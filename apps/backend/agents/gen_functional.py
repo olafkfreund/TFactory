@@ -60,32 +60,129 @@ def _write_status_patch(spec_dir: Path, **fields: object) -> None:
 
 # ─── The agent itself ─────────────────────────────────────────────────────
 
+# ─── SDK seams (mockable in tests) ──────────────────────────────────────
+
+
+async def _resolve_client(spec_dir: Path, project_dir: Path):
+    """Resolve the Claude Agent SDK client for the generation phase.
+
+    Same pattern as planner._resolve_planner_client — heavy imports
+    deferred to runtime so tests can mock this seam without the SDK chain.
+    """
+    from core.client import create_client
+    from phase_config import (
+        get_phase_model,
+        get_phase_thinking_budget,
+        get_provider_extra_kwargs,
+        infer_provider_from_model,
+    )
+    from providers.factory import get_provider
+
+    gen_model = get_phase_model(spec_dir, "coding", None)
+    provider_name = infer_provider_from_model(gen_model)
+    if provider_name == "claude":
+        thinking_budget = get_phase_thinking_budget(spec_dir, "coding")
+        return create_client(
+            project_dir, spec_dir, gen_model, max_thinking_tokens=thinking_budget,
+        )
+    return get_provider(
+        provider_name,
+        phase="coding",
+        model=gen_model,
+        working_dir=project_dir,
+        **get_provider_extra_kwargs(provider_name, gen_model),
+    )
+
+
+async def _invoke_session(
+    client, prompt: str, spec_dir: Path, verbose: bool,
+) -> tuple[str, str, dict]:
+    """Wrap run_agent_session so tests can patch one symbol."""
+    from agents.session import run_agent_session
+    from task_logger import LogPhase
+
+    async with client:
+        return await run_agent_session(
+            client, prompt, spec_dir, verbose, phase=LogPhase.CODING,
+        )
+
+
+# ─── Workspace helpers ──────────────────────────────────────────────────
+
+
+def _files_to_create(subtask) -> list[str]:
+    """Subtask.files_to_create may be a list (dataclass) or list-via-dict."""
+    f = getattr(subtask, "files_to_create", None)
+    if f is None and isinstance(subtask, dict):
+        f = subtask.get("files_to_create")
+    return list(f or [])
+
+
+def _write_replan_request(
+    spec_dir: Path,
+    subtask_id: str,
+    reason: str,
+    failed_target: str,
+) -> None:
+    """Write context/replan_request.json for the Planner's replan mode.
+
+    Schema matches what the planner_replan.md prompt + the planner's
+    _load_replan_request helper expect: {subtask_id, reason, failed_target}.
+    """
+    rr = spec_dir / "context" / "replan_request.json"
+    rr.parent.mkdir(parents=True, exist_ok=True)
+    rr.write_text(json.dumps({
+        "subtask_id": subtask_id,
+        "reason": reason,
+        "failed_target": failed_target,
+        "rejected_at": _now_iso(),
+    }, indent=2))
+
+
+def _advance_to_planner_replan(spec_dir: Path, project_dir: Path) -> None:
+    """Schedule the Planner in replan mode after a guardrail rejection.
+
+    Lazy import so a circular gen_functional ↔ planner can't form. Same
+    GC-anchor pattern as the planner's own _advance_to_gen_functional.
+    """
+    try:
+        from agents.planner import schedule_planner
+        schedule_planner(spec_dir, project_dir, mode="replan")
+    except ImportError as exc:
+        _gen_log.warning(
+            "could not auto-schedule planner replan: %s", exc,
+        )
+
+
+# ─── The agent ──────────────────────────────────────────────────────────
+
+
 async def run_gen_functional(
     spec_dir: Path,
     project_dir: Path,
     mode: Literal["initial", "rerun"] = "initial",
     verbose: bool = False,
 ) -> bool:
-    """Run the Gen-Functional agent — STUB at commit 1/6.
+    """Generate pytest test files for each pending Lane.FUNCTIONAL subtask.
 
-    Args:
-        spec_dir: TFactory workspace spec dir
-            (``~/.tfactory/workspaces/<project_id>/specs/<spec_id>/``).
-        project_dir: AIFactory project root_path (Glob/Grep target;
-            unused in stub).
-        mode: 'initial' for first generation pass, 'rerun' for a
-            re-execution (e.g. after a replan landed). Stub ignores;
-            real impl will branch.
-        verbose: forwarded to ``run_agent_session`` once real impl lands.
+    Per-subtask loop:
+      1. Build prompt via get_tfactory_gen_functional_prompt
+      2. SDK session — the agent uses Write to emit ONE test file
+      3. Pre-flight static check on the emitted source (commit 2 module)
+      4. Flake-risk lint on the source (commit 3 module)
+      5. If both pass → mark subtask completed, accumulate count
+         If either rejects → delete file, write context/replan_request.json,
+         schedule Planner replan, return False (stops the loop; next
+         iteration handles whatever the replan emits)
+      6. Session error → mark subtask failed, continue with the next
 
-    Returns:
-        True on success (including ``generated_empty`` — that's a
-        warning, not a failure). False on hard failure.
-
-    Stub behavior:
-        - status.json: status=generating, phase=gen_functional_started
-        - status.json: status=generated_empty + planner_warning that
-          the stub didn't actually generate anything
+    Status transitions:
+      pending/planned → generating → generated (with tests_generated count)
+                                   → generated_empty (0 pending subtasks)
+                                   → gen_functional_failed (hard error)
+                                   → replan_needed (guardrail rejected;
+                                                    Planner replan
+                                                    auto-scheduled)
     """
     if not spec_dir.is_dir():
         _gen_log.error("gen_functional: spec_dir %s does not exist", spec_dir)
@@ -98,39 +195,168 @@ async def run_gen_functional(
             phase=f"gen_functional_{mode}_started",
         )
 
-        # Yield to the event loop so callers can observe the generating
-        # state. The real impl spends seconds-to-minutes here (one SDK
-        # session per Lane.FUNCTIONAL subtask).
-        await asyncio.sleep(0)
+        # 1. Load the plan and find pending Lane.FUNCTIONAL subtasks.
+        from test_plan import ImplementationPlan, Lane, SubtaskStatus
 
-        # Sanity check: a plan exists. Without it Gen-Functional can't
-        # do anything; surface as a generated_empty warning rather than
-        # silent success.
         plan_file = spec_dir / "test_plan.json"
-        warnings: list[str] = [
-            "stub gen_functional (commit 1/6) — no tests generated; real "
-            "agent lands in commit 5"
-        ]
         if not plan_file.exists():
-            warnings.append("test_plan.json missing — Planner didn't run?")
+            _write_status_patch(
+                spec_dir,
+                status="gen_functional_failed",
+                phase="gen_functional_no_plan",
+                gen_functional_error="test_plan.json missing — Planner didn't run?",
+            )
+            return False
+
+        plan = ImplementationPlan.load(plan_file)
+        pending: list = []
+        for phase in plan.phases:
+            for st in phase.subtasks:
+                if st.lane == Lane.FUNCTIONAL and st.status == SubtaskStatus.PENDING:
+                    pending.append(st)
+
+        if not pending:
+            _write_status_patch(
+                spec_dir,
+                status="generated_empty",
+                phase="gen_functional_no_pending",
+                tests_generated=0,
+                gen_functional_warnings=["no pending Lane.FUNCTIONAL subtasks to generate"],
+            )
+            return True
+
+        # 2. Lazy imports for the guards + prompt assembly.
+        from prompts_pkg.prompts import get_tfactory_gen_functional_prompt
+        from agents.preflight_static import preflight_check
+        from agents.flake_risk_lint import flake_risk_lint
+
+        tests_generated = 0
+        for subtask in pending:
+            files = _files_to_create(subtask)
+            if not files:
+                subtask.fail("subtask had no files_to_create — Planner emit error")
+                continue
+            test_path = spec_dir / files[0]
+
+            # 3. Run the SDK session for this subtask.
+            prompt = get_tfactory_gen_functional_prompt(spec_dir, project_dir, subtask)
+            client = await _resolve_client(spec_dir, project_dir)
+            session_status, _response, _err = await _invoke_session(
+                client, prompt, spec_dir, verbose,
+            )
+            if session_status == "error":
+                _gen_log.warning(
+                    "gen_functional: session error on subtask %s — skipping",
+                    subtask.id,
+                )
+                subtask.fail("SDK session returned status=error")
+                continue
+
+            # 4. Did the agent actually write the file?
+            if not test_path.exists():
+                _write_replan_request(
+                    spec_dir,
+                    subtask_id=subtask.id,
+                    reason="agent did not Write the expected test file",
+                    failed_target=getattr(subtask, "target", "") or "",
+                )
+                plan.save(plan_file)
+                _write_status_patch(
+                    spec_dir,
+                    status="replan_needed",
+                    phase="gen_functional_no_write",
+                    last_rejected_subtask=subtask.id,
+                    tests_generated=tests_generated,
+                )
+                _advance_to_planner_replan(spec_dir, project_dir)
+                return False
+
+            source = test_path.read_text()
+
+            # 5. Pre-flight static check (commit 2).
+            pre = preflight_check(source, project_dir=project_dir)
+            if not pre.ok:
+                test_path.unlink(missing_ok=True)
+                reasons = ", ".join(
+                    f"{f.describe()} — {f.reason[:80]}" for f in pre.failures
+                ) or pre.summary()
+                _write_replan_request(
+                    spec_dir,
+                    subtask_id=subtask.id,
+                    reason=f"pre-flight rejected: {reasons}",
+                    failed_target=getattr(subtask, "target", "") or "",
+                )
+                plan.save(plan_file)
+                _write_status_patch(
+                    spec_dir,
+                    status="replan_needed",
+                    phase="gen_functional_preflight_rejected",
+                    last_rejected_subtask=subtask.id,
+                    tests_generated=tests_generated,
+                )
+                _advance_to_planner_replan(spec_dir, project_dir)
+                return False
+
+            # 6. Flake-risk lint (commit 3).
+            flake = flake_risk_lint(source)
+            if not flake.ok:
+                test_path.unlink(missing_ok=True)
+                reasons = "; ".join(
+                    f"L{h.lineno} {h.pattern}: {h.detail[:60]}"
+                    for h in flake.rejected
+                ) or flake.summary()
+                _write_replan_request(
+                    spec_dir,
+                    subtask_id=subtask.id,
+                    reason=f"flake-lint rejected: {reasons}",
+                    failed_target=getattr(subtask, "target", "") or "",
+                )
+                plan.save(plan_file)
+                _write_status_patch(
+                    spec_dir,
+                    status="replan_needed",
+                    phase="gen_functional_flake_rejected",
+                    last_rejected_subtask=subtask.id,
+                    tests_generated=tests_generated,
+                )
+                _advance_to_planner_replan(spec_dir, project_dir)
+                return False
+
+            # 7. Both guards passed → mark subtask done.
+            subtask.complete(output=f"wrote {files[0]}")
+            tests_generated += 1
+
+        plan.save(plan_file)
+
+        if tests_generated == 0:
+            _write_status_patch(
+                spec_dir,
+                status="gen_functional_failed",
+                phase="gen_functional_no_tests_generated",
+                tests_generated=0,
+                gen_functional_error=(
+                    "every pending subtask failed (session errors); no "
+                    "tests generated and no replan request written"
+                ),
+            )
+            return False
 
         _write_status_patch(
             spec_dir,
-            status="generated_empty",
-            phase=f"gen_functional_{mode}_stub_complete",
-            gen_functional_warnings=warnings,
-            tests_generated=0,
+            status="generated",
+            phase="gen_functional_complete",
+            tests_generated=tests_generated,
         )
         return True
 
     except Exception as exc:
         _gen_log.error(
-            "gen_functional stub failed: %s\n%s", exc, traceback.format_exc()
+            "gen_functional failed: %s\n%s", exc, traceback.format_exc()
         )
         _write_status_patch(
             spec_dir,
             status="gen_functional_failed",
-            phase=f"gen_functional_{mode}_error",
+            phase=f"gen_functional_{mode}_exception",
             gen_functional_error=str(exc)[:500],
         )
         return False
