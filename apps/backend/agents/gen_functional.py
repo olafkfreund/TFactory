@@ -1,13 +1,27 @@
-"""Gen-Functional agent — Task 6, issue #7.
+"""Gen-Functional agent — Task 6, issue #7 (v0.1) / issue #22 (v0.2).
 
 Second agent in the six-agent TFactory pipeline (Planner ← Gen-Functional →
 Executor → Evaluator → Triager). Reads the Planner's emitted
-`test_plan.json`, generates pytest test code for each `Lane.UNIT`
-subtask via the Claude Agent SDK, runs two MVP guardrails per subtask
+`test_plan.json`, generates test code for each ``Lane.UNIT`` subtask
+via the Claude Agent SDK, runs two MVP guardrails per subtask
 (pre-flight static check + flake-risk lint), and either commits the
-test file or writes a `context/replan_request.json` for the Planner.
+test file or writes a ``context/replan_request.json`` for the Planner.
 
-Task 6 commits (all landed):
+**v0.2 (Task 6 / #22) additions:**
+
+  - Per-subtask framework lookup via ``framework_registry.get_descriptor``.
+  - The framework descriptor is forwarded to
+    ``get_tfactory_gen_functional_prompt`` which injects the framework's
+    ``context_block`` into the generic prompt body (replacing the
+    Python-specific v0.1 prompt for polyglot subtasks).
+  - ``_resolve_runner_fn`` now reads the image from
+    ``framework_descriptor.runtime.image`` instead of the hardcoded
+    ``tfactory-runner-python:latest`` constant.
+  - v0.1-style subtasks (``subtask.framework is None``) degrade
+    gracefully with a ``DeprecationWarning`` on both the prompt helper
+    and the runner-image paths.
+
+v0.1 Task 6 commits (all landed):
 
   ✓ commit 1 — Auto-fire scaffold + stub
   ✓ commit 2 — Pre-flight static check (subprocess introspection)
@@ -26,13 +40,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-
 _gen_log = _logging.getLogger(__name__)
 
 
 # ─── Helpers shared with planner.py — keep these local to avoid an extra
 #    import surface. If the duplication starts hurting, factor into a
 #    new agents/_workspace_io.py module. ──────────────────────────────────
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -80,7 +94,10 @@ async def _resolve_client(spec_dir: Path, project_dir: Path):
     if provider_name == "claude":
         thinking_budget = get_phase_thinking_budget(spec_dir, "coding")
         return create_client(
-            project_dir, spec_dir, gen_model, max_thinking_tokens=thinking_budget,
+            project_dir,
+            spec_dir,
+            gen_model,
+            max_thinking_tokens=thinking_budget,
         )
     return get_provider(
         provider_name,
@@ -92,7 +109,10 @@ async def _resolve_client(spec_dir: Path, project_dir: Path):
 
 
 async def _invoke_session(
-    client, prompt: str, spec_dir: Path, verbose: bool,
+    client,
+    prompt: str,
+    spec_dir: Path,
+    verbose: bool,
 ) -> tuple[str, str, dict]:
     """Wrap run_agent_session so tests can patch one symbol."""
     from agents.session import run_agent_session
@@ -100,7 +120,11 @@ async def _invoke_session(
 
     async with client:
         return await run_agent_session(
-            client, prompt, spec_dir, verbose, phase=LogPhase.CODING,
+            client,
+            prompt,
+            spec_dir,
+            verbose,
+            phase=LogPhase.CODING,
         )
 
 
@@ -128,12 +152,17 @@ def _write_replan_request(
     """
     rr = spec_dir / "context" / "replan_request.json"
     rr.parent.mkdir(parents=True, exist_ok=True)
-    rr.write_text(json.dumps({
-        "subtask_id": subtask_id,
-        "reason": reason,
-        "failed_target": failed_target,
-        "rejected_at": _now_iso(),
-    }, indent=2))
+    rr.write_text(
+        json.dumps(
+            {
+                "subtask_id": subtask_id,
+                "reason": reason,
+                "failed_target": failed_target,
+                "rejected_at": _now_iso(),
+            },
+            indent=2,
+        )
+    )
 
 
 def _advance_to_planner_replan(spec_dir: Path, project_dir: Path) -> None:
@@ -144,11 +173,73 @@ def _advance_to_planner_replan(spec_dir: Path, project_dir: Path) -> None:
     """
     try:
         from agents.planner import schedule_planner
+
         schedule_planner(spec_dir, project_dir, mode="replan")
     except ImportError as exc:
         _gen_log.warning(
-            "could not auto-schedule planner replan: %s", exc,
+            "could not auto-schedule planner replan: %s",
+            exc,
         )
+
+
+def _resolve_framework_descriptor(subtask):
+    """Look up the FrameworkDescriptor for this subtask's ``framework`` field.
+
+    For polyglot v0.2 subtasks (``subtask.framework`` is set) the descriptor
+    is fetched from the framework registry and returned.
+
+    For v0.1-style subtasks (``subtask.framework is None``) ``None`` is
+    returned; the caller (``get_tfactory_gen_functional_prompt``) falls back
+    to the legacy Python-specific prompt and emits a ``DeprecationWarning``.
+
+    For subtasks whose ``framework`` value is present but unknown to the
+    registry, a ``LookupError`` is raised with a helpful message listing the
+    available framework names so the operator can diagnose the mismatch.
+
+    Args:
+        subtask: A Subtask dataclass or plain dict.
+
+    Returns:
+        A ``FrameworkDescriptor`` instance, or ``None`` for v0.1-style subtasks.
+
+    Raises:
+        LookupError: When ``subtask.framework`` is set but not registered.
+    """
+    if isinstance(subtask, dict):
+        framework_name = subtask.get("framework")
+    else:
+        framework_name = getattr(subtask, "framework", None)
+
+    if framework_name is None:
+        # v0.1-style subtask — the prompt helper will warn and use the legacy path.
+        return None
+
+    try:
+        from framework_registry import load_registry
+
+        registry = load_registry()
+        if framework_name not in registry:
+            available = sorted(registry.keys())
+            raise LookupError(
+                f"gen_functional: subtask framework {framework_name!r} is not "
+                f"registered in the framework registry. "
+                f"Available frameworks: {available}. "
+                "Check the frameworks/ directory or the subtask's framework field."
+            )
+        return registry[framework_name]
+    except LookupError:
+        raise
+    except Exception as exc:
+        # Registry unavailable (e.g. frameworks/ dir missing in a test env).
+        # Log a warning and fall back to None so the legacy path fires rather
+        # than crashing the whole gen_functional run.
+        _gen_log.warning(
+            "gen_functional: could not load framework registry for %r: %s — "
+            "falling back to legacy prompt path",
+            framework_name,
+            exc,
+        )
+        return None
 
 
 def _advance_to_evaluator(spec_dir: Path, project_dir: Path) -> None:
@@ -159,10 +250,12 @@ def _advance_to_evaluator(spec_dir: Path, project_dir: Path) -> None:
     """
     try:
         from agents.evaluator import schedule_evaluator
+
         schedule_evaluator(spec_dir, project_dir, mode="initial")
     except ImportError as exc:
         _gen_log.warning(
-            "could not auto-schedule evaluator: %s", exc,
+            "could not auto-schedule evaluator: %s",
+            exc,
         )
 
 
@@ -238,9 +331,9 @@ async def run_gen_functional(
             return True
 
         # 2. Lazy imports for the guards + prompt assembly.
-        from prompts_pkg.prompts import get_tfactory_gen_functional_prompt
-        from agents.preflight_static import preflight_check
         from agents.flake_risk_lint import flake_risk_lint
+        from agents.preflight_static import preflight_check
+        from prompts_pkg.prompts import get_tfactory_gen_functional_prompt
 
         tests_generated = 0
         for subtask in pending:
@@ -250,11 +343,24 @@ async def run_gen_functional(
                 continue
             test_path = spec_dir / files[0]
 
-            # 3. Run the SDK session for this subtask.
-            prompt = get_tfactory_gen_functional_prompt(spec_dir, project_dir, subtask)
+            # 3. Resolve the framework descriptor (v0.2 polyglot path).
+            #    For v0.1-style subtasks (framework=None) the descriptor is
+            #    None, which triggers the legacy prompt + DeprecationWarning.
+            framework_descriptor = _resolve_framework_descriptor(subtask)
+
+            # 4. Run the SDK session for this subtask.
+            prompt = get_tfactory_gen_functional_prompt(
+                spec_dir,
+                project_dir,
+                subtask,
+                framework_descriptor=framework_descriptor,
+            )
             client = await _resolve_client(spec_dir, project_dir)
             session_status, _response, _err = await _invoke_session(
-                client, prompt, spec_dir, verbose,
+                client,
+                prompt,
+                spec_dir,
+                verbose,
             )
             if session_status == "error":
                 _gen_log.warning(
@@ -289,9 +395,10 @@ async def run_gen_functional(
             pre = preflight_check(source, project_dir=project_dir)
             if not pre.ok:
                 test_path.unlink(missing_ok=True)
-                reasons = ", ".join(
-                    f"{f.describe()} — {f.reason[:80]}" for f in pre.failures
-                ) or pre.summary()
+                reasons = (
+                    ", ".join(f"{f.describe()} — {f.reason[:80]}" for f in pre.failures)
+                    or pre.summary()
+                )
                 _write_replan_request(
                     spec_dir,
                     subtask_id=subtask.id,
@@ -313,10 +420,13 @@ async def run_gen_functional(
             flake = flake_risk_lint(source)
             if not flake.ok:
                 test_path.unlink(missing_ok=True)
-                reasons = "; ".join(
-                    f"L{h.lineno} {h.pattern}: {h.detail[:60]}"
-                    for h in flake.rejected
-                ) or flake.summary()
+                reasons = (
+                    "; ".join(
+                        f"L{h.lineno} {h.pattern}: {h.detail[:60]}"
+                        for h in flake.rejected
+                    )
+                    or flake.summary()
+                )
                 _write_replan_request(
                     spec_dir,
                     subtask_id=subtask.id,
@@ -366,9 +476,7 @@ async def run_gen_functional(
         return True
 
     except Exception as exc:
-        _gen_log.error(
-            "gen_functional failed: %s\n%s", exc, traceback.format_exc()
-        )
+        _gen_log.error("gen_functional failed: %s\n%s", exc, traceback.format_exc())
         _write_status_patch(
             spec_dir,
             status="gen_functional_failed",
@@ -405,9 +513,7 @@ def schedule_gen_functional(
     """
     if os.environ.get("TFACTORY_AUTO_GENERATE", "1") == "0":
         return None
-    task = asyncio.create_task(
-        run_gen_functional(spec_dir, project_dir, mode=mode)
-    )
+    task = asyncio.create_task(run_gen_functional(spec_dir, project_dir, mode=mode))
     _BG_GEN_FUNCTIONAL_TASKS.add(task)
     task.add_done_callback(_BG_GEN_FUNCTIONAL_TASKS.discard)
     return task
