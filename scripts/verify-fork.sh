@@ -75,6 +75,7 @@ ALLOWLIST_GLOBS=(
     "README.md"
     "scripts/verify-fork.sh"
     "scripts/e2e-smoke.sh"
+    ".env.example"
     ".claude/skills/handover-to-tfactory/"
     "companion-skills/"
     "apps/backend/agents/tools_pkg/tools/task_control.py"
