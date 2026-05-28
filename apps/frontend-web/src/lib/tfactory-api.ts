@@ -1,0 +1,266 @@
+/**
+ * Typed API client for the TFactory portal backend endpoints
+ * (Task 9 / #10).
+ *
+ * Endpoints covered:
+ *   GET /api/tfactory/tasks                         — list
+ *   GET /api/tfactory/tasks/{spec_id}                — detail
+ *   GET /api/tfactory/tasks/{spec_id}/verdicts.json
+ *   GET /api/tfactory/tasks/{spec_id}/triage-report.json
+ *   GET /api/tfactory/tasks/{spec_id}/triage-report.md
+ *   GET /api/tfactory/tasks/{spec_id}/test-plan.json
+ *   GET /api/tfactory/tasks/{spec_id}/pr-comment-body.md
+ *
+ * Auth: uses ``getAuthHeaders`` from ./auth so the existing token
+ * management flows in transparently. Tests inject a custom fetch
+ * via the ``fetchFn`` option.
+ */
+
+import { getAuthHeaders } from './auth';
+
+const API_BASE = (import.meta.env?.VITE_API_BASE_URL as string | undefined) ?? '/api';
+const TFACTORY_PREFIX = `${API_BASE}/tfactory/tasks`;
+
+// ─── Response shapes (mirror apps/web-server/server/routes/tfactory_tasks.py)
+
+export interface TFactoryTaskSummary {
+  task_id: string;
+  project_id: string;
+  spec_id: string;
+  status: string | null;
+  phase: string | null;
+  updated_at: string;
+}
+
+export interface TFactoryTaskListResponse {
+  tasks: TFactoryTaskSummary[];
+  count: number;
+}
+
+export interface TFactoryArtefactMeta {
+  path: string;
+  exists: boolean;
+}
+
+export type TFactoryArtefactKey =
+  | 'test_plan'
+  | 'verdicts'
+  | 'triage_report_json'
+  | 'triage_report_md'
+  | 'pr_comment_body';
+
+export interface TFactoryTaskDetail {
+  task_id: string;
+  project_id: string;
+  spec_id: string;
+  status_json: Record<string, unknown>;
+  artefacts: Record<TFactoryArtefactKey, TFactoryArtefactMeta>;
+}
+
+// Subset of the verdicts.json schema the frontend actually reads. The
+// full schema is the Evaluator's contract from Task 7 commit 5.
+export interface TFactoryVerdict {
+  test_id: string;
+  test_file: string;
+  verdict: 'accept' | 'reject' | 'flag';
+  reasons: string[];
+  signals_summary?: {
+    coverage_delta_pct?: number;
+    coverage_new_lines?: number;
+    stability?: string;
+    mutation?: string;
+    lint_promotion?: string;
+  };
+  semantic_relevance?: 'high' | 'medium' | 'low';
+  semantic_notes?: string;
+}
+
+export interface TFactoryVerdictsDocument {
+  evaluator_version: string;
+  mode: string;
+  generated_at: string;
+  verdicts: TFactoryVerdict[];
+}
+
+// ─── Error shape ──────────────────────────────────────────────────────
+
+export class TFactoryApiError extends Error {
+  readonly status: number;
+  readonly endpoint: string;
+  constructor(status: number, endpoint: string, message: string) {
+    super(message);
+    this.name = 'TFactoryApiError';
+    this.status = status;
+    this.endpoint = endpoint;
+  }
+}
+
+// ─── Internal helpers ─────────────────────────────────────────────────
+
+type FetchLike = typeof fetch;
+
+interface FetchOptions {
+  signal?: AbortSignal;
+  fetchFn?: FetchLike;
+}
+
+async function _request<T>(
+  endpoint: string,
+  parse: 'json' | 'text',
+  options: FetchOptions = {},
+): Promise<T> {
+  const { signal, fetchFn = fetch } = options;
+  const response = await fetchFn(endpoint, {
+    method: 'GET',
+    headers: { ...getAuthHeaders() },
+    signal,
+  });
+
+  if (!response.ok) {
+    let detail = '';
+    try {
+      // Try parsing the body as JSON to extract FastAPI's { detail }
+      const data = (await response.json()) as unknown;
+      if (data && typeof data === 'object' && 'detail' in data) {
+        const d = (data as Record<string, unknown>).detail;
+        if (typeof d === 'string') detail = d;
+      }
+    } catch {
+      // Body wasn't JSON — fall through with empty detail
+    }
+    throw new TFactoryApiError(
+      response.status,
+      endpoint,
+      detail || `${response.status} ${response.statusText}`,
+    );
+  }
+
+  if (parse === 'json') {
+    return (await response.json()) as T;
+  }
+  return (await response.text()) as unknown as T;
+}
+
+// ─── Spec-id validation (mirrors backend) ─────────────────────────────
+
+const _SPEC_ID_RE = /^[A-Za-z0-9._-]+$/;
+
+function _validateSpecId(specId: string): void {
+  if (!specId || !_SPEC_ID_RE.test(specId)) {
+    throw new TFactoryApiError(
+      400, `(client validation: ${specId})`,
+      `invalid spec_id: ${specId}`,
+    );
+  }
+}
+
+// ─── Public endpoints ─────────────────────────────────────────────────
+
+/**
+ * GET /api/tfactory/tasks — list every TFactory workspace.
+ *
+ * Sorted by ``updated_at`` descending (newest first). Empty if the
+ * workspace root doesn't exist yet.
+ */
+export function listTasks(
+  options: FetchOptions = {},
+): Promise<TFactoryTaskListResponse> {
+  return _request<TFactoryTaskListResponse>(TFACTORY_PREFIX, 'json', options);
+}
+
+/**
+ * GET /api/tfactory/tasks/{spec_id} — full status + artefact meta.
+ *
+ * Throws TFactoryApiError(400) on malformed spec_id (validated
+ * client-side too — no network call when it's malformed),
+ * TFactoryApiError(404) if no matching spec.
+ */
+export async function getTaskDetail(
+  specId: string,
+  options: FetchOptions = {},
+): Promise<TFactoryTaskDetail> {
+  _validateSpecId(specId);
+  return _request<TFactoryTaskDetail>(
+    `${TFACTORY_PREFIX}/${specId}`, 'json', options,
+  );
+}
+
+/**
+ * GET /api/tfactory/tasks/{spec_id}/verdicts.json — Evaluator output.
+ *
+ * The response is a typed VerdictsDocument. 404 when the spec hasn't
+ * reached the Evaluator stage yet (the frontend uses this to grey
+ * out the verdict tab).
+ */
+export async function getVerdicts(
+  specId: string,
+  options: FetchOptions = {},
+): Promise<TFactoryVerdictsDocument> {
+  _validateSpecId(specId);
+  return _request<TFactoryVerdictsDocument>(
+    `${TFACTORY_PREFIX}/${specId}/verdicts.json`, 'json', options,
+  );
+}
+
+/**
+ * GET /api/tfactory/tasks/{spec_id}/triage-report.json — Triager output.
+ */
+export async function getTriageReportJson(
+  specId: string,
+  options: FetchOptions = {},
+): Promise<Record<string, unknown>> {
+  _validateSpecId(specId);
+  return _request<Record<string, unknown>>(
+    `${TFACTORY_PREFIX}/${specId}/triage-report.json`, 'json', options,
+  );
+}
+
+/**
+ * GET /api/tfactory/tasks/{spec_id}/triage-report.md — Triager MD.
+ *
+ * Returned as a string so a Markdown viewer component can render it.
+ */
+export async function getTriageReportMarkdown(
+  specId: string,
+  options: FetchOptions = {},
+): Promise<string> {
+  _validateSpecId(specId);
+  return _request<string>(
+    `${TFACTORY_PREFIX}/${specId}/triage-report.md`, 'text', options,
+  );
+}
+
+/**
+ * GET /api/tfactory/tasks/{spec_id}/test-plan.json — Planner output.
+ */
+export async function getTestPlan(
+  specId: string,
+  options: FetchOptions = {},
+): Promise<Record<string, unknown>> {
+  _validateSpecId(specId);
+  return _request<Record<string, unknown>>(
+    `${TFACTORY_PREFIX}/${specId}/test-plan.json`, 'json', options,
+  );
+}
+
+/**
+ * GET /api/tfactory/tasks/{spec_id}/pr-comment-body.md — fallback PR
+ * comment body for when the Triager skipped a real gh pr comment
+ * (no PR number in source.json).
+ */
+export async function getPrCommentBody(
+  specId: string,
+  options: FetchOptions = {},
+): Promise<string> {
+  _validateSpecId(specId);
+  return _request<string>(
+    `${TFACTORY_PREFIX}/${specId}/pr-comment-body.md`, 'text', options,
+  );
+}
+
+// ─── Internal exports for tests ───────────────────────────────────────
+
+export const _internalForTests = {
+  TFACTORY_PREFIX,
+  _validateSpecId,
+};
