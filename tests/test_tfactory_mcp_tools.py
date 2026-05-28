@@ -52,9 +52,31 @@ from agents.tools_pkg.tools.task_control import create_task_control_tools  # noq
 @pytest.fixture
 def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Isolated TFactory workspace root for one test."""
-    monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path / "tfactory"))
     monkeypatch.setenv("TFACTORY_PORTAL_PORT", "3102")
-    return tmp_path
+    # Snapshotter (Task 3) needs an AIFactory root too. Build a fake one
+    # so the default-happy task_create_and_run flow doesn't trip
+    # SnapshotError. Individual tests can scaffold per-spec sources via
+    # the `aifactory_spec` helper below.
+    aifactory_root = tmp_path / "aifactory"
+    aifactory_root.mkdir()
+    monkeypatch.setenv("TFACTORY_AIFACTORY_ROOT", str(aifactory_root))
+    return tmp_path / "tfactory"
+
+
+@pytest.fixture
+def aifactory_root(tmp_path: Path) -> Path:
+    """Convenience: the fake AIFactory root set by the workspace fixture."""
+    return tmp_path / "aifactory"
+
+
+def _scaffold_aifactory_spec(root: Path, project_id: str, spec_id: str) -> Path:
+    """Build a minimal AIFactory spec dir so the snapshotter has something to copy."""
+    spec_dir = root / "workspaces" / project_id / "specs" / spec_id
+    spec_dir.mkdir(parents=True)
+    (spec_dir / "spec.md").write_text(f"# spec {spec_id}\n\nAcceptance criteria.\n")
+    (spec_dir / "implementation_plan.json").write_text('{"phases": []}')
+    return spec_dir
 
 
 @pytest.fixture
@@ -179,7 +201,8 @@ async def test_task_create_and_run_unknown_project(tools: dict) -> None:
 
 
 @pytest.mark.asyncio
-async def test_task_create_and_run_happy(tools: dict, workspace: Path) -> None:
+async def test_task_create_and_run_happy(tools: dict, workspace: Path, aifactory_root: Path) -> None:
+    _scaffold_aifactory_spec(aifactory_root, "demo", "001-login")
     await tools["project_create"]({"id": "demo", "name": "Demo", "root_path": "/tmp/d"})
     res = await tools["task_create_and_run"]({
         "project_id": "demo",
@@ -202,9 +225,36 @@ async def test_task_create_and_run_happy(tools: dict, workspace: Path) -> None:
     assert status["status"] == "pending"
     assert status["lane_progress"]["functional"] == "pending"
 
+    # Snapshotter (Task 3, #4) populated context/
+    assert (spec_dir / "context" / "aifactory_spec.md").exists()
+    assert (spec_dir / "context" / "aifactory_plan.json").exists()
+    assert (spec_dir / "context" / "source.json").exists()
+    src = json.loads((spec_dir / "context" / "source.json").read_text())
+    assert src["has_spec_md"] is True
+    assert src["has_plan_json"] is True
+    # branch missing from the (fake) git repo at /tmp/d → diff skipped with warning
+    assert src["has_diff_patch"] is False
+
 
 @pytest.mark.asyncio
-async def test_task_create_and_run_duplicate(tools: dict) -> None:
+async def test_task_create_and_run_missing_aifactory_spec_rolls_back(
+    tools: dict, workspace: Path,
+) -> None:
+    """If the AIFactory spec dir doesn't exist, the partial workspace is unwound."""
+    await tools["project_create"]({"id": "demo", "name": "Demo", "root_path": "/tmp/d"})
+    res = await tools["task_create_and_run"]({
+        "project_id": "demo", "spec_id": "ghost-spec",
+        "branch": "f/x", "base_ref": "main", "confirm": True,
+    })
+    assert res.get("isError") is True
+    assert "AIFactory spec dir not found" in _content(res)
+    # Workspace must NOT linger after a failed snapshot — retry should be possible.
+    assert not (workspace / "workspaces" / "demo" / "specs" / "ghost-spec").exists()
+
+
+@pytest.mark.asyncio
+async def test_task_create_and_run_duplicate(tools: dict, aifactory_root: Path) -> None:
+    _scaffold_aifactory_spec(aifactory_root, "demo", "001")
     await tools["project_create"]({"id": "demo", "name": "Demo", "root_path": "/tmp/d"})
     args = {"project_id": "demo", "spec_id": "001", "branch": "f/x",
             "base_ref": "main", "confirm": True}
@@ -225,7 +275,8 @@ async def test_task_status_unknown(tools: dict) -> None:
 
 
 @pytest.mark.asyncio
-async def test_task_status_existing(tools: dict) -> None:
+async def test_task_status_existing(tools: dict, aifactory_root: Path) -> None:
+    _scaffold_aifactory_spec(aifactory_root, "demo", "001")
     await tools["project_create"]({"id": "demo", "name": "Demo", "root_path": "/tmp/d"})
     await tools["task_create_and_run"]({
         "project_id": "demo", "spec_id": "001",
@@ -250,7 +301,9 @@ async def test_task_list_empty(tools: dict) -> None:
 
 
 @pytest.mark.asyncio
-async def test_task_list_after_create(tools: dict) -> None:
+async def test_task_list_after_create(tools: dict, aifactory_root: Path) -> None:
+    _scaffold_aifactory_spec(aifactory_root, "demo", "a")
+    _scaffold_aifactory_spec(aifactory_root, "demo", "b")
     await tools["project_create"]({"id": "demo", "name": "Demo", "root_path": "/tmp/d"})
     await tools["task_create_and_run"]({
         "project_id": "demo", "spec_id": "a",
@@ -267,7 +320,9 @@ async def test_task_list_after_create(tools: dict) -> None:
 
 
 @pytest.mark.asyncio
-async def test_task_list_filter_by_project(tools: dict) -> None:
+async def test_task_list_filter_by_project(tools: dict, aifactory_root: Path) -> None:
+    _scaffold_aifactory_spec(aifactory_root, "p1", "a")
+    _scaffold_aifactory_spec(aifactory_root, "p2", "b")
     await tools["project_create"]({"id": "p1", "name": "P1", "root_path": "/tmp/p1"})
     await tools["project_create"]({"id": "p2", "name": "P2", "root_path": "/tmp/p2"})
     await tools["task_create_and_run"]({"project_id": "p1", "spec_id": "a",
@@ -297,7 +352,8 @@ async def test_report_get_invalid_format(tools: dict) -> None:
 
 
 @pytest.mark.asyncio
-async def test_report_get_missing_report(tools: dict, workspace: Path) -> None:
+async def test_report_get_missing_report(tools: dict, workspace: Path, aifactory_root: Path) -> None:
+    _scaffold_aifactory_spec(aifactory_root, "demo", "001")
     await tools["project_create"]({"id": "demo", "name": "Demo", "root_path": "/tmp/d"})
     await tools["task_create_and_run"]({"project_id": "demo", "spec_id": "001",
                                         "branch": "f", "base_ref": "main", "confirm": True})
@@ -307,7 +363,8 @@ async def test_report_get_missing_report(tools: dict, workspace: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_report_get_md_happy(tools: dict, workspace: Path) -> None:
+async def test_report_get_md_happy(tools: dict, workspace: Path, aifactory_root: Path) -> None:
+    _scaffold_aifactory_spec(aifactory_root, "demo", "001")
     await tools["project_create"]({"id": "demo", "name": "Demo", "root_path": "/tmp/d"})
     await tools["task_create_and_run"]({"project_id": "demo", "spec_id": "001",
                                         "branch": "f", "base_ref": "main", "confirm": True})
@@ -321,7 +378,8 @@ async def test_report_get_md_happy(tools: dict, workspace: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_report_get_json_happy(tools: dict, workspace: Path) -> None:
+async def test_report_get_json_happy(tools: dict, workspace: Path, aifactory_root: Path) -> None:
+    _scaffold_aifactory_spec(aifactory_root, "demo", "001")
     await tools["project_create"]({"id": "demo", "name": "Demo", "root_path": "/tmp/d"})
     await tools["task_create_and_run"]({"project_id": "demo", "spec_id": "001",
                                         "branch": "f", "base_ref": "main", "confirm": True})
@@ -337,8 +395,9 @@ async def test_report_get_json_happy(tools: dict, workspace: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_task_rerun_disallowed_lane(tools: dict) -> None:
+async def test_task_rerun_disallowed_lane(tools: dict, aifactory_root: Path) -> None:
     """Phase-2+ lanes are gated until those tasks land."""
+    _scaffold_aifactory_spec(aifactory_root, "demo", "001")
     await tools["project_create"]({"id": "demo", "name": "Demo", "root_path": "/tmp/d"})
     await tools["task_create_and_run"]({"project_id": "demo", "spec_id": "001",
                                         "branch": "f", "base_ref": "main", "confirm": True})
@@ -356,7 +415,8 @@ async def test_task_rerun_unknown_task(tools: dict) -> None:
 
 
 @pytest.mark.asyncio
-async def test_task_rerun_happy_bumps_count(tools: dict, workspace: Path) -> None:
+async def test_task_rerun_happy_bumps_count(tools: dict, workspace: Path, aifactory_root: Path) -> None:
+    _scaffold_aifactory_spec(aifactory_root, "demo", "001")
     await tools["project_create"]({"id": "demo", "name": "Demo", "root_path": "/tmp/d"})
     await tools["task_create_and_run"]({"project_id": "demo", "spec_id": "001",
                                         "branch": "f", "base_ref": "main", "confirm": True})

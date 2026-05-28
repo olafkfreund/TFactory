@@ -28,6 +28,7 @@ Package Structure:
 # Export all public types and functions for backwards compatibility
 from .enums import (
     ChunkStatus,  # Backwards compatibility
+    Lane,  # Added in Task 3 (#4) — TFactory test lanes
     PhaseType,
     SubtaskStatus,
     VerificationType,
@@ -50,6 +51,7 @@ __all__ = [
     "PhaseType",
     "SubtaskStatus",
     "VerificationType",
+    "Lane",
     # Models
     "Verification",
     "Subtask",

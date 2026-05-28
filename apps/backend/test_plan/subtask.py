@@ -10,7 +10,7 @@ and output capabilities.
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from .enums import SubtaskStatus
+from .enums import Lane, SubtaskStatus
 from .verification import Verification
 
 
@@ -21,6 +21,11 @@ class Subtask:
     id: str
     description: str
     status: SubtaskStatus = SubtaskStatus.PENDING
+
+    # TFactory lane tag (Task 3, #4). Planner emits lane-tagged subtasks
+    # so per-lane Generators (Tasks 6+) can dispatch. Default = FUNCTIONAL
+    # so inherited plans round-trip cleanly through the old shape.
+    lane: Lane = Lane.FUNCTIONAL
 
     # Scoping
     service: str | None = None  # Which service (backend, frontend, worker)
@@ -52,6 +57,7 @@ class Subtask:
             "id": self.id,
             "description": self.description,
             "status": self.status.value,
+            "lane": self.lane.value,
         }
         if self.service:
             result["service"] = self.service
@@ -90,6 +96,7 @@ class Subtask:
             id=data["id"],
             description=data["description"],
             status=SubtaskStatus(data.get("status", "pending")),
+            lane=Lane(data.get("lane", Lane.FUNCTIONAL.value)),
             service=data.get("service"),
             all_services=data.get("all_services", False),
             files_to_modify=data.get("files_to_modify", []),

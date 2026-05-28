@@ -53,5 +53,20 @@ class VerificationType(str, Enum):
     NONE = "none"  # No verification needed (investigation)
 
 
+class Lane(str, Enum):
+    """TFactory test lanes — added in Task 3 (#4).
+
+    Each Subtask carries a lane tag so the Planner can emit a mixed
+    plan that downstream generators dispatch on. At MVP only FUNCTIONAL
+    is lit (Task 6); SAST/DAST/FUZZ/MUTATION wire up in phases 2-5.
+    """
+
+    FUNCTIONAL = "functional"  # pytest / vitest unit + integration tests
+    SAST = "sast"              # Semgrep / Bandit / dep CVE / secrets scan
+    DAST = "dast"              # OWASP ZAP attack against running service
+    FUZZ = "fuzz"              # LLM-generated fuzz harnesses (atheris/jsfuzz)
+    MUTATION = "mutation"      # mutmut / stryker mutation testing
+
+
 # Backwards compatibility aliases
 ChunkStatus = SubtaskStatus

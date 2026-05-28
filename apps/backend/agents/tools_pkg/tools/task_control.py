@@ -54,6 +54,17 @@ except ImportError:
     SDK_TOOLS_AVAILABLE = False
     tool = None  # type: ignore[assignment]
 
+# Snapshotter is independent of the SDK — import unconditionally so tests
+# (which skip when the SDK isn't installed) can still verify wiring.
+try:
+    from workspaces import SnapshotError, snapshot_aifactory_spec
+except ImportError:  # apps/backend not on sys.path (e.g. running from repo root)
+    try:
+        from apps.backend.workspaces import SnapshotError, snapshot_aifactory_spec
+    except ImportError:
+        SnapshotError = Exception  # type: ignore[assignment,misc]
+        snapshot_aifactory_spec = None  # type: ignore[assignment]
+
 
 # ---------------------------------------------------------------------------
 # Storage layout helpers
@@ -216,7 +227,11 @@ def create_task_control_tools() -> list:
         confirm = bool(args.get("confirm", False))
 
         projects = _load_projects()
-        if not any(p.get("id") == project_id for p in projects["projects"]):
+        project_entry = next(
+            (p for p in projects["projects"] if p.get("id") == project_id),
+            None,
+        )
+        if project_entry is None:
             return _format_error(
                 f"unknown project_id: {project_id!r}. Run project_list to see registered projects "
                 f"or project_create to register one."
@@ -245,6 +260,32 @@ def create_task_control_tools() -> list:
         spec_dir.mkdir(parents=True, exist_ok=True)
         for sub in ("context", "tests", "findings", "logs", "memory"):
             (spec_dir / sub).mkdir(exist_ok=True)
+
+        # Snapshot the AIFactory spec into context/ (Task 3, #4). If the
+        # snapshot itself fails (missing source dir), unwind the workspace
+        # we just created so a retry isn't blocked by the "already exists"
+        # guard above.
+        snapshot_warnings: list[str] = []
+        if snapshot_aifactory_spec is not None:
+            try:
+                snap = snapshot_aifactory_spec(
+                    project_id=project_id,
+                    spec_id=spec_id,
+                    branch=branch,
+                    base_ref=base_ref,
+                    project_root_path=project_entry.get("root_path"),
+                    dest_spec_dir=spec_dir,
+                )
+                snapshot_warnings = list(snap.warnings)
+            except SnapshotError as exc:
+                # Roll back the partial workspace so the user can fix and retry.
+                import shutil as _shutil
+                _shutil.rmtree(spec_dir, ignore_errors=True)
+                return _format_error(str(exc))
+        else:
+            snapshot_warnings.append(
+                "snapshotter not importable in this environment — context/ left empty"
+            )
 
         # task.md — agent-readable handover payload
         (spec_dir / "task.md").write_text(
@@ -283,9 +324,11 @@ def create_task_control_tools() -> list:
             "spec_dir": str(spec_dir),
             "portal_url": f"http://localhost:{portal_port}/tasks/{task_id}",
             "status": "pending",
+            "snapshot_warnings": snapshot_warnings,
             "note": (
-                "Workspace created. Pipeline execution wires up in Tasks 3-8 "
-                "(snapshotter + planner + generators + executor + evaluator + triager)."
+                "Workspace created + AIFactory spec snapshotted into context/. "
+                "Pipeline execution (planner + generators + executor + evaluator + triager) "
+                "wires up in Tasks 5-8."
             ),
         })
 

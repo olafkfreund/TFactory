@@ -77,8 +77,10 @@ ALLOWLIST_GLOBS=(
     ".claude/skills/handover-to-tfactory/"
     "companion-skills/"
     "apps/backend/agents/tools_pkg/tools/task_control.py"
+    "apps/backend/workspaces/"
     "tests/test_mcp_task_control.py"
     "tests/test_tfactory_mcp_tools.py"
+    "tests/test_snapshotter.py"
     ".git/"
 )
 
