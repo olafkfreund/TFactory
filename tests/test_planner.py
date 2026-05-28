@@ -337,20 +337,243 @@ async def test_initial_session_error_no_retry(
     assert status["phase"] == "planner_session_error"
 
 
-# ── Replan mode (deferred to commit 5) ──────────────────────────────────
+# ── Replan mode (commit 5) ──────────────────────────────────────────────
+
+
+def _write_replan_request(spec_dir: Path, subtask_id: str,
+                           reason: str = "hallucinated import",
+                           failed_target: str = "foo.py::nope") -> None:
+    """Drop a context/replan_request.json — what Gen-Functional writes."""
+    (spec_dir / "context" / "replan_request.json").write_text(json.dumps({
+        "subtask_id": subtask_id,
+        "reason": reason,
+        "failed_target": failed_target,
+    }))
+
+
+def _make_plan_with_replan_phase(
+    original_subtask_id: str = "s0",
+    replan_id: str = "s0-r1",
+    replan_phase_name: str = "replan-1",
+    original_replan_count_after: int = 0,
+) -> str:
+    """Build a plan that mimics the agent's post-replan output:
+    original plan + appended replan-N phase. The agent does NOT
+    bump replan_count itself — our post-session helper does that.
+    """
+    return json.dumps({
+        "feature": "demo",
+        "workflow_type": "feature",
+        "services_involved": [],
+        "phases": [
+            {
+                "phase": 1, "name": "AC#1: works", "type": "implementation",
+                "subtasks": [{
+                    "id": original_subtask_id, "description": "orig",
+                    "status": "pending", "lane": "functional",
+                    "target": "foo.py::bar", "rationale": "AC#1",
+                    "files_to_create": ["tests/test_orig.py"],
+                    "verification": {
+                        "type": "command",
+                        "command": "pytest tests/test_orig.py",
+                        "expected": "exit 0",
+                    },
+                    # Pre-existing replan_count from earlier rounds.
+                    "replan_count": original_replan_count_after,
+                }],
+                "parallel_safe": False,
+            },
+            {
+                "phase": 2, "name": replan_phase_name, "type": "implementation",
+                "subtasks": [{
+                    "id": replan_id, "description": "corrected",
+                    "status": "pending", "lane": "functional",
+                    "target": "foo.py::real_func", "rationale":
+                        f"Replan of '{original_subtask_id}': original failed",
+                    "files_to_create": ["tests/test_corrected.py"],
+                    "verification": {
+                        "type": "command",
+                        "command": "pytest tests/test_corrected.py",
+                        "expected": "exit 0",
+                    },
+                }],
+                "parallel_safe": False,
+            },
+        ],
+        "final_acceptance": [],
+        "status": "in_progress", "planStatus": "pending",
+    })
 
 
 @pytest.mark.asyncio
-async def test_replan_mode_deferred_in_commit_4(
+async def test_replan_happy_path_appends_phase_and_bumps_count(
     spec_dir: Path, project_dir: Path, mock_sdk
 ) -> None:
-    """Replan mode returns False with a clear deferred status until commit 5."""
-    mock_sdk(plans=[_make_valid_plan_json(1)])
+    """First replan: phase appended, count goes 0 → 1, not stuck yet."""
+    # Pre-seed the spec dir with an existing plan + replan request.
+    (spec_dir / "test_plan.json").write_text(_make_valid_plan_json(1))
+    _write_replan_request(spec_dir, "s0")
+
+    # Mock the agent emitting the same plan + a new replan-1 phase.
+    mock_sdk(plans=[_make_plan_with_replan_phase("s0")])
+
+    ok = await run_planner(spec_dir, project_dir, mode="replan")
+    assert ok is True
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["status"] == "planned"
+    assert "replan_complete" in status["phase"]
+    assert status["last_replan_for"] == "s0"
+    assert status["last_replan_count"] == 1
+    assert status["last_replan_stuck"] is False
+
+    # Plan persisted with bumped count on the original subtask.
+    final_plan = json.loads((spec_dir / "test_plan.json").read_text())
+    s0 = final_plan["phases"][0]["subtasks"][0]
+    assert s0["id"] == "s0"
+    assert s0["replan_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_replan_second_round_hits_stuck(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """Second replan on the same subtask flips status to stuck."""
+    # Pre-seed: original subtask already has replan_count=1 from a prior round.
+    pre_seed = json.loads(_make_valid_plan_json(1))
+    pre_seed["phases"][0]["subtasks"][0]["replan_count"] = 1
+    (spec_dir / "test_plan.json").write_text(json.dumps(pre_seed))
+    _write_replan_request(spec_dir, "s0")
+
+    # Mock the agent emitting the plan with another replan phase appended.
+    # Pre-existing replan_count is 1; the bumper takes it to 2.
+    plan_with_replan = json.loads(_make_plan_with_replan_phase("s0"))
+    plan_with_replan["phases"][0]["subtasks"][0]["replan_count"] = 1
+    mock_sdk(plans=[json.dumps(plan_with_replan)])
+
+    ok = await run_planner(spec_dir, project_dir, mode="replan")
+    assert ok is True
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["last_replan_count"] == 2
+    assert status["last_replan_stuck"] is True
+    assert any("stuck" in w for w in status.get("planner_warnings", []))
+
+
+@pytest.mark.asyncio
+async def test_replan_missing_replan_request_fails(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """No context/replan_request.json → planner_failed before SDK invoke."""
+    (spec_dir / "test_plan.json").write_text(_make_valid_plan_json(1))
+    calls = mock_sdk(plans=[_make_plan_with_replan_phase("s0")])
+
+    ok = await run_planner(spec_dir, project_dir, mode="replan")
+    assert ok is False
+    assert len(calls) == 0  # SDK never invoked
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["status"] == "planner_failed"
+    assert "missing_request" in status["phase"]
+
+
+@pytest.mark.asyncio
+async def test_replan_missing_existing_plan_fails(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """No existing test_plan.json → planner_failed before SDK invoke."""
+    _write_replan_request(spec_dir, "s0")
+    calls = mock_sdk(plans=[_make_plan_with_replan_phase("s0")])
+
+    ok = await run_planner(spec_dir, project_dir, mode="replan")
+    assert ok is False
+    assert len(calls) == 0
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["status"] == "planner_failed"
+    assert "no_existing_plan" in status["phase"]
+
+
+@pytest.mark.asyncio
+async def test_replan_warns_when_subtask_id_unknown(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """If replan_request.subtask_id doesn't match any subtask, succeed
+    but emit a warning (the agent did its job; our bookkeeping just
+    can't find the target)."""
+    (spec_dir / "test_plan.json").write_text(_make_valid_plan_json(1))
+    _write_replan_request(spec_dir, "ghost-subtask")
+    mock_sdk(plans=[_make_plan_with_replan_phase("s0")])  # plan still has s0
+
+    ok = await run_planner(spec_dir, project_dir, mode="replan")
+    assert ok is True
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert any("not found" in w for w in status.get("planner_warnings", []))
+
+
+@pytest.mark.asyncio
+async def test_replan_rejects_when_existing_phases_dropped(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """If the agent emits a plan that drops earlier phases, fail clearly."""
+    # Pre-seed a plan with TWO phases.
+    pre = json.loads(_make_valid_plan_json(2))
+    pre["phases"].append({
+        "phase": 2, "name": "AC#2", "type": "implementation",
+        "subtasks": [], "parallel_safe": False,
+    })
+    (spec_dir / "test_plan.json").write_text(json.dumps(pre))
+    _write_replan_request(spec_dir, "s0")
+
+    # Mock the agent emitting a plan that LOST phase 2 (only kept phase 1 + new replan-3)
+    # — a regression we explicitly defend against.
+    bad = json.loads(_make_valid_plan_json(1))
+    bad["phases"].append({
+        "phase": 3, "name": "replan-1", "type": "implementation",
+        "subtasks": [{
+            "id": "s0-r1", "description": "x", "status": "pending",
+            "lane": "functional", "target": "f.py::g", "rationale": "r",
+            "files_to_create": ["tests/x.py"],
+            "verification": {"type": "command", "command": "pytest",
+                             "expected": "exit 0"},
+        }],
+        "parallel_safe": False,
+    })
+    mock_sdk(plans=[json.dumps(bad)])
+
     ok = await run_planner(spec_dir, project_dir, mode="replan")
     assert ok is False
     status = json.loads((spec_dir / "status.json").read_text())
     assert status["status"] == "planner_failed"
-    assert "replan_not_implemented" in status["phase"]
+    assert "phases_lost" in status["phase"]
+    assert "dropped existing phases" in status.get("planner_error", "")
+
+
+@pytest.mark.asyncio
+async def test_replan_session_error_no_retry(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    (spec_dir / "test_plan.json").write_text(_make_valid_plan_json(1))
+    _write_replan_request(spec_dir, "s0")
+    calls = mock_sdk(plans=[None], statuses=["error"])
+
+    ok = await run_planner(spec_dir, project_dir, mode="replan")
+    assert ok is False
+    assert len(calls) == 1
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["status"] == "planner_failed"
+    assert status["phase"] == "planner_replan_session_error"
+
+
+@pytest.mark.asyncio
+async def test_replan_retry_succeeds_after_invalid_json(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    (spec_dir / "test_plan.json").write_text(_make_valid_plan_json(1))
+    _write_replan_request(spec_dir, "s0")
+    mock_sdk(plans=["bad json {{{", _make_plan_with_replan_phase("s0")])
+
+    ok = await run_planner(spec_dir, project_dir, mode="replan")
+    assert ok is True
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["status"] == "planned"
+    assert status["last_replan_count"] == 1
 
 
 # ── Failure paths ───────────────────────────────────────────────────────

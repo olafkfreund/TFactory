@@ -362,6 +362,102 @@ def _validate_emitted_plan(spec_dir: Path) -> tuple[bool, str, object | None]:
     return True, "", plan
 
 
+# ─── Replan helpers (commit 5 of 6) ────────────────────────────────────────
+
+# After this many replans on a single subtask, mark it stuck. The Triager
+# omits stuck subtasks from the commit phase but they remain in the plan
+# for the report.
+_STUCK_AFTER_REPLANS = 2
+
+
+def _load_replan_request(spec_dir: Path) -> tuple[bool, str, dict | None]:
+    """Read + validate context/replan_request.json.
+
+    Returns ``(ok, error, payload)``. On success, ``payload`` has at
+    minimum the ``subtask_id`` field (other fields optional).
+    """
+    rr_path = spec_dir / "context" / "replan_request.json"
+    if not rr_path.exists():
+        return False, "replan_request.json missing — Gen-Functional should write this", None
+    try:
+        data = json.loads(rr_path.read_text())
+    except (json.JSONDecodeError, OSError) as exc:
+        return False, f"replan_request.json unreadable: {exc}", None
+    if not isinstance(data, dict) or "subtask_id" not in data:
+        return False, "replan_request.json missing required 'subtask_id'", None
+    return True, "", data
+
+
+def _find_subtask_by_id(plan, subtask_id: str):
+    """Locate a Subtask by ID across all phases. Returns (phase, subtask) or (None, None)."""
+    for phase in plan.phases:
+        for subtask in phase.subtasks:
+            if subtask.id == subtask_id:
+                return phase, subtask
+    return None, None
+
+
+def _bump_replan_count_and_maybe_stuck(plan, subtask_id: str) -> tuple[int, bool]:
+    """Bump replan_count on the original subtask; mark stuck at ≥ 2.
+
+    Returns ``(new_count, became_stuck)``. Caller is responsible for
+    saving the plan back.
+    """
+    # Need the dataclass-level enum to set status. Imported here to keep
+    # the module top-level light.
+    from test_plan import SubtaskStatus
+
+    _phase, subtask = _find_subtask_by_id(plan, subtask_id)
+    if subtask is None:
+        # The original subtask no longer exists — defensive no-op.
+        return 0, False
+    subtask.replan_count = (subtask.replan_count or 0) + 1
+    became_stuck = subtask.replan_count >= _STUCK_AFTER_REPLANS
+    if became_stuck:
+        # Use the enum value (string) — SubtaskStatus members serialise
+        # as their .value via to_dict.
+        # "stuck" isn't in the base SubtaskStatus enum, but the from_dict
+        # tolerates the literal so we set it via the raw string-enum
+        # access. If "stuck" ever lands as a proper enum member, this
+        # keeps working.
+        try:
+            subtask.status = SubtaskStatus("stuck")
+        except ValueError:
+            # SubtaskStatus enum doesn't include "stuck" yet — use
+            # FAILED as the closest existing semantic equivalent and
+            # rely on the planner_warnings to convey "stuck-via-replan".
+            subtask.status = SubtaskStatus.FAILED
+    return subtask.replan_count, became_stuck
+
+
+def _existing_phase_ids(plan) -> set[int]:
+    """Return the set of phase numbers in the plan (for the preserve check)."""
+    return {p.phase for p in plan.phases}
+
+
+def _check_existing_phases_preserved(
+    plan_before, plan_after,
+) -> tuple[bool, str]:
+    """Verify the agent didn't drop / renumber existing phases on replan.
+
+    Returns ``(ok, error)``. The replan prompt says "preserve every
+    existing phase verbatim, append exactly one new replan-N phase".
+    Soft check: phases present BEFORE must still be present AFTER (by
+    .phase number). We don't deep-compare subtasks; the agent may bump
+    a replan_count which is legitimate.
+    """
+    before_ids = _existing_phase_ids(plan_before)
+    after_ids = _existing_phase_ids(plan_after)
+    missing = before_ids - after_ids
+    if missing:
+        return False, f"agent dropped existing phases: {sorted(missing)}"
+    # Allow exactly one new phase (the replan-N). If more, flag.
+    new_phases = after_ids - before_ids
+    if len(new_phases) > 1:
+        return False, f"agent added {len(new_phases)} new phases; expected 1 replan-N"
+    return True, ""
+
+
 async def run_planner(
     spec_dir: Path,
     project_dir: Path,
@@ -406,16 +502,7 @@ async def run_planner(
         return False
 
     if mode == "replan":
-        # Commit 5 wires up the real replan path. For now: surface the
-        # deferred status and return False so the auto-fire path doesn't
-        # silently no-op.
-        _write_status_patch(
-            spec_dir,
-            status="planner_failed",
-            phase="planner_replan_not_implemented",
-            planner_error="replan mode wires up in commit 5/6 of Task 5",
-        )
-        return False
+        return await _run_planner_replan(spec_dir, project_dir, verbose)
 
     try:
         _write_status_patch(
@@ -519,6 +606,176 @@ async def run_planner(
             spec_dir,
             status="planner_failed",
             phase=f"planner_{mode}_exception",
+            planner_error=str(exc)[:500],
+        )
+        return False
+
+
+async def _run_planner_replan(
+    spec_dir: Path,
+    project_dir: Path,
+    verbose: bool,
+) -> bool:
+    """Replan-mode body. Mirrors initial-mode structure with the additional
+    post-session bookkeeping that distinguishes replan from initial:
+
+      - Reads context/replan_request.json for the rejection details
+      - Verifies the existing test_plan.json before the session
+      - Verifies the agent preserved existing phases after the session
+      - Bumps replan_count on the original (rejected) subtask
+      - Marks the original subtask stuck if replan_count >= 2
+
+    Returns True on success, False on hard failure. Failures leave
+    status.json with a descriptive phase + planner_error.
+    """
+    try:
+        _write_status_patch(
+            spec_dir,
+            status="planning",
+            phase="planner_replan_started",
+        )
+
+        # 1. Load + validate replan_request.json
+        rr_ok, rr_err, replan_request = _load_replan_request(spec_dir)
+        if not rr_ok:
+            _write_status_patch(
+                spec_dir,
+                status="planner_failed",
+                phase="planner_replan_missing_request",
+                planner_error=rr_err,
+            )
+            return False
+
+        # 2. Load the existing test_plan.json — replan MUST have an
+        #    existing plan to amend; if it's missing, the caller should
+        #    invoke initial mode instead.
+        ok_before, kind_before, plan_before = _validate_emitted_plan(spec_dir)
+        if not ok_before:
+            _write_status_patch(
+                spec_dir,
+                status="planner_failed",
+                phase="planner_replan_no_existing_plan",
+                planner_error=(
+                    f"replan requires an existing valid test_plan.json — got {kind_before}"
+                ),
+            )
+            return False
+
+        # 3. Build the replan prompt + invoke session.
+        from prompts_pkg.prompts import get_tfactory_planner_replan_prompt
+        prompt = get_tfactory_planner_replan_prompt(spec_dir, project_dir)
+        client = await _resolve_planner_client(spec_dir, project_dir)
+        session_status, _response, _err = await _invoke_session(
+            client, prompt, spec_dir, verbose
+        )
+        if session_status == "error":
+            _write_status_patch(
+                spec_dir,
+                status="planner_failed",
+                phase="planner_replan_session_error",
+                planner_error="run_agent_session returned status=error",
+            )
+            return False
+
+        # 4. Validate the updated plan. Retry once on missing/malformed
+        #    (same pattern as initial mode).
+        ok_after, err_kind, plan_after = _validate_emitted_plan(spec_dir)
+        if not ok_after:
+            _planner_log.warning(
+                "replan: first session produced %s (%s); retrying once",
+                err_kind, plan_after,
+            )
+            retry_prompt = _build_retry_prompt(
+                prompt, err_kind, str(plan_after or "")[:300]
+            )
+            client_retry = await _resolve_planner_client(spec_dir, project_dir)
+            retry_status, _r, _re = await _invoke_session(
+                client_retry, retry_prompt, spec_dir, verbose
+            )
+            if retry_status == "error":
+                _write_status_patch(
+                    spec_dir,
+                    status="planner_failed",
+                    phase="planner_replan_session_error",
+                    planner_error="retry session returned status=error",
+                )
+                return False
+            ok_after, err_kind, plan_after = _validate_emitted_plan(spec_dir)
+            if not ok_after:
+                _write_status_patch(
+                    spec_dir,
+                    status="planner_failed",
+                    phase=f"planner_replan_invalid_{err_kind}_after_retry",
+                    planner_error=(
+                        f"after retry: {err_kind} — {str(plan_after or '')[:200]}"
+                    ),
+                )
+                return False
+
+        # 5. Verify the agent preserved existing phases (didn't rewrite the plan).
+        preserve_ok, preserve_err = _check_existing_phases_preserved(
+            plan_before, plan_after
+        )
+        if not preserve_ok:
+            _write_status_patch(
+                spec_dir,
+                status="planner_failed",
+                phase="planner_replan_phases_lost",
+                planner_error=preserve_err,
+            )
+            return False
+
+        # 6. Bump replan_count on the original subtask + check stuck.
+        original_subtask_id = replan_request["subtask_id"]
+        new_count, became_stuck = _bump_replan_count_and_maybe_stuck(
+            plan_after, original_subtask_id
+        )
+
+        warnings: list[str] = []
+        if new_count == 0:
+            warnings.append(
+                f"replan_request.subtask_id={original_subtask_id!r} not found "
+                f"in plan — replan_count NOT bumped"
+            )
+        elif became_stuck:
+            warnings.append(
+                f"subtask {original_subtask_id!r} hit stuck at replan_count="
+                f"{new_count} — Triager will omit from commit phase"
+            )
+
+        # 7. Truncate if over budget (replan can push total over 30).
+        subtask_count = _count_subtasks(plan_after)
+        if subtask_count > _HARD_SUBTASK_CAP:
+            dropped = _truncate_subtasks(plan_after, _HARD_SUBTASK_CAP)
+            warnings.append(
+                f"plan grew to {subtask_count} subtasks post-replan; truncated "
+                f"to {_HARD_SUBTASK_CAP} (dropped {dropped})"
+            )
+            subtask_count = _HARD_SUBTASK_CAP
+
+        # 8. Persist the updated plan + status.
+        plan_after.save(spec_dir / "test_plan.json")
+
+        _write_status_patch(
+            spec_dir,
+            status="planned",
+            phase="planner_replan_complete",
+            planner_warnings=warnings,
+            subtask_count=subtask_count,
+            last_replan_for=original_subtask_id,
+            last_replan_count=new_count,
+            last_replan_stuck=became_stuck,
+        )
+        return True
+
+    except Exception as exc:
+        _planner_log.error(
+            "planner replan failed: %s\n%s", exc, traceback.format_exc()
+        )
+        _write_status_patch(
+            spec_dir,
+            status="planner_failed",
+            phase="planner_replan_exception",
             planner_error=str(exc)[:500],
         )
         return False
