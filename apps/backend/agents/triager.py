@@ -15,14 +15,14 @@ Per CLAUDE.md: "NO automatic pushes to GitHub - user controls when
 to push". Real-run defaults are off; the operator flips them per
 deployment.
 
-Task 8 commits (in flight):
+Task 8 commits (all landed):
 
   ✓ commit 1 — Auto-fire scaffold + stub
   ✓ commit 2 — Dedup + rank primitives
   ✓ commit 3 — Triage report rendering (golden-file snapshot)
   ✓ commit 4 — git_writer + pr_comment helpers (dry-run first)
-  ✓ commit 5 — Real run_triager wires everything  (this commit)
-  ⬜ commit 6 — Integration test + close #9
+  ✓ commit 5 — Real run_triager wires everything
+  ✓ commit 6 — Integration test + close #9
 
   (Sub-task 8.4 — trim AIFactory's runners/github/ to a minimal
   pr_comment.py — is deferred to a follow-up commit; the web-server

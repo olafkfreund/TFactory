@@ -102,6 +102,7 @@ ALLOWLIST_GLOBS=(
     "tests/test_evaluator_prompts.py"
     "tests/test_evaluator_integration.py"
     "tests/test_triager.py"
+    "tests/test_triager_integration.py"
     "tests/fixtures/planner_smoke/"
     "guides/"
     ".git/"
