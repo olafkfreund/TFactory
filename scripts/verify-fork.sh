@@ -85,6 +85,8 @@ ALLOWLIST_GLOBS=(
     "apps/backend/agents/gen_functional.py"
     "apps/backend/agents/evaluator.py"
     "apps/backend/agents/triager.py"
+    "apps/backend/tools/git_writer.py"
+    "apps/backend/tools/pr_comment.py"
     "apps/backend/prompts/"
     "apps/backend/prompts_pkg/"
     "tests/test_mcp_task_control.py"
