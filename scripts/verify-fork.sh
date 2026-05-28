@@ -62,6 +62,13 @@ REQUIRED_PATHS=(
     "docs/_config.yml"
     "docs/index.md"
     ".agent-os/specs/2026-05-28-tfactory-mvp-walking-skeleton/spec.md"
+    # Task 2 (#18): .tfactory.yml schema + parser
+    "apps/backend/tfactory_yml/__init__.py"
+    "apps/backend/tfactory_yml/schema.py"
+    "apps/backend/tfactory_yml/parser.py"
+    "apps/backend/tfactory_yml/secrets.py"
+    "apps/backend/tfactory_yml/exceptions.py"
+    ".tfactory.yml.example"
 )
 
 # Allowlist of paths that MAY legitimately mention `aifactory` / `AIFactory`.
@@ -117,6 +124,12 @@ ALLOWLIST_GLOBS=(
     ".husky/"
     # framework_registry docs reference the AIFactory spec handover relationship
     "docs/framework-registry.md"
+    # Task 2 (#18): .tfactory.yml schema + parser. These files describe the
+    # config file that AIFactory projects carry; references to "AIFactory repo"
+    # are intentional documentation of the cross-project relationship.
+    "apps/backend/tfactory_yml/"
+    ".tfactory.yml.example"
+    ".pre-commit-config.yaml"
 )
 
 # ---------- args ----------
