@@ -1,7 +1,7 @@
 ---
 name: handover-to-tfactory
-description: Hand a finished AIFactory spec off to TFactory for autonomous test generation. Records the task, snapshots the spec dir, and drives the full Planner → Gen-Functional → Executor → Evaluator → Triager pipeline to produce a triage report + (optionally) commit tests to the feature branch + post a PR comment.
-when_to_use: When the user has finished an AIFactory feature on a branch and wants TFactory to generate aligned pytest tests + a verdicts/coverage report. Common triggers — "hand this off to tfactory", "/handover-to-tfactory", "generate tests for the current PR", "have tfactory test this spec".
+description: Hand a finished AIFactory spec off to TFactory for autonomous polyglot test generation. Records the task, snapshots the spec dir, and drives the full Planner → Gen-Functional → Executor → Evaluator → Triager pipeline across the v0.2 5-lane spine (unit / browser / api / integration / mutation) to produce a triage report + (optionally) commit tests to the feature branch + post a PR comment.
+when_to_use: When the user has finished an AIFactory feature on a branch and wants TFactory to generate aligned tests + a verdicts/coverage report across pytest / Jest / Playwright as appropriate for each subtask. Common triggers — "hand this off to tfactory", "/handover-to-tfactory", "generate tests for the current PR", "have tfactory test this spec".
 allowed-tools:
   - mcp__tfactory__project_list
   - mcp__tfactory__project_create
@@ -17,17 +17,32 @@ allowed-tools:
 
 Hand a finished AIFactory spec off to TFactory.
 
-> **Status (post-MVP, v0.1.0-mvp):** the full 4-agent pipeline is wired
-> and tested against mocked SDK + injected docker-runner seams. Real
-> end-to-end run against an AIFactory project still requires an
-> `ANTHROPIC_API_KEY` + a running Docker daemon + a real git/gh setup.
-> See `guides/e2e-smoke.md` for the operator-facing walkthrough.
+> **Status (v0.2):** the 4-agent pipeline is wired across the v0.2 5-lane
+> spine — **unit** (pytest / Jest / xUnit), **browser** (Playwright /
+> Cypress), **api** (httpx / supertest), **integration** (TestContainers /
+> WireMock), and **mutation** (mutmut / Stryker). The Planner emits
+> polyglot subtasks with explicit `(language, framework)` per subtask, so a
+> single plan can mix pytest tests for Python with Jest/Playwright tests
+> for TypeScript. Real end-to-end run against an AIFactory project still
+> requires credentials for the configured LLM provider + a running Docker
+> daemon + a real git/gh setup. See `guides/e2e-smoke.md` for the
+> operator-facing walkthrough.
 >
 > The skill records the task, snapshots the AIFactory spec into
 > `~/.tfactory/workspaces/<proj>/specs/<spec>/context/`, and (with
 > `TFACTORY_AUTO_*=1`, the production default) auto-fires the pipeline.
 > Final status reaches `triaged` / `triaged_empty` when the Triager
 > finishes; `findings/triage_report.md` holds the human-readable report.
+>
+> **Prerequisites (v0.2):**
+> - **`.tfactory.yml`** at the AIFactory repo root declaring the targets
+>   the pipeline will exercise (HTTP services, k8s contexts, docker-compose
+>   stacks, feature-flag overlays). If missing, ask the user to run
+>   `/tfactory-init` first.
+> - **`.tfactory/tests-catalog.json`** at the AIFactory repo root — the
+>   persistent cross-run catalog the Triager consults to decide
+>   UPDATE-in-place vs CREATE-new per AC. `/tfactory-init` seeds it empty
+>   on first adoption.
 
 ## When to use
 
@@ -43,6 +58,32 @@ If the user is mid-feature and the branch isn't ready, push back rather
 than handing over a half-built thing.
 
 ## Procedure
+
+### 0. Verify v0.2 prerequisites are in place
+
+Before invoking the MCP tool, confirm the AIFactory repo root contains:
+
+```bash
+test -f .tfactory.yml && echo "ok: .tfactory.yml"
+test -f .tfactory/tests-catalog.json && echo "ok: tests-catalog.json"
+```
+
+- If `.tfactory.yml` is missing → tell the user to run `/tfactory-init`
+  first. TFactory v0.2 needs declared targets to drive the polyglot
+  Planner — without them, the Planner can't assign `target_name` to
+  subtasks and the Browser / API lanes have nowhere to run.
+- If `.tfactory/tests-catalog.json` is missing → run `/tfactory-init` (it
+  seeds an empty catalog) OR write `{"version": 1, "updated_at":
+  "<now-Z>", "tests": []}` manually. The catalog lets the Triager decide
+  UPDATE-in-place vs CREATE-new per AC. Without it, the Triager treats
+  every accepted test as a brand-new CREATE.
+
+These checks ensure the pipeline operates with the v0.2 `(language,
+framework)` polyglot mental model. The Planner picks the
+`(language, framework)` per subtask — e.g. `(python, pytest)` for a
+Python helper, `(typescript, jest)` for a unit-tested React utility,
+`(typescript, playwright)` for an end-to-end browser flow. A single
+test_plan.json can mix all three.
 
 ### 1. Gather the four required arguments
 
@@ -103,9 +144,10 @@ Call the same tool with `confirm=true`. The response contains:
 A one-line summary at minimum, e.g.:
 
 > Task `<task_id>` created in TFactory. Workspace at `<spec_dir>`.
-> Pipeline execution lands in Tasks 5-8; for now the task sits at
-> `status=pending`. Poll with `mcp__tfactory__task_status` once the
-> pipeline is wired.
+> The Planner will emit polyglot subtasks across the unit / browser /
+> api / integration lanes (mutation is orthogonal — it strengthens
+> whatever else lands). Poll with `mcp__tfactory__task_status` for the
+> live status; the final state is `triaged` / `triaged_empty`.
 
 If the user wants progress: call `task_status` once after a beat.
 
@@ -131,13 +173,22 @@ mcp__tfactory__report_get(task_id=<task_id>, format='md')
   `companion-skills/aifactory-handover-to-tfactory/` in the TFactory
   repo for installation steps.)
 
-## Non-goals at MVP
+## Non-goals
 
 - This skill does **not** drive the Planner / Generators / Executor /
   Evaluator / Triager directly — those agents run inside the TFactory
-  backend once Tasks 5-8 land.
-- This skill does **not** push code or open PRs. The Triager (Task 8)
-  handles `git commit` + `gh pr comment` once the pipeline is wired.
+  backend pipeline once the task is created.
+- This skill does **not** push code or open PRs by default. The Triager
+  side-effects (`git commit` to the feature branch, `gh pr comment`) are
+  DRY-RUN by default; operators opt in via
+  `TFACTORY_TRIAGER_GIT_WRITE=1` and `TFACTORY_TRIAGER_PR_COMMENT=1`.
 - This skill does **not** handle external repositories (non-AIFactory).
-  TFactory MVP is spec-aware-handover only; arbitrary-repo testing is
-  out of scope.
+  v0.2 is still spec-aware-handover only; arbitrary-repo testing is out
+  of scope.
+- This skill does **not** create `.tfactory.yml` or
+  `.tfactory/tests-catalog.json`. Use `/tfactory-init` for that.
+- The `task_create_and_run` MCP tool signature is **unchanged from v0.1**
+  — only the downstream pipeline is polyglot. No new arguments are
+  required to drive the unit / browser / api / integration lanes; the
+  Planner infers `(language, framework)` per subtask from the diff +
+  the targets declared in `.tfactory.yml`.
