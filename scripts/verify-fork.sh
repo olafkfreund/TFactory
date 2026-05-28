@@ -113,6 +113,10 @@ ALLOWLIST_GLOBS=(
     "tests/fixtures/planner_smoke/"
     "guides/"
     ".git/"
+    # .husky/pre-commit comments mention AIFactory test files for context
+    ".husky/"
+    # framework_registry docs reference the AIFactory spec handover relationship
+    "docs/framework-registry.md"
 )
 
 # ---------- args ----------
