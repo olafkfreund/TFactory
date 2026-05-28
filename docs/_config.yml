@@ -1,19 +1,36 @@
 title: TFactory
-description: Autonomous test generation + execution platform, sister project to AIFactory.
+description: Autonomous test generation + execution platform — Planner → Gen-Functional → Evaluator → Triager. Sister project to AIFactory.
+
+# Keep the remote theme reference so the legacy Pages auto-builder is happy,
+# but override its layout via _layouts/default.html (Jekyll local layouts
+# always supersede remote-theme layouts). Our custom CSS loads AFTER
+# cayman's so it wins by source order.
 remote_theme: pages-themes/cayman@v0.2.0
+
 plugins:
   - jekyll-remote-theme
   - jekyll-relative-links
+
 relative_links:
   enabled: true
   collections: true
+
 markdown: kramdown
 kramdown:
   input: GFM
   hard_wrap: false
   syntax_highlighter: rouge
+  syntax_highlighter_opts:
+    css_class: highlight
+
 show_downloads: false
+
 exclude:
   - vendor/
   - Gemfile
   - Gemfile.lock
+
+# Repo + version metadata (used by the custom layout)
+repo_url: https://github.com/olafkfreund/TFactory
+release_tag: v0.1.0-mvp
+release_url: https://github.com/olafkfreund/TFactory/releases/tag/v0.1.0-mvp

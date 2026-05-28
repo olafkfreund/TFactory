@@ -1,0 +1,53 @@
+<section class="pipeline reveal">
+  <header class="pipeline__header">
+    <h2 class="pipeline__title">The 4-agent pipeline</h2>
+    <span class="pipeline__caption">walking skeleton · v0.1.0-mvp</span>
+  </header>
+  <div class="pipeline__flow" role="list">
+    <div class="pipeline__node pipeline__node--active" role="listitem">
+      <span class="pipeline__node-icon" aria-hidden="true">📋</span>
+      <p class="pipeline__node-name">Planner</p>
+      <span class="pipeline__node-meta">test_plan.json</span>
+    </div>
+    <div class="pipeline__arrow" aria-hidden="true">
+      <svg width="28" height="14" viewBox="0 0 28 14" fill="none">
+        <path d="M0 7h22M16 1l6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+    <div class="pipeline__node pipeline__node--active" role="listitem">
+      <span class="pipeline__node-icon" aria-hidden="true">⚙️</span>
+      <p class="pipeline__node-name">Gen-Functional</p>
+      <span class="pipeline__node-meta">tests/*.py</span>
+    </div>
+    <div class="pipeline__arrow" aria-hidden="true">
+      <svg width="28" height="14" viewBox="0 0 28 14" fill="none">
+        <path d="M0 7h22M16 1l6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+    <div class="pipeline__node pipeline__node--active" role="listitem">
+      <span class="pipeline__node-icon" aria-hidden="true">🐳</span>
+      <p class="pipeline__node-name">Executor</p>
+      <span class="pipeline__node-meta">docker</span>
+    </div>
+    <div class="pipeline__arrow" aria-hidden="true">
+      <svg width="28" height="14" viewBox="0 0 28 14" fill="none">
+        <path d="M0 7h22M16 1l6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+    <div class="pipeline__node pipeline__node--active" role="listitem">
+      <span class="pipeline__node-icon" aria-hidden="true">🔬</span>
+      <p class="pipeline__node-name">Evaluator</p>
+      <span class="pipeline__node-meta">verdicts.json</span>
+    </div>
+    <div class="pipeline__arrow" aria-hidden="true">
+      <svg width="28" height="14" viewBox="0 0 28 14" fill="none">
+        <path d="M0 7h22M16 1l6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+    <div class="pipeline__node pipeline__node--active" role="listitem">
+      <span class="pipeline__node-icon" aria-hidden="true">📤</span>
+      <p class="pipeline__node-name">Triager</p>
+      <span class="pipeline__node-meta">triage_report.md</span>
+    </div>
+  </div>
+</section>
