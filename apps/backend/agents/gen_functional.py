@@ -182,6 +182,67 @@ def _advance_to_planner_replan(spec_dir: Path, project_dir: Path) -> None:
         )
 
 
+def _resolve_runner_fn(framework_descriptor=None):
+    """Return a runner callable parameterized by the framework's Docker image.
+
+    In v0.2 the runner image is taken from
+    ``framework_descriptor.runtime.image``.  For v0.1-style subtasks
+    (``framework_descriptor=None``) the legacy default image
+    ``tfactory-runner-python:latest`` is used and a ``DeprecationWarning``
+    is emitted.
+
+    The returned callable has the signature::
+
+        runner_fn(test_file: Path, project_dir: Path, seed: int) -> RunResultLike
+
+    matching the seam that ``stability_runner.check_stability`` and
+    ``mutate_probe.mutate_and_probe`` expect.
+
+    Args:
+        framework_descriptor: A ``FrameworkDescriptor`` instance, or ``None``
+            for v0.1-style subtasks.
+
+    Returns:
+        A callable that runs a test file via DockerRunner.
+
+    Note:
+        Heavy imports are deferred so tests can patch this function without
+        pulling in the full Docker runtime chain.
+    """
+    import warnings
+
+    _DEFAULT_IMAGE = "tfactory-runner-python:latest"
+
+    if framework_descriptor is None:
+        warnings.warn(
+            f"_resolve_runner_fn: framework_descriptor not provided; "
+            f"falling back to default image {_DEFAULT_IMAGE!r}. "
+            "Pass framework_descriptor for polyglot runner dispatch; "
+            "this default will be removed in v0.3.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        image = _DEFAULT_IMAGE
+    else:
+        image = (
+            getattr(getattr(framework_descriptor, "runtime", None), "image", None)
+            or _DEFAULT_IMAGE
+        )
+
+    from tools.runners.docker_runner import DockerRunner
+
+    runner = DockerRunner(image=image)
+
+    def _run(test_file: Path, project_dir_arg: Path, seed: int):
+        return runner.run_pytest(
+            test_file=test_file,
+            project_dir=project_dir_arg,
+            seed=seed,
+        )
+
+    return _run
+
+
 def _resolve_framework_descriptor(subtask):
     """Look up the FrameworkDescriptor for this subtask's ``framework`` field.
 
