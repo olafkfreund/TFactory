@@ -1,33 +1,49 @@
-"""Task-control MCP tools — Epic #50 M1.
+"""Task-control MCP tools — TFactory MVP, Task 2 (#3).
 
-8 tools that let a Claude Code session in the TFactory repo drive
-TFactory tasks via natural-language MCP calls:
+Seven tools that let a Claude Code session in an AIFactory project
+hand a finished spec off to TFactory and observe progress:
+
+  Write tools
+  - task_create_and_run  — create a TFactory workspace for an AIFactory
+                           spec + (eventually) kick off the pipeline
+  - project_create       — register an AIFactory project for handover
+  - task_rerun           — re-execute one lane against an existing task
 
   Read tools
-  - task_list         — list tasks (filter by status/project, default limit 50)
-  - task_running      — list currently running tasks
-  - task_get          — full task detail (heavy fields truncated)
-  - task_status       — execution state (phase, current subtask, progress)
-  - task_get_logs     — last N log lines (default 100, cap 500)
+  - task_status   — execution state for a task (phase + lane progress)
+  - task_list     — list TFactory tasks, filterable by project / status
+  - project_list  — list registered projects
+  - report_get    — fetch a task's report (markdown or JSON)
 
-  Write tools (each writes an AuditLog row server-side)
-  - task_start        — POST /api/tasks/{id}/start
-  - task_stop         — POST /api/tasks/{id}/stop
-  - task_approve_plan — POST /api/tasks/{id}/approve-plan
+Storage at MVP: filesystem-only, under ``$TFACTORY_WORKSPACE_ROOT``
+(default ``~/.tfactory``). Layout:
 
-Trust model (per Epic #50): tools have full admin access via the legacy
-bearer token at ``~/.tfactory/.token``. Per-user MCP tokens land in the
-v1.1 RBAC work — until then, anyone with the token has admin.
+    ~/.tfactory/
+      projects.json
+      workspaces/{project_id}/specs/{spec_id}/
+        task.md                  # handover payload, agent-readable
+        status.json              # task lifecycle state
+        report.md / report.json  # populated by the Triager (Task 8)
+        context/, tests/, findings/, logs/, memory/  # Task 3+
+
+The REST-backed inherited tool surface (task_start / task_stop / etc.)
+has been removed — those were for AIFactory's coder pipeline. The
+TFactory FastAPI portal (Task 9) will add HTTP endpoints that mirror
+these MCP tools so the React frontend can read the same state.
 
 Registered ONLY from the standalone MCP server
 (``apps/backend/mcp_server/tfactory_server.py``), NOT from
-``registry.create_all_tools`` — the in-process Claude Agent SDK shouldn't
-be able to drive itself recursively.
+``registry.create_all_tools`` — the in-process Claude Agent SDK
+shouldn't be able to drive itself recursively.
 """
 
 from __future__ import annotations
 
 import json
+import os
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 try:
@@ -38,658 +54,476 @@ except ImportError:
     SDK_TOOLS_AVAILABLE = False
     tool = None  # type: ignore[assignment]
 
-from ..http_client import MCPHTTPError, request
+
+# ---------------------------------------------------------------------------
+# Storage layout helpers
+# ---------------------------------------------------------------------------
+
+_DEFAULT_ROOT = Path.home() / ".tfactory"
+_MVP_LANES = ("functional",)  # other lanes ship in phases 2-5
 
 
-def _format_error(exc: Exception) -> dict[str, Any]:
-    """Wrap an MCPHTTPError (or other) as a content-block error response.
+def _workspace_root() -> Path:
+    """Resolve the TFactory workspace root. Env override > default."""
+    root = os.environ.get("TFACTORY_WORKSPACE_ROOT")
+    return Path(root).expanduser() if root else _DEFAULT_ROOT
 
-    MCP tools don't have a separate ``isError`` field in the simple SDK
-    helper; we return ``content[]`` with a single text block prefixed
-    with "Error:" so the LLM client renders it as a failure message and
-    the operator sees the actionable guidance directly.
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _projects_file(root: Path | None = None) -> Path:
+    return (root or _workspace_root()) / "projects.json"
+
+
+def _load_projects(root: Path | None = None) -> dict[str, Any]:
+    """Return ``{"projects": [...]}``; empty if the file doesn't exist."""
+    pf = _projects_file(root)
+    if not pf.exists():
+        return {"projects": []}
+    try:
+        return json.loads(pf.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {"projects": []}
+
+
+def _save_projects(data: dict[str, Any], root: Path | None = None) -> None:
+    pf = _projects_file(root)
+    pf.parent.mkdir(parents=True, exist_ok=True)
+    pf.write_text(json.dumps(data, indent=2))
+
+
+def _spec_dir(project_id: str, spec_id: str, root: Path | None = None) -> Path:
+    return (root or _workspace_root()) / "workspaces" / project_id / "specs" / spec_id
+
+
+def _status_file(project_id: str, spec_id: str, root: Path | None = None) -> Path:
+    return _spec_dir(project_id, spec_id, root) / "status.json"
+
+
+def _find_task(task_id: str, root: Path | None = None) -> tuple[str, str] | None:
+    """Locate a task by ID. Returns (project_id, spec_id) or None.
+
+    The spec_id IS the task_id in MVP — they're allocated 1:1 when
+    task_create_and_run runs. A separate id field exists in status.json
+    so a future store could decouple them without breaking the API.
     """
+    workspaces_root = (root or _workspace_root()) / "workspaces"
+    if not workspaces_root.exists():
+        return None
+    for project_dir in workspaces_root.iterdir():
+        if not project_dir.is_dir():
+            continue
+        specs_dir = project_dir / "specs"
+        if not specs_dir.exists():
+            continue
+        candidate = specs_dir / task_id
+        if candidate.is_dir():
+            return (project_dir.name, task_id)
+    return None
+
+
+def _load_status(project_id: str, spec_id: str, root: Path | None = None) -> dict[str, Any] | None:
+    sf = _status_file(project_id, spec_id, root)
+    if not sf.exists():
+        return None
+    try:
+        return json.loads(sf.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Response envelope helpers
+# ---------------------------------------------------------------------------
+
+def _format_error(exc: Exception | str) -> dict[str, Any]:
+    """Return the MCP content-block error shape (``isError=True``)."""
+    text = str(exc) if isinstance(exc, Exception) else exc
     return {
-        "content": [{"type": "text", "text": f"Error: {exc}"}],
+        "content": [{"type": "text", "text": f"Error: {text}"}],
         "isError": True,
     }
 
 
 def _format_json(data: Any) -> dict[str, Any]:
-    """Wrap a JSON-serializable payload as a content-block response."""
+    """Return the MCP content-block success shape with JSON payload."""
     return {
         "content": [{"type": "text", "text": json.dumps(data, indent=2, default=str)}]
     }
 
 
-# Heavy fields stripped from task_get so the LLM context doesn't bloat.
-# These remain available via direct REST if needed.
-_HEAVY_FIELDS_TO_TRUNCATE = ("requirements_json", "test_plan_json", "context_json")
-_HEAVY_FIELD_CAP = 2000
-
-
-def _lean_task(task: dict) -> dict:
-    """Strip / truncate heavy fields from a task detail payload."""
-    lean = dict(task)
-    for field in _HEAVY_FIELDS_TO_TRUNCATE:
-        if field in lean and isinstance(lean[field], str) and len(lean[field]) > _HEAVY_FIELD_CAP:
-            lean[field] = lean[field][:_HEAVY_FIELD_CAP] + "...[truncated]"
-    return lean
-
+# ---------------------------------------------------------------------------
+# Tool factory
+# ---------------------------------------------------------------------------
 
 def create_task_control_tools() -> list:
-    """Create the 8 task-control tools.
+    """Create the seven TFactory MVP task-control tools.
 
-    Returns a list of tool functions decorated with @tool — callers pass
-    this to ``mcp.server.Server.tools`` via ``create_sdk_mcp_server``.
+    Returns a list of tool functions decorated with ``@tool`` from
+    ``claude_agent_sdk``. The standalone MCP server passes this list
+    to ``create_sdk_mcp_server`` to publish them over stdio.
     """
     if not SDK_TOOLS_AVAILABLE:
         return []
 
-    tools = []
+    tools: list = []
 
-    # ── Read tools ────────────────────────────────────────────────────
+    # ── task_create_and_run ──────────────────────────────────────────────
 
     @tool(
-        "task_list",
-        "List TFactory tasks across all projects. Filter by status (e.g. 'running', "
-        "'completed', 'failed') or project_id. Returns lean entries with id, title, "
-        "status, project_id, created_at.",
+        "task_create_and_run",
+        "Create a TFactory task for an AIFactory spec and (eventually) "
+        "kick off the autonomous test-generation pipeline. At MVP the task "
+        "is recorded with status=pending; the pipeline runs once the "
+        "Planner/Generator/Executor/Evaluator/Triager agents land "
+        "(Tasks 5-8). Returns the new task_id, portal_url, and "
+        "workspace spec_dir path.",
         {
             "type": "object",
             "properties": {
-                "status": {"type": "string", "description": "Optional status filter"},
-                "project_id": {"type": "string", "description": "Optional project filter"},
-                "limit": {"type": "integer", "default": 50, "description": "Max results"},
+                "project_id": {
+                    "type": "string",
+                    "description": "Project ID (from project_list / project_create)",
+                },
+                "spec_id": {
+                    "type": "string",
+                    "description": "AIFactory spec ID — the spec_dir under ~/.aifactory/workspaces/{project_id}/specs/{spec_id}/ that the Planner will read read-only",
+                },
+                "branch": {
+                    "type": "string",
+                    "description": "Git branch containing the completed feature code",
+                },
+                "base_ref": {
+                    "type": "string",
+                    "description": "Base ref to diff against (typically the PR base, e.g. main)",
+                },
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Pass true to actually create the workspace. If false, returns a preview without side effects.",
+                },
             },
+            "required": ["project_id", "spec_id", "branch", "base_ref"],
         },
     )
-    async def task_list(args: dict[str, Any]) -> dict[str, Any]:
-        params: dict[str, Any] = {"limit": args.get("limit", 50)}
-        if args.get("status"):
-            params["status"] = args["status"]
-        if args.get("project_id"):
-            params["project_id"] = args["project_id"]
-        try:
-            raw = await request("GET", "/api/tasks", params=params)
-        except MCPHTTPError as exc:
-            return _format_error(exc)
-        # Server returns either a list or a wrapped object — handle both.
-        items = raw if isinstance(raw, list) else raw.get("tasks", raw.get("data", []))
-        lean = [
-            {
-                "id": t.get("id"),
-                "title": t.get("title") or t.get("spec_id"),
-                "status": t.get("status"),
-                "project_id": t.get("project_id"),
-                "created_at": t.get("created_at"),
-            }
-            for t in items
-            if isinstance(t, dict)
-        ]
-        return _format_json({"count": len(lean), "tasks": lean})
+    async def task_create_and_run(args: dict[str, Any]) -> dict[str, Any]:
+        project_id = args["project_id"]
+        spec_id = args["spec_id"]
+        branch = args["branch"]
+        base_ref = args["base_ref"]
+        confirm = bool(args.get("confirm", False))
 
-    @tool(
-        "task_running",
-        "List TFactory tasks currently running (phase != idle/completed/failed). "
-        "Returns id, title, project_id, phase, started_at for each.",
-        {"type": "object", "properties": {}},
-    )
-    async def task_running(args: dict[str, Any]) -> dict[str, Any]:
-        try:
-            raw = await request("GET", "/api/tasks/running")
-        except MCPHTTPError as exc:
-            return _format_error(exc)
-        items = raw if isinstance(raw, list) else raw.get("tasks", raw.get("data", []))
-        lean = [
-            {
-                "id": t.get("id"),
-                "title": t.get("title") or t.get("spec_id"),
-                "project_id": t.get("project_id"),
-                "phase": t.get("phase") or t.get("current_phase"),
-                "started_at": t.get("started_at"),
-            }
-            for t in items
-            if isinstance(t, dict)
-        ]
-        return _format_json({"count": len(lean), "running": lean})
+        projects = _load_projects()
+        if not any(p.get("id") == project_id for p in projects["projects"]):
+            return _format_error(
+                f"unknown project_id: {project_id!r}. Run project_list to see registered projects "
+                f"or project_create to register one."
+            )
 
-    @tool(
-        "task_get",
-        "Get full task detail by id. Heavy fields (requirements_json, "
-        "test_plan_json) are truncated to 2000 chars to keep the "
-        "response sensibly sized; use the REST API directly for the full payload.",
-        {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string", "description": "Task id"},
-            },
-            "required": ["task_id"],
-        },
-    )
-    async def task_get(args: dict[str, Any]) -> dict[str, Any]:
-        task_id = args["task_id"]
-        try:
-            raw = await request("GET", f"/api/tasks/{task_id}")
-        except MCPHTTPError as exc:
-            return _format_error(exc)
-        if not isinstance(raw, dict):
-            return _format_error(RuntimeError(f"unexpected payload shape: {type(raw)}"))
-        return _format_json(_lean_task(raw))
+        task_id = spec_id  # MVP: 1:1 mapping
+        spec_dir = _spec_dir(project_id, task_id)
+
+        if not confirm:
+            return _format_json({
+                "preview": True,
+                "would_create": str(spec_dir),
+                "project_id": project_id,
+                "spec_id": spec_id,
+                "branch": branch,
+                "base_ref": base_ref,
+                "hint": "Re-run with confirm=true to create the workspace.",
+            })
+
+        if spec_dir.exists():
+            return _format_error(
+                f"spec_dir already exists: {spec_dir}. Use task_rerun to re-execute a lane "
+                f"against an existing task."
+            )
+
+        spec_dir.mkdir(parents=True, exist_ok=True)
+        for sub in ("context", "tests", "findings", "logs", "memory"):
+            (spec_dir / sub).mkdir(exist_ok=True)
+
+        # task.md — agent-readable handover payload
+        (spec_dir / "task.md").write_text(
+            f"# TFactory task\n\n"
+            f"- project_id: {project_id}\n"
+            f"- spec_id: {spec_id}\n"
+            f"- branch: {branch}\n"
+            f"- base_ref: {base_ref}\n"
+            f"- created_at: {_now_iso()}\n\n"
+            f"## Source\n\n"
+            f"This task tests the AIFactory spec at "
+            f"`~/.aifactory/workspaces/{project_id}/specs/{spec_id}/`.\n"
+            f"The Planner agent (Task 5) reads that snapshot and emits a "
+            f"lane-tagged `test_plan.json` under this workspace.\n"
+        )
+
+        # status.json — lifecycle state
+        status = {
+            "task_id": task_id,
+            "project_id": project_id,
+            "spec_id": spec_id,
+            "branch": branch,
+            "base_ref": base_ref,
+            "status": "pending",
+            "phase": "created",
+            "lane_progress": {lane: "pending" for lane in _MVP_LANES},
+            "created_at": _now_iso(),
+            "updated_at": _now_iso(),
+        }
+        _status_file(project_id, task_id).write_text(json.dumps(status, indent=2))
+
+        portal_port = os.environ.get("TFACTORY_PORTAL_PORT", "3102")
+        return _format_json({
+            "task_id": task_id,
+            "project_id": project_id,
+            "spec_dir": str(spec_dir),
+            "portal_url": f"http://localhost:{portal_port}/tasks/{task_id}",
+            "status": "pending",
+            "note": (
+                "Workspace created. Pipeline execution wires up in Tasks 3-8 "
+                "(snapshotter + planner + generators + executor + evaluator + triager)."
+            ),
+        })
+
+    tools.append(task_create_and_run)
+
+    # ── task_status ──────────────────────────────────────────────────────
 
     @tool(
         "task_status",
-        "Get the execution-state object for a task: current phase, current subtask, "
-        "overall progress, and the model in use right now. Cheaper than task_get; "
-        "use this for polling.",
+        "Get the lifecycle state of a TFactory task: status, current phase, "
+        "per-lane progress, branch, base_ref, timestamps. Cheap; safe to poll.",
         {
             "type": "object",
             "properties": {
-                "task_id": {"type": "string", "description": "Task id"},
+                "task_id": {"type": "string", "description": "TFactory task ID"},
             },
             "required": ["task_id"],
         },
     )
     async def task_status(args: dict[str, Any]) -> dict[str, Any]:
         task_id = args["task_id"]
-        try:
-            raw = await request("GET", f"/api/tasks/{task_id}/status")
-        except MCPHTTPError as exc:
-            return _format_error(exc)
-        return _format_json(raw)
+        located = _find_task(task_id)
+        if not located:
+            return _format_error(f"unknown task_id: {task_id!r}")
+        project_id, spec_id = located
+        status = _load_status(project_id, spec_id)
+        if status is None:
+            return _format_error(
+                f"task {task_id!r} has no status.json — workspace likely corrupted"
+            )
+        return _format_json(status)
+
+    tools.append(task_status)
+
+    # ── task_list ────────────────────────────────────────────────────────
 
     @tool(
-        "task_get_logs",
-        "Get the last N log lines for a task. Default 100, capped at 500 to keep "
-        "the response sensibly sized.",
+        "task_list",
+        "List TFactory tasks. Optionally filter by project_id or status. "
+        "Returns lean entries (task_id, project_id, status, phase, created_at, updated_at).",
         {
             "type": "object",
             "properties": {
-                "task_id": {"type": "string", "description": "Task id"},
-                "tail": {
-                    "type": "integer",
-                    "default": 100,
-                    "description": "Number of trailing lines (capped at 500)",
-                },
+                "project_id": {"type": "string", "description": "Optional project filter"},
+                "status": {"type": "string", "description": "Optional status filter (e.g. pending, running, done, failed)"},
+                "limit": {"type": "integer", "default": 50, "description": "Max results"},
             },
-            "required": ["task_id"],
         },
     )
-    async def task_get_logs(args: dict[str, Any]) -> dict[str, Any]:
-        task_id = args["task_id"]
-        tail = min(int(args.get("tail", 100)), 500)
-        try:
-            raw = await request("GET", f"/api/tasks/{task_id}/logs", params={"tail": tail})
-        except MCPHTTPError as exc:
-            return _format_error(exc)
-        return _format_json(raw)
+    async def task_list(args: dict[str, Any]) -> dict[str, Any]:
+        project_filter = args.get("project_id")
+        status_filter = args.get("status")
+        limit = int(args.get("limit", 50))
 
-    # ── Write tools (each writes an AuditLog row server-side) ─────────
+        results: list[dict[str, Any]] = []
+        workspaces_root = _workspace_root() / "workspaces"
+        if workspaces_root.exists():
+            for project_dir in sorted(workspaces_root.iterdir()):
+                if not project_dir.is_dir():
+                    continue
+                if project_filter and project_dir.name != project_filter:
+                    continue
+                specs_dir = project_dir / "specs"
+                if not specs_dir.exists():
+                    continue
+                for spec_dir in sorted(specs_dir.iterdir()):
+                    if not spec_dir.is_dir():
+                        continue
+                    status = _load_status(project_dir.name, spec_dir.name)
+                    if not status:
+                        continue
+                    if status_filter and status.get("status") != status_filter:
+                        continue
+                    results.append({
+                        "task_id": status.get("task_id"),
+                        "project_id": status.get("project_id"),
+                        "status": status.get("status"),
+                        "phase": status.get("phase"),
+                        "created_at": status.get("created_at"),
+                        "updated_at": status.get("updated_at"),
+                    })
+                    if len(results) >= limit:
+                        break
+                if len(results) >= limit:
+                    break
 
-    @tool(
-        "task_start",
-        "Start a task's agent. The task must exist and be in a startable state "
-        "(typically 'planned' or 'paused'). Writes an audit log entry server-side.",
-        {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string", "description": "Task id"},
-            },
-            "required": ["task_id"],
-        },
-    )
-    async def task_start(args: dict[str, Any]) -> dict[str, Any]:
-        task_id = args["task_id"]
-        try:
-            raw = await request("POST", f"/api/tasks/{task_id}/start", json={})
-        except MCPHTTPError as exc:
-            return _format_error(exc)
-        return _format_json({"started": True, "task_id": task_id, "details": raw})
+        return _format_json({"count": len(results), "tasks": results})
 
-    @tool(
-        "task_stop",
-        "Stop a running task. The agent subprocess is terminated; the task can be "
-        "resumed with task_start. Writes an audit log entry server-side.",
-        {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string", "description": "Task id"},
-            },
-            "required": ["task_id"],
-        },
-    )
-    async def task_stop(args: dict[str, Any]) -> dict[str, Any]:
-        task_id = args["task_id"]
-        try:
-            raw = await request("POST", f"/api/tasks/{task_id}/stop", json={})
-        except MCPHTTPError as exc:
-            return _format_error(exc)
-        return _format_json({"stopped": True, "task_id": task_id, "details": raw})
+    tools.append(task_list)
 
-    @tool(
-        "task_approve_plan",
-        "Approve a task's implementation plan at the human-review checkpoint. The "
-        "agent resumes from where it paused. Writes an audit log entry server-side.",
-        {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string", "description": "Task id"},
-            },
-            "required": ["task_id"],
-        },
-    )
-    async def task_approve_plan(args: dict[str, Any]) -> dict[str, Any]:
-        task_id = args["task_id"]
-        try:
-            raw = await request(
-                "POST", f"/api/tasks/{task_id}/approve-plan", json={}
-            )
-        except MCPHTTPError as exc:
-            return _format_error(exc)
-        return _format_json({"approved": True, "task_id": task_id, "details": raw})
-
-    # ── M2 Write tools (destructive — gated by confirm=true) ──────────
-    #
-    # The 4 destructive M2 tools (create_and_run, recover, create_pr,
-    # merge_pr) MUST refuse without explicit ``confirm=true``. Autonomous
-    # Claude Code sessions shouldn't kick off paid agent runs or merge
-    # production PRs unprompted — the confirm-gate forces a deliberate
-    # second LLM turn for these actions.
-
-    def _confirm_gate_response(verb: str, preview: dict[str, Any]) -> dict[str, Any]:
-        """Structured ``requires_confirmation`` response shown when confirm=false."""
-        body = {
-            "requires_confirmation": True,
-            "verb": verb,
-            "preview": preview,
-            "to_proceed": f"Re-call this tool with confirm=true to actually {verb}.",
-        }
-        return _format_json(body)
-
-    @tool(
-        "task_create_and_run",
-        "Create a new task from a description and start it immediately. "
-        "DESTRUCTIVE: kicks off a paid agent run — requires confirm=true. "
-        "Returns the new task_id once started.",
-        {
-            "type": "object",
-            "properties": {
-                "project_id": {"type": "string"},
-                "title": {"type": "string"},
-                "description": {"type": "string"},
-                "model": {"type": "string", "description": "Override default model (optional)"},
-                "confirm": {
-                    "type": "boolean",
-                    "default": False,
-                    "description": "Required true to actually create + run",
-                },
-            },
-            "required": ["project_id", "title", "description"],
-        },
-    )
-    async def task_create_and_run(args: dict[str, Any]) -> dict[str, Any]:
-        if not args.get("confirm"):
-            return _confirm_gate_response(
-                "create_and_run",
-                {
-                    "project_id": args.get("project_id"),
-                    "title": args.get("title"),
-                    "description_preview": (args.get("description", "")[:200]),
-                },
-            )
-        payload = {
-            "project_id": args["project_id"],
-            "title": args["title"],
-            "description": args["description"],
-        }
-        if args.get("model"):
-            payload["model"] = args["model"]
-        try:
-            raw = await request(
-                "POST", "/api/tasks/create-and-run", json=payload
-            )
-        except MCPHTTPError as exc:
-            return _format_error(exc)
-        return _format_json({"created_and_started": True, "details": raw})
-
-    @tool(
-        "task_recover",
-        "Recover a stuck task — restarts the agent from its last checkpoint. "
-        "DESTRUCTIVE: requires confirm=true. With auto_restart=false the task "
-        "is left paused after recovery so a human can inspect first.",
-        {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string"},
-                "auto_restart": {"type": "boolean", "default": False},
-                "confirm": {"type": "boolean", "default": False},
-            },
-            "required": ["task_id"],
-        },
-    )
-    async def task_recover(args: dict[str, Any]) -> dict[str, Any]:
-        if not args.get("confirm"):
-            return _confirm_gate_response(
-                "recover",
-                {
-                    "task_id": args.get("task_id"),
-                    "auto_restart": args.get("auto_restart", False),
-                },
-            )
-        task_id = args["task_id"]
-        payload = {"auto_restart": args.get("auto_restart", False)}
-        try:
-            raw = await request(
-                "POST", f"/api/tasks/{task_id}/recover", json=payload
-            )
-        except MCPHTTPError as exc:
-            return _format_error(exc)
-        return _format_json({"recovered": True, "task_id": task_id, "details": raw})
-
-    @tool(
-        "task_create_pr",
-        "Create a GitHub PR from the task's worktree branch. DESTRUCTIVE "
-        "(visible on GitHub) — requires confirm=true. Title and body default "
-        "to the spec title + summary.",
-        {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string"},
-                "title": {"type": "string"},
-                "body": {"type": "string"},
-                "confirm": {"type": "boolean", "default": False},
-            },
-            "required": ["task_id"],
-        },
-    )
-    async def task_create_pr(args: dict[str, Any]) -> dict[str, Any]:
-        if not args.get("confirm"):
-            return _confirm_gate_response(
-                "create_pr",
-                {
-                    "task_id": args.get("task_id"),
-                    "title": args.get("title", "(default to spec title)"),
-                },
-            )
-        task_id = args["task_id"]
-        payload: dict[str, Any] = {}
-        if args.get("title"):
-            payload["title"] = args["title"]
-        if args.get("body"):
-            payload["body"] = args["body"]
-        try:
-            raw = await request(
-                "POST", f"/api/tasks/{task_id}/worktree/create-pr", json=payload
-            )
-        except MCPHTTPError as exc:
-            return _format_error(exc)
-        return _format_json({"created": True, "task_id": task_id, "details": raw})
-
-    @tool(
-        "task_merge_pr",
-        "Merge the task's open PR into the project's default branch. "
-        "DESTRUCTIVE: requires confirm=true. merge_method defaults to "
-        "'merge'; can be 'squash' or 'rebase'.",
-        {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string"},
-                "merge_method": {
-                    "type": "string",
-                    "enum": ["merge", "squash", "rebase"],
-                    "default": "merge",
-                },
-                "confirm": {"type": "boolean", "default": False},
-            },
-            "required": ["task_id"],
-        },
-    )
-    async def task_merge_pr(args: dict[str, Any]) -> dict[str, Any]:
-        if not args.get("confirm"):
-            return _confirm_gate_response(
-                "merge_pr",
-                {
-                    "task_id": args.get("task_id"),
-                    "merge_method": args.get("merge_method", "merge"),
-                },
-            )
-        task_id = args["task_id"]
-        payload = {"merge_method": args.get("merge_method", "merge")}
-        try:
-            raw = await request(
-                "POST", f"/api/tasks/{task_id}/worktree/merge", json=payload
-            )
-        except MCPHTTPError as exc:
-            return _format_error(exc)
-        return _format_json({"merged": True, "task_id": task_id, "details": raw})
-
-    # ── M2 Read tools ─────────────────────────────────────────────────
-
-    @tool(
-        "task_get_diff",
-        "Get the worktree diff for a task — what the agent has written so far. "
-        "Truncates at max_lines (default 1000) to keep the response sane; "
-        "use the REST API directly for the full diff.",
-        {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string"},
-                "max_lines": {"type": "integer", "default": 1000},
-            },
-            "required": ["task_id"],
-        },
-    )
-    async def task_get_diff(args: dict[str, Any]) -> dict[str, Any]:
-        task_id = args["task_id"]
-        max_lines = int(args.get("max_lines", 1000))
-        try:
-            raw = await request(
-                "GET", f"/api/tasks/{task_id}/worktree/diff"
-            )
-        except MCPHTTPError as exc:
-            return _format_error(exc)
-
-        # Server may return {diff: "..."} or a raw string. Normalize to string.
-        diff_text = raw.get("diff", "") if isinstance(raw, dict) else str(raw)
-        lines = diff_text.splitlines()
-        truncated = len(lines) > max_lines
-        if truncated:
-            lines = lines[:max_lines]
-            lines.append(f"...[truncated after {max_lines} lines]")
-        return _format_json(
-            {
-                "task_id": task_id,
-                "lines": len(lines),
-                "truncated": truncated,
-                "diff": "\n".join(lines),
-            }
-        )
+    # ── project_list ─────────────────────────────────────────────────────
 
     @tool(
         "project_list",
-        "List all projects registered with this TFactory install. "
-        "Returns id, name, path, git_provider for each.",
+        "List AIFactory projects registered with TFactory. Each project "
+        "maps to a local AIFactory checkout the user wants to hand specs over from.",
         {"type": "object", "properties": {}},
     )
     async def project_list(args: dict[str, Any]) -> dict[str, Any]:
-        try:
-            raw = await request("GET", "/api/projects")
-        except MCPHTTPError as exc:
-            return _format_error(exc)
-        items = raw if isinstance(raw, list) else raw.get("projects", raw.get("data", []))
-        lean = [
-            {
-                "id": p.get("id"),
-                "name": p.get("name"),
-                "path": p.get("path"),
-                "git_provider": p.get("git_provider") or p.get("gitProvider"),
-            }
-            for p in items
-            if isinstance(p, dict)
-        ]
-        return _format_json({"count": len(lean), "projects": lean})
+        data = _load_projects()
+        return _format_json({"count": len(data["projects"]), "projects": data["projects"]})
+
+    tools.append(project_list)
+
+    # ── project_create ───────────────────────────────────────────────────
 
     @tool(
         "project_create",
-        "Register a new TFactory project. Two mutually-exclusive modes: "
-        "(1) local mode — pass `path` to register an existing directory; "
-        "(2) clone mode — pass `git_url` (+ optional `branch`) and the "
-        "portal clones the repo into PROJECT_WORKSPACE_ROOT (~/.tfactory/"
-        "workspaces/ by default) and registers the clone. DESTRUCTIVE: "
-        "creates on-disk state (and in clone mode, performs a network "
-        "fetch) — requires confirm=true. Returns the new project_id.",
+        "Register an AIFactory project with TFactory. The project_id and "
+        "name should match the AIFactory project being handed over from. "
+        "root_path points at the local checkout where the feature branch lives.",
         {
             "type": "object",
             "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Local mode — absolute path to register",
-                },
-                "git_url": {
-                    "type": "string",
-                    "description": "Clone mode — HTTPS or SSH git URL to clone",
-                },
-                "branch": {
-                    "type": "string",
-                    "description": "Clone mode — branch to checkout (defaults to remote HEAD)",
-                },
-                "name": {
-                    "type": "string",
-                    "description": "Display name (defaults to the directory/repo basename)",
-                },
-                "confirm": {
-                    "type": "boolean",
-                    "default": False,
-                    "description": "Required true to actually create the project",
-                },
+                "id": {"type": "string", "description": "Project ID (typically matches the AIFactory project_id)"},
+                "name": {"type": "string", "description": "Human-readable project name"},
+                "root_path": {"type": "string", "description": "Absolute path to the local checkout"},
             },
+            "required": ["id", "name", "root_path"],
         },
     )
     async def project_create(args: dict[str, Any]) -> dict[str, Any]:
-        path = args.get("path")
-        git_url = args.get("git_url")
-        # Schema mirror of the backend's ProjectCreate model_validator —
-        # surface the error early rather than waiting for a 422.
-        if not path and not git_url:
-            return _format_error(ValueError(
-                "project_create requires either `path` (local mode) or "
-                "`git_url` (clone mode)."
-            ))
-        if path and git_url:
-            return _format_error(ValueError(
-                "`path` and `git_url` are mutually exclusive — pass one or the other."
-            ))
-        if not args.get("confirm"):
-            return _confirm_gate_response(
-                "create_project",
-                {
-                    "mode": "clone" if git_url else "local",
-                    "path": path,
-                    "git_url": git_url,
-                    "branch": args.get("branch"),
-                    "name": args.get("name"),
-                },
-            )
-        payload: dict[str, Any] = {}
-        if path:
-            payload["path"] = path
-        if git_url:
-            payload["gitUrl"] = git_url
-            if args.get("branch"):
-                payload["branch"] = args["branch"]
-        if args.get("name"):
-            payload["name"] = args["name"]
-        try:
-            raw = await request("POST", "/api/projects", json=payload)
-        except MCPHTTPError as exc:
-            return _format_error(exc)
-        return _format_json(
-            {
-                "created": True,
-                "project_id": raw.get("id") if isinstance(raw, dict) else None,
-                "details": raw,
-            }
-        )
+        pid = args["id"]
+        name = args["name"]
+        root_path = args["root_path"]
+
+        data = _load_projects()
+        if any(p.get("id") == pid for p in data["projects"]):
+            return _format_error(f"project_id already registered: {pid!r}")
+
+        entry = {
+            "id": pid,
+            "name": name,
+            "root_path": str(Path(root_path).expanduser()),
+            "created_at": _now_iso(),
+        }
+        data["projects"].append(entry)
+        _save_projects(data)
+        return _format_json(entry)
+
+    tools.append(project_create)
+
+    # ── report_get ───────────────────────────────────────────────────────
 
     @tool(
-        "agent_status",
-        "Single-call answer to 'what's this agent doing right now?' Combines "
-        "task_status (phase + progress) with the model + subtask in flight. "
-        "Cheaper to read than calling task_status + task_get separately.",
+        "report_get",
+        "Fetch a task's final report. Format is 'md' (default, human-readable) "
+        "or 'json' (machine-readable). Reports are populated by the Triager "
+        "(Task 8) at the end of the pipeline.",
         {
             "type": "object",
-            "properties": {"task_id": {"type": "string"}},
+            "properties": {
+                "task_id": {"type": "string", "description": "TFactory task ID"},
+                "format": {
+                    "type": "string",
+                    "enum": ["md", "json"],
+                    "default": "md",
+                    "description": "Report format",
+                },
+            },
             "required": ["task_id"],
         },
     )
-    async def agent_status(args: dict[str, Any]) -> dict[str, Any]:
+    async def report_get(args: dict[str, Any]) -> dict[str, Any]:
         task_id = args["task_id"]
-        # Fetch status + task in parallel-ish (sequential here for simpler
-        # error handling — both fail in the same way).
-        try:
-            status_data = await request("GET", f"/api/tasks/{task_id}/status")
-        except MCPHTTPError as exc:
-            return _format_error(exc)
-        try:
-            task_data = await request("GET", f"/api/tasks/{task_id}")
-        except MCPHTTPError as exc:
-            return _format_error(exc)
+        fmt = args.get("format", "md")
+        if fmt not in ("md", "json"):
+            return _format_error(f"format must be 'md' or 'json'; got {fmt!r}")
+        located = _find_task(task_id)
+        if not located:
+            return _format_error(f"unknown task_id: {task_id!r}")
+        project_id, spec_id = located
+        report_path = _spec_dir(project_id, spec_id) / (
+            "report.md" if fmt == "md" else "report.json"
+        )
+        if not report_path.exists():
+            return _format_error(
+                f"no {fmt} report for task {task_id!r} yet — the Triager (Task 8) hasn't run"
+            )
+        return _format_json({
+            "task_id": task_id,
+            "format": fmt,
+            "path": str(report_path),
+            "body": report_path.read_text(),
+        })
 
-        if not isinstance(status_data, dict):
-            status_data = {}
-        if not isinstance(task_data, dict):
-            task_data = {}
+    tools.append(report_get)
 
-        # Best-effort field extraction — different server versions use
-        # slightly different shapes for the phase-model mapping.
-        phase_models = (
-            task_data.get("phaseModels")
-            or task_data.get("phase_models")
-            or task_data.get("metadata", {}).get("phaseModels")
-            or {}
-        )
-        current_phase = (
-            status_data.get("phase")
-            or status_data.get("current_phase")
-            or task_data.get("status")
-        )
-        model = (
-            status_data.get("model_in_use")
-            or phase_models.get(current_phase or "")
-            or task_data.get("model")
-        )
-        return _format_json(
-            {
-                "task_id": task_id,
-                "phase": current_phase,
-                "model": model,
-                "current_subtask_id": status_data.get("current_subtask_id"),
-                "current_subtask_title": status_data.get("current_subtask")
-                or status_data.get("current_subtask_title"),
-                "overall_progress": status_data.get("overall_progress"),
-            }
-        )
+    # ── task_rerun ───────────────────────────────────────────────────────
 
-    tools.extend(
-        [
-            # M1
-            task_list,
-            task_running,
-            task_get,
-            task_status,
-            task_get_logs,
-            task_start,
-            task_stop,
-            task_approve_plan,
-            # M2
-            task_create_and_run,
-            task_recover,
-            task_create_pr,
-            task_merge_pr,
-            task_get_diff,
-            project_list,
-            project_create,
-            agent_status,
-        ]
+    @tool(
+        "task_rerun",
+        "Re-execute one lane of a previously-run task against the existing "
+        "context snapshot. At MVP only the 'functional' lane is implemented; "
+        "passing any other lane returns a 'not implemented in MVP' error.",
+        {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "TFactory task ID"},
+                "lane": {
+                    "type": "string",
+                    "default": "functional",
+                    "description": "Lane to rerun (MVP: functional only)",
+                },
+            },
+            "required": ["task_id"],
+        },
     )
+    async def task_rerun(args: dict[str, Any]) -> dict[str, Any]:
+        task_id = args["task_id"]
+        lane = args.get("lane", "functional")
+        if lane not in _MVP_LANES:
+            return _format_error(
+                f"lane {lane!r} not implemented at MVP — only {list(_MVP_LANES)} are lit. "
+                f"sast/dast/fuzz/mutation lanes land in phases 2-5."
+            )
+        located = _find_task(task_id)
+        if not located:
+            return _format_error(f"unknown task_id: {task_id!r}")
+        project_id, spec_id = located
+        status = _load_status(project_id, spec_id)
+        if status is None:
+            return _format_error(f"task {task_id!r} has no status.json")
+        # Bump rerun marker. The actual pipeline reinvocation is wired in Task 5+.
+        rerun_count = int(status.get("rerun_count", 0)) + 1
+        status["rerun_count"] = rerun_count
+        status["lane_progress"][lane] = "pending"
+        status["status"] = "pending"
+        status["updated_at"] = _now_iso()
+        _status_file(project_id, spec_id).write_text(json.dumps(status, indent=2))
+        return _format_json({
+            "task_id": task_id,
+            "lane": lane,
+            "rerun_count": rerun_count,
+            "status": "pending",
+            "note": "Rerun recorded. Pipeline reinvocation wires up in Tasks 5-8.",
+        })
+
+    tools.append(task_rerun)
+
     return tools

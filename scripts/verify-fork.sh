@@ -65,13 +65,21 @@ REQUIRED_PATHS=(
 )
 
 # Allowlist of paths that MAY legitimately mention `aifactory` / `AIFactory`.
-# These are the documented intentional cross-references.
+# These are the documented intentional cross-references — files that DESCRIBE
+# the handover-from-AIFactory relationship (skills, MCP tool descriptions,
+# specs, the Pages site, quarantined inherited tests). Adding to this list
+# must be justified in a commit message.
 ALLOWLIST_GLOBS=(
     "docs/"
     ".agent-os/"
     "README.md"
     "scripts/verify-fork.sh"
     ".claude/skills/handover-to-tfactory/"
+    "companion-skills/"
+    "apps/backend/agents/tools_pkg/tools/task_control.py"
+    "tests/test_mcp_task_control.py"
+    "tests/test_tfactory_mcp_tools.py"
+    ".git/"
 )
 
 # ---------- args ----------

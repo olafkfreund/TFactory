@@ -1,18 +1,28 @@
-"""Tests for the 8 task-control MCP tools.
+"""Inherited tests for AIFactory's 8 task-control MCP tools.
 
-Each tool is a thin wrapper over a REST call; we stub ``http_client.request``
-and verify:
-- the tool calls the right HTTP method + path + params
-- the tool returns the MCP ``content[]`` envelope shape
-- read tools' lean projections drop heavy fields
-- write tools include the audit-able verb in their response shape
-- MCPHTTPError propagates as an ``isError`` content block (not a raised exception)
+QUARANTINED for TFactory MVP — Task 2 (#3) replaced those tools with the
+seven spec-aware MVP tools tested in ``tests/test_tfactory_mcp_tools.py``.
+The inherited tools (task_start, task_stop, task_approve_plan,
+task_running, task_get, task_get_logs, etc.) no longer exist; this file
+is kept only as historical reference until the broader test rewrite in
+Tasks 5-8 settles.
+
+Re-enable individual tests once the corresponding TFactory tool surface
+stabilises.
 """
 
 from __future__ import annotations
 
 import sys
 from unittest.mock import MagicMock
+
+import pytest
+
+pytest.skip(
+    "Quarantined: AIFactory task-control tools removed in Task 2 (#3); "
+    "see tests/test_tfactory_mcp_tools.py for the TFactory replacement suite.",
+    allow_module_level=True,
+)
 
 # conftest.py pre-mocks claude_agent_sdk to support test files that don't
 # need the real SDK. These tests DO need the real SDK so the ``@tool``
