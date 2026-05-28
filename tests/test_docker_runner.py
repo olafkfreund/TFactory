@@ -333,3 +333,159 @@ def test_docker_image_runs_echo(tmp_path):
     )
     assert res.ok, res.stderr
     assert "tfactory-smoke" in res.stdout
+
+
+# ── per-image smoke tests (Task 7 / #23) ────────────────────────────────
+#
+# These tests require:
+#   1. Docker daemon accessible (checked by _docker_available()).
+#   2. The tfactory-runner-* images to have been built locally.
+#      Build them with:
+#        docker build -t tfactory-runner-pytest:latest docker/tfactory-runner-pytest
+#        docker build -t tfactory-runner-jest:latest docker/tfactory-runner-jest
+#        docker build -t tfactory-runner-playwright:latest docker/tfactory-runner-playwright
+#
+# All cases are marked @pytest.mark.slow so they are excluded from the fast
+# pre-commit and PR-check runs (pytest -m "not slow").  The runner-images CI
+# workflow builds the images and exercises the same checks inline.
+
+
+def _image_available(image: str) -> bool:
+    """Return True if the image tag exists in the local Docker daemon."""
+    if not _docker_available():
+        return False
+    try:
+        result = subprocess.run(
+            ["docker", "image", "inspect", image],
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+        return result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+# --- pytest image -----------------------------------------------------------
+
+@pytest.mark.slow
+@pytest.mark.skipif(not _docker_available(), reason="docker not available")
+@pytest.mark.skipif(
+    not _image_available("tfactory-runner-pytest:latest"),
+    reason="tfactory-runner-pytest:latest not built locally",
+)
+def test_pytest_image_runs_hello_world(tmp_path):
+    """tfactory-runner-pytest can run a trivial Python print."""
+    r = DockerRunner(image="tfactory-runner-pytest:latest")
+    res = r.run(
+        repo_path=tmp_path,
+        scratch_path=tmp_path,
+        command=["python", "-c", "print('ok')"],
+        timeout_sec=60,
+    )
+    assert res.returncode == 0, res.stderr
+    assert "ok" in res.stdout
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not _docker_available(), reason="docker not available")
+@pytest.mark.skipif(
+    not _image_available("tfactory-runner-pytest:latest"),
+    reason="tfactory-runner-pytest:latest not built locally",
+)
+def test_pytest_image_has_pytest_on_path(tmp_path):
+    """pytest 8.x must be importable inside tfactory-runner-pytest."""
+    r = DockerRunner(image="tfactory-runner-pytest:latest")
+    res = r.run(
+        repo_path=tmp_path,
+        scratch_path=tmp_path,
+        command=["pytest", "--version"],
+        timeout_sec=60,
+    )
+    assert res.returncode == 0, res.stderr
+    # pytest --version prints e.g. "pytest 8.3.2"
+    assert "pytest" in res.stdout or "pytest" in res.stderr
+    version_output = res.stdout + res.stderr
+    assert "8." in version_output, f"Expected pytest 8.x, got: {version_output!r}"
+
+
+# --- jest image -------------------------------------------------------------
+
+@pytest.mark.slow
+@pytest.mark.skipif(not _docker_available(), reason="docker not available")
+@pytest.mark.skipif(
+    not _image_available("tfactory-runner-jest:latest"),
+    reason="tfactory-runner-jest:latest not built locally",
+)
+def test_jest_image_runs_hello_world(tmp_path):
+    """tfactory-runner-jest can run a trivial Node console.log."""
+    r = DockerRunner(image="tfactory-runner-jest:latest")
+    res = r.run(
+        repo_path=tmp_path,
+        scratch_path=tmp_path,
+        command=["node", "-e", "console.log('ok')"],
+        timeout_sec=60,
+    )
+    assert res.returncode == 0, res.stderr
+    assert "ok" in res.stdout
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not _docker_available(), reason="docker not available")
+@pytest.mark.skipif(
+    not _image_available("tfactory-runner-jest:latest"),
+    reason="tfactory-runner-jest:latest not built locally",
+)
+def test_jest_image_has_jest_on_path(tmp_path):
+    """jest 29.x must be on PATH inside tfactory-runner-jest."""
+    r = DockerRunner(image="tfactory-runner-jest:latest")
+    res = r.run(
+        repo_path=tmp_path,
+        scratch_path=tmp_path,
+        command=["jest", "--version"],
+        timeout_sec=60,
+    )
+    assert res.returncode == 0, res.stderr
+    version_output = res.stdout + res.stderr
+    assert "29." in version_output, f"Expected jest 29.x, got: {version_output!r}"
+
+
+# --- playwright image -------------------------------------------------------
+
+@pytest.mark.slow
+@pytest.mark.skipif(not _docker_available(), reason="docker not available")
+@pytest.mark.skipif(
+    not _image_available("tfactory-runner-playwright:latest"),
+    reason="tfactory-runner-playwright:latest not built locally",
+)
+def test_playwright_image_runs_hello_world(tmp_path):
+    """tfactory-runner-playwright can run a trivial Node console.log."""
+    r = DockerRunner(image="tfactory-runner-playwright:latest")
+    res = r.run(
+        repo_path=tmp_path,
+        scratch_path=tmp_path,
+        command=["node", "-e", "console.log('ok')"],
+        timeout_sec=60,
+    )
+    assert res.returncode == 0, res.stderr
+    assert "ok" in res.stdout
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not _docker_available(), reason="docker not available")
+@pytest.mark.skipif(
+    not _image_available("tfactory-runner-playwright:latest"),
+    reason="tfactory-runner-playwright:latest not built locally",
+)
+def test_playwright_image_has_playwright_on_path(tmp_path):
+    """@playwright/test 1.4x must be accessible via npx inside tfactory-runner-playwright."""
+    r = DockerRunner(image="tfactory-runner-playwright:latest")
+    res = r.run(
+        repo_path=tmp_path,
+        scratch_path=tmp_path,
+        command=["npx", "playwright", "--version"],
+        timeout_sec=120,
+    )
+    assert res.returncode == 0, res.stderr
+    version_output = res.stdout + res.stderr
+    assert "1.4" in version_output, f"Expected Playwright 1.4x, got: {version_output!r}"
