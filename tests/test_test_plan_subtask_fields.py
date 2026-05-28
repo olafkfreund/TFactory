@@ -189,3 +189,195 @@ def test_replan_count_does_not_affect_status_directly() -> None:
     s = Subtask(id="1", description="x", replan_count=5)
     assert s.status == SubtaskStatus.PENDING  # unchanged
     # Explicitly: the model doesn't enforce stuck-at-2.
+
+
+# ── Task 5 / #21: Polyglot fields — defaults ────────────────────────────
+
+
+def test_language_defaults_to_none() -> None:
+    s = Subtask(id="1", description="x")
+    assert s.language is None
+
+
+def test_framework_defaults_to_none() -> None:
+    s = Subtask(id="1", description="x")
+    assert s.framework is None
+
+
+def test_target_name_defaults_to_none() -> None:
+    s = Subtask(id="1", description="x")
+    assert s.target_name is None
+
+
+def test_intent_defaults_to_create() -> None:
+    s = Subtask(id="1", description="x")
+    assert s.intent == "create"
+
+
+# ── Explicit construction ────────────────────────────────────────────────
+
+
+def test_accepts_all_polyglot_fields() -> None:
+    s = Subtask(
+        id="1",
+        description="verify login endpoint",
+        language="python",
+        framework="pytest",
+        target_name="backend-unit",
+        intent="update",
+    )
+    assert s.language == "python"
+    assert s.framework == "pytest"
+    assert s.target_name == "backend-unit"
+    assert s.intent == "update"
+
+
+def test_polyglot_fields_coexist_with_lane_and_target() -> None:
+    s = Subtask(
+        id="1", description="x",
+        lane=Lane.BROWSER,
+        target="tests/e2e/login.spec.ts::loginTest",
+        language="typescript",
+        framework="playwright",
+        intent="create",
+    )
+    assert s.lane == Lane.BROWSER
+    assert s.language == "typescript"
+    assert s.framework == "playwright"
+
+
+# ── to_dict emission ─────────────────────────────────────────────────────
+
+
+def test_to_dict_omits_language_when_none() -> None:
+    s = Subtask(id="1", description="x")
+    assert "language" not in s.to_dict()
+
+
+def test_to_dict_omits_framework_when_none() -> None:
+    s = Subtask(id="1", description="x")
+    assert "framework" not in s.to_dict()
+
+
+def test_to_dict_omits_target_name_when_none() -> None:
+    s = Subtask(id="1", description="x")
+    assert "target_name" not in s.to_dict()
+
+
+def test_to_dict_omits_intent_when_create() -> None:
+    """Default intent='create' is omitted to keep plans terse."""
+    s = Subtask(id="1", description="x", intent="create")
+    assert "intent" not in s.to_dict()
+
+
+def test_to_dict_emits_intent_when_update() -> None:
+    s = Subtask(id="1", description="x", intent="update")
+    assert s.to_dict()["intent"] == "update"
+
+
+def test_to_dict_emits_intent_when_skip() -> None:
+    s = Subtask(id="1", description="x", intent="skip")
+    assert s.to_dict()["intent"] == "skip"
+
+
+def test_to_dict_emits_language_when_set() -> None:
+    s = Subtask(id="1", description="x", language="typescript")
+    assert s.to_dict()["language"] == "typescript"
+
+
+def test_to_dict_emits_framework_when_set() -> None:
+    s = Subtask(id="1", description="x", framework="jest")
+    assert s.to_dict()["framework"] == "jest"
+
+
+def test_to_dict_emits_target_name_when_set() -> None:
+    s = Subtask(id="1", description="x", target_name="web-staging")
+    assert s.to_dict()["target_name"] == "web-staging"
+
+
+# ── from_dict tolerance ─────────────────────────────────────────────────
+
+
+def test_from_dict_legacy_plan_gets_polyglot_defaults() -> None:
+    """v0.1 plans (no polyglot keys) must parse with sensible defaults."""
+    legacy = {"id": "1", "description": "x"}
+    s = Subtask.from_dict(legacy)
+    assert s.language is None
+    assert s.framework is None
+    assert s.target_name is None
+    assert s.intent == "create"
+
+
+def test_from_dict_parses_language() -> None:
+    s = Subtask.from_dict({"id": "1", "description": "x", "language": "python"})
+    assert s.language == "python"
+
+
+def test_from_dict_parses_framework() -> None:
+    s = Subtask.from_dict({"id": "1", "description": "x", "framework": "pytest"})
+    assert s.framework == "pytest"
+
+
+def test_from_dict_parses_target_name() -> None:
+    s = Subtask.from_dict({"id": "1", "description": "x", "target_name": "api"})
+    assert s.target_name == "api"
+
+
+@pytest.mark.parametrize("intent", ["create", "update", "skip"])
+def test_from_dict_parses_all_intent_values(intent: str) -> None:
+    s = Subtask.from_dict({"id": "1", "description": "x", "intent": intent})
+    assert s.intent == intent
+
+
+# ── framework_id() helper ────────────────────────────────────────────────
+
+
+def test_framework_id_returns_framework_when_set() -> None:
+    s = Subtask(id="1", description="x", framework="pytest")
+    assert s.framework_id() == "pytest"
+
+
+def test_framework_id_returns_none_when_not_set() -> None:
+    """v0.1-style subtask has no framework — framework_id returns None."""
+    s = Subtask(id="1", description="x")
+    assert s.framework_id() is None
+
+
+def test_framework_id_matches_framework_field() -> None:
+    for fw in ("pytest", "jest", "playwright"):
+        s = Subtask(id="1", description="x", framework=fw)
+        assert s.framework_id() == s.framework
+
+
+# ── Full round-trip for polyglot fields ─────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "language,framework,target_name,intent",
+    [
+        ("python", "pytest", None, "create"),
+        ("typescript", "jest", "web-unit", "create"),
+        ("typescript", "playwright", "web-e2e", "update"),
+        ("python", "pytest", "api-unit", "skip"),
+        (None, None, None, "create"),          # v0.1 legacy
+    ],
+)
+def test_polyglot_full_round_trip(
+    language: str | None,
+    framework: str | None,
+    target_name: str | None,
+    intent: str,
+) -> None:
+    s = Subtask(
+        id="rt",
+        description="x",
+        language=language,
+        framework=framework,
+        target_name=target_name,
+        intent=intent,
+    )
+    again = Subtask.from_dict(s.to_dict())
+    assert again.language == s.language
+    assert again.framework == s.framework
+    assert again.target_name == s.target_name
+    assert again.intent == s.intent
