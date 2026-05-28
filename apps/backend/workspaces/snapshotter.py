@@ -219,6 +219,26 @@ def snapshot_aifactory_spec(
                 dst.chmod(_SNAPSHOT_MODE)
                 result.has_tfactory_yml = True
 
+    # ── .tfactory/tests-catalog.json → context/tests_catalog.json ────────
+    if project_root_path is not None:
+        repo = Path(project_root_path).expanduser()
+        if repo.is_dir():
+            from tests_catalog import CatalogError, load_catalog
+
+            cat = None
+            try:
+                cat = load_catalog(repo)
+            except CatalogError as exc:
+                result.warnings.append(
+                    f"tests-catalog.json present but unparseable: {exc.reason}"
+                )
+                cat = None
+            if cat is not None:
+                dst = context_dir / "tests_catalog.json"
+                dst.write_text(json.dumps(cat.to_dict(), indent=2, sort_keys=True))
+                dst.chmod(_SNAPSHOT_MODE)
+                result.has_tests_catalog = True
+
     # ── source.json ──────────────────────────────────────────────────────
     (context_dir / "source.json").write_text(json.dumps(result.to_dict(), indent=2))
 
