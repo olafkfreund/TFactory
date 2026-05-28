@@ -67,6 +67,21 @@ Task 15 (#31).
 ### Tasks shipped so far in v0.2
 
 - **#16 Task 0**: Lane rename + breaking-change migration
+- **#22 Task 6**: Gen-Functional refactor — generic prompt + context injection
+
+  Gen-Functional is now polyglot. The v0.1 Python+pytest-specific prompt is
+  preserved as `prompts/gen_functional-v01-legacy.md` (removed in v0.3). A
+  new generic `prompts/gen_functional.md` is parameterized at runtime by the
+  framework descriptor's `context_block`. The prompt helper
+  (`get_tfactory_gen_functional_prompt`) accepts an optional
+  `framework_descriptor` argument (pass `None` for the legacy path; a
+  `DeprecationWarning` is emitted). The dispatcher (`gen_functional.py`)
+  calls `framework_registry.load_registry()` per subtask, resolves the
+  descriptor, and injects it into the prompt assembly. The runner image
+  (`DockerRunner(image=...)`) is similarly parameterized by
+  `descriptor.runtime.image` instead of the hardcoded
+  `tfactory-runner-python:latest`. 25 new tests (57 total across the two
+  gen_functional test files).
 
 ### In progress
 

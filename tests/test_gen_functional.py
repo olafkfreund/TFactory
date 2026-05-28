@@ -1,4 +1,4 @@
-"""Tests for the real TFactory Gen-Functional agent — Task 6 (#7) commit 5.
+"""Tests for the real TFactory Gen-Functional agent — Task 6 (#7 v0.1 / #22 v0.2).
 
 Real ``run_gen_functional`` invokes the Claude Agent SDK; these tests
 mock the two SDK seams (``_resolve_client`` + ``_invoke_session``) so
@@ -7,7 +7,7 @@ guardrails (preflight_static + flake_risk_lint) are NOT mocked —
 they run for real because they're cheap (subprocess preflight ≤ 1s,
 AST flake-lint ≤ 1ms) and that gives better signal.
 
-Covered:
+Covered (v0.1):
   - Happy single-subtask: SDK writes a valid test → both guards pass →
     subtask completed, status=generated, tests_generated=1
   - Happy multi-subtask: all three pass → tests_generated=3
@@ -21,6 +21,14 @@ Covered:
   - schedule_gen_functional env gating + GC anchor
   - Full chain: planner success → gen_functional → guardrail rejects →
     planner replan auto-fires
+
+Covered (v0.2 / Task 6 #22):
+  - _resolve_framework_descriptor: pytest/jest/playwright lookups
+  - _resolve_framework_descriptor: None for v0.1-style (framework=None)
+  - _resolve_framework_descriptor: unknown framework → LookupError
+  - _resolve_runner_fn: image parameterized by descriptor
+  - _resolve_runner_fn: legacy fallback + DeprecationWarning
+  - run_gen_functional dispatches jest/playwright subtasks (mocked SDK)
 """
 
 from __future__ import annotations
@@ -34,6 +42,8 @@ import pytest
 
 from agents.gen_functional import (
     _BG_GEN_FUNCTIONAL_TASKS,
+    _resolve_framework_descriptor,
+    _resolve_runner_fn,
     run_gen_functional,
     schedule_gen_functional,
 )
@@ -485,3 +495,322 @@ async def test_full_chain_rejection_loops_back_to_planner_replan(
     # The replan_request that gen_functional wrote is what the planner consumed.
     rr_path = spec_dir / "context" / "replan_request.json"
     assert rr_path.exists()
+
+
+# ── v0.2: _resolve_framework_descriptor unit tests (Task 6 / #22) ──────
+
+
+def test_resolve_framework_descriptor_returns_none_for_no_framework() -> None:
+    """v0.1-style subtask (framework=None) → descriptor is None."""
+    subtask = {"id": "x", "description": "y"}
+    result = _resolve_framework_descriptor(subtask)
+    assert result is None
+
+
+def test_resolve_framework_descriptor_returns_none_for_dataclass_no_framework() -> None:
+    """v0.1-style Subtask dataclass (no framework field set) → None."""
+    from test_plan import Subtask as SubtaskDC, Lane
+
+    st = SubtaskDC(id="t1", description="d", lane=Lane.UNIT)
+    assert st.framework is None
+    result = _resolve_framework_descriptor(st)
+    assert result is None
+
+
+def test_resolve_framework_descriptor_returns_descriptor_for_pytest() -> None:
+    """v0.2: subtask.framework='pytest' → FrameworkDescriptor with name='pytest'."""
+    subtask = {"id": "x", "description": "y", "framework": "pytest"}
+    result = _resolve_framework_descriptor(subtask)
+    assert result is not None
+    assert result.name == "pytest"
+    assert result.runtime.image == "tfactory-runner-pytest:latest"
+
+
+def test_resolve_framework_descriptor_returns_descriptor_for_jest() -> None:
+    """v0.2: subtask.framework='jest' → FrameworkDescriptor with name='jest'."""
+    subtask = {"id": "x", "description": "y", "framework": "jest"}
+    result = _resolve_framework_descriptor(subtask)
+    assert result is not None
+    assert result.name == "jest"
+    assert result.runtime.image == "tfactory-runner-jest:latest"
+
+
+def test_resolve_framework_descriptor_returns_descriptor_for_playwright() -> None:
+    """v0.2: subtask.framework='playwright' → FrameworkDescriptor with name='playwright'."""
+    subtask = {"id": "x", "description": "y", "framework": "playwright"}
+    result = _resolve_framework_descriptor(subtask)
+    assert result is not None
+    assert result.name == "playwright"
+    assert result.runtime.image == "tfactory-runner-playwright:latest"
+
+
+def test_resolve_framework_descriptor_raises_for_unknown_framework() -> None:
+    """v0.2: unknown framework → LookupError with helpful message."""
+    subtask = {"id": "x", "description": "y", "framework": "my-fake-framework-xyz"}
+    with pytest.raises(LookupError, match="my-fake-framework-xyz"):
+        _resolve_framework_descriptor(subtask)
+
+
+def test_resolve_framework_descriptor_lookup_error_mentions_available_frameworks() -> None:
+    """LookupError message lists available frameworks for diagnosis."""
+    subtask = {"id": "x", "description": "y", "framework": "no-such-one"}
+    with pytest.raises(LookupError) as exc_info:
+        _resolve_framework_descriptor(subtask)
+    msg = str(exc_info.value)
+    # Should mention at least one known framework name
+    assert any(fw in msg for fw in ["pytest", "jest", "playwright"])
+
+
+# ── v0.2: _resolve_runner_fn unit tests (Task 6 / #22) ─────────────────
+
+
+def test_runner_fn_parameterized_by_descriptor_image(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_resolve_runner_fn reads image from descriptor.runtime.image."""
+    captured: dict = {}
+
+    class FakeRuntime:
+        image = "tfactory-runner-jest:latest"
+
+    class FakeDesc:
+        runtime = FakeRuntime()
+
+    class FakeDockerRunner:
+        def __init__(self, image=None, **kwargs):
+            captured["image"] = image
+
+        def run_pytest(self, **kwargs):
+            return None
+
+    import agents.gen_functional as gf_mod
+
+    monkeypatch.setattr(
+        "agents.gen_functional.DockerRunner", None, raising=False,
+    )
+    # We need to inject into the lazy import path inside _resolve_runner_fn.
+    # Monkeypatch the module that will be imported at call time.
+    import tools.runners.docker_runner as dr_mod
+
+    original = dr_mod.DockerRunner
+    dr_mod.DockerRunner = FakeDockerRunner
+    try:
+        _resolve_runner_fn(framework_descriptor=FakeDesc())
+        assert captured["image"] == "tfactory-runner-jest:latest"
+    finally:
+        dr_mod.DockerRunner = original
+
+
+def test_runner_fn_legacy_uses_default_image_with_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_resolve_runner_fn(None) → tfactory-runner-python:latest + DeprecationWarning."""
+    import warnings
+    captured: dict = {}
+
+    class FakeDockerRunner:
+        def __init__(self, image=None, **kwargs):
+            captured["image"] = image
+
+        def run_pytest(self, **kwargs):
+            return None
+
+    import tools.runners.docker_runner as dr_mod
+
+    original = dr_mod.DockerRunner
+    dr_mod.DockerRunner = FakeDockerRunner
+    try:
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            _resolve_runner_fn(framework_descriptor=None)
+        depr = [x for x in w if issubclass(x.category, DeprecationWarning)]
+        assert depr, "expected DeprecationWarning for legacy path"
+        assert captured["image"] == "tfactory-runner-python:latest"
+    finally:
+        dr_mod.DockerRunner = original
+
+
+# ── v0.2: run_gen_functional dispatches framework subtasks ───────────────
+
+
+def _make_plan_with_framework(spec_dir: Path, framework: str, lang: str) -> None:
+    """Write a test_plan.json with ONE pending Lane.UNIT subtask tagged with (lang, framework).
+
+    Note: Gen-Functional currently dispatches on Lane.UNIT regardless of framework;
+    the framework field controls which descriptor (and thus which prompt + runner image)
+    is used. Browser-lane routing is a v0.3 concern (Task 10).
+    """
+    ext = "py" if framework == "pytest" else "spec.ts"
+    plan = {
+        "feature": "demo", "workflow_type": "feature",
+        "services_involved": [],
+        "phases": [{
+            "phase": 1, "name": "AC#1", "type": "implementation",
+            "subtasks": [{
+                "id": "s0",
+                "description": f"test with {framework}",
+                "status": "pending",
+                "lane": "unit",  # always unit so gen_functional picks it up
+                "language": lang,
+                "framework": framework,
+                "target": "app/auth/login.py::login_user",
+                "rationale": "AC#1",
+                "files_to_create": [f"tests/test_s0.{ext}"],
+                "verification": {
+                    "type": "command",
+                    "run": f"pytest tests/test_s0.{ext}" if framework == "pytest"
+                    else f"npx {framework} tests/test_s0.{ext}",
+                },
+            }],
+            "parallel_safe": False,
+        }],
+        "final_acceptance": [],
+        "status": "in_progress", "planStatus": "pending",
+    }
+    (spec_dir / "test_plan.json").write_text(json.dumps(plan))
+
+
+def _mock_sdk_capture_prompt(monkeypatch: pytest.MonkeyPatch, captured_prompts: list):
+    """Set up SDK mocks that capture the assembled prompt text.
+
+    The mock writes the valid test source at the path declared in the prompt
+    so the agent thinks the SDK agent completed successfully.
+    """
+    class _FakeAsyncCM:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): return None
+
+    async def _resolve(*a, **kw): return _FakeAsyncCM()
+
+    async def _invoke(client, prompt, spec_dir_arg, verbose):
+        captured_prompts.append(prompt)
+        for line in prompt.splitlines():
+            if line.startswith("- write the file at:"):
+                write_path = Path(line.split("`")[1])
+                write_path.parent.mkdir(parents=True, exist_ok=True)
+                write_path.write_text(_valid_test_source())
+                break
+        return "complete", "mock", {}
+
+    monkeypatch.setattr("agents.gen_functional._resolve_client", _resolve)
+    monkeypatch.setattr("agents.gen_functional._invoke_session", _invoke)
+
+
+@pytest.mark.asyncio
+async def test_gen_functional_dispatches_pytest_subtask(
+    spec_dir: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """pytest subtask: descriptor resolved, FRAMEWORK CONTEXT (pytest) in prompt."""
+    _make_plan_with_framework(spec_dir, "pytest", "python")
+    captured_prompts: list[str] = []
+    _mock_sdk_capture_prompt(monkeypatch, captured_prompts)
+
+    ok = await run_gen_functional(spec_dir, project_dir)
+    assert ok is True
+    assert captured_prompts, "no prompt was assembled"
+    assert "## FRAMEWORK CONTEXT (pytest)" in captured_prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_gen_functional_dispatches_jest_subtask(
+    spec_dir: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """jest subtask: FRAMEWORK CONTEXT (jest) present in prompt sent to SDK."""
+    _make_plan_with_framework(spec_dir, "jest", "typescript")
+    captured_prompts: list[str] = []
+    _mock_sdk_capture_prompt(monkeypatch, captured_prompts)
+
+    ok = await run_gen_functional(spec_dir, project_dir)
+    assert ok is True
+    assert captured_prompts, "no prompt assembled for jest subtask"
+    assert "## FRAMEWORK CONTEXT (jest)" in captured_prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_gen_functional_dispatches_playwright_subtask(
+    spec_dir: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """playwright subtask: FRAMEWORK CONTEXT (playwright) present in prompt."""
+    _make_plan_with_framework(spec_dir, "playwright", "typescript")
+    captured_prompts: list[str] = []
+    _mock_sdk_capture_prompt(monkeypatch, captured_prompts)
+
+    ok = await run_gen_functional(spec_dir, project_dir)
+    assert ok is True
+    assert captured_prompts
+    assert "## FRAMEWORK CONTEXT (playwright)" in captured_prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_gen_functional_legacy_subtask_uses_default_image_with_warning(
+    spec_dir: Path, project_dir: Path, mock_sdk,
+) -> None:
+    """v0.1 subtask (no framework): DeprecationWarning raised via prompt helper."""
+    _make_plan(spec_dir, subtask_count=1)
+    import warnings
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        mock_sdk(source_for=lambda sid: _valid_test_source())
+        ok = await run_gen_functional(spec_dir, project_dir)
+
+    assert ok is True
+    depr = [x for x in w if issubclass(x.category, DeprecationWarning)]
+    assert depr, "expected DeprecationWarning for v0.1-style subtask"
+
+
+@pytest.mark.asyncio
+async def test_gen_functional_unknown_framework_fails_gracefully(
+    spec_dir: Path, project_dir: Path, mock_sdk,
+) -> None:
+    """Unknown framework in subtask → LookupError raised, status=gen_functional_failed."""
+    _make_plan_with_framework(spec_dir, "my-fake-xyz", "typescript")
+    mock_sdk(source_for=lambda sid: _valid_test_source())
+
+    ok = await run_gen_functional(spec_dir, project_dir)
+    assert ok is False
+    status = json.loads((spec_dir / "status.json").read_text())
+    # The LookupError from _resolve_framework_descriptor should cause a failure
+    assert status["status"] == "gen_functional_failed"
+
+
+@pytest.mark.asyncio
+async def test_gen_functional_writes_v01_legacy_path_when_descriptor_none(
+    spec_dir: Path, project_dir: Path,
+) -> None:
+    """v0.1 subtask (no framework): SDK is called with the legacy prompt content."""
+    _make_plan(spec_dir, subtask_count=1)
+    captured_prompts: list[str] = []
+    import warnings
+
+    class _FakeAsyncCM:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): return None
+
+    async def _resolve(*a, **kw): return _FakeAsyncCM()
+
+    async def _invoke(client, prompt, spec_dir_arg, verbose):
+        captured_prompts.append(prompt)
+        for line in prompt.splitlines():
+            if line.startswith("- write the file at:"):
+                write_path = Path(line.split("`")[1])
+                write_path.parent.mkdir(parents=True, exist_ok=True)
+                write_path.write_text(_valid_test_source())
+                break
+        return "complete", "mock", {}
+
+    import pytest as pt
+    pt.MonkeyPatch().setattr("agents.gen_functional._resolve_client", _resolve)
+    pt.MonkeyPatch().setattr("agents.gen_functional._invoke_session", _invoke)
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        ok = await run_gen_functional(spec_dir, project_dir)
+
+    assert ok is True
+    assert captured_prompts
+    # The legacy prompt body includes Python-specific guidance
+    assert "pytest" in captured_prompts[0]
+    # A DeprecationWarning was issued
+    depr = [x for x in w if issubclass(x.category, DeprecationWarning)]
+    assert depr

@@ -673,45 +673,46 @@ def get_tfactory_gen_functional_prompt(
     spec_dir: Path,
     project_dir: Path,
     subtask,
+    framework_descriptor=None,
 ) -> str:
-    """Assemble the per-subtask Gen-Functional prompt — Task 6 (#7) commit 4.
+    """Assemble the per-subtask Gen-Functional prompt — Task 6 (#22).
 
-    Each Gen-Functional session generates ONE pytest test file for ONE
-    subtask emitted by the Planner. This helper loads
-    ``apps/backend/prompts/gen_functional.md`` and prepends a SUBTASK
-    CONTEXT block with the concrete fields the agent needs:
-        - target (``<path>::<symbol>``)
-        - rationale (the AC this subtask covers)
-        - files_to_create (where to Write)
-        - verification command (what the Executor will run)
-        - paths to the snapshot context files
+    v0.2: accepts an optional ``framework_descriptor`` (a
+    ``FrameworkDescriptor`` instance) that triggers the generic prompt
+    path.  When ``framework_descriptor`` is ``None`` the v0.1 legacy
+    prompt path is used (with a ``DeprecationWarning``).
+
+    **v0.2 prompt assembly order:**
+
+    1. SUBTASK CONTEXT block — concrete paths + subtask fields
+    2. FRAMEWORK CONTEXT block — injected from
+       ``framework_descriptor.context_block``
+    3. Generic prompt body from ``gen_functional.md``
+
+    **v0.1 legacy path (framework_descriptor=None):**
+
+    Loads ``gen_functional-v01-legacy.md`` and prepends the same SUBTASK
+    CONTEXT block.  Issues a ``DeprecationWarning`` to guide migration.
 
     Args:
         spec_dir: TFactory workspace spec dir.
-        project_dir: AIFactory project root_path (Glob/Grep target).
+        project_dir: AIFactory project root path (Glob/Grep target).
         subtask: A Subtask dataclass instance from the loaded
-            ImplementationPlan. We pull the test-planning fields added
-            in Task 5 commit 1 (target / rationale / files_to_create /
-            verification).
+            ImplementationPlan.  Duck-typed: also accepts a plain dict
+            with the same keys (post-JSON-load shape).
+        framework_descriptor: A ``FrameworkDescriptor`` instance from
+            ``framework_registry.get_descriptor(subtask.framework)``.
+            Pass ``None`` to use the v0.1 legacy prompt (warns).
 
     Returns:
-        Full system prompt ready for run_agent_session.
+        Full system prompt ready for ``run_agent_session``.
 
     Raises:
-        FileNotFoundError: if gen_functional.md is missing.
+        FileNotFoundError: if the resolved prompt file is missing.
     """
-    prompt_file = PROMPTS_DIR / "gen_functional.md"
-    if not prompt_file.exists():
-        raise FileNotFoundError(
-            f"gen_functional.md missing at {prompt_file}. "
-            "TFactory's Task 6 (#7) commit 4 authors this prompt; check the working tree."
-        )
+    import warnings
 
-    body = prompt_file.read_text()
-
-    # Per-subtask context block — concrete paths + the subtask's
-    # planning fields. Duck-typed: callers can pass a Subtask
-    # dataclass OR a dict; we just read attributes / keys.
+    # Duck-typed accessor for dataclass-or-dict subtask shapes.
     def _get(obj, key, default=None):
         if isinstance(obj, dict):
             return obj.get(key, default)
@@ -722,12 +723,13 @@ def get_tfactory_gen_functional_prompt(
     files_to_create = _get(subtask, "files_to_create", []) or []
     description = _get(subtask, "description", "?")
     subtask_id = _get(subtask, "id", "?")
-    # Verification carries the pytest command for the Executor. There's
-    # a schema drift between the planner prompt (which tells the LLM
-    # to emit ``"command"``) and the Verification dataclass (whose
-    # field is ``run``). Both shapes are accepted here; the proper
-    # reconciliation is a follow-up for Task 7/8 when the Executor
-    # actually consumes this field.
+    language = _get(subtask, "language", None) or "?"
+    framework = _get(subtask, "framework", None) or "?"
+    intent = _get(subtask, "intent", "create") or "create"
+
+    # Verification carries the pytest/jest/playwright command for the Executor.
+    # The planner prompt tells the LLM to emit ``"command"``; the Verification
+    # dataclass uses ``run``. Both shapes are accepted here.
     verification = _get(subtask, "verification", None)
     if verification is None:
         verification_cmd = "?"
@@ -742,13 +744,17 @@ def get_tfactory_gen_functional_prompt(
 
     write_path = files_to_create[0] if files_to_create else "?"
 
+    # SUBTASK CONTEXT block (shared by both the v0.1 and v0.2 paths).
     context = (
-        "## SUBTASK CONTEXT (TFactory Gen-Functional — Python)\n\n"
+        "## SUBTASK CONTEXT (TFactory Gen-Functional)\n\n"
         f"Subtask: `{subtask_id}` — {description}\n\n"
-        f"- target:           `{target}`\n"
-        f"- rationale:        {rationale}\n"
+        f"- target:            `{target}`\n"
+        f"- rationale:         {rationale}\n"
+        f"- language:          {language}\n"
+        f"- framework:         {framework}\n"
+        f"- intent:            {intent}\n"
         f"- write the file at: `{spec_dir / write_path}`\n"
-        f"- verification:     `{verification_cmd}`\n\n"
+        f"- verification:      `{verification_cmd}`\n\n"
         f"Concrete paths for this run:\n\n"
         f"- spec_dir:    `{spec_dir}`\n"
         f"- project_dir: `{project_dir}` (read-only via Glob/Grep)\n\n"
@@ -758,7 +764,42 @@ def get_tfactory_gen_functional_prompt(
         f"- `{spec_dir / 'test_plan.json'}` (the full Planner output)\n\n"
         "---\n\n"
     )
-    return context + body
+
+    if framework_descriptor is None:
+        # v0.1 legacy path — warn and load the legacy prompt.
+        warnings.warn(
+            "get_tfactory_gen_functional_prompt: framework_descriptor not provided; "
+            "falling back to v0.1 legacy prompt path. "
+            "Pass framework_descriptor; v0.1 legacy path will be removed in v0.3.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        legacy_file = PROMPTS_DIR / "gen_functional-v01-legacy.md"
+        if not legacy_file.exists():
+            raise FileNotFoundError(
+                f"gen_functional-v01-legacy.md missing at {legacy_file}. "
+                "The v0.1 legacy prompt must be present for this fallback path."
+            )
+        body = legacy_file.read_text()
+        return context + body
+
+    # v0.2 generic path — inject FRAMEWORK CONTEXT then load the generic body.
+    framework_name = getattr(framework_descriptor, "name", str(framework_descriptor))
+    context_block_text = getattr(framework_descriptor, "context_block", "")
+    framework_context = (
+        f"## FRAMEWORK CONTEXT ({framework_name})\n\n{context_block_text}\n\n---\n\n"
+    )
+
+    prompt_file = PROMPTS_DIR / "gen_functional.md"
+    if not prompt_file.exists():
+        raise FileNotFoundError(
+            f"gen_functional.md missing at {prompt_file}. "
+            "TFactory's Task 6 (#22) commit 1 authors this prompt; check the working tree."
+        )
+    body = prompt_file.read_text()
+
+    # Final assembly: SUBTASK CONTEXT → FRAMEWORK CONTEXT → generic body
+    return context + framework_context + body
 
 
 # ─── Task 7 (#8) — Evaluator helper ──────────────────────────────────────
