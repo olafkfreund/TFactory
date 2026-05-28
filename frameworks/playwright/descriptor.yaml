@@ -116,5 +116,8 @@ context_block: |
     - Brittle nth() selectors       → prefer getByRole + accessible names
 
 # Evaluator hooks — dotted-path references for per-language Evaluator primitives.
-# Populated in Task 9 (#25): tsc-preflight, ESLint-lint, Stryker-mutate.
-evaluator_hooks: []
+# Wired in Task 9 (#25).
+evaluator_hooks:
+  - agents.lang_typescript.preflight.run_ts_preflight
+  - agents.lang_typescript.flake_lint.run_ts_flake_lint
+  - agents.lang_typescript.mutate_probe.run_ts_mutate_probe
