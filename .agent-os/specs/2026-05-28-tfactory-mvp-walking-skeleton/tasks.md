@@ -48,12 +48,12 @@ These are the tasks to be completed for the spec detailed in `@.agent-os/specs/2
   - [ ] 4.5 Run an end-to-end Docker smoke: a hand-written pytest file inside a fixture project executes in the container, JUnit + coverage XML come back, test result parses
   - [ ] 4.6 Verify all tests pass
 
-- [ ] 5. **Planner agent**
-  - [ ] 5.1 Write tests for `planner.py` against a fixture `aifactory_spec.md` + `diff.patch` (mocked LLM); verify replan behavior; verify "stuck after 2 replans" path
-  - [ ] 5.2 Author `apps/backend/prompts/planner.md` (testing-oriented; reads acceptance criteria + diff; emits lane-tagged subtasks)
-  - [ ] 5.3 Implement `apps/backend/agents/planner.py` (Claude Agent SDK session, JSON output schema enforced, replan reentry supported)
-  - [ ] 5.4 Add `lane: functional` filter so MVP planner only emits functional subtasks even if the prompt suggests others
-  - [ ] 5.5 Verify all tests pass
+- [x] 5. **Planner agent**
+  - [x] 5.1 Write tests for `planner.py` against a fixture `aifactory_spec.md` + `diff.patch` (mocked LLM); verify replan behavior; verify "stuck after 2 replans" path
+  - [x] 5.2 Author `apps/backend/prompts/planner.md` (testing-oriented; reads acceptance criteria + diff; emits lane-tagged subtasks)
+  - [x] 5.3 Implement `apps/backend/agents/planner.py` (Claude Agent SDK session, JSON output schema enforced, replan reentry supported)
+  - [x] 5.4 Add `lane: functional` filter so MVP planner only emits functional subtasks even if the prompt suggests others
+  - [x] 5.5 Verify all tests pass
 
 - [ ] 6. **Gen-Functional agent (Python)**
   - [ ] 6.1 Write tests for the pre-flight static check (hallucinated import, hallucinated method, valid case) using a subprocess-based introspection helper

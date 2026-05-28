@@ -7,7 +7,7 @@ nav_order: 1
 # TFactory
 
 > **Autonomous test generation + execution platform — sister project to [AIFactory](https://github.com/olafkfreund/AIFactory).**
-> Status: **MVP build in progress · 4 of 12 tasks delivered** · Last update 2026-05-28
+> Status: **MVP build in progress · 5 of 12 tasks delivered** · Last update 2026-05-28
 
 TFactory receives a finished AIFactory spec, generates feature + security tests
 aligned to its acceptance criteria, executes them sandboxed, evaluates quality,
@@ -18,15 +18,15 @@ back to the PR — autonomously.
 
 ```
 Phase 1 (MVP — walking skeleton)
-  ████████░░░░░░░░░░░░░░░░░░  4 of 12 tasks delivered
+  ██████████░░░░░░░░░░░░░░░░  5 of 12 tasks delivered
 
   ✓ #2  Task 1: Hard fork + scaffold
   ✓ #3  Task 2: MCP server + /handover-to-tfactory skill
   ✓ #4  Task 3: Workspace + snapshotter (test_plan.Lane added)
   ✓ #5  Task 4: Docker runner + lane dispatcher
+  ✓ #6  Task 5: Planner agent (initial + replan + stuck transition)
 
-  → #6  Task 5: Planner agent             ← ready to start
-  → #7  Task 6: Gen-Functional agent      ← ready to start (parallel)
+  → #7  Task 6: Gen-Functional agent      ← ready to start
     #8  Task 7: Evaluator (blocked by #7)
     #9  Task 8: Triager + git writer (blocked by #8)
     #10 Task 9: Portal backend (blocked by #9)

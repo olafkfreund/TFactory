@@ -7,7 +7,7 @@ aligned to its acceptance criteria, runs them in a sandbox, evaluates quality,
 commits the tests to the feature branch, and posts a coverage + findings report
 to the PR — autonomously.
 
-> Status: **MVP build in progress · 4 of 12 tasks delivered · Task 5 (Planner) underway.**
+> Status: **MVP build in progress · 5 of 12 tasks delivered · Task 6 (Gen-Functional) is next.**
 > See [Progress](https://olafkfreund.github.io/TFactory/progress/) for the live build log.
 
 ## Quickstart (NixOS / flake-based)

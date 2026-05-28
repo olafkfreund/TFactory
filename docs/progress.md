@@ -15,12 +15,12 @@ commit on `main`. Numbers update by hand as commits land — last refresh on
 
 ```
 Phase 1 (MVP — walking skeleton)
-  ████████░░░░░░░░░░░░░░░░░░  4 of 12 tasks delivered
+  ██████████░░░░░░░░░░░░░░░░  5 of 12 tasks delivered
 
-  Done:    #2  #3  #4  #5
-  Ready:   #6 (Planner)  #7 (Gen-Functional)        — parallel-able
+  Done:    #2  #3  #4  #5  #6
+  Ready:   #7 (Gen-Functional)
   Blocked: #8  #9  #10  #11  #12  #13
-  Carry-forward: #14 (venv install + smokes)
+  Carry-forward: #14 (manual smoke only)
 ```
 
 ## Closed tasks
@@ -31,6 +31,7 @@ Phase 1 (MVP — walking skeleton)
 | [#3](https://github.com/olafkfreund/TFactory/issues/3) | Task 2: MCP server + `/handover-to-tfactory` skill | [`6b72011`](https://github.com/olafkfreund/TFactory/commit/6b72011) | +1,100 / −597 | 2026-05-28 |
 | [#4](https://github.com/olafkfreund/TFactory/issues/4) | Task 3: Workspace + state model + snapshotter | [`a131c2c`](https://github.com/olafkfreund/TFactory/commit/a131c2c) | +750 / −16 | 2026-05-28 |
 | [#5](https://github.com/olafkfreund/TFactory/issues/5) | Task 4: Docker runner + lane dispatcher | [`d74bb46`](https://github.com/olafkfreund/TFactory/commit/d74bb46) | +1,133 | 2026-05-28 |
+| [#6](https://github.com/olafkfreund/TFactory/issues/6) | Task 5: Planner agent (6 commits) | `4333051`…`commit-6-sha` | +~2,800 | 2026-05-28 |
 
 Closing rationale: each task is functionally delivered, dependents built
 on top successfully, and the only remaining sub-tasks wait on

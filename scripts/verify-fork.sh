@@ -89,6 +89,9 @@ ALLOWLIST_GLOBS=(
     "tests/test_snapshotter.py"
     "tests/test_planner_prompts.py"
     "tests/test_planner.py"
+    "tests/test_planner_integration.py"
+    "tests/fixtures/planner_smoke/"
+    "guides/"
     ".git/"
 )
 
