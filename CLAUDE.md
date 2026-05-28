@@ -4,12 +4,57 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-TFactory is a web-based AI task management and agent orchestration platform that builds software through coordinated AI agent sessions. It uses the Claude Agent SDK to run agents in isolated workspaces with security controls.
+TFactory is an autonomous test generation + execution platform. It receives
+a finished AIFactory feature on a branch, generates pytest tests aligned to
+the acceptance criteria, runs them in a Docker sandbox, evaluates quality
+via a 5-signal verdict pipeline (coverage delta · 3× stability · mutate-and-
+check · flake-lint promotion · LLM semantic relevance), and emits a triage
+report ready to commit + post to the PR.
+
+**Status:** MVP walking skeleton complete — 12 of 12 tasks delivered.
+Functional lane (Python pytest) active. SAST / DAST / Fuzz / Mutation
+lanes are Phase 2-5 placeholders in the portal.
 
 **Project:** TFactory
 **Repository:** https://github.com/olafkfreund/TFactory
 **Author:** DataSeek Team
 **License:** MIT OR GPL-3.0
+
+### Pipeline architecture (the 4 agents)
+
+```
+  Planner ─► Gen-Functional ─► Executor ─► Evaluator ─► Triager
+   (#6)        (#7)              (#5)        (#8)        (#9)
+```
+
+Each agent lives under `apps/backend/agents/`:
+  - `planner.py`         — emits lane-tagged `test_plan.json`
+  - `gen_functional.py`  — writes pytest files per subtask
+  - (Executor — `tools/runners/docker_runner.py`, no LLM)
+  - `evaluator.py`       — 5-signal verdicts → `findings/verdicts.json`
+  - `triager.py`         — dedup + rank → `findings/triage_report.{md,json}`
+                           + git_writer + pr_comment (dry-run by default)
+
+Pipeline supporting primitives (also under `agents/`):
+  - `preflight_static.py` + `flake_risk_lint.py` — Gen-Functional guards
+  - `coverage_delta.py` + `stability_runner.py` + `mutate_probe.py`
+    + `lint_promotion.py` — Evaluator's four pre-computed signals
+  - `triage_dedup.py` + `triage_report.py` — Triager primitives
+
+Each agent has its own `prompts/<agent>.md` system prompt + an assembly
+helper in `prompts_pkg/prompts.py`. SDK seams (`_resolve_*_client`,
+`_invoke_session`) are mockable in tests — the suite never hits a real LLM.
+
+**Auto-fire chain:** every stage's success path calls
+`schedule_<next>(spec_dir, project_dir)` which fires the next agent
+asynchronously, gated by env (`TFACTORY_AUTO_PLAN`,
+`TFACTORY_AUTO_GENERATE`, `TFACTORY_AUTO_EVALUATE`, `TFACTORY_AUTO_TRIAGE`).
+Default ON in production; tests pin OFF.
+
+**Triager side-effects** (git commit + PR comment) default to **DRY-RUN**
+per the "no automatic pushes" policy. Operators opt in via:
+  - `TFACTORY_TRIAGER_GIT_WRITE=1`
+  - `TFACTORY_TRIAGER_PR_COMMENT=1`
 
 **LLM provider abstraction:** TFactory uses the Claude Agent SDK
 (`claude-agent-sdk`) as its primary provider, but also supports Codex CLI,
@@ -20,6 +65,31 @@ see `phase_config.infer_provider_from_model()`. Never call
 `anthropic.Anthropic()` directly; route Claude interactions through
 `core.client.create_client()` and other providers through
 `providers.factory.get_provider()`.
+
+### Workspace layout
+
+Per-task data lives at `~/.tfactory/workspaces/<project_id>/specs/<spec_id>/`:
+
+```
+status.json                          ← live status (status / phase / counts)
+test_plan.json                       ← Planner's lane-tagged subtask plan
+context/
+  aifactory_spec.md                  ← frozen snapshot of the AIFactory spec
+  aifactory_plan.json                ← AIFactory's implementation plan (if any)
+  diff.patch                         ← base_ref..branch diff
+  source.json                        ← branch + base_ref + repo metadata
+  replan_request.json                ← written by Gen-Functional on guardrail reject
+tests/                                ← generated pytest files (Gen-Functional)
+findings/
+  verdicts.json                      ← Evaluator's per-test verdicts
+  triage_report.{md,json}            ← Triager's renderable report
+  pr_comment_body.md                 ← PR comment body (when no PR# in source.json)
+  mutants/                           ← mutate_probe.py's per-test mutants
+logs/
+  planner.log + gen_functional.log + evaluator.log + triager.log
+```
+
+Override workspace root with `TFACTORY_WORKSPACE_ROOT=/path/to/dir`.
 
 ## Project Structure
 
@@ -167,18 +237,60 @@ See [RELEASE.md](RELEASE.md) for detailed release process documentation.
 
 ## Architecture
 
-### Core Pipeline
+### Core Pipeline (the 4 agents)
 
-**Spec Creation (spec_runner.py)** - Dynamic 3-8 phase pipeline based on task complexity:
-- SIMPLE (3 phases): Discovery → Quick Spec → Validate
-- STANDARD (6-7 phases): Discovery → Requirements → [Research] → Context → Spec → Plan → Validate
-- COMPLEX (8 phases): Full pipeline with Research and Self-Critique phases
+```
+  Planner ─► Gen-Functional ─► Executor ─► Evaluator ─► Triager
+```
 
-**Implementation (run.py → agent.py)** - Multi-session build:
-1. Planner Agent creates subtask-based implementation plan
-2. Coder Agent implements subtasks (can spawn subagents for parallel work)
-3. QA Reviewer validates acceptance criteria
-4. QA Fixer resolves issues in a loop
+Each agent has a stub commit + 4-5 commits of real implementation +
+an integration test commit. Total per agent: 6 commits. Pattern shipped
+across Tasks 5-8 (Planner / Gen-Functional / Evaluator / Triager) and
+Task 4 for the Executor.
+
+**Planner** (`agents/planner.py`):
+  - Reads `context/aifactory_spec.md` + `context/diff.patch`
+  - Emits `test_plan.json` (Lane.FUNCTIONAL subtasks, one phase per AC)
+  - Initial + replan modes; `replan_count >= 2` → status=stuck
+  - Hard cap: 30 subtasks; soft warning at 15
+
+**Gen-Functional** (`agents/gen_functional.py`):
+  - Per-subtask loop: prompt → SDK → write test file
+  - Two guardrails per subtask:
+    - `preflight_static.py` — subprocess-checks every import resolves
+    - `flake_risk_lint.py` — AST scan for 5 flake patterns
+      (dict-iter-order, set-iter-order, random-no-seed = high reject;
+       time.sleep, datetime.now-no-freeze = medium flag)
+  - Rejection → writes `context/replan_request.json` → triggers Planner replan
+  - Status: generating → generated / generated_empty / replan_needed / gen_functional_failed
+
+**Executor** (`tools/runners/docker_runner.py`, no LLM):
+  - DockerRunner.run_pytest in `--network=none --read-only` container
+  - Emits coverage.xml + junit.xml to scratch volume
+  - The Evaluator's runner_fn seam wraps this; tests pass canned exit codes
+
+**Evaluator** (`agents/evaluator.py`) — *structurally separate from
+Gen-Functional, research-mandated for non-self-validation*:
+  - Builds an `EvaluatorSignals` bundle per completed test
+  - 5 signals (4 pre-computed in code, 1 LLM-judged):
+    1. coverage_delta (`coverage_delta.py` — Cobertura XML parser + set math)
+    2. stability (`stability_runner.py` — 3× re-run via runner_fn)
+    3. mutation (`mutate_probe.py` — AST mutates ONE assertion; KILLED/SURVIVED)
+    4. lint_promotion (`lint_promotion.py` — promotes flake-lint mediums)
+    5. semantic_relevance (the LLM's call — high/medium/low)
+  - Hands the bundle to evaluator.md prompt; LLM emits `findings/verdicts.json`
+  - Validates the verdict JSON (test_id presence + verdict ∈ {accept,reject,flag})
+
+**Triager** (`agents/triager.py`):
+  - Loads verdicts.json; wraps as TriageCandidates
+  - Drops rejects; dedups byte-identical + whitespace-normalised
+    via `triage_dedup.py`
+  - Ranks by (verdict_priority, mutation, stability, coverage_delta, test_id)
+  - Renders `findings/triage_report.{md,json}` via `triage_report.py`
+  - Side-effects (DRY-RUN by default):
+    - `tools/git_writer.py` — commits to AIFactory feature branch
+    - `tools/pr_comment.py` — `gh pr comment --body-file -`
+  - Final status: triaged / triaged_empty / triager_failed
 
 ### Key Components (apps/backend/)
 
@@ -186,8 +298,19 @@ See [RELEASE.md](RELEASE.md) for detailed release process documentation.
 - **core/client.py** - Claude Agent SDK client factory with security hooks and tool permissions
 - **core/security.py** - Dynamic command allowlisting based on detected project stack
 - **core/auth.py** - OAuth token management for Claude SDK authentication
-- **agents/** - Agent implementations (planner, coder, qa_reviewer, qa_fixer)
-- **spec_agents/** - Spec creation agents (gatherer, researcher, writer, critic)
+- **agents/** - The 4 TFactory agents + their primitives:
+  - `planner.py` / `gen_functional.py` / `evaluator.py` / `triager.py`
+  - `preflight_static.py` + `flake_risk_lint.py` (Gen-Functional guardrails)
+  - `coverage_delta.py` + `stability_runner.py` + `mutate_probe.py`
+    + `lint_promotion.py` (Evaluator's 4 numeric signals)
+  - `triage_dedup.py` + `triage_report.py` (Triager primitives)
+- **tools/** - Side-effect helpers:
+  - `git_writer.py` — commits to AIFactory branch (dry-run-first)
+  - `pr_comment.py` — `gh pr comment` with body via stdin (dry-run-first)
+  - `runners/docker_runner.py` — sandboxed pytest execution
+- **prompts/** + **prompts_pkg/** - System prompts + duck-typed assembly helpers
+- **workspaces/snapshotter.py** - Task 3's spec snapshotter
+- **mcp_server/tfactory_server.py** - MCP server exposing `task_create_and_run` etc.
 
 **Memory & Context:**
 - **integrations/graphiti/** - Graphiti memory system (mandatory)
@@ -224,18 +347,18 @@ See [RELEASE.md](RELEASE.md) for detailed release process documentation.
 
 ### Agent Prompts (apps/backend/prompts/)
 
-| Prompt | Purpose |
-|--------|---------|
-| planner.md | Creates implementation plan with subtasks |
-| coder.md | Implements individual subtasks |
-| coder_recovery.md | Recovers from stuck/failed subtasks |
-| qa_reviewer.md | Validates acceptance criteria |
-| qa_fixer.md | Fixes QA-reported issues |
-| spec_gatherer.md | Collects user requirements |
-| spec_researcher.md | Validates external integrations |
-| spec_writer.md | Creates spec.md document |
-| spec_critic.md | Self-critique using ultrathink |
-| complexity_assessor.md | AI-based complexity assessment |
+The 4 TFactory agents each have a single system prompt; assembly helpers
+in `prompts_pkg/prompts.py` prepend a per-call CONTEXT block.
+
+| Prompt | Purpose | Helper |
+|--------|---------|--------|
+| planner.md | Initial-mode plan from AIFactory spec | `get_tfactory_planner_prompt` |
+| planner_replan.md | Replan after Gen-Functional rejection | `get_tfactory_planner_replan_prompt` |
+| gen_functional.md | Generate one pytest file per subtask | `get_tfactory_gen_functional_prompt` |
+| evaluator.md | Verdicts from 4 signals + LLM's semantic call | `get_tfactory_evaluator_prompt` |
+
+The Triager has no LLM prompt — it's a pure-compute orchestrator over
+the dedup + rank + render primitives.
 
 ### Spec Directory Structure
 

@@ -1,7 +1,7 @@
 ---
 name: handover-to-tfactory
-description: Hand a finished AIFactory spec off to TFactory for autonomous test generation. Records the task, snapshots the spec dir, and (once Tasks 5-8 land) drives the planner→generator→executor→evaluator→triager pipeline.
-when_to_use: When the user has finished an AIFactory feature on a branch and wants TFactory to generate aligned pytest tests + (eventually) a security/coverage report. Common triggers — "hand this off to tfactory", "/handover-to-tfactory", "generate tests for the current PR", "have tfactory test this spec".
+description: Hand a finished AIFactory spec off to TFactory for autonomous test generation. Records the task, snapshots the spec dir, and drives the full Planner → Gen-Functional → Executor → Evaluator → Triager pipeline to produce a triage report + (optionally) commit tests to the feature branch + post a PR comment.
+when_to_use: When the user has finished an AIFactory feature on a branch and wants TFactory to generate aligned pytest tests + a verdicts/coverage report. Common triggers — "hand this off to tfactory", "/handover-to-tfactory", "generate tests for the current PR", "have tfactory test this spec".
 allowed-tools:
   - mcp__tfactory__project_list
   - mcp__tfactory__project_create
@@ -17,11 +17,17 @@ allowed-tools:
 
 Hand a finished AIFactory spec off to TFactory.
 
-> **Status at MVP (Task 2, #3):** workspace creation + status tracking work
-> against the file system. Pipeline execution (Planner → Gen-Functional →
-> Executor → Evaluator → Triager) wires up in Tasks 5-8. Until then,
-> running this skill records the task with `status=pending` and reports
-> the workspace path so you can verify the contract.
+> **Status (post-MVP, v0.1.0-mvp):** the full 4-agent pipeline is wired
+> and tested against mocked SDK + injected docker-runner seams. Real
+> end-to-end run against an AIFactory project still requires an
+> `ANTHROPIC_API_KEY` + a running Docker daemon + a real git/gh setup.
+> See `guides/e2e-smoke.md` for the operator-facing walkthrough.
+>
+> The skill records the task, snapshots the AIFactory spec into
+> `~/.tfactory/workspaces/<proj>/specs/<spec>/context/`, and (with
+> `TFACTORY_AUTO_*=1`, the production default) auto-fires the pipeline.
+> Final status reaches `triaged` / `triaged_empty` when the Triager
+> finishes; `findings/triage_report.md` holds the human-readable report.
 
 ## When to use
 
