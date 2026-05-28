@@ -18,6 +18,31 @@ Task 7 commits (all landed):
   ✓ commit 4 — evaluator.md prompt + assembly helper
   ✓ commit 5 — Real run_evaluator with SDK + 5 signals → verdicts.json
   ✓ commit 6 — Integration test + close #8
+
+Task 8 additions (Browser-lane AppRuntime status transitions):
+
+  The Evaluator now surfaces two Browser-lane phases in status.json so
+  the portal's LaneStatusGrid can show operators what is happening:
+
+    ``executor_app_running``  — docker-compose services are up + healthy;
+                                the Playwright container is executing.
+    ``app_not_healthy``       — the AppRuntime health-poll timed out before
+                                all ``wait_for`` URLs replied with their
+                                expected HTTP status code.  The error
+                                message includes the last observed status
+                                code per URL.
+
+  These phases are set by ``_run_browser_subtask_with_runtime()`` which
+  wraps the AppRuntime + DockerRunner lifecycle for a single Browser-lane
+  subtask.  ``run_evaluator`` calls this helper instead of the plain
+  DockerRunner path when the subtask's lane is ``"browser"`` or
+  ``"integration"``.
+
+  Implementation note: the status transitions are thin wrappers — the
+  heavy lifting (AppRuntime lifecycle, health-poll, TFACTORY_TARGET_URL
+  injection) lives in ``tools/runners/app_runtime.py`` and
+  ``tools/runners/lane_dispatch.py``.  The Evaluator only owns the
+  *status.json* side-effects.
 """
 
 from __future__ import annotations
@@ -247,6 +272,100 @@ def _framework_coverage_strategy(subtask: dict) -> str | None:
             exc,
         )
         return None
+
+
+# ─── Browser-lane AppRuntime status transitions (Task 8 / #24) ──────────
+
+
+def _run_browser_subtask_with_runtime(
+    spec_dir: Path,
+    subtask: dict,
+    runner_fn=None,
+    *,
+    target=None,
+    repo_root: Path | None = None,
+) -> tuple[bool, str | None]:
+    """Execute a Browser-lane subtask wrapped in an AppRuntime lifecycle.
+
+    Writes status.json phase transitions visible to the portal:
+
+      ``executor_app_running`` — docker-compose is up + healthy; Playwright
+                                  container is executing.
+      ``app_not_healthy``      — health-poll timed out; the error message
+                                  includes the last observed status code per
+                                  URL.
+
+    This function is intentionally side-effect-light — it owns ONLY the
+    ``status.json`` writes.  The actual docker-compose / HTTP-poll / container
+    execution lives in ``tools.runners.app_runtime`` and
+    ``tools.runners.lane_dispatch``.
+
+    Args:
+        spec_dir: TFactory workspace spec directory.
+        subtask: A subtask dict from test_plan.json (lane == "browser" or
+            "integration").
+        runner_fn: Injectable subprocess.run replacement for tests.
+        target: A ``DockerComposeTarget`` instance.  When ``None`` this
+            function is a no-op and returns ``(False, "no_target")``.
+        repo_root: Absolute path to the AIFactory project root (required
+            when ``target`` is not None).
+
+    Returns:
+        ``(success, error_phase)`` — where ``success=True`` means the
+        Playwright container ran (its exit code is separate), and
+        ``error_phase`` is set when AppRuntime itself failed (e.g.
+        ``"app_not_healthy"``).
+    """
+    if target is None:
+        # No DockerComposeTarget — Browser subtask with a static base_url;
+        # skip AppRuntime lifecycle entirely.
+        return False, "no_target"
+
+    from tools.runners.app_runtime import AppRuntime, AppRuntimeError
+
+    _write_status_patch(
+        spec_dir,
+        phase="executor_app_running",
+        browser_subtask_id=subtask.get("id", ""),
+    )
+
+    runtime_kwargs: dict = {}
+    if runner_fn is not None:
+        runtime_kwargs["runner_fn"] = runner_fn
+
+    try:
+        with AppRuntime(target, repo_root, **runtime_kwargs) as runtime:
+            try:
+                runtime.wait_for_healthy()
+            except AppRuntimeError as exc:
+                _eval_log.error(
+                    "app_not_healthy for subtask %s: %s",
+                    subtask.get("id", ""),
+                    exc,
+                )
+                _write_status_patch(
+                    spec_dir,
+                    phase="app_not_healthy",
+                    app_runtime_error=str(exc)[:500],
+                    browser_subtask_id=subtask.get("id", ""),
+                )
+                return False, "app_not_healthy"
+            # App is healthy — caller proceeds with the test run.
+            return True, None
+    except AppRuntimeError as exc:
+        # start() itself failed (compose up returned non-zero).
+        _eval_log.error(
+            "app_runtime start failed for subtask %s: %s",
+            subtask.get("id", ""),
+            exc,
+        )
+        _write_status_patch(
+            spec_dir,
+            phase="app_not_healthy",
+            app_runtime_error=str(exc)[:500],
+            browser_subtask_id=subtask.get("id", ""),
+        )
+        return False, "app_not_healthy"
 
 
 def _coverage_delta_for_subtask(

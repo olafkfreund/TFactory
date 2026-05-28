@@ -151,3 +151,146 @@ def test_lit_lane_invokes_docker_runner(lane, monkeypatch, tmp_path):
     # The docker invocation actually fired
     assert "docker" in captured["argv"][0]
     assert "tfactory-runner-pytest:latest" in captured["argv"]
+
+
+# ── dispatch_browser_lane (Task 8 / #24) ────────────────────────────────
+
+
+from dataclasses import dataclass, field
+
+from tools.runners.app_runtime import AppRuntimeResult, HealthCheckResult
+from tools.runners.lane_dispatch import dispatch_browser_lane
+
+
+@dataclass
+class _FakeWaitFor:
+    url: str
+    timeout_seconds: int = 60
+    expect_status: int = 200
+
+
+@dataclass
+class _FakeTarget:
+    type: str = "docker_compose"
+    name: str = "web"
+    compose_file: str = "docker-compose.test.yml"
+    services: list = None  # type: ignore[assignment]
+    wait_for: list = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.services is None:
+            self.services = ["app", "db"]
+        if self.wait_for is None:
+            self.wait_for = [_FakeWaitFor(url="http://localhost:3000/ready")]
+
+
+class _StubRuntime:
+    """Stub AppRuntime that succeeds without any real docker calls."""
+
+    def __init__(self, target, repo_root, **kw):
+        self.target = target
+        self._started = False
+
+    def start(self):
+        self._started = True
+        return AppRuntimeResult(started=True)
+
+    def stop(self):
+        self._started = False
+
+    def wait_for_healthy(self):
+        return [
+            HealthCheckResult(
+                url=self.target.wait_for[0].url if self.target.wait_for else "",
+                last_status=200,
+                last_error=None,
+                healthy=True,
+            )
+        ]
+
+    def __enter__(self):
+        self.start()
+        return self
+
+    def __exit__(self, *a):
+        self.stop()
+
+
+def test_dispatch_browser_lane_returns_browser_dispatch_result(
+    monkeypatch, tmp_path
+):
+    """dispatch_browser_lane must return DispatchResult with lane='browser'."""
+    monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/docker")
+
+    def _fake_run(*args, **kwargs):
+        cp = MagicMock(spec=subprocess.CompletedProcess)
+        cp.returncode = 0
+        cp.stdout = ""
+        cp.stderr = ""
+        return cp
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+
+    target = _FakeTarget()
+    r = DockerRunner(image="tfactory-runner-playwright:latest")
+    result = dispatch_browser_lane(
+        target=target,
+        repo_root=tmp_path,
+        docker_runner=r,
+        docker_run_kwargs={
+            "repo_path": tmp_path,
+            "scratch_path": tmp_path,
+            "command": ["npx", "playwright", "test"],
+        },
+        app_runtime_cls=_StubRuntime,
+    )
+
+    assert isinstance(result, DispatchResult)
+    assert result.lane == "browser"
+    assert result.runner_used == "docker"
+    assert result.docker_result is not None
+    assert result.docker_result.returncode == 0
+
+
+def test_dispatch_browser_lane_no_wait_for_skips_target_url(
+    monkeypatch, tmp_path
+):
+    """dispatch_browser_lane with empty wait_for does not inject TFACTORY_TARGET_URL."""
+    monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/docker")
+    received_extra_env: dict = {}
+
+    def _fake_run(*args, **kwargs):
+        cp = MagicMock(spec=subprocess.CompletedProcess)
+        cp.returncode = 0
+        cp.stdout = ""
+        cp.stderr = ""
+        return cp
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+
+    class _NoWaitRuntime(_StubRuntime):
+        def wait_for_healthy(self):
+            return []
+
+    target_no_wait = _FakeTarget(wait_for=[])
+
+    class _CapturingRunner:
+        def run(self, **kwargs):
+            received_extra_env.update(kwargs.get("extra_env") or {})
+            return __import__(
+                "tools.runners.docker_runner", fromlist=["DockerRunResult"]
+            ).DockerRunResult(returncode=0)
+
+    dispatch_browser_lane(
+        target=target_no_wait,
+        repo_root=tmp_path,
+        docker_runner=_CapturingRunner(),  # type: ignore[arg-type]
+        docker_run_kwargs={
+            "repo_path": tmp_path,
+            "scratch_path": tmp_path,
+            "command": ["playwright"],
+        },
+        app_runtime_cls=_NoWaitRuntime,
+    )
+
+    assert "TFACTORY_TARGET_URL" not in received_extra_env

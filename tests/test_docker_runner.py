@@ -295,6 +295,81 @@ def test_run_pytest_omits_cov_arg_when_package_unset(monkeypatch, tmp_path):
     assert "--cov=" not in captured["argv"][-1]
 
 
+# ── extra_env parameter (Task 8 / #24) ─────────────────────────────────
+
+
+def test_extra_env_merged_into_argv(monkeypatch, tmp_path):
+    """extra_env values must appear as -e flags in the docker argv."""
+    monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/docker")
+    captured = {}
+
+    def _capture(*args, **kw):
+        captured["argv"] = args[0]
+        return _fake_completed(0)
+
+    monkeypatch.setattr(subprocess, "run", _capture)
+
+    r = DockerRunner()
+    r.run(
+        repo_path=tmp_path,
+        scratch_path=tmp_path,
+        command=["pytest"],
+        extra_env={"TFACTORY_TARGET_URL": "http://localhost:3000"},
+    )
+    argv = captured["argv"]
+    assert "TFACTORY_TARGET_URL=http://localhost:3000" in argv
+
+
+def test_extra_env_overrides_base_env(monkeypatch, tmp_path):
+    """When env and extra_env share a key, extra_env wins."""
+    monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/docker")
+    captured = {}
+
+    def _capture(*args, **kw):
+        captured["argv"] = args[0]
+        return _fake_completed(0)
+
+    monkeypatch.setattr(subprocess, "run", _capture)
+
+    r = DockerRunner()
+    r.run(
+        repo_path=tmp_path,
+        scratch_path=tmp_path,
+        command=["pytest"],
+        env={"MY_VAR": "original"},
+        extra_env={"MY_VAR": "override"},
+    )
+    argv = captured["argv"]
+    assert "MY_VAR=override" in argv
+    assert "MY_VAR=original" not in argv
+
+
+def test_extra_env_none_does_not_affect_argv(monkeypatch, tmp_path):
+    """Passing extra_env=None must not add any extra -e flags."""
+    monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/docker")
+    captured = {}
+
+    def _capture(*args, **kw):
+        captured["argv"] = args[0]
+        return _fake_completed(0)
+
+    monkeypatch.setattr(subprocess, "run", _capture)
+
+    r = DockerRunner()
+    r.run(
+        repo_path=tmp_path,
+        scratch_path=tmp_path,
+        command=["pytest"],
+        env={"BASE_VAR": "1"},
+        extra_env=None,
+    )
+    argv = captured["argv"]
+    assert "BASE_VAR=1" in argv
+    # no extra -e flags beyond BASE_VAR
+    e_flag_values = [argv[i + 1] for i, v in enumerate(argv) if v == "-e"]
+    assert all(v.startswith("BASE_VAR") for v in e_flag_values)
+
+
 # ── real-docker integration smoke (skipped if docker absent) ────────────
 
 

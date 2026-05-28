@@ -19,21 +19,29 @@ Decision 2.
 The dispatcher is intentionally thin — it owns lane→runner mapping and
 nothing else. Test-plan iteration / fan-out / aggregation is the
 Executor's (Task 8) job.
+
+Browser + Integration lane dispatch (Task 8 / #24):
+  ``dispatch_browser_lane()`` wraps the DockerRunner invocation in an
+  ``AppRuntime`` lifecycle so the target app is running when Playwright
+  tests execute.  It injects ``TFACTORY_TARGET_URL`` into the test
+  container via ``extra_env`` so the Playwright spec can read it without
+  hardcoding a port.  Callers that do NOT need the AppRuntime lifecycle
+  (unit / api / mutation) continue to use the plain ``dispatch_lane()``
+  path unchanged.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from .docker_runner import DockerRunner, DockerRunResult
 
-
 # ---------------------------------------------------------------------------
 # Errors
 # ---------------------------------------------------------------------------
+
 
 class LaneNotImplementedError(NotImplementedError):
     """Raised when the requested lane has no executor in this MVP."""
@@ -45,33 +53,35 @@ class LaneNotImplementedError(NotImplementedError):
 
 # Lanes that have a real runner. v0.1 had only "functional"; v0.2 lights
 # the full modality spine. Single source of truth so tests can iterate.
-_MVP_LIT_LANES: frozenset[str] = frozenset({
-    "unit",         # v0.2 (Task 7 — Jest / pytest images)
-    "browser",      # v0.2 (Task 7 + Task 8 — Playwright image + AppRuntime)
-    "api",          # v0.2 (Task 7 — same runner images as unit)
-    "integration",  # v0.2 (Task 7 + Task 8 — runner + AppRuntime)
-    "mutation",     # v0.2 (Task 7 — Stryker / mutmut images)
-})
+_MVP_LIT_LANES: frozenset[str] = frozenset(
+    {
+        "unit",  # v0.2 (Task 7 — Jest / pytest images)
+        "browser",  # v0.2 (Task 7 + Task 8 — Playwright image + AppRuntime)
+        "api",  # v0.2 (Task 7 — same runner images as unit)
+        "integration",  # v0.2 (Task 7 + Task 8 — runner + AppRuntime)
+        "mutation",  # v0.2 (Task 7 — Stryker / mutmut images)
+    }
+)
 
 # Deprecated v0.1 names — see test_plan.enums._V01_LANE_ALIASES. Listed
 # here so the dispatcher can route legacy plans (still parsing through
 # v0.2) cleanly. Removed in v0.3.
 _DEPRECATED_V01_ALIASES: dict[str, str] = {
     "functional": "unit",
-    "sast":       "unit",  # out of scope per Decision 2
-    "dast":       "unit",  # out of scope
-    "fuzz":       "unit",  # out of scope
+    "sast": "unit",  # out of scope per Decision 2
+    "dast": "unit",  # out of scope
+    "fuzz": "unit",  # out of scope
 }
 
 # Out-of-scope lane keys that should NEVER be in v0.2 plans. If they appear,
 # emit a structured error rather than a generic NotImplementedError so the
 # Planner can detect + replan.
 _LANE_PHASES: dict[str, str] = {
-    "sast":     "out of scope (Decision 2 — use a separate security pipeline)",
-    "deps":     "out of scope (security pipeline)",
-    "secrets":  "out of scope (security pipeline)",
-    "dast":     "out of scope (security pipeline)",
-    "fuzz":     "out of scope (Decision 2 — property-based testing folded into 'unit' lane)",
+    "sast": "out of scope (Decision 2 — use a separate security pipeline)",
+    "deps": "out of scope (security pipeline)",
+    "secrets": "out of scope (security pipeline)",
+    "dast": "out of scope (security pipeline)",
+    "fuzz": "out of scope (Decision 2 — property-based testing folded into 'unit' lane)",
 }
 
 
@@ -112,6 +122,7 @@ def dispatch_lane(
     # v0.1 alias compatibility — collapse old names to v0.2 lanes with warning
     if lane in _DEPRECATED_V01_ALIASES:
         import warnings
+
         new_lane = _DEPRECATED_V01_ALIASES[lane]
         warnings.warn(
             f"lane {lane!r} is a deprecated v0.1 alias; mapped to {new_lane!r}. "
@@ -155,3 +166,79 @@ def is_lane_lit(lane: str) -> bool:
     'lit' for compatibility through v0.2 (they map to 'unit' on dispatch).
     """
     return lane in _MVP_LIT_LANES or lane in _DEPRECATED_V01_ALIASES
+
+
+# ---------------------------------------------------------------------------
+# Browser-lane dispatch (Task 8 / #24) — AppRuntime lifecycle wrapper
+# ---------------------------------------------------------------------------
+
+
+def dispatch_browser_lane(
+    *,
+    target,  # DockerComposeTarget from tfactory_yml.schema
+    repo_root: Path,
+    docker_runner: DockerRunner,
+    docker_run_kwargs: dict[str, Any],
+    app_runtime_cls=None,  # injectable for tests; defaults to AppRuntime
+) -> DispatchResult:
+    """Dispatch a Browser-lane (or Integration-lane) test with AppRuntime.
+
+    Spins up the AIFactory app via docker-compose, waits for it to be
+    healthy, runs the Playwright test container with ``TFACTORY_TARGET_URL``
+    injected into the environment, then tears the app down.
+
+    The canonical target URL (used as ``TFACTORY_TARGET_URL``) is the first
+    entry in ``target.wait_for`` — this is the URL the test framework connects
+    to.  If ``wait_for`` is empty the test is dispatched without a target URL
+    (legacy / misconfigured case — callers should ensure ``wait_for`` is
+    populated for Browser-lane subtasks).
+
+    Args:
+        target: A ``DockerComposeTarget`` instance.
+        repo_root: Absolute path to the AIFactory project root.
+        docker_runner: Configured ``DockerRunner`` pointing at the
+            Playwright runner image.
+        docker_run_kwargs: Forwarded to ``docker_runner.run(**kwargs)``.
+            Must include at minimum ``repo_path``, ``scratch_path``,
+            ``command``.  Any ``extra_env`` already present is merged
+            (caller values take precedence except for
+            ``TFACTORY_TARGET_URL`` which is always overridden by this
+            function).
+        app_runtime_cls: Injected in tests to replace ``AppRuntime``
+            with a stub.  Defaults to the real ``AppRuntime``.
+
+    Returns:
+        ``DispatchResult`` with ``lane="browser"`` and the
+        ``DockerRunResult`` from the Playwright run.
+
+    Raises:
+        ``AppRuntimeError``: if the docker-compose start or health-poll
+            fails.  The app is always stopped before the error propagates
+            (``AppRuntime`` context manager guarantees this).
+    """
+    from .app_runtime import AppRuntime
+
+    runtime_cls = app_runtime_cls or AppRuntime
+
+    # Merge extra_env: start from caller-supplied values, then overlay
+    # TFACTORY_TARGET_URL so the test always knows which URL to hit.
+    kwargs = dict(docker_run_kwargs)
+    caller_extra_env: dict[str, str] = dict(kwargs.get("extra_env") or {})
+
+    target_url: str | None = None
+    if target.wait_for:
+        target_url = target.wait_for[0].url
+
+    with runtime_cls(target, repo_root) as runtime:
+        runtime.wait_for_healthy()
+        if target_url is not None:
+            caller_extra_env["TFACTORY_TARGET_URL"] = target_url
+        if caller_extra_env:
+            kwargs["extra_env"] = caller_extra_env
+        run_result = docker_runner.run(**kwargs)
+
+    return DispatchResult(
+        lane="browser",
+        runner_used="docker",
+        docker_result=run_result,
+    )
