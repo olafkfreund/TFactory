@@ -7,12 +7,35 @@ nav_order: 1
 # TFactory
 
 > **Autonomous test generation + execution platform — sister project to [AIFactory](https://github.com/olafkfreund/AIFactory).**
-> Status: Planning · MVP design locked 2026-05-28
+> Status: **MVP build in progress · 4 of 12 tasks delivered** · Last update 2026-05-28
 
 TFactory receives a finished AIFactory spec, generates feature + security tests
 aligned to its acceptance criteria, executes them sandboxed, evaluates quality,
 commits the tests to the feature branch, and posts a coverage + findings report
 back to the PR — autonomously.
+
+## Current progress
+
+```
+Phase 1 (MVP — walking skeleton)
+  ████████░░░░░░░░░░░░░░░░░░  4 of 12 tasks delivered
+
+  ✓ #2  Task 1: Hard fork + scaffold
+  ✓ #3  Task 2: MCP server + /handover-to-tfactory skill
+  ✓ #4  Task 3: Workspace + snapshotter (test_plan.Lane added)
+  ✓ #5  Task 4: Docker runner + lane dispatcher
+
+  → #6  Task 5: Planner agent             ← ready to start
+  → #7  Task 6: Gen-Functional agent      ← ready to start (parallel)
+    #8  Task 7: Evaluator (blocked by #7)
+    #9  Task 8: Triager + git writer (blocked by #8)
+    #10 Task 9: Portal backend (blocked by #9)
+    #11 Task 10: Portal frontend (parallel with #10)
+    #12 Task 11: e2e smoke
+    #13 Task 12: Docs + tag v0.1.0-mvp
+```
+
+See [Progress]({{ '/progress/' | relative_url }}) for the live build log + commit links + carry-forward items.
 
 ## What's in scope
 
@@ -50,6 +73,8 @@ static, Docker for runtime), spec-aware handover from AIFactory.
 
 ## Documentation
 
+- **[Progress]({{ '/progress/' | relative_url }})** — live build status, closed tasks + commits, what's ready to start, carry-forward items
+- **[Architecture]({{ '/architecture/' | relative_url }})** — directory structure, runtime layout (`~/.tfactory/...`), handover dataflow, runner stack, file-by-file map
 - **[Design Plan]({{ '/design-plan/' | relative_url }})** — full design rationale, 10 locked decisions, alternatives considered, landscape research (Diffblue, Meta TestGen-LLM, Qodo, OSS-Fuzz-Gen, XBOW, etc.), risk register
 - **[Spec]({{ '/spec/' | relative_url }})** — Agent OS spec: overview, user stories, scope, deliverable
 - **[Technical Spec]({{ '/technical-spec/' | relative_url }})** — architecture detail, inputs/outputs, per-component implementation
