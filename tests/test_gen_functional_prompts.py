@@ -205,12 +205,34 @@ def test_total_size_in_range(subtask_dataclass: Subtask) -> None:
 def test_raises_when_md_missing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, subtask_dataclass: Subtask,
 ) -> None:
+    """v0.2 path: when the generic gen_functional.md is missing, raise FileNotFoundError."""
     import prompts_pkg.prompts as mod
-    monkeypatch.setattr(mod, "PROMPTS_DIR", tmp_path)  # empty dir
+
+    class FakeDesc:
+        name = "pytest"
+        context_block = "pytest block"
+
+    monkeypatch.setattr(mod, "PROMPTS_DIR", tmp_path)  # empty dir — generic md absent
     with pytest.raises(FileNotFoundError, match="gen_functional.md"):
         get_tfactory_gen_functional_prompt(
-            Path("/ws"), Path("/p"), subtask_dataclass,
+            Path("/ws"), Path("/p"), subtask_dataclass, framework_descriptor=FakeDesc(),
         )
+
+
+def test_raises_when_legacy_md_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, subtask_dataclass: Subtask,
+) -> None:
+    """v0.1 legacy path: when gen_functional-v01-legacy.md is missing, raise FileNotFoundError."""
+    import prompts_pkg.prompts as mod
+
+    monkeypatch.setattr(mod, "PROMPTS_DIR", tmp_path)  # empty dir — legacy md absent
+    import warnings
+    with warnings.catch_warnings(record=True):
+        warnings.simplefilter("always")
+        with pytest.raises(FileNotFoundError, match="gen_functional-v01-legacy.md"):
+            get_tfactory_gen_functional_prompt(
+                Path("/ws"), Path("/p"), subtask_dataclass,
+            )
 
 
 def test_handles_missing_files_to_create_gracefully(subtask_dict: dict) -> None:
