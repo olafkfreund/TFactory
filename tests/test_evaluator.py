@@ -544,3 +544,264 @@ def test_advance_to_evaluator_swallows_import_errors(
 
     with patch("builtins.__import__", side_effect=_selective_raiser):
         gen_functional._advance_to_evaluator(spec_dir, project_dir)
+
+
+# ── Task 10 (#26) — Coverage adapter (null vs zero) ────────────────────
+#
+# Tests for _framework_coverage_strategy, _coverage_delta_for_subtask,
+# and _validate_verdicts coverage_delta_pct validation.
+#
+# These tests exercise the real registry (frameworks/ dir in the repo)
+# so playwright → "skip", pytest → "cobertura", jest → "lcov".
+# Registry lookups are fast (YAML parse) and deterministic.
+
+
+from agents.evaluator import _coverage_delta_for_subtask, _framework_coverage_strategy, _validate_verdicts
+
+
+# ── _framework_coverage_strategy ────────────────────────────────────────
+
+
+def test_framework_coverage_strategy_playwright_returns_skip() -> None:
+    """Playwright descriptor has coverage_strategy='skip' → returns 'skip'."""
+    strategy = _framework_coverage_strategy({"framework": "playwright"})
+    assert strategy == "skip"
+
+
+def test_framework_coverage_strategy_pytest_returns_cobertura() -> None:
+    """pytest descriptor has coverage_strategy='cobertura'."""
+    strategy = _framework_coverage_strategy({"framework": "pytest"})
+    assert strategy == "cobertura"
+
+
+def test_framework_coverage_strategy_jest_returns_lcov() -> None:
+    """jest descriptor has coverage_strategy='lcov'."""
+    strategy = _framework_coverage_strategy({"framework": "jest"})
+    assert strategy == "lcov"
+
+
+def test_framework_coverage_strategy_no_framework_returns_none() -> None:
+    """Subtask without a framework field returns None (v0.1 back-compat)."""
+    assert _framework_coverage_strategy({}) is None
+    assert _framework_coverage_strategy({"framework": ""}) is None
+
+
+def test_framework_coverage_strategy_unknown_framework_returns_none() -> None:
+    """Unknown framework (not in registry) returns None — never blocks."""
+    result = _framework_coverage_strategy({"framework": "nonexistent_fw_xyz"})
+    assert result is None
+
+
+# ── _coverage_delta_for_subtask ──────────────────────────────────────────
+
+
+def test_signals_coverage_none_for_browser_lane_framework(
+    spec_dir: Path,
+) -> None:
+    """Subtask with framework='playwright' (coverage_strategy='skip')
+    must yield coverage_delta=None from _coverage_delta_for_subtask.
+    No XML files should be read."""
+    subtask = {
+        "id": "st-playwright-0",
+        "framework": "playwright",
+        "files_to_create": ["tests/test_0.spec.ts"],
+    }
+    result = _coverage_delta_for_subtask(spec_dir, subtask)
+    assert result is None
+
+
+def test_signals_coverage_numeric_for_pytest_framework(
+    spec_dir: Path,
+) -> None:
+    """Subtask with framework='pytest' does NOT skip coverage (cobertura).
+    When the XML files are absent, returns None (not-computed path),
+    but the key difference is that it does NOT short-circuit via skip."""
+    # Write a coverage XML so the compute path is reachable and returns
+    # a real CoverageDelta rather than None-from-missing-file.
+    import xml.etree.ElementTree as ET
+
+    def _write_cobertura(path, lines_covered):
+        root = ET.Element("coverage", attrib={"line-rate": str(lines_covered / 10)})
+        pkg = ET.SubElement(root, "packages")
+        p = ET.SubElement(pkg, "package", attrib={"name": "app"})
+        cls = ET.SubElement(p, "classes")
+        c = ET.SubElement(cls, "class", attrib={"filename": "app/m.py"})
+        ls = ET.SubElement(c, "lines")
+        for i in range(lines_covered):
+            ET.SubElement(ls, "line", attrib={"number": str(i + 1), "hits": "1"})
+        ET.ElementTree(root).write(path)
+
+    (spec_dir / "findings").mkdir(parents=True, exist_ok=True)
+    _write_cobertura(spec_dir / "findings" / "baseline_coverage.xml", 5)
+    run_dir = spec_dir / "findings" / "runs" / "st-pytest-0"
+    run_dir.mkdir(parents=True)
+    _write_cobertura(run_dir / "coverage.xml", 8)
+
+    subtask = {
+        "id": "st-pytest-0",
+        "framework": "pytest",
+        "files_to_create": ["tests/test_0.py"],
+    }
+    result = _coverage_delta_for_subtask(spec_dir, subtask)
+    # With XML present, should get a CoverageDelta (not None)
+    assert result is not None
+
+
+def test_signals_coverage_numeric_for_jest_framework(
+    spec_dir: Path,
+) -> None:
+    """Subtask with framework='jest' (coverage_strategy='lcov') does NOT
+    skip coverage.  With missing XML, returns None via the XML-absent path
+    (not the skip-framework path)."""
+    subtask = {
+        "id": "st-jest-0",
+        "framework": "jest",
+        "files_to_create": ["tests/test_0.test.ts"],
+    }
+    # No XML files present → None via absent-file path
+    result = _coverage_delta_for_subtask(spec_dir, subtask)
+    assert result is None
+
+
+def test_signals_coverage_none_when_framework_field_absent(
+    spec_dir: Path,
+) -> None:
+    """v0.1 subtask (no framework field) falls through to the XML-check
+    path.  With no XML, returns None — backward-compat preserved."""
+    subtask = {
+        "id": "st-legacy-0",
+        "files_to_create": ["tests/test_0.py"],
+        # no 'framework' key
+    }
+    result = _coverage_delta_for_subtask(spec_dir, subtask)
+    assert result is None  # XML absent → None (not-computed)
+
+
+# ── _validate_verdicts coverage_delta_pct ────────────────────────────────
+
+
+def _make_verdict_doc(test_id: str, coverage_delta_pct) -> dict:
+    """Build a minimal valid verdicts.json dict for one test."""
+    return {
+        "evaluator_version": "task10",
+        "mode": "initial",
+        "verdicts": [
+            {
+                "test_id": test_id,
+                "verdict": "accept",
+                "reasons": ["all signals green"],
+                "signals_summary": {
+                    "coverage_delta_pct": coverage_delta_pct,
+                    "stability": "stable",
+                    "mutation": "killed",
+                    "lint_promotion": "no_findings",
+                },
+            }
+        ],
+        "generated_at": "2026-05-28T00:00:00+00:00",
+    }
+
+
+def test_validate_verdicts_accepts_null_coverage_pct(tmp_path: Path) -> None:
+    """verdict with coverage_delta_pct=null is valid (browser lane)."""
+    path = tmp_path / "verdicts.json"
+    path.write_text(
+        '{"evaluator_version":"x","verdicts":['
+        '{"test_id":"t0","verdict":"accept","signals_summary":{"coverage_delta_pct":null}}'
+        "]}"
+    )
+    ok, err, count = _validate_verdicts(path)
+    assert ok is True, f"expected ok but got error: {err}"
+    assert count == 1
+
+
+def test_validate_verdicts_accepts_numeric_coverage_pct(tmp_path: Path) -> None:
+    """verdict with numeric coverage_delta_pct=12.3 is valid."""
+    path = tmp_path / "verdicts.json"
+    path.write_text(
+        '{"evaluator_version":"x","verdicts":['
+        '{"test_id":"t1","verdict":"flag","signals_summary":{"coverage_delta_pct":12.3}}'
+        "]}"
+    )
+    ok, err, count = _validate_verdicts(path)
+    assert ok is True, f"expected ok but got error: {err}"
+    assert count == 1
+
+
+def test_validate_verdicts_accepts_zero_coverage_pct(tmp_path: Path) -> None:
+    """coverage_delta_pct=0 is a valid numeric value."""
+    path = tmp_path / "verdicts.json"
+    path.write_text(
+        '{"evaluator_version":"x","verdicts":['
+        '{"test_id":"t2","verdict":"reject","signals_summary":{"coverage_delta_pct":0}}'
+        "]}"
+    )
+    ok, err, count = _validate_verdicts(path)
+    assert ok is True
+    assert count == 1
+
+
+def test_validate_verdicts_rejects_string_coverage_pct(tmp_path: Path) -> None:
+    """coverage_delta_pct must be a number or null; a string is rejected."""
+    path = tmp_path / "verdicts.json"
+    path.write_text(
+        '{"evaluator_version":"x","verdicts":['
+        '{"test_id":"t3","verdict":"accept","signals_summary":{"coverage_delta_pct":"12.3"}}'
+        "]}"
+    )
+    ok, err, _count = _validate_verdicts(path)
+    assert ok is False
+    assert "coverage_delta_pct" in err
+    assert "number or null" in err
+
+
+def test_validate_verdicts_rejects_na_string_coverage_pct(tmp_path: Path) -> None:
+    """The LLM must not emit 'N/A' as a string; only null is accepted."""
+    path = tmp_path / "verdicts.json"
+    path.write_text(
+        '{"evaluator_version":"x","verdicts":['
+        '{"test_id":"t4","verdict":"accept","signals_summary":{"coverage_delta_pct":"N/A"}}'
+        "]}"
+    )
+    ok, err, _count = _validate_verdicts(path)
+    assert ok is False
+    assert "coverage_delta_pct" in err
+
+
+def test_validate_verdicts_accepts_absent_coverage_pct(tmp_path: Path) -> None:
+    """signals_summary with no coverage_delta_pct key is backward-compat."""
+    path = tmp_path / "verdicts.json"
+    path.write_text(
+        '{"evaluator_version":"x","verdicts":['
+        '{"test_id":"t5","verdict":"accept","signals_summary":{"stability":"stable"}}'
+        "]}"
+    )
+    ok, err, count = _validate_verdicts(path)
+    assert ok is True
+    assert count == 1
+
+
+def test_validate_verdicts_warns_on_unexpected_numeric_for_browser_lane(
+    tmp_path: Path, caplog,
+) -> None:
+    """When skip_coverage_test_ids includes the test_id and the LLM emits a
+    numeric coverage_delta_pct, a warning is logged and the verdict is
+    still accepted."""
+    import logging
+
+    path = tmp_path / "verdicts.json"
+    path.write_text(
+        '{"evaluator_version":"x","verdicts":['
+        '{"test_id":"browser-test-0","verdict":"accept",'
+        '"signals_summary":{"coverage_delta_pct":5.0}}'
+        "]}"
+    )
+    with caplog.at_level(logging.WARNING, logger="agents.evaluator"):
+        ok, err, count = _validate_verdicts(
+            path,
+            skip_coverage_test_ids=frozenset({"browser-test-0"}),
+        )
+    assert ok is True, f"unexpected failure: {err}"
+    assert count == 1
+    # Warning should mention the test_id and the numeric value
+    assert any("browser-test-0" in r.message for r in caplog.records)

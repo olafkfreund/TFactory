@@ -188,8 +188,10 @@ def test_block_accepts_dict_shape(dict_bundle) -> None:
 
 
 def test_block_missing_signals_degrades_gracefully() -> None:
-    """A bundle missing the four numeric signals renders the labels
-    but with 'not computed' values — no crash."""
+    """A bundle missing the four numeric signals renders the labels without
+    crashing.  Coverage None renders as 'N/A (browser lane)' (Decision 11 —
+    we never want the LLM to interpret a missing delta as '0%'); stability,
+    mutation, and lint_promotion render as 'not computed'."""
     bundle = {
         "test_id": "minimal",
         "test_file": "/x.py",
@@ -198,7 +200,7 @@ def test_block_missing_signals_degrades_gracefully() -> None:
         # no coverage / stability / mutation / lint_promotion
     }
     block = _format_evaluator_per_test_block(bundle)
-    assert "coverage: not computed" in block
+    assert "coverage: N/A (browser lane)" in block
     assert "stability: not computed" in block
     assert "mutation: not computed" in block
     assert "lint_promotion: not computed" in block
@@ -287,3 +289,129 @@ def test_raises_when_md_missing(
         get_tfactory_evaluator_prompt(
             Path("/ws"), Path("/p"), [dataclass_bundle],
         )
+
+
+# ── Task 10 (#26) — Coverage N/A rendering tests ──────────────────────
+
+
+def test_per_test_block_renders_coverage_na_when_none() -> None:
+    """Bundle with coverage_delta=None renders 'coverage: N/A (browser lane)'."""
+    bundle = {
+        "test_id": "pw-test-0",
+        "test_file": "/ws/spec/tests/test_login.spec.ts",
+        "target": "app/login.ts::loginFlow",
+        "rationale": "AC#1: login page accessible",
+        "coverage_delta": None,  # explicit None = browser lane
+        "stability": None,
+        "mutation": None,
+        "lint_promotion": None,
+    }
+    block = _format_evaluator_per_test_block(bundle)
+    assert "coverage: N/A (browser lane)" in block
+    assert "0%" not in block  # must NOT say "0%"
+    assert "coverage: not computed" not in block
+
+
+def test_per_test_block_renders_percent_when_numeric(
+    coverage_delta,
+) -> None:
+    """Bundle with a real CoverageDelta renders the numeric delta_pct."""
+    bundle = {
+        "test_id": "unit-test-0",
+        "test_file": "/ws/spec/tests/test_auth.py",
+        "target": "app/auth.py::authenticate",
+        "rationale": "AC#2: authenticate returns user object",
+        "coverage_delta": coverage_delta,  # CoverageDelta(delta_pct=5.25, ...)
+        "stability": None,
+        "mutation": None,
+        "lint_promotion": None,
+    }
+    block = _format_evaluator_per_test_block(bundle)
+    # delta_pct=5.25 → should appear as "+5.25"
+    assert "+5.25" in block
+    assert "N/A" not in block
+
+
+def test_evaluator_md_mentions_browser_lane_na_rule() -> None:
+    """The evaluator.md prompt must contain the N/A coverage rule
+    and reference the browser lane so the LLM knows not to penalise."""
+    from prompts_pkg.prompts import PROMPTS_DIR
+
+    md = (PROMPTS_DIR / "evaluator.md").read_text()
+    assert "N/A" in md
+    assert "browser" in md.lower()
+    assert "skip the coverage rule" in md or "skip coverage" in md.lower()
+
+
+def test_evaluator_md_does_not_penalise_browser_for_zero_coverage() -> None:
+    """The prompt must NOT instruct the LLM to penalise browser tests for
+    '0% coverage' — that was the bug this task fixes.
+
+    The correct text is a 'do not penalise' instruction, not an implicit
+    'low coverage = reject' rule. We verify:
+    1. The phrase 'do not penalise' (or 'do not factor') appears near
+       browser-lane coverage context.
+    2. There is no positive instruction to 'reject' for '0%' coverage
+       when the browser lane is discussed.
+    """
+    from prompts_pkg.prompts import PROMPTS_DIR
+
+    import re
+
+    md = (PROMPTS_DIR / "evaluator.md").read_text()
+
+    # The correct fix: prompt must say "do not penalise" for 0% in browser context.
+    # We verify the N/A rule is there — a "do not" near browser + 0%.
+    assert "do not" in md.lower() or "DO NOT" in md, (
+        "evaluator.md must contain a 'do not' instruction for browser coverage"
+    )
+    # Verify there is no instruction to auto-reject for 0% on browser tests.
+    # Look for a pattern like "browser ... 0 ... reject" (positive reject rule).
+    reject_0_browser = re.search(
+        r"browser[^\n]{0,200}0[%\s][^\n]{0,100}reject",
+        md,
+        re.IGNORECASE,
+    )
+    assert reject_0_browser is None, (
+        "evaluator.md appears to instruct the LLM to reject browser tests "
+        "for 0% coverage — this is the bug Task 10 was supposed to fix"
+    )
+
+
+def test_full_prompt_assembly_with_mixed_null_and_numeric(
+    coverage_delta,
+    stability_stable,
+    mutation_killed,
+    lint_promotion_clean,
+) -> None:
+    """Prompt with one null-coverage bundle and one numeric-coverage bundle
+    must render both correctly — the null one gets N/A, the numeric one
+    gets the delta."""
+    null_bundle = {
+        "test_id": "browser-test",
+        "test_file": "/ws/spec/tests/browser.spec.ts",
+        "target": "app/ui.ts::loginPage",
+        "rationale": "AC#1: login page loads",
+        "coverage_delta": None,
+    }
+    numeric_bundle = {
+        "test_id": "unit-test",
+        "test_file": "/ws/spec/tests/test_unit.py",
+        "target": "app/auth.py::authenticate",
+        "rationale": "AC#2: authenticate works",
+        "coverage_delta": coverage_delta,  # delta_pct=5.25
+        "stability": stability_stable,
+        "mutation": mutation_killed,
+        "lint_promotion": lint_promotion_clean,
+    }
+    prompt = get_tfactory_evaluator_prompt(
+        Path("/ws/spec"),
+        Path("/proj"),
+        [null_bundle, numeric_bundle],
+    )
+    assert "Number of generated tests to evaluate: 2" in prompt
+    assert "coverage: N/A (browser lane)" in prompt
+    assert "+5.25" in prompt
+    # Both test IDs appear
+    assert "browser-test" in prompt
+    assert "unit-test" in prompt
