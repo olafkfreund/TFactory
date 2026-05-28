@@ -153,6 +153,16 @@ ALLOWLIST_GLOBS=(
     "frameworks/jest/templates/"
     "frameworks/playwright/templates/"
     "tests/test_templates.py"
+    # Task 13 (#29): Claude Code skill bundles + slash commands.
+    # The skill bodies describe scaffolding TFactory inside an AIFactory repo
+    # and handing finished AIFactory features off to the TFactory pipeline.
+    # Skill prose legitimately references the AIFactory cross-project
+    # relationship — same allowlist pattern as the handover-to-tfactory skill.
+    ".claude/skills/tfactory-init/"
+    ".claude/skills/tfactory-add-test/"
+    ".claude/skills/tfactory-from-template/"
+    ".claude/commands/"
+    "tests/test_skills.py"
 )
 
 # ---------- args ----------
