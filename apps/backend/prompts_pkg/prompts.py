@@ -655,3 +655,165 @@ def get_tfactory_gen_functional_prompt(
         "---\n\n"
     )
     return context + body
+
+
+# ─── Task 7 (#8) — Evaluator helper ──────────────────────────────────────
+
+
+def _format_signal_value(obj, *keys, default="?"):
+    """Duck-typed accessor: try each key/attr in order; return the first
+    non-None value. Lets the helper accept dataclass-shaped OR dict-shaped
+    signal inputs (commit 5 will pass dataclasses; future callers may
+    pass dicts post-JSON-load)."""
+    for key in keys:
+        if isinstance(obj, dict):
+            val = obj.get(key)
+        else:
+            val = getattr(obj, key, None)
+        if val is not None:
+            return val
+    return default
+
+
+def _format_evaluator_per_test_block(bundle) -> str:
+    """Render one per-test signal sub-block for the EVALUATOR CONTEXT.
+
+    Duck-typed: ``bundle`` is either an EvaluatorSignals dataclass (commit
+    5) or a dict with the same keys. Each field is formatted compactly —
+    the LLM reads the prose body for the decision rules; this block is
+    just the numeric handles.
+    """
+    test_id = _format_signal_value(bundle, "test_id")
+    test_file = _format_signal_value(bundle, "test_file", "test_file_path")
+    target = _format_signal_value(bundle, "target")
+    rationale = _format_signal_value(bundle, "rationale")
+
+    coverage = _format_signal_value(bundle, "coverage_delta", "coverage", default=None)
+    if coverage is not None:
+        new_lines = _format_signal_value(coverage, "new_lines", default=frozenset())
+        new_lines_count = len(new_lines) if hasattr(new_lines, "__len__") else 0
+        delta_pct = _format_signal_value(coverage, "delta_pct", default=0.0)
+        new_files = _format_signal_value(coverage, "new_files", default=0)
+        coverage_line = (
+            f"coverage: delta_pct={delta_pct:+.2f}, "
+            f"new_lines={new_lines_count}, new_files={new_files}"
+        )
+    else:
+        coverage_line = "coverage: not computed"
+
+    stability = _format_signal_value(bundle, "stability", default=None)
+    if stability is not None:
+        verdict = _format_signal_value(stability, "verdict", default="?")
+        # Verdict is an enum (StabilityVerdict) — `.value` is the string
+        verdict_str = getattr(verdict, "value", verdict)
+        rerun_count = _format_signal_value(stability, "rerun_count", default="?")
+        stability_line = f"stability: {verdict_str} ({rerun_count} runs)"
+    else:
+        stability_line = "stability: not computed"
+
+    mutation = _format_signal_value(bundle, "mutation", default=None)
+    if mutation is not None:
+        m_verdict = _format_signal_value(mutation, "verdict", default="?")
+        m_verdict_str = getattr(m_verdict, "value", m_verdict)
+        m_op = _format_signal_value(mutation, "mutation", default=None)
+        op_str = _format_signal_value(m_op, "operator", default="?") if m_op else "?"
+        mutation_line = f"mutation: {m_verdict_str} (op={op_str})"
+    else:
+        mutation_line = "mutation: not computed"
+
+    lint = _format_signal_value(bundle, "lint_promotion", "promotion", default=None)
+    if lint is not None:
+        summary_fn = getattr(lint, "summary", None)
+        if callable(summary_fn):
+            lint_summary = summary_fn()
+        else:
+            lint_summary = (
+                f"high={_format_signal_value(lint, 'high_count', default=0)}, "
+                f"promoted={_format_signal_value(lint, 'promoted_count', default=0)}, "
+                f"medium={_format_signal_value(lint, 'medium_count', default=0)}"
+            )
+        lint_line = f"lint_promotion: {lint_summary}"
+    else:
+        lint_line = "lint_promotion: not computed"
+
+    return (
+        f"### Test `{test_id}`\n\n"
+        f"- file: `{test_file}`\n"
+        f"- target: `{target}`\n"
+        f"- rationale: {rationale}\n"
+        f"- {coverage_line}\n"
+        f"- {stability_line}\n"
+        f"- {mutation_line}\n"
+        f"- {lint_line}\n"
+    )
+
+
+def get_tfactory_evaluator_prompt(
+    spec_dir: Path,
+    project_dir: Path,
+    signal_bundles,
+) -> str:
+    """Assemble the Evaluator system prompt for TFactory (Task 7 / #8).
+
+    Loads ``apps/backend/prompts/evaluator.md`` and prepends an
+    EVALUATOR CONTEXT block that names the concrete paths AND emits
+    one sub-block per generated test with the four pre-computed
+    numeric signals (coverage / stability / mutation / lint_promotion).
+    The fifth signal — semantic relevance — is the LLM's call.
+
+    Args:
+        spec_dir: TFactory workspace spec dir.
+        project_dir: AIFactory project root (read-only for the agent).
+        signal_bundles: Iterable of bundles (dataclass OR dict) carrying
+            per-test signals. Each bundle exposes (as attribute OR key):
+              - ``test_id``, ``test_file`` / ``test_file_path``
+              - ``target``, ``rationale``
+              - ``coverage_delta`` (or ``coverage``) — a CoverageDelta
+              - ``stability`` — a StabilityResult
+              - ``mutation`` — a MutationResult
+              - ``lint_promotion`` (or ``promotion``) — a PromotionResult
+
+            Any missing field is rendered as "?" or "not computed".
+
+    Returns:
+        Full system prompt ready to hand to ``run_agent_session``.
+
+    Raises:
+        FileNotFoundError: if evaluator.md is missing.
+    """
+    prompt_file = PROMPTS_DIR / "evaluator.md"
+    if not prompt_file.exists():
+        raise FileNotFoundError(
+            f"evaluator.md missing at {prompt_file}. "
+            "TFactory's Task 7 (#8) commit 4 authors this prompt; check the working tree."
+        )
+
+    body = prompt_file.read_text()
+
+    bundles = list(signal_bundles)
+    per_test_blocks = "\n".join(
+        _format_evaluator_per_test_block(b) for b in bundles
+    )
+    if not per_test_blocks:
+        per_test_blocks = (
+            "*(no tests in this batch — emit an empty verdicts array.)*\n"
+        )
+
+    verdicts_path = spec_dir / "findings" / "verdicts.json"
+    context = (
+        "## EVALUATOR CONTEXT (TFactory Evaluator — Python)\n\n"
+        f"Concrete paths for this run:\n\n"
+        f"- spec_dir:    `{spec_dir}`\n"
+        f"- project_dir: `{project_dir}` (read-only via Glob/Grep)\n"
+        f"- write verdicts to: `{verdicts_path}`\n\n"
+        f"Number of generated tests to evaluate: {len(bundles)}\n\n"
+        "Files you can read:\n\n"
+        f"- `{spec_dir / 'context' / 'aifactory_spec.md'}`\n"
+        f"- `{spec_dir / 'context' / 'diff.patch'}` (may not exist)\n"
+        f"- `{spec_dir / 'test_plan.json'}` (the full Planner output)\n"
+        f"- each test file listed below (under `{spec_dir / 'tests'}`)\n\n"
+        "## Pre-computed signals per test\n\n"
+        f"{per_test_blocks}\n"
+        "---\n\n"
+    )
+    return context + body
