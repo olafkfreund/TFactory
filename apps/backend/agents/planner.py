@@ -201,16 +201,16 @@ async def run_followup_planner(
 
 
 # ---------------------------------------------------------------------------
-# TFactory Planner (Task 5, #6) — STUB at commit 2 of 6.
+# TFactory Planner (Tasks 5-6, #6 / Task 5 v0.2 polyglot extension #21)
 #
-# Real Claude-Agent-SDK wiring lands in commit 4. This stub just demonstrates
-# the auto-fire scheduling end-to-end:
-#   - status.json: pending → planning → planned
-#   - test_plan.json: minimal valid empty plan written
-#
-# Imports are deliberately scoped to stdlib + local modules so the stub runs
-# without claude-agent-sdk available — keeps the auto-fire path testable in
-# the minimal venv setup we used for commit 1's verification pass.
+# v0.1 (Task 5 #6): initial SDK wiring, lane-tagged subtasks, retry logic,
+#   replan mode, auto-fire scheduling.
+# v0.2 (Task 5 #21): polyglot schema — each subtask carries
+#   (language, framework, lane, target_name, intent).
+#   _validate_emitted_plan now enforces (language, framework, lane) against
+#   the framework registry (error_kind="invalid_framework").
+#   get_tfactory_planner_prompt injects FRAMEWORK REGISTRY + TESTS CATALOG
+#   context blocks so the agent picks the right framework per subtask.
 # ---------------------------------------------------------------------------
 
 import asyncio
