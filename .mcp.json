@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "tfactory": {
+      "type": "stdio",
+      "command": "bash",
+      "args": [
+        "${CLAUDE_PROJECT_DIR:-.}/scripts/start-tfactory-mcp.sh"
+      ],
+      "env": {
+        "TFACTORY_PROJECT_DIR": "${CLAUDE_PROJECT_DIR:-.}",
+        "TFACTORY_API_URL": "http://localhost:3102",
+        "TFACTORY_API_TOKEN_FILE": "~/.tfactory/.token"
+      }
+    }
+  }
+}
