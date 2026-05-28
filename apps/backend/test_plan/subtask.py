@@ -27,6 +27,15 @@ class Subtask:
     # so inherited plans round-trip cleanly through the old shape.
     lane: Lane = Lane.FUNCTIONAL
 
+    # TFactory test-planning fields (Task 5, #6). The Planner agent
+    # emits these so Gen-Functional + the Triager have explicit
+    # provenance (which AC this test covers, which symbol it
+    # exercises, how many times Gen-Functional rejected variants).
+    # Defaults keep inherited plans round-tripping unchanged.
+    target: str | None = None         # "<repo-relative path>::<symbol>"
+    rationale: str | None = None      # which acceptance criterion this covers
+    replan_count: int = 0             # bumped per replan; >= 2 → status=stuck
+
     # Scoping
     service: str | None = None  # Which service (backend, frontend, worker)
     all_services: bool = False  # True for integration subtasks
@@ -59,6 +68,14 @@ class Subtask:
             "status": self.status.value,
             "lane": self.lane.value,
         }
+        # TFactory test-planning fields — always emit so the test_plan.json
+        # is self-describing even when fields are at defaults.
+        if self.target is not None:
+            result["target"] = self.target
+        if self.rationale is not None:
+            result["rationale"] = self.rationale
+        if self.replan_count:
+            result["replan_count"] = self.replan_count
         if self.service:
             result["service"] = self.service
         if self.all_services:
@@ -97,6 +114,9 @@ class Subtask:
             description=data["description"],
             status=SubtaskStatus(data.get("status", "pending")),
             lane=Lane(data.get("lane", Lane.FUNCTIONAL.value)),
+            target=data.get("target"),
+            rationale=data.get("rationale"),
+            replan_count=int(data.get("replan_count", 0)),
             service=data.get("service"),
             all_services=data.get("all_services", False),
             files_to_modify=data.get("files_to_modify", []),
