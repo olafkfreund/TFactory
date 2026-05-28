@@ -264,9 +264,32 @@ async def test_task_create_and_run_auto_fires_planner(
     tools: dict, workspace: Path, aifactory_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """When TFACTORY_AUTO_PLAN=1, task_create_and_run schedules the planner."""
+    """When TFACTORY_AUTO_PLAN=1, task_create_and_run schedules the planner.
+
+    With Task 5 commit 4, the real planner makes an SDK call; here we
+    mock the SDK seams so the auto-fire path runs deterministically
+    without hitting Anthropic.
+    """
     monkeypatch.setenv("TFACTORY_AUTO_PLAN", "1")
     _scaffold_aifactory_spec(aifactory_root, "demo", "auto-fire")
+
+    # Mock the planner's SDK seams. Reuses the same shape as
+    # tests/test_planner.py's mock_sdk fixture.
+    class _FakeAsyncCM:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): return None
+    async def _resolve(*a, **kw): return _FakeAsyncCM()
+    async def _invoke(client, prompt, spec_dir_arg, verbose):
+        (spec_dir_arg / "test_plan.json").write_text(json.dumps({
+            "feature": "auto-fire-test",
+            "workflow_type": "feature",
+            "services_involved": [], "phases": [], "final_acceptance": [],
+            "status": "in_progress", "planStatus": "pending",
+        }))
+        return "complete", "mock", {}
+    monkeypatch.setattr("agents.planner._resolve_planner_client", _resolve)
+    monkeypatch.setattr("agents.planner._invoke_session", _invoke)
+
     await tools["project_create"]({"id": "demo", "name": "Demo", "root_path": "/tmp/d"})
     res = await tools["task_create_and_run"]({
         "project_id": "demo", "spec_id": "auto-fire",
@@ -275,13 +298,14 @@ async def test_task_create_and_run_auto_fires_planner(
     body = _payload(res)
     assert body["planner_scheduled"] is True
 
-    # Drain the background planner so the workspace reflects post-stub state.
+    # Drain the background planner so the workspace reflects post-real-call state.
     from agents.planner import _BG_PLANNER_TASKS
     if _BG_PLANNER_TASKS:
         await asyncio.gather(*list(_BG_PLANNER_TASKS), return_exceptions=True)
 
-    status = json.loads((workspace / "workspaces" / "demo" / "specs"
-                         / "auto-fire" / "status.json").read_text())
+    status_path = workspace / "workspaces" / "demo" / "specs" / "auto-fire" / "status.json"
+    status = json.loads(status_path.read_text())
+    # Empty-plan mock → planned_empty (warning, not failure).
     assert status["status"] == "planned_empty"
     assert (workspace / "workspaces" / "demo" / "specs"
             / "auto-fire" / "test_plan.json").exists()

@@ -88,7 +88,7 @@ ALLOWLIST_GLOBS=(
     "tests/test_tfactory_mcp_tools.py"
     "tests/test_snapshotter.py"
     "tests/test_planner_prompts.py"
-    "tests/test_planner_stub.py"
+    "tests/test_planner.py"
     ".git/"
 )
 

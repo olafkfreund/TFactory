@@ -249,80 +249,318 @@ def _write_status_patch(spec_dir: Path, **fields: object) -> None:
     (spec_dir / "status.json").write_text(json.dumps(status, indent=2))
 
 
+# Subtask cap — anything above is truncated post-emit with a warning.
+_HARD_SUBTASK_CAP = 30
+_SOFT_SUBTASK_WARN = 15
+
+
+def _count_subtasks(plan) -> int:
+    """Total subtasks across all phases."""
+    return sum(len(p.subtasks) for p in plan.phases)
+
+
+def _truncate_subtasks(plan, cap: int) -> int:
+    """Drop subtasks past ``cap`` (keeping phase ordering).
+
+    Returns the number of subtasks dropped.
+    """
+    dropped = 0
+    keep = cap
+    for phase in plan.phases:
+        if keep <= 0:
+            dropped += len(phase.subtasks)
+            phase.subtasks = []
+            continue
+        if len(phase.subtasks) > keep:
+            dropped += len(phase.subtasks) - keep
+            phase.subtasks = phase.subtasks[:keep]
+            keep = 0
+        else:
+            keep -= len(phase.subtasks)
+    return dropped
+
+
+async def _resolve_planner_client(spec_dir: Path, project_dir: Path):
+    """Resolve the Claude Agent SDK client for the planning phase.
+
+    Wraps the inherited `create_client` / `get_provider` factories so
+    tests can monkey-patch this one function instead of two.
+    """
+    # Heavy imports deferred to runtime so test_planner_stub.py can
+    # mock the SDK surface without forcing the full backend chain
+    # at module import time.
+    from core.client import create_client
+    from phase_config import (
+        get_phase_model,
+        get_phase_thinking_budget,
+        get_provider_extra_kwargs,
+        infer_provider_from_model,
+    )
+    from providers.factory import get_provider
+
+    planning_model = get_phase_model(spec_dir, "planning", None)
+    provider_name = infer_provider_from_model(planning_model)
+    if provider_name == "claude":
+        thinking_budget = get_phase_thinking_budget(spec_dir, "planning")
+        return create_client(
+            project_dir,
+            spec_dir,
+            planning_model,
+            max_thinking_tokens=thinking_budget,
+        )
+    return get_provider(
+        provider_name,
+        phase="planning",
+        model=planning_model,
+        working_dir=project_dir,
+        **get_provider_extra_kwargs(provider_name, planning_model),
+    )
+
+
+async def _invoke_session(
+    client,
+    prompt: str,
+    spec_dir: Path,
+    verbose: bool,
+) -> tuple[str, str, dict]:
+    """Thin wrapper around run_agent_session so tests can patch one symbol.
+
+    Returns the (status, response, error_info) triple that
+    run_agent_session yields.
+    """
+    from agents.session import run_agent_session
+    from task_logger import LogPhase
+
+    async with client:
+        return await run_agent_session(
+            client, prompt, spec_dir, verbose, phase=LogPhase.PLANNING
+        )
+
+
+def _validate_emitted_plan(spec_dir: Path) -> tuple[bool, str, object | None]:
+    """Load + validate test_plan.json the agent just wrote.
+
+    Returns ``(ok, error_kind, plan)``:
+      - ok=True, error_kind="", plan=ImplementationPlan → valid
+      - ok=False, error_kind="missing" → file not written
+      - ok=False, error_kind="json"    → file present but invalid JSON
+      - ok=False, error_kind="schema"  → JSON valid but doesn't load
+        as ImplementationPlan
+    """
+    from test_plan import ImplementationPlan  # local: avoid SDK cost on import
+
+    plan_file = spec_dir / "test_plan.json"
+    if not plan_file.exists():
+        return False, "missing", None
+    try:
+        # ImplementationPlan.load reads + parses + builds the dataclass.
+        plan = ImplementationPlan.load(plan_file)
+    except json.JSONDecodeError as exc:
+        return False, "json", str(exc)
+    except (KeyError, TypeError, ValueError) as exc:
+        return False, "schema", str(exc)
+    return True, "", plan
+
+
 async def run_planner(
     spec_dir: Path,
     project_dir: Path,
     mode: Literal["initial", "replan"] = "initial",
     verbose: bool = False,
 ) -> bool:
-    """Run the TFactory Planner agent — STUB at commit 2/6.
+    """Run the TFactory Planner agent.
+
+    Builds the test-oriented system prompt via ``get_tfactory_planner_prompt``,
+    invokes the Claude Agent SDK session via the inherited
+    ``run_agent_session`` machinery, then post-validates the emitted
+    ``test_plan.json``. Retries once on missing/malformed output with a
+    reminder turn before giving up.
+
+    Replan mode (commit 5) is currently a stub that surfaces the
+    deferred status and returns False — it'll wire up when the replan
+    path lands.
 
     Args:
-        spec_dir: TFactory workspace spec dir (``~/.tfactory/workspaces/.../specs/<id>/``).
-        project_dir: AIFactory project root_path (unused in stub; real
-            planner uses for Glob/Grep tools in commit 4).
-        mode: 'initial' or 'replan'. Stub ignores; real impl branches.
-        verbose: forwarded to ``run_agent_session`` once the real impl lands.
+        spec_dir: TFactory workspace spec dir
+            (``~/.tfactory/workspaces/<project_id>/specs/<spec_id>/``).
+        project_dir: AIFactory project root_path. Used by the SDK
+            client for Glob/Grep over the diffed code surface.
+        mode: 'initial' for first plan, 'replan' for follow-up after
+            Gen-Functional rejection (commit 5).
+        verbose: forwarded to ``run_agent_session``.
 
     Returns:
-        True on success; False if the workspace is malformed.
+        ``True`` on a valid plan (including ``planned_empty`` — that's
+        a warning state, not a failure). ``False`` on hard failure
+        (session error, missing file after retry, parse failure after
+        retry, malformed workspace).
 
-    Stub behavior:
-        - status.json: status=planning
-        - test_plan.json: minimal valid empty plan
-        - status.json: status=planned (or planner_failed on exception)
+    Side effects:
+        - Updates ``spec_dir/status.json`` (status, phase, planner_*).
+        - The SDK agent writes ``spec_dir/test_plan.json`` via its
+          Write tool. This function may also write to status.json's
+          ``planner_warnings`` list with truncation / soft-fail notes.
     """
     if not spec_dir.is_dir():
         _planner_log.error("planner: spec_dir %s does not exist", spec_dir)
         return False
 
+    if mode == "replan":
+        # Commit 5 wires up the real replan path. For now: surface the
+        # deferred status and return False so the auto-fire path doesn't
+        # silently no-op.
+        _write_status_patch(
+            spec_dir,
+            status="planner_failed",
+            phase="planner_replan_not_implemented",
+            planner_error="replan mode wires up in commit 5/6 of Task 5",
+        )
+        return False
+
     try:
         _write_status_patch(
-            spec_dir, status="planning", phase=f"planner_{mode}_started"
+            spec_dir, status="planning", phase="planner_initial_started"
         )
 
-        # Yield to the event loop so callers can observe the planning state
-        # before we transition to planned. Real impl spends seconds-to-minutes
-        # here; the stub just touches the loop.
-        await asyncio.sleep(0)
+        # Build the system prompt (loads planner.md + prepends SPEC CONTEXT)
+        from prompts_pkg.prompts import get_tfactory_planner_prompt
+        prompt = get_tfactory_planner_prompt(spec_dir, project_dir)
 
-        # Emit a minimal valid ImplementationPlan. Use the test_plan module
-        # so the JSON shape stays in lock-step with the model the rest of
-        # the pipeline will load via ImplementationPlan.load().
-        from test_plan import ImplementationPlan, WorkflowType  # local import: avoid SDK load cost
+        # Resolve the SDK client
+        client = await _resolve_planner_client(spec_dir, project_dir)
 
-        plan = ImplementationPlan(
-            feature=f"<stub planner — {spec_dir.name}>",
-            workflow_type=WorkflowType.FEATURE,
-            services_involved=[],
-            phases=[],
-            final_acceptance=[],
-            created_at=_now_iso(),
-            updated_at=_now_iso(),
-            status="in_progress",
-            planStatus="pending",
+        # Run the agent session — agent's Write tool emits test_plan.json
+        session_status, _response, _err = await _invoke_session(
+            client, prompt, spec_dir, verbose
         )
-        plan.save(spec_dir / "test_plan.json")
+        if session_status == "error":
+            _write_status_patch(
+                spec_dir,
+                status="planner_failed",
+                phase="planner_session_error",
+                planner_error="run_agent_session returned status=error",
+            )
+            return False
+
+        # Validate the emitted plan; retry once on missing/malformed.
+        ok, err_kind, plan = _validate_emitted_plan(spec_dir)
+        if not ok:
+            _planner_log.warning(
+                "planner: first session produced %s (%s); retrying once",
+                err_kind, plan,
+            )
+            retry_prompt = _build_retry_prompt(
+                prompt, err_kind, str(plan or "")[:300]
+            )
+            client_retry = await _resolve_planner_client(spec_dir, project_dir)
+            retry_status, _r, _re = await _invoke_session(
+                client_retry, retry_prompt, spec_dir, verbose
+            )
+            if retry_status == "error":
+                _write_status_patch(
+                    spec_dir,
+                    status="planner_failed",
+                    phase="planner_session_error",
+                    planner_error="retry session returned status=error",
+                )
+                return False
+            ok, err_kind, plan = _validate_emitted_plan(spec_dir)
+            if not ok:
+                _write_status_patch(
+                    spec_dir,
+                    status="planner_failed",
+                    phase=f"planner_invalid_{err_kind}_after_retry",
+                    planner_error=f"after retry: {err_kind} — {str(plan or '')[:200]}",
+                )
+                return False
+
+        # plan is now a valid ImplementationPlan instance.
+        subtask_count = _count_subtasks(plan)
+        warnings: list[str] = []
+
+        if subtask_count > _HARD_SUBTASK_CAP:
+            dropped = _truncate_subtasks(plan, _HARD_SUBTASK_CAP)
+            warnings.append(
+                f"emitted {subtask_count} subtasks; truncated to "
+                f"{_HARD_SUBTASK_CAP} (dropped {dropped})"
+            )
+            plan.save(spec_dir / "test_plan.json")
+            subtask_count = _HARD_SUBTASK_CAP
+        elif subtask_count > _SOFT_SUBTASK_WARN:
+            warnings.append(
+                f"emitted {subtask_count} subtasks "
+                f"(soft warning above {_SOFT_SUBTASK_WARN})"
+            )
+
+        if subtask_count == 0:
+            _write_status_patch(
+                spec_dir,
+                status="planned_empty",
+                phase="planner_initial_complete",
+                planner_warnings=warnings + [
+                    "agent emitted 0 subtasks — downstream pipeline will have nothing to do"
+                ],
+                subtask_count=0,
+            )
+            return True
 
         _write_status_patch(
             spec_dir,
-            status="planned_empty",
-            phase=f"planner_{mode}_stub_complete",
-            planner_warnings=[
-                "stub planner (commit 2/6) — empty plan emitted; real agent lands in commit 4"
-            ],
+            status="planned",
+            phase="planner_initial_complete",
+            planner_warnings=warnings,
+            subtask_count=subtask_count,
         )
         return True
 
     except Exception as exc:
-        _planner_log.error("planner stub failed: %s\n%s", exc, traceback.format_exc())
+        _planner_log.error("planner failed: %s\n%s", exc, traceback.format_exc())
         _write_status_patch(
             spec_dir,
             status="planner_failed",
-            phase=f"planner_{mode}_error",
+            phase=f"planner_{mode}_exception",
             planner_error=str(exc)[:500],
         )
         return False
+
+
+_RETRY_REMINDERS = {
+    "missing": (
+        "Your previous turn did not emit `test_plan.json`. "
+        "You MUST use the Write tool to create the file at "
+        "`{spec_dir}/test_plan.json`. Re-emit the full plan now."
+    ),
+    "json": (
+        "Your previous turn produced `test_plan.json` but it failed to "
+        "parse as JSON: {detail}. Re-emit the full plan, double-check "
+        "JSON syntax (commas, quotes, brackets) before calling Write."
+    ),
+    "schema": (
+        "Your previous turn produced `test_plan.json` but it didn't "
+        "match the ImplementationPlan schema: {detail}. "
+        "Re-emit the full plan; pay attention to required Subtask keys: "
+        "id, description, status, lane, target, rationale, "
+        "files_to_create, verification."
+    ),
+}
+
+
+def _build_retry_prompt(
+    original_prompt: str, err_kind: str, detail: str
+) -> str:
+    """Build a retry-turn prompt that re-presents the original system
+    prompt + a short corrective note describing what went wrong.
+    """
+    reminder = _RETRY_REMINDERS.get(
+        err_kind,
+        "Your previous turn did not produce a valid test_plan.json. Re-emit.",
+    ).format(spec_dir="<workspace>", detail=detail)
+    return (
+        f"## RETRY ({err_kind})\n\n"
+        f"{reminder}\n\n"
+        f"---\n\n"
+        f"{original_prompt}"
+    )
 
 
 # Module-level set so asyncio.create_task'd planner runs aren't GC'd while
