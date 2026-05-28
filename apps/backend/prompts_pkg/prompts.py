@@ -475,12 +475,105 @@ The project root is: `{project_dir}`
 # ---------------------------------------------------------------------------
 
 
+def _build_framework_registry_block() -> str:
+    """Return a FRAMEWORK REGISTRY summary block for the planner prompt.
+
+    Deferred import of framework_registry avoids circular imports at
+    module level (the same pattern Task 4 uses for tfactory_yml).
+    If the registry is unavailable (e.g. frameworks/ dir absent) the
+    block is replaced by a minimal placeholder so the helper stays
+    non-fatal — the validator in planner.py degrades gracefully too.
+
+    Returns:
+        Markdown string starting with '## FRAMEWORK REGISTRY'.
+    """
+    try:
+        from framework_registry import load_registry  # deferred: not on hot path
+
+        registry = load_registry()
+        if not registry:
+            return "## FRAMEWORK REGISTRY\n(no frameworks registered)\n"
+        lines = ["## FRAMEWORK REGISTRY"]
+        for name, desc in sorted(registry.items()):
+            lane_vals = ", ".join(
+                ln.value if hasattr(ln, "value") else str(ln) for ln in desc.lanes
+            )
+            lines.append(
+                f"- {name}: language={desc.language},"
+                f" lanes=[{lane_vals}],"
+                f" image={desc.runtime.image}"
+            )
+        return "\n".join(lines) + "\n"
+    except Exception:  # noqa: BLE001
+        return (
+            "## FRAMEWORK REGISTRY\n"
+            "(registry unavailable — use pytest for Python, jest for TypeScript)\n"
+        )
+
+
+def _build_tests_catalog_block(spec_dir: Path) -> str:
+    """Return a TESTS CATALOG summary block for the planner prompt.
+
+    Reads the frozen ``context/tests_catalog.json`` written by Task 4's
+    snapshotter (if present).  We load it directly from the JSON rather
+    than calling ``load_catalog(repo_root)`` because the snapshotter
+    already wrote a frozen copy scoped to this workspace.
+
+    Returns:
+        Markdown string starting with '## TESTS CATALOG'.
+    """
+    import json as _json
+
+    catalog_path = spec_dir / "context" / "tests_catalog.json"
+    if not catalog_path.exists():
+        return (
+            "## TESTS CATALOG\n"
+            "(no catalog at this repo yet — every subtask uses intent: create)\n"
+        )
+    try:
+        from tests_catalog import TestsCatalog  # deferred: not on hot path
+
+        data = _json.loads(catalog_path.read_text())
+        catalog = TestsCatalog.from_dict(data)
+        if not catalog.tests:
+            return (
+                "## TESTS CATALOG\n"
+                "(catalog present but empty — every subtask uses intent: create)\n"
+            )
+        lines = [
+            "## TESTS CATALOG (existing tests in this repo)",
+            "Existing entries (use intent: update if your AC matches an existing covers_acs):",
+        ]
+        for entry in catalog.tests:
+            acs_preview = "; ".join(entry.covers_acs[:2])
+            if len(entry.covers_acs) > 2:
+                acs_preview += f" (+ {len(entry.covers_acs) - 2} more)"
+            locked = " [operator_locked]" if entry.operator_locked else ""
+            lines.append(
+                f"- {entry.test_id}: framework={entry.framework},"
+                f" lane={entry.lane},"
+                f" test_file={entry.test_file},"
+                f" covers_acs=[{acs_preview!r}]{locked}"
+            )
+        lines.append(f"(catalog has {len(catalog.tests)} entries total)")
+        return "\n".join(lines) + "\n"
+    except Exception:  # noqa: BLE001
+        return (
+            "## TESTS CATALOG\n"
+            "(catalog present but could not be parsed — treating as absent)\n"
+        )
+
+
 def get_tfactory_planner_prompt(spec_dir: Path, project_dir: Path) -> str:
     """Assemble the initial-mode Planner prompt for TFactory.
 
-    Loads apps/backend/prompts/planner.md and prepends a context block
-    that names the concrete paths the agent will read + write. The
-    template uses `{spec_dir}` / `{project_dir}` placeholders that
+    Loads apps/backend/prompts/planner.md and prepends a SPEC CONTEXT
+    block that names the concrete paths the agent will read + write,
+    followed by a FRAMEWORK REGISTRY block (Task 5, #21) summarising
+    the available frameworks, and a TESTS CATALOG block (Task 5, #21)
+    listing existing tests so the agent can set intent: update/skip.
+
+    The template uses `{spec_dir}` / `{project_dir}` placeholders that
     survive to the agent verbatim — the agent uses the Read tool to
     fetch the files, so the placeholders in the prompt body are
     illustrative; the SPEC CONTEXT block we prepend here has the
@@ -504,6 +597,12 @@ def get_tfactory_planner_prompt(spec_dir: Path, project_dir: Path) -> str:
         )
 
     body = prompt_file.read_text()
+
+    # Registry + catalog blocks (Task 5, #21). Deferred imports inside
+    # helper functions avoid circular imports at module level.
+    registry_block = _build_framework_registry_block()
+    catalog_block = _build_tests_catalog_block(spec_dir)
+
     context = (
         "## SPEC CONTEXT (TFactory Planner — initial mode)\n\n"
         f"Concrete paths for this run:\n\n"
@@ -513,8 +612,13 @@ def get_tfactory_planner_prompt(spec_dir: Path, project_dir: Path) -> str:
         f"- `{spec_dir / 'context' / 'aifactory_spec.md'}`\n"
         f"- `{spec_dir / 'context' / 'aifactory_plan.json'}` (may not exist)\n"
         f"- `{spec_dir / 'context' / 'diff.patch'}` (may not exist if git skipped)\n"
-        f"- `{spec_dir / 'context' / 'source.json'}` (snapshot warnings — read first)\n\n"
+        f"- `{spec_dir / 'context' / 'source.json'}` (snapshot warnings — read first)\n"
+        f"- `{spec_dir / 'context' / 'tfactory_yml.json'}` (may not exist)\n"
+        f"- `{spec_dir / 'context' / 'tests_catalog.json'}` (may not exist)\n\n"
         f"Emit `test_plan.json` via Write at: `{spec_dir / 'test_plan.json'}`\n\n"
+        "---\n\n"
+        f"{registry_block}\n"
+        f"{catalog_block}\n"
         "---\n\n"
     )
     return context + body
@@ -791,13 +895,9 @@ def get_tfactory_evaluator_prompt(
     body = prompt_file.read_text()
 
     bundles = list(signal_bundles)
-    per_test_blocks = "\n".join(
-        _format_evaluator_per_test_block(b) for b in bundles
-    )
+    per_test_blocks = "\n".join(_format_evaluator_per_test_block(b) for b in bundles)
     if not per_test_blocks:
-        per_test_blocks = (
-            "*(no tests in this batch — emit an empty verdicts array.)*\n"
-        )
+        per_test_blocks = "*(no tests in this batch — emit an empty verdicts array.)*\n"
 
     verdicts_path = spec_dir / "findings" / "verdicts.json"
     context = (
