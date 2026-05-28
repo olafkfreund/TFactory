@@ -43,6 +43,7 @@ logger = logging.getLogger(__name__)
 # Errors
 # ---------------------------------------------------------------------------
 
+
 class DockerRunnerError(Exception):
     """Base for runner-level failures (binary missing, build issues)."""
 
@@ -54,6 +55,7 @@ class DockerTimeoutError(DockerRunnerError):
 # ---------------------------------------------------------------------------
 # Result
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class DockerRunResult:
@@ -78,6 +80,7 @@ class DockerRunResult:
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
+
 
 class DockerRunner:
     """Build + execute the docker invocation for a sandboxed test run.
@@ -137,19 +140,26 @@ class DockerRunner:
         if not command:
             raise DockerRunnerError("command must not be empty")
         if not repo_path.is_absolute() or not scratch_path.is_absolute():
-            raise DockerRunnerError(
-                "repo_path and scratch_path must be absolute"
-            )
+            raise DockerRunnerError("repo_path and scratch_path must be absolute")
 
         argv: list[str] = [
-            self.binary, "run", "--rm",
-            "--network", self.network,
-            "--cpus", str(self.cpus),
-            "--memory", str(self.memory),
-            "--pids-limit", str(self.pids_limit),
-            "-v", f"{repo_path}:{self.REPO_MOUNT}:ro",
-            "-v", f"{scratch_path}:{self.SCRATCH_MOUNT}:rw",
-            "-w", self.SCRATCH_MOUNT,
+            self.binary,
+            "run",
+            "--rm",
+            "--network",
+            self.network,
+            "--cpus",
+            str(self.cpus),
+            "--memory",
+            str(self.memory),
+            "--pids-limit",
+            str(self.pids_limit),
+            "-v",
+            f"{repo_path}:{self.REPO_MOUNT}:ro",
+            "-v",
+            f"{scratch_path}:{self.SCRATCH_MOUNT}:rw",
+            "-w",
+            self.SCRATCH_MOUNT,
         ]
         if self.read_only_rootfs:
             argv.append("--read-only")
@@ -177,9 +187,27 @@ class DockerRunner:
         command: Sequence[str],
         timeout_sec: int = 600,
         env: dict[str, str] | None = None,
+        extra_env: dict[str, str] | None = None,
         extra_args: Sequence[str] | None = None,
     ) -> DockerRunResult:
         """Execute the container and return a DockerRunResult.
+
+        Args:
+            repo_path: Absolute path to the repo mounted at ``/work:ro``.
+            scratch_path: Absolute path to the scratch volume (``/scratch:rw``).
+            command: Command + args to run inside the container.
+            timeout_sec: Hard wall-clock cap; raises ``DockerTimeoutError``
+                if the container runs longer.
+            env: Base environment variables forwarded as ``-e KEY=VAL``
+                flags.  Use for caller-level configuration that spans
+                many subtasks (e.g. the full test suite env).
+            extra_env: Additional environment variables merged ON TOP of
+                ``env`` (``extra_env`` values win on collision).  Intended
+                for per-run injections such as ``TFACTORY_TARGET_URL``
+                set by the Browser-lane AppRuntime wrapper.  Callers that
+                don't need the split can ignore this and use ``env`` alone.
+            extra_args: Extra ``docker run`` flags inserted before the
+                image name (e.g. ``["--user", "1000"]``).
 
         Raises:
             DockerRunnerError: if the binary isn't on PATH.
@@ -191,11 +219,19 @@ class DockerRunner:
                 f"install Docker / Podman or set TFACTORY_CONTAINER_BIN"
             )
 
+        # Merge env + extra_env: extra_env takes precedence (it's the
+        # per-run injection layer supplied by AppRuntime for Browser lanes).
+        merged_env: dict[str, str] | None = None
+        if env or extra_env:
+            merged_env = dict(env or {})
+            if extra_env:
+                merged_env.update(extra_env)
+
         argv = self.build_argv(
             repo_path=repo_path,
             scratch_path=scratch_path,
             command=command,
-            env=env,
+            env=merged_env,
             extra_args=extra_args,
         )
         logger.debug("docker invocation: %s", " ".join(argv))
