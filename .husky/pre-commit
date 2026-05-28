@@ -128,8 +128,38 @@ if git diff --cached --name-only | grep -q "^apps/backend/.*\.py$"; then
   # Run pytest (skip slow/integration tests and Windows-incompatible tests for pre-commit speed)
   echo "Running Python tests..."
   cd apps/backend
-  # Tests to skip: graphiti (external deps), merge_file_tracker/service_orchestrator/worktree/workspace (Windows path/git issues)
-  IGNORE_TESTS="--ignore=../../tests/test_graphiti.py --ignore=../../tests/test_merge_file_tracker.py --ignore=../../tests/test_service_orchestrator.py --ignore=../../tests/test_worktree.py --ignore=../../tests/test_workspace.py"
+  # Tests to skip:
+  #   graphiti: external deps
+  #   merge_file_tracker/service_orchestrator/worktree/workspace: Windows path/git issues
+  #   rmux/: requires web-server deps (fastapi/jose/aiosqlite etc.) not in backend venv
+  #   secrets/: requires sqlalchemy async + postgres driver
+  #   qa* / spec* / critique* / git_providers* / validation_strategy / test_plan_validator_resilience:
+  #     reference deleted modules (qa, qa_loop, spec, ideation) — dead test artifacts
+  #     from the AIFactory→TFactory fork cleanup; these will never be fixed in TFactory.
+  IGNORE_TESTS="--ignore=../../tests/test_graphiti.py \
+    --ignore=../../tests/test_merge_file_tracker.py \
+    --ignore=../../tests/test_service_orchestrator.py \
+    --ignore=../../tests/test_worktree.py \
+    --ignore=../../tests/test_workspace.py \
+    --ignore=../../tests/rmux/ \
+    --ignore=../../tests/secrets/ \
+    --ignore=../../tests/test_critique_integration.py \
+    --ignore=../../tests/test_git_providers_assign.py \
+    --ignore=../../tests/test_mcp_doctor.py \
+    --ignore=../../tests/test_qa_criteria.py \
+    --ignore=../../tests/test_qa_loop.py \
+    --ignore=../../tests/test_qa_loop_enhancements.py \
+    --ignore=../../tests/test_qa_providers.py \
+    --ignore=../../tests/test_qa_report_config.py \
+    --ignore=../../tests/test_qa_report_iteration.py \
+    --ignore=../../tests/test_qa_report_manual_plan.py \
+    --ignore=../../tests/test_qa_report_project_detection.py \
+    --ignore=../../tests/test_qa_report_recurring.py \
+    --ignore=../../tests/test_spec_complexity.py \
+    --ignore=../../tests/test_spec_phases.py \
+    --ignore=../../tests/test_spec_pipeline.py \
+    --ignore=../../tests/test_test_plan_validator_resilience.py \
+    --ignore=../../tests/test_validation_strategy.py"
   if [ -d ".venv" ]; then
     # Use venv if it exists
     if [ -f ".venv/bin/pytest" ]; then
