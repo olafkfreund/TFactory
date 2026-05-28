@@ -2,7 +2,7 @@
 
 Second agent in the six-agent TFactory pipeline (Planner ← Gen-Functional →
 Executor → Evaluator → Triager). Reads the Planner's emitted
-`test_plan.json`, generates pytest test code for each `Lane.FUNCTIONAL`
+`test_plan.json`, generates pytest test code for each `Lane.UNIT`
 subtask via the Claude Agent SDK, runs two MVP guardrails per subtask
 (pre-flight static check + flake-risk lint), and either commits the
 test file or writes a `context/replan_request.json` for the Planner.
@@ -175,7 +175,7 @@ async def run_gen_functional(
     mode: Literal["initial", "rerun"] = "initial",
     verbose: bool = False,
 ) -> bool:
-    """Generate pytest test files for each pending Lane.FUNCTIONAL subtask.
+    """Generate pytest test files for each pending Lane.UNIT subtask.
 
     Per-subtask loop:
       1. Build prompt via get_tfactory_gen_functional_prompt
@@ -207,7 +207,7 @@ async def run_gen_functional(
             phase=f"gen_functional_{mode}_started",
         )
 
-        # 1. Load the plan and find pending Lane.FUNCTIONAL subtasks.
+        # 1. Load the plan and find pending Lane.UNIT subtasks.
         from test_plan import ImplementationPlan, Lane, SubtaskStatus
 
         plan_file = spec_dir / "test_plan.json"
@@ -224,7 +224,7 @@ async def run_gen_functional(
         pending: list = []
         for phase in plan.phases:
             for st in phase.subtasks:
-                if st.lane == Lane.FUNCTIONAL and st.status == SubtaskStatus.PENDING:
+                if st.lane == Lane.UNIT and st.status == SubtaskStatus.PENDING:
                     pending.append(st)
 
         if not pending:
@@ -233,7 +233,7 @@ async def run_gen_functional(
                 status="generated_empty",
                 phase="gen_functional_no_pending",
                 tests_generated=0,
-                gen_functional_warnings=["no pending Lane.FUNCTIONAL subtasks to generate"],
+                gen_functional_warnings=["no pending Lane.UNIT subtasks to generate"],
             )
             return True
 

@@ -4,7 +4,7 @@ Third agent in the six-agent TFactory pipeline:
 
     Planner → Gen-Functional → Executor → Evaluator → Triager
 
-Reads completed Lane.FUNCTIONAL subtasks from test_plan.json, computes
+Reads completed Lane.UNIT subtasks from test_plan.json, computes
 five evaluation signals per generated test (coverage delta, 3× stability,
 mutate-and-check, lint promotion + the LLM's semantic-relevance call),
 hands them to an LLM via the evaluator.md prompt, then validates the
@@ -177,13 +177,18 @@ class EvaluatorSignals:
 
 def _completed_functional_subtasks(plan: dict) -> list[dict]:
     """Pick subtasks that Gen-Functional successfully generated
-    (status='completed', lane='functional', has files_to_create)."""
+    (status='completed', lane in {'unit','functional'}, has files_to_create).
+
+    Accepts both the v0.2 'unit' lane and the v0.1 deprecated 'functional'
+    alias so old test_plan.json files still process. v0.3 removes the
+    'functional' alias.
+    """
     out = []
     for phase in plan.get("phases", []):
         for st in phase.get("subtasks", []):
             if (
                 st.get("status") == "completed"
-                and st.get("lane") == "functional"
+                and st.get("lane") in ("unit", "functional")
                 and st.get("files_to_create")
             ):
                 out.append(st)

@@ -10,7 +10,7 @@ and output capabilities.
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from .enums import Lane, SubtaskStatus
+from .enums import Lane, SubtaskStatus, _parse_lane_str
 from .verification import Verification
 
 
@@ -22,10 +22,11 @@ class Subtask:
     description: str
     status: SubtaskStatus = SubtaskStatus.PENDING
 
-    # TFactory lane tag (Task 3, #4). Planner emits lane-tagged subtasks
-    # so per-lane Generators (Tasks 6+) can dispatch. Default = FUNCTIONAL
-    # so inherited plans round-trip cleanly through the old shape.
-    lane: Lane = Lane.FUNCTIONAL
+    # TFactory lane tag (Task 3, #4; restructured v0.2 Task 0).
+    # Planner emits lane-tagged subtasks so per-lane Generators can
+    # dispatch. Default = UNIT (was FUNCTIONAL in v0.1; renamed per
+    # Decision 2 of the v0.2 design spec).
+    lane: Lane = Lane.UNIT
 
     # TFactory test-planning fields (Task 5, #6). The Planner agent
     # emits these so Gen-Functional + the Triager have explicit
@@ -113,7 +114,7 @@ class Subtask:
             id=data["id"],
             description=data["description"],
             status=SubtaskStatus(data.get("status", "pending")),
-            lane=Lane(data.get("lane", Lane.FUNCTIONAL.value)),
+            lane=_parse_lane_str(data.get("lane", Lane.UNIT.value)),
             target=data.get("target"),
             rationale=data.get("rationale"),
             replan_count=int(data.get("replan_count", 0)),

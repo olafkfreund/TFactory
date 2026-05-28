@@ -1,20 +1,20 @@
-"""Lane → runner dispatcher — Task 4 (#5).
+"""Lane → runner dispatcher — Task 4 (#5), restructured in v0.2 Task 0 (#16).
 
-Given a Subtask's ``lane``, route to the right execution path:
+Given a Subtask's ``lane``, route to the right execution path. The v0.2
+spine reorganises lanes around modality (browser-first), not security
+category — see docs/plans/2026-05-28-enterprise-test-frameworks-design.md
+Decision 2.
 
-  functional → DockerRunner (sandboxed container)
-  sast       → NotImplementedError (phase 3, see TFACTORY_MVP_LANES)
-  dast       → NotImplementedError (phase 5)
-  fuzz       → NotImplementedError (phase 5)
-  mutation   → NotImplementedError (phase 2)
+  v0.2 lit lanes (real runner present):
+    unit        → DockerRunner (per-framework container: pytest / Jest / JUnit / …)
+    browser     → DockerRunner + AppRuntime (Playwright/Cypress in container; app via docker-compose)
+    api         → DockerRunner (httpx/supertest/REST Assured in container)
+    integration → DockerRunner + AppRuntime (TestContainers etc.)
+    mutation    → DockerRunner (per-framework: mutmut/Stryker/PIT)
 
-The static lanes (sast / deps / secrets) will eventually use a native
-pass-through executor that walks the filesystem and shells out to
-Semgrep / pip-audit / gitleaks directly — those tools are read-only and
-don't need a sandbox. That's the "tiered execution" decision from the
-design plan. The pass-through is stubbed here with an explicit
-``LaneNotImplementedError`` so callers fail loudly rather than silently
-skipping.
+  v0.1 alias lanes (deprecated through v0.2, removed in v0.3):
+    functional  → collapse to unit (most v0.1 usage was unit tests)
+    sast/dast/fuzz → out of scope per Decision 2; map to unit + warn
 
 The dispatcher is intentionally thin — it owns lane→runner mapping and
 nothing else. Test-plan iteration / fan-out / aggregation is the
@@ -43,19 +43,35 @@ class LaneNotImplementedError(NotImplementedError):
 # Routing
 # ---------------------------------------------------------------------------
 
-# Lanes that have a real runner at MVP. Single source of truth so tests
-# can iterate over the gap.
-_MVP_LIT_LANES: frozenset[str] = frozenset({"functional"})
+# Lanes that have a real runner. v0.1 had only "functional"; v0.2 lights
+# the full modality spine. Single source of truth so tests can iterate.
+_MVP_LIT_LANES: frozenset[str] = frozenset({
+    "unit",         # v0.2 (Task 7 — Jest / pytest images)
+    "browser",      # v0.2 (Task 7 + Task 8 — Playwright image + AppRuntime)
+    "api",          # v0.2 (Task 7 — same runner images as unit)
+    "integration",  # v0.2 (Task 7 + Task 8 — runner + AppRuntime)
+    "mutation",     # v0.2 (Task 7 — Stryker / mutmut images)
+})
 
-# Phase mapping for lanes that aren't lit yet — the error message points
-# at the right roadmap milestone.
+# Deprecated v0.1 names — see test_plan.enums._V01_LANE_ALIASES. Listed
+# here so the dispatcher can route legacy plans (still parsing through
+# v0.2) cleanly. Removed in v0.3.
+_DEPRECATED_V01_ALIASES: dict[str, str] = {
+    "functional": "unit",
+    "sast":       "unit",  # out of scope per Decision 2
+    "dast":       "unit",  # out of scope
+    "fuzz":       "unit",  # out of scope
+}
+
+# Out-of-scope lane keys that should NEVER be in v0.2 plans. If they appear,
+# emit a structured error rather than a generic NotImplementedError so the
+# Planner can detect + replan.
 _LANE_PHASES: dict[str, str] = {
-    "sast":     "phase 3 (#TBD, Task 3 of phase 3 in roadmap)",
-    "deps":     "phase 3 (same phase as sast)",
-    "secrets":  "phase 3",
-    "mutation": "phase 2 (#TBD, mutmut/stryker integration)",
-    "dast":     "phase 5 (#TBD, OWASP ZAP automation)",
-    "fuzz":     "phase 5 (atheris / jsfuzz)",
+    "sast":     "out of scope (Decision 2 — use a separate security pipeline)",
+    "deps":     "out of scope (security pipeline)",
+    "secrets":  "out of scope (security pipeline)",
+    "dast":     "out of scope (security pipeline)",
+    "fuzz":     "out of scope (Decision 2 — property-based testing folded into 'unit' lane)",
 }
 
 
@@ -93,36 +109,49 @@ def dispatch_lane(
         LaneNotImplementedError: for any lane not in ``_MVP_LIT_LANES``.
         ValueError: when lane is functional but docker_runner is None.
     """
+    # v0.1 alias compatibility — collapse old names to v0.2 lanes with warning
+    if lane in _DEPRECATED_V01_ALIASES:
+        import warnings
+        new_lane = _DEPRECATED_V01_ALIASES[lane]
+        warnings.warn(
+            f"lane {lane!r} is a deprecated v0.1 alias; mapped to {new_lane!r}. "
+            f"v0.3 will remove the alias. See Decision 2.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        lane = new_lane
+
     if lane not in _MVP_LIT_LANES:
         phase = _LANE_PHASES.get(lane, "unknown lane")
         raise LaneNotImplementedError(
-            f"lane {lane!r} is not implemented at MVP — wires up in {phase}. "
-            f"MVP lit lanes: {sorted(_MVP_LIT_LANES)}"
+            f"lane {lane!r} is not supported in v0.2 — {phase}. "
+            f"v0.2 lit lanes: {sorted(_MVP_LIT_LANES)}"
         )
 
-    if lane == "functional":
-        if docker_runner is None:
-            raise ValueError("dispatch_lane('functional') requires docker_runner")
-        if not docker_run_kwargs:
-            raise ValueError(
-                "dispatch_lane('functional') requires docker_run_kwargs "
-                "(at minimum repo_path, scratch_path, command)"
-            )
-        run_result = docker_runner.run(**docker_run_kwargs)
-        return DispatchResult(
-            lane=lane,
-            runner_used="docker",
-            docker_result=run_result,
+    # All v0.2 lit lanes currently dispatch through the same DockerRunner
+    # interface — the per-framework runner image is supplied by the caller
+    # via docker_run_kwargs (see Task 6's Gen-Functional dispatcher). The
+    # Browser + Integration lanes additionally need AppRuntime wired in
+    # (Task 8); that integration lives in the Executor, not here.
+    if docker_runner is None:
+        raise ValueError(f"dispatch_lane({lane!r}) requires docker_runner")
+    if not docker_run_kwargs:
+        raise ValueError(
+            f"dispatch_lane({lane!r}) requires docker_run_kwargs "
+            f"(at minimum repo_path, scratch_path, command)"
         )
-
-    # Defensive — _MVP_LIT_LANES contains only "functional" at MVP, so
-    # this branch is unreachable. Kept so the lit set can grow without
-    # silently degrading.
-    raise LaneNotImplementedError(
-        f"lane {lane!r} listed as lit but no handler wired"
+    run_result = docker_runner.run(**docker_run_kwargs)
+    return DispatchResult(
+        lane=lane,
+        runner_used="docker",
+        docker_result=run_result,
     )
 
 
 def is_lane_lit(lane: str) -> bool:
-    """Cheap check for whether a lane has a real runner at MVP."""
-    return lane in _MVP_LIT_LANES
+    """Cheap check for whether a lane has a real runner.
+
+    Accepts v0.1 aliases (functional/sast/dast/fuzz) — they're considered
+    'lit' for compatibility through v0.2 (they map to 'unit' on dispatch).
+    """
+    return lane in _MVP_LIT_LANES or lane in _DEPRECATED_V01_ALIASES

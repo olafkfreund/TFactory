@@ -43,35 +43,39 @@ class ToolSpec:
 
 # Lane keys mirror test_plan.enums.Lane but stay as strings so this module
 # stays import-cheap (no SDK / dataclass machinery at module-load time).
-_LANE_KEYS = ("functional", "sast", "deps", "secrets", "dast", "fuzz", "mutation")
+# Restructured in v0.2 Task 0 to match the new modality-based spine
+# (Browser · API · Integration · Unit · Mutation). The deprecated v0.1
+# names (functional/sast/deps/secrets/dast/fuzz) collapse to UNIT or are
+# out of scope — see test_plan.enums._V01_LANE_ALIASES.
+_LANE_KEYS = ("unit", "browser", "api", "integration", "mutation")
 
 
 _REGISTRY: dict[str, dict[str, ToolSpec | None]] = {
-    # ── Python (MVP target language) ────────────────────────────────────
+    # ── Python (v0.1 anchor, v0.2 = pytest still primary) ───────────────
     "python": {
-        "functional": ToolSpec("pytest", "pytest + pytest-cov", True, "1"),
-        "sast":       ToolSpec("semgrep", "semgrep + bandit", False, "3"),
-        "deps":       ToolSpec("pip-audit", "pip-audit + OSV cross-check", False, "3"),
-        "secrets":    ToolSpec("gitleaks", "gitleaks", False, "3"),
-        "dast":       ToolSpec("zap-cli", "OWASP ZAP automation", False, "5"),
-        "fuzz":       ToolSpec("atheris", "atheris (libFuzzer-Python)", False, "5"),
-        "mutation":   ToolSpec("mutmut", "mutmut (default) / cosmic-ray", False, "2"),
+        "unit":        ToolSpec("pytest", "pytest + pytest-cov", True, "1"),
+        "browser":     ToolSpec("playwright-python", "Playwright Python bindings", False, "2"),
+        "api":         ToolSpec("httpx+pytest", "httpx + pytest fixtures", False, "2"),
+        "integration": ToolSpec("testcontainers-python", "testcontainers-python", False, "2"),
+        "mutation":    ToolSpec("mutmut", "mutmut (default) / cosmic-ray", False, "2"),
     },
-    # ── TypeScript / Node (phase 4) ─────────────────────────────────────
+    # ── TypeScript / Node (v0.2 ramp — Jest unit + Playwright browser) ──
     "typescript": {
-        "functional": ToolSpec("vitest", "vitest (preferred) / jest", False, "4"),
-        "sast":       ToolSpec("semgrep", "semgrep + eslint-plugin-security", False, "4"),
-        "deps":       ToolSpec("npm-audit", "npm audit + OSV", False, "4"),
-        "secrets":    ToolSpec("gitleaks", "gitleaks", False, "4"),
-        "dast":       ToolSpec("zap-cli", "OWASP ZAP automation", False, "5"),
-        "fuzz":       ToolSpec("jsfuzz", "jsfuzz / fast-check", False, "5"),
-        "mutation":   ToolSpec("stryker", "stryker", False, "4"),
+        "unit":        ToolSpec("jest", "jest + nyc (preferred) / vitest", True, "2"),
+        "browser":     ToolSpec("playwright", "@playwright/test (primary)", True, "2"),
+        "api":         ToolSpec("supertest", "supertest + jest", False, "3"),
+        "integration": ToolSpec("testcontainers-node", "testcontainers-node", False, "3"),
+        "mutation":    ToolSpec("stryker", "stryker-mutator/core", False, "3"),
     },
-    # ── Go (phase 6+) ───────────────────────────────────────────────────
+    # ── Java (v0.3+) ────────────────────────────────────────────────────
+    "java": {lane: None for lane in _LANE_KEYS},
+    # ── C# / .NET (v0.3+) ───────────────────────────────────────────────
+    "csharp": {lane: None for lane in _LANE_KEYS},
+    # ── Go (v0.4+) ──────────────────────────────────────────────────────
     "go": {lane: None for lane in _LANE_KEYS},
-    # ── Rust (phase 6+) ─────────────────────────────────────────────────
+    # ── Rust (v0.4+) ────────────────────────────────────────────────────
     "rust": {lane: None for lane in _LANE_KEYS},
-    # ── Ruby (phase 6+) ─────────────────────────────────────────────────
+    # ── Ruby (v0.4+) ────────────────────────────────────────────────────
     "ruby": {lane: None for lane in _LANE_KEYS},
 }
 

@@ -71,7 +71,10 @@ except ImportError:  # apps/backend not on sys.path (e.g. running from repo root
 # ---------------------------------------------------------------------------
 
 _DEFAULT_ROOT = Path.home() / ".tfactory"
-_MVP_LANES = ("functional",)  # other lanes ship in phases 2-5
+# v0.2 modality spine — Decision 2 in the v0.2 design spec.
+# 'functional' is accepted as a deprecated v0.1 alias for 'unit'.
+_MVP_LANES = ("unit", "browser", "api", "integration", "mutation")
+_V01_LANE_ALIASES = {"functional": "unit"}  # for plan-load compatibility
 
 
 def _workspace_root() -> Path:
@@ -561,11 +564,13 @@ def create_task_control_tools() -> list:
     )
     async def task_rerun(args: dict[str, Any]) -> dict[str, Any]:
         task_id = args["task_id"]
-        lane = args.get("lane", "functional")
+        lane = args.get("lane", "unit")
+        # v0.1 alias compatibility — accept old names with a silent remap
+        lane = _V01_LANE_ALIASES.get(lane, lane)
         if lane not in _MVP_LANES:
             return _format_error(
-                f"lane {lane!r} not implemented at MVP — only {list(_MVP_LANES)} are lit. "
-                f"sast/dast/fuzz/mutation lanes land in phases 2-5."
+                f"lane {lane!r} not supported in v0.2 — lit lanes are {list(_MVP_LANES)}. "
+                f"SAST/DAST/Fuzz are out of scope (see Decision 2)."
             )
         located = _find_task(task_id)
         if not located:
