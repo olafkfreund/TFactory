@@ -10,14 +10,14 @@ mutate-and-check, lint promotion + the LLM's semantic-relevance call),
 hands them to an LLM via the evaluator.md prompt, then validates the
 verdicts.json the LLM writes.
 
-Task 7 commits (in flight):
+Task 7 commits (all landed):
 
   ✓ commit 1 — Auto-fire scaffold + stub
   ✓ commit 2 — Coverage-delta + 3× stability re-run primitives
   ✓ commit 3 — Mutate-and-check probe + flake-lint promotion primitives
   ✓ commit 4 — evaluator.md prompt + assembly helper
-  ✓ commit 5 — Real run_evaluator with SDK + 5 signals → verdicts.json  (this commit)
-  ⬜ commit 6 — Integration test + close #8
+  ✓ commit 5 — Real run_evaluator with SDK + 5 signals → verdicts.json
+  ✓ commit 6 — Integration test + close #8
 """
 
 from __future__ import annotations
