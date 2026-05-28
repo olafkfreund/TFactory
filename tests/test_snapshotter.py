@@ -1,6 +1,6 @@
-"""Tests for the AIFactory→TFactory spec snapshotter — Task 3 (#4).
+"""Tests for the AIFactory→TFactory spec snapshotter — Task 3 (#4) + Task 4 (#20).
 
-Sub-task 3.1 snapshotter side:
+Sub-task 3.1 snapshotter side (original):
   - happy path copies spec.md + implementation_plan.json
   - copies are read-only (0o444)
   - source.json contains expected metadata
@@ -10,6 +10,17 @@ Sub-task 3.1 snapshotter side:
   - project_root_path=None → no diff captured, warning recorded
   - real git repo → diff captured, sha recorded
   - bad git repo → soft fail with warning, no exception
+
+Sub-task 4.4 new cases (Task 4 / #20):
+  - .tfactory.yml present → context/tfactory_yml.json written, has_tfactory_yml=True
+  - .tfactory.yml absent → flag False, no file, no warning
+  - .tfactory.yml malformed → flag False, no file, warning recorded
+  - tests-catalog present → context/tests_catalog.json written, has_tests_catalog=True
+  - tests-catalog absent → flag False, no file, no warning
+  - tests-catalog malformed → flag False, no file, warning recorded
+  - both files present → both flags True, both files written
+  - project_root_path=None → both flags False, no extra warnings
+  - source.json carries has_tfactory_yml + has_tests_catalog keys
 """
 
 from __future__ import annotations

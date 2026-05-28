@@ -1,5 +1,9 @@
 """Snapshot an AIFactory spec into a TFactory workspace — Task 3 (#4).
 
+Extended in Task 4 (#20) to also capture ``.tfactory.yml`` and
+``.tfactory/tests-catalog.json`` from the AIFactory project root so the
+Planner agent sees them in ``context/`` alongside the spec and diff.
+
 Why a snapshot rather than reading the AIFactory spec live each time:
 
 - The AIFactory spec dir may be mutated (next task, follow-up planner)
@@ -14,17 +18,24 @@ Why a snapshot rather than reading the AIFactory spec live each time:
 What gets snapshotted, in
 ``~/.tfactory/workspaces/{project_id}/specs/{spec_id}/context/``:
 
-  source.json         — handover metadata (paths, refs, sha, timestamps)
-  aifactory_spec.md   — copy of AIFactory's spec.md (0o444)
-  aifactory_plan.json — copy of AIFactory's implementation_plan.json
-                        (0o444; absent if upstream doesn't have one)
-  diff.patch          — ``git diff base_ref..branch`` from the project's
-                        root_path (absent if git unavailable / refs missing)
+  source.json           — handover metadata (paths, refs, sha, timestamps)
+  aifactory_spec.md     — copy of AIFactory's spec.md (0o444)
+  aifactory_plan.json   — copy of AIFactory's implementation_plan.json
+                          (0o444; absent if upstream doesn't have one)
+  diff.patch            — ``git diff base_ref..branch`` from the project's
+                          root_path (absent if git unavailable / refs missing)
+  tfactory_yml.json     — parsed ``.tfactory.yml`` as JSON (0o444; absent if
+                          the file doesn't exist or fails validation)
+  tests_catalog.json    — copy of ``.tfactory/tests-catalog.json`` as JSON
+                          (0o444; absent if the file doesn't exist or is invalid)
 
 The snapshotter is intentionally tolerant of partial sources — if the
 AIFactory spec dir has spec.md but no implementation_plan.json, we
 snapshot what's there and note the gap in source.json. Callers can
 gate further pipeline steps on those gaps; the snapshotter doesn't.
+Both v0.2 files (``.tfactory.yml`` and the tests-catalog) are OPTIONAL —
+most v0.2 repos will adopt them gradually; absence is a recorded fact,
+not an error.
 """
 
 from __future__ import annotations
