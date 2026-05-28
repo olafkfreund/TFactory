@@ -188,8 +188,10 @@ def test_block_accepts_dict_shape(dict_bundle) -> None:
 
 
 def test_block_missing_signals_degrades_gracefully() -> None:
-    """A bundle missing the four numeric signals renders the labels
-    but with 'not computed' values — no crash."""
+    """A bundle missing the four numeric signals renders the labels without
+    crashing.  Coverage None renders as 'N/A (browser lane)' (Decision 11 —
+    we never want the LLM to interpret a missing delta as '0%'); stability,
+    mutation, and lint_promotion render as 'not computed'."""
     bundle = {
         "test_id": "minimal",
         "test_file": "/x.py",
@@ -198,7 +200,7 @@ def test_block_missing_signals_degrades_gracefully() -> None:
         # no coverage / stability / mutation / lint_promotion
     }
     block = _format_evaluator_per_test_block(bundle)
-    assert "coverage: not computed" in block
+    assert "coverage: N/A (browser lane)" in block
     assert "stability: not computed" in block
     assert "mutation: not computed" in block
     assert "lint_promotion: not computed" in block

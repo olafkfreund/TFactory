@@ -835,6 +835,7 @@ def _format_evaluator_per_test_block(bundle) -> str:
 
     coverage = _format_signal_value(bundle, "coverage_delta", "coverage", default=None)
     if coverage is not None:
+        # coverage is a CoverageDelta dataclass (or dict); render numeric signals.
         new_lines = _format_signal_value(coverage, "new_lines", default=frozenset())
         new_lines_count = len(new_lines) if hasattr(new_lines, "__len__") else 0
         delta_pct = _format_signal_value(coverage, "delta_pct", default=0.0)
@@ -844,7 +845,15 @@ def _format_evaluator_per_test_block(bundle) -> str:
             f"new_lines={new_lines_count}, new_files={new_files}"
         )
     else:
-        coverage_line = "coverage: not computed"
+        # coverage_delta is None — either the framework explicitly skips
+        # coverage measurement (Browser lane / Playwright, Decision 11) or
+        # the coverage XML was absent for this run.
+        #
+        # In both cases, render "N/A (browser lane)" so the Evaluator LLM
+        # does NOT interpret this as "0% coverage" and issue a spurious
+        # reject.  The evaluator.md verdict-priority section instructs the
+        # LLM to skip the coverage rule when it sees "N/A".
+        coverage_line = "coverage: N/A (browser lane)"
 
     stability = _format_signal_value(bundle, "stability", default=None)
     if stability is not None:
