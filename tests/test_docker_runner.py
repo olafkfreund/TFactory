@@ -324,7 +324,12 @@ def test_docker_image_runs_echo(tmp_path):
         repo_path=tmp_path,
         scratch_path=tmp_path,
         command=["echo", "tfactory-smoke"],
-        timeout_sec=30,
+        # Generous timeout — the combination of --network=none +
+        # --read-only + --tmpfs is observed to take 1-2 minutes on
+        # some hosts (notably first invocation after daemon idle).
+        # Steady-state on warm daemons is sub-second; we tolerate
+        # the slow path rather than skipping the integration smoke.
+        timeout_sec=180,
     )
     assert res.ok, res.stderr
     assert "tfactory-smoke" in res.stdout

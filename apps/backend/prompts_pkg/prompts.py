@@ -461,3 +461,105 @@ The project root is: `{project_dir}`
 
 """
     return spec_context + base_prompt
+
+
+# ---------------------------------------------------------------------------
+# TFactory Planner prompt helpers — Task 5 (#6), commit 3 of 6.
+#
+# These are distinct from the inherited get_planner_prompt /
+# get_followup_planner_prompt helpers above, which target AIFactory's
+# coder-pipeline planner. The TFactory variants load the new
+# test-oriented prompts in apps/backend/prompts/planner.md +
+# planner_replan.md, then prepend a SPEC CONTEXT block with the
+# concrete spec_dir + project_dir paths.
+# ---------------------------------------------------------------------------
+
+
+def get_tfactory_planner_prompt(spec_dir: Path, project_dir: Path) -> str:
+    """Assemble the initial-mode Planner prompt for TFactory.
+
+    Loads apps/backend/prompts/planner.md and prepends a context block
+    that names the concrete paths the agent will read + write. The
+    template uses `{spec_dir}` / `{project_dir}` placeholders that
+    survive to the agent verbatim — the agent uses the Read tool to
+    fetch the files, so the placeholders in the prompt body are
+    illustrative; the SPEC CONTEXT block we prepend here has the
+    real paths.
+
+    Args:
+        spec_dir: Absolute path to the TFactory workspace spec dir.
+        project_dir: Absolute path to the AIFactory project root.
+
+    Returns:
+        Full system prompt ready to hand to run_agent_session.
+
+    Raises:
+        FileNotFoundError: if planner.md is missing.
+    """
+    prompt_file = PROMPTS_DIR / "planner.md"
+    if not prompt_file.exists():
+        raise FileNotFoundError(
+            f"planner.md missing at {prompt_file}. "
+            "TFactory's Task 5 (#6) authors this prompt; check the working tree."
+        )
+
+    body = prompt_file.read_text()
+    context = (
+        "## SPEC CONTEXT (TFactory Planner — initial mode)\n\n"
+        f"Concrete paths for this run:\n\n"
+        f"- spec_dir: `{spec_dir}`\n"
+        f"- project_dir: `{project_dir}` (read-only via Glob/Grep)\n\n"
+        "Files Task 3's snapshotter already populated:\n\n"
+        f"- `{spec_dir / 'context' / 'aifactory_spec.md'}`\n"
+        f"- `{spec_dir / 'context' / 'aifactory_plan.json'}` (may not exist)\n"
+        f"- `{spec_dir / 'context' / 'diff.patch'}` (may not exist if git skipped)\n"
+        f"- `{spec_dir / 'context' / 'source.json'}` (snapshot warnings — read first)\n\n"
+        f"Emit `test_plan.json` via Write at: `{spec_dir / 'test_plan.json'}`\n\n"
+        "---\n\n"
+    )
+    return context + body
+
+
+def get_tfactory_planner_replan_prompt(spec_dir: Path, project_dir: Path) -> str:
+    """Assemble the replan-mode Planner prompt for TFactory.
+
+    Loads apps/backend/prompts/planner_replan.md and prepends a
+    REPLAN CONTEXT block naming the spec_dir + project_dir.
+
+    The replan_request.json file (read by the agent) is written by
+    Gen-Functional (Task 6) before this helper is called; this
+    function does NOT validate its presence — the agent surfaces a
+    clear error if the file's missing.
+
+    Args:
+        spec_dir: Absolute path to the TFactory workspace spec dir.
+        project_dir: Absolute path to the AIFactory project root.
+
+    Returns:
+        Full system prompt ready to hand to run_agent_session.
+
+    Raises:
+        FileNotFoundError: if planner_replan.md is missing.
+    """
+    prompt_file = PROMPTS_DIR / "planner_replan.md"
+    if not prompt_file.exists():
+        raise FileNotFoundError(
+            f"planner_replan.md missing at {prompt_file}. "
+            "TFactory's Task 5 (#6) authors this prompt; check the working tree."
+        )
+
+    body = prompt_file.read_text()
+    context = (
+        "## REPLAN CONTEXT (TFactory Planner — replan mode)\n\n"
+        f"Concrete paths for this run:\n\n"
+        f"- spec_dir: `{spec_dir}`\n"
+        f"- project_dir: `{project_dir}` (read-only via Glob/Grep)\n\n"
+        "Files you'll read:\n\n"
+        f"- `{spec_dir / 'context' / 'replan_request.json'}` — **read first**\n"
+        f"- `{spec_dir / 'test_plan.json'}` — the existing plan to append to\n"
+        f"- `{spec_dir / 'context' / 'aifactory_spec.md'}` — original spec\n"
+        f"- `{spec_dir / 'context' / 'diff.patch'}` — code surface (may be absent)\n\n"
+        f"Write the updated plan back to: `{spec_dir / 'test_plan.json'}`\n\n"
+        "---\n\n"
+    )
+    return context + body
