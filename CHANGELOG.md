@@ -1,3 +1,128 @@
+# Changelog
+
+## v0.1.0-mvp — Walking Skeleton (2026-05-28)
+
+> First tagged release. The MVP walking-skeleton pipeline is complete:
+> a Claude Code session in an AIFactory repo can invoke
+> `/handover-to-tfactory` and the four-agent pipeline (Planner →
+> Gen-Functional → Evaluator → Triager) produces a pytest test suite +
+> verdicts + a triage report against the AIFactory feature branch.
+>
+> Functional lane (Python) is active; SAST / DAST / Fuzz / Mutation
+> lanes are Phase 2-5 placeholders in the portal.
+>
+> Tests: **531 backend + 112 frontend = 643 total**, plus a 9-scenario
+> manual end-to-end smoke runner (`scripts/e2e-smoke.sh`). Side-effects
+> (git commit + PR comment) default to dry-run per the
+> "no automatic pushes" policy.
+
+### Tasks shipped (all 12)
+
+  - **#2  Task 1**: Hard fork from AIFactory + scaffold
+  - **#3  Task 2**: MCP server + `/handover-to-tfactory` skill
+  - **#4  Task 3**: Workspace + snapshotter
+  - **#5  Task 4**: Docker runner + lane dispatcher + lang registry
+  - **#6  Task 5**: Planner agent (initial + replan + stuck-at-2 transition)
+  - **#7  Task 6**: Gen-Functional agent (pre-flight static check +
+                    flake-risk lint guardrails)
+  - **#8  Task 7**: Evaluator (5-signal verdict pipeline:
+                    coverage delta · 3× stability · mutate-and-check ·
+                    flake-lint promotion · LLM semantic relevance)
+  - **#9  Task 8**: Triager (dedup + rank + report + git_writer +
+                    pr_comment, all dry-run by default)
+  - **#10 Task 9**: Portal backend retheme (FastAPI `/api/tfactory/tasks`
+                    + 5 artefact endpoints + WebSocket log stream)
+  - **#11 Task 10**: Portal frontend retheme (React lane status grid,
+                    task list, detail view, log viewer, shell)
+  - **#12 Task 11**: End-to-end smoke (9 verification scenarios + bash
+                    orchestrator + structural test harness +
+                    operator guide)
+  - **#13 Task 12**: Documentation + tag v0.1.0-mvp (this release)
+
+### Pipeline architecture
+
+```
+  Planner ─► Gen-Functional ─► Executor ─► Evaluator ─► Triager
+   (#6)        (#7)              (#5)        (#8)        (#9)
+```
+
+Each agent's success path schedules the next via env-gated async tasks
+(`TFACTORY_AUTO_PLAN`/`GENERATE`/`EVALUATE`/`TRIAGE`, all default ON).
+Gen-Functional → Planner replan loops when a guardrail rejects, capped
+by `replan_count >= 2` → `status=stuck`.
+
+### Test surface
+
+  | Suite | Cases | Run cmd |
+  |---|---:|---|
+  | Backend non-SDK | 531 | `pytest -q tests/` |
+  | Frontend (vitest + RTL) | 112 | `cd apps/frontend-web && vitest run` |
+  | E2e smoke (manual) | 9 scenarios | `scripts/e2e-smoke.sh --all` |
+
+Every Claude SDK + Docker call is mocked at a seam so CI runs in seconds
+without API keys or daemons. The e2e smoke exercises the real stack and
+is operator-driven.
+
+### Workspace layout
+
+Per-task state lives at `~/.tfactory/workspaces/<proj>/specs/<spec>/`:
+
+  - `status.json` — live status / phase / counts
+  - `test_plan.json` — Planner's lane-tagged subtasks
+  - `context/` — frozen AIFactory spec + diff + replan_request.json
+  - `tests/` — Gen-Functional's generated pytest files
+  - `findings/` — verdicts.json + triage_report.{md,json} + mutants/
+  - `logs/` — per-agent transcripts
+
+### Triager dry-run defaults
+
+Per CLAUDE.md "no automatic pushes" policy, the Triager's git_writer
+and pr_comment helpers default to dry-run (record the argvs they
+WOULD invoke without executing). Operators opt in via env:
+
+  - `TFACTORY_TRIAGER_GIT_WRITE=1` — actually commit accepted tests
+  - `TFACTORY_TRIAGER_PR_COMMENT=1` — actually `gh pr comment`
+
+### Deferred for v0.1.1+ (see #14)
+
+  - **AIFactory `runners/github/` trim** (sub-task 8.4): ~21,600 LOC
+    inherited PR-review machinery. Web-server still consumes parts;
+    needs careful surgery.
+  - **AIFactory spec-creation routes trim** (sub-task 9.2): inherited
+    FastAPI endpoints we don't use.
+  - **Inherited React spec wizard UI trim** (sub-task 10.2): 355
+    TS/TSX files; TFactory components live alongside cleanly.
+  - **Live log streaming**: WS sends ONE snapshot on connect at MVP;
+    live tail-as-file-grows is Phase 2.
+  - **Per-test coverage XML wiring**: `coverage_delta` primitive is
+    fully tested but inputs aren't wired yet — degrades to
+    "not computed".
+  - **`source.json` PR + repo_slug fields**: snapshotter doesn't
+    populate yet — operator sets them manually for now.
+
+### Known sharp edges
+
+See `guides/e2e-smoke.md` "Phase-2 backlog" for the full catalogue.
+Highlights:
+
+  - Verification field schema drift (`planner.md` emits `"command"`;
+    dataclass has `run`). Both shapes accepted via duck-typing.
+  - Manual smokes 6/8/9 lack auto-assertions (intentional —
+    require docker/gh state changes).
+  - NixOS devShell sets `NODE_ENV=production`; must `unset NODE_ENV`
+    before `npm install` in `apps/frontend-web/`.
+
+### Documentation
+
+  - `README.md` — front door + quickstart
+  - `CLAUDE.md` — guidance for Claude Code sessions inside this repo
+  - `guides/e2e-smoke.md` — 9-scenario operator walkthrough
+  - `guides/handover-to-tfactory-skill.md` — companion-skill reference
+  - `guides/HANDOVER_WORKFLOW.md` — operator handover flow
+  - `guides/CLAUDE_CODE_MCP_TOOLS.md` — MCP tool reference
+
+---
+
 ## Unreleased
 
 ### ⚖️ Licensing
