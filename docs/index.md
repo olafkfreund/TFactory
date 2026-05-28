@@ -54,7 +54,7 @@ nav_order: 1
 
 ## Status by lane
 
-<div class="reveal">
+<div class="reveal" markdown="1">
 
 | Lane | Status | Phase |
 |---|---|---|
@@ -69,7 +69,7 @@ nav_order: 1
 
 ## Quickstart
 
-<div class="reveal">
+<div class="reveal" markdown="1">
 
 ```bash
 # Clone + bootstrap (NixOS / flake-based)
