@@ -69,6 +69,13 @@ REQUIRED_PATHS=(
     "apps/backend/tfactory_yml/secrets.py"
     "apps/backend/tfactory_yml/exceptions.py"
     ".tfactory.yml.example"
+    # Task 3 (#19): tests-catalog schema + IO + lookup + migration
+    "apps/backend/tests_catalog/__init__.py"
+    "apps/backend/tests_catalog/schema.py"
+    "apps/backend/tests_catalog/io.py"
+    "apps/backend/tests_catalog/lookup.py"
+    "apps/backend/tests_catalog/migration.py"
+    "docs/tests-catalog.md"
 )
 
 # Allowlist of paths that MAY legitimately mention `aifactory` / `AIFactory`.
@@ -130,6 +137,13 @@ ALLOWLIST_GLOBS=(
     "apps/backend/tfactory_yml/"
     ".tfactory.yml.example"
     ".pre-commit-config.yaml"
+    # Task 3 (#19): tests-catalog schema + IO + lookup + migration.
+    # The catalog lives in the AIFactory repo; module docstrings and the
+    # developer guide legitimately refer to "AIFactory repo" when describing
+    # where the catalog is checked in.
+    "apps/backend/tests_catalog/"
+    "tests/test_tests_catalog.py"
+    "docs/tests-catalog.md"
 )
 
 # ---------- args ----------
