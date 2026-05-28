@@ -37,7 +37,6 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-
 # ---------------------------------------------------------------------------
 # Constants + helpers
 # ---------------------------------------------------------------------------
@@ -60,6 +59,7 @@ def _now_iso() -> str:
 # Result + error types
 # ---------------------------------------------------------------------------
 
+
 class SnapshotError(Exception):
     """Raised when a snapshot fails at a contract boundary (missing source)."""
 
@@ -79,10 +79,12 @@ class SnapshotResult:
     has_spec_md: bool = False
     has_plan_json: bool = False
     has_diff_patch: bool = False
+    has_tfactory_yml: bool = False
+    has_tests_catalog: bool = False
 
     # Git context at handover time.
     sha_at_handover: str | None = None
-    diff_stat: str | None = None     # e.g. "3 files changed, +12 -4"
+    diff_stat: str | None = None  # e.g. "3 files changed, +12 -4"
 
     # Warnings — soft failures that callers may surface to the user.
     warnings: list[str] = field(default_factory=list)
@@ -94,6 +96,7 @@ class SnapshotResult:
 # ---------------------------------------------------------------------------
 # Core snapshot routine
 # ---------------------------------------------------------------------------
+
 
 def snapshot_aifactory_spec(
     *,
@@ -178,9 +181,7 @@ def snapshot_aifactory_spec(
             if sha is not None:
                 result.sha_at_handover = sha
             else:
-                result.warnings.append(
-                    f"could not resolve branch {branch!r} in {repo}"
-                )
+                result.warnings.append(f"could not resolve branch {branch!r} in {repo}")
             diff_text, diff_stat, diff_err = _git_diff(repo, base_ref, branch)
             if diff_text is not None:
                 diff_path = context_dir / "diff.patch"
@@ -194,14 +195,32 @@ def snapshot_aifactory_spec(
                 f"project_root_path {repo} not a directory; git context skipped"
             )
     else:
-        result.warnings.append(
-            "project_root_path not provided; git context skipped"
-        )
+        result.warnings.append("project_root_path not provided; git context skipped")
+
+    # ── .tfactory.yml → context/tfactory_yml.json (if present) ──────────
+    if project_root_path is not None:
+        repo = Path(project_root_path).expanduser()
+        if repo.is_dir():
+            from tfactory_yml import TFactoryYmlError, load_tfactory_yml
+
+            cfg = None
+            try:
+                cfg = load_tfactory_yml(repo)
+            except TFactoryYmlError as exc:
+                result.warnings.append(
+                    f".tfactory.yml present but unparseable: {exc.message}"
+                )
+                cfg = None
+            if cfg is not None:
+                dst = context_dir / "tfactory_yml.json"
+                dst.write_text(
+                    json.dumps(cfg.model_dump(mode="json"), indent=2, sort_keys=True)
+                )
+                dst.chmod(_SNAPSHOT_MODE)
+                result.has_tfactory_yml = True
 
     # ── source.json ──────────────────────────────────────────────────────
-    (context_dir / "source.json").write_text(
-        json.dumps(result.to_dict(), indent=2)
-    )
+    (context_dir / "source.json").write_text(json.dumps(result.to_dict(), indent=2))
 
     return result
 
@@ -209,6 +228,7 @@ def snapshot_aifactory_spec(
 # ---------------------------------------------------------------------------
 # Git helpers
 # ---------------------------------------------------------------------------
+
 
 def _git_rev_parse(repo: Path, ref: str) -> str | None:
     """Return the full sha for ``ref`` inside ``repo``, or None on failure."""
@@ -227,7 +247,9 @@ def _git_rev_parse(repo: Path, ref: str) -> str | None:
     return proc.stdout.strip() or None
 
 
-def _git_diff(repo: Path, base_ref: str, branch: str) -> tuple[str | None, str | None, str | None]:
+def _git_diff(
+    repo: Path, base_ref: str, branch: str
+) -> tuple[str | None, str | None, str | None]:
     """Return (patch_text, stat_summary, error_message). Any may be None."""
     try:
         diff_proc = subprocess.run(
@@ -241,9 +263,13 @@ def _git_diff(repo: Path, base_ref: str, branch: str) -> tuple[str | None, str |
         return None, None, f"git not available or timed out: {exc}"
 
     if diff_proc.returncode != 0:
-        return None, None, (
-            f"git diff {base_ref}..{branch} failed: "
-            f"{(diff_proc.stderr or '').strip()[:200]}"
+        return (
+            None,
+            None,
+            (
+                f"git diff {base_ref}..{branch} failed: "
+                f"{(diff_proc.stderr or '').strip()[:200]}"
+            ),
         )
 
     # Stat summary is cheap and helps the Planner / report skim the diff size.
