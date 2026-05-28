@@ -27,11 +27,10 @@ import json
 import logging as _logging
 import os
 import traceback
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Literal, Protocol
-
 
 _eval_log = _logging.getLogger(__name__)
 
@@ -88,7 +87,10 @@ async def _resolve_evaluator_client(spec_dir: Path, project_dir: Path):
     if provider_name == "claude":
         thinking_budget = get_phase_thinking_budget(spec_dir, "coding")
         return create_client(
-            project_dir, spec_dir, eval_model, max_thinking_tokens=thinking_budget,
+            project_dir,
+            spec_dir,
+            eval_model,
+            max_thinking_tokens=thinking_budget,
         )
     return get_provider(
         provider_name,
@@ -100,7 +102,10 @@ async def _resolve_evaluator_client(spec_dir: Path, project_dir: Path):
 
 
 async def _invoke_session(
-    client, prompt: str, spec_dir: Path, verbose: bool,
+    client,
+    prompt: str,
+    spec_dir: Path,
+    verbose: bool,
 ) -> tuple[str, str, dict]:
     """Wrap run_agent_session so tests can patch one symbol."""
     from agents.session import run_agent_session
@@ -108,7 +113,11 @@ async def _invoke_session(
 
     async with client:
         return await run_agent_session(
-            client, prompt, spec_dir, verbose, phase=LogPhase.CODING,
+            client,
+            prompt,
+            spec_dir,
+            verbose,
+            phase=LogPhase.CODING,
         )
 
 
@@ -117,6 +126,7 @@ async def _invoke_session(
 
 class _RunResultLike(Protocol):
     """Same duck-type as stability_runner/mutate_probe expect."""
+
     @property
     def returncode(self) -> int: ...
     @property
@@ -126,7 +136,8 @@ class _RunResultLike(Protocol):
 
 
 def _resolve_runner_fn(
-    spec_dir: Path, project_dir: Path,
+    spec_dir: Path,
+    project_dir: Path,
 ) -> Callable[[Path, Path, int], _RunResultLike]:
     """Return a callable matching the runner_fn seam.
 
@@ -137,12 +148,14 @@ def _resolve_runner_fn(
     from tools.runners.docker_runner import DockerRunner
 
     runner = DockerRunner()
+
     def _run(test_file: Path, project_dir_arg: Path, seed: int):
         return runner.run_pytest(
             test_file=test_file,
             project_dir=project_dir_arg,
             seed=seed,
         )
+
     return _run
 
 
@@ -160,16 +173,23 @@ class EvaluatorSignals:
     couldn't run (e.g., coverage XML not emitted by the Executor for
     this test). The prompt helper renders missing signals as
     "not computed" rather than crashing.
+
+    ``coverage_delta`` is explicitly ``None`` (not zero) when the
+    framework's ``coverage_strategy == "skip"`` (Decision 11 — Browser
+    lane).  This prevents the Evaluator prompt from seeing "0% coverage"
+    and issuing a spurious reject for Playwright tests.  A ``None``
+    value is rendered as "N/A (browser lane)" by
+    ``_format_evaluator_per_test_block``.
     """
 
     test_id: str
     test_file: Path
     target: str
     rationale: str
-    coverage_delta: Any = None   # CoverageDelta | None
-    stability: Any = None        # StabilityResult | None
-    mutation: Any = None         # MutationResult | None
-    lint_promotion: Any = None   # PromotionResult | None
+    coverage_delta: Any = None  # CoverageDelta | None  (None = skip-coverage lane)
+    stability: Any = None  # StabilityResult | None
+    mutation: Any = None  # MutationResult | None
+    lint_promotion: Any = None  # PromotionResult | None
 
 
 # ─── Signal-bundle assembly ─────────────────────────────────────────────
@@ -195,15 +215,69 @@ def _completed_functional_subtasks(plan: dict) -> list[dict]:
     return out
 
 
+def _framework_coverage_strategy(subtask: dict) -> str | None:
+    """Look up the framework descriptor's coverage_strategy for a subtask.
+
+    Returns the strategy string ("lcov", "cobertura", "skip") or None
+    if the subtask has no ``framework`` field or the registry lookup
+    fails (e.g. unknown framework name — v0.1 back-compat).
+
+    Failures are swallowed and logged at DEBUG level so a registry
+    misconfiguration never blocks the Evaluator.
+    """
+    framework_name = subtask.get("framework")
+    if not framework_name:
+        return None
+    try:
+        from framework_registry import load_registry
+
+        registry = load_registry()
+        desc = registry.get(framework_name)
+        if desc is None:
+            _eval_log.debug(
+                "coverage_strategy: framework %r not in registry; treating as numeric",
+                framework_name,
+            )
+            return None
+        return desc.coverage_strategy
+    except Exception as exc:  # noqa: BLE001 — never block the Evaluator
+        _eval_log.debug(
+            "coverage_strategy lookup failed for framework %r: %s",
+            framework_name,
+            exc,
+        )
+        return None
+
+
 def _coverage_delta_for_subtask(
-    spec_dir: Path, subtask: dict,
+    spec_dir: Path,
+    subtask: dict,
 ):
     """Try to compute coverage delta for one test.
 
+    Returns ``None`` in two distinct cases:
+
+    1. **Skip-coverage lane** (Decision 11): the subtask's framework has
+       ``coverage_strategy == "skip"`` (e.g. Playwright Browser lane).
+       The Evaluator prompt renders this as "N/A (browser lane)" and does
+       NOT penalise the test for zero coverage.
+
+    2. **Coverage XML absent**: baseline or per-test coverage.xml are
+       missing — the LLM will see "not computed" (pre-existing behaviour).
+
     Looks for ``spec_dir/findings/baseline_coverage.xml`` and
-    ``spec_dir/findings/runs/<test_id>/coverage.xml``. Returns
-    None if either is missing — the LLM will see "not computed".
+    ``spec_dir/findings/runs/<test_id>/coverage.xml`` for case (2).
     """
+    # Case 1: framework explicitly opted out of coverage measurement.
+    strategy = _framework_coverage_strategy(subtask)
+    if strategy == "skip":
+        _eval_log.debug(
+            "coverage_delta: framework %r uses skip strategy — returning None",
+            subtask.get("framework"),
+        )
+        return None
+
+    # Case 2: try to parse XML coverage artefacts.
     from agents.coverage_delta import compute_delta_from_paths
 
     baseline = spec_dir / "findings" / "baseline_coverage.xml"
@@ -214,7 +288,9 @@ def _coverage_delta_for_subtask(
         return compute_delta_from_paths(baseline, after)
     except Exception as exc:  # noqa: BLE001 — defensive
         _eval_log.warning(
-            "coverage_delta failed for %s: %s", subtask["id"], exc,
+            "coverage_delta failed for %s: %s",
+            subtask["id"],
+            exc,
         )
         return None
 
@@ -235,7 +311,9 @@ def _stability_for_subtask(
         return check_stability(test_file, project_dir, runner_fn)
     except Exception as exc:  # noqa: BLE001
         _eval_log.warning(
-            "stability check failed for %s: %s", subtask["id"], exc,
+            "stability check failed for %s: %s",
+            subtask["id"],
+            exc,
         )
         return None
 
@@ -259,12 +337,16 @@ def _mutation_for_subtask(
     mutant_path = spec_dir / "findings" / "mutants" / f"{subtask['id']}.py"
     try:
         return run_mutate_probe(
-            test_file, project_dir, runner_fn,
+            test_file,
+            project_dir,
+            runner_fn,
             write_mutant_to=mutant_path,
         )
     except Exception as exc:  # noqa: BLE001
         _eval_log.warning(
-            "mutate probe failed for %s: %s", subtask["id"], exc,
+            "mutate probe failed for %s: %s",
+            subtask["id"],
+            exc,
         )
         return None
 
@@ -335,10 +417,14 @@ def _validate_verdicts(path: Path) -> tuple[bool, str, int]:
         if "test_id" not in v:
             return False, f"verdict[{i}] missing 'test_id'", 0
         if v.get("verdict") not in _VALID_VERDICTS:
-            return False, (
-                f"verdict[{i}] has invalid 'verdict': "
-                f"{v.get('verdict')!r} (must be one of {sorted(_VALID_VERDICTS)})"
-            ), 0
+            return (
+                False,
+                (
+                    f"verdict[{i}] has invalid 'verdict': "
+                    f"{v.get('verdict')!r} (must be one of {sorted(_VALID_VERDICTS)})"
+                ),
+                0,
+            )
     return True, "", len(verdicts)
 
 
@@ -351,10 +437,12 @@ def _advance_to_triager(spec_dir: Path, project_dir: Path) -> None:
     """
     try:
         from agents.triager import schedule_triager
+
         schedule_triager(spec_dir, project_dir, mode="initial")
     except ImportError as exc:
         _eval_log.warning(
-            "could not auto-schedule triager: %s", exc,
+            "could not auto-schedule triager: %s",
+            exc,
         )
 
 
@@ -424,12 +512,17 @@ async def run_evaluator(
         if not completed:
             verdicts_dir = spec_dir / "findings"
             verdicts_dir.mkdir(parents=True, exist_ok=True)
-            (verdicts_dir / "verdicts.json").write_text(json.dumps({
-                "evaluator_version": "task7-commit5",
-                "mode": mode,
-                "verdicts": [],
-                "generated_at": _now_iso(),
-            }, indent=2))
+            (verdicts_dir / "verdicts.json").write_text(
+                json.dumps(
+                    {
+                        "evaluator_version": "task7-commit5",
+                        "mode": mode,
+                        "verdicts": [],
+                        "generated_at": _now_iso(),
+                    },
+                    indent=2,
+                )
+            )
             _write_status_patch(
                 spec_dir,
                 status="evaluated_empty",
@@ -453,7 +546,10 @@ async def run_evaluator(
         client = await _resolve_evaluator_client(spec_dir, project_dir)
         try:
             session_status, _response, _err = await _invoke_session(
-                client, prompt, spec_dir, verbose,
+                client,
+                prompt,
+                spec_dir,
+                verbose,
             )
         except Exception as exc:  # noqa: BLE001 — surface in status
             _eval_log.error(
@@ -493,9 +589,7 @@ async def run_evaluator(
         return True
 
     except Exception as exc:
-        _eval_log.error(
-            "evaluator failed: %s\n%s", exc, traceback.format_exc()
-        )
+        _eval_log.error("evaluator failed: %s\n%s", exc, traceback.format_exc())
         _write_status_patch(
             spec_dir,
             status="evaluator_failed",
@@ -532,9 +626,7 @@ def schedule_evaluator(
     """
     if os.environ.get("TFACTORY_AUTO_EVALUATE", "1") == "0":
         return None
-    task = asyncio.create_task(
-        run_evaluator(spec_dir, project_dir, mode=mode)
-    )
+    task = asyncio.create_task(run_evaluator(spec_dir, project_dir, mode=mode))
     _BG_EVALUATOR_TASKS.add(task)
     task.add_done_callback(_BG_EVALUATOR_TASKS.discard)
     return task
