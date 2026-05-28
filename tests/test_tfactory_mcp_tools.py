@@ -19,6 +19,7 @@ Covers Task 2 sub-task 2.1 (#3):
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -54,6 +55,12 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Isolated TFactory workspace root for one test."""
     monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path / "tfactory"))
     monkeypatch.setenv("TFACTORY_PORTAL_PORT", "3102")
+    # Default: auto-fire OFF. Tests that exercise the auto-fire path
+    # opt in by setting TFACTORY_AUTO_PLAN=1 explicitly (see commit 2
+    # of Task 5). Keeping the default off here means the existing 21
+    # MCP-tool tests assert against the deterministic
+    # status=pending immediately-after-create state.
+    monkeypatch.setenv("TFACTORY_AUTO_PLAN", "0")
     # Snapshotter (Task 3) needs an AIFactory root too. Build a fake one
     # so the default-happy task_create_and_run flow doesn't trip
     # SnapshotError. Individual tests can scaffold per-spec sources via
@@ -250,6 +257,52 @@ async def test_task_create_and_run_missing_aifactory_spec_rolls_back(
     assert "AIFactory spec dir not found" in _content(res)
     # Workspace must NOT linger after a failed snapshot — retry should be possible.
     assert not (workspace / "workspaces" / "demo" / "specs" / "ghost-spec").exists()
+
+
+@pytest.mark.asyncio
+async def test_task_create_and_run_auto_fires_planner(
+    tools: dict, workspace: Path, aifactory_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When TFACTORY_AUTO_PLAN=1, task_create_and_run schedules the planner."""
+    monkeypatch.setenv("TFACTORY_AUTO_PLAN", "1")
+    _scaffold_aifactory_spec(aifactory_root, "demo", "auto-fire")
+    await tools["project_create"]({"id": "demo", "name": "Demo", "root_path": "/tmp/d"})
+    res = await tools["task_create_and_run"]({
+        "project_id": "demo", "spec_id": "auto-fire",
+        "branch": "f", "base_ref": "main", "confirm": True,
+    })
+    body = _payload(res)
+    assert body["planner_scheduled"] is True
+
+    # Drain the background planner so the workspace reflects post-stub state.
+    from agents.planner import _BG_PLANNER_TASKS
+    if _BG_PLANNER_TASKS:
+        await asyncio.gather(*list(_BG_PLANNER_TASKS), return_exceptions=True)
+
+    status = json.loads((workspace / "workspaces" / "demo" / "specs"
+                         / "auto-fire" / "status.json").read_text())
+    assert status["status"] == "planned_empty"
+    assert (workspace / "workspaces" / "demo" / "specs"
+            / "auto-fire" / "test_plan.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_task_create_and_run_does_not_auto_fire_when_disabled(
+    tools: dict, workspace: Path, aifactory_root: Path,
+) -> None:
+    """Default workspace fixture sets TFACTORY_AUTO_PLAN=0 — verify it sticks."""
+    _scaffold_aifactory_spec(aifactory_root, "demo", "no-auto")
+    await tools["project_create"]({"id": "demo", "name": "Demo", "root_path": "/tmp/d"})
+    res = await tools["task_create_and_run"]({
+        "project_id": "demo", "spec_id": "no-auto",
+        "branch": "f", "base_ref": "main", "confirm": True,
+    })
+    body = _payload(res)
+    assert body["planner_scheduled"] is False
+    status = json.loads((workspace / "workspaces" / "demo" / "specs"
+                         / "no-auto" / "status.json").read_text())
+    assert status["status"] == "pending"  # no advancement
 
 
 @pytest.mark.asyncio

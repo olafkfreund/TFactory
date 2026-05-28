@@ -200,3 +200,151 @@ async def run_followup_planner(
             task_logger.log_error(f"Follow-up planning error: {e}", LogPhase.PLANNING)
         status_manager.update(state=BuildState.ERROR)
         return False
+
+
+# ---------------------------------------------------------------------------
+# TFactory Planner (Task 5, #6) — STUB at commit 2 of 6.
+#
+# Real Claude-Agent-SDK wiring lands in commit 4. This stub just demonstrates
+# the auto-fire scheduling end-to-end:
+#   - status.json: pending → planning → planned
+#   - test_plan.json: minimal valid empty plan written
+#
+# Imports are deliberately scoped to stdlib + local modules so the stub runs
+# without claude-agent-sdk available — keeps the auto-fire path testable in
+# the minimal venv setup we used for commit 1's verification pass.
+# ---------------------------------------------------------------------------
+
+import asyncio
+import json
+import logging as _logging
+import os
+import traceback
+from datetime import datetime, timezone
+from typing import Literal
+
+_planner_log = _logging.getLogger(__name__ + ".tfactory")
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _read_status(spec_dir: Path) -> dict:
+    """Read status.json or return an empty dict if missing/corrupt."""
+    status_path = spec_dir / "status.json"
+    if not status_path.exists():
+        return {}
+    try:
+        return json.loads(status_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _write_status_patch(spec_dir: Path, **fields: object) -> None:
+    """Merge ``fields`` into status.json (atomic-ish single-file write)."""
+    status = _read_status(spec_dir)
+    status.update(fields)
+    status["updated_at"] = _now_iso()
+    (spec_dir / "status.json").write_text(json.dumps(status, indent=2))
+
+
+async def run_planner(
+    spec_dir: Path,
+    project_dir: Path,
+    mode: Literal["initial", "replan"] = "initial",
+    verbose: bool = False,
+) -> bool:
+    """Run the TFactory Planner agent — STUB at commit 2/6.
+
+    Args:
+        spec_dir: TFactory workspace spec dir (``~/.tfactory/workspaces/.../specs/<id>/``).
+        project_dir: AIFactory project root_path (unused in stub; real
+            planner uses for Glob/Grep tools in commit 4).
+        mode: 'initial' or 'replan'. Stub ignores; real impl branches.
+        verbose: forwarded to ``run_agent_session`` once the real impl lands.
+
+    Returns:
+        True on success; False if the workspace is malformed.
+
+    Stub behavior:
+        - status.json: status=planning
+        - test_plan.json: minimal valid empty plan
+        - status.json: status=planned (or planner_failed on exception)
+    """
+    if not spec_dir.is_dir():
+        _planner_log.error("planner: spec_dir %s does not exist", spec_dir)
+        return False
+
+    try:
+        _write_status_patch(
+            spec_dir, status="planning", phase=f"planner_{mode}_started"
+        )
+
+        # Yield to the event loop so callers can observe the planning state
+        # before we transition to planned. Real impl spends seconds-to-minutes
+        # here; the stub just touches the loop.
+        await asyncio.sleep(0)
+
+        # Emit a minimal valid ImplementationPlan. Use the test_plan module
+        # so the JSON shape stays in lock-step with the model the rest of
+        # the pipeline will load via ImplementationPlan.load().
+        from test_plan import ImplementationPlan, WorkflowType  # local import: avoid SDK load cost
+
+        plan = ImplementationPlan(
+            feature=f"<stub planner — {spec_dir.name}>",
+            workflow_type=WorkflowType.FEATURE,
+            services_involved=[],
+            phases=[],
+            final_acceptance=[],
+            created_at=_now_iso(),
+            updated_at=_now_iso(),
+            status="in_progress",
+            planStatus="pending",
+        )
+        plan.save(spec_dir / "test_plan.json")
+
+        _write_status_patch(
+            spec_dir,
+            status="planned_empty",
+            phase=f"planner_{mode}_stub_complete",
+            planner_warnings=[
+                "stub planner (commit 2/6) — empty plan emitted; real agent lands in commit 4"
+            ],
+        )
+        return True
+
+    except Exception as exc:
+        _planner_log.error("planner stub failed: %s\n%s", exc, traceback.format_exc())
+        _write_status_patch(
+            spec_dir,
+            status="planner_failed",
+            phase=f"planner_{mode}_error",
+            planner_error=str(exc)[:500],
+        )
+        return False
+
+
+# Module-level set so asyncio.create_task'd planner runs aren't GC'd while
+# the scheduling caller returns. Each completed task is removed via the
+# `done_callback`. Auto-fire path in task_control.py uses this directly.
+_BG_PLANNER_TASKS: set[asyncio.Task] = set()
+
+
+def schedule_planner(
+    spec_dir: Path,
+    project_dir: Path,
+    mode: Literal["initial", "replan"] = "initial",
+) -> asyncio.Task | None:
+    """Fire-and-forget the planner, gated by TFACTORY_AUTO_PLAN env var.
+
+    Returns the asyncio.Task that was scheduled, or None if auto-plan is
+    disabled. Caller doesn't need to await; the task is GC-anchored in
+    ``_BG_PLANNER_TASKS`` until it completes.
+    """
+    if os.environ.get("TFACTORY_AUTO_PLAN", "1") == "0":
+        return None
+    task = asyncio.create_task(run_planner(spec_dir, project_dir, mode=mode))
+    _BG_PLANNER_TASKS.add(task)
+    task.add_done_callback(_BG_PLANNER_TASKS.discard)
+    return task

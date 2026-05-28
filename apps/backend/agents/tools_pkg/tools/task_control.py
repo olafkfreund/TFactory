@@ -317,6 +317,27 @@ def create_task_control_tools() -> list:
         }
         _status_file(project_id, task_id).write_text(json.dumps(status, indent=2))
 
+        # Auto-fire the Planner (Task 5, #6). Skipped when
+        # TFACTORY_AUTO_PLAN=0 (used by tests + the manual CLI path).
+        # Errors inside the planner do NOT raise here — they show up in
+        # status.json as status=planner_failed. See planner.run_planner.
+        planner_scheduled = False
+        try:
+            from agents.planner import schedule_planner
+            project_root = project_entry.get("root_path", ".")
+            task = schedule_planner(
+                spec_dir=spec_dir,
+                project_dir=Path(project_root).expanduser(),
+                mode="initial",
+            )
+            planner_scheduled = task is not None
+        except ImportError:
+            # planner module not importable (e.g. minimal venv without SDK
+            # transitive deps); leave status=pending and surface a warning.
+            snapshot_warnings.append(
+                "planner module not importable — task stays at status=pending"
+            )
+
         portal_port = os.environ.get("TFACTORY_PORTAL_PORT", "3102")
         return _format_json({
             "task_id": task_id,
@@ -325,6 +346,7 @@ def create_task_control_tools() -> list:
             "portal_url": f"http://localhost:{portal_port}/tasks/{task_id}",
             "status": "pending",
             "snapshot_warnings": snapshot_warnings,
+            "planner_scheduled": planner_scheduled,
             "note": (
                 "Workspace created + AIFactory spec snapshotted into context/. "
                 "Pipeline execution (planner + generators + executor + evaluator + triager) "

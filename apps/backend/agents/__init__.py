@@ -31,6 +31,9 @@ __all__ = [
     # Constants
     "AUTO_CONTINUE_DELAY_SECONDS",
     "HUMAN_INTERVENTION_FILE",
+    # TFactory Planner (Task 5, #6)
+    "run_planner",
+    "schedule_planner",
 ]
 
 
@@ -56,6 +59,10 @@ def __getattr__(name):
         return locals()[name]
     elif name in ("post_session_processing", "run_agent_session"):
         from .session import post_session_processing, run_agent_session
+
+        return locals()[name]
+    elif name in ("run_planner", "schedule_planner"):
+        from .planner import run_planner, schedule_planner
 
         return locals()[name]
     elif name in (
