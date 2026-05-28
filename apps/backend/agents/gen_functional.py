@@ -7,17 +7,14 @@ subtask via the Claude Agent SDK, runs two MVP guardrails per subtask
 (pre-flight static check + flake-risk lint), and either commits the
 test file or writes a `context/replan_request.json` for the Planner.
 
-This file is the STUB at commit 1 of 6 of Task 6 — it just advances the
-status from `planned`/`planned_empty` → `generating` → `generated_empty`
-so the pipeline auto-advance wiring can be tested end-to-end. Real
-SDK invocation + the two guardrails land in commits 2-5.
+Task 6 commits (all landed):
 
-  ✓ commit 1 — Auto-fire scaffold + stub  (this commit)
-  ⬜ commit 2 — Pre-flight static check (subprocess introspection)
-  ⬜ commit 3 — Flake-risk lint (AST patterns)
-  ⬜ commit 4 — gen_functional.md prompt + assembly helper
-  ⬜ commit 5 — Real run_gen_functional with SDK + guards + replan_request
-  ⬜ commit 6 — Integration test + close #7
+  ✓ commit 1 — Auto-fire scaffold + stub
+  ✓ commit 2 — Pre-flight static check (subprocess introspection)
+  ✓ commit 3 — Flake-risk lint (AST patterns)
+  ✓ commit 4 — gen_functional.md prompt + assembly helper
+  ✓ commit 5 — Real run_gen_functional with SDK + guards + replan_request
+  ✓ commit 6 — Integration test + close #7
 """
 
 import asyncio
