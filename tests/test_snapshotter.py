@@ -218,3 +218,254 @@ def test_git_diff_captured_for_real_repo(populated_spec: Path, tmp_path: Path) -
     assert res.sha_at_handover is not None
     assert len(res.sha_at_handover) == 40  # full sha
     assert res.diff_stat is not None
+
+
+# ── Task 4 (#20): .tfactory.yml + tests-catalog capture ──────────────────
+
+# Minimal valid fixture content (per task spec)
+_TFACTORY_YML = """\
+version: 1
+targets:
+  - name: api
+    type: http
+    base_url: https://api.example.com
+"""
+
+_TESTS_CATALOG_JSON = """\
+{
+  "version": 1,
+  "updated_at": "2026-05-28T00:00:00Z",
+  "tests": []
+}
+"""
+
+
+def _make_project_root(tmp_path: Path) -> Path:
+    """Return a bare project root directory (no .tfactory.yml or catalog)."""
+    root = tmp_path / "project_root"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _add_tfactory_yml(project_root: Path) -> None:
+    """Write a minimal valid .tfactory.yml into *project_root*."""
+    (project_root / ".tfactory.yml").write_text(_TFACTORY_YML)
+
+
+def _add_tests_catalog(project_root: Path) -> None:
+    """Write a minimal valid tests-catalog.json into *project_root*."""
+    catalog_dir = project_root / ".tfactory"
+    catalog_dir.mkdir(parents=True, exist_ok=True)
+    (catalog_dir / "tests-catalog.json").write_text(_TESTS_CATALOG_JSON)
+
+
+def _call_snapshot(
+    populated_spec: Path,
+    tmp_path: Path,
+    project_root: Path | None,
+) -> tuple[object, Path]:
+    """Run snapshot_aifactory_spec and return (result, dest_context_dir)."""
+    dest = tmp_path / "ws"
+    res = snapshot_aifactory_spec(
+        project_id="demo",
+        spec_id="001-login",
+        branch="feature/login",
+        base_ref="main",
+        project_root_path=project_root,
+        dest_spec_dir=dest,
+    )
+    return res, dest / "context"
+
+
+# ── .tfactory.yml cases ──────────────────────────────────────────────────
+
+
+def test_snapshot_with_tfactory_yml_writes_context_file(
+    populated_spec: Path, tmp_path: Path
+) -> None:
+    """A project_root containing .tfactory.yml → context/tfactory_yml.json
+    is written, has_tfactory_yml=True, and the JSON parses with targets."""
+    project_root = _make_project_root(tmp_path)
+    _add_tfactory_yml(project_root)
+
+    res, ctx = _call_snapshot(populated_spec, tmp_path, project_root)
+
+    assert res.has_tfactory_yml is True
+    yml_file = ctx / "tfactory_yml.json"
+    assert yml_file.exists(), "context/tfactory_yml.json must be written"
+    data = json.loads(yml_file.read_text())
+    # The parsed JSON should have a 'targets' list with our 'api' target
+    assert "targets" in data
+    target_names = [t.get("name") for t in data["targets"]]
+    assert "api" in target_names
+    # File must be read-only
+    mode = yml_file.stat().st_mode & 0o777
+    assert mode == 0o444, f"Expected 0o444, got {oct(mode)}"
+
+
+def test_snapshot_without_tfactory_yml(
+    populated_spec: Path, tmp_path: Path
+) -> None:
+    """No .tfactory.yml in project_root → has_tfactory_yml=False, no
+    context/tfactory_yml.json, no warning about absence."""
+    project_root = _make_project_root(tmp_path)  # no .tfactory.yml
+
+    res, ctx = _call_snapshot(populated_spec, tmp_path, project_root)
+
+    assert res.has_tfactory_yml is False
+    assert not (ctx / "tfactory_yml.json").exists()
+    # Absence must not emit a warning
+    assert not any("tfactory.yml" in w for w in res.warnings)
+
+
+def test_snapshot_with_unparseable_tfactory_yml_records_warning(
+    populated_spec: Path, tmp_path: Path
+) -> None:
+    """A malformed .tfactory.yml → flag stays False, warning recorded,
+    no context/tfactory_yml.json written, no exception raised."""
+    project_root = _make_project_root(tmp_path)
+    # Write invalid YAML (Pydantic will reject 'type: unknown')
+    (project_root / ".tfactory.yml").write_text(
+        "version: 1\ntargets:\n  - name: bad\n    type: unknown_type\n"
+    )
+
+    res, ctx = _call_snapshot(populated_spec, tmp_path, project_root)
+
+    assert res.has_tfactory_yml is False
+    assert not (ctx / "tfactory_yml.json").exists()
+    assert any("unparseable" in w for w in res.warnings), (
+        f"Expected 'unparseable' warning, got: {res.warnings}"
+    )
+
+
+# ── tests-catalog cases ──────────────────────────────────────────────────
+
+
+def test_snapshot_with_tests_catalog_writes_context_file(
+    populated_spec: Path, tmp_path: Path
+) -> None:
+    """A project_root containing .tfactory/tests-catalog.json →
+    context/tests_catalog.json is written, has_tests_catalog=True,
+    and the JSON parses correctly."""
+    project_root = _make_project_root(tmp_path)
+    _add_tests_catalog(project_root)
+
+    res, ctx = _call_snapshot(populated_spec, tmp_path, project_root)
+
+    assert res.has_tests_catalog is True
+    cat_file = ctx / "tests_catalog.json"
+    assert cat_file.exists(), "context/tests_catalog.json must be written"
+    data = json.loads(cat_file.read_text())
+    assert "version" in data
+    assert data["version"] == 1
+    assert "tests" in data
+    # File must be read-only
+    mode = cat_file.stat().st_mode & 0o777
+    assert mode == 0o444, f"Expected 0o444, got {oct(mode)}"
+
+
+def test_snapshot_without_tests_catalog(
+    populated_spec: Path, tmp_path: Path
+) -> None:
+    """No .tfactory/tests-catalog.json → has_tests_catalog=False, no
+    context/tests_catalog.json, no warning about absence."""
+    project_root = _make_project_root(tmp_path)  # no catalog
+
+    res, ctx = _call_snapshot(populated_spec, tmp_path, project_root)
+
+    assert res.has_tests_catalog is False
+    assert not (ctx / "tests_catalog.json").exists()
+    assert not any("tests-catalog" in w for w in res.warnings)
+
+
+def test_snapshot_with_unparseable_tests_catalog_records_warning(
+    populated_spec: Path, tmp_path: Path
+) -> None:
+    """A malformed tests-catalog.json → flag stays False, warning recorded,
+    no context/tests_catalog.json written, no exception raised."""
+    project_root = _make_project_root(tmp_path)
+    catalog_dir = project_root / ".tfactory"
+    catalog_dir.mkdir(parents=True, exist_ok=True)
+    # Write invalid JSON
+    (catalog_dir / "tests-catalog.json").write_text(
+        '{"version": 1, "updated_at": "bad", "tests": [{"lane": "INVALID_LANE"}]}'
+    )
+
+    res, ctx = _call_snapshot(populated_spec, tmp_path, project_root)
+
+    assert res.has_tests_catalog is False
+    assert not (ctx / "tests_catalog.json").exists()
+    assert any("unparseable" in w for w in res.warnings), (
+        f"Expected 'unparseable' warning, got: {res.warnings}"
+    )
+
+
+# ── Combined + edge cases ────────────────────────────────────────────────
+
+
+def test_snapshot_with_both_yaml_and_catalog(
+    populated_spec: Path, tmp_path: Path
+) -> None:
+    """Both .tfactory.yml and tests-catalog.json present → both flags True,
+    both context files written."""
+    project_root = _make_project_root(tmp_path)
+    _add_tfactory_yml(project_root)
+    _add_tests_catalog(project_root)
+
+    res, ctx = _call_snapshot(populated_spec, tmp_path, project_root)
+
+    assert res.has_tfactory_yml is True
+    assert res.has_tests_catalog is True
+    assert (ctx / "tfactory_yml.json").exists()
+    assert (ctx / "tests_catalog.json").exists()
+
+
+def test_snapshot_no_project_root_path_skips_both(
+    populated_spec: Path, tmp_path: Path
+) -> None:
+    """project_root_path=None → both flags False, no yml/catalog warning
+    (only the expected 'not provided' git warning)."""
+    dest = tmp_path / "ws"
+    res = snapshot_aifactory_spec(
+        project_id="demo",
+        spec_id="001-login",
+        branch="feature/login",
+        base_ref="main",
+        project_root_path=None,
+        dest_spec_dir=dest,
+    )
+
+    assert res.has_tfactory_yml is False
+    assert res.has_tests_catalog is False
+    ctx = dest / "context"
+    assert not (ctx / "tfactory_yml.json").exists()
+    assert not (ctx / "tests_catalog.json").exists()
+    # The git skip warning IS expected; no yml/catalog-specific warnings
+    assert not any("tfactory.yml" in w for w in res.warnings)
+    assert not any("tests-catalog" in w for w in res.warnings)
+
+
+def test_source_json_includes_new_flags(
+    populated_spec: Path, tmp_path: Path
+) -> None:
+    """source.json written to context/ contains has_tfactory_yml and
+    has_tests_catalog keys with correct bool values."""
+    project_root = _make_project_root(tmp_path)
+    _add_tfactory_yml(project_root)
+    _add_tests_catalog(project_root)
+
+    dest = tmp_path / "ws"
+    snapshot_aifactory_spec(
+        project_id="demo",
+        spec_id="001-login",
+        branch="feature/login",
+        base_ref="main",
+        project_root_path=project_root,
+        dest_spec_dir=dest,
+    )
+
+    data = json.loads((dest / "context" / "source.json").read_text())
+    assert "has_tfactory_yml" in data, "source.json must include has_tfactory_yml"
+    assert "has_tests_catalog" in data, "source.json must include has_tests_catalog"
+    assert data["has_tfactory_yml"] is True
+    assert data["has_tests_catalog"] is True
