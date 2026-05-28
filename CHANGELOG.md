@@ -1,5 +1,82 @@
 # Changelog
 
+## v0.2 — Enterprise Test Framework Spine (in progress)
+
+> Successor to [v0.1.0-mvp](#v010-mvp--walking-skeleton-2026-05-28).
+> v0.2 lights the **Browser** lane (Playwright via a docker-compose
+> AppRuntime), adds the **API** + **Integration** lanes (HTTP/contract +
+> testcontainers), and ships the **framework descriptor registry**,
+> **`.tfactory.yml`** target schema, and **`.tfactory/tests-catalog.json`**
+> cross-run continuity store. Planner becomes polyglot per-subtask
+> (Python+TypeScript at MVP); Gen-Functional generalises via per-framework
+> templates + context blocks; Evaluator gains TypeScript primitives
+> (tsc / ESLint / Stryker); Triager learns update-in-place vs create-new
+> via the catalog; evidence (screenshots / video / trace / HAR) is
+> auto-captured and served by the portal for human review.
+>
+> Driver: `docs/plans/2026-05-28-enterprise-test-frameworks-design.md`
+> (11 locked decisions, 80 frameworks catalogued).
+> Task plan: `docs/plans/2026-05-28-enterprise-test-frameworks-tasks.md`
+> (16 tasks, ~95 commits, ~975 tests at the v0.2 finish line).
+
+### ⚠ BREAKING CHANGE — Lane spine rename (Task 0 / #16)
+
+The `Lane` enum's vocabulary swapped from v0.1's pipeline-stage terms to
+v0.2's **modality-based** decomposition (Decision 2):
+
+```
+v0.1                       →   v0.2
+─────────────────────────────────────────
+Lane.FUNCTIONAL            →   Lane.UNIT
+Lane.SAST   (out of scope) →   Lane.BROWSER     (new — Playwright)
+Lane.DAST   (out of scope) →   Lane.API         (new — HTTP/contract)
+Lane.FUZZ   (out of scope) →   Lane.INTEGRATION (new — testcontainers)
+Lane.MUTATION              →   Lane.MUTATION    (unchanged)
+```
+
+Why: the v0.1 lane names tracked the *security-pipeline* metaphor we
+adopted from AIFactory. v0.2's brief (per the user's direction during
+the `/super-brainstorm` interview that produced the design doc)
+narrowed the product to **functional + feature testing** — security
+scanning is owned by separate pipelines / controllers. The new lane
+names describe the *modality* of the test (where it runs, what it
+exercises), not the pipeline stage.
+
+**Compatibility through v0.2 (removed in v0.3):**
+
+- `Subtask.from_dict({"lane": "functional", ...})` still parses; the
+  string is remapped to `Lane.UNIT` with a `DeprecationWarning`.
+- `Subtask.from_dict({"lane": "sast", ...})` (and `"dast"`, `"fuzz"`)
+  likewise remaps to `Lane.UNIT` with a warning.
+- `lane_dispatch.dispatch_lane(lane="functional", ...)` lights the lane
+  via the same DockerRunner path used by `"unit"`, also with a warning.
+- `lang_registry.get_tool_for_lane(lang, "functional")` returns `None`
+  (the registry is keyed on the new lane vocabulary; remap upstream).
+- Workspaces created against v0.1 (`status.json["lane_progress"]`
+  keyed on `"functional"`) remain readable — the MCP `task_status`
+  surface returns the new `"unit"` key but old files lift correctly.
+
+**Frontend:** `LaneStatusGrid` reskinned in lockstep — the lit lane
+(was the FUNCTIONAL card showing the current task's status) is now
+the **Unit** card; the four placeholder cards relabel to **Browser**
+(Phase 2), **API** (Phase 3), **Integration** (Phase 4), **Mutation**
+(Phase 5). The component's prop renamed: `functionalStatus` →
+`unitStatus`. Full visual polish (icons + colors per lane) lands in
+Task 15 (#31).
+
+### Tasks shipped so far in v0.2
+
+- **#16 Task 0**: Lane rename + breaking-change migration
+
+### In progress
+
+- **#17 Task 1**: Framework descriptor registry
+- **#18 Task 2**: `.tfactory.yml` schema + parser + validator
+- **#19 Task 3**: `.tfactory/tests-catalog.json` schema + helpers
+- **#20-#32 Tasks 4-16**: see `docs/plans/2026-05-28-enterprise-test-frameworks-tasks.md`
+
+---
+
 ## v0.1.0-mvp — Walking Skeleton (2026-05-28)
 
 > First tagged release. The MVP walking-skeleton pipeline is complete:
