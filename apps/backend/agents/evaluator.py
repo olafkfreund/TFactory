@@ -337,6 +337,22 @@ def _validate_verdicts(path: Path) -> tuple[bool, str, int]:
     return True, "", len(verdicts)
 
 
+def _advance_to_triager(spec_dir: Path, project_dir: Path) -> None:
+    """Schedule the Triager after evaluator's success path.
+
+    Lazy import — same defensive shape as gen_functional's
+    _advance_to_evaluator. Gated by ``TFACTORY_AUTO_TRIAGE`` (default
+    ON; tests pin off).
+    """
+    try:
+        from agents.triager import schedule_triager
+        schedule_triager(spec_dir, project_dir, mode="initial")
+    except ImportError as exc:
+        _eval_log.warning(
+            "could not auto-schedule triager: %s", exc,
+        )
+
+
 # ─── The agent itself ───────────────────────────────────────────────────
 
 
@@ -465,6 +481,10 @@ async def run_evaluator(
             verdicts_count=count,
             tests_evaluated=len(bundles),
         )
+        # Forward-chain to the Triager (Task 8, #9). Gated by
+        # ``TFACTORY_AUTO_TRIAGE`` env; tests pin it off to keep
+        # this layer deterministic.
+        _advance_to_triager(spec_dir, project_dir)
         return True
 
     except Exception as exc:

@@ -57,6 +57,7 @@ def _disable_auto_chain(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TFACTORY_AUTO_PLAN", "0")
     monkeypatch.setenv("TFACTORY_AUTO_GENERATE", "0")
     monkeypatch.setenv("TFACTORY_AUTO_EVALUATE", "0")
+    monkeypatch.setenv("TFACTORY_AUTO_TRIAGE", "0")
 
 
 @pytest.fixture
