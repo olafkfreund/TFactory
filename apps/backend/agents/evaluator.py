@@ -393,13 +393,36 @@ def _build_signal_bundle(
 _VALID_VERDICTS = frozenset({"accept", "reject", "flag"})
 
 
-def _validate_verdicts(path: Path) -> tuple[bool, str, int]:
+def _validate_verdicts(
+    path: Path,
+    skip_coverage_test_ids: frozenset[str] | None = None,
+) -> tuple[bool, str, int]:
     """Validate the agent's verdicts.json.
+
+    Args:
+        path: Path to the verdicts.json file to validate.
+        skip_coverage_test_ids: Optional set of test IDs whose framework has
+            ``coverage_strategy == "skip"``.  When provided, a numeric
+            ``signals_summary.coverage_delta_pct`` on one of these tests
+            triggers a WARNING (the LLM should have left it null) but the
+            verdict is still **accepted** — we don't reject a verdict over a
+            cosmetic mismatch.
 
     Returns:
         (ok, error_message, verdicts_count).
         On success: (True, "", N). On failure: (False, "reason", 0).
+
+    Accepted values for ``signals_summary.coverage_delta_pct``:
+        - ``null`` / Python ``None`` — browser lane or coverage not computed.
+        - Any ``int`` or ``float`` — numeric coverage delta percentage.
+        - Key absent entirely — backward-compat; treated as null.
+
+    Rejected values:
+        - A string (e.g. ``"12.3"`` or ``"N/A"``).
+        - Any other non-numeric type.
     """
+    _skip_ids: frozenset[str] = skip_coverage_test_ids or frozenset()
+
     if not path.exists():
         return False, "verdicts.json not written by agent", 0
     try:
@@ -425,6 +448,32 @@ def _validate_verdicts(path: Path) -> tuple[bool, str, int]:
                 ),
                 0,
             )
+        # Validate signals_summary.coverage_delta_pct when present.
+        # Accepted: null (None) or a numeric value (int/float).
+        # Rejected: a string (the LLM must not emit "12.3" or "N/A" as text).
+        signals = v.get("signals_summary")
+        if isinstance(signals, dict) and "coverage_delta_pct" in signals:
+            cdp = signals["coverage_delta_pct"]
+            if cdp is not None and not isinstance(cdp, (int, float)):
+                return (
+                    False,
+                    (
+                        f"verdict[{i}].signals_summary.coverage_delta_pct "
+                        f"must be a number or null, got {cdp!r}"
+                    ),
+                    0,
+                )
+            # Warn if the LLM emitted a numeric value for a skip-coverage test.
+            test_id = v.get("test_id", "")
+            if test_id in _skip_ids and isinstance(cdp, (int, float)):
+                _eval_log.warning(
+                    "verdict[%d] test_id=%r is on a skip-coverage framework "
+                    "but signals_summary.coverage_delta_pct=%r is numeric; "
+                    "the LLM should have left it null — accepting verdict anyway",
+                    i,
+                    test_id,
+                    cdp,
+                )
     return True, "", len(verdicts)
 
 

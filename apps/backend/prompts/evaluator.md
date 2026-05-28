@@ -151,6 +151,29 @@ signals are green — coverage of the wrong code is not coverage.
 
 ---
 
+## Coverage rule — when applicable
+
+Some tests are on lanes where line coverage **does not apply** (typically
+the Browser lane — Playwright drives the user-agent application, not the
+source code lines being tested). When you see:
+
+```
+coverage: N/A (browser lane)
+```
+
+- **DO NOT** factor coverage into the verdict.
+- **DO NOT** penalise the test for "0% coverage" — the number is
+  meaningless; there is no coverage to measure.
+- Base the verdict on **stability + mutation + lint_promotion +
+  semantic_relevance only**.
+
+When you see a **numeric** coverage value (e.g. `coverage: delta_pct=+5.25,
+new_lines=2, new_files=0`), apply the normal coverage rule: high delta is a
+strong accept signal; `new_lines=0` is a reject signal (unless other
+signals are exceptional).
+
+---
+
 ## Verdict decision matrix
 
 When the signals roughly agree, the verdict is obvious. When they
@@ -162,6 +185,7 @@ conflict, use this priority order (top wins):
 | mutation | survived | reject |
 | semantic_relevance | low | reject |
 | lint_promotion.should_reject | true | reject |
+| coverage | N/A (browser lane) | skip coverage rule; use other signals |
 | coverage_delta.new_lines | 0 | reject (unless other signals exceptional) |
 | (all signals green) | — | accept |
 | (any conflict not above) | — | flag |
