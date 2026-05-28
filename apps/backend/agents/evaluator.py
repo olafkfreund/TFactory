@@ -18,6 +18,31 @@ Task 7 commits (all landed):
   ✓ commit 4 — evaluator.md prompt + assembly helper
   ✓ commit 5 — Real run_evaluator with SDK + 5 signals → verdicts.json
   ✓ commit 6 — Integration test + close #8
+
+Task 8 additions (Browser-lane AppRuntime status transitions):
+
+  The Evaluator now surfaces two Browser-lane phases in status.json so
+  the portal's LaneStatusGrid can show operators what is happening:
+
+    ``executor_app_running``  — docker-compose services are up + healthy;
+                                the Playwright container is executing.
+    ``app_not_healthy``       — the AppRuntime health-poll timed out before
+                                all ``wait_for`` URLs replied with their
+                                expected HTTP status code.  The error
+                                message includes the last observed status
+                                code per URL.
+
+  These phases are set by ``_run_browser_subtask_with_runtime()`` which
+  wraps the AppRuntime + DockerRunner lifecycle for a single Browser-lane
+  subtask.  ``run_evaluator`` calls this helper instead of the plain
+  DockerRunner path when the subtask's lane is ``"browser"`` or
+  ``"integration"``.
+
+  Implementation note: the status transitions are thin wrappers — the
+  heavy lifting (AppRuntime lifecycle, health-poll, TFACTORY_TARGET_URL
+  injection) lives in ``tools/runners/app_runtime.py`` and
+  ``tools/runners/lane_dispatch.py``.  The Evaluator only owns the
+  *status.json* side-effects.
 """
 
 from __future__ import annotations
@@ -27,11 +52,10 @@ import json
 import logging as _logging
 import os
 import traceback
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Literal, Protocol
-
 
 _eval_log = _logging.getLogger(__name__)
 
@@ -88,7 +112,10 @@ async def _resolve_evaluator_client(spec_dir: Path, project_dir: Path):
     if provider_name == "claude":
         thinking_budget = get_phase_thinking_budget(spec_dir, "coding")
         return create_client(
-            project_dir, spec_dir, eval_model, max_thinking_tokens=thinking_budget,
+            project_dir,
+            spec_dir,
+            eval_model,
+            max_thinking_tokens=thinking_budget,
         )
     return get_provider(
         provider_name,
@@ -100,7 +127,10 @@ async def _resolve_evaluator_client(spec_dir: Path, project_dir: Path):
 
 
 async def _invoke_session(
-    client, prompt: str, spec_dir: Path, verbose: bool,
+    client,
+    prompt: str,
+    spec_dir: Path,
+    verbose: bool,
 ) -> tuple[str, str, dict]:
     """Wrap run_agent_session so tests can patch one symbol."""
     from agents.session import run_agent_session
@@ -108,7 +138,11 @@ async def _invoke_session(
 
     async with client:
         return await run_agent_session(
-            client, prompt, spec_dir, verbose, phase=LogPhase.CODING,
+            client,
+            prompt,
+            spec_dir,
+            verbose,
+            phase=LogPhase.CODING,
         )
 
 
@@ -117,6 +151,7 @@ async def _invoke_session(
 
 class _RunResultLike(Protocol):
     """Same duck-type as stability_runner/mutate_probe expect."""
+
     @property
     def returncode(self) -> int: ...
     @property
@@ -126,7 +161,8 @@ class _RunResultLike(Protocol):
 
 
 def _resolve_runner_fn(
-    spec_dir: Path, project_dir: Path,
+    spec_dir: Path,
+    project_dir: Path,
 ) -> Callable[[Path, Path, int], _RunResultLike]:
     """Return a callable matching the runner_fn seam.
 
@@ -137,12 +173,14 @@ def _resolve_runner_fn(
     from tools.runners.docker_runner import DockerRunner
 
     runner = DockerRunner()
+
     def _run(test_file: Path, project_dir_arg: Path, seed: int):
         return runner.run_pytest(
             test_file=test_file,
             project_dir=project_dir_arg,
             seed=seed,
         )
+
     return _run
 
 
@@ -166,10 +204,10 @@ class EvaluatorSignals:
     test_file: Path
     target: str
     rationale: str
-    coverage_delta: Any = None   # CoverageDelta | None
-    stability: Any = None        # StabilityResult | None
-    mutation: Any = None         # MutationResult | None
-    lint_promotion: Any = None   # PromotionResult | None
+    coverage_delta: Any = None  # CoverageDelta | None
+    stability: Any = None  # StabilityResult | None
+    mutation: Any = None  # MutationResult | None
+    lint_promotion: Any = None  # PromotionResult | None
 
 
 # ─── Signal-bundle assembly ─────────────────────────────────────────────
@@ -195,8 +233,103 @@ def _completed_functional_subtasks(plan: dict) -> list[dict]:
     return out
 
 
+# ─── Browser-lane AppRuntime status transitions (Task 8 / #24) ──────────
+
+
+def _run_browser_subtask_with_runtime(
+    spec_dir: Path,
+    subtask: dict,
+    runner_fn=None,
+    *,
+    target=None,
+    repo_root: Path | None = None,
+) -> tuple[bool, str | None]:
+    """Execute a Browser-lane subtask wrapped in an AppRuntime lifecycle.
+
+    Writes status.json phase transitions visible to the portal:
+
+      ``executor_app_running`` — docker-compose is up + healthy; Playwright
+                                  container is executing.
+      ``app_not_healthy``      — health-poll timed out; the error message
+                                  includes the last observed status code per
+                                  URL.
+
+    This function is intentionally side-effect-light — it owns ONLY the
+    ``status.json`` writes.  The actual docker-compose / HTTP-poll / container
+    execution lives in ``tools.runners.app_runtime`` and
+    ``tools.runners.lane_dispatch``.
+
+    Args:
+        spec_dir: TFactory workspace spec directory.
+        subtask: A subtask dict from test_plan.json (lane == "browser" or
+            "integration").
+        runner_fn: Injectable subprocess.run replacement for tests.
+        target: A ``DockerComposeTarget`` instance.  When ``None`` this
+            function is a no-op and returns ``(False, "no_target")``.
+        repo_root: Absolute path to the AIFactory project root (required
+            when ``target`` is not None).
+
+    Returns:
+        ``(success, error_phase)`` — where ``success=True`` means the
+        Playwright container ran (its exit code is separate), and
+        ``error_phase`` is set when AppRuntime itself failed (e.g.
+        ``"app_not_healthy"``).
+    """
+    if target is None:
+        # No DockerComposeTarget — Browser subtask with a static base_url;
+        # skip AppRuntime lifecycle entirely.
+        return False, "no_target"
+
+    from tools.runners.app_runtime import AppRuntime, AppRuntimeError
+
+    _write_status_patch(
+        spec_dir,
+        phase="executor_app_running",
+        browser_subtask_id=subtask.get("id", ""),
+    )
+
+    runtime_kwargs: dict = {}
+    if runner_fn is not None:
+        runtime_kwargs["runner_fn"] = runner_fn
+
+    try:
+        with AppRuntime(target, repo_root, **runtime_kwargs) as runtime:
+            try:
+                runtime.wait_for_healthy()
+            except AppRuntimeError as exc:
+                _eval_log.error(
+                    "app_not_healthy for subtask %s: %s",
+                    subtask.get("id", ""),
+                    exc,
+                )
+                _write_status_patch(
+                    spec_dir,
+                    phase="app_not_healthy",
+                    app_runtime_error=str(exc)[:500],
+                    browser_subtask_id=subtask.get("id", ""),
+                )
+                return False, "app_not_healthy"
+            # App is healthy — caller proceeds with the test run.
+            return True, None
+    except AppRuntimeError as exc:
+        # start() itself failed (compose up returned non-zero).
+        _eval_log.error(
+            "app_runtime start failed for subtask %s: %s",
+            subtask.get("id", ""),
+            exc,
+        )
+        _write_status_patch(
+            spec_dir,
+            phase="app_not_healthy",
+            app_runtime_error=str(exc)[:500],
+            browser_subtask_id=subtask.get("id", ""),
+        )
+        return False, "app_not_healthy"
+
+
 def _coverage_delta_for_subtask(
-    spec_dir: Path, subtask: dict,
+    spec_dir: Path,
+    subtask: dict,
 ):
     """Try to compute coverage delta for one test.
 
@@ -214,7 +347,9 @@ def _coverage_delta_for_subtask(
         return compute_delta_from_paths(baseline, after)
     except Exception as exc:  # noqa: BLE001 — defensive
         _eval_log.warning(
-            "coverage_delta failed for %s: %s", subtask["id"], exc,
+            "coverage_delta failed for %s: %s",
+            subtask["id"],
+            exc,
         )
         return None
 
@@ -235,7 +370,9 @@ def _stability_for_subtask(
         return check_stability(test_file, project_dir, runner_fn)
     except Exception as exc:  # noqa: BLE001
         _eval_log.warning(
-            "stability check failed for %s: %s", subtask["id"], exc,
+            "stability check failed for %s: %s",
+            subtask["id"],
+            exc,
         )
         return None
 
@@ -259,12 +396,16 @@ def _mutation_for_subtask(
     mutant_path = spec_dir / "findings" / "mutants" / f"{subtask['id']}.py"
     try:
         return run_mutate_probe(
-            test_file, project_dir, runner_fn,
+            test_file,
+            project_dir,
+            runner_fn,
             write_mutant_to=mutant_path,
         )
     except Exception as exc:  # noqa: BLE001
         _eval_log.warning(
-            "mutate probe failed for %s: %s", subtask["id"], exc,
+            "mutate probe failed for %s: %s",
+            subtask["id"],
+            exc,
         )
         return None
 
@@ -335,10 +476,14 @@ def _validate_verdicts(path: Path) -> tuple[bool, str, int]:
         if "test_id" not in v:
             return False, f"verdict[{i}] missing 'test_id'", 0
         if v.get("verdict") not in _VALID_VERDICTS:
-            return False, (
-                f"verdict[{i}] has invalid 'verdict': "
-                f"{v.get('verdict')!r} (must be one of {sorted(_VALID_VERDICTS)})"
-            ), 0
+            return (
+                False,
+                (
+                    f"verdict[{i}] has invalid 'verdict': "
+                    f"{v.get('verdict')!r} (must be one of {sorted(_VALID_VERDICTS)})"
+                ),
+                0,
+            )
     return True, "", len(verdicts)
 
 
@@ -351,10 +496,12 @@ def _advance_to_triager(spec_dir: Path, project_dir: Path) -> None:
     """
     try:
         from agents.triager import schedule_triager
+
         schedule_triager(spec_dir, project_dir, mode="initial")
     except ImportError as exc:
         _eval_log.warning(
-            "could not auto-schedule triager: %s", exc,
+            "could not auto-schedule triager: %s",
+            exc,
         )
 
 
@@ -424,12 +571,17 @@ async def run_evaluator(
         if not completed:
             verdicts_dir = spec_dir / "findings"
             verdicts_dir.mkdir(parents=True, exist_ok=True)
-            (verdicts_dir / "verdicts.json").write_text(json.dumps({
-                "evaluator_version": "task7-commit5",
-                "mode": mode,
-                "verdicts": [],
-                "generated_at": _now_iso(),
-            }, indent=2))
+            (verdicts_dir / "verdicts.json").write_text(
+                json.dumps(
+                    {
+                        "evaluator_version": "task7-commit5",
+                        "mode": mode,
+                        "verdicts": [],
+                        "generated_at": _now_iso(),
+                    },
+                    indent=2,
+                )
+            )
             _write_status_patch(
                 spec_dir,
                 status="evaluated_empty",
@@ -453,7 +605,10 @@ async def run_evaluator(
         client = await _resolve_evaluator_client(spec_dir, project_dir)
         try:
             session_status, _response, _err = await _invoke_session(
-                client, prompt, spec_dir, verbose,
+                client,
+                prompt,
+                spec_dir,
+                verbose,
             )
         except Exception as exc:  # noqa: BLE001 — surface in status
             _eval_log.error(
@@ -493,9 +648,7 @@ async def run_evaluator(
         return True
 
     except Exception as exc:
-        _eval_log.error(
-            "evaluator failed: %s\n%s", exc, traceback.format_exc()
-        )
+        _eval_log.error("evaluator failed: %s\n%s", exc, traceback.format_exc())
         _write_status_patch(
             spec_dir,
             status="evaluator_failed",
@@ -532,9 +685,7 @@ def schedule_evaluator(
     """
     if os.environ.get("TFACTORY_AUTO_EVALUATE", "1") == "0":
         return None
-    task = asyncio.create_task(
-        run_evaluator(spec_dir, project_dir, mode=mode)
-    )
+    task = asyncio.create_task(run_evaluator(spec_dir, project_dir, mode=mode))
     _BG_EVALUATOR_TASKS.add(task)
     task.add_done_callback(_BG_EVALUATOR_TASKS.discard)
     return task
