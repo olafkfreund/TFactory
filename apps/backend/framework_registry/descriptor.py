@@ -59,8 +59,9 @@ class RuntimeSpec:
     def __post_init__(self) -> None:
         if not self.image:
             raise ValueError("RuntimeSpec.image must not be empty")
-        if not self.entrypoint:
-            raise ValueError("RuntimeSpec.entrypoint must not be empty")
+        # entrypoint is optional — an empty tuple is valid when the image has
+        # a built-in ENTRYPOINT.  The Executor appends the test file path at
+        # invocation time.
 
 
 @dataclass(frozen=True)
