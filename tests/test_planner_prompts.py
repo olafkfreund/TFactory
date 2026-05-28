@@ -169,3 +169,176 @@ def test_replan_raises_when_md_missing(
     monkeypatch.setattr(mod, "PROMPTS_DIR", tmp_path)
     with pytest.raises(FileNotFoundError, match="planner_replan.md"):
         get_tfactory_planner_replan_prompt(Path("/ws/x"), Path("/p"))
+
+
+# =============================================================================
+# Task 5 / #21 — Framework registry + catalog injection tests
+# =============================================================================
+
+
+def test_planner_prompt_includes_framework_registry_block() -> None:
+    """Prompt must contain a ## FRAMEWORK REGISTRY block with all three frameworks."""
+    p = get_tfactory_planner_prompt(Path("/ws/demo/001"), Path("/proj"))
+    assert "## FRAMEWORK REGISTRY" in p
+    assert "playwright" in p
+    assert "jest" in p
+    assert "pytest" in p
+
+
+def test_planner_prompt_registry_block_shows_language_and_lanes() -> None:
+    """Each registry entry must note language= and lanes= for the agent."""
+    p = get_tfactory_planner_prompt(Path("/ws/x"), Path("/p"))
+    assert "language=" in p
+    assert "lanes=" in p
+
+
+def test_planner_prompt_includes_catalog_block_when_absent(tmp_path: Path) -> None:
+    """When no catalog file exists the block says 'no catalog at this repo yet'."""
+    spec_dir = tmp_path / "spec"
+    spec_dir.mkdir()
+    (spec_dir / "context").mkdir()
+    p = get_tfactory_planner_prompt(spec_dir, tmp_path / "proj")
+    assert "## TESTS CATALOG" in p
+    assert "no catalog at this repo yet" in p
+
+
+def test_planner_prompt_includes_catalog_block_when_present(tmp_path: Path) -> None:
+    """When a catalog file exists the block lists entries with test_id and covers_acs."""
+    import json
+
+    spec_dir = tmp_path / "spec"
+    spec_dir.mkdir()
+    (spec_dir / "context").mkdir()
+
+    catalog_data = {
+        "version": 1,
+        "updated_at": "2026-05-28T00:00:00Z",
+        "tests": [
+            {
+                "test_id": "ac1-login-flow",
+                "test_file": "tests/e2e/login.spec.ts",
+                "framework": "playwright",
+                "lane": "browser",
+                "language": "typescript",
+                "covers_acs": ["AC#1: User can log in"],
+                "generated_at": "2026-05-28T00:00:00Z",
+                "generated_by_task": "001",
+                "last_verdict": "accept",
+            }
+        ],
+    }
+    (spec_dir / "context" / "tests_catalog.json").write_text(json.dumps(catalog_data))
+
+    p = get_tfactory_planner_prompt(spec_dir, tmp_path / "proj")
+    assert "## TESTS CATALOG" in p
+    assert "ac1-login-flow" in p
+    assert "covers_acs" in p or "AC#1: User can log in" in p
+
+
+def test_planner_prompt_catalog_block_shows_framework_and_lane(tmp_path: Path) -> None:
+    """Catalog block lines include framework= and lane= for the agent."""
+    import json
+
+    spec_dir = tmp_path / "spec"
+    spec_dir.mkdir()
+    (spec_dir / "context").mkdir()
+
+    catalog_data = {
+        "version": 1,
+        "updated_at": "2026-05-28T00:00:00Z",
+        "tests": [
+            {
+                "test_id": "tc-1",
+                "test_file": "tests/test_foo.py",
+                "framework": "pytest",
+                "lane": "unit",
+                "language": "python",
+                "covers_acs": ["AC#3: returns 200"],
+                "generated_at": "2026-05-28T00:00:00Z",
+                "generated_by_task": "002",
+                "last_verdict": "accept",
+            }
+        ],
+    }
+    (spec_dir / "context" / "tests_catalog.json").write_text(json.dumps(catalog_data))
+
+    p = get_tfactory_planner_prompt(spec_dir, tmp_path / "proj")
+    assert "framework=pytest" in p
+    assert "lane=unit" in p
+
+
+def test_planner_prompt_catalog_block_shows_total_count(tmp_path: Path) -> None:
+    """Catalog block footer line reports total entry count."""
+    import json
+
+    spec_dir = tmp_path / "spec"
+    spec_dir.mkdir()
+    (spec_dir / "context").mkdir()
+
+    tests = []
+    for i in range(3):
+        tests.append({
+            "test_id": f"tc-{i}",
+            "test_file": f"tests/test_{i}.py",
+            "framework": "pytest",
+            "lane": "unit",
+            "language": "python",
+            "covers_acs": [f"AC#{i}"],
+            "generated_at": "2026-05-28T00:00:00Z",
+            "generated_by_task": "003",
+            "last_verdict": "accept",
+        })
+    (spec_dir / "context" / "tests_catalog.json").write_text(
+        json.dumps({"version": 1, "updated_at": "2026-05-28T00:00:00Z", "tests": tests})
+    )
+
+    p = get_tfactory_planner_prompt(spec_dir, tmp_path / "proj")
+    assert "3 entries total" in p
+
+
+def test_planner_prompt_catalog_block_flags_operator_locked(tmp_path: Path) -> None:
+    """Locked catalog entries must be marked [operator_locked] in the block."""
+    import json
+
+    spec_dir = tmp_path / "spec"
+    spec_dir.mkdir()
+    (spec_dir / "context").mkdir()
+
+    catalog_data = {
+        "version": 1,
+        "updated_at": "2026-05-28T00:00:00Z",
+        "tests": [
+            {
+                "test_id": "locked-test",
+                "test_file": "tests/locked.py",
+                "framework": "pytest",
+                "lane": "unit",
+                "language": "python",
+                "covers_acs": ["AC#5: locked"],
+                "generated_at": "2026-05-28T00:00:00Z",
+                "generated_by_task": "004",
+                "last_verdict": "accept",
+                "operator_locked": True,
+            }
+        ],
+    }
+    (spec_dir / "context" / "tests_catalog.json").write_text(json.dumps(catalog_data))
+
+    p = get_tfactory_planner_prompt(spec_dir, tmp_path / "proj")
+    assert "operator_locked" in p
+
+
+def test_planner_prompt_mentions_intent_create_update_skip() -> None:
+    """Prompt body must mention all three intent values."""
+    p = get_tfactory_planner_prompt(Path("/ws/x"), Path("/p"))
+    assert "intent" in p
+    assert "create" in p
+    assert "update" in p
+    assert "skip" in p
+
+
+def test_planner_prompt_mentions_tfactory_yml_and_catalog_context_files() -> None:
+    """SPEC CONTEXT block must list both new v0.2 context files."""
+    p = get_tfactory_planner_prompt(Path("/ws/x"), Path("/p"))
+    assert "tfactory_yml.json" in p
+    assert "tests_catalog.json" in p
