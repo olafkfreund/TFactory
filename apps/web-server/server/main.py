@@ -222,6 +222,14 @@ def create_app() -> FastAPI:
     app.include_router(tasks.router, prefix="/api/tasks", tags=["Tasks"])
     # Execution routes also under /api/tasks for frontend compatibility
     app.include_router(execution.router, prefix="/api/tasks", tags=["Task Execution"])
+    # TFactory portal endpoints (Task 9 / #10) — read-only over the
+    # TFactory workspace filesystem at ~/.tfactory/workspaces/.
+    from .routes import tfactory_tasks as tfactory_tasks_routes
+    app.include_router(
+        tfactory_tasks_routes.router,
+        prefix="/api/tfactory/tasks",
+        tags=["TFactory Tasks"],
+    )
     app.include_router(settings_routes.router, prefix="/api/settings", tags=["Settings"])
     app.include_router(cli_accounts_routes.router, prefix="/api/settings", tags=["CLI Accounts"])
     app.include_router(llm_endpoints_routes.router)
