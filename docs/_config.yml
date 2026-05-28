@@ -1,12 +1,10 @@
 title: TFactory
 description: Autonomous test generation + execution platform — Planner → Gen-Functional → Evaluator → Triager. Sister project to AIFactory.
 
-# Custom theme — no remote theme. Layout lives in _layouts/, SCSS in assets/css/.
-# Both auto-compile via Jekyll's built-in pipeline.
+# Custom theme — no remote theme. Layout lives in _layouts/, plain CSS in assets/css/.
 
 plugins:
   - jekyll-relative-links
-  - jekyll-sitemap
 
 relative_links:
   enabled: true
@@ -21,10 +19,6 @@ kramdown:
     css_class: highlight
 
 show_downloads: false
-
-# SCSS pipeline
-sass:
-  style: compressed
 
 exclude:
   - vendor/
