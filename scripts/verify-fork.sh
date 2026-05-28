@@ -194,6 +194,10 @@ else
     for g in "${ALLOWLIST_GLOBS[@]}"; do
         IGNORE_ARGS+=("--glob" "!${g}**" "--glob" "!${g}")
     done
+    # Ephemeral subagent worktrees live under .claude/worktrees/ and contain
+    # complete TFactory checkouts (including legitimately-allowlisted files).
+    # They're not part of the project tree we're verifying — skip them.
+    IGNORE_ARGS+=("--glob" "!.claude/worktrees/**")
     # Search both lowercase and CamelCase. Source-only (rg respects .gitignore).
     HITS="$(rg --hidden --no-messages -l -e 'aifactory' -e 'AIFactory' "${IGNORE_ARGS[@]}" . 2>/dev/null || true)"
     if [ -z "$HITS" ]; then
