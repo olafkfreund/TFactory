@@ -337,12 +337,12 @@ descriptor's `context_block` + `templates`.
 
 ### Sub-tasks
 
-- [ ] 6.1 Author new `prompts/gen-functional.md` (generic; language/framework variables substituted at runtime)
-- [ ] 6.2 `prompts_pkg/prompts.py` — `get_tfactory_gen_functional_prompt` accepts a `FrameworkDescriptor` + subtask, injects the descriptor's `context_block` + a chosen `template` (if applicable)
-- [ ] 6.3 Update `agents/gen_functional.py`: per subtask, look up framework via `framework_registry`, pass the descriptor to the prompt helper
-- [ ] 6.4 `agents/gen_functional.py`'s `_resolve_runner_fn` parameterized by framework's `runtime.image` (no more hardcoded `tfactory-runner-python`)
-- [ ] 6.5 `tests/test_gen_functional.py` — new cases: 3 frameworks each generate a valid test file (mocked SDK), context-block injection verified, template selection works
-- [ ] 6.6 Migration: keep old `gen_functional.md` as `prompts/gen_functional-v01-legacy.md` for one release with a deprecation banner
+- [x] 6.1 Author new `prompts/gen-functional.md` (generic; language/framework variables substituted at runtime)
+- [x] 6.2 `prompts_pkg/prompts.py` — `get_tfactory_gen_functional_prompt` accepts a `FrameworkDescriptor` + subtask, injects the descriptor's `context_block` + a chosen `template` (if applicable)
+- [x] 6.3 Update `agents/gen_functional.py`: per subtask, look up framework via `framework_registry`, pass the descriptor to the prompt helper
+- [x] 6.4 `agents/gen_functional.py`'s `_resolve_runner_fn` parameterized by framework's `runtime.image` (no more hardcoded `tfactory-runner-python`)
+- [x] 6.5 `tests/test_gen_functional.py` — new cases: 3 frameworks each generate a valid test file (mocked SDK), context-block injection verified, template selection works
+- [x] 6.6 Migration: keep old `gen_functional.md` as `prompts/gen_functional-v01-legacy.md` for one release with a deprecation banner
 
 ### Acceptance criteria
 
