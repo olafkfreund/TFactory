@@ -33,9 +33,19 @@ class Subtask:
     # provenance (which AC this test covers, which symbol it
     # exercises, how many times Gen-Functional rejected variants).
     # Defaults keep inherited plans round-tripping unchanged.
-    target: str | None = None         # "<repo-relative path>::<symbol>"
-    rationale: str | None = None      # which acceptance criterion this covers
-    replan_count: int = 0             # bumped per replan; >= 2 → status=stuck
+    target: str | None = None  # "<repo-relative path>::<symbol>"
+    rationale: str | None = None  # which acceptance criterion this covers
+    replan_count: int = 0  # bumped per replan; >= 2 → status=stuck
+
+    # Polyglot planner fields (Task 5, #21). Each subtask now carries
+    # explicit (language, framework, target_name, intent) so the same
+    # plan can mix pytest subtasks for Python with Jest/Playwright
+    # subtasks for TypeScript. Defaults are None / "create" so v0.1
+    # plans (without these keys) round-trip without any change.
+    language: str | None = None  # "python" | "typescript" | future
+    framework: str | None = None  # "pytest" | "jest" | "playwright" | …
+    target_name: str | None = None  # .tfactory.yml target name (or None)
+    intent: str = "create"  # "create" | "update" | "skip"
 
     # Scoping
     service: str | None = None  # Which service (backend, frontend, worker)
@@ -77,6 +87,17 @@ class Subtask:
             result["rationale"] = self.rationale
         if self.replan_count:
             result["replan_count"] = self.replan_count
+        # Polyglot fields (Task 5, #21) — omit when None to keep
+        # backward-compat with v0.1 consumers that don't know these keys.
+        if self.language is not None:
+            result["language"] = self.language
+        if self.framework is not None:
+            result["framework"] = self.framework
+        if self.target_name is not None:
+            result["target_name"] = self.target_name
+        # intent defaults to "create"; omit when default to keep plans terse.
+        if self.intent != "create":
+            result["intent"] = self.intent
         if self.service:
             result["service"] = self.service
         if self.all_services:
@@ -118,6 +139,12 @@ class Subtask:
             target=data.get("target"),
             rationale=data.get("rationale"),
             replan_count=int(data.get("replan_count", 0)),
+            # Polyglot fields (Task 5, #21) — accept defensively so that
+            # legacy v0.1 plans (no these keys) round-trip unchanged.
+            language=data.get("language"),
+            framework=data.get("framework"),
+            target_name=data.get("target_name"),
+            intent=data.get("intent", "create"),
             service=data.get("service"),
             all_services=data.get("all_services", False),
             files_to_modify=data.get("files_to_modify", []),
@@ -131,6 +158,23 @@ class Subtask:
             session_id=data.get("session_id"),
             critique_result=data.get("critique_result"),
         )
+
+    def framework_id(self) -> str | None:
+        """Return the framework identifier for this subtask, or None.
+
+        Convenience accessor so callers do not introspect the raw
+        ``framework`` field directly.  Returns ``None`` for v0.1-style
+        subtasks that predate the polyglot schema (Task 5, #21).
+
+        Example::
+
+            st = Subtask(id="t1", description="x", framework="pytest")
+            assert st.framework_id() == "pytest"
+
+            st_legacy = Subtask(id="t2", description="y")
+            assert st_legacy.framework_id() is None
+        """
+        return self.framework
 
     def start(self, session_id: int):
         """Mark subtask as in progress."""

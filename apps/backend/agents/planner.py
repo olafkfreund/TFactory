@@ -68,8 +68,8 @@ async def run_followup_planner(
     Returns:
         bool: True if planning completed successfully
     """
-    from test_plan import ImplementationPlan
     from prompts import get_followup_planner_prompt
+    from test_plan import ImplementationPlan
 
     # Initialize status manager for ccstatusline
     status_manager = StatusManager(project_dir)
@@ -187,9 +187,7 @@ async def run_followup_planner(
                 return False
         else:
             print()
-            print_status(
-                "Error: test_plan.json not found after planning", "error"
-            )
+            print_status("Error: test_plan.json not found after planning", "error")
             status_manager.update(state=BuildState.ERROR)
             return False
 
@@ -203,16 +201,16 @@ async def run_followup_planner(
 
 
 # ---------------------------------------------------------------------------
-# TFactory Planner (Task 5, #6) — STUB at commit 2 of 6.
+# TFactory Planner (Tasks 5-6, #6 / Task 5 v0.2 polyglot extension #21)
 #
-# Real Claude-Agent-SDK wiring lands in commit 4. This stub just demonstrates
-# the auto-fire scheduling end-to-end:
-#   - status.json: pending → planning → planned
-#   - test_plan.json: minimal valid empty plan written
-#
-# Imports are deliberately scoped to stdlib + local modules so the stub runs
-# without claude-agent-sdk available — keeps the auto-fire path testable in
-# the minimal venv setup we used for commit 1's verification pass.
+# v0.1 (Task 5 #6): initial SDK wiring, lane-tagged subtasks, retry logic,
+#   replan mode, auto-fire scheduling.
+# v0.2 (Task 5 #21): polyglot schema — each subtask carries
+#   (language, framework, lane, target_name, intent).
+#   _validate_emitted_plan now enforces (language, framework, lane) against
+#   the framework registry (error_kind="invalid_framework").
+#   get_tfactory_planner_prompt injects FRAMEWORK REGISTRY + TESTS CATALOG
+#   context blocks so the agent picks the right framework per subtask.
 # ---------------------------------------------------------------------------
 
 import asyncio
@@ -342,10 +340,13 @@ def _validate_emitted_plan(spec_dir: Path) -> tuple[bool, str, object | None]:
 
     Returns ``(ok, error_kind, plan)``:
       - ok=True, error_kind="", plan=ImplementationPlan → valid
-      - ok=False, error_kind="missing" → file not written
-      - ok=False, error_kind="json"    → file present but invalid JSON
-      - ok=False, error_kind="schema"  → JSON valid but doesn't load
-        as ImplementationPlan
+      - ok=False, error_kind="missing"          → file not written
+      - ok=False, error_kind="json"             → invalid JSON
+      - ok=False, error_kind="schema"           → JSON valid but not a plan
+      - ok=False, error_kind="invalid_framework" → (language, framework, lane)
+          not consistent with the framework registry (v0.2 polyglot check).
+          v0.1 subtasks that have neither language nor framework set pass
+          through this check unchanged — backward-compat is preserved.
     """
     from test_plan import ImplementationPlan  # local: avoid SDK cost on import
 
@@ -359,6 +360,77 @@ def _validate_emitted_plan(spec_dir: Path) -> tuple[bool, str, object | None]:
         return False, "json", str(exc)
     except (KeyError, TypeError, ValueError) as exc:
         return False, "schema", str(exc)
+
+    # v0.2: validate every subtask's (language, framework, lane) against
+    # the framework registry.  v0.1-style subtasks (no language / framework
+    # fields) skip this check so legacy plans round-trip cleanly.
+    try:
+        from framework_registry import load_registry  # deferred: not on hot path
+
+        registry = load_registry()
+    except Exception as exc:
+        # Registry unavailable (e.g. frameworks/ dir missing in tests).
+        # Log and skip the check — a missing registry is not a plan error.
+        _planner_log.warning(
+            "planner: framework registry unavailable, skipping (language, framework)"
+            " validation: %s",
+            exc,
+        )
+        return True, "", plan
+
+    for phase in plan.phases:
+        for st in phase.subtasks:
+            # Both None → v0.1 subtask; skip.
+            if st.framework is None and st.language is None:
+                continue
+            # Exactly one set → malformed.
+            if st.framework is None or st.language is None:
+                return (
+                    False,
+                    "invalid_framework",
+                    (
+                        f"subtask {st.id!r}: must set both 'language' AND 'framework', "
+                        f"or neither (got language={st.language!r}, "
+                        f"framework={st.framework!r})"
+                    ),
+                )
+            # Framework not in registry.
+            if st.framework not in registry:
+                return (
+                    False,
+                    "invalid_framework",
+                    (
+                        f"subtask {st.id!r}: framework {st.framework!r} is not in the "
+                        f"registry. Known frameworks: {sorted(registry.keys())}"
+                    ),
+                )
+            descriptor = registry[st.framework]
+            # Language mismatch.
+            if descriptor.language != st.language:
+                return (
+                    False,
+                    "invalid_framework",
+                    (
+                        f"subtask {st.id!r}: framework {st.framework!r} targets language "
+                        f"{descriptor.language!r}, but subtask declared "
+                        f"language={st.language!r}"
+                    ),
+                )
+            # Lane not supported by this framework.
+            lane_str = st.lane.value if hasattr(st.lane, "value") else str(st.lane)
+            supported = [
+                ln.value if hasattr(ln, "value") else str(ln) for ln in descriptor.lanes
+            ]
+            if lane_str not in supported:
+                return (
+                    False,
+                    "invalid_framework",
+                    (
+                        f"subtask {st.id!r}: framework {st.framework!r} supports lanes "
+                        f"{supported}, but subtask declared lane {lane_str!r}"
+                    ),
+                )
+
     return True, "", plan
 
 
@@ -378,7 +450,11 @@ def _load_replan_request(spec_dir: Path) -> tuple[bool, str, dict | None]:
     """
     rr_path = spec_dir / "context" / "replan_request.json"
     if not rr_path.exists():
-        return False, "replan_request.json missing — Gen-Functional should write this", None
+        return (
+            False,
+            "replan_request.json missing — Gen-Functional should write this",
+            None,
+        )
     try:
         data = json.loads(rr_path.read_text())
     except (json.JSONDecodeError, OSError) as exc:
@@ -436,7 +512,8 @@ def _existing_phase_ids(plan) -> set[int]:
 
 
 def _check_existing_phases_preserved(
-    plan_before, plan_after,
+    plan_before,
+    plan_after,
 ) -> tuple[bool, str]:
     """Verify the agent didn't drop / renumber existing phases on replan.
 
@@ -511,6 +588,7 @@ async def run_planner(
 
         # Build the system prompt (loads planner.md + prepends SPEC CONTEXT)
         from prompts_pkg.prompts import get_tfactory_planner_prompt
+
         prompt = get_tfactory_planner_prompt(spec_dir, project_dir)
 
         # Resolve the SDK client
@@ -534,11 +612,10 @@ async def run_planner(
         if not ok:
             _planner_log.warning(
                 "planner: first session produced %s (%s); retrying once",
-                err_kind, plan,
+                err_kind,
+                plan,
             )
-            retry_prompt = _build_retry_prompt(
-                prompt, err_kind, str(plan or "")[:300]
-            )
+            retry_prompt = _build_retry_prompt(prompt, err_kind, str(plan or "")[:300])
             client_retry = await _resolve_planner_client(spec_dir, project_dir)
             retry_status, _r, _re = await _invoke_session(
                 client_retry, retry_prompt, spec_dir, verbose
@@ -584,7 +661,8 @@ async def run_planner(
                 spec_dir,
                 status="planned_empty",
                 phase="planner_initial_complete",
-                planner_warnings=warnings + [
+                planner_warnings=warnings
+                + [
                     "agent emitted 0 subtasks — downstream pipeline will have nothing to do"
                 ],
                 subtask_count=0,
@@ -665,6 +743,7 @@ async def _run_planner_replan(
 
         # 3. Build the replan prompt + invoke session.
         from prompts_pkg.prompts import get_tfactory_planner_replan_prompt
+
         prompt = get_tfactory_planner_replan_prompt(spec_dir, project_dir)
         client = await _resolve_planner_client(spec_dir, project_dir)
         session_status, _response, _err = await _invoke_session(
@@ -685,7 +764,8 @@ async def _run_planner_replan(
         if not ok_after:
             _planner_log.warning(
                 "replan: first session produced %s (%s); retrying once",
-                err_kind, plan_after,
+                err_kind,
+                plan_after,
             )
             retry_prompt = _build_retry_prompt(
                 prompt, err_kind, str(plan_after or "")[:300]
@@ -774,9 +854,7 @@ async def _run_planner_replan(
         return True
 
     except Exception as exc:
-        _planner_log.error(
-            "planner replan failed: %s\n%s", exc, traceback.format_exc()
-        )
+        _planner_log.error("planner replan failed: %s\n%s", exc, traceback.format_exc())
         _write_status_patch(
             spec_dir,
             status="planner_failed",
@@ -804,12 +882,24 @@ _RETRY_REMINDERS = {
         "id, description, status, lane, target, rationale, "
         "files_to_create, verification."
     ),
+    # v0.2 polyglot: (language, framework, lane) must be consistent with
+    # the framework registry that was injected into your CONTEXT block.
+    "invalid_framework": (
+        "Your previous turn produced `test_plan.json` but one or more "
+        "subtasks declared an invalid (language, framework, lane) "
+        "combination: {detail}. "
+        "Rules: (1) 'framework' must be a key in the FRAMEWORK REGISTRY "
+        "block in your CONTEXT. (2) 'language' must match the registry "
+        "entry's language exactly. (3) 'lane' must be listed in the "
+        "registry entry's lanes. (4) v0.1 subtasks with neither "
+        "'language' nor 'framework' set are allowed — omit both fields "
+        "if you don't need polyglot metadata. "
+        "Re-emit the corrected plan now."
+    ),
 }
 
 
-def _build_retry_prompt(
-    original_prompt: str, err_kind: str, detail: str
-) -> str:
+def _build_retry_prompt(original_prompt: str, err_kind: str, detail: str) -> str:
     """Build a retry-turn prompt that re-presents the original system
     prompt + a short corrective note describing what went wrong.
     """
@@ -817,12 +907,7 @@ def _build_retry_prompt(
         err_kind,
         "Your previous turn did not produce a valid test_plan.json. Re-emit.",
     ).format(spec_dir="<workspace>", detail=detail)
-    return (
-        f"## RETRY ({err_kind})\n\n"
-        f"{reminder}\n\n"
-        f"---\n\n"
-        f"{original_prompt}"
-    )
+    return f"## RETRY ({err_kind})\n\n{reminder}\n\n---\n\n{original_prompt}"
 
 
 def _advance_to_gen_functional(spec_dir: Path, project_dir: Path) -> None:
@@ -836,6 +921,7 @@ def _advance_to_gen_functional(spec_dir: Path, project_dir: Path) -> None:
     """
     try:
         from agents.gen_functional import schedule_gen_functional
+
         schedule_gen_functional(spec_dir, project_dir, mode="initial")
     except ImportError as exc:
         _planner_log.warning(

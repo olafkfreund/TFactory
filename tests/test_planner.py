@@ -641,3 +641,368 @@ async def test_scheduled_task_is_gc_anchored_then_cleared(
     assert len(_BG_PLANNER_TASKS) == before + 1
     await task
     assert len(_BG_PLANNER_TASKS) == before
+
+
+# =============================================================================
+# Task 5 / #21 — Polyglot planner tests (16 new cases)
+# =============================================================================
+
+
+def _make_polyglot_plan_json(subtasks: list[dict]) -> str:
+    """Build a valid ImplementationPlan JSON with arbitrary subtask dicts."""
+    return json.dumps({
+        "feature": "demo",
+        "workflow_type": "feature",
+        "services_involved": [],
+        "phases": [
+            {
+                "phase": 1,
+                "name": "AC#1: polyglot test",
+                "type": "implementation",
+                "subtasks": subtasks,
+                "parallel_safe": False,
+            }
+        ],
+        "final_acceptance": [],
+        "status": "in_progress",
+        "planStatus": "pending",
+    })
+
+
+def _make_polyglot_subtask(
+    *,
+    subtask_id: str = "s0",
+    language: str | None = None,
+    framework: str | None = None,
+    lane: str = "unit",
+    intent: str = "create",
+) -> dict:
+    """Return a subtask dict with optional polyglot fields."""
+    st: dict = {
+        "id": subtask_id,
+        "description": f"test {subtask_id}",
+        "status": "pending",
+        "lane": lane,
+        "target": "foo.py::bar",
+        "rationale": "AC#1",
+        "files_to_create": [f"tests/test_{subtask_id}.py"],
+        "verification": {
+            "type": "command",
+            "command": f"pytest tests/test_{subtask_id}.py",
+            "expected": "exit 0",
+        },
+    }
+    if language is not None:
+        st["language"] = language
+    if framework is not None:
+        st["framework"] = framework
+    if intent != "create":
+        st["intent"] = intent
+    return st
+
+
+# ── Polyglot happy paths ──────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_polyglot_plan_with_pytest_and_jest_subtasks(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """A plan with (python, pytest, unit) and (typescript, jest, unit) is accepted."""
+    subtasks = [
+        _make_polyglot_subtask(subtask_id="py-1", language="python", framework="pytest", lane="unit"),
+        _make_polyglot_subtask(subtask_id="ts-1", language="typescript", framework="jest", lane="unit"),
+    ]
+    mock_sdk(plans=[_make_polyglot_plan_json(subtasks)])
+    ok = await run_planner(spec_dir, project_dir)
+    assert ok is True
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["status"] == "planned"
+    assert status["subtask_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_polyglot_plan_with_playwright_subtask(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """A plan with (typescript, playwright, browser) is accepted."""
+    subtasks = [
+        _make_polyglot_subtask(
+            subtask_id="e2e-1", language="typescript", framework="playwright", lane="browser"
+        ),
+    ]
+    mock_sdk(plans=[_make_polyglot_plan_json(subtasks)])
+    ok = await run_planner(spec_dir, project_dir)
+    assert ok is True
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["status"] == "planned"
+
+
+@pytest.mark.asyncio
+async def test_validator_accepts_legacy_v01_subtask_without_framework(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """v0.1-style subtasks (no language/framework) must pass the validator."""
+    subtasks = [
+        _make_polyglot_subtask(subtask_id="legacy-1"),  # no language/framework
+    ]
+    mock_sdk(plans=[_make_polyglot_plan_json(subtasks)])
+    ok = await run_planner(spec_dir, project_dir)
+    assert ok is True
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["status"] == "planned"
+
+
+# ── Polyglot validator rejection paths ───────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_validator_rejects_unknown_framework(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """Framework not in registry triggers invalid_framework and retry."""
+    subtasks = [
+        _make_polyglot_subtask(subtask_id="bad-fw", language="python", framework="my-fake-framework", lane="unit"),
+    ]
+    bad_plan = _make_polyglot_plan_json(subtasks)
+    valid_plan = _make_valid_plan_json(1)
+
+    calls = mock_sdk(plans=[bad_plan, valid_plan])
+    ok = await run_planner(spec_dir, project_dir)
+    assert ok is True
+    assert len(calls) == 2  # retry was triggered
+    retry_prompt = calls[1]["prompt"]
+    assert "invalid_framework" in retry_prompt or "RETRY" in retry_prompt
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["status"] == "planned"
+
+
+@pytest.mark.asyncio
+async def test_validator_rejects_language_framework_mismatch(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """playwright is typescript, not java → invalid_framework, retry."""
+    subtasks = [
+        _make_polyglot_subtask(subtask_id="mismatch", language="java", framework="playwright", lane="browser"),
+    ]
+    bad_plan = _make_polyglot_plan_json(subtasks)
+    valid_plan = _make_valid_plan_json(1)
+
+    calls = mock_sdk(plans=[bad_plan, valid_plan])
+    ok = await run_planner(spec_dir, project_dir)
+    assert ok is True
+    assert len(calls) == 2
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["status"] == "planned"
+
+
+@pytest.mark.asyncio
+async def test_validator_rejects_lane_not_in_framework_lanes(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """pytest supports unit lane but NOT browser → invalid_framework, retry."""
+    subtasks = [
+        _make_polyglot_subtask(subtask_id="wrong-lane", language="python", framework="pytest", lane="browser"),
+    ]
+    bad_plan = _make_polyglot_plan_json(subtasks)
+    valid_plan = _make_valid_plan_json(1)
+
+    calls = mock_sdk(plans=[bad_plan, valid_plan])
+    ok = await run_planner(spec_dir, project_dir)
+    assert ok is True
+    assert len(calls) == 2
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["status"] == "planned"
+
+
+@pytest.mark.asyncio
+async def test_validator_rejects_partial_language_framework_pair(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """language set but framework absent → invalid_framework (must set both or neither)."""
+    subtask = _make_polyglot_subtask(subtask_id="partial")
+    subtask["language"] = "python"
+    # framework deliberately absent
+    bad_plan = _make_polyglot_plan_json([subtask])
+    valid_plan = _make_valid_plan_json(1)
+
+    calls = mock_sdk(plans=[bad_plan, valid_plan])
+    ok = await run_planner(spec_dir, project_dir)
+    assert ok is True
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_planner_invalid_framework_triggers_retry(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """Full path: invalid plan on first try, valid on retry → status=planned."""
+    subtasks = [
+        _make_polyglot_subtask(subtask_id="fw-err", language="python", framework="nonexistent", lane="unit"),
+    ]
+    bad_plan = _make_polyglot_plan_json(subtasks)
+    valid_plan = _make_valid_plan_json(2)
+
+    calls = mock_sdk(plans=[bad_plan, valid_plan])
+    ok = await run_planner(spec_dir, project_dir)
+    assert ok is True
+    assert len(calls) == 2
+    assert "RETRY" in calls[1]["prompt"] or "invalid_framework" in calls[1]["prompt"]
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["status"] == "planned"
+    assert status["subtask_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_planner_invalid_framework_twice_marks_failed(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """Both sessions emit invalid framework → status=planner_failed."""
+    subtasks = [
+        _make_polyglot_subtask(subtask_id="bad1", language="python", framework="no-such-framework", lane="unit"),
+    ]
+    bad_plan = _make_polyglot_plan_json(subtasks)
+
+    calls = mock_sdk(plans=[bad_plan, bad_plan])
+    ok = await run_planner(spec_dir, project_dir)
+    assert ok is False
+    assert len(calls) == 2
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["status"] == "planner_failed"
+    assert "invalid_framework" in status["phase"]
+
+
+# ── intent field ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_intent_create_is_default_in_emitted_plan(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """Subtask with no intent field round-trips as intent='create'."""
+    subtasks = [
+        _make_polyglot_subtask(subtask_id="no-intent"),  # no intent key
+    ]
+    mock_sdk(plans=[_make_polyglot_plan_json(subtasks)])
+    ok = await run_planner(spec_dir, project_dir)
+    assert ok is True
+    plan_data = json.loads((spec_dir / "test_plan.json").read_text())
+    st = plan_data["phases"][0]["subtasks"][0]
+    # intent defaults to "create" so it's NOT emitted in the JSON (omit-when-default)
+    # but should round-trip back via Subtask.from_dict
+    from test_plan import Subtask
+    s = Subtask.from_dict(st)
+    assert s.intent == "create"
+
+
+@pytest.mark.asyncio
+async def test_intent_update_when_catalog_hit(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """When catalog has an existing entry and agent sets intent:update, validator accepts."""
+    import json as _j
+
+    # Write a frozen catalog into context/
+    catalog_data = {
+        "version": 1,
+        "updated_at": "2026-05-28T10:00:00Z",
+        "tests": [
+            {
+                "test_id": "ac1-login-flow",
+                "test_file": "tests/e2e/login-flow.spec.ts",
+                "framework": "playwright",
+                "lane": "browser",
+                "language": "typescript",
+                "covers_acs": ["AC#1: User can log in"],
+                "generated_at": "2026-05-28T09:00:00Z",
+                "generated_by_task": "001",
+                "last_verdict": "accept",
+            }
+        ],
+    }
+    (spec_dir / "context" / "tests_catalog.json").write_text(_j.dumps(catalog_data))
+
+    # Agent emits a subtask matching the catalog entry with intent=update
+    subtasks = [
+        _make_polyglot_subtask(
+            subtask_id="ac1-login-update",
+            language="typescript",
+            framework="playwright",
+            lane="browser",
+            intent="update",
+        ),
+    ]
+    mock_sdk(plans=[_make_polyglot_plan_json(subtasks)])
+    ok = await run_planner(spec_dir, project_dir)
+    assert ok is True
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["status"] == "planned"
+    # Verify intent=update is preserved in the saved plan
+    plan_data = json.loads((spec_dir / "test_plan.json").read_text())
+    st = plan_data["phases"][0]["subtasks"][0]
+    from test_plan import Subtask
+    s = Subtask.from_dict(st)
+    assert s.intent == "update"
+
+
+# ── framework_id helper ───────────────────────────────────────────────────
+
+
+def test_subtask_framework_id_helper_returns_framework_or_none() -> None:
+    """Direct test of Subtask.framework_id()."""
+    from test_plan import Subtask
+
+    s_with = Subtask(id="1", description="x", framework="pytest")
+    assert s_with.framework_id() == "pytest"
+
+    s_without = Subtask(id="2", description="y")
+    assert s_without.framework_id() is None
+
+    for fw in ("jest", "playwright", "vitest"):
+        s = Subtask(id="x", description="y", framework=fw)
+        assert s.framework_id() == fw
+
+
+# ── replan preserves intent ───────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_replan_carries_intent_field(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """Replan path also preserves intent field in the corrected subtask."""
+    (spec_dir / "test_plan.json").write_text(_make_valid_plan_json(1))
+    _write_replan_request(spec_dir, "s0")
+
+    # Corrected subtask in the replan phase has intent=update
+    corrected_st = {
+        "id": "s0-r1",
+        "description": "corrected with intent",
+        "status": "pending",
+        "lane": "unit",
+        "language": "python",
+        "framework": "pytest",
+        "intent": "update",
+        "target": "foo.py::real_func",
+        "rationale": "Replan of 's0': original failed",
+        "files_to_create": ["tests/test_corrected.py"],
+        "verification": {
+            "type": "command",
+            "command": "pytest tests/test_corrected.py",
+            "expected": "exit 0",
+        },
+    }
+    replan_plan = json.loads(_make_plan_with_replan_phase("s0"))
+    replan_plan["phases"][1]["subtasks"] = [corrected_st]
+
+    mock_sdk(plans=[json.dumps(replan_plan)])
+    ok = await run_planner(spec_dir, project_dir, mode="replan")
+    assert ok is True
+
+    final = json.loads((spec_dir / "test_plan.json").read_text())
+    corrected = final["phases"][1]["subtasks"][0]
+    from test_plan import Subtask
+    s = Subtask.from_dict(corrected)
+    assert s.intent == "update"
+    assert s.framework == "pytest"
+    assert s.language == "python"
