@@ -409,3 +409,48 @@ async def websocket_logs(websocket: WebSocket, spec_id: str) -> None:
             await websocket.close(code=1011)  # internal error
         except Exception:  # noqa: BLE001
             pass
+
+
+# ─── Catalog endpoint (Task 14 / #30) ──────────────────────────────────────
+
+
+@router.get("/{spec_id}/catalog")
+def get_catalog(spec_id: str) -> Response:
+    """Serve the spec's ``context/tests_catalog.json`` snapshot.
+
+    The snapshot is written by the AIFactory snapshotter (Task 4) when the
+    handover happens.  It captures the state of the AIFactory repo's
+    ``tests-catalog.json`` at the moment the spec was handed to TFactory.
+
+    Returns the catalog JSON verbatim.
+
+    Returns 400 on malformed spec_id, 404 if the spec is not found or the
+    catalog has not been snapshotted for this spec yet.
+
+    URL: ``GET /api/tfactory/tasks/{spec_id}/catalog``
+    """
+    _validate_spec_id(spec_id)
+    root = _resolve_workspace_root()
+    spec_dir = _find_spec_dir(root, spec_id)
+    if spec_dir is None:
+        raise HTTPException(
+            status_code=http_status.HTTP_404_NOT_FOUND,
+            detail=f"task not found: {spec_id}",
+        )
+
+    catalog_path = spec_dir / "context" / "tests_catalog.json"
+    if not catalog_path.exists():
+        raise HTTPException(
+            status_code=http_status.HTTP_404_NOT_FOUND,
+            detail="catalog not snapshotted for this spec",
+        )
+
+    try:
+        content = catalog_path.read_bytes()
+    except OSError as exc:
+        raise HTTPException(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"could not read catalog: {exc}",
+        ) from exc
+
+    return Response(content=content, media_type="application/json")

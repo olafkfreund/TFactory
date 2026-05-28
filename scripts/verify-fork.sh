@@ -79,6 +79,10 @@ REQUIRED_PATHS=(
     # Task 12 (#28): per-framework template starter set + engine
     "apps/backend/templates_pkg/__init__.py"
     "apps/backend/templates_pkg/engine.py"
+    # Task 14 (#30): portal endpoints (framework registry, templates, skills, catalog)
+    "apps/web-server/server/routes/tfactory_frameworks.py"
+    "apps/web-server/server/routes/tfactory_templates.py"
+    "apps/web-server/server/routes/tfactory_skills.py"
 )
 
 # Allowlist of paths that MAY legitimately mention `aifactory` / `AIFactory`.
@@ -163,6 +167,20 @@ ALLOWLIST_GLOBS=(
     ".claude/skills/tfactory-from-template/"
     ".claude/commands/"
     "tests/test_skills.py"
+    # Task 14 (#30): portal endpoints for framework registry, templates, skills,
+    # catalog.  Route module docstrings reference the AIFactory→TFactory
+    # cross-project relationship (framework registry serves data about the
+    # AIFactory project's test stack; catalog is snapshotted from the AIFactory
+    # repo at handover time).
+    "apps/web-server/server/routes/tfactory_frameworks.py"
+    "apps/web-server/server/routes/tfactory_templates.py"
+    "apps/web-server/server/routes/tfactory_skills.py"
+    # tfactory_tasks.py extended in Task 14 with /catalog endpoint whose docstring
+    # legitimately references the AIFactory snapshotter (the source of the snapshot).
+    "apps/web-server/server/routes/tfactory_tasks.py"
+    "tests/test_tfactory_routes_frameworks.py"
+    "tests/test_tfactory_routes_templates.py"
+    "tests/test_tfactory_routes_skills.py"
 )
 
 # ---------- args ----------

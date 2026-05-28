@@ -83,6 +83,34 @@ Task 15 (#31).
   `tfactory-runner-python:latest`. 25 new tests (57 total across the two
   gen_functional test files).
 
+- **#30 Task 14**: Portal endpoints — framework registry, templates, skills, catalog
+
+  Five new read-only FastAPI routes under `/api/tfactory/`:
+
+  - `GET /api/tfactory/frameworks` — list all registered frameworks (name,
+    language, lanes, coverage_strategy, version_range, template_count),
+    sorted alphabetically.
+  - `GET /api/tfactory/frameworks/{name}` — full `FrameworkDescriptor` as
+    JSON. 404 for unknown names; 400 for path-traversal.
+  - `GET /api/tfactory/templates?framework={name}` — list templates for a
+    framework (name + metadata). 400 if param absent; 404 if framework
+    unknown.
+  - `GET /api/tfactory/templates/{framework}/{name}` — full template body +
+    metadata. 404 if framework or template unknown; 400 for path-traversal
+    on either segment.
+  - `GET /api/tfactory/skills` — list `.claude/skills/*/SKILL.md` bundles
+    with parsed YAML frontmatter. Gracefully returns `{"skills": []}` when
+    the directory is absent (Task 13 may not yet be merged).
+  - `GET /api/tfactory/tasks/{spec_id}/catalog` — serve the spec's
+    `context/tests_catalog.json` snapshot verbatim. 404 if not snapshotted.
+
+  All routes follow the FastAPI-shim-friendly pattern from v0.1's
+  `tfactory_tasks.py` (no hard fastapi import; route functions are unit-
+  testable without fastapi installed). 127 new tests across four test
+  files (`test_tfactory_routes_frameworks.py` · `test_tfactory_routes_
+  templates.py` · `test_tfactory_routes_skills.py` + 5 new /catalog
+  cases in `test_tfactory_routes_tasks.py`).
+
 ### In progress
 
 - **#17 Task 1**: Framework descriptor registry

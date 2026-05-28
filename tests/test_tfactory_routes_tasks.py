@@ -102,6 +102,7 @@ from server.routes.tfactory_tasks import (  # noqa: E402
     _summary_row,
     _tail_lines,
     _validate_spec_id,
+    get_catalog,
     get_pr_comment_body,
     get_task,
     get_test_plan,
@@ -702,3 +703,60 @@ def test_tail_log_payload_large_file_capped_at_byte_limit(
     # Should NOT crash and should return at most lines_per_file entries
     payload = tail_log_payload("042-x", lines_per_file=50)
     assert 0 < len(payload["files"]["huge"]) <= 50
+
+
+# ── /catalog endpoint (Task 14 / #30) ─────────────────────────────────────
+
+
+def test_get_catalog_returns_snapshotted_catalog(workspace_root: Path) -> None:
+    """Happy path: spec exists + context/tests_catalog.json written → returned verbatim."""
+    spec_dir = _make_task(workspace_root, project_id="demo", spec_id="042-x")
+    context_dir = spec_dir / "context"
+    context_dir.mkdir(parents=True, exist_ok=True)
+    catalog_body = '{"version": 1, "entries": [{"id": "test_foo", "path": "tests/test_foo.py"}]}'
+    (context_dir / "tests_catalog.json").write_text(catalog_body)
+
+    response = get_catalog("042-x")
+    assert response.media_type == "application/json"
+    assert response.content == catalog_body.encode("utf-8")
+
+
+def test_get_catalog_returns_404_when_not_snapshotted(workspace_root: Path) -> None:
+    """Spec dir exists but no context/tests_catalog.json → 404."""
+    spec_dir = _make_task(workspace_root, project_id="demo", spec_id="042-x")
+    (spec_dir / "context").mkdir(parents=True, exist_ok=True)
+    # Intentionally NOT writing tests_catalog.json
+
+    with pytest.raises(_HTTPException) as exc:
+        get_catalog("042-x")
+    assert exc.value.status_code == 404
+    assert "catalog" in exc.value.detail
+
+
+def test_get_catalog_returns_404_when_spec_id_unknown(workspace_root: Path) -> None:
+    """Unknown spec_id → 404."""
+    with pytest.raises(_HTTPException) as exc:
+        get_catalog("nonexistent-spec")
+    assert exc.value.status_code == 404
+
+
+def test_get_catalog_rejects_path_traversal_in_spec_id(workspace_root: Path) -> None:
+    """spec_id with .. or / → 400."""
+    for bad in ("../etc/passwd", "../../x", "x/y"):
+        with pytest.raises(_HTTPException) as exc:
+            get_catalog(bad)
+        assert exc.value.status_code == 400, bad
+
+
+def test_get_catalog_catalog_json_is_valid_json(workspace_root: Path) -> None:
+    """The returned content is valid JSON (not garbled bytes)."""
+    spec_dir = _make_task(workspace_root, project_id="demo", spec_id="042-x")
+    context_dir = spec_dir / "context"
+    context_dir.mkdir(parents=True, exist_ok=True)
+    import json
+    catalog = {"version": 1, "entries": []}
+    (context_dir / "tests_catalog.json").write_text(json.dumps(catalog))
+
+    response = get_catalog("042-x")
+    parsed = json.loads(response.content)
+    assert parsed == catalog
