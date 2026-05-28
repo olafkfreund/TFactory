@@ -103,6 +103,8 @@ ALLOWLIST_GLOBS=(
     "tests/test_evaluator_integration.py"
     "tests/test_triager.py"
     "tests/test_triager_integration.py"
+    "apps/frontend-web/src/lib/tfactory-api.ts"
+    "apps/frontend-web/src/components/tfactory/"
     "tests/fixtures/planner_smoke/"
     "guides/"
     ".git/"
