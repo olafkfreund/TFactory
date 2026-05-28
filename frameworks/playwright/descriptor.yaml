@@ -51,8 +51,12 @@ test_path_conventions:
   - "tests/**/*.spec.ts"
 
 # Template filenames — populated in Task 12 (#28).
-# Planned: login-flow, form-submit-validation, api-mocked-flow, data-loaded-page, error-state.
-templates: []
+templates:
+  - login-flow.spec.ts.tmpl
+  - form-submit-validation.spec.ts.tmpl
+  - api-mocked-flow.spec.ts.tmpl
+  - data-loaded-page.spec.ts.tmpl
+  - error-state.spec.ts.tmpl
 
 # Per Decision 11: Browser lane = skip.
 # Playwright tests instrument the served APPLICATION, not the test code itself.

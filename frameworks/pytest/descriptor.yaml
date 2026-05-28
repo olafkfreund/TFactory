@@ -50,8 +50,13 @@ test_path_conventions:
   - "tests/**/test_*.py"
   - "tests/**/*_test.py"
 
-# Template filenames (populated in Task 12, #28).  Empty for now.
-templates: []
+# Template filenames (populated in Task 12, #28).
+templates:
+  - function-pure.py.tmpl
+  - function-with-mock.py.tmpl
+  - fixture-driven.py.tmpl
+  - parametrize.py.tmpl
+  - async-function.py.tmpl
 
 # Per Decision 11: pytest emits Cobertura XML coverage reports via pytest-cov.
 # The Evaluator's coverage_delta primitive parses this XML.
