@@ -49,8 +49,12 @@ test_path_conventions:
   - "src/**/__tests__/**/*.ts"
 
 # Template filenames — populated in Task 12 (#28).
-# Planned: function-pure, function-with-mock, react-component, async-function, error-boundary.
-templates: []
+templates:
+  - function-pure.test.ts.tmpl
+  - function-with-mock.test.ts.tmpl
+  - react-component.test.tsx.tmpl
+  - async-function.test.ts.tmpl
+  - error-boundary.test.tsx.tmpl
 
 # Per Decision 11: Jest emits LCOV coverage via --coverage (nyc underneath).
 # The Evaluator's coverage_delta primitive uses the LCOV data to compute
