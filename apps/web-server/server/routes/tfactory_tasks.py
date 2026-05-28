@@ -27,7 +27,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, status as http_status
+from fastapi import APIRouter, HTTPException, Response, status as http_status
 
 
 router = APIRouter()
@@ -194,3 +194,80 @@ def get_task(spec_id: str) -> dict:
         "status_json": status_doc,
         "artefacts": _artefact_meta(spec_dir),
     }
+
+
+# ─── Artefact endpoints ────────────────────────────────────────────────
+
+
+def _serve_artefact_file(
+    spec_id: str, relpath: str, media_type: str,
+) -> Response:
+    """Locate ``spec_id`` and serve the file at ``spec_dir/relpath``.
+
+    Returns 400 on malformed spec_id, 404 if spec missing or artefact
+    missing. Returns raw bytes verbatim — the frontend parses /
+    renders as appropriate.
+    """
+    _validate_spec_id(spec_id)
+    root = _resolve_workspace_root()
+    spec_dir = _find_spec_dir(root, spec_id)
+    if spec_dir is None:
+        raise HTTPException(
+            status_code=http_status.HTTP_404_NOT_FOUND,
+            detail=f"task not found: {spec_id}",
+        )
+    target = spec_dir / relpath
+    if not target.exists():
+        raise HTTPException(
+            status_code=http_status.HTTP_404_NOT_FOUND,
+            detail=f"artefact not found: {relpath}",
+        )
+    try:
+        content = target.read_bytes()
+    except OSError as exc:
+        raise HTTPException(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"could not read artefact: {exc}",
+        ) from exc
+    return Response(content=content, media_type=media_type)
+
+
+@router.get("/{spec_id}/verdicts.json")
+def get_verdicts(spec_id: str) -> Response:
+    """Stream the Evaluator's verdicts.json verbatim."""
+    return _serve_artefact_file(
+        spec_id, "findings/verdicts.json", "application/json",
+    )
+
+
+@router.get("/{spec_id}/triage-report.json")
+def get_triage_report_json(spec_id: str) -> Response:
+    """Stream the Triager's triage_report.json verbatim."""
+    return _serve_artefact_file(
+        spec_id, "findings/triage_report.json", "application/json",
+    )
+
+
+@router.get("/{spec_id}/triage-report.md")
+def get_triage_report_md(spec_id: str) -> Response:
+    """Stream the Triager's triage_report.md verbatim."""
+    return _serve_artefact_file(
+        spec_id, "findings/triage_report.md", "text/markdown",
+    )
+
+
+@router.get("/{spec_id}/test-plan.json")
+def get_test_plan(spec_id: str) -> Response:
+    """Stream the Planner's test_plan.json verbatim."""
+    return _serve_artefact_file(
+        spec_id, "test_plan.json", "application/json",
+    )
+
+
+@router.get("/{spec_id}/pr-comment-body.md")
+def get_pr_comment_body(spec_id: str) -> Response:
+    """Stream findings/pr_comment_body.md — present when the Triager
+    skipped a real gh pr comment (no PR number in source.json)."""
+    return _serve_artefact_file(
+        spec_id, "findings/pr_comment_body.md", "text/markdown",
+    )

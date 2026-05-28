@@ -47,12 +47,21 @@ if "fastapi" not in sys.modules:
             self.status_code = status_code
             self.detail = detail
 
+    class _Response:
+        def __init__(self, content=b"", media_type: str = "") -> None:
+            self.content = content
+            self.media_type = media_type
+            # Mirror real FastAPI's body attribute for assertions
+            self.body = content if isinstance(content, (bytes, bytearray)) else str(content).encode()
+
     _status = types.ModuleType("fastapi.status")
     _status.HTTP_400_BAD_REQUEST = 400
     _status.HTTP_404_NOT_FOUND = 404
+    _status.HTTP_500_INTERNAL_SERVER_ERROR = 500
 
     _fastapi.APIRouter = _APIRouter
     _fastapi.HTTPException = _HTTPException
+    _fastapi.Response = _Response
     _fastapi.status = _status
     sys.modules["fastapi"] = _fastapi
     sys.modules["fastapi.status"] = _status
@@ -72,9 +81,15 @@ from server.routes.tfactory_tasks import (  # noqa: E402
     _artefact_meta,
     _find_spec_dir,
     _resolve_workspace_root,
+    _serve_artefact_file,
     _summary_row,
     _validate_spec_id,
+    get_pr_comment_body,
     get_task,
+    get_test_plan,
+    get_triage_report_json,
+    get_triage_report_md,
+    get_verdicts,
     list_tasks,
 )
 
@@ -339,3 +354,174 @@ def test_get_task_no_status_json_returns_empty_doc(
     with pytest.raises(_HTTPException) as exc:
         get_task("incomplete")
     assert exc.value.status_code == 404
+
+
+# ── _serve_artefact_file (shared helper) ───────────────────────────────
+
+
+def test_serve_artefact_400_on_malformed_spec_id(
+    workspace_root: Path,
+) -> None:
+    with pytest.raises(_HTTPException) as exc:
+        _serve_artefact_file("../x", "test_plan.json", "application/json")
+    assert exc.value.status_code == 400
+
+
+def test_serve_artefact_404_when_spec_missing(workspace_root: Path) -> None:
+    with pytest.raises(_HTTPException) as exc:
+        _serve_artefact_file("nonexistent", "test_plan.json", "application/json")
+    assert exc.value.status_code == 404
+    assert "task not found" in exc.value.detail
+
+
+def test_serve_artefact_404_when_artefact_missing(
+    workspace_root: Path,
+) -> None:
+    """Spec exists but the artefact file isn't present."""
+    _make_task(workspace_root, project_id="demo", spec_id="042-x")
+    # No test_plan.json written
+    with pytest.raises(_HTTPException) as exc:
+        _serve_artefact_file("042-x", "test_plan.json", "application/json")
+    assert exc.value.status_code == 404
+    assert "artefact not found" in exc.value.detail
+
+
+def test_serve_artefact_returns_response_with_content(
+    workspace_root: Path,
+) -> None:
+    """Happy path: file bytes flow through verbatim with the right
+    media_type."""
+    _make_task(workspace_root, project_id="demo", spec_id="042-x")
+    spec_dir = workspace_root / "workspaces" / "demo" / "specs" / "042-x"
+    body = '{"hello": "world"}'
+    (spec_dir / "test_plan.json").write_text(body)
+
+    response = _serve_artefact_file(
+        "042-x", "test_plan.json", "application/json",
+    )
+    assert response.media_type == "application/json"
+    assert response.content == body.encode("utf-8")
+
+
+# ── Per-endpoint sanity tests ──────────────────────────────────────────
+
+
+def test_get_verdicts_returns_findings_verdicts_json(
+    workspace_root: Path,
+) -> None:
+    _make_task(workspace_root, project_id="demo", spec_id="042-x")
+    spec_dir = workspace_root / "workspaces" / "demo" / "specs" / "042-x"
+    body = '{"evaluator_version": "task7-commit5", "verdicts": []}'
+    (spec_dir / "findings" / "verdicts.json").write_text(body)
+
+    response = get_verdicts("042-x")
+    assert response.media_type == "application/json"
+    assert response.content == body.encode("utf-8")
+
+
+def test_get_verdicts_404_when_missing(workspace_root: Path) -> None:
+    _make_task(workspace_root, project_id="demo", spec_id="042-x")
+    with pytest.raises(_HTTPException) as exc:
+        get_verdicts("042-x")
+    assert exc.value.status_code == 404
+
+
+def test_get_triage_report_json_returns_file(
+    workspace_root: Path,
+) -> None:
+    _make_task(workspace_root, project_id="demo", spec_id="042-x")
+    spec_dir = workspace_root / "workspaces" / "demo" / "specs" / "042-x"
+    body = '{"triager_version": "task8-commit3", "summary": {}}'
+    (spec_dir / "findings" / "triage_report.json").write_text(body)
+
+    response = get_triage_report_json("042-x")
+    assert response.media_type == "application/json"
+    assert response.content == body.encode("utf-8")
+
+
+def test_get_triage_report_md_returns_markdown(
+    workspace_root: Path,
+) -> None:
+    _make_task(workspace_root, project_id="demo", spec_id="042-x")
+    spec_dir = workspace_root / "workspaces" / "demo" / "specs" / "042-x"
+    body = "# Triage Report\n\nLooks good.\n"
+    (spec_dir / "findings" / "triage_report.md").write_text(body)
+
+    response = get_triage_report_md("042-x")
+    assert response.media_type == "text/markdown"
+    assert response.content == body.encode("utf-8")
+
+
+def test_get_test_plan_returns_top_level_file(
+    workspace_root: Path,
+) -> None:
+    """test_plan.json lives at spec_dir/test_plan.json (not under findings/)."""
+    _make_task(workspace_root, project_id="demo", spec_id="042-x")
+    spec_dir = workspace_root / "workspaces" / "demo" / "specs" / "042-x"
+    body = '{"feature": "x", "phases": []}'
+    (spec_dir / "test_plan.json").write_text(body)
+
+    response = get_test_plan("042-x")
+    assert response.media_type == "application/json"
+    assert response.content == body.encode("utf-8")
+
+
+def test_get_pr_comment_body_returns_markdown(
+    workspace_root: Path,
+) -> None:
+    _make_task(workspace_root, project_id="demo", spec_id="042-x")
+    spec_dir = workspace_root / "workspaces" / "demo" / "specs" / "042-x"
+    body = "# Triage Report\n\n_(skipped — no PR number)_\n"
+    (spec_dir / "findings" / "pr_comment_body.md").write_text(body)
+
+    response = get_pr_comment_body("042-x")
+    assert response.media_type == "text/markdown"
+    assert response.content == body.encode("utf-8")
+
+
+# ── Path-traversal protection (re-asserted per endpoint) ───────────────
+
+
+@pytest.mark.parametrize("handler", [
+    get_verdicts,
+    get_triage_report_json,
+    get_triage_report_md,
+    get_test_plan,
+    get_pr_comment_body,
+])
+def test_all_artefact_endpoints_reject_malformed_spec_id(
+    workspace_root: Path, handler,
+) -> None:
+    with pytest.raises(_HTTPException) as exc:
+        handler("../../etc/passwd")
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.parametrize("handler", [
+    get_verdicts,
+    get_triage_report_json,
+    get_triage_report_md,
+    get_test_plan,
+    get_pr_comment_body,
+])
+def test_all_artefact_endpoints_404_when_spec_missing(
+    workspace_root: Path, handler,
+) -> None:
+    with pytest.raises(_HTTPException) as exc:
+        handler("nonexistent-spec")
+    assert exc.value.status_code == 404
+
+
+# ── UTF-8 content survives the round-trip ──────────────────────────────
+
+
+def test_artefact_preserves_utf8_content(workspace_root: Path) -> None:
+    """Non-ASCII characters in the file body (e.g., a Markdown report
+    with em-dashes or unicode) must survive verbatim."""
+    _make_task(workspace_root, project_id="demo", spec_id="042-x")
+    spec_dir = workspace_root / "workspaces" / "demo" / "specs" / "042-x"
+    body = "# Triage — Report\n\ncafé · résumé · 🎉\n"
+    (spec_dir / "findings" / "triage_report.md").write_text(body, encoding="utf-8")
+
+    response = get_triage_report_md("042-x")
+    assert response.content.decode("utf-8") == body
