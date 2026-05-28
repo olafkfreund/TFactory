@@ -82,6 +82,7 @@ ALLOWLIST_GLOBS=(
     # legitimately describe the AIFactory→TFactory cross-reference
     # (planner reads ~/.aifactory/.../specs/.../ snapshot via Task 3).
     "apps/backend/agents/planner.py"
+    "apps/backend/agents/gen_functional.py"
     "apps/backend/prompts/"
     "apps/backend/prompts_pkg/"
     "tests/test_mcp_task_control.py"

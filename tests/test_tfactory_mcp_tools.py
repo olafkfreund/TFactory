@@ -61,6 +61,10 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # MCP-tool tests assert against the deterministic
     # status=pending immediately-after-create state.
     monkeypatch.setenv("TFACTORY_AUTO_PLAN", "0")
+    # Same for Gen-Functional auto-advance (Task 6, commit 1): tests
+    # that exercise the full planner→gen_functional chain set this to
+    # "1" explicitly.
+    monkeypatch.setenv("TFACTORY_AUTO_GENERATE", "0")
     # Snapshotter (Task 3) needs an AIFactory root too. Build a fake one
     # so the default-happy task_create_and_run flow doesn't trip
     # SnapshotError. Individual tests can scaffold per-spec sources via

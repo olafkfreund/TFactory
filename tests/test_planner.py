@@ -39,6 +39,19 @@ from agents.planner import (
 # ── Fixtures ─────────────────────────────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def _disable_auto_generate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin TFACTORY_AUTO_GENERATE=0 for the whole module.
+
+    Without this, the planner's success path schedules Gen-Functional
+    (Task 6, #7); the stub would fire concurrently and mutate
+    workspace state under the planner tests' assertions. Tests that
+    actually exercise the planner→gen_functional chain set
+    TFACTORY_AUTO_GENERATE=1 explicitly.
+    """
+    monkeypatch.setenv("TFACTORY_AUTO_GENERATE", "0")
+
+
 @pytest.fixture
 def spec_dir(tmp_path: Path) -> Path:
     """A workspace spec dir as task_create_and_run would have created."""

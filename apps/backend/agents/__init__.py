@@ -34,6 +34,9 @@ __all__ = [
     # TFactory Planner (Task 5, #6)
     "run_planner",
     "schedule_planner",
+    # TFactory Gen-Functional (Task 6, #7)
+    "run_gen_functional",
+    "schedule_gen_functional",
 ]
 
 
@@ -63,6 +66,10 @@ def __getattr__(name):
         return locals()[name]
     elif name in ("run_planner", "schedule_planner"):
         from .planner import run_planner, schedule_planner
+
+        return locals()[name]
+    elif name in ("run_gen_functional", "schedule_gen_functional"):
+        from .gen_functional import run_gen_functional, schedule_gen_functional
 
         return locals()[name]
     elif name in (

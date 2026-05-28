@@ -589,6 +589,7 @@ async def run_planner(
                 ],
                 subtask_count=0,
             )
+            _advance_to_gen_functional(spec_dir, project_dir)
             return True
 
         _write_status_patch(
@@ -598,6 +599,7 @@ async def run_planner(
             planner_warnings=warnings,
             subtask_count=subtask_count,
         )
+        _advance_to_gen_functional(spec_dir, project_dir)
         return True
 
     except Exception as exc:
@@ -766,6 +768,9 @@ async def _run_planner_replan(
             last_replan_count=new_count,
             last_replan_stuck=became_stuck,
         )
+        # Replan succeeded — schedule Gen-Functional to pick up the new
+        # replan-N subtask (it'll skip already-generated ones from prior phases).
+        _advance_to_gen_functional(spec_dir, project_dir)
         return True
 
     except Exception as exc:
@@ -818,6 +823,25 @@ def _build_retry_prompt(
         f"---\n\n"
         f"{original_prompt}"
     )
+
+
+def _advance_to_gen_functional(spec_dir: Path, project_dir: Path) -> None:
+    """Schedule Gen-Functional after planner success.
+
+    Lazy-imports schedule_gen_functional so a circular import between
+    planner.py ↔ gen_functional.py is impossible. ImportError is non-
+    fatal — the workspace is in a valid `planned` state regardless;
+    the operator can drive Gen-Functional manually if the auto-fire
+    path is unavailable.
+    """
+    try:
+        from agents.gen_functional import schedule_gen_functional
+        schedule_gen_functional(spec_dir, project_dir, mode="initial")
+    except ImportError as exc:
+        _planner_log.warning(
+            "could not auto-schedule gen_functional: %s — manual invocation required",
+            exc,
+        )
 
 
 # Module-level set so asyncio.create_task'd planner runs aren't GC'd while

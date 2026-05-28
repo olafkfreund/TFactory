@@ -31,6 +31,14 @@ FIXTURE = Path(__file__).parent / "fixtures" / "planner_smoke"
 # ── Fixtures ────────────────────────────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def _disable_auto_generate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin TFACTORY_AUTO_GENERATE=0 (Task 6, commit 1) so the planner's
+    success path doesn't schedule the stub Gen-Functional during these
+    integration assertions."""
+    monkeypatch.setenv("TFACTORY_AUTO_GENERATE", "0")
+
+
 @pytest.fixture
 def workspace(tmp_path: Path) -> Path:
     """Mimic what task_create_and_run + the snapshotter produce."""
