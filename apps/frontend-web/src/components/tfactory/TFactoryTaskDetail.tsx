@@ -285,7 +285,7 @@ export function TFactoryTaskDetail({ specId, fetchFn, wsFactory }: Props) {
             {JSON.stringify(detail.status_json, null, 2)}
           </pre>
         )}
-        {activeTab === 'lanes' && <LaneStatusGrid functionalStatus={status} />}
+        {activeTab === 'lanes' && <LaneStatusGrid unitStatus={status} />}
         {activeTab === 'verdicts' && (
           <>
             {loadingVerdicts && (

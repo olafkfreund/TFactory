@@ -1,21 +1,19 @@
 /**
- * Lane status grid — Task 10 (#11) commit 3.
+ * Lane status grid — Task 10 (#11) commit 3; reskinned in Task 0 (#16) commit 3.
  *
- * Presentational grid showing the FIVE lanes in TFactory's roadmap:
+ * Presentational grid showing the FIVE v0.2 lanes:
  *
- *   - functional  (Phase 1 — implemented, reflects current task)
- *   - sast        (Phase 2 — security static analysis; placeholder)
- *   - dast        (Phase 3 — dynamic security probes; placeholder)
- *   - fuzz        (Phase 4 — fuzzing; placeholder)
- *   - mutation    (Phase 5 — mutation testing; placeholder)
+ *   - unit         (Phase 1 — lit at v0.2 MVP; pytest/Jest for the changed feature)
+ *   - browser      (Phase 2 — Playwright via the live app; runs against AppRuntime)
+ *   - api          (Phase 3 — HTTP/contract checks against the running service)
+ *   - integration  (Phase 4 — service-to-service via testcontainers)
+ *   - mutation     (Phase 5 — assertion-strength mutation testing)
  *
- * Only the functional lane is "lit" — it shows the current task's
- * status (passed in via the ``functionalStatus`` prop). The other
- * four show a "Coming in Phase N" placeholder.
- *
- * This commit lays the structural foundation; Task 11 (e2e smoke)
- * and the Phase-2+ work will animate the other lanes as they
- * ship.
+ * v0.1 used `functional/sast/dast/fuzz/mutation`. The v0.2 spine swap is the
+ * modality-based decomposition from `docs/plans/2026-05-28-enterprise-test-frameworks-design.md`
+ * (Decision 2). At commit 3 only the UNIT lane is "lit" — it shows the
+ * current task's status. Browser/API/Integration/Mutation render as
+ * placeholders until Task 15 (#31) fully reskins them.
  */
 
 import { CheckCircle2, Circle, Clock, AlertCircle, Lock } from 'lucide-react';
@@ -25,7 +23,7 @@ import { statusColor } from './TFactoryTaskList';
 // ── Lane definitions ──────────────────────────────────────────────────
 
 export interface LaneDef {
-  id: 'functional' | 'sast' | 'dast' | 'fuzz' | 'mutation';
+  id: 'unit' | 'browser' | 'api' | 'integration' | 'mutation';
   label: string;
   phase: number;
   description: string;
@@ -33,20 +31,20 @@ export interface LaneDef {
 
 export const LANES: readonly LaneDef[] = [
   {
-    id: 'functional', label: 'Functional', phase: 1,
-    description: 'Pytest unit tests for the changed feature.',
+    id: 'unit', label: 'Unit', phase: 1,
+    description: 'pytest / Jest unit tests for the changed feature.',
   },
   {
-    id: 'sast', label: 'SAST', phase: 2,
-    description: 'Security static analysis (Semgrep / Bandit).',
+    id: 'browser', label: 'Browser', phase: 2,
+    description: 'Playwright UI tests run against the live app via AppRuntime.',
   },
   {
-    id: 'dast', label: 'DAST', phase: 3,
-    description: 'Dynamic security probes against the running app.',
+    id: 'api', label: 'API', phase: 3,
+    description: 'HTTP / contract checks against the running service surface.',
   },
   {
-    id: 'fuzz', label: 'Fuzz', phase: 4,
-    description: 'Property-based + corpus fuzzing on the feature surface.',
+    id: 'integration', label: 'Integration', phase: 4,
+    description: 'Service-to-service integration via testcontainers.',
   },
   {
     id: 'mutation', label: 'Mutation', phase: 5,
@@ -65,13 +63,13 @@ export type LaneCardState =
   | 'placeholder'; // future phase
 
 /**
- * Derive the LaneCardState for the functional lane from the task's
+ * Derive the LaneCardState for the unit lane from the task's
  * backend status string.
  *
  * Mirrors TFactoryTaskList's statusColor bucket mapping so the grid
  * + the task list stay visually consistent.
  */
-export function functionalLaneState(status: string | null): LaneCardState {
+export function unitLaneState(status: string | null): LaneCardState {
   const color = statusColor(status);
   if (color === 'green') return 'success';
   if (color === 'red') return 'failure';
@@ -134,7 +132,7 @@ function StateIcon({ state }: { state: LaneCardState }) {
 interface LaneCardProps {
   lane: LaneDef;
   state: LaneCardState;
-  /** Status string ("triaged", "evaluating", ...) for the functional lane. */
+  /** Status string ("triaged", "evaluating", ...) for the unit lane. */
   detail?: string;
 }
 
@@ -178,25 +176,25 @@ function LaneCard({ lane, state, detail }: LaneCardProps) {
 
 interface Props {
   /**
-   * The current task's backend status string. Drives the functional
+   * The current task's backend status string. Drives the unit
    * lane's state. ``null`` → idle.
    */
-  functionalStatus?: string | null;
+  unitStatus?: string | null;
 }
 
-export function LaneStatusGrid({ functionalStatus = null }: Props) {
-  const functionalState = functionalLaneState(functionalStatus);
+export function LaneStatusGrid({ unitStatus = null }: Props) {
+  const unitState = unitLaneState(unitStatus);
   return (
     <div
       data-testid="lane-status-grid"
       className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5"
     >
       {LANES.map((lane) => {
-        const state: LaneCardState = lane.id === 'functional'
-          ? functionalState
+        const state: LaneCardState = lane.id === 'unit'
+          ? unitState
           : 'placeholder';
-        const detail = lane.id === 'functional'
-          ? (functionalStatus ?? 'idle')
+        const detail = lane.id === 'unit'
+          ? (unitStatus ?? 'idle')
           : undefined;
         return (
           <LaneCard

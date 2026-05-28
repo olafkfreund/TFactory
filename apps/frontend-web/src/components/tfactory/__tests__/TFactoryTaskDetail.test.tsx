@@ -130,7 +130,7 @@ describe('<TFactoryTaskDetail> status tab', () => {
 // ── Lanes tab ────────────────────────────────────────────────────────
 
 describe('<TFactoryTaskDetail> lanes tab', () => {
-  it('switches to lanes tab and renders the grid with functional status', async () => {
+  it('switches to lanes tab and renders the grid with unit status', async () => {
     const fetchFn = makeUrlAwareFetch({
       '/spec-x': { jsonBody: sampleDetail({ status: 'triaged' }) },
     });
@@ -139,10 +139,10 @@ describe('<TFactoryTaskDetail> lanes tab', () => {
 
     fireEvent.click(screen.getByTestId('tab-lanes'));
     expect(screen.getByTestId('lane-status-grid')).toBeInTheDocument();
-    expect(screen.getByTestId('lane-card-functional')).toHaveAttribute(
+    expect(screen.getByTestId('lane-card-unit')).toHaveAttribute(
       'data-lane-state', 'success',
     );
-    expect(screen.getByTestId('lane-card-sast')).toHaveAttribute(
+    expect(screen.getByTestId('lane-card-browser')).toHaveAttribute(
       'data-lane-state', 'placeholder',
     );
   });
