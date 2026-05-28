@@ -78,9 +78,17 @@ ALLOWLIST_GLOBS=(
     "companion-skills/"
     "apps/backend/agents/tools_pkg/tools/task_control.py"
     "apps/backend/workspaces/"
+    # TFactory Planner files (Task 5, #6). Prompts + helpers + tests
+    # legitimately describe the AIFactory→TFactory cross-reference
+    # (planner reads ~/.aifactory/.../specs/.../ snapshot via Task 3).
+    "apps/backend/agents/planner.py"
+    "apps/backend/prompts/"
+    "apps/backend/prompts_pkg/"
     "tests/test_mcp_task_control.py"
     "tests/test_tfactory_mcp_tools.py"
     "tests/test_snapshotter.py"
+    "tests/test_planner_prompts.py"
+    "tests/test_planner_stub.py"
     ".git/"
 )
 

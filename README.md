@@ -7,8 +7,37 @@ aligned to its acceptance criteria, runs them in a sandbox, evaluates quality,
 commits the tests to the feature branch, and posts a coverage + findings report
 to the PR — autonomously.
 
-> Status: **Planning · MVP design locked 2026-05-28**.
-> Code scaffolding has not started yet — see the spec and task list to follow along.
+> Status: **MVP build in progress · 4 of 12 tasks delivered · Task 5 (Planner) underway.**
+> See [Progress](https://olafkfreund.github.io/TFactory/progress/) for the live build log.
+
+## Quickstart (NixOS / flake-based)
+
+```bash
+# One-command dev environment via the flake:
+nix develop
+
+# (inside the shell)
+tfactory-minimal-venv   # creates apps/backend/.venv with just pytest+pytest-asyncio
+tfactory-test           # runs the 120-case non-SDK suite (~1s)
+
+# For the full backend SDK install (graphiti, claude-agent-sdk, etc.):
+bootstrap-venv
+```
+
+The dev shell brings in **Python 3.13, Node 22, uv, git, gh, just,
+ripgrep, jq, docker-client** plus four shell functions: `bootstrap-venv`,
+`tfactory-minimal-venv`, `tfactory-test`, `verify-fork`.
+
+For auto-loading via `direnv`:
+
+```bash
+nix profile install nixpkgs#nix-direnv
+direnv allow
+```
+
+Non-Nix users can fall back to `npm run install:backend` (per the
+[Quickstart](https://olafkfreund.github.io/TFactory/) on Pages) — the
+Nix path just makes setup deterministic.
 
 ## Docs
 

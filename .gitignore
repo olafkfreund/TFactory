@@ -47,10 +47,18 @@ node_modules/
 Thumbs.db
 
 # Direnv / local secrets
-.envrc
+# .envrc is checked in (it's the entry point for `nix develop` via direnv);
+# .direnv/ is the local cache that must stay out of git.
+.direnv/
 .env
 .env.*
 !.env.example
+
+# Nix
+result
+result-*
+.devenv/
+.devenv.flake.nix
 
 # Jekyll local builds (Pages builds remotely)
 docs/_site/

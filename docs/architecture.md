@@ -326,6 +326,40 @@ All seven defined in
 - **CI workflow** updates. `.github/workflows/` inherited; pending Task 12's docs+tag pass.
 - **factory-core shared lib**. Hard-fork trade-off — accepted infra drift for clean separation. May extract later.
 
+## Development environment (Nix / devenv)
+
+TFactory ships a `flake.nix` declaring a `devShells.default` that gives
+you a reproducible NixOS-friendly dev shell. Entry is a single command:
+
+```bash
+nix develop
+```
+
+Or with [`direnv`](https://direnv.net/) auto-loading:
+
+```bash
+direnv allow
+```
+
+What's in the shell:
+
+- **Python 3.13** + `uv` for venv management
+- **Node.js 22** for the frontend + portal
+- **`docker-client`** (the daemon lives on the host) for `DockerRunner` (Task 4)
+- **`git`, `gh`, `just`, `ripgrep`, `jq`** — the tools `verify-fork.sh` and friends expect
+- Shell functions: **`bootstrap-venv`** (full backend install), **`tfactory-minimal-venv`** (just pytest), **`tfactory-test`** (run the non-SDK suite), **`verify-fork`**
+
+Env defaults (overridable per-shell):
+
+- `TFACTORY_WORKSPACE_ROOT=~/.tfactory`
+- `TFACTORY_PORTAL_PORT=3102`
+- `TFACTORY_AUTO_PLAN=0` (off by default for deterministic tests; production sets to `1`)
+
+`nix flake check` validates the shell builds across `x86_64-linux`.
+`nix fmt` formats `.nix` files via `nixpkgs-fmt`. The legacy `shell.nix`
+remains for `nix-shell` users; new development should prefer the flake
+path.
+
 ## Cross-references
 
 - Full design rationale + 10 locked decisions → [Design Plan]({{ '/design-plan/' | relative_url }})
