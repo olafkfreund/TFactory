@@ -76,6 +76,9 @@ REQUIRED_PATHS=(
     "apps/backend/tests_catalog/lookup.py"
     "apps/backend/tests_catalog/migration.py"
     "docs/tests-catalog.md"
+    # Task 12 (#28): per-framework template starter set + engine
+    "apps/backend/templates_pkg/__init__.py"
+    "apps/backend/templates_pkg/engine.py"
 )
 
 # Allowlist of paths that MAY legitimately mention `aifactory` / `AIFactory`.
@@ -144,6 +147,12 @@ ALLOWLIST_GLOBS=(
     "apps/backend/tests_catalog/"
     "tests/test_tests_catalog.py"
     "docs/tests-catalog.md"
+    # Task 12 (#28): per-framework template engine and 15 starter templates.
+    "apps/backend/templates_pkg/"
+    "frameworks/pytest/templates/"
+    "frameworks/jest/templates/"
+    "frameworks/playwright/templates/"
+    "tests/test_templates.py"
 )
 
 # ---------- args ----------
