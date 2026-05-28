@@ -563,3 +563,95 @@ def get_tfactory_planner_replan_prompt(spec_dir: Path, project_dir: Path) -> str
         "---\n\n"
     )
     return context + body
+
+
+def get_tfactory_gen_functional_prompt(
+    spec_dir: Path,
+    project_dir: Path,
+    subtask,
+) -> str:
+    """Assemble the per-subtask Gen-Functional prompt — Task 6 (#7) commit 4.
+
+    Each Gen-Functional session generates ONE pytest test file for ONE
+    subtask emitted by the Planner. This helper loads
+    ``apps/backend/prompts/gen_functional.md`` and prepends a SUBTASK
+    CONTEXT block with the concrete fields the agent needs:
+        - target (``<path>::<symbol>``)
+        - rationale (the AC this subtask covers)
+        - files_to_create (where to Write)
+        - verification command (what the Executor will run)
+        - paths to the snapshot context files
+
+    Args:
+        spec_dir: TFactory workspace spec dir.
+        project_dir: AIFactory project root_path (Glob/Grep target).
+        subtask: A Subtask dataclass instance from the loaded
+            ImplementationPlan. We pull the test-planning fields added
+            in Task 5 commit 1 (target / rationale / files_to_create /
+            verification).
+
+    Returns:
+        Full system prompt ready for run_agent_session.
+
+    Raises:
+        FileNotFoundError: if gen_functional.md is missing.
+    """
+    prompt_file = PROMPTS_DIR / "gen_functional.md"
+    if not prompt_file.exists():
+        raise FileNotFoundError(
+            f"gen_functional.md missing at {prompt_file}. "
+            "TFactory's Task 6 (#7) commit 4 authors this prompt; check the working tree."
+        )
+
+    body = prompt_file.read_text()
+
+    # Per-subtask context block — concrete paths + the subtask's
+    # planning fields. Duck-typed: callers can pass a Subtask
+    # dataclass OR a dict; we just read attributes / keys.
+    def _get(obj, key, default=None):
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    target = _get(subtask, "target", "?")
+    rationale = _get(subtask, "rationale", "?")
+    files_to_create = _get(subtask, "files_to_create", []) or []
+    description = _get(subtask, "description", "?")
+    subtask_id = _get(subtask, "id", "?")
+    # Verification carries the pytest command for the Executor. There's
+    # a schema drift between the planner prompt (which tells the LLM
+    # to emit ``"command"``) and the Verification dataclass (whose
+    # field is ``run``). Both shapes are accepted here; the proper
+    # reconciliation is a follow-up for Task 7/8 when the Executor
+    # actually consumes this field.
+    verification = _get(subtask, "verification", None)
+    if verification is None:
+        verification_cmd = "?"
+    elif isinstance(verification, dict):
+        verification_cmd = verification.get("command") or verification.get("run") or "?"
+    else:
+        verification_cmd = (
+            getattr(verification, "command", None)
+            or getattr(verification, "run", None)
+            or "?"
+        )
+
+    write_path = files_to_create[0] if files_to_create else "?"
+
+    context = (
+        "## SUBTASK CONTEXT (TFactory Gen-Functional — Python)\n\n"
+        f"Subtask: `{subtask_id}` — {description}\n\n"
+        f"- target:           `{target}`\n"
+        f"- rationale:        {rationale}\n"
+        f"- write the file at: `{spec_dir / write_path}`\n"
+        f"- verification:     `{verification_cmd}`\n\n"
+        f"Concrete paths for this run:\n\n"
+        f"- spec_dir:    `{spec_dir}`\n"
+        f"- project_dir: `{project_dir}` (read-only via Glob/Grep)\n\n"
+        "Snapshot files Task 3 populated:\n\n"
+        f"- `{spec_dir / 'context' / 'aifactory_spec.md'}`\n"
+        f"- `{spec_dir / 'context' / 'diff.patch'}` (may not exist)\n"
+        f"- `{spec_dir / 'test_plan.json'}` (the full Planner output)\n\n"
+        "---\n\n"
+    )
+    return context + body
