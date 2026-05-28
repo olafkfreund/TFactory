@@ -65,6 +65,9 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # that exercise the full planner→gen_functional chain set this to
     # "1" explicitly.
     monkeypatch.setenv("TFACTORY_AUTO_GENERATE", "0")
+    # Same for Evaluator auto-advance (Task 7, commit 1): keep the
+    # chain off in the MCP-tool tests; chain tests opt in explicitly.
+    monkeypatch.setenv("TFACTORY_AUTO_EVALUATE", "0")
     # Snapshotter (Task 3) needs an AIFactory root too. Build a fake one
     # so the default-happy task_create_and_run flow doesn't trip
     # SnapshotError. Individual tests can scaffold per-spec sources via

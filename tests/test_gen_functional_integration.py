@@ -53,6 +53,7 @@ def _disable_auto_chain(monkeypatch: pytest.MonkeyPatch) -> None:
     so we can assert ordering and intermediate state."""
     monkeypatch.setenv("TFACTORY_AUTO_GENERATE", "0")
     monkeypatch.setenv("TFACTORY_AUTO_PLAN", "0")
+    monkeypatch.setenv("TFACTORY_AUTO_EVALUATE", "0")
 
 
 @pytest.fixture

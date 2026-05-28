@@ -46,10 +46,12 @@ FIXTURE_PROJECT = Path(__file__).parent / "fixtures" / "planner_smoke" / "projec
 
 @pytest.fixture(autouse=True)
 def _disable_planner_auto_replan(monkeypatch: pytest.MonkeyPatch) -> None:
-    """gen_functional rejections schedule the planner in replan mode.
-    Pin TFACTORY_AUTO_PLAN=0 so the planner task doesn't fire during
-    these assertions; the chain-test opts in explicitly."""
+    """gen_functional rejections schedule the planner in replan mode;
+    gen_functional successes schedule the evaluator. Pin both env vars
+    OFF so the autouse default is fully deterministic. Individual chain
+    tests opt back in explicitly."""
     monkeypatch.setenv("TFACTORY_AUTO_PLAN", "0")
+    monkeypatch.setenv("TFACTORY_AUTO_EVALUATE", "0")
 
 
 # ── Fixtures ────────────────────────────────────────────────────────────

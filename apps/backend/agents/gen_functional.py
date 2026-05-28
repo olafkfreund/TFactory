@@ -151,6 +151,21 @@ def _advance_to_planner_replan(spec_dir: Path, project_dir: Path) -> None:
         )
 
 
+def _advance_to_evaluator(spec_dir: Path, project_dir: Path) -> None:
+    """Schedule the Evaluator after gen_functional's success path.
+
+    Lazy import — same defensive shape as _advance_to_planner_replan.
+    Gated by ``TFACTORY_AUTO_EVALUATE`` (default ON; tests pin off).
+    """
+    try:
+        from agents.evaluator import schedule_evaluator
+        schedule_evaluator(spec_dir, project_dir, mode="initial")
+    except ImportError as exc:
+        _gen_log.warning(
+            "could not auto-schedule evaluator: %s", exc,
+        )
+
+
 # ─── The agent ──────────────────────────────────────────────────────────
 
 
@@ -344,6 +359,10 @@ async def run_gen_functional(
             phase="gen_functional_complete",
             tests_generated=tests_generated,
         )
+        # Forward-chain to the Evaluator (Task 7, #8 — commit 1 lands the
+        # scheduler + stub). Gated by ``TFACTORY_AUTO_EVALUATE`` env;
+        # tests pin it off to keep this layer deterministic.
+        _advance_to_evaluator(spec_dir, project_dir)
         return True
 
     except Exception as exc:

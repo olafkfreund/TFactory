@@ -83,6 +83,7 @@ ALLOWLIST_GLOBS=(
     # (planner reads ~/.aifactory/.../specs/.../ snapshot via Task 3).
     "apps/backend/agents/planner.py"
     "apps/backend/agents/gen_functional.py"
+    "apps/backend/agents/evaluator.py"
     "apps/backend/prompts/"
     "apps/backend/prompts_pkg/"
     "tests/test_mcp_task_control.py"
@@ -94,6 +95,7 @@ ALLOWLIST_GLOBS=(
     "tests/test_gen_functional.py"
     "tests/test_gen_functional_prompts.py"
     "tests/test_gen_functional_integration.py"
+    "tests/test_evaluator.py"
     "tests/fixtures/planner_smoke/"
     "guides/"
     ".git/"
