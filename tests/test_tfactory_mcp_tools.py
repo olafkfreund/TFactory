@@ -237,7 +237,8 @@ async def test_task_create_and_run_happy(tools: dict, workspace: Path, aifactory
         assert (spec_dir / sub).is_dir(), f"missing subdir: {sub}"
     status = json.loads((spec_dir / "status.json").read_text())
     assert status["status"] == "pending"
-    assert status["lane_progress"]["functional"] == "pending"
+    # v0.2 lane spine — 'unit' replaced 'functional' per Decision 2
+    assert status["lane_progress"]["unit"] == "pending"
 
     # Snapshotter (Task 3, #4) populated context/
     assert (spec_dir / "context" / "aifactory_spec.md").exists()
@@ -480,15 +481,23 @@ async def test_report_get_json_happy(tools: dict, workspace: Path, aifactory_roo
 
 @pytest.mark.asyncio
 async def test_task_rerun_disallowed_lane(tools: dict, aifactory_root: Path) -> None:
-    """Phase-2+ lanes are gated until those tasks land."""
+    """Out-of-scope lanes are rejected with a Decision-2 message.
+
+    'sast'/'dast'/'fuzz' have v0.1 deprecation aliases (map to 'unit'),
+    so they're NOT disallowed at this layer — they'd succeed with a
+    warning. Use the security lanes without aliases (deps/secrets) to
+    test rejection.
+    """
     _scaffold_aifactory_spec(aifactory_root, "demo", "001")
     await tools["project_create"]({"id": "demo", "name": "Demo", "root_path": "/tmp/d"})
     await tools["task_create_and_run"]({"project_id": "demo", "spec_id": "001",
                                         "branch": "f", "base_ref": "main", "confirm": True})
-    for lane in ("sast", "dast", "fuzz", "mutation"):
+    for lane in ("deps", "secrets", "telepathy"):
         res = await tools["task_rerun"]({"task_id": "001", "lane": lane})
-        assert res.get("isError") is True, f"{lane} should be gated"
-        assert "not implemented at MVP" in _content(res)
+        assert res.get("isError") is True, f"{lane} should be rejected"
+        content = _content(res)
+        # v0.2 error message references the new lit set
+        assert "lit lanes" in content or "not supported" in content
 
 
 @pytest.mark.asyncio
@@ -512,4 +521,5 @@ async def test_task_rerun_happy_bumps_count(tools: dict, workspace: Path, aifact
     status = json.loads((workspace / "workspaces" / "demo" / "specs" / "001"
                          / "status.json").read_text())
     assert status["rerun_count"] == 2
-    assert status["lane_progress"]["functional"] == "pending"
+    # v0.2 lane spine — 'unit' replaced 'functional' per Decision 2
+    assert status["lane_progress"]["unit"] == "pending"

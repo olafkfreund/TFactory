@@ -33,7 +33,7 @@ def subtask_dataclass() -> Subtask:
     return Subtask(
         id="ac1-login-expiry",
         description="Verify login_user sets expires_at to +24h",
-        lane=Lane.FUNCTIONAL,
+        lane=Lane.UNIT,
         target="app/auth/login.py::login_user",
         rationale="AC#1: login_user returns session with expires_at=+24h",
         files_to_create=["tests/test_login_expiry.py"],

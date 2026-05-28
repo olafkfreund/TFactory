@@ -53,14 +53,17 @@ def test_accepts_all_three_fields() -> None:
 
 
 def test_fields_coexist_with_existing_lane_field() -> None:
+    """target/rationale/replan_count must coexist cleanly with an
+    explicit non-default lane. Use BROWSER (v0.2 spine) as the
+    non-default — was Lane.SAST in v0.1, replaced in Task 0."""
     s = Subtask(
         id="1", description="x",
-        lane=Lane.SAST,
+        lane=Lane.BROWSER,
         target="foo.py::bar",
         rationale="AC#1",
         replan_count=2,
     )
-    assert s.lane == Lane.SAST
+    assert s.lane == Lane.BROWSER
     assert s.target == "foo.py::bar"
 
 
