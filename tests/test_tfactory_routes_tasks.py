@@ -40,6 +40,19 @@ if "fastapi" not in sys.modules:
             def _decorator(fn):
                 return fn
             return _decorator
+        def websocket(self, *args, **kwargs):
+            def _decorator(fn):
+                return fn
+            return _decorator
+
+    class _WebSocket:  # only used for type annotations in the route module
+        async def accept(self): pass
+        async def send_text(self, _t: str): pass
+        async def receive_text(self) -> str: return ""
+        async def close(self, code: int = 1000, reason: str = ""): pass
+
+    class _WebSocketDisconnect(Exception):
+        pass
 
     class _HTTPException(Exception):
         def __init__(self, status_code: int, detail: str = "") -> None:
@@ -62,6 +75,8 @@ if "fastapi" not in sys.modules:
     _fastapi.APIRouter = _APIRouter
     _fastapi.HTTPException = _HTTPException
     _fastapi.Response = _Response
+    _fastapi.WebSocket = _WebSocket
+    _fastapi.WebSocketDisconnect = _WebSocketDisconnect
     _fastapi.status = _status
     sys.modules["fastapi"] = _fastapi
     sys.modules["fastapi.status"] = _status
@@ -78,11 +93,14 @@ if str(WEB_SERVER_PATH) not in sys.path:
 
 
 from server.routes.tfactory_tasks import (  # noqa: E402
+    DEFAULT_LOG_TAIL_LINES,
     _artefact_meta,
     _find_spec_dir,
+    _resolve_log_files,
     _resolve_workspace_root,
     _serve_artefact_file,
     _summary_row,
+    _tail_lines,
     _validate_spec_id,
     get_pr_comment_body,
     get_task,
@@ -91,6 +109,7 @@ from server.routes.tfactory_tasks import (  # noqa: E402
     get_triage_report_md,
     get_verdicts,
     list_tasks,
+    tail_log_payload,
 )
 
 
@@ -525,3 +544,161 @@ def test_artefact_preserves_utf8_content(workspace_root: Path) -> None:
 
     response = get_triage_report_md("042-x")
     assert response.content.decode("utf-8") == body
+
+
+# ── Log-tail primitives ───────────────────────────────────────────────
+
+
+def test_resolve_log_files_empty_when_no_logs_dir(workspace_root: Path) -> None:
+    spec_dir = _make_task(workspace_root, project_id="demo", spec_id="042-x")
+    # No logs/ subdir
+    assert _resolve_log_files(spec_dir) == {}
+
+
+def test_resolve_log_files_returns_log_files_by_stem(
+    workspace_root: Path,
+) -> None:
+    spec_dir = _make_task(workspace_root, project_id="demo", spec_id="042-x")
+    (spec_dir / "logs").mkdir()
+    (spec_dir / "logs" / "planner.log").write_text("p1\n")
+    (spec_dir / "logs" / "gen_functional.log").write_text("g1\n")
+    # Non-.log file is ignored
+    (spec_dir / "logs" / "random.txt").write_text("noise")
+
+    result = _resolve_log_files(spec_dir)
+    assert set(result.keys()) == {"planner", "gen_functional"}
+    assert result["planner"].name == "planner.log"
+
+
+def test_tail_lines_returns_last_n(workspace_root: Path, tmp_path: Path) -> None:
+    log = tmp_path / "x.log"
+    log.write_text("\n".join(f"line{i}" for i in range(50)) + "\n")
+    tail = _tail_lines(log, 5)
+    assert tail == [f"line{i}" for i in range(45, 50)]
+
+
+def test_tail_lines_handles_fewer_lines_than_requested(
+    tmp_path: Path,
+) -> None:
+    log = tmp_path / "small.log"
+    log.write_text("only\nthree\nlines\n")
+    tail = _tail_lines(log, 100)
+    assert tail == ["only", "three", "lines"]
+
+
+def test_tail_lines_handles_no_trailing_newline(tmp_path: Path) -> None:
+    log = tmp_path / "x.log"
+    log.write_text("a\nb\nc")  # no trailing newline
+    tail = _tail_lines(log, 10)
+    assert tail == ["a", "b", "c"]
+
+
+def test_tail_lines_empty_file_returns_empty(tmp_path: Path) -> None:
+    log = tmp_path / "x.log"
+    log.write_text("")
+    assert _tail_lines(log, 10) == []
+
+
+def test_tail_lines_missing_file_returns_empty(tmp_path: Path) -> None:
+    assert _tail_lines(tmp_path / "nope.log", 10) == []
+
+
+def test_tail_lines_zero_n_returns_empty(tmp_path: Path) -> None:
+    log = tmp_path / "x.log"
+    log.write_text("a\nb\nc\n")
+    assert _tail_lines(log, 0) == []
+
+
+# ── tail_log_payload (the WS payload builder) ──────────────────────────
+
+
+def test_tail_log_payload_400_on_malformed_spec_id(
+    workspace_root: Path,
+) -> None:
+    with pytest.raises(_HTTPException) as exc:
+        tail_log_payload("../../etc/passwd")
+    assert exc.value.status_code == 400
+
+
+def test_tail_log_payload_404_when_spec_missing(
+    workspace_root: Path,
+) -> None:
+    with pytest.raises(_HTTPException) as exc:
+        tail_log_payload("nonexistent")
+    assert exc.value.status_code == 404
+
+
+def test_tail_log_payload_empty_files_when_no_logs(
+    workspace_root: Path,
+) -> None:
+    _make_task(workspace_root, project_id="demo", spec_id="042-x")
+    payload = tail_log_payload("042-x")
+    assert payload["spec_id"] == "042-x"
+    assert payload["files"] == {}
+    assert "captured_at" in payload
+
+
+def test_tail_log_payload_includes_all_log_stems(
+    workspace_root: Path,
+) -> None:
+    spec_dir = _make_task(workspace_root, project_id="demo", spec_id="042-x")
+    (spec_dir / "logs").mkdir()
+    (spec_dir / "logs" / "planner.log").write_text("p1\np2\n")
+    (spec_dir / "logs" / "gen_functional.log").write_text("g1\n")
+    (spec_dir / "logs" / "evaluator.log").write_text("e1\ne2\ne3\n")
+
+    payload = tail_log_payload("042-x")
+    assert set(payload["files"].keys()) == {
+        "planner", "gen_functional", "evaluator",
+    }
+    assert payload["files"]["planner"] == ["p1", "p2"]
+    assert payload["files"]["gen_functional"] == ["g1"]
+    assert payload["files"]["evaluator"] == ["e1", "e2", "e3"]
+
+
+def test_tail_log_payload_respects_lines_per_file_cap(
+    workspace_root: Path,
+) -> None:
+    spec_dir = _make_task(workspace_root, project_id="demo", spec_id="042-x")
+    (spec_dir / "logs").mkdir()
+    (spec_dir / "logs" / "big.log").write_text(
+        "\n".join(f"line{i}" for i in range(1_000)) + "\n"
+    )
+
+    payload = tail_log_payload("042-x", lines_per_file=10)
+    assert len(payload["files"]["big"]) == 10
+    assert payload["files"]["big"][0] == "line990"
+    assert payload["files"]["big"][-1] == "line999"
+
+
+def test_tail_log_payload_default_tail_lines() -> None:
+    """Lock down the default cap (frontend assumes this number)."""
+    assert DEFAULT_LOG_TAIL_LINES == 200
+
+
+def test_tail_log_payload_decodes_utf8(workspace_root: Path) -> None:
+    spec_dir = _make_task(workspace_root, project_id="demo", spec_id="042-x")
+    (spec_dir / "logs").mkdir()
+    body = "started café · finished résumé\nemoji 🎉 ok\n"
+    (spec_dir / "logs" / "planner.log").write_text(body, encoding="utf-8")
+
+    payload = tail_log_payload("042-x")
+    assert payload["files"]["planner"] == [
+        "started café · finished résumé", "emoji 🎉 ok",
+    ]
+
+
+def test_tail_log_payload_large_file_capped_at_byte_limit(
+    workspace_root: Path,
+) -> None:
+    """A multi-megabyte log file is read from the tail only — we don't
+    blow memory loading it all."""
+    spec_dir = _make_task(workspace_root, project_id="demo", spec_id="042-x")
+    (spec_dir / "logs").mkdir()
+    log = spec_dir / "logs" / "huge.log"
+    # 2MB of bytes — bigger than _TAIL_READ_CAP_BYTES (1MB)
+    log.write_text(("x" * 80 + "\n") * 30_000)
+
+    # Should NOT crash and should return at most lines_per_file entries
+    payload = tail_log_payload("042-x", lines_per_file=50)
+    assert 0 < len(payload["files"]["huge"]) <= 50

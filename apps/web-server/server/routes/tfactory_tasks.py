@@ -27,7 +27,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Response, status as http_status
+import json as _json_mod
+
+from fastapi import (
+    APIRouter,
+    HTTPException,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+    status as http_status,
+)
 
 
 router = APIRouter()
@@ -271,3 +280,132 @@ def get_pr_comment_body(spec_id: str) -> Response:
     return _serve_artefact_file(
         spec_id, "findings/pr_comment_body.md", "text/markdown",
     )
+
+
+# ─── Logs endpoint — testable core + WS transport ──────────────────────
+
+
+# Cap how many lines per log file we send per payload. Keeps the WS
+# message size predictable; the frontend can request more via a query
+# param in future commits.
+DEFAULT_LOG_TAIL_LINES = 200
+
+# Cap how many bytes per file we ever read for tailing — prevents a
+# 100MB log file from blowing the memory budget. We seek to the end
+# and read at most this many bytes.
+_TAIL_READ_CAP_BYTES = 1_000_000
+
+
+def _resolve_log_files(spec_dir: Path) -> dict[str, Path]:
+    """Discover log files under ``spec_dir/logs/``.
+
+    Returns a mapping ``{stem: path}`` where stem is the filename
+    without ``.log`` extension (e.g., ``planner``, ``gen_functional``).
+    Empty dict if logs/ doesn't exist.
+    """
+    logs_dir = spec_dir / "logs"
+    if not logs_dir.exists() or not logs_dir.is_dir():
+        return {}
+    out: dict[str, Path] = {}
+    for path in sorted(logs_dir.glob("*.log")):
+        if path.is_file():
+            out[path.stem] = path
+    return out
+
+
+def _tail_lines(path: Path, n: int) -> list[str]:
+    """Return the last ``n`` lines of ``path``.
+
+    Caps the read at ``_TAIL_READ_CAP_BYTES`` from EOF — guards against
+    huge log files. Lines are stripped of the trailing newline. Returns
+    an empty list if the file can't be read.
+    """
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as fh:
+            if size > _TAIL_READ_CAP_BYTES:
+                fh.seek(size - _TAIL_READ_CAP_BYTES)
+                # Discard the (likely partial) leading line
+                fh.readline()
+            tail_bytes = fh.read()
+    except OSError:
+        return []
+    text = tail_bytes.decode("utf-8", errors="replace")
+    # Use splitlines so we don't emit a trailing empty string from a
+    # final newline.
+    lines = text.splitlines()
+    return lines[-n:] if n > 0 else []
+
+
+def tail_log_payload(spec_id: str, lines_per_file: int = DEFAULT_LOG_TAIL_LINES) -> dict:
+    """Build the JSON payload the WS endpoint sends.
+
+    Returns:
+        {
+          "spec_id": "<id>",
+          "captured_at": "<iso>",
+          "files": {
+            "planner": ["line1", "line2", ...],
+            "gen_functional": [...],
+            ...
+          }
+        }
+
+    Raises:
+        HTTPException 400 — malformed spec_id
+        HTTPException 404 — spec dir doesn't exist
+    """
+    _validate_spec_id(spec_id)
+    root = _resolve_workspace_root()
+    spec_dir = _find_spec_dir(root, spec_id)
+    if spec_dir is None:
+        raise HTTPException(
+            status_code=http_status.HTTP_404_NOT_FOUND,
+            detail=f"task not found: {spec_id}",
+        )
+
+    files = _resolve_log_files(spec_dir)
+    payload_files = {
+        name: _tail_lines(path, lines_per_file)
+        for name, path in files.items()
+    }
+    return {
+        "spec_id": spec_id,
+        "captured_at": datetime.utcnow().isoformat(timespec="seconds") + "+00:00",
+        "files": payload_files,
+    }
+
+
+@router.websocket("/{spec_id}/logs/stream")
+async def websocket_logs(websocket: WebSocket, spec_id: str) -> None:
+    """WebSocket log tail. Sends one ``tail_log_payload`` snapshot on
+    connect; the frontend polls via reconnect for refreshes (live tail
+    is a Task 11 follow-up).
+
+    Disconnects cleanly on close. Path-traversal / missing-spec are
+    reported by closing with code 4400 / 4404 so the frontend can
+    distinguish them.
+    """
+    await websocket.accept()
+    try:
+        try:
+            payload = tail_log_payload(spec_id)
+        except HTTPException as exc:
+            # 400 → close with 4400, 404 → 4404 (custom WS close codes)
+            code = 4400 if exc.status_code == 400 else 4404
+            await websocket.close(code=code, reason=exc.detail)
+            return
+        await websocket.send_text(_json_mod.dumps(payload))
+        # Stay open until the client disconnects. The MVP doesn't
+        # push updates — Task 11's e2e smoke will revisit live tail.
+        try:
+            while True:
+                # recv_text raises WebSocketDisconnect on close.
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            return
+    except Exception:  # noqa: BLE001 — protect the ws loop from leaks
+        try:
+            await websocket.close(code=1011)  # internal error
+        except Exception:  # noqa: BLE001
+            pass
