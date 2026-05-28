@@ -1,6 +1,6 @@
 ---
 layout: default
-title: Spec: MVP Walking Skeleton
+title: "Spec — MVP Walking Skeleton"
 permalink: /spec/
 nav_order: 3
 ---
