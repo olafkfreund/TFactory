@@ -94,6 +94,7 @@ describe('<TFactoryTaskDetail> initial fetch', () => {
     expect(screen.getByTestId('tab-lanes')).toBeInTheDocument();
     expect(screen.getByTestId('tab-verdicts')).toBeInTheDocument();
     expect(screen.getByTestId('tab-report')).toBeInTheDocument();
+    expect(screen.getByTestId('tab-logs')).toBeInTheDocument();
   });
 
   it('shows alert when detail fetch returns 500', async () => {

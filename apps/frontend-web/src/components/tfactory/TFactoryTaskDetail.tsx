@@ -27,13 +27,16 @@ import {
   type TFactoryVerdictsDocument,
 } from '../../lib/tfactory-api';
 import { LaneStatusGrid } from './LaneStatusGrid';
+import { TFactoryLogViewer } from './TFactoryLogViewer';
 
-type Tab = 'status' | 'lanes' | 'verdicts' | 'report';
+type Tab = 'status' | 'lanes' | 'verdicts' | 'report' | 'logs';
 
 interface Props {
   specId: string;
   /** Test seam threaded through to all API client calls. */
   fetchFn?: typeof fetch;
+  /** Test seam threaded through to the log viewer's WebSocket factory. */
+  wsFactory?: (url: string) => WebSocket;
 }
 
 // ── Tab button ──────────────────────────────────────────────────────
@@ -138,7 +141,7 @@ function VerdictTable({ verdicts }: { verdicts: TFactoryVerdict[] }) {
 
 // ── Main component ───────────────────────────────────────────────────
 
-export function TFactoryTaskDetail({ specId, fetchFn }: Props) {
+export function TFactoryTaskDetail({ specId, fetchFn, wsFactory }: Props) {
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(true);
@@ -266,6 +269,10 @@ export function TFactoryTaskDetail({ specId, fetchFn }: Props) {
           tab="report" active={activeTab} onClick={onSelectTab}
           label="Report" disabled={!reportAvailable}
         />
+        <TabButton
+          tab="logs" active={activeTab} onClick={onSelectTab}
+          label="Logs"
+        />
       </div>
 
       <div
@@ -315,6 +322,9 @@ export function TFactoryTaskDetail({ specId, fetchFn }: Props) {
               </pre>
             )}
           </>
+        )}
+        {activeTab === 'logs' && (
+          <TFactoryLogViewer specId={specId} wsFactory={wsFactory} />
         )}
       </div>
     </div>
