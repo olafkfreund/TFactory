@@ -61,7 +61,7 @@ RUN npm install -g \
 # /scratch — bind-mounted rw at runtime (screenshots, videos, traces, junit.xml)
 # The || true guard handles the case where 'playwright' user already exists
 # in the base image (some versions do, some don't).
-RUN useradd -m -u 1000 tfactory 2>/dev/null || true \
+RUN (id tfactory >/dev/null 2>&1 || useradd -m -u 1002 tfactory) \
     && mkdir -p /repo /scratch \
     && chown tfactory:tfactory /repo /scratch
 
