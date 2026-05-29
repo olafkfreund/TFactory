@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#0a0e1a">
+  <meta name="theme-color" content="#000000">
   <meta name="color-scheme" content="dark">
   <title>{% if page.title %}{{ page.title }} · {% endif %}{{ site.title }}</title>
   <meta name="description" content="{{ site.description }}">
@@ -30,41 +30,23 @@
     <div class="bg-mesh__grid"></div>
   </div>
 
-  <header class="site-header" role="banner">
-    <div class="container site-header__inner">
-      <a class="site-brand" href="{{ '/' | relative_url }}">
-        <span class="site-brand__mark" aria-hidden="true">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-            <defs>
-              <linearGradient id="brand-grad" x1="0" y1="0" x2="24" y2="24">
-                <stop offset="0%" stop-color="#00d4ff"/>
-                <stop offset="100%" stop-color="#8b5cf6"/>
-              </linearGradient>
-            </defs>
-            <path
-              d="M4 4h16M12 4v16M5 8h6M5 12h4M5 16h6M13 8h6M13 12h4M13 16h6"
-              stroke="url(#brand-grad)"
-              stroke-width="1.8"
-              stroke-linecap="round"
-            />
-          </svg>
-        </span>
-        <span class="site-brand__name">TFactory</span>
-        {%- if site.release_tag -%}
-          <a class="site-brand__tag" href="{{ site.release_url }}" rel="noopener">{{ site.release_tag }}</a>
-        {%- endif -%}
-      </a>
-
-      <nav class="site-nav" aria-label="Primary">
-        <a href="{{ '/' | relative_url }}">Home</a>
-        <a href="{{ '/architecture/' | relative_url }}">Architecture</a>
-        <a href="{{ '/design-plan/' | relative_url }}">Design</a>
-        <a href="{{ '/tasks/' | relative_url }}">Tasks</a>
-        <a href="{{ '/progress/' | relative_url }}">Progress</a>
-        <a class="site-nav__cta" href="{{ site.repo_url }}" rel="noopener">GitHub</a>
-      </nav>
+  <nav class="topnav" role="banner" aria-label="Primary">
+    <div class="container topnav-inner">
+      <a class="brand" href="{{ '/' | relative_url }}">tfactory<span class="cursor" aria-hidden="true"></span></a>
+      <ul class="nav-links">
+        <li><a href="{{ '/' | relative_url }}"{% if page.url == '/' %} class="active"{% endif %}>Home</a></li>
+        <li><a href="{{ '/architecture/' | relative_url }}"{% if page.url contains '/architecture/' %} class="active"{% endif %}>Architecture</a></li>
+        <li><a href="{{ '/showcase/' | relative_url }}"{% if page.url contains '/showcase/' %} class="active"{% endif %}>Showcase</a></li>
+        <li><a href="{{ '/design-plan/' | relative_url }}"{% if page.url contains '/design-plan/' %} class="active"{% endif %}>Design</a></li>
+        <li><a href="{{ '/tasks/' | relative_url }}"{% if page.url contains '/tasks/' %} class="active"{% endif %}>Tasks</a></li>
+        <li><a href="{{ '/progress/' | relative_url }}"{% if page.url contains '/progress/' %} class="active"{% endif %}>Progress</a></li>
+        <li><a href="{{ site.repo_url }}" rel="noopener">GitHub</a></li>
+      </ul>
+      <button class="search-btn" aria-label="Search" onclick="window.open('{{ site.repo_url }}/search', '_blank')">
+        <span>search</span><kbd>⌘K</kbd>
+      </button>
     </div>
-  </header>
+  </nav>
 
   <main class="site-main" role="main">
     <article class="prose container">
