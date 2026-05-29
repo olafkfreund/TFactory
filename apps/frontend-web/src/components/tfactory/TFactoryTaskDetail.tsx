@@ -251,6 +251,16 @@ export function TFactoryTaskDetail({ specId, fetchFn, wsFactory }: Props) {
   const verdictsAvailable = detail.artefacts.verdicts?.exists ?? false;
   const reportAvailable = detail.artefacts.triage_report_md?.exists ?? false;
 
+  // Derive per-lane statuses from status_json.lane_progress (v0.2) or
+  // fall back to { unit: status } for v0.1 workspaces that don't have
+  // a lane_progress field yet.
+  const laneProgress = detail.status_json.lane_progress as
+    | Record<string, string | null>
+    | undefined;
+  const laneStatuses = laneProgress
+    ? (laneProgress as Record<string, string | null>)
+    : { unit: status };
+
   return (
     <div data-testid="tfactory-task-detail" className="flex flex-col gap-4">
       <header className="flex items-baseline gap-2 border-b border-gray-200 pb-3">
@@ -285,7 +295,7 @@ export function TFactoryTaskDetail({ specId, fetchFn, wsFactory }: Props) {
             {JSON.stringify(detail.status_json, null, 2)}
           </pre>
         )}
-        {activeTab === 'lanes' && <LaneStatusGrid unitStatus={status} />}
+        {activeTab === 'lanes' && <LaneStatusGrid laneStatuses={laneStatuses} />}
         {activeTab === 'verdicts' && (
           <>
             {loadingVerdicts && (
