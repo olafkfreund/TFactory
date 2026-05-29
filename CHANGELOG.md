@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.2.0 (release candidate) — Enterprise Test Framework Spine
+
+> All 16 v0.2 tasks shipped. Tag `v0.2.0` will be cut once Task 16 merges
+> the evidence-capture tab (parallel workstream). See
+> [v0.2 in progress](#v02--enterprise-test-framework-spine-in-progress)
+> below for the narrative description.
+>
+> **Backend tests: ~1100+ · Frontend tests: 49 (LaneStatusGrid) + suite**
+>
+> Tests: ~1100+ backend · frontend suite green.
+
+### All 16 tasks closed
+
+| Task | Issue | What shipped |
+|------|-------|--------------|
+| Task 0  | #16 | Lane spine rename (FUNCTIONAL→UNIT etc.) + portal reskin |
+| Task 1  | #17 | Framework descriptor registry (80 frameworks, 5 lanes) |
+| Task 2  | #18 | `.tfactory.yml` schema + parser + validator (Pydantic v2) |
+| Task 3  | #19 | `.tfactory/tests-catalog.json` schema + helpers + migration primitive |
+| Task 4  | #20 | Executor lane dispatch + DockerRunner image parameterisation |
+| Task 5  | #21 | Planner polyglot subtask schema + auto-fire scaffold |
+| Task 6  | #22 | Gen-Functional generic prompt + framework context injection |
+| Task 7  | #23 | Gen-Functional TypeScript/Playwright lane + template engine |
+| Task 8  | #24 | Browser AppRuntime (docker-compose) + lane lifecycle |
+| Task 9  | #25 | API lane (HTTP/contract) + OpenAPI context injection |
+| Task 10 | #26 | Evaluator TypeScript coverage adapter (tsc/ESLint/Stryker) |
+| Task 11 | #29 | Triager update-in-place vs create-new via tests-catalog |
+| Task 12 | #27 | Integration lane (testcontainers) + docker-compose teardown |
+| Task 13 | #28 | Skills registry + SKILL.md bundle parser |
+| Task 14 | #30 | Portal endpoints: frameworks / templates / skills / catalog |
+| Task 15 | #31 | LaneStatusGrid full reskin (5 independent lanes) + `tfactory init` / `tfactory migrate v0_1_catalog` CLIs |
+
+---
+
 ## v0.2 — Enterprise Test Framework Spine (in progress)
 
 > Successor to [v0.1.0-mvp](#v010-mvp--walking-skeleton-2026-05-28).
@@ -64,7 +98,7 @@ the **Unit** card; the four placeholder cards relabel to **Browser**
 `unitStatus`. Full visual polish (icons + colors per lane) lands in
 Task 15 (#31).
 
-### Tasks shipped so far in v0.2
+### Tasks shipped in v0.2
 
 - **#16 Task 0**: Lane rename + breaking-change migration
 - **#22 Task 6**: Gen-Functional refactor — generic prompt + context injection
@@ -111,12 +145,28 @@ Task 15 (#31).
   templates.py` · `test_tfactory_routes_skills.py` + 5 new /catalog
   cases in `test_tfactory_routes_tasks.py`).
 
-### In progress
+- **#31 Task 15**: LaneStatusGrid full reskin + `tfactory init` + `tfactory migrate` CLIs
 
-- **#17 Task 1**: Framework descriptor registry
-- **#18 Task 2**: `.tfactory.yml` schema + parser + validator
-- **#19 Task 3**: `.tfactory/tests-catalog.json` schema + helpers
-- **#20-#32 Tasks 4-16**: see `docs/plans/2026-05-28-enterprise-test-frameworks-tasks.md`
+  LaneStatusGrid receives a complete reskin: all five lane cards (Unit /
+  Browser / API / Integration / Mutation) are independently lit by
+  `laneStatuses: Partial<Record<LaneId, string|null>>`. Each lane has a
+  unique icon (CheckSquare / Globe / Plug / Network / Zap) and accent
+  colour (blue / purple / green / orange / red). `TFactoryTaskDetail`
+  derives per-lane statuses from `status_json.lane_progress` with v0.1
+  compat fallback. `unitLaneState` kept as alias.
+
+  Two new backend CLI commands:
+  - `python -m cli init` — interactive scaffolder for `.tfactory.yml` +
+    empty `.tfactory/tests-catalog.json`. Non-interactive mode testable
+    via flags. Validates output via `load_tfactory_yml()`.
+  - `python -m cli migrate v0_1_catalog` — walks
+    `~/.tfactory/workspaces/*/specs/*/` and consolidates per-spec test
+    entries into per-repo `.tfactory/tests-catalog.json` via the
+    existing `tests_catalog.migration.migrate_v0_1_workspace` primitive.
+    Dry-run flag prints the plan without writing.
+
+  21 new backend tests (`test_cli_init.py` + `test_cli_migrate.py`);
+  23 new frontend LaneStatusGrid tests (49 total in the file).
 
 ---
 
