@@ -61,11 +61,15 @@ if "fastapi" not in sys.modules:
             self.detail = detail
 
     class _Response:
-        def __init__(self, content=b"", media_type: str = "") -> None:
-            self.content = content
+        def __init__(self, content=b"", media_type: str = "", status_code: int = 200) -> None:
+            self.content = (
+                content if isinstance(content, (bytes, bytearray))
+                else str(content).encode()
+            )
             self.media_type = media_type
+            self.status_code = status_code
             # Mirror real FastAPI's body attribute for assertions
-            self.body = content if isinstance(content, (bytes, bytearray)) else str(content).encode()
+            self.body = self.content
 
     _status = types.ModuleType("fastapi.status")
     _status.HTTP_400_BAD_REQUEST = 400
