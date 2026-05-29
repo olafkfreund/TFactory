@@ -165,6 +165,12 @@ class CatalogEntry:
     target_ref: str | None = None
     operator_locked: bool = False
     generation_version: int = 1
+    # Evidence capture fields (Task 16 / #32) — backward-compatible defaults
+    last_evidence_run_id: str | None = None
+    # Stored as a tuple of (key, value) pairs where list values become tuples.
+    # This keeps CatalogEntry hashable (frozen dataclass constraint).
+    # Use .evidence_urls property for a plain dict view, or to_dict() for JSON.
+    evidence_urls_raw: tuple[tuple[str, str | tuple[str, ...]], ...] = ()
 
     def __post_init__(self) -> None:
         validate_lane(self.lane)
@@ -174,6 +180,21 @@ class CatalogEntry:
                 f"{self.last_verdict!r} is not a valid verdict. "
                 f"Valid values: {sorted(_VALID_VERDICTS)}",
             )
+
+    @property
+    def evidence_urls(self) -> dict[str, str | list[str]]:
+        """Return evidence artifact URLs as a plain dict.
+
+        Converts the internal hashable tuple representation back to
+        ``dict[str, str | list[str]]`` for callers that need a plain dict.
+        """
+        result: dict[str, str | list[str]] = {}
+        for key, value in self.evidence_urls_raw:
+            if isinstance(value, tuple):
+                result[key] = list(value)
+            else:
+                result[key] = value
+        return result
 
     # ------------------------------------------------------------------
     # Serialisation
@@ -185,8 +206,12 @@ class CatalogEntry:
         Keys are sorted and values use JSON-primitive types so that
         ``json.dumps(entry.to_dict(), sort_keys=True)`` produces a
         deterministic byte string.
+
+        Evidence fields (``last_evidence_run_id``, ``evidence_urls``) are
+        omitted when they hold their default values to keep the JSON compact
+        and backward-compatible with readers that predate Task 16.
         """
-        return {
+        d: dict[str, Any] = {
             "browsers_tested": list(self.browsers_tested),
             "covers_acs": list(self.covers_acs),
             "framework": self.framework,
@@ -201,6 +226,12 @@ class CatalogEntry:
             "test_file": self.test_file,
             "test_id": self.test_id,
         }
+        # Emit evidence fields only when non-default (omit-when-empty contract)
+        if self.last_evidence_run_id is not None:
+            d["last_evidence_run_id"] = self.last_evidence_run_id
+        if self.evidence_urls_raw:
+            d["evidence_urls"] = self.evidence_urls  # property returns plain dict
+        return d
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> CatalogEntry:
@@ -213,6 +244,18 @@ class CatalogEntry:
             CatalogError: If a required field is missing or a value is invalid.
         """
         try:
+            # Defensively load evidence_urls — may be absent in pre-Task-16 catalogs
+            raw_evidence_urls_dict = d.get("evidence_urls") or {}
+            if not isinstance(raw_evidence_urls_dict, dict):
+                raw_evidence_urls_dict = {}
+
+            # Convert dict[str, str|list] → tuple[(str, str|tuple[str,...])]
+            # so the frozen dataclass stays hashable.
+            evidence_urls_raw: tuple[tuple[str, str | tuple[str, ...]], ...] = tuple(
+                (k, tuple(v) if isinstance(v, list) else v)
+                for k, v in raw_evidence_urls_dict.items()
+            )
+
             return cls(
                 test_id=d["test_id"],
                 test_file=d["test_file"],
@@ -227,6 +270,8 @@ class CatalogEntry:
                 target_ref=d.get("target_ref"),
                 operator_locked=bool(d.get("operator_locked", False)),
                 generation_version=int(d.get("generation_version", 1)),
+                last_evidence_run_id=d.get("last_evidence_run_id") or None,
+                evidence_urls_raw=evidence_urls_raw,
             )
         except KeyError as exc:
             raise CatalogError("field", f"missing required field: {exc}") from exc
