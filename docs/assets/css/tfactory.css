@@ -1,40 +1,53 @@
-/* TFactory dark theme — Gruvbox palette. Plain CSS, no SCSS, no Liquid.
+/* TFactory dark theme — Terminal/CRT aesthetic matching
+ * https://olafkfreund.github.io/skill_pool/ (palette: green-on-black,
+ * JetBrains Mono, glow + scanline accents).
+ *
  * Loads AFTER cayman, so our rules win by source order.
  * Cayman uses .page-header / .main-content / .site-footer which we override
  * via our own _layouts/default.html using .site-header / .site-main / .site-footer.
  *
- * Palette: Gruvbox Dark, hard variant for the deepest backgrounds.
- * Reference: https://github.com/morhetz/gruvbox
+ * The class names below are TFactory's (.site-brand, .prose, etc.); the
+ * palette + typography mirror skill_pool's terminal.css.
  */
 
 /* ─── Tokens ───────────────────────────────────────────────────────── */
 :root {
-  /* Gruvbox bg ladder — bg0 (canvas) → bg2 (cards) → bg3 (borders) */
-  --bg: #282828;              /* gruvbox bg0 */
-  --bg-elevated: #3c3836;     /* gruvbox bg1 */
-  --bg-card: #504945;         /* gruvbox bg2 */
-  --bg-code: #1d2021;         /* gruvbox bg0_h (hard variant for code blocks) */
-  --border: #665c54;          /* gruvbox bg3 */
-  --border-soft: rgba(235, 219, 178, 0.07);  /* tinted with fg */
-  /* Gruvbox foreground (warm cream + muted variants) */
-  --text: #ebdbb2;            /* gruvbox fg */
-  --text-muted: #a89984;      /* gruvbox fg4 */
-  --text-dim: #928374;        /* gruvbox gray */
-  /* Gruvbox bright accents */
-  --accent-cyan: #83a598;     /* gruvbox bright aqua */
-  --accent-violet: #d3869b;   /* gruvbox bright purple */
-  --accent-green: #b8bb26;    /* gruvbox bright green */
-  --accent-yellow: #fabd2f;   /* gruvbox bright yellow */
-  --accent-red: #fb4934;      /* gruvbox bright red */
-  --accent-orange: #fe8019;   /* gruvbox bright orange — signature accent */
-  /* Signature gradient: aqua → orange (Gruvbox's most recognizable pairing) */
-  --grad-brand: linear-gradient(135deg, #83a598 0%, #fe8019 100%);
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace;
-  --container: 1100px;
-  --radius: 10px;
-  --radius-lg: 16px;
+  /* Terminal palette — green phosphor on pure black, matches skill_pool */
+  --bg: #000000;                 /* pure black canvas */
+  --bg-elevated: #050805;        /* almost-black surface */
+  --bg-card: #08130a;            /* card surface — green-tinted */
+  --bg-code: #050805;             /* code blocks — slightly elevated black */
+  --bg-glass: rgba(0, 18, 8, 0.55);  /* sticky-header backdrop */
+  --border: #144a14;             /* phosphor-tinted border */
+  --border-bright: #2a8a2a;      /* hover / accent border */
+  --border-soft: rgba(0, 255, 136, 0.10);  /* subtle accent tint */
+  /* Foreground ladder — light phosphor green → dim → muted */
+  --text: #d5ffd5;               /* fg — light green */
+  --text-muted: #6fa86f;         /* fg-dim */
+  --text-dim: #3d6a3d;           /* fg-muted */
+  /* Accents — keep token names from prior palette for backward compat */
+  --accent-cyan: #00ff88;        /* terminal-green (primary accent) */
+  --accent-violet: #00ff88;       /* alias — single-accent theme */
+  --accent-green: #00ff88;       /* alias */
+  --accent-yellow: #ffd200;      /* warning / yellow accent */
+  --accent-red: #ff5577;         /* error / red accent */
+  --accent-orange: #ffd200;      /* alias to yellow accent */
+  --accent: #00ff88;             /* generic accent — equals primary */
+  --accent-dim: #00b860;         /* dimmer accent for borders/text */
+  --shadow-glow: 0 0 14px rgba(0, 255, 136, 0.35);
+  --shadow-glow-soft: 0 0 4px rgba(0, 255, 136, 0.15);
+  /* Signature gradient — kept for h1 text-fill; both stops are accent green */
+  --grad-brand: linear-gradient(135deg, #00ff88 0%, #00b860 100%);
+  /* Typography — all monospace per skill_pool */
+  --font-sans: "JetBrains Mono", "Fira Code", "SF Mono", Menlo, Consolas, monospace;
+  --font-mono: "JetBrains Mono", "Fira Code", "SF Mono", Menlo, Consolas, monospace;
+  --container: 1180px;
+  --radius: 4px;                 /* tighter, terminal-y */
+  --radius-lg: 6px;
 }
+
+/* Load JetBrains Mono if not present (matches skill_pool) */
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap");
 
 /* ─── Reset + base ─────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; }
@@ -47,7 +60,7 @@ html {
 body {
   margin: 0;
   font-family: var(--font-sans);
-  font-size: 16px;
+  font-size: 15px;
   line-height: 1.65;
   color: var(--text);
   background: var(--bg);
@@ -55,14 +68,46 @@ body {
   display: flex;
   flex-direction: column;
   overflow-x: hidden;
+  position: relative;
 }
+/* CRT scanline overlay (matches skill_pool's signature effect) */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background:
+    repeating-linear-gradient(
+      0deg,
+      transparent 0,
+      transparent 2px,
+      rgba(0, 255, 136, 0.025) 2px,
+      rgba(0, 255, 136, 0.025) 3px
+    );
+  pointer-events: none;
+  z-index: 1;
+  mix-blend-mode: screen;
+}
+/* Body content sits above the scanline */
+body > * { position: relative; z-index: 2; }
 a {
-  color: var(--accent-cyan);
-  text-decoration: none;
-  transition: color 150ms ease;
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: var(--accent-dim);
+  text-underline-offset: 3px;
+  transition: color 150ms ease, text-decoration-color 150ms ease, text-shadow 150ms ease;
 }
-a:hover { color: var(--accent-violet); }
+a:hover {
+  color: var(--accent);
+  text-decoration-color: var(--accent);
+  text-shadow: var(--shadow-glow-soft);
+}
 img, svg { max-width: 100%; height: auto; }
+/* Subtle blinking cursor — terminal feel */
+@keyframes blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+::selection { background: rgba(0, 255, 136, 0.3); color: var(--text); }
 
 /* ─── Animated background ─────────────────────────────────────────── */
 .bg-mesh {
@@ -121,7 +166,7 @@ img, svg { max-width: 100%; height: auto; }
   position: sticky;
   top: 0;
   z-index: 100;
-  background: rgba(40, 40, 40, 0.85);
+  background: rgba(0, 0, 0, 0.85);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border-bottom: 1px solid var(--border);
@@ -159,10 +204,10 @@ img, svg { max-width: 100%; height: auto; }
   padding: 2px 8px;
   border-radius: 999px;
   background: var(--grad-brand);
-  color: #282828 !important;
+  color: #000000 !important;
   margin-left: 4px;
 }
-.site-brand__tag:hover { color: #282828 !important; opacity: 0.9; }
+.site-brand__tag:hover { color: #000000 !important; opacity: 0.9; }
 .site-nav {
   display: flex;
   align-items: center;
@@ -227,7 +272,7 @@ img, svg { max-width: 100%; height: auto; }
   letter-spacing: 0.05em;
 }
 .prose p, .prose li { color: var(--text); }
-.prose strong { color: #fbf1c7; font-weight: 600; }
+.prose strong { color: var(--accent); font-weight: 600; }
 .prose em { color: var(--text-muted); }
 .prose hr {
   border: 0;
@@ -268,7 +313,7 @@ img, svg { max-width: 100%; height: auto; }
   margin: 1.5em 0;
   padding: 12px 18px;
   border-left: 3px solid var(--accent-cyan);
-  background: rgba(131, 165, 152, 0.05);
+  background: rgba(0, 255, 136, 0.05);
   border-radius: 0 8px 8px 0;
   color: var(--text);
 }
@@ -301,7 +346,7 @@ img, svg { max-width: 100%; height: auto; }
 .prose tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
 .prose a {
   text-decoration: underline;
-  text-decoration-color: rgba(131, 165, 152, 0.35);
+  text-decoration-color: rgba(0, 255, 136, 0.35);
   text-underline-offset: 3px;
 }
 .prose a:hover { text-decoration-color: var(--accent-violet); }
@@ -310,7 +355,7 @@ img, svg { max-width: 100%; height: auto; }
 /* ─── Footer ───────────────────────────────────────────────────────── */
 .site-footer {
   border-top: 1px solid var(--border);
-  background: rgba(40, 40, 40, 0.6);
+  background: rgba(0, 0, 0, 0.6);
   padding: 24px 0;
   font-size: 13.5px;
   color: var(--text-muted);
@@ -326,7 +371,7 @@ img, svg { max-width: 100%; height: auto; }
 .site-footer a:hover { color: var(--accent-cyan); }
 .site-footer__meta { color: var(--text-dim); }
 
-::selection { background: rgba(131, 165, 152, 0.35); color: #fff; }
+::selection { background: rgba(0, 255, 136, 0.3); color: var(--text); }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb {
@@ -367,9 +412,9 @@ img, svg { max-width: 100%; height: auto; }
   text-transform: uppercase;
   color: var(--accent-cyan);
   padding: 5px 14px;
-  border: 1px solid rgba(131, 165, 152, 0.35);
+  border: 1px solid rgba(0, 255, 136, 0.35);
   border-radius: 999px;
-  background: rgba(131, 165, 152, 0.06);
+  background: rgba(0, 255, 136, 0.06);
   margin-bottom: 18px;
 }
 .hero__eyebrow::before {
@@ -412,7 +457,7 @@ img, svg { max-width: 100%; height: auto; }
   font-weight: 600;
   font-size: 15px;
   background: var(--grad-brand);
-  color: #282828 !important;
+  color: #000000 !important;
   border: none;
   text-decoration: none !important;
   transition: transform 200ms ease, box-shadow 200ms ease;
@@ -420,7 +465,7 @@ img, svg { max-width: 100%; height: auto; }
 .hero__cta:hover {
   transform: translateY(-2px);
   box-shadow: 0 12px 32px rgba(211, 134, 155, 0.35);
-  color: #282828 !important;
+  color: #000000 !important;
 }
 .hero__cta--ghost {
   background: transparent;
@@ -429,7 +474,7 @@ img, svg { max-width: 100%; height: auto; }
 }
 .hero__cta--ghost:hover {
   border-color: var(--accent-cyan);
-  background: rgba(131, 165, 152, 0.06);
+  background: rgba(0, 255, 136, 0.06);
   color: var(--text) !important;
   box-shadow: none;
 }
@@ -453,7 +498,7 @@ img, svg { max-width: 100%; height: auto; }
 .stat-grid__card:hover {
   transform: translateY(-3px);
   border-color: var(--accent-cyan);
-  box-shadow: 0 12px 32px rgba(131, 165, 152, 0.15);
+  box-shadow: 0 12px 32px rgba(0, 255, 136, 0.15);
 }
 .stat-grid__value {
   display: block;
@@ -520,11 +565,11 @@ img, svg { max-width: 100%; height: auto; }
 .pipeline__node:hover {
   transform: translateY(-4px);
   border-color: var(--accent-cyan);
-  box-shadow: 0 12px 24px rgba(131, 165, 152, 0.15);
+  box-shadow: 0 12px 24px rgba(0, 255, 136, 0.15);
 }
 .pipeline__node--active {
   border-color: var(--accent-cyan);
-  background: linear-gradient(135deg, rgba(131, 165, 152, 0.08) 0%, rgba(211, 134, 155, 0.06) 100%), var(--bg);
+  background: linear-gradient(135deg, rgba(0, 255, 136, 0.08) 0%, rgba(211, 134, 155, 0.06) 100%), var(--bg);
 }
 .pipeline__node-icon {
   font-size: 22px;
@@ -582,8 +627,8 @@ img, svg { max-width: 100%; height: auto; }
   align-items: center;
   justify-content: center;
   border-radius: 10px;
-  background: rgba(131, 165, 152, 0.08);
-  border: 1px solid rgba(131, 165, 152, 0.2);
+  background: rgba(0, 255, 136, 0.08);
+  border: 1px solid rgba(0, 255, 136, 0.2);
 }
 .feature-row__card h3 {
   font-size: 16px !important;
