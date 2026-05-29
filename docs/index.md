@@ -56,14 +56,29 @@ nav_order: 1
 
 <div class="reveal" markdown="1">
 
-| Lane | Status | Phase |
-|---|---|---|
-| **Functional (pytest)** | ✅ Active at MVP | 1 |
-| SAST + deps + secrets | 🔜 Coming | 2 |
-| DAST | 🔜 Coming | 3 |
-| Fuzz | 🔜 Coming | 4 |
-| Mutation testing | 🔜 Coming | 5 |
-| Go / Rust / Ruby ramp | 🔜 Coming | 6+ |
+v0.2 replaced the v0.1 pipeline-stage decomposition (Functional / SAST /
+DAST / Fuzz / Mutation) with a **modality-based spine** per Decision 2.
+Security scanning is delegated to dedicated security pipelines and is
+out of scope here — TFactory focuses on functional + feature testing.
+
+| Lane | v0.2.0 status | Runtime | Coverage | Evidence captured |
+|---|---|---|---|---|
+| **Unit** | ✅ Active | `tfactory-runner-pytest` + `tfactory-runner-jest` | line (cobertura / lcov) | — |
+| **Browser** | ✅ Active | `tfactory-runner-playwright` + AppRuntime (docker-compose + health-poll) | `null` (per Decision 11 — line coverage doesn't apply when the test drives the browser) | screenshots · video · trace.zip |
+| **API** | ✅ Active | per-framework Docker image + HTTP HAR recorder | line where the test exercises framework code | network.har |
+| **Integration** | ✅ Active | per-framework Docker image + AppRuntime (multi-service compose) | line where applicable | network.har · service logs |
+| **Mutation** | ✅ Active | `mutmut` (Python) / Stryker (TypeScript) — one-mutation-per-run probe in the Evaluator | reported per mutant (killed / survived) | — |
+
+All five lanes are wired and ship with v0.2.0. Each subtask's lane is
+chosen by the Planner based on its `(language, framework)` via the
+[framework registry](framework-registry/); reviewers see the lifecycle
+phases (`executor_app_running`, `app_not_healthy`, etc.) in the
+LaneStatusGrid and the per-test evidence in the Triager PR comment.
+
+The v0.2 design doc enumerates a longer "future-ramp" set (Go / Rust /
+Ruby support, additional security pipelines via integration) — those
+hook into the existing 5-lane spine through new
+`FrameworkDescriptor`s and don't require lane additions.
 
 </div>
 

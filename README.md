@@ -171,14 +171,25 @@ for each agent's implementation.
 
 ## Status by lane
 
-| Lane | Status | Phase |
-|---|---|---|
-| Functional (pytest) | Active at MVP | 1 |
-| SAST + deps + secrets | Planned | 2 |
-| DAST | Planned | 3 |
-| Fuzz | Planned | 4 |
-| Mutation testing (mutmut) | Planned | 5 |
-| Go / Rust / Ruby language ramp | Planned | 6+ |
+v0.2 swapped the v0.1 pipeline-stage decomposition for a
+**modality-based spine** (Decision 2). Security scanning is delegated to
+dedicated pipelines and out of scope here; TFactory focuses on
+functional + feature testing.
+
+| Lane | v0.2.0 status | Runtime | Coverage | Evidence |
+|---|---|---|---|---|
+| **Unit** | ✅ Active | `tfactory-runner-pytest` (Python) · `tfactory-runner-jest` (TypeScript) | line (cobertura / lcov) | — |
+| **Browser** | ✅ Active | `tfactory-runner-playwright` + `AppRuntime` (docker-compose + HTTP HEAD health-poll) | `null` (Decision 11 — line coverage doesn't apply when the test drives the browser) | screenshots · video · trace.zip |
+| **API** | ✅ Active | per-framework Docker image + HTTP HAR recorder | line where applicable | network.har |
+| **Integration** | ✅ Active | per-framework Docker image + `AppRuntime` (multi-service compose) | line where applicable | network.har · service logs |
+| **Mutation** | ✅ Active | `mutmut` (Python) / Stryker (TypeScript) — one-mutation-per-run probe inside the Evaluator | per-mutant (killed / survived) | — |
+
+All five lanes shipped with v0.2.0. The Planner picks each subtask's
+lane from its `(language, framework)` via the framework registry
+(`frameworks/{pytest,jest,playwright}/descriptor.yaml`). New languages
+(Go / Rust / Ruby) and additional security-pipeline integrations slot
+into this same spine through new `FrameworkDescriptor`s — no lane
+additions required.
 
 ## License
 
