@@ -24,11 +24,27 @@ on the AIFactory PR.
 
 <div class="reveal" markdown="1">
 
-- **Live SPA:** [olafkfreund.github.io/tfactory-demo/](https://olafkfreund.github.io/tfactory-demo/)
+**Try it live — embedded right here:**
+
+<iframe
+  src="https://olafkfreund.github.io/tfactory-demo/"
+  title="TFactory v0.2.0 demo SUT"
+  width="100%"
+  height="540"
+  loading="lazy"
+  style="border: 1px solid #2a2a2a; border-radius: 8px; background: #1a1a1a;"
+  sandbox="allow-scripts allow-same-origin">
+</iframe>
+
+> Pick a **category**, pick a **tone**, click **Generate**, then click
+> **Generate** again with the same dropdowns — you'll see the same text
+> appear (that's the seeded cache bug TFactory's AC#5 test catches).
+
+- **Open in a new tab:** [olafkfreund.github.io/tfactory-demo/](https://olafkfreund.github.io/tfactory-demo/)
 - **Source:** [github.com/olafkfreund/tfactory-demo](https://github.com/olafkfreund/tfactory-demo)
 
 The system-under-test is intentionally tiny: a Vite + React single-page
-app with two dropdowns (tone, audience), a **Generate** button, a
+app with two dropdowns (category, tone), a **Generate** button, a
 **Clear** button, and an output panel. The 5-AC surface covers happy
 path, every dropdown combination, the Clear reset, accessibility on the
 buttons, and a cache-warmup behaviour. AC#5 is the failing case — the
@@ -211,22 +227,22 @@ comment when `TFACTORY_TRIAGER_PR_COMMENT=1` is set.
 - **`generate-produces-non-empty-text`** — `tests/e2e/generate-produces-non-empty-text.spec.ts`
   - signals: stability=stable (1/1 run), coverage=N/A (browser lane), semantic=high
   - intent: CREATE new tests/e2e/generate-produces-non-empty-text.spec.ts
-  - evidence: 📸 [screenshot](evidence/generate-produces-non-empty-text/test-finished-1.png)
+  - evidence: 📸 [screenshot](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac1-generate-non-empty/test-finished-1.png)
 
 - **`greeting-category-vocabulary`** — `tests/e2e/greeting-category-vocabulary.spec.ts`
   - signals: stability=stable, coverage=N/A, semantic=high
   - intent: CREATE new tests/e2e/greeting-category-vocabulary.spec.ts
-  - evidence: 📸 [screenshot](evidence/greeting-category-vocabulary/test-finished-1.png)
+  - evidence: 📸 [screenshot](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac2-greeting-vocab/test-finished-1.png)
 
 - **`snarky-tone-vocabulary`** — `tests/e2e/snarky-tone-vocabulary.spec.ts`
   - signals: stability=stable, coverage=N/A, semantic=high
   - intent: CREATE new tests/e2e/snarky-tone-vocabulary.spec.ts
-  - evidence: 📸 [screenshot](evidence/snarky-tone-vocabulary/test-finished-1.png)
+  - evidence: 📸 [screenshot](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac3-snarky-vocab/test-finished-1.png)
 
 - **`clear-empties-output`** — `tests/e2e/clear-empties-output.spec.ts`
   - signals: stability=stable, coverage=N/A, semantic=high
   - intent: CREATE new tests/e2e/clear-empties-output.spec.ts
-  - evidence: 📸 [screenshot](evidence/clear-empties-output/test-finished-1.png)
+  - evidence: 📸 [screenshot](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac4-clear-empty/test-finished-1.png)
 
 ## Rejected (reject — surfaced for human review)
 
@@ -234,7 +250,7 @@ comment when `TFACTORY_TRIAGER_PR_COMMENT=1` is set.
   - **VERDICT: REJECT** — test ran cleanly and correctly identified a real bug in the SUT
   - signals: stability=stable (deterministic failure), coverage=N/A, semantic=high (test logic is sound; the SUT has a defect)
   - reason: AC#5 expected two consecutive Generate clicks to produce *different* text. The SUT's `src/generate.ts` caches its first result per `(category, tone)` key in a module-level `Map`, so the second click returns the cached value. Test correctly detected this.
-  - evidence: 📸 [screenshot](evidence/different-text-on-consecutive-generates/test-failed-1.png) · 🎥 [video.webm](evidence/different-text-on-consecutive-generates/video.webm) · 🔍 [trace.zip](evidence/different-text-on-consecutive-generates/trace.zip)
+  - evidence: 📸 [screenshot](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac5-different-text/test-failed-1.png) · 🎥 [video.webm](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac5-different-text/video.webm) · 🔍 [trace.zip](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac5-different-text/trace.zip)
   - **operator action required:** fix the `src/generate.ts` cache bug, then re-run; the test will then accept.
 
 ## What this demonstrates about TFactory v0.2.0
