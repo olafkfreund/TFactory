@@ -5,176 +5,101 @@ permalink: /progress/
 nav_order: 8
 ---
 
-# Progress
+# v0.2 progress
 
-Live build status of the TFactory MVP. Each task is one GitHub issue + one
-commit on `main`. Numbers update by hand as commits land — last refresh on
-2026-05-28.
+> Live snapshot of the v0.2 task delivery progress. Numbers update
+> by hand as merges land — last refresh on 2026-05-29.
+>
+> v0.1.0-mvp shipped 12 of 12 tasks on 2026-05-28 (the walking skeleton
+> for Python+pytest); see the
+> [v0.1.0-mvp release](https://github.com/olafkfreund/TFactory/releases/tag/v0.1.0-mvp)
+> and the v0.1 entry in the
+> [changelog](https://github.com/olafkfreund/TFactory/blob/main/CHANGELOG.md).
 
 ## At-a-glance
 
 ```
-Phase 1 (MVP — walking skeleton)
-  ██████████░░░░░░░░░░░░░░░░  5 of 12 tasks delivered
+v0.2 — Enterprise Test Framework Spine (release candidate)
+  ████████████████████████████  16 of 16 tasks shipped
 
-  Done:    #2  #3  #4  #5  #6
-  Ready:   #7 (Gen-Functional)
-  Blocked: #8  #9  #10  #11  #12  #13
-  Carry-forward: #14 (manual smoke only)
+  Done:        #16  #17  #18  #19  #20  #21  #22  #23
+               #24  #25  #26  #27  #28  #29  #30  #31  #32
+  Next step:   tag `v0.2.0` (operator-controlled)
+
+Driver doc:    docs/plans/2026-05-28-enterprise-test-frameworks-design.md
+Task plan:     docs/plans/2026-05-28-enterprise-test-frameworks-tasks.md
 ```
 
-## Closed tasks
+## Shipped — 16 of 16 tasks
 
-| # | Task | Commit | Lines | Closed |
-|---|---|---|---|---|
-| [#2](https://github.com/olafkfreund/TFactory/issues/2) | Task 1: Scaffold TFactory by hard-forking AIFactory | [`d3e321e`](https://github.com/olafkfreund/TFactory/commit/d3e321e) | +317,433 / 1,306 files | 2026-05-28 |
-| [#3](https://github.com/olafkfreund/TFactory/issues/3) | Task 2: MCP server + `/handover-to-tfactory` skill | [`6b72011`](https://github.com/olafkfreund/TFactory/commit/6b72011) | +1,100 / −597 | 2026-05-28 |
-| [#4](https://github.com/olafkfreund/TFactory/issues/4) | Task 3: Workspace + state model + snapshotter | [`a131c2c`](https://github.com/olafkfreund/TFactory/commit/a131c2c) | +750 / −16 | 2026-05-28 |
-| [#5](https://github.com/olafkfreund/TFactory/issues/5) | Task 4: Docker runner + lane dispatcher | [`d74bb46`](https://github.com/olafkfreund/TFactory/commit/d74bb46) | +1,133 | 2026-05-28 |
-| [#6](https://github.com/olafkfreund/TFactory/issues/6) | Task 5: Planner agent (6 commits) | `4333051`…`commit-6-sha` | +~2,800 | 2026-05-28 |
+| # | Task | Merge | Tests added |
+|---|---|---|---|
+| [#16](https://github.com/olafkfreund/TFactory/issues/16) | Task 0: Lane spine rename (functional / sast / dast / fuzz / mutation → unit / browser / api / integration / mutation) | `1ae97f9` + 4 prior commits | +25 alias coverage |
+| [#17](https://github.com/olafkfreund/TFactory/issues/17) | Task 1: Framework descriptor registry (pytest + Jest + Playwright at MVP) | [`1c92280`](https://github.com/olafkfreund/TFactory/commit/1c92280) (7 commits) | +45 |
+| [#18](https://github.com/olafkfreund/TFactory/issues/18) | Task 2: `.tfactory.yml` schema + parser + validator (http / k8s / docker_compose / feature_flag targets) | [`6359590`](https://github.com/olafkfreund/TFactory/commit/6359590) | +69 |
+| [#19](https://github.com/olafkfreund/TFactory/issues/19) | Task 3: `.tfactory/tests-catalog.json` schema + 3-step AC-match lookup | [`51fcebd`](https://github.com/olafkfreund/TFactory/commit/51fcebd) (6 commits) | +50 |
+| [#20](https://github.com/olafkfreund/TFactory/issues/20) | Task 4: Snapshotter extension — lifts `.tfactory.yml` + tests-catalog into workspace context | [`7b2fc8b`](https://github.com/olafkfreund/TFactory/commit/7b2fc8b) (4 commits) | +9 |
+| [#21](https://github.com/olafkfreund/TFactory/issues/21) | Task 5: Planner per-subtask polyglot (language / framework / target_name / intent) | [`43e9ac1`](https://github.com/olafkfreund/TFactory/commit/43e9ac1) (6 commits) | +52 |
+| [#22](https://github.com/olafkfreund/TFactory/issues/22) | Task 6: Gen-Functional generic — descriptor.context_block injection; v0.1 prompt preserved as legacy | [`4c006fb`](https://github.com/olafkfreund/TFactory/commit/4c006fb) (6 commits) | +25 |
+| [#23](https://github.com/olafkfreund/TFactory/issues/23) | Task 7: Per-framework Docker runner images (pytest / jest / playwright) | [`f3f88dd`](https://github.com/olafkfreund/TFactory/commit/f3f88dd) (5 commits) | +6 (skipped when no daemon) |
+| [#24](https://github.com/olafkfreund/TFactory/issues/24) | Task 8: Browser-lane AppRuntime — docker-compose lifecycle + HTTP health-poll | [`d2aa2ae`](https://github.com/olafkfreund/TFactory/commit/d2aa2ae) (6 commits) | +25 |
+| [#25](https://github.com/olafkfreund/TFactory/issues/25) | Task 9: TypeScript Evaluator primitives (tsc / ESLint / Stryker) | [`fde90ef`](https://github.com/olafkfreund/TFactory/commit/fde90ef) (6 commits) | +100 |
+| [#26](https://github.com/olafkfreund/TFactory/issues/26) | Task 10: Evaluator coverage adapter — null-not-zero for Browser lane (Decision 11) | [`4ef9a51`](https://github.com/olafkfreund/TFactory/commit/4ef9a51) (4 commits) | +21 |
+| [#28](https://github.com/olafkfreund/TFactory/issues/28) | Task 12: 15 starter test templates (5 each for Playwright / Jest / pytest) | [`e58adfd`](https://github.com/olafkfreund/TFactory/commit/e58adfd) (5 commits) | +48 |
+| [#29](https://github.com/olafkfreund/TFactory/issues/29) | Task 13: Skills + slash commands (`/tfactory-init` · `/tfactory-add-test` · `/tfactory-from-template` + handover update) | [`782259f`](https://github.com/olafkfreund/TFactory/commit/782259f) (5 commits) | +36 |
+| [#30](https://github.com/olafkfreund/TFactory/issues/30) | Task 14: Portal endpoints — frameworks / templates / skills / catalog | [`94e711b`](https://github.com/olafkfreund/TFactory/commit/94e711b) (6 commits) | +35 effective (43 declared; 8 hit the pre-existing starlette shim path) |
+| [#27](https://github.com/olafkfreund/TFactory/issues/27) | Task 11: Triager update-vs-create + catalog mutation (3-step `lookup_by_ac` decides UPDATE-in-place / CREATE-new / SKIP-locked) | [`cd5396b`](https://github.com/olafkfreund/TFactory/commit/cd5396b) (5 commits) | +24 |
+| [#31](https://github.com/olafkfreund/TFactory/issues/31) | Task 15: `LaneStatusGrid` full reskin (5 independently lit lanes) + `tfactory init` / `tfactory migrate v0_1_catalog` CLIs | [`f4eb9aa`](https://github.com/olafkfreund/TFactory/commit/f4eb9aa) (5 commits) | +21 backend + 27 frontend |
+| [#32](https://github.com/olafkfreund/TFactory/issues/32) | Task 16: Test evidence capture (screenshots / video / trace / HAR) + retention enforcer + portal endpoint + frontend Evidence tab | [`654e77a`](https://github.com/olafkfreund/TFactory/commit/654e77a) (5 commits; commit 4 deferred for follow-up PR) | +86 |
 
-Closing rationale: each task is functionally delivered, dependents built
-on top successfully, and the only remaining sub-tasks wait on
-user-driven `npm run install:backend` / `docker build` / manual smokes —
-all consolidated in [**#14**](https://github.com/olafkfreund/TFactory/issues/14).
+## v0.2.0 release candidate — next step
 
-## What's working today
+All 16 v0.2 tasks merged to `main`. The next operator-controlled step is
+tagging `v0.2.0` + cutting the GitHub Release. One follow-up PR is
+outstanding (~50 lines): Task 16's deferred commit 4 — Triager
+PR-comment evidence-links — which was held back during the parallel
+batch because Task 11 hadn't landed yet. Task 11 is now on main, so the
+follow-up is unblocked whenever someone picks it up.
 
-Across the four closed tasks, **~1,933 lines** of TFactory-original code
-landed (excludes the inherited fork):
+## Test totals
 
-| Module | LoC | What it does |
-|---|---:|---|
-| `apps/backend/agents/tools_pkg/tools/task_control.py` | 572 | The 7 MVP MCP tools (filesystem-backed) |
-| `apps/backend/workspaces/snapshotter.py` | 264 | AIFactory → TFactory read-only snapshot |
-| `apps/backend/tools/runners/docker_runner.py` | 268 | Sandboxed pytest exec via docker / podman |
-| `apps/backend/tools/runners/lane_dispatch.py` | 128 | Lane → runner routing + phase-tagged gates |
-| `apps/backend/tools/runners/lang_registry.py` | 108 | Per-language, per-lane tool table |
-| `docker/runners/python.Dockerfile` | 79 | Locked-down image — pytest + non-root + tini |
-| `scripts/verify-fork.sh` | 184 | Idempotent post-fork sanity check (exit-0 clean) |
-| `.claude/skills/handover-to-tfactory/SKILL.md` | 137 | TFactory-side slash command |
-| `companion-skills/aifactory-handover-to-tfactory/SKILL.md` | 130 | Drop-in mirror for AIFactory's repo |
+| Snapshot | Backend tests | Δ vs prior | Notes |
+|---|---:|---:|---|
+| v0.1.0-mvp baseline (2026-05-28) | **531** | — | Walking skeleton — Python + pytest only |
+| v0.2 in progress (post-batch-1, 2026-05-29) | **1039** (7 skipped) | **+508** | After 14 of 16 v0.2 tasks |
+| v0.2 release candidate (HEAD, 2026-05-29) | **1170** (7 skipped) | **+131** | After all 16 v0.2 tasks — exceeded the +~110 forecast |
 
-Plus the test suite covers **~90 unit cases** across:
+The 7 skips are the docker-runner smoke tests (#23) — they require a
+live daemon and gracefully skip when none is present.
 
-- `test_tfactory_mcp_tools.py` — 21 cases (every MCP tool, every error path)
-- `test_test_plan_lane.py` — 10 cases (Lane enum + Subtask round-trip)
-- `test_snapshotter.py` — 11 cases (mode 0o444, soft fails, real-git diff)
-- `test_docker_runner.py` — 28 cases (argv shape, lockdown flags, timeouts)
-- `test_lang_registry.py` — 10 cases (lookups, MVP filter, unknown lang)
-- `test_lane_dispatch.py` — 10 cases (lit lanes, phase-tagged errors)
-
-All test files pass `python -m py_compile` and use the
-[`conftest.py`](https://github.com/olafkfreund/TFactory/blob/main/tests/conftest.py)
-pre-mock of `claude_agent_sdk` so they collect cleanly without the SDK.
-Execution waits on the venv install (**#14**).
-
-## What's next
-
-### Ready to start (parallel)
-
-- [**#6 — Task 5: Planner**](https://github.com/olafkfreund/TFactory/issues/6).
-  Reads `context/aifactory_spec.md` + `context/diff.patch` from the
-  snapshot, emits lane-tagged subtasks into `test_plan.json`. Net new
-  prompt + agent module.
-- [**#7 — Task 6: Gen-Functional**](https://github.com/olafkfreund/TFactory/issues/7).
-  Consumes the planner's `Lane.FUNCTIONAL` subtasks, generates pytest
-  files, runs them through `dispatch_lane → DockerRunner.run_pytest`.
-  Includes the two MVP guardrails:
-  - **Pre-flight static check**: every import + method call resolves
-    against the diffed code's actual symbols (kills hallucinated tests).
-  - **Flake-risk lint**: dict-order assertions, `time.sleep`, unfrozen
-    `datetime.now()` etc. flagged or rejected.
-
-### Sequential downstream
-
-- **#8 — Task 7: Evaluator** (blocked by #7).
-  Coverage delta + 3x stability re-run + LLM semantic relevance +
-  mutate-and-check sanity probe.
-- **#9 — Task 8: Triager + git writer** (blocked by #8).
-  Dedup + rank + `report.md`/`report.json` + `git commit` accepted
-  tests on the AIFactory feature branch + `gh pr comment`.
-- **#10 — Task 9: Portal backend** (blocked by #9). FastAPI on `:3102`.
-- **#11 — Task 10: Portal frontend** (blocked by #9; parallel with #10).
-  React lane-status grid + report viewer.
-- **#12 — Task 11: e2e smoke** (blocked by #10 + #11).
-  The 9 verification scenarios from the design plan.
-- **#13 — Task 12: Docs + tag v0.1.0-mvp** (blocked by #12).
-
-### Carry-forward (#14)
-
-Seven items waiting on `npm run install:backend` + `docker build`:
-
-- `1.7` inherited pytest baseline
-- `2.5` `/handover-to-tfactory` manual smoke from AIFactory
-- `2.6` MCP tool tests
-- `3.1 / 3.5` lane + snapshotter tests
-- `4.5` docker build + integration smoke
-- `4.6` docker_runner + lang_registry + lane_dispatch tests
-
-## Dependency graph (current state)
+## Pipeline status
 
 ```
-   [DONE]
-  ✓ #2 (Task 1)
-        │
-   ┌────┴────┬─────────┐
-   │         │         │
-✓ #3       ✓ #4      ✓ #5            (parallel batch — all closed)
-(MCP+        (snap-    (docker
- skill)       shotter)   runner)
-   │         │         │
-   └─────────┴────┬────┘
-                  │
-       ┌──────────┴──────────┐
-       ▼                     ▼
-    #6 (T5 Planner)      #7 (T6 Gen-Functional)        ← READY
-       └─────────┬───────────┘
-                 ▼
-            #8 (T7 Evaluator)                          ← blocked by #7
-                 │
-                 ▼
-            #9 (T8 Triager)                            ← blocked by #8
-                 │
-         ┌───────┴───────┐
-         ▼               ▼
-       #10 (T9        #11 (T10
-       portal BE)     portal FE)                       ← blocked by #9
-         └───────┬───────┘
-                 ▼
-            #12 (T11 e2e)                              ← blocked by #10+#11
-                 │
-                 ▼
-            #13 (T12 docs + tag v0.1.0-mvp)            ← blocked by #12
+  Planner ─► Gen-Functional ─► Executor ─► Evaluator ─► Triager
+  (polyglot   (generic via      (DockerRunner    (5 signals;     (catalog-aware
+   per #21)    descriptor #22)   + AppRuntime     null coverage;  in #27, in flight;
+                                  for Browser     TS primitives   dry-run by default)
+                                  #24)            #25)
 ```
 
-## Commit timeline
-
-```
-d74bb46  Task 4: docker runner + lane dispatcher + lang registry  ★ #5
-a131c2c  Task 3: workspace state model + snapshotter              ★ #4
-6b72011  Task 2: MCP server + handover skill                      ★ #3
-d3e321e  Task 1: initial fork from AIFactory @ 676d1d0            ★ #2
-6b04856  docs: fix YAML frontmatter in spec.md
-b8b0f6f  Initial commit: design + spec + Pages site
-```
+All four agents are running on `main`; the only remaining work is the
+Triager catalog-lookup (#27), the lane grid + CLI polish (#31), and
+evidence capture + viewer (#32).
 
 ## Health signals
 
-- ✅ `scripts/verify-fork.sh --no-import` — PASS (15/15 structural checks)
-- ⚪ pytest — not yet run; waiting on venv install (#14)
-- ⚪ docker integration — Dockerfile written; not yet built (#14)
-- ✅ Pages site builds + deploys on every push to `main`
-- ✅ All MCP tool descriptions visible in the catalog with their schemas
-- ⚪ End-to-end handover from AIFactory → TFactory — manual smoke (#14, 2.5)
+- ✅ `scripts/verify-fork.sh --no-import` — passes against the v0.2 module set
+- ✅ pytest (backend) — **1039 passed, 7 skipped** at HEAD `d2aa2ae`
+- ✅ All 5 portal endpoints respond shim-compatibly without fastapi installed
+- ✅ Pages site builds + deploys on every push to `main` (Cayman + custom layout)
+- ⚪ Docker integration — runner images build under CI; per-image smoke
+  tests skip locally without a daemon (recovers via `tfactory-test`)
+- ⚪ End-to-end smoke (`scripts/e2e-smoke.sh`) — 9 scenarios, operator-driven
 
-## Where the unknowns are
+## Cross-references
 
-Things this design hasn't yet validated:
-
-- How chatty is the Planner's prompt with realistic AIFactory specs? Token cost per task TBD.
-- Does the pre-flight static check (Task 6.1) actually catch the 39%-of-failures hallucination rate the research suggests? Need real data.
-- Mutation-and-check sanity probe vs full mutmut at MVP — the cheap proxy may or may not be sufficient until Phase 2 lands.
-- Docker network policy for the eventual DAST lane (Phase 5) — `--network=none` default vs an opt-in bridge for ZAP attacks.
-
-See the [Design Plan]({{ '/design-plan/' | relative_url }}#risks-and-mitigations) risk register for the full list.
+- v0.2 driver doc → [`docs/plans/2026-05-28-enterprise-test-frameworks-design.md`](https://github.com/olafkfreund/TFactory/blob/main/docs/plans/2026-05-28-enterprise-test-frameworks-design.md)
+- v0.2 task plan → [`docs/plans/2026-05-28-enterprise-test-frameworks-tasks.md`](https://github.com/olafkfreund/TFactory/blob/main/docs/plans/2026-05-28-enterprise-test-frameworks-tasks.md)
+- Architecture → [Architecture]({{ '/architecture/' | relative_url }})
+- Changelog → [CHANGELOG.md](https://github.com/olafkfreund/TFactory/blob/main/CHANGELOG.md)
+- Epic + sub-issues → [github.com/olafkfreund/TFactory/issues](https://github.com/olafkfreund/TFactory/issues)
