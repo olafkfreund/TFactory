@@ -5,7 +5,7 @@ nav_order: 1
 ---
 
 <section class="hero">
-  <span class="hero__eyebrow">v0.1.0-mvp · walking skeleton complete</span>
+  <span class="hero__eyebrow">v0.2.0 · Browser + API + Integration lanes + evidence capture</span>
   <h1 class="hero__title">Autonomous tests, AI-graded.</h1>
   <p class="hero__subtitle">
     Hand TFactory a finished AIFactory branch. The four-agent pipeline plans,

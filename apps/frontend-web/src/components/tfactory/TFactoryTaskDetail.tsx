@@ -19,9 +19,11 @@ import { AlertTriangle, Loader2 } from 'lucide-react';
 
 import {
   TFactoryApiError,
+  evidenceArtifactUrl,
   getTaskDetail,
   getTriageReportMarkdown,
   getVerdicts,
+  type EvidenceUrls,
   type TFactoryTaskDetail as TaskDetail,
   type TFactoryVerdict,
   type TFactoryVerdictsDocument,
@@ -29,7 +31,7 @@ import {
 import { LaneStatusGrid } from './LaneStatusGrid';
 import { TFactoryLogViewer } from './TFactoryLogViewer';
 
-type Tab = 'status' | 'lanes' | 'verdicts' | 'report' | 'logs';
+type Tab = 'status' | 'lanes' | 'verdicts' | 'report' | 'logs' | 'evidence';
 
 interface Props {
   specId: string;
@@ -139,6 +141,129 @@ function VerdictTable({ verdicts }: { verdicts: TFactoryVerdict[] }) {
   );
 }
 
+// ── Evidence panel components ───────────────────────────────────────
+
+interface EvidenceTestRowProps {
+  specId: string;
+  testId: string;
+  urls: EvidenceUrls;
+}
+
+function EvidenceTestRow({ specId, testId, urls }: EvidenceTestRowProps) {
+  const screenshots: string[] = Array.isArray(urls.screenshots)
+    ? urls.screenshots
+    : typeof urls.screenshots === 'string'
+      ? [urls.screenshots]
+      : [];
+  const videoUrl = typeof urls.video === 'string' ? urls.video : null;
+  const traceUrl = typeof urls.trace === 'string' ? urls.trace : null;
+  const networkUrl = typeof urls.network === 'string' ? urls.network : null;
+
+  // Build full artifact URL from the relative portal path
+  const buildUrl = (artifactPath: string) => {
+    // If the path is already a full portal URL use it directly,
+    // otherwise construct from specId + testId
+    if (artifactPath.startsWith('/api/')) return artifactPath;
+    return evidenceArtifactUrl(specId, testId, artifactPath);
+  };
+
+  return (
+    <div
+      data-testid={`evidence-row-${testId}`}
+      className="rounded border border-gray-200 p-3 space-y-2"
+    >
+      <h4 className="font-mono text-xs font-semibold text-gray-700">{testId}</h4>
+
+      {screenshots.length > 0 && (
+        <div data-testid="evidence-screenshots" className="flex flex-wrap gap-2">
+          {screenshots.map((url) => {
+            const full = buildUrl(url);
+            const name = url.split('/').pop() ?? 'screenshot';
+            return (
+              <a key={full} href={full} target="_blank" rel="noopener noreferrer">
+                <img
+                  src={full}
+                  alt={`Screenshot ${name}`}
+                  title={name}
+                  className="h-24 w-auto rounded border border-gray-300 object-cover"
+                  data-testid={`evidence-screenshot-img-${name}`}
+                />
+              </a>
+            );
+          })}
+        </div>
+      )}
+
+      {videoUrl && (
+        <div data-testid="evidence-video">
+          {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+          <video
+            src={buildUrl(videoUrl)}
+            controls
+            className="max-h-48 w-full rounded"
+            data-testid="evidence-video-player"
+          />
+        </div>
+      )}
+
+      <div className="flex flex-wrap gap-2">
+        {traceUrl && (
+          <a
+            href={buildUrl(traceUrl)}
+            download
+            className="rounded bg-gray-100 px-2 py-1 text-xs text-gray-700 hover:bg-gray-200"
+            data-testid="evidence-trace-download"
+          >
+            Download trace.zip
+          </a>
+        )}
+        {networkUrl && (
+          <a
+            href={buildUrl(networkUrl)}
+            download
+            className="rounded bg-gray-100 px-2 py-1 text-xs text-gray-700 hover:bg-gray-200"
+            data-testid="evidence-har-download"
+          >
+            Download network.har
+          </a>
+        )}
+      </div>
+    </div>
+  );
+}
+
+interface EvidenceTabProps {
+  specId: string;
+  /** Map of test_id → evidence_urls (from verdicts or catalog). */
+  evidenceByTest: Record<string, EvidenceUrls>;
+}
+
+function EvidenceTab({ specId, evidenceByTest }: EvidenceTabProps) {
+  const entries = Object.entries(evidenceByTest);
+  if (entries.length === 0) {
+    return (
+      <p
+        data-testid="evidence-empty"
+        className="p-4 text-sm text-gray-500"
+      >
+        No evidence captured yet — evidence is collected after tests run.
+      </p>
+    );
+  }
+  return (
+    <div data-testid="evidence-panel" className="space-y-3 p-3">
+      {entries.map(([testId, urls]) => (
+        <EvidenceTestRow
+          key={testId}
+          specId={specId}
+          testId={testId}
+          urls={urls}
+        />
+      ))}
+    </div>
+  );
+}
+
 // ── Main component ───────────────────────────────────────────────────
 
 export function TFactoryTaskDetail({ specId, fetchFn, wsFactory }: Props) {
@@ -156,6 +281,11 @@ export function TFactoryTaskDetail({ specId, fetchFn, wsFactory }: Props) {
   const [reportError, setReportError] = useState<string | null>(null);
   const [loadingReport, setLoadingReport] = useState(false);
   const [reportRequested, setReportRequested] = useState(false);
+
+  // Evidence state — populated lazily when the Evidence tab is selected.
+  // The evidence_urls map is built from verdicts.json if already loaded,
+  // otherwise we show an empty panel until verdicts are fetched.
+  const [evidenceByTest, setEvidenceByTest] = useState<Record<string, EvidenceUrls>>({});
 
   // ── Initial fetch: detail ────────────────────────────────────────
 
@@ -179,6 +309,20 @@ export function TFactoryTaskDetail({ specId, fetchFn, wsFactory }: Props) {
 
   // ── Lazy fetch: verdicts (when tab opened) ──────────────────────
 
+  // Helper: extract evidence_urls from a verdicts document
+  const _extractEvidenceFromVerdicts = useCallback(
+    (doc: TFactoryVerdictsDocument) => {
+      const byTest: Record<string, EvidenceUrls> = {};
+      for (const v of doc.verdicts) {
+        if (v.evidence_urls && Object.keys(v.evidence_urls).length > 0) {
+          byTest[v.test_id] = v.evidence_urls;
+        }
+      }
+      setEvidenceByTest(byTest);
+    },
+    [],
+  );
+
   const onSelectTab = useCallback((tab: Tab) => {
     setActiveTab(tab);
     if (tab === 'verdicts' && !verdictsRequested) {
@@ -189,6 +333,7 @@ export function TFactoryTaskDetail({ specId, fetchFn, wsFactory }: Props) {
         .then((d) => {
           setVerdicts(d);
           setLoadingVerdicts(false);
+          _extractEvidenceFromVerdicts(d);
         })
         .catch((err: unknown) => {
           if (err instanceof TFactoryApiError && err.status === 404) {
@@ -217,7 +362,11 @@ export function TFactoryTaskDetail({ specId, fetchFn, wsFactory }: Props) {
           setLoadingReport(false);
         });
     }
-  }, [specId, fetchFn, verdictsRequested, reportRequested]);
+    // Evidence tab: if verdicts already loaded, extract evidence URLs from them
+    if (tab === 'evidence' && verdicts && Object.keys(evidenceByTest).length === 0) {
+      _extractEvidenceFromVerdicts(verdicts);
+    }
+  }, [specId, fetchFn, verdictsRequested, reportRequested, verdicts, evidenceByTest, _extractEvidenceFromVerdicts]);
 
   // ── Loading / error of the primary detail fetch ─────────────────
 
@@ -250,6 +399,9 @@ export function TFactoryTaskDetail({ specId, fetchFn, wsFactory }: Props) {
   const status = (detail.status_json.status as string | undefined) ?? null;
   const verdictsAvailable = detail.artefacts.verdicts?.exists ?? false;
   const reportAvailable = detail.artefacts.triage_report_md?.exists ?? false;
+  // Evidence tab is enabled when the verdicts artefact exists (evidence is
+  // stored alongside verdicts and populated from evidence_urls in each verdict)
+  const evidenceAvailable = verdictsAvailable;
 
   return (
     <div data-testid="tfactory-task-detail" className="flex flex-col gap-4">
@@ -272,6 +424,10 @@ export function TFactoryTaskDetail({ specId, fetchFn, wsFactory }: Props) {
         <TabButton
           tab="logs" active={activeTab} onClick={onSelectTab}
           label="Logs"
+        />
+        <TabButton
+          tab="evidence" active={activeTab} onClick={onSelectTab}
+          label="Evidence" disabled={!evidenceAvailable}
         />
       </div>
 
@@ -325,6 +481,9 @@ export function TFactoryTaskDetail({ specId, fetchFn, wsFactory }: Props) {
         )}
         {activeTab === 'logs' && (
           <TFactoryLogViewer specId={specId} wsFactory={wsFactory} />
+        )}
+        {activeTab === 'evidence' && (
+          <EvidenceTab specId={specId} evidenceByTest={evidenceByTest} />
         )}
       </div>
     </div>

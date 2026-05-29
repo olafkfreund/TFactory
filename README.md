@@ -7,8 +7,8 @@ aligned to its acceptance criteria, runs them in a sandbox, evaluates quality,
 commits the tests to the feature branch, and posts a coverage + findings report
 to the PR — autonomously.
 
-> Status: **MVP walking skeleton complete · 12 of 12 tasks delivered ·
-> functional lane active · ready to tag `v0.1.0-mvp`.**
+> Status: **v0.2.0 released · 16 of 16 v0.2 tasks delivered ·
+> Browser + API + Integration lanes active · test evidence capture live.**
 > See [Progress](https://olafkfreund.github.io/TFactory/progress/) for the
 > per-task log.
 

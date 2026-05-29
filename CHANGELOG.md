@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.2.0 — Enterprise Test Framework Spine
+
+> Released 2026-05-29. Closes all 16 v0.2 tasks and
+> [#32](https://github.com/olafkfreund/TFactory/issues/32).
+
+### Highlights
+
+- **Test evidence capture** (Task 16) — every Browser-lane failure produces
+  screenshots + video + trace.zip; every API/Integration test produces a
+  network.har. Evidence stored at
+  `spec_dir/findings/evidence/<test_id>/`, served via the portal, and
+  rendered in a new **Evidence** tab in `TFactoryTaskDetail`.
+- **Evidence retention enforcer** — prunes artefacts per configurable
+  policy (failures: forever; flagged: 90 days; passing: 7 days; size cap
+  per task). Fully injectable `now` parameter for deterministic tests.
+- **CatalogEntry evidence fields** — `last_evidence_run_id` and
+  `evidence_urls` (via `evidence_urls_raw` + `.evidence_urls` property)
+  added to the test catalog; backward-compatible with pre-Task-16 catalogs.
+- **EvidencePolicy** in `.tfactory.yml` — concrete typed sub-models for
+  `browser:`, `api:`, and `retention:` blocks replace the freeform
+  placeholder.
+- **Portal evidence endpoint** —
+  `GET /api/tfactory/tasks/{spec_id}/evidence/{test_id}/{artifact}` with
+  content-type by extension and path-traversal rejection on all three
+  path segments.
+- **90 new backend tests** across 4 test modules; **8+ new frontend tests**
+  in `TFactoryTaskDetail.test.tsx`.
+
+---
+
 ## v0.2 — Enterprise Test Framework Spine (in progress)
 
 > Successor to [v0.1.0-mvp](#v010-mvp--walking-skeleton-2026-05-28).

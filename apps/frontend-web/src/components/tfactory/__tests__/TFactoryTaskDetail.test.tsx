@@ -301,3 +301,190 @@ describe('<TFactoryTaskDetail> tab active state', () => {
     expect(screen.getByTestId('tab-status')).toHaveAttribute('aria-selected', 'false');
   });
 });
+
+// ── Evidence tab (Task 16 / #32) ─────────────────────────────────────
+
+/**
+ * Verdict body with evidence_urls populated for one test.
+ */
+const sampleVerdictsWithEvidence = (specId: string, testId: string) => ({
+  evaluator_version: 'task7-commit5',
+  mode: 'initial',
+  generated_at: '2026-05-29T00:00:00+00:00',
+  verdicts: [
+    {
+      test_id: testId,
+      test_file: `tests/e2e/${testId}.spec.ts`,
+      verdict: 'accept',
+      reasons: ['coverage +5%'],
+      evidence_urls: {
+        screenshots: [
+          `/api/tfactory/tasks/${specId}/evidence/${testId}/screenshots/0001.png`,
+        ],
+        video: `/api/tfactory/tasks/${specId}/evidence/${testId}/video.webm`,
+        trace: `/api/tfactory/tasks/${specId}/evidence/${testId}/trace.zip`,
+        network: `/api/tfactory/tasks/${specId}/evidence/${testId}/network.har`,
+      },
+    },
+  ],
+});
+
+describe('<TFactoryTaskDetail> evidence tab (Task 16)', () => {
+  it('renders Evidence tab button when verdicts artefact exists', async () => {
+    const fetchFn = makeUrlAwareFetch({
+      '/spec-x': { jsonBody: sampleDetail({ verdictsExists: true }) },
+    });
+    render(<TFactoryTaskDetail specId="spec-x" fetchFn={fetchFn} />);
+    await waitFor(() => screen.getByTestId('tab-evidence'));
+    expect(screen.getByTestId('tab-evidence')).toBeInTheDocument();
+  });
+
+  it('disables Evidence tab when verdicts artefact is absent', async () => {
+    const fetchFn = makeUrlAwareFetch({
+      '/spec-x': { jsonBody: sampleDetail({ verdictsExists: false }) },
+    });
+    render(<TFactoryTaskDetail specId="spec-x" fetchFn={fetchFn} />);
+    await waitFor(() => screen.getByTestId('tab-evidence'));
+    expect(screen.getByTestId('tab-evidence')).toBeDisabled();
+  });
+
+  it('shows empty message when no verdicts loaded yet', async () => {
+    const fetchFn = makeUrlAwareFetch({
+      '/spec-x': { jsonBody: sampleDetail({ verdictsExists: true }) },
+    });
+    render(<TFactoryTaskDetail specId="spec-x" fetchFn={fetchFn} />);
+    await waitFor(() => screen.getByTestId('tab-evidence'));
+
+    fireEvent.click(screen.getByTestId('tab-evidence'));
+    await waitFor(() => screen.getByTestId('evidence-empty'));
+    expect(screen.getByTestId('evidence-empty')).toBeInTheDocument();
+  });
+
+  it('shows evidence panel after verdicts with evidence_urls are loaded', async () => {
+    const fetchFn = makeUrlAwareFetch({
+      '/spec-x': { jsonBody: sampleDetail({ verdictsExists: true }) },
+      '/spec-x/verdicts.json': {
+        jsonBody: sampleVerdictsWithEvidence('spec-x', 'ac1-login'),
+      },
+    });
+    render(<TFactoryTaskDetail specId="spec-x" fetchFn={fetchFn} />);
+    await waitFor(() => screen.getByTestId('tab-verdicts'));
+
+    // Load verdicts first (populates evidence state)
+    fireEvent.click(screen.getByTestId('tab-verdicts'));
+    await waitFor(() => screen.getByTestId('verdict-table'));
+
+    // Now switch to evidence tab
+    fireEvent.click(screen.getByTestId('tab-evidence'));
+    await waitFor(() => screen.getByTestId('evidence-panel'));
+    expect(screen.getByTestId('evidence-row-ac1-login')).toBeInTheDocument();
+  });
+
+  it('renders screenshot thumbnail img tag', async () => {
+    const fetchFn = makeUrlAwareFetch({
+      '/spec-x': { jsonBody: sampleDetail({ verdictsExists: true }) },
+      '/spec-x/verdicts.json': {
+        jsonBody: sampleVerdictsWithEvidence('spec-x', 'ac1-login'),
+      },
+    });
+    render(<TFactoryTaskDetail specId="spec-x" fetchFn={fetchFn} />);
+    await waitFor(() => screen.getByTestId('tab-verdicts'));
+
+    fireEvent.click(screen.getByTestId('tab-verdicts'));
+    await waitFor(() => screen.getByTestId('verdict-table'));
+    fireEvent.click(screen.getByTestId('tab-evidence'));
+    await waitFor(() => screen.getByTestId('evidence-screenshots'));
+
+    const img = screen.getByTestId('evidence-screenshot-img-0001.png');
+    expect(img.tagName).toBe('IMG');
+    expect((img as HTMLImageElement).src).toContain('evidence/ac1-login/screenshots/0001.png');
+  });
+
+  it('renders video player element', async () => {
+    const fetchFn = makeUrlAwareFetch({
+      '/spec-x': { jsonBody: sampleDetail({ verdictsExists: true }) },
+      '/spec-x/verdicts.json': {
+        jsonBody: sampleVerdictsWithEvidence('spec-x', 'ac1-login'),
+      },
+    });
+    render(<TFactoryTaskDetail specId="spec-x" fetchFn={fetchFn} />);
+    await waitFor(() => screen.getByTestId('tab-verdicts'));
+
+    fireEvent.click(screen.getByTestId('tab-verdicts'));
+    await waitFor(() => screen.getByTestId('verdict-table'));
+    fireEvent.click(screen.getByTestId('tab-evidence'));
+    await waitFor(() => screen.getByTestId('evidence-video'));
+
+    const videoEl = screen.getByTestId('evidence-video-player');
+    expect(videoEl.tagName).toBe('VIDEO');
+    expect((videoEl as HTMLVideoElement).src).toContain('evidence/ac1-login/video.webm');
+  });
+
+  it('renders trace.zip download link', async () => {
+    const fetchFn = makeUrlAwareFetch({
+      '/spec-x': { jsonBody: sampleDetail({ verdictsExists: true }) },
+      '/spec-x/verdicts.json': {
+        jsonBody: sampleVerdictsWithEvidence('spec-x', 'ac1-login'),
+      },
+    });
+    render(<TFactoryTaskDetail specId="spec-x" fetchFn={fetchFn} />);
+    await waitFor(() => screen.getByTestId('tab-verdicts'));
+
+    fireEvent.click(screen.getByTestId('tab-verdicts'));
+    await waitFor(() => screen.getByTestId('verdict-table'));
+    fireEvent.click(screen.getByTestId('tab-evidence'));
+    await waitFor(() => screen.getByTestId('evidence-trace-download'));
+
+    const link = screen.getByTestId('evidence-trace-download') as HTMLAnchorElement;
+    expect(link.href).toContain('evidence/ac1-login/trace.zip');
+    expect(link.getAttribute('download')).not.toBeNull();
+  });
+
+  it('renders network.har download link', async () => {
+    const fetchFn = makeUrlAwareFetch({
+      '/spec-x': { jsonBody: sampleDetail({ verdictsExists: true }) },
+      '/spec-x/verdicts.json': {
+        jsonBody: sampleVerdictsWithEvidence('spec-x', 'ac1-login'),
+      },
+    });
+    render(<TFactoryTaskDetail specId="spec-x" fetchFn={fetchFn} />);
+    await waitFor(() => screen.getByTestId('tab-verdicts'));
+
+    fireEvent.click(screen.getByTestId('tab-verdicts'));
+    await waitFor(() => screen.getByTestId('verdict-table'));
+    fireEvent.click(screen.getByTestId('tab-evidence'));
+    await waitFor(() => screen.getByTestId('evidence-har-download'));
+
+    const link = screen.getByTestId('evidence-har-download') as HTMLAnchorElement;
+    expect(link.href).toContain('evidence/ac1-login/network.har');
+  });
+
+  it('shows evidence-empty when verdicts have no evidence_urls', async () => {
+    const verdictsNoEvidence = {
+      evaluator_version: 'task7-commit5',
+      mode: 'initial',
+      generated_at: '2026-05-29T00:00:00+00:00',
+      verdicts: [
+        {
+          test_id: 'ac1-login',
+          test_file: 'tests/e2e/ac1.spec.ts',
+          verdict: 'accept',
+          reasons: ['ok'],
+          // No evidence_urls field
+        },
+      ],
+    };
+    const fetchFn = makeUrlAwareFetch({
+      '/spec-x': { jsonBody: sampleDetail({ verdictsExists: true }) },
+      '/spec-x/verdicts.json': { jsonBody: verdictsNoEvidence },
+    });
+    render(<TFactoryTaskDetail specId="spec-x" fetchFn={fetchFn} />);
+    await waitFor(() => screen.getByTestId('tab-verdicts'));
+
+    fireEvent.click(screen.getByTestId('tab-verdicts'));
+    await waitFor(() => screen.getByTestId('verdict-table'));
+    fireEvent.click(screen.getByTestId('tab-evidence'));
+    await waitFor(() => screen.getByTestId('evidence-empty'));
+    expect(screen.getByTestId('evidence-empty')).toBeInTheDocument();
+  });
+});
