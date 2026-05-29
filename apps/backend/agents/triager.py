@@ -185,6 +185,65 @@ def _decide_catalog_intent(candidate, catalog) -> CandidateDecision:
     )
 
 
+# ─── Task 11: framework-conventional path derivation (commit 3) ────────
+
+# Fallback extension map when the framework registry cannot be loaded.
+_FRAMEWORK_EXTENSION_FALLBACK: dict[str, str] = {
+    "playwright": ".spec.ts",
+    "jest": ".test.ts",
+    "pytest": ".py",
+}
+
+
+def _derive_create_path(test_id: str, framework: str) -> str:
+    """Derive the conventional test-file path for a new test.
+
+    Consults the framework registry's ``test_path_conventions`` to pick
+    the first pattern, replaces the glob wildcards with the test_id,
+    and returns a repo-relative path string.
+
+    Falls back to a sensible default when the framework is unknown or
+    the registry is unavailable (e.g. in test environments without the
+    ``frameworks/`` directory).
+
+    Args:
+        test_id: The test identifier (e.g. ``"ac1-login-flow"``).
+        framework: Framework name string (e.g. ``"playwright"``).
+
+    Returns:
+        A repo-relative path string like ``"tests/e2e/ac1-login-flow.spec.ts"``.
+    """
+    try:
+        from framework_registry.loader import get_descriptor
+
+        desc = get_descriptor(framework)
+        if desc.test_path_conventions:
+            # Take the first convention pattern.
+            pattern = desc.test_path_conventions[0]
+            # Strip glob wildcards to get the directory prefix.
+            # e.g. "tests/e2e/**/*.spec.ts" → dir="tests/e2e", ext=".spec.ts"
+            # e.g. "tests/**/test_*.py"     → dir="tests",     ext=".py"
+            # e.g. "**/*.test.ts"           → dir="",           ext=".test.ts"
+            import posixpath
+
+            parts = pattern.replace("\\", "/").split("/")
+            dir_parts = [p for p in parts[:-1] if p and p != "**"]
+            filename_pattern = parts[-1]
+            # Extract extension from the filename glob
+            if "." in filename_pattern:
+                ext = filename_pattern[filename_pattern.rindex(".") :]
+            else:
+                ext = _FRAMEWORK_EXTENSION_FALLBACK.get(framework, ".py")
+            dir_prefix = "/".join(dir_parts) if dir_parts else "tests"
+            return posixpath.join(dir_prefix, f"{test_id}{ext}")
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Fallback: derive from known extensions
+    ext = _FRAMEWORK_EXTENSION_FALLBACK.get(framework, ".py")
+    return f"tests/{test_id}{ext}"
+
+
 # ─── Workspace helpers ─────────────────────────────────────────────────
 
 
@@ -329,16 +388,40 @@ async def run_triager(
             )
 
         # ── 2b. Load catalog + decide intent per accepted/flagged ─
-        # (Task 11 / #27 commit 2)
+        # (Task 11 / #27 commits 2-3)
         catalog = _load_catalog_from_spec(spec_dir)
         decisions: dict[str, CandidateDecision] = {}
         for c in candidates:
             if c.verdict_label in ("accept", "flag"):
-                decisions[c.test_id] = _decide_catalog_intent(c, catalog)
+                base_decision = _decide_catalog_intent(c, catalog)
+                # For CREATE: enrich with a framework-conventional path
+                if base_decision.intent == "create":
+                    framework = c.verdict.get("framework") or "pytest"
+                    derived = _derive_create_path(c.test_id, framework)
+                    decisions[c.test_id] = CandidateDecision(
+                        intent="create",
+                        derived_test_file=derived,
+                    )
+                else:
+                    decisions[c.test_id] = base_decision
             # rejects: no catalog lookup, no mutation
 
         # ── 3. Bucket by verdict + dedup the keepers ────────────
-        keepers = [c for c in candidates if c.verdict_label in ("accept", "flag")]
+        # SKIP candidates (operator_locked) are excluded from dedup/rank
+        # so they are not committed or flagged — they only appear in the
+        # report's skip section.
+        keepers = [
+            c
+            for c in candidates
+            if c.verdict_label in ("accept", "flag")
+            and decisions.get(c.test_id, CandidateDecision()).intent != "skip"
+        ]
+        skipped = [
+            c
+            for c in candidates
+            if c.verdict_label in ("accept", "flag")
+            and decisions.get(c.test_id, CandidateDecision()).intent == "skip"
+        ]
         rejects = [c for c in candidates if c.verdict_label == "reject"]
 
         if not candidates:
