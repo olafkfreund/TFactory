@@ -46,6 +46,9 @@
     "autonomous-agents"
   ],
   "devDependencies": {
-    "jsdom": "^27.4.0"
+    "@types/ws": "^8.18.1",
+    "jsdom": "^27.4.0",
+    "playwright": "^1.60.0",
+    "typescript": "^5.0.0"
   }
 }
