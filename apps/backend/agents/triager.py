@@ -451,8 +451,10 @@ async def run_triager(
             committed=committed,
             flagged=flagged,
             rejected=tuple(rejects),
+            skipped=tuple(skipped),
             collisions=dedup_result.collisions,
             dedup_input_count=len(keepers),
+            decisions=decisions,
         )
 
         findings_dir = spec_dir / "findings"
