@@ -34,6 +34,9 @@ if "fastapi" not in sys.modules:
         def get(self, *a, **kw):
             def _d(fn): return fn
             return _d
+        def websocket(self, *a, **kw):
+            def _d(fn): return fn
+            return _d
 
     class _HTTPException(Exception):
         def __init__(self, status_code: int, detail: str = "") -> None:
