@@ -9,6 +9,7 @@ _Mode: initial · Generated at 2026-05-28T15:30:00+00:00_
 | Dedup input | 4 |
 | Committed (accept) | 1 |
 | Flagged | 1 |
+| Skipped (operator locked) | 0 |
 | Rejected | 1 |
 | Dedup collisions | 1 |
 
@@ -25,6 +26,10 @@ _Mode: initial · Generated at 2026-05-28T15:30:00+00:00_
   - signals: coverage +1.20%, stability=stable, mutation=no_mutation, semantic=medium
   - reason: mutation probe found nothing to mutate
   - reason: shallow assertion
+
+## Skipped
+
+_(none)_
 
 ## Rejected
 

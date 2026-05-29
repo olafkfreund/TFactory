@@ -141,13 +141,14 @@ def test_render_json_top_level_shape() -> None:
     assert doc["triager_version"] == "task8-commit3"
     assert doc["mode"] == "initial"
     assert doc["generated_at"] == "2026-05-28T00:00:00+00:00"
-    assert doc["summary"] == {
-        "dedup_input_count": 4,
-        "committed_count": 1,
-        "flagged_count": 1,
-        "rejected_count": 1,
-        "dedup_collision_count": 1,
-    }
+    # Task 11: summary now includes skipped_count
+    summary = doc["summary"]
+    assert summary["dedup_input_count"] == 4
+    assert summary["committed_count"] == 1
+    assert summary["flagged_count"] == 1
+    assert summary["rejected_count"] == 1
+    assert summary["dedup_collision_count"] == 1
+    assert "skipped_count" in summary
     assert len(doc["committed"]) == 1
     assert doc["committed"][0]["test_id"] == "a"
     assert doc["committed"][0]["test_file"] == "tests/test_a.py"
@@ -156,6 +157,8 @@ def test_render_json_top_level_shape() -> None:
     assert doc["dedup_collisions"][0]["kind"] == "byte_identical"
     assert doc["dedup_collisions"][0]["representative"] == "a"
     assert doc["dedup_collisions"][0]["dropped"] == ["a-dup"]
+    # Task 11: skipped bucket present (may be empty)
+    assert "skipped" in doc
 
 
 def test_render_json_empty_buckets() -> None:
@@ -267,6 +270,7 @@ def test_markdown_has_all_sections() -> None:
         "## Summary",
         "## Committed",
         "## Flagged",
+        "## Skipped",
         "## Rejected",
         "## Dedup Collisions",
     ):
@@ -310,8 +314,10 @@ def test_markdown_empty_section_placeholder() -> None:
         dedup_input_count=0,
     )
     md = render_markdown(report)
-    # All four sections empty → each has the placeholder
-    assert md.count("_(none)_") == 4
+    # Task 11 added Skipped section → five sections now emit _(none)_
+    # when all are empty: Committed, Flagged, Skipped, Rejected,
+    # Dedup Collisions
+    assert md.count("_(none)_") == 5
 
 
 def test_markdown_missing_signal_degrades_gracefully() -> None:
