@@ -1,4 +1,4 @@
-"""Triager agent — Task 8, issue #9.
+"""Triager agent — Task 8, issue #9 + Task 11, issue #27.
 
 Final agent in the six-agent TFactory pipeline:
 
@@ -27,6 +27,14 @@ Task 8 commits (all landed):
   (Sub-task 8.4 — trim AIFactory's runners/github/ to a minimal
   pr_comment.py — is deferred to a follow-up commit; the web-server
   still consumes pieces of that tree and needs careful surgery.)
+
+Task 11 commits (v0.2 catalog-aware Triager):
+
+  ✓ commit 1 — Catalog read at Triager start + CandidateDecision dataclass
+  ✓ commit 2 — lookup_by_ac integration + intent derivation
+  ✓ commit 3 — UPDATE vs CREATE branching + framework path derivation
+  ✓ commit 4 — SKIP for operator_locked + report rendering with intent
+  ✓ commit 5 — Catalog mutation + 18+ test cases + close #27
 """
 
 from __future__ import annotations
@@ -36,12 +44,69 @@ import json
 import logging as _logging
 import os
 import traceback
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-
 _triage_log = _logging.getLogger(__name__)
+
+
+# ─── Task 11: per-candidate catalog decision ───────────────────────────
+
+
+@dataclass(frozen=True)
+class CandidateDecision:
+    """Catalog-aware decision for one TriageCandidate (Task 11 / #27).
+
+    Produced by ``_decide_catalog_intent`` after consulting the tests
+    catalog via ``lookup_by_ac``.
+
+    Attributes:
+        intent: One of ``"create"``, ``"update"``, or ``"skip"``.
+        update_target_file: Repo-relative path of the existing test file
+            when ``intent == "update"``.  ``None`` otherwise.
+        skip_reason: Human-readable reason for ``intent == "skip"``,
+            e.g. ``"operator_locked"``.  ``None`` otherwise.
+        derived_test_file: For ``intent == "create"``, the framework-
+            conventional path for the new test file.  May be ``None``
+            when the framework is unknown.
+    """
+
+    intent: Literal["create", "update", "skip"] = "create"
+    update_target_file: str | None = None
+    skip_reason: str | None = None
+    derived_test_file: str | None = None
+
+
+# ─── Task 11: catalog IO helpers ───────────────────────────────────────
+
+
+def _load_catalog_from_spec(spec_dir: Path):
+    """Load tests_catalog from ``spec_dir/context/tests_catalog.json``.
+
+    Returns a ``TestsCatalog`` when the file exists and parses, or
+    ``None`` when absent (v0.1-style run — every candidate is CREATE
+    with no catalog mutation).
+
+    Logs and returns ``None`` on parse failure rather than raising, to
+    keep the Triager's happy path unaffected by a corrupt catalog file.
+    """
+    catalog_path = spec_dir / "context" / "tests_catalog.json"
+    if not catalog_path.exists():
+        return None
+    try:
+        from tests_catalog import TestsCatalog
+
+        raw = json.loads(catalog_path.read_text(encoding="utf-8"))
+        return TestsCatalog.from_dict(raw)
+    except Exception as exc:  # noqa: BLE001
+        _triage_log.warning(
+            "triager: could not parse tests_catalog.json — "
+            "falling back to v0.1 (all CREATE): %s",
+            exc,
+        )
+        return None
 
 
 # ─── Workspace helpers ─────────────────────────────────────────────────
@@ -178,12 +243,14 @@ async def run_triager(
                     source = test_path.read_text(encoding="utf-8")
                 except OSError:
                     source = ""
-            candidates.append(TriageCandidate(
-                test_id=tid,
-                test_file=test_file,
-                verdict=v,
-                source=source,
-            ))
+            candidates.append(
+                TriageCandidate(
+                    test_id=tid,
+                    test_file=test_file,
+                    verdict=v,
+                    source=source,
+                )
+            )
 
         # ── 3. Bucket by verdict + dedup the keepers ────────────
         keepers = [c for c in candidates if c.verdict_label in ("accept", "flag")]
@@ -233,7 +300,8 @@ async def run_triager(
         branch = source_meta.get("branch") or ""
         if committed or flagged:
             files_to_commit = tuple(
-                (c.test_file, c.source) for c in (*committed, *flagged)
+                (c.test_file, c.source)
+                for c in (*committed, *flagged)
                 if c.source  # only commit files we managed to read
             )
             if branch and files_to_commit:
@@ -260,7 +328,8 @@ async def run_triager(
                 git_result_summary = {
                     "skipped": True,
                     "reason": (
-                        "no branch in source.json" if not branch
+                        "no branch in source.json"
+                        if not branch
                         else "no readable test sources"
                     ),
                 }
@@ -301,7 +370,9 @@ async def run_triager(
         flagged_count = len(flagged)
         rejected_count = len(rejects)
         collision_count = len(dedup_result.collisions)
-        final_status = "triaged" if (committed_count or flagged_count) else "triaged_empty"
+        final_status = (
+            "triaged" if (committed_count or flagged_count) else "triaged_empty"
+        )
         _write_status_patch(
             spec_dir,
             status=final_status,
@@ -316,9 +387,7 @@ async def run_triager(
         return True
 
     except Exception as exc:
-        _triage_log.error(
-            "triager failed: %s\n%s", exc, traceback.format_exc()
-        )
+        _triage_log.error("triager failed: %s\n%s", exc, traceback.format_exc())
         _write_status_patch(
             spec_dir,
             status="triager_failed",
@@ -342,6 +411,7 @@ def _load_source_meta(spec_dir: Path) -> dict:
 def _write_empty_report(spec_dir: Path, mode: str) -> None:
     """Write empty placeholder reports for the no-candidates path."""
     from agents.triage_report import build_report, render_json, render_markdown
+
     empty_report = build_report(
         mode=mode,
         generated_at=_now_iso(),
@@ -375,9 +445,7 @@ def schedule_triager(
     """
     if os.environ.get("TFACTORY_AUTO_TRIAGE", "1") == "0":
         return None
-    task = asyncio.create_task(
-        run_triager(spec_dir, project_dir, mode=mode)
-    )
+    task = asyncio.create_task(run_triager(spec_dir, project_dir, mode=mode))
     _BG_TRIAGER_TASKS.add(task)
     task.add_done_callback(_BG_TRIAGER_TASKS.discard)
     return task
