@@ -109,6 +109,82 @@ def _load_catalog_from_spec(spec_dir: Path):
         return None
 
 
+# ─── Task 11: lookup_by_ac + intent decision (commit 2) ────────────────
+
+
+def _extract_candidate_ac(candidate) -> str:
+    """Extract the AC string from a TriageCandidate for catalog lookup.
+
+    The rationale field of the verdict dict carries the AC reference
+    (e.g. ``"AC#1: login sets 24h expiry"``).  Returns ``""`` when
+    the rationale is absent or empty — the caller treats that as a
+    no-match, forcing CREATE intent.
+    """
+    rationale = candidate.verdict.get("rationale") or ""
+    if not rationale:
+        # Fallback: check the reasons list for an "AC#" prefix
+        reasons = candidate.verdict.get("reasons") or []
+        for r in reasons:
+            if isinstance(r, str) and r.strip().startswith("AC"):
+                return r.strip()
+    return str(rationale).strip()
+
+
+def _decide_catalog_intent(candidate, catalog) -> CandidateDecision:
+    """Decide CREATE / UPDATE / SKIP for *candidate* against *catalog*.
+
+    Args:
+        candidate: A ``TriageCandidate`` (accepted or flagged).
+        catalog: A ``TestsCatalog`` or ``None``.  When ``None`` every
+            candidate is CREATE (v0.1 backward-compat path).
+
+    Returns:
+        A ``CandidateDecision`` with the appropriate intent fields set.
+
+    Policy (from design doc, §"Update-vs-create policy"):
+    - ``catalog is None``          → CREATE (no catalog at all)
+    - ``len(matches) == 0``        → CREATE (no existing test)
+    - ``matches[0].operator_locked`` → SKIP (operator pinned)
+    - ``len(matches) == 1``        → UPDATE (clear single match)
+    - ``len(matches) > 1``         → UPDATE on most-recent + warn
+    """
+    if catalog is None:
+        return CandidateDecision(intent="create")
+
+    from tests_catalog import lookup_by_ac
+
+    candidate_ac = _extract_candidate_ac(candidate)
+    matches = lookup_by_ac(catalog, candidate_ac) if candidate_ac else []
+
+    if not matches:
+        return CandidateDecision(intent="create")
+
+    # Operator-locked check comes BEFORE the single/multi split so that
+    # a locked entry always wins, even when it's the only match.
+    if matches[0].operator_locked:
+        return CandidateDecision(
+            intent="skip",
+            skip_reason="operator_locked",
+        )
+
+    if len(matches) > 1:
+        _triage_log.warning(
+            "triager: catalog ambiguity — %d entries match AC %r for "
+            "candidate %r; picking most-recent entry as UPDATE target",
+            len(matches),
+            candidate_ac,
+            candidate.test_id,
+        )
+        best = max(matches, key=lambda e: e.generated_at)
+    else:
+        best = matches[0]
+
+    return CandidateDecision(
+        intent="update",
+        update_target_file=best.test_file,
+    )
+
+
 # ─── Workspace helpers ─────────────────────────────────────────────────
 
 
@@ -251,6 +327,15 @@ async def run_triager(
                     source=source,
                 )
             )
+
+        # ── 2b. Load catalog + decide intent per accepted/flagged ─
+        # (Task 11 / #27 commit 2)
+        catalog = _load_catalog_from_spec(spec_dir)
+        decisions: dict[str, CandidateDecision] = {}
+        for c in candidates:
+            if c.verdict_label in ("accept", "flag"):
+                decisions[c.test_id] = _decide_catalog_intent(c, catalog)
+            # rejects: no catalog lookup, no mutation
 
         # ── 3. Bucket by verdict + dedup the keepers ────────────
         keepers = [c for c in candidates if c.verdict_label in ("accept", "flag")]
