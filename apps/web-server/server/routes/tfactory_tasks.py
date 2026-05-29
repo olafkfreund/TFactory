@@ -27,6 +27,18 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+# Evidence artifact content-type map (mirrors agents.evidence.layout)
+_EVIDENCE_CONTENT_TYPES: dict[str, str] = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webm": "video/webm",
+    ".mp4": "video/mp4",
+    ".zip": "application/zip",
+    ".har": "application/json",
+    ".jsonl": "application/json",
+}
+
 import json as _json_mod
 
 from fastapi import (
@@ -57,6 +69,10 @@ def _resolve_workspace_root() -> Path:
 
 
 _SPEC_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+_TEST_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+# Artifact names: allow subdirectory prefix (e.g. "screenshots/0001.png")
+# but forbid path traversal sequences (.., absolute paths, null bytes).
+_ARTIFACT_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
 
 
 def _validate_spec_id(spec_id: str) -> None:
@@ -454,3 +470,143 @@ def get_catalog(spec_id: str) -> Response:
         ) from exc
 
     return Response(content=content, media_type="application/json")
+
+
+# ─── Evidence artifact endpoint (Task 16 / #32) ────────────────────────────
+
+
+def _validate_test_id(test_id: str) -> None:
+    """Reject path-traversal attempts in the test_id path parameter."""
+    if not test_id or not _TEST_ID_RE.match(test_id):
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail=f"invalid test_id: {test_id!r}",
+        )
+
+
+def _validate_artifact(artifact: str) -> None:
+    """Validate the artifact path segment.
+
+    Rejects:
+    * Empty strings
+    * Absolute paths (starting with /)
+    * Path traversal (contains ``..``)
+    * Null bytes or characters outside ``[A-Za-z0-9._/-]``
+    """
+    if not artifact:
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail="artifact must not be empty",
+        )
+    if ".." in artifact.split("/"):
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail=f"path traversal rejected: {artifact!r}",
+        )
+    if artifact.startswith("/"):
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail=f"artifact must be a relative path, got: {artifact!r}",
+        )
+    if not _ARTIFACT_RE.match(artifact):
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail=f"invalid artifact path: {artifact!r}",
+        )
+
+
+def _evidence_content_type(artifact: str) -> str:
+    """Return the MIME content-type for *artifact* based on its extension."""
+    suffix = Path(artifact).suffix.lower()
+    return _EVIDENCE_CONTENT_TYPES.get(suffix, "application/octet-stream")
+
+
+@router.get("/{spec_id}/evidence/{test_id}/{artifact:path}")
+def get_evidence_artifact(spec_id: str, test_id: str, artifact: str) -> Response:
+    """Serve a raw evidence artifact byte-for-byte.
+
+    URL: ``GET /api/tfactory/tasks/{spec_id}/evidence/{test_id}/{artifact}``
+
+    The ``artifact`` segment is treated as a relative sub-path under
+    ``<spec_dir>/findings/evidence/<test_id>/`` (e.g.
+    ``screenshots/0001.png``, ``video.webm``, ``trace.zip``,
+    ``network.har``).
+
+    Content-type is inferred from the file extension:
+
+    =========  =====================
+    Extension  Content-Type
+    =========  =====================
+    .png       image/png
+    .jpg/.jpeg image/jpeg
+    .webm      video/webm
+    .mp4       video/mp4
+    .zip       application/zip
+    .har       application/json
+    .jsonl     application/json
+    other      application/octet-stream
+    =========  =====================
+
+    Returns:
+
+    * **200** — raw bytes with the appropriate Content-Type
+    * **400** — ``spec_id``, ``test_id``, or ``artifact`` fails validation
+      (path traversal / illegal characters)
+    * **404** — spec not found, test evidence directory not found, or
+      the specific artifact file is absent
+    * **405** — method not allowed (only GET is permitted)
+    """
+    _validate_spec_id(spec_id)
+    _validate_test_id(test_id)
+    _validate_artifact(artifact)
+
+    root = _resolve_workspace_root()
+    spec_dir = _find_spec_dir(root, spec_id)
+    if spec_dir is None:
+        raise HTTPException(
+            status_code=http_status.HTTP_404_NOT_FOUND,
+            detail=f"task not found: {spec_id}",
+        )
+
+    evidence_base = spec_dir / "findings" / "evidence" / test_id
+    if not evidence_base.exists():
+        raise HTTPException(
+            status_code=http_status.HTTP_404_NOT_FOUND,
+            detail=f"evidence not found for test_id: {test_id}",
+        )
+
+    artifact_path = evidence_base / artifact
+
+    # Resolve symlinks and verify the resolved path stays under evidence_base
+    try:
+        resolved = artifact_path.resolve()
+        evidence_base_resolved = evidence_base.resolve()
+        if not str(resolved).startswith(str(evidence_base_resolved) + "/") and resolved != evidence_base_resolved:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail=f"path traversal rejected: {artifact!r}",
+            )
+    except (OSError, ValueError):
+        pass  # File doesn't exist yet; the 404 below will handle it
+
+    if not artifact_path.exists():
+        raise HTTPException(
+            status_code=http_status.HTTP_404_NOT_FOUND,
+            detail=f"artifact not found: {artifact}",
+        )
+
+    if not artifact_path.is_file():
+        raise HTTPException(
+            status_code=http_status.HTTP_404_NOT_FOUND,
+            detail=f"artifact is not a file: {artifact}",
+        )
+
+    try:
+        content = artifact_path.read_bytes()
+    except OSError as exc:
+        raise HTTPException(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"could not read artifact: {exc}",
+        ) from exc
+
+    return Response(content=content, media_type=_evidence_content_type(artifact))

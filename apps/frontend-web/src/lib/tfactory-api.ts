@@ -57,6 +57,11 @@ export interface TFactoryTaskDetail {
   artefacts: Record<TFactoryArtefactKey, TFactoryArtefactMeta>;
 }
 
+// ─── Evidence shapes ──────────────────────────────────────────────────
+
+/** Map of artifact key → URL or list of URLs, as returned by the layout helper. */
+export type EvidenceUrls = Record<string, string | string[]>;
+
 // Subset of the verdicts.json schema the frontend actually reads. The
 // full schema is the Evaluator's contract from Task 7 commit 5.
 export interface TFactoryVerdict {
@@ -73,6 +78,8 @@ export interface TFactoryVerdict {
   };
   semantic_relevance?: 'high' | 'medium' | 'low';
   semantic_notes?: string;
+  /** Evidence artifact URLs — populated by Task 16 evidence capture. */
+  evidence_urls?: EvidenceUrls;
 }
 
 export interface TFactoryVerdictsDocument {
@@ -258,9 +265,28 @@ export async function getPrCommentBody(
   );
 }
 
+/**
+ * Build a portal URL for an evidence artifact.
+ *
+ * Does NOT make a network request — returns the URL string so the caller
+ * can embed it in an ``<img src=...>``, ``<video src=...>``, or anchor tag.
+ *
+ * The artifact path may include a subdirectory prefix, e.g.
+ * ``"screenshots/0001.png"``, ``"video.webm"``, ``"trace.zip"``,
+ * ``"network.har"``.
+ */
+export function evidenceArtifactUrl(
+  specId: string,
+  testId: string,
+  artifact: string,
+): string {
+  return `${TFACTORY_PREFIX}/${specId}/evidence/${testId}/${artifact}`;
+}
+
 // ─── Internal exports for tests ───────────────────────────────────────
 
 export const _internalForTests = {
   TFACTORY_PREFIX,
   _validateSpecId,
+  evidenceArtifactUrl,
 };

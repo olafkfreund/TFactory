@@ -7,11 +7,11 @@ aligned to its acceptance criteria, runs them in a sandbox, evaluates quality,
 commits the tests to the feature branch, and posts a coverage + findings report
 to the PR — autonomously.
 
-> Status: **v0.2 release candidate — 16/16 tasks shipped, ~1100+ tests.**
-> All five lanes (Unit / Browser / API / Integration / Mutation) are
-> fully wired. Tag `v0.2.0` ships once the evidence-capture tab (Task 16)
-> merges. See [Progress](https://olafkfreund.github.io/TFactory/progress/)
-> for the per-task log.
+> Status: **v0.2 release candidate — 16 of 16 v0.2 tasks delivered ·
+> Browser + API + Integration lanes active · test evidence capture live ·
+> ~1175 backend tests.** Tag `v0.2.0` ships next (operator step).
+> See [Progress](https://olafkfreund.github.io/TFactory/progress/) for the
+> per-task log.
 
 ## Quickstart (NixOS / flake-based)
 

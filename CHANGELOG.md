@@ -2,35 +2,56 @@
 
 ## v0.2.0 (release candidate) — Enterprise Test Framework Spine
 
-> All 16 v0.2 tasks shipped. Tag `v0.2.0` will be cut once Task 16 merges
-> the evidence-capture tab (parallel workstream). See
-> [v0.2 in progress](#v02--enterprise-test-framework-spine-in-progress)
-> below for the narrative description.
+> All 16 v0.2 tasks shipped. The `v0.2.0` git tag + GitHub Release is
+> the next operator step.
 >
-> **Backend tests: ~1100+ · Frontend tests: 49 (LaneStatusGrid) + suite**
->
-> Tests: ~1100+ backend · frontend suite green.
+> **Backend tests: ~1175 passing · Frontend tests: 49 (LaneStatusGrid)
+> + 187 (TFactoryTaskDetail with evidence tab) + suite.**
 
 ### All 16 tasks closed
 
 | Task | Issue | What shipped |
 |------|-------|--------------|
-| Task 0  | #16 | Lane spine rename (FUNCTIONAL→UNIT etc.) + portal reskin |
-| Task 1  | #17 | Framework descriptor registry (80 frameworks, 5 lanes) |
+| Task 0  | #16 | Lane spine rename (FUNCTIONAL→UNIT etc.) + frontend reskin |
+| Task 1  | #17 | Framework descriptor registry (3 frameworks at MVP, ramp path to 80) |
 | Task 2  | #18 | `.tfactory.yml` schema + parser + validator (Pydantic v2) |
-| Task 3  | #19 | `.tfactory/tests-catalog.json` schema + helpers + migration primitive |
-| Task 4  | #20 | Executor lane dispatch + DockerRunner image parameterisation |
-| Task 5  | #21 | Planner polyglot subtask schema + auto-fire scaffold |
-| Task 6  | #22 | Gen-Functional generic prompt + framework context injection |
-| Task 7  | #23 | Gen-Functional TypeScript/Playwright lane + template engine |
-| Task 8  | #24 | Browser AppRuntime (docker-compose) + lane lifecycle |
-| Task 9  | #25 | API lane (HTTP/contract) + OpenAPI context injection |
-| Task 10 | #26 | Evaluator TypeScript coverage adapter (tsc/ESLint/Stryker) |
-| Task 11 | #29 | Triager update-in-place vs create-new via tests-catalog |
-| Task 12 | #27 | Integration lane (testcontainers) + docker-compose teardown |
-| Task 13 | #28 | Skills registry + SKILL.md bundle parser |
-| Task 14 | #30 | Portal endpoints: frameworks / templates / skills / catalog |
+| Task 3  | #19 | `.tfactory/tests-catalog.json` schema + atomic IO + 3-step lookup + migration primitive |
+| Task 4  | #20 | Snapshotter extension (reads `.tfactory.yml` + tests-catalog into `context/`) |
+| Task 5  | #21 | Planner polyglot subtask schema `(language, framework, target_name, intent)` |
+| Task 6  | #22 | Gen-Functional generic prompt + per-framework `FrameworkDescriptor.context_block` injection |
+| Task 7  | #23 | Per-framework Docker runner images (pytest / Jest / Playwright) + CI workflow |
+| Task 8  | #24 | Browser-lane AppRuntime (docker-compose + HTTP HEAD health-poll) |
+| Task 9  | #25 | Evaluator per-language primitives — TypeScript `preflight.py` (tsc) / `flake_lint.py` (ESLint) / `mutate_probe.py` (Stryker) |
+| Task 10 | #26 | Evaluator coverage adapter (null vs zero for Browser lane per Decision 11) |
+| Task 11 | #27 | Triager update-in-place vs create-new vs skip-locked via tests-catalog (3-step lookup) |
+| Task 12 | #28 | 15 starter templates (5 each for Playwright / Jest / pytest) + `string.Template` engine |
+| Task 13 | #29 | Skills + slash commands — `tfactory-init` / `tfactory-add-test` / `tfactory-from-template` + handover update |
+| Task 14 | #30 | Portal endpoints — frameworks / templates / skills / catalog (FastAPI shim pattern) |
 | Task 15 | #31 | LaneStatusGrid full reskin (5 independent lanes) + `tfactory init` / `tfactory migrate v0_1_catalog` CLIs |
+| Task 16 | #32 | Test evidence capture (screenshots / video / trace / HAR) + retention enforcer + portal endpoint + frontend Evidence tab |
+
+### Task 16 highlights
+
+- **Test evidence capture** — every Browser-lane failure produces
+  screenshots + video + trace.zip; every API/Integration test produces a
+  network.har. Evidence stored at
+  `spec_dir/findings/evidence/<test_id>/`, served via the portal, and
+  rendered in a new **Evidence** tab in `TFactoryTaskDetail`.
+- **Evidence retention enforcer** — prunes artefacts per configurable
+  policy (failures: forever; flagged: 90 days; passing: 7 days; size cap
+  per task). Fully injectable `now` parameter for deterministic tests.
+- **CatalogEntry evidence fields** — `last_evidence_run_id` and
+  `evidence_urls` (via `evidence_urls_raw` + `.evidence_urls` property)
+  added to the test catalog; backward-compatible with pre-Task-16 catalogs.
+- **EvidencePolicy** in `.tfactory.yml` — concrete typed sub-models for
+  `browser:`, `api:`, and `retention:` blocks replace the freeform
+  placeholder.
+- **Portal evidence endpoint** —
+  `GET /api/tfactory/tasks/{spec_id}/evidence/{test_id}/{artifact}` with
+  content-type by extension and path-traversal rejection on all three
+  path segments.
+- **90 new backend tests** across 4 test modules; **8+ new frontend tests**
+  in `TFactoryTaskDetail.test.tsx`.
 
 ---
 

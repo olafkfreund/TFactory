@@ -312,26 +312,129 @@ class TestData(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# EvidencePolicy (Task 16 placeholder — accept freeform sub-keys)
+# EvidencePolicy (Task 16 / #32 — concrete fields)
 # ---------------------------------------------------------------------------
 
 
-class EvidencePolicy(BaseModel):
-    """Evidence-capture policy (screenshots, video, HAR).
+class EvidenceBrowserPolicy(BaseModel):
+    """Screenshot / video / trace settings for the Browser lane (Playwright).
 
-    Fleshed out in Task 16 / #22.  For v0.2 we accept any sub-key so that
-    forward-compatible configs don't cause parse errors.
+    All fields correspond to Playwright's ``use:`` config options.
+
+    Attributes:
+        screenshot: When to capture screenshots.
+            ``"always"`` captures after every test; ``"on-failure"``
+            captures only when the test fails; ``"never"`` disables.
+        video: When to retain video recordings.
+            ``"always"`` keeps every run; ``"retain-on-failure"`` deletes
+            passing-run videos; ``"never"`` disables.
+        trace: When to record and retain Playwright traces.
+            ``"always"`` traces every run; ``"on-first-retry"`` starts
+            tracing on the first retry (Playwright's default); ``"never"``
+            disables.
+    """
+
+    screenshot: Literal["always", "on-failure", "never"] = "on-failure"
+    video: Literal["always", "retain-on-failure", "never"] = "retain-on-failure"
+    trace: Literal["always", "on-first-retry", "never"] = "on-first-retry"
+
+
+class EvidenceApiPolicy(BaseModel):
+    """HTTP recording settings for the API / Integration lanes.
+
+    Attributes:
+        record_http: When to record outbound HTTP calls to a ``.har`` file.
+            ``"always"`` records every run; ``"on-failure"`` records only
+            when the test fails; ``"never"`` disables recording.
+    """
+
+    record_http: Literal["always", "on-failure", "never"] = "on-failure"
+
+
+class EvidenceRetentionPolicy(BaseModel):
+    """Evidence retention windows per verdict bucket.
+
+    Attributes:
+        failures: How long to keep evidence for *failed* tests.
+            ``"forever"`` keeps indefinitely; ``"<N>_days"`` keeps for
+            N calendar days (e.g. ``"30_days"``).
+        flagged: How long to keep evidence for *flagged* tests.
+        passing: How long to keep evidence for *passing* tests.
+        size_cap_per_task: Maximum total evidence size per spec_id.
+            Format: ``"<N>MB"`` or ``"<N>GB"`` (e.g. ``"500MB"``).
+            ``None`` disables the cap.
+    """
+
+    failures: str = "forever"
+    flagged: str = "90_days"
+    passing: str = "7_days"
+    size_cap_per_task: str | None = "500MB"
+
+    @field_validator("failures", "flagged", "passing")
+    @classmethod
+    def _validate_retention_window(cls, v: str) -> str:
+        if v == "forever":
+            return v
+        if v.endswith("_days"):
+            days_part = v[: -len("_days")]
+            try:
+                n = int(days_part)
+                if n < 1:
+                    raise ValueError("must be a positive integer")
+                return v
+            except ValueError:
+                pass
+        raise ValueError(
+            f"retention window must be 'forever' or '<N>_days' (got {v!r})"
+        )
+
+    @field_validator("size_cap_per_task")
+    @classmethod
+    def _validate_size_cap(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        for suffix in ("GB", "MB", "KB"):
+            if v.endswith(suffix):
+                num_part = v[: -len(suffix)].strip()
+                try:
+                    n = float(num_part)
+                    if n <= 0:
+                        raise ValueError("size must be positive")
+                    return v
+                except ValueError:
+                    pass
+        raise ValueError(f"size_cap_per_task must be '<N>MB' or '<N>GB' (got {v!r})")
+
+
+class EvidencePolicy(BaseModel):
+    """Evidence-capture policy (screenshots, video, trace, HAR).
+
+    Implemented in Task 16 / #32.  Extends the placeholder with concrete
+    typed sub-models while retaining ``extra="allow"`` for forward
+    compatibility.
+
+    Example ``.tfactory.yml`` stanza::
+
+        evidence_policy:
+          browser:
+            screenshot: on-failure
+            video: retain-on-failure
+            trace: on-first-retry
+          api:
+            record_http: always
+          retention:
+            failures: forever
+            flagged: 90_days
+            passing: 7_days
+            size_cap_per_task: 500MB
     """
 
     model_config = {"extra": "allow"}
 
-    # Typed fields added in Task 16:
-    # screenshots: bool = True
-    # video: Literal["on", "off", "retain-on-failure"] = "retain-on-failure"
-    # trace: Literal["on", "off", "retain-on-failure"] = "retain-on-failure"
-    # network_har: bool = False
-    # retention_days_pass: int = 7
-    # retention_days_fail: int | None = None  # keep indefinitely
+    browser: EvidenceBrowserPolicy = Field(default_factory=EvidenceBrowserPolicy)
+    api: EvidenceApiPolicy = Field(default_factory=EvidenceApiPolicy)
+    retention: EvidenceRetentionPolicy = Field(default_factory=EvidenceRetentionPolicy)
 
 
 # ---------------------------------------------------------------------------

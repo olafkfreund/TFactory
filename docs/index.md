@@ -5,7 +5,7 @@ nav_order: 1
 ---
 
 <section class="hero">
-  <span class="hero__eyebrow">v0.2 release candidate · 16/16 tasks shipped · ~1100+ tests</span>
+  <span class="hero__eyebrow">v0.2 RC · Browser + API + Integration lanes + evidence capture · 16/16 tasks shipped</span>
   <h1 class="hero__title">Autonomous tests, AI-graded.</h1>
   <p class="hero__subtitle">
     Hand TFactory a finished AIFactory branch. The four-agent pipeline plans,
