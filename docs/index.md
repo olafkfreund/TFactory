@@ -13,6 +13,10 @@ nav_order: 1
     then posts a triage report to your PR.
   </p>
   <p>
+    <a class="hero__cta hero__cta--primary" href="{{ '/showcase/' | relative_url }}">
+      See the demo →
+    </a>
+    &nbsp;
     <a class="hero__cta" href="https://github.com/olafkfreund/TFactory/releases/tag/v0.2.0">
       v0.2.0 release ↗
     </a>
