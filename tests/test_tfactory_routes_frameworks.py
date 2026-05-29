@@ -189,7 +189,7 @@ def test_list_frameworks_lanes_are_strings() -> None:
 @pytest.mark.parametrize("fw_name", ["pytest", "jest", "playwright"])
 def test_get_framework_returns_full_descriptor_for_known_name(fw_name: str) -> None:
     resp = get_framework(fw_name)
-    payload = json.loads(resp.content)
+    payload = json.loads(resp.body)
     assert payload["name"] == fw_name
     # Required descriptor fields
     assert "language" in payload
@@ -220,37 +220,37 @@ def test_get_framework_rejects_path_traversal(bad: str) -> None:
 def test_get_framework_response_is_valid_json() -> None:
     resp = get_framework("pytest")
     assert resp.media_type == "application/json"
-    parsed = json.loads(resp.content)
+    parsed = json.loads(resp.body)
     assert isinstance(parsed, dict)
 
 
 def test_get_framework_pytest_uses_cobertura_coverage() -> None:
     resp = get_framework("pytest")
-    payload = json.loads(resp.content)
+    payload = json.loads(resp.body)
     assert payload["coverage_strategy"] == "cobertura"
 
 
 def test_get_framework_playwright_uses_skip_coverage() -> None:
     resp = get_framework("playwright")
-    payload = json.loads(resp.content)
+    payload = json.loads(resp.body)
     assert payload["coverage_strategy"] == "skip"
 
 
 def test_get_framework_jest_has_typescript_language() -> None:
     resp = get_framework("jest")
-    payload = json.loads(resp.content)
+    payload = json.loads(resp.body)
     assert payload["language"] == "typescript"
 
 
 def test_get_framework_pytest_has_python_language() -> None:
     resp = get_framework("pytest")
-    payload = json.loads(resp.content)
+    payload = json.loads(resp.body)
     assert payload["language"] == "python"
 
 
 def test_get_framework_runtime_has_image_and_entrypoint() -> None:
     resp = get_framework("pytest")
-    payload = json.loads(resp.content)
+    payload = json.loads(resp.body)
     rt = payload["runtime"]
     assert "image" in rt
     assert "entrypoint" in rt

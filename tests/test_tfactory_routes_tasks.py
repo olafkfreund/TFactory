@@ -424,7 +424,7 @@ def test_serve_artefact_returns_response_with_content(
         "042-x", "test_plan.json", "application/json",
     )
     assert response.media_type == "application/json"
-    assert response.content == body.encode("utf-8")
+    assert response.body == body.encode("utf-8")
 
 
 # ── Per-endpoint sanity tests ──────────────────────────────────────────
@@ -440,7 +440,7 @@ def test_get_verdicts_returns_findings_verdicts_json(
 
     response = get_verdicts("042-x")
     assert response.media_type == "application/json"
-    assert response.content == body.encode("utf-8")
+    assert response.body == body.encode("utf-8")
 
 
 def test_get_verdicts_404_when_missing(workspace_root: Path) -> None:
@@ -460,7 +460,7 @@ def test_get_triage_report_json_returns_file(
 
     response = get_triage_report_json("042-x")
     assert response.media_type == "application/json"
-    assert response.content == body.encode("utf-8")
+    assert response.body == body.encode("utf-8")
 
 
 def test_get_triage_report_md_returns_markdown(
@@ -473,7 +473,7 @@ def test_get_triage_report_md_returns_markdown(
 
     response = get_triage_report_md("042-x")
     assert response.media_type == "text/markdown"
-    assert response.content == body.encode("utf-8")
+    assert response.body == body.encode("utf-8")
 
 
 def test_get_test_plan_returns_top_level_file(
@@ -487,7 +487,7 @@ def test_get_test_plan_returns_top_level_file(
 
     response = get_test_plan("042-x")
     assert response.media_type == "application/json"
-    assert response.content == body.encode("utf-8")
+    assert response.body == body.encode("utf-8")
 
 
 def test_get_pr_comment_body_returns_markdown(
@@ -500,7 +500,7 @@ def test_get_pr_comment_body_returns_markdown(
 
     response = get_pr_comment_body("042-x")
     assert response.media_type == "text/markdown"
-    assert response.content == body.encode("utf-8")
+    assert response.body == body.encode("utf-8")
 
 
 # ── Path-traversal protection (re-asserted per endpoint) ───────────────
@@ -548,7 +548,7 @@ def test_artefact_preserves_utf8_content(workspace_root: Path) -> None:
     (spec_dir / "findings" / "triage_report.md").write_text(body, encoding="utf-8")
 
     response = get_triage_report_md("042-x")
-    assert response.content.decode("utf-8") == body
+    assert response.body.decode("utf-8") == body
 
 
 # ── Log-tail primitives ───────────────────────────────────────────────
@@ -722,7 +722,7 @@ def test_get_catalog_returns_snapshotted_catalog(workspace_root: Path) -> None:
 
     response = get_catalog("042-x")
     assert response.media_type == "application/json"
-    assert response.content == catalog_body.encode("utf-8")
+    assert response.body == catalog_body.encode("utf-8")
 
 
 def test_get_catalog_returns_404_when_not_snapshotted(workspace_root: Path) -> None:
@@ -762,5 +762,5 @@ def test_get_catalog_catalog_json_is_valid_json(workspace_root: Path) -> None:
     (context_dir / "tests_catalog.json").write_text(json.dumps(catalog))
 
     response = get_catalog("042-x")
-    parsed = json.loads(response.content)
+    parsed = json.loads(response.body)
     assert parsed == catalog

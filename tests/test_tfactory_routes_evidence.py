@@ -199,7 +199,7 @@ def test_get_evidence_artifact_png(workspace_root: Path) -> None:
     _make_evidence(spec_dir, "ac1-login", "screenshot.png", b"\x89PNG\r\n")
 
     response = get_evidence_artifact("spec-001", "ac1-login", "screenshot.png")
-    assert response.content == b"\x89PNG\r\n"
+    assert response.body == b"\x89PNG\r\n"
     assert response.media_type == "image/png"
 
 
@@ -211,7 +211,7 @@ def test_get_evidence_artifact_webm(workspace_root: Path) -> None:
     _make_evidence(spec_dir, "ac1-login", "video.webm", b"\x1aEBML")
 
     response = get_evidence_artifact("spec-001", "ac1-login", "video.webm")
-    assert response.content == b"\x1aEBML"
+    assert response.body == b"\x1aEBML"
     assert response.media_type == "video/webm"
 
 
@@ -223,7 +223,7 @@ def test_get_evidence_artifact_zip(workspace_root: Path) -> None:
     _make_evidence(spec_dir, "ac1-login", "trace.zip", b"PK\x03\x04")
 
     response = get_evidence_artifact("spec-001", "ac1-login", "trace.zip")
-    assert response.content == b"PK\x03\x04"
+    assert response.body == b"PK\x03\x04"
     assert response.media_type == "application/zip"
 
 
@@ -236,7 +236,7 @@ def test_get_evidence_artifact_har(workspace_root: Path) -> None:
     _make_evidence(spec_dir, "ac1-login", "network.har", har_content)
 
     response = get_evidence_artifact("spec-001", "ac1-login", "network.har")
-    assert response.content == har_content
+    assert response.body == har_content
     assert response.media_type == "application/json"
 
 
@@ -248,7 +248,7 @@ def test_get_evidence_artifact_screenshot_in_subdir(workspace_root: Path) -> Non
     _make_evidence(spec_dir, "ac1-login", "screenshots/0001.png", b"PNG")
 
     response = get_evidence_artifact("spec-001", "ac1-login", "screenshots/0001.png")
-    assert response.content == b"PNG"
+    assert response.body == b"PNG"
     assert response.media_type == "image/png"
 
 

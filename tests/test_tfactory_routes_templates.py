@@ -139,7 +139,7 @@ def test_list_templates_for_framework_returns_expected_count(
 ) -> None:
     req = _MockRequest(framework=fw_name)
     resp = list_templates(req)
-    payload = json.loads(resp.content)
+    payload = json.loads(resp.body)
     assert payload["framework"] == fw_name
     assert payload["count"] == expected_count
     assert len(payload["templates"]) == expected_count
@@ -148,7 +148,7 @@ def test_list_templates_for_framework_returns_expected_count(
 def test_list_templates_rows_have_name_and_metadata() -> None:
     req = _MockRequest(framework="pytest")
     resp = list_templates(req)
-    payload = json.loads(resp.content)
+    payload = json.loads(resp.body)
     for row in payload["templates"]:
         assert "name" in row
         assert "metadata" in row
@@ -162,7 +162,7 @@ def test_list_templates_rows_have_name_and_metadata() -> None:
 def test_list_templates_sorted_alphabetically() -> None:
     req = _MockRequest(framework="pytest")
     resp = list_templates(req)
-    payload = json.loads(resp.content)
+    payload = json.loads(resp.body)
     names = [r["name"] for r in payload["templates"]]
     assert names == sorted(names)
 
@@ -211,7 +211,7 @@ def test_list_templates_path_traversal_in_framework_param_returns_400() -> None:
 
 def test_get_template_returns_metadata_and_body_for_pytest() -> None:
     resp = get_template("pytest", "function-pure.py.tmpl")
-    payload = json.loads(resp.content)
+    payload = json.loads(resp.body)
     assert payload["name"] == "function-pure.py.tmpl"
     assert payload["framework"] == "pytest"
     assert "metadata" in payload
@@ -221,7 +221,7 @@ def test_get_template_returns_metadata_and_body_for_pytest() -> None:
 
 def test_get_template_returns_metadata_and_body_for_jest() -> None:
     resp = get_template("jest", "function-pure.test.ts.tmpl")
-    payload = json.loads(resp.content)
+    payload = json.loads(resp.body)
     assert payload["name"] == "function-pure.test.ts.tmpl"
     assert payload["framework"] == "jest"
     assert "body" in payload
@@ -229,7 +229,7 @@ def test_get_template_returns_metadata_and_body_for_jest() -> None:
 
 def test_get_template_returns_metadata_and_body_for_playwright() -> None:
     resp = get_template("playwright", "login-flow.spec.ts.tmpl")
-    payload = json.loads(resp.content)
+    payload = json.loads(resp.body)
     assert payload["name"] == "login-flow.spec.ts.tmpl"
     assert payload["framework"] == "playwright"
     assert "body" in payload
@@ -243,14 +243,14 @@ def test_get_template_returns_json_response() -> None:
 
 def test_get_template_metadata_has_description() -> None:
     resp = get_template("pytest", "function-pure.py.tmpl")
-    payload = json.loads(resp.content)
+    payload = json.loads(resp.body)
     assert isinstance(payload["metadata"]["description"], str)
     assert len(payload["metadata"]["description"]) > 0
 
 
 def test_get_template_metadata_has_vars_list() -> None:
     resp = get_template("pytest", "function-pure.py.tmpl")
-    payload = json.loads(resp.content)
+    payload = json.loads(resp.body)
     assert isinstance(payload["metadata"]["vars"], list)
 
 
@@ -260,14 +260,14 @@ def test_get_template_metadata_has_vars_list() -> None:
 def test_playwright_template_body_contains_var_placeholders() -> None:
     """Playwright templates use ${var} syntax for target URL, selectors, etc."""
     resp = get_template("playwright", "login-flow.spec.ts.tmpl")
-    payload = json.loads(resp.content)
+    payload = json.loads(resp.body)
     body = payload["body"]
     assert "${" in body, "Expected ${var} placeholders in playwright login-flow template"
 
 
 def test_playwright_template_body_references_target_base_url() -> None:
     resp = get_template("playwright", "login-flow.spec.ts.tmpl")
-    payload = json.loads(resp.content)
+    payload = json.loads(resp.body)
     assert "${target_base_url}" in payload["body"]
 
 
@@ -278,7 +278,7 @@ def test_playwright_template_body_references_target_base_url() -> None:
 ])
 def test_template_body_is_non_empty(fw: str, tmpl: str) -> None:
     resp = get_template(fw, tmpl)
-    payload = json.loads(resp.content)
+    payload = json.loads(resp.body)
     assert len(payload["body"].strip()) > 0
 
 

@@ -137,7 +137,7 @@ def test_list_skills_empty_when_dir_absent(
     """When the skills dir does not exist, return {"skills": []}."""
     monkeypatch.setenv("TFACTORY_SKILLS_DIR", str(tmp_path / "nonexistent"))
     resp = list_skills()
-    payload = json.loads(resp.content)
+    payload = json.loads(resp.body)
     assert payload == {"skills": []}
 
 
@@ -146,7 +146,7 @@ def test_list_skills_empty_when_skills_dir_is_empty(
 ) -> None:
     """Empty dir → empty list."""
     resp = list_skills()
-    payload = json.loads(resp.content)
+    payload = json.loads(resp.body)
     assert payload == {"skills": []}
 
 
@@ -169,7 +169,7 @@ def test_list_skills_returns_parsed_frontmatter(skills_dir: Path) -> None:
     )
 
     resp = list_skills()
-    payload = json.loads(resp.content)
+    payload = json.loads(resp.body)
     skills = payload["skills"]
     assert len(skills) == 2
 
@@ -187,7 +187,7 @@ def test_list_skills_returns_parsed_frontmatter(skills_dir: Path) -> None:
 def test_list_skills_single_skill(skills_dir: Path) -> None:
     _write_skill(skills_dir, "my-skill", description="Solo skill.")
     resp = list_skills()
-    payload = json.loads(resp.content)
+    payload = json.loads(resp.body)
     assert len(payload["skills"]) == 1
     assert payload["skills"][0]["name"] == "my-skill"
     assert payload["skills"][0]["description"] == "Solo skill."
@@ -205,7 +205,7 @@ def test_list_skills_skips_malformed_skill_md(skills_dir: Path) -> None:
     (broken_dir / "SKILL.md").write_text("---\n{not: valid: yaml: [\n---\nBody\n")
 
     resp = list_skills()
-    payload = json.loads(resp.content)
+    payload = json.loads(resp.body)
     # Only the good skill should appear
     assert len(payload["skills"]) == 1
     assert payload["skills"][0]["name"] == "good-skill"
@@ -219,7 +219,7 @@ def test_list_skills_skips_skill_dir_without_skill_md(skills_dir: Path) -> None:
     (no_md_dir / "README.md").write_text("not a SKILL.md")
 
     resp = list_skills()
-    payload = json.loads(resp.content)
+    payload = json.loads(resp.body)
     assert len(payload["skills"]) == 1
 
 
@@ -231,7 +231,7 @@ def test_list_skills_skips_missing_frontmatter_delimiter(skills_dir: Path) -> No
     (no_fm / "SKILL.md").write_text("name: no-frontmatter\nNo leading --- delimiter\n")
 
     resp = list_skills()
-    payload = json.loads(resp.content)
+    payload = json.loads(resp.body)
     assert len(payload["skills"]) == 1
 
 
@@ -242,7 +242,7 @@ def test_list_skills_response_shape(skills_dir: Path) -> None:
     """Response is exactly {"skills": [...]} — no extra top-level keys."""
     _write_skill(skills_dir, "shape-skill")
     resp = list_skills()
-    payload = json.loads(resp.content)
+    payload = json.loads(resp.body)
     assert set(payload.keys()) == {"skills"}
     assert isinstance(payload["skills"], list)
 
@@ -251,7 +251,7 @@ def test_list_skills_each_row_has_required_fields(skills_dir: Path) -> None:
     """Each skill row exposes name, description, when_to_use, allowed_tools."""
     _write_skill(skills_dir, "field-skill")
     resp = list_skills()
-    payload = json.loads(resp.content)
+    payload = json.loads(resp.body)
     for row in payload["skills"]:
         assert "name" in row
         assert "description" in row
@@ -263,7 +263,7 @@ def test_list_skills_allowed_tools_normalised_to_underscore(skills_dir: Path) ->
     """SKILL.md uses 'allowed-tools'; API response exposes 'allowed_tools'."""
     _write_skill(skills_dir, "norm-skill", allowed_tools=["mcp__foo__bar"])
     resp = list_skills()
-    payload = json.loads(resp.content)
+    payload = json.loads(resp.body)
     row = payload["skills"][0]
     assert "allowed_tools" in row
     assert "allowed-tools" not in row
