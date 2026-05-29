@@ -5,6 +5,20 @@
 > All 16 v0.2 tasks shipped. The `v0.2.0` git tag + GitHub Release is
 > the next operator step.
 >
+> **Task 16 follow-up (deferred commit 4) landed:** Triager now surfaces
+> portal evidence links per accepted/flagged candidate in
+> `triage_report.md`, so PR reviewers can click straight from the comment
+> to screenshots / video / trace.zip / network.har. Threaded via a new
+> optional `spec_dir` param on `build_report`; v0.1 callers
+> (`build_report` without `spec_dir`) stay backward-compatible with
+> `evidence_urls_by_test_id={}`. Ordering is fixed (screenshots → video →
+> trace → network → others by sorted key) so the report stays
+> byte-identical for the same input. 7 new tests in
+> `tests/test_triage_report.py` covering: empty-evidence v0.1 path,
+> spec_dir walk wiring URLs into the report, markdown emoji bullets
+> rendered, no-evidence-dir omitted, flagged-yes/rejected-no scope,
+> deterministic ordering, ghost-test_id pruned.
+>
 > **Backend tests: ~1175 passing · Frontend tests: 49 (LaneStatusGrid)
 > + 187 (TFactoryTaskDetail with evidence tab) + suite.**
 

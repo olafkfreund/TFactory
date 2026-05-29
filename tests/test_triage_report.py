@@ -364,3 +364,149 @@ def test_markdown_trailing_newline() -> None:
     )
     md = render_markdown(report)
     assert md.endswith("\n")
+
+
+# ── Task 16 follow-up: evidence-link rendering ─────────────────────────
+
+
+def _make_evidence(spec_dir: Path, test_id: str, *,
+                   screenshots: int = 0, video: bool = False,
+                   trace: bool = False, har: bool = False) -> Path:
+    """Create a synthetic evidence dir for *test_id* under *spec_dir*."""
+    evidence_dir = spec_dir / "findings" / "evidence" / test_id
+    if screenshots:
+        (evidence_dir / "screenshots").mkdir(parents=True, exist_ok=True)
+        for i in range(screenshots):
+            (evidence_dir / "screenshots" / f"{i:04d}.png").write_bytes(b"\x89PNG")
+    else:
+        evidence_dir.mkdir(parents=True, exist_ok=True)
+    if video:
+        (evidence_dir / "video.webm").write_bytes(b"WEBM")
+    if trace:
+        (evidence_dir / "trace.zip").write_bytes(b"PK\x03\x04")
+    if har:
+        (evidence_dir / "network.har").write_text('{"log":{"entries":[]}}')
+    return evidence_dir
+
+
+def test_build_report_without_spec_dir_has_empty_evidence_dict(tmp_path: Path) -> None:
+    """v0.1 callers don't pass spec_dir — evidence_urls_by_test_id stays empty."""
+    report = build_report(
+        mode="initial", generated_at="2026-05-28T00:00:00+00:00",
+        committed=[_cand(test_id="t1")], flagged=[], rejected=[],
+        collisions=[], dedup_input_count=1,
+    )
+    assert report.evidence_urls_by_test_id == {}
+    md = render_markdown(report)
+    assert "evidence:" not in md
+
+
+def test_build_report_with_spec_dir_walks_evidence_for_committed(tmp_path: Path) -> None:
+    """When spec_dir is passed and findings/evidence/<test_id>/ exists,
+    its URLs are wired into the report."""
+    spec_dir = tmp_path / "spec-abc"
+    _make_evidence(spec_dir, "t1", screenshots=3, video=True, trace=True, har=True)
+    report = build_report(
+        mode="initial", generated_at="2026-05-28T00:00:00+00:00",
+        committed=[_cand(test_id="t1")], flagged=[], rejected=[],
+        collisions=[], dedup_input_count=1, spec_dir=spec_dir,
+    )
+    urls = report.evidence_urls_by_test_id["t1"]
+    assert isinstance(urls.get("screenshots"), list)
+    assert len(urls["screenshots"]) == 3
+    assert urls["video"].endswith("/video.webm")
+    assert urls["trace"].endswith("/trace.zip")
+    assert urls["network"].endswith("/network.har")
+    # URL contains both the spec_id and test_id
+    assert "/api/tfactory/tasks/spec-abc/evidence/t1/" in urls["video"]
+
+
+def test_render_markdown_includes_evidence_bullets(tmp_path: Path) -> None:
+    """Accepted candidate with evidence renders evidence bullets in the
+    Markdown report so PR reviewers can click through."""
+    spec_dir = tmp_path / "spec-xyz"
+    _make_evidence(spec_dir, "login-flow", screenshots=2, video=True, har=True)
+    report = build_report(
+        mode="initial", generated_at="2026-05-28T00:00:00+00:00",
+        committed=[_cand(test_id="login-flow")], flagged=[], rejected=[],
+        collisions=[], dedup_input_count=1, spec_dir=spec_dir,
+    )
+    md = render_markdown(report)
+    assert "📸 2 screenshots" in md
+    assert "🎥 [video]" in md
+    assert "🌐 [network.har]" in md
+    # No trace.zip on disk → not rendered
+    assert "🔍 [trace.zip]" not in md
+
+
+def test_render_markdown_omits_evidence_when_dir_absent(tmp_path: Path) -> None:
+    """Candidate without an evidence dir gets no evidence bullets — even
+    when spec_dir is passed."""
+    spec_dir = tmp_path / "spec-xyz"
+    spec_dir.mkdir()  # no findings/evidence/ subdir
+    report = build_report(
+        mode="initial", generated_at="2026-05-28T00:00:00+00:00",
+        committed=[_cand(test_id="solo")], flagged=[], rejected=[],
+        collisions=[], dedup_input_count=1, spec_dir=spec_dir,
+    )
+    md = render_markdown(report)
+    assert "evidence:" not in md
+    assert report.evidence_urls_by_test_id == {}
+
+
+def test_evidence_rendered_for_flagged_not_rejected(tmp_path: Path) -> None:
+    """Evidence rendering covers accepted + flagged candidates only — rejected
+    tests don't ship to the PR and don't need evidence-link surfacing.
+    Rejection means the test failed quality gates; the report shows it for
+    the audit trail but its evidence (if any) isn't actionable for reviewers."""
+    spec_dir = tmp_path / "spec-rej"
+    _make_evidence(spec_dir, "flag1", video=True)
+    _make_evidence(spec_dir, "rej1", video=True)
+    report = build_report(
+        mode="initial", generated_at="2026-05-28T00:00:00+00:00",
+        committed=[],
+        flagged=[_cand(test_id="flag1", verdict="flag")],
+        rejected=[_cand(test_id="rej1", verdict="reject")],
+        collisions=[], dedup_input_count=2, spec_dir=spec_dir,
+    )
+    md = render_markdown(report)
+    # flagged candidate gets evidence
+    flag_section = md.split("## Flagged")[1].split("##")[0]
+    assert "🎥 [video]" in flag_section
+    # rejected candidate doesn't (the dict is only built for committed + flagged)
+    rej_section = md.split("## Rejected")[1].split("##")[0]
+    assert "🎥 [video]" not in rej_section
+
+
+def test_evidence_dict_deterministic_ordering(tmp_path: Path) -> None:
+    """Same input → byte-identical evidence section. Screenshots ordered
+    by filename; video/trace/network in fixed insertion order."""
+    spec_dir = tmp_path / "spec-det"
+    _make_evidence(spec_dir, "t1", screenshots=3, video=True, trace=True, har=True)
+    report_a = build_report(
+        mode="initial", generated_at="2026-05-28T00:00:00+00:00",
+        committed=[_cand(test_id="t1")], flagged=[], rejected=[],
+        collisions=[], dedup_input_count=1, spec_dir=spec_dir,
+    )
+    report_b = build_report(
+        mode="initial", generated_at="2026-05-28T00:00:00+00:00",
+        committed=[_cand(test_id="t1")], flagged=[], rejected=[],
+        collisions=[], dedup_input_count=1, spec_dir=spec_dir,
+    )
+    assert render_markdown(report_a) == render_markdown(report_b)
+
+
+def test_evidence_walks_only_candidates_in_report(tmp_path: Path) -> None:
+    """An evidence dir for a test_id not in committed/flagged is ignored —
+    we never surface URLs for tests the Triager didn't see."""
+    spec_dir = tmp_path / "spec-ghost"
+    _make_evidence(spec_dir, "ghost", video=True)
+    report = build_report(
+        mode="initial", generated_at="2026-05-28T00:00:00+00:00",
+        committed=[_cand(test_id="real")], flagged=[], rejected=[],
+        collisions=[], dedup_input_count=1, spec_dir=spec_dir,
+    )
+    assert "ghost" not in report.evidence_urls_by_test_id
+    assert "real" not in report.evidence_urls_by_test_id  # no evidence dir
+    md = render_markdown(report)
+    assert "ghost" not in md

@@ -561,6 +561,7 @@ async def run_triager(
             collisions=dedup_result.collisions,
             dedup_input_count=len(keepers),
             decisions=decisions,
+            spec_dir=spec_dir,
         )
 
         findings_dir = spec_dir / "findings"

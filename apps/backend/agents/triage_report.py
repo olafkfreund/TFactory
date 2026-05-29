@@ -1,4 +1,5 @@
-"""Triager report rendering — Task 8 (#9) commit 3 + Task 11 (#27) commit 4.
+"""Triager report rendering — Task 8 (#9) commit 3 + Task 11 (#27) commit 4
++ Task 16 (#32) commit 4 follow-up (evidence-links).
 
 Pure-compute renderer that takes the output of commit 2's dedup +
 rank primitives and produces two artefacts:
@@ -18,12 +19,21 @@ Task 11 (commit 4) extends the report with per-candidate ``intent``
 fields (``"create"`` / ``"update"`` / ``"skip"``) surfaced from the
 catalog lookup step in ``agents/triager.py``.  A new ``skipped`` bucket
 lists operator-locked candidates that were not committed.
+
+Task 16 follow-up (deferred from #32 commit 4): when ``build_report``
+is given a ``spec_dir``, the Markdown renderer surfaces portal evidence
+links per accepted/flagged candidate.  Evidence URLs follow the contract
+shipped in Task 14:
+``/api/tfactory/tasks/{spec_id}/evidence/{test_id}/{artifact}``.
+Reviewers click the links to inspect screenshots, video, trace.zip and
+network HAR for the test before trusting the AI-generated assertion.
 """
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Sequence
 
 from agents.triage_dedup import DedupCollision, TriageCandidate
@@ -76,6 +86,9 @@ class TriageReport:
     collisions: tuple[DedupCollision, ...] = field(default_factory=tuple)
     dedup_input_count: int = 0
     decisions: dict = field(default_factory=dict)  # test_id → CandidateDecision
+    # Task 16 follow-up: test_id → evidence_urls dict (per evidence_urls_for_test).
+    # Empty when build_report was called without spec_dir (e.g. v0.1 callers).
+    evidence_urls_by_test_id: dict = field(default_factory=dict)
 
     @property
     def committed_count(self) -> int:
@@ -97,6 +110,36 @@ class TriageReport:
 # ─── Build helper ───────────────────────────────────────────────────────
 
 
+def _collect_evidence_urls(
+    spec_dir: Path,
+    candidates: Sequence[TriageCandidate],
+) -> dict[str, dict]:
+    """Walk ``spec_dir/findings/evidence/<test_id>/`` for each candidate
+    and build a ``{test_id → evidence_urls dict}`` mapping for the renderer.
+
+    Returns an empty dict if no candidate has evidence on disk. Failures
+    to read evidence layout for any single test are swallowed so the
+    report never crashes on a malformed evidence dir.
+    """
+    try:
+        from agents.evidence.layout import evidence_urls_for_test
+    except Exception:
+        return {}
+    spec_id = spec_dir.name
+    out: dict[str, dict] = {}
+    for c in candidates:
+        evidence_dir = spec_dir / "findings" / "evidence" / c.test_id
+        if not evidence_dir.is_dir():
+            continue
+        try:
+            urls = evidence_urls_for_test(spec_id, c.test_id, evidence_dir)
+        except Exception:
+            continue
+        if urls:
+            out[c.test_id] = urls
+    return out
+
+
 def build_report(
     *,
     mode: str,
@@ -108,6 +151,7 @@ def build_report(
     dedup_input_count: int,
     skipped: Sequence[TriageCandidate] = (),
     decisions: dict | None = None,
+    spec_dir: Path | None = None,
 ) -> TriageReport:
     """Construct a TriageReport from the Triager's commit-5 working set.
 
@@ -120,7 +164,17 @@ def build_report(
         skipped: Candidates excluded because ``operator_locked`` (Task 11).
         decisions: Mapping test_id → CandidateDecision (Task 11); surfaced
             per candidate in the JSON + Markdown renderers.
+        spec_dir: When provided, the report walks
+            ``spec_dir/findings/evidence/<test_id>/`` per accepted/flagged
+            candidate and surfaces portal evidence links in the Markdown
+            (Task 16 follow-up). When None, evidence rendering is skipped.
     """
+    evidence_urls_by_test_id: dict[str, dict] = {}
+    if spec_dir is not None:
+        evidence_urls_by_test_id = _collect_evidence_urls(
+            spec_dir,
+            tuple(committed) + tuple(flagged),
+        )
     return TriageReport(
         mode=mode,
         generated_at=generated_at,
@@ -131,6 +185,7 @@ def build_report(
         collisions=tuple(collisions),
         dedup_input_count=dedup_input_count,
         decisions=dict(decisions) if decisions else {},
+        evidence_urls_by_test_id=evidence_urls_by_test_id,
     )
 
 
@@ -250,11 +305,45 @@ def _intent_label(decisions: dict, test_id: str) -> str:
     return "CREATE new"
 
 
+def _evidence_md_lines(urls: dict) -> list[str]:
+    """Render an evidence-URLs dict as markdown bullets.
+
+    Ordering is fixed (screenshots → video → trace → network → others)
+    so the report stays byte-identical for the same input. Screenshot
+    URLs are emitted as a single bullet with a count.
+    """
+    lines: list[str] = []
+    shots = urls.get("screenshots")
+    if isinstance(shots, list) and shots:
+        lines.append(
+            f"  - evidence: 📸 {len(shots)} screenshot"
+            f"{'s' if len(shots) != 1 else ''} "
+            + " · ".join(f"[{i + 1}]({u})" for i, u in enumerate(shots))
+        )
+    if isinstance(urls.get("video"), str):
+        lines.append(f"  - evidence: 🎥 [video]({urls['video']})")
+    if isinstance(urls.get("trace"), str):
+        lines.append(f"  - evidence: 🔍 [trace.zip]({urls['trace']})")
+    if isinstance(urls.get("network"), str):
+        lines.append(f"  - evidence: 🌐 [network.har]({urls['network']})")
+    # Surface any other top-level string URLs (e.g. console.log captured
+    # by the runner) in stable key order so the renderer stays deterministic.
+    seen = {"screenshots", "video", "trace", "network"}
+    for key in sorted(urls.keys()):
+        if key in seen:
+            continue
+        val = urls[key]
+        if isinstance(val, str):
+            lines.append(f"  - evidence: 📄 [{key}]({val})")
+    return lines
+
+
 def _candidate_md_block(
     c: TriageCandidate,
     *,
     show_reasons: bool = True,
     decisions: dict | None = None,
+    evidence_urls: dict | None = None,
 ) -> str:
     """Render one candidate as a markdown sub-section."""
     lines = [
@@ -265,6 +354,8 @@ def _candidate_md_block(
         label = _intent_label(decisions, c.test_id)
         if label:
             lines.append(f"  - intent: {label}")
+    if evidence_urls:
+        lines.extend(_evidence_md_lines(evidence_urls))
     if show_reasons:
         reasons = c.verdict.get("reasons") or []
         if reasons:
@@ -309,11 +400,22 @@ def render_markdown(report: TriageReport) -> str:
         f"| Dedup collisions | {len(report.collisions)} |\n"
     )
 
+    ev_urls_by_id = report.evidence_urls_by_test_id or {}
     committed_body = "\n".join(
-        _candidate_md_block(c, decisions=decisions) for c in report.committed
+        _candidate_md_block(
+            c,
+            decisions=decisions,
+            evidence_urls=ev_urls_by_id.get(c.test_id),
+        )
+        for c in report.committed
     )
     flagged_body = "\n".join(
-        _candidate_md_block(c, decisions=decisions) for c in report.flagged
+        _candidate_md_block(
+            c,
+            decisions=decisions,
+            evidence_urls=ev_urls_by_id.get(c.test_id),
+        )
+        for c in report.flagged
     )
     skipped_body = "\n".join(
         _candidate_md_block(c, show_reasons=False, decisions=decisions)
