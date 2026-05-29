@@ -244,6 +244,112 @@ def _derive_create_path(test_id: str, framework: str) -> str:
     return f"tests/{test_id}{ext}"
 
 
+# ─── Task 11: catalog mutation (commit 5) ──────────────────────────────
+
+
+def _mutate_catalog(
+    catalog,
+    candidates,
+    decisions: dict[str, CandidateDecision],
+    generated_by_task: str,
+    now_ts: str,
+) -> TestsCatalog | None:
+    """Apply UPDATE / CREATE decisions to *catalog* and return a new catalog.
+
+    Per the design doc policy:
+    - UPDATE: bump generation_version; refresh generated_at + last_verdict
+    - CREATE: append a new CatalogEntry
+    - SKIP (operator_locked): leave entry untouched
+    - REJECT candidates: not in decisions dict → no catalog mutation
+
+    Args:
+        catalog: The current ``TestsCatalog`` (may be ``None`` for v0.1
+            runs — returns ``None`` in that case so the caller skips
+            save_catalog).
+        candidates: All TriageCandidates (accept + flag only — rejects
+            are already excluded from decisions).
+        decisions: Mapping test_id → CandidateDecision from the intent
+            derivation step.
+        generated_by_task: Spec-ID to record in new catalog entries.
+        now_ts: ISO-8601 UTC timestamp string to use for generated_at.
+
+    Returns:
+        An updated ``TestsCatalog``, or ``None`` when *catalog* is
+        ``None`` (v0.1 flow — no catalog file at all).
+    """
+    if catalog is None:
+        return None
+
+    from tests_catalog import CatalogEntry, TestsCatalog
+
+    # Build a mutable list so we can update in place.
+    entries: list = list(catalog.tests)
+
+    # Index existing entries by test_file for O(1) UPDATE lookup.
+    file_index: dict[str, int] = {e.test_file: i for i, e in enumerate(entries)}
+
+    for c in candidates:
+        decision = decisions.get(c.test_id)
+        if decision is None:
+            continue  # reject or unprocessed
+
+        if decision.intent == "skip":
+            # operator_locked — leave the catalog entry untouched
+            continue
+
+        verdict_label = c.verdict_label
+
+        if decision.intent == "update" and decision.update_target_file:
+            idx = file_index.get(decision.update_target_file)
+            if idx is not None:
+                old = entries[idx]
+                # Frozen dataclass — replace with new instance
+                entries[idx] = CatalogEntry(
+                    test_id=old.test_id,
+                    test_file=old.test_file,
+                    framework=old.framework,
+                    lane=old.lane,
+                    language=old.language,
+                    covers_acs=old.covers_acs,
+                    generated_at=now_ts,
+                    generated_by_task=old.generated_by_task,
+                    last_verdict=verdict_label,
+                    browsers_tested=old.browsers_tested,
+                    target_ref=old.target_ref,
+                    operator_locked=old.operator_locked,
+                    generation_version=old.generation_version + 1,
+                )
+
+        elif decision.intent == "create":
+            test_file = decision.derived_test_file or c.test_file
+            # Avoid duplicate entries if the same test appears twice
+            if test_file not in file_index:
+                verdict_dict = c.verdict
+                framework = verdict_dict.get("framework") or "pytest"
+                language = verdict_dict.get("language") or "python"
+                lane_str = verdict_dict.get("lane") or "unit"
+                new_entry = CatalogEntry(
+                    test_id=c.test_id,
+                    test_file=test_file,
+                    framework=framework,
+                    lane=lane_str,
+                    language=language,
+                    covers_acs=tuple(verdict_dict.get("covers_acs") or []),
+                    generated_at=now_ts,
+                    generated_by_task=generated_by_task,
+                    last_verdict=verdict_label,
+                    generation_version=1,
+                )
+                entries.append(new_entry)
+                file_index[test_file] = len(entries) - 1
+
+    return TestsCatalog(
+        version=catalog.version,
+        updated_at=now_ts,
+        tests=tuple(entries),
+    )
+
+
 # ─── Workspace helpers ─────────────────────────────────────────────────
 
 
@@ -534,6 +640,39 @@ async def run_triager(
                 "reason": "no PR number in source.json",
                 "body_written_to": str(findings_dir / "pr_comment_body.md"),
             }
+
+        # ── 6b. Catalog mutation (Task 11 / #27 commit 5) ──────────
+        # All candidates that went through intent derivation (accept + flag).
+        # We pass the full keepers + skipped list (rejects excluded above).
+        all_decided = list(keepers) + list(skipped)
+        source_meta_for_task = _load_source_meta(spec_dir)
+        generated_by_task = (
+            source_meta_for_task.get("spec_id")
+            or source_meta_for_task.get("task_id")
+            or "unknown"
+        )
+        updated_catalog = _mutate_catalog(
+            catalog=catalog,
+            candidates=all_decided,
+            decisions=decisions,
+            generated_by_task=generated_by_task,
+            now_ts=report.generated_at,
+        )
+        if updated_catalog is not None:
+            # Write back to spec_dir/context/tests_catalog.json — the
+            # Triager's workspace copy. The AIFactory repo's authoritative
+            # copy lives at <project_dir>/.tfactory/tests-catalog.json and
+            # is updated by git_writer (Task 16), not here.
+            catalog_out = spec_dir / "context" / "tests_catalog.json"
+            catalog_out.parent.mkdir(parents=True, exist_ok=True)
+            catalog_out.write_text(
+                json.dumps(
+                    updated_catalog.to_dict(),
+                    indent=2,
+                    sort_keys=True,
+                    ensure_ascii=False,
+                )
+            )
 
         # ── 7. Record summaries in status.json ──────────────────
         committed_count = len(committed)
