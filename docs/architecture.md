@@ -40,10 +40,17 @@ AIFactory finished branch  ─►  /handover-to-tfactory  ─►  TFactory MCP
                               git commit + PR comment (dry-run default)
 ```
 
-All five lanes are wired as of v0.2 RC. Lane dispatch is gated per
-the `Lane` enum — `Lane.UNIT` has a full pytest runner; the other
-four have AppRuntime / testcontainers / Stryker stubs that light up
-as Task 16 (evidence capture) merges.
+All five lanes are wired as of v0.2.0 (released 2026-05-29). Lane
+dispatch is gated per the `Lane` enum: `Lane.UNIT` runs pytest;
+`Lane.BROWSER` runs Playwright wrapped in `AppRuntime` (docker-compose
+start → HTTP HEAD health-poll → tear down with `--volumes`);
+`Lane.API` and `Lane.INTEGRATION` use the same per-framework Docker
+runner image dispatch plus the HTTP HAR recorder from
+`agents/evidence/http_recorder.py`; `Lane.MUTATION` shells out to
+Stryker for TypeScript or `mutate_probe.py` for Python. Evidence
+artefacts (screenshots / video / trace / HAR) are captured per test
+under `findings/evidence/<test_id>/`, served by the portal endpoint
+and linked from the Triager PR comment.
 
 ## v0.2 lane status
 

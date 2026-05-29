@@ -19,12 +19,13 @@ nav_order: 8
 ## At-a-glance
 
 ```
-v0.2 — Enterprise Test Framework Spine (release candidate)
-  ████████████████████████████  16 of 16 tasks shipped
+v0.2.0 — Enterprise Test Framework Spine (released 2026-05-29)
+  ████████████████████████████  16 of 16 tasks shipped + Triager follow-up
 
   Done:        #16  #17  #18  #19  #20  #21  #22  #23
                #24  #25  #26  #27  #28  #29  #30  #31  #32
-  Next step:   tag `v0.2.0` (operator-controlled)
+               + Triager evidence-links (5d8f588)
+  Release:     https://github.com/olafkfreund/TFactory/releases/tag/v0.2.0
 
 Driver doc:    docs/plans/2026-05-28-enterprise-test-frameworks-design.md
 Task plan:     docs/plans/2026-05-28-enterprise-test-frameworks-tasks.md
@@ -52,14 +53,20 @@ Task plan:     docs/plans/2026-05-28-enterprise-test-frameworks-tasks.md
 | [#31](https://github.com/olafkfreund/TFactory/issues/31) | Task 15: `LaneStatusGrid` full reskin (5 independently lit lanes) + `tfactory init` / `tfactory migrate v0_1_catalog` CLIs | [`f4eb9aa`](https://github.com/olafkfreund/TFactory/commit/f4eb9aa) (5 commits) | +21 backend + 27 frontend |
 | [#32](https://github.com/olafkfreund/TFactory/issues/32) | Task 16: Test evidence capture (screenshots / video / trace / HAR) + retention enforcer + portal endpoint + frontend Evidence tab | [`654e77a`](https://github.com/olafkfreund/TFactory/commit/654e77a) (5 commits; commit 4 deferred for follow-up PR) | +86 |
 
-## v0.2.0 release candidate — next step
+## v0.2.0 — released 2026-05-29
 
-All 16 v0.2 tasks merged to `main`. The next operator-controlled step is
-tagging `v0.2.0` + cutting the GitHub Release. One follow-up PR is
-outstanding (~50 lines): Task 16's deferred commit 4 — Triager
-PR-comment evidence-links — which was held back during the parallel
-batch because Task 11 hadn't landed yet. Task 11 is now on main, so the
-follow-up is unblocked whenever someone picks it up.
+All 16 v0.2 tasks merged to `main` and the Task 16 deferred commit 4
+follow-up (Triager PR-comment evidence-links, `5d8f588`) landed
+immediately afterwards. Annotated tag `v0.2.0` pushed; GitHub Release
+live at
+<https://github.com/olafkfreund/TFactory/releases/tag/v0.2.0>.
+Release body mirrors the v0.2.0 CHANGELOG section.
+
+The Triager follow-up was the only piece held back during the parallel
+batch (it block-waited on Task 11). It now ships portal evidence links
+per accepted/flagged candidate in `triage_report.md` so PR reviewers
+click straight from the comment to screenshots / video / trace.zip /
+network.har.
 
 ## Test totals
 
@@ -67,7 +74,8 @@ follow-up is unblocked whenever someone picks it up.
 |---|---:|---:|---|
 | v0.1.0-mvp baseline (2026-05-28) | **531** | — | Walking skeleton — Python + pytest only |
 | v0.2 in progress (post-batch-1, 2026-05-29) | **1039** (7 skipped) | **+508** | After 14 of 16 v0.2 tasks |
-| v0.2 release candidate (HEAD, 2026-05-29) | **1170** (7 skipped) | **+131** | After all 16 v0.2 tasks — exceeded the +~110 forecast |
+| v0.2 release candidate (post-batch-2, 2026-05-29) | **1170** (7 skipped) | **+131** | After all 16 v0.2 tasks — exceeded the +~110 forecast |
+| **v0.2.0 released (HEAD `5d8f588`, 2026-05-29)** | **1177** (7 skipped) | **+7** | After Triager evidence-links follow-up |
 
 The 7 skips are the docker-runner smoke tests (#23) — they require a
 live daemon and gracefully skip when none is present.

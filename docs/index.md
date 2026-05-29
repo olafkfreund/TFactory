@@ -5,7 +5,7 @@ nav_order: 1
 ---
 
 <section class="hero">
-  <span class="hero__eyebrow">v0.2 RC · Browser + API + Integration lanes + evidence capture · 16/16 tasks shipped</span>
+  <span class="hero__eyebrow"><a href="https://github.com/olafkfreund/TFactory/releases/tag/v0.2.0">v0.2.0 released</a> · Browser + API + Integration lanes + evidence capture · 16/16 tasks shipped · 1177 backend tests</span>
   <h1 class="hero__title">Autonomous tests, AI-graded.</h1>
   <p class="hero__subtitle">
     Hand TFactory a finished AIFactory branch. The four-agent pipeline plans,
@@ -13,8 +13,8 @@ nav_order: 1
     then posts a triage report to your PR.
   </p>
   <p>
-    <a class="hero__cta" href="https://github.com/olafkfreund/TFactory/releases/tag/v0.1.0-mvp">
-      v0.1.0-mvp release ↗
+    <a class="hero__cta" href="https://github.com/olafkfreund/TFactory/releases/tag/v0.2.0">
+      v0.2.0 release ↗
     </a>
     &nbsp;
     <a class="hero__cta hero__cta--ghost" href="{{ '/design-plan/' | relative_url }}">
@@ -125,7 +125,7 @@ Full walkthrough in the [repo README](https://github.com/olafkfreund/TFactory/bl
   <li class="feature-row__card reveal" style="--reveal-delay: 490ms">
     <span class="feature-row__icon">⚡</span>
     <h3><a href="https://github.com/olafkfreund/TFactory/blob/main/CHANGELOG.md">Changelog</a></h3>
-    <p>v0.1.0-mvp release notes, deferred work, sharp edges.</p>
+    <p>v0.2.0 release notes (16 task summaries), v0.1.0-mvp history, sharp edges.</p>
   </li>
 </ul>
 

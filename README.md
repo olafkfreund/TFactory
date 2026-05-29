@@ -7,11 +7,13 @@ aligned to its acceptance criteria, runs them in a sandbox, evaluates quality,
 commits the tests to the feature branch, and posts a coverage + findings report
 to the PR — autonomously.
 
-> Status: **v0.2 release candidate — 16 of 16 v0.2 tasks delivered ·
+> Status: **v0.2.0 released (2026-05-29) — 16 of 16 v0.2 tasks delivered ·
 > Browser + API + Integration lanes active · test evidence capture live ·
-> ~1175 backend tests.** Tag `v0.2.0` ships next (operator step).
-> See [Progress](https://olafkfreund.github.io/TFactory/progress/) for the
-> per-task log.
+> Triager surfaces portal evidence links in every PR comment ·
+> 1177 backend tests** (up from 531 at v0.1.0-mvp). See the
+> [v0.2.0 release](https://github.com/olafkfreund/TFactory/releases/tag/v0.2.0)
+> and [Progress](https://olafkfreund.github.io/TFactory/progress/) page
+> for the per-task log.
 
 ## Quickstart (NixOS / flake-based)
 

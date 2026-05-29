@@ -1,9 +1,14 @@
 # Changelog
 
-## v0.2.0 (release candidate) — Enterprise Test Framework Spine
+## v0.2.0 — Enterprise Test Framework Spine (2026-05-29)
 
-> All 16 v0.2 tasks shipped. The `v0.2.0` git tag + GitHub Release is
-> the next operator step.
+> All 16 v0.2 tasks shipped + the deferred Task 16 follow-up (Triager
+> evidence-links). Tagged + released:
+> <https://github.com/olafkfreund/TFactory/releases/tag/v0.2.0>.
+>
+> **Backend tests: 1177 passing** (was 531 at v0.1.0-mvp — **+646**).
+> **Frontend tests: 49 (LaneStatusGrid) + 187 (TFactoryTaskDetail with
+> evidence tab) + the wider suite.**
 >
 > **Task 16 follow-up (deferred commit 4) landed:** Triager now surfaces
 > portal evidence links per accepted/flagged candidate in
