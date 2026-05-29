@@ -75,7 +75,8 @@ network.har.
 | v0.1.0-mvp baseline (2026-05-28) | **531** | — | Walking skeleton — Python + pytest only |
 | v0.2 in progress (post-batch-1, 2026-05-29) | **1039** (7 skipped) | **+508** | After 14 of 16 v0.2 tasks |
 | v0.2 release candidate (post-batch-2, 2026-05-29) | **1170** (7 skipped) | **+131** | After all 16 v0.2 tasks — exceeded the +~110 forecast |
-| **v0.2.0 released (HEAD `5d8f588`, 2026-05-29)** | **1177** (7 skipped) | **+7** | After Triager evidence-links follow-up |
+| v0.2.0 released (`5d8f588`, 2026-05-29) | **1177** (7 skipped) | **+7** | After Triager evidence-links follow-up |
+| **v0.2 post-release (HEAD `bcc5c7d`, 2026-05-29)** | **1225** (7 skipped) | **+48** | Starlette `.content`→`.body` shim sweep + showcase + iframe demo |
 
 The 7 skips are the docker-runner smoke tests (#23) — they require a
 live daemon and gracefully skip when none is present.
@@ -85,29 +86,44 @@ live daemon and gracefully skip when none is present.
 ```
   Planner ─► Gen-Functional ─► Executor ─► Evaluator ─► Triager
   (polyglot   (generic via      (DockerRunner    (5 signals;     (catalog-aware
-   per #21)    descriptor #22)   + AppRuntime     null coverage;  in #27, in flight;
-                                  for Browser     TS primitives   dry-run by default)
-                                  #24)            #25)
+   per #21)    descriptor #22)   + AppRuntime     null coverage;  in #27 →
+                                  for Browser     TS primitives   evidence-links
+                                  #24)            #25)            from 5d8f588)
 ```
 
-All four agents are running on `main`; the only remaining work is the
-Triager catalog-lookup (#27), the lane grid + CLI polish (#31), and
-evidence capture + viewer (#32).
+All 16 v0.2 tasks shipped + the deferred Triager evidence-links
+follow-up landed. The pipeline is now end-to-end demonstrable —
+see the [live v0.2.0 showcase]({{ '/showcase/' | relative_url }})
+running against [olafkfreund/tfactory-demo](https://github.com/olafkfreund/tfactory-demo).
+
+## v0.2.0 demo + showcase
+
+A live end-to-end run published at [`/showcase/`]({{ '/showcase/' | relative_url }}):
+
+- **System under test:** [olafkfreund.github.io/tfactory-demo/](https://olafkfreund.github.io/tfactory-demo/) (Vite + React)
+- **5 Playwright tests** generated from the 5-AC user story; **4 pass, 1 fails** (AC#5 surfaces a seeded cache bug)
+- **Evidence captured:** 5 screenshots + AC#5 video.webm + AC#5 trace.zip
+- **Planner output:** real [test_plan.json](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/test_plan.json) emitted via the Claude subscription (no API keys)
+- **Tag:** [`v0.2.0-demo`](https://github.com/olafkfreund/TFactory/releases/tag/v0.2.0-demo) anchors the showcase commit (`be52f9b`)
 
 ## Health signals
 
 - ✅ `scripts/verify-fork.sh --no-import` — passes against the v0.2 module set
-- ✅ pytest (backend) — **1039 passed, 7 skipped** at HEAD `d2aa2ae`
+- ✅ pytest (backend) — **1225 passed, 7 skipped** at HEAD `bcc5c7d`
 - ✅ All 5 portal endpoints respond shim-compatibly without fastapi installed
 - ✅ Pages site builds + deploys on every push to `main` (Cayman + custom layout)
+- ✅ Showcase page renders the live SUT in an iframe + inline triage report with working evidence links
 - ⚪ Docker integration — runner images build under CI; per-image smoke
   tests skip locally without a daemon (recovers via `tfactory-test`)
 - ⚪ End-to-end smoke (`scripts/e2e-smoke.sh`) — 9 scenarios, operator-driven
 
 ## Cross-references
 
+- Live demo + showcase → [Demo]({{ '/showcase/' | relative_url }})
 - v0.2 driver doc → [`docs/plans/2026-05-28-enterprise-test-frameworks-design.md`](https://github.com/olafkfreund/TFactory/blob/main/docs/plans/2026-05-28-enterprise-test-frameworks-design.md)
 - v0.2 task plan → [`docs/plans/2026-05-28-enterprise-test-frameworks-tasks.md`](https://github.com/olafkfreund/TFactory/blob/main/docs/plans/2026-05-28-enterprise-test-frameworks-tasks.md)
 - Architecture → [Architecture]({{ '/architecture/' | relative_url }})
 - Changelog → [CHANGELOG.md](https://github.com/olafkfreund/TFactory/blob/main/CHANGELOG.md)
+- v0.2.0 release → [github.com/olafkfreund/TFactory/releases/tag/v0.2.0](https://github.com/olafkfreund/TFactory/releases/tag/v0.2.0)
+- v0.2.0-demo tag → [github.com/olafkfreund/TFactory/releases/tag/v0.2.0-demo](https://github.com/olafkfreund/TFactory/releases/tag/v0.2.0-demo)
 - Epic + sub-issues → [github.com/olafkfreund/TFactory/issues](https://github.com/olafkfreund/TFactory/issues)
