@@ -1,5 +1,11 @@
 # Auto-Build Framework Dependencies
 claude-agent-sdk>=0.1.16
+
+# CLI framework — used by tfactory.cli (init / migrate commands)
+click>=8.0.0
+
+# YAML generation for .tfactory.yml scaffolding
+PyYAML>=6.0.0
 # anthropic — pinned explicitly for Message Batches API access (Issue #11).
 # claude-agent-sdk does not expose batch primitives, so apps/backend/core/batch.py
 # drops to the raw client. Without this pin we'd silently resolve to whatever

@@ -12,45 +12,67 @@ the runtime pieces connect when a TFactory task fires. Everything below
 reflects what's actually on `main` as of the last commit — see
 [Progress]({{ '/progress/' | relative_url }}) for the live task status.
 
-## Six-agent pipeline (full vision)
+## v0.2 pipeline spine (5 lanes)
 
 ```
 AIFactory finished branch  ─►  /handover-to-tfactory  ─►  TFactory MCP
                                                               │
                                                               ▼
                                                          Planner
+                                                    (test_plan.json)
                                                               │
-                              ┌──────────┬─────────┬──────────┼──────────┐
-                              ▼          ▼         ▼          ▼          ▼
-                          Gen-Func   Gen-SAST  Gen-DAST   Gen-Mut     (more)
-                              └──────────┴────┬────┴──────────┴──────────┘
-                                              ▼
-                                          Executor  (Docker per task)
-                                              ▼
-                                          Evaluator  (separate agent)
-                                              ▼
-                                          Triager   ─►  git commit + PR comment
+                        ┌──────────┬──────────┬──────────────┼──────────────┐
+                        ▼          ▼          ▼               ▼              ▼
+                    Gen-Unit   Gen-Browser Gen-API      Gen-Integration  Gen-Mutation
+                        └──────────┴─────┬──┴──────────────── ┘──────────────┘
+                                         ▼
+                              Executor (Docker per subtask,
+                             .tfactory.yml target addressing,
+                              AppRuntime for browser/api)
+                                         ▼
+                              Evaluator  (5-signal verdicts:
+                               coverage · stability · mutation ·
+                               lint-promotion · semantic-relevance)
+                                         ▼
+                              Triager (update-in-place vs create-new
+                               via .tfactory/tests-catalog.json)
+                                         ▼
+                              git commit + PR comment (dry-run default)
 ```
 
-At MVP only the **functional** lane is lit. SAST / DAST / fuzz / mutation
-land in phases 2-5.
+All five lanes are wired as of v0.2 RC. Lane dispatch is gated per
+the `Lane` enum — `Lane.UNIT` has a full pytest runner; the other
+four have AppRuntime / testcontainers / Stryker stubs that light up
+as Task 16 (evidence capture) merges.
 
-## Lane status
+## v0.2 lane status
 
-| Lane | Phase | Tool (Python) | Tool (TypeScript, ph. 4) | Code today |
-|---|---|---|---|---|
-| **functional** | **1 (MVP)** | pytest + pytest-cov | vitest / jest | `tools/runners/docker_runner.py` |
-| sast | 3 | semgrep + bandit | semgrep + eslint-sec | `lang_registry.py` placeholder |
-| deps | 3 | pip-audit + OSV | npm audit + OSV | placeholder |
-| secrets | 3 | gitleaks | gitleaks | placeholder |
-| mutation | 2 | mutmut / cosmic-ray | stryker | placeholder |
-| dast | 5 | OWASP ZAP | OWASP ZAP | placeholder |
-| fuzz | 5 | atheris | jsfuzz / fast-check | placeholder |
+| Lane | Phase | Framework examples | Status |
+|------|-------|--------------------|--------|
+| **Unit**        | **1** | pytest, Jest, vitest | **Active** |
+| **Browser**     | **2** | Playwright (chromium/firefox/webkit) | **Active** (AppRuntime) |
+| **API**         | **3** | pytest-httpx, supertest, dredd | **Active** |
+| **Integration** | **4** | testcontainers-python, testcontainers-node | **Active** |
+| **Mutation**    | **5** | mutmut, cosmic-ray, Stryker | **Active** |
 
-The `_MVP_LIT_LANES = {"functional"}` set in
-[`lane_dispatch.py`](https://github.com/olafkfreund/TFactory/blob/main/apps/backend/tools/runners/lane_dispatch.py)
-is the single source of truth for which lanes have a real runner; gated
-lanes raise `LaneNotImplementedError` with a phase pointer.
+The framework descriptor registry (`framework_registry/`) catalogs
+80 frameworks across the five lanes; `.tfactory.yml` configures targets
+(HTTP / kubernetes / docker_compose / feature_flag) for each lane.
+The tests-catalog (`tests_catalog/`) persists cross-run continuity via
+`tests-catalog.json` committed alongside generated tests.
+
+## CLI commands (v0.2)
+
+```bash
+# Scaffold a new .tfactory.yml + empty tests-catalog.json
+python -m cli init
+python -m cli init --non-interactive --target-name api \
+    --target-type http --base-url https://api.staging.example.com
+
+# Migrate v0.1 workspace tests to the new catalog format
+python -m cli migrate v0_1_catalog
+python -m cli migrate v0_1_catalog --dry-run
+```
 
 ## Repository layout (depth 3)
 
