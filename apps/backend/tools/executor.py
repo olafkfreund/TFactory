@@ -115,6 +115,22 @@ class ToolExecutor:
         Returns:
             ``ToolResultBlock`` with ``content`` (str) and ``is_error`` (bool).
         """
+        # Small/local models (e.g. qwen) sometimes emit tool arguments as a
+        # JSON list (or other non-object) instead of a parameters object. The
+        # downstream validator/handlers assume a dict, so a list here would
+        # raise *outside* the handler try-block below and abort the whole
+        # agent session. Reject it cleanly as a recoverable tool error so the
+        # model can correct on the next turn.
+        if not isinstance(tool_input, dict):
+            return ToolResultBlock(
+                content=(
+                    f"Error: {tool_name} arguments must be a JSON object, got "
+                    f"{type(tool_input).__name__}. Re-send the call with named "
+                    "parameters, e.g. {\"file_path\": ..., \"content\": ...}."
+                ),
+                is_error=True,
+            )
+
         # Input validation (reuse existing validator)
         is_valid, error_msg = validate_tool_input(tool_name, tool_input)
         if not is_valid:
@@ -228,6 +244,17 @@ class ToolExecutor:
         """Write content to a file, creating parent dirs if needed."""
         file_path = tool_input["file_path"]
         content = tool_input["content"]
+
+        # Local models sometimes pass ``content`` as a list (e.g. lines, or a
+        # JSON structure) rather than a string. write_text() requires str —
+        # coerce: a list of strings joins to text; anything else serialises to
+        # JSON (keeps a list/dict file like test_plan.json valid).
+        if not isinstance(content, str):
+            if isinstance(content, list) and all(isinstance(x, str) for x in content):
+                content = "\n".join(content)
+            else:
+                import json as _json
+                content = _json.dumps(content, indent=2, default=str)
 
         resolved, error = self._validate_path(file_path)
         if error:

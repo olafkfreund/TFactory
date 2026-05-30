@@ -88,3 +88,51 @@ def test_write_execute_into_extra_root(tmp_path):
     )
     assert not result.is_error, result.content
     assert target.read_text() == '{"phases": []}'
+
+
+# ── Robustness against local-model malformed tool calls (qwen2.5-coder) ──────
+
+def test_non_dict_tool_input_is_recoverable_error(tmp_path):
+    """A list (not object) as tool input must NOT crash — it returns an error
+    result so the agent session survives and the model can retry."""
+    from tools.executor import ToolExecutor
+
+    project = tmp_path / "project"
+    project.mkdir()
+    ex = ToolExecutor(working_dir=project)
+    result = asyncio.run(ex.execute("Write", [{"file_path": "x", "content": "y"}]))
+    assert result.is_error
+    assert "must be a JSON object" in result.content
+
+
+def test_write_content_as_list_of_lines(tmp_path):
+    """content passed as a list of strings is joined into text."""
+    from tools.executor import ToolExecutor
+
+    project = tmp_path / "project"
+    project.mkdir()
+    ex = ToolExecutor(working_dir=project)
+    target = project / "out.txt"
+    result = asyncio.run(
+        ex.execute("Write", {"file_path": str(target), "content": ["a", "b", "c"]})
+    )
+    assert not result.is_error, result.content
+    assert target.read_text() == "a\nb\nc"
+
+
+def test_write_content_as_json_structure(tmp_path):
+    """content passed as a dict/list structure serialises to valid JSON."""
+    import json
+
+    from tools.executor import ToolExecutor
+
+    project = tmp_path / "project"
+    project.mkdir()
+    ex = ToolExecutor(working_dir=project)
+    target = project / "test_plan.json"
+    payload = {"phases": [{"subtasks": [{"id": "t1"}]}]}
+    result = asyncio.run(
+        ex.execute("Write", {"file_path": str(target), "content": payload})
+    )
+    assert not result.is_error, result.content
+    assert json.loads(target.read_text()) == payload
