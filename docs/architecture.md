@@ -352,6 +352,43 @@ All seven defined in
        (Task 8 Executor)
 ```
 
+## Credential Broker (epic #62)
+
+A pluggable secrets layer (`apps/backend/tfactory_secrets/`) so agents can
+authenticate to cloud environments without secrets in the repo. It mirrors the
+LLM-provider patterns and extends — rather than replaces — the existing
+`core/mcp_credentials.py` ambient chain.
+
+```
+   agent / MCP tool ─► CredentialBroker.resolve_cloud("gcp"|"aws"|"azure"|"k8s")
+                       │  (1) egress gate: .tfactory.yml egress.enabled?  (default OFF)
+                       │  (2) backend-fetch head, else ambient mcp_credentials chain
+                       ▼
+            get_secrets_backend(name)  ◄─ infer_backend_from_ref()  (refs.py)
+                       │   env · localfile(sops/age/agenix) · vault ·
+                       │   azure_keyvault · aws_secrets_manager · gcp_secret_manager
+                       ▼
+            materialise ephemerally → env vars + 0600 cred files (kubeconfig,
+            ADC json) in a per-task scratch dir, wiped on close()/atexit
+                       ▼
+            inject into core/client.py agent env (no-op unless egress enabled)
+```
+
+| Module | Role |
+|---|---|
+| `__init__.py` | `SecretsBackend` ABC + `SecretRef` / `SecretValue` (value-redacting `repr`) |
+| `refs.py` | per-scheme ref parsing + backend routing (mirrors `infer_provider_from_model`) |
+| `factory.py` | `get_secrets_backend()` registry + alias map + lazy SDK import |
+| `backends/` | `env`, `localfile`, `vault`, `azure_keyvault`, `aws_secrets_manager`, `gcp_secret_manager` |
+| `broker.py` | `CredentialBroker` — cloud resolution, ephemeral materialise + wipe, `inject_task_credentials` |
+| `egress.py` | `.tfactory.yml` egress gate + secret-free manifest + badge |
+| `redaction.py` | value-based + pattern redaction; `RedactingFilter` for loggers |
+| `cli.py` | `python -m tfactory_secrets.cli audit\|doctor\|resolve` |
+
+Design: `docs/plans/2026-05-30-credential-broker-design.md`. Reference:
+`guides/credentials.md`. Cloud SDKs are optional (lazy-imported); a missing
+package degrades only that backend to `available() == False`.
+
 ## What's NOT in the architecture yet
 
 - **Planner / Generator / Evaluator / Triager agents** (Tasks 5-8). Prompts under `apps/backend/prompts/` will be authored as those tasks land.

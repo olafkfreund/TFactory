@@ -203,6 +203,43 @@ lane from its `(language, framework)` via the framework registry
 into this same spine through new `FrameworkDescriptor`s — no lane
 additions required.
 
+## Connect to your environment — Credential Broker
+
+Agents often need to reach **real services and cloud environments** (a staging
+API, a Kubernetes cluster, a GCP/AWS/Azure project) to plan and run tests — but
+secrets must never land in the repo. The **Credential Broker** (epic
+[#62](https://github.com/olafkfreund/TFactory/issues/62)) resolves credentials
+from a pluggable backend and exposes them to the agents ephemerally:
+
+- **Backends:** Azure Key Vault · AWS Secrets Manager · GCP Secret Manager ·
+  HashiCorp Vault · local **sops / age / agenix** · plain env. One ref syntax
+  (`vault:path#field`, `gcp-sm://proj/secret`, `sops:file#key`, …); cloud SDKs
+  load lazily so an absent package never breaks startup.
+- **Ephemeral + redacted:** file credentials (kubeconfig, GCP ADC) are written
+  `0600` to a per-task scratch dir and **wiped** when the task ends; resolved
+  values are redacted from logs.
+- **Honest egress:** off by default — *no* cloud credential is resolved unless
+  the project opts in (`.tfactory.yml` `egress.enabled`).
+  `python -m tfactory_secrets.cli audit` prints a secret-free manifest of
+  exactly what would leave your network.
+
+**Why:** it extends the existing `core/mcp_credentials.py` ambient chain
+(K8s / AWS-IRSA / Azure-MI / GCP-ADC) with a vault-fetch head rather than
+reinventing auth, and keeps the same honest-egress posture as
+[BYO-LLM](guides/byo-llm.md). See [`guides/credentials.md`](guides/credentials.md)
+and the [Credentials](https://olafkfreund.github.io/TFactory/credentials/) page.
+
+## Run on any LLM
+
+TFactory routes each pipeline phase to a provider purely from the **model
+string** — no separate provider switch. Supported: the **Claude Agent SDK**
+(primary), **OpenAI Codex**, **Gemini CLI**, **GitHub Copilot CLI**, **Ollama**
+(local), and any **OpenAI-compatible** endpoint (vLLM / LM Studio / OpenRouter /
+Together / Groq / LocalAI). This lets a team run on a flat-rate subscription, a
+self-hosted model, or fully air-gapped — with an honest **data-egress badge**
+(`python apps/backend/byo_llm.py <model>`) so you always know whether a run
+keeps data on your network. See [`guides/byo-llm.md`](guides/byo-llm.md).
+
 ## License
 
 [MIT OR GPL-3.0](LICENSE).
