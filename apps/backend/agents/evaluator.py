@@ -473,23 +473,30 @@ def _mutation_for_subtask(
     subtask: dict,
     runner_fn,
 ):
-    """Run the mutate-and-check probe for one test.
+    """Run the mutate-and-check probe for one test, dispatched by language.
 
-    Writes the mutant to ``spec_dir/findings/mutants/<test_id>.py`` so
-    the original test file stays clean.
+    Routes to the Python (mutmut-style AST) or TypeScript (Stryker) backend
+    via ``mutation_dispatch`` (#41). Writes the mutant to
+    ``spec_dir/findings/mutants/<test_id>.<ext>`` so the original test file
+    stays clean. Returns ``None`` for languages with no wired backend.
     """
-    from agents.mutate_probe import run_mutate_probe
+    from agents.mutation_dispatch import (
+        is_mutation_supported,
+        mutant_extension,
+        run_language_mutation,
+    )
 
+    language = subtask.get("language")
+    if not is_mutation_supported(language):
+        return None
     test_file = spec_dir / subtask["files_to_create"][0]
     if not test_file.exists():
         return None
-    mutant_path = spec_dir / "findings" / "mutants" / f"{subtask['id']}.py"
+    ext = mutant_extension(language)
+    mutant_path = spec_dir / "findings" / "mutants" / f"{subtask['id']}.{ext}"
     try:
-        return run_mutate_probe(
-            test_file,
-            project_dir,
-            runner_fn,
-            write_mutant_to=mutant_path,
+        return run_language_mutation(
+            language, test_file, project_dir, runner_fn, mutant_path=mutant_path
         )
     except Exception as exc:  # noqa: BLE001
         _eval_log.warning(
