@@ -225,6 +225,9 @@ function AuthenticatedApp() {
     const scale = settings.uiScale ?? UI_SCALE_DEFAULT;
     const clampedScale = Math.max(UI_SCALE_MIN, Math.min(UI_SCALE_MAX, scale));
     root.setAttribute('data-ui-scale', clampedScale.toString());
+    // Drive the actual scale via a CSS var consumed by html { font-size } in
+    // index.css — previously the attribute was set but nothing consumed it.
+    root.style.setProperty('--ui-scale', clampedScale.toString());
   }, [settings.uiScale]);
 
   const handleTaskClick = (task: Task) => {

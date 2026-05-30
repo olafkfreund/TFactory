@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
+import { EgressBadge } from '../EgressBadge';
 import { post } from '../../lib/api-client';
 
 interface OpenAICompatSetupStepProps {
@@ -118,9 +119,13 @@ export function OpenAICompatSetupStep({ onNext, onBack }: OpenAICompatSetupStepP
         <div className="space-y-5">
           {/* Base URL */}
           <div className="space-y-2">
-            <Label htmlFor="openai-compat-base-url" className="text-sm font-medium">
-              {t('openaiCompatSetup.baseUrlLabel')}
-            </Label>
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor="openai-compat-base-url" className="text-sm font-medium">
+                {t('openaiCompatSetup.baseUrlLabel')}
+              </Label>
+              {/* Honest data-egress posture for the entered endpoint */}
+              <EgressBadge baseUrl={baseUrl} />
+            </div>
             <Input
               id="openai-compat-base-url"
               type="url"
