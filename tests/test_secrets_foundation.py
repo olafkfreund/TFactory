@@ -93,12 +93,16 @@ def test_factory_instantiates_implemented_backends():
     assert isinstance(get_secrets_backend("sops"), LocalFileBackend)
 
 
-def test_factory_planned_backends_raise_not_implemented():
+def test_factory_instantiates_cloud_backends():
+    """Cloud backends instantiate (SDK imported lazily, only at resolve time)."""
+    from tfactory_secrets import SecretsBackend
     from tfactory_secrets.factory import get_secrets_backend
 
     for name in ("vault", "azurekv", "aws-sm", "gcp-sm"):
-        with pytest.raises(NotImplementedError):
-            get_secrets_backend(name)
+        backend = get_secrets_backend(name)
+        assert isinstance(backend, SecretsBackend)
+        # available() is a safe bool even when the SDK isn't installed.
+        assert isinstance(backend.available(), bool)
 
 
 def test_factory_unknown_backend_raises():
