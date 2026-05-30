@@ -135,6 +135,10 @@ In-repo guides (`guides/`):
 - **`guides/planner-manual-smoke.md`** — Planner-only sibling smoke
 - **`guides/HANDOVER_WORKFLOW.md`** — how to trigger TFactory from a live Claude Code session
 - **`guides/CLAUDE_CODE_MCP_TOOLS.md`** — driving TFactory tasks from the MCP control plane
+- **`guides/byo-llm.md`** — run TFactory **fully on your own infrastructure**
+  (Ollama / vLLM / LM Studio / LocalAI) with a verifiable no-egress guarantee —
+  for GDPR / HIPAA / air-gapped teams. `python apps/backend/byo_llm.py <model>`
+  prints the live data-egress posture (🔒 Local / 🏠 Self-hosted / ☁️ Managed)
 
 ## Project tracking
 

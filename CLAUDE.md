@@ -75,6 +75,12 @@ see `phase_config.infer_provider_from_model()`. Never call
 `core.client.create_client()` and other providers through
 `providers.factory.get_provider()`.
 
+**BYO-LLM / air-gapped (#38):** `byo_llm.py` classifies a model+endpoint's
+data-egress posture (LOCAL / SELF_HOSTED / MANAGED_CLOUD) so the portal/CLI
+can show an honest "🔒 Local — no data egress" badge. `python apps/backend/
+byo_llm.py <model>` exits 0 only when the run keeps all data on your network.
+See `guides/byo-llm.md`.
+
 ### Workspace layout
 
 Per-task data lives at `~/.tfactory/workspaces/<project_id>/specs/<spec_id>/`:
