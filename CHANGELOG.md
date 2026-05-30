@@ -22,6 +22,16 @@
 > `gpt-5`, billed to your Copilot subscription. Routed via the factory
 > (`copilot:gpt-5` correctly resolves to Copilot, not Codex). Verified
 > end-to-end: Planner produced a 7-subtask plan on `copilot:claude-sonnet-4.5`.
+>
+> **Ollama / local models can now write the workspace.** Ollama is the only
+> provider whose file ops run through TFactory's own `ToolExecutor`, which was
+> sandboxed to a single root (the SUT project dir). The Planner/Gen-Functional/
+> Evaluator write into the spec/workspace dir — *outside* that root — so every
+> `Write` was denied and the model burned all its turns retrying (looked like a
+> convergence failure; it wasn't). `ToolExecutor` now takes `extra_roots`, and
+> the spec dir is threaded in for the Ollama provider. Verified:
+> `qwen2.5-coder:14b` Planner went from 25-turn timeout to **PASS (3 subtasks)
+> in ~36s**.
 
 ## 0.2.1 — Version honesty + docs reconciliation (2026-05-30)
 

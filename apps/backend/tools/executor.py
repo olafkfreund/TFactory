@@ -84,9 +84,16 @@ class ToolExecutor:
         self,
         working_dir: Path,
         bash_timeout: int = _DEFAULT_BASH_TIMEOUT,
+        extra_roots: list[Path] | None = None,
     ) -> None:
         self._working_dir = working_dir.resolve()
         self._bash_timeout = min(bash_timeout, _MAX_BASH_TIMEOUT)
+        # Additional directories file ops may touch beyond ``working_dir``.
+        # TFactory threads the per-task spec/workspace dir here so agents that
+        # run their file ops through this executor (e.g. the Ollama provider)
+        # can write ``test_plan.json`` / generated tests into the workspace,
+        # which lives outside the SUT project dir. Each must contain the path.
+        self._extra_roots: list[Path] = [r.resolve() for r in (extra_roots or [])]
 
         # Dispatch table
         self._handlers: dict[str, Any] = {
@@ -150,16 +157,25 @@ class ToolExecutor:
         except (ValueError, OSError) as exc:
             return Path(), f"Invalid path '{file_path}': {exc}"
 
-        # Check path boundary
-        try:
-            resolved.relative_to(self._working_dir)
-        except ValueError:
-            return Path(), (
-                f"Path '{file_path}' resolves to '{resolved}' which is outside "
-                f"the project directory '{self._working_dir}'. Access denied."
-            )
+        # Check path boundary: within working_dir OR any extra allowed root.
+        allowed_roots = [self._working_dir, *self._extra_roots]
+        for root in allowed_roots:
+            try:
+                resolved.relative_to(root)
+                return resolved, None
+            except ValueError:
+                continue
 
-        return resolved, None
+        return Path(), (
+            f"Path '{file_path}' resolves to '{resolved}' which is outside "
+            f"the project directory '{self._working_dir}'"
+            + (
+                f" and the allowed workspace root(s) {[str(r) for r in self._extra_roots]}"
+                if self._extra_roots
+                else ""
+            )
+            + ". Access denied."
+        )
 
     # ------------------------------------------------------------------
     # Tool handlers
