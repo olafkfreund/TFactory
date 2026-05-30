@@ -567,6 +567,16 @@ def create_client(
     if effort_level:
         sdk_env["CLAUDE_CODE_EFFORT_LEVEL"] = effort_level
 
+    # Credential broker (epic #62): merge any task-scoped cloud credentials into
+    # the agent's environment. Off by default and fully fault-tolerant — only
+    # acts when egress is explicitly enabled for the task (see #8).
+    try:
+        from tfactory_secrets.broker import inject_task_credentials
+
+        inject_task_credentials(sdk_env, project_dir, spec_dir)
+    except Exception:  # noqa: BLE001 - never let credential wiring break the agent
+        pass
+
     # Fast mode requires the CLI to read "fastMode" from user settings.
     # The SDK default (setting_sources=None) passes --setting-sources "" which
     # blocks ALL filesystem settings. We must explicitly enable "user" source
