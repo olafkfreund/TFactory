@@ -1,5 +1,5 @@
 title: TFactory
-description: Autonomous test generation + execution platform — Planner → Gen-Functional → Evaluator → Triager. Sister project to AIFactory.
+description: Autonomous test generation + execution platform — Planner → Gen-Functional → Evaluator → Triager. Hand off a finished feature from AIFactory, Claude Code, or any tool (MCP, or a markdown/Gherkin/EARS file) and get an AI-graded test suite + triage report on your PR.
 
 # Keep the remote theme reference so the legacy Pages auto-builder is happy,
 # but override its layout via _layouts/default.html (Jekyll local layouts

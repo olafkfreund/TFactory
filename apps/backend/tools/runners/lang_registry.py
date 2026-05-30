@@ -4,22 +4,22 @@ Lookup table that maps ``(language, lane)`` → the tool the runner should
 invoke. Used by per-lane Generators (Tasks 6+) and the Executor (Task 8)
 to pick the right tooling per project at plan-time.
 
-At MVP only ``("python", "functional")`` has a real entry (pytest); the
-remaining 19 cells are intentionally placeholder or ``None`` — the
-generators in phases 2-5 fill them in as those lanes light up.
+Lit today: Python ``unit`` (pytest) and TypeScript ``unit`` (jest) +
+``browser`` (playwright). The remaining cells are wired tooling that lights
+up per the roadmap; Java/.NET (v0.3) and Go/Rust/Ruby (v0.4) are ``None``.
+Security scanning is out of scope (delegated to dedicated pipelines), so the
+v0.1 sast/dast/fuzz lanes were dropped — see ``test_plan.enums`` Decision 2.
 
 Single source of truth so the design-plan tooling table doesn't drift
-from the code that actually invokes it:
+from the code that actually invokes it (v0.2 modality spine):
 
-    Lane         | Python              | TypeScript (phase 4)
-    -------------+---------------------+---------------------
-    functional   | pytest              | vitest
-    sast         | semgrep + bandit    | semgrep + eslint-plugin-security
-    deps (sast)  | pip-audit           | npm audit
-    secrets      | gitleaks            | gitleaks
-    dast (p5)    | owasp zap           | owasp zap
-    fuzz (p5)    | atheris             | jsfuzz / fast-check
-    mutation (p2)| mutmut              | stryker
+    Lane         | Python                  | TypeScript
+    -------------+-------------------------+-------------------------
+    unit         | pytest                  | jest
+    browser      | playwright-python       | @playwright/test
+    api          | httpx + pytest          | supertest + jest
+    integration  | testcontainers-python   | testcontainers-node
+    mutation     | mutmut                  | stryker
 """
 
 from __future__ import annotations
@@ -68,15 +68,15 @@ _REGISTRY: dict[str, dict[str, ToolSpec | None]] = {
         "mutation":    ToolSpec("stryker", "stryker-mutator/core", False, "3"),
     },
     # ── Java (v0.3+) ────────────────────────────────────────────────────
-    "java": {lane: None for lane in _LANE_KEYS},
+    "java": dict.fromkeys(_LANE_KEYS),
     # ── C# / .NET (v0.3+) ───────────────────────────────────────────────
-    "csharp": {lane: None for lane in _LANE_KEYS},
+    "csharp": dict.fromkeys(_LANE_KEYS),
     # ── Go (v0.4+) ──────────────────────────────────────────────────────
-    "go": {lane: None for lane in _LANE_KEYS},
+    "go": dict.fromkeys(_LANE_KEYS),
     # ── Rust (v0.4+) ────────────────────────────────────────────────────
-    "rust": {lane: None for lane in _LANE_KEYS},
+    "rust": dict.fromkeys(_LANE_KEYS),
     # ── Ruby (v0.4+) ────────────────────────────────────────────────────
-    "ruby": {lane: None for lane in _LANE_KEYS},
+    "ruby": dict.fromkeys(_LANE_KEYS),
 }
 
 

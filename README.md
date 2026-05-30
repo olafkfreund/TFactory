@@ -1,11 +1,16 @@
 # TFactory
 
-**Autonomous test generation + execution platform — sister project to [AIFactory](https://github.com/olafkfreund/AIFactory).**
+**Autonomous test generation + execution platform.** Started as a sister
+project to [AIFactory](https://github.com/olafkfreund/AIFactory) — now a
+standalone product you can drive from **any tool**.
 
-TFactory ingests a finished AIFactory spec, generates feature + security tests
-aligned to its acceptance criteria, runs them in a sandbox, evaluates quality,
-commits the tests to the feature branch, and posts a coverage + findings report
-to the PR — autonomously.
+Hand TFactory a finished feature's acceptance criteria — from AIFactory,
+**Claude Code**, or anything else, via the **MCP control plane** or a plain
+file (markdown / Gherkin / EARS, see [`guides/spec-sources.md`](guides/spec-sources.md)).
+It generates tests aligned to those criteria across the v0.2 lane spine
+(unit / browser / api / integration / mutation), runs them in a sandbox,
+evaluates quality with a 5-signal verdict, commits the tests to the feature
+branch, and posts a triage report to the PR — autonomously.
 
 > Status: **v0.2.0 released (2026-05-29) — 16 of 16 v0.2 tasks delivered ·
 > Browser + API + Integration lanes active · test evidence capture live ·
@@ -70,7 +75,7 @@ The portal exposes a `/tfactory` view powered by the components under
 
 - **TFactoryTaskList** — workspace list with status badges
 - **TFactoryTaskDetail** — tabs for Status / Lanes / Verdicts / Report / Logs
-- **LaneStatusGrid** — Functional lit; SAST/DAST/Fuzz/Mutation as Phase 2-5 placeholders
+- **LaneStatusGrid** — Unit / Browser / API / Integration / Mutation lane spine
 - **TFactoryLogViewer** — WebSocket live tail (one snapshot per connect at MVP)
 
 ## End-to-end smoke
@@ -134,6 +139,13 @@ In-repo guides (`guides/`):
 - **`guides/planner-manual-smoke.md`** — Planner-only sibling smoke
 - **`guides/HANDOVER_WORKFLOW.md`** — how to trigger TFactory from a live Claude Code session
 - **`guides/CLAUDE_CODE_MCP_TOOLS.md`** — driving TFactory tasks from the MCP control plane
+- **`guides/byo-llm.md`** — run TFactory **fully on your own infrastructure**
+  (Ollama / vLLM / LM Studio / LocalAI) with a verifiable no-egress guarantee —
+  for GDPR / HIPAA / air-gapped teams. `python apps/backend/byo_llm.py <model>`
+  prints the live data-egress posture (🔒 Local / 🏠 Self-hosted / ☁️ Managed)
+- **`guides/spec-sources.md`** — use TFactory **without AIFactory**: ingest any
+  acceptance-criteria source (markdown / Gherkin `.feature` / EARS) into the
+  pipeline via `python apps/backend/spec_sources.py <file>`
 
 ## Project tracking
 
@@ -150,7 +162,7 @@ AIFactory finished branch  ─►  /handover-to-tfactory  ─►  TFactory MCP
                                                               │
                               ┌──────────┬─────────┬──────────┼──────────┐
                               ▼          ▼         ▼          ▼          ▼
-                          Gen-Func   Gen-SAST  Gen-DAST   Gen-Mut     (more)
+                       Gen-Unit  Gen-Browser  Gen-API  Gen-Integration  Gen-Mut
                               └──────────┴────┬────┴──────────┴──────────┘
                                               ▼
                                           Executor  (Docker per task)
@@ -160,9 +172,9 @@ AIFactory finished branch  ─►  /handover-to-tfactory  ─►  TFactory MCP
                                           Triager   ─►  git commit + PR comment
 ```
 
-Six agents (Planner / per-lane Generators / Executor / Evaluator / Triager),
-four lanes (functional active at MVP), tiered sandbox (native for static,
-Docker for runtime), spec-aware handover from AIFactory.
+Five pipeline stages (Planner / per-lane Generators / Executor / Evaluator /
+Triager), five lanes (unit / browser / api / integration / mutation), Docker
+sandbox, spec-aware handover from AIFactory.
 
 The four-stage chain auto-advances via `TFACTORY_AUTO_*` env vars; each
 stage writes its outputs to `~/.tfactory/workspaces/{project}/specs/{spec}/`

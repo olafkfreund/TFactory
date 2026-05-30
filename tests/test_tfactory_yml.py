@@ -33,7 +33,6 @@ import textwrap
 from pathlib import Path
 
 import pytest
-
 from tfactory_yml import (
     BasicAuth,
     BearerAuth,
@@ -47,17 +46,15 @@ from tfactory_yml import (
     NoneAuth,
     OAuth2ClientCredentialsAuth,
     ServiceAccountAuth,
+    TestData,
     TFactoryConfig,
     TFactoryYmlError,
-    TestData,
     WaitFor,
-    load_tfactory_yml,
-    resolve_env_var,
-)
-from tfactory_yml import (
     _has_env_var_references,
+    load_tfactory_yml,
     load_tfactory_yml_text,
     resolve_auth_env_vars,
+    resolve_env_var,
 )
 
 # ---------------------------------------------------------------------------

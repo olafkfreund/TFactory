@@ -13,17 +13,15 @@ import json
 from pathlib import Path
 
 import pytest
-from click.testing import CliRunner
-
 from cli import tfactory_main
-
+from click.testing import CliRunner
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def run_init(tmp_path: Path, *args: str, input: str = "") -> "Result":
+def run_init(tmp_path: Path, *args: str, input: str = "") -> Result:
     """Invoke `cli init` in *tmp_path* via the click test runner."""
     runner = CliRunner()
     result = runner.invoke(

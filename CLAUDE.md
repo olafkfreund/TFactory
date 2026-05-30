@@ -11,14 +11,24 @@ via a 5-signal verdict pipeline (coverage delta · 3× stability · mutate-and-
 check · flake-lint promotion · LLM semantic relevance), and emits a triage
 report ready to commit + post to the PR.
 
-**Status:** MVP walking skeleton complete — 12 of 12 tasks delivered.
-Functional lane (Python pytest) active. SAST / DAST / Fuzz / Mutation
-lanes are Phase 2-5 placeholders in the portal.
+**Status:** v0.2.0 released (2026-05-29) — 16 of 16 v0.2 tasks delivered.
+Modality-based lane spine active: unit / browser / api / integration / mutation
+(pytest · Jest · Playwright). Security scanning is out of scope — delegated to
+dedicated SAST/DAST pipelines, not generated here.
 
 **Project:** TFactory
 **Repository:** https://github.com/olafkfreund/TFactory
 **Author:** DataSeek Team
 **License:** MIT OR GPL-3.0
+
+### Product source-of-truth (`.agent-os/product/`)
+
+- **Mission & positioning:** `.agent-os/product/mission.md`
+- **Roadmap (3 horizons + shipped):** `.agent-os/product/roadmap.md`
+- **Decision log (highest override priority):** `.agent-os/product/decisions.md`
+- **GTM & pricing model:** `.agent-os/product/pricing.md`
+
+Active work is tracked under epic [#33](https://github.com/olafkfreund/TFactory/issues/33).
 
 ### Pipeline architecture (the 4 agents)
 
@@ -39,6 +49,13 @@ Pipeline supporting primitives (also under `agents/`):
   - `preflight_static.py` + `flake_risk_lint.py` — Gen-Functional guards
   - `coverage_delta.py` + `stability_runner.py` + `mutate_probe.py`
     + `lint_promotion.py` — Evaluator's four pre-computed signals
+  - `mutation_dispatch.py` — per-language mutation routing (#41): Python
+    (`mutate_probe`) vs TypeScript (`lang_typescript/mutate_probe`, Stryker);
+    the Evaluator dispatches by `subtask.language` (Java/PIT = future)
+  - `flaky_history.py` — cross-run flip-rate history (#37): persists each
+    test's pass/fail across runs (`<workspace>/<project>/test_history.json`)
+    so chronically flaky tests are flagged even when one run's 3× stability
+    happens to pass
   - `triage_dedup.py` + `triage_report.py` — Triager primitives
 
 Each agent has its own `prompts/<agent>.md` system prompt + an assembly
@@ -65,6 +82,19 @@ see `phase_config.infer_provider_from_model()`. Never call
 `anthropic.Anthropic()` directly; route Claude interactions through
 `core.client.create_client()` and other providers through
 `providers.factory.get_provider()`.
+
+**BYO-LLM / air-gapped (#38):** `byo_llm.py` classifies a model+endpoint's
+data-egress posture (LOCAL / SELF_HOSTED / MANAGED_CLOUD) so the portal/CLI
+can show an honest "🔒 Local — no data egress" badge. `python apps/backend/
+byo_llm.py <model>` exits 0 only when the run keeps all data on your network.
+See `guides/byo-llm.md`.
+
+**Generic AC sources / no-AIFactory (#40):** `spec_sources.py` ingests any
+acceptance-criteria source (markdown / Gherkin `.feature` / EARS) and
+normalises it into the canonical `context/aifactory_spec.md` the Planner
+reads — so TFactory runs without AIFactory. `write_spec_markdown()` is the
+pipeline seam; `python apps/backend/spec_sources.py <file>` is the CLI. See
+`guides/spec-sources.md`.
 
 ### Workspace layout
 
@@ -250,7 +280,7 @@ Task 4 for the Executor.
 
 **Planner** (`agents/planner.py`):
   - Reads `context/aifactory_spec.md` + `context/diff.patch`
-  - Emits `test_plan.json` (Lane.FUNCTIONAL subtasks, one phase per AC)
+  - Emits `test_plan.json` (lane-tagged subtasks across the v0.2 spine, one phase per AC)
   - Initial + replan modes; `replan_count >= 2` → status=stuck
   - Hard cap: 30 subtasks; soft warning at 15
 

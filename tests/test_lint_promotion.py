@@ -26,7 +26,6 @@ from __future__ import annotations
 import textwrap
 
 import pytest
-
 from agents.flake_risk_lint import (
     FlakeRiskHit,
     FlakeRiskResult,
@@ -37,7 +36,6 @@ from agents.lint_promotion import (
     PromotionResult,
     promote_flake_findings,
 )
-
 
 # ── time_sleep promotion ───────────────────────────────────────────────
 

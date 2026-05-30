@@ -11,10 +11,8 @@ import json
 from pathlib import Path
 
 import pytest
-from click.testing import CliRunner
-
 from cli import tfactory_main
-
+from click.testing import CliRunner
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -37,7 +35,7 @@ def add_test_file(spec_dir: Path, name: str, content: str = "") -> Path:
     return path
 
 
-def run_migrate(workspace: Path, *extra_args: str) -> "Result":
+def run_migrate(workspace: Path, *extra_args: str) -> Result:
     """Invoke `cli migrate v0_1_catalog` via the click test runner."""
     runner = CliRunner()
     result = runner.invoke(

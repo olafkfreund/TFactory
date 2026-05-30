@@ -7,6 +7,11 @@ nav_order: 4
 
 # Technical Specification
 
+> ⏳ **Historical record — v0.1.0-mvp technical spec (2026-05-28).** Describes
+> the v0.1 Functional-lane MVP architecture. The shipped product moved to the
+> v0.2 modality spine (unit / browser / api / integration / mutation); see
+> [Architecture](/architecture/) for current state.
+
 > Spec: TFactory MVP — Walking Skeleton (Functional Lane, Python)
 > Parent: `../spec.md`
 > Source design: `/home/olafkfreund/.claude/plans/virtual-cooking-bumblebee.md`

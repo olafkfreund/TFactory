@@ -1,6 +1,6 @@
 {
   "name": "tfactory-web",
-  "version": "3.0.2",
+  "version": "0.2.1",
   "type": "module",
   "description": "Web UI for TFactory autonomous coding framework",
   "scripts": {
@@ -64,6 +64,7 @@
     "@playwright/test": "^1.55.0",
     "@tailwindcss/postcss": "^4.1.17",
     "tsx": "^4.20.0",
+    "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.1",
     "@types/highlight.js": "^9.12.4",

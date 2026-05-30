@@ -23,7 +23,6 @@ from __future__ import annotations
 import textwrap
 
 import pytest
-
 from agents.triage_dedup import (
     DedupCollision,
     DedupResult,
@@ -34,7 +33,6 @@ from agents.triage_dedup import (
     normalised_hash,
     rank_candidates,
 )
-
 
 # ── Helpers ────────────────────────────────────────────────────────────
 

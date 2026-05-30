@@ -21,13 +21,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-
 from tools.pr_comment import (
     PRCommentRequest,
     PRCommentResult,
     post_pr_comment,
 )
-
 
 # ── Helpers ────────────────────────────────────────────────────────────
 

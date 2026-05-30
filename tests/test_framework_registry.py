@@ -25,7 +25,6 @@ from typing import Any
 
 import pytest
 import yaml
-
 from framework_registry import (
     FrameworkDescriptor,
     FrameworkDescriptorError,

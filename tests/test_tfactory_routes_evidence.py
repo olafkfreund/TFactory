@@ -25,7 +25,6 @@ from typing import Any
 
 import pytest
 
-
 # ── FastAPI stub (same pattern as test_tfactory_routes_tasks.py) ─────────────
 
 if "fastapi" not in sys.modules:
@@ -83,7 +82,6 @@ if "fastapi" not in sys.modules:
 
 from fastapi import HTTPException as _HTTPException  # noqa: E402
 
-
 # Add apps/web-server/ to sys.path
 WEB_SERVER_PATH = Path(__file__).parent.parent / "apps" / "web-server"
 if str(WEB_SERVER_PATH) not in sys.path:
@@ -91,13 +89,12 @@ if str(WEB_SERVER_PATH) not in sys.path:
 
 
 from server.routes.tfactory_tasks import (  # noqa: E402
+    _evidence_content_type,
     _validate_artifact,
     _validate_spec_id,
     _validate_test_id,
-    _evidence_content_type,
     get_evidence_artifact,
 )
-
 
 # ── Workspace builder fixture ─────────────────────────────────────────────────
 

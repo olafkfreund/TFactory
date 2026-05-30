@@ -19,9 +19,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-
-from agents.evidence.http_recorder import record_http_to_har, _build_har_document
-
+from agents.evidence.http_recorder import _build_har_document, record_http_to_har
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 

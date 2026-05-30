@@ -32,9 +32,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 from workspaces import SnapshotError, snapshot_aifactory_spec
-
 
 # ── Fixtures ─────────────────────────────────────────────────────────────
 

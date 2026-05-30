@@ -8,9 +8,11 @@ nav_order: 1
   <span class="hero__eyebrow"><a href="https://github.com/olafkfreund/TFactory/releases/tag/v0.2.0">v0.2.0 released</a> · Browser + API + Integration lanes + evidence capture · 16/16 tasks shipped · 1177 backend tests</span>
   <h1 class="hero__title">Autonomous tests, AI-graded.</h1>
   <p class="hero__subtitle">
-    Hand TFactory a finished AIFactory branch. The four-agent pipeline plans,
-    writes, sandboxes, scores, and commits a pytest suite — autonomously —
-    then posts a triage report to your PR.
+    Hand TFactory a finished feature on a branch — from AIFactory, Claude Code,
+    or any tool, via the MCP control plane or a plain acceptance-criteria file
+    (markdown / Gherkin / EARS). The agent pipeline plans, writes, sandboxes,
+    scores, and commits the suite — autonomously — then posts a triage report
+    to your PR.
   </p>
   <p>
     <a class="hero__cta hero__cta--primary" href="{{ '/showcase/' | relative_url }}">

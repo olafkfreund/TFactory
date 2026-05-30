@@ -186,7 +186,7 @@ fork and adapted by string-replace.
                 │   └── diff.patch       #   base_ref..branch
                 ├── tests/               # ← Gen-Functional writes pytest files (Task 6)
                 │   └── functional/
-                ├── findings/            # ← SAST/DAST/fuzz/mutation (phases 2-5)
+                ├── findings/            # ← verdicts.json + triage_report + evidence/
                 ├── logs/                # ← per-agent transcripts (Tasks 5+)
                 ├── memory/              # ← session insights (Tasks 5+)
                 ├── report.md            # ← Triager output (Task 8)
@@ -258,12 +258,12 @@ AIFactory spec can change without breaking in-flight TFactory work.
                            │
         ┌──────────────────┼──────────────────────┐
         │                  │                      │
-   functional        sast/deps/secrets       dast/fuzz/mutation
+   unit / browser        api / integration         mutation
         │                  │                      │
         ▼                  ▼                      ▼
-  DockerRunner       (phase 3:                (phase 2/5:
-  docker_runner.py    native walker            LaneNotImpl
-  ─────────────       — not lit)              with phase tag)
+  DockerRunner       DockerRunner             mutate probe
+  (pytest / jest /    + AppRuntime             (mutmut / Stryker
+   playwright)        (browser lane)            per language)
   build_argv()  ←── pure function: argv list
                     --network=none
                     --read-only
@@ -285,13 +285,18 @@ docker ↔ podman is a config change. Binary picked from
 
 ## Tool registry (Task 4)
 
-| Language | Functional | SAST | Deps | Secrets | DAST | Fuzz | Mutation |
-|---|---|---|---|---|---|---|---|
-| **Python** | pytest ★ | semgrep | pip-audit | gitleaks | zap-cli | atheris | mutmut |
-| **TypeScript** | vitest | semgrep+eslint | npm-audit | gitleaks | zap-cli | jsfuzz | stryker |
-| Go | — | — | — | — | — | — | — |
-| Rust | — | — | — | — | — | — | — |
-| Ruby | — | — | — | — | — | — | — |
+v0.2 lane spine — security scanning is out of scope (delegated to dedicated
+pipelines); see `apps/backend/tools/runners/lang_registry.py` for the source
+of truth.
+
+| Language | Unit | Browser | API | Integration | Mutation |
+|---|---|---|---|---|---|
+| **Python** | pytest ★ | playwright-python | httpx+pytest | testcontainers | mutmut |
+| **TypeScript** | jest ★ | playwright ★ | supertest | testcontainers-node | stryker |
+| Java / .NET | — | — | — | — | — (v0.3+) |
+| Go / Rust / Ruby | — | — | — | — | — (v0.4+) |
+
+★ = lit today (Python unit + TypeScript unit/browser).
 
 ★ = the only `available_at_mvp=True` cell.
 [`lang_registry.py`](https://github.com/olafkfreund/TFactory/blob/main/apps/backend/tools/runners/lang_registry.py)
