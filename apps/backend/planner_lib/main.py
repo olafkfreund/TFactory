@@ -21,9 +21,9 @@ Usage:
 import json
 from pathlib import Path
 
-from test_plan import ImplementationPlan
 from planner_lib.context import ContextLoader
 from planner_lib.generators import get_plan_generator
+from test_plan import ImplementationPlan
 
 
 class ImplementationPlanner:

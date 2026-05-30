@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from .session import Session, _STORE
+from .session import _STORE, Session
 
 
 def login_user(email: str, password: str) -> Session | None:

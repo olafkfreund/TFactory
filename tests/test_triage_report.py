@@ -20,7 +20,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from agents.triage_dedup import DedupCollision, TriageCandidate
 from agents.triage_report import (
     TriageReport,
@@ -28,7 +27,6 @@ from agents.triage_report import (
     render_json,
     render_markdown,
 )
-
 
 GOLDEN_DIR = Path(__file__).parent / "fixtures" / "triage_report"
 

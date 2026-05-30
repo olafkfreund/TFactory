@@ -24,7 +24,6 @@ from pathlib import Path
 
 import pytest
 
-
 # ── FastAPI stub (same pattern as test_tfactory_routes_tasks.py) ───────────
 if "fastapi" not in sys.modules:
     _fastapi = types.ModuleType("fastapi")
@@ -79,7 +78,6 @@ if "fastapi" not in sys.modules:
 
 from fastapi import HTTPException as _HTTPException  # noqa: E402
 
-
 # ── sys.path setup ──────────────────────────────────────────────────────────
 WEB_SERVER_PATH = Path(__file__).parent.parent / "apps" / "web-server"
 BACKEND_PATH = Path(__file__).parent.parent / "apps" / "backend"
@@ -96,7 +94,6 @@ from server.routes.tfactory_frameworks import (  # noqa: E402
     get_framework,
     list_frameworks,
 )
-
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 

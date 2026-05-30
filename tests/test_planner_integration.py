@@ -22,7 +22,6 @@ import shutil
 from pathlib import Path
 
 import pytest
-
 from agents.planner import _BG_PLANNER_TASKS, run_planner
 
 FIXTURE = Path(__file__).parent / "fixtures" / "planner_smoke"

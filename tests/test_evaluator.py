@@ -34,14 +34,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
 from agents.evaluator import (
     _BG_EVALUATOR_TASKS,
     EvaluatorSignals,
     run_evaluator,
     schedule_evaluator,
 )
-
 
 # ── autouse: keep the chain envs deterministic ─────────────────────────
 
@@ -556,8 +554,11 @@ def test_advance_to_evaluator_swallows_import_errors(
 # Registry lookups are fast (YAML parse) and deterministic.
 
 
-from agents.evaluator import _coverage_delta_for_subtask, _framework_coverage_strategy, _validate_verdicts
-
+from agents.evaluator import (
+    _coverage_delta_for_subtask,
+    _framework_coverage_strategy,
+    _validate_verdicts,
+)
 
 # ── _framework_coverage_strategy ────────────────────────────────────────
 

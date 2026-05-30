@@ -34,7 +34,6 @@ from enum import Enum
 from pathlib import Path
 from typing import Callable, Protocol
 
-
 # How many times to re-run. Three is the smallest N that can yield
 # all four verdict outcomes (stable, flaky, consistent_fail, error)
 # without arbitrary-tie-breaking.

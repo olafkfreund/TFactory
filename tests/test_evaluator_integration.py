@@ -35,14 +35,12 @@ import textwrap
 from pathlib import Path
 
 import pytest
-
 from agents.evaluator import (
     _BG_EVALUATOR_TASKS,  # noqa: F401 — GC anchor importable
     run_evaluator,
 )
 from agents.gen_functional import run_gen_functional
 from agents.planner import run_planner
-
 
 FIXTURE = Path(__file__).parent / "fixtures" / "planner_smoke"
 

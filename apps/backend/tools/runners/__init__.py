@@ -15,8 +15,8 @@ Public surface:
 
 from .docker_runner import (
     DockerRunner,
-    DockerRunResult,
     DockerRunnerError,
+    DockerRunResult,
     DockerTimeoutError,
 )
 from .lane_dispatch import (

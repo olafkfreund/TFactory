@@ -19,7 +19,6 @@ import textwrap
 from pathlib import Path
 
 import pytest
-
 from agents.coverage_delta import (
     CoverageDelta,
     CoverageParseError,
@@ -28,7 +27,6 @@ from agents.coverage_delta import (
     compute_delta_from_paths,
     parse_coverage_xml,
 )
-
 
 # ── Helpers ────────────────────────────────────────────────────────────
 

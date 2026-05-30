@@ -23,7 +23,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-
 from agents.mutate_probe import (
     MutationApplied,
     MutationResult,
@@ -31,7 +30,6 @@ from agents.mutate_probe import (
     mutate_source,
     run_mutate_probe,
 )
-
 
 # ── Fake runner ────────────────────────────────────────────────────────
 

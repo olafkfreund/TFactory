@@ -34,7 +34,6 @@ from unittest.mock import MagicMock, call, patch
 from urllib.error import HTTPError, URLError
 
 import pytest
-
 from tools.runners.app_runtime import (
     AppRuntime,
     AppRuntimeError,
@@ -42,7 +41,6 @@ from tools.runners.app_runtime import (
     HealthCheckResult,
 )
 from tools.runners.lane_dispatch import DispatchResult, dispatch_browser_lane
-
 
 # ---------------------------------------------------------------------------
 # Helpers

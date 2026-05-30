@@ -27,10 +27,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from prompts_pkg.prompts import get_tfactory_gen_functional_prompt
 from test_plan import Lane, Subtask, Verification, VerificationType
-
 
 # ── Fixtures ────────────────────────────────────────────────────────────
 
