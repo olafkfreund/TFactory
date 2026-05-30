@@ -34,10 +34,10 @@ study) captured in epic [#33](https://github.com/olafkfreund/TFactory/issues/33)
 
 ## Horizon 3 — Later: moat & strategy
 
-- [ ] Decouple from AIFactory — ingest generic AC sources (Gherkin/EARS/markdown/Jira) (#40) `L`
+- [x] Decouple from AIFactory — ingest generic AC sources (Gherkin/EARS/markdown) (#40) `L`
 - [ ] Mutation-driven generation across languages (Stryker/PIT) (#41) `L`
-- [ ] Define freemium GTM + pricing (#42) `M`
-- [ ] Trim ~21.6k LOC of inherited AIFactory dead weight (#43) `L`
+- [x] Define freemium GTM + pricing (#42) `M` — see `pricing.md`
+- [~] Trim inherited AIFactory dead weight (#43) `L` — tranche 1 done; runners/github cut pending a dedicated refactor
 
 ## Effort Scale
 
