@@ -226,6 +226,11 @@ class OpenAICompatibleAgenticProvider(BaseLLMProvider):
                         "id": tool_call_id,
                         "name": tool_name,
                         "args": tool_args,
+                        # Gemini 3.x returns a reasoning signature per tool call
+                        # in extra_content.google.thought_signature and REQUIRES
+                        # it to be echoed back on the next turn, or the request
+                        # 400s. Other endpoints omit it (harmless passthrough).
+                        "extra_content": tc.get("extra_content"),
                     })
                     assistant_blocks.append(
                         ToolUseBlock(name=tool_name, input=tool_args)
@@ -274,6 +279,13 @@ class OpenAICompatibleAgenticProvider(BaseLLMProvider):
                                 "name": call["name"],
                                 "arguments": json.dumps(call["args"]),
                             },
+                            # Echo the provider's reasoning signature (Gemini 3.x
+                            # requires it; absent for other endpoints).
+                            **(
+                                {"extra_content": call["extra_content"]}
+                                if call.get("extra_content")
+                                else {}
+                            ),
                         }
                         for call in normalized_calls
                     ],

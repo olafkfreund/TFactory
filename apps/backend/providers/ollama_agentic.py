@@ -210,6 +210,18 @@ class OllamaAgenticProvider(BaseLLMProvider):
             {"role": "user", "content": self._pending_prompt},
         ]
 
+        # Convergence guard for small/local models: they tend to loop on Read
+        # and never emit the final Write. Track signatures of executed calls and
+        # how many read-only turns have passed without producing output, then
+        # nudge the model to write once a threshold is crossed.
+        _seen_calls: set[tuple[str, str]] = set()
+        _readonly_turns = 0
+        _produced_output = False
+        _nudged = False
+        _READONLY = {"Read", "Glob", "Grep"}
+        _WRITERS = {"Write", "Edit", "MultiEdit"}
+        _NUDGE_AFTER = 5
+
         for turn in range(self._max_turns):
             logger.debug(
                 "OllamaAgenticProvider: turn %d/%d", turn + 1, self._max_turns
@@ -325,6 +337,47 @@ class OllamaAgenticProvider(BaseLLMProvider):
                 # Append assistant message and tool results to conversation
                 messages.append(message)
                 messages.extend(tool_results_for_api)
+
+                # ── Convergence guard ──────────────────────────────────────
+                turn_names = [
+                    (tc.get("function", {}) or {}).get("name", "") for tc in tool_calls
+                ]
+                turn_sigs = [
+                    (
+                        (tc.get("function", {}) or {}).get("name", ""),
+                        json.dumps(
+                            (tc.get("function", {}) or {}).get("arguments", {}),
+                            sort_keys=True,
+                            default=str,
+                        ),
+                    )
+                    for tc in tool_calls
+                ]
+                if any(n in _WRITERS for n in turn_names):
+                    _produced_output = True
+                repeated = any(s in _seen_calls for s in turn_sigs)
+                _seen_calls.update(turn_sigs)
+                if turn_names and all(n in _READONLY for n in turn_names):
+                    _readonly_turns += 1
+                else:
+                    _readonly_turns = 0
+                # Once the model has read enough (or is re-reading the same
+                # thing) without producing output, push it to write — once.
+                if (
+                    not _produced_output
+                    and not _nudged
+                    and (_readonly_turns >= _NUDGE_AFTER or repeated)
+                ):
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "You have gathered enough context. Do NOT read or "
+                            "search again. Produce the final required file NOW "
+                            "by calling the Write tool exactly once with the "
+                            "complete file content."
+                        ),
+                    })
+                    _nudged = True
 
             else:
                 # No tool calls — final response
