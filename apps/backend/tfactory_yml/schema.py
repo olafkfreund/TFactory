@@ -442,6 +442,37 @@ class EvidencePolicy(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class EgressDestination(BaseModel):
+    """A declared network destination credentials are allowed to reach."""
+
+    name: str
+    host: str  # hostname or glob (e.g. "api.staging.example.com", "*.googleapis.com")
+    description: str | None = None
+
+
+class EgressConfig(BaseModel):
+    """Honest-egress gate (epic #62). Default OFF — no cloud credentials are
+    resolved unless ``enabled`` is true."""
+
+    enabled: bool = False
+    destinations: list[EgressDestination] = Field(default_factory=list)
+
+
+class CredentialEntry(BaseModel):
+    """One named credential: a backend ref + how to expose it to consumers.
+
+    ``ref`` is a secret reference (e.g. ``vault:secret/data/app#token``,
+    ``gcp-sm://proj/sa``); ``as`` is the env-var name to set; ``kind=file``
+    writes the value to a 0600 file and sets the env var to that path.
+    """
+
+    ref: str
+    as_: str = Field(alias="as")
+    kind: Literal["env", "file"] = "env"
+
+    model_config = {"populate_by_name": True}
+
+
 class TFactoryConfig(BaseModel):
     """Parsed representation of a ``.tfactory.yml`` file.
 
@@ -466,6 +497,9 @@ class TFactoryConfig(BaseModel):
     evidence_policy: EvidencePolicy | None = None
     # Optional path overrides (consumed by Planner / Gen-Functional)
     test_paths: dict[str, str] | None = None
+    # Credential broker (epic #62): egress gate + named credential refs.
+    egress: EgressConfig = Field(default_factory=EgressConfig)
+    credentials: dict[str, CredentialEntry] | None = None
 
     @model_validator(mode="after")
     def _validate_default_target(self) -> TFactoryConfig:
