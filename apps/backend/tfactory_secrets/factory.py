@@ -25,15 +25,18 @@ from tfactory_secrets import SecretsBackend
 _BACKEND_REGISTRY: dict[str, tuple[str, str]] = {
     "env": ("tfactory_secrets.backends.env", "EnvBackend"),
     "localfile": ("tfactory_secrets.backends.localfile", "LocalFileBackend"),
+    "vault": ("tfactory_secrets.backends.vault", "VaultBackend"),
+    "azure_keyvault": (
+        "tfactory_secrets.backends.azure_keyvault", "AzureKeyVaultBackend"),
+    "aws_secrets_manager": (
+        "tfactory_secrets.backends.aws_secrets_manager", "AwsSecretsManagerBackend"),
+    "gcp_secret_manager": (
+        "tfactory_secrets.backends.gcp_secret_manager", "GcpSecretManagerBackend"),
 }
 
 # Recognised backends whose implementation lands in a later child issue.
-_PLANNED: dict[str, str] = {
-    "vault": "#66 (HashiCorp Vault)",
-    "azure_keyvault": "#67 (Azure Key Vault)",
-    "aws_secrets_manager": "#68 (AWS Secrets Manager)",
-    "gcp_secret_manager": "#69 (GCP Secret Manager)",
-}
+# (All v1 backends are now implemented.)
+_PLANNED: dict[str, str] = {}
 
 # Human-friendly aliases -> canonical name.
 _ALIASES: dict[str, str] = {
