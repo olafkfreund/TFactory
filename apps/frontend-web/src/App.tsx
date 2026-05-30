@@ -178,8 +178,8 @@ function AuthenticatedApp() {
   useEffect(() => {
     const root = document.documentElement;
 
-    // Always use Ocean color theme
-    root.setAttribute('data-theme', 'ocean');
+    // Always use the Gruvbox color theme
+    root.setAttribute('data-theme', 'gruvbox');
 
     const applyTheme = () => {
       if (settings.theme === 'dark') {

@@ -52,32 +52,32 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 
-  /* Light mode colors */
-  --background: 240 10% 96%;
-  --foreground: 240 10% 4%;
-  --card: 0 0% 100%;
-  --card-foreground: 240 10% 4%;
-  --popover: 0 0% 100%;
-  --popover-foreground: 240 10% 4%;
-  --primary: 211 76% 35%;
-  --primary-foreground: 0 0% 100%;
-  --secondary: 240 5% 90%;
-  --secondary-foreground: 240 10% 4%;
-  --muted: 240 5% 90%;
-  --muted-foreground: 240 5% 40%;
-  --accent: 128 53% 59%;
-  --accent-foreground: 0 0% 100%;
-  --destructive: 0 84% 60%;
-  --destructive-foreground: 0 0% 100%;
-  --success: 142 71% 45%;
-  --success-foreground: 0 0% 100%;
-  --warning: 38 92% 50%;
-  --warning-foreground: 0 0% 100%;
-  --info: 199 89% 48%;
-  --info-foreground: 0 0% 100%;
-  --border: 240 6% 85%;
-  --input: 240 6% 85%;
-  --ring: 211 76% 35%;
+  /* Gruvbox — light mode (bg0 #fbf1c7 · fg #3c3836) */
+  --background: 48 87% 88%;          /* bg0   #fbf1c7 */
+  --foreground: 20 5% 22%;           /* fg1   #3c3836 */
+  --card: 46 80% 92%;                /* cream */
+  --card-foreground: 20 5% 22%;
+  --popover: 46 80% 92%;
+  --popover-foreground: 20 5% 22%;
+  --primary: 56 80% 26%;             /* green  #79740e */
+  --primary-foreground: 48 87% 92%;
+  --secondary: 43 36% 81%;           /* bg1   #ebdbb2 */
+  --secondary-foreground: 20 5% 22%;
+  --muted: 43 36% 81%;
+  --muted-foreground: 26 10% 44%;
+  --accent: 18 96% 35%;              /* orange #af3a03 */
+  --accent-foreground: 48 87% 92%;
+  --destructive: 2 99% 31%;          /* red    #9d0006 */
+  --destructive-foreground: 48 87% 92%;
+  --success: 146 30% 37%;            /* aqua   #427b58 */
+  --success-foreground: 48 87% 92%;
+  --warning: 36 80% 39%;             /* yellow #b57614 */
+  --warning-foreground: 48 87% 92%;
+  --info: 189 90% 25%;               /* blue   #076678 */
+  --info-foreground: 48 87% 92%;
+  --border: 40 33% 73%;              /* bg2   #d5c4a1 */
+  --input: 40 33% 73%;
+  --ring: 56 80% 26%;
   --radius: 0.5rem;
 
   color-scheme: light;
@@ -85,33 +85,33 @@
   background-color: hsl(var(--background));
 }
 
-/* Default Theme - Dark Mode */
+/* Gruvbox — dark mode (bg0 #282828 · fg #ebdbb2) */
 .dark {
-  --background: 240 10% 4%;
-  --foreground: 0 0% 95%;
-  --card: 240 10% 6%;
-  --card-foreground: 0 0% 95%;
-  --popover: 240 10% 8%;
-  --popover-foreground: 0 0% 95%;
-  --primary: 211 76% 50%;
-  --primary-foreground: 0 0% 100%;
-  --secondary: 240 5% 15%;
-  --secondary-foreground: 0 0% 95%;
-  --muted: 240 5% 15%;
-  --muted-foreground: 240 5% 60%;
-  --accent: 128 53% 65%;
-  --accent-foreground: 0 0% 100%;
-  --destructive: 0 62% 50%;
-  --destructive-foreground: 0 0% 100%;
-  --success: 142 71% 45%;
-  --success-foreground: 0 0% 100%;
-  --warning: 38 92% 50%;
-  --warning-foreground: 0 0% 100%;
-  --info: 199 89% 48%;
-  --info-foreground: 0 0% 100%;
-  --border: 240 5% 18%;
-  --input: 240 5% 18%;
-  --ring: 211 76% 50%;
+  --background: 0 0% 16%;            /* bg0  #282828 */
+  --foreground: 43 36% 81%;         /* fg1  #ebdbb2 */
+  --card: 20 5% 22%;                /* bg1  #3c3836 */
+  --card-foreground: 43 36% 81%;
+  --popover: 24 7% 29%;             /* bg2  #504945 */
+  --popover-foreground: 43 36% 81%;
+  --primary: 61 66% 44%;            /* green  #b8bb26 */
+  --primary-foreground: 0 0% 12%;
+  --secondary: 24 7% 29%;           /* bg2 */
+  --secondary-foreground: 43 36% 81%;
+  --muted: 24 7% 29%;
+  --muted-foreground: 40 14% 59%;   /* fg4  #a89984 */
+  --accent: 27 99% 55%;             /* orange #fe8019 */
+  --accent-foreground: 0 0% 12%;
+  --destructive: 6 96% 59%;         /* red    #fb4934 */
+  --destructive-foreground: 0 0% 12%;
+  --success: 110 33% 62%;           /* aqua   #8ec07c */
+  --success-foreground: 0 0% 12%;
+  --warning: 42 95% 58%;            /* yellow #fabd2f */
+  --warning-foreground: 0 0% 12%;
+  --info: 155 16% 58%;              /* blue   #83a598 */
+  --info-foreground: 0 0% 12%;
+  --border: 24 7% 29%;              /* bg2 */
+  --input: 24 7% 29%;
+  --ring: 61 66% 44%;
 
   color-scheme: dark;
   color: hsl(var(--foreground));
@@ -119,23 +119,23 @@
 }
 
 /* ============================================
-   Ocean Color Theme
+   Gruvbox Color Theme
    ============================================ */
 
-[data-theme="ocean"] {
-  --primary: 199 89% 40%;
-  --primary-foreground: 0 0% 100%;
-  --accent: 199 89% 40%;
-  --accent-foreground: 0 0% 100%;
-  --ring: 199 89% 40%;
+[data-theme="gruvbox"] {
+  --primary: 56 80% 26%;             /* green  #79740e */
+  --primary-foreground: 48 87% 92%;
+  --accent: 18 96% 35%;              /* orange #af3a03 */
+  --accent-foreground: 48 87% 92%;
+  --ring: 56 80% 26%;
 }
-[data-theme="ocean"].dark, .dark[data-theme="ocean"] {
-  --background: 204 80% 16%;
-  --card: 204 70% 12%;
-  --popover: 204 70% 14%;
-  --border: 204 50% 25%;
-  --primary: 199 89% 50%;
-  --accent: 199 89% 50%;
+[data-theme="gruvbox"].dark, .dark[data-theme="gruvbox"] {
+  --background: 0 0% 16%;            /* bg0  #282828 */
+  --card: 20 5% 22%;                /* bg1  #3c3836 */
+  --popover: 24 7% 29%;             /* bg2  #504945 */
+  --border: 24 7% 29%;
+  --primary: 61 66% 44%;            /* green  #b8bb26 */
+  --accent: 27 99% 55%;             /* orange #fe8019 */
 }
 
 body {
@@ -156,16 +156,16 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: #1a1a1a;
+  background: hsl(var(--background));
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #3a3a3a;
+  background: hsl(var(--border));
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #4a4a4a;
+  background: hsl(var(--muted-foreground));
 }
 
 /* Terminal grid drag-and-drop styles */
