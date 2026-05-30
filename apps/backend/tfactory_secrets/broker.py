@@ -170,6 +170,25 @@ class CredentialBroker:
             available=True, source=f"broker:{source}", env_vars=dict(self._env)
         )
 
+    def materialise_credential(self, name: str, entry) -> str:
+        """Resolve a `.tfactory.yml` credential entry and expose it.
+
+        ``entry`` carries ``ref`` / ``as_`` (env var) / ``kind`` (``env``|``file``).
+        Returns the env-var name set. Raises ``SecretsError`` on failure.
+        """
+        ref = getattr(entry, "ref", None) or (entry.get("ref") if isinstance(entry, dict) else None)
+        as_var = getattr(entry, "as_", None) or (entry.get("as") if isinstance(entry, dict) else None)
+        kind = getattr(entry, "kind", None) or (entry.get("kind", "env") if isinstance(entry, dict) else "env")
+        if not ref or not as_var:
+            raise SecretsError(f"Credential {name!r} needs both 'ref' and 'as'.")
+        secret = self.resolve_ref(ref)
+        if kind == "file":
+            path = self.materialise_file(f"{name}-cred", secret.value)
+            self._env[as_var] = str(path)
+        else:
+            self._env[as_var] = secret.value
+        return as_var
+
     def materialise_file(self, name: str, content: str, mode: int = 0o600) -> Path:
         """Write ``content`` to a 0600 file in the per-task scratch dir; tracked
         for wipe on close."""
@@ -216,16 +235,38 @@ def inject_task_credentials(
     Materialised cred files are wiped at process exit; the agent subprocess
     inherits ``env`` (and reads any cred files it points to) during the run.
     """
-    if os.environ.get("TFACTORY_EGRESS_ENABLED", "").strip().lower() not in ("1", "true"):
+    from tfactory_secrets.egress import egress_enabled
+
+    if not egress_enabled(project_dir):
         return env
     try:
         broker = CredentialBroker(project_dir, spec_dir, egress_allowed=True)
+        # 1. Per-project `.tfactory.yml` `credentials:` entries.
+        for name, entry in _project_credentials(project_dir).items():
+            try:
+                broker.materialise_credential(name, entry)
+            except SecretsError as exc:
+                logger.warning("CredentialBroker: credential %r skipped: %s", name, exc)
+        # 2. Cloud-provider creds from the operator config (backend-fetch head).
         for provider in _CLOUD_PROVIDERS:
-            broker.resolve_cloud(provider)  # materialises env + files (if configured)
+            broker.resolve_cloud(provider)
         broker.apply_to_env(env)
     except Exception as exc:  # noqa: BLE001 - never break the agent on creds
         logger.warning("CredentialBroker: credential injection skipped: %s", exc)
     return env
+
+
+def _project_credentials(project_dir: Path | str | None) -> dict:
+    """Return the `.tfactory.yml` `credentials:` map (name -> entry), or {}."""
+    if project_dir is None:
+        return {}
+    try:
+        from tfactory_yml.parser import load_tfactory_yml
+
+        cfg = load_tfactory_yml(Path(project_dir))
+    except Exception:  # noqa: BLE001
+        return {}
+    return getattr(cfg, "credentials", None) or {} if cfg else {}
 
 
 def _wipe_paths(paths: list[Path]) -> None:
