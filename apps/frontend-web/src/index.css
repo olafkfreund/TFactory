@@ -47,12 +47,6 @@
    Theme CSS Variables
    ============================================ */
 
-/* UI scale: the settings slider sets --ui-scale on <html>; rem-based sizing
-   (Tailwind) scales from this root font-size. Default 1 → 16px (unchanged). */
-html {
-  font-size: calc(16px * var(--ui-scale, 1));
-}
-
 /* Default Theme - Light Mode */
 :root {
   font-family: 'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, sans-serif;
