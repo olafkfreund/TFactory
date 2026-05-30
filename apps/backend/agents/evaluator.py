@@ -117,12 +117,13 @@ async def _resolve_evaluator_client(spec_dir: Path, project_dir: Path):
             eval_model,
             max_thinking_tokens=thinking_budget,
         )
+    extra = get_provider_extra_kwargs(provider_name, eval_model)
     return get_provider(
         provider_name,
         phase="coding",
-        model=eval_model,
         working_dir=project_dir,
-        **get_provider_extra_kwargs(provider_name, eval_model),
+        model=extra.pop("model", eval_model),
+        **extra,
     )
 
 

@@ -306,12 +306,16 @@ async def _resolve_planner_client(spec_dir: Path, project_dir: Path):
             planning_model,
             max_thinking_tokens=thinking_budget,
         )
+    # get_provider_extra_kwargs may itself return a "model" (e.g. the stripped
+    # name for openai-compatible / studio endpoints) — let it win and avoid
+    # passing model= twice (TypeError: multiple values for 'model').
+    extra = get_provider_extra_kwargs(provider_name, planning_model)
     return get_provider(
         provider_name,
         phase="planning",
-        model=planning_model,
         working_dir=project_dir,
-        **get_provider_extra_kwargs(provider_name, planning_model),
+        model=extra.pop("model", planning_model),
+        **extra,
     )
 
 

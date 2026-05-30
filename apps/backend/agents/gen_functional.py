@@ -99,12 +99,13 @@ async def _resolve_client(spec_dir: Path, project_dir: Path):
             gen_model,
             max_thinking_tokens=thinking_budget,
         )
+    extra = get_provider_extra_kwargs(provider_name, gen_model)
     return get_provider(
         provider_name,
         phase="coding",
-        model=gen_model,
         working_dir=project_dir,
-        **get_provider_extra_kwargs(provider_name, gen_model),
+        model=extra.pop("model", gen_model),
+        **extra,
     )
 
 
