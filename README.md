@@ -1,12 +1,16 @@
 # TFactory
 
-**Autonomous test generation + execution platform — sister project to [AIFactory](https://github.com/olafkfreund/AIFactory).**
+**Autonomous test generation + execution platform.** Started as a sister
+project to [AIFactory](https://github.com/olafkfreund/AIFactory) — now a
+standalone product you can drive from **any tool**.
 
-TFactory ingests a finished AIFactory spec, generates tests aligned to its
-acceptance criteria across the v0.2 lane spine (unit / browser / api /
-integration / mutation), runs them in a sandbox, evaluates quality,
-commits the tests to the feature branch, and posts a coverage report
-to the PR — autonomously.
+Hand TFactory a finished feature's acceptance criteria — from AIFactory,
+**Claude Code**, or anything else, via the **MCP control plane** or a plain
+file (markdown / Gherkin / EARS, see [`guides/spec-sources.md`](guides/spec-sources.md)).
+It generates tests aligned to those criteria across the v0.2 lane spine
+(unit / browser / api / integration / mutation), runs them in a sandbox,
+evaluates quality with a 5-signal verdict, commits the tests to the feature
+branch, and posts a triage report to the PR — autonomously.
 
 > Status: **v0.2.0 released (2026-05-29) — 16 of 16 v0.2 tasks delivered ·
 > Browser + API + Integration lanes active · test evidence capture live ·

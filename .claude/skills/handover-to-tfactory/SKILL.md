@@ -1,6 +1,6 @@
 ---
 name: handover-to-tfactory
-description: Hand a finished AIFactory spec off to TFactory for autonomous polyglot test generation. Records the task, snapshots the spec dir, and drives the full Planner → Gen-Functional → Executor → Evaluator → Triager pipeline across the v0.2 5-lane spine (unit / browser / api / integration / mutation) to produce a triage report + (optionally) commit tests to the feature branch + post a PR comment.
+description: Hand a finished feature off to TFactory for autonomous polyglot test generation — from AIFactory, Claude Code, or any tool (via the MCP control plane, or a markdown/Gherkin/EARS acceptance-criteria file ingested with spec_sources.py). Records the task, snapshots the spec, and drives the full Planner → Gen-Functional → Executor → Evaluator → Triager pipeline across the v0.2 5-lane spine (unit / browser / api / integration / mutation) to produce a triage report + (optionally) commit tests to the feature branch + post a PR comment. Pair with /tfactory-watch under /loop to poll the task home and verify coverage — the full round-trip.
 when_to_use: When the user has finished an AIFactory feature on a branch and wants TFactory to generate aligned tests + a verdicts/coverage report across pytest / Jest / Playwright as appropriate for each subtask. Common triggers — "hand this off to tfactory", "/handover-to-tfactory", "generate tests for the current PR", "have tfactory test this spec".
 allowed-tools:
   - mcp__tfactory__project_list
@@ -182,9 +182,13 @@ mcp__tfactory__report_get(task_id=<task_id>, format='md')
   side-effects (`git commit` to the feature branch, `gh pr comment`) are
   DRY-RUN by default; operators opt in via
   `TFACTORY_TRIAGER_GIT_WRITE=1` and `TFACTORY_TRIAGER_PR_COMMENT=1`.
-- This skill does **not** handle external repositories (non-AIFactory).
-  v0.2 is still spec-aware-handover only; arbitrary-repo testing is out
-  of scope.
+- **Non-AIFactory handover is supported** (Claude Code or any tool): provide
+  the feature's acceptance criteria as a markdown / Gherkin / EARS file and
+  ingest it with `python apps/backend/spec_sources.py <file> --context
+  <spec_dir>/context` (see `guides/spec-sources.md`). That writes the canonical
+  `context/aifactory_spec.md` the Planner reads, then hand off the same way.
+  The AIFactory snapshot path above is the warm-start wedge, not the only
+  entry point.
 - This skill does **not** create `.tfactory.yml` or
   `.tfactory/tests-catalog.json`. Use `/tfactory-init` for that.
 - The `task_create_and_run` MCP tool signature is **unchanged from v0.1**
@@ -192,3 +196,26 @@ mcp__tfactory__report_get(task_id=<task_id>, format='md')
   required to drive the unit / browser / api / integration lanes; the
   Planner infers `(language, framework)` per subtask from the diff +
   the targets declared in `.tfactory.yml`.
+
+## After handover — watch it home (the round-trip)
+
+Handing off returns a `task_id` but the pipeline runs asynchronously. To close
+the loop **hands-off**, chain into the `/tfactory-watch` skill under `/loop`:
+
+```
+/loop 30s /tfactory-watch <task_id>
+```
+
+`/tfactory-watch` polls `mcp__tfactory__task_status` each interval; when the
+task reaches a terminal state (`triaged` / `triaged_empty`, or a `*_failed` /
+`stuck`) it **picks up `findings/triage_report.md` and verifies** that the
+generated, accepted tests cover the acceptance criteria you handed off — then
+stops the loop. This gives you the full round-trip:
+
+```
+set goals/ACs → /handover-to-tfactory → (TFactory plans+writes+runs+scores)
+   → /loop /tfactory-watch → pick up report → verify coverage → done
+```
+
+After running this skill, offer to start the watch loop for the returned
+`task_id` unless the user only wanted to fire-and-forget.
