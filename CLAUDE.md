@@ -11,9 +11,10 @@ via a 5-signal verdict pipeline (coverage delta · 3× stability · mutate-and-
 check · flake-lint promotion · LLM semantic relevance), and emits a triage
 report ready to commit + post to the PR.
 
-**Status:** MVP walking skeleton complete — 12 of 12 tasks delivered.
-Functional lane (Python pytest) active. SAST / DAST / Fuzz / Mutation
-lanes are Phase 2-5 placeholders in the portal.
+**Status:** v0.2.0 released (2026-05-29) — 16 of 16 v0.2 tasks delivered.
+Modality-based lane spine active: unit / browser / api / integration / mutation
+(pytest · Jest · Playwright). Security scanning is out of scope — delegated to
+dedicated SAST/DAST pipelines, not generated here.
 
 **Project:** TFactory
 **Repository:** https://github.com/olafkfreund/TFactory
@@ -250,7 +251,7 @@ Task 4 for the Executor.
 
 **Planner** (`agents/planner.py`):
   - Reads `context/aifactory_spec.md` + `context/diff.patch`
-  - Emits `test_plan.json` (Lane.FUNCTIONAL subtasks, one phase per AC)
+  - Emits `test_plan.json` (lane-tagged subtasks across the v0.2 spine, one phase per AC)
   - Initial + replan modes; `replan_count >= 2` → status=stuck
   - Hard cap: 30 subtasks; soft warning at 15
 
