@@ -48,6 +48,10 @@ Pipeline supporting primitives (also under `agents/`):
   - `preflight_static.py` + `flake_risk_lint.py` — Gen-Functional guards
   - `coverage_delta.py` + `stability_runner.py` + `mutate_probe.py`
     + `lint_promotion.py` — Evaluator's four pre-computed signals
+  - `flaky_history.py` — cross-run flip-rate history (#37): persists each
+    test's pass/fail across runs (`<workspace>/<project>/test_history.json`)
+    so chronically flaky tests are flagged even when one run's 3× stability
+    happens to pass
   - `triage_dedup.py` + `triage_report.py` — Triager primitives
 
 Each agent has its own `prompts/<agent>.md` system prompt + an assembly
