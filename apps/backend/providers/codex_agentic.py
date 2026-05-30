@@ -15,7 +15,7 @@ Usage::
     from providers.codex_agentic import CodexAgenticProvider
 
     provider = CodexAgenticProvider(
-        model="gpt-5-codex",
+        model="gpt-5.3-codex",
         working_dir=spec_dir,
         timeout=600,
     )
@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import shutil
 from collections.abc import AsyncGenerator, AsyncIterator
@@ -42,7 +43,7 @@ from providers.types import AssistantMessage, TextBlock
 logger = logging.getLogger(__name__)
 
 _DEFAULT_CODEX_PATH: str = "codex"
-_DEFAULT_MODEL: str = "gpt-5-codex"
+_DEFAULT_MODEL: str = "gpt-5.3-codex"
 _DEFAULT_TIMEOUT: int = 600  # 10 minutes for agentic tasks
 _MODEL_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$")
 
@@ -60,7 +61,7 @@ class CodexAgenticProvider(BaseLLMProvider):
     on exit.
 
     Args:
-        model: Codex model identifier (e.g. ``"gpt-5-codex"``).
+        model: Codex model identifier (e.g. ``"gpt-5.3-codex"``).
         codex_path: Path or command name for the ``codex`` executable.
         timeout: Maximum seconds to wait for a response.
         working_dir: Working directory for Codex sessions.
@@ -148,6 +149,51 @@ class CodexAgenticProvider(BaseLLMProvider):
         self._request_id += 1
         return self._request_id
 
+    @staticmethod
+    def _build_subprocess_env() -> dict[str, str]:
+        """Build the env for ``codex mcp-server``, owning auth when possible.
+
+        Codex resolves credentials from ``$CODEX_HOME/auth.json`` (default
+        ``~/.codex``). A bare ChatGPT-account login there rejects every model
+        ("model is not supported when using Codex with a ChatGPT account"),
+        which is fragile: any re-login to ChatGPT silently breaks TFactory.
+
+        When ``OPENAI_API_KEY`` is set, point Codex at a TFactory-owned
+        ``CODEX_HOME`` containing an api-key ``auth.json``
+        (``{"OPENAI_API_KEY": ...}`` — the exact shape ``codex login
+        --with-api-key`` writes). This makes agentic Codex work regardless of
+        the user's global ``codex login`` state, and leaves that global login
+        untouched. With no API key, fall back to the inherited environment so a
+        Codex-enabled ChatGPT plan still works.
+        """
+        env = dict(os.environ)
+        api_key = env.get("OPENAI_API_KEY", "").strip()
+        if not api_key:
+            return env
+
+        codex_home = Path.home() / ".tfactory" / "codex-home"
+        try:
+            codex_home.mkdir(parents=True, exist_ok=True)
+            auth_path = codex_home / "auth.json"
+            desired = json.dumps({"OPENAI_API_KEY": api_key})
+            # Only rewrite when the key changed — avoids needless disk churn.
+            if not auth_path.exists() or auth_path.read_text().strip() != desired:
+                auth_path.write_text(desired)
+                auth_path.chmod(0o600)
+            env["CODEX_HOME"] = str(codex_home)
+            logger.info(
+                "CodexAgenticProvider: using TFactory-owned CODEX_HOME=%s (api-key auth)",
+                codex_home,
+            )
+        except OSError as exc:
+            # Non-fatal: fall back to the inherited codex login.
+            logger.warning(
+                "CodexAgenticProvider: could not provision CODEX_HOME (%s); "
+                "falling back to global codex login",
+                exc,
+            )
+        return env
+
     async def __aenter__(self) -> CodexAgenticProvider:
         """Start the MCP server and send initialize handshake."""
         # "codex" is often a shell alias (e.g. -> codex-cli), which shutil.which
@@ -168,6 +214,7 @@ class CodexAgenticProvider(BaseLLMProvider):
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=self._build_subprocess_env(),
         )
 
         # Send initialize
