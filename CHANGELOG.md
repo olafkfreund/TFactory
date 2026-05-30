@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased — Credential Broker (epic #62)
+
+> Agents can now authenticate to cloud environments using vault-backed or
+> locally-encrypted credentials, gated by an honest egress posture. See
+> `guides/credentials.md` and `docs/plans/2026-05-30-credential-broker-design.md`.
+>
+> **Pluggable secrets backends** (`apps/backend/tfactory_secrets/`). A
+> `SecretsBackend` abstraction + factory (mirrors `providers/factory.py`) +
+> ref routing (`env:` · `sops:`/`age:`/`agenix:` · `vault:` · `azurekv://` ·
+> `aws-sm://` · `gcp-sm://`). Cloud SDKs import lazily — an absent package makes
+> only that backend unavailable. (#63 #64 #66 #67 #68 #69)
+>
+> **CredentialBroker** (#65) extends the existing `core/mcp_credentials.py`
+> chain with a vault-fetch head, materialises file creds (kubeconfig, GCP ADC)
+> at **0600** in a per-task scratch dir, **wipes** them on task end, and wires
+> resolved env into the agent via `core/client.py` (off unless egress is on).
+>
+> **Honest egress** (#8): `.tfactory.yml` `egress.enabled` gate (default OFF) +
+> `credentials:` block; a secret-free egress **manifest** + badge; log redaction;
+> `python -m tfactory_secrets.cli audit|doctor|resolve`.
+>
+> Fast-follows: sandbox-test injection (#73), OIDC/workload-identity
+> federation (#74). ~99 new tests across the secrets suite.
+
 ## 0.2.1 — Version honesty + docs reconciliation (2026-05-30)
 
 > Housekeeping release. No runtime behaviour change.
