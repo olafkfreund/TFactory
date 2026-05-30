@@ -126,13 +126,21 @@ if [[ -n "$TITLE" ]]; then
   done
 fi
 
-DRAW=""
+# ─── top title bar (HEADER) ────────────────────────────────────────────
+# TITLE becomes a prominent top banner (left), with an optional SUBTITLE env
+# rendered smaller on the right. Falls back gracefully if no font is found.
+HDR_H=96
+HEADER_FILTER=""
+HEADER_LABEL="[stack]"
 if [[ -n "$TITLE" && -n "$FONT" ]]; then
-  ESC_TITLE=${TITLE//:/\\:}
-  ESC_TITLE=${ESC_TITLE//\'/}
-  DRAW=",drawtext=fontfile='${FONT}':text='${ESC_TITLE}':x=(w-text_w)/2:y=h-60:fontsize=30:fontcolor=white:box=1:boxcolor=0x000000AA:boxborderw=14"
+  ESC_TITLE=${TITLE//:/\\:}; ESC_TITLE=${ESC_TITLE//\'/}
+  ESC_SUB=${SUBTITLE//:/\\:}; ESC_SUB=${ESC_SUB//\'/}
+  SUB_DRAW=""
+  [[ -n "$ESC_SUB" ]] && SUB_DRAW=",drawtext=fontfile='${FONT}':text='${ESC_SUB}':x=w-text_w-40:y=(${HDR_H}-text_h)/2:fontsize=26:fontcolor=0x8b949e"
+  HEADER_FILTER="color=c=0x161b22:s=${CANVAS_W}x${HDR_H}:d=${DUR}[hdrbg];[hdrbg]drawtext=fontfile='${FONT}':text='${ESC_TITLE}':x=40:y=(${HDR_H}-text_h)/2:fontsize=34:fontcolor=white${SUB_DRAW},drawbox=x=0:y=${HDR_H}-3:w=${CANVAS_W}:h=3:color=0x58a6ff:t=fill[hdr];"
+  HEADER_LABEL="[hdrstack]"
 elif [[ -n "$TITLE" ]]; then
-  echo "compose.sh: no font found — skipping lower-third caption" >&2
+  echo "compose.sh: no font found — skipping title bar" >&2
 fi
 
 # ─── build filter graph ────────────────────────────────────────────────
@@ -154,16 +162,22 @@ else
   REPORT_FILTER="[2:v]${PAD_BOT}[bot]"
 fi
 
+# Optional header gets vstacked above the three-pane stack.
+HEADER_VSTACK=""
+[[ -n "$HEADER_FILTER" ]] && HEADER_VSTACK="[hdr][stack]vstack=inputs=2[hdrstack];"
+
 FILTER="\
+${HEADER_FILTER}\
 [0:v]${PAD_TOP}[tl];\
 [1:v]${PAD_TOP}[tr];\
 ${REPORT_FILTER};\
 [tl][tr]hstack=inputs=2[top];\
 [top][bot]vstack=inputs=2[stack];\
-[stack]format=yuv420p${DRAW}[v]"
+${HEADER_VSTACK}\
+${HEADER_LABEL}format=yuv420p[v]"
 
 echo "compose.sh: encoding $OUT_MP4 ..."
-ffmpeg -hide_banner -loglevel error -y \
+ffmpeg -nostdin -hide_banner -loglevel error -y \
   -i "$TERM_IN" \
   -i "$PORTAL_IN" \
   "${REPORT_INPUT[@]}" \
@@ -178,7 +192,7 @@ ffmpeg -hide_banner -loglevel error -y \
 # ─── gif (two-pass palette) ────────────────────────────────────────────
 
 echo "compose.sh: encoding $OUT_GIF ..."
-ffmpeg -hide_banner -loglevel error -y -i "$OUT_MP4" \
+ffmpeg -nostdin -hide_banner -loglevel error -y -i "$OUT_MP4" \
   -vf "fps=${GIF_FPS},scale=${GIF_W}:-2:flags=lanczos,split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle" \
   "$OUT_GIF"
 
