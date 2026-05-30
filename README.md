@@ -139,6 +139,9 @@ In-repo guides (`guides/`):
   (Ollama / vLLM / LM Studio / LocalAI) with a verifiable no-egress guarantee —
   for GDPR / HIPAA / air-gapped teams. `python apps/backend/byo_llm.py <model>`
   prints the live data-egress posture (🔒 Local / 🏠 Self-hosted / ☁️ Managed)
+- **`guides/spec-sources.md`** — use TFactory **without AIFactory**: ingest any
+  acceptance-criteria source (markdown / Gherkin `.feature` / EARS) into the
+  pipeline via `python apps/backend/spec_sources.py <file>`
 
 ## Project tracking
 
