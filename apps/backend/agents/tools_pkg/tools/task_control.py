@@ -475,6 +475,13 @@ def create_task_control_tools() -> list:
         },
     )
     async def project_create(args: dict[str, Any]) -> dict[str, Any]:
+        missing = [k for k in ("id", "name", "root_path") if not args.get(k)]
+        if missing:
+            return _format_error(
+                f"project_create requires {', '.join(missing)}. Provide id "
+                "(matches the AIFactory project_id), name, and root_path "
+                "(absolute path to the local checkout where the feature branch lives)."
+            )
         pid = args["id"]
         name = args["name"]
         root_path = args["root_path"]
