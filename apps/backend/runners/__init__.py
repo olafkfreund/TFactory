@@ -1,21 +1,9 @@
+"""Runners package.
+
+Historically this re-exported a set of standalone AIFactory CLI runners
+(ideation / spec / roadmap / insights / ai_analyzer). Those are not part of
+TFactory and several imported modules that no longer exist, so the eager
+re-exports here crashed any ``import runners.*`` — including the
+``runners.github.providers`` imports the web-server still uses. Removed in
+#43; submodules are imported directly by their consumers.
 """
-Runners Module
-==============
-
-Standalone runners for various Magestic AI capabilities.
-Each runner can be invoked from CLI or programmatically.
-"""
-
-from .ai_analyzer_runner import main as run_ai_analyzer
-from .ideation_runner import main as run_ideation
-from .insights_runner import main as run_insights
-from .roadmap_runner import main as run_roadmap
-from .spec_runner import main as run_spec
-
-__all__ = [
-    "run_spec",
-    "run_roadmap",
-    "run_ideation",
-    "run_insights",
-    "run_ai_analyzer",
-]
