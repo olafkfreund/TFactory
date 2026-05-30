@@ -215,6 +215,7 @@ class EvaluatorSignals:
     stability: Any = None  # StabilityResult | None
     mutation: Any = None  # MutationResult | None
     lint_promotion: Any = None  # PromotionResult | None
+    flaky_history: Any = None  # FlakyHistory | None  (cross-run flip-rate, #37)
 
 
 # ─── Signal-bundle assembly ─────────────────────────────────────────────
@@ -437,6 +438,35 @@ def _stability_for_subtask(
         return None
 
 
+def _flaky_history_for_subtask(spec_dir: Path, subtask: dict, stability):
+    """Record this run's pass/fail outcome into the project-level flaky
+    history store and return the updated FlakyHistory (#37).
+
+    The outcome is derived from the 3× stability verdict: ``STABLE`` is a
+    clean pass; anything else (flaky / consistent-fail / error) is a fail.
+    Returns ``None`` when stability couldn't run, so we don't pollute the
+    history with a phantom outcome. The store lives one level above the
+    spec dir (``<workspace>/<project>/test_history.json``) so it persists
+    across separate spec runs of the same project.
+    """
+    if stability is None:
+        return None
+    from agents.flaky_history import record_outcome
+    from agents.stability_runner import StabilityVerdict
+
+    try:
+        store = spec_dir.parent.parent / "test_history.json"
+        passed = stability.verdict == StabilityVerdict.STABLE
+        return record_outcome(store, subtask["id"], passed)
+    except Exception as exc:  # noqa: BLE001
+        _eval_log.warning(
+            "flaky-history record failed for %s: %s",
+            subtask["id"],
+            exc,
+        )
+        return None
+
+
 def _mutation_for_subtask(
     spec_dir: Path,
     project_dir: Path,
@@ -494,15 +524,17 @@ def _build_signal_bundle(
 ) -> EvaluatorSignals:
     """Run every available signal primitive against ``subtask`` and
     return a bundle the prompt helper can format."""
+    stability = _stability_for_subtask(spec_dir, project_dir, subtask, runner_fn)
     return EvaluatorSignals(
         test_id=subtask["id"],
         test_file=spec_dir / subtask["files_to_create"][0],
         target=subtask.get("target") or "?",
         rationale=subtask.get("rationale") or "?",
         coverage_delta=_coverage_delta_for_subtask(spec_dir, subtask),
-        stability=_stability_for_subtask(spec_dir, project_dir, subtask, runner_fn),
+        stability=stability,
         mutation=_mutation_for_subtask(spec_dir, project_dir, subtask, runner_fn),
         lint_promotion=_lint_promotion_for_subtask(spec_dir, subtask),
+        flaky_history=_flaky_history_for_subtask(spec_dir, subtask, stability),
     )
 
 
