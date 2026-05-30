@@ -26,6 +26,7 @@ dedicated SAST/DAST pipelines, not generated here.
 - **Mission & positioning:** `.agent-os/product/mission.md`
 - **Roadmap (3 horizons + shipped):** `.agent-os/product/roadmap.md`
 - **Decision log (highest override priority):** `.agent-os/product/decisions.md`
+- **GTM & pricing model:** `.agent-os/product/pricing.md`
 
 Active work is tracked under epic [#33](https://github.com/olafkfreund/TFactory/issues/33).
 
