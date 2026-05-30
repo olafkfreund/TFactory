@@ -21,6 +21,14 @@ dedicated SAST/DAST pipelines, not generated here.
 **Author:** DataSeek Team
 **License:** MIT OR GPL-3.0
 
+### Product source-of-truth (`.agent-os/product/`)
+
+- **Mission & positioning:** `.agent-os/product/mission.md`
+- **Roadmap (3 horizons + shipped):** `.agent-os/product/roadmap.md`
+- **Decision log (highest override priority):** `.agent-os/product/decisions.md`
+
+Active work is tracked under epic [#33](https://github.com/olafkfreund/TFactory/issues/33).
+
 ### Pipeline architecture (the 4 agents)
 
 ```
