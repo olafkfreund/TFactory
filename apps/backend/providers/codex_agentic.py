@@ -15,7 +15,7 @@ Usage::
     from providers.codex_agentic import CodexAgenticProvider
 
     provider = CodexAgenticProvider(
-        model="gpt-5.3-codex",
+        model="gpt-5-codex",
         working_dir=spec_dir,
         timeout=600,
     )
@@ -42,7 +42,7 @@ from providers.types import AssistantMessage, TextBlock
 logger = logging.getLogger(__name__)
 
 _DEFAULT_CODEX_PATH: str = "codex"
-_DEFAULT_MODEL: str = "gpt-5.3-codex"
+_DEFAULT_MODEL: str = "gpt-5-codex"
 _DEFAULT_TIMEOUT: int = 600  # 10 minutes for agentic tasks
 _MODEL_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$")
 
@@ -60,7 +60,7 @@ class CodexAgenticProvider(BaseLLMProvider):
     on exit.
 
     Args:
-        model: Codex model identifier (e.g. ``"gpt-5.3-codex"``).
+        model: Codex model identifier (e.g. ``"gpt-5-codex"``).
         codex_path: Path or command name for the ``codex`` executable.
         timeout: Maximum seconds to wait for a response.
         working_dir: Working directory for Codex sessions.
@@ -150,11 +150,14 @@ class CodexAgenticProvider(BaseLLMProvider):
 
     async def __aenter__(self) -> CodexAgenticProvider:
         """Start the MCP server and send initialize handshake."""
-        resolved_path = shutil.which(self._codex_path)
+        # "codex" is often a shell alias (e.g. -> codex-cli), which shutil.which
+        # cannot resolve for create_subprocess_exec. Fall back to the real
+        # binary name so agentic Codex works in those environments.
+        resolved_path = shutil.which(self._codex_path) or shutil.which("codex-cli")
         if resolved_path is None:
             raise RuntimeError(
-                f"Codex CLI executable not found: '{self._codex_path}'. "
-                "Install the Codex CLI or pass the correct path."
+                f"Codex CLI executable not found: '{self._codex_path}' "
+                "(also tried 'codex-cli'). Install the Codex CLI or pass the correct path."
             )
 
         cmd = [resolved_path, "mcp-server"]
@@ -269,6 +272,16 @@ class CodexAgenticProvider(BaseLLMProvider):
 
         # Extract response text
         result = response.get("result", {})
+
+        # The codex MCP server reports model/stream failures as an ``error``
+        # field on an *otherwise successful* tools/call result (not a JSON-RPC
+        # error), e.g. {"error": "... 400 ... model is not supported when using
+        # Codex with a ChatGPT account."}. Surface it loudly — otherwise the
+        # caller silently receives "(no output from Codex MCP)" and the agent
+        # fails with an opaque "missing output" instead of the real cause.
+        if isinstance(result, dict) and result.get("error"):
+            raise RuntimeError(f"Codex MCP run failed: {result['error']}")
+
         content_blocks = result.get("content", [])
         structured = result.get("structuredContent", {})
 
