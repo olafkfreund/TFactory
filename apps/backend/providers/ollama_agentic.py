@@ -82,6 +82,33 @@ _PATH_TAGS: str = "/api/tags"
 _MAX_TOOL_ARGS_LEN: int = 50_000  # 50 KB safety limit for tool argument strings
 
 
+def _extract_text_tool_calls(text: str) -> list[dict]:
+    """Parse tool calls a model emitted as TEXT (a ```json {"name","arguments"}```
+    block, or a bare top-level JSON object with those keys) into the native
+    ``tool_calls`` shape ``[{"function": {"name", "arguments"}}]``.
+
+    Small/local models (qwen, llama, etc.) often describe a tool call in prose
+    instead of using the structured tool_calls field; this lets the agentic
+    loop execute them anyway.
+    """
+    import re
+
+    out: list[dict] = []
+    candidates: list[str] = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.S)
+    if not candidates:
+        stripped = text.strip()
+        if stripped.startswith("{") and '"name"' in stripped and '"arguments"' in stripped:
+            candidates = [stripped]
+    for raw in candidates:
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and obj.get("name") and "arguments" in obj:
+            out.append({"function": {"name": obj["name"], "arguments": obj["arguments"]}})
+    return out
+
+
 class OllamaAgenticProvider(BaseLLMProvider):
     """Agentic Ollama provider with native tool calling.
 
@@ -207,6 +234,16 @@ class OllamaAgenticProvider(BaseLLMProvider):
             message = response_data.get("message", {})
             content_text = (message.get("content") or "").strip()
             tool_calls = message.get("tool_calls")
+
+            # Fallback for small/local models (e.g. qwen2.5-coder) that emit a
+            # tool call as a ```json {"name","arguments"}``` TEXT block instead
+            # of the native tool_calls field — parse them so the agentic loop
+            # still progresses (otherwise the agent stalls and writes nothing).
+            if not tool_calls and content_text:
+                parsed = _extract_text_tool_calls(content_text)
+                if parsed:
+                    tool_calls = parsed
+                    content_text = ""  # don't surface the raw JSON block as text
 
             # Build the AssistantMessage content blocks
             assistant_blocks: list[Any] = []
