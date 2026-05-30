@@ -826,6 +826,127 @@ def _build_api_signal_bundle(
     )
 
 
+# ─── Jest-lane signal computation (TypeScript unit tests) ───────────────
+
+_JEST_IMAGE = "tfactory-runner-jest:latest"
+
+
+def _completed_jest_subtasks(plan: dict) -> list[dict]:
+    """Completed unit-lane TypeScript (Jest) subtasks Gen-Functional generated.
+
+    These sit in the unit lane like pytest, but are TypeScript — so they need
+    the Jest runner, not pytest.
+    """
+    out = []
+    for phase in plan.get("phases", []):
+        for st in phase.get("subtasks", []):
+            if (
+                st.get("status") == "completed"
+                and st.get("lane") in ("unit", "functional")
+                and st.get("language") == "typescript"
+                and st.get("files_to_create")
+            ):
+                out.append(st)
+    return out
+
+
+def _resolve_jest_runner_fn(image: str = _JEST_IMAGE):
+    """Return a runner_fn(test_file, project_dir, seed) -> DockerRunResult that
+    runs ONE Jest/TypeScript spec in the runner image.
+
+    The SUT (.ts modules + jest.config + tsconfig) and the test are flattened
+    into a writable scratch dir so the test's relative ``./module`` import
+    resolves; node_modules is symlinked to the image's global install and
+    NODE_PATH spans jest's nested deps (ts-jest requires jest-util).
+    """
+    import shutil as _sh
+    import tempfile as _tmp
+
+    from tools.runners.docker_runner import DockerRunResult, DockerRunner
+
+    def _run(test_file: Path, project_dir_arg: Path, seed: int) -> DockerRunResult:
+        scratch = Path(_tmp.mkdtemp(prefix="tf-jest-"))
+        try:
+            # Copy the SUT (.ts modules + jest/ts config) into scratch root, then
+            # place the test at its ORIGINAL relative path (e.g. tests/x.test.ts)
+            # so its relative import (`../slugify` from a tests/ subdir, or
+            # `./slugify` from the root) resolves the same way it was authored.
+            for item in Path(project_dir_arg).iterdir():
+                if item.name in (".git", "node_modules"):
+                    continue
+                dst = scratch / item.name
+                if item.is_dir():
+                    _sh.copytree(item, dst, dirs_exist_ok=True)
+                else:
+                    _sh.copy2(item, dst)
+            tparts = Path(test_file).parts
+            if "tests" in tparts:
+                rel = Path(*tparts[tparts.index("tests") :])  # tests/<...>/x.test.ts
+            else:
+                rel = Path(Path(test_file).name)
+            dst_test = scratch / rel
+            dst_test.parent.mkdir(parents=True, exist_ok=True)
+            _sh.copy2(test_file, dst_test)
+            for p in scratch.rglob("*"):
+                try:
+                    p.chmod(0o777)
+                except OSError:
+                    pass
+            scratch.chmod(0o777)
+
+            runner = DockerRunner(image=image, network="none", read_only_rootfs=False)
+            node_path = (
+                "/usr/local/lib/node_modules:"
+                "/usr/local/lib/node_modules/jest/node_modules"
+            )
+            cmd = (
+                "ln -sfn /usr/local/lib/node_modules /scratch/node_modules; "
+                "cd /scratch && "
+                f"npx jest --ci --forceExit {rel.as_posix()} 2>&1; "
+                "echo __JEST_EXIT=$?"
+            )
+            res = runner.run(
+                repo_path=Path(project_dir_arg).resolve(),
+                scratch_path=scratch.resolve(),
+                command=["sh", "-c", cmd],
+                extra_env={"NODE_PATH": node_path},
+                timeout_sec=300,
+            )
+            code = res.returncode
+            for line in (res.stdout or "").splitlines():
+                if line.startswith("__JEST_EXIT="):
+                    try:
+                        code = int(line.split("=", 1)[1])
+                    except ValueError:
+                        pass
+            return DockerRunResult(
+                returncode=code, stdout=res.stdout, stderr=res.stderr, argv=res.argv
+            )
+        finally:
+            _sh.rmtree(scratch, ignore_errors=True)
+
+    return _run
+
+
+def _build_jest_signal_bundle(
+    spec_dir: Path, project_dir: Path, subtask: dict, runner_fn
+) -> EvaluatorSignals:
+    """Signal bundle for a Jest (TypeScript unit) subtask: 3× stability via
+    Jest; coverage + mutation skipped in the demo path."""
+    stability = _stability_for_subtask(spec_dir, project_dir, subtask, runner_fn)
+    return EvaluatorSignals(
+        test_id=subtask["id"],
+        test_file=spec_dir / subtask["files_to_create"][0],
+        target=subtask.get("target") or "?",
+        rationale=subtask.get("rationale") or "?",
+        coverage_delta=None,
+        stability=stability,
+        mutation=None,
+        lint_promotion=_lint_promotion_for_subtask(spec_dir, subtask),
+        flaky_history=_flaky_history_for_subtask(spec_dir, subtask, stability),
+    )
+
+
 # ─── Verdicts.json validation ───────────────────────────────────────────
 
 
@@ -997,7 +1118,10 @@ async def run_evaluator(
         unit_completed = _completed_functional_subtasks(plan)
         browser_completed = _completed_browser_subtasks(plan)
         api_completed = _completed_api_subtasks(plan)
-        completed = unit_completed + browser_completed + api_completed
+        jest_completed = _completed_jest_subtasks(plan)
+        completed = (
+            unit_completed + browser_completed + api_completed + jest_completed
+        )
 
         # 2. No work — early exit with evaluated_empty.
         if not completed:
@@ -1054,6 +1178,12 @@ async def run_evaluator(
                 bundles.append(
                     _build_api_signal_bundle(spec_dir, project_dir, st, api_runner)
                 )
+        if jest_completed:
+            jest_runner = _resolve_jest_runner_fn()
+            bundles += [
+                _build_jest_signal_bundle(spec_dir, project_dir, st, jest_runner)
+                for st in jest_completed
+            ]
 
         # 4. Build prompt + invoke SDK session.
         from prompts_pkg.prompts import get_tfactory_evaluator_prompt

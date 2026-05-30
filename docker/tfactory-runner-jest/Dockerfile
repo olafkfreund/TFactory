@@ -68,7 +68,9 @@ RUN npm install -g \
 # ── Filesystem layout ─────────────────────────────────────────────────────
 # /repo    — bind-mounted ro at runtime (target project code)
 # /scratch — bind-mounted rw at runtime (jest-junit output, lcov reports)
-RUN useradd -m -u 1000 tfactory \
+# node:22-slim already ships a "node" user at UID 1000, so create tfactory at
+# 1002 (guarded) rather than colliding with it.
+RUN (id tfactory >/dev/null 2>&1 || useradd -m -u 1002 tfactory) \
     && mkdir -p /repo /scratch \
     && chown tfactory:tfactory /repo /scratch
 
