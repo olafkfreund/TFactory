@@ -145,31 +145,47 @@ def load_template(path: Path) -> TemplateFile:
 
 
 def load_templates_for_framework(
-    framework_name: str, root: Path | None = None
+    framework_name: str,
+    root: Path | None = None,
+    project_dir: Path | None = None,
+    include_harvested: bool = True,
 ) -> dict[str, TemplateFile]:
-    """Load all templates for a framework from ``frameworks/{name}/templates/``.
+    """Load all templates for a framework, across the built-in set and the
+    harvested libraries (most reusable last so they can shadow by name).
+
+    Search order (later wins on filename collision):
+      1. built-in  — ``<repo>/frameworks/{name}/templates/``
+      2. global    — ``~/.tfactory/templates/{name}/`` (harvested, cross-project)
+      3. project   — ``{project_dir}/.tfactory/templates/{name}/`` (harvested,
+                     committed with the repo)
 
     Args:
-        framework_name: One of ``"pytest"``, ``"jest"``, ``"playwright"``
-            (or any future framework whose directory lives under
-            ``frameworks/``).
-        root: Repository root override.  When ``None``, the root is inferred
-            from the location of this module file
-            (``templates_pkg`` → ``apps/backend`` → ``apps`` → repo root).
+        framework_name: ``"pytest"``, ``"jest"``, ``"playwright"``, …
+        root: Repository root override (defaults to the inferred repo root).
+        project_dir: The AIFactory project checkout, to pick up its harvested
+            ``.tfactory/templates/`` library. Omit to skip the project library.
+        include_harvested: Set False to load only the built-in set.
 
     Returns:
-        A mapping of ``{filename: TemplateFile}`` for every ``*.tmpl`` file
-        found in ``frameworks/{name}/templates/``.  Returns an empty dict if
-        the directory does not exist.
+        ``{filename: TemplateFile}`` for every ``*.tmpl`` found.
     """
     if root is None:
-        # templates_pkg lives at apps/backend/templates_pkg/
-        # → parents[0] = apps/backend/templates_pkg
-        # → parents[1] = apps/backend
-        # → parents[2] = apps
-        # → parents[3] = repo root
         root = Path(__file__).resolve().parents[3]
-    tdir = root / "frameworks" / framework_name / "templates"
-    if not tdir.is_dir():
-        return {}
-    return {p.name: load_template(p) for p in sorted(tdir.glob("*.tmpl"))}
+
+    search_dirs: list[Path] = [root / "frameworks" / framework_name / "templates"]
+    if include_harvested:
+        search_dirs.append(
+            Path.home() / ".tfactory" / "templates" / framework_name
+        )
+        if project_dir is not None:
+            search_dirs.append(
+                Path(project_dir) / ".tfactory" / "templates" / framework_name
+            )
+
+    out: dict[str, TemplateFile] = {}
+    for tdir in search_dirs:
+        if not tdir.is_dir():
+            continue
+        for p in sorted(tdir.glob("*.tmpl")):
+            out[p.name] = load_template(p)
+    return out

@@ -58,13 +58,30 @@ Autoselect rules:
 
 ### 2. Show available templates
 
+> **Two libraries, growing over time.** Beyond the built-in starter templates,
+> the Triager **auto-harvests** high-confidence accepted tests (stable · mutation
+> killed · high semantic relevance) into a reusable template library, so a test
+> written once becomes a pattern future runs can start from. `load_templates_for_framework`
+> reads all three sources (later shadows earlier on filename collision):
+>
+> 1. built-in — `frameworks/<fw>/templates/`
+> 2. global — `~/.tfactory/templates/<fw>/` (harvested, cross-project)
+> 3. project — `<project_dir>/.tfactory/templates/<fw>/` (harvested, committed
+>    with the repo)
+>
+> Pass `project_dir=<checkout>` to include that project's harvested library.
+> Each harvested template's frontmatter records `harvested_from`, `covers_acs`,
+> and a `fingerprint` (dedup). Auto-harvest is on by default; control it with
+> `TFACTORY_TRIAGER_HARVEST=0` (off) and `TFACTORY_TRIAGER_HARVEST_GLOBAL=1`
+> (also write the global library).
+
 Call:
 
 ```bash
 PYTHONPATH=apps/backend python3 -c "
 from templates_pkg.engine import load_templates_for_framework
 import json
-tmpls = load_templates_for_framework('${FRAMEWORK}')
+tmpls = load_templates_for_framework('${FRAMEWORK}', project_dir='${PROJECT_DIR}')
 for name, t in tmpls.items():
     print(json.dumps({
         'name': name,

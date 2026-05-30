@@ -395,6 +395,20 @@ def _pr_comment_dry_run() -> bool:
     return not _truthy(os.environ.get("TFACTORY_TRIAGER_PR_COMMENT"))
 
 
+def _harvest_enabled() -> bool:
+    """Default ON. Promote high-confidence accepts into the reusable template
+    library. Writing template files into ``<project>/.tfactory/templates/`` is
+    low-risk, so this is on by default; set TFACTORY_TRIAGER_HARVEST=0 to skip."""
+    env_val = os.environ.get("TFACTORY_TRIAGER_HARVEST")
+    return env_val is None or _truthy(env_val)
+
+
+def _harvest_global() -> bool:
+    """Also write harvested templates to the cross-project global library at
+    ``~/.tfactory/templates/``. Opt-in via TFACTORY_TRIAGER_HARVEST_GLOBAL=1."""
+    return _truthy(os.environ.get("TFACTORY_TRIAGER_HARVEST_GLOBAL"))
+
+
 # ─── The agent itself ───────────────────────────────────────────────────
 
 
@@ -687,6 +701,32 @@ async def run_triager(
                     "triager: could not update workspace tests_catalog.json "
                     "(non-fatal): %s",
                     exc,
+                )
+
+        # ── 6c. Harvest high-confidence accepts into the reusable
+        #        template library (project-local + optional global).
+        #        Non-fatal: a harvest failure must never fail the Triager.
+        harvested_count = 0
+        if _harvest_enabled():
+            try:
+                from agents.template_harvest import harvest_accepted_tests
+
+                harvested = harvest_accepted_tests(
+                    spec_dir,
+                    project_dir,
+                    keepers,
+                    also_global=_harvest_global(),
+                )
+                harvested_count = len(harvested)
+                if harvested_count:
+                    _triage_log.info(
+                        "triager: harvested %d accepted test(s) into the "
+                        "reusable template library",
+                        harvested_count,
+                    )
+            except Exception as exc:  # noqa: BLE001 — non-fatal side-effect
+                _triage_log.warning(
+                    "triager: template harvest failed (non-fatal): %s", exc
                 )
 
         # ── 7. Record summaries in status.json ──────────────────
