@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.1 — Version honesty + docs reconciliation (2026-05-30)
+
+> Housekeeping release. No runtime behaviour change.
+>
+> **Version stamp corrected.** `package.json`, `apps/frontend-web/package.json`,
+> and `apps/backend/__init__.py` were still on the inherited AIFactory `3.0.2`
+> despite the product being on the v0.x line. Now `0.2.1` — the honest next
+> patch after the v0.2.0 release. (Heading uses the bare `## 0.2.1` form that
+> `release.yml` validates, unlike the older `## vX.Y.Z` entries below.)
+>
+> **Docs reconciled to the v0.2 lane spine.** README + CLAUDE.md no longer
+> describe the retired v0.1 `Functional / SAST / DAST / Fuzz` lanes; security
+> scanning is stated as out of scope (delegated to dedicated pipelines). See
+> issues #34 / #35 under epic #33 (Product Hardening & Market Fit).
+
 ## v0.2.0 — Enterprise Test Framework Spine (2026-05-29)
 
 > All 16 v0.2 tasks shipped + the deferred Task 16 follow-up (Triager
