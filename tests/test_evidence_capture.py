@@ -22,7 +22,6 @@ from pathlib import Path
 import pytest
 
 # ── Import the layout helpers directly (no FastAPI / extra deps needed) ──────
-
 from agents.evidence.layout import (
     content_type_for_artifact,
     evidence_dir_for_test,
@@ -30,7 +29,6 @@ from agents.evidence.layout import (
     render_playwright_config,
 )
 from tests_catalog.schema import CatalogEntry
-
 
 # ─── evidence_dir_for_test ────────────────────────────────────────────────────
 
@@ -208,17 +206,17 @@ def test_content_type_for_artifact(filename: str, expected: str) -> None:
 
 
 def _base_entry_kwargs() -> dict:
-    return dict(
-        test_id="ac1-login",
-        test_file="tests/e2e/login.spec.ts",
-        framework="playwright",
-        lane="browser",
-        language="typescript",
-        covers_acs=("AC#1",),
-        generated_at="2026-05-29T10:00:00Z",
-        generated_by_task="spec-001",
-        last_verdict="accept",
-    )
+    return {
+        "test_id": "ac1-login",
+        "test_file": "tests/e2e/login.spec.ts",
+        "framework": "playwright",
+        "lane": "browser",
+        "language": "typescript",
+        "covers_acs": ("AC#1",),
+        "generated_at": "2026-05-29T10:00:00Z",
+        "generated_by_task": "spec-001",
+        "last_verdict": "accept",
+    }
 
 
 def _base_entry_kwargs_dict() -> dict:

@@ -41,7 +41,6 @@ from __future__ import annotations
 
 import json
 import os
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -314,7 +313,7 @@ def create_task_control_tools() -> list:
             "base_ref": base_ref,
             "status": "pending",
             "phase": "created",
-            "lane_progress": {lane: "pending" for lane in _MVP_LANES},
+            "lane_progress": dict.fromkeys(_MVP_LANES, "pending"),
             "created_at": _now_iso(),
             "updated_at": _now_iso(),
         }

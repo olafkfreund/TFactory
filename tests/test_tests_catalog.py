@@ -27,7 +27,6 @@ import tempfile
 from pathlib import Path
 
 import pytest
-
 from tests_catalog import (
     CatalogEntry,
     CatalogError,
@@ -46,38 +45,38 @@ from tests_catalog.schema import validate_lane
 
 def _minimal_entry(**overrides) -> CatalogEntry:
     """Build the smallest valid CatalogEntry, applying any overrides."""
-    defaults = dict(
-        test_id="t1",
-        test_file="tests/test_auth.py",
-        framework="pytest",
-        lane="unit",
-        language="python",
-        covers_acs=(),
-        generated_at="2026-05-28T10:00:00Z",
-        generated_by_task="042-auth",
-        last_verdict="accept",
-    )
+    defaults = {
+        "test_id": "t1",
+        "test_file": "tests/test_auth.py",
+        "framework": "pytest",
+        "lane": "unit",
+        "language": "python",
+        "covers_acs": (),
+        "generated_at": "2026-05-28T10:00:00Z",
+        "generated_by_task": "042-auth",
+        "last_verdict": "accept",
+    }
     defaults.update(overrides)
     return CatalogEntry(**defaults)
 
 
 def _full_entry(**overrides) -> CatalogEntry:
     """Build a fully-populated CatalogEntry."""
-    defaults = dict(
-        test_id="ac1-login-flow",
-        test_file="tests/e2e/login-flow.spec.ts",
-        framework="playwright",
-        lane="browser",
-        language="typescript",
-        covers_acs=("AC#1: User can log in with valid credentials",),
-        generated_at="2026-05-28T10:30:00Z",
-        generated_by_task="042-session-expiry",
-        last_verdict="accept",
-        browsers_tested=("chromium", "firefox"),
-        target_ref="web-staging",
-        operator_locked=False,
-        generation_version=3,
-    )
+    defaults = {
+        "test_id": "ac1-login-flow",
+        "test_file": "tests/e2e/login-flow.spec.ts",
+        "framework": "playwright",
+        "lane": "browser",
+        "language": "typescript",
+        "covers_acs": ("AC#1: User can log in with valid credentials",),
+        "generated_at": "2026-05-28T10:30:00Z",
+        "generated_by_task": "042-session-expiry",
+        "last_verdict": "accept",
+        "browsers_tested": ("chromium", "firefox"),
+        "target_ref": "web-staging",
+        "operator_locked": False,
+        "generation_version": 3,
+    }
     defaults.update(overrides)
     return CatalogEntry(**defaults)
 
