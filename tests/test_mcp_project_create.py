@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
-"""Tests for the new mcp__tfactory__project_create tool.
+"""Tests for the mcp__tfactory__project_create tool.
 
-The tool wraps POST /api/projects (the same endpoint #82 PR-A extended),
-exposing both local-mode (path) and clone-mode (git_url) to MCP clients —
-notably the /handover skill, which uses it to auto-register the user's
-cwd when no matching project exists.
+`project_create` registers an AIFactory project with TFactory so it can be
+handed off for test generation. It is a *local* registration: the caller
+supplies ``id`` (matches the AIFactory project_id), ``name``, and
+``root_path`` (the local checkout where the feature branch lives). The
+entry is persisted to ``<workspace_root>/projects.json``. There is no
+clone / git_url mode — TFactory always operates on a local checkout (see
+the worktree model in CLAUDE.md).
 """
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -33,131 +37,72 @@ if isinstance(sys.modules.get("claude_agent_sdk"), MagicMock):
 def _get_project_create_tool():
     """Return the SdkMcpTool wrapper for project_create from the registry."""
     from agents.tools_pkg.tools.task_control import create_task_control_tools
+
     for t in create_task_control_tools():
         if t.name == "project_create":
             return t
     raise AssertionError("project_create not registered in MCP tool list")
 
 
+@pytest.fixture
+def isolated_workspace(tmp_path, monkeypatch):
+    """Point the projects store at a throwaway workspace root."""
+    import agents.tools_pkg.tools.task_control as tc
+
+    monkeypatch.setattr(tc, "_workspace_root", lambda: tmp_path)
+    return tmp_path
+
+
 def test_project_create_is_in_the_registry():
     tool = _get_project_create_tool()
     assert tool.name == "project_create"
-    assert "git_url" in tool.description.lower() or "clone" in tool.description.lower()
+    desc = tool.description.lower()
+    assert "root_path" in desc and "aifactory" in desc
 
 
 @pytest.mark.asyncio
-async def test_project_create_rejects_neither_path_nor_url():
-    """Mirror of the backend's ProjectCreate model_validator — surface
-    the validation error at the MCP boundary rather than letting a 422
-    bubble back from the server."""
+async def test_project_create_rejects_missing_all_fields(isolated_workspace):
+    """No id / name / root_path → graceful isError, not a KeyError."""
     tool = _get_project_create_tool()
-    result = await tool.handler({"confirm": True})
+    result = await tool.handler({})
     assert result.get("isError") is True
     text = result["content"][0]["text"]
-    assert "path" in text and "git_url" in text
+    assert "id" in text and "name" in text and "root_path" in text
 
 
 @pytest.mark.asyncio
-async def test_project_create_rejects_both_path_and_url():
+async def test_project_create_rejects_missing_root_path(isolated_workspace):
+    tool = _get_project_create_tool()
+    result = await tool.handler({"id": "proj-1", "name": "My Project"})
+    assert result.get("isError") is True
+    assert "root_path" in result["content"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_project_create_registers_new_project(isolated_workspace):
     tool = _get_project_create_tool()
     result = await tool.handler(
-        {"path": "/x", "git_url": "https://example.test/r", "confirm": True}
+        {"id": "proj-1", "name": "My Project", "root_path": "/tmp/checkout"}
     )
-    assert result.get("isError") is True
-    text = result["content"][0]["text"]
-    assert "mutually exclusive" in text
+    assert result.get("isError") is not True
+    entry = json.loads(result["content"][0]["text"])
+    assert entry["id"] == "proj-1"
+    assert entry["name"] == "My Project"
+    assert entry["root_path"].endswith("/tmp/checkout") or entry["root_path"] == "/tmp/checkout"
+    assert "created_at" in entry
+
+    # Persisted to <workspace_root>/projects.json
+    saved = json.loads((isolated_workspace / "projects.json").read_text())
+    assert [p["id"] for p in saved["projects"]] == ["proj-1"]
 
 
 @pytest.mark.asyncio
-async def test_project_create_confirm_gate_blocks_without_confirm():
-    """No confirm=true → return a structured preview instead of touching disk."""
+async def test_project_create_rejects_duplicate_id(isolated_workspace):
     tool = _get_project_create_tool()
-    result = await tool.handler({"git_url": "https://example.test/me/r.git"})
-    import json
-    body = json.loads(result["content"][0]["text"])
-    assert body["requires_confirmation"] is True
-    assert body["verb"] == "create_project"
-    assert body["preview"]["mode"] == "clone"
-    assert body["preview"]["git_url"] == "https://example.test/me/r.git"
+    args = {"id": "proj-1", "name": "My Project", "root_path": "/tmp/checkout"}
+    first = await tool.handler(args)
+    assert first.get("isError") is not True
 
-
-@pytest.mark.asyncio
-async def test_project_create_clone_mode_posts_gitUrl():
-    """confirm=true with git_url → POST /api/projects with camelCase gitUrl."""
-    from unittest.mock import AsyncMock
-
-    captured: dict = {}
-
-    async def fake_request(method, path, **kw):
-        captured["method"] = method
-        captured["path"] = path
-        captured["json"] = kw.get("json")
-        return {"id": "proj-xyz", "name": "r", "path": "/tmp/r"}
-
-    # Build a fresh tool tied to the mocked request callable. The factory
-    # accepts the request function as an arg — but here we monkeypatch
-    # the module-level `request` instead because the existing
-    # create_task_control_tools() closure captures it.
-    import agents.tools_pkg.tools.task_control as tc
-
-    original_request = getattr(tc, "request", None)
-    tc.request = AsyncMock(side_effect=fake_request)
-    try:
-        tool = _get_project_create_tool()
-        # Note: the closure was captured at tool-build time, so re-build
-        # after the patch to get a tool that sees the mocked request.
-        for t in tc.create_task_control_tools():
-            if t.name == "project_create":
-                tool = t
-                break
-        result = await tool.handler(
-            {
-                "git_url": "https://example.test/me/r.git",
-                "branch": "main",
-                "name": "r",
-                "confirm": True,
-            }
-        )
-    finally:
-        if original_request is not None:
-            tc.request = original_request
-
-    assert captured["method"] == "POST"
-    assert captured["path"] == "/api/projects"
-    assert captured["json"] == {
-        "gitUrl": "https://example.test/me/r.git",
-        "branch": "main",
-        "name": "r",
-    }
-    import json
-    body = json.loads(result["content"][0]["text"])
-    assert body["created"] is True
-    assert body["project_id"] == "proj-xyz"
-
-
-@pytest.mark.asyncio
-async def test_project_create_local_mode_posts_path():
-    from unittest.mock import AsyncMock
-
-    captured: dict = {}
-
-    async def fake_request(method, path, **kw):
-        captured["method"] = method
-        captured["path"] = path
-        captured["json"] = kw.get("json")
-        return {"id": "proj-local", "path": "/tmp/x"}
-
-    import agents.tools_pkg.tools.task_control as tc
-    original = getattr(tc, "request", None)
-    tc.request = AsyncMock(side_effect=fake_request)
-    try:
-        for t in tc.create_task_control_tools():
-            if t.name == "project_create":
-                tool = t
-                break
-        await tool.handler({"path": "/tmp/x", "confirm": True})
-    finally:
-        if original is not None:
-            tc.request = original
-
-    assert captured["json"] == {"path": "/tmp/x"}
+    second = await tool.handler(args)
+    assert second.get("isError") is True
+    assert "already registered" in second["content"][0]["text"]

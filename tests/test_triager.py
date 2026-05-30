@@ -31,13 +31,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
 from agents.triager import (
     _BG_TRIAGER_TASKS,
     run_triager,
     schedule_triager,
 )
-
 
 # ── autouse env pins ───────────────────────────────────────────────────
 
@@ -449,6 +447,7 @@ def test_advance_to_triager_swallows_import_errors(
 # Task 11 / #27 — Catalog-aware Triager: intent + catalog mutation tests
 # ═══════════════════════════════════════════════════════════════════════
 
+from agents.triage_dedup import TriageCandidate
 from agents.triager import (  # noqa: E402 — local imports after helpers
     CandidateDecision,
     _decide_catalog_intent,
@@ -456,9 +455,7 @@ from agents.triager import (  # noqa: E402 — local imports after helpers
     _extract_candidate_ac,
     _mutate_catalog,
 )
-from agents.triage_dedup import TriageCandidate
 from tests_catalog.schema import CatalogEntry, TestsCatalog
-
 
 # ── Fixtures ───────────────────────────────────────────────────────────
 

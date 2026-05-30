@@ -19,7 +19,6 @@ from pathlib import Path
 
 import pytest
 import yaml
-
 from templates_pkg.engine import (
     TemplateError,
     TemplateFile,

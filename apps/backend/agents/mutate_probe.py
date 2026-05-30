@@ -40,7 +40,7 @@ The Evaluator commit-5 wiring will:
 from __future__ import annotations
 
 import ast
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Callable, Protocol

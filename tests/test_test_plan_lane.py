@@ -11,7 +11,6 @@ from __future__ import annotations
 import warnings
 
 import pytest
-
 from test_plan import (
     Lane,
     Subtask,
@@ -19,12 +18,11 @@ from test_plan import (
 )
 from test_plan.enums import _parse_lane_str
 
-
 # ── Lane enum (v0.2 spine) ──────────────────────────────────────────────
 
 
 def test_lane_has_five_v02_values() -> None:
-    assert {l.value for l in Lane} == {
+    assert {lane.value for lane in Lane} == {
         "unit", "browser", "api", "integration", "mutation",
     }
 

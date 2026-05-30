@@ -39,7 +39,6 @@ import os
 from pathlib import Path
 
 import pytest
-
 from agents.gen_functional import (
     _BG_GEN_FUNCTIONAL_TASKS,
     _resolve_framework_descriptor,
@@ -509,7 +508,8 @@ def test_resolve_framework_descriptor_returns_none_for_no_framework() -> None:
 
 def test_resolve_framework_descriptor_returns_none_for_dataclass_no_framework() -> None:
     """v0.1-style Subtask dataclass (no framework field set) → None."""
-    from test_plan import Subtask as SubtaskDC, Lane
+    from test_plan import Lane
+    from test_plan import Subtask as SubtaskDC
 
     st = SubtaskDC(id="t1", description="d", lane=Lane.UNIT)
     assert st.framework is None

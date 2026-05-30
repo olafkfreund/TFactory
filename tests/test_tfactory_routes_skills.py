@@ -23,7 +23,6 @@ from pathlib import Path
 
 import pytest
 
-
 # ── FastAPI stub ─────────────────────────────────────────────────────────────
 if "fastapi" not in sys.modules:
     _fastapi = types.ModuleType("fastapi")
@@ -85,7 +84,6 @@ for _p in (str(WEB_SERVER_PATH),):
 
 
 from server.routes.tfactory_skills import list_skills  # noqa: E402
-
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
 
