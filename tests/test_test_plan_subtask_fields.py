@@ -13,9 +13,7 @@ later in ``tests/test_planner.py`` once commits 2-6 of Task 5 ship.
 from __future__ import annotations
 
 import pytest
-
 from test_plan import Lane, Subtask, SubtaskStatus
-
 
 # ── Defaults ─────────────────────────────────────────────────────────────
 

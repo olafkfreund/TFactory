@@ -17,7 +17,6 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-
 from tools.runners.docker_runner import DockerRunner
 from tools.runners.lane_dispatch import (
     DispatchResult,
@@ -25,7 +24,6 @@ from tools.runners.lane_dispatch import (
     dispatch_lane,
     is_lane_lit,
 )
-
 
 # ── lit / not-lit gate (v0.2 spine) ────────────────────────────────────
 

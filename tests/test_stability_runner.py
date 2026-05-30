@@ -21,7 +21,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-
 from agents.stability_runner import (
     DEFAULT_SEED,
     RERUN_COUNT,
@@ -30,7 +29,6 @@ from agents.stability_runner import (
     StabilityVerdict,
     check_stability,
 )
-
 
 # ── Fake DockerRunResult ───────────────────────────────────────────────
 

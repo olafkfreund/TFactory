@@ -28,13 +28,11 @@ import json
 from pathlib import Path
 
 import pytest
-
 from agents.planner import (
     _BG_PLANNER_TASKS,
     run_planner,
     schedule_planner,
 )
-
 
 # ── Fixtures ─────────────────────────────────────────────────────────────
 

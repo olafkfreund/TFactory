@@ -32,7 +32,6 @@ import textwrap
 from pathlib import Path
 
 import pytest
-
 from agents.evaluator import run_evaluator
 from agents.gen_functional import run_gen_functional
 from agents.planner import run_planner
@@ -40,7 +39,6 @@ from agents.triager import (
     _BG_TRIAGER_TASKS,  # noqa: F401
     run_triager,
 )
-
 
 FIXTURE = Path(__file__).parent / "fixtures" / "planner_smoke"
 
@@ -294,7 +292,10 @@ def _install_gen_functional_mock(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _install_evaluator_runner_mock(monkeypatch: pytest.MonkeyPatch) -> None:
     class _FakeRes:
-        def __init__(self, rc): self.returncode = rc; self.stdout = ""; self.stderr = ""
+        def __init__(self, rc):
+            self.returncode = rc
+            self.stdout = ""
+            self.stderr = ""
     def _runner(test_file, _pd, _seed):
         # Mutants → fail (KILLED); originals → pass
         return _FakeRes(1 if "mutants" in str(test_file) else 0)

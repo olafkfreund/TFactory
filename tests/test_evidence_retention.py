@@ -18,13 +18,11 @@ from __future__ import annotations
 import json
 import os
 import shutil
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
-
-from agents.evidence.retention import enforce_retention, RetentionStats
-
+from agents.evidence.retention import RetentionStats, enforce_retention
 
 # ─── Fixtures ─────────────────────────────────────────────────────────────────
 

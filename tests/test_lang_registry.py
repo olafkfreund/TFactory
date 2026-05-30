@@ -9,14 +9,12 @@ Ruby) have placeholder rows with None across all lanes (v0.3+ ramp).
 from __future__ import annotations
 
 import pytest
-
 from tools.runners.lang_registry import (
     ToolSpec,
     UnsupportedLanguageError,
     get_tool_for_lane,
     languages_supporting_lane,
 )
-
 
 # ── Python entries ─────────────────────────────────────────────────────
 

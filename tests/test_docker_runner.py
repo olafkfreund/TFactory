@@ -26,13 +26,11 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from tools.runners.docker_runner import (
     DockerRunner,
     DockerRunnerError,
     DockerTimeoutError,
 )
-
 
 # ── argv construction ────────────────────────────────────────────────────
 

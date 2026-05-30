@@ -24,7 +24,6 @@ from typing import Any
 
 import pytest
 
-
 # The route module imports FastAPI's APIRouter + HTTPException. The
 # TFactory backend venv does NOT install FastAPI (those deps live in
 # apps/web-server/requirements.txt and are only installed when the
@@ -87,7 +86,6 @@ if "fastapi" not in sys.modules:
 
 from fastapi import HTTPException as _HTTPException  # noqa: E402
 
-
 # Add apps/web-server/ to sys.path so ``from server.routes...`` resolves.
 WEB_SERVER_PATH = (
     Path(__file__).parent.parent / "apps" / "web-server"
@@ -116,7 +114,6 @@ from server.routes.tfactory_tasks import (  # noqa: E402
     list_tasks,
     tail_log_payload,
 )
-
 
 # ── Workspace builder fixture ──────────────────────────────────────────
 

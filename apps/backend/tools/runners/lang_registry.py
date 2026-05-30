@@ -68,15 +68,15 @@ _REGISTRY: dict[str, dict[str, ToolSpec | None]] = {
         "mutation":    ToolSpec("stryker", "stryker-mutator/core", False, "3"),
     },
     # ── Java (v0.3+) ────────────────────────────────────────────────────
-    "java": {lane: None for lane in _LANE_KEYS},
+    "java": dict.fromkeys(_LANE_KEYS),
     # ── C# / .NET (v0.3+) ───────────────────────────────────────────────
-    "csharp": {lane: None for lane in _LANE_KEYS},
+    "csharp": dict.fromkeys(_LANE_KEYS),
     # ── Go (v0.4+) ──────────────────────────────────────────────────────
-    "go": {lane: None for lane in _LANE_KEYS},
+    "go": dict.fromkeys(_LANE_KEYS),
     # ── Rust (v0.4+) ────────────────────────────────────────────────────
-    "rust": {lane: None for lane in _LANE_KEYS},
+    "rust": dict.fromkeys(_LANE_KEYS),
     # ── Ruby (v0.4+) ────────────────────────────────────────────────────
-    "ruby": {lane: None for lane in _LANE_KEYS},
+    "ruby": dict.fromkeys(_LANE_KEYS),
 }
 
 

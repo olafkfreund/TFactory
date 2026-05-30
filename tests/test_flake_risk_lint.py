@@ -8,7 +8,6 @@ syntax-error early return.
 from __future__ import annotations
 
 import pytest
-
 from agents.flake_risk_lint import (
     FlakeRiskResult,
     flake_risk_lint,

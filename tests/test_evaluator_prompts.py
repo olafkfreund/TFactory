@@ -22,7 +22,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from agents.coverage_delta import CoverageDelta
 from agents.flake_risk_lint import FlakeRiskResult
 from agents.lint_promotion import promote_flake_findings
@@ -40,7 +39,6 @@ from prompts_pkg.prompts import (
     _format_evaluator_per_test_block,
     get_tfactory_evaluator_prompt,
 )
-
 
 # ── Fixtures: real dataclass bundles ───────────────────────────────────
 
@@ -354,9 +352,9 @@ def test_evaluator_md_does_not_penalise_browser_for_zero_coverage() -> None:
     2. There is no positive instruction to 'reject' for '0%' coverage
        when the browser lane is discussed.
     """
-    from prompts_pkg.prompts import PROMPTS_DIR
-
     import re
+
+    from prompts_pkg.prompts import PROMPTS_DIR
 
     md = (PROMPTS_DIR / "evaluator.md").read_text()
 
