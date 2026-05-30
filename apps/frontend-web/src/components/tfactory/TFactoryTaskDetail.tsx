@@ -20,11 +20,14 @@ import { AlertTriangle, Loader2 } from 'lucide-react';
 import { MarkdownBody } from '../ui/MarkdownBody';
 import {
   TFactoryApiError,
+  dismissRun,
   evidenceArtifactUrl,
   getTaskDetail,
   getTriageReportMarkdown,
   getVerdicts,
+  mergeAcceptedTests,
   type EvidenceUrls,
+  type MergeResult,
   type TFactoryTaskDetail as TaskDetail,
   type TFactoryVerdict,
   type TFactoryVerdictsDocument,
@@ -308,6 +311,113 @@ function Signal({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+// ── Merge / dismiss action bar (the human review gate) ──────────────
+
+function MergeActionBar({ specId, verdicts, fetchFn }: {
+  specId: string;
+  verdicts: TFactoryVerdict[];
+  fetchFn?: typeof fetch;
+}) {
+  const acceptCount = verdicts.filter((v) => v.verdict === 'accept').length;
+  const flagCount = verdicts.filter((v) => v.verdict === 'flag').length;
+  const [dryRun, setDryRun] = useState(true);
+  const [branch, setBranch] = useState('');
+  const [includeFlagged, setIncludeFlagged] = useState(false);
+  const [busy, setBusy] = useState<'merge' | 'dismiss' | null>(null);
+  const [result, setResult] = useState<MergeResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [dismissed, setDismissed] = useState(false);
+
+  const onMerge = async () => {
+    setBusy('merge'); setError(null); setResult(null);
+    try {
+      const r = await mergeAcceptedTests(specId, {
+        dry_run: dryRun,
+        target_branch: branch.trim() || undefined,
+        include_flagged: includeFlagged,
+      }, { fetchFn });
+      setResult(r);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally { setBusy(null); }
+  };
+  const onDismiss = async () => {
+    setBusy('dismiss'); setError(null);
+    try { await dismissRun(specId, { fetchFn }); setDismissed(true); }
+    catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(null); }
+  };
+
+  return (
+    <div data-testid="merge-action-bar" className="rounded-lg border border-border bg-card p-3 space-y-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          data-testid="merge-btn"
+          disabled={acceptCount === 0 || busy !== null || dismissed}
+          onClick={onMerge}
+          className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground disabled:opacity-40 hover:bg-primary/90"
+        >
+          {busy === 'merge' && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />}
+          {dryRun ? 'Preview merge' : 'Merge'} {acceptCount} accepted{includeFlagged && flagCount ? ` + ${flagCount} flagged` : ''}
+        </button>
+        <button
+          type="button"
+          data-testid="dismiss-btn"
+          disabled={busy !== null || dismissed}
+          onClick={onDismiss}
+          className="rounded-md border border-border px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground disabled:opacity-40"
+        >
+          Dismiss run
+        </button>
+        <label className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">
+          <input type="checkbox" checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} data-testid="dry-run-toggle" />
+          Dry run
+        </label>
+        {flagCount > 0 && (
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <input type="checkbox" checked={includeFlagged} onChange={(e) => setIncludeFlagged(e.target.checked)} />
+            include flagged
+          </label>
+        )}
+      </div>
+      <input
+        type="text"
+        value={branch}
+        onChange={(e) => setBranch(e.target.value)}
+        placeholder="target branch (defaults to the handover branch)"
+        className="w-full rounded-md border border-border bg-background px-2 py-1 font-mono text-xs text-foreground"
+        data-testid="target-branch"
+      />
+      {acceptCount === 0 && (
+        <p className="text-xs text-muted-foreground">No accepted tests — nothing to merge. Dismiss the run or re-evaluate.</p>
+      )}
+      {dismissed && <p className="text-sm text-warning">Run dismissed.</p>}
+      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+      {result && (
+        <div className="space-y-1.5 rounded-md border border-border bg-muted/40 p-2 text-xs">
+          <p className={result.ok ? 'text-success' : 'text-destructive'}>
+            {result.dry_run ? 'Dry run' : 'Committed'} · {result.ok ? 'ok' : `failed: ${result.error}`}
+            {result.commit_sha && <> · <span className="font-mono">{result.commit_sha.slice(0, 10)}</span></>}
+          </p>
+          <p className="text-muted-foreground">{result.files.length} file(s) → <span className="font-mono">{result.branch}</span></p>
+          <ul className="ml-4 list-disc font-mono text-muted-foreground">
+            {result.files.slice(0, 8).map((f) => <li key={f}>{f}</li>)}
+          </ul>
+          {result.dry_run && result.argv.length > 0 && (
+            <details>
+              <summary className="cursor-pointer text-muted-foreground">git commands (preview)</summary>
+              <pre className="mt-1 overflow-auto whitespace-pre-wrap font-mono text-[10px] text-muted-foreground">
+                {result.argv.map((a) => a.join(' ')).join('\n')}
+              </pre>
+            </details>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function VerdictBuckets({ verdicts }: { verdicts: TFactoryVerdict[] }) {
   if (verdicts.length === 0) {
     return <p className="p-4 text-sm text-muted-foreground">No verdicts yet.</p>;
@@ -540,7 +650,12 @@ export function TFactoryTaskDetail({ specId, fetchFn, wsFactory }: Props) {
           <>
             {loadingVerdicts && <div role="status" className="p-4 text-sm text-muted-foreground">Loading verdicts…</div>}
             {verdictsError && <div role="alert" className="p-4 text-sm text-destructive">{verdictsError}</div>}
-            {verdicts && <VerdictBuckets verdicts={verdicts.verdicts} />}
+            {verdicts && (
+              <div className="space-y-4">
+                <MergeActionBar specId={specId} verdicts={verdicts.verdicts} fetchFn={fetchFn} />
+                <VerdictBuckets verdicts={verdicts.verdicts} />
+              </div>
+            )}
           </>
         )}
         {activeTab === 'report' && (

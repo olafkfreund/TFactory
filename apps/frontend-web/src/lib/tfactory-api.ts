@@ -148,6 +148,64 @@ async function _request<T>(
   return (await response.text()) as unknown as T;
 }
 
+async function _post<T>(endpoint: string, body: unknown, options: FetchOptions = {}): Promise<T> {
+  const { signal, fetchFn = fetch } = options;
+  const response = await fetchFn(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!response.ok) {
+    let detail = '';
+    try {
+      const data = (await response.json()) as unknown;
+      if (data && typeof data === 'object' && 'detail' in data) {
+        const d = (data as Record<string, unknown>).detail;
+        if (typeof d === 'string') detail = d;
+      }
+    } catch { /* non-JSON body */ }
+    throw new TFactoryApiError(response.status, endpoint, detail || `${response.status} ${response.statusText}`);
+  }
+  return (await response.json()) as T;
+}
+
+// ─── Merge / dismiss (the human review gate) ──────────────────────────
+
+export interface MergeRequest {
+  dry_run?: boolean;
+  target_branch?: string | null;
+  repo_dir?: string | null;
+  include_flagged?: boolean;
+}
+
+export interface MergeResult {
+  ok: boolean;
+  dry_run: boolean;
+  branch: string;
+  files: string[];
+  committed_paths: string[];
+  commit_sha: string;
+  argv: string[][];
+  error: string;
+}
+
+/** POST /{spec_id}/merge — commit accepted tests (dry-run by default). */
+export async function mergeAcceptedTests(
+  specId: string, body: MergeRequest = {}, options: FetchOptions = {},
+): Promise<MergeResult> {
+  _validateSpecId(specId);
+  return _post<MergeResult>(`${TFACTORY_PREFIX}/${specId}/merge`, { dry_run: true, ...body }, options);
+}
+
+/** POST /{spec_id}/dismiss — mark the run dismissed. */
+export async function dismissRun(
+  specId: string, options: FetchOptions = {},
+): Promise<{ ok: boolean; dismissed: boolean; dismissed_at: string }> {
+  _validateSpecId(specId);
+  return _post(`${TFACTORY_PREFIX}/${specId}/dismiss`, {}, options);
+}
+
 // ─── Spec-id validation (mirrors backend) ─────────────────────────────
 
 const _SPEC_ID_RE = /^[A-Za-z0-9._-]+$/;

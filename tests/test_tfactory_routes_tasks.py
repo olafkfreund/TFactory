@@ -39,6 +39,10 @@ if "fastapi" not in sys.modules:
             def _decorator(fn):
                 return fn
             return _decorator
+        def post(self, *args, **kwargs):
+            def _decorator(fn):
+                return fn
+            return _decorator
         def websocket(self, *args, **kwargs):
             def _decorator(fn):
                 return fn
@@ -113,6 +117,11 @@ from server.routes.tfactory_tasks import (  # noqa: E402
     get_verdicts,
     list_tasks,
     tail_log_payload,
+)
+from server.routes.tfactory_tasks import (  # noqa: E402
+    MergeRequest,
+    dismiss_run,
+    merge_accepted_tests,
 )
 
 # ── Workspace builder fixture ──────────────────────────────────────────
@@ -761,3 +770,71 @@ def test_get_catalog_catalog_json_is_valid_json(workspace_root: Path) -> None:
     response = get_catalog("042-x")
     parsed = json.loads(response.body)
     assert parsed == catalog
+
+
+# ── Merge / dismiss (the human review gate) ────────────────────────────
+
+
+def _make_evaluated_task(workspace_root: Path, *, spec_id: str = "001-x") -> Path:
+    """A spec with a valid verdicts.json (1 accept + 1 reject), a test file,
+    and a source.json carrying the handover branch."""
+    spec_dir = _make_task(workspace_root, project_id="proj", spec_id=spec_id)
+    (spec_dir / "tests").mkdir()
+    (spec_dir / "tests" / "test_pricing.py").write_text("def test_x():\n    assert True\n")
+    (spec_dir / "context").mkdir()
+    (spec_dir / "context" / "source.json").write_text(json.dumps({"branch": "feat/x"}))
+    (spec_dir / "findings" / "verdicts.json").write_text(json.dumps({
+        "verdicts": [
+            {"test_id": "t-accept", "verdict": "accept", "test_file": "tests/test_pricing.py"},
+            {"test_id": "t-reject", "verdict": "reject", "test_file": "tests/other.py"},
+        ],
+    }))
+    return spec_dir
+
+
+def test_merge_dry_run_returns_planned_files(workspace_root: Path) -> None:
+    _make_evaluated_task(workspace_root)
+    out = merge_accepted_tests("001-x", MergeRequest(dry_run=True))
+    assert out["ok"] is True and out["dry_run"] is True
+    assert out["branch"] == "feat/x"
+    assert out["files"] == ["tests/test_pricing.py"]  # only the accepted one
+    assert out["commit_sha"] == ""  # dry-run writes nothing
+    assert any(argv for argv in out["argv"])  # git argv preview present
+
+
+def test_merge_uses_target_branch_override(workspace_root: Path) -> None:
+    _make_evaluated_task(workspace_root)
+    out = merge_accepted_tests("001-x", MergeRequest(dry_run=True, target_branch="release/1"))
+    assert out["branch"] == "release/1"
+
+
+def test_merge_no_accepts_is_400(workspace_root: Path) -> None:
+    spec_dir = _make_task(workspace_root, project_id="proj", spec_id="002-y")
+    (spec_dir / "findings" / "verdicts.json").write_text(json.dumps({
+        "verdicts": [{"test_id": "t", "verdict": "reject", "test_file": "tests/a.py"}],
+    }))
+    with pytest.raises(_HTTPException) as exc:
+        merge_accepted_tests("002-y", MergeRequest(dry_run=True))
+    assert exc.value.status_code == 400
+
+
+def test_merge_no_verdicts_is_404(workspace_root: Path) -> None:
+    _make_task(workspace_root, project_id="proj", spec_id="003-z")
+    with pytest.raises(_HTTPException) as exc:
+        merge_accepted_tests("003-z", MergeRequest(dry_run=True))
+    assert exc.value.status_code == 404
+
+
+def test_merge_real_run_requires_repo_dir(workspace_root: Path) -> None:
+    _make_evaluated_task(workspace_root)
+    with pytest.raises(_HTTPException) as exc:
+        merge_accepted_tests("001-x", MergeRequest(dry_run=False))
+    assert exc.value.status_code == 400
+
+
+def test_dismiss_marks_status(workspace_root: Path) -> None:
+    spec_dir = _make_task(workspace_root, project_id="proj", spec_id="004-d")
+    out = dismiss_run("004-d")
+    assert out["ok"] is True and out["dismissed"] is True
+    doc = json.loads((spec_dir / "status.json").read_text())
+    assert doc["dismissed"] is True and "dismissed_at" in doc

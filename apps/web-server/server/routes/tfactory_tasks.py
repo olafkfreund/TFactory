@@ -49,6 +49,7 @@ from fastapi import (
     WebSocketDisconnect,
     status as http_status,
 )
+from pydantic import BaseModel
 
 
 router = APIRouter()
@@ -610,3 +611,115 @@ def get_evidence_artifact(spec_id: str, test_id: str, artifact: str) -> Response
         ) from exc
 
     return Response(content=content, media_type=_evidence_content_type(artifact))
+
+
+# ── Merge / dismiss (the human review gate) ─────────────────────────
+#
+# The Triager already commits accepted tests to the feature branch
+# (dry-run by default per the "no automatic pushes" policy). These
+# endpoints let the operator drive that same git_writer from the
+# portal's verdict-review surface: a dry-run preview by default, and an
+# explicit real commit when they opt in.
+
+
+class MergeRequest(BaseModel):
+    """Body for POST /{spec_id}/merge."""
+
+    dry_run: bool = True
+    target_branch: str | None = None
+    repo_dir: str | None = None
+    include_flagged: bool = False
+
+
+@router.post("/{spec_id}/merge")
+def merge_accepted_tests(spec_id: str, body: MergeRequest) -> dict[str, Any]:
+    """Commit the accepted (and optionally flagged) tests to the feature
+    branch via the Triager's git_writer. Dry-run by default — returns the
+    exact git argv + the files that would be committed, nothing written."""
+    _validate_spec_id(spec_id)
+    spec_dir = _find_spec_dir(_resolve_workspace_root(), spec_id)
+    if spec_dir is None:
+        raise HTTPException(status_code=404, detail=f"spec not found: {spec_id}")
+
+    verdicts_doc = _read_json(spec_dir / "findings" / "verdicts.json")
+    if not verdicts_doc:
+        raise HTTPException(status_code=404, detail="no verdicts.json — task hasn't been evaluated")
+    wanted = {"accept"} | ({"flag"} if body.include_flagged else set())
+    selected = [v for v in verdicts_doc.get("verdicts", []) if v.get("verdict") in wanted]
+    if not selected:
+        raise HTTPException(status_code=400, detail="no accepted tests to merge")
+
+    source = _read_json(spec_dir / "context" / "source.json") or {}
+    branch = (body.target_branch or source.get("branch") or "").strip()
+    if not branch:
+        raise HTTPException(status_code=400, detail="no target branch (set target_branch or context/source.json)")
+
+    files: list[tuple[str, str]] = []
+    for v in selected:
+        tf = v.get("test_file")
+        if not tf:
+            continue
+        p = Path(tf)
+        if not p.is_absolute():
+            p = spec_dir / tf
+        if not p.is_file():
+            continue
+        try:
+            content = p.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        try:
+            rel = str(p.relative_to(spec_dir))  # e.g. tests/unit/test_x.py
+        except ValueError:
+            rel = p.name
+        files.append((rel, content))
+
+    if not files:
+        raise HTTPException(status_code=400, detail="no readable test files for the selected verdicts")
+
+    if not body.dry_run and not body.repo_dir:
+        raise HTTPException(status_code=400, detail="repo_dir is required for a real (non-dry-run) merge")
+    repo_dir = Path(body.repo_dir) if body.repo_dir else spec_dir
+
+    from tools.git_writer import GitWriteRequest, write_tests_to_branch
+
+    n_accept = sum(1 for v in selected if v.get("verdict") == "accept")
+    n_flag = len(selected) - n_accept
+    request = GitWriteRequest(
+        repo_dir=repo_dir,
+        branch=branch,
+        files=tuple(files),
+        commit_msg=f"tfactory: add {n_accept} accepted"
+        + (f" + {n_flag} flagged" if n_flag else "")
+        + " test(s)",
+    )
+    result = write_tests_to_branch(request, dry_run=body.dry_run)
+    return {
+        "ok": result.ok,
+        "dry_run": result.dry_run,
+        "branch": branch,
+        "files": [f[0] for f in files],
+        "committed_paths": list(result.committed_paths),
+        "commit_sha": result.commit_sha,
+        "argv": [list(a) for a in result.argv_log],
+        "error": result.error,
+    }
+
+
+@router.post("/{spec_id}/dismiss")
+def dismiss_run(spec_id: str) -> dict[str, Any]:
+    """Mark a run dismissed (operator chose not to merge). Records a
+    ``dismissed`` flag on status.json — non-destructive."""
+    _validate_spec_id(spec_id)
+    spec_dir = _find_spec_dir(_resolve_workspace_root(), spec_id)
+    if spec_dir is None:
+        raise HTTPException(status_code=404, detail=f"spec not found: {spec_id}")
+    status_path = spec_dir / "status.json"
+    doc = _read_json(status_path) or {}
+    doc["dismissed"] = True
+    doc["dismissed_at"] = datetime.utcnow().isoformat() + "Z"
+    try:
+        status_path.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"could not write status.json: {exc}") from exc
+    return {"ok": True, "dismissed": True, "dismissed_at": doc["dismissed_at"]}
