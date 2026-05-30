@@ -4,6 +4,7 @@
     "tools": "Tools"
   },
   "items": {
+    "tests": "Tests",
     "kanban": "Tasks",
     "terminals": "Terminal",
     "editor": "Files",

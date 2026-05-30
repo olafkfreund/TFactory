@@ -30,9 +30,9 @@ export function TFactoryPortal({ fetchFn, wsFactory }: Props) {
   if (selectedSpecId === null) {
     return (
       <div data-testid="tfactory-portal" data-view="list" className="flex flex-col gap-3">
-        <header className="border-b border-gray-200 pb-2">
+        <header className="border-b border-border pb-2">
           <h1 className="text-xl font-semibold">TFactory Tasks</h1>
-          <p className="text-xs text-gray-500">
+          <p className="text-xs text-muted-foreground">
             Read-only view of TFactory workspaces under ~/.tfactory/.
           </p>
         </header>
@@ -50,7 +50,7 @@ export function TFactoryPortal({ fetchFn, wsFactory }: Props) {
         type="button"
         data-testid="portal-back"
         onClick={() => setSelectedSpecId(null)}
-        className="self-start inline-flex items-center gap-1 text-sm text-blue-700 hover:text-blue-900"
+        className="self-start inline-flex items-center gap-1 text-sm text-primary hover:text-primary"
       >
         <ChevronLeft className="h-4 w-4" aria-hidden />
         Back to tasks

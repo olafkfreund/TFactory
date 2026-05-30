@@ -20,6 +20,7 @@ import { AddProjectModal } from './components/AddProjectModal';
 import { AppSettingsDialog } from './components/settings';
 import { TaskCreationWizard } from './components/TaskCreationWizard';
 import { TaskDetailModal } from './components/task-detail';
+import { TFactoryPortal } from './components/tfactory/TFactoryPortal';
 import { OnboardingWizard } from './components/onboarding';
 import { LoadingScreen } from './components/LoadingScreen';
 import { ProjectSwitchLoadingModal } from './components/ProjectSwitchLoadingModal';
@@ -94,7 +95,7 @@ function AuthenticatedApp() {
     },
     [selectedTaskId, tasks]
   );
-  const [activeView, setActiveView] = useState<SidebarView>('kanban');
+  const [activeView, setActiveView] = useState<SidebarView>('tfactory');
   const [isNewTaskDialogOpen, setIsNewTaskDialogOpen] = useState(false);
   const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
   const [isAddProjectModalOpen, setIsAddProjectModalOpen] = useState(false);
@@ -293,7 +294,14 @@ function AuthenticatedApp() {
             />
 
             <main className="flex-1 overflow-hidden">
-              {selectedProject ? (
+              {activeView === 'tfactory' ? (
+                /* TFactory's own surface: the test-generation review queue.
+                   Global (reads ~/.tfactory workspaces), so it renders with or
+                   without a selected project. */
+                <div className="h-full overflow-auto p-4">
+                  <TFactoryPortal />
+                </div>
+              ) : selectedProject ? (
                 <>
                   {activeView === 'kanban' && (
                     <KanbanBoard

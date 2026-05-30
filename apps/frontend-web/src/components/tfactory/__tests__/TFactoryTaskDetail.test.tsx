@@ -233,7 +233,12 @@ describe('<TFactoryTaskDetail> report tab', () => {
 
     fireEvent.click(screen.getByTestId('tab-report'));
     await waitFor(() => screen.getByTestId('report-md-content'));
-    expect(screen.getByTestId('report-md-content').textContent).toBe(md);
+    // The report is now rendered as markdown (MarkdownBody), not a raw <pre>
+    // dump — so the heading "#" is gone and a real <h1> carries the text.
+    const panel = screen.getByTestId('report-md-content');
+    expect(panel.textContent).toContain('Triage Report');
+    expect(panel.textContent).toContain('Looks good.');
+    expect(panel.querySelector('h1')?.textContent).toBe('Triage Report');
   });
 
   it('disables Report tab when triage_report_md artefact is absent', async () => {
