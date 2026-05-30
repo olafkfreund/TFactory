@@ -1,0 +1,146 @@
+---
+layout: default
+title: Demos
+permalink: /demos/
+nav_order: 5.6
+---
+
+# TFactory demos — every lane, end to end
+
+<div class="reveal" markdown="1">
+
+Each demo below is a **real, unedited pipeline run** on the user's Claude
+subscription — not a mock. A developer hands TFactory a finished feature; the
+four-agent pipeline (**Planner → Gen-Functional → Executor → Evaluator →
+Triager**) plans, writes, sandboxes, scores, and triages a test suite, and
+emits the verdicts a reviewer would see on the PR.
+
+Every demo is a single composite screencast: the **Claude Code terminal**
+(top-left), the **TFactory portal** (top-right), and the **live triage report**
+with real verdicts (bottom). Each one shows at least one **passing** test and
+one **failing** test caught by a deliberately seeded bug — proof the grader
+actually distinguishes good tests from bad.
+
+These span the full v0.2 lane spine — **browser** (Playwright), **unit**
+(pytest + coverage + 3× stability + mutation), and **api** (httpx against a
+running service) — to show TFactory tests **far more than web pages**.
+
+</div>
+
+## 1 · Greeting generator — browser lane (Playwright)
+
+<div class="reveal" markdown="1">
+
+**What it tests:** a deployed Vite + React SPA. TFactory writes Playwright
+tests that drive the UI against the live
+[demo site](https://olafkfreund.github.io/tfactory-demo/) and assert on the
+output panel.
+
+**Result:** **4 accept + 1 reject.** AC#5 ("two consecutive Generate clicks
+must differ") is rejected — it caught a deliberately seeded memoisation cache
+bug.
+
+<img src="{{ '/static/demos/greeting-generator/demo.gif' | relative_url }}"
+     alt="Greeting generator browser-lane demo"
+     style="width:100%;border:1px solid #2a2a2a;border-radius:8px" loading="lazy" />
+
+[Download MP4]({{ '/static/demos/greeting-generator/demo.mp4' | relative_url }})
+
+</div>
+
+## 2 · Failure → merge / dismiss — the human decision
+
+<div class="reveal" markdown="1">
+
+**What it shows:** the same greeting-generator run, framed on the
+**human-in-the-loop** close-out — the reviewer **merges the 4 accepted tests**
+and **dismisses the rejected run** (AC#5). This is the decision a reviewer
+makes when TFactory flags a failing test.
+
+**Result:** 4 accepted (committed) · 1 rejected (dismissed).
+
+<img src="{{ '/static/demos/failure-flow/demo.gif' | relative_url }}"
+     alt="Failure to merge/dismiss flow demo"
+     style="width:100%;border:1px solid #2a2a2a;border-radius:8px" loading="lazy" />
+
+[Download MP4]({{ '/static/demos/failure-flow/demo.mp4' | relative_url }})
+
+</div>
+
+## 3 · Pricing helper — unit lane (pytest + mutation)
+
+<div class="reveal" markdown="1">
+
+**What it tests:** a pure Python module (`pricing.py`). This is the lane a
+browser demo can't show — the **numeric signals**: coverage delta, **3×
+stability** re-runs, and **mutate-and-check** (mutmut). A test only passes if it
+*kills the mutant*.
+
+**Result:** **4 accept** — every generated test runs cleanly, is stable across
+3 re-runs, and kills its mutation. No browser involved.
+
+<img src="{{ '/static/demos/python-unit/demo.gif' | relative_url }}"
+     alt="Python unit-lane demo"
+     style="width:100%;border:1px solid #2a2a2a;border-radius:8px" loading="lazy" />
+
+[Download MP4]({{ '/static/demos/python-unit/demo.mp4' | relative_url }})
+
+</div>
+
+## 4 · Message board — fill a form, verify it holds the text
+
+<div class="reveal" markdown="1">
+
+**What it tests:** a form page — type a name + message, click Post, and check
+the post list holds exactly what was typed (verbatim text, special characters,
+the author name). TFactory writes Playwright tests that fill the form and
+assert on the rendered result.
+
+**Result:** **3 accept + 1 flag.** The flagged test ("two posts both remain
+visible") caught a seeded state bug where a new post replaces the previous one.
+
+<img src="{{ '/static/demos/form-fill/demo.gif' | relative_url }}"
+     alt="Form-fill browser-lane demo"
+     style="width:100%;border:1px solid #2a2a2a;border-radius:8px" loading="lazy" />
+
+[Download MP4]({{ '/static/demos/form-fill/demo.mp4' | relative_url }})
+
+</div>
+
+## 5 · KV API gateway — api lane (httpx, **no browser**)
+
+<div class="reveal" markdown="1">
+
+**What it tests:** a running REST service (FastAPI key-value gateway). TFactory
+writes **httpx** tests — `import httpx`, read `TFACTORY_TARGET_URL`, assert on
+`response.status_code` and `response.json()` — and runs them against the live
+service. **Zero Playwright, zero browser.** This is the proof that TFactory
+tests APIs, gateways, and service connections, not just web pages.
+
+**Result:** **4 accept + 1 flag.** The four contract tests pass; the flagged
+test ("a missing key must return 404") caught a seeded contract bug — the
+gateway returns HTTP 200 with a null body instead of 404 — and the Evaluator
+flags it for human review as a regression guard once the gateway is fixed.
+
+<img src="{{ '/static/demos/api-gateway/demo.gif' | relative_url }}"
+     alt="API gateway api-lane (httpx) demo"
+     style="width:100%;border:1px solid #2a2a2a;border-radius:8px" loading="lazy" />
+
+[Download MP4]({{ '/static/demos/api-gateway/demo.mp4' | relative_url }})
+
+</div>
+
+## How these were produced
+
+<div class="reveal" markdown="1">
+
+All five were generated by the **`/demo`** command, which drives a scenario
+end-to-end and refuses to publish a demo until an automated **quality gate**
+passes (multi-pane frame · real pipeline run · a pass *and* a fail in the
+report · web-embeddable output). Scenario definitions live in
+`tests/fixtures/demo-scenarios/`; the production scripts live in `scripts/demo/`.
+
+> A polyglot **multi-lane** demo (one spec fanning out to pytest + Jest +
+> Playwright + httpx in a single plan) is in progress.
+
+</div>

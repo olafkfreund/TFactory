@@ -73,3 +73,9 @@ docs/vendor/
 
 # Docker scratch
 .docker-scratch/
+
+# /demo working directories (per-run panes/casts) — only the clean
+# docs/static/demos/ media is committed for the Pages showcase.
+docs/static/recordings/
+.claude/worktrees/
+.claude/scheduled_tasks.lock
