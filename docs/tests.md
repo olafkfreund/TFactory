@@ -7,6 +7,10 @@ nav_order: 5
 
 # Test Coverage Specification
 
+> ⏳ **Historical record — v0.1.0-mvp test plan (2026-05-28).** Covers the v0.1
+> Functional-lane MVP. The shipped product moved to the v0.2 modality spine
+> (unit / browser / api / integration / mutation); see [Architecture](/architecture/).
+
 > Spec: TFactory MVP — Walking Skeleton (Functional Lane, Python)
 > Parent: `../spec.md`
 > Approach: TDD — every code-bearing task writes tests first, then implementation, then verifies green.
