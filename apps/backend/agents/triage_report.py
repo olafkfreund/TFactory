@@ -89,6 +89,9 @@ class TriageReport:
     # Task 16 follow-up: test_id → evidence_urls dict (per evidence_urls_for_test).
     # Empty when build_report was called without spec_dir (e.g. v0.1 callers).
     evidence_urls_by_test_id: dict = field(default_factory=dict)
+    # #37: test_id → flaky-history summary (runs / flip_rate / classification).
+    # Empty when build_report was called without spec_dir or no history exists.
+    flaky_by_test_id: dict = field(default_factory=dict)
 
     @property
     def committed_count(self) -> int:
@@ -170,10 +173,15 @@ def build_report(
             (Task 16 follow-up). When None, evidence rendering is skipped.
     """
     evidence_urls_by_test_id: dict[str, dict] = {}
+    flaky_by_test_id: dict[str, dict] = {}
     if spec_dir is not None:
         evidence_urls_by_test_id = _collect_evidence_urls(
             spec_dir,
             tuple(committed) + tuple(flagged),
+        )
+        flaky_by_test_id = _collect_flaky_history(
+            spec_dir,
+            tuple(committed) + tuple(flagged) + tuple(rejected),
         )
     return TriageReport(
         mode=mode,
@@ -186,7 +194,34 @@ def build_report(
         dedup_input_count=dedup_input_count,
         decisions=dict(decisions) if decisions else {},
         evidence_urls_by_test_id=evidence_urls_by_test_id,
+        flaky_by_test_id=flaky_by_test_id,
     )
+
+
+def _collect_flaky_history(
+    spec_dir: Path,
+    candidates: Sequence[TriageCandidate],
+) -> dict[str, dict]:
+    """Look up each candidate's cross-run flip-rate from the project-level
+    flaky-history store (``<workspace>/<project>/test_history.json``) and
+    return ``{test_id → summary}`` for those with at least one prior run (#37).
+    """
+    store = spec_dir.parent.parent / "test_history.json"
+    if not store.exists():
+        return {}
+    try:
+        from agents.flaky_history import load_history
+    except Exception:  # noqa: BLE001
+        return {}
+    out: dict[str, dict] = {}
+    for c in candidates:
+        try:
+            hist = load_history(store, c.test_id)
+        except Exception:  # noqa: BLE001
+            continue
+        if hist.runs:
+            out[c.test_id] = hist.as_dict()
+    return out
 
 
 # ─── JSON renderer ──────────────────────────────────────────────────────
@@ -344,12 +379,19 @@ def _candidate_md_block(
     show_reasons: bool = True,
     decisions: dict | None = None,
     evidence_urls: dict | None = None,
+    flaky: dict | None = None,
 ) -> str:
     """Render one candidate as a markdown sub-section."""
     lines = [
         f"- **`{c.test_id}`** — `{c.test_file}`",
         f"  - signals: {_signal_summary_line(c)}",
     ]
+    if flaky and flaky.get("runs"):
+        lines.append(
+            f"  - flaky history: {flaky.get('classification', '?')} "
+            f"(flip_rate={flaky.get('flip_rate', 0.0):.2f} over "
+            f"{flaky.get('runs', 0)} runs)"
+        )
     if decisions:
         label = _intent_label(decisions, c.test_id)
         if label:
@@ -401,11 +443,13 @@ def render_markdown(report: TriageReport) -> str:
     )
 
     ev_urls_by_id = report.evidence_urls_by_test_id or {}
+    flaky_by_id = report.flaky_by_test_id or {}
     committed_body = "\n".join(
         _candidate_md_block(
             c,
             decisions=decisions,
             evidence_urls=ev_urls_by_id.get(c.test_id),
+            flaky=flaky_by_id.get(c.test_id),
         )
         for c in report.committed
     )
@@ -414,6 +458,7 @@ def render_markdown(report: TriageReport) -> str:
             c,
             decisions=decisions,
             evidence_urls=ev_urls_by_id.get(c.test_id),
+            flaky=flaky_by_id.get(c.test_id),
         )
         for c in report.flagged
     )
@@ -421,7 +466,10 @@ def render_markdown(report: TriageReport) -> str:
         _candidate_md_block(c, show_reasons=False, decisions=decisions)
         for c in report.skipped
     )
-    rejected_body = "\n".join(_candidate_md_block(c) for c in report.rejected)
+    rejected_body = "\n".join(
+        _candidate_md_block(c, flaky=flaky_by_id.get(c.test_id))
+        for c in report.rejected
+    )
     collisions_body = "\n".join(
         f"- **{coll.kind}**: kept `{coll.representative.test_id}`, "
         f"dropped {', '.join(f'`{d.test_id}`' for d in coll.dropped)}"

@@ -890,6 +890,19 @@ def _format_evaluator_per_test_block(bundle) -> str:
     else:
         lint_line = "lint_promotion: not computed"
 
+    # Cross-run flip-rate (#37): historical flakiness across separate
+    # pipeline runs — a chronically flaky test should be flagged/rejected
+    # even when this run's 3× stability happened to come up STABLE.
+    flaky = _format_signal_value(bundle, "flaky_history", default=None)
+    if flaky is not None and _format_signal_value(flaky, "runs", default=0):
+        f_class = _format_signal_value(flaky, "classification", default="?")
+        f_class_str = getattr(f_class, "value", f_class)
+        f_rate = _format_signal_value(flaky, "flip_rate", default=0.0)
+        f_runs = _format_signal_value(flaky, "runs", default=0)
+        flaky_line = f"flaky_history: {f_class_str} (flip_rate={f_rate:.2f} over {f_runs} runs)"
+    else:
+        flaky_line = "flaky_history: no prior runs"
+
     return (
         f"### Test `{test_id}`\n\n"
         f"- file: `{test_file}`\n"
@@ -899,6 +912,7 @@ def _format_evaluator_per_test_block(bundle) -> str:
         f"- {stability_line}\n"
         f"- {mutation_line}\n"
         f"- {lint_line}\n"
+        f"- {flaky_line}\n"
     )
 
 
