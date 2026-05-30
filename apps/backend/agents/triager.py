@@ -666,14 +666,28 @@ async def run_triager(
             # is updated by git_writer (Task 16), not here.
             catalog_out = spec_dir / "context" / "tests_catalog.json"
             catalog_out.parent.mkdir(parents=True, exist_ok=True)
-            catalog_out.write_text(
-                json.dumps(
-                    updated_catalog.to_dict(),
-                    indent=2,
-                    sort_keys=True,
-                    ensure_ascii=False,
+            # The snapshotter pins context/ files read-only (0o444), so make
+            # the catalog writable before overwriting. This copy is the
+            # Triager's workspace scratch — the authoritative AIFactory-repo
+            # catalog is updated by git_writer — so a write failure here must
+            # NOT fail the whole Triager; degrade to a warning instead.
+            try:
+                if catalog_out.exists():
+                    catalog_out.chmod(0o644)
+                catalog_out.write_text(
+                    json.dumps(
+                        updated_catalog.to_dict(),
+                        indent=2,
+                        sort_keys=True,
+                        ensure_ascii=False,
+                    )
                 )
-            )
+            except OSError as exc:
+                _triage_log.warning(
+                    "triager: could not update workspace tests_catalog.json "
+                    "(non-fatal): %s",
+                    exc,
+                )
 
         # ── 7. Record summaries in status.json ──────────────────
         committed_count = len(committed)

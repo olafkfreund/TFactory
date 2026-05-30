@@ -329,7 +329,7 @@ async def run_gen_functional(
     mode: Literal["initial", "rerun"] = "initial",
     verbose: bool = False,
 ) -> bool:
-    """Generate pytest test files for each pending Lane.UNIT subtask.
+    """Generate a test file for each pending subtask, across all lanes.
 
     Per-subtask loop:
       1. Build prompt via get_tfactory_gen_functional_prompt
@@ -362,7 +362,7 @@ async def run_gen_functional(
         )
 
         # 1. Load the plan and find pending Lane.UNIT subtasks.
-        from test_plan import ImplementationPlan, Lane, SubtaskStatus
+        from test_plan import ImplementationPlan, SubtaskStatus
 
         plan_file = spec_dir / "test_plan.json"
         if not plan_file.exists():
@@ -378,7 +378,12 @@ async def run_gen_functional(
         pending: list = []
         for phase in plan.phases:
             for st in phase.subtasks:
-                if st.lane == Lane.UNIT and st.status == SubtaskStatus.PENDING:
+                # Generate every pending subtask regardless of lane — the
+                # per-subtask framework descriptor (Playwright / Jest / pytest /
+                # httpx) drives the prompt + runner image. Previously gated to
+                # Lane.UNIT, which silently dropped the browser/api/integration
+                # subtasks the Planner emitted (→ generated_empty).
+                if st.status == SubtaskStatus.PENDING:
                     pending.append(st)
 
         if not pending:
@@ -387,7 +392,7 @@ async def run_gen_functional(
                 status="generated_empty",
                 phase="gen_functional_no_pending",
                 tests_generated=0,
-                gen_functional_warnings=["no pending Lane.UNIT subtasks to generate"],
+                gen_functional_warnings=["no pending subtasks to generate"],
             )
             return True
 
@@ -452,9 +457,17 @@ async def run_gen_functional(
 
             source = test_path.read_text()
 
-            # 5. Pre-flight static check (commit 2).
-            pre = preflight_check(source, project_dir=project_dir)
-            if not pre.ok:
+            # The pre-flight + flake-lint guards parse Python ASTs, so they only
+            # apply to Python sources. For TS/JS (Playwright / Jest) and other
+            # languages they would false-reject valid tests — skip them.
+            # language=None is the v0.1 legacy Python path, so treat it as Python.
+            is_python = (subtask.language or "python") == "python"
+
+            # 5. Pre-flight static check (commit 2) — Python only.
+            pre = (
+                preflight_check(source, project_dir=project_dir) if is_python else None
+            )
+            if pre is not None and not pre.ok:
                 test_path.unlink(missing_ok=True)
                 reasons = (
                     ", ".join(f"{f.describe()} — {f.reason[:80]}" for f in pre.failures)
@@ -477,9 +490,9 @@ async def run_gen_functional(
                 _advance_to_planner_replan(spec_dir, project_dir)
                 return False
 
-            # 6. Flake-risk lint (commit 3).
-            flake = flake_risk_lint(source)
-            if not flake.ok:
+            # 6. Flake-risk lint (commit 3) — Python only (AST-based).
+            flake = flake_risk_lint(source) if is_python else None
+            if flake is not None and not flake.ok:
                 test_path.unlink(missing_ok=True)
                 reasons = (
                     "; ".join(

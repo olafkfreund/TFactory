@@ -160,26 +160,101 @@ class _RunResultLike(Protocol):
     def stderr(self) -> str: ...
 
 
+_PYTEST_IMAGE = "tfactory-runner-pytest:latest"
+
+
 def _resolve_runner_fn(
     spec_dir: Path,
     project_dir: Path,
+    image: str = _PYTEST_IMAGE,
+    network: str = "none",
+    target_url: str | None = None,
 ) -> Callable[[Path, Path, int], _RunResultLike]:
-    """Return a callable matching the runner_fn seam.
+    """Return a callable matching the runner_fn seam for the pytest-based lanes
+    (unit + api).
 
-    The real implementation wires ``DockerRunner.run_pytest``; tests
-    mock this whole function so the stability + mutation primitives
-    can be exercised in unit tests without touching Docker.
+    ``runner_fn(test_file, project_dir, seed) -> DockerRunResult``. The given
+    ``test_file`` may be the generated test (under the workspace) OR a mutated
+    copy (under ``findings/mutants/``) — the runner copies the SUT and the
+    specific test into a writable scratch dir on the host, then runs pytest
+    inside it so ``from <module> import ...`` resolves (pyproject pythonpath).
+
+    ``network``/``target_url`` support the **api** lane: pass ``network="host"``
+    so the in-container test can reach a host-served app, and ``target_url`` to
+    inject ``TFACTORY_TARGET_URL`` (httpx tests read it). The unit lane uses the
+    defaults (``network="none"``, no target URL) for hermetic execution.
+
+    Tests mock this whole function so the stability + mutation primitives can be
+    exercised without Docker.
     """
-    from tools.runners.docker_runner import DockerRunner
+    import shutil as _sh
+    import tempfile as _tmp
 
-    runner = DockerRunner()
+    from tools.runners.docker_runner import DockerRunner, DockerRunResult
 
-    def _run(test_file: Path, project_dir_arg: Path, seed: int):
-        return runner.run_pytest(
-            test_file=test_file,
-            project_dir=project_dir_arg,
-            seed=seed,
-        )
+    def _run(test_file: Path, project_dir_arg: Path, seed: int) -> DockerRunResult:
+        scratch = Path(_tmp.mkdtemp(prefix="tf-pytest-"))
+        try:
+            # Host-side staging: copy the SUT, then drop the specific test file
+            # under tests/. Doing this on the host (scratch is bind-mounted rw)
+            # sidesteps the read-only /work mount + container-uid write issues.
+            for item in Path(project_dir_arg).iterdir():
+                if item.name == ".git":
+                    continue
+                dst = scratch / item.name
+                if item.is_dir():
+                    _sh.copytree(item, dst, dirs_exist_ok=True)
+                else:
+                    _sh.copy2(item, dst)
+            tdir = scratch / "tests"
+            tdir.mkdir(exist_ok=True)
+            _sh.copy2(test_file, tdir / Path(test_file).name)
+            # The container runs as a non-root uid; make scratch world-writable.
+            for p in scratch.rglob("*"):
+                try:
+                    p.chmod(0o777)
+                except OSError:
+                    pass
+            scratch.chmod(0o777)
+
+            runner = DockerRunner(image=image, network=network, read_only_rootfs=False)
+            cmd = (
+                "cd /scratch && "
+                f"python -m pytest tests/{Path(test_file).name} "
+                "-p no:cacheprovider -q --junitxml=/scratch/junit.xml "
+                "--cov-report=xml:/scratch/coverage.xml --cov=. 2>&1; "
+                "echo __PYTEST_EXIT=$?"
+            )
+            extra_env = {"PYTHONHASHSEED": str(seed)}
+            if target_url:
+                extra_env["TFACTORY_TARGET_URL"] = target_url
+                extra_env["APP_URL"] = target_url
+            res = runner.run(
+                repo_path=Path(project_dir_arg).resolve(),
+                scratch_path=scratch.resolve(),
+                command=["sh", "-c", cmd],
+                extra_env=extra_env,
+                timeout_sec=300,
+            )
+            code = res.returncode
+            for line in (res.stdout or "").splitlines():
+                if line.startswith("__PYTEST_EXIT="):
+                    try:
+                        code = int(line.split("=", 1)[1])
+                    except ValueError:
+                        pass
+            junit = scratch / "junit.xml"
+            cov = scratch / "coverage.xml"
+            return DockerRunResult(
+                returncode=code,
+                stdout=res.stdout,
+                stderr=res.stderr,
+                junit_xml_path=junit if junit.exists() else None,
+                coverage_xml_path=cov if cov.exists() else None,
+                argv=res.argv,
+            )
+        finally:
+            _sh.rmtree(scratch, ignore_errors=True)
 
     return _run
 
@@ -232,9 +307,13 @@ def _completed_functional_subtasks(plan: dict) -> list[dict]:
     out = []
     for phase in plan.get("phases", []):
         for st in phase.get("subtasks", []):
+            # The pytest runner only handles Python. A unit-lane subtask in
+            # another language (e.g. Jest/TypeScript) needs its own runner
+            # image — skip it here rather than feeding a .test.ts to pytest.
             if (
                 st.get("status") == "completed"
                 and st.get("lane") in ("unit", "functional")
+                and (st.get("language") in (None, "python"))
                 and st.get("files_to_create")
             ):
                 out.append(st)
@@ -545,6 +624,208 @@ def _build_signal_bundle(
     )
 
 
+# ─── Browser-lane signal computation (static base_url path) ─────────────
+#
+# Wires the browser lane into run_evaluator for the common static-URL case
+# (an http target in .tfactory.yml — e.g. a deployed Pages site). The
+# docker-compose AppRuntime path (_run_browser_subtask_with_runtime) remains
+# for local-app targets; this path runs the generated Playwright test in the
+# playwright runner image against the remote URL with --network=bridge and
+# TFACTORY_TARGET_URL injected.
+
+_PLAYWRIGHT_IMAGE = "tfactory-runner-playwright:latest"
+
+
+def _completed_browser_subtasks(plan: dict) -> list[dict]:
+    """Completed Playwright/browser subtasks Gen-Functional generated."""
+    out = []
+    for phase in plan.get("phases", []):
+        for st in phase.get("subtasks", []):
+            if (
+                st.get("status") == "completed"
+                and st.get("lane") == "browser"
+                and st.get("files_to_create")
+            ):
+                out.append(st)
+    return out
+
+
+def _browser_target_url(spec_dir: Path, subtask: dict) -> str | None:
+    """Resolve the base_url for the subtask's target from the snapshotted
+    .tfactory.yml (context/tfactory_yml.json). Falls back to the default
+    target when the subtask has no target_name.
+
+    The trailing slash is stripped: the parser normalises base_url to end in
+    ``/``, but api tests build URLs as ``f"{base_url}/api/..."`` — a trailing
+    slash would produce ``//api/...`` (a different path → spurious 404s). A
+    bare origin is also valid for Playwright ``page.goto``.
+    """
+    ctx = spec_dir / "context" / "tfactory_yml.json"
+    if not ctx.exists():
+        return None
+    try:
+        cfg = json.loads(ctx.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    targets = cfg.get("targets") or []
+    want = subtask.get("target_name") or cfg.get("default_target")
+
+    def _norm(u: str) -> str:
+        # Strip a single trailing slash from the origin/path, but never reduce
+        # to empty (keep at least the scheme+host).
+        return u[:-1] if (u.endswith("/") and not u.endswith("://")) else u
+
+    for t in targets:
+        if t.get("name") == want and t.get("base_url"):
+            return _norm(t["base_url"])
+    # last resort: first http target with a base_url
+    for t in targets:
+        if t.get("base_url"):
+            return _norm(t["base_url"])
+    return None
+
+
+def _stage_browser_test(spec_dir: Path, project_dir: Path, subtask: dict) -> None:
+    """Copy the generated test from the workspace into the project checkout so
+    the playwright runner (which mounts project_dir at /repo) can see it."""
+    import shutil as _sh
+
+    rel = subtask["files_to_create"][0]
+    src = spec_dir / rel
+    dst = Path(project_dir) / rel
+    if src.exists():
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        _sh.copy2(src, dst)
+
+
+def _resolve_browser_runner_fn(target_url: str | None, image: str = _PLAYWRIGHT_IMAGE):
+    """Return a runner_fn(test_file, project_dir, seed) -> DockerRunResult that
+    runs ONE Playwright spec in the runner image against ``target_url``.
+
+    Mirrors the proven invocation: world-writable scratch, copy /repo→/scratch,
+    symlink node_modules to the image's global install, --network=bridge, and
+    TFACTORY_TARGET_URL injected so the spec hits the deployed site.
+    """
+    import shutil as _sh
+    import tempfile as _tmp
+
+    from tools.runners.docker_runner import DockerRunner, DockerRunResult
+
+    def _run(test_file: Path, project_dir_arg: Path, seed: int) -> DockerRunResult:
+        # relative path of the spec inside the project checkout
+        try:
+            rel = str(
+                Path(test_file).resolve().relative_to(Path(project_dir_arg).resolve())
+            )
+        except ValueError:
+            # test_file lives in the workspace, not the checkout — use its
+            # path relative to the workspace tests/ layout instead.
+            rel = "/".join(Path(test_file).parts[-3:])
+        scratch = Path(_tmp.mkdtemp(prefix="tf-pw-"))
+        try:
+            scratch.chmod(0o777)
+            runner = DockerRunner(image=image, network="host", read_only_rootfs=False)
+            # DockerRunner mounts the checkout read-only at /work and a
+            # writable scratch at /scratch (the workdir). Stage the project
+            # into scratch so node_modules (symlinked to the image's global
+            # install) resolves and Playwright can write artifacts.
+            staged = (
+                "cp -r /work/. /scratch/ 2>/dev/null; "
+                "ln -sfn /usr/lib/node_modules /scratch/node_modules; "
+                "cd /scratch && "
+                f"npx playwright test {rel} --reporter=junit "
+                "--output=/scratch/pw-artifacts; "
+                "echo __PW_EXIT=$?"
+            )
+            extra_env = {}
+            if target_url:
+                extra_env["TFACTORY_TARGET_URL"] = target_url
+                extra_env["APP_URL"] = target_url
+            res = runner.run(
+                repo_path=Path(project_dir_arg).resolve(),
+                scratch_path=scratch.resolve(),
+                command=["sh", "-c", staged],
+                extra_env=extra_env,
+                timeout_sec=300,
+            )
+            # The wrapper shell always exits 0; recover the real playwright exit
+            # from the __PW_EXIT marker so stability sees the true pass/fail.
+            code = res.returncode
+            marker = None
+            for line in (res.stdout or "").splitlines():
+                if line.startswith("__PW_EXIT="):
+                    try:
+                        marker = int(line.split("=", 1)[1])
+                    except ValueError:
+                        marker = None
+            if marker is not None:
+                code = marker
+            return DockerRunResult(
+                returncode=code, stdout=res.stdout, stderr=res.stderr, argv=res.argv
+            )
+        finally:
+            _sh.rmtree(scratch, ignore_errors=True)
+
+    return _run
+
+
+def _build_browser_signal_bundle(
+    spec_dir: Path, project_dir: Path, subtask: dict, runner_fn
+) -> EvaluatorSignals:
+    """Signal bundle for a Browser-lane subtask: 3× stability via Playwright,
+    coverage skipped (Decision 11), mutation skipped (no TS mutation in the
+    browser path)."""
+    stability = _stability_for_subtask(spec_dir, project_dir, subtask, runner_fn)
+    return EvaluatorSignals(
+        test_id=subtask["id"],
+        test_file=spec_dir / subtask["files_to_create"][0],
+        target=subtask.get("target") or "?",
+        rationale=subtask.get("rationale") or "?",
+        coverage_delta=None,  # browser lane — coverage_strategy == "skip"
+        stability=stability,
+        mutation=None,  # mutation not run for the browser lane
+        lint_promotion=_lint_promotion_for_subtask(spec_dir, subtask),
+        flaky_history=_flaky_history_for_subtask(spec_dir, subtask, stability),
+    )
+
+
+# ─── API-lane signal computation (httpx against a host-served app) ──────
+
+
+def _completed_api_subtasks(plan: dict) -> list[dict]:
+    """Completed api-lane subtasks (httpx tests) Gen-Functional generated."""
+    out = []
+    for phase in plan.get("phases", []):
+        for st in phase.get("subtasks", []):
+            if (
+                st.get("status") == "completed"
+                and st.get("lane") == "api"
+                and st.get("files_to_create")
+            ):
+                out.append(st)
+    return out
+
+
+def _build_api_signal_bundle(
+    spec_dir: Path, project_dir: Path, subtask: dict, runner_fn
+) -> EvaluatorSignals:
+    """Signal bundle for an api-lane subtask: 3× stability via pytest/httpx
+    against the host-served app, coverage skipped (the SUT runs out-of-process),
+    mutation skipped."""
+    stability = _stability_for_subtask(spec_dir, project_dir, subtask, runner_fn)
+    return EvaluatorSignals(
+        test_id=subtask["id"],
+        test_file=spec_dir / subtask["files_to_create"][0],
+        target=subtask.get("target") or "?",
+        rationale=subtask.get("rationale") or "?",
+        coverage_delta=None,  # api lane hits a running service — no line coverage
+        stability=stability,
+        mutation=None,
+        lint_promotion=_lint_promotion_for_subtask(spec_dir, subtask),
+        flaky_history=_flaky_history_for_subtask(spec_dir, subtask, stability),
+    )
+
+
 # ─── Verdicts.json validation ───────────────────────────────────────────
 
 
@@ -713,7 +994,10 @@ async def run_evaluator(
             )
             return False
 
-        completed = _completed_functional_subtasks(plan)
+        unit_completed = _completed_functional_subtasks(plan)
+        browser_completed = _completed_browser_subtasks(plan)
+        api_completed = _completed_api_subtasks(plan)
+        completed = unit_completed + browser_completed + api_completed
 
         # 2. No work — early exit with evaluated_empty.
         if not completed:
@@ -740,11 +1024,36 @@ async def run_evaluator(
 
         # 3. Per-test signal computation (real primitives; runner_fn
         #    seam mocked in tests so docker isn't required).
-        runner_fn = _resolve_runner_fn(spec_dir, project_dir)
-        bundles = [
-            _build_signal_bundle(spec_dir, project_dir, st, runner_fn)
-            for st in completed
-        ]
+        bundles = []
+        if unit_completed:
+            unit_runner = _resolve_runner_fn(spec_dir, project_dir)
+            bundles += [
+                _build_signal_bundle(spec_dir, project_dir, st, unit_runner)
+                for st in unit_completed
+            ]
+        if browser_completed:
+            for st in browser_completed:
+                # Stage the generated spec into the checkout so the Playwright
+                # runner (mounts project_dir at /repo) can see it.
+                _stage_browser_test(spec_dir, project_dir, st)
+                url = _browser_target_url(spec_dir, st)
+                browser_runner = _resolve_browser_runner_fn(url)
+                bundles.append(
+                    _build_browser_signal_bundle(
+                        spec_dir, project_dir, st, browser_runner
+                    )
+                )
+        if api_completed:
+            for st in api_completed:
+                url = _browser_target_url(spec_dir, st)
+                # network="host" so the in-container httpx test can reach the
+                # host-served app at the target URL (e.g. http://localhost:8200).
+                api_runner = _resolve_runner_fn(
+                    spec_dir, project_dir, network="host", target_url=url
+                )
+                bundles.append(
+                    _build_api_signal_bundle(spec_dir, project_dir, st, api_runner)
+                )
 
         # 4. Build prompt + invoke SDK session.
         from prompts_pkg.prompts import get_tfactory_evaluator_prompt
