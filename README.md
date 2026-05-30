@@ -2,9 +2,10 @@
 
 **Autonomous test generation + execution platform — sister project to [AIFactory](https://github.com/olafkfreund/AIFactory).**
 
-TFactory ingests a finished AIFactory spec, generates feature + security tests
-aligned to its acceptance criteria, runs them in a sandbox, evaluates quality,
-commits the tests to the feature branch, and posts a coverage + findings report
+TFactory ingests a finished AIFactory spec, generates tests aligned to its
+acceptance criteria across the v0.2 lane spine (unit / browser / api /
+integration / mutation), runs them in a sandbox, evaluates quality,
+commits the tests to the feature branch, and posts a coverage report
 to the PR — autonomously.
 
 > Status: **v0.2.0 released (2026-05-29) — 16 of 16 v0.2 tasks delivered ·
@@ -70,7 +71,7 @@ The portal exposes a `/tfactory` view powered by the components under
 
 - **TFactoryTaskList** — workspace list with status badges
 - **TFactoryTaskDetail** — tabs for Status / Lanes / Verdicts / Report / Logs
-- **LaneStatusGrid** — Functional lit; SAST/DAST/Fuzz/Mutation as Phase 2-5 placeholders
+- **LaneStatusGrid** — Unit / Browser / API / Integration / Mutation lane spine
 - **TFactoryLogViewer** — WebSocket live tail (one snapshot per connect at MVP)
 
 ## End-to-end smoke
@@ -150,7 +151,7 @@ AIFactory finished branch  ─►  /handover-to-tfactory  ─►  TFactory MCP
                                                               │
                               ┌──────────┬─────────┬──────────┼──────────┐
                               ▼          ▼         ▼          ▼          ▼
-                          Gen-Func   Gen-SAST  Gen-DAST   Gen-Mut     (more)
+                       Gen-Unit  Gen-Browser  Gen-API  Gen-Integration  Gen-Mut
                               └──────────┴────┬────┴──────────┴──────────┘
                                               ▼
                                           Executor  (Docker per task)
@@ -160,9 +161,9 @@ AIFactory finished branch  ─►  /handover-to-tfactory  ─►  TFactory MCP
                                           Triager   ─►  git commit + PR comment
 ```
 
-Six agents (Planner / per-lane Generators / Executor / Evaluator / Triager),
-four lanes (functional active at MVP), tiered sandbox (native for static,
-Docker for runtime), spec-aware handover from AIFactory.
+Five pipeline stages (Planner / per-lane Generators / Executor / Evaluator /
+Triager), five lanes (unit / browser / api / integration / mutation), Docker
+sandbox, spec-aware handover from AIFactory.
 
 The four-stage chain auto-advances via `TFACTORY_AUTO_*` env vars; each
 stage writes its outputs to `~/.tfactory/workspaces/{project}/specs/{spec}/`
