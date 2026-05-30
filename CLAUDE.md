@@ -85,6 +85,13 @@ can show an honest "🔒 Local — no data egress" badge. `python apps/backend/
 byo_llm.py <model>` exits 0 only when the run keeps all data on your network.
 See `guides/byo-llm.md`.
 
+**Generic AC sources / no-AIFactory (#40):** `spec_sources.py` ingests any
+acceptance-criteria source (markdown / Gherkin `.feature` / EARS) and
+normalises it into the canonical `context/aifactory_spec.md` the Planner
+reads — so TFactory runs without AIFactory. `write_spec_markdown()` is the
+pipeline seam; `python apps/backend/spec_sources.py <file>` is the CLI. See
+`guides/spec-sources.md`.
+
 ### Workspace layout
 
 Per-task data lives at `~/.tfactory/workspaces/<project_id>/specs/<spec_id>/`:
