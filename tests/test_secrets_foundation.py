@@ -165,14 +165,8 @@ def test_localfile_missing_file(tmp_path):
         LocalFileBackend().resolve(parse_ref(f"file:{tmp_path / 'nope'}"))
 
 
-def test_localfile_encrypted_format_deferred(tmp_path):
-    from tfactory_secrets.backends.localfile import LocalFileBackend
-    from tfactory_secrets.refs import parse_ref
-
-    p = tmp_path / "s.enc.yaml"
-    p.write_text("api_token: ENC[...]\n")
-    with pytest.raises(NotImplementedError):
-        LocalFileBackend().resolve(parse_ref(f"sops:{p}#api_token"))
+# NOTE: sops/age/agenix decryption (the encrypted localfile formats) is
+# covered in tests/test_secrets_localfile.py (issue #64).
 
 
 # ── redaction ───────────────────────────────────────────────────────────────
