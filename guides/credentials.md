@@ -66,11 +66,23 @@ or `~/.config/sops/age/keys.txt`.
   and `credentials:` (named refs → env var, `kind: env|file`). `kind: file`
   writes the value to a **0600** file in a per-task scratch dir and sets the env
   var to that path (kubeconfig, GCP ADC json).
-- **Operator** `~/.tfactory/credentials.json` (chmod 600) — maps cloud
-  providers to backend refs for the broker's cloud-provider fetch head:
+- **Operator** `~/.tfactory/credentials.json` (chmod 600) — host-wide config
+  read by the broker, with two blocks (a looser file mode still loads, with a
+  warning). Values are always *references*, never secrets:
   ```json
-  { "cloud": { "gcp": { "ref": "gcp-sm://proj/sa", "as": "GOOGLE_APPLICATION_CREDENTIALS", "kind": "file" } } }
+  {
+    "cloud": {
+      "gcp": { "ref": "gcp-sm://proj/sa", "as": "GOOGLE_APPLICATION_CREDENTIALS", "kind": "file" }
+    },
+    "credentials": {
+      "staging-db": { "ref": "vault:secret/data/staging/db#url", "as": "DATABASE_URL" }
+    }
+  }
   ```
+  - `cloud` — provider → backend ref; the broker's cloud-provider fetch head.
+  - `credentials` — named sets → backend ref, the host-wide analogue of the
+    per-project `.tfactory.yml` `credentials:` block. On a name collision the
+    per-project entry wins. Schema/loader: `tfactory_secrets/operator_config.py`.
 
 ## Egress posture (honest by default)
 

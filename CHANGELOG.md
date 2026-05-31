@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Operator credential config (#71).** Formalised the
+  `~/.tfactory/credentials.json` (0600) schema/loader
+  (`tfactory_secrets/operator_config.py`): a `cloud` block (provider → backend
+  ref) plus a `credentials` block of named sets, the host-wide analogue of the
+  per-project `.tfactory.yml` `credentials:` (project wins on collision).
 - **Triager completion callback (#85).** When a task reaches a terminal
   status, the Triager can notify a watcher so `/tfactory-watch` needs no
   polling. Two opt-in, best-effort channels (both OFF by default; a failing
