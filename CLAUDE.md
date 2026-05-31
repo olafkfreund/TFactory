@@ -73,6 +73,15 @@ per the "no automatic pushes" policy. Operators opt in via:
   - `TFACTORY_TRIAGER_GIT_WRITE=1`
   - `TFACTORY_TRIAGER_PR_COMMENT=1`
 
+**Triager completion callback (#85)** — when the task reaches a terminal
+status (`triaged` / `triaged_empty` / `triager_failed`), an opt-in callback
+fires so `/tfactory-watch` needs no polling. Both default OFF and are
+best-effort (a failing target never breaks the pipeline):
+  - `TFACTORY_COMPLETION_WEBHOOK=<url>` — POSTs `{task_id, project_id, status,
+    phase, updated_at}` (timeout `TFACTORY_COMPLETION_WEBHOOK_TIMEOUT`, default 5s)
+  - `TFACTORY_COMPLETION_SENTINEL=1` — writes `findings/COMPLETED.json` a
+    same-host watcher can stat instead of polling
+
 **LLM provider abstraction:** TFactory uses the Claude Agent SDK
 (`claude-agent-sdk`) as its primary provider, but also supports Codex CLI,
 Gemini CLI, Ollama, and any OpenAI-compatible endpoint (LM Studio, vLLM,

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **Triager completion callback (#85).** When a task reaches a terminal
+  status, the Triager can notify a watcher so `/tfactory-watch` needs no
+  polling. Two opt-in, best-effort channels (both OFF by default; a failing
+  target never breaks the pipeline): `TFACTORY_COMPLETION_WEBHOOK=<url>`
+  (POSTs `{task_id, project_id, status, phase, updated_at}`) and
+  `TFACTORY_COMPLETION_SENTINEL=1` (writes `findings/COMPLETED.json`).
+
 ## Unreleased — Credential Broker (epic #62)
 
 > Agents can now authenticate to cloud environments using vault-backed or
