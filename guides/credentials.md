@@ -115,7 +115,21 @@ with CredentialBroker(project_dir, spec_dir, egress_allowed=True) as broker:
 # cred files wiped on exit
 ```
 
+## Sandbox credential injection (#73)
+
+Network-enabled lanes (api / integration) can authenticate to the SUT/cloud
+**inside** the Docker sandbox. Strictly gated:
+
+- The **unit** lane runs `--network=none` and receives **no** credentials.
+- A network-enabled lane gets broker-resolved creds **only when egress is
+  opted in** — cloud tokens as env vars, and a kubeconfig (when materialised)
+  bind-mounted **read-only** at `/root/.kube/config`.
+- Materialised secret files are **wiped after the run**.
+
+Seam: `tools/runners/sandbox_credentials.resolve_sandbox_credentials(project_dir,
+spec_dir, network)` → `DockerRunner.run(..., secret_files=…)`; wired into the
+Evaluator's pytest runner for the api lane.
+
 ## Out of scope (fast-follows)
 
-- Injecting credentials into the **test sandbox** (issue #73).
 - Short-lived / **workload-identity federation** (OIDC → STS/WIF) (issue #74).

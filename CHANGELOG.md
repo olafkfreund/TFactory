@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Sandbox credential injection (#73).** Network-enabled lanes (api /
+  integration) can authenticate inside the Docker sandbox — broker-resolved
+  cloud tokens as env vars plus a kubeconfig bind-mounted read-only — gated by
+  `network != none` **and** egress opt-in. The unit lane (`--network=none`)
+  gets nothing; mounted secret files are wiped after the run. Seam:
+  `tools/runners/sandbox_credentials.py` + `DockerRunner.run(secret_files=…)`.
 - **Operator credential config (#71).** Formalised the
   `~/.tfactory/credentials.json` (0600) schema/loader
   (`tfactory_secrets/operator_config.py`): a `cloud` block (provider → backend
