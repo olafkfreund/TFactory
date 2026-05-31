@@ -130,6 +130,19 @@ Seam: `tools/runners/sandbox_credentials.resolve_sandbox_credentials(project_dir
 spec_dir, network)` → `DockerRunner.run(..., secret_files=…)`; wired into the
 Evaluator's pytest runner for the api lane.
 
-## Out of scope (fast-follows)
+## Workload-identity federation (#74)
 
-- Short-lived / **workload-identity federation** (OIDC → STS/WIF) (issue #74).
+Instead of a long-lived secret, mint **short-lived scoped** creds from an OIDC
+token. Configure a `wif` block in `~/.tfactory/credentials.json`:
+
+```json
+{ "wif": { "aws": { "role_arn": "arn:aws:iam::123:role/tfactory",
+                    "token_file": "/var/run/secrets/oidc/token",
+                    "duration_seconds": 3600 } } }
+```
+
+`resolve_cloud("aws")` then runs STS `AssumeRoleWithWebIdentity` and returns
+short-lived `AWS_ACCESS_KEY_ID`/`SECRET`/`SESSION_TOKEN`. The broker caches them
+with their TTL and **re-mints automatically** as they near expiry. GCP Workload
+Identity Federation and Azure federated tokens are routed but not yet
+implemented. Module: `tfactory_secrets/wif.py`.

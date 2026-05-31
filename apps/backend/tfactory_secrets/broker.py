@@ -68,6 +68,8 @@ class CredentialBroker:
         self._materialised: list[Path] = []
         self._env: dict[str, str] = {}
         self._closed = False
+        # WIF: per-provider minted creds cached with their TTL (#74).
+        self._wif_cache: dict[str, object] = {}
         # Wipe materialised files even if close() is never called.
         self._finalizer = weakref.finalize(self, _wipe_paths, self._materialised)
         atexit.register(self.close)
@@ -102,6 +104,11 @@ class CredentialBroker:
             return CredentialStatus(False, f"unknown-provider:{provider}")
         if not self.egress_allowed:
             return CredentialStatus(False, "egress-disabled")
+
+        # 0. WIF head: mint short-lived federated creds if configured (#74).
+        wif_status = self._resolve_wif(provider)
+        if wif_status is not None:
+            return wif_status
 
         # 1. Backend-fetch head: an operator-configured ref for this provider.
         entry = _cloud_config().get(provider)
@@ -148,6 +155,47 @@ class CredentialBroker:
         self.close()
 
     # -- internals ----------------------------------------------------------
+
+    def _resolve_wif(self, provider: str):
+        """Mint (or reuse cached) short-lived federated creds for ``provider``.
+
+        Returns a ``CredentialStatus`` when WIF is configured for the provider,
+        else ``None`` so ``resolve_cloud`` falls through to the other heads.
+        Cached creds are reused until they near expiry, then re-minted — that's
+        the refresh path. Fault-tolerant: a failed/unimplemented mint logs and
+        returns ``None`` rather than breaking resolution.
+        """
+        import time
+
+        from core.mcp_credentials import CredentialStatus
+
+        entry = _wif_config().get(provider)
+        if not entry:
+            return None
+
+        now = time.time()
+        cached = self._wif_cache.get(provider)
+        if cached is not None and not cached.expired(now):
+            return CredentialStatus(True, f"wif:{provider}", dict(cached.env))
+
+        try:
+            from tfactory_secrets.wif import mint_wif
+
+            creds = mint_wif(provider, entry, now=now)
+        except Exception as exc:  # noqa: BLE001 - incl. NotImplementedError (gcp/azure)
+            logger.warning(
+                "CredentialBroker: WIF mint for %s failed (%s); "
+                "falling back to other credential heads.",
+                provider,
+                exc,
+            )
+            return None
+
+        if creds is None:
+            return None
+        self._wif_cache[provider] = creds
+        self._env.update(creds.env)
+        return CredentialStatus(True, f"wif:{provider}", dict(creds.env))
 
     def _materialise_cloud_entry(self, provider: str, entry: dict):
         """Resolve ``entry['ref']`` and materialise it per ``entry['kind']``."""
@@ -314,10 +362,25 @@ def _operator_credentials() -> dict:
     return {name: e.model_dump(by_alias=True) for name, e in cfg.credentials.items()}
 
 
+@lru_cache(maxsize=1)
+def _wif_config() -> dict:
+    """Read the operator config's ``wif:`` map (#74).
+
+    Returns ``{provider: OperatorWifEntry}`` — workload-identity-federation
+    config per cloud provider. Entries are returned as the validated model so
+    ``wif.mint_wif`` can read attributes directly.
+    """
+    from tfactory_secrets.operator_config import load_operator_config
+
+    cfg = load_operator_config(CREDENTIALS_CONFIG_PATH)
+    return dict(cfg.wif)
+
+
 def reset_config_cache() -> None:
     """Drop the cached credentials config (test/CLI helper)."""
     _cloud_config.cache_clear()
     _operator_credentials.cache_clear()
+    _wif_config.cache_clear()
 
 
 __all__ = [

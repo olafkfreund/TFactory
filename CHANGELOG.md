@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Workload-identity federation (#74).** Mint short-lived scoped credentials
+  from an OIDC token via a `wif` block in `~/.tfactory/credentials.json`. AWS
+  STS `AssumeRoleWithWebIdentity` is implemented (`tfactory_secrets/wif.py`);
+  `resolve_cloud("aws")` returns short-lived keys that the broker caches with
+  their TTL and re-mints near expiry. GCP WIF / Azure federated tokens routed
+  (fast-follow). Completes the Credential Broker epic (#62).
 - **Sandbox credential injection (#73).** Network-enabled lanes (api /
   integration) can authenticate inside the Docker sandbox — broker-resolved
   cloud tokens as env vars plus a kubeconfig bind-mounted read-only — gated by

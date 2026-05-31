@@ -55,6 +55,25 @@ class OperatorCredentialEntry(BaseModel):
     kind: str = "env"
 
 
+class OperatorWifEntry(BaseModel):
+    """Workload-identity-federation config for one cloud provider (#74).
+
+    Mints **short-lived** scoped credentials from an OIDC token instead of a
+    long-lived secret. AWS: ``role_arn`` + an OIDC token from ``token_file``
+    (or inline ``token``) → STS ``AssumeRoleWithWebIdentity``. ``duration_seconds``
+    bounds the session TTL; ``audience``/``session_name`` are optional.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    role_arn: str | None = None
+    token_file: str | None = None
+    token: str | None = None
+    audience: str | None = None
+    session_name: str = "tfactory"
+    duration_seconds: int = 3600
+
+
 class OperatorCredentialsConfig(BaseModel):
     """Validated view of ``~/.tfactory/credentials.json``."""
 
@@ -62,6 +81,7 @@ class OperatorCredentialsConfig(BaseModel):
 
     cloud: dict[str, OperatorCredentialEntry] = Field(default_factory=dict)
     credentials: dict[str, OperatorCredentialEntry] = Field(default_factory=dict)
+    wif: dict[str, OperatorWifEntry] = Field(default_factory=dict)
 
 
 def load_operator_config(path: Path | None = None) -> OperatorCredentialsConfig:
@@ -96,5 +116,6 @@ __all__ = [
     "OPERATOR_CONFIG_PATH",
     "OperatorCredentialEntry",
     "OperatorCredentialsConfig",
+    "OperatorWifEntry",
     "load_operator_config",
 ]
