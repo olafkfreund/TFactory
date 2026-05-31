@@ -43,11 +43,11 @@ output panel.
 must differ") is rejected — it caught a deliberately seeded memoisation cache
 bug.
 
-<img src="{{ '/static/demos/greeting-generator/demo.gif' | relative_url }}"
+<img src="{{ '/static/demos/greeting-generator/demo.gif' | relative_url }}?v=2"
      alt="Greeting generator browser-lane demo"
      style="width:100%;border:1px solid #2a2a2a;border-radius:8px" loading="lazy" />
 
-[Download MP4]({{ '/static/demos/greeting-generator/demo.mp4' | relative_url }})
+[Download MP4]({{ '/static/demos/greeting-generator/demo.mp4' | relative_url }}?v=2)
 
 </div>
 
@@ -62,11 +62,11 @@ makes when TFactory flags a failing test.
 
 **Result:** 4 accepted (committed) · 1 rejected (dismissed).
 
-<img src="{{ '/static/demos/failure-flow/demo.gif' | relative_url }}"
+<img src="{{ '/static/demos/failure-flow/demo.gif' | relative_url }}?v=2"
      alt="Failure to merge/dismiss flow demo"
      style="width:100%;border:1px solid #2a2a2a;border-radius:8px" loading="lazy" />
 
-[Download MP4]({{ '/static/demos/failure-flow/demo.mp4' | relative_url }})
+[Download MP4]({{ '/static/demos/failure-flow/demo.mp4' | relative_url }}?v=2)
 
 </div>
 
@@ -82,11 +82,11 @@ stability** re-runs, and **mutate-and-check** (mutmut). A test only passes if it
 **Result:** **4 accept** — every generated test runs cleanly, is stable across
 3 re-runs, and kills its mutation. No browser involved.
 
-<img src="{{ '/static/demos/python-unit/demo.gif' | relative_url }}"
+<img src="{{ '/static/demos/python-unit/demo.gif' | relative_url }}?v=2"
      alt="Python unit-lane demo"
      style="width:100%;border:1px solid #2a2a2a;border-radius:8px" loading="lazy" />
 
-[Download MP4]({{ '/static/demos/python-unit/demo.mp4' | relative_url }})
+[Download MP4]({{ '/static/demos/python-unit/demo.mp4' | relative_url }}?v=2)
 
 </div>
 
@@ -102,11 +102,11 @@ assert on the rendered result.
 **Result:** **3 accept + 1 flag.** The flagged test ("two posts both remain
 visible") caught a seeded state bug where a new post replaces the previous one.
 
-<img src="{{ '/static/demos/form-fill/demo.gif' | relative_url }}"
+<img src="{{ '/static/demos/form-fill/demo.gif' | relative_url }}?v=2"
      alt="Form-fill browser-lane demo"
      style="width:100%;border:1px solid #2a2a2a;border-radius:8px" loading="lazy" />
 
-[Download MP4]({{ '/static/demos/form-fill/demo.mp4' | relative_url }})
+[Download MP4]({{ '/static/demos/form-fill/demo.mp4' | relative_url }}?v=2)
 
 </div>
 
@@ -125,11 +125,11 @@ test ("a missing key must return 404") caught a seeded contract bug — the
 gateway returns HTTP 200 with a null body instead of 404 — and the Evaluator
 flags it for human review as a regression guard once the gateway is fixed.
 
-<img src="{{ '/static/demos/api-gateway/demo.gif' | relative_url }}"
+<img src="{{ '/static/demos/api-gateway/demo.gif' | relative_url }}?v=2"
      alt="API gateway api-lane (httpx) demo"
      style="width:100%;border:1px solid #2a2a2a;border-radius:8px" loading="lazy" />
 
-[Download MP4]({{ '/static/demos/api-gateway/demo.mp4' | relative_url }})
+[Download MP4]({{ '/static/demos/api-gateway/demo.mp4' | relative_url }}?v=2)
 
 </div>
 
@@ -147,11 +147,11 @@ caught a seeded off-by-one (it charged $10 instead of $5); mutation *killed* on
 the good tests and *survived* on the buggy boundary — TFactory's evidence the
 test found a real defect.
 
-<img src="{{ '/static/demos/edge-case/demo.gif' | relative_url }}"
+<img src="{{ '/static/demos/edge-case/demo.gif' | relative_url }}?v=2"
      alt="Edge-case / boundary unit-lane demo"
      style="width:100%;border:1px solid #2a2a2a;border-radius:8px" loading="lazy" />
 
-[Download MP4]({{ '/static/demos/edge-case/demo.mp4' | relative_url }})
+[Download MP4]({{ '/static/demos/edge-case/demo.mp4' | relative_url }}?v=2)
 
 </div>
 
@@ -175,11 +175,11 @@ grading powers in one run:
 
 One tool, two languages, real bugs *and* weak-test detection.
 
-<img src="{{ '/static/demos/polyglot/demo.gif' | relative_url }}"
+<img src="{{ '/static/demos/polyglot/demo.gif' | relative_url }}?v=2"
      alt="Polyglot (Python pytest + TypeScript Jest) demo"
      style="width:100%;border:1px solid #2a2a2a;border-radius:8px" loading="lazy" />
 
-[Download MP4]({{ '/static/demos/polyglot/demo.mp4' | relative_url }})
+[Download MP4]({{ '/static/demos/polyglot/demo.mp4' | relative_url }}?v=2)
 
 </div>
 
