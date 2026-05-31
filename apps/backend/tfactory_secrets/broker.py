@@ -22,7 +22,6 @@ project's ``.tfactory.yml`` ``egress.enabled`` in issue #8). Local backends
 from __future__ import annotations
 
 import atexit
-import json
 import logging
 import os
 import shutil
@@ -115,7 +114,8 @@ class CredentialBroker:
                 logger.warning(
                     "CredentialBroker: backend ref for %s failed (%s); "
                     "falling back to ambient credentials.",
-                    provider, exc,
+                    provider,
+                    exc,
                 )
 
         # 2. Fall back to the existing ambient resolution chain.
@@ -176,9 +176,15 @@ class CredentialBroker:
         ``entry`` carries ``ref`` / ``as_`` (env var) / ``kind`` (``env``|``file``).
         Returns the env-var name set. Raises ``SecretsError`` on failure.
         """
-        ref = getattr(entry, "ref", None) or (entry.get("ref") if isinstance(entry, dict) else None)
-        as_var = getattr(entry, "as_", None) or (entry.get("as") if isinstance(entry, dict) else None)
-        kind = getattr(entry, "kind", None) or (entry.get("kind", "env") if isinstance(entry, dict) else "env")
+        ref = getattr(entry, "ref", None) or (
+            entry.get("ref") if isinstance(entry, dict) else None
+        )
+        as_var = getattr(entry, "as_", None) or (
+            entry.get("as") if isinstance(entry, dict) else None
+        )
+        kind = getattr(entry, "kind", None) or (
+            entry.get("kind", "env") if isinstance(entry, dict) else "env"
+        )
         if not ref or not as_var:
             raise SecretsError(f"Credential {name!r} needs both 'ref' and 'as'.")
         secret = self.resolve_ref(ref)
@@ -241,8 +247,11 @@ def inject_task_credentials(
         return env
     try:
         broker = CredentialBroker(project_dir, spec_dir, egress_allowed=True)
-        # 1. Per-project `.tfactory.yml` `credentials:` entries.
-        for name, entry in _project_credentials(project_dir).items():
+        # 1. Operator-level named `credentials:` (~/.tfactory/credentials.json),
+        #    then per-project `.tfactory.yml` `credentials:` — project wins on
+        #    name collisions (applied last).
+        named: dict = {**_operator_credentials(), **_project_credentials(project_dir)}
+        for name, entry in named.items():
             try:
                 broker.materialise_credential(name, entry)
             except SecretsError as exc:
@@ -280,26 +289,35 @@ def _wipe_paths(paths: list[Path]) -> None:
 
 @lru_cache(maxsize=1)
 def _cloud_config() -> dict:
-    """Read ~/.tfactory/credentials.json -> {provider: {ref, as, kind}}."""
-    if not CREDENTIALS_CONFIG_PATH.exists():
-        return {}
-    try:
-        mode = CREDENTIALS_CONFIG_PATH.stat().st_mode & 0o777
-        if mode & 0o077:
-            logger.warning(
-                "%s is group/world-accessible (mode %o); recommend chmod 600.",
-                CREDENTIALS_CONFIG_PATH, mode,
-            )
-        data = json.loads(CREDENTIALS_CONFIG_PATH.read_text(encoding="utf-8"))
-        return data.get("cloud", {}) if isinstance(data, dict) else {}
-    except (OSError, json.JSONDecodeError) as exc:
-        logger.warning("Failed to read %s: %s", CREDENTIALS_CONFIG_PATH, exc)
-        return {}
+    """Read ~/.tfactory/credentials.json -> {provider: {ref, as, kind}}.
+
+    Delegates to the typed loader (#71) and returns the dict shape callers
+    already expect (``.get("ref")`` / ``.get("as")`` / ``.get("kind")``).
+    """
+    from tfactory_secrets.operator_config import load_operator_config
+
+    cfg = load_operator_config(CREDENTIALS_CONFIG_PATH)
+    return {name: e.model_dump(by_alias=True) for name, e in cfg.cloud.items()}
+
+
+@lru_cache(maxsize=1)
+def _operator_credentials() -> dict:
+    """Read the operator config's named ``credentials:`` map (#71).
+
+    Returns ``{name: {ref, as, kind}}`` — operator-defined named credential
+    sets, the host-wide analogue of the per-project ``.tfactory.yml``
+    ``credentials:`` block.
+    """
+    from tfactory_secrets.operator_config import load_operator_config
+
+    cfg = load_operator_config(CREDENTIALS_CONFIG_PATH)
+    return {name: e.model_dump(by_alias=True) for name, e in cfg.credentials.items()}
 
 
 def reset_config_cache() -> None:
     """Drop the cached credentials config (test/CLI helper)."""
     _cloud_config.cache_clear()
+    _operator_credentials.cache_clear()
 
 
 __all__ = [
