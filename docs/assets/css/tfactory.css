@@ -12,42 +12,44 @@
 
 /* ─── Tokens ───────────────────────────────────────────────────────── */
 :root {
-  /* Terminal palette — green phosphor on pure black, matches skill_pool */
-  --bg: #000000;                 /* pure black canvas */
-  --bg-elevated: #050805;        /* almost-black surface */
-  --bg-card: #08130a;            /* card surface — green-tinted */
-  --bg-code: #050805;             /* code blocks — slightly elevated black */
-  --bg-glass: rgba(0, 18, 8, 0.55);  /* sticky-header backdrop */
-  --border: #144a14;             /* phosphor-tinted border */
-  --border-bright: #2a8a2a;      /* hover / accent border */
-  --border-soft: rgba(0, 255, 136, 0.10);  /* subtle accent tint */
-  /* Foreground ladder — light phosphor green → dim → muted */
-  --text: #d5ffd5;               /* fg — light green */
-  --text-muted: #6fa86f;         /* fg-dim */
-  --text-dim: #3d6a3d;           /* fg-muted */
-  /* Accents — keep token names from prior palette for backward compat */
-  --accent-cyan: #00ff88;        /* terminal-green (primary accent) */
-  --accent-violet: #00ff88;       /* alias — single-accent theme */
-  --accent-green: #00ff88;       /* alias */
-  --accent-yellow: #ffd200;      /* warning / yellow accent */
-  --accent-red: #ff5577;         /* error / red accent */
-  --accent-orange: #ffd200;      /* alias to yellow accent */
-  --accent: #00ff88;             /* generic accent — equals primary */
-  --accent-dim: #00b860;         /* dimmer accent for borders/text */
-  --shadow-glow: 0 0 14px rgba(0, 255, 136, 0.35);
-  --shadow-glow-soft: 0 0 4px rgba(0, 255, 136, 0.15);
-  /* Signature gradient — kept for h1 text-fill; both stops are accent green */
-  --grad-brand: linear-gradient(135deg, #00ff88 0%, #00b860 100%);
-  /* Typography — all monospace per skill_pool */
-  --font-sans: "JetBrains Mono", "Fira Code", "SF Mono", Menlo, Consolas, monospace;
-  --font-mono: "JetBrains Mono", "Fira Code", "SF Mono", Menlo, Consolas, monospace;
+  /* Gruvbox dark — matches the TFactory portal (.dark): bg0 #282828 · fg1 #ebdbb2.
+   * One identity across landing page → portal → demo screencasts. */
+  --bg: #282828;                 /* bg0   — canvas */
+  --bg-elevated: #32302f;        /* bg0_s — surface */
+  --bg-card: #3c3836;            /* bg1   — card surface */
+  --bg-code: #1d2021;            /* bg0_h — code blocks (matches demo terminal) */
+  --bg-glass: rgba(40, 40, 40, 0.72);  /* sticky-header backdrop */
+  --border: #504945;             /* bg2 */
+  --border-bright: #665c54;      /* bg3 — hover / accent border */
+  --border-soft: rgba(168, 153, 132, 0.12);  /* subtle fg4 tint */
+  /* Foreground ladder — fg1 → fg4 → gray */
+  --text: #ebdbb2;               /* fg1 */
+  --text-muted: #a89984;         /* fg4 */
+  --text-dim: #928374;           /* gray */
+  /* Accents — Gruvbox bright (green primary, orange accent) */
+  --accent-cyan: #b8bb26;        /* green — primary accent (token name kept) */
+  --accent-violet: #fe8019;      /* orange — secondary accent / mesh glow */
+  --accent-green: #b8bb26;       /* green */
+  --accent-yellow: #fabd2f;      /* yellow — warning */
+  --accent-red: #fb4934;         /* red — error */
+  --accent-orange: #fe8019;      /* orange */
+  --accent: #b8bb26;             /* generic accent — green primary */
+  --accent-dim: #98971a;         /* neutral green — dimmer borders/text */
+  /* Gruvbox is flat + warm, not neon — glows toned right down */
+  --shadow-glow: 0 0 12px rgba(184, 187, 38, 0.20);
+  --shadow-glow-soft: 0 0 3px rgba(184, 187, 38, 0.10);
+  /* Signature gradient — green → orange (the portal's brand pair) */
+  --grad-brand: linear-gradient(135deg, #b8bb26 0%, #fe8019 100%);
+  /* Typography — mono-led, matches the portal (IBM Plex Sans + JetBrains Mono) */
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", ui-monospace, "SF Mono", Menlo, monospace;
   --container: 1180px;
-  --radius: 4px;                 /* tighter, terminal-y */
-  --radius-lg: 6px;
+  --radius: 6px;
+  --radius-lg: 10px;
 }
 
-/* Load JetBrains Mono if not present (matches skill_pool) */
-@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap");
+/* Match the portal's type pairing */
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap");
 
 /* ─── Reset + base ─────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; }
@@ -70,23 +72,8 @@ body {
   overflow-x: hidden;
   position: relative;
 }
-/* CRT scanline overlay (matches skill_pool's signature effect) */
-body::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  background:
-    repeating-linear-gradient(
-      0deg,
-      transparent 0,
-      transparent 2px,
-      rgba(0, 255, 136, 0.025) 2px,
-      rgba(0, 255, 136, 0.025) 3px
-    );
-  pointer-events: none;
-  z-index: 1;
-  mix-blend-mode: screen;
-}
+/* No CRT scanline — Gruvbox is flat + warm, matching the portal. */
+body::before { content: none; }
 /* Body content sits above the scanline */
 body > * { position: relative; z-index: 2; }
 a {
@@ -107,7 +94,7 @@ img, svg { max-width: 100%; height: auto; }
   0%, 49% { opacity: 1; }
   50%, 100% { opacity: 0; }
 }
-::selection { background: rgba(0, 255, 136, 0.3); color: var(--text); }
+::selection { background: rgba(184, 187, 38, 0.3); color: var(--text); }
 
 /* ─── Animated background ─────────────────────────────────────────── */
 .bg-mesh {
@@ -179,18 +166,22 @@ img, svg { max-width: 100%; height: auto; }
   gap: 24px;
 }
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
   font-weight: 700;
-  font-size: 16px;
-  color: var(--accent);
+  font-size: 17px;
+  color: var(--text);
   text-decoration: none;
   letter-spacing: -0.02em;
-  text-shadow: var(--shadow-glow-soft);
   flex-shrink: 0;
 }
 .brand:hover { color: var(--accent); }
-.brand::before {
-  content: "> ";
-  color: var(--text-muted);
+.brand-logo {
+  width: 24px;
+  height: 24px;
+  display: block;
+  flex-shrink: 0;
 }
 .brand .cursor {
   display: inline-block;
@@ -335,7 +326,7 @@ img, svg { max-width: 100%; height: auto; }
   margin: 1.5em 0;
   padding: 12px 18px;
   border-left: 3px solid var(--accent-cyan);
-  background: rgba(0, 255, 136, 0.05);
+  background: rgba(184, 187, 38, 0.05);
   border-radius: 0 8px 8px 0;
   color: var(--text);
 }
@@ -368,7 +359,7 @@ img, svg { max-width: 100%; height: auto; }
 .prose tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
 .prose a {
   text-decoration: underline;
-  text-decoration-color: rgba(0, 255, 136, 0.35);
+  text-decoration-color: rgba(184, 187, 38, 0.35);
   text-underline-offset: 3px;
 }
 .prose a:hover { text-decoration-color: var(--accent-violet); }
@@ -393,7 +384,7 @@ img, svg { max-width: 100%; height: auto; }
 .site-footer a:hover { color: var(--accent-cyan); }
 .site-footer__meta { color: var(--text-dim); }
 
-::selection { background: rgba(0, 255, 136, 0.3); color: var(--text); }
+::selection { background: rgba(184, 187, 38, 0.3); color: var(--text); }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb {
@@ -434,9 +425,9 @@ img, svg { max-width: 100%; height: auto; }
   text-transform: uppercase;
   color: var(--accent-cyan);
   padding: 5px 14px;
-  border: 1px solid rgba(0, 255, 136, 0.35);
+  border: 1px solid rgba(184, 187, 38, 0.35);
   border-radius: 999px;
-  background: rgba(0, 255, 136, 0.06);
+  background: rgba(184, 187, 38, 0.06);
   margin-bottom: 18px;
 }
 .hero__eyebrow::before {
@@ -496,7 +487,7 @@ img, svg { max-width: 100%; height: auto; }
 }
 .hero__cta--ghost:hover {
   border-color: var(--accent-cyan);
-  background: rgba(0, 255, 136, 0.06);
+  background: rgba(184, 187, 38, 0.06);
   color: var(--text) !important;
   box-shadow: none;
 }
@@ -520,7 +511,7 @@ img, svg { max-width: 100%; height: auto; }
 .stat-grid__card:hover {
   transform: translateY(-3px);
   border-color: var(--accent-cyan);
-  box-shadow: 0 12px 32px rgba(0, 255, 136, 0.15);
+  box-shadow: 0 12px 32px rgba(184, 187, 38, 0.15);
 }
 .stat-grid__value {
   display: block;
@@ -587,11 +578,11 @@ img, svg { max-width: 100%; height: auto; }
 .pipeline__node:hover {
   transform: translateY(-4px);
   border-color: var(--accent-cyan);
-  box-shadow: 0 12px 24px rgba(0, 255, 136, 0.15);
+  box-shadow: 0 12px 24px rgba(184, 187, 38, 0.15);
 }
 .pipeline__node--active {
   border-color: var(--accent-cyan);
-  background: linear-gradient(135deg, rgba(0, 255, 136, 0.08) 0%, rgba(211, 134, 155, 0.06) 100%), var(--bg);
+  background: linear-gradient(135deg, rgba(184, 187, 38, 0.08) 0%, rgba(211, 134, 155, 0.06) 100%), var(--bg);
 }
 .pipeline__node-icon {
   font-size: 22px;
@@ -649,8 +640,8 @@ img, svg { max-width: 100%; height: auto; }
   align-items: center;
   justify-content: center;
   border-radius: 10px;
-  background: rgba(0, 255, 136, 0.08);
-  border: 1px solid rgba(0, 255, 136, 0.2);
+  background: rgba(184, 187, 38, 0.08);
+  border: 1px solid rgba(184, 187, 38, 0.2);
 }
 .feature-row__card h3 {
   font-size: 16px !important;
@@ -663,3 +654,59 @@ img, svg { max-width: 100%; height: auto; }
   color: var(--text-muted);
   line-height: 1.55;
 }
+
+/* ─── Blog ─────────────────────────────────────────────────────────── */
+.post-list { list-style: none; padding: 0; margin: 28px 0 0; }
+.post-list__item { margin: 0 0 12px; }
+.post-list__link {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 4px 18px;
+  align-items: baseline;
+  text-decoration: none;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  transition: border-color 150ms ease, background 150ms ease;
+}
+.post-list__link:hover {
+  border-color: var(--border-bright);
+  background: var(--bg-card);
+}
+.post-list__date {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.post-list__title {
+  font-weight: 600;
+  font-size: 17px;
+  color: var(--accent);
+}
+.post-list__excerpt {
+  grid-column: 2;
+  font-size: 14px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+@media (max-width: 560px) {
+  .post-list__link { grid-template-columns: 1fr; }
+  .post-list__excerpt { grid-column: 1; }
+}
+.post-meta {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-dim);
+  margin: 0 0 6px;
+}
+.post-meta a { color: var(--text-muted); }
+.post-title { margin-top: 4px; }
+.post-subtitle {
+  font-size: 18px;
+  color: var(--text-muted);
+  margin-top: -4px;
+  line-height: 1.5;
+}
+.post-foot { margin-top: 28px; font-family: var(--font-mono); font-size: 14px; }

@@ -23,6 +23,15 @@ kramdown:
   syntax_highlighter_opts:
     css_class: highlight
 
+# Blog — posts live under /blog/<year>/<month>/<day>/<title>/
+permalink: /blog/:year/:month/:day/:title/
+defaults:
+  - scope:
+      path: ""
+      type: posts
+    values:
+      layout: post
+
 show_downloads: false
 
 exclude:
