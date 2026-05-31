@@ -742,6 +742,47 @@ def test_validate_verdicts_accepts_zero_coverage_pct(tmp_path: Path) -> None:
     assert count == 1
 
 
+_GOOD_VERDICT = (
+    '{"evaluator_version":"x","verdicts":['
+    '{"test_id":"t0","verdict":"accept","signals_summary":{"coverage_delta_pct":null}}'
+    "]}"
+)
+
+
+def test_validate_verdicts_tolerates_trailing_data(tmp_path: Path) -> None:
+    """The reported bug: valid JSON + trailing prose ('Extra data: ...').
+
+    The validator salvages the object AND rewrites the file clean so the
+    Triager (which json.loads the same file) succeeds too.
+    """
+    import json as _json
+
+    path = tmp_path / "verdicts.json"
+    path.write_text(_GOOD_VERDICT + "\n\nHere are the verdicts above. Done!")
+    ok, err, count = _validate_verdicts(path)
+    assert ok is True, f"expected ok but got: {err}"
+    assert count == 1
+    # File was normalised to clean JSON (no trailing data).
+    reparsed = _json.loads(path.read_text())
+    assert reparsed["verdicts"][0]["test_id"] == "t0"
+
+
+def test_validate_verdicts_tolerates_markdown_fence(tmp_path: Path) -> None:
+    path = tmp_path / "verdicts.json"
+    path.write_text("```json\n" + _GOOD_VERDICT + "\n```\n")
+    ok, err, count = _validate_verdicts(path)
+    assert ok is True, f"expected ok but got: {err}"
+    assert count == 1
+
+
+def test_validate_verdicts_still_rejects_garbage(tmp_path: Path) -> None:
+    path = tmp_path / "verdicts.json"
+    path.write_text("not json at all, no object here")
+    ok, err, count = _validate_verdicts(path)
+    assert ok is False
+    assert "not valid JSON" in err
+
+
 def test_validate_verdicts_rejects_string_coverage_pct(tmp_path: Path) -> None:
     """coverage_delta_pct must be a number or null; a string is rejected."""
     path = tmp_path / "verdicts.json"

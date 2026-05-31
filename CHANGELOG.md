@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Fix: Evaluator no longer fails on a verdicts.json with trailing data.** The
+  LLM sometimes wraps the JSON in a ```` ```json ```` fence or appends a
+  sentence after it, which made strict `json.loads` raise *"Extra data"* and
+  the task land in `evaluator_failed` / `evaluator_invalid_verdicts`. The
+  validator now parses leniently (fence-strip + `raw_decode` of the first JSON
+  value) and rewrites the salvaged object so the Triager reads clean JSON.
+
 - **Workload-identity federation (#74).** Mint short-lived scoped credentials
   from an OIDC token via a `wif` block in `~/.tfactory/credentials.json`. AWS
   STS `AssumeRoleWithWebIdentity` is implemented (`tfactory_secrets/wif.py`);
