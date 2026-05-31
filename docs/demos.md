@@ -11,7 +11,7 @@ nav_order: 5.6
 
 Each demo below is a **real, unedited pipeline run** on the user's Claude
 subscription — not a mock. A developer hands TFactory a finished feature; the
-four-agent pipeline (**Planner → Gen-Functional → Executor → Evaluator →
+five-agent pipeline (**Planner → Gen-Functional → Executor → Evaluator →
 Triager**) plans, writes, sandboxes, scores, and triages a test suite, and
 emits the verdicts a reviewer would see on the PR.
 
