@@ -5,7 +5,7 @@ nav_order: 1
 ---
 
 <section class="hero">
-  <span class="hero__eyebrow"><a href="https://github.com/olafkfreund/TFactory/releases/tag/v0.2.0">v0.2.0 released</a> · Browser + API + Integration lanes + evidence capture · 16/16 tasks shipped · 1177 backend tests</span>
+  <span class="hero__eyebrow"><a href="https://github.com/olafkfreund/TFactory/releases/tag/v0.2.0">v0.2.0</a> · 5 lanes + evidence capture · <a href="{{ '/credentials/' | relative_url }}">Credential Broker</a> — vault-backed cloud auth · runs on any LLM</span>
   <h1 class="hero__title">Autonomous tests, AI-graded.</h1>
   <p class="hero__subtitle">
     Hand TFactory a finished feature on a branch — from AIFactory, Claude Code,
@@ -55,6 +55,31 @@ nav_order: 1
     <span class="feature-row__icon" aria-hidden="true">📨</span>
     <h3>Dry-run by default</h3>
     <p>Per <code>CLAUDE.md</code> no-auto-push policy: git_writer + gh pr comment record argvs without executing. Operators opt in via env vars.</p>
+  </li>
+</ul>
+
+## New since v0.2.0 — connect to anything
+
+<div class="reveal" markdown="1">
+
+Two capabilities make TFactory usable beyond a single laptop and a single
+model: it can now **authenticate to your cloud** and **run on whatever LLM you
+already pay for**.
+
+</div>
+
+<ul class="feature-row">
+  <li class="feature-row__card reveal">
+    <span class="feature-row__icon" aria-hidden="true">🔐</span>
+    <h3>Credential Broker</h3>
+    <p><strong>Problem:</strong> agents need real cloud/K8s/API credentials to test against live services, but secrets must never touch the repo.</p>
+    <p><strong>Solution:</strong> resolve secrets from a vault (Azure KV · AWS Secrets Manager · GCP Secret Manager · HashiCorp Vault) or local sops/age/agenix, materialise them ephemerally (0600, wiped per task), gated by an explicit <strong>egress opt-in</strong> with an honest manifest. <a href="{{ '/credentials/' | relative_url }}">See how →</a></p>
+  </li>
+  <li class="feature-row__card reveal" style="--reveal-delay: 80ms">
+    <span class="feature-row__icon" aria-hidden="true">🧠</span>
+    <h3>Run on any LLM</h3>
+    <p><strong>Problem:</strong> teams are locked to one provider, or can't send code to a managed cloud at all.</p>
+    <p><strong>Solution:</strong> a model-string-driven provider factory — Claude SDK, OpenAI Codex, Gemini CLI, GitHub Copilot CLI, Ollama (local), and any OpenAI-compatible endpoint (vLLM / LM Studio / OpenRouter…). Per-phase routing + an honest <a href="https://github.com/olafkfreund/TFactory/blob/main/guides/byo-llm.md">data-egress badge</a> for air-gapped / BYO-LLM runs.</p>
   </li>
 </ul>
 
