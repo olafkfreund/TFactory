@@ -24,12 +24,45 @@ def _load(path: Path):
         return {}
 
 
+# Self-playing line-reveal: each body line cascades in, then a blinking cursor
+# holds. Captured by Playwright recordVideo to make an animated terminal pane.
+_ANIM_CSS = """
+.wrap > *:not(.bar){opacity:0;transform:translateY(3px)}
+.wrap > *.shown{opacity:1;transform:none;transition:opacity .2s ease,transform .2s ease}
+#cur{display:inline-block;width:10px;height:20px;background:#58a6ff;vertical-align:-4px;
+  margin-left:4px;opacity:0;animation:blink 1.05s steps(1) infinite}
+#cur.on{opacity:1}
+@keyframes blink{50%{opacity:0}}
+"""
+
+_ANIM_JS = """
+<script>
+(function(){
+  var items=[].slice.call(document.querySelectorAll('.wrap > *:not(.bar)'));
+  var cur=document.createElement('span'); cur.id='cur';
+  document.querySelector('.wrap').appendChild(cur);
+  var k=0;
+  (function step(){
+    if(k>=items.length){ cur.className='on'; return; }
+    items[k].classList.add('shown'); k++;
+    setTimeout(step, 430);
+  })();
+})();
+</script>
+"""
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("workspace")
     ap.add_argument("command")
     ap.add_argument("out")
     ap.add_argument("--lane-note", default="")
+    ap.add_argument(
+        "--animate",
+        action="store_true",
+        help="emit a self-playing typewriter/line-reveal terminal (for video capture)",
+    )
     args = ap.parse_args()
 
     ws = Path(args.workspace)
@@ -85,10 +118,11 @@ html,body{{margin:0;background:#0d1117;color:#c9d1d9;
 .p{{color:#58a6ff;font-weight:700}} .g{{color:#3fb950}} .r{{color:#f85149}} .y{{color:#d29922}}
 .dim{{color:#6e7681}} .ph{{color:#c9d1d9;white-space:pre}} .row{{margin:3px 0}} .sp{{margin-top:10px}}
 b{{color:#58a6ff;font-weight:600}}
+{_ANIM_CSS if args.animate else ''}
 </style></head><body><div class="wrap">
 <div class="bar">● ● ●&nbsp;&nbsp;Claude Code — TFactory handover</div>
 {body}
-</div></body></html>"""
+</div>{_ANIM_JS if args.animate else ''}</body></html>"""
     Path(args.out).write_text(out)
     print(f"terminal pane → {args.out}  ({n_sub} subtasks, {verdict_str})")
 

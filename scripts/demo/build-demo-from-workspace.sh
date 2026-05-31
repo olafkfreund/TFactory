@@ -27,16 +27,19 @@ mkdir -p "$PANES"
 [[ -f "$WS/findings/triage_report.md" ]] || { echo "no triage_report.md for $SCEN ($WS)"; exit 1; }
 cp "$WS/findings/triage_report.md" "$RUN_DIR/triage_report.md"
 
-# 1. terminal pane (scenario-accurate, from the real plan+verdicts) → html → png → webm
-"$PY" "$ROOT/scripts/demo/render-terminal-pane.py" "$WS" "$CMD" "$PANES/terminal.html" --lane-note "$LANE" >/dev/null
+# 1. terminal pane (scenario-accurate, from the real plan+verdicts) — ANIMATED:
+#    self-playing line-reveal HTML, captured to webm via Playwright recordVideo.
+"$PY" "$ROOT/scripts/demo/render-terminal-pane.py" "$WS" "$CMD" "$PANES/terminal.html" \
+  --lane-note "$LANE" --animate >/dev/null
+node "$ROOT/scripts/demo/record-html.mjs" "$PANES/terminal.html" "$PANES/terminal.webm" 9 960 720 >/dev/null 2>&1
+# still frame (after full reveal) for posters / the quality gate
 node -e "
 const {chromium}=require('@playwright/test');
 (async()=>{const b=await chromium.launch({headless:true,executablePath:process.env.CHROME_PATH});
 const c=await b.newContext({viewport:{width:960,height:720}});const p=await c.newPage();
 await p.goto('file://'+require('path').resolve('$PANES/terminal.html'));
-await p.waitForTimeout(1000);await p.screenshot({path:'$PANES/terminal.png'});await b.close();})()
+await p.waitForTimeout(5000);await p.screenshot({path:'$PANES/terminal.png'});await b.close();})()
 .catch(e=>{console.error(e);process.exit(1)});"
-ffmpeg -y -loop 1 -i "$PANES/terminal.png" -t 8 -r 24 -c:v libvpx-vp9 -pix_fmt yuv420p "$PANES/terminal.webm" >/dev/null 2>&1
 
 # 2. portal pane (themed walkthrough) + report still
 node "$ROOT/scripts/demo/portal-record.mjs" "$PANES/portal.webm" >/dev/null 2>&1
