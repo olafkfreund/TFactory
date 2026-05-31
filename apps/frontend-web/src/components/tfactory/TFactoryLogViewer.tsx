@@ -173,7 +173,7 @@ export function TFactoryLogViewer({ specId, wsFactory, wsBaseUrl }: Props) {
 function StatusLine({ state, error }: { state: WsState; error: string | null }) {
   if (state === 'connecting') {
     return (
-      <div role="status" className="flex items-center gap-2 text-sm text-gray-500">
+      <div role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
         <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
         Connecting to log stream…
       </div>
@@ -181,7 +181,7 @@ function StatusLine({ state, error }: { state: WsState; error: string | null }) 
   }
   if (state === 'open') {
     return (
-      <div data-testid="ws-status-open" className="flex items-center gap-2 text-sm text-green-700">
+      <div data-testid="ws-status-open" className="flex items-center gap-2 text-sm text-success">
         <Plug className="h-3 w-3" aria-hidden />
         Live
       </div>
@@ -189,7 +189,7 @@ function StatusLine({ state, error }: { state: WsState; error: string | null }) 
   }
   if (state === 'closed' && !error) {
     return (
-      <div data-testid="ws-status-closed" className="flex items-center gap-2 text-sm text-gray-500">
+      <div data-testid="ws-status-closed" className="flex items-center gap-2 text-sm text-muted-foreground">
         <Unplug className="h-3 w-3" aria-hidden />
         Connection closed
       </div>
@@ -197,7 +197,7 @@ function StatusLine({ state, error }: { state: WsState; error: string | null }) 
   }
   // error or closed-with-reason
   return (
-    <div role="alert" className="flex items-center gap-2 text-sm text-red-600">
+    <div role="alert" className="flex items-center gap-2 text-sm text-destructive">
       <AlertTriangle className="h-3 w-3" aria-hidden />
       {error ?? 'WebSocket error'}
     </div>
@@ -207,7 +207,7 @@ function StatusLine({ state, error }: { state: WsState; error: string | null }) 
 function NoPayloadPlaceholder({ state }: { state: WsState }) {
   if (state === 'connecting') return null;
   return (
-    <p className="text-xs italic text-gray-500">
+    <p className="text-xs italic text-muted-foreground">
       No log data received yet.
     </p>
   );
@@ -219,7 +219,7 @@ function LogPanels({ payload }: { payload: LogStreamPayload }) {
     return (
       <p
         data-testid="log-files-empty"
-        className="text-xs italic text-gray-500"
+        className="text-xs italic text-muted-foreground"
       >
         No log files yet — agents haven't produced output for this task.
       </p>
@@ -231,9 +231,9 @@ function LogPanels({ payload }: { payload: LogStreamPayload }) {
         <section
           key={name}
           data-testid={`log-section-${name}`}
-          className="rounded border border-gray-200 bg-gray-50"
+          className="rounded border border-border bg-muted"
         >
-          <header className="border-b border-gray-200 px-3 py-1 font-mono text-xs text-gray-700">
+          <header className="border-b border-border px-3 py-1 font-mono text-xs text-foreground">
             {name}.log
           </header>
           <pre

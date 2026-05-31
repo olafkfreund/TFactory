@@ -53,11 +53,11 @@ export function statusColor(status: string | null): string {
 }
 
 const BADGE_CLASSES: Record<string, string> = {
-  green: 'bg-green-100 text-green-800',
-  red: 'bg-red-100 text-red-800',
-  blue: 'bg-blue-100 text-blue-800',
-  yellow: 'bg-yellow-100 text-yellow-800',
-  gray: 'bg-gray-100 text-gray-800',
+  green: 'bg-success/15 text-success',
+  red: 'bg-destructive/15 text-destructive',
+  blue: 'bg-info/15 text-primary',
+  yellow: 'bg-warning/15 text-warning',
+  gray: 'bg-muted text-foreground',
 };
 
 function StatusBadge({ status }: { status: string | null }) {
@@ -78,7 +78,7 @@ function StatusBadge({ status }: { status: string | null }) {
 
 function LoadingState() {
   return (
-    <div role="status" className="flex items-center gap-2 p-6 text-gray-500">
+    <div role="status" className="flex items-center gap-2 p-6 text-muted-foreground">
       <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
       <span>Loading tasks…</span>
     </div>
@@ -87,7 +87,7 @@ function LoadingState() {
 
 function ErrorState({ message }: { message: string }) {
   return (
-    <div role="alert" className="flex items-center gap-2 p-6 text-red-700">
+    <div role="alert" className="flex items-center gap-2 p-6 text-destructive">
       <AlertTriangle className="h-4 w-4" aria-hidden />
       <span>{message}</span>
     </div>
@@ -96,7 +96,7 @@ function ErrorState({ message }: { message: string }) {
 
 function EmptyState() {
   return (
-    <div className="flex flex-col items-center gap-2 p-12 text-gray-500">
+    <div className="flex flex-col items-center gap-2 p-12 text-muted-foreground">
       <Inbox className="h-8 w-8" aria-hidden />
       <p>No TFactory tasks yet.</p>
       <p className="text-xs">Workspaces appear here once an AIFactory handover lands.</p>
@@ -142,7 +142,7 @@ export function TFactoryTaskList({ onSelectTask, fetchFn }: Props) {
         data-testid="tfactory-task-list"
         aria-label="TFactory tasks"
       >
-        <thead className="border-b border-gray-200 text-xs uppercase tracking-wide text-gray-500">
+        <thead className="border-b border-border text-xs uppercase tracking-wide text-muted-foreground">
           <tr>
             <th className="px-3 py-2">Spec</th>
             <th className="px-3 py-2">Project</th>
@@ -155,18 +155,18 @@ export function TFactoryTaskList({ onSelectTask, fetchFn }: Props) {
           {tasks.map((task) => (
             <tr
               key={`${task.project_id}::${task.spec_id}`}
-              className="cursor-pointer border-b border-gray-100 hover:bg-gray-50"
+              className="cursor-pointer border-b border-border hover:bg-muted"
               onClick={() => onSelectTask?.(task.spec_id)}
               data-testid={`task-row-${task.spec_id}`}
               data-spec-id={task.spec_id}
             >
               <td className="px-3 py-2 font-medium">{task.spec_id}</td>
-              <td className="px-3 py-2 text-gray-600">{task.project_id}</td>
+              <td className="px-3 py-2 text-muted-foreground">{task.project_id}</td>
               <td className="px-3 py-2">
                 <StatusBadge status={task.status} />
               </td>
-              <td className="px-3 py-2 text-gray-500">{task.phase ?? '—'}</td>
-              <td className="px-3 py-2 text-gray-500">{task.updated_at}</td>
+              <td className="px-3 py-2 text-muted-foreground">{task.phase ?? '—'}</td>
+              <td className="px-3 py-2 text-muted-foreground">{task.updated_at}</td>
             </tr>
           ))}
         </tbody>

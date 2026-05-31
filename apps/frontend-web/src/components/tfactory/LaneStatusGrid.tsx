@@ -57,8 +57,8 @@ export const LANES: readonly LaneDef[] = [
     id: 'unit', label: 'Unit', phase: 1,
     description: 'pytest / Jest unit tests for the changed feature.',
     accentBorder: 'border-blue-300',
-    accentBg: 'bg-blue-50',
-    accentIcon: 'text-blue-600',
+    accentBg: 'bg-info/10',
+    accentIcon: 'text-info',
   },
   {
     id: 'browser', label: 'Browser', phase: 2,
@@ -71,8 +71,8 @@ export const LANES: readonly LaneDef[] = [
     id: 'api', label: 'API', phase: 3,
     description: 'HTTP / contract checks against the running service surface.',
     accentBorder: 'border-green-300',
-    accentBg: 'bg-green-50',
-    accentIcon: 'text-green-600',
+    accentBg: 'bg-success/10',
+    accentIcon: 'text-success',
   },
   {
     id: 'integration', label: 'Integration', phase: 4,
@@ -85,8 +85,8 @@ export const LANES: readonly LaneDef[] = [
     id: 'mutation', label: 'Mutation', phase: 5,
     description: 'Whole-suite mutation testing for assertion strength.',
     accentBorder: 'border-red-300',
-    accentBg: 'bg-red-50',
-    accentIcon: 'text-red-600',
+    accentBg: 'bg-destructive/10',
+    accentIcon: 'text-destructive',
   },
 ] as const;
 
@@ -135,24 +135,24 @@ const STATE_VISUALS: Record<
   { borderClass: string; bgClass: string; iconColorClass: string; label: string }
 > = {
   idle: {
-    borderClass: 'border-gray-200', bgClass: 'bg-white',
-    iconColorClass: 'text-gray-400', label: 'Idle',
+    borderClass: 'border-border', bgClass: 'bg-card',
+    iconColorClass: 'text-muted-foreground', label: 'Idle',
   },
   in_flight: {
-    borderClass: 'border-blue-300', bgClass: 'bg-blue-50',
-    iconColorClass: 'text-blue-500', label: 'In flight',
+    borderClass: 'border-blue-300', bgClass: 'bg-info/10',
+    iconColorClass: 'text-info', label: 'In flight',
   },
   success: {
-    borderClass: 'border-green-300', bgClass: 'bg-green-50',
-    iconColorClass: 'text-green-600', label: 'Complete',
+    borderClass: 'border-green-300', bgClass: 'bg-success/10',
+    iconColorClass: 'text-success', label: 'Complete',
   },
   warning: {
-    borderClass: 'border-yellow-300', bgClass: 'bg-yellow-50',
-    iconColorClass: 'text-yellow-600', label: 'Needs review',
+    borderClass: 'border-yellow-300', bgClass: 'bg-warning/10',
+    iconColorClass: 'text-warning', label: 'Needs review',
   },
   failure: {
-    borderClass: 'border-red-300', bgClass: 'bg-red-50',
-    iconColorClass: 'text-red-600', label: 'Failed',
+    borderClass: 'border-red-300', bgClass: 'bg-destructive/10',
+    iconColorClass: 'text-destructive', label: 'Failed',
   },
 };
 
@@ -222,11 +222,11 @@ function LaneCard({ lane, state, detail }: LaneCardProps) {
       <div className="flex items-center gap-2">
         <LaneIcon laneId={lane.id} colorClass={iconColorClass} />
         <span className="font-semibold">{lane.label}</span>
-        <span className="ml-auto text-xs text-gray-500">
+        <span className="ml-auto text-xs text-muted-foreground">
           Phase&nbsp;{lane.phase}
         </span>
       </div>
-      <p className="text-xs text-gray-500">{lane.description}</p>
+      <p className="text-xs text-muted-foreground">{lane.description}</p>
       <div className="mt-1 flex items-center gap-1">
         <StateIcon state={state} />
         <p

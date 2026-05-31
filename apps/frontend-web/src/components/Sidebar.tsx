@@ -4,6 +4,7 @@ import {
   Plus,
   Trash2,
   Columns3,
+  FlaskConical,
   Terminal,
   FolderOpen,
   BookOpen,
@@ -50,7 +51,7 @@ import { GitSetupModal } from './GitSetupModal';
 import { RateLimitIndicator } from './RateLimitIndicator';
 import type { Project, AutoBuildVersionInfo, GitStatus, ProjectEnvConfig } from '../shared/types';
 
-export type SidebarView = 'kanban' | 'terminals' | 'editor' | 'context' | 'github-issues' | 'github-prs' | 'changelog' | 'insights' | 'worktrees' | 'agent-tools' | 'skills';
+export type SidebarView = 'tfactory' | 'kanban' | 'terminals' | 'editor' | 'context' | 'github-issues' | 'github-prs' | 'changelog' | 'insights' | 'worktrees' | 'agent-tools' | 'skills';
 
 interface SidebarProps {
   onSettingsClick: () => void;
@@ -66,8 +67,11 @@ interface NavItem {
   icon: React.ElementType;
 }
 
-// Base nav items always shown
+// Base nav items always shown.
+// TFactory's own job (tests / review queue) leads; the inherited
+// general-agent IDE surfaces (editor/terminals/worktrees) follow.
 const baseNavItems: NavItem[] = [
+  { id: 'tfactory', labelKey: 'navigation:items.tests', icon: FlaskConical },
   { id: 'kanban', labelKey: 'navigation:items.kanban', icon: Columns3 },
   { id: 'editor', labelKey: 'navigation:items.editor', icon: FolderOpen },
   { id: 'insights', labelKey: 'navigation:items.chat', icon: Sparkles },
@@ -327,8 +331,10 @@ export function Sidebar({
       <div className="flex h-full w-64 flex-col bg-sidebar border-r border-border">
         {/* Header with drag area - extra top padding for macOS traffic lights */}
         <div className="electron-drag flex h-14 items-center gap-2.5 px-4 pt-6">
-          <img src="/logo.png" alt="TFactory" className="electron-no-drag h-7 w-7 rounded" />
-          <span className="electron-no-drag text-lg font-bold" style={{ color: '#61CE70' }}>AI<span style={{ color: '#FFFFFF' }}>Factory</span></span>
+          <img src="/logo.svg" alt="TFactory" className="electron-no-drag h-7 w-7 rounded" />
+          <span className="electron-no-drag text-lg font-bold tracking-tight text-foreground">
+            <span className="text-primary">T</span>Factory
+          </span>
         </div>
 
         <Separator className="mt-2" />
