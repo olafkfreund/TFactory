@@ -84,13 +84,28 @@ best-effort (a failing target never breaks the pipeline):
 
 **LLM provider abstraction:** TFactory uses the Claude Agent SDK
 (`claude-agent-sdk`) as its primary provider, but also supports Codex CLI,
-Gemini CLI, Ollama, and any OpenAI-compatible endpoint (LM Studio, vLLM,
-OpenRouter, Together, Groq, LocalAI) via the provider factory in
-`apps/backend/providers/`. Provider selection is driven by the model string —
-see `phase_config.infer_provider_from_model()`. Never call
+GitHub Copilot CLI, Gemini CLI, Ollama, and any OpenAI-compatible endpoint
+(LM Studio, vLLM, OpenRouter, Together, Groq, LocalAI) via the provider
+factory in `apps/backend/providers/`. Provider selection is driven by the
+model string — see `phase_config.infer_provider_from_model()`. Never call
 `anthropic.Anthropic()` directly; route Claude interactions through
 `core.client.create_client()` and other providers through
 `providers.factory.get_provider()`.
+
+Provider notes worth knowing:
+  - **Codex** (`gpt-*` / `*codex*` → `codex_agentic.py`, `codex mcp-server`):
+    when `OPENAI_API_KEY` is set, the provider writes an api-key `auth.json`
+    into a TFactory-owned `CODEX_HOME` (`~/.tfactory/codex-home/`) and points
+    the subprocess at it — so Codex works regardless of the global
+    `codex login` state (a bare ChatGPT-account login rejects every model with
+    "model is not supported when using Codex with a ChatGPT account"). Your
+    global `codex login` is left untouched. With no key, it falls back to the
+    inherited login (a Codex-enabled ChatGPT plan still works).
+  - **GitHub Copilot CLI** (`copilot:<model>` → `copilot_agentic.py`): runs
+    `copilot -p "<prompt>" --allow-all-tools --model <model>` headlessly;
+    Copilot does its own tool loop in one shot. Models: `claude-sonnet-4.5`
+    (default), `claude-sonnet-4`, `gpt-5` — billed to your Copilot
+    subscription. Requires `copilot` installed + signed in.
 
 **BYO-LLM / air-gapped (#38):** `byo_llm.py` classifies a model+endpoint's
 data-egress posture (LOCAL / SELF_HOSTED / MANAGED_CLOUD) so the portal/CLI

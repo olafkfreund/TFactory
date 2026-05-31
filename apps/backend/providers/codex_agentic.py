@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import shutil
 from collections.abc import AsyncGenerator, AsyncIterator
@@ -148,13 +149,61 @@ class CodexAgenticProvider(BaseLLMProvider):
         self._request_id += 1
         return self._request_id
 
+    @staticmethod
+    def _build_subprocess_env() -> dict[str, str]:
+        """Build the env for ``codex mcp-server``, owning auth when possible.
+
+        Codex resolves credentials from ``$CODEX_HOME/auth.json`` (default
+        ``~/.codex``). A bare ChatGPT-account login there rejects every model
+        ("model is not supported when using Codex with a ChatGPT account"),
+        which is fragile: any re-login to ChatGPT silently breaks TFactory.
+
+        When ``OPENAI_API_KEY`` is set, point Codex at a TFactory-owned
+        ``CODEX_HOME`` containing an api-key ``auth.json``
+        (``{"OPENAI_API_KEY": ...}`` — the exact shape ``codex login
+        --with-api-key`` writes). This makes agentic Codex work regardless of
+        the user's global ``codex login`` state, and leaves that global login
+        untouched. With no API key, fall back to the inherited environment so a
+        Codex-enabled ChatGPT plan still works.
+        """
+        env = dict(os.environ)
+        api_key = env.get("OPENAI_API_KEY", "").strip()
+        if not api_key:
+            return env
+
+        codex_home = Path.home() / ".tfactory" / "codex-home"
+        try:
+            codex_home.mkdir(parents=True, exist_ok=True)
+            auth_path = codex_home / "auth.json"
+            desired = json.dumps({"OPENAI_API_KEY": api_key})
+            # Only rewrite when the key changed — avoids needless disk churn.
+            if not auth_path.exists() or auth_path.read_text().strip() != desired:
+                auth_path.write_text(desired)
+                auth_path.chmod(0o600)
+            env["CODEX_HOME"] = str(codex_home)
+            logger.info(
+                "CodexAgenticProvider: using TFactory-owned CODEX_HOME=%s (api-key auth)",
+                codex_home,
+            )
+        except OSError as exc:
+            # Non-fatal: fall back to the inherited codex login.
+            logger.warning(
+                "CodexAgenticProvider: could not provision CODEX_HOME (%s); "
+                "falling back to global codex login",
+                exc,
+            )
+        return env
+
     async def __aenter__(self) -> CodexAgenticProvider:
         """Start the MCP server and send initialize handshake."""
-        resolved_path = shutil.which(self._codex_path)
+        # "codex" is often a shell alias (e.g. -> codex-cli), which shutil.which
+        # cannot resolve for create_subprocess_exec. Fall back to the real
+        # binary name so agentic Codex works in those environments.
+        resolved_path = shutil.which(self._codex_path) or shutil.which("codex-cli")
         if resolved_path is None:
             raise RuntimeError(
-                f"Codex CLI executable not found: '{self._codex_path}'. "
-                "Install the Codex CLI or pass the correct path."
+                f"Codex CLI executable not found: '{self._codex_path}' "
+                "(also tried 'codex-cli'). Install the Codex CLI or pass the correct path."
             )
 
         cmd = [resolved_path, "mcp-server"]
@@ -165,6 +214,7 @@ class CodexAgenticProvider(BaseLLMProvider):
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=self._build_subprocess_env(),
         )
 
         # Send initialize
@@ -269,6 +319,16 @@ class CodexAgenticProvider(BaseLLMProvider):
 
         # Extract response text
         result = response.get("result", {})
+
+        # The codex MCP server reports model/stream failures as an ``error``
+        # field on an *otherwise successful* tools/call result (not a JSON-RPC
+        # error), e.g. {"error": "... 400 ... model is not supported when using
+        # Codex with a ChatGPT account."}. Surface it loudly — otherwise the
+        # caller silently receives "(no output from Codex MCP)" and the agent
+        # fails with an opaque "missing output" instead of the real cause.
+        if isinstance(result, dict) and result.get("error"):
+            raise RuntimeError(f"Codex MCP run failed: {result['error']}")
+
         content_blocks = result.get("content", [])
         structured = result.get("structuredContent", {})
 

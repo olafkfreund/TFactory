@@ -50,6 +50,39 @@
 > Fast-follows: sandbox-test injection (#73), OIDC/workload-identity
 > federation (#74). ~99 new tests across the secrets suite.
 
+## 0.2.2 — Multi-provider hardening: Codex auth + GitHub Copilot CLI (2026-05-30)
+
+> Makes the non-Claude provider lanes reliable for demos and BYO-LLM.
+>
+> **Codex now works regardless of your global `codex login`.** A bare
+> ChatGPT-account login rejects every model ("model is not supported when
+> using Codex with a ChatGPT account"), which silently broke TFactory's Codex
+> lane. `codex_agentic.py` now provisions a TFactory-owned `CODEX_HOME`
+> (`~/.tfactory/codex-home/`) with an api-key `auth.json` built from
+> `OPENAI_API_KEY` and points the `codex mcp-server` subprocess at it — your
+> global login is left untouched. It also surfaces MCP run errors instead of
+> swallowing them as "(no output from Codex MCP)", resolves the `codex` shell
+> alias to `codex-cli`, and defaults to `gpt-5.3-codex`. Verified end-to-end:
+> Planner emits a valid plan even with the broken ChatGPT login still active.
+>
+> **New provider: GitHub Copilot CLI** (`copilot:<model>`). A first-class
+> agentic provider (`copilot_agentic.py`) that runs `copilot -p "<prompt>"
+> --allow-all-tools --model <model>` headlessly — Copilot runs its own tool
+> loop in one shot. Models: `claude-sonnet-4.5` (default), `claude-sonnet-4`,
+> `gpt-5`, billed to your Copilot subscription. Routed via the factory
+> (`copilot:gpt-5` correctly resolves to Copilot, not Codex). Verified
+> end-to-end: Planner produced a 7-subtask plan on `copilot:claude-sonnet-4.5`.
+>
+> **Ollama / local models can now write the workspace.** Ollama is the only
+> provider whose file ops run through TFactory's own `ToolExecutor`, which was
+> sandboxed to a single root (the SUT project dir). The Planner/Gen-Functional/
+> Evaluator write into the spec/workspace dir — *outside* that root — so every
+> `Write` was denied and the model burned all its turns retrying (looked like a
+> convergence failure; it wasn't). `ToolExecutor` now takes `extra_roots`, and
+> the spec dir is threaded in for the Ollama provider. Verified:
+> `qwen2.5-coder:14b` Planner went from 25-turn timeout to **PASS (3 subtasks)
+> in ~36s**.
+
 ## 0.2.1 — Version honesty + docs reconciliation (2026-05-30)
 
 > Housekeeping release. No runtime behaviour change.

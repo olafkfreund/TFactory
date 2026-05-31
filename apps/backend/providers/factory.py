@@ -55,6 +55,7 @@ _AGENTIC_REGISTRY: dict[str, tuple[str, str]] = {
     "gemini":             ("providers.gemini_agentic",               "GeminiAgenticProvider"),
     "ollama":             ("providers.ollama_agentic",               "OllamaAgenticProvider"),
     "openai-compatible":  ("providers.openai_compatible_agentic",    "OpenAICompatibleAgenticProvider"),
+    "copilot":            ("providers.copilot_agentic",              "CopilotAgenticProvider"),
 }
 
 _TEXT_REGISTRY: dict[str, tuple[str, str]] = {
@@ -84,6 +85,10 @@ _PROVIDER_ALIASES: dict[str, str] = {
     "ollama": "ollama",
     "local": "ollama",
     "local-ollama": "ollama",
+    # GitHub Copilot CLI (subscription-backed; runs claude-sonnet-*/gpt-5)
+    "copilot": "copilot",
+    "github-copilot": "copilot",
+    "gh-copilot": "copilot",
     # OpenAI-compatible endpoints (LM Studio, vLLM, OpenRouter, Together, Groq, ...)
     "openai": "openai-compatible",
     "openai-api": "openai-compatible",

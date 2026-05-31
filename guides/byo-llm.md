@@ -39,6 +39,20 @@ your machine/LAN, **1** otherwise — wire it into CI as an air-gap gate.
 Provider selection is driven entirely by the model-string prefix
 (`phase_config.infer_provider_from_model`) — no separate provider switch.
 
+## Subscription-backed (non-Claude) providers
+
+If you don't need fully local but want to run TFactory off a flat-rate
+subscription instead of the Claude SDK, two hosted CLIs are wired in:
+
+| Provider | Model string | Auth / billing |
+|---|---|---|
+| **GitHub Copilot CLI** *(recommended non-Claude default)* | `copilot:claude-sonnet-4.5` (also `copilot:claude-sonnet-4`, `copilot:gpt-5`) | your GitHub Copilot subscription (flat-rate); `copilot` must be installed + signed in |
+| **OpenAI Codex** | `gpt-5.3-codex` / `gpt-5-codex` | `OPENAI_API_KEY` (pay-per-token). The provider writes a TFactory-owned `CODEX_HOME` so it works regardless of your global `codex login` — a bare ChatGPT-account login rejects every model on the headless path |
+
+`copilot:*` is the recommended non-Claude lane for demos: it runs
+`claude-sonnet-4.5` through your Copilot subscription (flat-rate, no per-token
+billing) and Copilot handles its own tool sandbox.
+
 ### Example: vLLM
 
 ```bash

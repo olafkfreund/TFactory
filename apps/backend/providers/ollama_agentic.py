@@ -138,6 +138,7 @@ class OllamaAgenticProvider(BaseLLMProvider):
         max_turns: int = _DEFAULT_MAX_TURNS,
         tool_names: list[str] | None = None,
         extra_options: dict[str, Any] | None = None,
+        extra_roots: list[Path] | None = None,
     ) -> None:
         # Callers (e.g. the phase resolver) pass the provider-prefixed form
         # ``ollama:qwen3:14b`` because that's how TFactory threads the
@@ -160,9 +161,15 @@ class OllamaAgenticProvider(BaseLLMProvider):
         # Tool setup
         effective_tools = tool_names or _DEFAULT_TOOL_NAMES
         self._tool_defs = get_tool_definitions(effective_tools)
+        # The SUT project dir is the primary boundary, but TFactory's per-task
+        # spec/workspace dir (where test_plan.json + generated tests are
+        # written) lives outside it — thread it in as an extra allowed root so
+        # the agent's writes aren't denied. See ToolExecutor.extra_roots.
+        self._extra_roots: list[Path] = [Path(r).resolve() for r in (extra_roots or [])]
         self._executor = ToolExecutor(
             working_dir=self._working_dir,
             bash_timeout=min(timeout, 120),
+            extra_roots=self._extra_roots,
         )
 
         logger.debug(

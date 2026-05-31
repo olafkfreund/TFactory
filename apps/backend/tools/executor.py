@@ -84,9 +84,16 @@ class ToolExecutor:
         self,
         working_dir: Path,
         bash_timeout: int = _DEFAULT_BASH_TIMEOUT,
+        extra_roots: list[Path] | None = None,
     ) -> None:
         self._working_dir = working_dir.resolve()
         self._bash_timeout = min(bash_timeout, _MAX_BASH_TIMEOUT)
+        # Additional directories file ops may touch beyond ``working_dir``.
+        # TFactory threads the per-task spec/workspace dir here so agents that
+        # run their file ops through this executor (e.g. the Ollama provider)
+        # can write ``test_plan.json`` / generated tests into the workspace,
+        # which lives outside the SUT project dir. Each must contain the path.
+        self._extra_roots: list[Path] = [r.resolve() for r in (extra_roots or [])]
 
         # Dispatch table
         self._handlers: dict[str, Any] = {
@@ -108,6 +115,22 @@ class ToolExecutor:
         Returns:
             ``ToolResultBlock`` with ``content`` (str) and ``is_error`` (bool).
         """
+        # Small/local models (e.g. qwen) sometimes emit tool arguments as a
+        # JSON list (or other non-object) instead of a parameters object. The
+        # downstream validator/handlers assume a dict, so a list here would
+        # raise *outside* the handler try-block below and abort the whole
+        # agent session. Reject it cleanly as a recoverable tool error so the
+        # model can correct on the next turn.
+        if not isinstance(tool_input, dict):
+            return ToolResultBlock(
+                content=(
+                    f"Error: {tool_name} arguments must be a JSON object, got "
+                    f"{type(tool_input).__name__}. Re-send the call with named "
+                    "parameters, e.g. {\"file_path\": ..., \"content\": ...}."
+                ),
+                is_error=True,
+            )
+
         # Input validation (reuse existing validator)
         is_valid, error_msg = validate_tool_input(tool_name, tool_input)
         if not is_valid:
@@ -150,16 +173,25 @@ class ToolExecutor:
         except (ValueError, OSError) as exc:
             return Path(), f"Invalid path '{file_path}': {exc}"
 
-        # Check path boundary
-        try:
-            resolved.relative_to(self._working_dir)
-        except ValueError:
-            return Path(), (
-                f"Path '{file_path}' resolves to '{resolved}' which is outside "
-                f"the project directory '{self._working_dir}'. Access denied."
-            )
+        # Check path boundary: within working_dir OR any extra allowed root.
+        allowed_roots = [self._working_dir, *self._extra_roots]
+        for root in allowed_roots:
+            try:
+                resolved.relative_to(root)
+                return resolved, None
+            except ValueError:
+                continue
 
-        return resolved, None
+        return Path(), (
+            f"Path '{file_path}' resolves to '{resolved}' which is outside "
+            f"the project directory '{self._working_dir}'"
+            + (
+                f" and the allowed workspace root(s) {[str(r) for r in self._extra_roots]}"
+                if self._extra_roots
+                else ""
+            )
+            + ". Access denied."
+        )
 
     # ------------------------------------------------------------------
     # Tool handlers
@@ -212,6 +244,17 @@ class ToolExecutor:
         """Write content to a file, creating parent dirs if needed."""
         file_path = tool_input["file_path"]
         content = tool_input["content"]
+
+        # Local models sometimes pass ``content`` as a list (e.g. lines, or a
+        # JSON structure) rather than a string. write_text() requires str —
+        # coerce: a list of strings joins to text; anything else serialises to
+        # JSON (keeps a list/dict file like test_plan.json valid).
+        if not isinstance(content, str):
+            if isinstance(content, list) and all(isinstance(x, str) for x in content):
+                content = "\n".join(content)
+            else:
+                import json as _json
+                content = _json.dumps(content, indent=2, default=str)
 
         resolved, error = self._validate_path(file_path)
         if error:

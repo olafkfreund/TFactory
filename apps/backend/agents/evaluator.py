@@ -118,6 +118,12 @@ async def _resolve_evaluator_client(spec_dir: Path, project_dir: Path):
             max_thinking_tokens=thinking_budget,
         )
     extra = get_provider_extra_kwargs(provider_name, eval_model)
+    # Ollama runs file ops through TFactory's ToolExecutor (sandboxed to
+    # working_dir); the Evaluator reads/writes within the spec/workspace dir,
+    # outside the SUT project — allow it explicitly. Other agentic providers
+    # use their own sandboxes and don't take this kwarg.
+    if provider_name == "ollama":
+        extra["extra_roots"] = [spec_dir]
     return get_provider(
         provider_name,
         phase="coding",
