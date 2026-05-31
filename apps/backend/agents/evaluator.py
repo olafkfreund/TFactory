@@ -973,6 +973,37 @@ def _build_jest_signal_bundle(
 _VALID_VERDICTS = frozenset({"accept", "reject", "flag"})
 
 
+def _loads_tolerant(text: str) -> tuple[object, bool]:
+    """Parse JSON that may carry a markdown fence or trailing prose.
+
+    LLMs occasionally wrap the object in a ```json fence or append an
+    explanation after it (``json.loads`` then fails with "Extra data: ...").
+    Strict parse first; on failure, strip a code fence and decode just the
+    first JSON value via ``raw_decode``, ignoring anything after it.
+
+    Returns ``(doc, salvaged)`` — ``salvaged`` is True when the lenient path
+    recovered the object, so the caller can rewrite a clean file. Raises
+    ``json.JSONDecodeError`` when no JSON object can be recovered.
+    """
+    try:
+        return json.loads(text), False
+    except json.JSONDecodeError:
+        pass
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        # Drop the opening fence line (```json / ```), then a trailing fence.
+        cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned
+        fence = cleaned.rfind("```")
+        if fence != -1:
+            cleaned = cleaned[:fence]
+        cleaned = cleaned.strip()
+    starts = [i for i in (cleaned.find("{"), cleaned.find("[")) if i != -1]
+    if not starts:
+        raise json.JSONDecodeError("no JSON value found", text, 0)
+    doc, _end = json.JSONDecoder().raw_decode(cleaned[min(starts) :])
+    return doc, True
+
+
 def _validate_verdicts(
     path: Path,
     skip_coverage_test_ids: frozenset[str] | None = None,
@@ -1006,11 +1037,22 @@ def _validate_verdicts(
     if not path.exists():
         return False, "verdicts.json not written by agent", 0
     try:
-        doc = json.loads(path.read_text())
+        doc, salvaged = _loads_tolerant(path.read_text())
     except json.JSONDecodeError as exc:
         return False, f"verdicts.json is not valid JSON: {exc}", 0
     if not isinstance(doc, dict):
         return False, "verdicts.json root is not an object", 0
+    if salvaged:
+        # The agent wrapped the JSON in a fence or appended trailing prose.
+        # Rewrite the canonical object so the Triager (which json.loads the
+        # same file) doesn't trip over it.
+        _eval_log.warning(
+            "verdicts.json had extra data around the JSON; rewrote the salvaged object."
+        )
+        try:
+            path.write_text(json.dumps(doc, indent=2))
+        except OSError:
+            pass
     verdicts = doc.get("verdicts")
     if not isinstance(verdicts, list):
         return False, "verdicts.json missing 'verdicts' array", 0
