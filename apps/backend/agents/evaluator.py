@@ -230,13 +230,26 @@ def _resolve_runner_fn(
             if target_url:
                 extra_env["TFACTORY_TARGET_URL"] = target_url
                 extra_env["APP_URL"] = target_url
-            res = runner.run(
-                repo_path=Path(project_dir_arg).resolve(),
-                scratch_path=scratch.resolve(),
-                command=["sh", "-c", cmd],
-                extra_env=extra_env,
-                timeout_sec=300,
+            # Sandbox credential injection (#73): only the network-enabled api
+            # lane (network != "none") gets broker-resolved creds, and only
+            # when egress is opted in. Unit lane (network="none") gets neither.
+            from tools.runners.sandbox_credentials import resolve_sandbox_credentials
+
+            sandbox_creds = resolve_sandbox_credentials(
+                project_dir_arg, spec_dir, network
             )
+            extra_env.update(sandbox_creds.env)
+            try:
+                res = runner.run(
+                    repo_path=Path(project_dir_arg).resolve(),
+                    scratch_path=scratch.resolve(),
+                    command=["sh", "-c", cmd],
+                    extra_env=extra_env,
+                    secret_files=sandbox_creds.files,
+                    timeout_sec=300,
+                )
+            finally:
+                sandbox_creds.wipe()  # erase materialised secret files
             code = res.returncode
             for line in (res.stdout or "").splitlines():
                 if line.startswith("__PYTEST_EXIT="):
@@ -863,7 +876,7 @@ def _resolve_jest_runner_fn(image: str = _JEST_IMAGE):
     import shutil as _sh
     import tempfile as _tmp
 
-    from tools.runners.docker_runner import DockerRunResult, DockerRunner
+    from tools.runners.docker_runner import DockerRunner, DockerRunResult
 
     def _run(test_file: Path, project_dir_arg: Path, seed: int) -> DockerRunResult:
         scratch = Path(_tmp.mkdtemp(prefix="tf-jest-"))
@@ -1120,9 +1133,7 @@ async def run_evaluator(
         browser_completed = _completed_browser_subtasks(plan)
         api_completed = _completed_api_subtasks(plan)
         jest_completed = _completed_jest_subtasks(plan)
-        completed = (
-            unit_completed + browser_completed + api_completed + jest_completed
-        )
+        completed = unit_completed + browser_completed + api_completed + jest_completed
 
         # 2. No work — early exit with evaluated_empty.
         if not completed:

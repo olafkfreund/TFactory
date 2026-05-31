@@ -34,7 +34,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -131,16 +131,30 @@ class DockerRunner:
         command: Sequence[str],
         env: dict[str, str] | None = None,
         extra_args: Sequence[str] | None = None,
+        secret_files: Mapping[str, str] | None = None,
     ) -> list[str]:
         """Return the full container invocation as a list of strings.
 
         Pure function — no side effects — so tests can assert on the
         exact argv without a real container runtime present.
+
+        ``secret_files`` maps absolute host paths → absolute container paths;
+        each is bind-mounted **read-only** (e.g. a materialised kubeconfig for
+        a network-enabled api/integration lane, issue #73). Mounting only —
+        the host files' lifecycle (materialise + wipe) is the caller's job.
         """
         if not command:
             raise DockerRunnerError("command must not be empty")
         if not repo_path.is_absolute() or not scratch_path.is_absolute():
             raise DockerRunnerError("repo_path and scratch_path must be absolute")
+        for host_path, container_path in (secret_files or {}).items():
+            if (
+                not Path(host_path).is_absolute()
+                or not Path(container_path).is_absolute()
+            ):
+                raise DockerRunnerError(
+                    "secret_files keys (host) and values (container) must be absolute paths"
+                )
 
         argv: list[str] = [
             self.binary,
@@ -167,6 +181,10 @@ class DockerRunner:
             # caches that pytest plugins like xdist sometimes scribble.
             argv.extend(["--tmpfs", "/tmp:rw,size=64m"])
 
+        # Read-only bind-mounts for materialised secret files (issue #73).
+        for host_path, container_path in (secret_files or {}).items():
+            argv.extend(["-v", f"{host_path}:{container_path}:ro"])
+
         for key, val in (env or {}).items():
             argv.extend(["-e", f"{key}={val}"])
 
@@ -189,6 +207,7 @@ class DockerRunner:
         env: dict[str, str] | None = None,
         extra_env: dict[str, str] | None = None,
         extra_args: Sequence[str] | None = None,
+        secret_files: Mapping[str, str] | None = None,
     ) -> DockerRunResult:
         """Execute the container and return a DockerRunResult.
 
@@ -233,6 +252,7 @@ class DockerRunner:
             command=command,
             env=merged_env,
             extra_args=extra_args,
+            secret_files=secret_files,
         )
         logger.debug("docker invocation: %s", " ".join(argv))
 

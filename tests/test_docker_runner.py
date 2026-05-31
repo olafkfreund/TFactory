@@ -102,6 +102,33 @@ def test_env_vars_become_e_flags():
     assert "BAR=two" in argv
 
 
+def test_secret_files_become_ro_mounts():
+    # #73: materialised secret files are bind-mounted read-only.
+    argv = DockerRunner().build_argv(
+        repo_path=Path("/tmp/r"),
+        scratch_path=Path("/tmp/s"),
+        command=["cmd"],
+        secret_files={"/host/kubeconfig": "/root/.kube/config"},
+    )
+    assert "/host/kubeconfig:/root/.kube/config:ro" in argv
+
+
+def test_no_secret_mounts_by_default():
+    # The default (unit-lane) path mounts no secrets.
+    argv = _basic_argv()
+    assert not any(":ro" in a and "kube" in a for a in argv)
+
+
+def test_secret_files_must_be_absolute():
+    with pytest.raises(DockerRunnerError):
+        DockerRunner().build_argv(
+            repo_path=Path("/tmp/r"),
+            scratch_path=Path("/tmp/s"),
+            command=["cmd"],
+            secret_files={"relative/path": "/root/.kube/config"},
+        )
+
+
 def test_extra_args_appended_before_image():
     r = DockerRunner()
     argv = r.build_argv(
