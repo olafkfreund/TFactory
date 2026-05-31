@@ -52,6 +52,7 @@ set -euo pipefail
 
 RUN_DIR="${RUN_DIR:-}"
 TITLE="${TITLE:-}"
+SUBTITLE="${SUBTITLE:-}"
 CANVAS_W="${CANVAS_W:-1920}"
 CANVAS_H="${CANVAS_H:-1080}"
 GIF_FPS="${GIF_FPS:-12}"
