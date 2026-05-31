@@ -367,11 +367,19 @@ def _read_status(spec_dir: Path) -> dict:
         return {}
 
 
+# Terminal statuses the Triager can land on. A completion callback fires once
+# the task reaches any of these (see _notify_completion).
+_TERMINAL_STATUSES = frozenset({"triaged", "triaged_empty", "triager_failed"})
+
+
 def _write_status_patch(spec_dir: Path, **fields: object) -> None:
     status = _read_status(spec_dir)
     status.update(fields)
     status["updated_at"] = _now_iso()
     (spec_dir / "status.json").write_text(json.dumps(status, indent=2))
+    # Fire the completion callback exactly once, when the task goes terminal.
+    if fields.get("status") in _TERMINAL_STATUSES:
+        _notify_completion(spec_dir, status)
 
 
 # ─── Mode resolution: dry-run vs real ─────────────────────────────────
@@ -407,6 +415,64 @@ def _harvest_global() -> bool:
     """Also write harvested templates to the cross-project global library at
     ``~/.tfactory/templates/``. Opt-in via TFACTORY_TRIAGER_HARVEST_GLOBAL=1."""
     return _truthy(os.environ.get("TFACTORY_TRIAGER_HARVEST_GLOBAL"))
+
+
+# ─── Completion callback (#85) ──────────────────────────────────────────
+# When the Triager reaches a terminal status, optionally notify a watcher so
+# the /tfactory-watch round-trip needs no polling. Both channels are OFF by
+# default (consistent with the "no automatic side-effects" policy) and are
+# strictly best-effort — a missing/failing target must never affect the run.
+
+
+def _completion_webhook_url() -> str | None:
+    """Webhook URL POSTed on completion. Opt-in via TFACTORY_COMPLETION_WEBHOOK."""
+    url = (os.environ.get("TFACTORY_COMPLETION_WEBHOOK") or "").strip()
+    return url or None
+
+
+def _completion_sentinel_enabled() -> bool:
+    """Write findings/COMPLETED.json on completion. Opt-in via
+    TFACTORY_COMPLETION_SENTINEL=1 — a same-host watcher can stat it."""
+    return _truthy(os.environ.get("TFACTORY_COMPLETION_SENTINEL"))
+
+
+def _notify_completion(spec_dir: Path, status: dict) -> None:
+    """Best-effort terminal callback. Writes a local sentinel (opt-in) and
+    POSTs an env-gated webhook (opt-in). Every failure is swallowed so the
+    pipeline can never break on notification."""
+    payload = {
+        "task_id": status.get("task_id") or spec_dir.name,
+        "project_id": status.get("project_id"),
+        "status": status.get("status"),
+        "phase": status.get("phase"),
+        "updated_at": status.get("updated_at"),
+    }
+
+    if _completion_sentinel_enabled():
+        try:
+            findings_dir = spec_dir / "findings"
+            findings_dir.mkdir(parents=True, exist_ok=True)
+            (findings_dir / "COMPLETED.json").write_text(json.dumps(payload, indent=2))
+        except OSError:
+            pass
+
+    url = _completion_webhook_url()
+    if not url:
+        return
+    try:
+        import urllib.request
+
+        timeout = float(os.environ.get("TFACTORY_COMPLETION_WEBHOOK_TIMEOUT", "5"))
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=timeout).close()  # noqa: S310
+    except Exception:
+        # Webhook is best-effort; never surface failures into the pipeline.
+        pass
 
 
 # ─── The agent itself ───────────────────────────────────────────────────
