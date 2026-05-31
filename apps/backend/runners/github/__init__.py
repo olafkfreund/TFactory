@@ -1,41 +1,15 @@
+"""GitHub provider layer.
+
+TFactory keeps only the multi-provider abstraction the web-server uses to
+read GitHub/GitLab/Azure DevOps PRs and issues:
+
+    from runners.github.providers.factory import get_provider
+
+The inherited AIFactory PR-review / issue-triage / auto-fix automation that
+used to live here (orchestrator, models, bot_detection, batch_*, …) was
+removed in #43 — it was dead weight with no live consumer. ``providers/``
+depends only on ``gh_client`` + ``rate_limiter``, which remain.
+
+Imports are NOT eager here on purpose: importing ``runners.github`` must not
+drag in heavy submodules. Consumers import what they need directly.
 """
-GitHub Automation Runners
-=========================
-
-Standalone runner system for GitHub automation:
-- PR Review: AI-powered code review with fix suggestions
-- Issue Triage: Duplicate/spam/feature-creep detection
-- Issue Auto-Fix: Automatic spec creation and execution from issues
-
-This is SEPARATE from the main task execution pipeline (spec_runner, run.py, etc.)
-to maintain modularity and avoid breaking existing features.
-"""
-
-from .models import (
-    AutoFixState,
-    AutoFixStatus,
-    GitHubRunnerConfig,
-    PRReviewFinding,
-    PRReviewResult,
-    ReviewCategory,
-    ReviewSeverity,
-    TriageCategory,
-    TriageResult,
-)
-from .orchestrator import GitHubOrchestrator
-
-__all__ = [
-    # Orchestrator
-    "GitHubOrchestrator",
-    # Models
-    "PRReviewResult",
-    "PRReviewFinding",
-    "TriageResult",
-    "AutoFixState",
-    "GitHubRunnerConfig",
-    # Enums
-    "ReviewSeverity",
-    "ReviewCategory",
-    "TriageCategory",
-    "AutoFixStatus",
-]
