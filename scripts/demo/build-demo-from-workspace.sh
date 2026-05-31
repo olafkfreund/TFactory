@@ -41,8 +41,13 @@ await p.goto('file://'+require('path').resolve('$PANES/terminal.html'));
 await p.waitForTimeout(5000);await p.screenshot({path:'$PANES/terminal.png'});await b.close();})()
 .catch(e=>{console.error(e);process.exit(1)});"
 
-# 2. portal pane — scenario-specific: drill into THIS task + walk its tabs
+# 2. portal pane — scenario-specific: drill into THIS task, linger on Verdicts.
 SPEC="$SPEC" node "$ROOT/scripts/demo/portal-record.mjs" "$PANES/portal.webm" >/dev/null 2>&1
+# Keep only the TAIL (the lingered scenario verdicts) — robust to the variable
+# "preparing workspace" splash + nav time at the head, which is identical across
+# demos and made them all look the same.
+ffmpeg -y -sseof -12 -i "$PANES/portal.webm" -c:v libvpx-vp9 -an "$PANES/portal-tail.webm" >/dev/null 2>&1 \
+  && mv "$PANES/portal-tail.webm" "$PANES/portal.webm"
 node "$ROOT/scripts/demo/portal-task-shot.mjs" "$PANES/report.png" "$SPEC" "Report" >/dev/null 2>&1
 
 # 3. composite + gate
