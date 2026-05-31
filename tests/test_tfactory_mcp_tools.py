@@ -475,6 +475,43 @@ async def test_report_get_json_happy(tools: dict, workspace: Path, aifactory_roo
     assert "functional" in body["body"]
 
 
+@pytest.mark.asyncio
+async def test_report_get_reads_findings_triage_report(
+    tools: dict, workspace: Path, aifactory_root: Path,
+) -> None:
+    """report_get reads the Triager's real output: findings/triage_report.md (#57)."""
+    _scaffold_aifactory_spec(aifactory_root, "demo", "001")
+    await tools["project_create"]({"id": "demo", "name": "Demo", "root_path": "/tmp/d"})
+    await tools["task_create_and_run"]({"project_id": "demo", "spec_id": "001",
+                                        "branch": "f", "base_ref": "main", "confirm": True})
+    # The Triager writes findings/triage_report.{md,json}, NOT report.* at root.
+    findings = workspace / "workspaces" / "demo" / "specs" / "001" / "findings"
+    findings.mkdir(parents=True, exist_ok=True)
+    (findings / "triage_report.md").write_text("# Triage\n\n2 accepted, 1 flagged.\n")
+    res = await tools["report_get"]({"task_id": "001", "format": "md"})
+    body = _payload(res)
+    assert "triage_report.md" in body["path"]
+    assert "2 accepted" in body["body"]
+
+
+@pytest.mark.asyncio
+async def test_report_get_findings_precedes_legacy(
+    tools: dict, workspace: Path, aifactory_root: Path,
+) -> None:
+    """When both exist, the findings/triage_report.* wins over legacy report.*."""
+    _scaffold_aifactory_spec(aifactory_root, "demo", "001")
+    await tools["project_create"]({"id": "demo", "name": "Demo", "root_path": "/tmp/d"})
+    await tools["task_create_and_run"]({"project_id": "demo", "spec_id": "001",
+                                        "branch": "f", "base_ref": "main", "confirm": True})
+    spec = workspace / "workspaces" / "demo" / "specs" / "001"
+    (spec / "report.md").write_text("LEGACY\n")
+    (spec / "findings").mkdir(parents=True, exist_ok=True)
+    (spec / "findings" / "triage_report.md").write_text("CANONICAL\n")
+    body = _payload(await tools["report_get"]({"task_id": "001", "format": "md"}))
+    assert "CANONICAL" in body["body"]
+    assert "LEGACY" not in body["body"]
+
+
 # ── task_rerun ───────────────────────────────────────────────────────────
 
 
@@ -522,3 +559,59 @@ async def test_task_rerun_happy_bumps_count(tools: dict, workspace: Path, aifact
     assert status["rerun_count"] == 2
     # v0.2 lane spine — 'unit' replaced 'functional' per Decision 2
     assert status["lane_progress"]["unit"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_task_rerun_does_not_refire_when_disabled(
+    tools: dict, workspace: Path, aifactory_root: Path,
+) -> None:
+    """Default fixture sets TFACTORY_AUTO_PLAN=0 — rerun records but doesn't fire (#57)."""
+    _scaffold_aifactory_spec(aifactory_root, "demo", "001")
+    await tools["project_create"]({"id": "demo", "name": "Demo", "root_path": "/tmp/d"})
+    await tools["task_create_and_run"]({"project_id": "demo", "spec_id": "001",
+                                        "branch": "f", "base_ref": "main", "confirm": True})
+    body = _payload(await tools["task_rerun"]({"task_id": "001"}))
+    assert body["planner_scheduled"] is False
+    assert "not auto-fired" in body["note"]
+
+
+@pytest.mark.asyncio
+async def test_task_rerun_refires_planner_when_enabled(
+    tools: dict, workspace: Path, aifactory_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With TFACTORY_AUTO_PLAN=1, task_rerun re-fires the Planner (#57).
+
+    Mocks the planner SDK seams (same shape as the create-and-run auto-fire
+    test) so the re-fire path runs without hitting a real LLM.
+    """
+    monkeypatch.setenv("TFACTORY_AUTO_PLAN", "1")
+    _scaffold_aifactory_spec(aifactory_root, "demo", "001")
+
+    class _FakeAsyncCM:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): return None
+    async def _resolve(*a, **kw): return _FakeAsyncCM()
+    async def _invoke(client, prompt, spec_dir_arg, verbose):
+        (spec_dir_arg / "test_plan.json").write_text(json.dumps({
+            "feature": "rerun-test", "workflow_type": "feature",
+            "services_involved": [], "phases": [], "final_acceptance": [],
+            "status": "in_progress", "planStatus": "pending",
+        }))
+        return "complete", "mock", {}
+    monkeypatch.setattr("agents.planner._resolve_planner_client", _resolve)
+    monkeypatch.setattr("agents.planner._invoke_session", _invoke)
+
+    await tools["project_create"]({"id": "demo", "name": "Demo", "root_path": "/tmp/d"})
+    # Create with auto-plan on, then drain so we start from a settled state.
+    await tools["task_create_and_run"]({"project_id": "demo", "spec_id": "001",
+                                        "branch": "f", "base_ref": "main", "confirm": True})
+    from agents.planner import _BG_PLANNER_TASKS
+    if _BG_PLANNER_TASKS:
+        await asyncio.gather(*list(_BG_PLANNER_TASKS), return_exceptions=True)
+
+    body = _payload(await tools["task_rerun"]({"task_id": "001"}))
+    assert body["planner_scheduled"] is True
+    assert "re-fired" in body["note"]
+    if _BG_PLANNER_TASKS:
+        await asyncio.gather(*list(_BG_PLANNER_TASKS), return_exceptions=True)
