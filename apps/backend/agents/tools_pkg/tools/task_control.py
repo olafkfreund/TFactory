@@ -23,7 +23,7 @@ Storage at MVP: filesystem-only, under ``$TFACTORY_WORKSPACE_ROOT``
       workspaces/{project_id}/specs/{spec_id}/
         task.md                  # handover payload, agent-readable
         status.json              # task lifecycle state
-        report.md / report.json  # populated by the Triager (Task 8)
+        findings/triage_report.{md,json}  # populated by the Triager (Task 8)
         context/, tests/, findings/, logs/, memory/  # Task 3+
 
 The REST-backed inherited tool surface (task_start / task_stop / etc.)
@@ -137,7 +137,9 @@ def _find_task(task_id: str, root: Path | None = None) -> tuple[str, str] | None
     return None
 
 
-def _load_status(project_id: str, spec_id: str, root: Path | None = None) -> dict[str, Any] | None:
+def _load_status(
+    project_id: str, spec_id: str, root: Path | None = None
+) -> dict[str, Any] | None:
     sf = _status_file(project_id, spec_id, root)
     if not sf.exists():
         return None
@@ -150,6 +152,7 @@ def _load_status(project_id: str, spec_id: str, root: Path | None = None) -> dic
 # ---------------------------------------------------------------------------
 # Response envelope helpers
 # ---------------------------------------------------------------------------
+
 
 def _format_error(exc: Exception | str) -> dict[str, Any]:
     """Return the MCP content-block error shape (``isError=True``)."""
@@ -170,6 +173,7 @@ def _format_json(data: Any) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Tool factory
 # ---------------------------------------------------------------------------
+
 
 def create_task_control_tools() -> list:
     """Create the seven TFactory MVP task-control tools.
@@ -243,15 +247,17 @@ def create_task_control_tools() -> list:
         spec_dir = _spec_dir(project_id, task_id)
 
         if not confirm:
-            return _format_json({
-                "preview": True,
-                "would_create": str(spec_dir),
-                "project_id": project_id,
-                "spec_id": spec_id,
-                "branch": branch,
-                "base_ref": base_ref,
-                "hint": "Re-run with confirm=true to create the workspace.",
-            })
+            return _format_json(
+                {
+                    "preview": True,
+                    "would_create": str(spec_dir),
+                    "project_id": project_id,
+                    "spec_id": spec_id,
+                    "branch": branch,
+                    "base_ref": base_ref,
+                    "hint": "Re-run with confirm=true to create the workspace.",
+                }
+            )
 
         if spec_dir.exists():
             return _format_error(
@@ -282,6 +288,7 @@ def create_task_control_tools() -> list:
             except SnapshotError as exc:
                 # Roll back the partial workspace so the user can fix and retry.
                 import shutil as _shutil
+
                 _shutil.rmtree(spec_dir, ignore_errors=True)
                 return _format_error(str(exc))
         else:
@@ -326,6 +333,7 @@ def create_task_control_tools() -> list:
         planner_scheduled = False
         try:
             from agents.planner import schedule_planner
+
             project_root = project_entry.get("root_path", ".")
             task = schedule_planner(
                 spec_dir=spec_dir,
@@ -341,20 +349,22 @@ def create_task_control_tools() -> list:
             )
 
         portal_port = os.environ.get("TFACTORY_PORTAL_PORT", "3102")
-        return _format_json({
-            "task_id": task_id,
-            "project_id": project_id,
-            "spec_dir": str(spec_dir),
-            "portal_url": f"http://localhost:{portal_port}/tasks/{task_id}",
-            "status": "pending",
-            "snapshot_warnings": snapshot_warnings,
-            "planner_scheduled": planner_scheduled,
-            "note": (
-                "Workspace created + AIFactory spec snapshotted into context/. "
-                "Pipeline execution (planner + generators + executor + evaluator + triager) "
-                "wires up in Tasks 5-8."
-            ),
-        })
+        return _format_json(
+            {
+                "task_id": task_id,
+                "project_id": project_id,
+                "spec_dir": str(spec_dir),
+                "portal_url": f"http://localhost:{portal_port}/tasks/{task_id}",
+                "status": "pending",
+                "snapshot_warnings": snapshot_warnings,
+                "planner_scheduled": planner_scheduled,
+                "note": (
+                    "Workspace created + AIFactory spec snapshotted into context/. "
+                    "Pipeline execution (planner + generators + executor + evaluator + triager) "
+                    "wires up in Tasks 5-8."
+                ),
+            }
+        )
 
     tools.append(task_create_and_run)
 
@@ -396,9 +406,19 @@ def create_task_control_tools() -> list:
         {
             "type": "object",
             "properties": {
-                "project_id": {"type": "string", "description": "Optional project filter"},
-                "status": {"type": "string", "description": "Optional status filter (e.g. pending, running, done, failed)"},
-                "limit": {"type": "integer", "default": 50, "description": "Max results"},
+                "project_id": {
+                    "type": "string",
+                    "description": "Optional project filter",
+                },
+                "status": {
+                    "type": "string",
+                    "description": "Optional status filter (e.g. pending, running, done, failed)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "default": 50,
+                    "description": "Max results",
+                },
             },
         },
     )
@@ -426,14 +446,16 @@ def create_task_control_tools() -> list:
                         continue
                     if status_filter and status.get("status") != status_filter:
                         continue
-                    results.append({
-                        "task_id": status.get("task_id"),
-                        "project_id": status.get("project_id"),
-                        "status": status.get("status"),
-                        "phase": status.get("phase"),
-                        "created_at": status.get("created_at"),
-                        "updated_at": status.get("updated_at"),
-                    })
+                    results.append(
+                        {
+                            "task_id": status.get("task_id"),
+                            "project_id": status.get("project_id"),
+                            "status": status.get("status"),
+                            "phase": status.get("phase"),
+                            "created_at": status.get("created_at"),
+                            "updated_at": status.get("updated_at"),
+                        }
+                    )
                     if len(results) >= limit:
                         break
                 if len(results) >= limit:
@@ -453,7 +475,9 @@ def create_task_control_tools() -> list:
     )
     async def project_list(args: dict[str, Any]) -> dict[str, Any]:
         data = _load_projects()
-        return _format_json({"count": len(data["projects"]), "projects": data["projects"]})
+        return _format_json(
+            {"count": len(data["projects"]), "projects": data["projects"]}
+        )
 
     tools.append(project_list)
 
@@ -467,9 +491,18 @@ def create_task_control_tools() -> list:
         {
             "type": "object",
             "properties": {
-                "id": {"type": "string", "description": "Project ID (typically matches the AIFactory project_id)"},
-                "name": {"type": "string", "description": "Human-readable project name"},
-                "root_path": {"type": "string", "description": "Absolute path to the local checkout"},
+                "id": {
+                    "type": "string",
+                    "description": "Project ID (typically matches the AIFactory project_id)",
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Human-readable project name",
+                },
+                "root_path": {
+                    "type": "string",
+                    "description": "Absolute path to the local checkout",
+                },
             },
             "required": ["id", "name", "root_path"],
         },
@@ -532,19 +565,28 @@ def create_task_control_tools() -> list:
         if not located:
             return _format_error(f"unknown task_id: {task_id!r}")
         project_id, spec_id = located
-        report_path = _spec_dir(project_id, spec_id) / (
-            "report.md" if fmt == "md" else "report.json"
-        )
+        spec_dir = _spec_dir(project_id, spec_id)
+        filename = "triage_report.md" if fmt == "md" else "triage_report.json"
+        # The Triager writes findings/triage_report.{md,json}. Prefer that;
+        # fall back to the legacy report.{md,json} at the spec-dir root for
+        # any pre-Triager-wiring workspaces.
+        report_path = spec_dir / "findings" / filename
         if not report_path.exists():
-            return _format_error(
-                f"no {fmt} report for task {task_id!r} yet — the Triager (Task 8) hasn't run"
-            )
-        return _format_json({
-            "task_id": task_id,
-            "format": fmt,
-            "path": str(report_path),
-            "body": report_path.read_text(),
-        })
+            legacy = spec_dir / ("report.md" if fmt == "md" else "report.json")
+            if legacy.exists():
+                report_path = legacy
+            else:
+                return _format_error(
+                    f"no {fmt} report for task {task_id!r} yet — the Triager (Task 8) hasn't run"
+                )
+        return _format_json(
+            {
+                "task_id": task_id,
+                "format": fmt,
+                "path": str(report_path),
+                "body": report_path.read_text(),
+            }
+        )
 
     tools.append(report_get)
 
@@ -552,17 +594,18 @@ def create_task_control_tools() -> list:
 
     @tool(
         "task_rerun",
-        "Re-execute one lane of a previously-run task against the existing "
-        "context snapshot. At MVP only the 'functional' lane is implemented; "
-        "passing any other lane returns a 'not implemented in MVP' error.",
+        "Re-execute a previously-run task against its existing context "
+        "snapshot. Resets the named lane to pending and re-fires the Planner, "
+        "which auto-chains the rest of the pipeline (gen → executor → "
+        "evaluator → triager). Lane must be one of the v0.2 lit lanes.",
         {
             "type": "object",
             "properties": {
                 "task_id": {"type": "string", "description": "TFactory task ID"},
                 "lane": {
                     "type": "string",
-                    "default": "functional",
-                    "description": "Lane to rerun (MVP: functional only)",
+                    "default": "unit",
+                    "description": "Lane to reset before the rerun (v0.2 lit lanes)",
                 },
             },
             "required": ["task_id"],
@@ -585,20 +628,55 @@ def create_task_control_tools() -> list:
         status = _load_status(project_id, spec_id)
         if status is None:
             return _format_error(f"task {task_id!r} has no status.json")
-        # Bump rerun marker. The actual pipeline reinvocation is wired in Task 5+.
+        # Bump rerun marker + reset the lane, then re-fire the pipeline.
         rerun_count = int(status.get("rerun_count", 0)) + 1
         status["rerun_count"] = rerun_count
         status["lane_progress"][lane] = "pending"
         status["status"] = "pending"
+        status["phase"] = "created"
         status["updated_at"] = _now_iso()
         _status_file(project_id, spec_id).write_text(json.dumps(status, indent=2))
-        return _format_json({
-            "task_id": task_id,
-            "lane": lane,
-            "rerun_count": rerun_count,
-            "status": "pending",
-            "note": "Rerun recorded. Pipeline reinvocation wires up in Tasks 5-8.",
-        })
+
+        # Re-fire the Planner against the existing snapshot. schedule_planner
+        # is gated by TFACTORY_AUTO_PLAN (off in tests + the manual CLI path)
+        # and the success path of each stage auto-chains the next agent.
+        planner_scheduled = False
+        try:
+            from agents.planner import schedule_planner
+
+            project_entry = next(
+                (
+                    p
+                    for p in _load_projects().get("projects", [])
+                    if p.get("id") == project_id
+                ),
+                {},
+            )
+            project_root = project_entry.get("root_path", ".")
+            task = schedule_planner(
+                spec_dir=_spec_dir(project_id, spec_id),
+                project_dir=Path(project_root).expanduser(),
+                mode="initial",
+            )
+            planner_scheduled = task is not None
+        except ImportError:
+            pass  # planner not importable (minimal venv) — status stays pending
+
+        return _format_json(
+            {
+                "task_id": task_id,
+                "lane": lane,
+                "rerun_count": rerun_count,
+                "status": "pending",
+                "planner_scheduled": planner_scheduled,
+                "note": (
+                    "Rerun recorded; Planner re-fired (auto-chains the pipeline)."
+                    if planner_scheduled
+                    else "Rerun recorded. Planner not auto-fired "
+                    "(TFACTORY_AUTO_PLAN=0 or planner unavailable)."
+                ),
+            }
+        )
 
     tools.append(task_rerun)
 
