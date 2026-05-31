@@ -31,7 +31,7 @@ cp "$WS/findings/triage_report.md" "$RUN_DIR/triage_report.md"
 #    self-playing line-reveal HTML, captured to webm via Playwright recordVideo.
 "$PY" "$ROOT/scripts/demo/render-terminal-pane.py" "$WS" "$CMD" "$PANES/terminal.html" \
   --lane-note "$LANE" --animate >/dev/null
-node "$ROOT/scripts/demo/record-html.mjs" "$PANES/terminal.html" "$PANES/terminal.webm" 9 960 720 >/dev/null 2>&1
+node "$ROOT/scripts/demo/record-html.mjs" "$PANES/terminal.html" "$PANES/terminal.webm" 13 960 720 >/dev/null 2>&1
 # still frame (after full reveal) for posters / the quality gate
 node -e "
 const {chromium}=require('@playwright/test');
@@ -41,8 +41,8 @@ await p.goto('file://'+require('path').resolve('$PANES/terminal.html'));
 await p.waitForTimeout(5000);await p.screenshot({path:'$PANES/terminal.png'});await b.close();})()
 .catch(e=>{console.error(e);process.exit(1)});"
 
-# 2. portal pane (themed walkthrough) + report still
-node "$ROOT/scripts/demo/portal-record.mjs" "$PANES/portal.webm" >/dev/null 2>&1
+# 2. portal pane — scenario-specific: drill into THIS task + walk its tabs
+SPEC="$SPEC" node "$ROOT/scripts/demo/portal-record.mjs" "$PANES/portal.webm" >/dev/null 2>&1
 node "$ROOT/scripts/demo/portal-task-shot.mjs" "$PANES/report.png" "$SPEC" "Report" >/dev/null 2>&1
 
 # 3. composite + gate
