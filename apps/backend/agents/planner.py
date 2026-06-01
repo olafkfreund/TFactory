@@ -245,6 +245,10 @@ def _write_status_patch(spec_dir: Path, **fields: object) -> None:
     status.update(fields)
     status["updated_at"] = _now_iso()
     (spec_dir / "status.json").write_text(json.dumps(status, indent=2))
+    # Best-effort push-based progress event (#95); no-op unless opted in.
+    from agents.stage_events import emit_stage_event
+
+    emit_stage_event(spec_dir, status, stage="planner")
 
 
 # Subtask cap — anything above is truncated post-emit with a warning.
