@@ -45,8 +45,8 @@ def test_provider_factory_alias_resolution_copilot():
 
 def test_factory_instantiates_copilot_provider():
     """Factory returns a CopilotAgenticProvider with the prefix stripped."""
-    from providers.factory import get_provider
     from providers.copilot_agentic import CopilotAgenticProvider
+    from providers.factory import get_provider
 
     prov = get_provider("copilot", phase="planning", model="copilot:claude-sonnet-4.5")
     assert isinstance(prov, CopilotAgenticProvider)

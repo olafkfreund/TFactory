@@ -16,7 +16,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from byo_llm import EgressClass, _BADGE
+from byo_llm import _BADGE, EgressClass
 
 
 def egress_enabled(project_dir: Path | str | None) -> bool:
@@ -40,12 +40,12 @@ def badge_for(egress: EgressClass) -> str:
 
 @dataclass
 class ManifestRow:
-    name: str          # credential name (the key in `credentials:`)
-    backend: str       # canonical backend
+    name: str  # credential name (the key in `credentials:`)
+    backend: str  # canonical backend
     egress_class: str  # local | self_hosted | managed_cloud
     badge: str
-    as_var: str        # env var it is exposed as
-    kind: str          # env | file
+    as_var: str  # env var it is exposed as
+    kind: str  # env | file
     # NOTE: never contains the secret value or the resolvable ref fragment.
 
 
@@ -65,15 +65,28 @@ class EgressManifest:
     def render_markdown(self) -> str:
         if not self.enabled:
             return "## Egress manifest\n\n🔒 Egress disabled — no credentials are resolved.\n"
-        lines = ["## Egress manifest", "", f"☁️ Egress **enabled** — {len(self.rows)} credential(s).", ""]
+        lines = [
+            "## Egress manifest",
+            "",
+            f"☁️ Egress **enabled** — {len(self.rows)} credential(s).",
+            "",
+        ]
         if self.rows:
-            lines += ["| Credential | Backend | Egress | Exposed as |", "|---|---|---|---|"]
+            lines += [
+                "| Credential | Backend | Egress | Exposed as |",
+                "|---|---|---|---|",
+            ]
             for r in self.rows:
-                lines.append(f"| {r.name} | {r.backend} | {r.badge} | `{r.as_var}` ({r.kind}) |")
+                lines.append(
+                    f"| {r.name} | {r.backend} | {r.badge} | `{r.as_var}` ({r.kind}) |"
+                )
             lines.append("")
         if self.destinations:
             lines += ["**Declared destinations:**", ""]
-            lines += [f"- {d.get('name', '?')} → `{d.get('host', '?')}`" for d in self.destinations]
+            lines += [
+                f"- {d.get('name', '?')} → `{d.get('host', '?')}`"
+                for d in self.destinations
+            ]
             lines.append("")
         return "\n".join(lines)
 
@@ -87,25 +100,49 @@ def build_manifest(credentials: dict | None, egress_cfg) -> EgressManifest:
     enabled = bool(egress_cfg and getattr(egress_cfg, "enabled", False))
     rows: list[ManifestRow] = []
     for cred_name, entry in (credentials or {}).items():
-        ref = getattr(entry, "ref", None) or (entry.get("ref") if isinstance(entry, dict) else None)
-        as_var = getattr(entry, "as_", None) or (entry.get("as") if isinstance(entry, dict) else "")
-        kind = getattr(entry, "kind", None) or (entry.get("kind", "env") if isinstance(entry, dict) else "env")
+        ref = getattr(entry, "ref", None) or (
+            entry.get("ref") if isinstance(entry, dict) else None
+        )
+        as_var = getattr(entry, "as_", None) or (
+            entry.get("as") if isinstance(entry, dict) else ""
+        )
+        kind = getattr(entry, "kind", None) or (
+            entry.get("kind", "env") if isinstance(entry, dict) else "env"
+        )
         try:
             backend_name = infer_backend_from_ref(ref) if ref else "?"
-            ec = get_secrets_backend(backend_name).egress_class() if ref else EgressClass.MANAGED_CLOUD
+            ec = (
+                get_secrets_backend(backend_name).egress_class()
+                if ref
+                else EgressClass.MANAGED_CLOUD
+            )
         except Exception:  # noqa: BLE001 - unknown ref => assume worst case for honesty
             backend_name, ec = "?", EgressClass.MANAGED_CLOUD
-        rows.append(ManifestRow(
-            name=cred_name, backend=backend_name, egress_class=ec.value,
-            badge=_BADGE[ec], as_var=as_var or "", kind=kind,
-        ))
+        rows.append(
+            ManifestRow(
+                name=cred_name,
+                backend=backend_name,
+                egress_class=ec.value,
+                badge=_BADGE[ec],
+                as_var=as_var or "",
+                kind=kind,
+            )
+        )
     destinations = []
-    for d in (getattr(egress_cfg, "destinations", []) or []):
-        destinations.append({
-            "name": getattr(d, "name", None) or d.get("name"),
-            "host": getattr(d, "host", None) or d.get("host"),
-        })
+    for d in getattr(egress_cfg, "destinations", []) or []:
+        destinations.append(
+            {
+                "name": getattr(d, "name", None) or d.get("name"),
+                "host": getattr(d, "host", None) or d.get("host"),
+            }
+        )
     return EgressManifest(enabled=enabled, rows=rows, destinations=destinations)
 
 
-__all__ = ["egress_enabled", "badge_for", "build_manifest", "EgressManifest", "ManifestRow"]
+__all__ = [
+    "egress_enabled",
+    "badge_for",
+    "build_manifest",
+    "EgressManifest",
+    "ManifestRow",
+]
