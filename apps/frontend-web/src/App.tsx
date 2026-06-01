@@ -175,12 +175,9 @@ function AuthenticatedApp() {
     return () => clearTimeout(timeout);
   }, [isSwitchingProject]);
 
-  // Apply theme (light/dark mode + Ocean color theme)
+  // Apply light/dark mode (the color palette is handled by a separate effect)
   useEffect(() => {
     const root = document.documentElement;
-
-    // Always use the Gruvbox color theme
-    root.setAttribute('data-theme', 'gruvbox');
 
     const applyTheme = () => {
       if (settings.theme === 'dark') {
@@ -218,6 +215,23 @@ function AuthenticatedApp() {
       mediaQuery.removeEventListener('change', handleChange);
     };
   }, [settings.theme]);
+
+  // Apply color theme (palette) via the data-theme attribute. Gruvbox is the
+  // default; both gruvbox and shadcn have [data-theme] blocks in index.css.
+  useEffect(() => {
+    const root = document.documentElement;
+    const colorTheme = settings.colorTheme ?? 'gruvbox';
+
+    root.setAttribute('data-theme', colorTheme);
+
+    // Persist so the inline pre-paint script in index.html can apply the
+    // palette synchronously on next load, preventing a flash of wrong colors.
+    try {
+      localStorage.setItem('tfactory-color-theme', colorTheme);
+    } catch {
+      // localStorage may be unavailable
+    }
+  }, [settings.colorTheme]);
 
   // Apply UI scale
   useEffect(() => {
