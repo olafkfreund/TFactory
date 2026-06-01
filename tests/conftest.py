@@ -1221,6 +1221,7 @@ CRITICAL_MODULES = frozenset(
         "test_output_envelope",  # shared agent-output JSON envelope (#96)
         "test_stage_events",  # per-stage pipeline events (#95)
         "test_liveness",  # stall watchdog (#95)
+        "test_liveness_sweep",  # stall watchdog driver (#95)
         "test_security",  # command allowlist / sandbox invariants
         "test_coverage_delta",  # Evaluator coverage signal
         "test_triage_dedup",  # Triager dedup + rank
