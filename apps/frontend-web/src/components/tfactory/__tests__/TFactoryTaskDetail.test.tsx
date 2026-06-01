@@ -12,10 +12,30 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
-import { TFactoryTaskDetail } from '../TFactoryTaskDetail';
+import { TFactoryTaskDetail, statusSeverity } from '../TFactoryTaskDetail';
 
 beforeEach(() => {
   localStorage.setItem('tfactory-token', 'test-token');
+});
+
+// ── statusSeverity unit ───────────────────────────────────────────────
+
+describe('statusSeverity', () => {
+  it.each([
+    ['stalled', 'destructive'],
+    ['stuck', 'destructive'],
+    ['triager_failed', 'destructive'],
+    ['triaged', 'success'],
+    ['generating', 'info'],
+    ['replan_needed', 'warning'],
+    ['triaged_empty', 'muted'],
+  ])('maps %s → %s', (status, expected) => {
+    expect(statusSeverity(status)).toBe(expected);
+  });
+
+  it('null status → muted', () => {
+    expect(statusSeverity(null)).toBe('muted');
+  });
 });
 
 // ── URL-aware fetch helper ────────────────────────────────────────────

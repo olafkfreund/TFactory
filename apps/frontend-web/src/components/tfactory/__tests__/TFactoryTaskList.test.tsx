@@ -65,6 +65,7 @@ describe('statusColor', () => {
     ['evaluator_failed', 'red'],
     ['planner_failed', 'red'],
     ['stuck', 'red'],
+    ['stalled', 'red'],
     ['replan_needed', 'red'],
     ['planning', 'blue'],
     ['generating', 'blue'],
