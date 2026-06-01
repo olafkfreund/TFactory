@@ -539,9 +539,15 @@ async def run_triager(
             )
             return False
 
+        # Tolerant read via the shared agent-output envelope (#96). The
+        # Evaluator already canonicalises verdicts.json, but reading through
+        # the same extractor keeps the last consumer robust to a fence or
+        # trailing prose rather than hard-failing on it.
+        from agents.output_envelope import OutputEnvelopeError, extract_json
+
         try:
-            doc = json.loads(verdicts_path.read_text())
-        except json.JSONDecodeError as exc:
+            doc, _salvaged = extract_json(verdicts_path.read_text())
+        except OutputEnvelopeError as exc:
             _write_status_patch(
                 spec_dir,
                 status="triager_failed",
