@@ -30,6 +30,7 @@ except ImportError:
     ClaudeAgentOptions = None
     ClaudeSDKClient = None
 
+from agents.output_envelope import OutputEnvelopeError, extract_json
 from core.auth import ensure_claude_code_oauth_token, get_auth_token
 
 # Default model for insight extraction (fast and cheap)
@@ -422,52 +423,22 @@ def parse_insights(response_text: str) -> dict | None:
     Returns:
         Parsed insights dict or None if parsing failed
     """
-    # Check for empty response
-    if not response_text or not response_text.strip():
-        logger.warning("Empty response received for insight extraction")
-        return None
-
-    # Try to extract JSON from the response
-    text = response_text.strip()
-
-    # Handle markdown code blocks
-    if text.startswith("```"):
-        # Remove code block markers
-        lines = text.split("\n")
-        # Remove first line (```json or ```)
-        if lines[0].startswith("```"):
-            lines = lines[1:]
-        # Remove last line if it's ``
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        text = "\n".join(lines)
-
-    # Try to parse JSON, with fallback strategies
-    insights = None
-
-    # Strategy 1: Direct parse
+    # Extract JSON from the response via the shared tolerant envelope (#96):
+    # handles empty output, ```json fences, trailing prose and brace-matching
+    # in one place, so this call site no longer hand-rolls its own salvage.
     try:
-        insights = json.loads(text)
-    except json.JSONDecodeError:
-        # Strategy 2: Extract JSON object between first { and last }
-        first_brace = text.find("{")
-        last_brace = text.rfind("}")
-        if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
-            json_substring = text[first_brace : last_brace + 1]
-            try:
-                insights = json.loads(json_substring)
-                logger.debug("Extracted JSON using brace-matching fallback")
-            except json.JSONDecodeError:
-                pass
-
-    # If parsing still failed, log and return None
-    if insights is None:
+        insights, salvaged = extract_json(response_text)
+    except OutputEnvelopeError as exc:
         logger.warning(
-            f"Failed to parse insights JSON. Response length: {len(text)} chars"
+            f"Failed to parse insights JSON ({exc}). "
+            f"Response length: {len(response_text or '')} chars"
         )
-        if text:
-            logger.debug(f"Response text preview: {text[:200]}...")
+        if response_text:
+            logger.debug(f"Response text preview: {response_text.strip()[:200]}...")
         return None
+
+    if salvaged:
+        logger.debug("Extracted insights JSON via the tolerant envelope fallback")
 
     # Validate structure
     if not isinstance(insights, dict):
@@ -732,7 +703,9 @@ async def extract_session_insights_bulk(
                 recovery_manager=c.get("recovery_manager"),
             )
         except Exception as exc:  # noqa: BLE001
-            logger.warning("gather_extraction_inputs failed for %s: %s", subtask_id, exc)
+            logger.warning(
+                "gather_extraction_inputs failed for %s: %s", subtask_id, exc
+            )
             entries_by_id[subtask_id] = {"skip_reason": "gather_failed"}
             continue
 
@@ -758,7 +731,9 @@ async def extract_session_insights_bulk(
     # Submit + poll.
     try:
         batch_id = await submit_batch(requests, api_key=api_key)
-        logger.info("Bulk extraction batch submitted: %s (%d requests)", batch_id, len(requests))
+        logger.info(
+            "Bulk extraction batch submitted: %s (%d requests)", batch_id, len(requests)
+        )
         batch_results = await await_batch(
             batch_id, api_key=api_key, timeout=_bulk_timeout()
         )
@@ -816,9 +791,7 @@ async def extract_session_insights_bulk(
     # Handle entries that were pre-skipped (no changes / gather failure).
     for c in completions:
         if c["subtask_id"] not in out:
-            out[c["subtask_id"]] = _get_generic_insights(
-                c["subtask_id"], c["success"]
-            )
+            out[c["subtask_id"]] = _get_generic_insights(c["subtask_id"], c["success"])
 
     return out
 
