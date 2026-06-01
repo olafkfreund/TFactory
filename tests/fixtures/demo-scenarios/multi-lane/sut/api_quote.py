@@ -8,7 +8,6 @@ by the browser lane (Playwright).
 from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException, Query
-
 from quote import quote
 
 app = FastAPI(title="TFactory Demo — Quote API")

@@ -92,7 +92,7 @@ def test_redactor_value_based():
 
 
 def test_redacting_filter_on_logger(caplog):
-    from tfactory_secrets.redaction import Redactor, RedactingFilter
+    from tfactory_secrets.redaction import RedactingFilter, Redactor
 
     r = Redactor()
     r.register("leakytoken123")
