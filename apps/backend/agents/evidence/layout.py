@@ -167,6 +167,8 @@ def render_playwright_config(
     screenshot_policy: str = "only-on-failure",
     video_policy: str = "retain-on-failure",
     trace_policy: str = "on-first-retry",
+    requires_auth: bool = False,
+    storage_state_path: str = "state.json",
 ) -> str:
     """Render the Playwright config template with the given substitutions.
 
@@ -180,18 +182,73 @@ def render_playwright_config(
         screenshot_policy: Playwright screenshot capture mode.
         video_policy: Playwright video capture mode.
         trace_policy: Playwright trace capture mode.
+        requires_auth: When True (a ``ref``-auth target + ``requires_auth``
+            subtask, #107 task 5), add a ``setup`` project that runs
+            ``auth.setup.ts`` first and make the chromium project depend on it +
+            reuse its ``storageState`` — so tests log in once, not per-test.
+        storage_state_path: Where ``auth.setup.ts`` writes / tests read the
+            saved session (maps to ``storageState``).
 
     Returns:
         Rendered TypeScript config file contents as a string.
     """
     tmpl_path = Path(__file__).with_name("playwright.config.tmpl.ts")
     tmpl = tmpl_path.read_text(encoding="utf-8")
+
+    if requires_auth:
+        storage_state_use = f'\n    storageState: "{storage_state_path}",'
+        setup_project = '\n    { name: "setup", testMatch: /auth\\.setup\\.ts/ },'
+        chromium_deps = '\n      dependencies: ["setup"],'
+    else:
+        # No auth → all three render empty so the config is unchanged (and the
+        # no-placeholder-leakage invariant holds).
+        storage_state_use = setup_project = chromium_deps = ""
+
     return (
         tmpl.replace("@@OUTPUT_DIR@@", str(output_dir))
         .replace("@@BASE_URL@@", base_url)
         .replace("@@SCREENSHOT_POLICY@@", screenshot_policy)
         .replace("@@VIDEO_POLICY@@", video_policy)
         .replace("@@TRACE_POLICY@@", trace_policy)
+        .replace("@@STORAGE_STATE_USE@@", storage_state_use)
+        .replace("@@SETUP_PROJECT@@", setup_project)
+        .replace("@@CHROMIUM_DEPS@@", chromium_deps)
+    )
+
+
+def render_auth_setup(
+    *,
+    login_url: str,
+    username_selector: str,
+    password_selector: str,
+    submit_selector: str,
+    success_url_pattern: str,
+    username_env: str,
+    secret_env: str,
+    storage_state_path: str = "state.json",
+) -> str:
+    """Render the ``auth.setup.ts`` form-login template (#107 task 5).
+
+    Produces the Playwright ``setup`` script that logs in once and saves the
+    authenticated session to ``storage_state_path``. Credentials are read from
+    the injected env vars (``username_env`` / ``secret_env``) at run time — never
+    baked into the file. The selectors / URLs come from the target's
+    ``auth: { type: ref }`` block in ``.tfactory.yml``.
+
+    Returns:
+        Rendered TypeScript ``auth.setup.ts`` contents as a string.
+    """
+    tmpl_path = Path(__file__).with_name("auth.setup.tmpl.ts")
+    tmpl = tmpl_path.read_text(encoding="utf-8")
+    return (
+        tmpl.replace("@@LOGIN_URL@@", login_url)
+        .replace("@@USERNAME_SELECTOR@@", username_selector)
+        .replace("@@PASSWORD_SELECTOR@@", password_selector)
+        .replace("@@SUBMIT_SELECTOR@@", submit_selector)
+        .replace("@@SUCCESS_URL_PATTERN@@", success_url_pattern)
+        .replace("@@USERNAME_ENV@@", username_env)
+        .replace("@@SECRET_ENV@@", secret_env)
+        .replace("@@STORAGE_STATE_PATH@@", storage_state_path)
     )
 
 

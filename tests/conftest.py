@@ -1233,6 +1233,7 @@ CRITICAL_MODULES = frozenset(
         "test_provider_runtime",  # provider CLI version manager (#121)
         "test_kubernetes_runtime",  # kubectl port-forward dispatch (#108)
         "test_visual_baseline",  # visual-regression baseline store (#109)
+        "test_auth_setup_render",  # Playwright storageState auth render (#107)
     }
 )
 

@@ -264,15 +264,20 @@ class TestPlaywrightTemplateInstantiation:
         result = tmpl.instantiate(
             target_base_url="https://example.com",
             test_name="logs in with valid credentials",
+            login_path="/login",
             username_selector="#email",
             password_selector="#password",
             submit_selector='button[type="submit"]',
             success_url_pattern="dashboard",
+            username_env="TEST_USERNAME",
+            secret_env="TEST_SECRET",
         )
         assert _no_unsubstituted(result)
         assert _ts_looks_valid(result)
         assert "https://example.com" in result
         assert "dashboard" in result
+        # creds are read from injected env vars, not hard-coded (#107 task 5)
+        assert "process.env['TEST_USERNAME']" in result
 
     def test_form_submit_validation_instantiates(self) -> None:
         templates = load_templates_for_framework("playwright", root=REPO_ROOT)
