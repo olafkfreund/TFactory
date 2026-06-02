@@ -1232,6 +1232,7 @@ CRITICAL_MODULES = frozenset(
         "test_platform_templates",  # shipped platform/infra template library
         "test_provider_runtime",  # provider CLI version manager (#121)
         "test_kubernetes_runtime",  # kubectl port-forward dispatch (#108)
+        "test_visual_baseline",  # visual-regression baseline store (#109)
     }
 )
 
