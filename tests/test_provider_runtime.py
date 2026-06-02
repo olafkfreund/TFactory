@@ -62,6 +62,73 @@ def test_detect_returns_none_when_binary_absent(monkeypatch: pytest.MonkeyPatch)
     assert pr.detect_installed(pr.get_runtime("codex")) is None
 
 
+def test_detect_pip_falls_back_to_backend_venv(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Simulate being imported from a venv that lacks the SDK: importlib fails,
+    # so detection must shell out to the backend venv interpreter (#121).
+    def _boom(pkg):
+        raise ModuleNotFoundError(pkg)
+
+    monkeypatch.setattr("importlib.metadata.version", _boom)
+    monkeypatch.setattr(pr, "_backend_python", lambda: "/be/.venv/bin/python")
+    monkeypatch.setattr(
+        pr.subprocess, "run",
+        lambda *a, **k: SimpleNamespace(stdout="0.2.87\n", stderr="", returncode=0),
+    )
+    assert pr.detect_installed(pr.get_runtime("claude")) == "0.2.87"
+
+
+def test_detect_pip_none_when_no_backend_venv(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "importlib.metadata.version", lambda pkg: (_ for _ in ()).throw(Exception())
+    )
+    monkeypatch.setattr(pr, "_backend_python", lambda: None)
+    assert pr.detect_installed(pr.get_runtime("claude")) is None
+
+
+# ── binary resolution via well-known paths (antigravity) ─────────────────────
+
+
+def test_find_binary_probes_extra_paths(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pr.shutil, "which", lambda b: None)  # not on PATH
+    binp = tmp_path / "antigravity"
+    binp.write_text("#!/bin/sh\n")
+    rt = pr.ProviderRuntime(
+        "g", "npm", ("gemini",), ("--version",), package="x", extra_paths=(str(binp),)
+    )
+    assert pr._find_binary(rt) == str(binp)
+
+
+def test_gemini_registry_has_antigravity_extra_paths() -> None:
+    paths = pr.get_runtime("gemini").extra_paths
+    assert paths and any("antigravity-cli" in p for p in paths)
+
+
+def test_npm_package_version_reads_package_json(tmp_path) -> None:
+    pkg = tmp_path / "node_modules" / "@google" / "gemini-cli"
+    (pkg / "bin").mkdir(parents=True)
+    (pkg / "package.json").write_text(json.dumps({"version": "0.10.4"}))
+    binp = pkg / "bin" / "gemini"
+    binp.write_text("#!/usr/bin/env node\n")
+    assert pr._npm_package_version(str(binp)) == "0.10.4"
+
+
+def test_detect_npm_prefers_package_json_over_cli(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pkg = tmp_path / "lib" / "codex"
+    (pkg / "bin").mkdir(parents=True)
+    (pkg / "package.json").write_text(json.dumps({"version": "1.7.2"}))
+    binp = pkg / "bin" / "codex"
+    binp.write_text("#!/usr/bin/env node\n")
+    monkeypatch.setattr(pr.shutil, "which", lambda b: str(binp) if b == "codex" else None)
+
+    def _should_not_run(*a, **k):  # version must come from package.json, not the CLI
+        raise AssertionError("CLI --version should not be spawned when package.json wins")
+
+    monkeypatch.setattr(pr.subprocess, "run", _should_not_run)
+    assert pr.detect_installed(pr.get_runtime("codex")) == "1.7.2"
+
+
 # ── latest_version ───────────────────────────────────────────────────────────
 
 

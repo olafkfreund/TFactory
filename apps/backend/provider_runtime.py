@@ -55,6 +55,10 @@ class ProviderRuntime:
     version_args: tuple[str, ...]  # e.g. ("--version",)
     package: str | None = None  # npm / pip package name
     managed: bool = True  # False → detect-only (e.g. ollama)
+    # Well-known install locations to probe when none of ``binaries`` is on
+    # PATH (``~`` expanded). Mirrors cli_accounts' antigravity-cli probing so
+    # the Provider Runtimes panel agrees with the CLI Accounts panel (#121).
+    extra_paths: tuple[str, ...] = ()
 
 
 # The provider runtimes TFactory cares about. Gemini lists ``antigravity``
@@ -77,6 +81,12 @@ _REGISTRY: dict[str, ProviderRuntime] = {
         ("antigravity", "gemini"),
         ("--version",),
         package="@google/gemini-cli",
+        # Antigravity CLI (post-Gemini-sunset successor) installs under
+        # ~/.gemini/antigravity-cli/bin/ by default — rarely on PATH.
+        extra_paths=(
+            "~/.gemini/antigravity-cli/bin/antigravity",
+            "~/.gemini/antigravity-cli/bin/gemini",
+        ),
     ),
     "ollama": ProviderRuntime(
         "ollama", "binary", ("ollama",), ("--version",), managed=False
@@ -127,21 +137,79 @@ def _find_binary(rt: ProviderRuntime) -> str | None:
         path = shutil.which(name)
         if path:
             return path
+    # Not on PATH — probe the runtime's well-known install locations.
+    for raw in rt.extra_paths:
+        cand = Path(raw).expanduser()
+        if cand.is_file() or cand.is_symlink():
+            return str(cand)
+    return None
+
+
+def _backend_python() -> str | None:
+    """Path to the backend venv's interpreter, if present and not the current
+    one. Lets pip-kind detection work when this module is imported from a
+    *different* venv (e.g. the web-server, which doesn't install the SDK)."""
+    cand = Path(__file__).resolve().parent / ".venv" / "bin" / "python"
+    if cand.exists() and str(cand) != sys.executable:
+        return str(cand)
+    return None
+
+
+def _pip_version_via(python: str | None, package: str | None) -> str | None:
+    """Query ``package``'s installed version inside another interpreter."""
+    if not python or not package:
+        return None
+    try:
+        proc = subprocess.run(
+            [
+                python,
+                "-c",
+                f"from importlib.metadata import version;print(version({package!r}))",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return _parse_version(proc.stdout) if proc.returncode == 0 else None
+
+
+def _npm_package_version(bin_path: str) -> str | None:
+    """Read the version from a globally-installed npm package's package.json,
+    walking up from the binary. Avoids slow Node.js startup (e.g. the Gemini
+    CLI takes ~4s to print ``--version``). Ported from cli_accounts (#121)."""
+    try:
+        for parent in Path(bin_path).resolve().parents:
+            pkg_json = parent / "package.json"
+            if pkg_json.exists():
+                version = json.loads(pkg_json.read_text()).get("version")
+                return _parse_version(version) if version else None
+    except (OSError, ValueError):
+        return None
     return None
 
 
 def detect_installed(rt: ProviderRuntime) -> str | None:
     """Installed version, or ``None`` if not installed / undetectable."""
     if rt.kind == "pip":
+        # Fast path: the importing interpreter has the package.
         try:
             from importlib.metadata import version as _pkg_version
 
             return _parse_version(_pkg_version(rt.package))
-        except Exception:  # noqa: BLE001 - not installed / metadata missing
-            return None
+        except Exception:  # noqa: BLE001 - not installed in *this* interpreter
+            # Fallback: this module may be imported from the web-server venv,
+            # which lacks the SDK — ask the backend venv instead (#121).
+            return _pip_version_via(_backend_python(), rt.package)
     binary = _find_binary(rt)
     if binary is None:
         return None
+    # npm CLIs: prefer package.json (cheap) over spawning the slow CLI.
+    if rt.kind == "npm":
+        pkg_version = _npm_package_version(binary)
+        if pkg_version:
+            return pkg_version
     try:
         proc = subprocess.run(
             [binary, *rt.version_args],
