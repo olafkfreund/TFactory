@@ -68,9 +68,11 @@ Phased so each parent task is independently shippable behind the egress/`require
   - [ ] 7.1 Settings → Credentials panel (create/list-metadata/delete) reusing the Git-credentials UI pattern; i18n en/fr/pt-BR
   - [ ] 7.2 `npm run typecheck` + component tests; verify green
 
-- [ ] 8. **Docs + guide**
-  - [ ] 8.1 `guides/test-target-auth.md` (store a credential → reference in `.tfactory.yml` → mark a subtask `requires_auth`)
-  - [ ] 8.2 Update `.tfactory.yml.example` + `docs/framework-registry.md` where relevant; close #107
+- [x] 8. **Docs + guide** — PR for #107 (does not need a pipeline)
+  - [x] 8.1 `guides/test-target-auth.md` — store → reference in `.tfactory.yml`
+        → `requires_auth`; ref schemes; security model; honest **status** table.
+  - [x] 8.2 `.tfactory.yml.example` gains a commented `test_credentials` + ref-auth
+        block. (Keep #107 **open** until the pipeline-verified tasks 4b-final/5/7 land.)
 
 ## Definition of done
 - All acceptance criteria in `spec.md` met; no plaintext secret in any log/artifact/verdict/triage (redaction test green).
