@@ -124,7 +124,7 @@ def test_discover_shape_feeds_render_cloud_topology() -> None:
 
     inv = discover("aws", regions=["us-east-1"], runner=_aws_runner())
     out = render_cloud_topology(inv)
-    assert out.startswith("graph TD\n")
+    assert out.startswith("graph LR\n")
     assert "AWS Account 533267307120" in out
     assert "📍 us-east-1" in out
 

@@ -74,7 +74,7 @@ def test_builder_sanitises_node_ids() -> None:
 
 def test_topology_has_account_global_and_regions() -> None:
     out = render_cloud_topology(_INVENTORY)
-    assert out.startswith("graph TD\n")
+    assert out.startswith("graph LR\n")
     assert "AWS Account 533267307120" in out
     assert "Olaf.Freund" in out
     assert "🌐 Global services" in out
@@ -101,7 +101,7 @@ def test_topology_s3_ok_is_green() -> None:
 
 def test_topology_empty_inventory_is_valid_minimal_graph() -> None:
     out = render_cloud_topology({})
-    assert out.startswith("graph TD\n")
+    assert out.startswith("graph LR\n")
     assert "CLOUD Account ?" in out
     assert "classDef bad" in out
 

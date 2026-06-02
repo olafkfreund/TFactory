@@ -35,6 +35,10 @@
       "save": "Salvar credencial",
       "saving": "Salvando…"
     },
+    "cloudAssessment": {
+      "title": "Avaliação de Nuvem",
+      "description": "Configurações incorretas na nuvem + topologia"
+    },
     "display": {
       "title": "Exibição",
       "description": "Ajuste o tamanho dos elementos da interface"

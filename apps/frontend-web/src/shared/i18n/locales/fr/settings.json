@@ -118,6 +118,10 @@
       "save": "Enregistrer l'identifiant",
       "saving": "Enregistrement…"
     },
+    "cloudAssessment": {
+      "title": "Évaluation du cloud",
+      "description": "Anomalies de configuration cloud + topologie"
+    },
     "apiKeys": {
       "title": "Clés API",
       "description": "Clés acw_ à portée pour le plan de contrôle MCP stdio. Remplace le jeton admin global pour les déploiements en entreprise.",
