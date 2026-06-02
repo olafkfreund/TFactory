@@ -1231,6 +1231,7 @@ CRITICAL_MODULES = frozenset(
         "test_config_to_credential_specs",  # schema→resolver-spec glue (#107)
         "test_platform_templates",  # shipped platform/infra template library
         "test_provider_runtime",  # provider CLI version manager (#121)
+        "test_kubernetes_runtime",  # kubectl port-forward dispatch (#108)
     }
 )
 
