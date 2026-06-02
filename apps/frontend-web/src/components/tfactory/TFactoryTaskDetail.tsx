@@ -47,10 +47,11 @@ interface Props {
 
 type Severity = 'success' | 'warning' | 'destructive' | 'info' | 'muted';
 
-function statusSeverity(status: string | null): Severity {
+export function statusSeverity(status: string | null): Severity {
   if (!status) return 'muted';
   const s = status.toLowerCase();
-  if (s.includes('failed') || s.includes('stuck') || s.includes('error')) return 'destructive';
+  if (s.includes('failed') || s.includes('stuck') || s.includes('stalled') || s.includes('error'))
+    return 'destructive';
   if (s.endsWith('_empty')) return 'muted';
   if (s.includes('triaged') || s.includes('generated') || s.includes('accept')) return 'success';
   if (s.includes('replan') || s.includes('flag') || s.includes('warn')) return 'warning';

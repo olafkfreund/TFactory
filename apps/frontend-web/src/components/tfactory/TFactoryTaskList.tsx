@@ -36,14 +36,19 @@ interface Props {
  * Buckets:
  *   - success: evaluated, triaged
  *   - active:  planning, generating, evaluating, triaging, in-flight
- *   - error:   *_failed, stuck, replan_needed
+ *   - error:   *_failed, stuck, stalled, replan_needed
  *   - empty:   *_empty
  *   - default: pending / unknown → gray
  */
 export function statusColor(status: string | null): string {
   if (!status) return 'gray';
   if (status === 'triaged' || status === 'evaluated') return 'green';
-  if (status.endsWith('_failed') || status === 'stuck' || status === 'replan_needed') {
+  if (
+    status.endsWith('_failed') ||
+    status === 'stuck' ||
+    status === 'stalled' ||
+    status === 'replan_needed'
+  ) {
     return 'red';
   }
   if (status.endsWith('_empty')) return 'yellow';
