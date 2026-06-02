@@ -1230,6 +1230,7 @@ CRITICAL_MODULES = frozenset(
         "test_tfactory_yml_test_credentials",  # .tfactory.yml test_credentials schema (#107)
         "test_config_to_credential_specs",  # schema→resolver-spec glue (#107)
         "test_platform_templates",  # shipped platform/infra template library
+        "test_provider_runtime",  # provider CLI version manager (#121)
     }
 )
 
