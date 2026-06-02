@@ -26,10 +26,10 @@ Phased so each parent task is independently shippable behind the egress/`require
         `store:` ref. The web-server `store:` materialisation moves to task 4.
   - [x] 2.3 Added `test_resolve_test_target_credentials` to `CRITICAL_MODULES` (214 tests, ~7s)
 
-- [ ] 3. **`.tfactory.yml` schema + subtask field**
-  - [ ] 3.1 Write tests for the `test_credentials` block + `targets[].auth.ref` validation, and subtask `requires_auth`
-  - [ ] 3.2 Extend `tfactory_yml/schema.py` + the `test_plan` subtask schema (`requires_auth: bool = false`)
-  - [ ] 3.3 Fail-closed validation when `test_credentials` used without egress; verify all tests pass
+- [x] 3. **`.tfactory.yml` schema + subtask field** — PR for #107
+  - [x] 3.1 Tests: `tests/test_tfactory_yml_test_credentials.py` (parse, ref-auth, fail-closed, env-name, subtask round-trip)
+  - [x] 3.2 `tfactory_yml/schema.py`: `TestCredentialEntry` + `test_credentials` map + `RefAuth` (`type: ref`) in the auth union; `test_plan/subtask.py`: `requires_auth: bool = False` (wired through `to_dict`/`from_dict`, omitted at default)
+  - [x] 3.3 `model_validator` fails closed: `test_credentials` without `egress.enabled` → error; `auth.ref` must name a declared entry. Added module to `CRITICAL_MODULES` (221 tests)
 
 - [ ] 4. **Executor wiring + redaction**
   - [ ] 4.1 Write tests: executor injects creds for egress browser/api lanes only; secret scrubbed from logs/junit/HAR/verdicts/triage
