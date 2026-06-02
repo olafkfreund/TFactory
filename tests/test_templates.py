@@ -188,14 +188,20 @@ class TestTemplateFileInstantiate:
 class TestLoadTemplatesForFramework:
     @pytest.mark.parametrize("fw", ["pytest", "jest", "playwright"])
     def test_loads_all_templates(self, fw: str) -> None:
-        templates = load_templates_for_framework(fw, root=REPO_ROOT)
+        # The curated built-in set is exactly 5 per framework; the shipped
+        # platform `library/` is loaded separately (include_library=False here).
+        templates = load_templates_for_framework(
+            fw, root=REPO_ROOT, include_library=False
+        )
         assert len(templates) == 5, (
-            f"Expected 5 templates for {fw}, got {len(templates)}: {list(templates)}"
+            f"Expected 5 curated templates for {fw}, got {len(templates)}: {list(templates)}"
         )
 
     @pytest.mark.parametrize("fw", ["pytest", "jest", "playwright"])
-    def test_each_framework_has_exactly_5_templates(self, fw: str) -> None:
-        templates = load_templates_for_framework(fw, root=REPO_ROOT)
+    def test_each_framework_has_exactly_5_curated_templates(self, fw: str) -> None:
+        templates = load_templates_for_framework(
+            fw, root=REPO_ROOT, include_library=False
+        )
         assert len(templates) == 5
 
     def test_returns_empty_for_unknown_framework(self) -> None:

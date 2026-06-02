@@ -149,14 +149,18 @@ def load_templates_for_framework(
     root: Path | None = None,
     project_dir: Path | None = None,
     include_harvested: bool = True,
+    include_library: bool = True,
 ) -> dict[str, TemplateFile]:
-    """Load all templates for a framework, across the built-in set and the
-    harvested libraries (most reusable last so they can shadow by name).
+    """Load all templates for a framework, across the built-in set, the shipped
+    platform library, and the harvested libraries (most reusable last so they
+    can shadow by name).
 
     Search order (later wins on filename collision):
-      1. built-in  — ``<repo>/frameworks/{name}/templates/``
-      2. global    — ``~/.tfactory/templates/{name}/`` (harvested, cross-project)
-      3. project   — ``{project_dir}/.tfactory/templates/{name}/`` (harvested,
+      1. built-in  — ``<repo>/frameworks/{name}/templates/`` (the curated set)
+      2. library   — ``<repo>/frameworks/{name}/library/`` (shipped platform /
+                     infra patterns, e.g. ServiceNow / Salesforce / k8s / nginx)
+      3. global    — ``~/.tfactory/templates/{name}/`` (harvested, cross-project)
+      4. project   — ``{project_dir}/.tfactory/templates/{name}/`` (harvested,
                      committed with the repo)
 
     Args:
@@ -164,7 +168,9 @@ def load_templates_for_framework(
         root: Repository root override (defaults to the inferred repo root).
         project_dir: The AIFactory project checkout, to pick up its harvested
             ``.tfactory/templates/`` library. Omit to skip the project library.
-        include_harvested: Set False to load only the built-in set.
+        include_harvested: Set False to load only the shipped sets.
+        include_library: Set False to load only the curated built-in set
+            (used by the "exactly 5 curated templates" invariant tests).
 
     Returns:
         ``{filename: TemplateFile}`` for every ``*.tmpl`` found.
@@ -173,10 +179,10 @@ def load_templates_for_framework(
         root = Path(__file__).resolve().parents[3]
 
     search_dirs: list[Path] = [root / "frameworks" / framework_name / "templates"]
+    if include_library:
+        search_dirs.append(root / "frameworks" / framework_name / "library")
     if include_harvested:
-        search_dirs.append(
-            Path.home() / ".tfactory" / "templates" / framework_name
-        )
+        search_dirs.append(Path.home() / ".tfactory" / "templates" / framework_name)
         if project_dir is not None:
             search_dirs.append(
                 Path(project_dir) / ".tfactory" / "templates" / framework_name
