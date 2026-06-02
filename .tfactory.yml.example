@@ -107,6 +107,32 @@ targets:
       token_env: LD_SDK_KEY           # LaunchDarkly SDK key (server-side)
 
 # ============================================================
+# Test-target login credentials (optional — #107)
+# ============================================================
+# Store the secret encrypted in the portal (POST /api/test-credentials -> tc_…),
+# then reference it here so generated tests can log in. REQUIRES egress.enabled.
+# A target opts in with `auth: { type: ref, ref: <name> }`.
+# See guides/test-target-auth.md.
+#
+# egress:
+#   enabled: true
+# test_credentials:
+#   login:
+#     ref: store:tc_a1b2          # store:<id> | env:NAME | vault:path#field
+#     kind: form                  # form | api_token | basic_auth | totp
+#     as_secret: TEST_PASSWORD    # env var the secret is exposed as
+#     as_username: TEST_USERNAME  # optional
+# # ...and on the relevant target:
+# #   auth:
+# #     type: ref
+# #     ref: login
+# #     login_url: /login
+# #     username_selector: "#email"
+# #     password_selector: "#password"
+# #     submit_selector: "button[type=submit]"
+# #     success_url_pattern: "**/dashboard"
+
+# ============================================================
 # Test data seeding + reset (optional)
 # ============================================================
 # Commands run by the Executor before/after the test suite.
