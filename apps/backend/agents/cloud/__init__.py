@@ -13,6 +13,7 @@ from .assessment import (
     to_inventory_findings,
 )
 from .discovery import AccessResult, access_check, discover
+from .report import assess_and_write, cloud_findings_paths, render_report_markdown
 
 __all__ = [
     "AccessResult",
@@ -20,7 +21,10 @@ __all__ = [
     "CloudFinding",
     "access_check",
     "assess",
+    "assess_and_write",
+    "cloud_findings_paths",
     "discover",
     "parse_ocsf",
+    "render_report_markdown",
     "to_inventory_findings",
 ]
