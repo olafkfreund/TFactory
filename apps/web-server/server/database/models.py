@@ -434,6 +434,58 @@ class GitCredential(Base):
         return f"<GitCredential id={self.id!r} name={self.name!r}>"
 
 
+class TestTargetCredential(Base):
+    """An encrypted credential used to authenticate to a system-under-test (#107).
+
+    Mirrors :class:`GitCredential`: org-scoped, secret columns encrypted at
+    rest via ``EncryptedString`` (Epic #26 P2 — KMS/Vault/Azure/GCP backends),
+    and the secret is never returned via the API after creation (only
+    metadata). Generated tests reference these by ``name`` from
+    ``.tfactory.yml`` ``test_credentials``; the broker resolves them and the
+    executor injects them as ephemeral env into egress-enabled lanes only.
+
+    ``username`` is plaintext (not sensitive on its own). ``secret`` holds the
+    password / API token / TOTP seed; ``extra`` is an optional encrypted JSON
+    blob for kind-specific fields (e.g. ``{"otp_period": 30}``). ``kind`` is an
+    enum-by-convention (``form`` | ``api_token`` | ``basic_auth`` | ``totp``)
+    validated at the API layer, keeping the column forward-compatible.
+    """
+
+    __tablename__ = "test_target_credentials"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=_generate_uuid
+    )
+    org_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("organizations.id"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    kind: Mapped[str] = mapped_column(String(50), nullable=False, default="form")
+    # Plaintext username/identifier (not a secret on its own).
+    username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # The secret material — password / API token / TOTP seed. Encrypted at rest.
+    secret: Mapped[str] = mapped_column(_EncryptedString(), nullable=False)
+    # Optional kind-specific JSON (encrypted), e.g. {"otp_period": 30}.
+    extra: Mapped[str | None] = mapped_column(_EncryptedString(), nullable=True)
+    created_by: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    organization: Mapped["Organization"] = relationship("Organization")
+
+    # A credential name is unique per org so .tfactory.yml refs are unambiguous.
+    __table_args__ = (
+        UniqueConstraint("org_id", "name", name="uq_test_cred_org_name"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<TestTargetCredential id={self.id!r} name={self.name!r}>"
+
+
 # ---------------------------------------------------------------------------
 # Email Accounts (OAuth-connected email for notifications)
 # ---------------------------------------------------------------------------
