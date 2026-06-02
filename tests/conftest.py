@@ -1228,6 +1228,7 @@ CRITICAL_MODULES = frozenset(
         "test_triager_completion_webhook",  # #85 completion callback contract
         "test_resolve_test_target_credentials",  # test-target cred resolver (#107)
         "test_tfactory_yml_test_credentials",  # .tfactory.yml test_credentials schema (#107)
+        "test_config_to_credential_specs",  # schema→resolver-spec glue (#107)
     }
 )
 
