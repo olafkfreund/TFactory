@@ -176,3 +176,28 @@ def test_install_argv_unmanaged_raises() -> None:
 )
 def test_semver_lt(a, b, older) -> None:
     assert pr._semver_lt(a, b) is older
+
+
+# ── run_install (live runner; mocked subprocess) ─────────────────────────────
+
+
+def test_run_install_executes_and_redetects(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        pr.subprocess, "run",
+        lambda *a, **k: SimpleNamespace(stdout="added 1 package\n", stderr="", returncode=0),
+    )
+    monkeypatch.setattr(pr, "detect_installed", lambda rt: "1.9.0")
+    res = pr.run_install("codex")
+    assert res.returncode == 0
+    assert res.installed_version == "1.9.0"
+    assert res.command == ["npm", "install", "-g", "@openai/codex@latest"]
+
+
+def test_run_install_unmanaged_raises() -> None:
+    with pytest.raises(ValueError):
+        pr.run_install("ollama")
+
+
+def test_run_install_unknown_raises() -> None:
+    with pytest.raises(KeyError):
+        pr.run_install("nope")

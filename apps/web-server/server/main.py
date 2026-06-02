@@ -38,6 +38,7 @@ from .routes import (
     notifications,
     organizations,
     projects,
+    provider_runtimes,
     skills,
     tasks,
     terminal,
@@ -236,6 +237,9 @@ def create_app() -> FastAPI:
 
     # Test-target credentials for "log in then test" (#107)
     app.include_router(test_target_credentials.router)
+
+    # Provider runtime version manager (#121)
+    app.include_router(provider_runtimes.router)
 
     # Audit log routes (prefix defined in router: /api/orgs)
     app.include_router(audit.router)

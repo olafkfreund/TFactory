@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Literal
 
 __all__ = [
+    "InstallResult",
     "ProviderRuntime",
     "RuntimeStatus",
     "get_all_status",
@@ -34,6 +35,7 @@ __all__ = [
     "get_status",
     "install_argv",
     "pinned_version",
+    "run_install",
     "runtimes",
     "set_pin",
 ]
@@ -288,3 +290,40 @@ def install_argv(rt: ProviderRuntime, version: str | None = None) -> list[str]:
         # Copilot is upgraded in place; no version pin via this path.
         return ["copilot", "upgrade"]
     raise ValueError(f"cannot build an install command for kind {rt.kind!r}")
+
+
+@dataclass(frozen=True)
+class InstallResult:
+    name: str
+    command: list[str]
+    returncode: int
+    output: str  # combined stdout+stderr tail
+    installed_version: str | None  # re-detected after the install
+
+
+def run_install(
+    name: str, version: str | None = None, *, timeout: int = 600
+) -> InstallResult:
+    """Execute the install/update for ``name`` at ``version`` (or latest).
+
+    Runs :func:`install_argv` — a **real** package install on the host. This is
+    an explicit action (callers gate it behind a user request, never silent).
+    Returns the result + the re-detected installed version. Raises ``KeyError``
+    for an unknown runtime and ``ValueError`` for an unmanaged one.
+    """
+    rt = get_runtime(name)
+    argv = install_argv(rt, version)  # raises ValueError if unmanaged
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        returncode = proc.returncode
+        output = ((proc.stdout or "") + (proc.stderr or ""))[-4000:]
+    except (OSError, subprocess.SubprocessError) as exc:
+        returncode = -1
+        output = f"install failed to launch: {exc}"
+    return InstallResult(
+        name=name,
+        command=argv,
+        returncode=returncode,
+        output=output,
+        installed_version=detect_installed(rt),
+    )
