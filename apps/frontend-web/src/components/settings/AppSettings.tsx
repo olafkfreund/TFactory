@@ -18,7 +18,8 @@ import {
   Bug,
   Plug,
   Palette,
-  ShieldCheck
+  ShieldCheck,
+  Cloud
 } from 'lucide-react';
 
 import {
@@ -40,6 +41,7 @@ import { GeneralSettings } from './GeneralSettings';
 import { IntegrationSettings } from './IntegrationSettings';
 import { GitCredentialsSettings } from './sections/GitCredentialsSettings';
 import { TestCredentialsSettings } from './sections/TestCredentialsSettings';
+import { CloudAssessmentPage } from './sections/CloudAssessmentPage';
 import { McpApiKeysSettings } from './sections/McpApiKeysSettings';
 import { AdvancedSettings } from './AdvancedSettings';
 import { DebugSettings } from './DebugSettings';
@@ -58,7 +60,7 @@ interface AppSettingsDialogProps {
 }
 
 // App-level settings sections
-export type AppSection = 'appearance' | 'language' | 'agent' | 'llmProvider' | 'integrations' | 'gitCredentials' | 'testCredentials' | 'apiKeys' | 'notifications' | 'debug';
+export type AppSection = 'appearance' | 'language' | 'agent' | 'llmProvider' | 'integrations' | 'gitCredentials' | 'testCredentials' | 'cloudAssessment' | 'apiKeys' | 'notifications' | 'debug';
 
 interface NavItemConfig<T extends string> {
   id: T;
@@ -72,6 +74,7 @@ const appNavItemsConfig: NavItemConfig<AppSection>[] = [
   { id: 'integrations', icon: Key },
   { id: 'gitCredentials', icon: KeyRound },
   { id: 'testCredentials', icon: ShieldCheck },
+  { id: 'cloudAssessment', icon: Cloud },
   { id: 'apiKeys', icon: KeyRound },
   { id: 'notifications', icon: Bell },
   { id: 'debug', icon: Bug },
@@ -183,6 +186,8 @@ export function AppSettingsDialog({ open, onOpenChange, initialSection, initialP
         return <GitCredentialsSettings />;
       case 'testCredentials':
         return <TestCredentialsSettings />;
+      case 'cloudAssessment':
+        return <CloudAssessmentPage />;
       case 'apiKeys':
         return <McpApiKeysSettings />;
       case 'notifications':

@@ -118,6 +118,10 @@
       "save": "Save credential",
       "saving": "Saving…"
     },
+    "cloudAssessment": {
+      "title": "Cloud Assessment",
+      "description": "Cloud misconfiguration findings + topology"
+    },
     "apiKeys": {
       "title": "API Keys",
       "description": "Scoped acw_ keys for the stdio MCP control plane. Replaces the host-wide admin token for enterprise deployments.",

@@ -38,6 +38,7 @@ from .routes import (
     notifications,
     organizations,
     projects,
+    cloud,
     provider_runtimes,
     skills,
     tasks,
@@ -240,6 +241,7 @@ def create_app() -> FastAPI:
 
     # Provider runtime version manager (#121)
     app.include_router(provider_runtimes.router)
+    app.include_router(cloud.router)
 
     # Audit log routes (prefix defined in router: /api/orgs)
     app.include_router(audit.router)
