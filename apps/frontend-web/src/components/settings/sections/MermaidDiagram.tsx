@@ -8,7 +8,13 @@
 import { useEffect, useRef, useState } from 'react';
 import mermaid from 'mermaid';
 
-mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'strict' });
+mermaid.initialize({
+  startOnLoad: false,
+  theme: 'default',
+  securityLevel: 'strict',
+  // Render at natural size so a wide diagram scrolls rather than being squashed.
+  flowchart: { useMaxWidth: false, htmlLabels: true },
+});
 
 let _seq = 0;
 
@@ -41,10 +47,11 @@ export function MermaidDiagram({ source }: { source: string }) {
       </pre>
     );
   }
+  // overflow-auto → scroll a wide/tall diagram; [&_svg]:mx-auto → centre when it fits.
   return (
     <div
       ref={ref}
-      className="overflow-auto rounded-lg border border-border bg-white p-3 [&_svg]:mx-auto"
+      className="max-h-[75vh] overflow-auto rounded-lg border border-border bg-white p-3 [&_svg]:mx-auto [&_svg]:max-w-none"
     />
   );
 }

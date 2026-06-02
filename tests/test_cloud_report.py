@@ -90,7 +90,7 @@ def test_assess_and_write_creates_all_artifacts(tmp_path: Path) -> None:
     assert "REJECT" in p["report_md"].read_text()
     # diagram has the topology + a flagged finding
     diag = p["diagram_mmd"].read_text()
-    assert diag.startswith("graph TD\n") and "🔴" in diag and "class " in diag
+    assert diag.startswith("graph LR\n") and "🔴" in diag and "class " in diag
     # json is structured + matches
     data = json.loads(p["report_json"].read_text())
     assert data["verdict"] == "reject"

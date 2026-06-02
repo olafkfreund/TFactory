@@ -96,8 +96,11 @@ def render_cloud_topology(inventory: dict) -> str:
     Account → global services + per-region resources, with each finding attached
     to its scope (``global`` or a region name) and flagged red at/above medium
     severity. Missing sections are simply omitted.
+
+    Laid out left-to-right (``LR``) so each region's findings stack vertically
+    rather than fanning out into an unreadably wide row.
     """
-    g = MermaidGraph("TD")
+    g = MermaidGraph("LR")
     provider = str(inventory.get("provider", "cloud")).upper()
     account = inventory.get("account", "?")
     identity = inventory.get("identity")
