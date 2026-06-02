@@ -35,6 +35,7 @@ def get_cloud_assessment() -> dict:
     js = base / "cloud_assessment.json"
     md = base / "cloud_assessment.md"
     mmd = base / "diagrams" / "cloud_topology.mmd"
+    plan = base / "cloud_remediation_plan.md"
     if not js.is_file():
         return {"present": False}
     try:
@@ -46,4 +47,5 @@ def get_cloud_assessment() -> dict:
         "json": data,
         "reportMarkdown": md.read_text(encoding="utf-8") if md.is_file() else "",
         "diagramMermaid": mmd.read_text(encoding="utf-8") if mmd.is_file() else "",
+        "remediationMarkdown": plan.read_text(encoding="utf-8") if plan.is_file() else "",
     }
