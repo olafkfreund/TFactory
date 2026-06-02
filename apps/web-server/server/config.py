@@ -79,6 +79,12 @@ class Settings(BaseSettings):
     # Task execution
     MAX_CONCURRENT_TASKS: int = 5
 
+    # Liveness watchdog (#95) — periodic sweep that flags a silent in-flight
+    # stage as `stalled`. OFF by default; opt in with APP_LIVENESS_SWEEP_ENABLED.
+    LIVENESS_SWEEP_ENABLED: bool = False
+    LIVENESS_SWEEP_INTERVAL_SECONDS: int = 300  # how often to sweep
+    LIVENESS_SWEEP_DEADLINE_SECONDS: float = 600  # idle budget before stalled
+
     class Config:
         env_file = ".env"
         env_prefix = "APP_"

@@ -118,6 +118,25 @@ class NoneAuth(BaseModel):
     type: Literal["none"]
 
 
+class RefAuth(BaseModel):
+    """Auth that references a named ``test_credentials`` entry (#107).
+
+    For a form login (the default), TFactory drives the login page with the
+    given selectors and the credential's resolved username/secret, then reuses
+    the authenticated session (Playwright ``storageState``). ``ref`` names a
+    key in the top-level ``test_credentials`` map; the selectors are consumed
+    by the browser-lane login setup.
+    """
+
+    type: Literal["ref"]
+    ref: str  # a key in the top-level test_credentials map
+    login_url: str | None = None
+    username_selector: str | None = None
+    password_selector: str | None = None
+    submit_selector: str | None = None
+    success_url_pattern: str | None = None
+
+
 # Union type for the ``auth:`` field (discriminated on ``type``).
 AuthSpec = Annotated[
     BearerAuth
@@ -125,7 +144,8 @@ AuthSpec = Annotated[
     | OAuth2ClientCredentialsAuth
     | ServiceAccountAuth
     | MtlsAuth
-    | NoneAuth,
+    | NoneAuth
+    | RefAuth,
     Field(discriminator="type"),
 ]
 
@@ -473,6 +493,29 @@ class CredentialEntry(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class TestCredentialEntry(BaseModel):
+    """A named test-target credential (#107): a secret ref + how to expose it.
+
+    Resolved per run by ``resolve_test_target_credentials`` into ephemeral
+    sandbox env. ``ref`` is a secret reference — ``store:<id>`` (resolved
+    web-server-side, since the backend agent has no DB driver) or
+    ``env:``/``vault:`` (resolved by the broker). The resolved secret becomes
+    the ``as_secret`` env var; an optional ``username_ref`` resolves the
+    plaintext username into ``as_username``.
+    """
+
+    ref: str
+    as_secret: str
+    as_username: str | None = None
+    username_ref: str | None = None
+    kind: Literal["form", "api_token", "basic_auth", "totp"] = "form"
+
+    @field_validator("as_secret", "as_username")
+    @classmethod
+    def _check_env_names(cls, v: str | None) -> str | None:
+        return v if v is None else _validate_env_var_name(v, "as_secret/as_username")
+
+
 class TFactoryConfig(BaseModel):
     """Parsed representation of a ``.tfactory.yml`` file.
 
@@ -500,6 +543,31 @@ class TFactoryConfig(BaseModel):
     # Credential broker (epic #62): egress gate + named credential refs.
     egress: EgressConfig = Field(default_factory=EgressConfig)
     credentials: dict[str, CredentialEntry] | None = None
+    # Test-target login credentials (#107): name → secret ref + env mapping.
+    test_credentials: dict[str, TestCredentialEntry] | None = None
+
+    @model_validator(mode="after")
+    def _validate_test_credentials(self) -> TFactoryConfig:
+        """Fail closed on test-target auth misconfig (#107).
+
+        - declaring ``test_credentials`` requires egress (login needs network),
+        - every ``auth: {type: ref}`` must name a declared credential.
+        """
+        tc = self.test_credentials or {}
+        if tc and not self.egress.enabled:
+            raise ValueError(
+                "test_credentials is set but egress.enabled is false. "
+                "Test-target login needs network egress — set egress.enabled: true."
+            )
+        for target in self.targets:
+            auth = getattr(target, "auth", None)
+            if auth is not None and getattr(auth, "type", None) == "ref":
+                if auth.ref not in tc:
+                    raise ValueError(
+                        f"target {target.name!r} auth.ref {auth.ref!r} does not "
+                        f"match any test_credentials entry; known: {sorted(tc)}"
+                    )
+        return self
 
     @model_validator(mode="after")
     def _validate_default_target(self) -> TFactoryConfig:

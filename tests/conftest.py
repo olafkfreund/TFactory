@@ -1205,3 +1205,41 @@ except ImportError:
         "assert_endpoint", "endpoint_integration_helper",
     ):
         globals()[_name] = _make_skip_fixture(_name)
+
+
+# =============================================================================
+# CRITICAL FAST LANE (#97)
+# =============================================================================
+# A curated set of fast, hermetic, high-signal test modules that form the
+# required PR gate (`pytest -m critical`). The full suite still runs on
+# merge-to-dev and nightly. Keep this list short and deterministic — no
+# external services, no Docker, sub-second per module — so the gate stays a
+# quick, reliable signal. Add a module here (not a `slow`/service-dependent
+# one) when it guards a core invariant worth blocking a merge on.
+CRITICAL_MODULES = frozenset(
+    {
+        "test_output_envelope",  # shared agent-output JSON envelope (#96)
+        "test_stage_events",  # per-stage pipeline events (#95)
+        "test_liveness",  # stall watchdog (#95)
+        "test_liveness_sweep",  # stall watchdog driver (#95)
+        "test_security",  # command allowlist / sandbox invariants
+        "test_coverage_delta",  # Evaluator coverage signal
+        "test_triage_dedup",  # Triager dedup + rank
+        "test_triager_completion_webhook",  # #85 completion callback contract
+        "test_resolve_test_target_credentials",  # test-target cred resolver (#107)
+        "test_tfactory_yml_test_credentials",  # .tfactory.yml test_credentials schema (#107)
+        "test_config_to_credential_specs",  # schema→resolver-spec glue (#107)
+    }
+)
+
+
+def pytest_collection_modifyitems(config, items):
+    """Tag every test in a CRITICAL_MODULES file with the ``critical`` marker.
+
+    Centralising the curated set here keeps it in one visible place and avoids
+    sprinkling ``pytestmark`` across the modules (which would risk import-order
+    lint churn). Dynamically-added markers are honoured by ``-m critical``.
+    """
+    for item in items:
+        if item.path.stem in CRITICAL_MODULES:
+            item.add_marker(pytest.mark.critical)

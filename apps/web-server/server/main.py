@@ -7,6 +7,7 @@ Main entry point for the web server that provides:
 - Static file serving for the React SPA
 """
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -40,6 +41,7 @@ from .routes import (
     skills,
     tasks,
     terminal,
+    test_target_credentials,
 )
 from .routes import cli_accounts as cli_accounts_routes
 from .routes import llm_endpoints as llm_endpoints_routes
@@ -91,9 +93,35 @@ async def lifespan(app: FastAPI):
     init_skills_service()
     logger.info("SkillsService initialized")
 
+    # Liveness watchdog driver (#95): periodically flag silent stages as
+    # `stalled`. OFF by default; opt in with APP_LIVENESS_SWEEP_ENABLED.
+    app.state.liveness_sweep_task = None
+    if settings.LIVENESS_SWEEP_ENABLED:
+        from .background.liveness_sweep import liveness_sweep_loop
+
+        app.state.liveness_sweep_task = asyncio.create_task(
+            liveness_sweep_loop(
+                settings.LIVENESS_SWEEP_INTERVAL_SECONDS,
+                settings.LIVENESS_SWEEP_DEADLINE_SECONDS,
+            )
+        )
+        logger.info(
+            "Liveness sweep enabled (every %ss, deadline %ss)",
+            settings.LIVENESS_SWEEP_INTERVAL_SECONDS,
+            settings.LIVENESS_SWEEP_DEADLINE_SECONDS,
+        )
+
     yield
 
     # Shutdown
+    sweep_task = getattr(app.state, "liveness_sweep_task", None)
+    if sweep_task is not None:
+        sweep_task.cancel()
+        try:
+            await sweep_task
+        except asyncio.CancelledError:
+            pass
+
     logger.info("Shutting down Magestic AI Web Server...")
 
 
@@ -205,6 +233,9 @@ def create_app() -> FastAPI:
 
     # Git credentials for portal-managed clone auth (epic #82 PR-C)
     app.include_router(git_credentials.router)
+
+    # Test-target credentials for "log in then test" (#107)
+    app.include_router(test_target_credentials.router)
 
     # Audit log routes (prefix defined in router: /api/orgs)
     app.include_router(audit.router)

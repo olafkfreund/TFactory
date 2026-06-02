@@ -377,6 +377,10 @@ def _write_status_patch(spec_dir: Path, **fields: object) -> None:
     status.update(fields)
     status["updated_at"] = _now_iso()
     (spec_dir / "status.json").write_text(json.dumps(status, indent=2))
+    # Best-effort push-based progress event (#95); no-op unless opted in.
+    from agents.stage_events import emit_stage_event
+
+    emit_stage_event(spec_dir, status, stage="triager")
     # Fire the completion callback exactly once, when the task goes terminal.
     if fields.get("status") in _TERMINAL_STATUSES:
         _notify_completion(spec_dir, status)
@@ -535,9 +539,15 @@ async def run_triager(
             )
             return False
 
+        # Tolerant read via the shared agent-output envelope (#96). The
+        # Evaluator already canonicalises verdicts.json, but reading through
+        # the same extractor keeps the last consumer robust to a fence or
+        # trailing prose rather than hard-failing on it.
+        from agents.output_envelope import OutputEnvelopeError, extract_json
+
         try:
-            doc = json.loads(verdicts_path.read_text())
-        except json.JSONDecodeError as exc:
+            doc, _salvaged = extract_json(verdicts_path.read_text())
+        except OutputEnvelopeError as exc:
             _write_status_patch(
                 spec_dir,
                 status="triager_failed",

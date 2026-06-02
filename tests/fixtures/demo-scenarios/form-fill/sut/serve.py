@@ -1,4 +1,7 @@
-import http.server, socketserver, os
+import http.server
+import os
+import socketserver
+
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 class H(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):

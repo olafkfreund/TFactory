@@ -41,16 +41,23 @@ interface Props {
   specId: string;
   fetchFn?: typeof fetch;
   wsFactory?: (url: string) => WebSocket;
+  /**
+   * Background auto-refresh interval in ms so live status/lane changes
+   * (e.g. a watchdog `stalled` flip, #95) appear without a manual reload.
+   * Set to 0 to disable. Default 5000.
+   */
+  pollMs?: number;
 }
 
 // ── Status severity → theme token ───────────────────────────────────
 
 type Severity = 'success' | 'warning' | 'destructive' | 'info' | 'muted';
 
-function statusSeverity(status: string | null): Severity {
+export function statusSeverity(status: string | null): Severity {
   if (!status) return 'muted';
   const s = status.toLowerCase();
-  if (s.includes('failed') || s.includes('stuck') || s.includes('error')) return 'destructive';
+  if (s.includes('failed') || s.includes('stuck') || s.includes('stalled') || s.includes('error'))
+    return 'destructive';
   if (s.endsWith('_empty')) return 'muted';
   if (s.includes('triaged') || s.includes('generated') || s.includes('accept')) return 'success';
   if (s.includes('replan') || s.includes('flag') || s.includes('warn')) return 'warning';
@@ -522,7 +529,7 @@ function EvidenceTab({ specId, evidenceByTest }: { specId: string; evidenceByTes
 
 // ── Main component ───────────────────────────────────────────────────
 
-export function TFactoryTaskDetail({ specId, fetchFn, wsFactory }: Props) {
+export function TFactoryTaskDetail({ specId, fetchFn, wsFactory, pollMs = 5000 }: Props) {
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(true);
@@ -553,6 +560,22 @@ export function TFactoryTaskDetail({ specId, fetchFn, wsFactory }: Props) {
       });
     return () => { cancelled = true; };
   }, [specId, fetchFn]);
+
+  // Background auto-refresh: re-fetch the detail on an interval so live
+  // status/lane changes (e.g. a watchdog `stalled` flip, #95) surface without
+  // a manual reload. Updates only on success — a transient poll error keeps
+  // the last-good detail rather than flipping to the error state.
+  useEffect(() => {
+    if (!pollMs || pollMs <= 0) return;
+    const id = setInterval(() => {
+      getTaskDetail(specId, { fetchFn })
+        .then((d) => setDetail(d))
+        .catch(() => {
+          /* keep last-good detail on a transient poll error */
+        });
+    }, pollMs);
+    return () => clearInterval(id);
+  }, [pollMs, specId, fetchFn]);
 
   const _extractEvidenceFromVerdicts = useCallback((doc: TFactoryVerdictsDocument) => {
     const byTest: Record<string, EvidenceUrls> = {};

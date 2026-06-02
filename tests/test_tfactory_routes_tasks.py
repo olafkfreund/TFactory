@@ -98,8 +98,9 @@ if str(WEB_SERVER_PATH) not in sys.path:
     sys.path.insert(0, str(WEB_SERVER_PATH))
 
 
-from server.routes.tfactory_tasks import (  # noqa: E402
+from server.routes.tfactory_tasks import (  # noqa: E402  # noqa: E402
     DEFAULT_LOG_TAIL_LINES,
+    MergeRequest,
     _artefact_meta,
     _find_spec_dir,
     _resolve_log_files,
@@ -108,6 +109,7 @@ from server.routes.tfactory_tasks import (  # noqa: E402
     _summary_row,
     _tail_lines,
     _validate_spec_id,
+    dismiss_run,
     get_catalog,
     get_pr_comment_body,
     get_task,
@@ -116,12 +118,8 @@ from server.routes.tfactory_tasks import (  # noqa: E402
     get_triage_report_md,
     get_verdicts,
     list_tasks,
-    tail_log_payload,
-)
-from server.routes.tfactory_tasks import (  # noqa: E402
-    MergeRequest,
-    dismiss_run,
     merge_accepted_tests,
+    tail_log_payload,
 )
 
 # ── Workspace builder fixture ──────────────────────────────────────────

@@ -17,6 +17,7 @@ from .models import (
     OrgMember,
     Project,
     Task,
+    TestTargetCredential,
     User,
 )
 
@@ -35,5 +36,6 @@ __all__ = [
     "AuditLog",
     "EmailAccount",
     "GitCredential",
+    "TestTargetCredential",
     "LLMEndpoint",
 ]

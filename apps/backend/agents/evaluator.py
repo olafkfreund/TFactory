@@ -82,6 +82,10 @@ def _write_status_patch(spec_dir: Path, **fields: object) -> None:
     status.update(fields)
     status["updated_at"] = _now_iso()
     (spec_dir / "status.json").write_text(json.dumps(status, indent=2))
+    # Best-effort push-based progress event (#95); no-op unless opted in.
+    from agents.stage_events import emit_stage_event
+
+    emit_stage_event(spec_dir, status, stage="evaluator")
 
 
 # ─── SDK seams (mockable in tests) ──────────────────────────────────────
@@ -976,32 +980,20 @@ _VALID_VERDICTS = frozenset({"accept", "reject", "flag"})
 def _loads_tolerant(text: str) -> tuple[object, bool]:
     """Parse JSON that may carry a markdown fence or trailing prose.
 
-    LLMs occasionally wrap the object in a ```json fence or append an
-    explanation after it (``json.loads`` then fails with "Extra data: ...").
-    Strict parse first; on failure, strip a code fence and decode just the
-    first JSON value via ``raw_decode``, ignoring anything after it.
+    Thin wrapper over the shared agent-output envelope (#96): strict parse,
+    then fence-strip / first-value ``raw_decode`` / outermost brace-match.
 
     Returns ``(doc, salvaged)`` — ``salvaged`` is True when the lenient path
     recovered the object, so the caller can rewrite a clean file. Raises
-    ``json.JSONDecodeError`` when no JSON object can be recovered.
+    ``json.JSONDecodeError`` when no JSON object can be recovered (preserved
+    for the existing caller).
     """
+    from agents.output_envelope import OutputEnvelopeError, extract_json
+
     try:
-        return json.loads(text), False
-    except json.JSONDecodeError:
-        pass
-    cleaned = text.strip()
-    if cleaned.startswith("```"):
-        # Drop the opening fence line (```json / ```), then a trailing fence.
-        cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned
-        fence = cleaned.rfind("```")
-        if fence != -1:
-            cleaned = cleaned[:fence]
-        cleaned = cleaned.strip()
-    starts = [i for i in (cleaned.find("{"), cleaned.find("[")) if i != -1]
-    if not starts:
-        raise json.JSONDecodeError("no JSON value found", text, 0)
-    doc, _end = json.JSONDecoder().raw_decode(cleaned[min(starts) :])
-    return doc, True
+        return extract_json(text)
+    except OutputEnvelopeError as exc:
+        raise json.JSONDecodeError(str(exc), text or "", 0) from None
 
 
 def _validate_verdicts(
