@@ -25,6 +25,12 @@ interface Props {
   onSelectTask?: (specId: string) => void;
   /** Test seam: inject a fake fetch (default: global fetch). */
   fetchFn?: typeof fetch;
+  /**
+   * Background auto-refresh interval in ms so live status changes (e.g. a
+   * watchdog `stalled` flip, #95) appear without a manual reload. Set to 0
+   * to disable. Default 5000.
+   */
+  pollMs?: number;
 }
 
 // ── Status → Tailwind colour ────────────────────────────────────────
@@ -111,7 +117,7 @@ function EmptyState() {
 
 // ── Main component ───────────────────────────────────────────────────
 
-export function TFactoryTaskList({ onSelectTask, fetchFn }: Props) {
+export function TFactoryTaskList({ onSelectTask, fetchFn, pollMs = 5000 }: Props) {
   const [tasks, setTasks] = useState<TFactoryTaskSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -135,6 +141,22 @@ export function TFactoryTaskList({ onSelectTask, fetchFn }: Props) {
       cancelled = true;
     };
   }, [fetchFn]);
+
+  // Background auto-refresh: re-fetch on an interval so live status changes
+  // (e.g. a watchdog `stalled` flip, #95) surface without a manual reload.
+  // Updates the list only on success — a transient poll error keeps the
+  // last-good rows on screen rather than flipping to the error state.
+  useEffect(() => {
+    if (!pollMs || pollMs <= 0) return;
+    const id = setInterval(() => {
+      listTasks({ fetchFn })
+        .then((response) => setTasks(response.tasks))
+        .catch(() => {
+          /* keep last-good list on a transient poll error */
+        });
+    }, pollMs);
+    return () => clearInterval(id);
+  }, [pollMs, fetchFn]);
 
   if (loading) return <LoadingState />;
   if (error) return <ErrorState message={error} />;
