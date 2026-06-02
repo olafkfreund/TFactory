@@ -46,6 +46,7 @@ class Subtask:
     framework: str | None = None  # "pytest" | "jest" | "playwright" | …
     target_name: str | None = None  # .tfactory.yml target name (or None)
     intent: str = "create"  # "create" | "update" | "skip"
+    requires_auth: bool = False  # #107 — needs test-target login (storageState)
 
     # Scoping
     service: str | None = None  # Which service (backend, frontend, worker)
@@ -98,6 +99,8 @@ class Subtask:
         # intent defaults to "create"; omit when default to keep plans terse.
         if self.intent != "create":
             result["intent"] = self.intent
+        if self.requires_auth:
+            result["requires_auth"] = True
         if self.service:
             result["service"] = self.service
         if self.all_services:
@@ -145,6 +148,7 @@ class Subtask:
             framework=data.get("framework"),
             target_name=data.get("target_name"),
             intent=data.get("intent", "create"),
+            requires_auth=data.get("requires_auth", False),
             service=data.get("service"),
             all_services=data.get("all_services", False),
             files_to_modify=data.get("files_to_modify", []),
