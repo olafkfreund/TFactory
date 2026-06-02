@@ -57,6 +57,7 @@ templates:
   - api-mocked-flow.spec.ts.tmpl
   - data-loaded-page.spec.ts.tmpl
   - error-state.spec.ts.tmpl
+  - visual-regression.spec.ts.tmpl
 
 # Per Decision 11: Browser lane = skip.
 # Playwright tests instrument the served APPLICATION, not the test code itself.
@@ -107,6 +108,20 @@ context_block: |
     - Screenshots, video, and trace are captured automatically by the runner
     - test.info().attach() can add extra screenshots mid-test for debugging
     - Do NOT manually control playwright video/trace; the runner config handles this
+
+  Visual regression (#109):
+    - Assert UI stability with expect(page).toHaveScreenshot('<name>.png', {...})
+      — the runner diffs against the stored per-target baseline and fails on drift
+    - Always set a threshold: maxDiffPixelRatio (e.g. 0.01) tolerates tiny
+      anti-aliasing/font differences without hiding real regressions
+    - Stabilise BEFORE snapshotting (this is the #1 source of visual flake):
+        animations: 'disabled'  and  caret: 'hide'  in the toHaveScreenshot options
+        mask dynamic regions (clocks, ads, avatars) with { mask: [page.locator(...)] }
+        await an auto-waited assertion (e.g. toBeVisible) so the page has settled
+    - One screenshot assertion per logical view; name snapshots stably and
+      descriptively ('checkout-summary.png'), never with timestamps or random ids
+    - NEVER hand-write pixel comparisons or call page.screenshot() for assertions
+      — use toHaveScreenshot so baselines + diffs are managed by the runner
 
   Anti-patterns:
     - page.waitForTimeout(N)       → use auto-wait expectations instead
