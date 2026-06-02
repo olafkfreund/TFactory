@@ -1240,6 +1240,7 @@ CRITICAL_MODULES = frozenset(
         "test_cloud_discovery",  # cloud discovery primitive (#133/#135)
         "test_cloud_assessment",  # cloud OCSF→verdict mapping (#133/#138)
         "test_cloud_report",  # cloud assessment report + task-write (#133/#138)
+        "test_cloud_runner",  # cloud assessment orchestrator / auto-run (#133/#138)
     }
 )
 

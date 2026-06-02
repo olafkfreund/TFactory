@@ -14,6 +14,7 @@ from .assessment import (
 )
 from .discovery import AccessResult, access_check, discover
 from .report import assess_and_write, cloud_findings_paths, render_report_markdown
+from .runner import build_prowler_command, run_cloud_assessment
 
 __all__ = [
     "AccessResult",
@@ -22,9 +23,11 @@ __all__ = [
     "access_check",
     "assess",
     "assess_and_write",
+    "build_prowler_command",
     "cloud_findings_paths",
     "discover",
     "parse_ocsf",
     "render_report_markdown",
+    "run_cloud_assessment",
     "to_inventory_findings",
 ]
