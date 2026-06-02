@@ -9,6 +9,32 @@
       "title": "Aparência",
       "description": "Personalize como o TFactory aparece"
     },
+    "testCredentials": {
+      "title": "Credenciais de Teste",
+      "description": "Logins que seus testes gerados usam para autenticar",
+      "info": "Referencie uma credencial armazenada no .tfactory.yml (test_credentials + auth: { type: ref }). Ela é injetada apenas nas pistas com acesso à rede quando uma subtarefa define requires_auth, e removida de cada log e artefato. Os segredos são criptografados em repouso e nunca retornados após a criação.",
+      "noOrg": "Nenhuma organização configurada ainda — informe o ID da sua organização acima.",
+      "orgIdLabel": "ID da organização",
+      "orgIdHelp": "O UUID da sua organização. Encontre-o em qualquer URL da organização ou via API de orgs. O seletor de várias organizações chega com o Epic #35.",
+      "existing": "Credenciais armazenadas",
+      "add": "Adicionar credencial",
+      "loading": "Carregando credenciais…",
+      "empty": "Nenhuma credencial armazenada ainda.",
+      "noUser": "sem usuário",
+      "created": "criada em",
+      "copyName": "Copiar nome (referencie no .tfactory.yml)",
+      "newCredential": "Nova credencial",
+      "name": "Nome",
+      "kind": "Tipo",
+      "username": "Usuário (opcional)",
+      "secret": "Segredo (senha / token de API / semente TOTP)",
+      "secretHelp": "Criptografado em repouso. Após salvar, não pode ser recuperado novamente — guarde um backup em outro lugar se precisar.",
+      "fieldsRequired": "Nome e segredo são obrigatórios.",
+      "confirmDelete": "Excluir esta credencial? Isso não pode ser desfeito.",
+      "cancel": "Cancelar",
+      "save": "Salvar credencial",
+      "saving": "Salvando…"
+    },
     "display": {
       "title": "Exibição",
       "description": "Ajuste o tamanho dos elementos da interface"
