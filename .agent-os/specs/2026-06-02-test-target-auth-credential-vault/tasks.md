@@ -31,11 +31,20 @@ Phased so each parent task is independently shippable behind the egress/`require
   - [x] 3.2 `tfactory_yml/schema.py`: `TestCredentialEntry` + `test_credentials` map + `RefAuth` (`type: ref`) in the auth union; `test_plan/subtask.py`: `requires_auth: bool = False` (wired through `to_dict`/`from_dict`, omitted at default)
   - [x] 3.3 `model_validator` fails closed: `test_credentials` without `egress.enabled` → error; `auth.ref` must name a declared entry. Added module to `CRITICAL_MODULES` (221 tests)
 
-- [ ] 4. **Executor wiring + redaction**
-  - [ ] 4.1 Write tests: executor injects creds for egress browser/api lanes only; secret scrubbed from logs/junit/HAR/verdicts/triage
-  - [ ] 4.2 Extend `sandbox_credentials.resolve_sandbox_credentials()` to merge test-target creds; reuse `wipe()`
-  - [ ] 4.3 Add the redaction pass (highest risk: HAR `Authorization`/cookie/form-body in `http_recorder.py`)
-  - [ ] 4.4 Verify hermetic lanes still get nothing; verify all tests pass
+- [~] 4. **Executor wiring + redaction** — split into 4a (done) + 4b (pending)
+  - [x] 4a **store: resolver (web-server)** — `server/services/test_credential_resolver.py`
+        `resolve_store_credential(db, id) → (username, secret)` (decrypts on read,
+        bumps `last_used_at`) + `parse_store_ref`. Test in the `secrets` job.
+        This is the web-server half deferred from task 2 (backend venv has no DB).
+  - [x] **Finding:** the redaction *primitive* already exists —
+        `tfactory_secrets/redaction.py` (`Redactor` value-scrub + `RedactingFilter`
+        + `scrub_patterns`). 4b is *wiring* it, not new code.
+  - [ ] 4b.1 Wire `agent_service` hand-off to expand `store:` refs (via 4a) +
+        `env:`/`vault:` refs (via task-2 resolver) into the run env for egress lanes
+  - [ ] 4b.2 Seed a `Redactor` from the resolved secret values; apply at the sinks
+        (logs, junit, HAR `http_recorder.py` ← highest risk, verdicts, triage)
+  - [ ] 4b.3 Tests: executor injects creds for egress lanes only; hermetic gets
+        nothing; secret scrubbed from every artefact. ⚠️ touches live `evaluator.py`
 
 - [ ] 5. **Playwright auth (`storageState`)**
   - [ ] 5.1 Write a runner smoke test: `auth.setup.ts` logs in once → `state.json`; protected test reuses it (no second login in HAR)
