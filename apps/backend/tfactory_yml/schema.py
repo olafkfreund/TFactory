@@ -312,9 +312,70 @@ class FeatureFlagTarget(BaseModel):
     auth: AuthSpec | None = None
 
 
+class CloudScanConfig(BaseModel):
+    """What a cloud discovery/assessment run should do for a target (#133).
+
+    Defaults run a full read-only discovery + CIS misconfiguration assessment
+    and fail the run (verdict=reject) on any finding at or above ``high``.
+    """
+
+    discover: bool = True  # enumerate resources → inventory + diagram
+    misconfiguration: bool = True  # run CIS/OCSF misconfiguration checks
+    services: list[str] = []  # restrict to these services (e.g. s3, iam, ec2); [] = all
+    compliance: list[str] = ["cis"]  # frameworks to assess against (cis, nist, …)
+    # Findings at or above this severity gate the run to verdict=reject.
+    fail_on_severity: Literal["critical", "high", "medium", "low"] = "high"
+
+
+class CloudProviderTarget(BaseModel):
+    """A cloud account / subscription / project to discover + assess (#133).
+
+    Read-only by design: TFactory enumerates resources and checks their
+    configuration; it never mutates the account. Credentials resolve either
+    from an ambient CLI ``profile`` (e.g. an AWS named profile), an optional
+    read-only ``assume_role`` (AWS role ARN / GCP impersonated SA / Azure MI),
+    or a vault-backed ``auth: { type: ref }`` reference — never inline secrets.
+
+    Requires ``egress.enabled`` (cloud APIs need network) — enforced at the
+    config level, like ``test_credentials``.
+
+    Examples::
+
+        - name: aws-prod
+          type: cloud_provider
+          provider: aws
+          regions: [us-east-1, eu-west-2]
+          profile: Calitii          # ambient CLI profile
+          assume_role: arn:aws:iam::123456789012:role/tfactory-readonly
+          scan:
+            misconfiguration: true
+            compliance: [cis]
+            fail_on_severity: high
+    """
+
+    type: Literal["cloud_provider"]
+    name: str
+    provider: Literal["aws", "azure", "gcp"]
+    regions: list[str] = []  # [] = provider default / all enabled regions
+    profile: str | None = (
+        None  # named CLI profile (aws profile / gcloud config / az subscription)
+    )
+    assume_role: str | None = (
+        None  # read-only role ARN / impersonated SA / managed identity
+    )
+    auth: RefAuth | None = (
+        None  # vault-backed credential reference (alternative to profile)
+    )
+    scan: CloudScanConfig = Field(default_factory=CloudScanConfig)
+
+
 # Union of all concrete target types (discriminated on ``type``).
 TargetSpec = Annotated[
-    HttpTarget | KubernetesTarget | DockerComposeTarget | FeatureFlagTarget,
+    HttpTarget
+    | KubernetesTarget
+    | DockerComposeTarget
+    | FeatureFlagTarget
+    | CloudProviderTarget,
     Field(discriminator="type"),
 ]
 
@@ -567,6 +628,24 @@ class TFactoryConfig(BaseModel):
                         f"target {target.name!r} auth.ref {auth.ref!r} does not "
                         f"match any test_credentials entry; known: {sorted(tc)}"
                     )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_cloud_targets(self) -> TFactoryConfig:
+        """Fail closed on cloud target misconfig (#133).
+
+        A ``cloud_provider`` target needs network egress to reach cloud APIs,
+        so declaring one without ``egress.enabled`` is rejected.
+        """
+        cloud = [
+            t for t in self.targets if getattr(t, "type", None) == "cloud_provider"
+        ]
+        if cloud and not self.egress.enabled:
+            names = sorted(t.name for t in cloud)
+            raise ValueError(
+                f"cloud_provider target(s) {names} require network egress to "
+                "reach cloud APIs — set egress.enabled: true."
+            )
         return self
 
     @model_validator(mode="after")
