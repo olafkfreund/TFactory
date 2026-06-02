@@ -1236,6 +1236,7 @@ CRITICAL_MODULES = frozenset(
         "test_auth_setup_render",  # Playwright storageState auth render (#107)
         "test_auth_tagging",  # Planner requires_auth tagging (#107 task 6)
         "test_tfactory_yml_cloud_target",  # CloudProviderTarget schema (#133/#134)
+        "test_mermaid_diagram",  # cloud topology diagram generator (#133/#136)
     }
 )
 
