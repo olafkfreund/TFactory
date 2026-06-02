@@ -39,12 +39,19 @@ Phased so each parent task is independently shippable behind the egress/`require
   - [x] **Finding:** the redaction *primitive* already exists —
         `tfactory_secrets/redaction.py` (`Redactor` value-scrub + `RedactingFilter`
         + `scrub_patterns`). 4b is *wiring* it, not new code.
+  - [x] 4b-glue **`config_to_credential_specs(config, target_name)`** —
+        bridges the task-3 schema to task-2 specs (ref-auth target → resolver
+        spec). Pure + critical-lane tested (`tests/test_config_to_credential_specs.py`).
   - [ ] 4b.1 Wire `agent_service` hand-off to expand `store:` refs (via 4a) +
         `env:`/`vault:` refs (via task-2 resolver) into the run env for egress lanes
-  - [ ] 4b.2 Seed a `Redactor` from the resolved secret values; apply at the sinks
-        (logs, junit, HAR `http_recorder.py` ← highest risk, verdicts, triage)
+        ⚠️ **live `agent_service.py` — needs a real pipeline run to verify**
+  - [ ] 4b.2 In the Evaluator's egress lanes call `config_to_credential_specs` →
+        `resolve_test_target_credentials` → merge into `extra_env`; seed a
+        `Redactor` from the values; apply at the sinks (logs, junit, HAR
+        `http_recorder.py` ← highest risk, verdicts, triage)
+        ⚠️ **live `evaluator.py` critical path — pipeline-verify before merge**
   - [ ] 4b.3 Tests: executor injects creds for egress lanes only; hermetic gets
-        nothing; secret scrubbed from every artefact. ⚠️ touches live `evaluator.py`
+        nothing; secret scrubbed from every artefact
 
 - [ ] 5. **Playwright auth (`storageState`)**
   - [ ] 5.1 Write a runner smoke test: `auth.setup.ts` logs in once → `state.json`; protected test reuses it (no second login in HAR)

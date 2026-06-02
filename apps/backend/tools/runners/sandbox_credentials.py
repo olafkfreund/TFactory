@@ -186,9 +186,47 @@ def resolve_test_target_credentials(
     return SandboxCredentials(env=env, broker=broker)
 
 
+def config_to_credential_specs(
+    config: object | None, target_name: str | None
+) -> list[TargetCredentialSpec]:
+    """Build resolver specs for a target's ``ref``-auth from a parsed config.
+
+    Bridges the ``.tfactory.yml`` schema (task 3) to the resolver (task 2): if
+    ``target_name``'s ``auth`` is a ``ref`` auth, look up the named
+    ``test_credentials`` entry and turn it into a :class:`TargetCredentialSpec`.
+
+    Returns ``[]`` when there is no config, no such target, the target has no
+    ``ref``-auth, or the named credential is absent. Reads ``config``
+    duck-typed (a ``TFactoryConfig``) so this module needs no schema import.
+    """
+    if config is None or not target_name:
+        return []
+    test_credentials = getattr(config, "test_credentials", None) or {}
+    lookup = getattr(config, "lookup_target", None)
+    target = lookup(target_name) if callable(lookup) else None
+    if target is None:
+        return []
+    auth = getattr(target, "auth", None)
+    if auth is None or getattr(auth, "type", None) != "ref":
+        return []
+    entry = test_credentials.get(getattr(auth, "ref", None))
+    if entry is None:
+        return []
+    return [
+        TargetCredentialSpec(
+            name=auth.ref,
+            ref=entry.ref,
+            as_secret=entry.as_secret,
+            as_username=entry.as_username,
+            username_ref=entry.username_ref,
+        )
+    ]
+
+
 __all__ = [
     "SandboxCredentials",
     "TargetCredentialSpec",
+    "config_to_credential_specs",
     "resolve_sandbox_credentials",
     "resolve_test_target_credentials",
 ]
