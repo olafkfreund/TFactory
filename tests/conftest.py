@@ -1238,6 +1238,7 @@ CRITICAL_MODULES = frozenset(
         "test_tfactory_yml_cloud_target",  # CloudProviderTarget schema (#133/#134)
         "test_mermaid_diagram",  # cloud topology diagram generator (#133/#136)
         "test_cloud_discovery",  # cloud discovery primitive (#133/#135)
+        "test_cloud_assessment",  # cloud OCSF→verdict mapping (#133/#138)
     }
 )
 
