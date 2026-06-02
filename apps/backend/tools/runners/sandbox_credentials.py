@@ -13,6 +13,7 @@ This keeps the default path (unit lane, egress off) completely credential-free.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -100,4 +101,94 @@ def resolve_sandbox_credentials(
     return SandboxCredentials(env=env, files=files, broker=broker)
 
 
-__all__ = ["SandboxCredentials", "resolve_sandbox_credentials"]
+# ---------------------------------------------------------------------------
+# Test-target credentials (#107) — "log in then test"
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class TargetCredentialSpec:
+    """One ``.tfactory.yml`` ``test_credentials`` entry, resolved per run.
+
+    ``ref`` is a secret reference the broker understands (``env:NAME`` /
+    ``vault:path#field`` / cloud schemes). Its resolved value becomes the
+    ``as_secret`` env var inside the sandbox. An optional ``username_ref``
+    resolves the plaintext username into ``as_username``.
+
+    Note on ``store:<id>`` refs: those are resolved **web-server-side** (it
+    owns the encrypted DB; the backend agent runs in a separate venv without
+    the DB driver) and arrive here already materialised as an ``env:`` ref,
+    so this resolver only ever sees broker-resolvable schemes.
+    """
+
+    name: str
+    ref: str
+    as_secret: str
+    as_username: str | None = None
+    username_ref: str | None = None
+
+
+def resolve_test_target_credentials(
+    specs: Iterable[TargetCredentialSpec] | None,
+    project_dir: Path | str | None,
+    spec_dir: Path | str | None,
+    network: str | None,
+) -> SandboxCredentials:
+    """Resolve test-target credentials into sandbox env, gated like #73.
+
+    Returns **empty** credentials when the lane is hermetic
+    (``network`` in ``{None, "", "none"}``), when there are no specs, or when
+    egress is not enabled for the project — so the default hermetic path stays
+    completely credential-free. Otherwise each spec's ``ref`` is resolved via
+    the CredentialBroker and mapped to its ``as_secret`` (and optional
+    ``as_username``) env var.
+
+    Fully fault-tolerant: a per-spec failure is logged and skipped rather than
+    breaking the lane. The returned ``broker`` is retained so the caller can
+    ``wipe()`` materialised files after the run.
+    """
+    specs = list(specs or [])
+    if network in (None, "", "none") or not specs:
+        return SandboxCredentials()
+
+    try:
+        from tfactory_secrets.egress import egress_enabled
+
+        if not egress_enabled(project_dir):
+            return SandboxCredentials()
+        from tfactory_secrets.broker import CredentialBroker
+
+        broker = CredentialBroker(project_dir, spec_dir, egress_allowed=True)
+    except Exception:  # noqa: BLE001 - never break the lane on creds
+        logger.warning("test-target credential resolution unavailable", exc_info=True)
+        return SandboxCredentials()
+
+    env: dict[str, str] = {}
+    for spec in specs:
+        if spec.ref.startswith("store:"):
+            # store: refs are materialised web-server-side; if one reaches the
+            # backend it wasn't expanded upstream — skip rather than guess.
+            logger.warning(
+                "test credential %r has an unresolved store: ref; expected the "
+                "web-server to materialise it. Skipping.",
+                spec.name,
+            )
+            continue
+        try:
+            env[spec.as_secret] = broker.resolve_ref(spec.ref).value
+            if spec.as_username and spec.username_ref:
+                env[spec.as_username] = broker.resolve_ref(spec.username_ref).value
+        except Exception:  # noqa: BLE001 - one bad ref must not break the lane
+            logger.warning(
+                "failed to resolve test credential %r", spec.name, exc_info=True
+            )
+
+    return SandboxCredentials(env=env, broker=broker)
+
+
+__all__ = [
+    "SandboxCredentials",
+    "TargetCredentialSpec",
+    "resolve_sandbox_credentials",
+    "resolve_test_target_credentials",
+]

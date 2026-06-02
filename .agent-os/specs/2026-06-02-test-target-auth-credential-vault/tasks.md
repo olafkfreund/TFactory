@@ -16,10 +16,15 @@ Phased so each parent task is independently shippable behind the egress/`require
   - [x] 1.3 `POST/GET/DELETE /api/test-credentials` (metadata-only response, org-scoped authz mirroring `git_credentials.py`); router registered in `main.py`
   - [x] 1.4 Migration applies on `postgres (P1)` PG 15 + 16 via CI; new-credential tests run in the `secrets (P2)` CI job
 
-- [ ] 2. **Resolver in `tfactory_secrets`**
-  - [ ] 2.1 Write tests for `resolve_test_target_credentials()` (env/vault/store refs, hermetic→none, egress-off→none, wipe)
-  - [ ] 2.2 Implement it alongside `resolve_cloud()`; `store:<id>` via direct `_EncryptedString` decryption (option A)
-  - [ ] 2.3 Tag the resolver test module into `CRITICAL_MODULES`; verify all tests pass
+- [x] 2. **Resolver** (`tools/runners/sandbox_credentials.py`) — PR for #107
+  - [x] 2.1 Tests: `tests/test_resolve_test_target_credentials.py` (hermetic→none, no-specs→none, egress-off→none, env/username refs, multi-spec, fault-tolerant skip)
+  - [x] 2.2 `resolve_test_target_credentials(specs, project_dir, spec_dir, network)` + `TargetCredentialSpec`, mirroring `resolve_sandbox_credentials`; resolves broker refs (env/vault/cloud), gated on egress.
+        **Deviation from the spec's Option A:** the backend agent runs in a
+        venv WITHOUT the DB driver, so it cannot directly decrypt `store:<id>`.
+        `store:` is therefore materialised **web-server-side** (it owns the DB)
+        and arrives as an `env:` ref; the backend resolver skips any stray
+        `store:` ref. The web-server `store:` materialisation moves to task 4.
+  - [x] 2.3 Added `test_resolve_test_target_credentials` to `CRITICAL_MODULES` (214 tests, ~7s)
 
 - [ ] 3. **`.tfactory.yml` schema + subtask field**
   - [ ] 3.1 Write tests for the `test_credentials` block + `targets[].auth.ref` validation, and subtask `requires_auth`
