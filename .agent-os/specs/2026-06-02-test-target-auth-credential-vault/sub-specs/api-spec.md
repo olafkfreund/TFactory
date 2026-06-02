@@ -33,7 +33,15 @@ The backend agent resolves a `store:<id>` ref by fetching+decrypting from the we
 - **(A) Direct DB read** from the backend using the same `_EncryptedString` decryption (no network) — simplest, no new endpoint.
 - **(B) A loopback-only internal endpoint** `GET /internal/test-credentials/{id}/resolve` bound to `127.0.0.1`, authenticated by a per-host shared token.
 
-Recommendation: **(A) direct decryption** — avoids exposing plaintext over any socket; the backend already imports web-server modules via the `sys.path` insert pattern (`routes/mcp.py`, `services/auto_fix_service.py`).
+Recommendation (revised during task 2): **(B) web-server materialises `store:`**.
+The backend agent runs in a **separate venv without the DB driver**
+(sqlalchemy/the encrypted-column stack live only in the web-server venv), so
+**(A) direct decryption from the backend is infeasible**. Instead the
+web-server resolves a `store:<id>` into the credential value at hand-off and
+passes it to the backend as an `env:` ref (or pre-injected env). The backend
+`resolve_test_target_credentials` (task 2) only ever sees broker schemes and
+skips any stray `store:` ref. The loopback endpoint (B) remains an option if a
+cross-process resolve is ever needed.
 
 ## 3. `.tfactory.yml` schema additions
 
