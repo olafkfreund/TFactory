@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronDown, Cloud, Server } from 'lucide-react';
+import { ChevronDown, Cloud, Package, Server } from 'lucide-react';
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '../../ui/collapsible';
 import { SettingsSection } from '../SettingsSection';
 import { LLMAccountsSettings } from './LLMAccountsSettings';
 import { OpenAIEndpointsSection } from './OpenAIEndpointsSection';
+import { ProviderRuntimesSection } from './ProviderRuntimesSection';
 interface LLMProvidersPageProps {
   isOpen: boolean;
 }
@@ -69,6 +70,14 @@ export function LLMProvidersPage({ isOpen }: LLMProvidersPageProps) {
           description={t('sections.llmProvider.openaiCompatible.description')}
         >
           <OpenAIEndpointsSection isOpen={isOpen} />
+        </Panel>
+
+        <Panel
+          icon={<Package className="h-4 w-4" />}
+          title="Provider Runtimes"
+          description="Versions of the provider CLIs/SDKs — update to latest or pin for rollback"
+        >
+          <ProviderRuntimesSection />
         </Panel>
       </div>
     </SettingsSection>
