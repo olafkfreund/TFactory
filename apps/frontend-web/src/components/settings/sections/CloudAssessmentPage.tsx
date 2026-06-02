@@ -25,7 +25,24 @@ interface Assessment {
   };
   reportMarkdown?: string;
   diagramMermaid?: string;
+  remediationMarkdown?: string;
 }
+
+// Shared Markdown styling (GFM tables, themed) for report + remediation plan.
+const MD_CLASS =
+  'overflow-auto rounded-lg border border-border p-4 text-sm ' +
+  '[&_h1]:mb-2 [&_h1]:mt-1 [&_h1]:text-lg [&_h1]:font-bold [&_h1]:text-foreground ' +
+  '[&_h2]:mb-2 [&_h2]:mt-4 [&_h2]:text-base [&_h2]:font-semibold [&_h2]:text-foreground ' +
+  '[&_h3]:mb-1 [&_h3]:mt-3 [&_h3]:text-sm [&_h3]:font-semibold [&_h3]:text-foreground ' +
+  '[&_p]:mb-2 [&_p]:text-muted-foreground ' +
+  '[&_ul]:mb-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:text-muted-foreground ' +
+  '[&_blockquote]:mb-2 [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:text-xs [&_blockquote]:text-muted-foreground ' +
+  '[&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-xs ' +
+  '[&_a]:text-info [&_a]:underline ' +
+  '[&_table]:my-3 [&_table]:w-full [&_table]:border-collapse [&_table]:text-xs ' +
+  '[&_thead]:bg-muted/50 ' +
+  '[&_th]:border [&_th]:border-border [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_th]:font-semibold ' +
+  '[&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1 [&_td]:align-top';
 
 function VerdictBadge({ verdict }: { verdict?: string }) {
   const v = (verdict || '').toLowerCase();
@@ -102,21 +119,25 @@ export function CloudAssessmentPage() {
             </div>
           )}
 
+          {data.remediationMarkdown && (
+            <div>
+              <h4 className="mb-2 text-sm font-semibold text-foreground">
+                Remediation plan — how to fix
+              </h4>
+              <div className={MD_CLASS}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  {data.remediationMarkdown}
+                </ReactMarkdown>
+              </div>
+            </div>
+          )}
+
           {data.reportMarkdown && (
-            <div
-              className="overflow-auto rounded-lg border border-border p-4 text-sm
-                [&_h1]:mb-2 [&_h1]:mt-1 [&_h1]:text-lg [&_h1]:font-bold [&_h1]:text-foreground
-                [&_h2]:mb-2 [&_h2]:mt-4 [&_h2]:text-base [&_h2]:font-semibold [&_h2]:text-foreground
-                [&_p]:mb-2 [&_p]:text-muted-foreground
-                [&_ul]:mb-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:text-muted-foreground
-                [&_blockquote]:mb-2 [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:text-xs [&_blockquote]:text-muted-foreground
-                [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-xs
-                [&_table]:my-3 [&_table]:w-full [&_table]:border-collapse [&_table]:text-xs
-                [&_thead]:bg-muted/50
-                [&_th]:border [&_th]:border-border [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_th]:font-semibold
-                [&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1 [&_td]:align-top"
-            >
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{data.reportMarkdown}</ReactMarkdown>
+            <div>
+              <h4 className="mb-2 text-sm font-semibold text-foreground">Full report</h4>
+              <div className={MD_CLASS}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{data.reportMarkdown}</ReactMarkdown>
+              </div>
             </div>
           )}
         </div>

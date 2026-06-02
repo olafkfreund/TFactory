@@ -60,6 +60,9 @@ class CloudFinding:
     status: str  # lowercased: pass|fail|muted
     region: str | None
     resource: str | None
+    remediation: str = ""  # how to fix (Prowler remediation.desc)
+    risk: str = ""  # why it matters (risk_details / status_detail)
+    references: tuple[str, ...] = ()  # doc links
 
 
 @dataclass(frozen=True)
@@ -88,6 +91,8 @@ def _one(rec: dict) -> CloudFinding:
         sev = _SEV_ID.get(rec.get("severity_id"), "")
 
     region = cloud.get("region") or res0.get("region") or None
+    rem = rec.get("remediation") or {}
+    refs = rem.get("references") or []
 
     return CloudFinding(
         check_id=str(
@@ -98,6 +103,9 @@ def _one(rec: dict) -> CloudFinding:
         status=str(rec.get("status_code") or rec.get("status") or "").strip().lower(),
         region=region,
         resource=res0.get("name") or res0.get("uid") or None,
+        remediation=str(rem.get("desc") or ""),
+        risk=str(rec.get("risk_details") or rec.get("status_detail") or ""),
+        references=tuple(r for r in refs if isinstance(r, str)),
     )
 
 

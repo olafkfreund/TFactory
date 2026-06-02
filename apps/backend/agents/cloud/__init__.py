@@ -13,6 +13,7 @@ from .assessment import (
     to_inventory_findings,
 )
 from .discovery import AccessResult, access_check, discover
+from .remediation import render_remediation_plan
 from .report import assess_and_write, cloud_findings_paths, render_report_markdown
 from .runner import build_prowler_command, run_cloud_assessment
 
@@ -27,6 +28,7 @@ __all__ = [
     "cloud_findings_paths",
     "discover",
     "parse_ocsf",
+    "render_remediation_plan",
     "render_report_markdown",
     "run_cloud_assessment",
     "to_inventory_findings",

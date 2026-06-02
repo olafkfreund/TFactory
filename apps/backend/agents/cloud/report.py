@@ -20,6 +20,7 @@ from pathlib import Path
 from agents.diagrams import render_cloud_topology
 
 from .assessment import CloudAssessment, CloudFinding, assess, parse_ocsf
+from .remediation import render_remediation_plan
 
 __all__ = [
     "assess_and_write",
@@ -38,6 +39,7 @@ def cloud_findings_paths(spec_dir: Path) -> dict[str, Path]:
         "report_md": base / "cloud_assessment.md",
         "report_json": base / "cloud_assessment.json",
         "diagram_mmd": base / "diagrams" / "cloud_topology.mmd",
+        "remediation_md": base / "cloud_remediation_plan.md",
     }
 
 
@@ -153,12 +155,14 @@ def assess_and_write(
     inv["findings"] = dedup_findings_for_diagram(findings, limit=diagram_limit)
     diagram = render_cloud_topology(inv)
     report = render_report_markdown(inventory, a, findings)
+    remediation = render_remediation_plan(findings, fail_on_severity=fail_on_severity)
 
     paths = cloud_findings_paths(spec_dir)
     for p in paths.values():
         p.parent.mkdir(parents=True, exist_ok=True)
     paths["diagram_mmd"].write_text(diagram, encoding="utf-8")
     paths["report_md"].write_text(report, encoding="utf-8")
+    paths["remediation_md"].write_text(remediation, encoding="utf-8")
     paths["report_json"].write_text(
         json.dumps(
             {
