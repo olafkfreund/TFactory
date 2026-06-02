@@ -10,11 +10,11 @@ Phased so each parent task is independently shippable behind the egress/`require
 
 ## Tasks
 
-- [ ] 1. **Credential storage (web-server)**
-  - [ ] 1.1 Write tests for `TestTargetCredential` (encryption-at-rest, `UNIQUE(org_id,name)`, no-secret serialisation)
-  - [ ] 1.2 Add the model (mirror `GitCredential`) + Alembic migration
-  - [ ] 1.3 `POST/GET/DELETE /api/test-credentials` (metadata-only responses, org-scoped authz mirroring `git_credentials.py`)
-  - [ ] 1.4 Migration green on `postgres (P1)` PG 15 + 16; verify all tests pass
+- [x] 1. **Credential storage (web-server)** — PR for #107 (this branch)
+  - [x] 1.1 Write tests for `TestTargetCredential` (encryption-at-rest round-trip + ciphertext-at-rest, `UNIQUE(org_id,name)`, no-secret response shape) — `tests/secrets/test_test_target_credential.py`
+  - [x] 1.2 Add the model (mirrors `GitCredential`, + `username`/`extra`/unique) + Alembic migration `c3e5a8b1d2f4` (chains off `b2d4f7e9c3a1`)
+  - [x] 1.3 `POST/GET/DELETE /api/test-credentials` (metadata-only response, org-scoped authz mirroring `git_credentials.py`); router registered in `main.py`
+  - [x] 1.4 Migration applies on `postgres (P1)` PG 15 + 16 via CI; new-credential tests run in the `secrets (P2)` CI job
 
 - [ ] 2. **Resolver in `tfactory_secrets`**
   - [ ] 2.1 Write tests for `resolve_test_target_credentials()` (env/vault/store refs, hermetic→none, egress-off→none, wipe)

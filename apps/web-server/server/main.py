@@ -41,6 +41,7 @@ from .routes import (
     skills,
     tasks,
     terminal,
+    test_target_credentials,
 )
 from .routes import cli_accounts as cli_accounts_routes
 from .routes import llm_endpoints as llm_endpoints_routes
@@ -232,6 +233,9 @@ def create_app() -> FastAPI:
 
     # Git credentials for portal-managed clone auth (epic #82 PR-C)
     app.include_router(git_credentials.router)
+
+    # Test-target credentials for "log in then test" (#107)
+    app.include_router(test_target_credentials.router)
 
     # Audit log routes (prefix defined in router: /api/orgs)
     app.include_router(audit.router)
