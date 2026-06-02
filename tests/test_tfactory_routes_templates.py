@@ -126,14 +126,23 @@ def test_validate_segment_rejects_empty() -> None:
 # ── list_templates — happy paths ─────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("fw_name,expected_count", [
-    ("pytest", 5),
-    ("jest", 5),
-    ("playwright", 5),
-])
-def test_list_templates_for_framework_returns_expected_count(
-    fw_name: str, expected_count: int
-) -> None:
+def _disk_template_count(fw: str) -> int:
+    """Curated `templates/` + shipped `library/` .tmpl files for a framework.
+
+    The route surfaces both tiers, so the expected count is disk-driven (stays
+    correct as the platform library grows).
+    """
+    fw_dir = Path(__file__).resolve().parents[1] / "frameworks" / fw
+    n = len(list((fw_dir / "templates").glob("*.tmpl")))
+    lib = fw_dir / "library"
+    if lib.is_dir():
+        n += len(list(lib.glob("*.tmpl")))
+    return n
+
+
+@pytest.mark.parametrize("fw_name", ["pytest", "jest", "playwright"])
+def test_list_templates_for_framework_returns_expected_count(fw_name: str) -> None:
+    expected_count = _disk_template_count(fw_name)
     req = _MockRequest(framework=fw_name)
     resp = list_templates(req)
     payload = json.loads(resp.body)
