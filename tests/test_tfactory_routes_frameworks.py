@@ -135,13 +135,14 @@ def test_validate_name_rejects_spaces() -> None:
 # ── list_frameworks ─────────────────────────────────────────────────────────
 
 
-def test_list_frameworks_returns_three_v02_frameworks() -> None:
+def test_list_frameworks_returns_registered_frameworks() -> None:
     result = list_frameworks()
     names = {f["name"] for f in result["frameworks"]}
-    assert "pytest" in names
-    assert "jest" in names
-    assert "playwright" in names
-    assert result["count"] == 3
+    # v0.2 spine + the #110 additions (Vitest unit, Cypress browser).
+    assert {"pytest", "jest", "playwright", "vitest", "cypress"} <= names
+    # count is self-consistent with the rows, whatever the registry size.
+    assert result["count"] == len(result["frameworks"])
+    assert result["count"] == len(names)
 
 
 def test_list_frameworks_sorted_alphabetically() -> None:

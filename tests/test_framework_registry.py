@@ -548,6 +548,51 @@ def test_real_jest_descriptor() -> None:
     not _REAL_FRAMEWORKS_DIR.is_dir(),
     reason=f"frameworks/ directory not found at {_REAL_FRAMEWORKS_DIR}",
 )
+def test_real_vitest_descriptor() -> None:
+    """The real Vitest descriptor — Unit lane, lcov, jest-compatible (#110)."""
+    desc = get_descriptor("vitest", frameworks_dir=_REAL_FRAMEWORKS_DIR)
+    assert desc.language == "typescript"
+    assert Lane.UNIT in desc.lanes
+    assert desc.coverage_strategy == "lcov"
+    assert any(".test.ts" in p for p in desc.test_path_conventions)
+    assert any("vitest" in s for s in desc.manifest_signals)
+    # Reuses the shared TypeScript Evaluator hooks (descriptor-only addition).
+    assert any("lang_typescript" in h for h in desc.evaluator_hooks)
+    assert len(desc.templates) == 5
+
+
+@pytest.mark.skipif(
+    not _REAL_FRAMEWORKS_DIR.is_dir(),
+    reason=f"frameworks/ directory not found at {_REAL_FRAMEWORKS_DIR}",
+)
+def test_real_cypress_descriptor() -> None:
+    """The real Cypress descriptor — Browser lane, coverage=skip (#110, Decision 11)."""
+    desc = get_descriptor("cypress", frameworks_dir=_REAL_FRAMEWORKS_DIR)
+    assert desc.language == "typescript"
+    assert Lane.BROWSER in desc.lanes
+    assert desc.coverage_strategy == "skip", (
+        "Decision 11: browser lane must not emit coverage; Evaluator uses null, not zero"
+    )
+    assert any(".cy.ts" in p for p in desc.test_path_conventions)
+    assert any("cypress" in s for s in desc.manifest_signals)
+    assert any("lang_typescript" in h for h in desc.evaluator_hooks)
+    assert len(desc.templates) == 5
+
+
+@pytest.mark.skipif(
+    not _REAL_FRAMEWORKS_DIR.is_dir(),
+    reason=f"frameworks/ directory not found at {_REAL_FRAMEWORKS_DIR}",
+)
+def test_real_registry_has_five_frameworks() -> None:
+    """The real registry now ships pytest/jest/playwright + vitest/cypress (#110)."""
+    registry = load_registry(frameworks_dir=_REAL_FRAMEWORKS_DIR)
+    assert {"pytest", "jest", "playwright", "vitest", "cypress"} <= set(registry)
+
+
+@pytest.mark.skipif(
+    not _REAL_FRAMEWORKS_DIR.is_dir(),
+    reason=f"frameworks/ directory not found at {_REAL_FRAMEWORKS_DIR}",
+)
 def test_real_acceptance_criterion() -> None:
     """Task 1 acceptance criterion: load_registry returns dict with 'playwright'."""
     registry = load_registry(frameworks_dir=_REAL_FRAMEWORKS_DIR)
