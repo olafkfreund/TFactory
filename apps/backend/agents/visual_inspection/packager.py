@@ -110,3 +110,23 @@ def _copy_if(evidence: Path, src_name: str | None, dest_dir: Path, dst_name: str
         return None
     shutil.copy2(src, dest_dir / dst_name)
     return f"{dest_dir.name}/{dst_name}"
+
+
+def finalize_run(run_dir, meta: RunMeta, *, generate=None, repo: str | None = None) -> None:
+    """Write the P2 artifacts into an already-packaged run dir (#172):
+    ``correction-plan.md`` (LLM seam + deterministic fallback) and ``issues.json``
+    (the GitHub epic + child-per-failure specs, dry-run). Best-effort each.
+    """
+    import json as _json
+
+    from .correction_plan import render_correction_plan
+    from .issues import build_issue_specs, issue_specs_to_dict
+
+    run_dir = Path(run_dir)
+    (run_dir / "correction-plan.md").write_text(
+        render_correction_plan(meta, generate=generate), encoding="utf-8"
+    )
+    epic, children = build_issue_specs(meta, repo=repo)
+    (run_dir / "issues.json").write_text(
+        _json.dumps(issue_specs_to_dict(epic, children), indent=2), encoding="utf-8"
+    )

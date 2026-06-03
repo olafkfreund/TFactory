@@ -14,7 +14,14 @@ from .model import (
     slugify,
     verdict_for,
 )
-from .packager import PackagedRun, package_run
+from .correction_plan import build_correction_prompt, render_correction_plan
+from .issues import (
+    IssueSpec,
+    build_issue_specs,
+    issue_specs_to_dict,
+    register_issues,
+)
+from .packager import PackagedRun, finalize_run, package_run
 from .report import render_inspection_report
 
 __all__ = [
@@ -26,5 +33,12 @@ __all__ = [
     "verdict_for",
     "PackagedRun",
     "package_run",
+    "finalize_run",
     "render_inspection_report",
+    "build_correction_prompt",
+    "render_correction_plan",
+    "IssueSpec",
+    "build_issue_specs",
+    "issue_specs_to_dict",
+    "register_issues",
 ]
