@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.4.0 — Visual Inspection Run + SaaS connector targets (2026-06-03)
+
+> A new **Visual Inspection Run** feature (all no-tenant phases shipped) plus the
+> first-class **SaaS connector** target. Epic
+> [#170](https://github.com/olafkfreund/TFactory/issues/170).
+
+- **Visual Inspection Run (#170).** Record a generated Playwright **browser** run
+  (trace + video + step-labeled verification *and* error screenshots) and package
+  it into `automated-test/<YYYY-MM-DD-HHMMSS>/` with a deterministic human report,
+  an LLM correction plan (injectable seam + deterministic fallback), a GitHub
+  issue export (dry-run), and `meta.json`. New `agents/visual_inspection/`
+  (`packager` · `report` · `correction_plan` · `issues` · `store`); a
+  `write_paths_to_branch` git helper to commit the folder to the SUT repo
+  (dry-run default); a portal **Visual Reports** page + `/api/visual-inspections`
+  routes; and a `/handover-to-tfactory` opt-in (`visual_inspection {enabled,
+  target, flow}` threaded through `task_create_and_run`). Phases P1/P2/P4/P5
+  shipped; **P3** (ServiceNow browser/SSO) remains, needing a live tenant.
+  See `docs/plans/2026-06-03-visual-inspection-run-design.md`.
+- **SaaS connector target (#111).** A first-class `type: connector` target
+  (ServiceNow / Salesforce / SAP / MuleSoft) reusing the http + credential-vault
+  auth, plus a platform registry mapping each platform → API style · `library/`
+  check template · guidance. See `guides/saas-connectors.md`.
+- **storageState login-once scaffolding (#107).** Gen-Functional scaffolds
+  `auth.setup.ts` + a `requires_auth` Playwright config from a ref-auth target's
+  selectors, so a browser test logs in once and reuses the session.
+
 ## 0.3.0 — Cloud testing (AWS/GCP/Azure), platform foundations + portal redesign (2026-06-03)
 
 > The cloud epic ships end-to-end across three providers, four backlog

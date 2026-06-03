@@ -289,3 +289,61 @@ def write_tests_to_branch(
         commit_sha=sha,
         argv_log=tuple(argv_log),
     )
+
+
+def write_paths_to_branch(
+    repo_dir: Path,
+    paths: list[str],
+    branch: str,
+    message: str,
+    *,
+    dry_run: bool = True,
+    runner_fn: Callable[..., _SubprocessResultLike] | None = None,
+) -> GitWriteResult:
+    """Commit already-on-disk ``paths`` (relative to ``repo_dir``) onto ``branch``.
+
+    Generalises :func:`write_tests_to_branch` (which writes *file contents*) to
+    commit an arbitrary artifact directory — e.g. a Visual Inspection's
+    ``automated-test/<run>/`` folder (#170 / P4). Same **dry-run-first** contract:
+    ``dry_run=True`` (default) only assembles + returns the argv sequences; no
+    subprocess, no commit. The branch is created-or-reset with ``checkout -B``.
+    """
+    runner = runner_fn or _default_runner_fn
+    argv_log: list[tuple[str, ...]] = []
+    repo_dir = Path(repo_dir)
+
+    if not dry_run and not repo_dir.exists():
+        return GitWriteResult(ok=False, dry_run=False, error=f"repo_dir does not exist: {repo_dir}")
+    try:
+        rels = [str(_validate_relative_path(p)) for p in paths]
+    except GitWriterError as exc:
+        return GitWriteResult(ok=False, dry_run=dry_run, error=str(exc))
+    if not rels:
+        return GitWriteResult(ok=False, dry_run=dry_run, error="no paths to commit")
+
+    steps = [
+        ("git", "-C", str(repo_dir), "checkout", "-B", branch),
+        ("git", "-C", str(repo_dir), "add", "--", *rels),
+        ("git", "-C", str(repo_dir), "commit", "--no-verify", "-m", message),
+    ]
+    for argv in steps:
+        argv_log.append(argv)
+        if not dry_run:
+            res = runner(list(argv), cwd=repo_dir)
+            if res.returncode != 0:
+                return GitWriteResult(
+                    ok=False, dry_run=False, argv_log=tuple(argv_log),
+                    error=f"{argv[3]} failed: {(res.stderr or '').strip()[:200]}",
+                )
+
+    sha_argv = ("git", "-C", str(repo_dir), "rev-parse", "HEAD")
+    argv_log.append(sha_argv)
+    sha = ""
+    if not dry_run:
+        res = runner(list(sha_argv), cwd=repo_dir)
+        sha = (res.stdout or "").strip()
+
+    return GitWriteResult(
+        ok=True, dry_run=dry_run, committed_paths=tuple(rels),
+        commit_sha=sha, argv_log=tuple(argv_log),
+    )

@@ -87,6 +87,22 @@ missing.
 | `branch` | `git rev-parse --abbrev-ref HEAD`. |
 | `base_ref` | The PR base. Default `main`; use `git merge-base HEAD origin/main` if needed. |
 
+### 1b. Ask what to focus on + whether to enable a visual inspection (#170)
+
+Before previewing, ask the user (skip whichever is already clear):
+
+1. **What should TFactory focus on?** — the task intent / acceptance focus.
+2. **Enable a visual inspection?** — for UI-heavy features (or a SaaS target like
+   ServiceNow), TFactory can record a Playwright **browser** run, capture per-step
+   verification + error screenshots, and package a human **visual-inspection
+   report** + correction plan into `automated-test/<datetime>/` (surfaced in the
+   portal's *Visual Reports*). If yes, gather the **visual target** name (a
+   `visual: true` target in `.tfactory.yml`) and the **flow** to inspect.
+
+Pass these as the optional `visual_inspection` argument to `task_create_and_run`:
+`{ "enabled": true, "target": "<name>", "flow": "<what to inspect>" }`. Omit it for
+a normal code-test task — the default path is unchanged.
+
 ### 2. Confirm the project is registered with TFactory
 
 Call `mcp__tfactory__project_list`. If the AIFactory project isn't

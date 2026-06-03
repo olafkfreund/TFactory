@@ -86,3 +86,6 @@ docs/static/recordings/
 # hashed asset bundle is regenerated, never hand-edited, so it is not tracked.
 apps/web-server/static/assets/
 apps/web-server/static/index.html
+
+# Planner-smoke test artifact (a generated .tfactory/ workspace under a fixture).
+tests/fixtures/planner_smoke/project_tree/.tfactory/

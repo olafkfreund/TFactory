@@ -86,6 +86,28 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def write_visual_inspection_meta(spec_dir: Path, visual_inspection: dict | None) -> bool:
+    """Write ``context/visual_inspection.json`` when a handover opts in (#170 / P5).
+
+    ``visual_inspection`` is the optional ``task_create_and_run`` arg
+    ``{enabled, target, flow}``. Returns True (and writes the file) only when
+    ``enabled`` is truthy — so a normal task leaves no metadata + the default
+    path is untouched. The run path (P4) reads this to drive the browser lane.
+    """
+    vi = visual_inspection or {}
+    if not vi.get("enabled"):
+        return False
+    ctx = Path(spec_dir) / "context"
+    ctx.mkdir(parents=True, exist_ok=True)
+    (ctx / "visual_inspection.json").write_text(
+        json.dumps(
+            {"enabled": True, "target": vi.get("target"), "flow": vi.get("flow")},
+            indent=2,
+        )
+    )
+    return True
+
+
 def _projects_file(root: Path | None = None) -> Path:
     return (root or _workspace_root()) / "projects.json"
 
@@ -221,6 +243,15 @@ def create_task_control_tools() -> list:
                     "default": False,
                     "description": "Pass true to actually create the workspace. If false, returns a preview without side effects.",
                 },
+                "visual_inspection": {
+                    "type": "object",
+                    "description": "Optional (#170). When the handover enables a visual inspection, pass {enabled: true, target: <visual target name>, flow: <what to inspect>}. The browser lane then records + packages an automated-test/ run with screenshots + a human report. Omit (or enabled:false) for a normal task.",
+                    "properties": {
+                        "enabled": {"type": "boolean", "default": False},
+                        "target": {"type": "string", "description": "Name of a visual target in .tfactory.yml"},
+                        "flow": {"type": "string", "description": "What to inspect (the user flow / acceptance focus)"},
+                    },
+                },
             },
             "required": ["project_id", "spec_id", "branch", "base_ref"],
         },
@@ -231,6 +262,10 @@ def create_task_control_tools() -> list:
         branch = args["branch"]
         base_ref = args["base_ref"]
         confirm = bool(args.get("confirm", False))
+        # Visual Inspection opt-in (#170 / P5): the handover asks "enable visual
+        # inspection?"; when enabled, {enabled, target, flow} threads to the
+        # workspace so the browser lane records + packages an automated-test/ run.
+        visual_inspection = args.get("visual_inspection") or {}
 
         projects = _load_projects()
         project_entry = next(
@@ -311,6 +346,11 @@ def create_task_control_tools() -> list:
             f"lane-tagged `test_plan.json` under this workspace.\n"
         )
 
+        # Visual Inspection metadata (#170 / P5) — written only when opted in,
+        # so the default path is untouched. The run path (P4) reads this to
+        # drive the browser lane against the named target + package the result.
+        vi_enabled = write_visual_inspection_meta(spec_dir, visual_inspection)
+
         # status.json — lifecycle state
         status = {
             "task_id": task_id,
@@ -321,6 +361,7 @@ def create_task_control_tools() -> list:
             "status": "pending",
             "phase": "created",
             "lane_progress": dict.fromkeys(_MVP_LANES, "pending"),
+            "visual_inspection": vi_enabled,
             "created_at": _now_iso(),
             "updated_at": _now_iso(),
         }

@@ -16,6 +16,7 @@ import { Insights } from './components/Insights';
 import { AgentTools } from './components/AgentTools';
 import { SkillsPage } from './components/SkillsPage';
 import { CloudAssessmentPage } from './components/settings/sections/CloudAssessmentPage';
+import { VisualReportsPage } from './components/settings/sections/VisualReportsPage';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { AddProjectModal } from './components/AddProjectModal';
 import { AppSettingsDialog } from './components/settings';
@@ -369,6 +370,11 @@ function AuthenticatedApp() {
                   {activeView === 'cloud' && (
                     <div className="h-full overflow-auto p-6">
                       <CloudAssessmentPage />
+                    </div>
+                  )}
+                  {activeView === 'visual-reports' && (
+                    <div className="h-full overflow-auto p-6">
+                      <VisualReportsPage />
                     </div>
                   )}
                 </>
