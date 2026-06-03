@@ -1,34 +1,55 @@
 /**
- * Cloud Assessment viewer (#133/#140).
+ * Cloud Assessment viewer (#133/#140/#152).
  *
- * Renders the latest cloud assessment the TFactory cloud task-write (#138)
- * produced — the verdict, the report (Markdown), and the Mermaid service
- * topology — fetched from GET /api/cloud/assessment.
+ * A history of cloud assessments: a newest-first list of runs → click to open
+ * the detail (verdict · service topology · remediation plan · full report) with
+ * downloads (.md / issues .json / PDF) you can feed to a Claude Code / Antigravity
+ * correction task. Backed by /api/cloud/assessments.
  */
 import { useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Loader2, ShieldAlert, ShieldCheck, ShieldQuestion } from 'lucide-react';
+import {
+  ArrowLeft,
+  Cloud,
+  Download,
+  FileDown,
+  FileText,
+  Loader2,
+  ShieldAlert,
+  ShieldCheck,
+  ShieldQuestion,
+} from 'lucide-react';
 import { get } from '../../../lib/api-client';
 import { SettingsSection } from '../SettingsSection';
 import { MermaidDiagram } from './MermaidDiagram';
 
-interface Assessment {
+interface Summary {
+  id: string;
+  provider?: string;
+  account?: string;
+  verdict?: string;
+  failed?: number;
+  passed?: number;
+  created?: number;
+}
+
+interface Detail {
   present: boolean;
+  id?: string;
   json?: {
     provider?: string;
     account?: string;
     verdict?: string;
     failed?: number;
     passed?: number;
-    fail_counts?: Record<string, number>;
   };
   reportMarkdown?: string;
   diagramMermaid?: string;
   remediationMarkdown?: string;
+  issuesJson?: string;
 }
 
-// Shared Markdown styling (GFM tables, themed) for report + remediation plan.
 const MD_CLASS =
   'overflow-auto rounded-lg border border-border p-4 text-sm ' +
   '[&_h1]:mb-2 [&_h1]:mt-1 [&_h1]:text-lg [&_h1]:font-bold [&_h1]:text-foreground ' +
@@ -46,40 +67,65 @@ const MD_CLASS =
 
 function VerdictBadge({ verdict }: { verdict?: string }) {
   const v = (verdict || '').toLowerCase();
-  if (v === 'reject') {
+  if (v === 'reject')
     return (
       <span className="inline-flex items-center gap-1.5 rounded-full bg-destructive/15 px-3 py-1 text-sm font-semibold text-destructive">
         <ShieldAlert className="h-4 w-4" /> REJECT
       </span>
     );
-  }
-  if (v === 'flag') {
+  if (v === 'flag')
     return (
       <span className="inline-flex items-center gap-1.5 rounded-full bg-warning/15 px-3 py-1 text-sm font-semibold text-warning">
         <ShieldQuestion className="h-4 w-4" /> FLAG
       </span>
     );
-  }
-  if (v === 'accept') {
+  if (v === 'accept')
     return (
       <span className="inline-flex items-center gap-1.5 rounded-full bg-success/15 px-3 py-1 text-sm font-semibold text-success">
         <ShieldCheck className="h-4 w-4" /> ACCEPT
       </span>
     );
-  }
   return null;
 }
 
+async function downloadArtifact(id: string, kind: string, filename: string) {
+  let token: string | null = null;
+  try {
+    token = localStorage.getItem('tfactory-token');
+  } catch {
+    token = null;
+  }
+  const res = await fetch(`/api/cloud/assessments/${encodeURIComponent(id)}/download/${kind}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) return;
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function fmtTime(t?: number) {
+  return t ? new Date(t * 1000).toLocaleString() : '';
+}
+
 export function CloudAssessmentPage() {
-  const [data, setData] = useState<Assessment | null>(null);
+  const [list, setList] = useState<Summary[] | null>(null);
+  const [selected, setSelected] = useState<Detail | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadingDetail, setLoadingDetail] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const res = await get<Assessment>('/cloud/assessment');
+      const res = await get<{ assessments: Summary[] }>('/cloud/assessments');
       if (!cancelled) {
-        setData(res.success && res.data ? res.data : { present: false });
+        setList(res.success && res.data ? res.data.assessments : []);
         setLoading(false);
       }
     })();
@@ -88,60 +134,163 @@ export function CloudAssessmentPage() {
     };
   }, []);
 
+  const openDetail = async (id: string) => {
+    setLoadingDetail(true);
+    setSelected({ present: true, id });
+    const res = await get<Detail>(`/cloud/assessments/${encodeURIComponent(id)}`);
+    setSelected(res.success && res.data ? res.data : null);
+    setLoadingDetail(false);
+  };
+
   return (
     <SettingsSection
       title="Cloud Assessment"
-      description="Latest cloud misconfiguration assessment — verdict, findings, and service topology."
+      description="Cloud misconfiguration assessments — verdict, findings, topology, and a downloadable remediation plan."
     >
       {loading ? (
         <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" /> Loading assessment…
+          <Loader2 className="h-4 w-4 animate-spin" /> Loading assessments…
         </div>
-      ) : !data?.present ? (
-        <div className="rounded-lg border border-border bg-muted/30 p-4 text-sm text-muted-foreground">
-          No cloud assessment yet. Run a cloud target (AWS/Azure/GCP) to produce a
-          report — it lands in <code>findings/cloud_assessment.md</code> and shows here.
+      ) : selected ? (
+        <DetailView detail={selected} onBack={() => setSelected(null)} loading={loadingDetail} />
+      ) : (
+        <ListView list={list || []} onOpen={openDetail} />
+      )}
+    </SettingsSection>
+  );
+}
+
+function ListView({ list, onOpen }: { list: Summary[]; onOpen: (id: string) => void }) {
+  if (!list.length) {
+    return (
+      <div className="rounded-lg border border-border bg-muted/30 p-4 text-sm text-muted-foreground">
+        No cloud assessments yet. Run a cloud target (AWS/Azure/GCP) — each run shows here as a card.
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-2">
+      <p className="text-sm text-muted-foreground">{list.length} assessment(s) · newest first</p>
+      <div className="divide-y divide-border rounded-lg border border-border">
+        {list.map((a) => (
+          <button
+            key={a.id}
+            onClick={() => onOpen(a.id)}
+            className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left hover:bg-muted/50"
+          >
+            <div className="flex items-center gap-3">
+              <Cloud className="h-4 w-4 text-muted-foreground" />
+              <div>
+                <div className="text-sm font-medium text-foreground">
+                  {a.provider?.toUpperCase()} · account {a.account}
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  {fmtTime(a.created)} · 🔴 {a.failed ?? 0} fail · ✅ {a.passed ?? 0} pass
+                </div>
+              </div>
+            </div>
+            <VerdictBadge verdict={a.verdict} />
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DetailView({ detail, onBack, loading }: { detail: Detail; onBack: () => void; loading: boolean }) {
+  const id = detail.id || '';
+  const acct = detail.json?.account || 'acct';
+  return (
+    <div className="space-y-5">
+      <button
+        onClick={onBack}
+        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+      >
+        <ArrowLeft className="h-4 w-4" /> All assessments
+      </button>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <VerdictBadge verdict={detail.json?.verdict} />
+        <span className="text-sm text-muted-foreground">
+          {detail.json?.provider?.toUpperCase()} · account {acct} · 🔴 {detail.json?.failed ?? 0} fail · ✅{' '}
+          {detail.json?.passed ?? 0} pass
+        </span>
+      </div>
+
+      {/* Downloads — feed these to a Claude Code / Antigravity correction task */}
+      <div className="flex flex-wrap gap-2">
+        <DownloadBtn
+          icon={<FileText className="h-3.5 w-3.5" />}
+          label="Remediation .md"
+          onClick={() => downloadArtifact(id, 'remediation.md', `cloud-remediation-${acct}.md`)}
+        />
+        <DownloadBtn
+          icon={<FileDown className="h-3.5 w-3.5" />}
+          label="Remediation .pdf"
+          onClick={() => downloadArtifact(id, 'remediation.pdf', `cloud-remediation-${acct}.pdf`)}
+        />
+        <DownloadBtn
+          icon={<Download className="h-3.5 w-3.5" />}
+          label="Issues .json"
+          onClick={() => downloadArtifact(id, 'issues.json', `cloud-issues-${acct}.json`)}
+        />
+        <DownloadBtn
+          icon={<FileText className="h-3.5 w-3.5" />}
+          label="Report .md"
+          onClick={() => downloadArtifact(id, 'report.md', `cloud-report-${acct}.md`)}
+        />
+      </div>
+
+      {loading ? (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" /> Loading…
         </div>
       ) : (
-        <div className="space-y-5">
-          <div className="flex flex-wrap items-center gap-3">
-            <VerdictBadge verdict={data.json?.verdict} />
-            <span className="text-sm text-muted-foreground">
-              {data.json?.provider?.toUpperCase()} · account {data.json?.account} ·{' '}
-              🔴 {data.json?.failed ?? 0} fail · ✅ {data.json?.passed ?? 0} pass
-            </span>
-          </div>
-
-          {data.diagramMermaid && (
+        <>
+          {detail.diagramMermaid && (
             <div>
               <h4 className="mb-2 text-sm font-semibold text-foreground">Service topology</h4>
-              <MermaidDiagram source={data.diagramMermaid} />
+              <MermaidDiagram source={detail.diagramMermaid} />
             </div>
           )}
-
-          {data.remediationMarkdown && (
+          {detail.remediationMarkdown && (
             <div>
-              <h4 className="mb-2 text-sm font-semibold text-foreground">
-                Remediation plan — how to fix
-              </h4>
+              <h4 className="mb-2 text-sm font-semibold text-foreground">Remediation plan — how to fix</h4>
               <div className={MD_CLASS}>
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                  {data.remediationMarkdown}
-                </ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{detail.remediationMarkdown}</ReactMarkdown>
               </div>
             </div>
           )}
-
-          {data.reportMarkdown && (
+          {detail.reportMarkdown && (
             <div>
               <h4 className="mb-2 text-sm font-semibold text-foreground">Full report</h4>
               <div className={MD_CLASS}>
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{data.reportMarkdown}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{detail.reportMarkdown}</ReactMarkdown>
               </div>
             </div>
           )}
-        </div>
+        </>
       )}
-    </SettingsSection>
+    </div>
+  );
+}
+
+function DownloadBtn({
+  icon,
+  label,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-foreground hover:bg-muted/50"
+    >
+      {icon}
+      {label}
+    </button>
   );
 }
