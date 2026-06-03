@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 
+import { formatRelativeTime } from '../../lib/utils';
 import { MarkdownBody } from '../ui/MarkdownBody';
 import {
   TFactoryApiError,
@@ -174,8 +175,8 @@ function Stat({ label, value, mono }: { label: string; value: unknown; mono?: bo
 
 function fmt(iso?: string): string {
   if (!iso) return '';
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
+  // Humanised relative time ("2d ago"), consistent with the home + cloud lists.
+  return formatRelativeTime(iso) || iso;
 }
 
 // ── Tab button ──────────────────────────────────────────────────────
