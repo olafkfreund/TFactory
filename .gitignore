@@ -79,3 +79,9 @@ docs/vendor/
 docs/static/recordings/
 .claude/worktrees/
 .claude/scheduled_tasks.lock
+
+# Vite build output for the portal — hashed bundle filenames change every
+# build, producing large churn + checkout reverts. The frontend is built
+# (`apps/frontend-web` → outDir ../web-server/static) and served in prod; the
+# hashed asset bundle is regenerated, never hand-edited, so it is not tracked.
+apps/web-server/static/assets/
