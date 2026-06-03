@@ -163,7 +163,9 @@ describe('<TFactoryTaskList> populated', () => {
     await waitFor(() => screen.getByText('task-a'));
     expect(screen.getByText('projx')).toBeInTheDocument();
     expect(screen.getByText('evaluator_complete')).toBeInTheDocument();
-    expect(screen.getByText('2026-05-28T10:00:00+00:00')).toBeInTheDocument();
+    // updated_at is humanised to a short absolute date ("May 28") plus a
+    // relative label, rather than the raw ISO string.
+    expect(screen.getByText('May 28')).toBeInTheDocument();
   });
 
   it('colours status badges by bucket', async () => {
