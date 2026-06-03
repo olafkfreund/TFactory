@@ -62,6 +62,16 @@ def _aifactory_root() -> Path:
     return Path(root).expanduser() if root else _DEFAULT_AIFACTORY_ROOT
 
 
+# AIFactory's web-server listens on 3101 (apps/web-server/.env: APP_PORT=3101).
+# This is the endpoint the hand-back (epic #182) POSTs corrections back to.
+_DEFAULT_AIFACTORY_API_URL = "http://localhost:3101"
+
+
+def _default_api_url() -> str:
+    """Resolve AIFactory's API base URL for the hand-back. Env override."""
+    return os.environ.get("TFACTORY_AIFACTORY_API_URL", _DEFAULT_AIFACTORY_API_URL)
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -100,8 +110,24 @@ class SnapshotResult:
     # Warnings — soft failures that callers may surface to the user.
     warnings: list[str] = field(default_factory=list)
 
+    # Hand-back target (epic #182). ``aifactory_api_url`` is where TFactory
+    # POSTs a correction back to; ``correction_cycle`` bounds the test→fix→
+    # re-test loop (mirrors the Planner's replan cap → stuck).
+    aifactory_api_url: str | None = None
+    correction_cycle: int = 0
+
     def to_dict(self) -> dict:
-        return asdict(self)
+        d = asdict(self)
+        # Group the hand-back target into a single ``aifactory`` envelope so
+        # the handback builder (P2) reads ``source["aifactory"]`` as one unit.
+        api_url = d.pop("aifactory_api_url", None)
+        d["aifactory"] = {
+            "project_id": self.project_id,
+            "spec_id": self.spec_id,
+            "api_url": api_url,
+            "task_id": f"{self.project_id}:{self.spec_id}",
+        }
+        return d
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +144,7 @@ def snapshot_aifactory_spec(
     project_root_path: Path | str | None,
     dest_spec_dir: Path | str,
     aifactory_root: Path | None = None,
+    api_url: str | None = None,
 ) -> SnapshotResult:
     """Snapshot an AIFactory spec into a TFactory workspace context dir.
 
@@ -133,6 +160,9 @@ def snapshot_aifactory_spec(
             ``context/`` subtree into.
         aifactory_root: Optional override for ``~/.aifactory``. Useful
             in tests; production code uses the default.
+        api_url: AIFactory's web-server base URL for the hand-back target
+            (epic #182). Defaults to ``$TFACTORY_AIFACTORY_API_URL`` or
+            ``http://localhost:3101``.
 
     Returns:
         A SnapshotResult describing what landed. Always also written
@@ -162,6 +192,7 @@ def snapshot_aifactory_spec(
         branch=branch,
         base_ref=base_ref,
         aifactory_spec_dir=str(source_dir),
+        aifactory_api_url=api_url or _default_api_url(),
     )
 
     # ── spec.md → aifactory_spec.md (0o444) ──────────────────────────────
