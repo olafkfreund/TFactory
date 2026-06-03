@@ -756,7 +756,11 @@ def _kube_runtime_for(target: dict | None, *, runtime_cls=None):
     (on success *and* failure). Auth rides the materialised read-only kubeconfig
     (``KUBECONFIG``). Returns None for non-k8s targets (the static-URL path).
     """
-    if not target or target.get("type") != "kubernetes" or not target.get("port_forward"):
+    if (
+        not target
+        or target.get("type") != "kubernetes"
+        or not target.get("port_forward")
+    ):
         return None
     from types import SimpleNamespace
 
@@ -769,6 +773,10 @@ def _kube_runtime_for(target: dict | None, *, runtime_cls=None):
         namespace=target.get("namespace"),
         service=target.get("service"),
         port=target.get("port"),
+        # KubernetesRuntime.start() reads target.port_forward — without it the
+        # real runtime AttributeErrors (the mocked dispatch test never hits
+        # start(), so this only surfaces live). #108.
+        port_forward=target.get("port_forward"),
     )
     return cls(t, kubeconfig=os.environ.get("KUBECONFIG"))
 
@@ -1368,16 +1376,25 @@ async def run_evaluator(
                 if rt is not None:
                     with rt as runtime:
                         api_runner = _resolve_runner_fn(
-                            spec_dir, project_dir, network="host",
-                            target_url=runtime.target_url, subtask=st,
+                            spec_dir,
+                            project_dir,
+                            network="host",
+                            target_url=runtime.target_url,
+                            subtask=st,
                         )
                         bundles.append(
-                            _build_api_signal_bundle(spec_dir, project_dir, st, api_runner)
+                            _build_api_signal_bundle(
+                                spec_dir, project_dir, st, api_runner
+                            )
                         )
                 else:
                     url = _browser_target_url(spec_dir, st)
                     api_runner = _resolve_runner_fn(
-                        spec_dir, project_dir, network="host", target_url=url, subtask=st
+                        spec_dir,
+                        project_dir,
+                        network="host",
+                        target_url=url,
+                        subtask=st,
                     )
                     bundles.append(
                         _build_api_signal_bundle(spec_dir, project_dir, st, api_runner)

@@ -98,3 +98,19 @@ def test_kube_runtime_built_for_port_forward_target(monkeypatch) -> None:
     # usable as a context manager yielding the live URL
     with rt as runtime:
         assert runtime.target_url == "http://localhost:8080"
+
+
+def test_kube_runtime_for_threads_port_forward_to_real_runtime() -> None:
+    """_kube_runtime_for must set target.port_forward on the namespace it builds:
+    the REAL KubernetesRuntime.start() reads it, and would AttributeError without
+    it (the mocked runtime_cls path never hits start()). Live-found regression
+    (#108)."""
+    from agents.evaluator import _kube_runtime_for
+
+    target = {
+        "name": "web", "type": "kubernetes", "context": "kind-x",
+        "namespace": "demo", "service": "web", "port": 8080, "port_forward": True,
+    }
+    rt = _kube_runtime_for(target)  # real KubernetesRuntime (no mock)
+    assert rt is not None
+    assert getattr(rt.target, "port_forward", None) is True
