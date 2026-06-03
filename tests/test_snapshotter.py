@@ -111,6 +111,62 @@ def test_source_json_schema(populated_spec: Path, tmp_path: Path) -> None:
     assert data["base_ref"] == "main"
 
 
+def test_source_json_carries_handback_target(
+    populated_spec: Path, tmp_path: Path
+) -> None:
+    """P1 (#183): source.json carries the AIFactory hand-back envelope so a
+    correction can target the original spec (epic #182)."""
+    dest = tmp_path / "tfactory" / "ws"
+    snapshot_aifactory_spec(
+        project_id="demo", spec_id="001-login",
+        branch="feature/x", base_ref="main",
+        project_root_path=None, dest_spec_dir=dest,
+    )
+    data = json.loads((dest / "context" / "source.json").read_text())
+
+    # correction_cycle starts at zero (bounds the test→fix→re-test loop).
+    assert data["correction_cycle"] == 0
+
+    # The handback builder (P2) reads source["aifactory"] as one unit.
+    af = data["aifactory"]
+    assert af["project_id"] == "demo"
+    assert af["spec_id"] == "001-login"
+    assert af["task_id"] == "demo:001-login"
+    assert af["api_url"] == "http://localhost:3101"  # AIFactory web-server default
+    # The flat field is folded into the envelope, not duplicated at top level.
+    assert "aifactory_api_url" not in data
+
+
+def test_handback_api_url_env_override(
+    populated_spec: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TFACTORY_AIFACTORY_API_URL overrides the default (remote AIFactory)."""
+    monkeypatch.setenv("TFACTORY_AIFACTORY_API_URL", "https://aif.internal:8443")
+    dest = tmp_path / "tfactory" / "ws"
+    snapshot_aifactory_spec(
+        project_id="demo", spec_id="001-login",
+        branch="feature/x", base_ref="main",
+        project_root_path=None, dest_spec_dir=dest,
+    )
+    data = json.loads((dest / "context" / "source.json").read_text())
+    assert data["aifactory"]["api_url"] == "https://aif.internal:8443"
+
+
+def test_handback_api_url_explicit_arg_wins(
+    populated_spec: Path, tmp_path: Path
+) -> None:
+    """An explicit api_url arg beats the env default."""
+    dest = tmp_path / "tfactory" / "ws"
+    snapshot_aifactory_spec(
+        project_id="demo", spec_id="001-login",
+        branch="feature/x", base_ref="main",
+        project_root_path=None, dest_spec_dir=dest,
+        api_url="http://example:9000",
+    )
+    data = json.loads((dest / "context" / "source.json").read_text())
+    assert data["aifactory"]["api_url"] == "http://example:9000"
+
+
 # ── Soft-fail paths (warnings, not exceptions) ───────────────────────────
 
 

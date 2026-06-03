@@ -137,6 +137,19 @@ have written `report.md`/`report.json` — fetch with `report_get`.
   via `scripts/start-tfactory-mcp.sh` in the TFactory repo, and confirm
   the AIFactory `.mcp.json` points at the right absolute path.
 
+## When the tests find problems — hand back for a fix
+
+If TFactory's run finishes with failing tests / rejects, you can hand the
+problems back to AIFactory for a fix with **`/handback-to-aifactory`** (install
+its companion from `TFactory/companion-skills/aifactory-handback-from-tfactory/`).
+It applies the correction TFactory prepared to the original spec via AIFactory's
+QA Fixer, closing the loop:
+
+```
+/handover-to-tfactory → test → (failures) → /handback-to-aifactory
+   → AIFactory QA Fixer → re-run TFactory to verify
+```
+
 ## Status at MVP
 
 Workspace creation + status tracking work. The pipeline (planner →

@@ -244,3 +244,21 @@ set goals/ACs → /handover-to-tfactory → (TFactory plans+writes+runs+scores)
 
 After running this skill, offer to start the watch loop for the returned
 `task_id` unless the user only wanted to fire-and-forget.
+
+## When the tests find problems — hand back for a fix (the reverse direction)
+
+If the watch loop reports a `triaged` run whose report has **failing tests /
+rejects** (or a visual-inspection fail), the loop doesn't end at "here are the
+problems" — you can hand them straight back to AIFactory for a fix. When the
+Triager goes terminal with failures, its completion hook (#185) already writes
+the correction request to the workspace
+(`findings/handback_request.{md,json}`). Run **`/handback-to-aifactory`** to
+preview it and (on confirm) send it — AIFactory's QA Fixer writes the fix on the
+original spec. Then re-run TFactory to verify:
+
+```
+/handover-to-tfactory → test → (failures) → /handback-to-aifactory
+   → AIFactory QA Fixer → task_rerun to verify → done
+```
+
+This closes the full AIFactory ↔ TFactory loop (epic #182).

@@ -384,6 +384,12 @@ def _write_status_patch(spec_dir: Path, **fields: object) -> None:
     # Fire the completion callback exactly once, when the task goes terminal.
     if fields.get("status") in _TERMINAL_STATUSES:
         _notify_completion(spec_dir, status)
+        # Best-effort TFactory→AIFactory correction hand-back (#185 / epic #182).
+        # Prepares findings/handback_request.{md,json} when the run has failures;
+        # sends to AIFactory only with TFACTORY_HANDBACK_SEND=1. Never raises.
+        from agents.handback.trigger import maybe_handback
+
+        maybe_handback(spec_dir)
 
 
 # ─── Mode resolution: dry-run vs real ─────────────────────────────────

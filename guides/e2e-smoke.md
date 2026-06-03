@@ -347,3 +347,4 @@ Track in follow-up issues; not blockers for `v0.1.0-mvp` shipping.
 - [`tests/test_e2e_smoke_script.py`](../tests/test_e2e_smoke_script.py) — structural tests for the runner
 - [`guides/planner-manual-smoke.md`](planner-manual-smoke.md) — the Planner-only sibling smoke (predates this guide)
 - [`guides/HANDOVER_WORKFLOW.md`](HANDOVER_WORKFLOW.md) — how operators trigger TFactory from a live Claude Code session
+- [`guides/aifactory-handback.md`](aifactory-handback.md) — the reverse direction: hand failing tests back to AIFactory for a fix, and the bounded test→fix→re-test loop
