@@ -62,7 +62,7 @@ export function ProjectSelector({
             <SelectValue placeholder="Select a project..." className="truncate min-w-0 flex-1" />
           </div>
         </SelectTrigger>
-        <SelectContent className="min-w-(--radix-select-trigger-width) max-w-(--radix-select-trigger-width) bg-[hsl(211,40%,12%)] border-[hsl(211,30%,22%)]">
+        <SelectContent className="min-w-(--radix-select-trigger-width) max-w-(--radix-select-trigger-width) bg-popover border-border">
           {projects.length === 0 ? (
             <div className="px-2 py-4 text-center text-sm text-muted-foreground">
               <p>No projects yet</p>
