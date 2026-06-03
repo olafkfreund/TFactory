@@ -124,13 +124,31 @@ def render_cloud_topology(inventory: dict) -> str:
             )
             g.edge(gnode, "s3")
         iam = glob.get("iam")
-        if iam:
+        if iam and "users" in iam:  # AWS IAM account summary
             g.node(
                 "iam",
                 f"IAM · {iam.get('users', '?')} users · "
                 f"{iam.get('roles', '?')} roles · {iam.get('policies', '?')} policies",
             )
             g.edge(gnode, "iam")
+        # Generic global services (GCP storage/iam, Azure storage/rg/compute, …).
+        _rendered = {"s3"}
+        if iam and "users" in iam:
+            _rendered.add("iam")
+        for key, val in glob.items():
+            if key in _rendered or not isinstance(val, dict):
+                continue
+            if "count" in val:
+                summary = str(val["count"])
+            else:
+                summary = " · ".join(f"{k} {v}" for k, v in val.items()) or "?"
+            label = key.replace("_", " ").upper()
+            nid = g.node(
+                f"glob_{key}",
+                f"{label} · {summary}",
+                cls="ok" if val.get("ok") else None,
+            )
+            g.edge(gnode, nid)
 
     # ── per-region resources ─────────────────────────────────────────────────
     for region, res in (inventory.get("regions") or {}).items():

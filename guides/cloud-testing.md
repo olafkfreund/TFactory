@@ -1,8 +1,8 @@
 # Cloud Infrastructure Testing (AWS / Azure / GCP)
 
-> Status: AWS implemented end-to-end (discovery + Prowler assessment + diagram +
-> portal view). Azure / GCP discovery are stubs (next). Epic
-> [#133](https://github.com/olafkfreund/TFactory/issues/133).
+> Status: AWS, GCP and Azure implemented end-to-end (discovery + Prowler
+> assessment + diagram + portal view), all live-verified against real accounts.
+> Epic [#133](https://github.com/olafkfreund/TFactory/issues/133).
 
 TFactory can assess a cloud account the way it assesses code: **discover** what's
 there, **detect misconfigurations**, **diagram** the topology, and emit a
@@ -93,11 +93,18 @@ Use the **`/cloud-discover`** skill (`.claude/skills/cloud-discover/SKILL.md`) �
 it drives access → discover → diagram → assess and writes the report. Or call
 the primitives directly (see the skill for snippets).
 
-## Adding the next provider (Azure / GCP)
+## Per-provider auth
 
-`agents/cloud/discovery._IMPLEMENTED` currently lists `aws`. To add Azure/GCP:
-1. Implement the provider branch in `access_check` / `discover` (using `az` /
-   `gcloud` read-only calls) returning the same inventory shape.
-2. Prowler already supports Azure + GCP — point the runner at
-   `prowler azure` / `prowler gcp`; the OCSF→verdict mapping is provider-agnostic.
-3. The diagram, report, and portal view need no changes (inventory-driven).
+All three providers share the inventory shape, diagram, report, verdict and
+portal view (inventory-driven). They differ only in **how credentials reach
+the scan**:
+
+| Provider | Discovery (host CLI) | Prowler auth (in container) |
+|----------|----------------------|------------------------------|
+| AWS   | `aws` + `--profile`         | `~/.aws` mounted ro, `AWS_PROFILE` |
+| GCP   | `gcloud` (project from config or `profile`) | `~/.config/gcloud` mounted ro as `/gcloud`, ADC (`GOOGLE_APPLICATION_CREDENTIALS` + `CLOUDSDK_CONFIG`), run as host uid |
+| Azure | `az` (subscription from login or `profile`) | `~/.azure` mounted ro as `/azure` (`AZURE_CONFIG_DIR`), `prowler azure --az-cli-auth`, run as host uid |
+
+GCP/Azure mount 0600 credential files, so the container runs as the host uid
+(`--user`) to read them; the runner image bundles `az` for `--az-cli-auth`.
+Discovery itself always runs host-side (the host has `aws`/`gcloud`/`az`).
