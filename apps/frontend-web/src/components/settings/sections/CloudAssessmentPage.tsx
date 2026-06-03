@@ -144,8 +144,8 @@ export function CloudAssessmentPage() {
 
   return (
     <SettingsSection
-      title="Cloud Assessment"
-      description="Cloud misconfiguration assessments — verdict, findings, topology, and a downloadable remediation plan."
+      title="Cloud Reports"
+      description="Reports from cloud infrastructure checks — each AWS/Azure/GCP run's verdict, findings, topology, and downloadable remediation plan. Start a check from +Task → Cloud Infrastructure."
     >
       {loading ? (
         <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
@@ -164,7 +164,7 @@ function ListView({ list, onOpen }: { list: Summary[]; onOpen: (id: string) => v
   if (!list.length) {
     return (
       <div className="rounded-lg border border-border bg-muted/30 p-4 text-sm text-muted-foreground">
-        No cloud assessments yet. Run a cloud target (AWS/Azure/GCP) — each run shows here as a card.
+        No cloud reports yet. Start a check from <strong>+Task → Cloud Infrastructure</strong> (AWS/Azure/GCP) — each run shows here as a card.
       </div>
     );
   }
