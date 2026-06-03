@@ -10,7 +10,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from agents.cloud.report import cloud_findings_paths
-from agents.cloud.runner import build_prowler_command, run_cloud_assessment
+from agents.cloud.runner import (
+    _docker_argv,
+    build_prowler_command,
+    run_cloud_assessment,
+)
 
 
 def _target(provider="aws", profile="Calitii", regions=("us-east-1",),
@@ -47,6 +51,48 @@ def test_build_prowler_command_services_and_regions() -> None:
     cmd = build_prowler_command("aws", regions=["us-east-1", "eu-west-2"], services=["iam", "s3"])
     assert cmd.count("--service") == 2 and "iam" in cmd and "s3" in cmd
     assert cmd.count("--region") == 2 and "eu-west-2" in cmd
+
+
+def test_build_prowler_command_azure_uses_az_cli_auth() -> None:
+    cmd = build_prowler_command("azure")
+    assert cmd[:2] == ["prowler", "azure"]
+    assert "--az-cli-auth" in cmd
+
+
+def test_build_prowler_command_gcp_pins_project() -> None:
+    cmd = build_prowler_command("gcp", project_id="sarc-493418")
+    assert cmd[:2] == ["prowler", "gcp"]
+    assert cmd[cmd.index("--project-id") + 1] == "sarc-493418"
+    # no project pin when not provided
+    assert "--project-id" not in build_prowler_command("gcp")
+
+
+# ── _docker_argv (per-provider auth wiring) ──────────────────────────────────
+
+
+def test_docker_argv_aws_mounts_profile() -> None:
+    argv = _docker_argv("aws", "Calitii", "/scr", ["prowler", "aws"])
+    assert "--network=bridge" in argv
+    assert f"AWS_PROFILE=Calitii" in argv
+    assert "--user" not in argv  # AWS keeps the image's default user
+
+
+def test_docker_argv_gcp_runs_as_host_uid_with_adc() -> None:
+    argv = _docker_argv("gcp", None, "/scr", ["prowler", "gcp"])
+    assert "--user" in argv
+    assert "CLOUDSDK_CONFIG=/gcloud" in argv
+    assert "GOOGLE_APPLICATION_CREDENTIALS=/gcloud/application_default_credentials.json" in argv
+    assert any(a.endswith(":/gcloud:ro") for a in argv)
+
+
+def test_docker_argv_azure_copies_login_to_writable_config() -> None:
+    argv = _docker_argv("azure", None, "/scr", ["prowler", "azure", "--az-cli-auth"])
+    assert "--user" in argv
+    assert "AZURE_CONFIG_DIR=/scratch/azure-cfg" in argv
+    assert any(a.endswith(":/azure-src:ro") for a in argv)
+    # az config is read-only on the host → copied into scratch, then prowler execs
+    assert argv[-3:][0] == "sh" and argv[-2] == "-lc"
+    assert "cp -r /azure-src/." in argv[-1] and "exec prowler azure" in argv[-1]
 
 
 # ── run_cloud_assessment (orchestration) ─────────────────────────────────────

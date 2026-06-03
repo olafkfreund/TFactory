@@ -49,6 +49,12 @@ RUN apt-get update \
 # prowler: CSPM engine (pulls boto3 + the cloud SDKs). checkov: IaC scanning.
 RUN pip install "prowler>=5,<6" "checkov>=3,<4"
 
+# ── Azure CLI ─────────────────────────────────────────────────────────────
+# Prowler's azure provider authenticates with --az-cli-auth, which delegates to
+# AzureCliCredential → it shells out to `az`. The host's read-only ~/.azure login
+# is mounted in at runtime (AZURE_CONFIG_DIR), so the `az` binary must be present.
+RUN pip install "azure-cli>=2.60,<3"
+
 # ── Filesystem + non-root ─────────────────────────────────────────────────
 # /repo    — bind-mounted ro at runtime (IaC / terraform for Checkov)
 # /scratch — bind-mounted rw at runtime (OCSF JSON findings, reports)

@@ -23,12 +23,18 @@ is outward-facing against the user's real account — confirm scope before any c
 
 ## Inputs
 
-- **provider** (`aws` | `azure` | `gcp`) — AWS is implemented; Azure/GCP are
-  stubs (`agents/cloud/discovery._IMPLEMENTED`).
-- **profile / account** — e.g. an AWS named profile (`--profile Calitii`). Ask
+- **provider** (`aws` | `azure` | `gcp`) — all three implemented
+  (`agents/cloud/discovery._IMPLEMENTED`). Discovery shells out to the host CLI
+  (`aws` / `gcloud` / `az`); the in-container Prowler scan handles per-provider
+  auth (AWS profile · GCP ADC · Azure `--az-cli-auth`).
+- **profile / account** — AWS: a named profile (`--profile Calitii`). GCP: the
+  `profile` field pins the project id (else ADC's default project). Azure: the
+  `profile` field selects the subscription (else the active `az` login). Ask
   which account if unclear; confirm before scanning.
 - **regions** — default to the profile's region; ask if multi-region matters.
-- **services / scope** (optional) — restrict to e.g. `iam`, `s3`, `ec2`.
+  GCP/Azure enumerate globally (no per-region fan-out in discovery).
+- **services / scope** (optional) — restrict to e.g. `iam`, `s3`, `ec2` (AWS);
+  `storage`, `iam` (GCP); `storage`, `resource_groups`, `compute` (Azure).
 - **fail_on_severity** (default `high`) — the verdict gate.
 
 ## Workflow

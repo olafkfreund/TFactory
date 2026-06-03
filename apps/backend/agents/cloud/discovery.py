@@ -12,8 +12,9 @@ All provider CLI invocation goes through an injectable ``runner`` seam (default
 ``subprocess.run``) so tests run against canned JSON — no real cloud, no network.
 Only ``describe``/``list``/``get`` style calls are issued; nothing mutates.
 
-AWS is implemented (the pilot); Azure/GCP raise ``CloudDiscoveryError`` until
-their sub-tasks land.
+AWS, GCP and Azure are implemented. Discovery shells out to the host CLIs
+(``aws`` / ``gcloud`` / ``az``); the in-container Prowler scan (see
+``runner.py``) handles credential auth per provider.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ from typing import Callable
 __all__ = ["AccessResult", "CloudDiscoveryError", "access_check", "discover"]
 
 _SUPPORTED = ("aws", "azure", "gcp")
-_IMPLEMENTED = ("aws",)
+_IMPLEMENTED = ("aws", "gcp", "azure")
 
 
 class CloudDiscoveryError(Exception):
@@ -91,6 +92,57 @@ def _aws_identity_name(arn: str) -> str | None:
 # ── access check ─────────────────────────────────────────────────────────────
 
 
+def _aws_access(profile: str | None, runner: Callable | None) -> AccessResult:
+    cmd = _run(
+        runner,
+        ["aws", "sts", "get-caller-identity", "--output", "json"]
+        + _profile_args("aws", profile),
+    )
+    if cmd.returncode != 0:
+        return AccessResult(ok=False, provider="aws", error="sts get-caller-identity failed")
+    try:
+        data = json.loads(cmd.stdout)
+    except (json.JSONDecodeError, ValueError):
+        return AccessResult(ok=False, provider="aws", error="unparseable identity")
+    return AccessResult(
+        ok=True, provider="aws", account=data.get("Account"),
+        identity=_aws_identity_name(data.get("Arn", "")),
+    )
+
+
+def _gcp_access(profile: str | None, runner: Callable | None) -> AccessResult:
+    # ``profile`` overrides the project; otherwise read the active gcloud config.
+    acct = _run(runner, ["gcloud", "auth", "list", "--filter=status:ACTIVE",
+                         "--format=value(account)"])
+    identity = acct.stdout.strip() or None
+    if profile:
+        project = profile
+    else:
+        proj = _run(runner, ["gcloud", "config", "get-value", "project", "--quiet"])
+        project = proj.stdout.strip()
+    if not project:
+        return AccessResult(ok=False, provider="gcp", error="no GCP project configured")
+    return AccessResult(ok=True, provider="gcp", account=project, identity=identity)
+
+
+def _azure_access(profile: str | None, runner: Callable | None) -> AccessResult:
+    argv = ["az", "account", "show", "--output", "json"]
+    if profile:
+        argv += ["--subscription", profile]
+    cmd = _run(runner, argv)
+    if cmd.returncode != 0:
+        return AccessResult(ok=False, provider="azure", error="az account show failed")
+    try:
+        data = json.loads(cmd.stdout)
+    except (json.JSONDecodeError, ValueError):
+        return AccessResult(ok=False, provider="azure", error="unparseable identity")
+    user = (data.get("user") or {}).get("name")
+    return AccessResult(ok=True, provider="azure", account=data.get("id"), identity=user)
+
+
+_ACCESS = {"aws": _aws_access, "gcp": _gcp_access, "azure": _azure_access}
+
+
 def access_check(
     provider: str, *, profile: str | None = None, runner: Callable | None = None
 ) -> AccessResult:
@@ -104,24 +156,7 @@ def access_check(
             f"provider {provider!r} discovery is not implemented yet "
             f"(implemented: {list(_IMPLEMENTED)})"
         )
-    argv = ["aws", "sts", "get-caller-identity", "--output", "json"] + _profile_args(
-        provider, profile
-    )
-    cmd = _run(runner, argv)
-    if cmd.returncode != 0:
-        return AccessResult(
-            ok=False, provider=provider, error="sts get-caller-identity failed"
-        )
-    try:
-        data = json.loads(cmd.stdout)
-    except (json.JSONDecodeError, ValueError):
-        return AccessResult(ok=False, provider=provider, error="unparseable identity")
-    return AccessResult(
-        ok=True,
-        provider=provider,
-        account=data.get("Account"),
-        identity=_aws_identity_name(data.get("Arn", "")),
-    )
+    return _ACCESS[provider](profile, runner)
 
 
 # ── discovery ────────────────────────────────────────────────────────────────
@@ -138,6 +173,18 @@ def _count(cmd: _Cmd, key: str) -> int | None:
     return len(val) if isinstance(val, list) else None
 
 
+def _json_list_len(cmd: _Cmd, key: str | None = None) -> int | None:
+    """Length of a JSON array in ``cmd.stdout`` (optionally under ``key``)."""
+    if cmd.returncode != 0:
+        return None
+    try:
+        data = json.loads(cmd.stdout)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    val = data.get(key) if (key and isinstance(data, dict)) else data
+    return len(val) if isinstance(val, list) else None
+
+
 def discover(
     provider: str,
     *,
@@ -149,7 +196,9 @@ def discover(
     """Enumerate the account read-only into the normalized inventory dict.
 
     Returns a dict shaped for ``render_cloud_topology`` + assessment:
-    ``{provider, account, identity, global: {s3, iam}, regions: {<r>: {...}}}``.
+    ``{provider, account, identity, global: {...}, regions: {<r>: {...}}}``.
+    ``global`` holds per-service summaries (AWS: ``s3``/``iam``; GCP:
+    ``storage``/``iam``; Azure: ``storage``/``resource_groups``/``compute``).
     Findings are added by the assessment stage (#138), not here.
     """
     if provider not in _IMPLEMENTED:
@@ -157,7 +206,6 @@ def discover(
             f"provider {provider!r} discovery is not implemented yet "
             f"(implemented: {list(_IMPLEMENTED)})"
         )
-    prof = _profile_args(provider, profile)
     access = access_check(provider, profile=profile, runner=runner)
     inv: dict = {
         "provider": provider,
@@ -174,6 +222,57 @@ def discover(
 
     def wanted(svc: str) -> bool:
         return not want or svc in want
+
+    if provider == "gcp":
+        _gcp_discover(inv, access.account, wanted, runner)
+    elif provider == "azure":
+        _azure_discover(inv, access.account, wanted, runner)
+    else:
+        _aws_discover(inv, profile, regions, wanted, runner)
+    return inv
+
+
+def _gcp_discover(inv: dict, project: str | None, wanted, runner) -> None:
+    """GCP global inventory via host ``gcloud`` (storage buckets + service accounts)."""
+    proj = ["--project", project] if project else []
+    if wanted("storage"):
+        b = _run(runner, ["gcloud", "storage", "buckets", "list", "--format=json"] + proj)
+        n = _json_list_len(b)
+        if n is not None:
+            inv["global"]["storage"] = {"count": n}
+    if wanted("iam"):
+        sa = _run(
+            runner,
+            ["gcloud", "iam", "service-accounts", "list", "--format=json"] + proj,
+        )
+        n = _json_list_len(sa)
+        if n is not None:
+            inv["global"]["iam"] = {"service_accounts": n}
+
+
+def _azure_discover(inv: dict, subscription: str | None, wanted, runner) -> None:
+    """Azure global inventory via host ``az`` (resource groups + storage + compute)."""
+    sub = ["--subscription", subscription] if subscription else []
+    if wanted("resource_groups"):
+        g = _run(runner, ["az", "group", "list", "--output", "json"] + sub)
+        n = _json_list_len(g)
+        if n is not None:
+            inv["global"]["resource_groups"] = {"count": n}
+    if wanted("storage"):
+        s = _run(runner, ["az", "storage", "account", "list", "--output", "json"] + sub)
+        n = _json_list_len(s)
+        if n is not None:
+            inv["global"]["storage"] = {"count": n}
+    if wanted("compute"):
+        v = _run(runner, ["az", "vm", "list", "--output", "json"] + sub)
+        n = _json_list_len(v)
+        if n is not None:
+            inv["global"]["compute"] = {"vms": n}
+
+
+def _aws_discover(inv: dict, profile, regions, wanted, runner) -> None:
+    """AWS global (s3/iam) + per-region (vpc/ec2/lambda) inventory."""
+    prof = _profile_args("aws", profile)
 
     # ── global services ──────────────────────────────────────────────────────
     if wanted("s3"):

@@ -87,9 +87,68 @@ def test_access_check_unsupported_provider_raises() -> None:
         access_check("digitalocean")
 
 
-def test_access_check_unimplemented_provider_raises() -> None:
-    with pytest.raises(CloudDiscoveryError, match="not implemented"):
-        access_check("gcp")
+def _gcp_runner():
+    """Runner answering host gcloud read-only calls from canned JSON."""
+
+    def run(argv):
+        joined = " ".join(argv)
+        if "auth list" in joined:
+            return _cmd(0, "olaf@freundcloud.com\n")
+        if "config get-value project" in joined:
+            return _cmd(0, "sarc-493418\n")
+        if "buckets list" in joined:
+            return _cmd(0, json.dumps([{"name": f"bkt{i}"} for i in range(4)]))
+        if "service-accounts list" in joined:
+            return _cmd(0, json.dumps([{"email": "a"}, {"email": "b"}]))
+        return _cmd(0, "[]")
+
+    return run
+
+
+def _azure_runner():
+    """Runner answering host az read-only calls from canned JSON."""
+
+    def run(argv):
+        joined = " ".join(argv)
+        if "account show" in joined:
+            return _cmd(0, json.dumps({
+                "id": "46b2dfbe-fe9e-4433-b327-b2dc32c8af5e",
+                "name": "Development",
+                "user": {"name": "olaf.freund@outlook.com"},
+            }))
+        if "group list" in joined:
+            return _cmd(0, json.dumps([{"name": "rg1"}, {"name": "rg2"}, {"name": "rg3"}]))
+        if "storage account list" in joined:
+            return _cmd(0, json.dumps([{"name": "sa1"}]))
+        if "vm list" in joined:
+            return _cmd(0, json.dumps([{"name": "vm1"}, {"name": "vm2"}]))
+        return _cmd(0, "[]")
+
+    return run
+
+
+def test_access_check_gcp_success() -> None:
+    r = access_check("gcp", runner=_gcp_runner())
+    assert r.ok is True
+    assert r.account == "sarc-493418"
+    assert r.identity == "olaf@freundcloud.com"
+
+
+def test_access_check_gcp_profile_overrides_project() -> None:
+    r = access_check("gcp", profile="other-proj", runner=_gcp_runner())
+    assert r.account == "other-proj"
+
+
+def test_access_check_azure_success() -> None:
+    r = access_check("azure", runner=_azure_runner())
+    assert r.ok is True
+    assert r.account == "46b2dfbe-fe9e-4433-b327-b2dc32c8af5e"
+    assert r.identity == "olaf.freund@outlook.com"
+
+
+def test_access_check_azure_failure() -> None:
+    r = access_check("azure", runner=lambda argv: _cmd(1, ""))
+    assert r.ok is False and r.error
 
 
 def test_assumed_role_arn_name() -> None:
@@ -148,6 +207,42 @@ def test_discover_tolerates_denied_service_calls() -> None:
     assert "iam" not in inv["global"]
 
 
-def test_discover_unimplemented_provider_raises() -> None:
-    with pytest.raises(CloudDiscoveryError, match="not implemented"):
-        discover("azure")
+def test_discover_unsupported_provider_raises() -> None:
+    with pytest.raises(CloudDiscoveryError):
+        discover("oracle")
+
+
+def test_discover_gcp_builds_inventory() -> None:
+    inv = discover("gcp", runner=_gcp_runner())
+    assert inv["provider"] == "gcp"
+    assert inv["account"] == "sarc-493418"
+    assert inv["global"]["storage"]["count"] == 4
+    assert inv["global"]["iam"]["service_accounts"] == 2
+    assert inv["regions"] == {}  # GCP enumerated globally, not per-region here
+
+
+def test_discover_azure_builds_inventory() -> None:
+    inv = discover("azure", runner=_azure_runner())
+    assert inv["provider"] == "azure"
+    assert inv["account"] == "46b2dfbe-fe9e-4433-b327-b2dc32c8af5e"
+    assert inv["global"]["resource_groups"]["count"] == 3
+    assert inv["global"]["storage"]["count"] == 1
+    assert inv["global"]["compute"]["vms"] == 2
+
+
+def test_discover_gcp_services_filter() -> None:
+    inv = discover("gcp", services=["storage"], runner=_gcp_runner())
+    assert "storage" in inv["global"] and "iam" not in inv["global"]
+
+
+def test_discover_gcp_and_azure_feed_render_topology() -> None:
+    from agents.diagrams import render_cloud_topology
+
+    gcp = render_cloud_topology(discover("gcp", runner=_gcp_runner()))
+    assert gcp.startswith("graph LR\n")
+    assert "GCP Account sarc-493418" in gcp
+    assert "STORAGE · 4" in gcp and "IAM · service_accounts 2" in gcp
+
+    az = render_cloud_topology(discover("azure", runner=_azure_runner()))
+    assert "AZURE Account 46b2dfbe" in az
+    assert "RESOURCE GROUPS · 3" in az and "COMPUTE · vms 2" in az

@@ -13,6 +13,8 @@ without a real cloud or container.
 
 from __future__ import annotations
 
+import os
+import shlex
 import subprocess
 import tempfile
 from pathlib import Path
@@ -25,11 +27,22 @@ __all__ = ["build_prowler_command", "run_cloud_assessment"]
 
 _IMAGE = "tfactory-runner-cloud:latest"
 # Where each provider's ambient creds live on the host → mounted read-only.
+# AWS keeps the container's default home (verified); GCP/Azure mount to a
+# fixed path and run as the host uid so 0600 credential files are readable.
 _CRED_MOUNTS = {
     "aws": (str(Path.home() / ".aws"), "/home/tfactory/.aws"),
-    "gcp": (str(Path.home() / ".config" / "gcloud"), "/home/tfactory/.config/gcloud"),
-    "azure": (str(Path.home() / ".azure"), "/home/tfactory/.azure"),
+    "gcp": (str(Path.home() / ".config" / "gcloud"), "/gcloud"),
+    # Azure's ``az`` writes to AZURE_CONFIG_DIR (commandIndex.json); the host
+    # login is mounted read-only at /azure-src and copied into writable scratch.
+    "azure": (str(Path.home() / ".azure"), "/azure-src"),
 }
+
+# In-container shell that gives Azure's ``az`` a *writable* copy of the
+# read-only host login, then execs Prowler. Keeps host creds read-only.
+_AZURE_PREP = (
+    'mkdir -p "$AZURE_CONFIG_DIR" && cp -r /azure-src/. "$AZURE_CONFIG_DIR"/ '
+    '&& chmod -R u+rwX "$AZURE_CONFIG_DIR" && exec '
+)
 
 
 def build_prowler_command(
@@ -38,9 +51,18 @@ def build_prowler_command(
     regions: list[str] | None = None,
     services: list[str] | None = None,
     output_dir: str = "/scratch",
+    project_id: str | None = None,
 ) -> list[str]:
-    """The in-container Prowler command (pure) — read-only OCSF scan."""
+    """The in-container Prowler command (pure) — read-only OCSF scan.
+
+    Per-provider auth flags: Azure uses ``--az-cli-auth`` (the mounted ``az``
+    login); GCP optionally pins ``--project-id`` (else ADC's default project).
+    """
     cmd = ["prowler", provider]
+    if provider == "azure":
+        cmd += ["--az-cli-auth"]
+    if provider == "gcp" and project_id:
+        cmd += ["--project-id", project_id]
     for s in services or []:
         cmd += ["--service", s]
     for r in regions or []:
@@ -57,9 +79,28 @@ def _docker_argv(provider: str, profile: str | None, scratch_host: str,
     if mount:
         argv += ["-v", f"{mount[0]}:{mount[1]}:ro"]
     argv += ["-v", f"{scratch_host}:/scratch:rw"]
-    if provider == "aws" and profile:
-        argv += ["-e", f"AWS_PROFILE={profile}"]
-    argv += [_IMAGE, *prowler_cmd]
+    if provider == "aws":
+        if profile:
+            argv += ["-e", f"AWS_PROFILE={profile}"]
+    elif provider == "gcp":
+        # Read 0600 ADC as the host uid; point gcloud + ADC at the mount.
+        argv += [
+            "--user", f"{os.getuid()}:{os.getgid()}",
+            "-e", "HOME=/scratch",
+            "-e", "CLOUDSDK_CONFIG=/gcloud",
+            "-e", "GOOGLE_APPLICATION_CREDENTIALS=/gcloud/application_default_credentials.json",
+        ]
+    elif provider == "azure":
+        argv += [
+            "--user", f"{os.getuid()}:{os.getgid()}",
+            "-e", "HOME=/scratch",
+            "-e", "AZURE_CONFIG_DIR=/scratch/azure-cfg",
+        ]
+    if provider == "azure":
+        # Wrap in a shell so az gets a writable config copy before Prowler runs.
+        argv += [_IMAGE, "sh", "-lc", _AZURE_PREP + shlex.join(prowler_cmd)]
+    else:
+        argv += [_IMAGE, *prowler_cmd]
     return argv
 
 
@@ -72,7 +113,11 @@ def _run_prowler(target, *, timeout: int = 1800) -> str:
     regions = list(getattr(target, "regions", []) or [])
     scratch = tempfile.mkdtemp(prefix="tfactory-prowler-")
     Path(scratch).chmod(0o777)  # the container's non-root user writes here
-    cmd = build_prowler_command(provider, regions=regions, services=services)
+    # For GCP, ``profile`` carries the project id (else ADC's default project).
+    project_id = profile if provider == "gcp" else None
+    cmd = build_prowler_command(
+        provider, regions=regions, services=services, project_id=project_id
+    )
     argv = _docker_argv(provider, profile, scratch, cmd)
     # Prowler exits non-zero when it finds failures — that's expected, not an error.
     subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
