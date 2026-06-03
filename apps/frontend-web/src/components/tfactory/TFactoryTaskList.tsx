@@ -19,6 +19,15 @@ import {
   listTasks,
   type TFactoryTaskSummary,
 } from '../../lib/tfactory-api';
+import { formatRelativeTime } from '../../lib/utils';
+
+// Locale-independent short date ("May 28") for the row's secondary timestamp.
+const _MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function shortDate(iso: string | null): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '' : `${_MONTHS[d.getMonth()]} ${d.getDate()}`;
+}
 
 interface Props {
   /** Called when a row is clicked. */
@@ -63,23 +72,38 @@ export function statusColor(status: string | null): string {
   return 'blue';
 }
 
+// Per-status visual language: badge (pill), the leading dot, the left accent
+// edge, and the dot's offset ring. Surgical colour — verdict is the hero signal.
 const BADGE_CLASSES: Record<string, string> = {
-  green: 'bg-success/15 text-success',
-  red: 'bg-destructive/15 text-destructive',
-  blue: 'bg-info/15 text-primary',
-  yellow: 'bg-warning/15 text-warning',
-  gray: 'bg-muted text-foreground',
+  green: 'bg-success/10 text-success ring-1 ring-inset ring-success/25',
+  red: 'bg-destructive/10 text-destructive ring-1 ring-inset ring-destructive/25',
+  blue: 'bg-info/10 text-info ring-1 ring-inset ring-info/25',
+  yellow: 'bg-warning/10 text-warning ring-1 ring-inset ring-warning/25',
+  gray: 'bg-muted text-muted-foreground ring-1 ring-inset ring-border',
+};
+const DOT_CLASSES: Record<string, string> = {
+  green: 'bg-success', red: 'bg-destructive', blue: 'bg-info',
+  yellow: 'bg-warning', gray: 'bg-muted-foreground',
+};
+const ACCENT_CLASSES: Record<string, string> = {
+  green: 'bg-success', red: 'bg-destructive', blue: 'bg-info',
+  yellow: 'bg-warning', gray: 'bg-border',
 };
 
 function StatusBadge({ status }: { status: string | null }) {
   const color = statusColor(status);
   const cls = BADGE_CLASSES[color] || BADGE_CLASSES.gray;
+  const live = color === 'blue'; // in-flight → breathing dot
   return (
     <span
       data-testid="status-badge"
       data-status-color={color}
-      className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${cls}`}
+      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium tracking-tight ${cls}`}
     >
+      <span
+        className={`h-1.5 w-1.5 rounded-full ${DOT_CLASSES[color]} ${live ? 'animate-pulse' : ''}`}
+        aria-hidden
+      />
       {status ?? '—'}
     </span>
   );
@@ -163,41 +187,70 @@ export function TFactoryTaskList({ onSelectTask, fetchFn, pollMs = 5000 }: Props
   if (tasks.length === 0) return <EmptyState />;
 
   return (
-    <div className="overflow-x-auto">
-      <table
-        className="w-full text-left text-sm"
-        data-testid="tfactory-task-list"
-        aria-label="TFactory tasks"
-      >
-        <thead className="border-b border-border text-xs uppercase tracking-wide text-muted-foreground">
-          <tr>
-            <th className="px-3 py-2">Spec</th>
-            <th className="px-3 py-2">Project</th>
-            <th className="px-3 py-2">Status</th>
-            <th className="px-3 py-2">Phase</th>
-            <th className="px-3 py-2">Updated</th>
-          </tr>
-        </thead>
-        <tbody>
-          {tasks.map((task) => (
-            <tr
-              key={`${task.project_id}::${task.spec_id}`}
-              className="cursor-pointer border-b border-border hover:bg-muted"
-              onClick={() => onSelectTask?.(task.spec_id)}
-              data-testid={`task-row-${task.spec_id}`}
-              data-spec-id={task.spec_id}
-            >
-              <td className="px-3 py-2 font-medium">{task.spec_id}</td>
-              <td className="px-3 py-2 text-muted-foreground">{task.project_id}</td>
-              <td className="px-3 py-2">
-                <StatusBadge status={task.status} />
-              </td>
-              <td className="px-3 py-2 text-muted-foreground">{task.phase ?? '—'}</td>
-              <td className="px-3 py-2 text-muted-foreground">{task.updated_at}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div
+      data-testid="tfactory-task-list"
+      aria-label="TFactory tasks"
+      className="flex flex-col gap-1.5"
+    >
+      {/* column legend — quiet, lets the rows breathe */}
+      <div className="flex items-center px-4 pb-1 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground/70">
+        <span className="flex-1">Spec</span>
+        <span className="w-[120px]">Status</span>
+        <span className="hidden w-[200px] md:block">Phase</span>
+        <span className="w-20 text-right">Updated</span>
+      </div>
+
+      {tasks.map((task) => {
+        const color = statusColor(task.status);
+        const rel = formatRelativeTime(task.updated_at);
+        return (
+          <button
+            type="button"
+            key={`${task.project_id}::${task.spec_id}`}
+            data-testid={`task-row-${task.spec_id}`}
+            data-spec-id={task.spec_id}
+            onClick={() => onSelectTask?.(task.spec_id)}
+            className="group relative flex items-center gap-4 overflow-hidden rounded-lg border border-border/60 bg-card/40 px-4 py-3 text-left transition-all duration-150 hover:border-border hover:bg-muted/40 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {/* left accent edge — reveals the status colour on hover */}
+            <span
+              className={`absolute inset-y-0 left-0 w-[3px] ${ACCENT_CLASSES[color]} opacity-0 transition-opacity duration-150 group-hover:opacity-100`}
+              aria-hidden
+            />
+            {/* status dot */}
+            <span
+              className={`h-2 w-2 shrink-0 rounded-full ${DOT_CLASSES[color]} ${color === 'blue' ? 'animate-pulse' : ''}`}
+              aria-hidden
+            />
+            {/* spec id + project */}
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="truncate font-mono text-sm font-semibold text-foreground transition-colors group-hover:text-primary">
+                {task.spec_id}
+              </span>
+              <span className="truncate text-xs text-muted-foreground">{task.project_id}</span>
+            </span>
+            {/* status */}
+            <span className="w-[120px] shrink-0">
+              <StatusBadge status={task.status} />
+            </span>
+            {/* phase — mono chip, the data plane */}
+            <span className="hidden w-[200px] shrink-0 md:block">
+              <span className="inline-block max-w-full truncate rounded bg-muted/60 px-2 py-0.5 align-middle font-mono text-[11px] text-muted-foreground">
+                {task.phase ?? '—'}
+              </span>
+            </span>
+            {/* time — relative over absolute, tabular for alignment */}
+            <span className="w-20 shrink-0 text-right leading-tight">
+              <span className="block text-xs font-medium tabular-nums text-foreground/80">
+                {rel || '—'}
+              </span>
+              <span className="block text-[11px] tabular-nums text-muted-foreground">
+                {shortDate(task.updated_at)}
+              </span>
+            </span>
+          </button>
+        );
+      })}
     </div>
   );
 }
