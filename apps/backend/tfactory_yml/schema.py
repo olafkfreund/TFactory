@@ -369,13 +369,90 @@ class CloudProviderTarget(BaseModel):
     scan: CloudScanConfig = Field(default_factory=CloudScanConfig)
 
 
+# Managed-SaaS platforms with a first-class connector profile (#111). Each maps
+# to an API style + the pytest `library/` check template + Gen-Functional
+# guidance. Adding a platform = add an entry here + a `library/<template>` file
+# (the documented pattern — see guides/saas-connectors.md).
+CONNECTOR_PLATFORMS: dict[str, dict[str, str]] = {
+    "servicenow": {
+        "api_style": "rest",  # Table API
+        "library_template": "servicenow-table-api.py.tmpl",
+        "guidance": (
+            "ServiceNow: prefer the Table API (`/api/now/table/<table>`) over UI "
+            "automation — SSO-gated portals are brittle. Bearer/OAuth token via the "
+            "credential vault; assert on `result[0].<field>`."
+        ),
+    },
+    "salesforce": {
+        "api_style": "rest",  # REST + SOQL
+        "library_template": "salesforce-rest-query.py.tmpl",
+        "guidance": (
+            "Salesforce: use the REST API + SOQL (`/services/data/vXX.0/query`) with "
+            "an OAuth bearer token from the vault; avoid Lightning DOM automation."
+        ),
+    },
+    "mulesoft": {
+        "api_style": "rest",
+        "library_template": "mulesoft-api.py.tmpl",
+        "guidance": "MuleSoft: drive the published API endpoints directly with a vault token.",
+    },
+    "sap": {
+        "api_style": "odata",  # SAP Gateway / S/4HANA OData v2/v4
+        "library_template": "",  # template TBD — see guides/saas-connectors.md
+        "guidance": (
+            "SAP: drive OData services (`/sap/opu/odata/...`) with `$filter`/`$top`; "
+            "auth via the vault (basic / OAuth). API-first over SAP GUI automation."
+        ),
+    },
+}
+
+
+def connector_platform_info(platform: str) -> dict[str, str] | None:
+    """Registry entry (api style · library template · guidance) for a platform."""
+    return CONNECTOR_PLATFORMS.get(platform)
+
+
+class ConnectorTarget(BaseModel):
+    """A managed-SaaS platform target — ServiceNow / Salesforce / SAP / MuleSoft (#111).
+
+    A first-class, ergonomic alternative to a raw ``http`` target: name the
+    ``platform`` and TFactory knows its API style + which ``library/`` check
+    template + Gen-Functional guidance to use. Auth + ``base_url`` reuse the
+    HTTP / credential-vault plumbing (``auth: { type: ref }`` resolves an
+    OAuth/SSO token from the vault). Tests drive the platform's REST/OData API
+    on the **api lane** — API-first is far more stable than SSO-gated browser
+    automation.
+
+    Example::
+
+        - name: snow
+          type: connector
+          platform: servicenow
+          base_url: https://acme.service-now.com
+          entities: [incident, change_request]
+          auth:
+            type: ref
+            ref: snow-svc
+    """
+
+    type: Literal["connector"]
+    name: str
+    platform: Literal["servicenow", "salesforce", "sap", "mulesoft"]
+    base_url: AnyHttpUrl
+    auth: AuthSpec | None = None
+    health_check: HealthCheck | None = None
+    # Tables / objects / OData entity sets to focus generation on (hints).
+    entities: list[str] = []
+
+
 # Union of all concrete target types (discriminated on ``type``).
 TargetSpec = Annotated[
     HttpTarget
     | KubernetesTarget
     | DockerComposeTarget
     | FeatureFlagTarget
-    | CloudProviderTarget,
+    | CloudProviderTarget
+    | ConnectorTarget,
     Field(discriminator="type"),
 ]
 
