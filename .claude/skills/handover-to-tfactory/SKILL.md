@@ -98,6 +98,31 @@ missing.
 | `branch` | Current branch from `git rev-parse --abbrev-ref HEAD`. |
 | `base_ref` | The PR base. Default to `main`; use `git merge-base HEAD origin/main` for the actual fork point if the user pushed back. |
 
+### 1b. Ask what to focus on + whether to enable a visual inspection (#170)
+
+Before previewing, ask the user two things (skip whichever is already clear from
+the conversation):
+
+1. **What should TFactory focus on?** — the task intent / acceptance focus. This
+   sharpens the work the Planner reads.
+2. **Enable a visual inspection?** — for a UI-heavy feature (or a SaaS target
+   like ServiceNow), TFactory can record a Playwright **browser** run, capture
+   per-step **verification** + **error** screenshots, and package a human
+   **visual-inspection report** + correction plan into `automated-test/<datetime>/`
+   (committed to the repo, dry-run by default; surfaced in the portal's *Visual
+   Reports*). If yes, gather:
+   - the **visual target** name (a `visual: true` target in `.tfactory.yml`), and
+   - the **flow** to inspect (what the human wants to verify).
+
+Pass these to `task_create_and_run` as the optional `visual_inspection` argument:
+
+```
+visual_inspection = { "enabled": true, "target": "<target name>", "flow": "<what to inspect>" }
+```
+
+Omit it (or `enabled: false`) for a normal code-test task — the default path is
+unchanged.
+
 ### 2. Confirm the project is registered with TFactory
 
 Call `mcp__tfactory__project_list`. If the AIFactory project isn't in
