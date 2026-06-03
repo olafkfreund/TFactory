@@ -723,3 +723,89 @@ def dismiss_run(spec_id: str) -> dict[str, Any]:
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"could not write status.json: {exc}") from exc
     return {"ok": True, "dismissed": True, "dismissed_at": doc["dismissed_at"]}
+
+
+# ─── Visual regression baselines (#109) ───────────────────────────────────
+#
+# Surface the stored visual baselines (agents.evidence.visual_baseline) so the
+# portal Evidence tab can list them, view a baseline image, and accept/update a
+# captured screenshot as the new baseline. Backed by the per-task workspace
+# (findings/visual-baselines/<target>/<snapshot>.png).
+import sys as _sys
+
+from fastapi.responses import FileResponse as _FileResponse
+
+_BACKEND_DIR = Path(__file__).resolve().parents[3] / "backend"
+if str(_BACKEND_DIR) not in _sys.path:
+    _sys.path.insert(0, str(_BACKEND_DIR))
+
+
+def _spec_dir_or_404(spec_id: str) -> Path:
+    _validate_spec_id(spec_id)
+    spec_dir = _find_spec_dir(_resolve_workspace_root(), spec_id)
+    if spec_dir is None:
+        raise HTTPException(status_code=404, detail=f"task not found: {spec_id}")
+    return spec_dir
+
+
+@router.get("/{spec_id}/visual-baselines")
+def list_visual_baselines(spec_id: str, target: str) -> dict:
+    """List the stored visual baselines for a target (snapshot name + size)."""
+    from agents.evidence import visual_baseline as vb
+
+    spec_dir = _spec_dir_or_404(spec_id)
+    try:
+        entries = vb.list_baselines(spec_dir, target)
+    except vb.VisualBaselineError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "target": target,
+        "baselines": [
+            {"snapshot": e.snapshot, "sizeBytes": e.size_bytes} for e in entries
+        ],
+    }
+
+
+@router.get("/{spec_id}/visual-baselines/{target}/{snapshot}")
+def get_visual_baseline(spec_id: str, target: str, snapshot: str):
+    """Serve one baseline image (PNG)."""
+    from agents.evidence import visual_baseline as vb
+
+    spec_dir = _spec_dir_or_404(spec_id)
+    try:
+        path = vb.baseline_path(spec_dir, target, snapshot)
+    except vb.VisualBaselineError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="baseline not found")
+    return _FileResponse(path, media_type="image/png", filename=snapshot)
+
+
+class _AcceptBaselineBody(BaseModel):
+    # path (relative to the task workspace) of the captured screenshot to promote
+    source: str
+
+
+@router.post("/{spec_id}/visual-baselines/{target}/{snapshot}/accept")
+def accept_visual_baseline(
+    spec_id: str, target: str, snapshot: str, body: _AcceptBaselineBody
+) -> dict:
+    """Promote a captured screenshot to the stored baseline (accept/update flow)."""
+    from agents.evidence import visual_baseline as vb
+
+    spec_dir = _spec_dir_or_404(spec_id)
+    # The source must stay inside the task workspace (no traversal escape).
+    src = (spec_dir / body.source).resolve()
+    root = spec_dir.resolve()
+    if root not in src.parents or not src.is_file():
+        raise HTTPException(status_code=400, detail="invalid source image")
+    try:
+        dest = vb.accept_baseline(spec_dir, target, snapshot, src)
+    except vb.VisualBaselineError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "accepted": True,
+        "target": target,
+        "snapshot": snapshot,
+        "path": str(dest.relative_to(spec_dir)),
+    }
