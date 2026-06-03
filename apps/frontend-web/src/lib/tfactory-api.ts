@@ -341,6 +341,59 @@ export function evidenceArtifactUrl(
   return `${TFACTORY_PREFIX}/${specId}/evidence/${testId}/${artifact}`;
 }
 
+// ─── Visual baselines (#109) ──────────────────────────────────────────
+
+export interface VisualBaselineEntry {
+  snapshot: string;
+  sizeBytes: number;
+}
+
+export interface VisualBaselinesDocument {
+  target: string;
+  baselines: VisualBaselineEntry[];
+}
+
+export interface AcceptBaselineResult {
+  accepted: boolean;
+  target: string;
+  snapshot: string;
+  path: string;
+}
+
+/** GET …/{spec_id}/visual-baselines?target= — stored baselines for a target. */
+export async function listVisualBaselines(
+  specId: string,
+  target: string,
+  options: FetchOptions = {},
+): Promise<VisualBaselinesDocument> {
+  const ep = `${TFACTORY_PREFIX}/${specId}/visual-baselines?target=${encodeURIComponent(target)}`;
+  return _request<VisualBaselinesDocument>(ep, 'json', options);
+}
+
+/** URL for one stored baseline image — use directly as an `<img src>`. */
+export function visualBaselineImageUrl(
+  specId: string,
+  target: string,
+  snapshot: string,
+): string {
+  return `${TFACTORY_PREFIX}/${specId}/visual-baselines/${encodeURIComponent(target)}/${encodeURIComponent(snapshot)}`;
+}
+
+/**
+ * POST …/visual-baselines/{target}/{snapshot}/accept — promote a captured
+ * screenshot (by workspace-relative path) to the stored baseline.
+ */
+export async function acceptVisualBaseline(
+  specId: string,
+  target: string,
+  snapshot: string,
+  source: string,
+  options: FetchOptions = {},
+): Promise<AcceptBaselineResult> {
+  const ep = `${TFACTORY_PREFIX}/${specId}/visual-baselines/${encodeURIComponent(target)}/${encodeURIComponent(snapshot)}/accept`;
+  return _post<AcceptBaselineResult>(ep, { source }, options);
+}
+
 // ─── Internal exports for tests ───────────────────────────────────────
 
 export const _internalForTests = {

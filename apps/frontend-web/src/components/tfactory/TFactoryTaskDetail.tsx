@@ -35,6 +35,7 @@ import {
 } from '../../lib/tfactory-api';
 import { LaneStatusGrid } from './LaneStatusGrid';
 import { TFactoryLogViewer } from './TFactoryLogViewer';
+import { VisualBaselines } from './VisualBaselines';
 
 type Tab = 'status' | 'lanes' | 'verdicts' | 'report' | 'logs' | 'evidence';
 
@@ -512,18 +513,19 @@ function EvidenceTestRow({ specId, testId, urls }: { specId: string; testId: str
 
 function EvidenceTab({ specId, evidenceByTest }: { specId: string; evidenceByTest: Record<string, EvidenceUrls> }) {
   const entries = Object.entries(evidenceByTest);
-  if (entries.length === 0) {
-    return (
-      <p data-testid="evidence-empty" className="p-4 text-sm text-muted-foreground">
-        No evidence captured yet — evidence is collected after tests run.
-      </p>
-    );
-  }
   return (
     <div data-testid="evidence-panel" className="space-y-3 p-1">
-      {entries.map(([testId, urls]) => (
-        <EvidenceTestRow key={testId} specId={specId} testId={testId} urls={urls} />
-      ))}
+      {/* Visual-regression baselines for a target (#109) — view + accept. */}
+      <VisualBaselines specId={specId} />
+      {entries.length === 0 ? (
+        <p data-testid="evidence-empty" className="p-4 text-sm text-muted-foreground">
+          No per-test evidence captured yet — evidence is collected after tests run.
+        </p>
+      ) : (
+        entries.map(([testId, urls]) => (
+          <EvidenceTestRow key={testId} specId={specId} testId={testId} urls={urls} />
+        ))
+      )}
     </div>
   );
 }
