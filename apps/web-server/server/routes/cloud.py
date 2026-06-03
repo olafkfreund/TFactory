@@ -1,7 +1,10 @@
 """Cloud assessment portal routes (#133/#140/#152).
 
-Surfaces the cloud assessment history the cloud task-write (#138/#150) produces:
+Surfaces the cloud assessment history + launches new checks from the portal:
 
+    POST /api/cloud/assessments/run                  — launch a check
+        body: {provider, profile?, regions?, services?, fail_on_severity?}
+        runs the discovery gate (sync); if access OK, backgrounds the assessment
     GET /api/cloud/assessments                       — list (newest first)
     GET /api/cloud/assessments/{id}                  — full detail
     GET /api/cloud/assessments/{id}/download/{kind}  — download an artifact
@@ -13,11 +16,14 @@ Backed by ``agents.cloud.store`` (``~/.tfactory/cloud-assessments/<id>/``).
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import sys
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 # Add apps/backend to sys.path so ``import agents.cloud.store`` resolves
 # (the canonical pattern used by routes/provider_runtimes.py).
@@ -25,9 +31,62 @@ _BACKEND = Path(__file__).resolve().parents[3] / "backend"
 if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
 
-from agents.cloud import store  # noqa: E402  (after sys.path insert)
+from agents.cloud import portal_run, store  # noqa: E402  (after sys.path insert)
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/cloud", tags=["Cloud"])
+
+
+class CloudRunRequest(BaseModel):
+    provider: str  # aws | azure | gcp
+    profile: str | None = None  # AWS profile / GCP project / Azure subscription
+    regions: list[str] = []
+    services: list[str] = []
+    fail_on_severity: str = "high"
+
+
+async def _run_assessment_bg(req: "CloudRunRequest") -> None:
+    """Background: run the (slow, Docker) assessment + mirror it into the store."""
+    try:
+        out = await asyncio.to_thread(
+            portal_run.run_and_store,
+            req.provider,
+            profile=req.profile,
+            regions=req.regions,
+            services=req.services,
+            fail_on_severity=req.fail_on_severity,
+        )
+        logger.info("cloud assessment stored: %s (%s)", out["assessment_id"], out["verdict"])
+    except Exception:  # never let a background failure crash the loop
+        logger.exception("cloud assessment run failed for provider=%s", req.provider)
+
+
+@router.post("/assessments/run", summary="Launch a cloud check (gate → assessment)")
+async def run_cloud_check(req: CloudRunRequest) -> dict:
+    """Run the read-only access/discovery **gate**; if we get in, background the
+    assessment and return immediately. The report appears under Cloud Reports."""
+    if req.provider not in ("aws", "azure", "gcp"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"unsupported provider {req.provider!r}")
+    gate = await asyncio.to_thread(
+        portal_run.preflight,
+        req.provider,
+        profile=req.profile,
+        regions=req.regions,
+        services=req.services,
+    )
+    if not gate["ok"]:
+        # No access — do NOT proceed. The user fixes creds and retries.
+        return {"gate": "no_access", "provider": req.provider, "error": gate["error"]}
+    # Access confirmed → kick off the assessment in the background.
+    asyncio.create_task(_run_assessment_bg(req))
+    return {
+        "gate": "ok",
+        "provider": req.provider,
+        "account": gate["account"],
+        "identity": gate["identity"],
+        "inventory": gate["inventory"],
+        "status": "running",
+    }
 
 _DOWNLOAD_MEDIA = {
     "report.md": "text/markdown",
