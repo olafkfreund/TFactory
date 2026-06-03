@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — Cloud testing (AWS/GCP/Azure), platform foundations + portal redesign (2026-06-03)
+
+> The cloud epic ships end-to-end across three providers, four backlog
+> capabilities get their foundations wired + tested, and the portal gets a
+> flagship-grade design pass. Headlines below; the credential-broker fast-follow
+> work is folded in from the prior Unreleased section.
 
 - **Cloud infrastructure testing — AWS · GCP · Azure (epic #133, complete).**
   A read-only assessment flow: access gate → discovery (host `aws`/`gcloud`/`az`)
