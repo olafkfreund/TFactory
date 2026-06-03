@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.5.0 — Bidirectional AIFactory ↔ TFactory integration (2026-06-03)
+
+> Close the loop with AIFactory: when TFactory's tests find problems, hand a
+> **correction** back to AIFactory for a fix, then re-test — bounded so it can't
+> run away. The reverse of `/handover-to-tfactory`. Epic
+> [#182](https://github.com/olafkfreund/TFactory/issues/182).
+
+- **Hand-back pipeline (#182).** New `agents/handback/` packages a finished
+  run's failures into a `QA_FIX_REQUEST.md`-shaped correction and (opt-in) sends
+  it to AIFactory's QA Fixer:
+  - **Traceability (#183).** The snapshotter records the AIFactory hand-back
+    target (`aifactory{project_id,spec_id,api_url,task_id}` + `correction_cycle`)
+    in `context/source.json`; `api_url` defaults to AIFactory's web-server
+    (`http://localhost:3101`, override `TFACTORY_AIFACTORY_API_URL`).
+  - **Builder + renderer (#184).** `request.py` + `render.py` — pure-compute
+    selection of failing tests → a deterministic fix-request payload (reuses the
+    triage report + the visual correction plan).
+  - **Sender + Triager hook (#185).** `send.py` writes
+    `findings/handback_request.{md,json}` always and POSTs only on
+    `dry_run=False AND confirm`; the Triager's terminal-status hook *prepares*
+    (default ON) and *sends* on opt-in (`TFACTORY_HANDBACK_SEND=1`), mirroring
+    `TFACTORY_TRIAGER_GIT_WRITE`.
+  - **Operator skill + CLI (#186).** `/handback-to-aifactory` (+ AIFactory
+    companion) previews then sends via the AIFactory MCP tool
+    `task_apply_correction`, or `python -m agents.handback <spec_dir> --send`.
+  - **Bounded closed loop (#187).** `loop.py` + `/tfactory-fixloop` drive a
+    test→fix→re-test cycle that stops at **passed**, or **stuck** (cap
+    `TFACTORY_HANDBACK_MAX_CYCLES` default 2, or no progress).
+  - **AIFactory receiver** (sister repo, `AIFactory#317`): `POST
+    /api/tasks/{task_id}/apply-correction` + MCP `task_apply_correction` write
+    `QA_FIX_REQUEST.md` onto the original spec and run the existing QA Fixer.
+  - Dry-run-first + opt-in throughout (no automatic pushes). See
+    `guides/aifactory-handback.md` and
+    `docs/plans/2026-06-03-aifactory-tfactory-handback-design.md`.
+
 ## 0.4.0 — Visual Inspection Run + SaaS connector targets (2026-06-03)
 
 > A new **Visual Inspection Run** feature (all no-tenant phases shipped) plus the
