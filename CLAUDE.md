@@ -92,6 +92,23 @@ best-effort (a failing target never breaks the pipeline):
   - `TFACTORY_COMPLETION_SENTINEL=1` — writes `findings/COMPLETED.json` a
     same-host watcher can stat instead of polling
 
+**Bidirectional AIFactory ↔ TFactory bridge (epic #182)** — the reverse of the
+handover: when a run finishes with failing tests, TFactory packages a
+**correction** (`agents/handback/` — builder + renderer + dry-run-first sender)
+and hands it back to AIFactory, whose receiver writes `QA_FIX_REQUEST.md` onto
+the original spec and runs the QA Fixer. The Triager's terminal-status hook
+*prepares* the artifact (`findings/handback_request.{md,json}`); the operator
+sends it via `/handback-to-aifactory` (or `python -m agents.handback <spec_dir>
+--send`); `/tfactory-fixloop` drives a bounded test→fix→re-test loop. All
+side-effects honor the no-automatic-pushes policy. Env (all opt-in / tunable):
+  - `TFACTORY_HANDBACK_PREPARE` (default ON) — build + write the artifact
+  - `TFACTORY_HANDBACK_SEND=1` (default OFF) — also POST to AIFactory
+  - `TFACTORY_AIFACTORY_API_URL` (default `http://localhost:3101`) — AIFactory web-server
+  - `TFACTORY_HANDBACK_MAX_CYCLES` (default 2) — correction-cycle cap → `stuck`
+
+  The AIFactory-side receiver lives in that repo (issue `AIFactory#317`). See
+  `guides/aifactory-handback.md`.
+
 **LLM provider abstraction:** TFactory uses the Claude Agent SDK
 (`claude-agent-sdk`) as its primary provider, but also supports Codex CLI,
 GitHub Copilot CLI, Gemini CLI, Ollama, and any OpenAI-compatible endpoint
