@@ -85,3 +85,4 @@ docs/static/recordings/
 # (`apps/frontend-web` → outDir ../web-server/static) and served in prod; the
 # hashed asset bundle is regenerated, never hand-edited, so it is not tracked.
 apps/web-server/static/assets/
+apps/web-server/static/index.html
