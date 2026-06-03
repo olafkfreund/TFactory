@@ -19,6 +19,7 @@ import {
   GitBranch,
   Wrench,
   Lightbulb,
+  Cloud,
   LogOut
 } from 'lucide-react';
 import { Button } from './ui/button';
@@ -51,7 +52,7 @@ import { GitSetupModal } from './GitSetupModal';
 import { RateLimitIndicator } from './RateLimitIndicator';
 import type { Project, AutoBuildVersionInfo, GitStatus, ProjectEnvConfig } from '../shared/types';
 
-export type SidebarView = 'tfactory' | 'kanban' | 'terminals' | 'editor' | 'context' | 'github-issues' | 'github-prs' | 'changelog' | 'insights' | 'worktrees' | 'agent-tools' | 'skills';
+export type SidebarView = 'tfactory' | 'kanban' | 'terminals' | 'editor' | 'context' | 'github-issues' | 'github-prs' | 'changelog' | 'insights' | 'worktrees' | 'agent-tools' | 'skills' | 'cloud';
 
 interface SidebarProps {
   onSettingsClick: () => void;
@@ -80,7 +81,8 @@ const baseNavItems: NavItem[] = [
   { id: 'skills', labelKey: 'navigation:items.skills', icon: Lightbulb },
   { id: 'changelog', labelKey: 'navigation:items.changelog', icon: FileText },
   { id: 'worktrees', labelKey: 'navigation:items.worktrees', icon: GitBranch },
-  { id: 'context', labelKey: 'navigation:items.context', icon: BookOpen }
+  { id: 'context', labelKey: 'navigation:items.context', icon: BookOpen },
+  { id: 'cloud', labelKey: 'navigation:items.cloud', icon: Cloud }
 ];
 
 // GitHub nav items shown when GitHub is enabled

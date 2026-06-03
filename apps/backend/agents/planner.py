@@ -33,6 +33,7 @@ from ui import (
     print_status,
 )
 
+from .auth_tagging import apply_requires_auth_from_config
 from .session import run_agent_session
 
 logger = logging.getLogger(__name__)
@@ -656,6 +657,17 @@ async def run_planner(
         # plan is now a valid ImplementationPlan instance.
         subtask_count = _count_subtasks(plan)
         warnings: list[str] = []
+
+        # #107 task 6: deterministically tag subtasks whose target uses
+        # ref-auth in .tfactory.yml so the storageState login path is used.
+        # Best-effort — a missing/malformed config tags nothing.
+        auth_tagged = apply_requires_auth_from_config(plan, project_dir)
+        if auth_tagged:
+            plan.save(spec_dir / "test_plan.json")
+            warnings.append(
+                f"tagged {auth_tagged} subtask(s) requires_auth from "
+                ".tfactory.yml ref-auth targets (#107)"
+            )
 
         if subtask_count > _HARD_SUBTASK_CAP:
             dropped = _truncate_subtasks(plan, _HARD_SUBTASK_CAP)

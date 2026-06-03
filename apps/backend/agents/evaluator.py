@@ -180,6 +180,7 @@ def _resolve_runner_fn(
     image: str = _PYTEST_IMAGE,
     network: str = "none",
     target_url: str | None = None,
+    subtask: dict | None = None,
 ) -> Callable[[Path, Path, int], _RunResultLike]:
     """Return a callable matching the runner_fn seam for the pytest-based lanes
     (unit + api).
@@ -249,6 +250,19 @@ def _resolve_runner_fn(
                 project_dir_arg, spec_dir, network
             )
             extra_env.update(sandbox_creds.env)
+            # Test-target login credentials (#107): a ref-auth target's
+            # username/secret, resolved + injected as env (egress-gated like #73).
+            from tools.runners.sandbox_credentials import (
+                resolve_test_target_credentials,
+            )
+
+            test_creds = resolve_test_target_credentials(
+                _test_credential_specs(spec_dir, subtask),
+                project_dir_arg,
+                spec_dir,
+                network,
+            )
+            extra_env.update(test_creds.env)
             try:
                 res = runner.run(
                     repo_path=Path(project_dir_arg).resolve(),
@@ -260,6 +274,7 @@ def _resolve_runner_fn(
                 )
             finally:
                 sandbox_creds.wipe()  # erase materialised secret files
+                test_creds.wipe()
             code = res.returncode
             for line in (res.stdout or "").splitlines():
                 if line.startswith("__PYTEST_EXIT="):
@@ -709,6 +724,90 @@ def _browser_target_url(spec_dir: Path, subtask: dict) -> str | None:
     return None
 
 
+def _resolve_target(spec_dir: Path, subtask: dict) -> dict | None:
+    """Resolve the subtask's *target object* from the snapshotted .tfactory.yml.
+
+    Like :func:`_browser_target_url` but returns the whole target dict (so the
+    caller can branch on ``type``), preferring the subtask's ``target_name``,
+    then the config ``default_target``, then the first target.
+    """
+    ctx = spec_dir / "context" / "tfactory_yml.json"
+    if not ctx.exists():
+        return None
+    try:
+        cfg = json.loads(ctx.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    targets = cfg.get("targets") or []
+    want = subtask.get("target_name") or cfg.get("default_target")
+    for t in targets:
+        if t.get("name") == want:
+            return t
+    return targets[0] if targets else None
+
+
+def _kube_runtime_for(target: dict | None, *, runtime_cls=None):
+    """A ``KubernetesRuntime`` for a kubernetes port-forward target, else None (#108).
+
+    When the resolved target is ``type: kubernetes`` with ``port_forward: true``,
+    the api/browser lane has no static ``base_url`` — the URL only exists while a
+    ``kubectl port-forward`` is live. The caller uses the returned runtime as a
+    context manager so the forward is up during the test run and torn down after
+    (on success *and* failure). Auth rides the materialised read-only kubeconfig
+    (``KUBECONFIG``). Returns None for non-k8s targets (the static-URL path).
+    """
+    if not target or target.get("type") != "kubernetes" or not target.get("port_forward"):
+        return None
+    from types import SimpleNamespace
+
+    from tools.runners.kubernetes_runtime import KubernetesRuntime
+
+    cls = runtime_cls or KubernetesRuntime
+    t = SimpleNamespace(
+        name=target.get("name"),
+        context=target.get("context"),
+        namespace=target.get("namespace"),
+        service=target.get("service"),
+        port=target.get("port"),
+    )
+    return cls(t, kubeconfig=os.environ.get("KUBECONFIG"))
+
+
+def _test_credential_specs(spec_dir: Path, subtask: dict | None) -> list:
+    """TargetCredentialSpec list for a subtask's ``ref``-auth target (#107).
+
+    Reads the snapshotted .tfactory.yml: when the subtask's target uses
+    ``auth: {type: ref}``, turn the referenced ``test_credentials`` entry into a
+    resolver spec (``resolve_test_target_credentials`` injects it as login env).
+    Empty list when there is no ref-auth / no matching credential.
+    """
+    if subtask is None:
+        return []
+    from tools.runners.sandbox_credentials import TargetCredentialSpec
+
+    target = _resolve_target(spec_dir, subtask)
+    auth = (target or {}).get("auth") or {}
+    if auth.get("type") != "ref" or not auth.get("ref"):
+        return []
+    ctx = spec_dir / "context" / "tfactory_yml.json"
+    try:
+        cfg = json.loads(ctx.read_text())
+    except (OSError, json.JSONDecodeError, ValueError):
+        return []
+    entry = (cfg.get("test_credentials") or {}).get(auth["ref"])
+    if not entry:
+        return []
+    return [
+        TargetCredentialSpec(
+            name=auth["ref"],
+            ref=entry["ref"],
+            as_secret=entry["as_secret"],
+            as_username=entry.get("as_username"),
+            username_ref=entry.get("username_ref"),
+        )
+    ]
+
+
 def _stage_browser_test(spec_dir: Path, project_dir: Path, subtask: dict) -> None:
     """Copy the generated test from the workspace into the project checkout so
     the playwright runner (which mounts project_dir at /repo) can see it."""
@@ -722,13 +821,21 @@ def _stage_browser_test(spec_dir: Path, project_dir: Path, subtask: dict) -> Non
         _sh.copy2(src, dst)
 
 
-def _resolve_browser_runner_fn(target_url: str | None, image: str = _PLAYWRIGHT_IMAGE):
+def _resolve_browser_runner_fn(
+    target_url: str | None,
+    image: str = _PLAYWRIGHT_IMAGE,
+    *,
+    spec_dir: Path | None = None,
+    subtask: dict | None = None,
+):
     """Return a runner_fn(test_file, project_dir, seed) -> DockerRunResult that
     runs ONE Playwright spec in the runner image against ``target_url``.
 
     Mirrors the proven invocation: world-writable scratch, copy /repo→/scratch,
     symlink node_modules to the image's global install, --network=bridge, and
-    TFACTORY_TARGET_URL injected so the spec hits the deployed site.
+    TFACTORY_TARGET_URL injected so the spec hits the deployed site. When the
+    target uses ``auth: {type: ref}`` (#107), the login credential is resolved
+    and injected as env so the spec's login fixture can authenticate.
     """
     import shutil as _sh
     import tempfile as _tmp
@@ -765,13 +872,30 @@ def _resolve_browser_runner_fn(target_url: str | None, image: str = _PLAYWRIGHT_
             if target_url:
                 extra_env["TFACTORY_TARGET_URL"] = target_url
                 extra_env["APP_URL"] = target_url
-            res = runner.run(
-                repo_path=Path(project_dir_arg).resolve(),
-                scratch_path=scratch.resolve(),
-                command=["sh", "-c", staged],
-                extra_env=extra_env,
-                timeout_sec=300,
+            # Test-target login credentials (#107): inject the ref-auth
+            # target's username/secret so the spec's login fixture can sign in.
+            # network="host" here, so the egress-gated resolver runs.
+            from tools.runners.sandbox_credentials import (
+                resolve_test_target_credentials,
             )
+
+            test_creds = resolve_test_target_credentials(
+                _test_credential_specs(spec_dir, subtask) if spec_dir else [],
+                project_dir_arg,
+                spec_dir,
+                "host",
+            )
+            extra_env.update(test_creds.env)
+            try:
+                res = runner.run(
+                    repo_path=Path(project_dir_arg).resolve(),
+                    scratch_path=scratch.resolve(),
+                    command=["sh", "-c", staged],
+                    extra_env=extra_env,
+                    timeout_sec=300,
+                )
+            finally:
+                test_creds.wipe()
             # The wrapper shell always exits 0; recover the real playwright exit
             # from the __PW_EXIT marker so stability sees the true pass/fail.
             code = res.returncode
@@ -1212,24 +1336,52 @@ async def run_evaluator(
                 # Stage the generated spec into the checkout so the Playwright
                 # runner (mounts project_dir at /repo) can see it.
                 _stage_browser_test(spec_dir, project_dir, st)
-                url = _browser_target_url(spec_dir, st)
-                browser_runner = _resolve_browser_runner_fn(url)
-                bundles.append(
-                    _build_browser_signal_bundle(
-                        spec_dir, project_dir, st, browser_runner
+                # A kubernetes target has no static base_url — port-forward it
+                # for the run lifetime (#108); else use the static target URL.
+                rt = _kube_runtime_for(_resolve_target(spec_dir, st))
+                if rt is not None:
+                    with rt as runtime:
+                        browser_runner = _resolve_browser_runner_fn(
+                            runtime.target_url, spec_dir=spec_dir, subtask=st
+                        )
+                        bundles.append(
+                            _build_browser_signal_bundle(
+                                spec_dir, project_dir, st, browser_runner
+                            )
+                        )
+                else:
+                    url = _browser_target_url(spec_dir, st)
+                    browser_runner = _resolve_browser_runner_fn(
+                        url, spec_dir=spec_dir, subtask=st
                     )
-                )
+                    bundles.append(
+                        _build_browser_signal_bundle(
+                            spec_dir, project_dir, st, browser_runner
+                        )
+                    )
         if api_completed:
             for st in api_completed:
-                url = _browser_target_url(spec_dir, st)
                 # network="host" so the in-container httpx test can reach the
                 # host-served app at the target URL (e.g. http://localhost:8200).
-                api_runner = _resolve_runner_fn(
-                    spec_dir, project_dir, network="host", target_url=url
-                )
-                bundles.append(
-                    _build_api_signal_bundle(spec_dir, project_dir, st, api_runner)
-                )
+                # A kubernetes target is port-forwarded for the run lifetime (#108).
+                rt = _kube_runtime_for(_resolve_target(spec_dir, st))
+                if rt is not None:
+                    with rt as runtime:
+                        api_runner = _resolve_runner_fn(
+                            spec_dir, project_dir, network="host",
+                            target_url=runtime.target_url, subtask=st,
+                        )
+                        bundles.append(
+                            _build_api_signal_bundle(spec_dir, project_dir, st, api_runner)
+                        )
+                else:
+                    url = _browser_target_url(spec_dir, st)
+                    api_runner = _resolve_runner_fn(
+                        spec_dir, project_dir, network="host", target_url=url, subtask=st
+                    )
+                    bundles.append(
+                        _build_api_signal_bundle(spec_dir, project_dir, st, api_runner)
+                    )
         if jest_completed:
             jest_runner = _resolve_jest_runner_fn()
             bundles += [

@@ -185,18 +185,32 @@ class TestTemplateFileInstantiate:
 # ---------------------------------------------------------------------------
 
 
+# Curated built-in template counts per framework. Playwright gained a 6th
+# (visual-regression) with #109; the rest ship the original 5.
+_CURATED_TEMPLATE_COUNTS = {"pytest": 5, "jest": 5, "playwright": 6}
+
+
 class TestLoadTemplatesForFramework:
-    @pytest.mark.parametrize("fw", ["pytest", "jest", "playwright"])
-    def test_loads_all_templates(self, fw: str) -> None:
-        templates = load_templates_for_framework(fw, root=REPO_ROOT)
-        assert len(templates) == 5, (
-            f"Expected 5 templates for {fw}, got {len(templates)}: {list(templates)}"
+    @pytest.mark.parametrize("fw,expected", sorted(_CURATED_TEMPLATE_COUNTS.items()))
+    def test_loads_all_templates(self, fw: str, expected: int) -> None:
+        # The curated built-in set; the shipped platform `library/` is loaded
+        # separately (include_library=False here).
+        templates = load_templates_for_framework(
+            fw, root=REPO_ROOT, include_library=False
+        )
+        assert len(templates) == expected, (
+            f"Expected {expected} curated templates for {fw}, got "
+            f"{len(templates)}: {list(templates)}"
         )
 
-    @pytest.mark.parametrize("fw", ["pytest", "jest", "playwright"])
-    def test_each_framework_has_exactly_5_templates(self, fw: str) -> None:
-        templates = load_templates_for_framework(fw, root=REPO_ROOT)
-        assert len(templates) == 5
+    @pytest.mark.parametrize("fw,expected", sorted(_CURATED_TEMPLATE_COUNTS.items()))
+    def test_each_framework_has_expected_curated_templates(
+        self, fw: str, expected: int
+    ) -> None:
+        templates = load_templates_for_framework(
+            fw, root=REPO_ROOT, include_library=False
+        )
+        assert len(templates) == expected
 
     def test_returns_empty_for_unknown_framework(self) -> None:
         templates = load_templates_for_framework("nonexistent_fw_xyz", root=REPO_ROOT)
@@ -250,15 +264,20 @@ class TestPlaywrightTemplateInstantiation:
         result = tmpl.instantiate(
             target_base_url="https://example.com",
             test_name="logs in with valid credentials",
+            login_path="/login",
             username_selector="#email",
             password_selector="#password",
             submit_selector='button[type="submit"]',
             success_url_pattern="dashboard",
+            username_env="TEST_USERNAME",
+            secret_env="TEST_SECRET",
         )
         assert _no_unsubstituted(result)
         assert _ts_looks_valid(result)
         assert "https://example.com" in result
         assert "dashboard" in result
+        # creds are read from injected env vars, not hard-coded (#107 task 5)
+        assert "process.env['TEST_USERNAME']" in result
 
     def test_form_submit_validation_instantiates(self) -> None:
         templates = load_templates_for_framework("playwright", root=REPO_ROOT)

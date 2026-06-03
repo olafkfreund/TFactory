@@ -92,6 +92,36 @@
       "save": "Save credential",
       "saving": "Saving…"
     },
+    "testCredentials": {
+      "title": "Test Credentials",
+      "description": "Logins your generated tests authenticate with",
+      "info": "Reference a stored credential from .tfactory.yml (test_credentials + auth: { type: ref }). It is injected only on egress lanes when a subtask sets requires_auth, and scrubbed from every log and artifact. Secrets are encrypted at rest and never returned after creation.",
+      "noOrg": "No organization configured yet — enter your org ID above.",
+      "orgIdLabel": "Organization ID",
+      "orgIdHelp": "Your organization's UUID. Find it in any org URL or via the orgs API. Multi-org picker lands with Epic #35.",
+      "existing": "Stored credentials",
+      "add": "Add credential",
+      "loading": "Loading credentials…",
+      "empty": "No credentials stored yet.",
+      "noUser": "no username",
+      "created": "created",
+      "copyName": "Copy name (reference it in .tfactory.yml)",
+      "newCredential": "New credential",
+      "name": "Name",
+      "kind": "Kind",
+      "username": "Username (optional)",
+      "secret": "Secret (password / API token / TOTP seed)",
+      "secretHelp": "Encrypted at rest. After save it cannot be retrieved again — store a backup elsewhere if you need one.",
+      "fieldsRequired": "Name and secret are required.",
+      "confirmDelete": "Delete this credential? This cannot be undone.",
+      "cancel": "Cancel",
+      "save": "Save credential",
+      "saving": "Saving…"
+    },
+    "cloudAssessment": {
+      "title": "Cloud Assessment",
+      "description": "Cloud misconfiguration findings + topology"
+    },
     "apiKeys": {
       "title": "API Keys",
       "description": "Scoped acw_ keys for the stdio MCP control plane. Replaces the host-wide admin token for enterprise deployments.",

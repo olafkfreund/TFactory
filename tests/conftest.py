@@ -1229,6 +1229,21 @@ CRITICAL_MODULES = frozenset(
         "test_resolve_test_target_credentials",  # test-target cred resolver (#107)
         "test_tfactory_yml_test_credentials",  # .tfactory.yml test_credentials schema (#107)
         "test_config_to_credential_specs",  # schema→resolver-spec glue (#107)
+        "test_platform_templates",  # shipped platform/infra template library
+        "test_provider_runtime",  # provider CLI version manager (#121)
+        "test_kubernetes_runtime",  # kubectl port-forward dispatch (#108)
+        "test_visual_baseline",  # visual-regression baseline store (#109)
+        "test_auth_setup_render",  # Playwright storageState auth render (#107)
+        "test_auth_tagging",  # Planner requires_auth tagging (#107 task 6)
+        "test_tfactory_yml_cloud_target",  # CloudProviderTarget schema (#133/#134)
+        "test_mermaid_diagram",  # cloud topology diagram generator (#133/#136)
+        "test_cloud_discovery",  # cloud discovery primitive (#133/#135)
+        "test_cloud_assessment",  # cloud OCSF→verdict mapping (#133/#138)
+        "test_cloud_report",  # cloud assessment report + task-write (#133/#138)
+        "test_cloud_runner",  # cloud assessment orchestrator / auto-run (#133/#138)
+        "test_cloud_remediation",  # cloud remediation plan (#133/#150)
+        "test_cloud_issues",  # findings → GitHub issues (#133/#152)
+        "test_cloud_store",  # multi-assessment portal store + downloads (#133/#152)
     }
 )
 

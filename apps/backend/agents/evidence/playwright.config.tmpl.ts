@@ -39,7 +39,7 @@ export default defineConfig({
     trace: "@@TRACE_POLICY@@",
 
     // Headless by default; the Docker container has no display server
-    headless: true,
+    headless: true,@@STORAGE_STATE_USE@@
   },
 
   reporter: [
@@ -47,10 +47,10 @@ export default defineConfig({
     ["junit", { outputFile: "@@OUTPUT_DIR@@/junit.xml" }],
   ],
 
-  projects: [
+  projects: [@@SETUP_PROJECT@@
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      use: { ...devices["Desktop Chrome"] },@@CHROMIUM_DEPS@@
     },
   ],
 });

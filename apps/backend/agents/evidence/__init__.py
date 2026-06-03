@@ -17,7 +17,9 @@ from agents.evidence.layout import (
     content_type_for_artifact,
     evidence_dir_for_test,
     evidence_urls_for_test,
+    render_auth_setup,
     render_playwright_config,
+    scaffold_auth_setup,
 )
 from agents.evidence.retention import RetentionStats, enforce_retention
 
@@ -25,7 +27,9 @@ __all__ = [
     "evidence_dir_for_test",
     "evidence_urls_for_test",
     "content_type_for_artifact",
+    "render_auth_setup",
     "render_playwright_config",
+    "scaffold_auth_setup",
     "record_http_to_har",
     "enforce_retention",
     "RetentionStats",

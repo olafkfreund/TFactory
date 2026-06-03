@@ -17,7 +17,9 @@ import {
   Globe,
   Bug,
   Plug,
-  Palette
+  Palette,
+  ShieldCheck,
+  Cloud
 } from 'lucide-react';
 
 import {
@@ -38,6 +40,8 @@ import { LanguageSettings } from './LanguageSettings';
 import { GeneralSettings } from './GeneralSettings';
 import { IntegrationSettings } from './IntegrationSettings';
 import { GitCredentialsSettings } from './sections/GitCredentialsSettings';
+import { TestCredentialsSettings } from './sections/TestCredentialsSettings';
+import { CloudAssessmentPage } from './sections/CloudAssessmentPage';
 import { McpApiKeysSettings } from './sections/McpApiKeysSettings';
 import { AdvancedSettings } from './AdvancedSettings';
 import { DebugSettings } from './DebugSettings';
@@ -56,7 +60,7 @@ interface AppSettingsDialogProps {
 }
 
 // App-level settings sections
-export type AppSection = 'appearance' | 'language' | 'agent' | 'llmProvider' | 'integrations' | 'gitCredentials' | 'apiKeys' | 'notifications' | 'debug';
+export type AppSection = 'appearance' | 'language' | 'agent' | 'llmProvider' | 'integrations' | 'gitCredentials' | 'testCredentials' | 'cloudAssessment' | 'apiKeys' | 'notifications' | 'debug';
 
 interface NavItemConfig<T extends string> {
   id: T;
@@ -69,6 +73,8 @@ const appNavItemsConfig: NavItemConfig<AppSection>[] = [
   { id: 'llmProvider', icon: Cpu },
   { id: 'integrations', icon: Key },
   { id: 'gitCredentials', icon: KeyRound },
+  { id: 'testCredentials', icon: ShieldCheck },
+  { id: 'cloudAssessment', icon: Cloud },
   { id: 'apiKeys', icon: KeyRound },
   { id: 'notifications', icon: Bell },
   { id: 'debug', icon: Bug },
@@ -178,6 +184,10 @@ export function AppSettingsDialog({ open, onOpenChange, initialSection, initialP
         return <IntegrationSettings settings={settings} onSettingsChange={setSettings} />;
       case 'gitCredentials':
         return <GitCredentialsSettings />;
+      case 'testCredentials':
+        return <TestCredentialsSettings />;
+      case 'cloudAssessment':
+        return <CloudAssessmentPage />;
       case 'apiKeys':
         return <McpApiKeysSettings />;
       case 'notifications':

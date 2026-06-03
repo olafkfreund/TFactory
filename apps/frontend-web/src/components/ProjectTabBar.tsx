@@ -158,9 +158,16 @@ export function ProjectTabBar({
           <Plus className="h-4 w-4" />
         </Button>
         <Separator orientation="vertical" className="h-4 mx-0.5" />
-        <ClaudeCodeStatusBadge iconOnly onOpenOnboarding={onOpenOnboarding} />
-        <CLIToolStatusBadge iconOnly />
-        <OpenAIEndpointsStatusBadge iconOnly />
+        {/* Provider / CLI health, grouped into one cohesive status cluster
+            (each badge keeps its own hover tooltip). */}
+        <div
+          className="flex items-center gap-0.5 rounded-lg bg-muted/40 px-1 py-0.5 ring-1 ring-inset ring-border/60"
+          aria-label="Provider and CLI status"
+        >
+          <ClaudeCodeStatusBadge iconOnly onOpenOnboarding={onOpenOnboarding} />
+          <CLIToolStatusBadge iconOnly />
+          <OpenAIEndpointsStatusBadge iconOnly />
+        </div>
         <Separator orientation="vertical" className="h-4 mx-0.5" />
         <Button
           variant="ghost"
@@ -184,7 +191,14 @@ export function ProjectTabBar({
           variant="ghost"
           size="icon"
           className="h-8 w-8"
-          title="Help"
+          title="Help & docs"
+          onClick={() =>
+            window.open(
+              'https://github.com/olafkfreund/TFactory#readme',
+              '_blank',
+              'noopener,noreferrer',
+            )
+          }
         >
           <HelpCircle className="h-4 w-4" />
         </Button>

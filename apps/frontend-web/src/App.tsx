@@ -15,10 +15,12 @@ import { Changelog } from './components/changelog/Changelog';
 import { Insights } from './components/Insights';
 import { AgentTools } from './components/AgentTools';
 import { SkillsPage } from './components/SkillsPage';
+import { CloudAssessmentPage } from './components/settings/sections/CloudAssessmentPage';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { AddProjectModal } from './components/AddProjectModal';
 import { AppSettingsDialog } from './components/settings';
 import { TaskCreationWizard } from './components/TaskCreationWizard';
+import { CloudCheckDialog } from './components/CloudCheckDialog';
 import { TaskDetailModal } from './components/task-detail';
 import { TFactoryPortal } from './components/tfactory/TFactoryPortal';
 import { OnboardingWizard } from './components/onboarding';
@@ -97,6 +99,7 @@ function AuthenticatedApp() {
   );
   const [activeView, setActiveView] = useState<SidebarView>('tfactory');
   const [isNewTaskDialogOpen, setIsNewTaskDialogOpen] = useState(false);
+  const [isCloudCheckOpen, setIsCloudCheckOpen] = useState(false);
   const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
   const [isAddProjectModalOpen, setIsAddProjectModalOpen] = useState(false);
   const [isOnboardingOpen, setIsOnboardingOpen] = useState(false);
@@ -363,6 +366,11 @@ function AuthenticatedApp() {
                   )}
                   {activeView === 'agent-tools' && <AgentTools />}
                   {activeView === 'skills' && <SkillsPage />}
+                  {activeView === 'cloud' && (
+                    <div className="h-full overflow-auto p-6">
+                      <CloudAssessmentPage />
+                    </div>
+                  )}
                 </>
               ) : (
                 <WelcomeScreen
@@ -412,8 +420,12 @@ function AuthenticatedApp() {
               projectId={(activeProjectId || selectedProjectId)!}
               open={isNewTaskDialogOpen}
               onOpenChange={setIsNewTaskDialogOpen}
+              onCloudInfra={() => setIsCloudCheckOpen(true)}
             />
           )}
+
+          {/* Cloud Infrastructure check — launchable from +Task or Cloud Reports */}
+          <CloudCheckDialog open={isCloudCheckOpen} onOpenChange={setIsCloudCheckOpen} />
 
           {/* Task Detail Modal */}
           <TaskDetailModal

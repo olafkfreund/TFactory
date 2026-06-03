@@ -312,9 +312,147 @@ class FeatureFlagTarget(BaseModel):
     auth: AuthSpec | None = None
 
 
+class CloudScanConfig(BaseModel):
+    """What a cloud discovery/assessment run should do for a target (#133).
+
+    Defaults run a full read-only discovery + CIS misconfiguration assessment
+    and fail the run (verdict=reject) on any finding at or above ``high``.
+    """
+
+    discover: bool = True  # enumerate resources → inventory + diagram
+    misconfiguration: bool = True  # run CIS/OCSF misconfiguration checks
+    services: list[str] = []  # restrict to these services (e.g. s3, iam, ec2); [] = all
+    compliance: list[str] = ["cis"]  # frameworks to assess against (cis, nist, …)
+    # Findings at or above this severity gate the run to verdict=reject.
+    fail_on_severity: Literal["critical", "high", "medium", "low"] = "high"
+
+
+class CloudProviderTarget(BaseModel):
+    """A cloud account / subscription / project to discover + assess (#133).
+
+    Read-only by design: TFactory enumerates resources and checks their
+    configuration; it never mutates the account. Credentials resolve either
+    from an ambient CLI ``profile`` (e.g. an AWS named profile), an optional
+    read-only ``assume_role`` (AWS role ARN / GCP impersonated SA / Azure MI),
+    or a vault-backed ``auth: { type: ref }`` reference — never inline secrets.
+
+    Requires ``egress.enabled`` (cloud APIs need network) — enforced at the
+    config level, like ``test_credentials``.
+
+    Examples::
+
+        - name: aws-prod
+          type: cloud_provider
+          provider: aws
+          regions: [us-east-1, eu-west-2]
+          profile: Calitii          # ambient CLI profile
+          assume_role: arn:aws:iam::123456789012:role/tfactory-readonly
+          scan:
+            misconfiguration: true
+            compliance: [cis]
+            fail_on_severity: high
+    """
+
+    type: Literal["cloud_provider"]
+    name: str
+    provider: Literal["aws", "azure", "gcp"]
+    regions: list[str] = []  # [] = provider default / all enabled regions
+    profile: str | None = (
+        None  # named CLI profile (aws profile / gcloud config / az subscription)
+    )
+    assume_role: str | None = (
+        None  # read-only role ARN / impersonated SA / managed identity
+    )
+    auth: RefAuth | None = (
+        None  # vault-backed credential reference (alternative to profile)
+    )
+    scan: CloudScanConfig = Field(default_factory=CloudScanConfig)
+
+
+# Managed-SaaS platforms with a first-class connector profile (#111). Each maps
+# to an API style + the pytest `library/` check template + Gen-Functional
+# guidance. Adding a platform = add an entry here + a `library/<template>` file
+# (the documented pattern — see guides/saas-connectors.md).
+CONNECTOR_PLATFORMS: dict[str, dict[str, str]] = {
+    "servicenow": {
+        "api_style": "rest",  # Table API
+        "library_template": "servicenow-table-api.py.tmpl",
+        "guidance": (
+            "ServiceNow: prefer the Table API (`/api/now/table/<table>`) over UI "
+            "automation — SSO-gated portals are brittle. Bearer/OAuth token via the "
+            "credential vault; assert on `result[0].<field>`."
+        ),
+    },
+    "salesforce": {
+        "api_style": "rest",  # REST + SOQL
+        "library_template": "salesforce-rest-query.py.tmpl",
+        "guidance": (
+            "Salesforce: use the REST API + SOQL (`/services/data/vXX.0/query`) with "
+            "an OAuth bearer token from the vault; avoid Lightning DOM automation."
+        ),
+    },
+    "mulesoft": {
+        "api_style": "rest",
+        "library_template": "mulesoft-api.py.tmpl",
+        "guidance": "MuleSoft: drive the published API endpoints directly with a vault token.",
+    },
+    "sap": {
+        "api_style": "odata",  # SAP Gateway / S/4HANA OData v2/v4
+        "library_template": "",  # template TBD — see guides/saas-connectors.md
+        "guidance": (
+            "SAP: drive OData services (`/sap/opu/odata/...`) with `$filter`/`$top`; "
+            "auth via the vault (basic / OAuth). API-first over SAP GUI automation."
+        ),
+    },
+}
+
+
+def connector_platform_info(platform: str) -> dict[str, str] | None:
+    """Registry entry (api style · library template · guidance) for a platform."""
+    return CONNECTOR_PLATFORMS.get(platform)
+
+
+class ConnectorTarget(BaseModel):
+    """A managed-SaaS platform target — ServiceNow / Salesforce / SAP / MuleSoft (#111).
+
+    A first-class, ergonomic alternative to a raw ``http`` target: name the
+    ``platform`` and TFactory knows its API style + which ``library/`` check
+    template + Gen-Functional guidance to use. Auth + ``base_url`` reuse the
+    HTTP / credential-vault plumbing (``auth: { type: ref }`` resolves an
+    OAuth/SSO token from the vault). Tests drive the platform's REST/OData API
+    on the **api lane** — API-first is far more stable than SSO-gated browser
+    automation.
+
+    Example::
+
+        - name: snow
+          type: connector
+          platform: servicenow
+          base_url: https://acme.service-now.com
+          entities: [incident, change_request]
+          auth:
+            type: ref
+            ref: snow-svc
+    """
+
+    type: Literal["connector"]
+    name: str
+    platform: Literal["servicenow", "salesforce", "sap", "mulesoft"]
+    base_url: AnyHttpUrl
+    auth: AuthSpec | None = None
+    health_check: HealthCheck | None = None
+    # Tables / objects / OData entity sets to focus generation on (hints).
+    entities: list[str] = []
+
+
 # Union of all concrete target types (discriminated on ``type``).
 TargetSpec = Annotated[
-    HttpTarget | KubernetesTarget | DockerComposeTarget | FeatureFlagTarget,
+    HttpTarget
+    | KubernetesTarget
+    | DockerComposeTarget
+    | FeatureFlagTarget
+    | CloudProviderTarget
+    | ConnectorTarget,
     Field(discriminator="type"),
 ]
 
@@ -567,6 +705,24 @@ class TFactoryConfig(BaseModel):
                         f"target {target.name!r} auth.ref {auth.ref!r} does not "
                         f"match any test_credentials entry; known: {sorted(tc)}"
                     )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_cloud_targets(self) -> TFactoryConfig:
+        """Fail closed on cloud target misconfig (#133).
+
+        A ``cloud_provider`` target needs network egress to reach cloud APIs,
+        so declaring one without ``egress.enabled`` is rejected.
+        """
+        cloud = [
+            t for t in self.targets if getattr(t, "type", None) == "cloud_provider"
+        ]
+        if cloud and not self.egress.enabled:
+            names = sorted(t.name for t in cloud)
+            raise ValueError(
+                f"cloud_provider target(s) {names} require network egress to "
+                "reach cloud APIs — set egress.enabled: true."
+            )
         return self
 
     @model_validator(mode="after")

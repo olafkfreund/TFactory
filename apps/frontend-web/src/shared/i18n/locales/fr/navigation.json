@@ -19,7 +19,8 @@
     "adoPRs": "Pull Requests ADO",
     "worktrees": "Worktrees",
     "agentTools": "MCP",
-    "skills": "Compétences"
+    "skills": "Compétences",
+    "cloud": "Rapports cloud"
   },
   "actions": {
     "settings": "Paramètres",

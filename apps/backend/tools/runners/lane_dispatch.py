@@ -242,3 +242,60 @@ def dispatch_browser_lane(
         runner_used="docker",
         docker_result=run_result,
     )
+
+
+# ---------------------------------------------------------------------------
+# Kubernetes dispatch (#108) — kubectl port-forward lifecycle wrapper
+# ---------------------------------------------------------------------------
+
+
+def dispatch_kubernetes_lane(
+    *,
+    lane: str,
+    target,  # KubernetesTarget from tfactory_yml.schema
+    docker_runner: DockerRunner,
+    docker_run_kwargs: dict[str, Any],
+    kubeconfig: str | None = None,
+    kube_runtime_cls=None,  # injectable for tests; defaults to KubernetesRuntime
+) -> DispatchResult:
+    """Dispatch a lane against a Kubernetes service via ``kubectl port-forward``.
+
+    Port-forwards ``target.service`` for the run lifetime, injects the resolved
+    ``http://localhost:<port>`` as ``TFACTORY_TARGET_URL`` into the test
+    container env, runs the test, then tears the forward down (guaranteed by the
+    ``KubernetesRuntime`` context manager, on success and on failure).
+
+    Auth (ServiceAccount token / mTLS) is carried by ``kubeconfig`` — the
+    read-only file ``sandbox_credentials`` materialises for egress lanes.
+
+    Args:
+        lane: The lane string this k8s target serves (e.g. ``"api"`` /
+            ``"browser"`` / ``"integration"``) — recorded on the result.
+        target: A ``KubernetesTarget`` with ``port_forward=True``.
+        docker_runner: Configured ``DockerRunner`` for the framework image.
+        docker_run_kwargs: Forwarded to ``docker_runner.run(**kwargs)``; any
+            ``extra_env`` is merged (``TFACTORY_TARGET_URL`` is overridden here).
+        kubeconfig: Path to the materialised kubeconfig (``--kubeconfig``).
+        kube_runtime_cls: Injected in tests to replace ``KubernetesRuntime``.
+
+    Raises:
+        KubernetesRuntimeError: if the forward can't start or become ready; the
+            forward is always torn down before the error propagates.
+    """
+    from .kubernetes_runtime import KubernetesRuntime
+
+    runtime_cls = kube_runtime_cls or KubernetesRuntime
+
+    kwargs = dict(docker_run_kwargs)
+    caller_extra_env: dict[str, str] = dict(kwargs.get("extra_env") or {})
+
+    with runtime_cls(target, kubeconfig=kubeconfig) as runtime:
+        caller_extra_env["TFACTORY_TARGET_URL"] = runtime.target_url
+        kwargs["extra_env"] = caller_extra_env
+        run_result = docker_runner.run(**kwargs)
+
+    return DispatchResult(
+        lane=lane,
+        runner_used="docker",
+        docker_result=run_result,
+    )
