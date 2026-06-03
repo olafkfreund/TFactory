@@ -11,7 +11,7 @@ nav_order: 5.5
 
 This page is the receipt. We took TFactory v0.2.0, handed it a small live
 SUT (a Vite + React greeting generator with 5 acceptance criteria and a
-deliberately seeded cache bug), and let the four-agent pipeline plan,
+deliberately seeded cache bug), and let the five-agent pipeline plan,
 write, sandbox, score, and triage a Playwright suite end-to-end. Below
 you'll find the time-lapse of the portal, the generated tests, the
 captured evidence (screenshots, video, trace, HAR), and the unedited

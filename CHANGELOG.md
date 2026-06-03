@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+- **Cloud infrastructure testing — AWS · GCP · Azure (epic #133, complete).**
+  A read-only assessment flow: access gate → discovery (host `aws`/`gcloud`/`az`)
+  → Mermaid topology → Prowler/CIS scan (OCSF) in `tfactory-runner-cloud` →
+  accept/flag/reject verdict → downloadable remediation plan. GCP uses ADC,
+  Azure uses `--az-cli-auth` (the image bundles `azure-cli`); all three
+  live-verified read-only against real accounts. `frameworks/cloud-discover` +
+  `frameworks/cloud-prowler` descriptors + a high-signal check library (#138).
+  Launch from the portal — **+Task → Cloud Infrastructure** runs the discovery
+  gate first, then backgrounds the assessment; reports land in **Cloud Reports**.
+  See `guides/cloud-testing.md`.
+- **Test-target login credentials wired into the lanes (#107).** A
+  `auth: {type: ref}` target's credential is resolved and injected
+  (`TEST_USERNAME`/`TEST_PASSWORD`) into the api/browser run, egress-gated and
+  wiped after — so a generated test can log in to a SUT, then test it.
+- **Kubernetes port-forward dispatch wired into the Evaluator (#108).** A
+  `type: kubernetes`, `port_forward: true` target is `kubectl port-forward`-ed
+  for the run lifetime (auth via the read-only kubeconfig), its
+  `http://localhost:<port>` injected as `TFACTORY_TARGET_URL`, torn down on
+  success and failure.
+- **Visual-regression baselines surfaced in the portal (#109).** A portal API
+  over `agents.evidence.visual_baseline` — list / serve / accept (traversal-
+  guarded) — backing the Playwright `toHaveScreenshot` template + the
+  threshold/anti-flake guidance already shipped.
+- **Portal redesign.** Flagship-grade pass: home Tests list + Cloud Reports as
+  card layouts with humanised time and verdict-driven status colour; a branded,
+  atmospheric login; a grouped top-bar status cluster; the new Gruvbox flask
+  favicon; and a fix for the New Task dialog's leftover Ocean-theme colours.
+
 - **Fix: Evaluator no longer fails on a verdicts.json with trailing data.** The
   LLM sometimes wraps the JSON in a ```` ```json ```` fence or appends a
   sentence after it, which made strict `json.loads` raise *"Extra data"* and

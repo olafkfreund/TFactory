@@ -13,8 +13,18 @@ report ready to commit + post to the PR.
 
 **Status:** v0.2.0 released (2026-05-29) — 16 of 16 v0.2 tasks delivered.
 Modality-based lane spine active: unit / browser / api / integration / mutation
-(pytest · Jest · Playwright). Security scanning is out of scope — delegated to
-dedicated SAST/DAST pipelines, not generated here.
+(pytest · Jest · Playwright). Application security scanning (SAST/DAST of the
+code under test) is out of scope — delegated to dedicated pipelines, not
+generated here.
+
+**Cloud infrastructure testing (epic #133, complete):** a separate read-only
+assessment flow — access gate → discovery → topology diagram → Prowler/CIS
+misconfiguration scan (OCSF) → accept/flag/reject verdict → remediation plan —
+for **AWS, GCP and Azure** (all live-verified). This is cloud *posture* (CSPM),
+distinct from the app-code SAST/DAST above. Launchable from the portal
+(+Task → Cloud Infrastructure); see `guides/cloud-testing.md`. Also wired this
+cycle: Kubernetes port-forward dispatch (#108), test-target login credentials
+into the lanes (#107), and visual-regression baselines in the portal (#109).
 
 **Project:** TFactory
 **Repository:** https://github.com/olafkfreund/TFactory

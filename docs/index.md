@@ -39,7 +39,7 @@ nav_order: 1
   <li class="feature-row__card reveal" style="--reveal-delay: 0ms">
     <span class="feature-row__icon" aria-hidden="true">🪶</span>
     <h3>Spec-aware handover</h3>
-    <p>A Claude Code session in your AIFactory repo runs <code>/handover-to-tfactory</code>. TFactory snapshots the spec + diff, runs four agents, returns a verdicts report.</p>
+    <p>A Claude Code session in your AIFactory repo runs <code>/handover-to-tfactory</code>. TFactory snapshots the spec + diff, runs five agents, returns a verdicts report.</p>
   </li>
   <li class="feature-row__card reveal" style="--reveal-delay: 80ms">
     <span class="feature-row__icon" aria-hidden="true">🛡️</span>
@@ -62,20 +62,26 @@ nav_order: 1
 
 <div class="reveal" markdown="1">
 
-Two capabilities make TFactory usable beyond a single laptop and a single
-model: it can now **authenticate to your cloud** and **run on whatever LLM you
-already pay for**.
+Three capabilities make TFactory usable beyond a single laptop and a single
+model: it can now **assess your cloud infrastructure**, **authenticate to your
+cloud**, and **run on whatever LLM you already pay for**.
 
 </div>
 
 <ul class="feature-row">
   <li class="feature-row__card reveal">
+    <span class="feature-row__icon" aria-hidden="true">☁️</span>
+    <h3>Cloud infrastructure testing</h3>
+    <p><strong>Problem:</strong> misconfigurations — public buckets, over-privileged IAM, management ports open to the internet — slip past code review and never fail a test.</p>
+    <p><strong>Solution:</strong> a read-only assessment lane for <strong>AWS · GCP · Azure</strong>: access gate → discovery → Mermaid topology → Prowler/CIS scan (OCSF) → accept / flag / reject verdict → a downloadable remediation plan. Launch it from <code>+Task → Cloud Infrastructure</code>; reports land in the portal. <a href="https://github.com/olafkfreund/TFactory/blob/main/guides/cloud-testing.md">See how →</a></p>
+  </li>
+  <li class="feature-row__card reveal" style="--reveal-delay: 80ms">
     <span class="feature-row__icon" aria-hidden="true">🔐</span>
     <h3>Credential Broker</h3>
     <p><strong>Problem:</strong> agents need real cloud/K8s/API credentials to test against live services, but secrets must never touch the repo.</p>
     <p><strong>Solution:</strong> resolve secrets from a vault (Azure KV · AWS Secrets Manager · GCP Secret Manager · HashiCorp Vault) or local sops/age/agenix, materialise them ephemerally (0600, wiped per task), gated by an explicit <strong>egress opt-in</strong> with an honest manifest. <a href="{{ '/credentials/' | relative_url }}">See how →</a></p>
   </li>
-  <li class="feature-row__card reveal" style="--reveal-delay: 80ms">
+  <li class="feature-row__card reveal" style="--reveal-delay: 160ms">
     <span class="feature-row__icon" aria-hidden="true">🧠</span>
     <h3>Run on any LLM</h3>
     <p><strong>Problem:</strong> teams are locked to one provider, or can't send code to a managed cloud at all.</p>
