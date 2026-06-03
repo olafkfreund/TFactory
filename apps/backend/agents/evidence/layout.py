@@ -35,6 +35,7 @@ Usage::
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 # ─── Directory layout ────────────────────────────────────────────────────────
@@ -250,6 +251,74 @@ def render_auth_setup(
         .replace("@@SECRET_ENV@@", secret_env)
         .replace("@@STORAGE_STATE_PATH@@", storage_state_path)
     )
+
+
+# Where the saved authenticated session lands (relative to the test workspace).
+_STORAGE_STATE_PATH = ".auth/state.json"
+
+
+def scaffold_auth_setup(spec_dir: Path | str) -> bool:
+    """Write ``auth.setup.ts`` + a ``requires_auth`` Playwright config (#107 task 5).
+
+    When the task's snapshotted ``.tfactory.yml`` (``context/tfactory_yml.json``)
+    declares a target with ``auth: { type: ref }`` and the referenced
+    ``test_credentials`` entry maps to env vars, render the login-once
+    ``auth.setup.ts`` (selectors from the RefAuth block, credentials read from the
+    injected env vars — never baked in) into ``tests/`` and a config whose
+    chromium project depends on the ``setup`` project + reuses its
+    ``storageState``. Gen-Functional calls this once a browser subtask
+    ``requires_auth``.
+
+    Returns True if scaffolding was written; False when there is no ref-auth
+    target / not enough info (so the default no-auth path is untouched).
+    """
+    spec_dir = Path(spec_dir)
+    snap = spec_dir / "context" / "tfactory_yml.json"
+    if not snap.is_file():
+        return False
+    try:
+        cfg = json.loads(snap.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return False
+
+    targets = cfg.get("targets") or []
+    creds = cfg.get("test_credentials") or {}
+    target = next(
+        (t for t in targets if (t.get("auth") or {}).get("type") == "ref"), None
+    )
+    if not target:
+        return False
+    auth = target["auth"]
+    cred = creds.get(auth.get("ref")) or {}
+    username_env = cred.get("as_username")
+    secret_env = cred.get("as_secret")
+    base_url = target.get("base_url")
+    # A form login needs a login URL + both credential env vars to be useful.
+    if not (auth.get("login_url") and username_env and secret_env and base_url):
+        return False
+
+    setup_ts = render_auth_setup(
+        login_url=auth["login_url"],
+        username_selector=auth.get("username_selector") or "input[name='username']",
+        password_selector=auth.get("password_selector") or "input[name='password']",
+        submit_selector=auth.get("submit_selector") or "button[type='submit']",
+        success_url_pattern=auth.get("success_url_pattern") or "",
+        username_env=username_env,
+        secret_env=secret_env,
+        storage_state_path=_STORAGE_STATE_PATH,
+    )
+    config_ts = render_playwright_config(
+        output_dir=spec_dir / "findings" / "evidence",
+        base_url=base_url,
+        requires_auth=True,
+        storage_state_path=_STORAGE_STATE_PATH,
+    )
+
+    tests_dir = spec_dir / "tests"
+    tests_dir.mkdir(parents=True, exist_ok=True)
+    (tests_dir / "auth.setup.ts").write_text(setup_ts, encoding="utf-8")
+    (spec_dir / "playwright.config.ts").write_text(config_ts, encoding="utf-8")
+    return True
 
 
 def content_type_for_artifact(artifact_name: str) -> str:
