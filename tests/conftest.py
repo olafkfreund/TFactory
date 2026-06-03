@@ -1242,6 +1242,8 @@ CRITICAL_MODULES = frozenset(
         "test_cloud_report",  # cloud assessment report + task-write (#133/#138)
         "test_cloud_runner",  # cloud assessment orchestrator / auto-run (#133/#138)
         "test_cloud_remediation",  # cloud remediation plan (#133/#150)
+        "test_cloud_issues",  # findings → GitHub issues (#133/#152)
+        "test_cloud_store",  # multi-assessment portal store + downloads (#133/#152)
     }
 )
 

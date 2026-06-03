@@ -1,51 +1,74 @@
-"""Cloud assessment portal route (#133/#140).
+"""Cloud assessment portal routes (#133/#140/#152).
 
-Serves the latest cloud assessment artifacts (report + Mermaid diagram +
-structured JSON) the cloud task-write (#138) produces, so the portal can render
-them in a Cloud Assessment view.
+Surfaces the cloud assessment history the cloud task-write (#138/#150) produces:
 
-    GET /api/cloud/assessment  → { present, json, reportMarkdown, diagramMermaid }
+    GET /api/cloud/assessments                       — list (newest first)
+    GET /api/cloud/assessments/{id}                  — full detail
+    GET /api/cloud/assessments/{id}/download/{kind}  — download an artifact
+        kind ∈ report.md | remediation.md | issues.json | remediation.pdf
+    GET /api/cloud/assessment                        — newest (back-compat)
 
-Reads from ``~/.tfactory/cloud-assessments/latest/`` (override with
-``TFACTORY_CLOUD_ASSESSMENT_DIR``). This is the portal's read side; the executor
-(#138) writes the same artifact shape into a task's ``findings/``.
+Backed by ``agents.cloud.store`` (``~/.tfactory/cloud-assessments/<id>/``).
 """
 
 from __future__ import annotations
 
-import json
-import os
+import sys
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, status
+from fastapi.responses import FileResponse
+
+# Add apps/backend to sys.path so ``import agents.cloud.store`` resolves
+# (the canonical pattern used by routes/provider_runtimes.py).
+_BACKEND = Path(__file__).resolve().parents[3] / "backend"
+if str(_BACKEND) not in sys.path:
+    sys.path.insert(0, str(_BACKEND))
+
+from agents.cloud import store  # noqa: E402  (after sys.path insert)
 
 router = APIRouter(prefix="/api/cloud", tags=["Cloud"])
 
+_DOWNLOAD_MEDIA = {
+    "report.md": "text/markdown",
+    "remediation.md": "text/markdown",
+    "issues.json": "application/json",
+    "remediation.pdf": "application/pdf",
+    "report.pdf": "application/pdf",
+}
 
-def _assessment_dir() -> Path:
-    override = os.environ.get("TFACTORY_CLOUD_ASSESSMENT_DIR")
-    if override:
-        return Path(override)
-    return Path.home() / ".tfactory" / "cloud-assessments" / "latest"
+
+@router.get("/assessments", summary="List cloud assessments (newest first)")
+def list_cloud_assessments() -> dict:
+    return {"assessments": store.list_assessments()}
 
 
-@router.get("/assessment", summary="Latest cloud assessment (report + diagram)")
-def get_cloud_assessment() -> dict:
-    base = _assessment_dir()
-    js = base / "cloud_assessment.json"
-    md = base / "cloud_assessment.md"
-    mmd = base / "diagrams" / "cloud_topology.mmd"
-    plan = base / "cloud_remediation_plan.md"
-    if not js.is_file():
+@router.get("/assessments/{assessment_id}", summary="One cloud assessment (full)")
+def get_cloud_assessment_by_id(assessment_id: str) -> dict:
+    data = store.read_assessment(assessment_id)
+    if data is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="assessment not found")
+    return data
+
+
+@router.get(
+    "/assessments/{assessment_id}/download/{kind}",
+    summary="Download an assessment artifact (md / json / pdf)",
+)
+def download_cloud_artifact(assessment_id: str, kind: str):
+    if kind not in _DOWNLOAD_MEDIA:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unknown artifact")
+    path = store.download_path(assessment_id, kind)
+    if path is None or not Path(path).is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="artifact not available")
+    filename = f"cloud-{assessment_id}-{kind}"
+    return FileResponse(path, media_type=_DOWNLOAD_MEDIA[kind], filename=filename)
+
+
+@router.get("/assessment", summary="Newest cloud assessment (back-compat)")
+def get_latest_cloud_assessment() -> dict:
+    items = store.list_assessments()
+    if not items:
         return {"present": False}
-    try:
-        data = json.loads(js.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        data = {}
-    return {
-        "present": True,
-        "json": data,
-        "reportMarkdown": md.read_text(encoding="utf-8") if md.is_file() else "",
-        "diagramMermaid": mmd.read_text(encoding="utf-8") if mmd.is_file() else "",
-        "remediationMarkdown": plan.read_text(encoding="utf-8") if plan.is_file() else "",
-    }
+    data = store.read_assessment(items[0]["id"])
+    return data or {"present": False}

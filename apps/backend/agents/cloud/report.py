@@ -20,6 +20,7 @@ from pathlib import Path
 from agents.diagrams import render_cloud_topology
 
 from .assessment import CloudAssessment, CloudFinding, assess, parse_ocsf
+from .issues import build_issue_specs, issue_specs_to_dict
 from .remediation import render_remediation_plan
 
 __all__ = [
@@ -40,6 +41,7 @@ def cloud_findings_paths(spec_dir: Path) -> dict[str, Path]:
         "report_json": base / "cloud_assessment.json",
         "diagram_mmd": base / "diagrams" / "cloud_topology.mmd",
         "remediation_md": base / "cloud_remediation_plan.md",
+        "issues_json": base / "cloud_issues.json",
     }
 
 
@@ -160,9 +162,19 @@ def assess_and_write(
     paths = cloud_findings_paths(spec_dir)
     for p in paths.values():
         p.parent.mkdir(parents=True, exist_ok=True)
+    epic, children = build_issue_specs(
+        findings,
+        provider=str(inventory.get("provider", "cloud")),
+        account=str(inventory.get("account", "?")),
+        fail_on_severity=fail_on_severity,
+    )
+
     paths["diagram_mmd"].write_text(diagram, encoding="utf-8")
     paths["report_md"].write_text(report, encoding="utf-8")
     paths["remediation_md"].write_text(remediation, encoding="utf-8")
+    paths["issues_json"].write_text(
+        json.dumps(issue_specs_to_dict(epic, children), indent=2), encoding="utf-8"
+    )
     paths["report_json"].write_text(
         json.dumps(
             {
