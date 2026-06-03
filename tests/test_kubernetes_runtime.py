@@ -250,3 +250,16 @@ def test_dispatch_kubernetes_lane_injects_target_url_and_tears_down() -> None:
     inst = _FakeRuntime.instances[-1]
     assert inst.entered and inst.exited
     assert inst.kubeconfig == "/kc/config"
+
+
+def test_start_resolves_from_ipv6_forwarding_line_first() -> None:
+    """kubectl may print the [::1] line before (or instead of) the 127.0.0.1
+    line — the runtime must resolve from either family, not hang waiting for
+    IPv4. Live-found regression (#108)."""
+    proc = _FakeProc(["Forwarding from [::1]:8080 -> 8080\n"])
+    popen, _ = _popen_for(proc)
+    rt = KubernetesRuntime(_target(port=8080), popen_fn=popen)
+    res = rt.start()
+    assert res.started is True
+    assert res.local_port == 8080
+    assert rt.target_url == "http://localhost:8080"

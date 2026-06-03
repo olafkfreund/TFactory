@@ -38,9 +38,15 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 
-# kubectl prints e.g. "Forwarding from 127.0.0.1:8080 -> 80" once the tunnel is
-# live. We bind to 127.0.0.1 (loopback) specifically — the [::1] line is ignored.
-_FORWARD_RE = re.compile(r"Forwarding from 127\.0\.0\.1:(\d+)")
+# kubectl prints a forwarding line per bound loopback address once the tunnel is
+# live, e.g. "Forwarding from 127.0.0.1:8080 -> 80" and/or
+# "Forwarding from [::1]:8080 -> 80". The order is not guaranteed, and in some
+# environments only the IPv6 line appears (e.g. when a stale forward still holds
+# the IPv4 loopback port). We accept the first line of *either* family and grab
+# its local port — ``target_url`` uses ``localhost``, which resolves to whichever
+# was bound. Matching IPv4 only here used to hang on the next blocking readline
+# when the [::1] line came first (#108).
+_FORWARD_RE = re.compile(r"Forwarding from \S+?:(\d+)\s*->")
 
 
 class KubernetesRuntimeError(Exception):
