@@ -548,6 +548,23 @@ async def run_gen_functional(
             )
             return False
 
+        # #107 (task 5): when a browser subtask authenticates against a
+        # ref-auth target, scaffold the storageState login-once setup —
+        # auth.setup.ts (logs in once) + a requires_auth Playwright config
+        # whose tests depend on the setup project + reuse its session.
+        # Best-effort: scaffolding must never fail the generation.
+        if any(
+            getattr(st, "requires_auth", False)
+            and "browser" in str(getattr(st, "lane", "")).lower()
+            for st in pending
+        ):
+            try:
+                from agents.evidence import scaffold_auth_setup
+
+                scaffold_auth_setup(spec_dir)
+            except Exception:  # noqa: BLE001 - never break generation on scaffolding
+                pass
+
         _write_status_patch(
             spec_dir,
             status="generated",
