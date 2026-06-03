@@ -1,13 +1,25 @@
 # Product Roadmap
 
-> Last Updated: 2026-05-30
+> Last Updated: 2026-06-03
 > Version: 1.0.0
 > Status: Active
 
 Derived from the 2026-05-30 PM review (internal audit + 15-competitor market
 study) captured in epic [#33](https://github.com/olafkfreund/TFactory/issues/33).
 
-## Phase 0: Already Shipped (v0.1.0-mvp → v0.2.0)
+## Phase 0: Already Shipped (v0.1.0-mvp → v0.5.0)
+
+**v0.3.0 → v0.5.0 (2026-06-03):**
+
+- [x] Cloud infrastructure testing — AWS · GCP · Azure read-only posture (epic #133)
+- [x] Credential Broker — pluggable secrets backends, ephemeral creds, honest egress, WIF (#62/#73/#74)
+- [x] Test-target login (storageState, #107), Kubernetes port-forward targets (#108, live-verified)
+- [x] Visual Inspection Run — Playwright record + screenshots + correction plan (epic #170)
+- [x] SaaS connector targets — ServiceNow / Salesforce / SAP / MuleSoft (#111)
+- [x] **Bidirectional AIFactory ↔ TFactory loop** — hand-back + bounded re-test (epic #182, v0.5.0)
+- [x] Flagship-grade portal redesign + Cloud Reports / Visual Reports pages
+
+**v0.1.0-mvp → v0.2.0:**
 
 - [x] 4-agent pipeline end-to-end — Planner → Gen → Executor → Evaluator → Triager
 - [x] 5-signal verdict (coverage · stability · mutation · flake-lint · semantic)

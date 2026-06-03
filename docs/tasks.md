@@ -7,13 +7,19 @@ nav_order: 6
 
 # Spec Tasks
 
-> **Historical record — v0.1.0-mvp planning checklist (2026-05-28).**
-> All 12 tasks below shipped in [v0.1.0-mvp](https://github.com/olafkfreund/TFactory/releases/tag/v0.1.0-mvp).
-> The v0.2 epic that built on top also shipped in
-> [v0.2.0](https://github.com/olafkfreund/TFactory/releases/tag/v0.2.0)
-> (16 / 16 tasks closed). See [Progress]({{ '/progress/' | relative_url }})
-> for the live status dashboard and the [v0.2.0 demo]({{ '/showcase/' | relative_url }})
-> for the released pipeline running end-to-end.
+> **Historical record — v0.1.0-mvp planning checklist (2026-05-28).** This page
+> is the original walking-skeleton task plan, kept for provenance. Everything
+> below shipped in [v0.1.0-mvp](https://github.com/olafkfreund/TFactory/releases/tag/v0.1.0-mvp);
+> the live status board is [Progress]({{ '/progress/' | relative_url }}).
+>
+> **Shipped since (releases all on GitHub):**
+> - **v0.2.0** — Enterprise Test Framework Spine (16/16 tasks, #16–#32)
+> - **v0.3.0** — Cloud testing AWS/GCP/Azure (epic #133) + Credential Broker (#62) + portal redesign
+> - **v0.4.0** — Visual Inspection Run (epic #170) + SaaS connector targets (#111)
+> - **v0.5.0** — Bidirectional AIFactory ↔ TFactory loop (epic #182) + k8s live-fix (#108)
+>
+> Per-phase detail is on [Progress]({{ '/progress/' | relative_url }}); real-life
+> walk-throughs for every feature are on [Examples]({{ '/examples/' | relative_url }}).
 
 These are the tasks that were planned in the spec at `@.agent-os/specs/2026-05-28-tfactory-mvp-walking-skeleton/spec.md`.
 

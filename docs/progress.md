@@ -5,33 +5,87 @@ permalink: /progress/
 nav_order: 8
 ---
 
-# v0.2 progress
+# Progress
 
-> Live snapshot of the v0.2 task delivery progress. Numbers update
-> by hand as merges land — last refresh on 2026-05-29.
->
-> v0.1.0-mvp shipped 12 of 12 tasks on 2026-05-28 (the walking skeleton
-> for Python+pytest); see the
-> [v0.1.0-mvp release](https://github.com/olafkfreund/TFactory/releases/tag/v0.1.0-mvp)
-> and the v0.1 entry in the
+> Live delivery snapshot, updated by hand as merges land — last refresh
+> **2026-06-03 (v0.5.0)**. Older milestones kept below as the historical
+> record. Full detail per release in the
 > [changelog](https://github.com/olafkfreund/TFactory/blob/main/CHANGELOG.md).
 
-## At-a-glance
+## At-a-glance — current
 
 ```
-v0.2.0 — Enterprise Test Framework Spine (released 2026-05-29)
-  ████████████████████████████  16 of 16 tasks shipped + Triager follow-up
+v0.5.0 — Bidirectional AIFactory ↔ TFactory integration   (Latest · 2026-06-03)
+  ████████████████████████████  epic #182 — 7 phases shipped + #108 live-fix
 
-  Done:        #16  #17  #18  #19  #20  #21  #22  #23
-               #24  #25  #26  #27  #28  #29  #30  #31  #32
-               + Triager evidence-links (5d8f588)
-  Release:     https://github.com/olafkfreund/TFactory/releases/tag/v0.2.0
+v0.4.0 — Visual Inspection Run + SaaS connector targets    (2026-06-03)
+  ████████████████████████████  epic #170 (P1/P2/P4/P5) · #111 · #107
 
-Driver doc:    docs/plans/2026-05-28-enterprise-test-frameworks-design.md
-Task plan:     docs/plans/2026-05-28-enterprise-test-frameworks-tasks.md
+v0.3.0 — Cloud testing (AWS/GCP/Azure) + platform + portal (2026-06-03)
+  ████████████████████████████  epic #133 · #74 #73 #71 #85 #108 #109 #107 #138
+
+v0.2.0 — Enterprise Test Framework Spine                   (2026-05-29)
+  ████████████████████████████  16 of 16 tasks (#16–#32) + evidence-links
+
+Releases:  https://github.com/olafkfreund/TFactory/releases
+Backend tests: 531 (v0.1) → 1225 (v0.2) → 2803 (v0.5)
 ```
 
-## Shipped — 16 of 16 tasks
+## v0.5.0 — Bidirectional AIFactory ↔ TFactory integration (2026-06-03)
+
+The reverse of the handover: when TFactory's tests find problems, it hands a
+**correction** back to AIFactory's QA Fixer, then re-tests — bounded so it can't
+run away. Epic [#182](https://github.com/olafkfreund/TFactory/issues/182),
+seven phases shipped.
+
+| Phase | What | Issue |
+|---|---|---|
+| P1 | `source.json` records the AIFactory hand-back target | [#183](https://github.com/olafkfreund/TFactory/issues/183) |
+| P2 | `agents/handback/` correction builder + renderer (pure) | [#184](https://github.com/olafkfreund/TFactory/issues/184) |
+| P3 | AIFactory receiver: `apply-correction` REST + MCP + QA Fixer | [AIFactory#317](https://github.com/olafkfreund/AIFactory/issues/317) |
+| P4 | dry-run-first sender + Triager completion hook | [#185](https://github.com/olafkfreund/TFactory/issues/185) |
+| P5 | `/handback-to-aifactory` skill + companion + CLI | [#186](https://github.com/olafkfreund/TFactory/issues/186) |
+| P6 | bounded closed loop + `/tfactory-fixloop` | [#187](https://github.com/olafkfreund/TFactory/issues/187) |
+| Docs | `guides/aifactory-handback.md` + round-trip updates | [#188](https://github.com/olafkfreund/TFactory/issues/188) |
+
+Also this cycle: **[#108](https://github.com/olafkfreund/TFactory/issues/108)** —
+the Kubernetes port-forward dispatch was **live-verified** against a real kind
+cluster, fixing two defects the mocked tests masked (a missing `port_forward`
+attribute; an IPv4-only readiness parse that hung on kubectl's `[::1]` line).
+Design: [`docs/plans/2026-06-03-aifactory-tfactory-handback-design.md`](https://github.com/olafkfreund/TFactory/blob/main/docs/plans/2026-06-03-aifactory-tfactory-handback-design.md).
+
+## v0.4.0 — Visual Inspection Run + SaaS connectors (2026-06-03)
+
+- **Visual Inspection Run (epic [#170](https://github.com/olafkfreund/TFactory/issues/170)).**
+  Record a Playwright browser run — trace + video + step-labelled *verification
+  and error* screenshots — and package a human report, an LLM correction plan,
+  and a GitHub-issue export into `automated-test/<datetime>/`, surfaced in the
+  portal's **Visual Reports**. P1/P2/P4/P5 shipped; P3 (ServiceNow SSO) needs a
+  live tenant.
+- **SaaS connector target ([#111](https://github.com/olafkfreund/TFactory/issues/111)).**
+  A first-class `type: connector` target (ServiceNow / Salesforce / SAP /
+  MuleSoft) over the http + credential-vault auth.
+- **storageState login-once ([#107](https://github.com/olafkfreund/TFactory/issues/107)).**
+  Gen-Functional scaffolds `auth.setup.ts` so a browser test logs in once and
+  reuses the session.
+
+## v0.3.0 — Cloud testing + platform foundations + portal redesign (2026-06-03)
+
+- **Cloud infrastructure testing — AWS · GCP · Azure (epic
+  [#133](https://github.com/olafkfreund/TFactory/issues/133), complete).**
+  Read-only posture: access gate → discovery → Mermaid topology → Prowler/CIS
+  (OCSF) → accept/flag/reject → remediation plan. All three live-verified.
+  Launch from **+Task → Cloud Infrastructure**; reports land in **Cloud Reports**.
+- **Credential Broker (epic [#62](https://github.com/olafkfreund/TFactory/issues/62)).**
+  Pluggable secrets backends, ephemeral 0600 file creds, honest egress gate,
+  sandbox injection (#73), OIDC/workload-identity federation (#74).
+- **k8s dispatch (#108)**, **test-target login (#107)**, **visual-regression
+  baselines (#109)**, **Triager completion callback (#85)**, and a flagship-grade
+  **portal redesign**.
+
+## v0.2.0 — task-by-task (historical record)
+
+> The 16-task enterprise spine that v0.3+ builds on. Kept for provenance.
 
 | # | Task | Merge | Tests added |
 |---|---|---|---|
@@ -76,10 +130,13 @@ network.har.
 | v0.2 in progress (post-batch-1, 2026-05-29) | **1039** (7 skipped) | **+508** | After 14 of 16 v0.2 tasks |
 | v0.2 release candidate (post-batch-2, 2026-05-29) | **1170** (7 skipped) | **+131** | After all 16 v0.2 tasks — exceeded the +~110 forecast |
 | v0.2.0 released (`5d8f588`, 2026-05-29) | **1177** (7 skipped) | **+7** | After Triager evidence-links follow-up |
-| **v0.2 post-release (HEAD `bcc5c7d`, 2026-05-29)** | **1225** (7 skipped) | **+48** | Starlette `.content`→`.body` shim sweep + showcase + iframe demo |
+| v0.2 post-release (HEAD `bcc5c7d`, 2026-05-29) | **1225** (7 skipped) | **+48** | Starlette `.content`→`.body` shim sweep + showcase + iframe demo |
+| v0.3.0 (Cloud + Credential Broker + portal, 2026-06-03) | ~2200 | **+~975** | Cloud assessment, secrets backends, WIF, sandbox injection, portal redesign |
+| v0.4.0 (Visual Inspection + connectors, 2026-06-03) | ~2400 | **+~200** | `agents/visual_inspection/`, connector registry, storageState scaffold |
+| **v0.5.0 (Hand-back loop + #108, 2026-06-03)** | **2803** | **+~400** | `agents/handback/` (request/render/send/trigger/loop), k8s live-fix |
 
-The 7 skips are the docker-runner smoke tests (#23) — they require a
-live daemon and gracefully skip when none is present.
+The docker-runner smoke tests (#23) require a live daemon and gracefully skip
+when none is present.
 
 ## Pipeline status
 
@@ -109,7 +166,7 @@ A live end-to-end run published at [`/showcase/`]({{ '/showcase/' | relative_url
 ## Health signals
 
 - ✅ `scripts/verify-fork.sh --no-import` — passes against the v0.2 module set
-- ✅ pytest (backend) — **1225 passed, 7 skipped** at HEAD `bcc5c7d`
+- ✅ pytest (backend) — **2803 tests** at v0.5.0 (1225 at v0.2.0)
 - ✅ All 5 portal endpoints respond shim-compatibly without fastapi installed
 - ✅ Pages site builds + deploys on every push to `main` (Cayman + custom layout)
 - ✅ Showcase page renders the live SUT in an iframe + inline triage report with working evidence links

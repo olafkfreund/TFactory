@@ -5,7 +5,7 @@ nav_order: 1
 ---
 
 <section class="hero">
-  <span class="hero__eyebrow"><a href="https://github.com/olafkfreund/TFactory/releases/tag/v0.2.0">v0.2.0</a> · 5 lanes + evidence capture · <a href="{{ '/credentials/' | relative_url }}">Credential Broker</a> — vault-backed cloud auth · runs on any LLM</span>
+  <span class="hero__eyebrow"><a href="https://github.com/olafkfreund/TFactory/releases/tag/v0.5.0">v0.5.0</a> · 5 lanes + evidence · closed <a href="{{ '/examples/' | relative_url }}">test → fix → re-test</a> loop · visual inspection · cloud posture · runs on any LLM</span>
   <h1 class="hero__title">Autonomous tests, AI-graded.</h1>
   <p class="hero__subtitle">
     Hand TFactory a finished feature on a branch — from AIFactory, Claude Code,
@@ -19,8 +19,8 @@ nav_order: 1
       See the demo →
     </a>
     &nbsp;
-    <a class="hero__cta" href="https://github.com/olafkfreund/TFactory/releases/tag/v0.2.0">
-      v0.2.0 release ↗
+    <a class="hero__cta" href="https://github.com/olafkfreund/TFactory/releases/tag/v0.5.0">
+      v0.5.0 release ↗
     </a>
     &nbsp;
     <a class="hero__cta hero__cta--ghost" href="{{ '/design-plan/' | relative_url }}">
@@ -58,7 +58,7 @@ nav_order: 1
   </li>
 </ul>
 
-## New since v0.2.0 — connect to anything
+## New in v0.3 — connect to anything
 
 <div class="reveal" markdown="1">
 
@@ -89,6 +89,37 @@ cloud**, and **run on whatever LLM you already pay for**.
   </li>
 </ul>
 
+## New in v0.4–v0.5 — close the loop, see the UI
+
+<div class="reveal" markdown="1">
+
+Testing found the problem — now do something about it. The newest work turns a
+verdict into action: hand fixes back to AIFactory and re-test, and capture what
+a human would actually *look* at.
+
+</div>
+
+<ul class="feature-row">
+  <li class="feature-row__card reveal">
+    <span class="feature-row__icon" aria-hidden="true">🔁</span>
+    <h3>Closed test → fix → re-test loop</h3>
+    <p><strong>Problem:</strong> finding a bug is half a result — someone still has to fix it and re-run the suite.</p>
+    <p><strong>Solution:</strong> when tests fail, TFactory hands a correction back to <strong>AIFactory's QA Fixer</strong> (<code>/handback-to-aifactory</code>), which patches the same spec; <code>/tfactory-fixloop</code> re-tests on a bound — stopping at green or <code>stuck</code> so it can't churn. Dry-run-first, opt-in send. <a href="{{ '/examples/' | relative_url }}#2-close-the-loop--fix-what-the-tests-found-v050">See how →</a></p>
+  </li>
+  <li class="feature-row__card reveal" style="--reveal-delay: 80ms">
+    <span class="feature-row__icon" aria-hidden="true">📸</span>
+    <h3>Visual Inspection Run</h3>
+    <p><strong>Problem:</strong> assertions don't tell you whether the page <em>looks</em> right.</p>
+    <p><strong>Solution:</strong> record a Playwright run with trace + video + step-labelled <strong>verification and error screenshots</strong>, packaged with a human report + correction plan into <code>automated-test/&lt;datetime&gt;/</code> and the portal's <strong>Visual Reports</strong>. <a href="{{ '/examples/' | relative_url }}#3-test-a-ui-flow-and-capture-what-a-human-would-check">See how →</a></p>
+  </li>
+  <li class="feature-row__card reveal" style="--reveal-delay: 160ms">
+    <span class="feature-row__icon" aria-hidden="true">🎯</span>
+    <h3>Reach anything under test</h3>
+    <p><strong>Problem:</strong> the SUT lives behind auth, inside Kubernetes, or is a SaaS platform.</p>
+    <p><strong>Solution:</strong> log-in-once browser sessions (storageState), <code>type: kubernetes</code> port-forward targets, and first-class <code>type: connector</code> SaaS targets (ServiceNow / Salesforce / SAP / MuleSoft). <a href="{{ '/examples/' | relative_url }}">See examples →</a></p>
+  </li>
+</ul>
+
 ## Status by lane
 
 <div class="reveal" markdown="1">
@@ -98,7 +129,7 @@ DAST / Fuzz / Mutation) with a **modality-based spine** per Decision 2.
 Security scanning is delegated to dedicated security pipelines and is
 out of scope here — TFactory focuses on functional + feature testing.
 
-| Lane | v0.2.0 status | Runtime | Coverage | Evidence captured |
+| Lane | Status | Runtime | Coverage | Evidence captured |
 |---|---|---|---|---|
 | **Unit** | ✅ Active | `tfactory-runner-pytest` + `tfactory-runner-jest` | line (cobertura / lcov) | — |
 | **Browser** | ✅ Active | `tfactory-runner-playwright` + AppRuntime (docker-compose + health-poll) | `null` (per Decision 11 — line coverage doesn't apply when the test drives the browser) | screenshots · video · trace.zip |
