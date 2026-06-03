@@ -709,6 +709,55 @@ def _browser_target_url(spec_dir: Path, subtask: dict) -> str | None:
     return None
 
 
+def _resolve_target(spec_dir: Path, subtask: dict) -> dict | None:
+    """Resolve the subtask's *target object* from the snapshotted .tfactory.yml.
+
+    Like :func:`_browser_target_url` but returns the whole target dict (so the
+    caller can branch on ``type``), preferring the subtask's ``target_name``,
+    then the config ``default_target``, then the first target.
+    """
+    ctx = spec_dir / "context" / "tfactory_yml.json"
+    if not ctx.exists():
+        return None
+    try:
+        cfg = json.loads(ctx.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    targets = cfg.get("targets") or []
+    want = subtask.get("target_name") or cfg.get("default_target")
+    for t in targets:
+        if t.get("name") == want:
+            return t
+    return targets[0] if targets else None
+
+
+def _kube_runtime_for(target: dict | None, *, runtime_cls=None):
+    """A ``KubernetesRuntime`` for a kubernetes port-forward target, else None (#108).
+
+    When the resolved target is ``type: kubernetes`` with ``port_forward: true``,
+    the api/browser lane has no static ``base_url`` — the URL only exists while a
+    ``kubectl port-forward`` is live. The caller uses the returned runtime as a
+    context manager so the forward is up during the test run and torn down after
+    (on success *and* failure). Auth rides the materialised read-only kubeconfig
+    (``KUBECONFIG``). Returns None for non-k8s targets (the static-URL path).
+    """
+    if not target or target.get("type") != "kubernetes" or not target.get("port_forward"):
+        return None
+    from types import SimpleNamespace
+
+    from tools.runners.kubernetes_runtime import KubernetesRuntime
+
+    cls = runtime_cls or KubernetesRuntime
+    t = SimpleNamespace(
+        name=target.get("name"),
+        context=target.get("context"),
+        namespace=target.get("namespace"),
+        service=target.get("service"),
+        port=target.get("port"),
+    )
+    return cls(t, kubeconfig=os.environ.get("KUBECONFIG"))
+
+
 def _stage_browser_test(spec_dir: Path, project_dir: Path, subtask: dict) -> None:
     """Copy the generated test from the workspace into the project checkout so
     the playwright runner (which mounts project_dir at /repo) can see it."""
@@ -1212,24 +1261,48 @@ async def run_evaluator(
                 # Stage the generated spec into the checkout so the Playwright
                 # runner (mounts project_dir at /repo) can see it.
                 _stage_browser_test(spec_dir, project_dir, st)
-                url = _browser_target_url(spec_dir, st)
-                browser_runner = _resolve_browser_runner_fn(url)
-                bundles.append(
-                    _build_browser_signal_bundle(
-                        spec_dir, project_dir, st, browser_runner
+                # A kubernetes target has no static base_url — port-forward it
+                # for the run lifetime (#108); else use the static target URL.
+                rt = _kube_runtime_for(_resolve_target(spec_dir, st))
+                if rt is not None:
+                    with rt as runtime:
+                        browser_runner = _resolve_browser_runner_fn(runtime.target_url)
+                        bundles.append(
+                            _build_browser_signal_bundle(
+                                spec_dir, project_dir, st, browser_runner
+                            )
+                        )
+                else:
+                    url = _browser_target_url(spec_dir, st)
+                    browser_runner = _resolve_browser_runner_fn(url)
+                    bundles.append(
+                        _build_browser_signal_bundle(
+                            spec_dir, project_dir, st, browser_runner
+                        )
                     )
-                )
         if api_completed:
             for st in api_completed:
-                url = _browser_target_url(spec_dir, st)
                 # network="host" so the in-container httpx test can reach the
                 # host-served app at the target URL (e.g. http://localhost:8200).
-                api_runner = _resolve_runner_fn(
-                    spec_dir, project_dir, network="host", target_url=url
-                )
-                bundles.append(
-                    _build_api_signal_bundle(spec_dir, project_dir, st, api_runner)
-                )
+                # A kubernetes target is port-forwarded for the run lifetime (#108).
+                rt = _kube_runtime_for(_resolve_target(spec_dir, st))
+                if rt is not None:
+                    with rt as runtime:
+                        api_runner = _resolve_runner_fn(
+                            spec_dir, project_dir, network="host",
+                            target_url=runtime.target_url,
+                        )
+                        bundles.append(
+                            _build_api_signal_bundle(spec_dir, project_dir, st, api_runner)
+                        )
+                else:
+                    url = _browser_target_url(spec_dir, st)
+                    api_runner = _resolve_runner_fn(
+                        spec_dir, project_dir, network="host", target_url=url
+                    )
+                    bundles.append(
+                        _build_api_signal_bundle(spec_dir, project_dir, st, api_runner)
+                    )
         if jest_completed:
             jest_runner = _resolve_jest_runner_fn()
             bundles += [
