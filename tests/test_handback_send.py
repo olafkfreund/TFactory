@@ -151,3 +151,34 @@ def test_hook_noop_when_no_failures(tmp_path, monkeypatch) -> None:
 
 def test_hook_noop_when_artifacts_missing(tmp_path) -> None:
     assert maybe_handback(tmp_path) is None  # no verdicts/source → None, no raise
+
+
+# ── CLI: python -m agents.handback <spec_dir> [--send] ───────────────────
+
+
+from agents.handback.__main__ import main as handback_main  # noqa: E402
+
+
+def test_cli_preview_writes_artifact_and_no_send(tmp_path, capsys) -> None:
+    _seed_workspace(tmp_path)
+    rc = handback_main([str(tmp_path)])  # no --send → dry-run
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["dry_run"] is True and out["sent"] is False
+    assert (tmp_path / "findings" / "handback_request.md").exists()
+
+
+def test_cli_nothing_to_hand_back(tmp_path, capsys) -> None:
+    (tmp_path / "findings").mkdir(parents=True)
+    (tmp_path / "context").mkdir(parents=True)
+    (tmp_path / "findings" / "verdicts.json").write_text(
+        json.dumps({"verdicts": [{"test_id": "a", "verdict": "accept"}]})
+    )
+    (tmp_path / "context" / "source.json").write_text(json.dumps(SOURCE))
+    rc = handback_main([str(tmp_path)])
+    assert rc == 0
+    assert "Nothing to hand back" in capsys.readouterr().out
+
+
+def test_cli_missing_artifacts_errors(tmp_path) -> None:
+    assert handback_main([str(tmp_path)]) == 2
