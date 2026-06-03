@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo, type ClipboardEvent, type DragEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { v4 as uuid } from 'uuid';
-import { Loader2, ChevronDown, ChevronUp, Image as ImageIcon, X, RotateCcw, FolderTree, GitBranch } from 'lucide-react';
+import { Loader2, ChevronDown, ChevronUp, Image as ImageIcon, X, RotateCcw, FolderTree, GitBranch, Cloud } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -57,12 +57,15 @@ interface TaskCreationWizardProps {
   projectId: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Switch to the Cloud Infrastructure check flow (closes this wizard). */
+  onCloudInfra?: () => void;
 }
 
 export function TaskCreationWizard({
   projectId,
   open,
-  onOpenChange
+  onOpenChange,
+  onCloudInfra
 }: TaskCreationWizardProps) {
   const { t } = useTranslation('tasks');
 
@@ -799,6 +802,28 @@ export function TaskCreationWizard({
         </DialogHeader>
 
         <div className="space-y-5 py-4">
+          {/* Task template chooser — Code change (this wizard) vs Cloud Infrastructure */}
+          {onCloudInfra && (
+            <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-3 py-2">
+              <div className="flex items-center gap-2 text-sm">
+                <Cloud className="h-4 w-4 text-muted-foreground" />
+                <span className="text-muted-foreground">
+                  Assessing a cloud account instead of changing code?
+                </span>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  onOpenChange(false);
+                  onCloudInfra();
+                }}
+              >
+                Cloud Infrastructure
+              </Button>
+            </div>
+          )}
           {/* Description (Primary - Required) */}
           <div className="space-y-2">
             <Label htmlFor="description" className="text-sm font-medium text-foreground">

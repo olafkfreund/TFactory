@@ -15,6 +15,7 @@ Pure filesystem + subprocess; no network.
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import re
@@ -26,11 +27,21 @@ from pathlib import Path
 __all__ = [
     "download_path",
     "list_assessments",
+    "new_assessment_id",
     "read_assessment",
     "store_root",
+    "write_assessment",
 ]
 
 _ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+# Artifacts an assessment dir holds (source name under findings/ → stored name).
+# diagrams/cloud_topology.mmd is handled separately (it lives in a subdir).
+_ARTIFACTS = (
+    "cloud_assessment.md",
+    "cloud_assessment.json",
+    "cloud_remediation_plan.md",
+    "cloud_issues.json",
+)
 # download kind → filename within the assessment dir (".pdf" is rendered).
 _DOWNLOADS = {
     "report.md": "cloud_assessment.md",
@@ -52,6 +63,38 @@ def _safe_dir(assessment_id: str) -> Path | None:
         return None
     d = store_root() / assessment_id
     return d if d.is_dir() else None
+
+
+def _slug(value: str) -> str:
+    """Collapse a value to the safe id alphabet (``[A-Za-z0-9._-]``)."""
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "").strip()).strip("-") or "x"
+
+
+def new_assessment_id(provider: str, account: str | None, *, now=None) -> str:
+    """A sortable, filesystem-safe id: ``<provider>-<account>-<UTC timestamp>``."""
+    ts = (now or datetime.datetime.now(datetime.timezone.utc)).strftime("%Y%m%d%H%M%S")
+    return f"{_slug(provider)}-{_slug(account or 'unknown')}-{ts}"
+
+
+def write_assessment(spec_dir: Path, assessment_id: str) -> Path:
+    """Copy a finished run's artifacts from ``spec_dir/findings/`` into the store.
+
+    Mirrors the files the portal reads (report/remediation/issues JSON+MD +
+    the topology diagram) into ``<root>/<assessment_id>/`` so the run shows up
+    in **Cloud Reports**. Returns the created store directory.
+    """
+    src = Path(spec_dir) / "findings"
+    dst = store_root() / _slug(assessment_id)
+    dst.mkdir(parents=True, exist_ok=True)
+    for name in _ARTIFACTS:
+        f = src / name
+        if f.is_file():
+            shutil.copy2(f, dst / name)
+    diagram = src / "diagrams" / "cloud_topology.mmd"
+    if diagram.is_file():
+        (dst / "diagrams").mkdir(exist_ok=True)
+        shutil.copy2(diagram, dst / "diagrams" / "cloud_topology.mmd")
+    return dst
 
 
 def list_assessments() -> list[dict]:

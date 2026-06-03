@@ -16,6 +16,7 @@ import {
   FileDown,
   FileText,
   Loader2,
+  Plus,
   ShieldAlert,
   ShieldCheck,
   ShieldQuestion,
@@ -23,6 +24,8 @@ import {
 import { get } from '../../../lib/api-client';
 import { SettingsSection } from '../SettingsSection';
 import { MermaidDiagram } from './MermaidDiagram';
+import { Button } from '../../ui/button';
+import { CloudCheckDialog } from '../../CloudCheckDialog';
 
 interface Summary {
   id: string;
@@ -119,19 +122,16 @@ export function CloudAssessmentPage() {
   const [selected, setSelected] = useState<Detail | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [showNewCheck, setShowNewCheck] = useState(false);
+
+  const loadList = async () => {
+    const res = await get<{ assessments: Summary[] }>('/cloud/assessments');
+    setList(res.success && res.data ? res.data.assessments : []);
+    setLoading(false);
+  };
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const res = await get<{ assessments: Summary[] }>('/cloud/assessments');
-      if (!cancelled) {
-        setList(res.success && res.data ? res.data.assessments : []);
-        setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    void loadList();
   }, []);
 
   const openDetail = async (id: string) => {
@@ -145,8 +145,15 @@ export function CloudAssessmentPage() {
   return (
     <SettingsSection
       title="Cloud Reports"
-      description="Reports from cloud infrastructure checks — each AWS/Azure/GCP run's verdict, findings, topology, and downloadable remediation plan. Start a check from +Task → Cloud Infrastructure."
+      description="Reports from cloud infrastructure checks — each AWS/Azure/GCP run's verdict, findings, topology, and downloadable remediation plan. Start a check with the New check button (also available from +Task → Cloud Infrastructure)."
     >
+      {!selected && (
+        <div className="mb-3 flex justify-end">
+          <Button size="sm" onClick={() => setShowNewCheck(true)}>
+            <Plus className="mr-1.5 h-4 w-4" /> New check
+          </Button>
+        </div>
+      )}
       {loading ? (
         <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" /> Loading assessments…
@@ -154,17 +161,37 @@ export function CloudAssessmentPage() {
       ) : selected ? (
         <DetailView detail={selected} onBack={() => setSelected(null)} loading={loadingDetail} />
       ) : (
-        <ListView list={list || []} onOpen={openDetail} />
+        <ListView list={list || []} onOpen={openDetail} onNewCheck={() => setShowNewCheck(true)} />
       )}
+      <CloudCheckDialog
+        open={showNewCheck}
+        onOpenChange={setShowNewCheck}
+        onLaunched={() => {
+          // Refresh shortly after — the assessment runs in the background.
+          window.setTimeout(() => void loadList(), 1500);
+        }}
+      />
     </SettingsSection>
   );
 }
 
-function ListView({ list, onOpen }: { list: Summary[]; onOpen: (id: string) => void }) {
+function ListView({
+  list,
+  onOpen,
+  onNewCheck,
+}: {
+  list: Summary[];
+  onOpen: (id: string) => void;
+  onNewCheck: () => void;
+}) {
   if (!list.length) {
     return (
       <div className="rounded-lg border border-border bg-muted/30 p-4 text-sm text-muted-foreground">
-        No cloud reports yet. Start a check from <strong>+Task → Cloud Infrastructure</strong> (AWS/Azure/GCP) — each run shows here as a card.
+        No cloud reports yet. Click{' '}
+        <button onClick={onNewCheck} className="font-medium text-foreground underline">
+          New check
+        </button>{' '}
+        to assess an AWS/Azure/GCP account — each run shows here as a card.
       </div>
     );
   }
