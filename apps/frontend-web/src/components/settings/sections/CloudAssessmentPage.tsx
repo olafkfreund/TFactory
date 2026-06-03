@@ -22,6 +22,7 @@ import {
   ShieldQuestion,
 } from 'lucide-react';
 import { get } from '../../../lib/api-client';
+import { formatRelativeTime } from '../../../lib/utils';
 import { SettingsSection } from '../SettingsSection';
 import { MermaidDiagram } from './MermaidDiagram';
 import { Button } from '../../ui/button';
@@ -113,8 +114,17 @@ async function downloadArtifact(id: string, kind: string, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-function fmtTime(t?: number) {
-  return t ? new Date(t * 1000).toLocaleString() : '';
+const _MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+// Humanised "2d ago" relative label + a short absolute date ("May 31"),
+// matching the home list. `created` is a unix timestamp in seconds.
+function relTime(t?: number): string {
+  return t ? formatRelativeTime(new Date(t * 1000)) : '';
+}
+function shortDate(t?: number): string {
+  if (!t) return '';
+  const d = new Date(t * 1000);
+  return Number.isNaN(d.getTime()) ? '' : `${_MONTHS[d.getMonth()]} ${d.getDate()}`;
 }
 
 export function CloudAssessmentPage() {
@@ -196,30 +206,53 @@ function ListView({
     );
   }
   return (
-    <div className="space-y-2">
-      <p className="text-sm text-muted-foreground">{list.length} assessment(s) · newest first</p>
-      <div className="divide-y divide-border rounded-lg border border-border">
-        {list.map((a) => (
+    <div className="flex flex-col gap-1.5">
+      <p className="px-1 text-xs text-muted-foreground">
+        {list.length} assessment{list.length === 1 ? '' : 's'} · newest first
+      </p>
+      {list.map((a) => {
+        const verdictColor =
+          (a.verdict || '').toLowerCase() === 'reject'
+            ? 'bg-destructive'
+            : (a.verdict || '').toLowerCase() === 'flag'
+              ? 'bg-warning'
+              : 'bg-success';
+        return (
           <button
+            type="button"
             key={a.id}
             onClick={() => onOpen(a.id)}
-            className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left hover:bg-muted/50"
+            className="group relative flex items-center gap-4 overflow-hidden rounded-lg border border-border/60 bg-card/40 px-4 py-3 text-left transition-all duration-150 hover:border-border hover:bg-muted/40 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            <div className="flex items-center gap-3">
-              <Cloud className="h-4 w-4 text-muted-foreground" />
-              <div>
-                <div className="text-sm font-medium text-foreground">
-                  {a.provider?.toUpperCase()} · account {a.account}
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  {fmtTime(a.created)} · 🔴 {a.failed ?? 0} fail · ✅ {a.passed ?? 0} pass
-                </div>
-              </div>
-            </div>
+            <span
+              className={`absolute inset-y-0 left-0 w-[3px] ${verdictColor} opacity-0 transition-opacity duration-150 group-hover:opacity-100`}
+              aria-hidden
+            />
+            <Cloud className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="truncate text-sm font-semibold text-foreground transition-colors group-hover:text-primary">
+                {a.provider?.toUpperCase()}
+                <span className="ml-1.5 font-mono text-xs font-normal text-muted-foreground">
+                  {a.account}
+                </span>
+              </span>
+              <span className="mt-0.5 flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
+                <span className="text-destructive">{a.failed ?? 0} fail</span>
+                <span className="text-success">{a.passed ?? 0} pass</span>
+              </span>
+            </span>
+            <span className="shrink-0 text-right leading-tight">
+              <span className="block text-xs font-medium tabular-nums text-foreground/80">
+                {relTime(a.created) || '—'}
+              </span>
+              <span className="block text-[11px] tabular-nums text-muted-foreground">
+                {shortDate(a.created)}
+              </span>
+            </span>
             <VerdictBadge verdict={a.verdict} />
           </button>
-        ))}
-      </div>
+        );
+      })}
     </div>
   );
 }
