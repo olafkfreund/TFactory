@@ -20,7 +20,8 @@
     "worktrees": "Worktrees",
     "agentTools": "MCP",
     "skills": "Compétences",
-    "cloud": "Rapports cloud"
+    "cloud": "Rapports cloud",
+    "visualReports": "Rapports visuels"
   },
   "actions": {
     "settings": "Paramètres",
