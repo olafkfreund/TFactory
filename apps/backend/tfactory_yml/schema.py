@@ -118,6 +118,33 @@ class NoneAuth(BaseModel):
     type: Literal["none"]
 
 
+class LoginStep(BaseModel):
+    """One action in a multi-step login flow (#107 — SSO / IdP-redirect logins).
+
+    A simple form login needs no steps (the default single-step path). For SSO
+    and multi-step logins (e.g. "Login with SSO" → enter email → Next → enter
+    password → submit, possibly across an IdP redirect), declare an ordered
+    ``steps`` list on the ref-auth block. Credentials are NEVER inlined — use
+    ``fill_username`` / ``fill_secret`` (read from the injected env vars at run
+    time); ``fill`` is for non-secret literals only (e.g. a tenant name).
+
+    Actions:
+      - ``goto``          — navigate to ``url``
+      - ``click``         — click ``selector``
+      - ``fill_username`` — fill ``selector`` with the injected username env var
+      - ``fill_secret``   — fill ``selector`` with the injected secret env var
+      - ``fill``          — fill ``selector`` with the literal ``value`` (non-secret)
+      - ``wait_for_url``  — wait until the URL matches ``url`` (substring/glob)
+    """
+
+    action: Literal[
+        "goto", "click", "fill_username", "fill_secret", "fill", "wait_for_url"
+    ]
+    selector: str | None = None  # click / fill* actions
+    url: str | None = None  # goto / wait_for_url actions
+    value: str | None = None  # fill action — non-secret literal only
+
+
 class RefAuth(BaseModel):
     """Auth that references a named ``test_credentials`` entry (#107).
 
@@ -126,6 +153,10 @@ class RefAuth(BaseModel):
     the authenticated session (Playwright ``storageState``). ``ref`` names a
     key in the top-level ``test_credentials`` map; the selectors are consumed
     by the browser-lane login setup.
+
+    For SSO / multi-step logins, supply an ordered ``steps`` list (see
+    :class:`LoginStep`); when present it drives the login instead of the
+    single-step selectors above.
     """
 
     type: Literal["ref"]
@@ -135,6 +166,7 @@ class RefAuth(BaseModel):
     password_selector: str | None = None
     submit_selector: str | None = None
     success_url_pattern: str | None = None
+    steps: list[LoginStep] | None = None
 
 
 # Union type for the ``auth:`` field (discriminated on ``type``).

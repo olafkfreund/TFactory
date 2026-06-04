@@ -66,6 +66,52 @@ def test_ref_auth_naming_unknown_credential_is_rejected() -> None:
         )
 
 
+# ── multi-step / SSO login (#107) ────────────────────────────────────────────
+
+
+def test_ref_auth_with_steps_parses() -> None:
+    cfg = TFactoryConfig.model_validate(
+        _cfg(
+            targets=[
+                _http_target(
+                    auth={
+                        "type": "ref",
+                        "ref": "login",
+                        "steps": [
+                            {"action": "goto", "url": "https://app/login"},
+                            {"action": "click", "selector": "text=SSO"},
+                            {"action": "fill_username", "selector": "#email"},
+                            {"action": "fill_secret", "selector": "#pass"},
+                            {"action": "wait_for_url", "url": "dashboard"},
+                        ],
+                    }
+                )
+            ]
+        )
+    )
+    steps = cfg.targets[0].auth.steps
+    assert steps is not None and len(steps) == 5
+    assert steps[0].action == "goto" and steps[0].url == "https://app/login"
+    assert steps[2].action == "fill_username" and steps[2].selector == "#email"
+
+
+def test_ref_auth_step_rejects_unknown_action() -> None:
+    with pytest.raises(ValidationError):
+        TFactoryConfig.model_validate(
+            _cfg(
+                targets=[
+                    _http_target(
+                        auth={
+                            "type": "ref",
+                            "ref": "login",
+                            "steps": [{"action": "hack_the_planet"}],
+                        }
+                    )
+                ]
+            )
+        )
+
+
 def test_bad_env_var_name_is_rejected() -> None:
     with pytest.raises(ValidationError):
         CredEntry(ref="env:X", as_secret="1-bad name")
