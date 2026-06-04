@@ -16,9 +16,33 @@ from agents.evidence.visual_baseline import (
     baseline_status,
     has_baseline,
     list_baselines,
+    stage_baselines,
 )
 
 _PNG = b"\x89PNG\r\n\x1a\n fake image bytes"
+
+
+# ── stage_baselines: copy the store into a browser-run scratch dir (#109) ─────
+
+
+def test_stage_baselines_copies_store_into_scratch(tmp_path: Path) -> None:
+    spec = tmp_path / "spec"
+    accept_baseline(spec, "web", "home.png", _PNG)
+    accept_baseline(spec, "web", "checkout.png", _PNG)
+
+    scratch = tmp_path / "scratch"
+    n = stage_baselines(spec, "web", scratch)
+
+    assert n == 2
+    staged = scratch / "findings" / "visual_baselines" / "web"
+    # lands at the path the config's snapshotPathTemplate resolves to
+    assert (staged / "home.png").read_bytes() == _PNG
+    assert (staged / "checkout.png").read_bytes() == _PNG
+
+
+def test_stage_baselines_no_baselines_returns_zero(tmp_path: Path) -> None:
+    assert stage_baselines(tmp_path / "spec", "web", tmp_path / "scratch") == 0
+    assert not (tmp_path / "scratch" / "findings").exists()
 
 
 # ── layout ───────────────────────────────────────────────────────────────────

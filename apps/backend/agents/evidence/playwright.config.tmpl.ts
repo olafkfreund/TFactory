@@ -30,7 +30,7 @@ export default defineConfig({
   retries: 1,            // one retry so trace: "on-first-retry" triggers
   workers: 1,            // single worker prevents port clashes in sandbox
 
-  outputDir: "@@OUTPUT_DIR@@",
+  outputDir: "@@OUTPUT_DIR@@",@@SNAPSHOT_PATH_TEMPLATE@@
 
   use: {
     baseURL: "@@BASE_URL@@",

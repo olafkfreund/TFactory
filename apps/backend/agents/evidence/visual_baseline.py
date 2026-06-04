@@ -32,6 +32,7 @@ __all__ = [
     "baseline_status",
     "has_baseline",
     "list_baselines",
+    "stage_baselines",
 ]
 
 _BASELINES_SUBDIR = "visual_baselines"
@@ -155,3 +156,33 @@ def baseline_status(
         snap: ("tracked" if has_baseline(spec_dir, target, snap) else "new")
         for snap in captured_snapshots
     }
+
+
+def stage_baselines(spec_dir: Path, target: str, dest_dir: Path) -> int:
+    """Copy ``target``'s stored baselines into a browser run's scratch dir (#109).
+
+    The Executor stages the portal-managed store into the Playwright run scratch
+    at ``<dest_dir>/findings/visual_baselines/<target>/`` so the config's
+    ``snapshotPathTemplate`` (see ``render_playwright_config(visual_target=...)``)
+    resolves to them and ``toHaveScreenshot`` compares against the accepted
+    baseline rather than Playwright's per-test scratch default.
+
+    Returns the number of baseline images staged (0 when the target has none).
+    """
+    src = baseline_dir(spec_dir, target)
+    if not src.is_dir():
+        return 0
+    dst = (
+        Path(dest_dir)
+        / "findings"
+        / _BASELINES_SUBDIR
+        / _safe_component(target, kind="target")
+    )
+    dst.mkdir(parents=True, exist_ok=True)
+    import shutil
+
+    staged = 0
+    for img in sorted(src.glob("*.png")):
+        shutil.copy2(img, dst / img.name)
+        staged += 1
+    return staged
