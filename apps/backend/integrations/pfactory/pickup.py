@@ -349,6 +349,11 @@ def _main(argv: list[str] | None = None) -> int:
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--issue", help="GitHub issue JSON file ('-' for stdin)")
     group.add_argument("--requirements", help="requirements.json file ('-' for stdin)")
+    parser.add_argument(
+        "--oracle",
+        action="store_true",
+        help="also print the parsed pfactory:meta test oracle (#196)",
+    )
     args = parser.parse_args(argv)
 
     path = args.issue or args.requirements
@@ -367,7 +372,17 @@ def _main(argv: list[str] | None = None) -> int:
         ]
 
     decision = classify_issue(payload) if args.issue else classify_requirements(payload)
-    print(json.dumps(_decision_dict(decision), indent=2))
+    out = _decision_dict(decision)
+    if args.oracle:
+        from .oracle import build_oracle, oracle_to_dict
+
+        oracle = (
+            build_oracle(issue_body=payload.get("body") or "")
+            if args.issue
+            else build_oracle(requirements=payload)
+        )
+        out["oracle"] = oracle_to_dict(oracle)
+    print(json.dumps(out, indent=2))
     return 0 if decision.picked_up else 1
 
 
