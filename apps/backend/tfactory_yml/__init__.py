@@ -34,17 +34,16 @@ Public API::
 from .exceptions import TFactoryYmlError
 from .parser import _has_env_var_references, load_tfactory_yml, load_tfactory_yml_text
 from .schema import (
+    CONNECTOR_PLATFORMS,
     AuthSpec,
     BasicAuth,
     BearerAuth,
-    CONNECTOR_PLATFORMS,
     ConnectorTarget,
     DockerComposeTarget,
     EvidencePolicy,
     FeatureFlagTarget,
     HealthCheck,
     HttpTarget,
-    connector_platform_info,
     KubernetesTarget,
     MtlsAuth,
     NoneAuth,
@@ -54,6 +53,7 @@ from .schema import (
     TestData,
     TFactoryConfig,
     WaitFor,
+    connector_platform_info,
 )
 from .secrets import MissingSecretError, resolve_auth_env_vars, resolve_env_var
 
