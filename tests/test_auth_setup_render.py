@@ -47,6 +47,36 @@ def test_config_custom_storage_state_path(tmp_path: Path) -> None:
     assert 'storageState: "auth/admin.json"' in rendered
 
 
+# ── visual-regression: snapshotPathTemplate → the baseline store (#109) ───────
+
+
+def test_config_without_visual_target_has_no_snapshot_template(tmp_path: Path) -> None:
+    rendered = render_playwright_config(tmp_path / "ev", "http://localhost:3000")
+    assert "snapshotPathTemplate" not in rendered
+    assert "@@" not in rendered  # no placeholder leakage
+
+
+def test_config_visual_target_points_snapshots_at_the_store(tmp_path: Path) -> None:
+    rendered = render_playwright_config(
+        tmp_path / "ev", "http://localhost:3000", visual_target="web-app"
+    )
+    # toHaveScreenshot baselines resolve to the portal-managed store path
+    assert (
+        'snapshotPathTemplate: "findings/visual_baselines/web-app/{arg}{ext}"'
+        in rendered
+    )
+    assert "@@" not in rendered
+
+
+def test_config_visual_target_rejects_path_traversal(tmp_path: Path) -> None:
+    # a target name that tries to escape the store is rejected (fail-closed)
+    import pytest
+    from agents.evidence.visual_baseline import VisualBaselineError
+
+    with pytest.raises(VisualBaselineError):
+        render_playwright_config(tmp_path / "ev", "http://x", visual_target="../../etc")
+
+
 # ── render_auth_setup ────────────────────────────────────────────────────────
 
 

@@ -38,6 +38,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from agents.evidence.visual_baseline import _safe_component
+
 # ─── Directory layout ────────────────────────────────────────────────────────
 
 
@@ -170,6 +172,7 @@ def render_playwright_config(
     trace_policy: str = "on-first-retry",
     requires_auth: bool = False,
     storage_state_path: str = "state.json",
+    visual_target: str | None = None,
 ) -> str:
     """Render the Playwright config template with the given substitutions.
 
@@ -205,6 +208,20 @@ def render_playwright_config(
         # no-placeholder-leakage invariant holds).
         storage_state_use = setup_project = chromium_deps = ""
 
+    if visual_target:
+        # Point toHaveScreenshot baselines at the portal-managed visual_baseline
+        # store (findings/visual_baselines/<target>/) so an accepted baseline is
+        # what the generated assertion compares against — instead of Playwright's
+        # default per-test scratch location (#109). {arg} = the snapshot name
+        # passed to toHaveScreenshot('<arg>'); {ext} = the image extension.
+        safe_target = _safe_component(visual_target, kind="target")
+        snapshot_path_template = (
+            f'\n  snapshotPathTemplate: '
+            f'"findings/visual_baselines/{safe_target}/{{arg}}{{ext}}",'
+        )
+    else:
+        snapshot_path_template = ""
+
     return (
         tmpl.replace("@@OUTPUT_DIR@@", str(output_dir))
         .replace("@@BASE_URL@@", base_url)
@@ -214,6 +231,7 @@ def render_playwright_config(
         .replace("@@STORAGE_STATE_USE@@", storage_state_use)
         .replace("@@SETUP_PROJECT@@", setup_project)
         .replace("@@CHROMIUM_DEPS@@", chromium_deps)
+        .replace("@@SNAPSHOT_PATH_TEMPLATE@@", snapshot_path_template)
     )
 
 
