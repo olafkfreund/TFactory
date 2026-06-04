@@ -334,6 +334,207 @@ def _advance_to_evaluator(spec_dir: Path, project_dir: Path) -> None:
 # ─── The agent ──────────────────────────────────────────────────────────
 
 
+def _collect_pending_subtasks(plan) -> list:
+    """Return every PENDING subtask across all phases, regardless of lane.
+
+    The per-subtask framework descriptor (Playwright / Jest / pytest / httpx)
+    drives the prompt + runner image, so we no longer gate on Lane.UNIT —
+    doing so silently dropped the browser/api/integration subtasks the Planner
+    emitted (→ generated_empty).
+    """
+    from test_plan import SubtaskStatus
+
+    return [
+        st
+        for phase in plan.phases
+        for st in phase.subtasks
+        if st.status == SubtaskStatus.PENDING
+    ]
+
+
+def _reject_subtask_for_replan(
+    spec_dir: Path,
+    project_dir: Path,
+    plan,
+    plan_file: Path,
+    subtask,
+    *,
+    reason: str,
+    phase: str,
+    tests_generated: int,
+    test_path: Path | None = None,
+) -> bool:
+    """Record a guardrail rejection and schedule a Planner replan.
+
+    Deletes the offending test file (when one exists), writes
+    ``context/replan_request.json``, persists the plan, flips status to
+    ``replan_needed``, and forward-chains to the Planner. Always returns
+    ``False`` so callers can ``return`` it directly to stop the loop.
+    """
+    if test_path is not None:
+        test_path.unlink(missing_ok=True)
+    _write_replan_request(
+        spec_dir,
+        subtask_id=subtask.id,
+        reason=reason,
+        failed_target=getattr(subtask, "target", "") or "",
+    )
+    plan.save(plan_file)
+    _write_status_patch(
+        spec_dir,
+        status="replan_needed",
+        phase=phase,
+        last_rejected_subtask=subtask.id,
+        tests_generated=tests_generated,
+    )
+    _advance_to_planner_replan(spec_dir, project_dir)
+    return False
+
+
+async def _generate_one_subtask(
+    spec_dir: Path,
+    project_dir: Path,
+    plan,
+    plan_file: Path,
+    subtask,
+    tests_generated: int,
+    verbose: bool,
+) -> str:
+    """Generate, guard, and record ONE subtask's test file.
+
+    Returns one of:
+      ``"generated"`` — file written and both guards passed (caller counts it)
+      ``"skipped"``   — recoverable per-subtask failure; move to the next one
+      ``"rejected"``  — a guardrail rejected and a Planner replan was scheduled;
+                        the caller must stop the loop (return False)
+    """
+    from agents.flake_risk_lint import flake_risk_lint
+    from agents.preflight_static import preflight_check
+    from prompts_pkg.prompts import get_tfactory_gen_functional_prompt
+
+    files = _files_to_create(subtask)
+    if not files:
+        subtask.fail("subtask had no files_to_create — Planner emit error")
+        return "skipped"
+    test_path = spec_dir / files[0]
+
+    # Resolve the framework descriptor (v0.2 polyglot path). For v0.1-style
+    # subtasks (framework=None) the descriptor is None, which triggers the
+    # legacy prompt + DeprecationWarning.
+    framework_descriptor = _resolve_framework_descriptor(subtask)
+
+    prompt = get_tfactory_gen_functional_prompt(
+        spec_dir,
+        project_dir,
+        subtask,
+        framework_descriptor=framework_descriptor,
+    )
+    client = await _resolve_client(spec_dir, project_dir)
+    session_status, _response, _err = await _invoke_session(
+        client,
+        prompt,
+        spec_dir,
+        verbose,
+    )
+    if session_status == "error":
+        _gen_log.warning(
+            "gen_functional: session error on subtask %s — skipping",
+            subtask.id,
+        )
+        subtask.fail("SDK session returned status=error")
+        return "skipped"
+
+    # Did the agent actually write the file?
+    if not test_path.exists():
+        _reject_subtask_for_replan(
+            spec_dir,
+            project_dir,
+            plan,
+            plan_file,
+            subtask,
+            reason="agent did not Write the expected test file",
+            phase="gen_functional_no_write",
+            tests_generated=tests_generated,
+        )
+        return "rejected"
+
+    source = test_path.read_text()
+
+    # The pre-flight + flake-lint guards parse Python ASTs, so they only apply
+    # to Python sources. For TS/JS (Playwright / Jest) and other languages they
+    # would false-reject valid tests — skip them. language=None is the v0.1
+    # legacy Python path, so treat it as Python.
+    is_python = (subtask.language or "python") == "python"
+
+    # Pre-flight static check (commit 2) — Python only.
+    pre = preflight_check(source, project_dir=project_dir) if is_python else None
+    if pre is not None and not pre.ok:
+        reasons = (
+            ", ".join(f"{f.describe()} — {f.reason[:80]}" for f in pre.failures)
+            or pre.summary()
+        )
+        _reject_subtask_for_replan(
+            spec_dir,
+            project_dir,
+            plan,
+            plan_file,
+            subtask,
+            test_path=test_path,
+            reason=f"pre-flight rejected: {reasons}",
+            phase="gen_functional_preflight_rejected",
+            tests_generated=tests_generated,
+        )
+        return "rejected"
+
+    # Flake-risk lint (commit 3) — Python only (AST-based).
+    flake = flake_risk_lint(source) if is_python else None
+    if flake is not None and not flake.ok:
+        reasons = (
+            "; ".join(
+                f"L{h.lineno} {h.pattern}: {h.detail[:60]}" for h in flake.rejected
+            )
+            or flake.summary()
+        )
+        _reject_subtask_for_replan(
+            spec_dir,
+            project_dir,
+            plan,
+            plan_file,
+            subtask,
+            test_path=test_path,
+            reason=f"flake-lint rejected: {reasons}",
+            phase="gen_functional_flake_rejected",
+            tests_generated=tests_generated,
+        )
+        return "rejected"
+
+    subtask.complete(output=f"wrote {files[0]}")
+    return "generated"
+
+
+def _maybe_scaffold_auth(spec_dir: Path, pending: list) -> None:
+    """Scaffold the storageState login-once setup if any browser subtask needs auth.
+
+    #107 (task 5): when a browser subtask authenticates against a ref-auth
+    target, scaffold auth.setup.ts (logs in once) + a requires_auth Playwright
+    config whose tests depend on the setup project + reuse its session.
+    Best-effort: scaffolding must never fail the generation run.
+    """
+    needs_auth = any(
+        getattr(st, "requires_auth", False)
+        and "browser" in str(getattr(st, "lane", "")).lower()
+        for st in pending
+    )
+    if not needs_auth:
+        return
+    try:
+        from agents.evidence import scaffold_auth_setup
+
+        scaffold_auth_setup(spec_dir)
+    except Exception:  # noqa: BLE001 - never break generation on scaffolding
+        pass
+
+
 async def run_gen_functional(
     spec_dir: Path,
     project_dir: Path,
@@ -342,7 +543,7 @@ async def run_gen_functional(
 ) -> bool:
     """Generate a test file for each pending subtask, across all lanes.
 
-    Per-subtask loop:
+    Per-subtask loop (see ``_generate_one_subtask``):
       1. Build prompt via get_tfactory_gen_functional_prompt
       2. SDK session — the agent uses Write to emit ONE test file
       3. Pre-flight static check on the emitted source (commit 2 module)
@@ -372,8 +573,7 @@ async def run_gen_functional(
             phase=f"gen_functional_{mode}_started",
         )
 
-        # 1. Load the plan and find pending Lane.UNIT subtasks.
-        from test_plan import ImplementationPlan, SubtaskStatus
+        from test_plan import ImplementationPlan
 
         plan_file = spec_dir / "test_plan.json"
         if not plan_file.exists():
@@ -386,17 +586,7 @@ async def run_gen_functional(
             return False
 
         plan = ImplementationPlan.load(plan_file)
-        pending: list = []
-        for phase in plan.phases:
-            for st in phase.subtasks:
-                # Generate every pending subtask regardless of lane — the
-                # per-subtask framework descriptor (Playwright / Jest / pytest /
-                # httpx) drives the prompt + runner image. Previously gated to
-                # Lane.UNIT, which silently dropped the browser/api/integration
-                # subtasks the Planner emitted (→ generated_empty).
-                if st.status == SubtaskStatus.PENDING:
-                    pending.append(st)
-
+        pending = _collect_pending_subtasks(plan)
         if not pending:
             _write_status_patch(
                 spec_dir,
@@ -407,131 +597,21 @@ async def run_gen_functional(
             )
             return True
 
-        # 2. Lazy imports for the guards + prompt assembly.
-        from agents.flake_risk_lint import flake_risk_lint
-        from agents.preflight_static import preflight_check
-        from prompts_pkg.prompts import get_tfactory_gen_functional_prompt
-
         tests_generated = 0
         for subtask in pending:
-            files = _files_to_create(subtask)
-            if not files:
-                subtask.fail("subtask had no files_to_create — Planner emit error")
-                continue
-            test_path = spec_dir / files[0]
-
-            # 3. Resolve the framework descriptor (v0.2 polyglot path).
-            #    For v0.1-style subtasks (framework=None) the descriptor is
-            #    None, which triggers the legacy prompt + DeprecationWarning.
-            framework_descriptor = _resolve_framework_descriptor(subtask)
-
-            # 4. Run the SDK session for this subtask.
-            prompt = get_tfactory_gen_functional_prompt(
+            outcome = await _generate_one_subtask(
                 spec_dir,
                 project_dir,
+                plan,
+                plan_file,
                 subtask,
-                framework_descriptor=framework_descriptor,
-            )
-            client = await _resolve_client(spec_dir, project_dir)
-            session_status, _response, _err = await _invoke_session(
-                client,
-                prompt,
-                spec_dir,
+                tests_generated,
                 verbose,
             )
-            if session_status == "error":
-                _gen_log.warning(
-                    "gen_functional: session error on subtask %s — skipping",
-                    subtask.id,
-                )
-                subtask.fail("SDK session returned status=error")
-                continue
-
-            # 4. Did the agent actually write the file?
-            if not test_path.exists():
-                _write_replan_request(
-                    spec_dir,
-                    subtask_id=subtask.id,
-                    reason="agent did not Write the expected test file",
-                    failed_target=getattr(subtask, "target", "") or "",
-                )
-                plan.save(plan_file)
-                _write_status_patch(
-                    spec_dir,
-                    status="replan_needed",
-                    phase="gen_functional_no_write",
-                    last_rejected_subtask=subtask.id,
-                    tests_generated=tests_generated,
-                )
-                _advance_to_planner_replan(spec_dir, project_dir)
+            if outcome == "rejected":
                 return False
-
-            source = test_path.read_text()
-
-            # The pre-flight + flake-lint guards parse Python ASTs, so they only
-            # apply to Python sources. For TS/JS (Playwright / Jest) and other
-            # languages they would false-reject valid tests — skip them.
-            # language=None is the v0.1 legacy Python path, so treat it as Python.
-            is_python = (subtask.language or "python") == "python"
-
-            # 5. Pre-flight static check (commit 2) — Python only.
-            pre = (
-                preflight_check(source, project_dir=project_dir) if is_python else None
-            )
-            if pre is not None and not pre.ok:
-                test_path.unlink(missing_ok=True)
-                reasons = (
-                    ", ".join(f"{f.describe()} — {f.reason[:80]}" for f in pre.failures)
-                    or pre.summary()
-                )
-                _write_replan_request(
-                    spec_dir,
-                    subtask_id=subtask.id,
-                    reason=f"pre-flight rejected: {reasons}",
-                    failed_target=getattr(subtask, "target", "") or "",
-                )
-                plan.save(plan_file)
-                _write_status_patch(
-                    spec_dir,
-                    status="replan_needed",
-                    phase="gen_functional_preflight_rejected",
-                    last_rejected_subtask=subtask.id,
-                    tests_generated=tests_generated,
-                )
-                _advance_to_planner_replan(spec_dir, project_dir)
-                return False
-
-            # 6. Flake-risk lint (commit 3) — Python only (AST-based).
-            flake = flake_risk_lint(source) if is_python else None
-            if flake is not None and not flake.ok:
-                test_path.unlink(missing_ok=True)
-                reasons = (
-                    "; ".join(
-                        f"L{h.lineno} {h.pattern}: {h.detail[:60]}"
-                        for h in flake.rejected
-                    )
-                    or flake.summary()
-                )
-                _write_replan_request(
-                    spec_dir,
-                    subtask_id=subtask.id,
-                    reason=f"flake-lint rejected: {reasons}",
-                    failed_target=getattr(subtask, "target", "") or "",
-                )
-                plan.save(plan_file)
-                _write_status_patch(
-                    spec_dir,
-                    status="replan_needed",
-                    phase="gen_functional_flake_rejected",
-                    last_rejected_subtask=subtask.id,
-                    tests_generated=tests_generated,
-                )
-                _advance_to_planner_replan(spec_dir, project_dir)
-                return False
-
-            # 7. Both guards passed → mark subtask done.
-            subtask.complete(output=f"wrote {files[0]}")
-            tests_generated += 1
+            if outcome == "generated":
+                tests_generated += 1
 
         plan.save(plan_file)
 
@@ -548,22 +628,7 @@ async def run_gen_functional(
             )
             return False
 
-        # #107 (task 5): when a browser subtask authenticates against a
-        # ref-auth target, scaffold the storageState login-once setup —
-        # auth.setup.ts (logs in once) + a requires_auth Playwright config
-        # whose tests depend on the setup project + reuse its session.
-        # Best-effort: scaffolding must never fail the generation.
-        if any(
-            getattr(st, "requires_auth", False)
-            and "browser" in str(getattr(st, "lane", "")).lower()
-            for st in pending
-        ):
-            try:
-                from agents.evidence import scaffold_auth_setup
-
-                scaffold_auth_setup(spec_dir)
-            except Exception:  # noqa: BLE001 - never break generation on scaffolding
-                pass
+        _maybe_scaffold_auth(spec_dir, pending)
 
         _write_status_patch(
             spec_dir,
