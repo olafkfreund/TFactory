@@ -423,7 +423,7 @@ What's in the shell:
 Env defaults (overridable per-shell):
 
 - `TFACTORY_WORKSPACE_ROOT=~/.tfactory`
-- `TFACTORY_PORTAL_PORT=3102`
+- `TFACTORY_PORTAL_PORT=3103`
 - `TFACTORY_AUTO_PLAN=0` (off by default for deterministic tests; production sets to `1`)
 
 `nix flake check` validates the shell builds across `x86_64-linux`.
