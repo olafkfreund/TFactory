@@ -40,7 +40,7 @@ export default defineConfig(({ mode }) => {
       }),
       proxy: {
         '/api': {
-          target: env.VITE_API_URL || 'http://localhost:3102',
+          target: env.VITE_API_URL || 'http://localhost:3103',
           changeOrigin: true,
           secure: false,
           // ``ws: true`` is required for Epic #44's WS route
@@ -51,7 +51,7 @@ export default defineConfig(({ mode }) => {
           ws: true,
         },
         '/ws': {
-          target: env.VITE_WS_URL || 'ws://localhost:3102',
+          target: env.VITE_WS_URL || 'ws://localhost:3103',
           ws: true,
           secure: false,
         },

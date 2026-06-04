@@ -454,17 +454,90 @@ def _completion_sentinel_enabled() -> bool:
     return _truthy(os.environ.get("TFACTORY_COMPLETION_SENTINEL"))
 
 
-def _notify_completion(spec_dir: Path, status: dict) -> None:
-    """Best-effort terminal callback. Writes a local sentinel (opt-in) and
-    POSTs an env-gated webhook (opt-in). Every failure is swallowed so the
-    pipeline can never break on notification."""
-    payload = {
+# ─── Normalized completion-event envelope (#198, Factory PARR-spine) ─────
+# v1 of the cross-service completion envelope. AIFactory / PFactory / TFactory
+# all emit this shape so a watcher (CFactory) consumes one schema. The spine
+# correlation key is the GitHub issue number threaded end-to-end. See
+# docs/completion-event-envelope.md for the contract.
+_COMPLETION_SCHEMA_VERSION = "1.0"
+
+
+def _outcome_for_status(status_value: str | None) -> str:
+    """Map a terminal TFactory status to a normalized coarse outcome."""
+    if status_value == "triaged":
+        return "success"
+    if status_value == "triaged_empty":
+        return "empty"
+    return "failure"
+
+
+def _correlation_issue_number(status: dict, source: dict) -> int | None:
+    """The GitHub issue number threading the PARR spine end-to-end.
+
+    Read from status.json or source.json (populated by the PFactory pickup
+    contract, #193). Returns None until a run carries one.
+    """
+    for src in (status, source):
+        raw = src.get("issue_number")
+        if raw is None:
+            raw = src.get("correlation_id")
+        if raw is None:
+            continue
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _completion_result_summary(status: dict) -> dict:
+    """Service-specific result counts for the envelope (absent keys omitted)."""
+    keys = (
+        "committed_count",
+        "flagged_count",
+        "rejected_count",
+        "verdicts_count",
+        "dedup_collision_count",
+    )
+    return {k: status[k] for k in keys if k in status}
+
+
+def _build_completion_envelope(spec_dir: Path, status: dict) -> dict:
+    """Build the v1 normalized completion-event envelope (#198).
+
+    The flat #85 fields (``task_id``, ``project_id``, ``status``, ``phase``,
+    ``updated_at``) are retained for backward-compat; the normalized header
+    (``schema_version``, ``event``, ``service``, ``correlation_id``,
+    ``outcome``) plus repo/branch context + a result summary sit on top.
+    """
+    source = _load_source_meta(spec_dir)
+    status_value = status.get("status")
+    return {
+        "schema_version": _COMPLETION_SCHEMA_VERSION,
+        "event": "completion",
+        "service": "tfactory",
+        "correlation_id": _correlation_issue_number(status, source),
         "task_id": status.get("task_id") or spec_dir.name,
         "project_id": status.get("project_id"),
-        "status": status.get("status"),
+        "spec_id": status.get("spec_id") or source.get("spec_id"),
+        "status": status_value,
+        "outcome": _outcome_for_status(status_value),
         "phase": status.get("phase"),
+        "repo": source.get("repo_slug") or source.get("repo"),
+        "branch": source.get("branch"),
+        "pr_number": source.get("pr_number") or None,
+        "result": _completion_result_summary(status),
+        "emitted_at": _now_iso(),
         "updated_at": status.get("updated_at"),
     }
+
+
+def _notify_completion(spec_dir: Path, status: dict) -> None:
+    """Best-effort terminal callback. Writes a local sentinel (opt-in) and
+    POSTs an env-gated webhook (opt-in), both carrying the v1 normalized
+    completion-event envelope (#198). Every failure is swallowed so the
+    pipeline can never break on notification."""
+    payload = _build_completion_envelope(spec_dir, status)
 
     if _completion_sentinel_enabled():
         try:

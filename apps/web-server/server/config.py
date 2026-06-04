@@ -18,7 +18,7 @@ class Settings(BaseSettings):
 
     # Server configuration
     HOST: str = "0.0.0.0"
-    PORT: int = 3102
+    PORT: int = 3103
     DEBUG: bool = False
 
     # SSL configuration
@@ -58,7 +58,7 @@ class Settings(BaseSettings):
         "http://localhost:3000",
         "https://localhost:3100",
         "https://localhost:3000",
-        "https://localhost:3102",
+        "https://localhost:3103",
     ]
 
     @field_validator("CORS_ORIGINS", mode="before")
