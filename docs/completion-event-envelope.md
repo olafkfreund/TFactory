@@ -29,7 +29,8 @@ or `context/source.json` (`issue_number` / `correlation_id`).
   "schema_version": "1.0",       // bump on any breaking field change
   "event": "completion",         // event type
   "service": "tfactory",         // emitting service: aifactory | pfactory | tfactory
-  "correlation_id": 412,         // GitHub issue # (int) | null — the spine key
+  "correlation_key": "412",      // RFC-0001 spine key: string, never null (synthetic "tf-<spec_id>" fallback)
+  "correlation_id": 412,         // legacy alias: GitHub issue # (int) | null
 
   "task_id": "001-pricing",      // emitting service's task id
   "project_id": "demo",          // project / repo identifier
