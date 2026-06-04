@@ -79,3 +79,47 @@ def test_returns_false_when_login_url_missing(tmp_path) -> None:
 
 def test_returns_false_without_snapshot(tmp_path) -> None:
     assert scaffold_auth_setup(tmp_path) is False
+
+
+# ── multi-step / SSO login path (#107) ───────────────────────────────────────
+
+_STEPS_TARGET = {
+    "name": "app",
+    "type": "http",
+    "base_url": "https://app.example.com",
+    "auth": {
+        "type": "ref",
+        "ref": "app-login",
+        # No login_url — the declared steps own the navigation.
+        "steps": [
+            {"action": "goto", "url": "https://app.example.com"},
+            {"action": "click", "selector": "text=Login with SSO"},
+            {"action": "fill_username", "selector": "#email"},
+            {"action": "fill_secret", "selector": "#password"},
+            {"action": "click", "selector": "button[type='submit']"},
+            {"action": "wait_for_url", "url": "dashboard"},
+        ],
+    },
+}
+
+
+def test_scaffolds_multistep_login_when_steps_present(tmp_path) -> None:
+    _snapshot(tmp_path, [_STEPS_TARGET], _TEST_CREDS)
+    assert scaffold_auth_setup(tmp_path) is True
+
+    setup = (tmp_path / "tests" / "auth.setup.ts").read_text()
+    assert 'await page.locator("text=Login with SSO").click();' in setup
+    assert 'process.env["TEST_USERNAME"]' in setup
+    assert 'process.env["TEST_PASSWORD"]' in setup
+    assert 'await page.waitForURL("**/dashboard**");' in setup
+    assert "APP_PASSWORD" not in setup  # creds never inlined
+    assert "@@" not in setup
+    # config still wires the setup project + storageState reuse
+    config = (tmp_path / "playwright.config.ts").read_text()
+    assert "storageState" in config and "dependencies" in config
+
+
+def test_steps_path_does_not_require_login_url(tmp_path) -> None:
+    # Steps present but no login_url → still scaffolds (single-step rule doesn't apply).
+    _snapshot(tmp_path, [_STEPS_TARGET], _TEST_CREDS)
+    assert scaffold_auth_setup(tmp_path) is True
