@@ -5,6 +5,14 @@ via GitHub issues (and, secondarily, ``requirements.json``). See the contract in
 the PFactory repo ``docs/tag-taxonomy.md`` (v1).
 """
 
+from .oracle import (
+    Citation,
+    PFactoryOracle,
+    build_oracle,
+    extract_meta_block,
+    oracle_to_dict,
+    parse_meta_block,
+)
 from .pickup import (
     LABEL_EPIC,
     LABEL_HANDOFF_AIFACTORY,
@@ -21,6 +29,7 @@ from .pickup import (
 )
 
 __all__ = [
+    # pickup (#195)
     "LABEL_PFACTORY",
     "LABEL_HANDOFF_TFACTORY",
     "LABEL_HANDOFF_AIFACTORY",
@@ -33,4 +42,11 @@ __all__ = [
     "pickup_issue",
     "pickup_requirements",
     "priority_to_horizon",
+    # oracle (#196)
+    "Citation",
+    "PFactoryOracle",
+    "build_oracle",
+    "parse_meta_block",
+    "extract_meta_block",
+    "oracle_to_dict",
 ]

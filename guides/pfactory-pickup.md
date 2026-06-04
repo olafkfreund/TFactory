@@ -62,7 +62,29 @@ gh issue view 412 --json number,title,body,labels \
   | python -m integrations.pfactory --issue -
 
 python -m integrations.pfactory --requirements .aifactory/specs/001-x/requirements.json
+
+# Add --oracle to also print the parsed test oracle (#196):
+python -m integrations.pfactory --issue issue.json --oracle
 ```
 
-Implementation: `apps/backend/integrations/pfactory/pickup.py`.
-Tests: `tests/test_pfactory_pickup.py`.
+## The test oracle (#196)
+
+Every governed issue body ends with a `pfactory:meta` block (mirrored into
+`requirements.json` → `metadata`). `build_oracle` parses it — preferring
+`requirements.json` when present — into a `PFactoryOracle`: the **acceptance
+criteria** (extracted via `spec_sources`) + **`citations[]`** (the sources the
+tests assert against) + priority/horizon + plan metadata. It degrades
+gracefully on a missing/old `taxonomy` or a malformed block (empty oracle, no
+raise).
+
+```python
+from integrations.pfactory import build_oracle
+
+oracle = build_oracle(issue_body=issue.body)              # or requirements=req
+oracle.acceptance_criteria   # tuple[str, ...] — what the tests must assert
+oracle.citations             # tuple[Citation, ...] — why, uri, source
+oracle.horizon               # "now" | "next" | "later"
+```
+
+Implementation: `apps/backend/integrations/pfactory/{pickup,oracle}.py`.
+Tests: `tests/test_pfactory_pickup.py`, `tests/test_pfactory_oracle.py`.
