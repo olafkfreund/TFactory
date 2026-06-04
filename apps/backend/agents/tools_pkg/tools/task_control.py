@@ -86,7 +86,9 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def write_visual_inspection_meta(spec_dir: Path, visual_inspection: dict | None) -> bool:
+def write_visual_inspection_meta(
+    spec_dir: Path, visual_inspection: dict | None
+) -> bool:
     """Write ``context/visual_inspection.json`` when a handover opts in (#170 / P5).
 
     ``visual_inspection`` is the optional ``task_create_and_run`` arg
@@ -248,8 +250,14 @@ def create_task_control_tools() -> list:
                     "description": "Optional (#170). When the handover enables a visual inspection, pass {enabled: true, target: <visual target name>, flow: <what to inspect>}. The browser lane then records + packages an automated-test/ run with screenshots + a human report. Omit (or enabled:false) for a normal task.",
                     "properties": {
                         "enabled": {"type": "boolean", "default": False},
-                        "target": {"type": "string", "description": "Name of a visual target in .tfactory.yml"},
-                        "flow": {"type": "string", "description": "What to inspect (the user flow / acceptance focus)"},
+                        "target": {
+                            "type": "string",
+                            "description": "Name of a visual target in .tfactory.yml",
+                        },
+                        "flow": {
+                            "type": "string",
+                            "description": "What to inspect (the user flow / acceptance focus)",
+                        },
                     },
                 },
             },
@@ -389,7 +397,7 @@ def create_task_control_tools() -> list:
                 "planner module not importable — task stays at status=pending"
             )
 
-        portal_port = os.environ.get("TFACTORY_PORTAL_PORT", "3102")
+        portal_port = os.environ.get("TFACTORY_PORTAL_PORT", "3103")
         return _format_json(
             {
                 "task_id": task_id,

@@ -236,8 +236,16 @@ def _derive_create_path(test_id: str, framework: str) -> str:
                 ext = _FRAMEWORK_EXTENSION_FALLBACK.get(framework, ".py")
             dir_prefix = "/".join(dir_parts) if dir_parts else "tests"
             return posixpath.join(dir_prefix, f"{test_id}{ext}")
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        # Registry unavailable (expected in test envs without frameworks/) or
+        # a malformed convention pattern — fall back below, but leave a trail.
+        _triage_log.debug(
+            "could not derive create-path from registry for %r/%r: %s — "
+            "using extension fallback",
+            test_id,
+            framework,
+            exc,
+        )
 
     # Fallback: derive from known extensions
     ext = _FRAMEWORK_EXTENSION_FALLBACK.get(framework, ".py")
@@ -446,17 +454,90 @@ def _completion_sentinel_enabled() -> bool:
     return _truthy(os.environ.get("TFACTORY_COMPLETION_SENTINEL"))
 
 
-def _notify_completion(spec_dir: Path, status: dict) -> None:
-    """Best-effort terminal callback. Writes a local sentinel (opt-in) and
-    POSTs an env-gated webhook (opt-in). Every failure is swallowed so the
-    pipeline can never break on notification."""
-    payload = {
+# ─── Normalized completion-event envelope (#198, Factory PARR-spine) ─────
+# v1 of the cross-service completion envelope. AIFactory / PFactory / TFactory
+# all emit this shape so a watcher (CFactory) consumes one schema. The spine
+# correlation key is the GitHub issue number threaded end-to-end. See
+# docs/completion-event-envelope.md for the contract.
+_COMPLETION_SCHEMA_VERSION = "1.0"
+
+
+def _outcome_for_status(status_value: str | None) -> str:
+    """Map a terminal TFactory status to a normalized coarse outcome."""
+    if status_value == "triaged":
+        return "success"
+    if status_value == "triaged_empty":
+        return "empty"
+    return "failure"
+
+
+def _correlation_issue_number(status: dict, source: dict) -> int | None:
+    """The GitHub issue number threading the PARR spine end-to-end.
+
+    Read from status.json or source.json (populated by the PFactory pickup
+    contract, #193). Returns None until a run carries one.
+    """
+    for src in (status, source):
+        raw = src.get("issue_number")
+        if raw is None:
+            raw = src.get("correlation_id")
+        if raw is None:
+            continue
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _completion_result_summary(status: dict) -> dict:
+    """Service-specific result counts for the envelope (absent keys omitted)."""
+    keys = (
+        "committed_count",
+        "flagged_count",
+        "rejected_count",
+        "verdicts_count",
+        "dedup_collision_count",
+    )
+    return {k: status[k] for k in keys if k in status}
+
+
+def _build_completion_envelope(spec_dir: Path, status: dict) -> dict:
+    """Build the v1 normalized completion-event envelope (#198).
+
+    The flat #85 fields (``task_id``, ``project_id``, ``status``, ``phase``,
+    ``updated_at``) are retained for backward-compat; the normalized header
+    (``schema_version``, ``event``, ``service``, ``correlation_id``,
+    ``outcome``) plus repo/branch context + a result summary sit on top.
+    """
+    source = _load_source_meta(spec_dir)
+    status_value = status.get("status")
+    return {
+        "schema_version": _COMPLETION_SCHEMA_VERSION,
+        "event": "completion",
+        "service": "tfactory",
+        "correlation_id": _correlation_issue_number(status, source),
         "task_id": status.get("task_id") or spec_dir.name,
         "project_id": status.get("project_id"),
-        "status": status.get("status"),
+        "spec_id": status.get("spec_id") or source.get("spec_id"),
+        "status": status_value,
+        "outcome": _outcome_for_status(status_value),
         "phase": status.get("phase"),
+        "repo": source.get("repo_slug") or source.get("repo"),
+        "branch": source.get("branch"),
+        "pr_number": source.get("pr_number") or None,
+        "result": _completion_result_summary(status),
+        "emitted_at": _now_iso(),
         "updated_at": status.get("updated_at"),
     }
+
+
+def _notify_completion(spec_dir: Path, status: dict) -> None:
+    """Best-effort terminal callback. Writes a local sentinel (opt-in) and
+    POSTs an env-gated webhook (opt-in), both carrying the v1 normalized
+    completion-event envelope (#198). Every failure is swallowed so the
+    pipeline can never break on notification."""
+    payload = _build_completion_envelope(spec_dir, status)
 
     if _completion_sentinel_enabled():
         try:
@@ -486,6 +567,298 @@ def _notify_completion(spec_dir: Path, status: dict) -> None:
 
 
 # ─── The agent itself ───────────────────────────────────────────────────
+
+
+def _load_verdicts_or_fail(spec_dir: Path) -> list | None:
+    """Read findings/verdicts.json tolerantly (#96 envelope extractor).
+
+    Returns the verdicts list (possibly empty), or None after writing a
+    ``triager_failed`` status when the file is missing or unparseable.
+    """
+    verdicts_path = spec_dir / "findings" / "verdicts.json"
+    if not verdicts_path.exists():
+        _write_status_patch(
+            spec_dir,
+            status="triager_failed",
+            phase="triager_no_verdicts",
+            triager_error="findings/verdicts.json not found",
+        )
+        return None
+    from agents.output_envelope import OutputEnvelopeError, extract_json
+
+    try:
+        verdicts_doc, _ = extract_json(verdicts_path.read_text())
+    except OutputEnvelopeError as exc:
+        _write_status_patch(
+            spec_dir,
+            status="triager_failed",
+            phase="triager_verdicts_unparseable",
+            triager_error=f"verdicts.json invalid: {exc}",
+        )
+        return None
+    return verdicts_doc.get("verdicts") or []
+
+
+def _read_test_source(spec_dir: Path, test_file: str) -> str:
+    """Read a generated test file's source, or '' if absent/unreadable."""
+    test_path = spec_dir / test_file
+    if not test_path.exists():
+        return ""
+    try:
+        return test_path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def _build_candidates(spec_dir: Path, verdicts: list) -> list:
+    """Wrap each well-formed verdict as a TriageCandidate (with its source)."""
+    from agents.triage_dedup import TriageCandidate
+
+    candidates = []
+    for v in verdicts:
+        tid = v.get("test_id")
+        test_file = v.get("test_file")
+        if not tid or not test_file:
+            # Skip malformed entries — the Evaluator's validator should have
+            # caught them, but be defensive.
+            continue
+        candidates.append(
+            TriageCandidate(
+                test_id=tid,
+                test_file=test_file,
+                verdict=v,
+                source=_read_test_source(spec_dir, test_file),
+            )
+        )
+    return candidates
+
+
+def _resolve_catalog_decisions(candidates: list, catalog) -> dict:
+    """Decide the catalog intent (create/update/skip) for each accept/flag
+    candidate; rejects get no lookup. (Task 11 / #27 commits 2-3.)
+
+    CREATE intents are enriched with a framework-conventional path.
+    """
+    decisions: dict[str, CandidateDecision] = {}
+    for c in candidates:
+        if c.verdict_label not in ("accept", "flag"):
+            continue
+        base_decision = _decide_catalog_intent(c, catalog)
+        if base_decision.intent == "create":
+            framework = c.verdict.get("framework") or "pytest"
+            decisions[c.test_id] = CandidateDecision(
+                intent="create",
+                derived_test_file=_derive_create_path(c.test_id, framework),
+            )
+        else:
+            decisions[c.test_id] = base_decision
+    return decisions
+
+
+def _bucket_candidates(candidates: list, decisions: dict) -> tuple[list, list, list]:
+    """Split candidates into (keepers, skipped, rejects) in a single pass.
+
+    SKIP candidates (operator_locked) are excluded from dedup/rank so they are
+    not committed or flagged — they only appear in the report's skip section.
+    """
+    keepers, skipped, rejects = [], [], []
+    for c in candidates:
+        if c.verdict_label == "reject":
+            rejects.append(c)
+        elif c.verdict_label in ("accept", "flag"):
+            intent = decisions.get(c.test_id, CandidateDecision()).intent
+            (skipped if intent == "skip" else keepers).append(c)
+    return keepers, skipped, rejects
+
+
+def _dedup_and_rank(keepers: list) -> tuple:
+    """Dedup the keepers and rank survivors.
+
+    Returns ``(dedup_result, committed, flagged)`` where committed/flagged are
+    the ranked survivors re-bucketed by verdict label.
+    """
+    from agents.triage_dedup import dedup_candidates, rank_candidates
+
+    dedup_result = dedup_candidates(keepers)
+    ranked = rank_candidates(dedup_result.kept)
+    committed = tuple(c for c in ranked if c.verdict_label == "accept")
+    flagged = tuple(c for c in ranked if c.verdict_label == "flag")
+    return dedup_result, committed, flagged
+
+
+def _render_and_write_report(
+    spec_dir,
+    mode,
+    committed,
+    flagged,
+    rejects,
+    skipped,
+    dedup_result,
+    keepers,
+    decisions,
+) -> tuple:
+    """Build the report and write triage_report.{json,md}; return (report, report_md)."""
+    from agents.triage_report import build_report, render_json, render_markdown
+
+    report = build_report(
+        mode=mode,
+        generated_at=_now_iso(),
+        committed=committed,
+        flagged=flagged,
+        rejected=tuple(rejects),
+        skipped=tuple(skipped),
+        collisions=dedup_result.collisions,
+        dedup_input_count=len(keepers),
+        decisions=decisions,
+        spec_dir=spec_dir,
+    )
+    findings_dir = spec_dir / "findings"
+    findings_dir.mkdir(parents=True, exist_ok=True)
+    (findings_dir / "triage_report.json").write_text(render_json(report))
+    report_md = render_markdown(report)
+    (findings_dir / "triage_report.md").write_text(report_md)
+    return report, report_md
+
+
+def _run_git_side_effect(project_dir, committed, flagged, source_meta) -> dict:
+    """Commit accepted+flagged test files to the feature branch (dry-run by default).
+
+    Returns a summary dict for status.json. Skips cleanly when there's nothing
+    to commit, no branch in source.json, or no readable sources.
+    """
+    if not (committed or flagged):
+        return {"skipped": True, "reason": "no side-effect path"}
+
+    from tools.git_writer import GitWriteRequest, write_tests_to_branch
+
+    branch = source_meta.get("branch") or ""
+    files_to_commit = tuple(
+        (c.test_file, c.source) for c in (*committed, *flagged) if c.source
+    )
+    if not (branch and files_to_commit):
+        return {
+            "skipped": True,
+            "reason": (
+                "no branch in source.json" if not branch else "no readable test sources"
+            ),
+        }
+    request = GitWriteRequest(
+        repo_dir=project_dir,
+        branch=branch,
+        files=files_to_commit,
+        commit_msg=(
+            f"tfactory: add {len(committed)} accepted + {len(flagged)} flagged tests"
+        ),
+    )
+    git_write_result = write_tests_to_branch(request, dry_run=_git_writer_dry_run())
+    return {
+        "skipped": False,
+        "dry_run": git_write_result.dry_run,
+        "ok": git_write_result.ok,
+        "committed_paths": list(git_write_result.committed_paths),
+        "commit_sha": git_write_result.commit_sha,
+        "error": git_write_result.error,
+        "argv_log": [list(a) for a in git_write_result.argv_log],
+    }
+
+
+def _run_pr_side_effect(project_dir, findings_dir, source_meta, report_md) -> dict:
+    """Post the report to the PR (dry-run by default), or write the body to disk
+    when there's no PR number. Returns a summary dict for status.json."""
+    pr_number = int(source_meta.get("pr_number") or 0)
+    if pr_number > 0 and report_md:
+        from tools.pr_comment import PRCommentRequest, post_pr_comment
+
+        request = PRCommentRequest(
+            repo_dir=project_dir,
+            pr_number=pr_number,
+            body=report_md,
+            repo_slug=source_meta.get("repo_slug") or None,
+        )
+        pr_comment_result = post_pr_comment(request, dry_run=_pr_comment_dry_run())
+        return {
+            "skipped": False,
+            "dry_run": pr_comment_result.dry_run,
+            "ok": pr_comment_result.ok,
+            "argv": list(pr_comment_result.argv),
+            "body_bytes": pr_comment_result.body_bytes,
+            "comment_url": pr_comment_result.comment_url,
+            "error": pr_comment_result.error,
+        }
+    # No PR number — write the comment body to disk for manual posting.
+    (findings_dir / "pr_comment_body.md").write_text(report_md)
+    return {
+        "skipped": True,
+        "reason": "no PR number in source.json",
+        "body_written_to": str(findings_dir / "pr_comment_body.md"),
+    }
+
+
+def _persist_catalog_mutation(
+    spec_dir, catalog, keepers, skipped, decisions, generated_by_task, generated_at
+) -> None:
+    """Mutate + persist the workspace tests_catalog.json (Task 11 / #27 commit 5).
+
+    Writes to spec_dir/context/tests_catalog.json — the Triager's scratch copy;
+    the authoritative AIFactory-repo catalog is updated by git_writer. Non-fatal:
+    a write failure degrades to a warning rather than failing the whole Triager.
+    """
+    all_decided = list(keepers) + list(skipped)
+    updated_catalog = _mutate_catalog(
+        catalog=catalog,
+        candidates=all_decided,
+        decisions=decisions,
+        generated_by_task=generated_by_task,
+        now_ts=generated_at,
+    )
+    if updated_catalog is None:
+        return
+    catalog_out = spec_dir / "context" / "tests_catalog.json"
+    catalog_out.parent.mkdir(parents=True, exist_ok=True)
+    # The snapshotter pins context/ files read-only (0o444), so make the catalog
+    # writable before overwriting.
+    try:
+        if catalog_out.exists():
+            catalog_out.chmod(0o644)
+        catalog_out.write_text(
+            json.dumps(
+                updated_catalog.to_dict(),
+                indent=2,
+                sort_keys=True,
+                ensure_ascii=False,
+            )
+        )
+    except OSError as exc:
+        _triage_log.warning(
+            "triager: could not update workspace tests_catalog.json (non-fatal): %s",
+            exc,
+        )
+
+
+def _maybe_harvest(spec_dir, project_dir, keepers) -> None:
+    """Harvest high-confidence accepts into the reusable template library.
+
+    Non-fatal: a harvest failure must never fail the Triager.
+    """
+    if not _harvest_enabled():
+        return
+    try:
+        from agents.template_harvest import harvest_accepted_tests
+
+        harvested = harvest_accepted_tests(
+            spec_dir,
+            project_dir,
+            keepers,
+            also_global=_harvest_global(),
+        )
+        if harvested:
+            _triage_log.info(
+                "triager: harvested %d accepted test(s) into the reusable "
+                "template library",
+                len(harvested),
+            )
+    except Exception as exc:  # noqa: BLE001 — non-fatal side-effect
+        _triage_log.warning("triager: template harvest failed (non-fatal): %s", exc)
 
 
 async def run_triager(
@@ -522,109 +895,11 @@ async def run_triager(
             phase=f"triager_{mode}_started",
         )
 
-        # Lazy imports — keeps test mocking simple + avoids loading
-        # heavy modules when the path isn't taken (e.g., evaluator
-        # failures land here pre-load).
-        from agents.triage_dedup import (
-            TriageCandidate,
-            dedup_candidates,
-            rank_candidates,
-        )
-        from agents.triage_report import build_report, render_json, render_markdown
-        from tools.git_writer import GitWriteRequest, write_tests_to_branch
-        from tools.pr_comment import PRCommentRequest, post_pr_comment
-
-        # ── 1. Load verdicts.json ────────────────────────────────
-        verdicts_path = spec_dir / "findings" / "verdicts.json"
-        if not verdicts_path.exists():
-            _write_status_patch(
-                spec_dir,
-                status="triager_failed",
-                phase="triager_no_verdicts",
-                triager_error="findings/verdicts.json not found",
-            )
+        # 1. Load verdicts.json and wrap each as a TriageCandidate.
+        verdicts = _load_verdicts_or_fail(spec_dir)
+        if verdicts is None:
             return False
-
-        # Tolerant read via the shared agent-output envelope (#96). The
-        # Evaluator already canonicalises verdicts.json, but reading through
-        # the same extractor keeps the last consumer robust to a fence or
-        # trailing prose rather than hard-failing on it.
-        from agents.output_envelope import OutputEnvelopeError, extract_json
-
-        try:
-            doc, _salvaged = extract_json(verdicts_path.read_text())
-        except OutputEnvelopeError as exc:
-            _write_status_patch(
-                spec_dir,
-                status="triager_failed",
-                phase="triager_verdicts_unparseable",
-                triager_error=f"verdicts.json invalid: {exc}",
-            )
-            return False
-
-        verdicts = doc.get("verdicts") or []
-
-        # ── 2. Wrap as TriageCandidates ─────────────────────────
-        candidates: list[TriageCandidate] = []
-        for v in verdicts:
-            tid = v.get("test_id")
-            test_file = v.get("test_file")
-            if not tid or not test_file:
-                # Skip malformed entries — the Evaluator's validator
-                # should have caught them, but be defensive
-                continue
-            test_path = spec_dir / test_file
-            source = ""
-            if test_path.exists():
-                try:
-                    source = test_path.read_text(encoding="utf-8")
-                except OSError:
-                    source = ""
-            candidates.append(
-                TriageCandidate(
-                    test_id=tid,
-                    test_file=test_file,
-                    verdict=v,
-                    source=source,
-                )
-            )
-
-        # ── 2b. Load catalog + decide intent per accepted/flagged ─
-        # (Task 11 / #27 commits 2-3)
-        catalog = _load_catalog_from_spec(spec_dir)
-        decisions: dict[str, CandidateDecision] = {}
-        for c in candidates:
-            if c.verdict_label in ("accept", "flag"):
-                base_decision = _decide_catalog_intent(c, catalog)
-                # For CREATE: enrich with a framework-conventional path
-                if base_decision.intent == "create":
-                    framework = c.verdict.get("framework") or "pytest"
-                    derived = _derive_create_path(c.test_id, framework)
-                    decisions[c.test_id] = CandidateDecision(
-                        intent="create",
-                        derived_test_file=derived,
-                    )
-                else:
-                    decisions[c.test_id] = base_decision
-            # rejects: no catalog lookup, no mutation
-
-        # ── 3. Bucket by verdict + dedup the keepers ────────────
-        # SKIP candidates (operator_locked) are excluded from dedup/rank
-        # so they are not committed or flagged — they only appear in the
-        # report's skip section.
-        keepers = [
-            c
-            for c in candidates
-            if c.verdict_label in ("accept", "flag")
-            and decisions.get(c.test_id, CandidateDecision()).intent != "skip"
-        ]
-        skipped = [
-            c
-            for c in candidates
-            if c.verdict_label in ("accept", "flag")
-            and decisions.get(c.test_id, CandidateDecision()).intent == "skip"
-        ]
-        rejects = [c for c in candidates if c.verdict_label == "reject"]
+        candidates = _build_candidates(spec_dir, verdicts)
 
         if not candidates:
             # No verdicts at all — empty pass.
@@ -640,182 +915,55 @@ async def run_triager(
             )
             return True
 
-        dedup_result = dedup_candidates(keepers)
-        ranked_survivors = rank_candidates(dedup_result.kept)
-        # Re-bucket the ranked survivors by verdict label
-        committed = tuple(c for c in ranked_survivors if c.verdict_label == "accept")
-        flagged = tuple(c for c in ranked_survivors if c.verdict_label == "flag")
+        # 2. Decide catalog intent, then bucket into keepers/skipped/rejects.
+        catalog = _load_catalog_from_spec(spec_dir)
+        decisions = _resolve_catalog_decisions(candidates, catalog)
+        keepers, skipped, rejects = _bucket_candidates(candidates, decisions)
 
-        # ── 4. Build + render the report ────────────────────────
-        report = build_report(
-            mode=mode,
-            generated_at=_now_iso(),
-            committed=committed,
-            flagged=flagged,
-            rejected=tuple(rejects),
-            skipped=tuple(skipped),
-            collisions=dedup_result.collisions,
-            dedup_input_count=len(keepers),
-            decisions=decisions,
-            spec_dir=spec_dir,
+        # 3. Dedup + rank the keepers into committed/flagged survivors.
+        dedup_result, committed, flagged = _dedup_and_rank(keepers)
+
+        # 4. Build + render the report.
+        report, report_md = _render_and_write_report(
+            spec_dir,
+            mode,
+            committed,
+            flagged,
+            rejects,
+            skipped,
+            dedup_result,
+            keepers,
+            decisions,
         )
 
+        # 5-6. Side-effects (both dry-run by default per the no-auto-push policy).
         findings_dir = spec_dir / "findings"
-        findings_dir.mkdir(parents=True, exist_ok=True)
-        (findings_dir / "triage_report.json").write_text(render_json(report))
-        report_md = render_markdown(report)
-        (findings_dir / "triage_report.md").write_text(report_md)
-
-        # ── 5. git_writer side-effect (dry-run by default) ──────
-        git_dry = _git_writer_dry_run()
-        git_result_summary: dict = {"skipped": True, "reason": "no side-effect path"}
         source_meta = _load_source_meta(spec_dir)
-        branch = source_meta.get("branch") or ""
-        if committed or flagged:
-            files_to_commit = tuple(
-                (c.test_file, c.source)
-                for c in (*committed, *flagged)
-                if c.source  # only commit files we managed to read
-            )
-            if branch and files_to_commit:
-                request = GitWriteRequest(
-                    repo_dir=project_dir,
-                    branch=branch,
-                    files=files_to_commit,
-                    commit_msg=(
-                        f"tfactory: add {len(committed)} accepted "
-                        f"+ {len(flagged)} flagged tests"
-                    ),
-                )
-                gw = write_tests_to_branch(request, dry_run=git_dry)
-                git_result_summary = {
-                    "skipped": False,
-                    "dry_run": gw.dry_run,
-                    "ok": gw.ok,
-                    "committed_paths": list(gw.committed_paths),
-                    "commit_sha": gw.commit_sha,
-                    "error": gw.error,
-                    "argv_log": [list(a) for a in gw.argv_log],
-                }
-            else:
-                git_result_summary = {
-                    "skipped": True,
-                    "reason": (
-                        "no branch in source.json"
-                        if not branch
-                        else "no readable test sources"
-                    ),
-                }
+        git_result_summary = _run_git_side_effect(
+            project_dir, committed, flagged, source_meta
+        )
+        pr_comment_summary = _run_pr_side_effect(
+            project_dir, findings_dir, source_meta, report_md
+        )
 
-        # ── 6. pr_comment side-effect (dry-run by default) ──────
-        pr_dry = _pr_comment_dry_run()
-        pr_number = int(source_meta.get("pr_number") or 0)
-        pr_comment_summary: dict = {"skipped": True, "reason": "no PR number"}
-        if pr_number > 0 and report_md:
-            request = PRCommentRequest(
-                repo_dir=project_dir,
-                pr_number=pr_number,
-                body=report_md,
-                repo_slug=source_meta.get("repo_slug") or None,
-            )
-            pc = post_pr_comment(request, dry_run=pr_dry)
-            pr_comment_summary = {
-                "skipped": False,
-                "dry_run": pc.dry_run,
-                "ok": pc.ok,
-                "argv": list(pc.argv),
-                "body_bytes": pc.body_bytes,
-                "comment_url": pc.comment_url,
-                "error": pc.error,
-            }
-        else:
-            # No PR number — write the comment body to disk so the
-            # operator can paste it manually.
-            (findings_dir / "pr_comment_body.md").write_text(report_md)
-            pr_comment_summary = {
-                "skipped": True,
-                "reason": "no PR number in source.json",
-                "body_written_to": str(findings_dir / "pr_comment_body.md"),
-            }
-
-        # ── 6b. Catalog mutation (Task 11 / #27 commit 5) ──────────
-        # All candidates that went through intent derivation (accept + flag).
-        # We pass the full keepers + skipped list (rejects excluded above).
-        all_decided = list(keepers) + list(skipped)
-        source_meta_for_task = _load_source_meta(spec_dir)
+        # 6b-6c. Catalog mutation + template harvest (both non-fatal side-effects).
         generated_by_task = (
-            source_meta_for_task.get("spec_id")
-            or source_meta_for_task.get("task_id")
-            or "unknown"
+            source_meta.get("spec_id") or source_meta.get("task_id") or "unknown"
         )
-        updated_catalog = _mutate_catalog(
-            catalog=catalog,
-            candidates=all_decided,
-            decisions=decisions,
-            generated_by_task=generated_by_task,
-            now_ts=report.generated_at,
+        _persist_catalog_mutation(
+            spec_dir,
+            catalog,
+            keepers,
+            skipped,
+            decisions,
+            generated_by_task,
+            report.generated_at,
         )
-        if updated_catalog is not None:
-            # Write back to spec_dir/context/tests_catalog.json — the
-            # Triager's workspace copy. The AIFactory repo's authoritative
-            # copy lives at <project_dir>/.tfactory/tests-catalog.json and
-            # is updated by git_writer (Task 16), not here.
-            catalog_out = spec_dir / "context" / "tests_catalog.json"
-            catalog_out.parent.mkdir(parents=True, exist_ok=True)
-            # The snapshotter pins context/ files read-only (0o444), so make
-            # the catalog writable before overwriting. This copy is the
-            # Triager's workspace scratch — the authoritative AIFactory-repo
-            # catalog is updated by git_writer — so a write failure here must
-            # NOT fail the whole Triager; degrade to a warning instead.
-            try:
-                if catalog_out.exists():
-                    catalog_out.chmod(0o644)
-                catalog_out.write_text(
-                    json.dumps(
-                        updated_catalog.to_dict(),
-                        indent=2,
-                        sort_keys=True,
-                        ensure_ascii=False,
-                    )
-                )
-            except OSError as exc:
-                _triage_log.warning(
-                    "triager: could not update workspace tests_catalog.json "
-                    "(non-fatal): %s",
-                    exc,
-                )
+        _maybe_harvest(spec_dir, project_dir, keepers)
 
-        # ── 6c. Harvest high-confidence accepts into the reusable
-        #        template library (project-local + optional global).
-        #        Non-fatal: a harvest failure must never fail the Triager.
-        harvested_count = 0
-        if _harvest_enabled():
-            try:
-                from agents.template_harvest import harvest_accepted_tests
-
-                harvested = harvest_accepted_tests(
-                    spec_dir,
-                    project_dir,
-                    keepers,
-                    also_global=_harvest_global(),
-                )
-                harvested_count = len(harvested)
-                if harvested_count:
-                    _triage_log.info(
-                        "triager: harvested %d accepted test(s) into the "
-                        "reusable template library",
-                        harvested_count,
-                    )
-            except Exception as exc:  # noqa: BLE001 — non-fatal side-effect
-                _triage_log.warning(
-                    "triager: template harvest failed (non-fatal): %s", exc
-                )
-
-        # ── 7. Record summaries in status.json ──────────────────
+        # 7. Record summaries in status.json.
         committed_count = len(committed)
         flagged_count = len(flagged)
-        rejected_count = len(rejects)
-        collision_count = len(dedup_result.collisions)
         final_status = (
             "triaged" if (committed_count or flagged_count) else "triaged_empty"
         )
@@ -824,9 +972,9 @@ async def run_triager(
             status=final_status,
             phase="triager_complete",
             committed_count=committed_count,
-            rejected_count=rejected_count,
+            rejected_count=len(rejects),
             flagged_count=flagged_count,
-            dedup_collision_count=collision_count,
+            dedup_collision_count=len(dedup_result.collisions),
             git_writer=git_result_summary,
             pr_comment=pr_comment_summary,
         )

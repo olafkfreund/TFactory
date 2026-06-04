@@ -59,6 +59,9 @@ from typing import Any, Callable, Literal, Protocol
 
 _eval_log = _logging.getLogger(__name__)
 
+# Stamped into verdicts.json for traceability of which Evaluator produced them.
+_EVALUATOR_VERSION = "task7-commit5"
+
 
 # ─── Workspace helpers (local copy — same pattern as planner/gen_functional)
 
@@ -174,6 +177,24 @@ class _RunResultLike(Protocol):
 _PYTEST_IMAGE = "tfactory-runner-pytest:latest"
 
 
+def _parse_marker_exit(stdout: str | None, prefix: str, default: int) -> int:
+    """Recover the real exit code from an ``echo <prefix>$?`` marker line.
+
+    Each runner wraps its test command in a shell that always exits 0, appending
+    a ``<prefix><code>`` line so the true pass/fail survives. Returns the last
+    parseable marker, or ``default`` when none is present. ``prefix`` includes
+    the trailing ``=`` (e.g. ``"__PYTEST_EXIT="``).
+    """
+    code = default
+    for line in (stdout or "").splitlines():
+        if line.startswith(prefix):
+            try:
+                code = int(line.split("=", 1)[1])
+            except ValueError:
+                pass
+    return code
+
+
 def _resolve_runner_fn(
     spec_dir: Path,
     project_dir: Path,
@@ -275,13 +296,7 @@ def _resolve_runner_fn(
             finally:
                 sandbox_creds.wipe()  # erase materialised secret files
                 test_creds.wipe()
-            code = res.returncode
-            for line in (res.stdout or "").splitlines():
-                if line.startswith("__PYTEST_EXIT="):
-                    try:
-                        code = int(line.split("=", 1)[1])
-                    except ValueError:
-                        pass
+            code = _parse_marker_exit(res.stdout, "__PYTEST_EXIT=", res.returncode)
             junit = scratch / "junit.xml"
             cov = scratch / "coverage.xml"
             return DockerRunResult(
@@ -335,28 +350,39 @@ class EvaluatorSignals:
 # ─── Signal-bundle assembly ─────────────────────────────────────────────
 
 
+def _filter_completed_subtasks(plan: dict, predicate) -> list[dict]:
+    """Return completed subtasks across all phases that match ``predicate``.
+
+    Owns the shared phase/subtask walk plus the common
+    ``status == 'completed'`` + ``files_to_create`` gate; ``predicate(subtask)``
+    supplies the per-lane/language membership test.
+    """
+    return [
+        st
+        for phase in plan.get("phases", [])
+        for st in phase.get("subtasks", [])
+        if st.get("status") == "completed"
+        and st.get("files_to_create")
+        and predicate(st)
+    ]
+
+
 def _completed_functional_subtasks(plan: dict) -> list[dict]:
     """Pick subtasks that Gen-Functional successfully generated
     (status='completed', lane in {'unit','functional'}, has files_to_create).
 
     Accepts both the v0.2 'unit' lane and the v0.1 deprecated 'functional'
     alias so old test_plan.json files still process. v0.3 removes the
-    'functional' alias.
+    'functional' alias. The pytest runner only handles Python, so a unit-lane
+    subtask in another language (e.g. Jest/TypeScript) is excluded here.
     """
-    out = []
-    for phase in plan.get("phases", []):
-        for st in phase.get("subtasks", []):
-            # The pytest runner only handles Python. A unit-lane subtask in
-            # another language (e.g. Jest/TypeScript) needs its own runner
-            # image — skip it here rather than feeding a .test.ts to pytest.
-            if (
-                st.get("status") == "completed"
-                and st.get("lane") in ("unit", "functional")
-                and (st.get("language") in (None, "python"))
-                and st.get("files_to_create")
-            ):
-                out.append(st)
-    return out
+    return _filter_completed_subtasks(
+        plan,
+        lambda st: (
+            st.get("lane") in ("unit", "functional")
+            and st.get("language") in (None, "python")
+        ),
+    )
 
 
 def _framework_coverage_strategy(subtask: dict) -> str | None:
@@ -385,8 +411,11 @@ def _framework_coverage_strategy(subtask: dict) -> str | None:
             return None
         return desc.coverage_strategy
     except Exception as exc:  # noqa: BLE001 — never block the Evaluator
-        _eval_log.debug(
-            "coverage_strategy lookup failed for framework %r: %s",
+        # Surface at WARNING: a registry misconfiguration would otherwise
+        # silently skip the coverage strategy for every test in the run.
+        _eval_log.warning(
+            "coverage_strategy lookup failed for framework %r: %s — "
+            "treating coverage as numeric",
             framework_name,
             exc,
         )
@@ -677,16 +706,7 @@ _PLAYWRIGHT_IMAGE = "tfactory-runner-playwright:latest"
 
 def _completed_browser_subtasks(plan: dict) -> list[dict]:
     """Completed Playwright/browser subtasks Gen-Functional generated."""
-    out = []
-    for phase in plan.get("phases", []):
-        for st in phase.get("subtasks", []):
-            if (
-                st.get("status") == "completed"
-                and st.get("lane") == "browser"
-                and st.get("files_to_create")
-            ):
-                out.append(st)
-    return out
+    return _filter_completed_subtasks(plan, lambda st: st.get("lane") == "browser")
 
 
 def _browser_target_url(spec_dir: Path, subtask: dict) -> str | None:
@@ -906,16 +926,7 @@ def _resolve_browser_runner_fn(
                 test_creds.wipe()
             # The wrapper shell always exits 0; recover the real playwright exit
             # from the __PW_EXIT marker so stability sees the true pass/fail.
-            code = res.returncode
-            marker = None
-            for line in (res.stdout or "").splitlines():
-                if line.startswith("__PW_EXIT="):
-                    try:
-                        marker = int(line.split("=", 1)[1])
-                    except ValueError:
-                        marker = None
-            if marker is not None:
-                code = marker
+            code = _parse_marker_exit(res.stdout, "__PW_EXIT=", res.returncode)
             return DockerRunResult(
                 returncode=code, stdout=res.stdout, stderr=res.stderr, argv=res.argv
             )
@@ -950,16 +961,7 @@ def _build_browser_signal_bundle(
 
 def _completed_api_subtasks(plan: dict) -> list[dict]:
     """Completed api-lane subtasks (httpx tests) Gen-Functional generated."""
-    out = []
-    for phase in plan.get("phases", []):
-        for st in phase.get("subtasks", []):
-            if (
-                st.get("status") == "completed"
-                and st.get("lane") == "api"
-                and st.get("files_to_create")
-            ):
-                out.append(st)
-    return out
+    return _filter_completed_subtasks(plan, lambda st: st.get("lane") == "api")
 
 
 def _build_api_signal_bundle(
@@ -993,17 +995,13 @@ def _completed_jest_subtasks(plan: dict) -> list[dict]:
     These sit in the unit lane like pytest, but are TypeScript — so they need
     the Jest runner, not pytest.
     """
-    out = []
-    for phase in plan.get("phases", []):
-        for st in phase.get("subtasks", []):
-            if (
-                st.get("status") == "completed"
-                and st.get("lane") in ("unit", "functional")
-                and st.get("language") == "typescript"
-                and st.get("files_to_create")
-            ):
-                out.append(st)
-    return out
+    return _filter_completed_subtasks(
+        plan,
+        lambda st: (
+            st.get("lane") in ("unit", "functional")
+            and st.get("language") == "typescript"
+        ),
+    )
 
 
 def _resolve_jest_runner_fn(image: str = _JEST_IMAGE):
@@ -1068,13 +1066,7 @@ def _resolve_jest_runner_fn(image: str = _JEST_IMAGE):
                 extra_env={"NODE_PATH": node_path},
                 timeout_sec=300,
             )
-            code = res.returncode
-            for line in (res.stdout or "").splitlines():
-                if line.startswith("__JEST_EXIT="):
-                    try:
-                        code = int(line.split("=", 1)[1])
-                    except ValueError:
-                        pass
+            code = _parse_marker_exit(res.stdout, "__JEST_EXIT=", res.returncode)
             return DockerRunResult(
                 returncode=code, stdout=res.stdout, stderr=res.stderr, argv=res.argv
             )
@@ -1244,6 +1236,175 @@ def _advance_to_triager(spec_dir: Path, project_dir: Path) -> None:
 # ─── The agent itself ───────────────────────────────────────────────────
 
 
+def _load_plan_or_fail(spec_dir: Path) -> dict | None:
+    """Load + parse test_plan.json. Returns the plan dict, or None after
+    writing an ``evaluator_failed`` status patch when missing/unparseable."""
+    plan_path = spec_dir / "test_plan.json"
+    if not plan_path.exists():
+        _write_status_patch(
+            spec_dir,
+            status="evaluator_failed",
+            phase="evaluator_no_plan",
+            evaluator_error="test_plan.json not found",
+        )
+        return None
+    try:
+        return json.loads(plan_path.read_text())
+    except json.JSONDecodeError as exc:
+        _write_status_patch(
+            spec_dir,
+            status="evaluator_failed",
+            phase="evaluator_plan_unparseable",
+            evaluator_error=f"test_plan.json invalid: {exc}",
+        )
+        return None
+
+
+def _write_empty_verdicts(spec_dir: Path, mode: str) -> None:
+    """Write an empty verdicts.json + ``evaluated_empty`` status (no work case)."""
+    verdicts_dir = spec_dir / "findings"
+    verdicts_dir.mkdir(parents=True, exist_ok=True)
+    (verdicts_dir / "verdicts.json").write_text(
+        json.dumps(
+            {
+                "evaluator_version": _EVALUATOR_VERSION,
+                "mode": mode,
+                "verdicts": [],
+                "generated_at": _now_iso(),
+            },
+            indent=2,
+        )
+    )
+    _write_status_patch(
+        spec_dir,
+        status="evaluated_empty",
+        phase="evaluator_no_completed_subtasks",
+        verdicts_count=0,
+    )
+
+
+def _build_kube_or_static_bundle(
+    spec_dir, project_dir, st, *, make_runner, make_bundle
+):
+    """Build one signal bundle for a subtask whose target may be Kubernetes.
+
+    When the subtask's target resolves to a kube runtime, port-forward it for
+    the run lifetime (#108) and use ``runtime.target_url``; otherwise use the
+    static target URL. ``make_runner(url)`` builds the runner_fn and
+    ``make_bundle(runner_fn)`` builds the EvaluatorSignals bundle.
+    """
+    rt = _kube_runtime_for(_resolve_target(spec_dir, st))
+    if rt is not None:
+        with rt as runtime:
+            return make_bundle(make_runner(runtime.target_url))
+    return make_bundle(make_runner(_browser_target_url(spec_dir, st)))
+
+
+def _build_all_bundles(spec_dir, project_dir, unit, browser, api, jest) -> list:
+    """Compute the per-test signal bundle for every completed subtask.
+
+    runner_fn is the mockable seam — tests pass canned results so Docker isn't
+    required. Browser/api targets may be Kubernetes (port-forwarded, #108).
+    """
+    bundles = []
+    if unit:
+        unit_runner = _resolve_runner_fn(spec_dir, project_dir)
+        bundles += [
+            _build_signal_bundle(spec_dir, project_dir, st, unit_runner) for st in unit
+        ]
+    for st in browser:
+        # Stage the generated spec into the checkout so the Playwright runner
+        # (mounts project_dir at /repo) can see it.
+        _stage_browser_test(spec_dir, project_dir, st)
+        bundles.append(
+            _build_kube_or_static_bundle(
+                spec_dir,
+                project_dir,
+                st,
+                make_runner=lambda url, st=st: _resolve_browser_runner_fn(
+                    url, spec_dir=spec_dir, subtask=st
+                ),
+                make_bundle=lambda runner, st=st: _build_browser_signal_bundle(
+                    spec_dir, project_dir, st, runner
+                ),
+            )
+        )
+    for st in api:
+        # network="host" so the in-container httpx test can reach the
+        # host-served app at the target URL (e.g. http://localhost:8200).
+        bundles.append(
+            _build_kube_or_static_bundle(
+                spec_dir,
+                project_dir,
+                st,
+                make_runner=lambda url, st=st: _resolve_runner_fn(
+                    spec_dir, project_dir, network="host", target_url=url, subtask=st
+                ),
+                make_bundle=lambda runner, st=st: _build_api_signal_bundle(
+                    spec_dir, project_dir, st, runner
+                ),
+            )
+        )
+    if jest:
+        jest_runner = _resolve_jest_runner_fn()
+        bundles += [
+            _build_jest_signal_bundle(spec_dir, project_dir, st, jest_runner)
+            for st in jest
+        ]
+    return bundles
+
+
+async def _run_evaluator_session(spec_dir, project_dir, bundles, verbose) -> bool:
+    """Invoke the LLM with the signal bundles, then validate verdicts.json.
+
+    Returns True on success (status → ``evaluated`` and Triager scheduled),
+    False on a session error or invalid verdicts (status → ``evaluator_failed``).
+    """
+    from prompts_pkg.prompts import get_tfactory_evaluator_prompt
+
+    prompt = get_tfactory_evaluator_prompt(spec_dir, project_dir, bundles)
+    client = await _resolve_evaluator_client(spec_dir, project_dir)
+    try:
+        session_status, _response, _err = await _invoke_session(
+            client,
+            prompt,
+            spec_dir,
+            verbose,
+        )
+    except Exception as exc:  # noqa: BLE001 — surface in status
+        _eval_log.error("evaluator session raised: %s\n%s", exc, traceback.format_exc())
+        _write_status_patch(
+            spec_dir,
+            status="evaluator_failed",
+            phase="evaluator_session_error",
+            evaluator_error=str(exc)[:500],
+        )
+        return False
+
+    verdicts_path = spec_dir / "findings" / "verdicts.json"
+    ok, err, count = _validate_verdicts(verdicts_path)
+    if not ok:
+        _write_status_patch(
+            spec_dir,
+            status="evaluator_failed",
+            phase="evaluator_invalid_verdicts",
+            evaluator_error=err,
+        )
+        return False
+
+    _write_status_patch(
+        spec_dir,
+        status="evaluated",
+        phase="evaluator_complete",
+        verdicts_count=count,
+        tests_evaluated=len(bundles),
+    )
+    # Forward-chain to the Triager (Task 8, #9). Gated by ``TFACTORY_AUTO_TRIAGE``
+    # env; tests pin it off to keep this layer deterministic.
+    _advance_to_triager(spec_dir, project_dir)
+    return True
+
+
 async def run_evaluator(
     spec_dir: Path,
     project_dir: Path,
@@ -1279,26 +1440,9 @@ async def run_evaluator(
             phase=f"evaluator_{mode}_started",
         )
 
-        # 1. Load the plan + filter to completed functional subtasks.
-        plan_path = spec_dir / "test_plan.json"
-        if not plan_path.exists():
-            _write_status_patch(
-                spec_dir,
-                status="evaluator_failed",
-                phase="evaluator_no_plan",
-                evaluator_error="test_plan.json not found",
-            )
-            return False
-
-        try:
-            plan = json.loads(plan_path.read_text())
-        except json.JSONDecodeError as exc:
-            _write_status_patch(
-                spec_dir,
-                status="evaluator_failed",
-                phase="evaluator_plan_unparseable",
-                evaluator_error=f"test_plan.json invalid: {exc}",
-            )
+        # 1. Load the plan + filter to completed subtasks per lane.
+        plan = _load_plan_or_fail(spec_dir)
+        if plan is None:
             return False
 
         unit_completed = _completed_functional_subtasks(plan)
@@ -1309,151 +1453,22 @@ async def run_evaluator(
 
         # 2. No work — early exit with evaluated_empty.
         if not completed:
-            verdicts_dir = spec_dir / "findings"
-            verdicts_dir.mkdir(parents=True, exist_ok=True)
-            (verdicts_dir / "verdicts.json").write_text(
-                json.dumps(
-                    {
-                        "evaluator_version": "task7-commit5",
-                        "mode": mode,
-                        "verdicts": [],
-                        "generated_at": _now_iso(),
-                    },
-                    indent=2,
-                )
-            )
-            _write_status_patch(
-                spec_dir,
-                status="evaluated_empty",
-                phase="evaluator_no_completed_subtasks",
-                verdicts_count=0,
-            )
+            _write_empty_verdicts(spec_dir, mode)
             return True
 
-        # 3. Per-test signal computation (real primitives; runner_fn
-        #    seam mocked in tests so docker isn't required).
-        bundles = []
-        if unit_completed:
-            unit_runner = _resolve_runner_fn(spec_dir, project_dir)
-            bundles += [
-                _build_signal_bundle(spec_dir, project_dir, st, unit_runner)
-                for st in unit_completed
-            ]
-        if browser_completed:
-            for st in browser_completed:
-                # Stage the generated spec into the checkout so the Playwright
-                # runner (mounts project_dir at /repo) can see it.
-                _stage_browser_test(spec_dir, project_dir, st)
-                # A kubernetes target has no static base_url — port-forward it
-                # for the run lifetime (#108); else use the static target URL.
-                rt = _kube_runtime_for(_resolve_target(spec_dir, st))
-                if rt is not None:
-                    with rt as runtime:
-                        browser_runner = _resolve_browser_runner_fn(
-                            runtime.target_url, spec_dir=spec_dir, subtask=st
-                        )
-                        bundles.append(
-                            _build_browser_signal_bundle(
-                                spec_dir, project_dir, st, browser_runner
-                            )
-                        )
-                else:
-                    url = _browser_target_url(spec_dir, st)
-                    browser_runner = _resolve_browser_runner_fn(
-                        url, spec_dir=spec_dir, subtask=st
-                    )
-                    bundles.append(
-                        _build_browser_signal_bundle(
-                            spec_dir, project_dir, st, browser_runner
-                        )
-                    )
-        if api_completed:
-            for st in api_completed:
-                # network="host" so the in-container httpx test can reach the
-                # host-served app at the target URL (e.g. http://localhost:8200).
-                # A kubernetes target is port-forwarded for the run lifetime (#108).
-                rt = _kube_runtime_for(_resolve_target(spec_dir, st))
-                if rt is not None:
-                    with rt as runtime:
-                        api_runner = _resolve_runner_fn(
-                            spec_dir,
-                            project_dir,
-                            network="host",
-                            target_url=runtime.target_url,
-                            subtask=st,
-                        )
-                        bundles.append(
-                            _build_api_signal_bundle(
-                                spec_dir, project_dir, st, api_runner
-                            )
-                        )
-                else:
-                    url = _browser_target_url(spec_dir, st)
-                    api_runner = _resolve_runner_fn(
-                        spec_dir,
-                        project_dir,
-                        network="host",
-                        target_url=url,
-                        subtask=st,
-                    )
-                    bundles.append(
-                        _build_api_signal_bundle(spec_dir, project_dir, st, api_runner)
-                    )
-        if jest_completed:
-            jest_runner = _resolve_jest_runner_fn()
-            bundles += [
-                _build_jest_signal_bundle(spec_dir, project_dir, st, jest_runner)
-                for st in jest_completed
-            ]
-
-        # 4. Build prompt + invoke SDK session.
-        from prompts_pkg.prompts import get_tfactory_evaluator_prompt
-
-        prompt = get_tfactory_evaluator_prompt(spec_dir, project_dir, bundles)
-        client = await _resolve_evaluator_client(spec_dir, project_dir)
-        try:
-            session_status, _response, _err = await _invoke_session(
-                client,
-                prompt,
-                spec_dir,
-                verbose,
-            )
-        except Exception as exc:  # noqa: BLE001 — surface in status
-            _eval_log.error(
-                "evaluator session raised: %s\n%s", exc, traceback.format_exc()
-            )
-            _write_status_patch(
-                spec_dir,
-                status="evaluator_failed",
-                phase="evaluator_session_error",
-                evaluator_error=str(exc)[:500],
-            )
-            return False
-
-        # 5. Validate the verdicts.json the agent wrote.
-        verdicts_path = spec_dir / "findings" / "verdicts.json"
-        ok, err, count = _validate_verdicts(verdicts_path)
-        if not ok:
-            _write_status_patch(
-                spec_dir,
-                status="evaluator_failed",
-                phase="evaluator_invalid_verdicts",
-                evaluator_error=err,
-            )
-            return False
-
-        _write_status_patch(
+        # 3. Per-test signal computation (real primitives; runner_fn seam
+        #    mocked in tests so docker isn't required).
+        bundles = _build_all_bundles(
             spec_dir,
-            status="evaluated",
-            phase="evaluator_complete",
-            verdicts_count=count,
-            tests_evaluated=len(bundles),
+            project_dir,
+            unit_completed,
+            browser_completed,
+            api_completed,
+            jest_completed,
         )
-        # Forward-chain to the Triager (Task 8, #9). Gated by
-        # ``TFACTORY_AUTO_TRIAGE`` env; tests pin it off to keep
-        # this layer deterministic.
-        _advance_to_triager(spec_dir, project_dir)
-        return True
+
+        # 4-5. Invoke the SDK session + validate the verdicts it wrote.
+        return await _run_evaluator_session(spec_dir, project_dir, bundles, verbose)
 
     except Exception as exc:
         _eval_log.error("evaluator failed: %s\n%s", exc, traceback.format_exc())

@@ -83,12 +83,16 @@ per the "no automatic pushes" policy. Operators opt in via:
   - `TFACTORY_TRIAGER_GIT_WRITE=1`
   - `TFACTORY_TRIAGER_PR_COMMENT=1`
 
-**Triager completion callback (#85)** — when the task reaches a terminal
+**Triager completion callback (#85 / #198)** — when the task reaches a terminal
 status (`triaged` / `triaged_empty` / `triager_failed`), an opt-in callback
 fires so `/tfactory-watch` needs no polling. Both default OFF and are
-best-effort (a failing target never breaks the pipeline):
-  - `TFACTORY_COMPLETION_WEBHOOK=<url>` — POSTs `{task_id, project_id, status,
-    phase, updated_at}` (timeout `TFACTORY_COMPLETION_WEBHOOK_TIMEOUT`, default 5s)
+best-effort (a failing target never breaks the pipeline). Both carry the v1
+**normalized completion-event envelope** (`schema_version`, `event`, `service`,
+`correlation_id` = the GitHub issue #, `outcome`, + the legacy flat fields) —
+the cross-service shape from the Factory PARR-spine epic; see
+`docs/completion-event-envelope.md`:
+  - `TFACTORY_COMPLETION_WEBHOOK=<url>` — POSTs the envelope as JSON (timeout
+    `TFACTORY_COMPLETION_WEBHOOK_TIMEOUT`, default 5s)
   - `TFACTORY_COMPLETION_SENTINEL=1` — writes `findings/COMPLETED.json` a
     same-host watcher can stat instead of polling
 
@@ -781,7 +785,7 @@ Access the web UI at `http://localhost:3100` (or your server IP for remote acces
 **Backend (`apps/web-server/.env`):**
 ```bash
 APP_HOST=0.0.0.0      # Listen on all interfaces
-APP_PORT=3102          # API server port
+APP_PORT=3103          # API server port
 APP_DEBUG=true         # Enable Swagger docs at /docs
 # APP_API_TOKEN=xxx    # Optional: Set fixed token (auto-generated if not set)
 ```
@@ -789,14 +793,14 @@ APP_DEBUG=true         # Enable Swagger docs at /docs
 **Frontend (`apps/frontend-web/.env`):**
 ```bash
 VITE_API_BASE_URL=/api                    # API base (proxied to backend)
-VITE_WS_BASE_URL=ws://your-server:3102    # WebSocket URL for remote deployments
-VITE_API_URL=http://localhost:3102        # Backend URL for Vite proxy
+VITE_WS_BASE_URL=ws://your-server:3103    # WebSocket URL for remote deployments
+VITE_API_URL=http://localhost:3103        # Backend URL for Vite proxy
 ```
 
 ### Remote Access
 
 For remote deployments:
-1. Ensure ports 3102 (backend) and 3100 (frontend dev) are accessible
+1. Ensure ports 3103 (backend) and 3100 (frontend dev) are accessible
 2. Set `VITE_WS_BASE_URL` to your server's WebSocket URL
 3. Access via `http://YOUR_SERVER_IP:3100`
 
@@ -805,8 +809,8 @@ For production, build the frontend (`npm run build`) and serve from `apps/web-se
 ### API Documentation
 
 When `APP_DEBUG=true`:
-- Swagger UI: `http://localhost:3102/docs`
-- ReDoc: `http://localhost:3102/redoc`
+- Swagger UI: `http://localhost:3103/docs`
+- ReDoc: `http://localhost:3103/redoc`
 
 See `apps/web-server/README.md` and `apps/frontend-web/README.md` for detailed documentation.
 
@@ -915,7 +919,7 @@ python run.py --spec 001
 
 **With the Web interface**:
 ```bash
-# Start backend (port 3102)
+# Start backend (port 3103)
 cd apps/web-server && source .venv/bin/activate && python -m server.main
 
 # Start frontend (port 3100)

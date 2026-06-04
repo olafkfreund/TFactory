@@ -32,7 +32,7 @@ python -m server.main
 
 The server will:
 1. Generate an API token on first run (saved to `~/.aifactory/.token`)
-2. Start on `http://0.0.0.0:3102`
+2. Start on `http://0.0.0.0:3103`
 3. Print the token to console
 
 ## Configuration
@@ -42,7 +42,7 @@ Copy `.env.example` to `.env` and customize:
 ```bash
 # Server settings
 APP_HOST=0.0.0.0
-APP_PORT=3102
+APP_PORT=3103
 APP_DEBUG=true
 
 # SSL/HTTPS (optional)
@@ -88,8 +88,8 @@ When SSL is enabled without custom certificates, self-signed certificates are au
 ## API Documentation
 
 When `APP_DEBUG=true`, API docs are available at:
-- Swagger UI: `http://localhost:3102/docs`
-- ReDoc: `http://localhost:3102/redoc`
+- Swagger UI: `http://localhost:3103/docs`
+- ReDoc: `http://localhost:3103/redoc`
 
 ## API Endpoints
 
@@ -171,12 +171,12 @@ When `APP_DEBUG=true`, API docs are available at:
 All API endpoints (except `/api/health`) require Bearer token authentication:
 
 ```bash
-curl -H "Authorization: Bearer YOUR_TOKEN" http://localhost:3102/api/projects
+curl -H "Authorization: Bearer YOUR_TOKEN" http://localhost:3103/api/projects
 ```
 
 WebSocket connections pass the token as a query parameter:
 ```
-ws://localhost:3102/ws/events?token=YOUR_TOKEN
+ws://localhost:3103/ws/events?token=YOUR_TOKEN
 ```
 
 ## Project Structure
@@ -215,8 +215,8 @@ apps/web-server/
 
 The server listens on all interfaces (`0.0.0.0`) by default. For remote access:
 
-1. Ensure port 3102 is open in your firewall
-2. Access via `http://YOUR_SERVER_IP:3102`
+1. Ensure port 3103 is open in your firewall
+2. Access via `http://YOUR_SERVER_IP:3103`
 3. Use the frontend at `http://YOUR_SERVER_IP:3100` (dev) or serve built files
 
 ## Data Storage
@@ -243,7 +243,7 @@ pytest tests/
 
 The web server is designed to work with `apps/frontend-web`. In development:
 
-1. Start the backend: `python -m server.main` (port 3102)
+1. Start the backend: `python -m server.main` (port 3103)
 2. Start the frontend: `cd ../frontend-web && npm run dev` (port 3100)
 3. Frontend proxies API calls to backend via Vite config
 

@@ -97,3 +97,59 @@ def test_webhook_failure_is_swallowed(tmp_path: Path, monkeypatch: pytest.Monkey
     # Must NOT raise — the pipeline can never break on a failed webhook.
     _write_status_patch(tmp_path, status="triaged")
     assert json.loads((tmp_path / "status.json").read_text())["status"] == "triaged"
+
+
+# ─── v1 normalized completion-event envelope (#198) ─────────────────────
+
+
+def _completed_envelope(spec_dir: Path) -> dict:
+    """Read the sentinel envelope after a terminal write."""
+    return json.loads((spec_dir / "findings" / "COMPLETED.json").read_text())
+
+
+def test_envelope_has_normalized_header(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TFACTORY_COMPLETION_SENTINEL", "1")
+    _seed_status(tmp_path)
+    _write_status_patch(
+        tmp_path, status="triaged", phase="triager_complete", committed_count=3
+    )
+    env = _completed_envelope(tmp_path)
+    assert env["schema_version"] == "1.0"
+    assert env["event"] == "completion"
+    assert env["service"] == "tfactory"
+    assert env["outcome"] == "success"
+    assert env["correlation_id"] is None  # no issue number on this run
+    assert env["result"] == {"committed_count": 3}
+    # backward-compat flat fields still present
+    assert env["task_id"] == "042" and env["status"] == "triaged"
+
+
+@pytest.mark.parametrize(
+    "status_value,expected",
+    [("triaged", "success"), ("triaged_empty", "empty"), ("triager_failed", "failure")],
+)
+def test_envelope_outcome_mapping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status_value: str, expected: str
+) -> None:
+    monkeypatch.setenv("TFACTORY_COMPLETION_SENTINEL", "1")
+    _seed_status(tmp_path)
+    _write_status_patch(tmp_path, status=status_value)
+    assert _completed_envelope(tmp_path)["outcome"] == expected
+
+
+def test_envelope_correlation_id_from_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TFACTORY_COMPLETION_SENTINEL", "1")
+    _seed_status(tmp_path)
+    ctx = tmp_path / "context"
+    ctx.mkdir(parents=True, exist_ok=True)
+    (ctx / "source.json").write_text(
+        json.dumps({"issue_number": 412, "branch": "feat/x", "repo_slug": "o/r"})
+    )
+    _write_status_patch(tmp_path, status="triaged")
+    env = _completed_envelope(tmp_path)
+    assert env["correlation_id"] == 412
+    assert env["branch"] == "feat/x" and env["repo"] == "o/r"

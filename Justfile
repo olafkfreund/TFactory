@@ -24,9 +24,9 @@ setup-token:
 
 # ----- dev -----
 
-# Start the FastAPI web-server (port 3102)
+# Start the FastAPI web-server (port 3103)
 backend:
-    cd apps/web-server && python -m server.main
+    cd apps/web-server && .venv/bin/python -m server.main
 
 # Start the Vite dev server (port 3100)
 frontend:
