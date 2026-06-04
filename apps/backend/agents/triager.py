@@ -490,6 +490,21 @@ def _correlation_issue_number(status: dict, source: dict) -> int | None:
     return None
 
 
+def _correlation_key(status: dict, source: dict, spec_dir: Path) -> str:
+    """The RFC-0001 spine correlation key — a string, never null.
+
+    The GitHub issue number rendered as a string, with a synthetic
+    ``tf-<spec_id>`` fallback for runs that have no issue yet. This is the
+    canonical key CFactory and the other Factory services correlate on
+    (see olafkfreund/Factory RFC-0001).
+    """
+    issue = _correlation_issue_number(status, source)
+    if issue is not None:
+        return str(issue)
+    spec_id = status.get("spec_id") or source.get("spec_id") or status.get("task_id") or spec_dir.name
+    return f"tf-{spec_id}"
+
+
 def _completion_result_summary(status: dict) -> dict:
     """Service-specific result counts for the envelope (absent keys omitted)."""
     keys = (
@@ -507,8 +522,11 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> dict:
 
     The flat #85 fields (``task_id``, ``project_id``, ``status``, ``phase``,
     ``updated_at``) are retained for backward-compat; the normalized header
-    (``schema_version``, ``event``, ``service``, ``correlation_id``,
+    (``schema_version``, ``event``, ``service``, ``correlation_key``,
     ``outcome``) plus repo/branch context + a result summary sit on top.
+
+    ``correlation_key`` is the RFC-0001 spine key (string, never null); the
+    legacy ``correlation_id`` (int|null) is kept as an alias for older readers.
     """
     source = _load_source_meta(spec_dir)
     status_value = status.get("status")
@@ -516,13 +534,14 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> dict:
         "schema_version": _COMPLETION_SCHEMA_VERSION,
         "event": "completion",
         "service": "tfactory",
+        "correlation_key": _correlation_key(status, source, spec_dir),
         "correlation_id": _correlation_issue_number(status, source),
         "task_id": status.get("task_id") or spec_dir.name,
         "project_id": status.get("project_id"),
         "spec_id": status.get("spec_id") or source.get("spec_id"),
         "status": status_value,
         "outcome": _outcome_for_status(status_value),
-        "phase": status.get("phase"),
+        "phase": status.get("phase") or "test",
         "repo": source.get("repo_slug") or source.get("repo"),
         "branch": source.get("branch"),
         "pr_number": source.get("pr_number") or None,

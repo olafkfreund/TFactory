@@ -121,6 +121,8 @@ def test_envelope_has_normalized_header(
     assert env["service"] == "tfactory"
     assert env["outcome"] == "success"
     assert env["correlation_id"] is None  # no issue number on this run
+    # RFC-0001 spine key: string, never null — synthetic fallback when no issue.
+    assert env["correlation_key"] == "tf-042"
     assert env["result"] == {"committed_count": 3}
     # backward-compat flat fields still present
     assert env["task_id"] == "042" and env["status"] == "triaged"
@@ -152,4 +154,6 @@ def test_envelope_correlation_id_from_source(
     _write_status_patch(tmp_path, status="triaged")
     env = _completed_envelope(tmp_path)
     assert env["correlation_id"] == 412
+    # RFC-0001 spine key is the issue number as a string.
+    assert env["correlation_key"] == "412"
     assert env["branch"] == "feat/x" and env["repo"] == "o/r"

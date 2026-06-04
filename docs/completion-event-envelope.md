@@ -11,10 +11,16 @@ for the other services to match.
 
 ## Correlation key
 
-The spine correlation key is the **GitHub issue number** threaded end-to-end
-(`correlation_id`). TFactory reads it from `status.json` or
-`context/source.json` (`issue_number` / `correlation_id`); it is `null` until a
-run carries one (populated by the PFactory pickup contract, epic #193).
+The spine correlation key is **`correlation_key`** (string, never null), per
+[Factory RFC-0001](https://github.com/olafkfreund/Factory/blob/main/docs/rfc/0001-correlation-key-and-completion-event.md):
+the **GitHub issue number** rendered as a string, with a synthetic
+`tf-<spec_id>` fallback until a run carries an issue (populated by the PFactory
+pickup contract, epic #193). TFactory reads the issue number from `status.json`
+or `context/source.json` (`issue_number` / `correlation_id`).
+
+> `correlation_key` (string) is the canonical RFC-0001 key consumers (CFactory)
+> match on. The legacy `correlation_id` (int | null) is retained as an alias for
+> older readers.
 
 ## Schema
 
