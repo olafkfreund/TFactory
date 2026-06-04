@@ -1,205 +1,15 @@
 """
-Planner Agent Module
-====================
+TFactory Planner Agent
+======================
 
-Handles follow-up planner sessions for adding new subtasks to completed specs.
+Turns an AIFactory acceptance-criteria spec + diff into a fresh, lane-tagged
+``test_plan.json`` (initial mode), and revises it when Gen-Functional rejects
+a subtask (replan mode).
+
+The legacy "add subtasks to a completed spec" flow (``run_followup_planner``)
+lives in ``followup_planner.py`` — it shares no logic with this module and is
+re-exported below only for backward-compatible attribute access.
 """
-
-import logging
-from pathlib import Path
-
-from core.client import create_client
-from phase_config import (
-    get_phase_model,
-    get_phase_thinking_budget,
-    get_provider_extra_kwargs,
-    infer_provider_from_model,
-)
-from phase_event import ExecutionPhase, emit_phase
-from providers.factory import get_provider
-from task_logger import (
-    LogPhase,
-    get_task_logger,
-)
-from ui import (
-    BuildState,
-    Icons,
-    StatusManager,
-    bold,
-    box,
-    highlight,
-    icon,
-    muted,
-    print_status,
-)
-
-from .auth_tagging import apply_requires_auth_from_config
-from .session import run_agent_session
-
-logger = logging.getLogger(__name__)
-
-
-async def run_followup_planner(
-    project_dir: Path,
-    spec_dir: Path,
-    model: str,
-    verbose: bool = False,
-) -> bool:
-    """
-    Run the follow-up planner to add new subtasks to a completed spec.
-
-    This is a simplified version of run_autonomous_agent that:
-    1. Creates a client
-    2. Loads the followup planner prompt
-    3. Runs a single planning session
-    4. Returns after the plan is updated (doesn't enter coding loop)
-
-    The planner agent will:
-    - Read FOLLOWUP_REQUEST.md for the new task
-    - Read the existing test_plan.json
-    - Add new phase(s) with pending subtasks
-    - Update the plan status back to in_progress
-
-    Args:
-        project_dir: Root directory for the project
-        spec_dir: Directory containing the completed spec
-        model: Claude model to use
-        verbose: Whether to show detailed output
-
-    Returns:
-        bool: True if planning completed successfully
-    """
-    from prompts import get_followup_planner_prompt
-    from test_plan import ImplementationPlan
-
-    # Initialize status manager for ccstatusline
-    status_manager = StatusManager(project_dir)
-    status_manager.set_active(spec_dir.name, BuildState.PLANNING)
-    emit_phase(ExecutionPhase.PLANNING, "Follow-up planning")
-
-    # Initialize task logger for persistent logging
-    task_logger = get_task_logger(spec_dir)
-
-    # Show header
-    content = [
-        bold(f"{icon(Icons.GEAR)} FOLLOW-UP PLANNER SESSION"),
-        "",
-        f"Spec: {highlight(spec_dir.name)}",
-        muted("Adding follow-up work to completed spec."),
-        "",
-        muted("The agent will read your FOLLOWUP_REQUEST.md and add new subtasks."),
-    ]
-    print()
-    print(box(content, width=70, style="heavy"))
-    print()
-
-    # Start planning phase in task logger
-    if task_logger:
-        task_logger.start_phase(LogPhase.PLANNING, "Starting follow-up planning...")
-        task_logger.set_session(1)
-
-    # Create client with phase-specific model and thinking budget
-    # Respects task_metadata.json configuration when no CLI override
-    planning_model = get_phase_model(spec_dir, "planning", model)
-    planning_thinking_budget = get_phase_thinking_budget(spec_dir, "planning")
-    provider_name = infer_provider_from_model(planning_model)
-    if provider_name == "claude":
-        client = create_client(
-            project_dir,
-            spec_dir,
-            planning_model,
-            max_thinking_tokens=planning_thinking_budget,
-        )
-    else:
-        provider_kwargs = {
-            "model": planning_model,
-            "working_dir": project_dir,
-            **get_provider_extra_kwargs(provider_name, planning_model),
-        }
-        client = get_provider(
-            provider_name,
-            phase="planning",
-            **provider_kwargs,
-        )
-
-    # Generate follow-up planner prompt
-    prompt = get_followup_planner_prompt(spec_dir)
-
-    print_status("Running follow-up planner...", "progress")
-    print()
-
-    try:
-        # Run single planning session
-        async with client:
-            status, response, _error_info = await run_agent_session(
-                client, prompt, spec_dir, verbose, phase=LogPhase.PLANNING
-            )
-
-        # End planning phase in task logger
-        if task_logger:
-            task_logger.end_phase(
-                LogPhase.PLANNING,
-                success=(status != "error"),
-                message="Follow-up planning session completed",
-            )
-
-        if status == "error":
-            print()
-            print_status("Follow-up planning failed", "error")
-            status_manager.update(state=BuildState.ERROR)
-            return False
-
-        # Verify the plan was updated (should have pending subtasks now)
-        plan_file = spec_dir / "test_plan.json"
-        if plan_file.exists():
-            plan = ImplementationPlan.load(plan_file)
-
-            # Check if there are any pending subtasks
-            all_subtasks = [c for p in plan.phases for c in p.subtasks]
-            pending_subtasks = [c for c in all_subtasks if c.status.value == "pending"]
-
-            if pending_subtasks:
-                # Reset the plan status to in_progress (in case planner didn't)
-                plan.reset_for_followup()
-                plan.save(plan_file)
-
-                print()
-                content = [
-                    bold(f"{icon(Icons.SUCCESS)} FOLLOW-UP PLANNING COMPLETE"),
-                    "",
-                    f"New pending subtasks: {highlight(str(len(pending_subtasks)))}",
-                    f"Total subtasks: {len(all_subtasks)}",
-                    "",
-                    muted("Next steps:"),
-                    f"  Run: {highlight(f'python tfactory/run.py --spec {spec_dir.name}')}",
-                ]
-                print(box(content, width=70, style="heavy"))
-                print()
-                status_manager.update(state=BuildState.PAUSED)
-                return True
-            else:
-                print()
-                print_status(
-                    "Warning: No pending subtasks found after planning", "warning"
-                )
-                print(muted("The planner may not have added new subtasks."))
-                print(muted("Check test_plan.json manually."))
-                status_manager.update(state=BuildState.PAUSED)
-                return False
-        else:
-            print()
-            print_status("Error: test_plan.json not found after planning", "error")
-            status_manager.update(state=BuildState.ERROR)
-            return False
-
-    except Exception as e:
-        print()
-        print_status(f"Follow-up planning error: {e}", "error")
-        if task_logger:
-            task_logger.log_error(f"Follow-up planning error: {e}", LogPhase.PLANNING)
-        status_manager.update(state=BuildState.ERROR)
-        return False
-
 
 # ---------------------------------------------------------------------------
 # TFactory Planner (Tasks 5-6, #6 / Task 5 v0.2 polyglot extension #21)
@@ -213,14 +23,17 @@ async def run_followup_planner(
 #   get_tfactory_planner_prompt injects FRAMEWORK REGISTRY + TESTS CATALOG
 #   context blocks so the agent picks the right framework per subtask.
 # ---------------------------------------------------------------------------
-
 import asyncio
 import json
 import logging as _logging
 import os
 import traceback
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Literal
+
+from .auth_tagging import apply_requires_auth_from_config
+from .followup_planner import run_followup_planner  # noqa: F401 — back-compat re-export
 
 _planner_log = _logging.getLogger(__name__ + ".tfactory")
 
@@ -394,6 +207,19 @@ def _validate_emitted_plan(spec_dir: Path) -> tuple[bool, str, object | None]:
         )
         return True, "", plan
 
+    ok, detail = _validate_framework_consistency(plan, registry)
+    if not ok:
+        return False, "invalid_framework", detail
+    return True, "", plan
+
+
+def _validate_framework_consistency(plan, registry) -> tuple[bool, str]:
+    """Check every subtask's (language, framework, lane) against the registry.
+
+    v0.1-style subtasks (neither ``language`` nor ``framework`` set) skip the
+    check so legacy plans round-trip cleanly. Returns ``(ok, detail)`` where
+    ``detail`` is the human-readable reason on failure and ``""`` on success.
+    """
     for phase in plan.phases:
         for st in phase.subtasks:
             # Both None → v0.1 subtask; skip.
@@ -401,36 +227,24 @@ def _validate_emitted_plan(spec_dir: Path) -> tuple[bool, str, object | None]:
                 continue
             # Exactly one set → malformed.
             if st.framework is None or st.language is None:
-                return (
-                    False,
-                    "invalid_framework",
-                    (
-                        f"subtask {st.id!r}: must set both 'language' AND 'framework', "
-                        f"or neither (got language={st.language!r}, "
-                        f"framework={st.framework!r})"
-                    ),
+                return False, (
+                    f"subtask {st.id!r}: must set both 'language' AND 'framework', "
+                    f"or neither (got language={st.language!r}, "
+                    f"framework={st.framework!r})"
                 )
             # Framework not in registry.
             if st.framework not in registry:
-                return (
-                    False,
-                    "invalid_framework",
-                    (
-                        f"subtask {st.id!r}: framework {st.framework!r} is not in the "
-                        f"registry. Known frameworks: {sorted(registry.keys())}"
-                    ),
+                return False, (
+                    f"subtask {st.id!r}: framework {st.framework!r} is not in the "
+                    f"registry. Known frameworks: {sorted(registry.keys())}"
                 )
             descriptor = registry[st.framework]
             # Language mismatch.
             if descriptor.language != st.language:
-                return (
-                    False,
-                    "invalid_framework",
-                    (
-                        f"subtask {st.id!r}: framework {st.framework!r} targets language "
-                        f"{descriptor.language!r}, but subtask declared "
-                        f"language={st.language!r}"
-                    ),
+                return False, (
+                    f"subtask {st.id!r}: framework {st.framework!r} targets language "
+                    f"{descriptor.language!r}, but subtask declared "
+                    f"language={st.language!r}"
                 )
             # Lane not supported by this framework.
             lane_str = st.lane.value if hasattr(st.lane, "value") else str(st.lane)
@@ -438,16 +252,12 @@ def _validate_emitted_plan(spec_dir: Path) -> tuple[bool, str, object | None]:
                 ln.value if hasattr(ln, "value") else str(ln) for ln in descriptor.lanes
             ]
             if lane_str not in supported:
-                return (
-                    False,
-                    "invalid_framework",
-                    (
-                        f"subtask {st.id!r}: framework {st.framework!r} supports lanes "
-                        f"{supported}, but subtask declared lane {lane_str!r}"
-                    ),
+                return False, (
+                    f"subtask {st.id!r}: framework {st.framework!r} supports lanes "
+                    f"{supported}, but subtask declared lane {lane_str!r}"
                 )
 
-    return True, "", plan
+    return True, ""
 
 
 # ─── Replan helpers (commit 5 of 6) ────────────────────────────────────────
@@ -506,19 +316,9 @@ def _bump_replan_count_and_maybe_stuck(plan, subtask_id: str) -> tuple[int, bool
     subtask.replan_count = (subtask.replan_count or 0) + 1
     became_stuck = subtask.replan_count >= _STUCK_AFTER_REPLANS
     if became_stuck:
-        # Use the enum value (string) — SubtaskStatus members serialise
-        # as their .value via to_dict.
-        # "stuck" isn't in the base SubtaskStatus enum, but the from_dict
-        # tolerates the literal so we set it via the raw string-enum
-        # access. If "stuck" ever lands as a proper enum member, this
-        # keeps working.
-        try:
-            subtask.status = SubtaskStatus("stuck")
-        except ValueError:
-            # SubtaskStatus enum doesn't include "stuck" yet — use
-            # FAILED as the closest existing semantic equivalent and
-            # rely on the planner_warnings to convey "stuck-via-replan".
-            subtask.status = SubtaskStatus.FAILED
+        # STUCK is a first-class SubtaskStatus member; it serialises as
+        # "stuck" via to_dict and round-trips through from_dict.
+        subtask.status = SubtaskStatus.STUCK
     return subtask.replan_count, became_stuck
 
 
@@ -549,6 +349,160 @@ def _check_existing_phases_preserved(
     if len(new_phases) > 1:
         return False, f"agent added {len(new_phases)} new phases; expected 1 replan-N"
     return True, ""
+
+
+async def _run_session_with_retry(
+    spec_dir: Path,
+    project_dir: Path,
+    prompt: str,
+    verbose: bool,
+    *,
+    session_error_phase: str,
+    invalid_after_retry_prefix: str,
+) -> tuple[bool, object | None]:
+    """Invoke a planner session, validate the emitted plan, and retry once.
+
+    Shared by initial and replan modes — only the status-phase strings differ:
+      - ``session_error_phase``: written on any session ``status=error``.
+      - ``invalid_after_retry_prefix``: prefix for the post-retry invalid
+        phase, e.g. ``"planner_invalid_"`` → ``"planner_invalid_<kind>_after_retry"``.
+
+    Returns ``(ok, plan)``. On failure it has already written the appropriate
+    ``planner_failed`` status patch, so the caller just returns ``False``.
+    """
+    client = await _resolve_planner_client(spec_dir, project_dir)
+    session_status, _response, _error = await _invoke_session(
+        client, prompt, spec_dir, verbose
+    )
+    if session_status == "error":
+        _write_status_patch(
+            spec_dir,
+            status="planner_failed",
+            phase=session_error_phase,
+            planner_error="run_agent_session returned status=error",
+        )
+        return False, None
+
+    ok, err_kind, plan = _validate_emitted_plan(spec_dir)
+    if ok:
+        return True, plan
+
+    _planner_log.warning(
+        "planner: first session produced %s (%s); retrying once", err_kind, plan
+    )
+    retry_prompt = _build_retry_prompt(prompt, err_kind, str(plan or "")[:300])
+    client_retry = await _resolve_planner_client(spec_dir, project_dir)
+    retry_status, _r, _re = await _invoke_session(
+        client_retry, retry_prompt, spec_dir, verbose
+    )
+    if retry_status == "error":
+        _write_status_patch(
+            spec_dir,
+            status="planner_failed",
+            phase=session_error_phase,
+            planner_error="retry session returned status=error",
+        )
+        return False, None
+
+    ok, err_kind, plan = _validate_emitted_plan(spec_dir)
+    if not ok:
+        _write_status_patch(
+            spec_dir,
+            status="planner_failed",
+            phase=f"{invalid_after_retry_prefix}{err_kind}_after_retry",
+            planner_error=f"after retry: {err_kind} — {str(plan or '')[:200]}",
+        )
+        return False, None
+    return True, plan
+
+
+def _apply_auth_and_truncate(
+    spec_dir: Path, project_dir: Path, plan
+) -> tuple[list[str], int]:
+    """Tag requires_auth from .tfactory.yml and enforce the subtask cap.
+
+    Persists the plan whenever it mutates it. Returns ``(warnings, subtask_count)``.
+    """
+    plan_file = spec_dir / "test_plan.json"
+    subtask_count = _count_subtasks(plan)
+    warnings: list[str] = []
+
+    # #107 task 6: deterministically tag subtasks whose target uses ref-auth
+    # in .tfactory.yml so the storageState login path is used. Best-effort —
+    # a missing/malformed config tags nothing.
+    auth_tagged = apply_requires_auth_from_config(plan, project_dir)
+    if auth_tagged:
+        plan.save(plan_file)
+        warnings.append(
+            f"tagged {auth_tagged} subtask(s) requires_auth from "
+            ".tfactory.yml ref-auth targets (#107)"
+        )
+
+    if subtask_count > _HARD_SUBTASK_CAP:
+        dropped = _truncate_subtasks(plan, _HARD_SUBTASK_CAP)
+        warnings.append(
+            f"emitted {subtask_count} subtasks; truncated to "
+            f"{_HARD_SUBTASK_CAP} (dropped {dropped})"
+        )
+        plan.save(plan_file)
+        subtask_count = _HARD_SUBTASK_CAP
+    elif subtask_count > _SOFT_SUBTASK_WARN:
+        warnings.append(
+            f"emitted {subtask_count} subtasks "
+            f"(soft warning above {_SOFT_SUBTASK_WARN})"
+        )
+    return warnings, subtask_count
+
+
+def _finalize_replan(
+    spec_dir: Path, project_dir: Path, plan_after, replan_request: dict
+) -> None:
+    """Bump replan_count, truncate if over budget, persist, and chain forward.
+
+    Covers replan steps 6-8: replan-count bookkeeping (incl. stuck detection),
+    over-budget truncation, plan persistence, the terminal status patch, and
+    scheduling Gen-Functional to pick up the new replan-N subtask.
+    """
+    original_subtask_id = replan_request["subtask_id"]
+    new_count, became_stuck = _bump_replan_count_and_maybe_stuck(
+        plan_after, original_subtask_id
+    )
+
+    warnings: list[str] = []
+    if new_count == 0:
+        warnings.append(
+            f"replan_request.subtask_id={original_subtask_id!r} not found "
+            f"in plan — replan_count NOT bumped"
+        )
+    elif became_stuck:
+        warnings.append(
+            f"subtask {original_subtask_id!r} hit stuck at replan_count="
+            f"{new_count} — Triager will omit from commit phase"
+        )
+
+    subtask_count = _count_subtasks(plan_after)
+    if subtask_count > _HARD_SUBTASK_CAP:
+        dropped = _truncate_subtasks(plan_after, _HARD_SUBTASK_CAP)
+        warnings.append(
+            f"plan grew to {subtask_count} subtasks post-replan; truncated "
+            f"to {_HARD_SUBTASK_CAP} (dropped {dropped})"
+        )
+        subtask_count = _HARD_SUBTASK_CAP
+
+    plan_after.save(spec_dir / "test_plan.json")
+    _write_status_patch(
+        spec_dir,
+        status="planned",
+        phase="planner_replan_complete",
+        planner_warnings=warnings,
+        subtask_count=subtask_count,
+        last_replan_for=original_subtask_id,
+        last_replan_count=new_count,
+        last_replan_stuck=became_stuck,
+    )
+    # Replan succeeded — schedule Gen-Functional to pick up the new replan-N
+    # subtask (it'll skip already-generated ones from prior phases).
+    _advance_to_gen_functional(spec_dir, project_dir)
 
 
 async def run_planner(
@@ -607,81 +561,21 @@ async def run_planner(
 
         prompt = get_tfactory_planner_prompt(spec_dir, project_dir)
 
-        # Resolve the SDK client
-        client = await _resolve_planner_client(spec_dir, project_dir)
-
-        # Run the agent session — agent's Write tool emits test_plan.json
-        session_status, _response, _err = await _invoke_session(
-            client, prompt, spec_dir, verbose
+        # Run the agent session (agent's Write tool emits test_plan.json),
+        # validate the output, and retry once on missing/malformed.
+        ok, plan = await _run_session_with_retry(
+            spec_dir,
+            project_dir,
+            prompt,
+            verbose,
+            session_error_phase="planner_session_error",
+            invalid_after_retry_prefix="planner_invalid_",
         )
-        if session_status == "error":
-            _write_status_patch(
-                spec_dir,
-                status="planner_failed",
-                phase="planner_session_error",
-                planner_error="run_agent_session returned status=error",
-            )
+        if not ok:
             return False
 
-        # Validate the emitted plan; retry once on missing/malformed.
-        ok, err_kind, plan = _validate_emitted_plan(spec_dir)
-        if not ok:
-            _planner_log.warning(
-                "planner: first session produced %s (%s); retrying once",
-                err_kind,
-                plan,
-            )
-            retry_prompt = _build_retry_prompt(prompt, err_kind, str(plan or "")[:300])
-            client_retry = await _resolve_planner_client(spec_dir, project_dir)
-            retry_status, _r, _re = await _invoke_session(
-                client_retry, retry_prompt, spec_dir, verbose
-            )
-            if retry_status == "error":
-                _write_status_patch(
-                    spec_dir,
-                    status="planner_failed",
-                    phase="planner_session_error",
-                    planner_error="retry session returned status=error",
-                )
-                return False
-            ok, err_kind, plan = _validate_emitted_plan(spec_dir)
-            if not ok:
-                _write_status_patch(
-                    spec_dir,
-                    status="planner_failed",
-                    phase=f"planner_invalid_{err_kind}_after_retry",
-                    planner_error=f"after retry: {err_kind} — {str(plan or '')[:200]}",
-                )
-                return False
-
         # plan is now a valid ImplementationPlan instance.
-        subtask_count = _count_subtasks(plan)
-        warnings: list[str] = []
-
-        # #107 task 6: deterministically tag subtasks whose target uses
-        # ref-auth in .tfactory.yml so the storageState login path is used.
-        # Best-effort — a missing/malformed config tags nothing.
-        auth_tagged = apply_requires_auth_from_config(plan, project_dir)
-        if auth_tagged:
-            plan.save(spec_dir / "test_plan.json")
-            warnings.append(
-                f"tagged {auth_tagged} subtask(s) requires_auth from "
-                ".tfactory.yml ref-auth targets (#107)"
-            )
-
-        if subtask_count > _HARD_SUBTASK_CAP:
-            dropped = _truncate_subtasks(plan, _HARD_SUBTASK_CAP)
-            warnings.append(
-                f"emitted {subtask_count} subtasks; truncated to "
-                f"{_HARD_SUBTASK_CAP} (dropped {dropped})"
-            )
-            plan.save(spec_dir / "test_plan.json")
-            subtask_count = _HARD_SUBTASK_CAP
-        elif subtask_count > _SOFT_SUBTASK_WARN:
-            warnings.append(
-                f"emitted {subtask_count} subtasks "
-                f"(soft warning above {_SOFT_SUBTASK_WARN})"
-            )
+        warnings, subtask_count = _apply_auth_and_truncate(spec_dir, project_dir, plan)
 
         if subtask_count == 0:
             _write_status_patch(
@@ -768,60 +662,22 @@ async def _run_planner_replan(
             )
             return False
 
-        # 3. Build the replan prompt + invoke session.
+        # 3. Build the replan prompt, invoke the session, validate, retry once.
         from prompts_pkg.prompts import get_tfactory_planner_replan_prompt
 
         prompt = get_tfactory_planner_replan_prompt(spec_dir, project_dir)
-        client = await _resolve_planner_client(spec_dir, project_dir)
-        session_status, _response, _err = await _invoke_session(
-            client, prompt, spec_dir, verbose
+        ok_after, plan_after = await _run_session_with_retry(
+            spec_dir,
+            project_dir,
+            prompt,
+            verbose,
+            session_error_phase="planner_replan_session_error",
+            invalid_after_retry_prefix="planner_replan_invalid_",
         )
-        if session_status == "error":
-            _write_status_patch(
-                spec_dir,
-                status="planner_failed",
-                phase="planner_replan_session_error",
-                planner_error="run_agent_session returned status=error",
-            )
+        if not ok_after:
             return False
 
-        # 4. Validate the updated plan. Retry once on missing/malformed
-        #    (same pattern as initial mode).
-        ok_after, err_kind, plan_after = _validate_emitted_plan(spec_dir)
-        if not ok_after:
-            _planner_log.warning(
-                "replan: first session produced %s (%s); retrying once",
-                err_kind,
-                plan_after,
-            )
-            retry_prompt = _build_retry_prompt(
-                prompt, err_kind, str(plan_after or "")[:300]
-            )
-            client_retry = await _resolve_planner_client(spec_dir, project_dir)
-            retry_status, _r, _re = await _invoke_session(
-                client_retry, retry_prompt, spec_dir, verbose
-            )
-            if retry_status == "error":
-                _write_status_patch(
-                    spec_dir,
-                    status="planner_failed",
-                    phase="planner_replan_session_error",
-                    planner_error="retry session returned status=error",
-                )
-                return False
-            ok_after, err_kind, plan_after = _validate_emitted_plan(spec_dir)
-            if not ok_after:
-                _write_status_patch(
-                    spec_dir,
-                    status="planner_failed",
-                    phase=f"planner_replan_invalid_{err_kind}_after_retry",
-                    planner_error=(
-                        f"after retry: {err_kind} — {str(plan_after or '')[:200]}"
-                    ),
-                )
-                return False
-
-        # 5. Verify the agent preserved existing phases (didn't rewrite the plan).
+        # 4. Verify the agent preserved existing phases (didn't rewrite the plan).
         preserve_ok, preserve_err = _check_existing_phases_preserved(
             plan_before, plan_after
         )
@@ -834,50 +690,8 @@ async def _run_planner_replan(
             )
             return False
 
-        # 6. Bump replan_count on the original subtask + check stuck.
-        original_subtask_id = replan_request["subtask_id"]
-        new_count, became_stuck = _bump_replan_count_and_maybe_stuck(
-            plan_after, original_subtask_id
-        )
-
-        warnings: list[str] = []
-        if new_count == 0:
-            warnings.append(
-                f"replan_request.subtask_id={original_subtask_id!r} not found "
-                f"in plan — replan_count NOT bumped"
-            )
-        elif became_stuck:
-            warnings.append(
-                f"subtask {original_subtask_id!r} hit stuck at replan_count="
-                f"{new_count} — Triager will omit from commit phase"
-            )
-
-        # 7. Truncate if over budget (replan can push total over 30).
-        subtask_count = _count_subtasks(plan_after)
-        if subtask_count > _HARD_SUBTASK_CAP:
-            dropped = _truncate_subtasks(plan_after, _HARD_SUBTASK_CAP)
-            warnings.append(
-                f"plan grew to {subtask_count} subtasks post-replan; truncated "
-                f"to {_HARD_SUBTASK_CAP} (dropped {dropped})"
-            )
-            subtask_count = _HARD_SUBTASK_CAP
-
-        # 8. Persist the updated plan + status.
-        plan_after.save(spec_dir / "test_plan.json")
-
-        _write_status_patch(
-            spec_dir,
-            status="planned",
-            phase="planner_replan_complete",
-            planner_warnings=warnings,
-            subtask_count=subtask_count,
-            last_replan_for=original_subtask_id,
-            last_replan_count=new_count,
-            last_replan_stuck=became_stuck,
-        )
-        # Replan succeeded — schedule Gen-Functional to pick up the new
-        # replan-N subtask (it'll skip already-generated ones from prior phases).
-        _advance_to_gen_functional(spec_dir, project_dir)
+        # 5. Bump replan-count, truncate if over budget, persist, chain forward.
+        _finalize_replan(spec_dir, project_dir, plan_after, replan_request)
         return True
 
     except Exception as exc:
