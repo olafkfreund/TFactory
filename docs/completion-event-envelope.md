@@ -1,58 +1,63 @@
-# Completion-event envelope (v1)
+# Completion-event envelope
 
-> Part of the Factory **PARR-spine** epic (`olafkfreund/Factory`). Issue #198.
+> Conforms to **[RFC-0001](https://github.com/olafkfreund/Factory/blob/main/docs/rfc/0001-correlation-key-and-completion-event.md)**
+> — the canonical shared correlation-key + completion-event schema (Factory
+> PARR-spine epic #1). TFactory emits this on terminal Triager status (#198/#211).
 
-The connective tissue that lets the Factory products cooperate includes a
-**normalized completion-event envelope** emitted by each service
-(AIFactory · PFactory · TFactory) when a unit of work reaches a terminal
-state. A single watcher (CFactory) can then consume one schema across all of
-them. This document is TFactory's emission and the proposed **v1 contract**
-for the other services to match.
+When a unit of work reaches a terminal state, TFactory emits a normalized
+completion event so the watcher (CFactory) consumes one schema across all
+services (AIFactory · PFactory · TFactory).
 
 ## Correlation key
 
-The spine correlation key is the **GitHub issue number** threaded end-to-end
-(`correlation_id`). TFactory reads it from `status.json` or
-`context/source.json` (`issue_number` / `correlation_id`); it is `null` until a
-run carries one (populated by the PFactory pickup contract, epic #193).
+Per RFC-0001 §2, the shared key is **`correlation_key`** — the GitHub issue
+number rendered as a string, with a synthetic **`tf-<spec_id>`** fallback so it
+is **never null**. TFactory reads the issue number from `status.json` or
+`context/source.json` (`issue_number` / `correlation_id`, populated by the
+PFactory pickup contract, epic #193); absent one, it falls back to the synthetic
+key. The legacy int field `correlation_id` is retained as a backward-compat alias.
 
 ## Schema
 
+The six RFC-0001 core fields, plus the optional `correlation` chain block, plus
+additive TFactory detail (RFC §7 permits extra fields):
+
 ```jsonc
 {
-  "schema_version": "1.0",       // bump on any breaking field change
-  "event": "completion",         // event type
-  "service": "tfactory",         // emitting service: aifactory | pfactory | tfactory
-  "correlation_id": 412,         // GitHub issue # (int) | null — the spine key
-
+  // RFC-0001 core (required)
+  "correlation_key": "412",      // issue# as string | "tf-<spec_id>" — never null
+  "service": "tfactory",         // aifactory | pfactory | tfactory
   "task_id": "001-pricing",      // emitting service's task id
-  "project_id": "demo",          // project / repo identifier
-  "spec_id": "001-pricing",      // spec id (TFactory) | null
-
   "status": "triaged",           // service-native terminal status (verbatim)
-  "outcome": "success",          // normalized coarse outcome (see below)
-  "phase": "triager_complete",   // service-native terminal phase
+  "phase": "test",               // pipeline phase (falls back to "test")
+  "updated_at": "2026-06-04T16:29:58+00:00",
 
-  "repo": "owner/name",          // GitHub slug | null
-  "branch": "feat/x",            // feature branch | null
-  "pr_number": 88,               // PR number (int) | null
-
-  "result": {                    // service-specific summary; keys optional
-    "committed_count": 3,
-    "flagged_count": 1,
-    "rejected_count": 2,
-    "verdicts_count": 6,
-    "dedup_collision_count": 0
+  // RFC-0001 §4 optional chain block (upstream/downstream links)
+  "correlation": {
+    "issue_number": 412,         // int | null
+    "spec_id": "001-pricing",
+    "branch": "feat/x",
+    "pr_number": 88
   },
 
-  "emitted_at": "2026-06-04T16:30:00+00:00",  // when this event was emitted
-  "updated_at": "2026-06-04T16:29:58+00:00"   // status.json last-write time
+  // Additive TFactory detail (+ #85/#198 backward-compat fields)
+  "schema_version": "1.0",
+  "event": "completion",
+  "correlation_id": 412,         // legacy alias of correlation_key (int | null)
+  "project_id": "demo",
+  "spec_id": "001-pricing",
+  "outcome": "success",          // normalized coarse outcome (see below)
+  "repo": "owner/name",
+  "branch": "feat/x",
+  "pr_number": 88,
+  "result": { "committed_count": 3, "flagged_count": 1, "rejected_count": 2,
+              "verdicts_count": 6, "dedup_collision_count": 0 },
+  "emitted_at": "2026-06-04T16:30:00+00:00"
 }
 ```
 
-The flat fields `task_id`, `project_id`, `status`, `phase`, `updated_at` are
-retained from the original `#85` payload for backward-compatibility; existing
-consumers keep working while new consumers read the normalized header.
+Consumers that only need the spine read the six RFC core fields + `correlation`;
+the additive fields are ignored by RFC-conformant consumers (RFC §7).
 
 ### `outcome` mapping (normalized across services)
 
@@ -75,9 +80,10 @@ The same envelope is sent on both.
 
 ## Port map (PARR spine)
 
-TFactory's default web-server port is **3103** (was 3102, which now belongs to
-PFactory). Canonical local map: AIFactory `3101` · PFactory `3102` ·
-TFactory `3103` · CFactory `3110/3111`.
+TFactory's default web-server port is **3103**. Canonical local map (see the
+[Factory port map](https://github.com/olafkfreund/Factory/blob/main/docs/dev/local-ports-and-run-all.md)):
+AIFactory `3101` · TFactory `3103` · CFactory `3110/3111` · PFactory `3114/3115`
+(PFactory moved to its own pair, freeing `3102`).
 
 ## Implementation
 

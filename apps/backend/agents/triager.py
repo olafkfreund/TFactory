@@ -490,6 +490,16 @@ def _correlation_issue_number(status: dict, source: dict) -> int | None:
     return None
 
 
+def _correlation_key(spec_dir: Path, status: dict, source: dict) -> str:
+    """The RFC-0001 shared correlation key: the GitHub issue number as a string,
+    with a synthetic ``tf-<spec_id>`` fallback so it is never null (RFC-0001 §2)."""
+    issue = _correlation_issue_number(status, source)
+    if issue is not None:
+        return str(issue)
+    spec_id = status.get("spec_id") or source.get("spec_id") or spec_dir.name
+    return f"tf-{spec_id}"
+
+
 def _completion_result_summary(status: dict) -> dict:
     """Service-specific result counts for the envelope (absent keys omitted)."""
     keys = (
@@ -512,23 +522,37 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> dict:
     """
     source = _load_source_meta(spec_dir)
     status_value = status.get("status")
+    issue_number = _correlation_issue_number(status, source)
     return {
+        # RFC-0001 core: the six required fields (Factory#4). `correlation_key`
+        # is the shared key (issue#, synthetic `tf-<spec_id>` fallback) so the
+        # CFactory collector can thread this event into a WorkItem.
+        "correlation_key": _correlation_key(spec_dir, status, source),
+        "service": "tfactory",
+        "task_id": status.get("task_id") or spec_dir.name,
+        "status": status_value,
+        "phase": status.get("phase") or "test",
+        "updated_at": status.get("updated_at") or _now_iso(),
+        # RFC-0001 §4 optional chain block (upstream/downstream links).
+        "correlation": {
+            "issue_number": issue_number,
+            "spec_id": status.get("spec_id") or source.get("spec_id"),
+            "branch": source.get("branch"),
+            "pr_number": source.get("pr_number") or None,
+        },
+        # Additive TFactory detail (RFC §7 — extra fields are allowed) + the
+        # #85/#198 flat fields retained for backward-compat.
         "schema_version": _COMPLETION_SCHEMA_VERSION,
         "event": "completion",
-        "service": "tfactory",
-        "correlation_id": _correlation_issue_number(status, source),
-        "task_id": status.get("task_id") or spec_dir.name,
+        "correlation_id": issue_number,
         "project_id": status.get("project_id"),
         "spec_id": status.get("spec_id") or source.get("spec_id"),
-        "status": status_value,
         "outcome": _outcome_for_status(status_value),
-        "phase": status.get("phase"),
         "repo": source.get("repo_slug") or source.get("repo"),
         "branch": source.get("branch"),
         "pr_number": source.get("pr_number") or None,
         "result": _completion_result_summary(status),
         "emitted_at": _now_iso(),
-        "updated_at": status.get("updated_at"),
     }
 
 
