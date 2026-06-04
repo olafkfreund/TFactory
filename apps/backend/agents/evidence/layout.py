@@ -253,6 +253,63 @@ def render_auth_setup(
     )
 
 
+def _js_str(value: str) -> str:
+    """Escape a string for embedding inside a TS double-quoted literal."""
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def render_auth_setup_steps(
+    *,
+    steps: list[dict],
+    username_env: str,
+    secret_env: str,
+    storage_state_path: str = "state.json",
+) -> str:
+    """Render a multi-step ``auth.setup.ts`` from a declarative steps list (#107).
+
+    For SSO / IdP-redirect / multi-step logins. Each step dict carries an
+    ``action`` plus the relevant ``selector`` / ``url`` / ``value``. Credentials
+    are read from env vars (``fill_username`` / ``fill_secret``) — never inlined;
+    ``fill`` is for non-secret literals only. Incomplete steps are skipped.
+
+    Returns:
+        Rendered TypeScript ``auth.setup.ts`` contents as a string.
+    """
+    lines: list[str] = []
+    for step in steps or []:
+        action = step.get("action")
+        sel = step.get("selector")
+        url = step.get("url")
+        val = step.get("value")
+        if action == "goto" and url:
+            lines.append(f'  await page.goto("{_js_str(url)}");')
+        elif action == "click" and sel:
+            lines.append(f'  await page.locator("{_js_str(sel)}").click();')
+        elif action == "fill_username" and sel:
+            lines.append(
+                f'  await page.locator("{_js_str(sel)}")'
+                f'.fill(process.env["{username_env}"] ?? "");'
+            )
+        elif action == "fill_secret" and sel:
+            lines.append(
+                f'  await page.locator("{_js_str(sel)}")'
+                f'.fill(process.env["{secret_env}"] ?? "");'
+            )
+        elif action == "fill" and sel and val is not None:
+            lines.append(
+                f'  await page.locator("{_js_str(sel)}").fill("{_js_str(val)}");'
+            )
+        elif action == "wait_for_url" and url:
+            lines.append(f'  await page.waitForURL("**/{_js_str(url)}**");')
+
+    body = "\n".join(lines)
+    tmpl_path = Path(__file__).with_name("auth.setup.steps.tmpl.ts")
+    tmpl = tmpl_path.read_text(encoding="utf-8")
+    return tmpl.replace("@@LOGIN_STEPS@@", body).replace(
+        "@@STORAGE_STATE_PATH@@", storage_state_path
+    )
+
+
 # Where the saved authenticated session lands (relative to the test workspace).
 _STORAGE_STATE_PATH = ".auth/state.json"
 
@@ -293,20 +350,33 @@ def scaffold_auth_setup(spec_dir: Path | str) -> bool:
     username_env = cred.get("as_username")
     secret_env = cred.get("as_secret")
     base_url = target.get("base_url")
-    # A form login needs a login URL + both credential env vars to be useful.
-    if not (auth.get("login_url") and username_env and secret_env and base_url):
+    # Both credential env vars + a base_url are needed either way.
+    if not (username_env and secret_env and base_url):
         return False
 
-    setup_ts = render_auth_setup(
-        login_url=auth["login_url"],
-        username_selector=auth.get("username_selector") or "input[name='username']",
-        password_selector=auth.get("password_selector") or "input[name='password']",
-        submit_selector=auth.get("submit_selector") or "button[type='submit']",
-        success_url_pattern=auth.get("success_url_pattern") or "",
-        username_env=username_env,
-        secret_env=secret_env,
-        storage_state_path=_STORAGE_STATE_PATH,
-    )
+    steps = auth.get("steps")
+    if steps:
+        # Multi-step / SSO login — the declared steps own the navigation.
+        setup_ts = render_auth_setup_steps(
+            steps=steps,
+            username_env=username_env,
+            secret_env=secret_env,
+            storage_state_path=_STORAGE_STATE_PATH,
+        )
+    else:
+        # Single-step form login needs an explicit login URL.
+        if not auth.get("login_url"):
+            return False
+        setup_ts = render_auth_setup(
+            login_url=auth["login_url"],
+            username_selector=auth.get("username_selector") or "input[name='username']",
+            password_selector=auth.get("password_selector") or "input[name='password']",
+            submit_selector=auth.get("submit_selector") or "button[type='submit']",
+            success_url_pattern=auth.get("success_url_pattern") or "",
+            username_env=username_env,
+            secret_env=secret_env,
+            storage_state_path=_STORAGE_STATE_PATH,
+        )
     config_ts = render_playwright_config(
         output_dir=spec_dir / "findings" / "evidence",
         base_url=base_url,

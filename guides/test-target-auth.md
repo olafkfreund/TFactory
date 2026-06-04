@@ -95,6 +95,34 @@ targets:
 Validation is **fail-closed**: declaring `test_credentials` without
 `egress.enabled` is an error, and a `ref`-auth must name a declared entry.
 
+### Multi-step / SSO logins (`steps`)
+
+The single-step selectors above cover a plain form login. For **SSO / IdP-redirect
+/ multi-step** logins (e.g. "Login with SSO" → enter email → Next → password →
+submit), declare an ordered `steps` list instead — it drives the login and owns
+the navigation (no `login_url` needed):
+
+```yaml
+    auth:
+      type: ref
+      ref: login
+      steps:
+        - { action: goto, url: https://staging.example.com }
+        - { action: click, selector: "text=Login with SSO" }
+        - { action: fill_username, selector: "#email" }   # reads the injected username env var
+        - { action: click, selector: "#next" }
+        - { action: fill_secret, selector: "#password" }  # reads the injected secret env var
+        - { action: fill, selector: "#tenant", value: acme-corp }  # non-secret literal only
+        - { action: click, selector: "button[type=submit]" }
+        - { action: wait_for_url, url: dashboard }
+```
+
+Actions: `goto` (`url`) · `click` (`selector`) · `fill_username` / `fill_secret`
+(`selector`, value from the injected env var) · `fill` (`selector` + `value`,
+**non-secret literals only**) · `wait_for_url` (`url` substring/glob). Credentials
+are **never inlined** — `fill_username`/`fill_secret` read the vault-injected env
+vars at run time. The login still runs once and is reused via `storageState`.
+
 ## Security model
 
 - **At rest:** encrypted via `EncryptedString` (KMS / Vault / Azure KV / GCP SM).
