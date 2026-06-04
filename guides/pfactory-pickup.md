@@ -86,5 +86,35 @@ oracle.citations             # tuple[Citation, ...] — why, uri, source
 oracle.horizon               # "now" | "next" | "later"
 ```
 
-Implementation: `apps/backend/integrations/pfactory/{pickup,oracle}.py`.
-Tests: `tests/test_pfactory_pickup.py`, `tests/test_pfactory_oracle.py`.
+## Run + report back (#197)
+
+`run_target` / `pickup_and_run` close the loop: seed a TFactory spec workspace
+from the oracle (acceptance criteria → `AC#N` markers; citations → the
+description), then schedule the existing Planner → Gen-Functional → Executor →
+Evaluator → Triager pipeline. The Triager renders a triage report tied to the
+target's `plan_id` and reports back on the originating issue.
+
+The workspace's `context/source.json` carries `issue_number` — the spine
+correlation key the completion envelope (#198) reports back on — and `pfactory:
+true` for provenance.
+
+```python
+from integrations.pfactory import pickup_and_run
+
+# Recognise → parse → run, all dry-run by default:
+handle = pickup_and_run(
+    issue, project_id="acme", project_dir=repo_path,
+    repo="acme/orders", branch="feat/x",
+)
+if handle:
+    handle.spec_dir   # .../specs/<plan_id> with the triage report
+```
+
+**No automatic pushes.** The Triager's git-commit + PR-comment side-effects stay
+**dry-run by default**. Opt in with `run_target(..., dry_run=False)` (which sets
+TFactory's existing `TFACTORY_TRIAGER_GIT_WRITE` / `TFACTORY_TRIAGER_PR_COMMENT`
+flags) or by setting those env flags directly. `schedule` is injectable for
+tests; the default fires the Planner (which auto-chains the rest).
+
+Implementation: `apps/backend/integrations/pfactory/{pickup,oracle,run}.py`.
+Tests: `tests/test_pfactory_{pickup,oracle,run}.py`.
