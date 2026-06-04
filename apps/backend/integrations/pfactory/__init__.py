@@ -27,6 +27,13 @@ from .pickup import (
     pickup_requirements,
     priority_to_horizon,
 )
+from .run import (
+    RunHandle,
+    pickup_and_run,
+    prepare_workspace,
+    run_target,
+    spec_markdown_from_oracle,
+)
 
 __all__ = [
     # pickup (#195)
@@ -49,4 +56,10 @@ __all__ = [
     "parse_meta_block",
     "extract_meta_block",
     "oracle_to_dict",
+    # run (#197)
+    "RunHandle",
+    "run_target",
+    "pickup_and_run",
+    "prepare_workspace",
+    "spec_markdown_from_oracle",
 ]
