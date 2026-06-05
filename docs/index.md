@@ -122,6 +122,39 @@ a human would actually *look* at.
   </li>
 </ul>
 
+## New since v0.5 — a node in the Factory line
+
+<div class="reveal" markdown="1">
+
+TFactory used to be a tool you handed work to. Now it's a **governed node** in
+the [Factory](https://factory.freundcloud.com/) line: it picks up test work
+that [PFactory](https://pfactory.freundcloud.com/) has planned and governed,
+reports completion on a schema the whole line shares, and registers itself in
+the software catalog.
+
+</div>
+
+<ul class="feature-row">
+  <li class="feature-row__card reveal">
+    <span class="feature-row__icon" aria-hidden="true">📥</span>
+    <h3>Governed pickup from PFactory</h3>
+    <p><strong>Problem:</strong> ad-hoc handovers don't carry the acceptance contract — TFactory had to infer what "tested" meant.</p>
+    <p><strong>Solution:</strong> TFactory recognises and enqueues <strong>governed test targets</strong> from PFactory, parses the <code>pfactory:meta</code> block as the <strong>test oracle</strong>, then generates, runs, and reports back up the spine. The contract travels with the work.</p>
+  </li>
+  <li class="feature-row__card reveal" style="--reveal-delay: 80ms">
+    <span class="feature-row__icon" aria-hidden="true">📡</span>
+    <h3>One completion event, watched by CFactory</h3>
+    <p><strong>Problem:</strong> four services, four ways of saying "done" — nothing could watch the whole line.</p>
+    <p><strong>Solution:</strong> the Triager emits a normalized <strong><a href="https://github.com/olafkfreund/Factory/blob/main/docs/rfc/0001-correlation-key-and-completion-event.md">RFC-0001</a></strong> completion event with a shared <code>correlation_key</code>, so AIFactory · PFactory · TFactory all speak one schema and CFactory watches a single contract. <a href="{{ '/completion-event-envelope/' | relative_url }}">See the envelope →</a></p>
+  </li>
+  <li class="feature-row__card reveal" style="--reveal-delay: 160ms">
+    <span class="feature-row__icon" aria-hidden="true">🗂️</span>
+    <h3>In the Backstage catalog</h3>
+    <p><strong>Problem:</strong> a service nobody can find in the catalog isn't really part of the platform.</p>
+    <p><strong>Solution:</strong> TFactory ships a <code>catalog-info.yaml</code> + TechDocs and is importable into Backstage, with enriched annotations and an AI-assistant skill descriptor — discoverable alongside the rest of the Factory.</p>
+  </li>
+</ul>
+
 ## Status by lane
 
 <div class="reveal" markdown="1">

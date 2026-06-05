@@ -8,14 +8,17 @@ nav_order: 8
 # Progress
 
 > Live delivery snapshot, updated by hand as merges land — last refresh
-> **2026-06-03 (v0.5.0)**. Older milestones kept below as the historical
-> record. Full detail per release in the
+> **2026-06-05**. Older milestones kept below as the historical record. Full
+> detail per release in the
 > [changelog](https://github.com/olafkfreund/TFactory/blob/main/CHANGELOG.md).
 
 ## At-a-glance — current
 
 ```
-v0.5.0 — Bidirectional AIFactory ↔ TFactory integration   (Latest · 2026-06-03)
+Unreleased — Factory PARR spine: governed pickup + RFC-0001 + Backstage
+  ████████████████████████████  #193–#197 · #198 #211 #214 #224 · #215 #216 #223
+
+v0.5.0 — Bidirectional AIFactory ↔ TFactory integration   (2026-06-03)
   ████████████████████████████  epic #182 — 7 phases shipped + #108 live-fix
 
 v0.4.0 — Visual Inspection Run + SaaS connector targets    (2026-06-03)
@@ -30,6 +33,24 @@ v0.2.0 — Enterprise Test Framework Spine                   (2026-05-29)
 Releases:  https://github.com/olafkfreund/TFactory/releases
 Backend tests: 531 (v0.1) → 1225 (v0.2) → 2803 (v0.5)
 ```
+
+## Unreleased — Factory PARR spine
+
+TFactory becomes a **verified node in the
+[Factory](https://factory.freundcloud.com/) line** rather than a standalone tool:
+
+- **Governed pickup from PFactory (#193–#197)** — recognise + enqueue governed
+  test targets, parse `pfactory:meta` as the test oracle, then generate · run ·
+  report back up the spine.
+- **RFC-0001 normalized completion event (#198 / #211 / #214 / #224)** — the
+  Triager emits one cross-service envelope with a shared `correlation_key`;
+  CFactory watches a single contract across AIFactory · PFactory · TFactory.
+  Default port moved 3102 → 3103. See the
+  [completion-event envelope]({{ '/completion-event-envelope/' | relative_url }}).
+- **Backstage onboarding (#215 / #216 / #223)** — `catalog-info.yaml` + TechDocs,
+  enriched annotations, an AI-assistant skill descriptor.
+- **Reach more SUTs** — multi-step / SSO login (#107), `toHaveScreenshot`
+  baselines wired to the portal store (#109), live K8s port-forward fix (#108).
 
 ## v0.5.0 — Bidirectional AIFactory ↔ TFactory integration (2026-06-03)
 

@@ -1,5 +1,50 @@
 # Changelog
 
+## Unreleased — Factory PARR spine: governed pickup, RFC-0001 completion, Backstage
+
+> TFactory stops being a standalone tool and becomes a **verified node in the
+> [Factory](https://factory.freundcloud.com/) line** — it picks up governed test
+> targets from PFactory, emits a shared completion event CFactory can watch, and
+> registers itself in the Backstage software catalog. Part of the Factory
+> PARR-spine epic (Plan · Act · Review · Report).
+
+- **PFactory governed-target pickup (#193–#197).** TFactory now consumes test
+  work that [PFactory](https://pfactory.freundcloud.com/) has planned and
+  governed, rather than only ad-hoc handovers:
+  - **Recognise + enqueue (#195).** Detect governed test targets and enqueue
+    them through the existing task pipeline.
+  - **Tag taxonomy (#194).** Create the shared label set PFactory and TFactory
+    agree on for routing governed work.
+  - **`pfactory:meta` oracle (#196).** Parse the `pfactory:meta` block as the
+    test oracle — the governed acceptance contract the generated tests must
+    satisfy.
+  - **Generate · run · report back (#197).** Produce tests for a picked-up
+    target, execute them, and report the result back up the spine.
+- **RFC-0001 normalized completion event (#198 / #211 / #214 / #224).** The
+  Triager's terminal-status completion event now conforms to
+  **[RFC-0001](https://github.com/olafkfreund/Factory/blob/main/docs/rfc/0001-correlation-key-and-completion-event.md)**
+  — the canonical cross-service correlation-key + completion-event schema, so
+  one shape flows across AIFactory · PFactory · TFactory and CFactory watches a
+  single contract:
+  - Shared **`correlation_key`** (GitHub issue number, with a synthetic
+    `tf-<spec_id>` fallback so it is never null); legacy int `correlation_id`
+    retained as a back-compat alias.
+  - Default integration port moved **3102 → 3103** (#198); MCP-proxy tests
+    realigned.
+  - Triager emits an **RFC-0001 usage block** on completion events (#224).
+  - See `docs/completion-event-envelope.md`.
+- **Backstage software-catalog onboarding (#215 / #216 / #223).** TFactory is now
+  importable into Backstage: `catalog-info.yaml` + TechDocs (#215/#216),
+  completion-event TechDocs aligned to RFC-0001, and enriched catalog
+  annotations + an AI-assistant skill descriptor (#223).
+- **Reach more systems under test.** Multi-step / SSO test-target login flows
+  (#107) and `toHaveScreenshot` visual baselines wired to the portal-managed
+  store (#109); live Kubernetes port-forward dispatch fix (#108).
+- **Hardening.** Patched the binutils CVE (CVE-2026-6846) to clear the P0 Trivy
+  gate; web-server deps installed into the backend venv so the full suite imports
+  cleanly (#219); core pipeline agents decomposed per a Clean Code review;
+  pre-existing ruff lint debt cleared. Backend suite now at **2803 tests**.
+
 ## 0.5.0 — Bidirectional AIFactory ↔ TFactory integration (2026-06-03)
 
 > Close the loop with AIFactory: when TFactory's tests find problems, hand a
