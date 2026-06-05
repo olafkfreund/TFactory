@@ -1,0 +1,50 @@
+# MkDocs configuration for Backstage TechDocs.
+#
+# NOTE: docs_dir is intentionally `techdocs/`, NOT `docs/`. The `docs/` directory
+# is the project's Jekyll GitHub Pages site (_config.yml, _posts/, _layouts/) and
+# must not be consumed by MkDocs.
+#
+# Backstage builds this site from the System entity's annotation
+# `backstage.io/techdocs-ref: dir:.` (catalog-info.yaml), which runs the TechDocs
+# generator against this mkdocs.yml at the repo root.
+
+site_name: TFactory
+site_description: >-
+  Autonomous test-generation + execution platform — spec-aligned tests, sandboxed
+  runs, a 5-signal quality verdict, and ranked triage straight to the PR.
+
+docs_dir: techdocs
+
+repo_url: https://github.com/olafkfreund/TFactory
+edit_uri: edit/dev/techdocs/
+
+plugins:
+  - techdocs-core
+
+nav:
+  - Home: index.md
+  - Architecture:
+      - Overview: architecture/overview.md
+      - The 4-agent pipeline: architecture/pipeline.md
+      - Workspace layout: architecture/workspace-layout.md
+      - Security model: architecture/security.md
+  - APIs:
+      - Overview: apis/index.md
+      - Web REST API: apis/rest-api.md
+      - MCP server: apis/mcp-server.md
+      - Completion-event envelope: apis/completion-event.md
+  - Tech stack & choices: tech-stack.md
+  - LLM providers: providers.md
+  - Frontend: frontend.md
+  - Configuration: configuration.md
+  - Architecture decisions: decisions.md
+  - Glossary: glossary.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight
+  - toc:
+      permalink: true
+  - tables

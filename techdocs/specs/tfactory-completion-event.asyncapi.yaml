@@ -1,0 +1,127 @@
+asyncapi: 2.6.0
+info:
+  title: TFactory completion-event
+  version: "1.0"
+  description: >-
+    Normalized v1 completion-event envelope emitted by the TFactory Triager when a
+    task reaches a terminal status. Delivered as a webhook POST
+    (TFACTORY_COMPLETION_WEBHOOK) and/or written as a findings/COMPLETED.json
+    sentinel (TFACTORY_COMPLETION_SENTINEL). This is the cross-service shape of the
+    Factory PARR spine; correlation_id is the GitHub issue number.
+  license:
+    name: MIT OR GPL-3.0
+  contact:
+    name: DataSeek Team
+    url: https://github.com/olafkfreund/TFactory
+
+defaultContentType: application/json
+
+channels:
+  tfactory/completion:
+    description: >-
+      Fires once per task on terminal status. The webhook target is operator-supplied;
+      the sentinel is a same-host file watchers can stat instead of polling.
+    subscribe:
+      operationId: onTaskCompletion
+      summary: Receive a completion envelope when a TFactory task finishes.
+      message:
+        $ref: '#/components/messages/CompletionEvent'
+
+components:
+  messages:
+    CompletionEvent:
+      name: completionEvent
+      title: Completion event
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/CompletionEnvelope'
+      examples:
+        - name: triaged-success
+          payload:
+            schema_version: "1.0"
+            event: completion
+            service: tfactory
+            correlation_id: 412
+            task_id: 001-pricing
+            project_id: demo
+            spec_id: 001-pricing
+            status: triaged
+            outcome: success
+            phase: triager_complete
+            repo: owner/name
+            branch: feat/x
+            pr_number: 88
+            result:
+              committed_count: 3
+              flagged_count: 1
+              rejected_count: 2
+              verdicts_count: 6
+              dedup_collision_count: 0
+            emitted_at: "2026-06-04T16:30:00+00:00"
+            updated_at: "2026-06-04T16:29:58+00:00"
+
+  schemas:
+    CompletionEnvelope:
+      type: object
+      required:
+        - schema_version
+        - event
+        - service
+        - correlation_id
+        - status
+        - outcome
+        - emitted_at
+      properties:
+        schema_version:
+          type: string
+          const: "1.0"
+          description: Bumped on any breaking change to the envelope.
+        event:
+          type: string
+          const: completion
+        service:
+          type: string
+          const: tfactory
+          description: Emitting service (PARR spine member).
+        correlation_id:
+          type: [integer, "null"]
+          description: GitHub issue number — the PARR-spine join key. Null if none.
+        task_id:
+          type: [string, "null"]
+        project_id:
+          type: [string, "null"]
+        spec_id:
+          type: [string, "null"]
+        status:
+          type: string
+          description: Service-native terminal status.
+          enum: [triaged, triaged_empty, triager_failed, stuck]
+        outcome:
+          type: string
+          description: Normalized cross-service outcome.
+          enum: [success, empty, failure]
+        phase:
+          type: [string, "null"]
+          description: Service-native terminal phase.
+        repo:
+          type: [string, "null"]
+          description: GitHub slug owner/name.
+        branch:
+          type: [string, "null"]
+        pr_number:
+          type: [integer, "null"]
+        result:
+          type: object
+          description: Service-specific result summary.
+          properties:
+            committed_count: { type: integer }
+            flagged_count: { type: integer }
+            rejected_count: { type: integer }
+            verdicts_count: { type: integer }
+            dedup_collision_count: { type: integer }
+        emitted_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: [string, "null"]
+          format: date-time
