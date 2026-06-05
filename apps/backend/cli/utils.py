@@ -17,7 +17,6 @@ if str(_PARENT_DIR) not in sys.path:
 from core.auth import get_auth_token, get_auth_token_source
 from dotenv import load_dotenv
 from graphiti_config import get_graphiti_status
-from spec.pipeline import get_specs_dir
 from ui import (
     Icons,
     bold,
@@ -50,6 +49,18 @@ def setup_environment() -> Path:
         load_dotenv(dev_env_file)
 
     return script_dir
+
+
+def get_specs_dir(project_dir: Path) -> Path:
+    """
+    Return the canonical per-project specs directory.
+
+    Specs live at ``<project_dir>/.tfactory/specs`` — the same convention
+    used across the CLI (``batch_commands``), runners, and ``core.workspace``.
+    Inlined here after the legacy ``spec.pipeline`` module was lost alongside
+    ``qa_loop`` (#226 / #227); it was the only consumer of that import.
+    """
+    return Path(project_dir) / ".tfactory" / "specs"
 
 
 def find_spec(project_dir: Path, spec_identifier: str) -> Path | None:
