@@ -110,8 +110,19 @@ side-effects honor the no-automatic-pushes policy. Env (all opt-in / tunable):
   - `TFACTORY_AIFACTORY_API_URL` (default `http://localhost:3101`) — AIFactory web-server
   - `TFACTORY_HANDBACK_MAX_CYCLES` (default 2) — correction-cycle cap → `stuck`
 
-  The AIFactory-side receiver lives in that repo (issue `AIFactory#317`). See
-  `guides/aifactory-handback.md`.
+  **Automatic event-driven loop (no `/loop` polling)** — the web-server exposes an
+  inbound webhook `POST /api/handback/aifactory-complete` that AIFactory calls when
+  its QA Fixer finishes; TFactory correlates it to the workspace, applies the same
+  bounded-loop guard (`agents/handback/loop.py`), and re-fires the pipeline via the
+  shared `agents/handback/rerun.py::rerun_pipeline` (also used by the `task_rerun`
+  MCP tool). The outbound send already carries `tfactory_task_id` +
+  `tfactory_callback_url` so AIFactory knows where to call back. Env:
+  - `APP_INBOUND_HANDBACK_ENABLED` (default OFF) — enable the inbound webhook
+  - `APP_INBOUND_HANDBACK_SECRET` — shared secret required in `X-TFactory-Handback-Token`
+  - `TFACTORY_SELF_API_URL` (default `http://localhost:3103`) — base for the callback URL
+
+  The AIFactory-side receiver + the emitter that calls this webhook live in that
+  repo (issue `AIFactory#317`). See `guides/aifactory-handback.md`.
 
 **LLM provider abstraction:** TFactory uses the Claude Agent SDK
 (`claude-agent-sdk`) as its primary provider, but also supports Codex CLI,

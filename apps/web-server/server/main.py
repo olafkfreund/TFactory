@@ -84,6 +84,7 @@ async def lifespan(app: FastAPI):
     backend_path = Path(settings.BACKEND_PATH)
     if backend_path.exists():
         from .routes.settings import load_app_settings, save_app_settings
+
         app_settings = load_app_settings()
         if not app_settings.autoBuildPath:
             app_settings.autoBuildPath = str(backend_path)
@@ -166,6 +167,7 @@ def create_app() -> FastAPI:
     # lifespan startup is JSON-formatted from the very first event.
     # Idempotent: re-calling overrides the processor chain wholesale.
     from .observability import configure_structlog
+
     configure_structlog(level="DEBUG" if settings.DEBUG else "INFO")
 
     # Version comes from apps/backend/__init__.py — the canonical source
@@ -200,6 +202,7 @@ def create_app() -> FastAPI:
     # secret is the JWT secret (already a strong process secret).
     # Cookie is scoped to the OIDC routes via SameSite=Lax + HTTP-only.
     from starlette.middleware.sessions import SessionMiddleware
+
     app.add_middleware(
         SessionMiddleware,
         secret_key=settings.JWT_SECRET,
@@ -215,6 +218,7 @@ def create_app() -> FastAPI:
     # carry the ID in their response, which auditors rely on to trace
     # failed auth attempts).
     from .observability import CorrelationIdMiddleware, install_httpx_propagation
+
     app.add_middleware(CorrelationIdMiddleware)
     # Patch httpx clients to forward the correlation ID on outbound
     # calls. Idempotent.
@@ -227,6 +231,7 @@ def create_app() -> FastAPI:
     # Endpoints return 404 when APP_OIDC_ENABLED isn't set, so this is a
     # no-op for installations that haven't configured an IdP.
     from .routes import oidc_routes
+
     app.include_router(oidc_routes.router)
 
     # Organization routes (prefix defined in router: /api/orgs)
@@ -252,6 +257,7 @@ def create_app() -> FastAPI:
     # Epic #26 P5.3 — /api/audit/export streaming + P5.5 GDPR erasure.
     app.include_router(audit.export_router)
     from .routes import gdpr as gdpr_routes
+
     app.include_router(gdpr_routes.router)
 
     # Notification routes (prefix defined in router: /api/notifications)
@@ -265,13 +271,27 @@ def create_app() -> FastAPI:
     # TFactory portal endpoints (Task 9 / #10) — read-only over the
     # TFactory workspace filesystem at ~/.tfactory/workspaces/.
     from .routes import tfactory_tasks as tfactory_tasks_routes
+
     app.include_router(
         tfactory_tasks_routes.router,
         prefix="/api/tfactory/tasks",
         tags=["TFactory Tasks"],
     )
-    app.include_router(settings_routes.router, prefix="/api/settings", tags=["Settings"])
-    app.include_router(cli_accounts_routes.router, prefix="/api/settings", tags=["CLI Accounts"])
+    # Inbound AIFactory completion webhook (epic #182) — auto re-test loop.
+    # Gated at runtime by APP_INBOUND_HANDBACK_ENABLED; auth via shared secret.
+    from .routes import handback as handback_routes
+
+    app.include_router(
+        handback_routes.router,
+        prefix="/api/handback",
+        tags=["Handback"],
+    )
+    app.include_router(
+        settings_routes.router, prefix="/api/settings", tags=["Settings"]
+    )
+    app.include_router(
+        cli_accounts_routes.router, prefix="/api/settings", tags=["CLI Accounts"]
+    )
     app.include_router(llm_endpoints_routes.router)
     app.include_router(files.router, prefix="/api/files", tags=["Files"])
     app.include_router(terminal.router, prefix="/api/terminals", tags=["Terminals"])
@@ -318,7 +338,9 @@ def create_app() -> FastAPI:
     # Git and utility routes
     app.include_router(git.router, prefix="/api/git", tags=["Git"])
     app.include_router(git.ollama_router, prefix="/api/ollama", tags=["Ollama"])
-    app.include_router(git.claude_code_router, prefix="/api/claude-code", tags=["Claude Code"])
+    app.include_router(
+        git.claude_code_router, prefix="/api/claude-code", tags=["Claude Code"]
+    )
     app.include_router(git.mcp_router, prefix="/api/mcp", tags=["MCP"])
     app.include_router(git.updates_router, prefix="/api/updates", tags=["Updates"])
 
@@ -344,8 +366,10 @@ def create_app() -> FastAPI:
     # the rmux/ package imports break at module load when the
     # bundled binary isn't present.
     from .rmux import is_rmux_enabled
+
     if is_rmux_enabled():
         from .rmux import console_router
+
         app.include_router(console_router)
         logger.info("[main] rmux Live Agent Console enabled — bridge router mounted")
 
@@ -355,6 +379,7 @@ def create_app() -> FastAPI:
     # Optional METRICS_SCRAPE_TOKEN bearer gate is read from env at
     # install time.
     from .observability import install_metrics
+
     install_metrics(app)
 
     # Health check endpoint (no auth required)

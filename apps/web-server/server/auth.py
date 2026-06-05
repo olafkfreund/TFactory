@@ -89,6 +89,12 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
         # middleware must let those requests through without checking
         # JWT/legacy first.
         "/api/mcp-stdio/",
+        # Inbound AIFactory completion webhook (epic #182). The caller is
+        # AIFactory's server, not a portal user with a JWT — the handler does
+        # its own shared-secret check (X-TFactory-Handback-Token) instead, so
+        # this prefix must bypass the JWT/legacy middleware. The endpoint is
+        # only active when APP_INBOUND_HANDBACK_ENABLED=true.
+        "/api/handback/",
     )
 
     async def dispatch(self, request: Request, call_next):

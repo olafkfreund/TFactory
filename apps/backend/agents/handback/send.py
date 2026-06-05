@@ -23,6 +23,7 @@ dependency).
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,6 +35,22 @@ from .request import CorrectionRequest
 __all__ = ["SendResult", "send_correction", "default_sender"]
 
 Sender = Callable[[dict], dict]
+
+# Path AIFactory POSTs back to when its QA Fixer finishes — closes the loop
+# automatically (epic #182). Base URL is this TFactory web-server.
+_CALLBACK_PATH = "/api/handback/aifactory-complete"
+
+
+def _self_callback_url() -> str:
+    """This TFactory's inbound completion-webhook URL for AIFactory to call back.
+
+    Base from ``TFACTORY_SELF_API_URL`` (default the local web-server on :3103),
+    mirroring the snapshotter's ``TFACTORY_AIFACTORY_API_URL`` default pattern.
+    """
+    base = (os.environ.get("TFACTORY_SELF_API_URL") or "http://localhost:3103").rstrip(
+        "/"
+    )
+    return f"{base}{_CALLBACK_PATH}"
 
 
 @dataclass
@@ -75,6 +92,9 @@ def default_sender(payload: dict) -> dict:
             "fix_request_md": payload["fix_request_md"],
             "source": payload.get("source"),
             "confirm": bool(payload.get("confirm")),
+            # Echoed back by AIFactory to the callback URL to close the loop.
+            "tfactory_task_id": payload.get("tfactory_task_id"),
+            "tfactory_callback_url": payload.get("tfactory_callback_url"),
         }
     ).encode()
     req = urllib.request.Request(
@@ -141,6 +161,10 @@ def send_correction(
         "fix_request_md": md,
         "source": request.source_kind,
         "confirm": True,
+        # Self-reference so AIFactory can call us back when the fix is done
+        # (epic #182 auto-loop). task_id IS the TFactory workspace key.
+        "tfactory_task_id": task_id,
+        "tfactory_callback_url": _self_callback_url(),
     }
     try:
         result.response = (sender_fn or default_sender)(payload)
