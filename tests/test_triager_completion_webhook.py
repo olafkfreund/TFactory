@@ -29,7 +29,9 @@ def _seed_status(spec_dir: Path) -> None:
     )
 
 
-def test_default_fires_no_channel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_fires_no_channel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.delenv("TFACTORY_COMPLETION_WEBHOOK", raising=False)
     monkeypatch.delenv("TFACTORY_COMPLETION_SENTINEL", raising=False)
     _seed_status(tmp_path)
@@ -37,7 +39,9 @@ def test_default_fires_no_channel(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert not (tmp_path / "findings" / "COMPLETED.json").exists()
 
 
-def test_sentinel_opt_in_writes_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sentinel_opt_in_writes_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("TFACTORY_COMPLETION_SENTINEL", "1")
     _seed_status(tmp_path)
     _write_status_patch(tmp_path, status="triaged")
@@ -48,14 +52,18 @@ def test_sentinel_opt_in_writes_marker(tmp_path: Path, monkeypatch: pytest.Monke
     assert body["status"] == "triaged"
 
 
-def test_non_terminal_status_does_not_fire(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_non_terminal_status_does_not_fire(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("TFACTORY_COMPLETION_SENTINEL", "1")
     _seed_status(tmp_path)
     _write_status_patch(tmp_path, status="triaging")  # not terminal
     assert not (tmp_path / "findings" / "COMPLETED.json").exists()
 
 
-def test_webhook_opt_in_posts_payload(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_webhook_opt_in_posts_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("TFACTORY_COMPLETION_WEBHOOK", "http://hook.test/notify")
     _seed_status(tmp_path)
 
@@ -84,7 +92,9 @@ def test_webhook_opt_in_posts_payload(tmp_path: Path, monkeypatch: pytest.Monkey
     assert captured["body"]["phase"] == "boom"
 
 
-def test_webhook_failure_is_swallowed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_webhook_failure_is_swallowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("TFACTORY_COMPLETION_WEBHOOK", "http://hook.test/notify")
     _seed_status(tmp_path)
 
@@ -116,7 +126,7 @@ def test_envelope_has_normalized_header(
         tmp_path, status="triaged", phase="triager_complete", committed_count=3
     )
     env = _completed_envelope(tmp_path)
-    assert env["schema_version"] == "1.0"
+    assert env["schema_version"] == "1.1"
     assert env["event"] == "completion"
     assert env["service"] == "tfactory"
     assert env["outcome"] == "success"
@@ -138,9 +148,9 @@ def test_envelope_has_rfc0001_core_fields(
     _seed_status(tmp_path)
     _write_status_patch(tmp_path, status="triaged")
     env = _completed_envelope(tmp_path)
-    assert _RFC_CORE <= set(env)              # all six RFC fields present
+    assert _RFC_CORE <= set(env)  # all six RFC fields present
     assert env["service"] == "tfactory"
-    assert isinstance(env["correlation_key"], str)   # never null, always a string
+    assert isinstance(env["correlation_key"], str)  # never null, always a string
 
 
 def test_correlation_key_is_issue_number_when_present(
@@ -167,7 +177,7 @@ def test_correlation_key_synthetic_fallback_without_issue(
     )
     _write_status_patch(tmp_path, status="triaged")
     env = _completed_envelope(tmp_path)
-    assert env["correlation_key"] == "tf-spec-099"   # synthetic, never null
+    assert env["correlation_key"] == "tf-spec-099"  # synthetic, never null
     assert env["correlation"]["issue_number"] is None
 
 
