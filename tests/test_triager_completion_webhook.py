@@ -126,6 +126,51 @@ def test_envelope_has_normalized_header(
     assert env["task_id"] == "042" and env["status"] == "triaged"
 
 
+# ─── RFC-0001 conformance (#211) ────────────────────────────────────────
+
+_RFC_CORE = {"correlation_key", "service", "task_id", "status", "phase", "updated_at"}
+
+
+def test_envelope_has_rfc0001_core_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TFACTORY_COMPLETION_SENTINEL", "1")
+    _seed_status(tmp_path)
+    _write_status_patch(tmp_path, status="triaged")
+    env = _completed_envelope(tmp_path)
+    assert _RFC_CORE <= set(env)              # all six RFC fields present
+    assert env["service"] == "tfactory"
+    assert isinstance(env["correlation_key"], str)   # never null, always a string
+
+
+def test_correlation_key_is_issue_number_when_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TFACTORY_COMPLETION_SENTINEL", "1")
+    _seed_status(tmp_path)
+    ctx = tmp_path / "context"
+    ctx.mkdir(parents=True, exist_ok=True)
+    (ctx / "source.json").write_text(json.dumps({"issue_number": 412}))
+    _write_status_patch(tmp_path, status="triaged")
+    env = _completed_envelope(tmp_path)
+    assert env["correlation_key"] == "412"
+    assert env["correlation"]["issue_number"] == 412
+
+
+def test_correlation_key_synthetic_fallback_without_issue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TFACTORY_COMPLETION_SENTINEL", "1")
+    (tmp_path / "findings").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "status.json").write_text(
+        json.dumps({"task_id": "042", "spec_id": "spec-099", "status": "triaging"})
+    )
+    _write_status_patch(tmp_path, status="triaged")
+    env = _completed_envelope(tmp_path)
+    assert env["correlation_key"] == "tf-spec-099"   # synthetic, never null
+    assert env["correlation"]["issue_number"] is None
+
+
 @pytest.mark.parametrize(
     "status_value,expected",
     [("triaged", "success"), ("triaged_empty", "empty"), ("triager_failed", "failure")],
