@@ -219,7 +219,11 @@ npm run install:all
 
 # Or install separately:
 # Backend (from apps/backend/)
-cd apps/backend && uv venv && uv pip install -r requirements.txt
+# Install BOTH requirement sets into the one venv — the pre-commit hook runs the
+# full backend suite, which imports server.* modules (jose/sqlalchemy/...).
+cd apps/backend && uv venv \
+  && uv pip install -r requirements.txt \
+  && uv pip install -r ../web-server/requirements.txt
 
 # Frontend (from apps/frontend/)
 cd apps/frontend && npm install

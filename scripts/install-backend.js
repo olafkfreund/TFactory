@@ -103,6 +103,20 @@ async function main() {
     process.exit(1);
   }
 
+  // Also install the web-server requirements into the SAME venv. The pre-commit
+  // hook runs the full backend test-suite, which imports server.* modules (jose,
+  // sqlalchemy, prometheus, ...); without these a fresh backend venv fails the
+  // hook on any committed .py with `ModuleNotFoundError: No module named 'jose'`.
+  // This mirrors CI and the Docker image's single merged venv.
+  const webServerReqs = path.join(backendDir, '..', 'web-server', 'requirements.txt');
+  if (fs.existsSync(webServerReqs)) {
+    console.log('\nInstalling web-server requirements into the backend venv (tests + pre-commit hook)...');
+    if (!run(`"${pip}" install -r "${webServerReqs}"`)) {
+      console.error('Failed to install web-server dependencies');
+      process.exit(1);
+    }
+  }
+
   // Preinstall @google/gemini-cli (Antigravity CLI) per default
   console.log('\nPreinstalling @google/gemini-cli (Antigravity CLI) per default...');
   try {
