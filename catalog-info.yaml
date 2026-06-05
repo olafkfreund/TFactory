@@ -21,21 +21,6 @@
 #       Resource   tfactory-workspace      (filesystem state store)
 ---
 apiVersion: backstage.io/v1alpha1
-kind: Domain
-metadata:
-  name: factory-platform
-  title: Factory Platform (PARR spine)
-  description: >-
-    The DataSeek autonomous SDLC spine — AIFactory (build), TFactory (test),
-    PFactory (provision) and CFactory (coordinate) — connected by a normalized
-    completion-event envelope. This descriptor covers TFactory.
-  tags:
-    - autonomous-sdlc
-    - ai-agents
-spec:
-  owner: group:default/dataseek-team
----
-apiVersion: backstage.io/v1alpha1
 kind: System
 metadata:
   name: tfactory
@@ -65,7 +50,6 @@ metadata:
     - react
 spec:
   owner: group:default/dataseek-team
-  domain: factory-platform
 ---
 apiVersion: backstage.io/v1alpha1
 kind: Component
