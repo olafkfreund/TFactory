@@ -39,6 +39,12 @@ exclude:
   - Gemfile
   - Gemfile.lock
 
+# Jekyll ignores dotfiles by default; whitelist the Backstage AI-skills
+# discovery endpoint so it is served at /.well-known/skills/.
+# See https://backstage.io/docs/ai/skills
+include:
+  - .well-known
+
 # Repo + version metadata (used by the custom layout)
 repo_url: https://github.com/olafkfreund/TFactory
 release_tag: v0.1.0-mvp

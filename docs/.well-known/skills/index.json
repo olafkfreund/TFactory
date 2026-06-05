@@ -1,0 +1,13 @@
+{
+  "$schema": "https://backstage.io/schema/skills/v1",
+  "version": "1",
+  "source": "https://github.com/olafkfreund/TFactory",
+  "skills": [
+    {
+      "name": "tfactory",
+      "description": "How to work in the TFactory codebase — the autonomous test-generation + execution platform: the 4-agent pipeline, the LLM-provider abstraction, the workspace layout, branching model, how to run the suite, and the non-negotiable conventions.",
+      "path": "tfactory/SKILL.md",
+      "tags": ["tfactory", "testing", "ai-agents", "python", "onboarding"]
+    }
+  ]
+}

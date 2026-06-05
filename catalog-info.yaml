@@ -8,6 +8,9 @@
 # they provide/consume, and a backing Resource. TechDocs for the whole platform
 # is attached to the System (built from the repo-root mkdocs.yml + techdocs/).
 #
+# An AI-assistant onboarding skill (Backstage "well-known skills" format) lives
+# at docs/.well-known/skills/tfactory/SKILL.md — see https://backstage.io/docs/ai/skills.
+#
 # Entity model:
 #   Domain  factory-platform
 #     System  tfactory
@@ -19,6 +22,7 @@
 #       API        tfactory-mcp            (mcp / json-rpc)
 #       API        tfactory-completion-event (asyncapi)
 #       Resource   tfactory-workspace      (filesystem state store)
+#     Group   dataseek-team  <- User olaf-freund
 ---
 apiVersion: backstage.io/v1alpha1
 kind: Domain
@@ -29,6 +33,14 @@ metadata:
     The DataSeek autonomous SDLC spine — AIFactory (build), TFactory (test),
     PFactory (provision) and CFactory (coordinate) — connected by a normalized
     completion-event envelope. This descriptor covers TFactory.
+  annotations:
+    backstage.io/source-location: url:https://github.com/olafkfreund/TFactory/tree/main/
+    backstage.io/view-url: https://github.com/olafkfreund/TFactory
+    backstage.io/edit-url: https://github.com/olafkfreund/TFactory/edit/main/catalog-info.yaml
+  links:
+    - url: https://github.com/olafkfreund/TFactory/blob/main/docs/completion-event-envelope.md
+      title: Completion-event envelope (cross-service contract)
+      icon: docs
   tags:
     - autonomous-sdlc
     - ai-agents
@@ -50,19 +62,46 @@ metadata:
     backstage.io/techdocs-ref: dir:.
     github.com/project-slug: olafkfreund/TFactory
     backstage.io/source-location: url:https://github.com/olafkfreund/TFactory/tree/main/
+    backstage.io/view-url: https://github.com/olafkfreund/TFactory
+    backstage.io/edit-url: https://github.com/olafkfreund/TFactory/edit/main/catalog-info.yaml
   links:
     - url: https://github.com/olafkfreund/TFactory
       title: Source repository
       icon: github
+    - url: https://olafkfreund.github.io/TFactory/
+      title: Project site (GitHub Pages)
+      icon: web
     - url: https://github.com/olafkfreund/TFactory/issues/33
       title: Active epic (#33)
       icon: dashboard
+    - url: https://github.com/olafkfreund/TFactory/blob/main/README.md
+      title: README
+      icon: docs
+    - url: https://github.com/olafkfreund/TFactory/blob/main/CHANGELOG.md
+      title: Changelog
+      icon: docs
+    - url: https://github.com/olafkfreund/TFactory/releases
+      title: Releases
+      icon: docs
+    - url: https://github.com/olafkfreund/TFactory/blob/main/guides/HANDOVER_WORKFLOW.md
+      title: Handover workflow guide
+      icon: docs
+    - url: https://github.com/olafkfreund/TFactory/blob/main/guides/cloud-testing.md
+      title: Cloud infrastructure testing guide
+      icon: docs
+    - url: https://github.com/olafkfreund/TFactory/blob/main/LICENSE
+      title: License (MIT OR GPL-3.0)
+      icon: docs
   tags:
     - testing
     - ai-agents
     - python
     - fastapi
     - react
+    - mcp
+    - pytest
+    - playwright
+    - docker
 spec:
   owner: group:default/dataseek-team
   domain: factory-platform
@@ -79,10 +118,24 @@ metadata:
   annotations:
     github.com/project-slug: olafkfreund/TFactory
     backstage.io/source-location: url:https://github.com/olafkfreund/TFactory/tree/main/apps/web-server/
+    backstage.io/techdocs-entity: system:default/tfactory
+    backstage.io/view-url: https://github.com/olafkfreund/TFactory/tree/main/apps/web-server
+    backstage.io/edit-url: https://github.com/olafkfreund/TFactory/edit/main/catalog-info.yaml
+  links:
+    - url: http://localhost:3103/docs
+      title: Swagger UI (APP_DEBUG=true)
+      icon: web
+    - url: http://localhost:3103/redoc
+      title: ReDoc (APP_DEBUG=true)
+      icon: web
+    - url: https://github.com/olafkfreund/TFactory/blob/main/apps/web-server/README.md
+      title: web-server README
+      icon: docs
   tags:
     - python
     - fastapi
     - websocket
+    - mcp
 spec:
   type: service
   lifecycle: production
@@ -105,10 +158,21 @@ metadata:
   annotations:
     github.com/project-slug: olafkfreund/TFactory
     backstage.io/source-location: url:https://github.com/olafkfreund/TFactory/tree/main/apps/frontend-web/
+    backstage.io/techdocs-entity: system:default/tfactory
+    backstage.io/view-url: https://github.com/olafkfreund/TFactory/tree/main/apps/frontend-web
+    backstage.io/edit-url: https://github.com/olafkfreund/TFactory/edit/main/catalog-info.yaml
+  links:
+    - url: http://localhost:3100
+      title: Local portal (npm run dev)
+      icon: web
+    - url: https://github.com/olafkfreund/TFactory/blob/main/apps/frontend-web/README.md
+      title: frontend-web README
+      icon: docs
   tags:
     - react
     - typescript
     - vite
+    - i18n
 spec:
   type: website
   lifecycle: production
@@ -129,10 +193,22 @@ metadata:
   annotations:
     github.com/project-slug: olafkfreund/TFactory
     backstage.io/source-location: url:https://github.com/olafkfreund/TFactory/tree/main/apps/backend/
+    backstage.io/techdocs-entity: system:default/tfactory
+    backstage.io/view-url: https://github.com/olafkfreund/TFactory/tree/main/apps/backend
+    backstage.io/edit-url: https://github.com/olafkfreund/TFactory/edit/main/catalog-info.yaml
+  links:
+    - url: https://github.com/olafkfreund/TFactory/blob/main/guides/byo-llm.md
+      title: BYO-LLM / air-gapped guide
+      icon: docs
+    - url: https://github.com/olafkfreund/TFactory/blob/main/guides/spec-sources.md
+      title: Generic AC sources (no-AIFactory) guide
+      icon: docs
   tags:
     - python
     - ai-agents
     - claude-agent-sdk
+    - graphiti
+    - cli
 spec:
   type: service
   lifecycle: production
@@ -155,9 +231,20 @@ metadata:
   annotations:
     github.com/project-slug: olafkfreund/TFactory
     backstage.io/source-location: url:https://github.com/olafkfreund/TFactory/tree/main/apps/backend/mcp_server/
+    backstage.io/techdocs-entity: system:default/tfactory
+    backstage.io/view-url: https://github.com/olafkfreund/TFactory/tree/main/apps/backend/mcp_server
+    backstage.io/edit-url: https://github.com/olafkfreund/TFactory/edit/main/catalog-info.yaml
+  links:
+    - url: https://github.com/olafkfreund/TFactory/blob/main/guides/REMOTE_MCP_SERVER.md
+      title: Remote MCP server guide
+      icon: docs
+    - url: https://github.com/olafkfreund/TFactory/blob/main/guides/CLAUDE_CODE_MCP_TOOLS.md
+      title: Claude Code MCP tools guide
+      icon: docs
   tags:
     - python
     - mcp
+    - json-rpc
 spec:
   type: service
   lifecycle: production
@@ -177,6 +264,12 @@ metadata:
     /docs and ReDoc at /redoc when APP_DEBUG=true. Bearer (JWT) auth.
   annotations:
     backstage.io/source-location: url:https://github.com/olafkfreund/TFactory/tree/main/apps/web-server/
+    backstage.io/view-url: https://github.com/olafkfreund/TFactory/blob/main/techdocs/specs/tfactory-web-api.openapi.json
+    backstage.io/edit-url: https://github.com/olafkfreund/TFactory/edit/main/catalog-info.yaml
+  links:
+    - url: http://localhost:3103/docs
+      title: Swagger UI (live)
+      icon: web
   tags:
     - rest
     - openapi
@@ -199,6 +292,8 @@ metadata:
     reports. Server name "tfactory", version 1.0.0.
   annotations:
     backstage.io/source-location: url:https://github.com/olafkfreund/TFactory/tree/main/apps/backend/mcp_server/tfactory_server.py
+    backstage.io/view-url: https://github.com/olafkfreund/TFactory/blob/main/apps/backend/mcp_server/tfactory_server.py
+    backstage.io/edit-url: https://github.com/olafkfreund/TFactory/edit/main/catalog-info.yaml
   tags:
     - mcp
     - json-rpc
@@ -221,6 +316,12 @@ metadata:
     shape of the Factory PARR spine — correlation_id is the GitHub issue number.
   annotations:
     backstage.io/source-location: url:https://github.com/olafkfreund/TFactory/tree/main/docs/completion-event-envelope.md
+    backstage.io/view-url: https://github.com/olafkfreund/TFactory/blob/main/docs/completion-event-envelope.md
+    backstage.io/edit-url: https://github.com/olafkfreund/TFactory/edit/main/catalog-info.yaml
+  links:
+    - url: https://github.com/olafkfreund/TFactory/blob/main/docs/completion-event-envelope.md
+      title: Envelope reference
+      icon: docs
   tags:
     - asyncapi
     - events
@@ -242,6 +343,13 @@ metadata:
     Per-task filesystem state at ~/.tfactory/workspaces/<project>/specs/<spec>/
     (override with TFACTORY_WORKSPACE_ROOT). Holds status.json, test_plan.json,
     context/, tests/, findings/ and logs/ for every run.
+  annotations:
+    backstage.io/source-location: url:https://github.com/olafkfreund/TFactory/tree/main/apps/backend/workspaces/
+    backstage.io/view-url: https://github.com/olafkfreund/TFactory/tree/main/apps/backend/workspaces
+    backstage.io/edit-url: https://github.com/olafkfreund/TFactory/edit/main/catalog-info.yaml
+  tags:
+    - filesystem
+    - state-store
 spec:
   type: filesystem
   lifecycle: production
@@ -255,4 +363,21 @@ metadata:
   description: DataSeek Team — maintainers of TFactory.
 spec:
   type: team
+  profile:
+    displayName: DataSeek Team
+    email: olaf@freundcloud.com
   children: []
+  members:
+    - olaf-freund
+---
+apiVersion: backstage.io/v1alpha1
+kind: User
+metadata:
+  name: olaf-freund
+  description: Maintainer / author of TFactory.
+spec:
+  profile:
+    displayName: Olaf Freund
+    email: olaf@freundcloud.com
+  memberOf:
+    - dataseek-team
