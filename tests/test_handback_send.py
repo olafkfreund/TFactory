@@ -40,7 +40,10 @@ def _request():
 def test_dry_run_writes_artifacts_and_does_not_send(tmp_path) -> None:
     calls = []
     res = send_correction(
-        _request(), tmp_path, dry_run=True, confirm=False,
+        _request(),
+        tmp_path,
+        dry_run=True,
+        confirm=False,
         sender_fn=lambda p: calls.append(p) or {},
         now="2026-06-03T00:00:00+00:00",
     )
@@ -72,10 +75,69 @@ def test_confirmed_live_send_calls_sender_with_payload(tmp_path) -> None:
     assert "QA Fix Request" in captured["fix_request_md"]
 
 
+def test_send_payload_carries_self_callback(tmp_path, monkeypatch) -> None:
+    """The handback payload self-references TFactory so AIFactory can call back."""
+    monkeypatch.setenv("TFACTORY_SELF_API_URL", "http://tfactory.local:3103")
+    captured = {}
+    send_correction(
+        _request(),
+        tmp_path,
+        dry_run=False,
+        confirm=True,
+        sender_fn=lambda p: captured.update(p) or {},
+    )
+    assert captured["tfactory_task_id"] == "demo:001-login"
+    assert (
+        captured["tfactory_callback_url"]
+        == "http://tfactory.local:3103/api/handback/aifactory-complete"
+    )
+
+
+def test_default_sender_forwards_callback_fields(monkeypatch) -> None:
+    """default_sender includes the self-reference in the POST body to AIFactory."""
+    from agents.handback import send as send_mod
+
+    sent_body = {}
+
+    class _Resp:
+        def read(self):
+            return b"{}"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=0):
+        sent_body.update(json.loads(req.data.decode()))
+        return _Resp()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    send_mod.default_sender(
+        {
+            "api_url": "http://localhost:3101",
+            "task_id": "demo:001-login",
+            "fix_request_md": "# fix",
+            "source": "triage",
+            "confirm": True,
+            "tfactory_task_id": "demo:001-login",
+            "tfactory_callback_url": "http://tfactory.local:3103/api/handback/aifactory-complete",
+        }
+    )
+    assert sent_body["tfactory_task_id"] == "demo:001-login"
+    assert sent_body["tfactory_callback_url"].endswith(
+        "/api/handback/aifactory-complete"
+    )
+
+
 def test_not_confirmed_does_not_send_even_if_not_dry_run(tmp_path) -> None:
     calls = []
     res = send_correction(
-        _request(), tmp_path, dry_run=False, confirm=False,
+        _request(),
+        tmp_path,
+        dry_run=False,
+        confirm=False,
         sender_fn=lambda p: calls.append(p) or {},
     )
     assert not res.sent and calls == []
@@ -85,7 +147,9 @@ def test_unreachable_sender_is_graceful(tmp_path) -> None:
     def boom(payload):
         raise ConnectionError("AIFactory down")
 
-    res = send_correction(_request(), tmp_path, dry_run=False, confirm=True, sender_fn=boom)
+    res = send_correction(
+        _request(), tmp_path, dry_run=False, confirm=True, sender_fn=boom
+    )
     assert res.ok is False and res.sent is False
     assert "ConnectionError" in res.error
     # Artifact still written despite the failed send.
@@ -93,7 +157,9 @@ def test_unreachable_sender_is_graceful(tmp_path) -> None:
 
 
 def test_nothing_to_hand_back_writes_nothing(tmp_path) -> None:
-    req = build_correction_request({"verdicts": [{"test_id": "a", "verdict": "accept"}]}, None, SOURCE)
+    req = build_correction_request(
+        {"verdicts": [{"test_id": "a", "verdict": "accept"}]}, None, SOURCE
+    )
     res = send_correction(req, tmp_path, dry_run=True)
     assert res.ok and not res.sent
     assert not (tmp_path / "findings").exists()
@@ -125,7 +191,9 @@ def test_hook_sends_when_opted_in(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("TFACTORY_HANDBACK_SEND", "1")
     _seed_workspace(tmp_path)
     calls = []
-    res = maybe_handback(tmp_path, sender_fn=lambda p: calls.append(p) or {"success": True})
+    res = maybe_handback(
+        tmp_path, sender_fn=lambda p: calls.append(p) or {"success": True}
+    )
     assert res is not None and res.sent is True
     assert len(calls) == 1
 
