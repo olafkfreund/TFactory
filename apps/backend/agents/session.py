@@ -52,7 +52,11 @@ logger = logging.getLogger(__name__)
 
 
 def _append_build_progress(
-    spec_dir: Path, subtask_id: str, subtask: dict, session_num: int, commit_hash: str | None
+    spec_dir: Path,
+    subtask_id: str,
+    subtask: dict,
+    session_num: int,
+    commit_hash: str | None,
 ) -> None:
     """Append a completed subtask line to build-progress.txt."""
     progress_file = spec_dir / "build-progress.txt"
@@ -216,7 +220,9 @@ async def post_session_processing(
         # Append to build-progress.txt for frontend visibility
         _append_build_progress(spec_dir, subtask_id, subtask, session_num, commit_after)
         if source_spec_dir:
-            _append_build_progress(source_spec_dir, subtask_id, subtask, session_num, commit_after)
+            _append_build_progress(
+                source_spec_dir, subtask_id, subtask, session_num, commit_after
+            )
 
         return True
 
@@ -374,6 +380,10 @@ async def run_agent_session(
         _cache_read_total = 0
         _cache_write_total = 0
         _last_session_id: str | None = None
+        # Final (cumulative) token usage for this session — folded into
+        # status.json at session end so the completion event can emit an
+        # RFC-0001 usage block for the cockpit Tokens page (#224).
+        _session_usage = None
         debug("session", "Starting to receive response stream...")
         async for msg in safe_receive_messages(client, caller="session"):
             msg_type = type(msg).__name__
@@ -565,6 +575,11 @@ async def run_agent_session(
                 _cache_read_total += _cache_read
                 _cache_write_total += _cache_write
                 _last_session_id = getattr(msg, "session_id", _last_session_id)
+                # ResultMessage.usage is cumulative for the session; keep the
+                # latest so we record each session exactly once (#224).
+                from usage import usage_from_obj
+
+                _session_usage = usage_from_obj(msg) or _session_usage
 
         # Aggregated cache totals — one line per agent session so operators
         # can confirm the static prefix is being reused across turns.
@@ -575,6 +590,14 @@ async def run_agent_session(
                 _cache_write_total,
                 _last_session_id or "?",
             )
+
+        # Fold this session's token usage into the spec's running total (#224).
+        # Best-effort and additive: accumulates across the task's many sessions
+        # and handback retries; the completion event reads the sum back.
+        if _session_usage is not None:
+            from usage import record_in_status
+
+            record_in_status(spec_dir, _session_usage)
 
         print("\n" + "-" * 70 + "\n")
 

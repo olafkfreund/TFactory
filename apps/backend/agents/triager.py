@@ -459,7 +459,7 @@ def _completion_sentinel_enabled() -> bool:
 # all emit this shape so a watcher (CFactory) consumes one schema. The spine
 # correlation key is the GitHub issue number threaded end-to-end. See
 # docs/completion-event-envelope.md for the contract.
-_COMPLETION_SCHEMA_VERSION = "1.0"
+_COMPLETION_SCHEMA_VERSION = "1.1"
 
 
 def _outcome_for_status(status_value: str | None) -> str:
@@ -520,6 +520,8 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> dict:
     (``schema_version``, ``event``, ``service``, ``correlation_id``,
     ``outcome``) plus repo/branch context + a result summary sit on top.
     """
+    from usage import usage_block_from_status
+
     source = _load_source_meta(spec_dir)
     status_value = status.get("status")
     issue_number = _correlation_issue_number(status, source)
@@ -552,6 +554,9 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> dict:
         "branch": source.get("branch"),
         "pr_number": source.get("pr_number") or None,
         "result": _completion_result_summary(status),
+        # RFC-0001 v1.1 §3.1 additive usage block (#224). Zeros when the run did
+        # no LLM work; summed across sessions + handback retries via status.json.
+        "usage": usage_block_from_status(spec_dir),
         "emitted_at": _now_iso(),
     }
 

@@ -116,7 +116,7 @@ def test_envelope_has_normalized_header(
         tmp_path, status="triaged", phase="triager_complete", committed_count=3
     )
     env = _completed_envelope(tmp_path)
-    assert env["schema_version"] == "1.0"
+    assert env["schema_version"] == "1.1"
     assert env["event"] == "completion"
     assert env["service"] == "tfactory"
     assert env["outcome"] == "success"
