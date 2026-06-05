@@ -1218,6 +1218,7 @@ except ImportError:
 # one) when it guards a core invariant worth blocking a merge on.
 CRITICAL_MODULES = frozenset(
     {
+        "test_qa_loop",  # restored qa_loop module + CLI import guard (#226/#227)
         "test_output_envelope",  # shared agent-output JSON envelope (#96)
         "test_stage_events",  # per-stage pipeline events (#95)
         "test_liveness",  # stall watchdog (#95)
