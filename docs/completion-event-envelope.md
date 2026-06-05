@@ -1,3 +1,10 @@
+---
+layout: default
+title: Completion Event
+permalink: /completion-event-envelope/
+nav_order: 7.5
+---
+
 # Completion-event envelope
 
 > Conforms to **[RFC-0001](https://github.com/olafkfreund/Factory/blob/main/docs/rfc/0001-correlation-key-and-completion-event.md)**
