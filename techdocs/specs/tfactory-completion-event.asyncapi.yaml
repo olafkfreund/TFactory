@@ -1,0 +1,145 @@
+asyncapi: 2.6.0
+info:
+  title: TFactory completion-event
+  version: "1.0"
+  description: >-
+    Completion event emitted by the TFactory Triager on terminal status. Conforms
+    to RFC-0001 — the Factory-wide shared correlation-key + completion-event schema
+    (AIFactory · TFactory · PFactory · CFactory). Delivered as a webhook POST
+    (TFACTORY_COMPLETION_WEBHOOK) and/or a findings/COMPLETED.json sentinel
+    (TFACTORY_COMPLETION_SENTINEL). The shared join key is `correlation_key` (issue
+    number as string, with a synthetic `tf-<spec_id>` fallback so it is never null).
+  license:
+    name: MIT OR GPL-3.0
+  contact:
+    name: DataSeek Team
+    url: https://github.com/olafkfreund/TFactory
+
+defaultContentType: application/json
+
+channels:
+  tfactory/completion:
+    description: >-
+      Fires once per task on terminal status. The webhook target is operator-supplied;
+      the sentinel is a same-host file watchers can stat instead of polling.
+    subscribe:
+      operationId: onTaskCompletion
+      summary: Receive a completion envelope when a TFactory task finishes.
+      message:
+        $ref: '#/components/messages/CompletionEvent'
+
+components:
+  messages:
+    CompletionEvent:
+      name: completionEvent
+      title: Completion event (RFC-0001)
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/CompletionEnvelope'
+      examples:
+        - name: triaged-success
+          payload:
+            correlation_key: "412"
+            service: tfactory
+            task_id: 001-pricing
+            status: triaged
+            phase: test
+            updated_at: "2026-06-04T16:29:58+00:00"
+            correlation:
+              issue_number: 412
+              spec_id: 001-pricing
+              branch: feat/x
+              pr_number: 88
+            schema_version: "1.0"
+            event: completion
+            correlation_id: 412
+            project_id: demo
+            spec_id: 001-pricing
+            outcome: success
+            repo: owner/name
+            branch: feat/x
+            pr_number: 88
+            result:
+              committed_count: 3
+              flagged_count: 1
+              rejected_count: 2
+              verdicts_count: 6
+              dedup_collision_count: 0
+            emitted_at: "2026-06-04T16:30:00+00:00"
+
+  schemas:
+    CompletionEnvelope:
+      type: object
+      required:
+        - correlation_key
+        - service
+        - task_id
+        - status
+        - phase
+        - updated_at
+      properties:
+        # --- RFC-0001 core (required) ---
+        correlation_key:
+          type: string
+          description: GitHub issue number as a string, or synthetic `tf-<spec_id>`. Never null.
+          examples: ["412", "tf-001-pricing"]
+        service:
+          type: string
+          enum: [aifactory, pfactory, tfactory]
+        task_id:
+          type: string
+          description: Emitting service's task id.
+        status:
+          type: string
+          description: Service-native terminal status (verbatim).
+          enum: [triaged, triaged_empty, triager_failed, stuck]
+        phase:
+          type: string
+          description: Pipeline phase; falls back to "test".
+        updated_at:
+          type: string
+          format: date-time
+        # --- RFC-0001 §4 optional chain block ---
+        correlation:
+          type: object
+          description: Upstream/downstream links.
+          properties:
+            issue_number: { type: [integer, "null"] }
+            spec_id: { type: [string, "null"] }
+            branch: { type: [string, "null"] }
+            pr_number: { type: [integer, "null"] }
+        # --- Additive TFactory detail (RFC §7) ---
+        schema_version:
+          type: string
+          const: "1.0"
+        event:
+          type: string
+          const: completion
+        correlation_id:
+          type: [integer, "null"]
+          description: Legacy int alias of correlation_key.
+        project_id:
+          type: [string, "null"]
+        spec_id:
+          type: [string, "null"]
+        outcome:
+          type: string
+          description: Normalized coarse outcome.
+          enum: [success, empty, failure]
+        repo:
+          type: [string, "null"]
+        branch:
+          type: [string, "null"]
+        pr_number:
+          type: [integer, "null"]
+        result:
+          type: object
+          properties:
+            committed_count: { type: integer }
+            flagged_count: { type: integer }
+            rejected_count: { type: integer }
+            verdicts_count: { type: integer }
+            dedup_collision_count: { type: integer }
+        emitted_at:
+          type: string
+          format: date-time
