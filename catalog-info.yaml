@@ -40,6 +40,11 @@ spec:
     - tfactory-web-api
     - tfactory-mcp
     - tfactory-completion-event
+  consumesApis:
+    # Ingests AIFactory specs/features to generate tests against.
+    - aifactory-web-api
+  dependsOn:
+    - component:default/aifactory
 ---
 apiVersion: backstage.io/v1alpha1
 kind: Component
@@ -62,6 +67,7 @@ spec:
   lifecycle: production
   owner: olafkfreund
   domain: public
+  subcomponentOf: tfactory
   consumesApis:
     - tfactory-web-api
 ---
