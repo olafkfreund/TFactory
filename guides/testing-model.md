@@ -42,8 +42,10 @@ source directly; Jest/ts-jest transpiles at test time. Compiled languages
   - **Kubernetes** — `KubernetesRuntime` port-forwards the service (#108) and
     injects the resolved URL.
   - **Cloud** — read-only CSPM against a live account (#133).
-- **build→deploy→test orchestration** (build an image → deploy → test the
-  artifact → tear down) is **not yet implemented** (#233).
+- **build→deploy→test orchestration** (#233): declare `build:` steps
+  (`docker build` / `npm run build`) + a `docker_run` target; the Evaluator runs
+  the build before the lanes, then `docker run`s the image, health-polls,
+  injects `TFACTORY_TARGET_URL`, runs the lane, and tears the container down.
 
 ## 4. Connecting to environments
 
@@ -98,8 +100,12 @@ commits, dry-run-by-default side-effects. Full controls + per-release checklist:
 
 ## 8. Toward 100% automation — remaining gaps
 
-- build→deploy→test orchestration + artifact/image-digest testing (#233)
+- artifact/image-digest pinning (test an exact digest, not just a tag)
 - compiled languages — Java first (#237)
+
+(shipped this epic: build→deploy→test orchestration #233, Cypress/Vitest #236,
+confidence #238/#239, Backstage #240/#241, health-gate #234, storageState #235,
+hardening #242)
 - (shipped this epic: confidence #238/#239, Backstage #240/#241, health-gate
   #234, storageState #235, hardening #242)
 
