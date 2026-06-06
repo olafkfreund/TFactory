@@ -398,6 +398,14 @@ def _write_status_patch(spec_dir: Path, **fields: object) -> None:
         from agents.handback.trigger import maybe_handback
 
         maybe_handback(spec_dir)
+        # Best-effort per-component test-quality fact to Backstage (#240).
+        # No-op unless TFACTORY_BACKSTAGE_TECHINSIGHTS_URL is set; never raises.
+        try:
+            from agents.backstage_integration import maybe_emit_backstage
+
+            maybe_emit_backstage(spec_dir, status)
+        except Exception:  # noqa: BLE001 — emitting must never break the run
+            pass
 
 
 # ─── Mode resolution: dry-run vs real ─────────────────────────────────
