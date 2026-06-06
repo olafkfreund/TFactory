@@ -1518,6 +1518,15 @@ async def _run_evaluator_session(spec_dir, project_dir, bundles, verbose) -> boo
                     pass
         doc = json.loads(verdicts_path.read_text())
         enrich_verdicts(doc, flaky_by_test_id)
+        # Honor the RFC-0002 contract execution scope (#247): record declared
+        # coverage_target / mutation_scope / security_scope into the run output.
+        try:
+            from agents.contract_scope import apply_execution_scope
+            from agents.task_contract import read_tfactory_profile
+
+            apply_execution_scope(doc, read_tfactory_profile(spec_dir))
+        except Exception as exc:  # noqa: BLE001 — scope is additive metadata
+            _eval_log.warning("contract scope skipped: %s", exc)
         verdicts_path.write_text(json.dumps(doc, indent=2))
     except Exception as exc:  # noqa: BLE001 — confidence is additive metadata
         _eval_log.warning("confidence/flaky enrichment skipped: %s", exc)
