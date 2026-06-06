@@ -801,6 +801,73 @@ def _kube_runtime_for(target: dict | None, *, runtime_cls=None):
     return cls(t, kubeconfig=os.environ.get("KUBECONFIG"))
 
 
+def _docker_run_runtime_for(target: dict | None, *, runtime_cls=None):
+    """A ``DockerRunRuntime`` for a ``type: docker_run`` target, else None (#233).
+
+    Runs the (typically just-built) image for the lane lifetime, health-polls
+    its ``wait_for`` URLs, and exposes ``target_url``. Caller uses it as a
+    context manager so the container is removed on success *and* failure.
+    """
+    if not target or target.get("type") != "docker_run":
+        return None
+    from types import SimpleNamespace
+
+    from tools.runners.docker_run_runtime import DockerRunRuntime
+
+    cls = runtime_cls or DockerRunRuntime
+    wait_for = [
+        SimpleNamespace(
+            url=wf.get("url"),
+            expect_status=wf.get("expect_status", 200),
+            timeout_seconds=wf.get("timeout_seconds", 60),
+        )
+        for wf in (target.get("wait_for") or [])
+    ]
+    t = SimpleNamespace(
+        name=target.get("name"),
+        image=target.get("image"),
+        ports=target.get("ports") or [],
+        env=target.get("env") or {},
+        command=target.get("command"),
+        wait_for=wait_for,
+    )
+    return cls(t)
+
+
+def _maybe_run_build(spec_dir: Path, project_dir: Path) -> None:
+    """Run `.tfactory.yml` ``build:`` steps before the lanes (#233).
+
+    Reads the snapshotted config (``context/tfactory_yml.json``); no-op when no
+    build steps are declared. Best-effort: a build failure is logged + recorded
+    in status.json (``build_failed``) but never raises — a downstream docker_run
+    lane will then surface the missing image as a clear health failure (#234).
+    """
+    ctx = spec_dir / "context" / "tfactory_yml.json"
+    if not ctx.exists():
+        return
+    try:
+        cfg = json.loads(ctx.read_text())
+    except (json.JSONDecodeError, OSError):
+        return
+    raw_steps = cfg.get("build") or []
+    if not raw_steps:
+        return
+    try:
+        from types import SimpleNamespace
+
+        from tools.runners.build_runner import run_build_steps
+
+        steps = [SimpleNamespace(**s) for s in raw_steps]
+        result = run_build_steps(steps, repo_root=Path(project_dir))
+        if not result.ok:
+            _eval_log.error("build steps failed: %s", result.error)
+            _write_status_patch(
+                spec_dir, build_failed=True, build_error=result.error[:200]
+            )
+    except Exception as exc:  # noqa: BLE001 — build wiring must never crash the run
+        _eval_log.warning("build step execution skipped: %s", exc)
+
+
 def _test_credential_specs(spec_dir: Path, subtask: dict | None) -> list:
     """TargetCredentialSpec list for a subtask's ``ref``-auth target (#107).
 
@@ -1298,6 +1365,13 @@ def _build_kube_or_static_bundle(
     if rt is not None:
         with rt as runtime:
             return make_bundle(make_runner(runtime.target_url))
+    # docker_run target (#233): run the (built) image for the lane lifetime,
+    # health-poll, then tear down — like the kube path but for a single image.
+    drt = _docker_run_runtime_for(target)
+    if drt is not None:
+        with drt as runtime:
+            runtime.wait_for_healthy()
+            return make_bundle(make_runner(runtime.target_url))
     target_url = _browser_target_url(spec_dir, st)
     _gate_target_health(spec_dir, st, target, target_url)
     return make_bundle(make_runner(target_url))
@@ -1511,6 +1585,10 @@ async def run_evaluator(
         if not completed:
             _write_empty_verdicts(spec_dir, mode)
             return True
+
+        # 2b. Build the artifact under test if the config declares build steps
+        #     (#233) — e.g. docker build an image a docker_run target then runs.
+        _maybe_run_build(spec_dir, project_dir)
 
         # 3. Per-test signal computation (real primitives; runner_fn seam
         #    mocked in tests so docker isn't required).
