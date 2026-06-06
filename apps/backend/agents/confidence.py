@@ -138,10 +138,73 @@ def compute_confidence(verdict: dict) -> float:
     if den == 0.0:
         # No usable signals — fall back to a verdict-shaped neutral so the
         # field is always populated.
-        return {"accept": 0.6, "flag": 0.4, "reject": 0.1}.get(
+        base = {"accept": 0.6, "flag": 0.4, "reject": 0.1}.get(
             _norm(verdict.get("verdict")), 0.5
         )
-    return round(num / den, 2)
+    else:
+        base = num / den
+    return round(base * _flaky_penalty(summary), 2)
+
+
+# ─── Flaky-history wiring (#239) ─────────────────────────────────────────
+# Cross-run flip-rate is a distinct kind of evidence from the single-run
+# signals: a test can pass all 5 this run yet have flipped pass/fail across
+# history. Rather than fold it into the weighted mean (which would re-base
+# every C1 number), it applies as a *multiplicative penalty* — no history or a
+# STABLE classification leaves confidence unchanged; a FLAKY test is discounted
+# in proportion to its flip-rate.
+
+# Floor so even a coin-flip test keeps a small, non-zero confidence.
+FLAKY_PENALTY_FLOOR = 0.3
+
+
+def _flaky_penalty(summary: dict) -> float:
+    """Return a multiplier in [FLAKY_PENALTY_FLOOR, 1.0] from ``summary.flaky``.
+
+    Only a ``classification == "flaky"`` entry penalises; NEW/STABLE/missing
+    return 1.0 (no effect — keeps C1 behaviour intact).
+    """
+    flaky = summary.get("flaky")
+    if not isinstance(flaky, dict):
+        return 1.0
+    if _norm(flaky.get("classification")) != "flaky":
+        return 1.0
+    flip = flaky.get("flip_rate")
+    flip = (
+        float(flip)
+        if isinstance(flip, (int, float)) and not isinstance(flip, bool)
+        else 0.5
+    )
+    return max(FLAKY_PENALTY_FLOOR, 1.0 - flip)
+
+
+def apply_flaky_override(verdict: dict) -> bool:
+    """Deterministically demote an ``accept`` of a FLAKY test to ``flag``.
+
+    Cross-run flakiness is authoritative regardless of the LLM's call: a test
+    that flips across runs must never silently land. Never upgrades a verdict.
+    Returns True if the verdict label was changed.
+    """
+    summary = verdict.get("signals_summary")
+    if not isinstance(summary, dict):
+        return False
+    flaky = summary.get("flaky")
+    if not isinstance(flaky, dict):
+        return False
+    if _norm(flaky.get("classification")) != "flaky":
+        return False
+    if _norm(verdict.get("verdict")) != "accept":
+        return False
+    verdict["verdict"] = "flag"
+    reasons = verdict.get("reasons")
+    if not isinstance(reasons, list):
+        reasons = []
+        verdict["reasons"] = reasons
+    reasons.append(
+        f"flaky-history: flip_rate={flaky.get('flip_rate')} over "
+        f"{flaky.get('runs')} runs — demoted accept→flag (#239)"
+    )
+    return True
 
 
 def aggregate_confidence(verdicts: list[dict]) -> dict:
@@ -183,13 +246,17 @@ def aggregate_confidence(verdicts: list[dict]) -> dict:
     }
 
 
-def enrich_verdicts(doc: dict) -> dict:
-    """Mutate ``doc`` in place: stamp each verdict's confidence + run rollup.
+def enrich_verdicts(doc: dict, flaky_by_test_id: dict | None = None) -> dict:
+    """Mutate ``doc`` in place: stamp flaky history, confidence + run rollup.
 
-    Adds ``signals_summary.confidence`` to every verdict and a top-level
-    ``confidence_summary``. Safe to call on an empty verdicts doc. Returns the
-    same dict for convenience.
+    For each verdict, in order:
+      1. stamp ``signals_summary.flaky`` from ``flaky_by_test_id`` (#239),
+      2. apply the deterministic flaky override (accept→flag for FLAKY tests),
+      3. compute ``signals_summary.confidence`` (now flaky-penalised).
+    Then add the top-level ``confidence_summary``. Safe on an empty doc and when
+    ``flaky_by_test_id`` is None (then behaves exactly like C1). Returns ``doc``.
     """
+    flaky_by_test_id = flaky_by_test_id or {}
     verdicts = doc.get("verdicts")
     if not isinstance(verdicts, list):
         return doc
@@ -200,6 +267,10 @@ def enrich_verdicts(doc: dict) -> dict:
         if not isinstance(summary, dict):
             summary = {}
             v["signals_summary"] = summary
+        flaky = flaky_by_test_id.get(v.get("test_id"))
+        if isinstance(flaky, dict):
+            summary["flaky"] = flaky
+        apply_flaky_override(v)
         summary["confidence"] = compute_confidence(v)
     doc["confidence_summary"] = aggregate_confidence(verdicts)
     return doc

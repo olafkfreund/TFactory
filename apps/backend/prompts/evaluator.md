@@ -192,6 +192,13 @@ conflict, use this priority order (top wins):
 
 The Triager respects your verdict — be precise.
 
+**Cross-run flakiness (authoritative, applied automatically):** a test whose
+flaky-history `classification == "flaky"` (≥25% flip-rate across runs) is
+demoted `accept → flag` deterministically *after* your verdict, and its
+numeric confidence is discounted by its flip-rate (#239). Prefer `flag` (not
+`accept`) yourself when the bundle shows a flaky history, so your reasoning
+matches the recorded outcome.
+
 ---
 
 ## What you have
