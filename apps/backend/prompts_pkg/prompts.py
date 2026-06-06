@@ -602,6 +602,8 @@ def get_tfactory_planner_prompt(spec_dir: Path, project_dir: Path) -> str:
     # helper functions avoid circular imports at module level.
     registry_block = _build_framework_registry_block()
     catalog_block = _build_tests_catalog_block(spec_dir)
+    # RFC-0002 declared test profile (#246) — authoritative over inference.
+    profile_block = _build_contract_profile_block(spec_dir)
 
     context = (
         "## SPEC CONTEXT (TFactory Planner — initial mode)\n\n"
@@ -617,11 +619,63 @@ def get_tfactory_planner_prompt(spec_dir: Path, project_dir: Path) -> str:
         f"- `{spec_dir / 'context' / 'tests_catalog.json'}` (may not exist)\n\n"
         f"Emit `test_plan.json` via Write at: `{spec_dir / 'test_plan.json'}`\n\n"
         "---\n\n"
+        f"{profile_block}"
         f"{registry_block}\n"
         f"{catalog_block}\n"
         "---\n\n"
     )
     return context + body
+
+
+def _build_contract_profile_block(spec_dir: Path) -> str:
+    """Render the authoritative DECLARED TEST PROFILE block from an RFC-0002
+    contract, or "" when none is present (#246).
+
+    When PFactory has computed the VERIFY profile, the Planner must use the
+    declared lanes/frameworks/endpoints rather than inferring them from the
+    diff. Inference only fills gaps the contract leaves unspecified.
+    """
+    try:
+        from agents.task_contract import read_tfactory_profile
+
+        profile = read_tfactory_profile(spec_dir)
+    except Exception:  # noqa: BLE001 — never break planning on a contract read
+        profile = None
+    if profile is None:
+        return ""
+
+    lines = ["## DECLARED TEST PROFILE (RFC-0002 — AUTHORITATIVE)\n"]
+    lines.append(
+        "PFactory computed this VERIFY profile and AIFactory carried it. **Use it "
+        "as the source of truth** — generate exactly these lanes with these "
+        "frameworks/endpoints. Infer from the diff ONLY for fields left "
+        "unspecified below. Do not add lanes the profile omits.\n"
+    )
+    if profile.lanes:
+        lines.append(f"- **lanes** (generate these): {', '.join(profile.lanes)}")
+        if "security" in profile.lanes:
+            lines.append(
+                "  - NOTE: `security` lane is OUT OF SCOPE for TFactory (DEC-002) — "
+                "delegate to dedicated security pipelines; do not generate SAST/DAST."
+            )
+    if profile.frameworks:
+        fw = ", ".join(f"{k}={v}" for k, v in profile.frameworks.items())
+        lines.append(f"- **frameworks** (lane→framework): {fw}")
+    if profile.endpoints:
+        ep = ", ".join(f"{k}={v}" for k, v in profile.endpoints.items())
+        lines.append(f"- **endpoints**: {ep}")
+    if profile.docker_compose:
+        lines.append(f"- **docker_compose**: `{profile.docker_compose}`")
+    if profile.coverage_target is not None:
+        lines.append(f"- **coverage_target**: {profile.coverage_target}")
+    if profile.mutation_scope:
+        lines.append(f"- **mutation_scope**: {', '.join(profile.mutation_scope)}")
+    if profile.ac_to_code_map:
+        lines.append(
+            f"- **ac_to_code_map**: {len(profile.ac_to_code_map)} acceptance "
+            "criteria mapped to files — target tests at those files/functions."
+        )
+    return "\n".join(lines) + "\n\n---\n\n"
 
 
 def get_tfactory_planner_replan_prompt(spec_dir: Path, project_dir: Path) -> str:
@@ -899,7 +953,9 @@ def _format_evaluator_per_test_block(bundle) -> str:
         f_class_str = getattr(f_class, "value", f_class)
         f_rate = _format_signal_value(flaky, "flip_rate", default=0.0)
         f_runs = _format_signal_value(flaky, "runs", default=0)
-        flaky_line = f"flaky_history: {f_class_str} (flip_rate={f_rate:.2f} over {f_runs} runs)"
+        flaky_line = (
+            f"flaky_history: {f_class_str} (flip_rate={f_rate:.2f} over {f_runs} runs)"
+        )
     else:
         flaky_line = "flaky_history: no prior runs"
 
