@@ -360,3 +360,32 @@ def test_real_run_creates_nested_directories(tmp_path: Path) -> None:
     result = write_tests_to_branch(req, dry_run=False, runner_fn=runner)
     assert result.ok is True
     assert (repo / "a" / "b" / "c" / "test_deep.py").read_text() == "deep"
+
+
+# ── #242: opt-in GPG-signed commits ──────────────────────────────────────
+
+
+def test_signed_commit_adds_dash_s(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("TFACTORY_TRIAGER_GIT_SIGN", "1")
+    req = GitWriteRequest(
+        repo_dir=tmp_path / "repo",
+        branch="b",
+        files=(("tests/x.py", "x"),),
+        commit_msg="m",
+    )
+    result = write_tests_to_branch(req, dry_run=True)
+    commit_argv = next(a for a in result.argv_log if "commit" in a)
+    assert "-S" in commit_argv
+
+
+def test_unsigned_commit_has_no_dash_s(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("TFACTORY_TRIAGER_GIT_SIGN", raising=False)
+    req = GitWriteRequest(
+        repo_dir=tmp_path / "repo",
+        branch="b",
+        files=(("tests/x.py", "x"),),
+        commit_msg="m",
+    )
+    result = write_tests_to_branch(req, dry_run=True)
+    commit_argv = next(a for a in result.argv_log if "commit" in a)
+    assert "-S" not in commit_argv

@@ -17,6 +17,7 @@ fires on the running uvicorn event loop.
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import re
@@ -29,6 +30,12 @@ from fastapi import status as http_status
 from pydantic import BaseModel
 
 from ..config import get_settings
+from ..rate_limit import FixedWindowLimiter
+
+# Throttle re-fires per task so a leaked secret / misbehaving caller can't drive
+# unbounded pipeline runs (#242). Generous — a healthy loop fires a handful of
+# times per task, bounded anyway by TFACTORY_HANDBACK_MAX_CYCLES.
+_RATE_LIMITER = FixedWindowLimiter(max_calls=10, window_seconds=60.0)
 
 # Make apps/backend importable for the loop guard + rerun core.
 _BACKEND_DIR = Path(__file__).resolve().parents[3] / "backend"
@@ -123,9 +130,14 @@ async def aifactory_complete(
             detail="inbound handback webhook disabled",
         )
 
-    # Shared-secret auth (the middleware exempts /api/handback/).
+    # Shared-secret auth (the middleware exempts /api/handback/). Constant-time
+    # compare to avoid leaking the secret via response timing (#242).
     secret = settings.INBOUND_HANDBACK_SECRET
-    if not secret or x_tfactory_handback_token != secret:
+    if (
+        not secret
+        or not x_tfactory_handback_token
+        or not hmac.compare_digest(x_tfactory_handback_token, secret)
+    ):
         raise HTTPException(
             status_code=http_status.HTTP_401_UNAUTHORIZED,
             detail="invalid handback token",
@@ -133,6 +145,13 @@ async def aifactory_complete(
 
     project_id, spec_id = _resolve_ids(payload)
     task_id = f"{project_id}:{spec_id}"
+
+    # Throttle per task (#242) — bounds re-fires even if the secret leaks.
+    if not _RATE_LIMITER.allow(task_id):
+        raise HTTPException(
+            status_code=http_status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="rate limit exceeded for this task; retry shortly",
+        )
     spec_dir = _resolve_workspace_root() / "workspaces" / project_id / "specs" / spec_id
     if not (spec_dir / "status.json").exists():
         raise HTTPException(
