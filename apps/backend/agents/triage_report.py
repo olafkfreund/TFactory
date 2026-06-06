@@ -307,12 +307,17 @@ def _signal_summary_line(c: TriageCandidate) -> str:
         cov_str = f"{float(cov):+.2f}%"
     except (TypeError, ValueError):
         cov_str = "?"
-    return (
+    line = (
         f"coverage {cov_str}, "
         f"stability={summary.get('stability', '?')}, "
         f"mutation={summary.get('mutation', '?')}, "
         f"semantic={c.verdict.get('semantic_relevance', '?')}"
     )
+    # Numeric confidence (#238) when the Evaluator stamped it.
+    conf = summary.get("confidence")
+    if isinstance(conf, (int, float)) and not isinstance(conf, bool):
+        line += f", confidence={float(conf):.2f}"
+    return line
 
 
 def _intent_label(decisions: dict, test_id: str) -> str:

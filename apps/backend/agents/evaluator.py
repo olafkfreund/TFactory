@@ -1392,6 +1392,18 @@ async def _run_evaluator_session(spec_dir, project_dir, bundles, verbose) -> boo
         )
         return False
 
+    # Stamp a deterministic numeric confidence onto each verdict + a run-level
+    # rollup (#238). Best-effort: a scoring hiccup must never fail an otherwise
+    # valid evaluation — the categorical verdicts already passed validation.
+    try:
+        from agents.confidence import enrich_verdicts
+
+        doc = json.loads(verdicts_path.read_text())
+        enrich_verdicts(doc)
+        verdicts_path.write_text(json.dumps(doc, indent=2))
+    except Exception as exc:  # noqa: BLE001 — confidence is additive metadata
+        _eval_log.warning("confidence enrichment skipped: %s", exc)
+
     _write_status_patch(
         spec_dir,
         status="evaluated",
