@@ -48,16 +48,15 @@
   display: grid;
   place-items: center;
   color: hsl(var(--c));
-  border: 2px solid hsl(var(--c) / 0.32);
-  background: radial-gradient(80% 80% at 50% 35%, hsl(var(--c) / 0.06), transparent 70%);
-  transition: border-color 0.5s, box-shadow 0.5s, transform 0.5s;
+  border: 2px solid hsl(var(--c) / 0.45);
+  background: transparent;
+  transition: border-color 0.4s, transform 0.4s;
 }
 .pl-ring svg { color: hsl(var(--c) / 0.85); }
 
 /* active stage: brighten + glow + a slow rotating dashed halo */
 .pl-stage.is-active .pl-ring {
-  border-color: hsl(var(--c) / 0.95);
-  box-shadow: 0 0 0 1px hsl(var(--c) / 0.25), 0 0 28px hsl(var(--c) / 0.28);
+  border-color: hsl(var(--c));
 }
 .pl-stage.is-active .pl-ring svg { color: hsl(var(--c)); }
 .pl-stage.is-active .pl-ring::before {
@@ -86,9 +85,9 @@
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 13px;
   font-weight: 700;
-  color: hsl(var(--pl-panel));
+  /* Fixed dark text reads on the pastel accent in both light + dark themes. */
+  color: hsl(220 14% 14%);
   background: hsl(var(--c) / 0.9);
-  box-shadow: 0 2px 8px hsl(var(--c) / 0.35);
 }
 .pl-stage.is-idle .pl-badge { background: hsl(var(--c) / 0.55); }
 .pl-label {
@@ -202,10 +201,8 @@
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  /* Transparent base so the board blends with the page (no panel seam, #267
-     polish); just a soft top glow for depth. */
-  background:
-    radial-gradient(120% 40% at 50% 0%, hsl(240 6% 16% / 0.55), transparent 70%);
+  /* Flat: blends with the page in both themes (no gradient/glow). */
+  background: transparent;
 }
 .pl-board-grid {
   display: grid;
@@ -215,7 +212,7 @@
   z-index: 1;
 }
 .pl-col { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
-.pl-col + .pl-col { border-left: 1px solid hsl(0 0% 100% / 0.04); }
+.pl-col + .pl-col { border-left: 1px solid hsl(var(--border) / 0.5); }
 .pl-col-head {
   display: flex;
   justify-content: center;
@@ -234,13 +231,13 @@
   scrollbar-width: thin;
 }
 .pl-col-list::-webkit-scrollbar { width: 6px; }
-.pl-col-list::-webkit-scrollbar-thumb { background: hsl(0 0% 100% / 0.08); border-radius: 3px; }
+.pl-col-list::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 3px; }
 
 .pl-empty {
   margin-top: 18px;
   text-align: center;
   font-size: 12px;
-  color: hsl(0 0% 100% / 0.28);
+  color: hsl(var(--muted-foreground));
   font-family: var(--font-sans, system-ui, sans-serif);
 }
 .pl-add {
@@ -275,7 +272,6 @@
   margin-left: -11px;
   margin-top: -11px;
   color: hsl(var(--c));
-  filter: drop-shadow(0 0 10px hsl(var(--c) / 0.6));
 }
 
 /* a subtle per-card stage tick so cards read at a glance (functional + cool) */
@@ -289,8 +285,8 @@
   /* The single card box (#267): one border here; the inner SpecCard is
      borderless so there's no box-in-a-box. State classes (is-done/failed/live)
      recolour this border. */
-  border: 1px solid hsl(0 0% 100% / 0.08);
-  background: linear-gradient(180deg, hsl(240 6% 15% / 0.9), hsl(240 6% 11% / 0.9));
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--card));
   overflow: hidden;
 }
 .pl-card-wrap::before {
@@ -300,7 +296,6 @@
   width: 3px;
   border-radius: 3px;
   background: hsl(var(--c) / 0.7);
-  box-shadow: 0 0 8px hsl(var(--c) / 0.4);
   z-index: 2;
   pointer-events: none;
 }
@@ -373,7 +368,7 @@
   gap: 6px;
   padding: 7px 10px 8px;
   margin-top: 0;
-  border-top: 1px solid hsl(0 0% 100% / 0.05);
+  border-top: 1px solid hsl(var(--border));
 }
 .pl-chip {
   flex: 1;
@@ -384,7 +379,7 @@
   font-family: var(--font-sans, system-ui, sans-serif);
   font-size: 9px;
   letter-spacing: 0.02em;
-  color: hsl(0 0% 100% / 0.3);
+  color: hsl(var(--muted-foreground));
 }
 .pl-chip-ico { position: relative; display: inline-flex; }
 .pl-chip-x {
@@ -395,21 +390,19 @@
 .pl-chip[data-state="done"]    { color: hsl(150 45% 55%); }
 .pl-chip[data-state="active"]  { color: hsl(42 75% 58%); animation: pl-edge 1.6s ease-in-out infinite; }
 .pl-chip[data-state="failed"]  { color: hsl(0 72% 60%); }
-.pl-chip[data-state="pending"] { color: hsl(0 0% 100% / 0.25); }
+.pl-chip[data-state="pending"] { color: hsl(var(--muted-foreground) / 0.55); }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    v2 refinements: prominent rail panel + bigger rings + in-card live state
    ═══════════════════════════════════════════════════════════════════════════ */
 .pl-railpanel {
   position: relative;
-  margin: 14px 16px 10px;
-  padding: 14px 24px 18px;
-  border-radius: 18px;
-  border: 1px solid hsl(0 0% 100% / 0.07);
-  background:
-    radial-gradient(120% 120% at 50% -10%, hsl(240 6% 18% / 0.9), transparent 65%),
-    linear-gradient(180deg, hsl(var(--pl-panel) / 0.9), hsl(var(--pl-panel) / 0.55));
-  box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.04), 0 8px 30px hsl(0 0% 0% / 0.3);
+  margin: 8px 16px 0;
+  padding: 18px 24px 20px;
+  /* Flat: no box / shading — blends with the page background. A single bottom
+     divider separates the rail from the columns. */
+  background: transparent;
+  border-bottom: 1px solid hsl(var(--border));
 }
 .pl-rail { display: grid; grid-template-columns: repeat(4, 1fr); align-items: start; }
 .pl-rail-cell { display: flex; justify-content: center; }
@@ -430,7 +423,7 @@
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 12px;
   font-weight: 500;
-  color: hsl(0 0% 100% / 0.32);
+  color: hsl(var(--muted-foreground));
   letter-spacing: 0.04em;
 }
 .pl-conn { height: 3px; }
@@ -521,8 +514,7 @@
   right: -11px;
   padding: 4px 5px;
   border-radius: 999px;
-  background: hsl(240 6% 10% / 0.96);
-  box-shadow: 0 2px 10px hsl(0 0% 0% / 0.45);
+  background: hsl(var(--card));
 }
 .pl-card-done { border: 1px solid hsl(150 50% 52% / 0.5); }
 .pl-card-fail { border: 1px solid hsl(0 72% 58% / 0.5); }
@@ -532,9 +524,9 @@
    TaskCard's own border/ring is flattened so the phase strip + agent terminals
    sit inside one aligned box; status color + active pulse move to the wrapper. */
 .pl-card-wrap {
-  border: 1px solid hsl(0 0% 100% / 0.1);
+  border: 1px solid hsl(var(--border));
   border-radius: 14px;
-  background: hsl(240 6% 13% / 0.75);
+  background: hsl(var(--card));
   overflow: visible;            /* keep corner stickers visible */
 }
 .pl-card-wrap .card-surface {
@@ -547,8 +539,8 @@
 .pl-card-wrap.is-failed { border-color: hsl(0 72% 58% / 0.55); }
 .pl-card-wrap.is-live { border-color: hsl(42 70% 56% / 0.6); animation: pl-livebrd 2.2s ease-in-out infinite; }
 @keyframes pl-livebrd {
-  0%, 100% { box-shadow: 0 0 0 1px hsl(42 70% 56% / 0.15); }
-  50% { box-shadow: 0 0 14px hsl(42 70% 56% / 0.3); }
+  0%, 100% { border-color: hsl(42 70% 56% / 0.4); }
+  50% { border-color: hsl(42 70% 56% / 0.85); }
 }
 
 /* align the in-card rows to the card content padding (16px), tight to the card */
@@ -560,7 +552,7 @@
 .pl-phase-strip {
   padding: 8px 14px 12px;
   margin-top: 4px;
-  border-top: 1px solid hsl(0 0% 100% / 0.06);
+  border-top: 1px solid hsl(var(--border));
 }
 
 /* ───────────────────────────────────────────────────────────────────────────
@@ -585,18 +577,18 @@
   border-color: hsl(var(--c) / 0.5);
 }
 .pl-speccard:hover {
-  background: hsl(0 0% 100% / 0.03);
+  background: hsl(var(--foreground) / 0.04);
 }
 .pl-speccard-id {
   font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
   font-size: 13px;
   font-weight: 600;
-  color: hsl(0 0% 96%);
+  color: hsl(var(--foreground));
   word-break: break-word;
 }
 .pl-speccard-proj {
   font-size: 11px;
-  color: hsl(0 0% 60%);
+  color: hsl(var(--muted-foreground));
 }
 .pl-speccard-meta {
   display: flex;
@@ -616,17 +608,17 @@
 .pl-speccard-status[data-status-color='green'] { color: hsl(150 50% 60%); }
 .pl-speccard-status[data-status-color='red'] { color: hsl(0 65% 64%); }
 .pl-speccard-status[data-status-color='yellow'] { color: hsl(42 75% 60%); }
-.pl-speccard-status[data-status-color='gray'] { color: hsl(0 0% 60%); }
+.pl-speccard-status[data-status-color='gray'] { color: hsl(var(--muted-foreground)); }
 .pl-speccard-phase {
   font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
   font-size: 10px;
-  color: hsl(0 0% 55%);
-  background: hsl(0 0% 100% / 0.05);
+  color: hsl(var(--muted-foreground));
+  background: hsl(var(--muted));
   padding: 1px 6px;
   border-radius: 5px;
 }
 .pl-speccard-time {
   font-size: 10px;
-  color: hsl(0 0% 48%);
+  color: hsl(var(--muted-foreground));
   margin-top: 2px;
 }
