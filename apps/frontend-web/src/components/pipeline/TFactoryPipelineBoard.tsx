@@ -36,6 +36,12 @@ const COLOR: Record<Stage, string> = {
   plan: 'plan', generate: 'code', execute: 'review', report: 'done',
 };
 
+// Per-phase chip colour (phaseStrip key → brand colour var) so each phase icon
+// shows its OWN stage hue, not the card's done-green (#267 polish).
+const CHIP_COLOR: Record<string, string> = {
+  plan: 'plan', gen: 'code', exec: 'review', report: 'done',
+};
+
 const STAGES: { key: Stage; label: string; sub: string; Icon: typeof RobotHeadIcon }[] = [
   { key: 'plan', label: 'Plan', sub: 'Planner', Icon: PlanDocIcon },
   { key: 'generate', label: 'Generate', sub: 'Gen-Functional', Icon: RobotHeadIcon },
@@ -272,9 +278,15 @@ export function TFactoryPipelineBoard({ tasks, onSelectTask }: Props) {
 
                         <div className="pl-phase-strip" aria-hidden>
                           {phaseStrip(task).map((p) => (
-                            <span key={p.key} className="pl-chip" data-state={p.state} title={`${p.label}: ${p.state}`}>
+                            <span
+                              key={p.key}
+                              className="pl-chip"
+                              data-state={p.state}
+                              title={`${p.label}: ${p.state}`}
+                              style={{ ['--cc' as string]: `var(--pl-${CHIP_COLOR[p.key]})` }}
+                            >
                               <span className="pl-chip-ico">
-                                <p.Icon size={14} />
+                                <p.Icon size={16} />
                                 {p.state === 'failed' && <span className="pl-chip-x"><CrossIcon size={11} /></span>}
                               </span>
                               <span className="pl-chip-lbl">{p.label}</span>
