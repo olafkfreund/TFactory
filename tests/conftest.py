@@ -1358,6 +1358,7 @@ CRITICAL_MODULES = frozenset(
         "test_health_gate",  # pre-lane health gate + URL resolution (#234)
         "test_rate_limit",  # webhook rate limiter (#242)
         "test_build_deploy_test",  # build → deploy → test orchestration (#233)
+        "test_java_lane",  # Java JUnit + PIT + JaCoCo wedge (#237)
         "test_triage_dedup",  # Triager dedup + rank
         "test_triager_completion_webhook",  # #85 completion callback contract
         "test_resolve_test_target_credentials",  # test-target cred resolver (#107)

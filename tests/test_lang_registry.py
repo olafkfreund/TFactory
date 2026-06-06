@@ -80,11 +80,20 @@ def test_typescript_mutation_is_stryker():
 # ── Phase-2/3+ language placeholders ───────────────────────────────────
 
 
-def test_java_csharp_have_no_entries_yet():
-    """v0.3 ramp — placeholders only at v0.2."""
-    for lang in ("java", "csharp"):
-        for lane in ("unit", "browser", "api", "integration", "mutation"):
-            assert get_tool_for_lane(lang, lane) is None, f"{lang}/{lane}"
+def test_java_has_unit_api_mutation_entries():
+    """Java wedge (#237): unit + api (JUnit) + mutation (PIT) wired."""
+    assert get_tool_for_lane("java", "unit") is not None
+    assert get_tool_for_lane("java", "api") is not None
+    assert get_tool_for_lane("java", "mutation") is not None
+    # browser / integration not yet wired for Java
+    assert get_tool_for_lane("java", "browser") is None
+    assert get_tool_for_lane("java", "integration") is None
+
+
+def test_csharp_has_no_entries_yet():
+    """C#/.NET — placeholders only."""
+    for lane in ("unit", "browser", "api", "integration", "mutation"):
+        assert get_tool_for_lane("csharp", lane) is None, f"csharp/{lane}"
 
 
 def test_go_rust_ruby_have_no_entries_yet():
@@ -132,9 +141,9 @@ def test_languages_supporting_lane_mvp_only_for_browser():
 
 
 def test_languages_supporting_lane_unfiltered_for_unit():
-    """Unfiltered: Python + TypeScript both have unit registrations."""
+    """Unfiltered: Python + TypeScript + Java (#237) have unit registrations."""
     assert set(languages_supporting_lane("unit", mvp_only=False)) == {
-        "python", "typescript",
+        "python", "typescript", "java",
     }
 
 

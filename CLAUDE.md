@@ -62,8 +62,9 @@ Pipeline supporting primitives (also under `agents/`):
   - `coverage_delta.py` + `stability_runner.py` + `mutate_probe.py`
     + `lint_promotion.py` — Evaluator's four pre-computed signals
   - `mutation_dispatch.py` — per-language mutation routing (#41): Python
-    (`mutate_probe`) vs TypeScript (`lang_typescript/mutate_probe`, Stryker);
-    the Evaluator dispatches by `subtask.language` (Java/PIT = future)
+    (`mutate_probe`) · TypeScript (`lang_typescript/mutate_probe`, Stryker) ·
+    Java (`lang_java/mutate_probe`, PIT — wedge #237); the Evaluator dispatches
+    by `subtask.language` (C#/.NET = future)
   - `flaky_history.py` — cross-run flip-rate history (#37): persists each
     test's pass/fail across runs (`<workspace>/<project>/test_history.json`)
     so chronically flaky tests are flagged even when one run's 3× stability

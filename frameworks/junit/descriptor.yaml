@@ -1,0 +1,76 @@
+# frameworks/junit/descriptor.yaml
+#
+# JUnit 5 (Java) descriptor — Unit + API lanes (#237, epic #232).
+#
+# First compiled-language wedge. JUnit 5 (Jupiter) is the standard Java test
+# framework; coverage via JaCoCo, mutation via PIT (pitest). Runs in the
+# tfactory-runner-java image (JDK 21 + Maven).
+#
+name: junit
+language: java
+lanes:
+  - unit
+  - api
+
+# JUnit 5 (Jupiter). 5.10+ at v0.x; allow through 5.x.
+version_range: ">=5.8,<6.0"
+
+runtime:
+  image: tfactory-runner-java:latest
+  entrypoint:
+    - mvn
+    - "-B"
+    - "test"
+
+# Manifest signals for Java/JUnit detection.
+manifest_signals:
+  - "pom.xml"
+  - "build.gradle"
+  - "build.gradle.kts"
+  - "pom.xml:junit-jupiter"
+
+# Where JUnit tests live (Maven/Gradle conventions).
+test_path_conventions:
+  - "src/test/java/**/*Test.java"
+  - "src/test/java/**/*Tests.java"
+  - "src/test/java/**/Test*.java"
+
+templates:
+  - service-unit.test.java.tmpl
+  - rest-controller.test.java.tmpl
+
+# JaCoCo emits coverage XML (target/site/jacoco/jacoco.xml); the Evaluator's
+# coverage signal parses it via agents.lang_java.jacoco_coverage.
+coverage_strategy: jacoco
+
+context_block: |
+  You are generating JUnit 5 (Jupiter) tests in Java.
+
+  Test structure:
+    - One @Test method per behaviour; name it descriptively
+      (e.g. void returnsEmptyWhenInputBlank()).
+    - Use @DisplayName for human-readable names where helpful.
+    - Group with @Nested classes when a unit has several behaviours.
+
+  Assertions:
+    - Use org.junit.jupiter.api.Assertions (assertEquals, assertTrue,
+      assertThrows, assertAll) or AssertJ (assertThat) if present.
+    - Assert one logical behaviour per test.
+
+  Mocking:
+    - Use Mockito (mock(), when().thenReturn(), verify()).
+    - @ExtendWith(MockitoExtension.class) + @Mock / @InjectMocks.
+    - Never mock the class under test.
+
+  Determinism (avoid flaky tests):
+    - No Thread.sleep — use awaitility or deterministic clocks.
+    - Inject Clock instead of Instant.now() / new Date().
+    - Don't assert on HashMap/HashSet iteration order.
+    - Seed any randomness.
+
+  Coverage:
+    - JaCoCo runs automatically; write tests that exercise branches.
+
+# Evaluator hooks — per-language Java primitives (#237).
+evaluator_hooks:
+  - agents.lang_java.mutate_probe.run_java_mutate_probe
