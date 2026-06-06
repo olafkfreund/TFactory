@@ -13,7 +13,7 @@
 | TypeScript — Playwright (browser, via AppRuntime) | ✅ |
 | Mutation — Python (`mutate_probe`) + TypeScript (Stryker) | ✅ |
 | Cloud CSPM — AWS / GCP / Azure read-only posture (epic #133) | ✅ |
-| Cypress / Vitest | 🟡 descriptors wired, runner images deferred (#236) |
+| Cypress (browser) / Vitest (unit) — TypeScript | ✅ descriptors + runner images + CI build (#110/#236) |
 | Java (JUnit + PIT), C# / Go / Rust / Ruby | ❌ planned (#237 +) |
 | App SAST / DAST | ❌ out of scope (DEC-002) — delegated to security pipelines |
 
@@ -99,7 +99,7 @@ commits, dry-run-by-default side-effects. Full controls + per-release checklist:
 ## 8. Toward 100% automation — remaining gaps
 
 - build→deploy→test orchestration + artifact/image-digest testing (#233)
-- Cypress/Vitest runner images (#236); compiled languages — Java first (#237)
+- compiled languages — Java first (#237)
 - (shipped this epic: confidence #238/#239, Backstage #240/#241, health-gate
   #234, storageState #235, hardening #242)
 
