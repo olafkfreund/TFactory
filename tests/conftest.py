@@ -1364,6 +1364,7 @@ CRITICAL_MODULES = frozenset(
         "test_contract_scope",  # honor coverage/mutation/security scope (#247)
         "test_ac_to_code_map",  # ac_to_code_map precise targeting (#248)
         "test_correlation_sync",  # RFC-0001 completion + handback correlation (#249)
+        "test_visual_staging",  # stage visual baselines into browser run (#109)
         "test_triage_dedup",  # Triager dedup + rank
         "test_triager_completion_webhook",  # #85 completion callback contract
         "test_resolve_test_target_credentials",  # test-target cred resolver (#107)
