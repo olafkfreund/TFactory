@@ -95,7 +95,10 @@ best-effort (a failing target never breaks the pipeline). Both carry the v1
 **normalized completion-event envelope** (`schema_version`, `event`, `service`,
 `correlation_id` = the GitHub issue #, `outcome`, + the legacy flat fields) —
 the cross-service shape from the Factory PARR-spine epic; see
-`docs/completion-event-envelope.md`:
+`docs/completion-event-envelope.md`. The shared `correlation_key` precedence
+(#249) is: RFC-0002 contract `correlation_key` → GitHub issue # → synthetic
+`tf-<spec_id>`; the hand-back artifact + payload carry the same key so AIFactory
+reconciles on it:
   - `TFACTORY_COMPLETION_WEBHOOK=<url>` — POSTs the envelope as JSON (timeout
     `TFACTORY_COMPLETION_WEBHOOK_TIMEOUT`, default 5s)
   - `TFACTORY_COMPLETION_SENTINEL=1` — writes `findings/COMPLETED.json` a
