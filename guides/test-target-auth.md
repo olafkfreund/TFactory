@@ -145,9 +145,25 @@ The credential **vault** and config surface are implemented and tested:
 | Web-server `store:` resolver | ✅ (task 4a) |
 | Schema → resolver spec glue | ✅ (task 4b-glue) |
 | **Executor injection + sink redaction wiring** | ⏳ pending (task 4b-final) |
-| **Playwright `storageState` login fixture** | ⏳ pending (task 5) |
+| **Playwright `storageState` login fixture** | ✅ (#235, epic #232) |
 | **Portal Settings UI** | ⏳ pending (task 7) |
 
 Until the remaining steps land, declaring `test_credentials` is parsed and
 validated but not yet consumed end-to-end by a running pipeline. Track progress
 on [#107](https://github.com/olafkfreund/TFactory/issues/107).
+
+## Playwright storageState login (#235)
+
+`agents/evidence/layout.py::scaffold_auth_setup` renders a Playwright **setup**
+file (`tests/auth.setup.ts`) plus a `playwright.config.ts` from the target's
+`auth: { type: ref }` block — single-step selectors (`render_auth_setup`) or an
+ordered `steps` list for SSO (`render_auth_setup_steps`). It drives the login
+with the credential's injected env vars (`as_username` / `as_secret`, never
+inlined) and saves the session to `.auth/state.json`; the generated config's
+chromium project `dependencies: ['setup']` + `use.storageState` so authed specs
+log in **once** and reuse the session.
+
+Gen-Functional calls this automatically (`_maybe_scaffold_auth`) when a browser
+subtask is `requires_auth: true`; non-authed lanes are untouched. Because the
+`setup` project re-runs at the start of every run, an expired token simply
+re-authenticates on the next run — there is no stale-session reuse across runs.
