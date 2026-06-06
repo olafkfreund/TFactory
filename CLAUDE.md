@@ -39,6 +39,7 @@ into the lanes (#107), and visual-regression baselines in the portal (#109).
 - **GTM & pricing model:** `.agent-os/product/pricing.md`
 - **Testing model (what/how/scoring/verification):** `guides/testing-model.md`
 - **Security hardening checklist:** `guides/security-hardening.md`
+- **Task Contract v2 ingest (RFC-0002):** `guides/task-contract-v2.md`
 
 Active work is tracked under epic [#33](https://github.com/olafkfreund/TFactory/issues/33).
 
