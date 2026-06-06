@@ -1392,17 +1392,28 @@ async def _run_evaluator_session(spec_dir, project_dir, bundles, verbose) -> boo
         )
         return False
 
-    # Stamp a deterministic numeric confidence onto each verdict + a run-level
-    # rollup (#238). Best-effort: a scoring hiccup must never fail an otherwise
-    # valid evaluation — the categorical verdicts already passed validation.
+    # Stamp deterministic confidence + flaky-history onto each verdict + a
+    # run-level rollup (#238, #239). Best-effort: a scoring hiccup must never
+    # fail an otherwise valid evaluation — the categorical verdicts already
+    # passed validation. The flaky map (cross-run flip-rate) comes from the
+    # signal bundles and drives both the confidence penalty and the
+    # accept→flag override inside enrich_verdicts.
     try:
         from agents.confidence import enrich_verdicts
 
+        flaky_by_test_id = {}
+        for b in bundles:
+            fh = getattr(b, "flaky_history", None)
+            if fh is not None:
+                try:
+                    flaky_by_test_id[b.test_id] = fh.as_dict()
+                except Exception:  # noqa: BLE001 — skip a malformed entry
+                    pass
         doc = json.loads(verdicts_path.read_text())
-        enrich_verdicts(doc)
+        enrich_verdicts(doc, flaky_by_test_id)
         verdicts_path.write_text(json.dumps(doc, indent=2))
     except Exception as exc:  # noqa: BLE001 — confidence is additive metadata
-        _eval_log.warning("confidence enrichment skipped: %s", exc)
+        _eval_log.warning("confidence/flaky enrichment skipped: %s", exc)
 
     _write_status_patch(
         spec_dir,
