@@ -82,6 +82,8 @@ Default ON in production; tests pin OFF.
 per the "no automatic pushes" policy. Operators opt in via:
   - `TFACTORY_TRIAGER_GIT_WRITE=1`
   - `TFACTORY_TRIAGER_PR_COMMENT=1`
+  - `TFACTORY_TRIAGER_GIT_SIGN=1` — GPG-sign the commit (#242; needs
+    `user.signingkey` configured). See `guides/security-hardening.md`.
 
 **Triager completion callback (#85 / #198)** — when the task reaches a terminal
 status (`triaged` / `triaged_empty` / `triager_failed`), an opt-in callback

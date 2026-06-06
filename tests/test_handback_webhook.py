@@ -61,6 +61,7 @@ def _env(tmp_path, monkeypatch):
     monkeypatch.setenv("TFACTORY_AUTO_PLAN", "0")  # never fire the real Planner
     monkeypatch.delenv("TFACTORY_HANDBACK_MAX_CYCLES", raising=False)  # default 2
     monkeypatch.setattr(hb, "get_settings", lambda: _Settings())
+    hb._RATE_LIMITER.reset()  # isolate per-task throttle between tests (#242)
 
 
 def _payload(**kw):
@@ -167,3 +168,30 @@ async def test_bad_task_id_is_400(tmp_path):
             x_tfactory_handback_token=SECRET,
         )
     assert ei.value.status_code == 400
+
+
+# ── #242 hardening: rate limit + constant-time token ──────────────────────
+
+
+async def test_rate_limit_returns_429(tmp_path):
+    _seed(tmp_path, status="planning")  # always returns already_running → simple
+    # 10 calls allowed in the window; the 11th is throttled.
+    for _ in range(10):
+        await _call()
+    with pytest.raises(HTTPException) as ei:
+        await _call()
+    assert ei.value.status_code == 429
+
+
+async def test_empty_token_is_401(tmp_path):
+    _seed(tmp_path)
+    with pytest.raises(HTTPException) as ei:
+        await _call(token="")
+    assert ei.value.status_code == 401
+
+
+async def test_wrong_token_is_401(tmp_path):
+    _seed(tmp_path)
+    with pytest.raises(HTTPException) as ei:
+        await _call(token="not-the-secret")
+    assert ei.value.status_code == 401
