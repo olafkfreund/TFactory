@@ -1362,6 +1362,7 @@ CRITICAL_MODULES = frozenset(
         "test_task_contract",  # RFC-0002 task-contract reader (#245)
         "test_planner_contract_profile",  # contract → planner profile block (#246)
         "test_contract_scope",  # honor coverage/mutation/security scope (#247)
+        "test_ac_to_code_map",  # ac_to_code_map precise targeting (#248)
         "test_triage_dedup",  # Triager dedup + rank
         "test_triager_completion_webhook",  # #85 completion callback contract
         "test_resolve_test_target_credentials",  # test-target cred resolver (#107)
