@@ -1293,11 +1293,44 @@ def _build_kube_or_static_bundle(
     static target URL. ``make_runner(url)`` builds the runner_fn and
     ``make_bundle(runner_fn)`` builds the EvaluatorSignals bundle.
     """
-    rt = _kube_runtime_for(_resolve_target(spec_dir, st))
+    target = _resolve_target(spec_dir, st)
+    rt = _kube_runtime_for(target)
     if rt is not None:
         with rt as runtime:
             return make_bundle(make_runner(runtime.target_url))
-    return make_bundle(make_runner(_browser_target_url(spec_dir, st)))
+    target_url = _browser_target_url(spec_dir, st)
+    _gate_target_health(spec_dir, st, target, target_url)
+    return make_bundle(make_runner(target_url))
+
+
+def _gate_target_health(spec_dir, subtask, target, target_url) -> None:
+    """Probe a configured ``health_check`` before a static-target lane (#234).
+
+    Best-effort: surfaces a clear "target unhealthy" warning + a status marker
+    so a down deployment reads as a target problem, not an opaque test timeout.
+    No-op when the target has no health_check. Never raises.
+    """
+    if not isinstance(target, dict) or not target.get("health_check") or not target_url:
+        return
+    try:
+        from agents.health_gate import gate
+
+        result = gate(target_url, target.get("health_check"))
+        if not result.ok:
+            _eval_log.warning(
+                "target health check FAILED for %s (%s): %s — lane will likely "
+                "fail; this is a target problem, not the test.",
+                subtask.get("id"),
+                result.url,
+                result.detail,
+            )
+            _write_status_patch(
+                spec_dir,
+                target_unhealthy=True,
+                target_health_detail=result.detail[:200],
+            )
+    except Exception as exc:  # noqa: BLE001 — gating must never break the run
+        _eval_log.warning("health gate skipped: %s", exc)
 
 
 def _build_all_bundles(spec_dir, project_dir, unit, browser, api, jest) -> list:
