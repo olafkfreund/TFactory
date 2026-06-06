@@ -14,8 +14,8 @@
 import { useState } from 'react';
 import { ChevronLeft } from 'lucide-react';
 
+import { TFactoryPipelineView } from '../pipeline/TFactoryPipelineView';
 import { TFactoryTaskDetail } from './TFactoryTaskDetail';
-import { TFactoryTaskList } from './TFactoryTaskList';
 
 interface Props {
   /** Test seam threaded into both children. */
@@ -29,14 +29,8 @@ export function TFactoryPortal({ fetchFn, wsFactory }: Props) {
 
   if (selectedSpecId === null) {
     return (
-      <div data-testid="tfactory-portal" data-view="list" className="flex flex-col gap-3">
-        <header className="border-b border-border pb-2">
-          <h1 className="text-xl font-semibold">TFactory Tasks</h1>
-          <p className="text-xs text-muted-foreground">
-            Read-only view of TFactory workspaces under ~/.tfactory/.
-          </p>
-        </header>
-        <TFactoryTaskList
+      <div data-testid="tfactory-portal" data-view="list" className="h-full">
+        <TFactoryPipelineView
           onSelectTask={(specId) => setSelectedSpecId(specId)}
           fetchFn={fetchFn}
         />
@@ -45,7 +39,7 @@ export function TFactoryPortal({ fetchFn, wsFactory }: Props) {
   }
 
   return (
-    <div data-testid="tfactory-portal" data-view="detail" className="flex flex-col gap-3">
+    <div data-testid="tfactory-portal" data-view="detail" className="flex flex-col gap-3 h-full overflow-auto p-4">
       <button
         type="button"
         data-testid="portal-back"

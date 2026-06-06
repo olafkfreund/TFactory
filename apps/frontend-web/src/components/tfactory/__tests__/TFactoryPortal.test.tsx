@@ -76,7 +76,7 @@ describe('<TFactoryPortal>', () => {
     expect(screen.getByTestId('tfactory-portal')).toHaveAttribute(
       'data-view', 'list',
     );
-    expect(screen.getByRole('heading', { name: /TFactory Tasks/i }))
+    expect(screen.getByRole('heading', { name: /TFactory Pipeline/i }))
       .toBeInTheDocument();
     await waitFor(() => screen.getByTestId('task-row-spec-a'));
   });
