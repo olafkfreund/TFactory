@@ -1350,6 +1350,7 @@ CRITICAL_MODULES = frozenset(
         "test_liveness_sweep",  # stall watchdog driver (#95)
         "test_security",  # command allowlist / sandbox invariants
         "test_coverage_delta",  # Evaluator coverage signal
+        "test_confidence",  # numeric confidence score (#238)
         "test_triage_dedup",  # Triager dedup + rank
         "test_triager_completion_webhook",  # #85 completion callback contract
         "test_resolve_test_target_credentials",  # test-target cred resolver (#107)
