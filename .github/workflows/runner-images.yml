@@ -39,7 +39,7 @@ jobs:
     strategy:
       fail-fast: false   # keep building remaining images if one fails
       matrix:
-        runner: [pytest, jest, playwright, vitest, cypress, cloud]
+        runner: [pytest, jest, playwright, vitest, cypress, java, cloud]
 
     steps:
       - name: Checkout
@@ -143,6 +143,20 @@ jobs:
                 --tmpfs /tmp:rw,size=256m \
                 tfactory-runner-cypress:latest \
                 cypress --version
+              ;;
+            java)
+              docker run --rm \
+                --network=none \
+                --read-only \
+                --tmpfs /tmp:rw,size=64m \
+                tfactory-runner-java:latest \
+                java -version
+              docker run --rm \
+                --network=none \
+                --read-only \
+                --tmpfs /tmp:rw,size=64m \
+                tfactory-runner-java:latest \
+                mvn --version
               ;;
             cloud)
               docker run --rm \

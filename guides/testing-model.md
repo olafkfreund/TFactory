@@ -14,7 +14,8 @@
 | Mutation — Python (`mutate_probe`) + TypeScript (Stryker) | ✅ |
 | Cloud CSPM — AWS / GCP / Azure read-only posture (epic #133) | ✅ |
 | Cypress (browser) / Vitest (unit) — TypeScript | ✅ descriptors + runner images + CI build (#110/#236) |
-| Java (JUnit + PIT), C# / Go / Rust / Ruby | ❌ planned (#237 +) |
+| Java — JUnit 5 + JaCoCo + PIT mutation | 🟡 wedge: descriptor + runner image + probe + dispatch (#237); live PIT/JaCoCo via CI |
+| C# / Go / Rust / Ruby | ❌ planned |
 | App SAST / DAST | ❌ out of scope (DEC-002) — delegated to security pipelines |
 
 Lanes: **unit · browser · api · integration · mutation** (browser-first by
@@ -101,11 +102,13 @@ commits, dry-run-by-default side-effects. Full controls + per-release checklist:
 ## 8. Toward 100% automation — remaining gaps
 
 - artifact/image-digest pinning (test an exact digest, not just a tag)
-- compiled languages — Java first (#237)
+- more compiled languages (C# / Go / Rust); Java JaCoCo coverage into the
+  Evaluator delta + live PIT validation
+- generated JUnit templates + a Java preflight/flake-lint (parity with Py/TS)
 
 (shipped this epic: build→deploy→test orchestration #233, Cypress/Vitest #236,
-confidence #238/#239, Backstage #240/#241, health-gate #234, storageState #235,
-hardening #242)
+Java lane wedge #237, confidence #238/#239, Backstage #240/#241, health-gate
+#234, storageState #235, hardening #242)
 - (shipped this epic: confidence #238/#239, Backstage #240/#241, health-gate
   #234, storageState #235, hardening #242)
 

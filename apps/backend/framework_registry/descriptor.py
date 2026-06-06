@@ -121,7 +121,7 @@ class FrameworkDescriptor:
     manifest_signals: tuple[str, ...]
     test_path_conventions: tuple[str, ...]
     templates: tuple[str, ...]
-    coverage_strategy: Literal["lcov", "cobertura", "skip"]
+    coverage_strategy: Literal["lcov", "cobertura", "jacoco", "skip"]
     context_block: str
     evaluator_hooks: tuple[str, ...]
 
@@ -133,10 +133,10 @@ class FrameworkDescriptor:
             raise ValueError("FrameworkDescriptor.language must not be empty")
         if not self.lanes:
             raise ValueError("FrameworkDescriptor.lanes must not be empty")
-        if self.coverage_strategy not in {"lcov", "cobertura", "skip"}:
+        if self.coverage_strategy not in {"lcov", "cobertura", "jacoco", "skip"}:
             raise ValueError(
                 f"coverage_strategy {self.coverage_strategy!r} must be one of "
-                "'lcov', 'cobertura', 'skip'"
+                "'lcov', 'cobertura', 'jacoco', 'skip'"
             )
 
     @property
