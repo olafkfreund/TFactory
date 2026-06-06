@@ -498,9 +498,29 @@ def _correlation_issue_number(status: dict, source: dict) -> int | None:
     return None
 
 
+def _contract_correlation_key(spec_dir: Path) -> str | None:
+    """The explicit ``correlation_key`` from an RFC-0002 contract, if present (#249).
+
+    This is the cross-factory shared key PFactory minted; preferring it keeps
+    the completion event and the hand-back reconciled on one identifier.
+    """
+    try:
+        from agents.task_contract import read_task_contract
+
+        contract = read_task_contract(spec_dir) or {}
+        key = contract.get("correlation_key")
+        return key.strip() if isinstance(key, str) and key.strip() else None
+    except Exception:  # noqa: BLE001 — never break completion on a contract read
+        return None
+
+
 def _correlation_key(spec_dir: Path, status: dict, source: dict) -> str:
-    """The RFC-0001 shared correlation key: the GitHub issue number as a string,
-    with a synthetic ``tf-<spec_id>`` fallback so it is never null (RFC-0001 §2)."""
+    """The RFC-0001 shared correlation key. Precedence (#249):
+    RFC-0002 contract ``correlation_key`` → GitHub issue number → synthetic
+    ``tf-<spec_id>`` fallback so it is never null (RFC-0001 §2)."""
+    contract_key = _contract_correlation_key(spec_dir)
+    if contract_key:
+        return contract_key
     issue = _correlation_issue_number(status, source)
     if issue is not None:
         return str(issue)
