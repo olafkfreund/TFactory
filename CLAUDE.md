@@ -107,6 +107,12 @@ breaks a run. Env (`agents/backstage_integration.py`):
   - `TFACTORY_BACKSTAGE_COMPONENT=<ref|name>` — override the SUT entity ref
     (default derived from the snapshotted repo slug)
 
+  The triage report header also carries the SUT entity ref (`_Covers:
+  component:default/<name>_`) for catalog linkage, and a **public** badge SVG is
+  served at `GET /api/badges/<project_id>/<spec_id>/test-acceptance.svg`
+  (accept-rate coloured by commit-readiness; no token — aggregate counts only).
+  Embed in a README: `![tests](https://<host>/api/badges/<proj>/<spec>/test-acceptance.svg)`.
+
 **Bidirectional AIFactory ↔ TFactory bridge (epic #182)** — the reverse of the
 handover: when a run finishes with failing tests, TFactory packages a
 **correction** (`agents/handback/` — builder + renderer + dry-run-first sender)
