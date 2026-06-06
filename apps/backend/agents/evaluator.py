@@ -916,6 +916,32 @@ def _stage_browser_test(spec_dir: Path, project_dir: Path, subtask: dict) -> Non
         _sh.copy2(src, dst)
 
 
+def _stage_visual_baselines(
+    spec_dir: Path | None, subtask: dict | None, dest: Path
+) -> int:
+    """Stage a target's accepted visual baselines into a browser run scratch (#109).
+
+    Copies ``<spec_dir>/findings/visual_baselines/<target>/`` into ``dest`` so a
+    generated ``toHaveScreenshot`` assertion compares against the portal-accepted
+    baseline (with ``snapshotPathTemplate`` pointing there) instead of treating
+    every capture as new. Returns the number of images staged (0 when none).
+    Best-effort — never raises into the run.
+    """
+    if spec_dir is None:
+        return 0
+    try:
+        from agents.evidence.visual_baseline import stage_baselines
+
+        target_name = (subtask or {}).get("target_name") or "default"
+        n = stage_baselines(spec_dir, target_name, dest)
+        if n:
+            _eval_log.info("staged %d visual baseline(s) for target %s", n, target_name)
+        return n
+    except Exception as exc:  # noqa: BLE001 — baseline staging must not break the run
+        _eval_log.warning("visual baseline staging skipped: %s", exc)
+        return 0
+
+
 def _resolve_browser_runner_fn(
     target_url: str | None,
     image: str = _PLAYWRIGHT_IMAGE,
@@ -950,6 +976,9 @@ def _resolve_browser_runner_fn(
         scratch = Path(_tmp.mkdtemp(prefix="tf-pw-"))
         try:
             scratch.chmod(0o777)
+            # Stage accepted visual baselines into the run so a generated
+            # toHaveScreenshot assertion diffs against them (#109).
+            _stage_visual_baselines(spec_dir, subtask, scratch)
             runner = DockerRunner(image=image, network="host", read_only_rootfs=False)
             # DockerRunner mounts the checkout read-only at /work and a
             # writable scratch at /scratch (the workdir). Stage the project
