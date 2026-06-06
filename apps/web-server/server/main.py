@@ -286,6 +286,14 @@ def create_app() -> FastAPI:
         prefix="/api/handback",
         tags=["Handback"],
     )
+    # Public test-acceptance badge SVGs (#241) — embeddable in README/Backstage.
+    from .routes import badges as badge_routes
+
+    app.include_router(
+        badge_routes.router,
+        prefix="/api/badges",
+        tags=["Badges"],
+    )
     app.include_router(
         settings_routes.router, prefix="/api/settings", tags=["Settings"]
     )

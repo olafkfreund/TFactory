@@ -95,6 +95,10 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
         # this prefix must bypass the JWT/legacy middleware. The endpoint is
         # only active when APP_INBOUND_HANDBACK_ENABLED=true.
         "/api/handback/",
+        # Public test-acceptance badge SVGs (#241). Embedded in READMEs /
+        # Backstage, so they must render without a token. They expose only
+        # aggregate counts (accept-rate / readiness), never test content.
+        "/api/badges/",
     )
 
     async def dispatch(self, request: Request, call_next):

@@ -737,6 +737,16 @@ def _render_and_write_report(
     """Build the report and write triage_report.{json,md}; return (report, report_md)."""
     from agents.triage_report import build_report, render_json, render_markdown
 
+    # Resolve the SUT's Backstage entity ref for catalog linkage (#241).
+    # Best-effort — a resolution miss just omits the line.
+    component_ref = None
+    try:
+        from agents.backstage_integration import _component_ref
+
+        component_ref = _component_ref(_load_source_meta(spec_dir))
+    except Exception:  # noqa: BLE001
+        component_ref = None
+
     report = build_report(
         mode=mode,
         generated_at=_now_iso(),
@@ -748,6 +758,7 @@ def _render_and_write_report(
         dedup_input_count=len(keepers),
         decisions=decisions,
         spec_dir=spec_dir,
+        component_ref=component_ref,
     )
     findings_dir = spec_dir / "findings"
     findings_dir.mkdir(parents=True, exist_ok=True)
