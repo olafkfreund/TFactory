@@ -375,22 +375,27 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2px;
+  gap: 3px;
   font-family: var(--font-sans, system-ui, sans-serif);
   font-size: 9px;
   letter-spacing: 0.02em;
-  color: hsl(var(--muted-foreground));
+  /* Each phase shows its OWN stage hue (--cc), not the card's done-green. */
+  color: hsl(var(--cc, var(--muted-foreground)));
 }
 .pl-chip-ico { position: relative; display: inline-flex; }
+/* Bolder phase icons (stroke-based icons). */
+.pl-chip-ico svg { stroke-width: 2.4; }
+.pl-chip-lbl { font-weight: 600; }
 .pl-chip-x {
   position: absolute;
   inset: -1px -1px auto auto;
   color: hsl(0 75% 58%);
 }
-.pl-chip[data-state="done"]    { color: hsl(150 45% 55%); }
-.pl-chip[data-state="active"]  { color: hsl(42 75% 58%); animation: pl-edge 1.6s ease-in-out infinite; }
+/* State = weight / dim / pulse — NOT a hue override (keep the stage colour). */
+.pl-chip[data-state="done"]    { opacity: 1; }
+.pl-chip[data-state="active"]  { opacity: 1; animation: pl-edge 1.6s ease-in-out infinite; }
 .pl-chip[data-state="failed"]  { color: hsl(0 72% 60%); }
-.pl-chip[data-state="pending"] { color: hsl(var(--muted-foreground) / 0.55); }
+.pl-chip[data-state="pending"] { opacity: 0.4; }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    v2 refinements: prominent rail panel + bigger rings + in-card live state
@@ -473,7 +478,7 @@
   position: absolute;
   inset: -5px;
   border-radius: 50%;
-  border: 1.5px solid hsl(42 75% 58% / 0.7);
+  border: 1.5px solid hsl(var(--cc, 42 75% 58%) / 0.7);
   animation: pl-pulse-ring 1.4s ease-out infinite;
 }
 @keyframes pl-pulse-ring {
