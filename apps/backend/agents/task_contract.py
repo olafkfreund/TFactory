@@ -155,6 +155,16 @@ def parse_tfactory_profile(contract: dict | None) -> TfactoryProfile | None:
     return None if profile.is_empty else profile
 
 
+def ac_targets(profile: TfactoryProfile | None, ac_id: str) -> tuple[str, ...]:
+    """Files/functions an acceptance criterion covers, for precise targeting (#248).
+
+    Returns () when there's no profile or no mapping for ``ac_id``.
+    """
+    if profile is None:
+        return ()
+    return profile.ac_to_code_map.get(ac_id, ())
+
+
 def read_tfactory_profile(spec_dir: Path) -> TfactoryProfile | None:
     """Convenience: read the contract from the handover + parse the block.
 

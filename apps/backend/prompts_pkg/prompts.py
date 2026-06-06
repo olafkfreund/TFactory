@@ -672,9 +672,21 @@ def _build_contract_profile_block(spec_dir: Path) -> str:
         lines.append(f"- **mutation_scope**: {', '.join(profile.mutation_scope)}")
     if profile.ac_to_code_map:
         lines.append(
-            f"- **ac_to_code_map**: {len(profile.ac_to_code_map)} acceptance "
-            "criteria mapped to files — target tests at those files/functions."
+            f"- **ac_to_code_map** ({len(profile.ac_to_code_map)} acceptance "
+            "criteria → code) — target each AC's tests precisely at the listed "
+            "files/functions; create one phase per AC:"
         )
+        # Render the mapping, capped so a large map can't bloat the prompt.
+        _AC_CAP = 20
+        for i, (ac_id, targets) in enumerate(profile.ac_to_code_map.items()):
+            if i >= _AC_CAP:
+                lines.append(
+                    f"  - … and {len(profile.ac_to_code_map) - _AC_CAP} more "
+                    "(see context/aifactory_plan.json `tfactory.ac_to_code_map`)"
+                )
+                break
+            tlist = ", ".join(targets) if targets else "(no files listed)"
+            lines.append(f"  - `{ac_id}` → {tlist}")
     return "\n".join(lines) + "\n\n---\n\n"
 
 
