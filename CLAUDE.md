@@ -37,6 +37,8 @@ into the lanes (#107), and visual-regression baselines in the portal (#109).
 - **Roadmap (3 horizons + shipped):** `.agent-os/product/roadmap.md`
 - **Decision log (highest override priority):** `.agent-os/product/decisions.md`
 - **GTM & pricing model:** `.agent-os/product/pricing.md`
+- **Testing model (what/how/scoring/verification):** `guides/testing-model.md`
+- **Security hardening checklist:** `guides/security-hardening.md`
 
 Active work is tracked under epic [#33](https://github.com/olafkfreund/TFactory/issues/33).
 
