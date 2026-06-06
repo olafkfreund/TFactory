@@ -1352,6 +1352,7 @@ CRITICAL_MODULES = frozenset(
         "test_coverage_delta",  # Evaluator coverage signal
         "test_confidence",  # numeric confidence score (#238)
         "test_confidence_corpus",  # flaky-into-verdict + scoring drift guard (#239)
+        "test_backstage_integration",  # Backstage test-quality emitter (#240)
         "test_triage_dedup",  # Triager dedup + rank
         "test_triager_completion_webhook",  # #85 completion callback contract
         "test_resolve_test_target_credentials",  # test-target cred resolver (#107)

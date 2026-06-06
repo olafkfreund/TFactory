@@ -96,6 +96,17 @@ the cross-service shape from the Factory PARR-spine epic; see
   - `TFACTORY_COMPLETION_SENTINEL=1` — writes `findings/COMPLETED.json` a
     same-host watcher can stat instead of polling
 
+**Backstage test-quality scorecard (#240, epic #232)** — on terminal status the
+Triager best-effort emits a per-component fact (accept-rate, the #238/#239
+confidence rollup, flaky count) to Backstage TechInsights, so a Scorecard can
+grade the *system under test*. The fact's confidence comes from the numeric
+score (#238) which is flaky-penalised (#239). Opt-in / no-op when unset; never
+breaks a run. Env (`agents/backstage_integration.py`):
+  - `TFACTORY_BACKSTAGE_TECHINSIGHTS_URL=<url>` — POST target (master switch)
+  - `TFACTORY_BACKSTAGE_TOKEN=<token>` — optional bearer auth
+  - `TFACTORY_BACKSTAGE_COMPONENT=<ref|name>` — override the SUT entity ref
+    (default derived from the snapshotted repo slug)
+
 **Bidirectional AIFactory ↔ TFactory bridge (epic #182)** — the reverse of the
 handover: when a run finishes with failing tests, TFactory packages a
 **correction** (`agents/handback/` — builder + renderer + dry-run-first sender)
