@@ -134,7 +134,7 @@ def test_envelope_carries_zero_usage_by_default(tmp_path: Path):
     )
     env = _build_completion_envelope(tmp_path, {"task_id": "042", "status": "triaged"})
     assert env["usage"]["total_tokens"] == 0
-    assert env["schema_version"] == "1.1"
+    assert env["schema_version"] == "1.2"  # bumped by the #282 additive upgrade
 
 
 def test_envelope_reflects_recorded_usage(

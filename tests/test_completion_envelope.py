@@ -45,7 +45,7 @@ def test_new_event_id_is_uuid4_and_unique():
 def test_event_source_defaults(monkeypatch):
     monkeypatch.delenv("TFACTORY_EVENT_SOURCE", raising=False)
     assert ce.event_source(None) == "/tfactory"
-    assert ce.event_source("demo") == "/tfactory/demo"
+    assert ce.event_source("demo") == "/tfactory"  # producer identity, not per-project
 
 
 def test_event_source_env_override(monkeypatch):
@@ -59,7 +59,7 @@ def test_cloudevents_fields_shape(monkeypatch):
     fields = ce.cloudevents_fields(project_id="demo", time_iso="2026-06-08T00:00:00+00:00")
     assert fields["specversion"] == "1.0"
     assert fields["type"] == "io.factory.tfactory.completion"
-    assert fields["source"] == "/tfactory/demo"
+    assert fields["source"] == "/tfactory"
     assert fields["time"] == "2026-06-08T00:00:00+00:00"
     assert _TRACEPARENT_RE.match(fields["traceparent"])
     assert "id" in fields

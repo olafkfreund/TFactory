@@ -37,9 +37,7 @@ COMPLETION_EVENT_TYPE = "io.factory.tfactory.completion"
 
 # W3C trace-context ``traceparent``: version "-" trace-id(32hex) "-" span-id(16hex)
 # "-" flags(2hex). https://www.w3.org/TR/trace-context/#traceparent-header
-_TRACEPARENT_RE = re.compile(
-    r"^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$"
-)
+_TRACEPARENT_RE = re.compile(r"^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$")
 
 
 def new_event_id() -> str:
@@ -48,17 +46,16 @@ def new_event_id() -> str:
 
 
 def event_source(project_id: str | None = None) -> str:
-    """CloudEvents ``source``: a URI-reference identifying the producer context.
+    """CloudEvents ``source``: a URI-reference identifying the producer.
 
-    Precedence: ``TFACTORY_EVENT_SOURCE`` env override → ``/tfactory/<project_id>``
-    when the project is known → ``/tfactory``. Always non-empty (CloudEvents
-    requires a non-empty source).
+    ``TFACTORY_EVENT_SOURCE`` env override → ``/tfactory``. Deployment-level
+    (not per-project) so CFactory routes by a stable producer identity; the
+    per-event/per-project detail lives in ``correlation_key`` / ``project_id``.
+    ``project_id`` is accepted for call-site symmetry but not interpolated.
+    Always non-empty (CloudEvents requires a non-empty source).
     """
     override = (os.environ.get("TFACTORY_EVENT_SOURCE") or "").strip()
-    if override:
-        return override
-    project = (project_id or "").strip()
-    return f"/tfactory/{project}" if project else "/tfactory"
+    return override or "/tfactory"
 
 
 def _generate_traceparent() -> str:
@@ -90,9 +87,7 @@ def tracestate() -> str | None:
     return value or None
 
 
-def cloudevents_fields(
-    *, project_id: str | None, time_iso: str
-) -> dict:
+def cloudevents_fields(*, project_id: str | None, time_iso: str) -> dict:
     """Return the additive ``id`` + CloudEvents-core + trace fields.
 
     ``time_iso`` should be the envelope's emission timestamp (RFC3339) so
@@ -136,9 +131,7 @@ def validate_cloudevents_core(envelope: dict) -> list[str]:
     if tp is not None and isinstance(tp, str):
         # All-zero trace-id / span-id is explicitly invalid per the W3C spec.
         parts = tp.split("-")
-        if len(parts) == 4 and (
-            parts[1] == "0" * 32 or parts[2] == "0" * 16
-        ):
+        if len(parts) == 4 and (parts[1] == "0" * 32 or parts[2] == "0" * 16):
             errors.append("traceparent has all-zero trace-id or span-id")
     return errors
 
