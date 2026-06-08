@@ -5,7 +5,7 @@ nav_order: 1
 ---
 
 <section class="hero">
-  <span class="hero__eyebrow"><a href="https://github.com/olafkfreund/TFactory/releases/tag/v0.5.0">v0.5.0</a> · 5 lanes + evidence · closed <a href="{{ '/examples/' | relative_url }}">test → fix → re-test</a> loop · visual inspection · cloud posture · runs on any LLM</span>
+  <span class="hero__eyebrow"><a href="https://github.com/olafkfreund/TFactory/releases/tag/v0.7.0">v0.7.0</a> · 5 lanes + evidence · at-least-once completion delivery · closed <a href="{{ '/examples/' | relative_url }}">test → fix → re-test</a> loop · visual inspection · cloud posture · runs on any LLM</span>
   <h1 class="hero__title">Autonomous tests, AI-graded.</h1>
   <p class="hero__subtitle">
     Hand TFactory a finished feature on a branch — from AIFactory, Claude Code,
@@ -19,8 +19,8 @@ nav_order: 1
       See the demo →
     </a>
     &nbsp;
-    <a class="hero__cta" href="https://github.com/olafkfreund/TFactory/releases/tag/v0.5.0">
-      v0.5.0 release ↗
+    <a class="hero__cta" href="https://github.com/olafkfreund/TFactory/releases/tag/v0.7.0">
+      v0.7.0 release ↗
     </a>
     &nbsp;
     <a class="hero__cta hero__cta--ghost" href="{{ '/design-plan/' | relative_url }}">
@@ -152,6 +152,38 @@ the software catalog.
     <h3>In the Backstage catalog</h3>
     <p><strong>Problem:</strong> a service nobody can find in the catalog isn't really part of the platform.</p>
     <p><strong>Solution:</strong> TFactory ships a <code>catalog-info.yaml</code> + TechDocs and is importable into Backstage, with enriched annotations and an AI-assistant skill descriptor — discoverable alongside the rest of the Factory.</p>
+  </li>
+</ul>
+
+## New in v0.7 — done that survives a crash
+
+<div class="reveal" markdown="1">
+
+A distributed line is only as trustworthy as its weakest handoff. v0.7.0 hardens
+the completion handoff so it's **durable, idempotent, traceable, and bounded** —
+then fixes the SSO login that was bouncing everyone back to the door.
+[Read the post →]({% post_url 2026-06-08-when-done-has-to-survive-a-crash %})
+
+</div>
+
+<ul class="feature-row">
+  <li class="feature-row__card reveal">
+    <span class="feature-row__icon" aria-hidden="true">📦</span>
+    <h3>At-least-once completion delivery</h3>
+    <p><strong>Problem:</strong> a crash after the terminal write but before the POST lost the event — CFactory's WorkItem went stale with no replay.</p>
+    <p><strong>Solution:</strong> a durable <strong>transactional outbox + retrying relay</strong> — the Triager enqueues before delivery, a relay drains with backoff + dead-lettering and replays across restarts. Every event carries a UUID <code>id</code> sent as the <code>Idempotency-Key</code>, so retries dedup to effectively-once.</p>
+  </li>
+  <li class="feature-row__card reveal" style="--reveal-delay: 80ms">
+    <span class="feature-row__icon" aria-hidden="true">🔁</span>
+    <h3>A correction loop that knows when to stop</h3>
+    <p><strong>Problem:</strong> an unbounded fix→re-test loop, with assertions that could quietly weaken between rounds and mask a bug.</p>
+    <p><strong>Solution:</strong> a typed, versioned handback contract + a bounded state machine that emits a terminal <code>needs_human</code> instead of looping. Assertions are <strong>pinned</strong> — re-runs are diff-gated to additive-only, and the manifest hash rides on the contract so each round provably tests the same bar.</p>
+  </li>
+  <li class="feature-row__card reveal" style="--reveal-delay: 160ms">
+    <span class="feature-row__icon" aria-hidden="true">🔌</span>
+    <h3>SaaS connectors, end-to-end</h3>
+    <p><strong>Problem:</strong> big platforms (ServiceNow / Salesforce / SAP) are brittle to drive and gated behind SSO.</p>
+    <p><strong>Solution:</strong> all four connector platforms now test end-to-end through a stored credential (SAP's OData check completes the set), plus an opt-in <code>visual: true</code> browser lane with ServiceNow selector guidance for visual inspection.</p>
   </li>
 </ul>
 

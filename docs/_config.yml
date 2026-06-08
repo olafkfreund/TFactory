@@ -47,5 +47,5 @@ include:
 
 # Repo + version metadata (used by the custom layout)
 repo_url: https://github.com/olafkfreund/TFactory
-release_tag: v0.1.0-mvp
-release_url: https://github.com/olafkfreund/TFactory/releases/tag/v0.1.0-mvp
+release_tag: v0.7.0
+release_url: https://github.com/olafkfreund/TFactory/releases/tag/v0.7.0
