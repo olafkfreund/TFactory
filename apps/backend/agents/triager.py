@@ -607,6 +607,23 @@ def _notify_completion(spec_dir: Path, status: dict) -> None:
     url = _completion_webhook_url()
     if not url:
         return
+
+    # At-least-once path (#281): when TFACTORY_COMPLETION_OUTBOX is set, persist
+    # the event to the durable outbox *before* attempting delivery, then drain
+    # it. A crash between the terminal write and a successful POST no longer
+    # loses the event — the relay replays it on the next pass. Default-off keeps
+    # the legacy fire-and-forget behaviour unchanged (non-breaking, epic #284).
+    try:
+        from agents.completion_outbox import enqueue, outbox_enabled, relay_once
+
+        if outbox_enabled():
+            enqueue(payload)
+            relay_once()  # best-effort immediate delivery; undelivered persist
+            return
+    except Exception:
+        # Outbox must never break the pipeline; fall through to legacy POST.
+        pass
+
     try:
         import urllib.request
 
