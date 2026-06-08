@@ -515,10 +515,11 @@ CONNECTOR_PLATFORMS: dict[str, dict[str, str]] = {
     },
     "sap": {
         "api_style": "odata",  # SAP Gateway / S/4HANA OData v2/v4
-        "library_template": "",  # template TBD — see guides/saas-connectors.md
+        "library_template": "sap-odata.py.tmpl",
         "guidance": (
             "SAP: drive OData services (`/sap/opu/odata/...`) with `$filter`/`$top`; "
-            "auth via the vault (basic / OAuth). API-first over SAP GUI automation."
+            "auth via the vault (basic / OAuth). API-first over SAP GUI automation. "
+            "The check handles both OData v2 (`d.results`) and v4 (`value`) envelopes."
         ),
     },
 }

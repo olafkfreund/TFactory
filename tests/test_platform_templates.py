@@ -28,6 +28,11 @@ _SAMPLES: dict[str, dict[str, str]] = {
     "mulesoft-api.py.tmpl": {
         "path": "/api/v1/orders", "expected_status": "200", "expected_json_key": "data",
     },
+    "sap-odata.py.tmpl": {
+        "service_path": "sap/opu/odata/sap/API_BUSINESS_PARTNER",
+        "entity_set": "A_BusinessPartner", "filter": "BusinessPartnerCategory eq '1'",
+        "expected_field": "BusinessPartner", "expected_value": "1000001",
+    },
     "kubernetes-service-health.py.tmpl": {
         "health_path": "/healthz", "ready_path": "/readyz",
     },
