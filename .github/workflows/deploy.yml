@@ -15,6 +15,12 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # Hoist the PAT to job env: the `secrets` context is NOT allowed in a
+    # step-level `if:` (only `env`/`with`/`run`), so gating the gitops bump on
+    # `secrets.GITOPS_PAT` made the whole workflow invalid — every deploy failed
+    # with "workflow file issue". Gate on `env.GITOPS_PAT` instead.
+    env:
+      GITOPS_PAT: ${{ secrets.GITOPS_PAT }}
     steps:
       - uses: actions/checkout@v4
       - id: tags
@@ -34,8 +40,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Bump factory-gitops (if GITOPS_PAT set)
-        if: ${{ secrets.GITOPS_PAT != '' }}
-        env: { GITOPS_PAT: "${{ secrets.GITOPS_PAT }}" }
+        if: ${{ env.GITOPS_PAT != '' }}
         run: |
           set -e
           git clone --depth 1 "https://x:${GITOPS_PAT}@github.com/${GITOPS_REPO}.git" gitops
