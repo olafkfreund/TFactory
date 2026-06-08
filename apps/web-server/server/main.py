@@ -50,6 +50,7 @@ from .routes import (
 from .routes import cli_accounts as cli_accounts_routes
 from .routes import llm_endpoints as llm_endpoints_routes
 from .routes import logs as logs_routes
+from .routes import mcp_copilot as mcp_copilot_routes
 from .routes import settings as settings_routes
 from .services.skills_service import init_skills_service
 from .websockets import events as events_ws
@@ -294,6 +295,10 @@ def create_app() -> FastAPI:
         prefix="/api/badges",
         tags=["Badges"],
     )
+
+    # Copilot cloud agent MCP endpoint (epic #277 C3) — mounted at /mcp so
+    # it matches the URL registered in repo Settings → Copilot → MCP servers.
+    app.include_router(mcp_copilot_routes.router)
     app.include_router(
         settings_routes.router, prefix="/api/settings", tags=["Settings"]
     )

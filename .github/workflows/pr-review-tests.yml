@@ -1,0 +1,78 @@
+name: TFactory coverage summary on PR
+
+# Trigger: any PR opened or updated.
+# Fetches the TFactory coverage summary for the PR and posts it as a
+# PR comment + commit status check.
+# Part of epic #277 (C4).
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+concurrency:
+  group: pr-review-tests-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+jobs:
+  coverage-comment:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch coverage from TFactory
+        id: coverage
+        run: |
+          RESULT=$(curl -s \
+            -H "Authorization: Bearer ${{ secrets.TFACTORY_TOKEN }}" \
+            "${{ vars.TFACTORY_URL }}/api/coverage?pr=${{ github.event.pull_request.number }}&repo=${{ github.repository }}" \
+            || echo '{}')
+          PCT=$(echo "$RESULT" | jq -r '.coverage_pct // "N/A"')
+          REPORT=$(echo "$RESULT" | jq -r '.report_url // ""')
+          echo "pct=$PCT" >> "$GITHUB_OUTPUT"
+          echo "report=$REPORT" >> "$GITHUB_OUTPUT"
+
+      - name: Find existing coverage comment
+        id: find_comment
+        uses: peter-evans/find-comment@v3
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: github-actions[bot]
+          body-includes: "### TFactory coverage"
+
+      - name: Post or update coverage comment
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          comment-id: ${{ steps.find_comment.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          edit-mode: replace
+          body: |
+            ### TFactory coverage
+
+            **Coverage:** ${{ steps.coverage.outputs.pct }}%
+
+            ${{ steps.coverage.outputs.report != '' && format('[Full report]({0})', steps.coverage.outputs.report) || '_Report not yet available — the TFactory pipeline may still be running._' }}
+
+            > _Updated by the [TFactory coverage workflow](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})._
+
+      - name: Set commit status
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PCT="${{ steps.coverage.outputs.pct }}"
+          if [ "$PCT" = "N/A" ]; then
+            STATE="pending"
+            DESC="TFactory: coverage not yet available"
+          else
+            STATE="success"
+            DESC="Coverage: ${PCT}%"
+          fi
+          gh api "/repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }}" \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -f state="$STATE" \
+            -f description="$DESC" \
+            -f context="tfactory/coverage" \
+            -f target_url="${{ vars.TFACTORY_URL }}"
