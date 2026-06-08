@@ -109,12 +109,32 @@ def _resolve_ids(payload: AIFactoryCompletePayload) -> tuple[str, str]:
 
 
 def _mark_stuck(spec_dir: Path, reason: str) -> None:
-    """Flag the task stuck for human review (cap hit / no progress)."""
+    """Flag the task stuck for human review (cap hit / no progress) and emit a
+    terminal completion event (#283).
+
+    The bounded loop's terminal must not just stop silently — CFactory needs to
+    learn the unit needs a human instead of waiting for a re-test that never
+    comes. We keep ``status == "stuck"`` (backward-compat) but add a
+    ``needs_human`` marker and emit the RFC-0001 completion event keyed by the
+    same ``correlation_key`` as every other transition in this loop. Emission is
+    best-effort — a failing webhook must never break the handback handler.
+    """
     status_file = spec_dir / "status.json"
     status = _read_json(status_file) or {}
     status["status"] = "stuck"
     status["stuck_reason"] = reason
+    status["needs_human"] = True
     status_file.write_text(json.dumps(status, indent=2))
+
+    # Terminal completion event so the cockpit sees the human-handoff. phase
+    # carries the explicit needs_human signal; status stays "stuck" (its outcome
+    # already maps to failure) so existing consumers are unaffected.
+    try:
+        from agents.triager import _notify_completion
+
+        _notify_completion(spec_dir, {**status, "phase": "needs_human"})
+    except Exception:  # noqa: BLE001 — notification is best-effort
+        pass
 
 
 @router.post("/aifactory-complete")

@@ -53,6 +53,7 @@ from .schema import (
     TestData,
     TFactoryConfig,
     WaitFor,
+    connector_browser_guidance,
     connector_platform_info,
 )
 from .secrets import MissingSecretError, resolve_auth_env_vars, resolve_env_var
@@ -74,6 +75,7 @@ __all__ = [
     "ConnectorTarget",
     "CONNECTOR_PLATFORMS",
     "connector_platform_info",
+    "connector_browser_guidance",
     # Auth types
     "AuthSpec",
     "Auth",  # alias

@@ -467,7 +467,11 @@ def _completion_sentinel_enabled() -> bool:
 # all emit this shape so a watcher (CFactory) consumes one schema. The spine
 # correlation key is the GitHub issue number threaded end-to-end. See
 # docs/completion-event-envelope.md for the contract.
-_COMPLETION_SCHEMA_VERSION = "1.1"
+# Envelope grew additively in #282 (CloudEvents-core + id + W3C trace context).
+# Mirrors AIFactory's #466 upgrade field-for-field so the two producers emit a
+# parity envelope the CFactory collector can treat uniformly. The additive
+# fields are built in agents/completion_envelope.py (testable in isolation).
+_COMPLETION_SCHEMA_VERSION = "1.2"
 
 
 def _outcome_for_status(status_value: str | None) -> str:
@@ -548,11 +552,13 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> dict:
     (``schema_version``, ``event``, ``service``, ``correlation_id``,
     ``outcome``) plus repo/branch context + a result summary sit on top.
     """
+    from agents.completion_envelope import cloudevents_fields
     from usage import usage_block_from_status
 
     source = _load_source_meta(spec_dir)
     status_value = status.get("status")
     issue_number = _correlation_issue_number(status, source)
+    when = status.get("updated_at") or _now_iso()
     return {
         # RFC-0001 core: the six required fields (Factory#4). `correlation_key`
         # is the shared key (issue#, synthetic `tf-<spec_id>` fallback) so the
@@ -562,7 +568,7 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> dict:
         "task_id": status.get("task_id") or spec_dir.name,
         "status": status_value,
         "phase": status.get("phase") or "test",
-        "updated_at": status.get("updated_at") or _now_iso(),
+        "updated_at": when,
         # RFC-0001 §4 optional chain block (upstream/downstream links).
         "correlation": {
             "issue_number": issue_number,
@@ -586,6 +592,12 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> dict:
         # no LLM work; summed across sessions + handback retries via status.json.
         "usage": usage_block_from_status(spec_dir),
         "emitted_at": _now_iso(),
+        # Additive #282 (parity with AIFactory #466). Per-event idempotency id +
+        # CloudEvents-core + W3C trace context, all riding alongside the legacy
+        # fields above — nothing removed until the cross-repo cutover (#284).
+        # `time` mirrors the envelope timestamp; the #281 outbox keys its
+        # Idempotency-Key on `id`, so the id is stable across relay re-delivery.
+        **cloudevents_fields(project_id=status.get("project_id"), time_iso=when),
     }
 
 
@@ -607,6 +619,23 @@ def _notify_completion(spec_dir: Path, status: dict) -> None:
     url = _completion_webhook_url()
     if not url:
         return
+
+    # At-least-once path (#281): when TFACTORY_COMPLETION_OUTBOX is set, persist
+    # the event to the durable outbox *before* attempting delivery, then drain
+    # it. A crash between the terminal write and a successful POST no longer
+    # loses the event — the relay replays it on the next pass. Default-off keeps
+    # the legacy fire-and-forget behaviour unchanged (non-breaking, epic #284).
+    try:
+        from agents.completion_outbox import enqueue, outbox_enabled, relay_once
+
+        if outbox_enabled():
+            enqueue(payload)
+            relay_once()  # best-effort immediate delivery; undelivered persist
+            return
+    except Exception:
+        # Outbox must never break the pipeline; fall through to legacy POST.
+        pass
+
     try:
         import urllib.request
 

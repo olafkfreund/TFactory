@@ -247,6 +247,10 @@ class HttpTarget(BaseModel):
     # Optional hints consumed by the Planner / Gen-Functional
     openapi_spec: str | None = None  # path to OpenAPI spec for API lane
     selectors_hint: str | None = None  # e.g. "data_testid" or "role_based"
+    # Opt into the browser/visual lane (#173): drive the UI with Playwright +
+    # record a visual-inspection run, reusing this target's base_url + auth.
+    # Default False — most http targets are API-lane only.
+    visual: bool = False
 
 
 class KubernetesTarget(BaseModel):
@@ -481,6 +485,20 @@ CONNECTOR_PLATFORMS: dict[str, dict[str, str]] = {
             "automation — SSO-gated portals are brittle. Bearer/OAuth token via the "
             "credential vault; assert on `result[0].<field>`."
         ),
+        # Browser/visual-lane guidance (#173) — used only when the target opts
+        # into `visual: true`. ServiceNow's UI is iframe-nested with volatile
+        # element ids, so naive selectors flake; steer generation to stable ones.
+        "browser_guidance": (
+            "ServiceNow UI (visual lane): the main content renders inside the "
+            "`gsft_main` iframe — scope locators with "
+            "`page.frameLocator('iframe#gsft_main')` before selecting. Element ids "
+            "are dynamic (e.g. `sys_display.incident.caller_id`), so DO NOT match "
+            "on raw ids; prefer stable selectors — ARIA roles/names "
+            "(`getByRole('button', { name: 'Submit' })`), labels "
+            "(`getByLabel('Short description')`), and `data-*` attributes. Drive "
+            "the real SSO login via the storageState auth-setup (reuse the "
+            "ref-auth `steps` list for the IdP redirect); never re-login per test."
+        ),
     },
     "salesforce": {
         "api_style": "rest",  # REST + SOQL
@@ -497,10 +515,11 @@ CONNECTOR_PLATFORMS: dict[str, dict[str, str]] = {
     },
     "sap": {
         "api_style": "odata",  # SAP Gateway / S/4HANA OData v2/v4
-        "library_template": "",  # template TBD — see guides/saas-connectors.md
+        "library_template": "sap-odata.py.tmpl",
         "guidance": (
             "SAP: drive OData services (`/sap/opu/odata/...`) with `$filter`/`$top`; "
-            "auth via the vault (basic / OAuth). API-first over SAP GUI automation."
+            "auth via the vault (basic / OAuth). API-first over SAP GUI automation. "
+            "The check handles both OData v2 (`d.results`) and v4 (`value`) envelopes."
         ),
     },
 }
@@ -511,6 +530,20 @@ def connector_platform_info(platform: str) -> dict[str, str] | None:
     return CONNECTOR_PLATFORMS.get(platform)
 
 
+def connector_browser_guidance(platform: str) -> str | None:
+    """Browser/visual-lane Gen-Functional guidance for a platform, or ``None``.
+
+    Returned only for the visual lane (a target with ``visual: true``); the
+    default API-lane path uses ``connector_platform_info(...)['guidance']``.
+    Platforms without explicit browser guidance fall back to ``None`` so the
+    caller can omit the section rather than emit a stale API hint.
+    """
+    info = CONNECTOR_PLATFORMS.get(platform)
+    if not info:
+        return None
+    return info.get("browser_guidance")
+
+
 class ConnectorTarget(BaseModel):
     """A managed-SaaS platform target — ServiceNow / Salesforce / SAP / MuleSoft (#111).
 
@@ -518,9 +551,18 @@ class ConnectorTarget(BaseModel):
     ``platform`` and TFactory knows its API style + which ``library/`` check
     template + Gen-Functional guidance to use. Auth + ``base_url`` reuse the
     HTTP / credential-vault plumbing (``auth: { type: ref }`` resolves an
-    OAuth/SSO token from the vault). Tests drive the platform's REST/OData API
-    on the **api lane** — API-first is far more stable than SSO-gated browser
-    automation.
+    OAuth/SSO token from the vault).
+
+    **Two-lane stability split (#173):**
+
+    - **api lane (default):** drive the platform's REST/OData API. Far more
+      stable than browser automation — this is the recommended path.
+    - **browser/visual lane (opt-in, ``visual: true``):** drive the real UI with
+      Playwright + record a visual-inspection run (epic #170). Reuses this
+      target's ``base_url`` + ``auth`` (storageState SSO via the ref-auth
+      ``steps`` list). Inherently more brittle — use it for visual inspection of
+      SSO-gated portals (e.g. ServiceNow), not for the primary functional bar.
+      Per-platform browser guidance comes from ``connector_browser_guidance``.
 
     Example::
 
@@ -529,6 +571,7 @@ class ConnectorTarget(BaseModel):
           platform: servicenow
           base_url: https://acme.service-now.com
           entities: [incident, change_request]
+          visual: true          # also drive the UI on the visual lane
           auth:
             type: ref
             ref: snow-svc
@@ -542,6 +585,8 @@ class ConnectorTarget(BaseModel):
     health_check: HealthCheck | None = None
     # Tables / objects / OData entity sets to focus generation on (hints).
     entities: list[str] = []
+    # Opt into the browser/visual lane (#173) in addition to the api lane.
+    visual: bool = False
 
 
 # Union of all concrete target types (discriminated on ``type``).

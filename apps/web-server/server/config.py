@@ -85,6 +85,14 @@ class Settings(BaseSettings):
     LIVENESS_SWEEP_INTERVAL_SECONDS: int = 300  # how often to sweep
     LIVENESS_SWEEP_DEADLINE_SECONDS: float = 600  # idle budget before stalled
 
+    # Completion-event outbox relay (#281) — drains the durable outbox so
+    # RFC-0001 completion events reach CFactory at-least-once, surviving crashes
+    # and transient sink outages. OFF by default; opt in with
+    # APP_COMPLETION_RELAY_ENABLED (the Triager enqueues only when
+    # TFACTORY_COMPLETION_OUTBOX is also set).
+    COMPLETION_RELAY_ENABLED: bool = False
+    COMPLETION_RELAY_INTERVAL_SECONDS: int = 30  # how often to drain the outbox
+
     # Inbound AIFactory completion webhook (epic #182) — closes the automatic
     # fail→handback→fix→re-test loop. AIFactory POSTs to
     # /api/handback/aifactory-complete when its QA Fixer finishes; we re-fire
