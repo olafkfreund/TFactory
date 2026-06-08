@@ -119,6 +119,14 @@ def default_sender(payload: dict) -> dict:
             # Echoed back by AIFactory to the callback URL to close the loop.
             "tfactory_task_id": payload.get("tfactory_task_id"),
             "tfactory_callback_url": payload.get("tfactory_callback_url"),
+            # Typed handback triage contract (#283) — the structured report
+            # AIFactory's QA-fixer gate (#467) schema-validates before acting,
+            # plus the pinned assertion-manifest hash so each round provably
+            # tests against the same bar. Both additive; AIFactory accepts the
+            # legacy markdown-only POST when they're absent.
+            "correlation_key": payload.get("correlation_key"),
+            "triage": payload.get("triage"),
+            "manifest_hash": payload.get("manifest_hash"),
         }
     ).encode()
     req = urllib.request.Request(
@@ -162,12 +170,33 @@ def send_correction(
     # correlation as the completion event (#249).
     correlation_key = _correlation_key_for(spec)
 
+    # Assertion pinning (#283): pin the suite that just failed as the bar for
+    # this spec (idempotent — later cycles reuse the same manifest), and ride
+    # its hash on the contract so each round provably tests the same assertions.
+    # Best-effort — a missing/odd suite must never block the hand-back.
+    manifest_hash: str | None = None
+    try:
+        from agents.handback.assertion_manifest import pin_manifest
+
+        manifest_hash = pin_manifest(spec, spec / "tests").get("manifest_hash")
+    except Exception:  # noqa: BLE001
+        manifest_hash = None
+
+    # The typed triage contract (#283) AIFactory's #467 gate validates: the
+    # structured failure report + the pinned manifest hash + correlation key.
+    triage = {
+        **request.to_dict(),
+        "manifest_hash": manifest_hash,
+        "correlation_key": correlation_key,
+    }
+
     json_doc = {
         **request.to_dict(),
         "generated_at": now or _now_iso(),
         "dry_run": dry_run,
         "fix_request_md_path": "findings/handback_request.md",
         "correlation_key": correlation_key,
+        "manifest_hash": manifest_hash,
     }
     json_path = findings / "handback_request.json"
     json_path.write_text(json.dumps(json_doc, indent=2))
@@ -196,6 +225,9 @@ def send_correction(
         "tfactory_callback_url": _self_callback_url(),
         # RFC-0001 shared correlation key (#249) — reconcile on this end-to-end.
         "correlation_key": correlation_key,
+        # Typed handback triage contract + assertion-manifest hash (#283).
+        "triage": triage,
+        "manifest_hash": manifest_hash,
     }
     try:
         result.response = (sender_fn or default_sender)(payload)
