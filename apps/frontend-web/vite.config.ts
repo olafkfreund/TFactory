@@ -7,6 +7,24 @@ import os from 'os';
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, __dirname, '');
 
+  // Auto-versioning: read the canonical version from the root package.json
+  // (the file bump-version.js updates on every release) and inject it at
+  // build time so the UI can display exactly which build is running.
+  const rootPkg = path.resolve(__dirname, '../../package.json');
+  let appVersion = '0.0.0';
+  try {
+    appVersion = JSON.parse(fs.readFileSync(rootPkg, 'utf-8')).version || appVersion;
+  } catch {
+    // Fall back to the local package.json if the root isn't present.
+    try {
+      appVersion = JSON.parse(
+        fs.readFileSync(path.resolve(__dirname, 'package.json'), 'utf-8')
+      ).version || appVersion;
+    } catch {
+      /* keep default */
+    }
+  }
+
   // Resolve SSL certs from the shared data directory
   const sslDir = path.join(os.homedir(), '.tfactory', 'ssl');
   const certFile = path.join(sslDir, 'cert.pem');
@@ -15,6 +33,9 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
+    define: {
+      __APP_VERSION__: JSON.stringify(appVersion),
+    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, './src'),

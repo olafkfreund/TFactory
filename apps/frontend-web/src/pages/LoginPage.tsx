@@ -156,7 +156,7 @@ export function LoginPage() {
             style={{ animationDelay: '210ms' }}
           >
             <span className="mr-1.5 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-success align-middle" />
-            v0.2 · five-lane pipeline — unit · browser · api · integration · mutation
+            v{__APP_VERSION__} · five-lane pipeline — unit · browser · api · integration · mutation
           </p>
         </div>
       </div>
