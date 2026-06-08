@@ -5,7 +5,6 @@ import { TooltipProvider } from './components/ui/tooltip';
 import { Toaster } from './components/ui/toaster';
 import { Sidebar, type SidebarView } from './components/Sidebar';
 import { ProjectTabBar } from './components/ProjectTabBar';
-import { KanbanBoard } from './components/KanbanBoard';
 import { TerminalGrid } from './components/TerminalGrid';
 import { Worktrees } from './components/Worktrees';
 import { Context } from './components/context/Context';
@@ -316,19 +315,11 @@ function AuthenticatedApp() {
                 /* TFactory's own surface: the test-generation review queue.
                    Global (reads ~/.tfactory workspaces), so it renders with or
                    without a selected project. */
-                <div className="h-full overflow-auto p-4">
+                <div className="h-full overflow-hidden">
                   <TFactoryPortal />
                 </div>
               ) : selectedProject ? (
                 <>
-                  {activeView === 'kanban' && (
-                    <KanbanBoard
-                      tasks={tasks}
-                      onTaskClick={handleTaskClick}
-                      onNewTaskClick={() => setIsNewTaskDialogOpen(true)}
-                      isInitialized={!!selectedProject?.autoBuildPath}
-                    />
-                  )}
                   {/* TerminalGrid stays mounted but hidden to preserve xterm instances and PTY connections */}
                   <div className={activeView === 'terminals' ? 'h-full' : 'hidden'}>
                     <TerminalGrid
@@ -351,7 +342,7 @@ function AuthenticatedApp() {
                       onOpenSettings={() => setIsSettingsDialogOpen(true)}
                       onNavigateToTask={(taskId) => {
                         setSelectedTaskId(taskId);
-                        setActiveView('kanban');
+                        setActiveView('tfactory');
                       }}
                     />
                   )}

@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next';
 import {
   Plus,
   Trash2,
-  Columns3,
   FlaskConical,
   Terminal,
   FolderOpen,
@@ -53,7 +52,7 @@ import { GitSetupModal } from './GitSetupModal';
 import { RateLimitIndicator } from './RateLimitIndicator';
 import type { Project, AutoBuildVersionInfo, GitStatus, ProjectEnvConfig } from '../shared/types';
 
-export type SidebarView = 'tfactory' | 'kanban' | 'terminals' | 'editor' | 'context' | 'github-issues' | 'github-prs' | 'changelog' | 'insights' | 'worktrees' | 'agent-tools' | 'skills' | 'cloud' | 'visual-reports';
+export type SidebarView = 'tfactory' | 'terminals' | 'editor' | 'context' | 'github-issues' | 'github-prs' | 'changelog' | 'insights' | 'worktrees' | 'agent-tools' | 'skills' | 'cloud' | 'visual-reports';
 
 interface SidebarProps {
   onSettingsClick: () => void;
@@ -74,7 +73,6 @@ interface NavItem {
 // general-agent IDE surfaces (editor/terminals/worktrees) follow.
 const baseNavItems: NavItem[] = [
   { id: 'tfactory', labelKey: 'navigation:items.tests', icon: FlaskConical },
-  { id: 'kanban', labelKey: 'navigation:items.kanban', icon: Columns3 },
   { id: 'editor', labelKey: 'navigation:items.editor', icon: FolderOpen },
   { id: 'insights', labelKey: 'navigation:items.chat', icon: Sparkles },
   { id: 'terminals', labelKey: 'navigation:items.terminals', icon: Terminal },
@@ -97,7 +95,7 @@ export function Sidebar({
   onSettingsClick,
   onNewTaskClick,
   onOpenOnboarding,
-  activeView = 'kanban',
+  activeView = 'tfactory',
   onViewChange
 }: SidebarProps) {
   const { t } = useTranslation(['navigation', 'dialogs', 'common']);

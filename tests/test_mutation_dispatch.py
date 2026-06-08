@@ -33,9 +33,14 @@ def test_supported(lang):
     assert md.is_mutation_supported(lang) is True
 
 
-@pytest.mark.parametrize("lang", ["java", "go", "csharp", "ruby"])
+@pytest.mark.parametrize("lang", ["go", "csharp", "ruby"])
 def test_unsupported(lang):
     assert md.is_mutation_supported(lang) is False
+
+
+def test_java_now_supported():
+    # Java mutation (PIT) wired in #237.
+    assert md.is_mutation_supported("java") is True
 
 
 def test_mutant_extension():
@@ -97,8 +102,8 @@ def test_js_alias_routes_to_ts_probe(monkeypatch, tmp_path):
 
 def test_unsupported_language_returns_none(tmp_path):
     out = md.run_language_mutation(
-        "java", tmp_path / "T.java", tmp_path, runner_fn=None,
-        mutant_path=tmp_path / "m.java",
+        "go", tmp_path / "t_test.go", tmp_path, runner_fn=None,
+        mutant_path=tmp_path / "m.go",
     )
     assert out is None
 

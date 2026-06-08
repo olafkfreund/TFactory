@@ -316,6 +316,73 @@ class DockerComposeTarget(BaseModel):
         return v
 
 
+class BuildStep(BaseModel):
+    """One build step run before the lanes, to produce the artifact under test.
+
+    ``docker`` builds an image from a Dockerfile (``image`` = the tag to apply);
+    ``command`` runs an arbitrary build command (e.g. ``npm run build``) in
+    ``cwd``. Build steps run in declared order; any non-zero exit fails the run
+    (#233). Paths are relative to the repo root.
+
+    Examples::
+
+        build:
+          - type: command
+            command: npm ci && npm run build
+          - type: docker
+            dockerfile: Dockerfile
+            context: .
+            image: myapp:test
+    """
+
+    type: Literal["docker", "command"]
+    # docker
+    dockerfile: str | None = None
+    context: str | None = "."
+    image: str | None = None  # tag to apply to the built image
+    # command
+    command: str | None = None
+    cwd: str | None = None
+
+    @model_validator(mode="after")
+    def _require_fields_for_type(self) -> BuildStep:
+        if self.type == "docker" and not self.image:
+            raise ValueError(
+                "build step type=docker requires 'image' (the tag to build)"
+            )
+        if self.type == "command" and not self.command:
+            raise ValueError("build step type=command requires 'command'")
+        return self
+
+
+class DockerRunTarget(BaseModel):
+    """A single prebuilt/just-built image run as the system-under-test (#233).
+
+    The complement to ``docker_compose`` for the common "one service image"
+    case: TFactory ``docker run``s the image, waits for it to become healthy,
+    injects ``TFACTORY_TARGET_URL``, runs the lane, then removes the container.
+    The ``image`` is typically produced by a ``build:`` step.
+
+    Examples::
+
+        - name: api
+          type: docker_run
+          image: myapp:test
+          ports: ["3000:3000"]
+          wait_for:
+            - url: http://localhost:3000/health
+              timeout_seconds: 60
+    """
+
+    type: Literal["docker_run"]
+    name: str
+    image: str
+    ports: list[str] = []  # "host:container" mappings
+    env: dict[str, str] = {}  # non-secret env only (secrets via test_credentials)
+    command: list[str] | None = None  # override the image CMD
+    wait_for: list[WaitFor] = []
+
+
 class FeatureFlagTarget(BaseModel):
     """A feature-flag / gate overlay.
 
@@ -482,6 +549,7 @@ TargetSpec = Annotated[
     HttpTarget
     | KubernetesTarget
     | DockerComposeTarget
+    | DockerRunTarget
     | FeatureFlagTarget
     | CloudProviderTarget
     | ConnectorTarget,
@@ -706,6 +774,9 @@ class TFactoryConfig(BaseModel):
     version: Literal[1]
     targets: list[TargetSpec]
     default_target: str | None = None
+    # Optional build steps run before the lanes to produce the artifact under
+    # test (e.g. docker build / npm run build) — see DockerRunTarget (#233).
+    build: list[BuildStep] = []
     test_data: TestData | None = None
     evidence_policy: EvidencePolicy | None = None
     # Optional path overrides (consumed by Planner / Gen-Functional)

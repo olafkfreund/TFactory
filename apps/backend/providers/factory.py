@@ -50,20 +50,23 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _AGENTIC_REGISTRY: dict[str, tuple[str, str]] = {
-    "claude":             ("providers.claude",                       "ClaudeProvider"),
-    "codex":              ("providers.codex_agentic",                "CodexAgenticProvider"),
-    "gemini":             ("providers.gemini_agentic",               "GeminiAgenticProvider"),
-    "ollama":             ("providers.ollama_agentic",               "OllamaAgenticProvider"),
-    "openai-compatible":  ("providers.openai_compatible_agentic",    "OpenAICompatibleAgenticProvider"),
-    "copilot":            ("providers.copilot_agentic",              "CopilotAgenticProvider"),
+    "claude": ("providers.claude", "ClaudeProvider"),
+    "codex": ("providers.codex_agentic", "CodexAgenticProvider"),
+    "gemini": ("providers.gemini_agentic", "GeminiAgenticProvider"),
+    "ollama": ("providers.ollama_agentic", "OllamaAgenticProvider"),
+    "openai-compatible": (
+        "providers.openai_compatible_agentic",
+        "OpenAICompatibleAgenticProvider",
+    ),
+    "copilot": ("providers.copilot_agentic", "CopilotAgenticProvider"),
 }
 
 _TEXT_REGISTRY: dict[str, tuple[str, str]] = {
-    "claude":             ("providers.claude",               "ClaudeProvider"),
-    "codex":              ("providers.codex",                "CodexCLIProvider"),
-    "gemini":             ("providers.gemini",               "GeminiCLIProvider"),
-    "ollama":             ("providers.ollama",               "OllamaProvider"),
-    "openai-compatible":  ("providers.openai_compatible",    "OpenAICompatibleProvider"),
+    "claude": ("providers.claude", "ClaudeProvider"),
+    "codex": ("providers.codex", "CodexCLIProvider"),
+    "gemini": ("providers.gemini", "GeminiCLIProvider"),
+    "ollama": ("providers.ollama", "OllamaProvider"),
+    "openai-compatible": ("providers.openai_compatible", "OpenAICompatibleProvider"),
 }
 
 # Phases that need agentic capability (file ops, code execution)
@@ -93,6 +96,9 @@ _PROVIDER_ALIASES: dict[str, str] = {
     "openai": "openai-compatible",
     "openai-api": "openai-compatible",
     "openai-compatible": "openai-compatible",
+    # GitHub Models inference endpoint (OpenAI-compatible; auth via GITHUB_TOKEN)
+    "github-models": "openai-compatible",
+    "github-models-inference": "openai-compatible",
     "studio": "openai-compatible",
     "oai": "openai-compatible",
     "lm-studio": "openai-compatible",
@@ -114,8 +120,7 @@ def _resolve_canonical(provider_name: str) -> str:
     if canonical is None:
         known = sorted(_PROVIDER_ALIASES.keys())
         raise ValueError(
-            f"Unknown LLM provider: {provider_name!r}. "
-            f"Supported values: {known}"
+            f"Unknown LLM provider: {provider_name!r}. Supported values: {known}"
         )
     return canonical
 
@@ -213,8 +218,7 @@ def get_qa_llm_provider(provider_name: str, **kwargs: Any) -> BaseLLMProvider:
     if canonical is None:
         known = sorted(_PROVIDER_ALIASES.keys())
         raise ValueError(
-            f"Unknown QA LLM provider: {provider_name!r}. "
-            f"Supported values: {known}"
+            f"Unknown QA LLM provider: {provider_name!r}. Supported values: {known}"
         )
 
     module_path, class_name = _TEXT_REGISTRY[canonical]

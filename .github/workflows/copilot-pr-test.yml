@@ -1,0 +1,83 @@
+name: Run TFactory suite on Copilot PR
+
+# Trigger: a PR opened or pushed to by the copilot-swe-agent bot.
+# Creates a TFactory task against the PR's head SHA so the full test
+# pipeline runs and posts a commit status.
+# Part of epic #277 (C4).
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+concurrency:
+  group: copilot-pr-test-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  statuses: write
+  pull-requests: read
+
+jobs:
+  tfactory-test:
+    # Only run for PRs authored by the Copilot cloud agent bot.
+    # GitHub API: user.type == "Bot" and user.login starts with "copilot-swe-agent".
+    if: |
+      github.event.pull_request.user.type == 'Bot' &&
+      startsWith(github.event.pull_request.user.login, 'copilot-swe-agent')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Set pending commit status
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api "/repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }}" \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -f state=pending \
+            -f description="TFactory suite starting…" \
+            -f context="tfactory/suite" \
+            -f target_url="${{ vars.TFACTORY_URL }}"
+
+      - name: Trigger TFactory suite
+        id: trigger
+        run: |
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X POST "${{ vars.TFACTORY_URL }}/api/tasks/from-pr" \
+            -H "Authorization: Bearer ${{ secrets.TFACTORY_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "pr_number": ${{ github.event.pull_request.number }},
+              "repo": "${{ github.repository }}",
+              "head_sha": "${{ github.event.pull_request.head.sha }}"
+            }')
+          HTTP_STATUS=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | head -n-1)
+          echo "HTTP status: $HTTP_STATUS"
+          if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
+            echo "task_created=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::TFactory API returned HTTP $HTTP_STATUS; suite not started"
+          else
+            TASK_ID=$(echo "$BODY" | jq -r '.task_id // .spec_id // "unknown"')
+            echo "task_id=$TASK_ID" >> "$GITHUB_OUTPUT"
+            echo "task_created=true" >> "$GITHUB_OUTPUT"
+            echo "TFactory task: $TASK_ID"
+          fi
+
+      - name: Update commit status (queued)
+        if: steps.trigger.outputs.task_created == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api "/repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }}" \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -f state=pending \
+            -f description="TFactory suite queued (task: ${{ steps.trigger.outputs.task_id }})" \
+            -f context="tfactory/suite" \
+            -f target_url="${{ vars.TFACTORY_URL }}"

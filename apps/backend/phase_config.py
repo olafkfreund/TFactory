@@ -48,7 +48,11 @@ EFFORT_LEVEL_MAP: dict[str, str] = {
 
 # Models that support adaptive thinking via effort level (env var)
 # These models get both max_thinking_tokens AND effort_level
-ADAPTIVE_THINKING_MODELS: set[str] = {"claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6"}
+ADAPTIVE_THINKING_MODELS: set[str] = {
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-sonnet-4-6",
+}
 
 # Spec runner phase-specific thinking levels
 # Heavy phases use max for deep analysis
@@ -331,7 +335,9 @@ def load_task_metadata(spec_dir: Path) -> TaskMetadataConfig | None:
         try:
             with open(requirements_path) as f:
                 requirements = json.load(f)
-                if "metadata" in requirements and isinstance(requirements["metadata"], dict):
+                if "metadata" in requirements and isinstance(
+                    requirements["metadata"], dict
+                ):
                     return requirements["metadata"]
         except (json.JSONDecodeError, OSError):
             pass
@@ -595,6 +601,12 @@ def infer_provider_from_model(model: str) -> str:
     if m.startswith("copilot:"):
         return "copilot"
 
+    # Explicit prefix: "github-models/<catalog-path>" (GitHub Models inference).
+    # Routes to the OpenAI-compatible provider with GITHUB_TOKEN auth and
+    # base_url=https://models.github.ai/inference.
+    if m.startswith("github-models/"):
+        return "openai-compatible"
+
     # Explicit prefix for OpenAI-compatible endpoints (LM Studio, vLLM,
     # OpenRouter, Together, Groq, LocalAI, ...).  Connection details come
     # from env vars OPENAI_COMPATIBLE_BASE_URL / OPENAI_COMPATIBLE_API_KEY
@@ -631,7 +643,10 @@ def strip_provider_prefix(model: str) -> str:
     """
     for prefix in ("openai-compatible:", "openai:", "ollama:", "studio:", "copilot:"):
         if model.lower().startswith(prefix):
-            return model[len(prefix):]
+            return model[len(prefix) :]
+    # github-models/ uses a forward-slash delimiter (catalog path convention)
+    if model.lower().startswith("github-models/"):
+        return model[len("github-models/") :]
     return model
 
 
@@ -641,6 +656,7 @@ _LLM_ENDPOINTS_DB_PATH = Path.home() / ".tfactory" / "data.db"
 def _load_openai_endpoint_by_label(label: str) -> dict | None:
     """Look up an llm_endpoint row by label.  Returns None if not found."""
     import sqlite3
+
     if not _LLM_ENDPOINTS_DB_PATH.exists():
         return None
     try:
@@ -661,6 +677,7 @@ def _load_openai_endpoint_by_label(label: str) -> dict | None:
 def _load_first_openai_endpoint() -> dict | None:
     """Return the oldest configured llm_endpoint — for single-endpoint users."""
     import sqlite3
+
     if not _LLM_ENDPOINTS_DB_PATH.exists():
         return None
     try:
@@ -704,6 +721,22 @@ def get_provider_extra_kwargs(provider_name: str, model: str) -> dict:
 
     stripped = strip_provider_prefix(model).strip()
 
+    # Special handling for GitHub Models (OpenAI-compat; auth via GITHUB_TOKEN)
+    if model.lower().startswith("github-models/"):
+        github_token = os.environ.get("GITHUB_TOKEN", "").strip() or None
+        if not github_token:
+            raise ValueError(
+                "GITHUB_TOKEN is required for github-models/ provider but is not set. "
+                "Export GITHUB_TOKEN before using GitHub Models."
+            )
+        stripped_model = model[len("github-models/") :]
+        return {
+            "model": stripped_model
+            or os.environ.get("GITHUB_MODELS_DEFAULT", "openai/gpt-4.1"),
+            "base_url": "https://models.github.ai/inference",
+            "api_key": github_token,
+        }
+
     # Special handling for Google AI Studio
     if model.lower().startswith("studio:"):
         base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
@@ -733,8 +766,9 @@ def get_provider_extra_kwargs(provider_name: str, model: str) -> dict:
     endpoint = _load_first_openai_endpoint()
     if endpoint:
         return {
-            "model": stripped if stripped and stripped != "default"
-                                else endpoint["default_model"],
+            "model": stripped
+            if stripped and stripped != "default"
+            else endpoint["default_model"],
             "base_url": endpoint["base_url"],
             "api_key": endpoint["api_key"],
         }
@@ -758,7 +792,11 @@ def get_provider_extra_kwargs(provider_name: str, model: str) -> dict:
 
 # Provider capabilities: which providers support agentic phases (file ops, code execution)
 PROVIDER_AGENTIC_SUPPORT = {
-    "claude", "codex", "gemini", "ollama", "openai-compatible",
+    "claude",
+    "codex",
+    "gemini",
+    "ollama",
+    "openai-compatible",
 }
 
 

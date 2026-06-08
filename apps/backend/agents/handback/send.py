@@ -23,6 +23,7 @@ dependency).
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,6 +35,22 @@ from .request import CorrectionRequest
 __all__ = ["SendResult", "send_correction", "default_sender"]
 
 Sender = Callable[[dict], dict]
+
+# Path AIFactory POSTs back to when its QA Fixer finishes — closes the loop
+# automatically (epic #182). Base URL is this TFactory web-server.
+_CALLBACK_PATH = "/api/handback/aifactory-complete"
+
+
+def _self_callback_url() -> str:
+    """This TFactory's inbound completion-webhook URL for AIFactory to call back.
+
+    Base from ``TFACTORY_SELF_API_URL`` (default the local web-server on :3103),
+    mirroring the snapshotter's ``TFACTORY_AIFACTORY_API_URL`` default pattern.
+    """
+    base = (os.environ.get("TFACTORY_SELF_API_URL") or "http://localhost:3103").rstrip(
+        "/"
+    )
+    return f"{base}{_CALLBACK_PATH}"
 
 
 @dataclass
@@ -53,6 +70,30 @@ class SendResult:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _correlation_key_for(spec_dir: Path) -> str | None:
+    """RFC-0001 correlation key for the hand-back (#249).
+
+    Precedence mirrors the Triager's completion-event key: RFC-0002 contract
+    ``correlation_key`` → ``issue_number`` from source.json → None (AIFactory
+    falls back to the echoed ``tfactory_task_id``). Best-effort; never raises.
+    """
+    try:
+        from agents.task_contract import read_task_contract
+
+        contract = read_task_contract(spec_dir) or {}
+        key = contract.get("correlation_key")
+        if isinstance(key, str) and key.strip():
+            return key.strip()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        source = json.loads((spec_dir / "context" / "source.json").read_text())
+        issue = source.get("issue_number") or source.get("correlation_id")
+        return str(int(issue)) if issue is not None else None
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return None
 
 
 def default_sender(payload: dict) -> dict:
@@ -75,6 +116,9 @@ def default_sender(payload: dict) -> dict:
             "fix_request_md": payload["fix_request_md"],
             "source": payload.get("source"),
             "confirm": bool(payload.get("confirm")),
+            # Echoed back by AIFactory to the callback URL to close the loop.
+            "tfactory_task_id": payload.get("tfactory_task_id"),
+            "tfactory_callback_url": payload.get("tfactory_callback_url"),
         }
     ).encode()
     req = urllib.request.Request(
@@ -114,11 +158,16 @@ def send_correction(
     md_path = findings / "handback_request.md"
     md_path.write_text(md)
 
+    # RFC-0001 shared key so AIFactory reconciles the hand-back with the same
+    # correlation as the completion event (#249).
+    correlation_key = _correlation_key_for(spec)
+
     json_doc = {
         **request.to_dict(),
         "generated_at": now or _now_iso(),
         "dry_run": dry_run,
         "fix_request_md_path": "findings/handback_request.md",
+        "correlation_key": correlation_key,
     }
     json_path = findings / "handback_request.json"
     json_path.write_text(json.dumps(json_doc, indent=2))
@@ -141,6 +190,12 @@ def send_correction(
         "fix_request_md": md,
         "source": request.source_kind,
         "confirm": True,
+        # Self-reference so AIFactory can call us back when the fix is done
+        # (epic #182 auto-loop). task_id IS the TFactory workspace key.
+        "tfactory_task_id": task_id,
+        "tfactory_callback_url": _self_callback_url(),
+        # RFC-0001 shared correlation key (#249) — reconcile on this end-to-end.
+        "correlation_key": correlation_key,
     }
     try:
         result.response = (sender_fn or default_sender)(payload)
