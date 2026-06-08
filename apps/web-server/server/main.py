@@ -117,6 +117,21 @@ async def lifespan(app: FastAPI):
             settings.LIVENESS_SWEEP_DEADLINE_SECONDS,
         )
 
+    # Completion-event outbox relay driver (#281): drain the durable outbox so
+    # RFC-0001 completion events reach CFactory at-least-once. OFF by default;
+    # opt in with APP_COMPLETION_RELAY_ENABLED.
+    app.state.completion_relay_task = None
+    if settings.COMPLETION_RELAY_ENABLED:
+        from .background.completion_relay import completion_relay_loop
+
+        app.state.completion_relay_task = asyncio.create_task(
+            completion_relay_loop(settings.COMPLETION_RELAY_INTERVAL_SECONDS)
+        )
+        logger.info(
+            "Completion relay enabled (every %ss)",
+            settings.COMPLETION_RELAY_INTERVAL_SECONDS,
+        )
+
     yield
 
     # Shutdown
@@ -125,6 +140,14 @@ async def lifespan(app: FastAPI):
         sweep_task.cancel()
         try:
             await sweep_task
+        except asyncio.CancelledError:
+            pass
+
+    relay_task = getattr(app.state, "completion_relay_task", None)
+    if relay_task is not None:
+        relay_task.cancel()
+        try:
+            await relay_task
         except asyncio.CancelledError:
             pass
 
