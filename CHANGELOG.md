@@ -45,6 +45,43 @@
   cleanly (#219); core pipeline agents decomposed per a Clean Code review;
   pre-existing ruff lint debt cleared. Backend suite now at **2803 tests**.
 
+## 0.7.0 — Reliable completion delivery, SSO fix, SaaS connectors (2026-06-08)
+
+> Hardens the Factory PARR spine's completion-event delivery (epic #284, TFactory
+> side complete), fixes the OIDC SSO login loop, and rounds out the SaaS connector
+> support.
+
+### ✨ New Features
+
+- **Completion outbox + retrying relay (#281).** At-least-once delivery of
+  RFC-0001 completion events — the Triager durably enqueues the envelope before
+  delivery; a relay drains it with exponential backoff + dead-lettering and
+  replays across restarts. Opt-in via `TFACTORY_COMPLETION_OUTBOX` /
+  `APP_COMPLETION_RELAY_ENABLED`.
+- **Additive envelope upgrade (#282).** Per-event `id` (idempotency key),
+  CloudEvents-core (`specversion`/`source`/`type`/`time`), and W3C `traceparent`
+  ride alongside the legacy fields. Published schema + CI validation.
+- **Typed handback contract + bounded retry (#283).** Versioned triage-report
+  contract (`contracts/handback-triage-contract.v1.schema.json`), assertion
+  pinning (manifest hash + additive-only diff-gate), and a terminal `needs_human`
+  completion event when the correction-cycle cap is reached.
+- **SaaS connector visual lane (#173).** Opt-in `visual: true` browser lane on
+  `ConnectorTarget`/`HttpTarget` for visual-inspection runs, with ServiceNow
+  browser guidance (`iframe#gsft_main` + stable selectors).
+- **SAP OData connector (#111).** `sap-odata.py.tmpl` api-lane check (OData v2/v4,
+  bearer/OAuth or Basic) — all four connector platforms now have library checks.
+
+### 🐛 Bug Fixes
+
+- **OIDC/Keycloak SSO login loop (#286).** Honor the `access_token` cookie in the
+  auth middleware + `get_current_user`, and make the SPA `checkAuth` cookie-aware
+  so SSO logins no longer bounce back to `/login`.
+- **binutils CVE-2026-6846 (#218).** Pinned `binutils>2.46-r1`; Trivy P0 gate green.
+
+### 🔧 Other
+
+- Login page auto-versions from `package.json` at build time.
+
 ## 0.6.0 — GitHub Agentic Integration (2026-06-08)
 
 > TFactory can now route tasks to **GitHub Models** (OpenAI-compatible inference
