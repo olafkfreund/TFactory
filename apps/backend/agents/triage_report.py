@@ -92,6 +92,10 @@ class TriageReport:
     # #37: test_id → flaky-history summary (runs / flip_rate / classification).
     # Empty when build_report was called without spec_dir or no history exists.
     flaky_by_test_id: dict = field(default_factory=dict)
+    # #241: the Backstage entity ref of the system-under-test these tests cover
+    # (``component:default/<name>``). None when no repo/component could be
+    # resolved. Surfaced in the report header + JSON for catalog linkage.
+    component_ref: str | None = None
 
     @property
     def committed_count(self) -> int:
@@ -155,6 +159,7 @@ def build_report(
     skipped: Sequence[TriageCandidate] = (),
     decisions: dict | None = None,
     spec_dir: Path | None = None,
+    component_ref: str | None = None,
 ) -> TriageReport:
     """Construct a TriageReport from the Triager's commit-5 working set.
 
@@ -195,6 +200,7 @@ def build_report(
         decisions=dict(decisions) if decisions else {},
         evidence_urls_by_test_id=evidence_urls_by_test_id,
         flaky_by_test_id=flaky_by_test_id,
+        component_ref=component_ref,
     )
 
 
@@ -279,6 +285,7 @@ def render_json(report: TriageReport) -> str:
         "triager_version": "task8-commit3",
         "mode": report.mode,
         "generated_at": report.generated_at,
+        "component_ref": report.component_ref,
         "summary": {
             "dedup_input_count": report.dedup_input_count,
             "committed_count": report.committed_count,
@@ -307,12 +314,17 @@ def _signal_summary_line(c: TriageCandidate) -> str:
         cov_str = f"{float(cov):+.2f}%"
     except (TypeError, ValueError):
         cov_str = "?"
-    return (
+    line = (
         f"coverage {cov_str}, "
         f"stability={summary.get('stability', '?')}, "
         f"mutation={summary.get('mutation', '?')}, "
         f"semantic={c.verdict.get('semantic_relevance', '?')}"
     )
+    # Numeric confidence (#238) when the Evaluator stamped it.
+    conf = summary.get("confidence")
+    if isinstance(conf, (int, float)) and not isinstance(conf, bool):
+        line += f", confidence={float(conf):.2f}"
+    return line
 
 
 def _intent_label(decisions: dict, test_id: str) -> str:
@@ -479,6 +491,10 @@ def render_markdown(report: TriageReport) -> str:
     parts = [
         "# Triage Report\n",
         f"_Mode: {report.mode} · Generated at {report.generated_at}_\n",
+    ]
+    if report.component_ref:
+        parts.append(f"_Covers: `{report.component_ref}`_\n")
+    parts += [
         _section("Summary", summary_table),
         _section("Committed", committed_body),
         _section("Flagged", flagged_body),

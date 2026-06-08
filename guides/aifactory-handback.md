@@ -28,6 +28,19 @@ AIFactory writes QA_FIX_REQUEST.md onto the original spec → runs the QA Fixer
 re-test (task_rerun) — bounded by /tfactory-fixloop → passed | stuck
 ```
 
+**Automatic (event-driven) variant — epic #182.** Instead of polling with
+`/tfactory-fixloop`, TFactory can *listen* for AIFactory's "fix done": when the
+QA Fixer finishes, AIFactory POSTs to TFactory's inbound webhook, which applies
+the bounded-loop guard and re-fires the pipeline itself — no human, no polling.
+
+```
+AIFactory QA Fixer done ─POST /api/handback/aifactory-complete─► TFactory web-server
+                          (X-TFactory-Handback-Token)               │
+                                                                    ▼
+                              decide_loop → retest | stuck | passed
+                              retest → task_rerun (full pipeline)
+```
+
 Nothing is assembled by hand: when the Triager goes terminal with failures, its
 completion hook ([#185](https://github.com/olafkfreund/TFactory/issues/185))
 builds the correction request and writes it to the workspace. **Preparing is
@@ -79,6 +92,39 @@ One bounded cycle per interval — hand back, wait for the QA Fixer, re-test —
 stopping at **passed**, or **stuck** (the correction-cycle cap, default 2, or
 the same tests still failing after a correction). The loop can never run away.
 
+### D. Fully automatic (event-driven webhook, epic #182)
+
+No polling and no operator step after the initial send: AIFactory calls TFactory
+back when its fix is done, and TFactory auto-re-tests. Enable on the TFactory
+**web-server**:
+
+```bash
+APP_INBOUND_HANDBACK_ENABLED=true
+APP_INBOUND_HANDBACK_SECRET=<shared-secret>   # AIFactory sends this in the header
+```
+
+TFactory's outbound hand-back already tells AIFactory where to call back — the
+`send` payload carries `tfactory_task_id` and `tfactory_callback_url`
+(`<TFACTORY_SELF_API_URL>/api/handback/aifactory-complete`).
+
+**Endpoint contract** — AIFactory's emitter POSTs:
+
+```
+POST /api/handback/aifactory-complete
+Header: X-TFactory-Handback-Token: <APP_INBOUND_HANDBACK_SECRET>
+Body:   { "tfactory_task_id": "<project_id>:<spec_id>", "status": "complete" }
+```
+
+Response `action` is one of:
+- `retest` — under the cap and making progress → pipeline re-fired (`task_rerun`).
+- `stuck` — cap reached or the same tests still fail → task flagged for a human.
+- `passed` — no failing tests remain.
+- `already_running` — a run is already in flight (idempotent; no double-fire).
+
+The endpoint is **off** unless `APP_INBOUND_HANDBACK_ENABLED=true`, and rejects
+any call without the matching secret (401). Same `TFACTORY_HANDBACK_MAX_CYCLES`
+bound as the skill — the loop can never run away.
+
 ## Environment flags
 
 | Flag | Default | Effect |
@@ -86,7 +132,10 @@ the same tests still failing after a correction). The loop can never run away.
 | `TFACTORY_HANDBACK_PREPARE` | **ON** | Triager hook builds + writes the artifact on a failing run. Set falsy to disable. |
 | `TFACTORY_HANDBACK_SEND` | **OFF** | the hook also POSTs to AIFactory (opt-in; mirrors `TFACTORY_TRIAGER_GIT_WRITE`). |
 | `TFACTORY_AIFACTORY_API_URL` | `http://localhost:3101` | AIFactory web-server base URL for the send. |
-| `TFACTORY_HANDBACK_MAX_CYCLES` | `2` | correction-cycle cap before `/tfactory-fixloop` declares `stuck`. |
+| `TFACTORY_HANDBACK_MAX_CYCLES` | `2` | correction-cycle cap before the loop declares `stuck`. |
+| `TFACTORY_SELF_API_URL` | `http://localhost:3103` | this TFactory's base URL, used to build the `tfactory_callback_url` AIFactory calls back. |
+| `APP_INBOUND_HANDBACK_ENABLED` | **OFF** | enable the inbound `/api/handback/aifactory-complete` webhook (web-server). |
+| `APP_INBOUND_HANDBACK_SECRET` | — | shared secret the webhook requires in `X-TFactory-Handback-Token`. |
 
 Per the **no-automatic-pushes** policy, the *send* is always either operator-
 confirmed (skill) or an explicit `--send`/opt-in flag. Preparing the artifact is

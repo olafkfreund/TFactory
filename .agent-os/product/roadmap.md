@@ -19,6 +19,16 @@ study) captured in epic [#33](https://github.com/olafkfreund/TFactory/issues/33)
 - [x] **Bidirectional AIFactory ↔ TFactory loop** — hand-back + bounded re-test (epic #182, v0.5.0)
 - [x] Flagship-grade portal redesign + Cloud Reports / Visual Reports pages
 
+**Epic #232 — trustworthy, deployment-aware testing (2026-06-06):**
+
+- [x] Numeric confidence score from the weighted 5-signal verdict (#238)
+- [x] Flaky-history wired into the verdict + scoring regression corpus (#239)
+- [x] Backstage TechInsights test-quality emitter (#240) + per-component badge (#241)
+- [x] Pre-lane health-check gate + deployed-URL resolution (#234)
+- [x] Security hardening — rate-limited/constant-time webhook, signed commits (#242)
+- [x] Testing-model + security-hardening guides (#243) — `guides/testing-model.md`
+- [ ] Build→deploy→test orchestration (#233) · Cypress/Vitest images (#236) · Java lane (#237)
+
 **v0.1.0-mvp → v0.2.0:**
 
 - [x] 4-agent pipeline end-to-end — Planner → Gen → Executor → Evaluator → Triager

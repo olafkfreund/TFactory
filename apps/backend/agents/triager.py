@@ -398,6 +398,14 @@ def _write_status_patch(spec_dir: Path, **fields: object) -> None:
         from agents.handback.trigger import maybe_handback
 
         maybe_handback(spec_dir)
+        # Best-effort per-component test-quality fact to Backstage (#240).
+        # No-op unless TFACTORY_BACKSTAGE_TECHINSIGHTS_URL is set; never raises.
+        try:
+            from agents.backstage_integration import maybe_emit_backstage
+
+            maybe_emit_backstage(spec_dir, status)
+        except Exception:  # noqa: BLE001 — emitting must never break the run
+            pass
 
 
 # ─── Mode resolution: dry-run vs real ─────────────────────────────────
@@ -490,9 +498,29 @@ def _correlation_issue_number(status: dict, source: dict) -> int | None:
     return None
 
 
+def _contract_correlation_key(spec_dir: Path) -> str | None:
+    """The explicit ``correlation_key`` from an RFC-0002 contract, if present (#249).
+
+    This is the cross-factory shared key PFactory minted; preferring it keeps
+    the completion event and the hand-back reconciled on one identifier.
+    """
+    try:
+        from agents.task_contract import read_task_contract
+
+        contract = read_task_contract(spec_dir) or {}
+        key = contract.get("correlation_key")
+        return key.strip() if isinstance(key, str) and key.strip() else None
+    except Exception:  # noqa: BLE001 — never break completion on a contract read
+        return None
+
+
 def _correlation_key(spec_dir: Path, status: dict, source: dict) -> str:
-    """The RFC-0001 shared correlation key: the GitHub issue number as a string,
-    with a synthetic ``tf-<spec_id>`` fallback so it is never null (RFC-0001 §2)."""
+    """The RFC-0001 shared correlation key. Precedence (#249):
+    RFC-0002 contract ``correlation_key`` → GitHub issue number → synthetic
+    ``tf-<spec_id>`` fallback so it is never null (RFC-0001 §2)."""
+    contract_key = _contract_correlation_key(spec_dir)
+    if contract_key:
+        return contract_key
     issue = _correlation_issue_number(status, source)
     if issue is not None:
         return str(issue)
@@ -729,6 +757,16 @@ def _render_and_write_report(
     """Build the report and write triage_report.{json,md}; return (report, report_md)."""
     from agents.triage_report import build_report, render_json, render_markdown
 
+    # Resolve the SUT's Backstage entity ref for catalog linkage (#241).
+    # Best-effort — a resolution miss just omits the line.
+    component_ref = None
+    try:
+        from agents.backstage_integration import _component_ref
+
+        component_ref = _component_ref(_load_source_meta(spec_dir))
+    except Exception:  # noqa: BLE001
+        component_ref = None
+
     report = build_report(
         mode=mode,
         generated_at=_now_iso(),
@@ -740,6 +778,7 @@ def _render_and_write_report(
         dedup_input_count=len(keepers),
         decisions=decisions,
         spec_dir=spec_dir,
+        component_ref=component_ref,
     )
     findings_dir = spec_dir / "findings"
     findings_dir.mkdir(parents=True, exist_ok=True)

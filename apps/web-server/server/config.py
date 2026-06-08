@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     # SSL configuration
     SSL_ENABLED: bool = False
     SSL_CERTFILE: str = ""  # Path to SSL certificate
-    SSL_KEYFILE: str = ""   # Path to SSL private key
+    SSL_KEYFILE: str = ""  # Path to SSL private key
 
     # Authentication
     API_TOKEN: str = ""  # Will generate default if not set
@@ -85,9 +85,23 @@ class Settings(BaseSettings):
     LIVENESS_SWEEP_INTERVAL_SECONDS: int = 300  # how often to sweep
     LIVENESS_SWEEP_DEADLINE_SECONDS: float = 600  # idle budget before stalled
 
+    # Inbound AIFactory completion webhook (epic #182) — closes the automatic
+    # fail→handback→fix→re-test loop. AIFactory POSTs to
+    # /api/handback/aifactory-complete when its QA Fixer finishes; we re-fire
+    # the pipeline (bounded by TFACTORY_HANDBACK_MAX_CYCLES). OFF by default;
+    # the endpoint validates a shared secret in the X-TFactory-Handback-Token
+    # header against INBOUND_HANDBACK_SECRET.
+    INBOUND_HANDBACK_ENABLED: bool = False
+    INBOUND_HANDBACK_SECRET: str = ""
+
     class Config:
         env_file = ".env"
         env_prefix = "APP_"
+        # Ignore unknown keys in .env / the environment. The shared .env also
+        # carries backend-only vars (e.g. TFACTORY_COMPLETION_WEBHOOK) that the
+        # agents read directly via os.environ; without this, pydantic-settings
+        # raises `extra_forbidden` and the whole web-server fails to start.
+        extra = "ignore"
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -103,18 +117,14 @@ class Settings(BaseSettings):
         # Set default paths
         if not self.BACKEND_PATH:
             # Assume we're in apps/web-server, backend is at ../backend
-            self.BACKEND_PATH = str(
-                Path(__file__).parent.parent.parent / "backend"
-            )
+            self.BACKEND_PATH = str(Path(__file__).parent.parent.parent / "backend")
 
         if not self.PROJECTS_DATA_DIR:
             self.PROJECTS_DATA_DIR = str(get_data_dir())
 
         # Set default database URL
         if not self.DATABASE_URL:
-            self.DATABASE_URL = (
-                f"sqlite+aiosqlite:///{self.PROJECTS_DATA_DIR}/data.db"
-            )
+            self.DATABASE_URL = f"sqlite+aiosqlite:///{self.PROJECTS_DATA_DIR}/data.db"
 
         # Set up SSL paths if enabled
         if self.SSL_ENABLED:
@@ -135,14 +145,14 @@ class Settings(BaseSettings):
         token_file.write_text(token)
         token_file.chmod(0o600)  # Owner read/write only
 
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print("TFactory - First Run Setup")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
         print(f"Generated API token: {token}")
         print(f"Token saved to: {token_file}")
         print("\nUse this token to authenticate API requests:")
         print(f"  Authorization: Bearer {token}")
-        print(f"{'='*60}\n")
+        print(f"{'=' * 60}\n")
 
         return token
 
@@ -188,34 +198,46 @@ class Settings(BaseSettings):
 
         # Generate self-signed certificate if not exists
         if not cert_file.exists() or not key_file.exists():
-            print(f"\n{'='*60}")
+            print(f"\n{'=' * 60}")
             print("TFactory - SSL Setup")
-            print(f"{'='*60}")
+            print(f"{'=' * 60}")
             print("Generating self-signed SSL certificate...")
 
             try:
                 subprocess.run(
                     [
-                        "openssl", "req", "-x509", "-newkey", "rsa:4096",
-                        "-keyout", str(key_file),
-                        "-out", str(cert_file),
-                        "-days", "365",
+                        "openssl",
+                        "req",
+                        "-x509",
+                        "-newkey",
+                        "rsa:4096",
+                        "-keyout",
+                        str(key_file),
+                        "-out",
+                        str(cert_file),
+                        "-days",
+                        "365",
                         "-nodes",
-                        "-subj", "/CN=localhost/O=TFactory/C=US"
+                        "-subj",
+                        "/CN=localhost/O=TFactory/C=US",
                     ],
                     check=True,
-                    capture_output=True
+                    capture_output=True,
                 )
                 key_file.chmod(0o600)
                 print(f"Certificate generated: {cert_file}")
                 print(f"Private key generated: {key_file}")
                 print("\nNOTE: This is a self-signed certificate.")
                 print("Your browser will show a security warning.")
-                print(f"{'='*60}\n")
+                print(f"{'=' * 60}\n")
             except subprocess.CalledProcessError as e:
-                raise RuntimeError(f"Failed to generate SSL certificate: {e.stderr.decode()}")
+                raise RuntimeError(
+                    f"Failed to generate SSL certificate: {e.stderr.decode()}"
+                )
             except FileNotFoundError:
-                raise RuntimeError("OpenSSL not found. Install OpenSSL to enable HTTPS.")
+                raise RuntimeError(
+                    "OpenSSL not found. Install OpenSSL to enable HTTPS."
+                )
 
         # Set paths to generated certificates
         self.SSL_CERTFILE = str(cert_file)

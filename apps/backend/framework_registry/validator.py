@@ -36,7 +36,7 @@ from .descriptor import FrameworkDescriptor, RuntimeSpec
 # Public exception
 # ---------------------------------------------------------------------------
 
-_VALID_COVERAGE_STRATEGIES = frozenset({"lcov", "cobertura", "skip"})
+_VALID_COVERAGE_STRATEGIES = frozenset({"lcov", "cobertura", "jacoco", "skip"})
 
 _REQUIRED_FIELDS = (
     "name",

@@ -45,6 +45,32 @@
   cleanly (#219); core pipeline agents decomposed per a Clean Code review;
   pre-existing ruff lint debt cleared. Backend suite now at **2803 tests**.
 
+## 0.6.0 — GitHub Agentic Integration (2026-06-08)
+
+> TFactory can now route tasks to **GitHub Models** (OpenAI-compatible inference
+> via `GITHUB_TOKEN`) and dispatch test-writing to the **GitHub Copilot cloud
+> agent** (`copilot-swe-agent[bot]`). A new **MCP HTTP endpoint** (`POST /mcp`)
+> exposes six TFactory tools so Copilot can read test plans, AC maps, coverage,
+> and results, and report back. Three **GitHub Actions workflows** wire the
+> `tfactory:run` label trigger, Copilot PR auto-test, and PR coverage comments.
+> Epic #277 — closes #278, #279, #280.
+
+- **GitHub Models provider routing (C1).** `github-models/<catalog-path>` model
+  strings route to the OpenAI-compatible provider with
+  `https://models.github.ai/inference` as base URL and `GITHUB_TOKEN` for auth.
+  Factory alias `github-models` added to provider registry.
+- **Copilot cloud agent dispatch (C2).** `agents/copilot_dispatch.py` assigns
+  `copilot-swe-agent[bot]` to a GitHub issue with a structured test-suite prompt,
+  polls for a Copilot-authored PR (59-minute timeout), and persists
+  `copilot_dispatch` metadata to `test_task_metadata.json`.
+- **MCP Copilot HTTP endpoint (C3).** `POST /mcp` (JSON-RPC 2.0) exposes
+  `tfactory_get_test_plan`, `tfactory_get_ac_map`, `tfactory_get_coverage`,
+  `tfactory_get_results`, `tfactory_get_spec`, and `tfactory_report_result`.
+  Bearer auth via `COPILOT_MCP_TFACTORY_TOKEN`.
+- **GitHub Actions workflows (C4).** `tfactory-dispatch.yml` fires on
+  `tfactory:run` issue label; `copilot-pr-test.yml` triggers TFactory on
+  Copilot-authored PRs; `pr-review-tests.yml` posts coverage comments on all PRs.
+
 ## 0.5.0 — Bidirectional AIFactory ↔ TFactory integration (2026-06-03)
 
 > Close the loop with AIFactory: when TFactory's tests find problems, hand a

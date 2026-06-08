@@ -674,58 +674,23 @@ def create_task_control_tools() -> list:
         if not located:
             return _format_error(f"unknown task_id: {task_id!r}")
         project_id, spec_id = located
-        status = _load_status(project_id, spec_id)
-        if status is None:
-            return _format_error(f"task {task_id!r} has no status.json")
-        # Bump rerun marker + reset the lane, then re-fire the pipeline.
-        rerun_count = int(status.get("rerun_count", 0)) + 1
-        status["rerun_count"] = rerun_count
-        status["lane_progress"][lane] = "pending"
-        status["status"] = "pending"
-        status["phase"] = "created"
-        status["updated_at"] = _now_iso()
-        _status_file(project_id, spec_id).write_text(json.dumps(status, indent=2))
-
-        # Re-fire the Planner against the existing snapshot. schedule_planner
-        # is gated by TFACTORY_AUTO_PLAN (off in tests + the manual CLI path)
-        # and the success path of each stage auto-chains the next agent.
-        planner_scheduled = False
+        # Reset the lane + status and re-fire the pipeline via the shared core
+        # (also used by the inbound AIFactory completion webhook, epic #182).
         try:
-            from agents.planner import schedule_planner
+            from agents.handback.rerun import rerun_pipeline
 
-            project_entry = next(
-                (
-                    p
-                    for p in _load_projects().get("projects", [])
-                    if p.get("id") == project_id
-                ),
-                {},
-            )
-            project_root = project_entry.get("root_path", ".")
-            task = schedule_planner(
-                spec_dir=_spec_dir(project_id, spec_id),
-                project_dir=Path(project_root).expanduser(),
-                mode="initial",
-            )
-            planner_scheduled = task is not None
-        except ImportError:
-            pass  # planner not importable (minimal venv) — status stays pending
+            result = rerun_pipeline(project_id, spec_id, lane=lane)
+        except FileNotFoundError:
+            return _format_error(f"task {task_id!r} has no status.json")
 
-        return _format_json(
-            {
-                "task_id": task_id,
-                "lane": lane,
-                "rerun_count": rerun_count,
-                "status": "pending",
-                "planner_scheduled": planner_scheduled,
-                "note": (
-                    "Rerun recorded; Planner re-fired (auto-chains the pipeline)."
-                    if planner_scheduled
-                    else "Rerun recorded. Planner not auto-fired "
-                    "(TFACTORY_AUTO_PLAN=0 or planner unavailable)."
-                ),
-            }
+        result["task_id"] = task_id  # preserve the MCP tool's bare-id contract
+        result["note"] = (
+            "Rerun recorded; Planner re-fired (auto-chains the pipeline)."
+            if result["planner_scheduled"]
+            else "Rerun recorded. Planner not auto-fired "
+            "(TFACTORY_AUTO_PLAN=0 or planner unavailable)."
         )
+        return _format_json(result)
 
     tools.append(task_rerun)
 

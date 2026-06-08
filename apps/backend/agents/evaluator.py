@@ -801,6 +801,73 @@ def _kube_runtime_for(target: dict | None, *, runtime_cls=None):
     return cls(t, kubeconfig=os.environ.get("KUBECONFIG"))
 
 
+def _docker_run_runtime_for(target: dict | None, *, runtime_cls=None):
+    """A ``DockerRunRuntime`` for a ``type: docker_run`` target, else None (#233).
+
+    Runs the (typically just-built) image for the lane lifetime, health-polls
+    its ``wait_for`` URLs, and exposes ``target_url``. Caller uses it as a
+    context manager so the container is removed on success *and* failure.
+    """
+    if not target or target.get("type") != "docker_run":
+        return None
+    from types import SimpleNamespace
+
+    from tools.runners.docker_run_runtime import DockerRunRuntime
+
+    cls = runtime_cls or DockerRunRuntime
+    wait_for = [
+        SimpleNamespace(
+            url=wf.get("url"),
+            expect_status=wf.get("expect_status", 200),
+            timeout_seconds=wf.get("timeout_seconds", 60),
+        )
+        for wf in (target.get("wait_for") or [])
+    ]
+    t = SimpleNamespace(
+        name=target.get("name"),
+        image=target.get("image"),
+        ports=target.get("ports") or [],
+        env=target.get("env") or {},
+        command=target.get("command"),
+        wait_for=wait_for,
+    )
+    return cls(t)
+
+
+def _maybe_run_build(spec_dir: Path, project_dir: Path) -> None:
+    """Run `.tfactory.yml` ``build:`` steps before the lanes (#233).
+
+    Reads the snapshotted config (``context/tfactory_yml.json``); no-op when no
+    build steps are declared. Best-effort: a build failure is logged + recorded
+    in status.json (``build_failed``) but never raises — a downstream docker_run
+    lane will then surface the missing image as a clear health failure (#234).
+    """
+    ctx = spec_dir / "context" / "tfactory_yml.json"
+    if not ctx.exists():
+        return
+    try:
+        cfg = json.loads(ctx.read_text())
+    except (json.JSONDecodeError, OSError):
+        return
+    raw_steps = cfg.get("build") or []
+    if not raw_steps:
+        return
+    try:
+        from types import SimpleNamespace
+
+        from tools.runners.build_runner import run_build_steps
+
+        steps = [SimpleNamespace(**s) for s in raw_steps]
+        result = run_build_steps(steps, repo_root=Path(project_dir))
+        if not result.ok:
+            _eval_log.error("build steps failed: %s", result.error)
+            _write_status_patch(
+                spec_dir, build_failed=True, build_error=result.error[:200]
+            )
+    except Exception as exc:  # noqa: BLE001 — build wiring must never crash the run
+        _eval_log.warning("build step execution skipped: %s", exc)
+
+
 def _test_credential_specs(spec_dir: Path, subtask: dict | None) -> list:
     """TargetCredentialSpec list for a subtask's ``ref``-auth target (#107).
 
@@ -849,6 +916,32 @@ def _stage_browser_test(spec_dir: Path, project_dir: Path, subtask: dict) -> Non
         _sh.copy2(src, dst)
 
 
+def _stage_visual_baselines(
+    spec_dir: Path | None, subtask: dict | None, dest: Path
+) -> int:
+    """Stage a target's accepted visual baselines into a browser run scratch (#109).
+
+    Copies ``<spec_dir>/findings/visual_baselines/<target>/`` into ``dest`` so a
+    generated ``toHaveScreenshot`` assertion compares against the portal-accepted
+    baseline (with ``snapshotPathTemplate`` pointing there) instead of treating
+    every capture as new. Returns the number of images staged (0 when none).
+    Best-effort — never raises into the run.
+    """
+    if spec_dir is None:
+        return 0
+    try:
+        from agents.evidence.visual_baseline import stage_baselines
+
+        target_name = (subtask or {}).get("target_name") or "default"
+        n = stage_baselines(spec_dir, target_name, dest)
+        if n:
+            _eval_log.info("staged %d visual baseline(s) for target %s", n, target_name)
+        return n
+    except Exception as exc:  # noqa: BLE001 — baseline staging must not break the run
+        _eval_log.warning("visual baseline staging skipped: %s", exc)
+        return 0
+
+
 def _resolve_browser_runner_fn(
     target_url: str | None,
     image: str = _PLAYWRIGHT_IMAGE,
@@ -883,6 +976,9 @@ def _resolve_browser_runner_fn(
         scratch = Path(_tmp.mkdtemp(prefix="tf-pw-"))
         try:
             scratch.chmod(0o777)
+            # Stage accepted visual baselines into the run so a generated
+            # toHaveScreenshot assertion diffs against them (#109).
+            _stage_visual_baselines(spec_dir, subtask, scratch)
             runner = DockerRunner(image=image, network="host", read_only_rootfs=False)
             # DockerRunner mounts the checkout read-only at /work and a
             # writable scratch at /scratch (the workdir). Stage the project
@@ -1293,11 +1389,51 @@ def _build_kube_or_static_bundle(
     static target URL. ``make_runner(url)`` builds the runner_fn and
     ``make_bundle(runner_fn)`` builds the EvaluatorSignals bundle.
     """
-    rt = _kube_runtime_for(_resolve_target(spec_dir, st))
+    target = _resolve_target(spec_dir, st)
+    rt = _kube_runtime_for(target)
     if rt is not None:
         with rt as runtime:
             return make_bundle(make_runner(runtime.target_url))
-    return make_bundle(make_runner(_browser_target_url(spec_dir, st)))
+    # docker_run target (#233): run the (built) image for the lane lifetime,
+    # health-poll, then tear down — like the kube path but for a single image.
+    drt = _docker_run_runtime_for(target)
+    if drt is not None:
+        with drt as runtime:
+            runtime.wait_for_healthy()
+            return make_bundle(make_runner(runtime.target_url))
+    target_url = _browser_target_url(spec_dir, st)
+    _gate_target_health(spec_dir, st, target, target_url)
+    return make_bundle(make_runner(target_url))
+
+
+def _gate_target_health(spec_dir, subtask, target, target_url) -> None:
+    """Probe a configured ``health_check`` before a static-target lane (#234).
+
+    Best-effort: surfaces a clear "target unhealthy" warning + a status marker
+    so a down deployment reads as a target problem, not an opaque test timeout.
+    No-op when the target has no health_check. Never raises.
+    """
+    if not isinstance(target, dict) or not target.get("health_check") or not target_url:
+        return
+    try:
+        from agents.health_gate import gate
+
+        result = gate(target_url, target.get("health_check"))
+        if not result.ok:
+            _eval_log.warning(
+                "target health check FAILED for %s (%s): %s — lane will likely "
+                "fail; this is a target problem, not the test.",
+                subtask.get("id"),
+                result.url,
+                result.detail,
+            )
+            _write_status_patch(
+                spec_dir,
+                target_unhealthy=True,
+                target_health_detail=result.detail[:200],
+            )
+    except Exception as exc:  # noqa: BLE001 — gating must never break the run
+        _eval_log.warning("health gate skipped: %s", exc)
 
 
 def _build_all_bundles(spec_dir, project_dir, unit, browser, api, jest) -> list:
@@ -1392,6 +1528,38 @@ async def _run_evaluator_session(spec_dir, project_dir, bundles, verbose) -> boo
         )
         return False
 
+    # Stamp deterministic confidence + flaky-history onto each verdict + a
+    # run-level rollup (#238, #239). Best-effort: a scoring hiccup must never
+    # fail an otherwise valid evaluation — the categorical verdicts already
+    # passed validation. The flaky map (cross-run flip-rate) comes from the
+    # signal bundles and drives both the confidence penalty and the
+    # accept→flag override inside enrich_verdicts.
+    try:
+        from agents.confidence import enrich_verdicts
+
+        flaky_by_test_id = {}
+        for b in bundles:
+            fh = getattr(b, "flaky_history", None)
+            if fh is not None:
+                try:
+                    flaky_by_test_id[b.test_id] = fh.as_dict()
+                except Exception:  # noqa: BLE001 — skip a malformed entry
+                    pass
+        doc = json.loads(verdicts_path.read_text())
+        enrich_verdicts(doc, flaky_by_test_id)
+        # Honor the RFC-0002 contract execution scope (#247): record declared
+        # coverage_target / mutation_scope / security_scope into the run output.
+        try:
+            from agents.contract_scope import apply_execution_scope
+            from agents.task_contract import read_tfactory_profile
+
+            apply_execution_scope(doc, read_tfactory_profile(spec_dir))
+        except Exception as exc:  # noqa: BLE001 — scope is additive metadata
+            _eval_log.warning("contract scope skipped: %s", exc)
+        verdicts_path.write_text(json.dumps(doc, indent=2))
+    except Exception as exc:  # noqa: BLE001 — confidence is additive metadata
+        _eval_log.warning("confidence/flaky enrichment skipped: %s", exc)
+
     _write_status_patch(
         spec_dir,
         status="evaluated",
@@ -1455,6 +1623,10 @@ async def run_evaluator(
         if not completed:
             _write_empty_verdicts(spec_dir, mode)
             return True
+
+        # 2b. Build the artifact under test if the config declares build steps
+        #     (#233) — e.g. docker build an image a docker_run target then runs.
+        _maybe_run_build(spec_dir, project_dir)
 
         # 3. Per-test signal computation (real primitives; runner_fn seam
         #    mocked in tests so docker isn't required).

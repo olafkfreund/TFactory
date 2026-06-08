@@ -53,22 +53,34 @@ _LANE_KEYS = ("unit", "browser", "api", "integration", "mutation")
 _REGISTRY: dict[str, dict[str, ToolSpec | None]] = {
     # ── Python (v0.1 anchor, v0.2 = pytest still primary) ───────────────
     "python": {
-        "unit":        ToolSpec("pytest", "pytest + pytest-cov", True, "1"),
-        "browser":     ToolSpec("playwright-python", "Playwright Python bindings", False, "2"),
-        "api":         ToolSpec("httpx+pytest", "httpx + pytest fixtures", False, "2"),
-        "integration": ToolSpec("testcontainers-python", "testcontainers-python", False, "2"),
-        "mutation":    ToolSpec("mutmut", "mutmut (default) / cosmic-ray", False, "2"),
+        "unit": ToolSpec("pytest", "pytest + pytest-cov", True, "1"),
+        "browser": ToolSpec(
+            "playwright-python", "Playwright Python bindings", False, "2"
+        ),
+        "api": ToolSpec("httpx+pytest", "httpx + pytest fixtures", False, "2"),
+        "integration": ToolSpec(
+            "testcontainers-python", "testcontainers-python", False, "2"
+        ),
+        "mutation": ToolSpec("mutmut", "mutmut (default) / cosmic-ray", False, "2"),
     },
     # ── TypeScript / Node (v0.2 ramp — Jest unit + Playwright browser) ──
     "typescript": {
-        "unit":        ToolSpec("jest", "jest + nyc (preferred) / vitest", True, "2"),
-        "browser":     ToolSpec("playwright", "@playwright/test (primary)", True, "2"),
-        "api":         ToolSpec("supertest", "supertest + jest", False, "3"),
-        "integration": ToolSpec("testcontainers-node", "testcontainers-node", False, "3"),
-        "mutation":    ToolSpec("stryker", "stryker-mutator/core", False, "3"),
+        "unit": ToolSpec("jest", "jest + nyc (preferred) / vitest", True, "2"),
+        "browser": ToolSpec("playwright", "@playwright/test (primary)", True, "2"),
+        "api": ToolSpec("supertest", "supertest + jest", False, "3"),
+        "integration": ToolSpec(
+            "testcontainers-node", "testcontainers-node", False, "3"
+        ),
+        "mutation": ToolSpec("stryker", "stryker-mutator/core", False, "3"),
     },
-    # ── Java (v0.3+) ────────────────────────────────────────────────────
-    "java": dict.fromkeys(_LANE_KEYS),
+    # ── Java (first compiled-language wedge, #237) ──────────────────────
+    "java": {
+        "unit": ToolSpec("junit", "JUnit 5 (Jupiter) + JaCoCo", False, "3"),
+        "browser": None,
+        "api": ToolSpec("junit", "JUnit 5 + RestAssured/MockMvc", False, "3"),
+        "integration": None,
+        "mutation": ToolSpec("pit", "PIT (pitest) mutation testing", False, "3"),
+    },
     # ── C# / .NET (v0.3+) ───────────────────────────────────────────────
     "csharp": dict.fromkeys(_LANE_KEYS),
     # ── Go (v0.4+) ──────────────────────────────────────────────────────

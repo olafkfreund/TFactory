@@ -37,6 +37,9 @@ into the lanes (#107), and visual-regression baselines in the portal (#109).
 - **Roadmap (3 horizons + shipped):** `.agent-os/product/roadmap.md`
 - **Decision log (highest override priority):** `.agent-os/product/decisions.md`
 - **GTM & pricing model:** `.agent-os/product/pricing.md`
+- **Testing model (what/how/scoring/verification):** `guides/testing-model.md`
+- **Security hardening checklist:** `guides/security-hardening.md`
+- **Task Contract v2 ingest (RFC-0002):** `guides/task-contract-v2.md`
 
 Active work is tracked under epic [#33](https://github.com/olafkfreund/TFactory/issues/33).
 
@@ -60,8 +63,9 @@ Pipeline supporting primitives (also under `agents/`):
   - `coverage_delta.py` + `stability_runner.py` + `mutate_probe.py`
     + `lint_promotion.py` — Evaluator's four pre-computed signals
   - `mutation_dispatch.py` — per-language mutation routing (#41): Python
-    (`mutate_probe`) vs TypeScript (`lang_typescript/mutate_probe`, Stryker);
-    the Evaluator dispatches by `subtask.language` (Java/PIT = future)
+    (`mutate_probe`) · TypeScript (`lang_typescript/mutate_probe`, Stryker) ·
+    Java (`lang_java/mutate_probe`, PIT — wedge #237); the Evaluator dispatches
+    by `subtask.language` (C#/.NET = future)
   - `flaky_history.py` — cross-run flip-rate history (#37): persists each
     test's pass/fail across runs (`<workspace>/<project>/test_history.json`)
     so chronically flaky tests are flagged even when one run's 3× stability
@@ -82,6 +86,8 @@ Default ON in production; tests pin OFF.
 per the "no automatic pushes" policy. Operators opt in via:
   - `TFACTORY_TRIAGER_GIT_WRITE=1`
   - `TFACTORY_TRIAGER_PR_COMMENT=1`
+  - `TFACTORY_TRIAGER_GIT_SIGN=1` — GPG-sign the commit (#242; needs
+    `user.signingkey` configured). See `guides/security-hardening.md`.
 
 **Triager completion callback (#85 / #198)** — when the task reaches a terminal
 status (`triaged` / `triaged_empty` / `triager_failed`), an opt-in callback
@@ -90,11 +96,31 @@ best-effort (a failing target never breaks the pipeline). Both carry the v1
 **normalized completion-event envelope** (`schema_version`, `event`, `service`,
 `correlation_id` = the GitHub issue #, `outcome`, + the legacy flat fields) —
 the cross-service shape from the Factory PARR-spine epic; see
-`docs/completion-event-envelope.md`:
+`docs/completion-event-envelope.md`. The shared `correlation_key` precedence
+(#249) is: RFC-0002 contract `correlation_key` → GitHub issue # → synthetic
+`tf-<spec_id>`; the hand-back artifact + payload carry the same key so AIFactory
+reconciles on it:
   - `TFACTORY_COMPLETION_WEBHOOK=<url>` — POSTs the envelope as JSON (timeout
     `TFACTORY_COMPLETION_WEBHOOK_TIMEOUT`, default 5s)
   - `TFACTORY_COMPLETION_SENTINEL=1` — writes `findings/COMPLETED.json` a
     same-host watcher can stat instead of polling
+
+**Backstage test-quality scorecard (#240, epic #232)** — on terminal status the
+Triager best-effort emits a per-component fact (accept-rate, the #238/#239
+confidence rollup, flaky count) to Backstage TechInsights, so a Scorecard can
+grade the *system under test*. The fact's confidence comes from the numeric
+score (#238) which is flaky-penalised (#239). Opt-in / no-op when unset; never
+breaks a run. Env (`agents/backstage_integration.py`):
+  - `TFACTORY_BACKSTAGE_TECHINSIGHTS_URL=<url>` — POST target (master switch)
+  - `TFACTORY_BACKSTAGE_TOKEN=<token>` — optional bearer auth
+  - `TFACTORY_BACKSTAGE_COMPONENT=<ref|name>` — override the SUT entity ref
+    (default derived from the snapshotted repo slug)
+
+  The triage report header also carries the SUT entity ref (`_Covers:
+  component:default/<name>_`) for catalog linkage, and a **public** badge SVG is
+  served at `GET /api/badges/<project_id>/<spec_id>/test-acceptance.svg`
+  (accept-rate coloured by commit-readiness; no token — aggregate counts only).
+  Embed in a README: `![tests](https://<host>/api/badges/<proj>/<spec>/test-acceptance.svg)`.
 
 **Bidirectional AIFactory ↔ TFactory bridge (epic #182)** — the reverse of the
 handover: when a run finishes with failing tests, TFactory packages a
@@ -110,8 +136,19 @@ side-effects honor the no-automatic-pushes policy. Env (all opt-in / tunable):
   - `TFACTORY_AIFACTORY_API_URL` (default `http://localhost:3101`) — AIFactory web-server
   - `TFACTORY_HANDBACK_MAX_CYCLES` (default 2) — correction-cycle cap → `stuck`
 
-  The AIFactory-side receiver lives in that repo (issue `AIFactory#317`). See
-  `guides/aifactory-handback.md`.
+  **Automatic event-driven loop (no `/loop` polling)** — the web-server exposes an
+  inbound webhook `POST /api/handback/aifactory-complete` that AIFactory calls when
+  its QA Fixer finishes; TFactory correlates it to the workspace, applies the same
+  bounded-loop guard (`agents/handback/loop.py`), and re-fires the pipeline via the
+  shared `agents/handback/rerun.py::rerun_pipeline` (also used by the `task_rerun`
+  MCP tool). The outbound send already carries `tfactory_task_id` +
+  `tfactory_callback_url` so AIFactory knows where to call back. Env:
+  - `APP_INBOUND_HANDBACK_ENABLED` (default OFF) — enable the inbound webhook
+  - `APP_INBOUND_HANDBACK_SECRET` — shared secret required in `X-TFactory-Handback-Token`
+  - `TFACTORY_SELF_API_URL` (default `http://localhost:3103`) — base for the callback URL
+
+  The AIFactory-side receiver + the emitter that calls this webhook live in that
+  repo (issue `AIFactory#317`). See `guides/aifactory-handback.md`.
 
 **LLM provider abstraction:** TFactory uses the Claude Agent SDK
 (`claude-agent-sdk`) as its primary provider, but also supports Codex CLI,
