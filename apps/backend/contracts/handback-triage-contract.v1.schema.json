@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://factory.dev/schemas/tfactory/handback-triage-contract-1.0.json",
+  "title": "TFactory handback triage contract (v1.0)",
+  "description": "The typed, versioned triage report TFactory POSTs to AIFactory on a correction hand-back (#283, epic #284). Carries the failure signals (offending tests + AC mapping), the pinned assertion-manifest hash so each correction round provably tests the same bar, and the shared RFC-0001 correlation_key. additionalProperties is permitted so the contract can grow additively without breaking AIFactory's #467 validation gate; removal of any field is a separate, final cutover step.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "contract_version",
+    "aifactory_task_id",
+    "source",
+    "failing_tests"
+  ],
+  "properties": {
+    "contract_version": {
+      "type": "string",
+      "const": "1.0",
+      "description": "Schema version, bumped like RFC-0002 when the shape changes."
+    },
+    "aifactory_task_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The AIFactory task this correction targets (task_id, or project:spec)."
+    },
+    "aifactory": {
+      "type": "object",
+      "description": "The snapshotter's AIFactory envelope: project_id, spec_id, api_url, task_id.",
+      "additionalProperties": true
+    },
+    "source": {
+      "type": "string",
+      "enum": ["triage", "visual_inspection"],
+      "description": "What produced the hand-back: failing-test triage or a visual-inspection plan."
+    },
+    "failing_tests": {
+      "type": "array",
+      "description": "Per offending test: what failed and which AC/file AIFactory must fix.",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["test_id", "verdict", "reason"],
+        "properties": {
+          "test_id": { "type": "string", "minLength": 1 },
+          "file": { "type": ["string", "null"] },
+          "lane": { "type": ["string", "null"] },
+          "verdict": { "type": "string", "minLength": 1 },
+          "reason": { "type": "string" },
+          "acceptance_criterion": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "has_visual_plan": { "type": "boolean" },
+    "manifest_hash": {
+      "type": ["string", "null"],
+      "description": "Hash of the pinned assertion manifest — stable across no-op re-runs so CFactory can confirm round N tested the same assertions as round 1."
+    },
+    "correlation_key": {
+      "type": ["string", "null"],
+      "description": "Shared RFC-0001 correlation key (#249): issue# | tf-<spec_id>. Threads the hand-back and its re-test/completion events together."
+    }
+  }
+}
