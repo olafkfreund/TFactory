@@ -56,7 +56,11 @@ guidance:
 | `servicenow` | REST (Table API) | `servicenow-table-api.py.tmpl` |
 | `salesforce` | REST + SOQL | `salesforce-rest-query.py.tmpl` |
 | `mulesoft` | REST | `mulesoft-api.py.tmpl` |
-| `sap` | OData (Gateway / S/4HANA) | _TBD_ |
+| `sap` | OData (Gateway / S/4HANA) | `sap-odata.py.tmpl` |
+
+The SAP check handles both OData **v2** (`d.results`) and **v4** (`value`)
+response envelopes and supports either a bearer/OAuth token or HTTP Basic auth
+(set `TFACTORY_TARGET_USER` for Basic) — both resolved from the credential vault.
 
 ## Adding the next platform (the pattern)
 

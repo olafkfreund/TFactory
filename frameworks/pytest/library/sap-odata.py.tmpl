@@ -1,0 +1,55 @@
+---
+description: SAP OData — query an OData entity set with $filter/$top and assert a field on the first record (api lane; needs target URL + auth). Handles both OData v2 (d.results) and v4 (value) response envelopes.
+requires_target: true
+requires_auth: true
+vars:
+  - service_path
+  - entity_set
+  - filter
+  - expected_field
+  - expected_value
+---
+import os
+
+import httpx
+
+# The api lane injects TFACTORY_TARGET_URL (the SAP Gateway / S/4HANA host, e.g.
+# https://sap.example.com) and TEST_PASSWORD (a bearer/OAuth token or the
+# password half of a basic credential, resolved from .tfactory.yml
+# test_credentials — see guides/test-target-auth.md). TFACTORY_TARGET_USER is
+# the username when the SAP service uses HTTP Basic auth.
+BASE_URL = os.environ["TFACTORY_TARGET_URL"].rstrip("/")
+TOKEN = os.environ.get("TEST_PASSWORD", "")
+USER = os.environ.get("TFACTORY_TARGET_USER", "")
+
+
+def _auth_kwargs() -> dict:
+    # Prefer a bearer/OAuth token; fall back to HTTP Basic when a username is set
+    # (common for SAP Gateway). Never inline secrets — both come from the vault.
+    if USER:
+        return {"auth": (USER, TOKEN)}
+    return {"headers": {"Authorization": f"Bearer {TOKEN}"}}
+
+
+def _records(body: dict) -> list:
+    # OData v4: {"value": [...]}; OData v2: {"d": {"results": [...]}} (or {"d": {...}}).
+    if "value" in body:
+        return body["value"]
+    d = body.get("d", {})
+    if isinstance(d, dict):
+        return d.get("results", [d] if d else [])
+    return []
+
+
+def test_sap_odata_${entity_set}_has_expected_field() -> None:
+    url = f"{BASE_URL}/${service_path}/${entity_set}"
+    params = {"$$top": "1", "$$format": "json"}
+    if "${filter}":
+        params["$$filter"] = "${filter}"
+    kwargs = _auth_kwargs()
+    kwargs.setdefault("headers", {})["Accept"] = "application/json"
+    resp = httpx.get(url, params=params, timeout=30, **kwargs)
+    assert resp.status_code == 200, f"SAP OData {resp.status_code}: {resp.text}"
+    records = _records(resp.json())
+    assert records, "SAP OData query returned no records"
+    assert records[0]["${expected_field}"] == "${expected_value}"
