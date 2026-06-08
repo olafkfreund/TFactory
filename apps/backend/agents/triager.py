@@ -43,7 +43,9 @@ import asyncio
 import json
 import logging as _logging
 import os
+import secrets
 import traceback
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -467,7 +469,34 @@ def _completion_sentinel_enabled() -> bool:
 # all emit this shape so a watcher (CFactory) consumes one schema. The spine
 # correlation key is the GitHub issue number threaded end-to-end. See
 # docs/completion-event-envelope.md for the contract.
-_COMPLETION_SCHEMA_VERSION = "1.1"
+# Envelope grew additively in #282 (CloudEvents-core + id + W3C trace context).
+# Mirrors AIFactory's #466 upgrade field-for-field so the two producers emit a
+# parity envelope the CFactory collector can treat uniformly.
+_COMPLETION_SCHEMA_VERSION = "1.2"
+
+# CloudEvents 1.0 (CNCF) alignment. ``type`` is the reverse-DNS event kind for
+# TFactory's terminal completion; ``source`` is overridable per deployment.
+_CE_SPECVERSION = "1.0"
+_CE_TYPE = "io.factory.tfactory.completion"
+
+
+def _ce_source() -> str:
+    """CloudEvents ``source`` URI-reference identifying this producer."""
+    return (
+        os.environ.get("TFACTORY_EVENT_SOURCE") or "/tfactory"
+    ).strip() or "/tfactory"
+
+
+def _new_event_id() -> str:
+    """A fresh per-event idempotency id (CloudEvents ``id``). The #281 outbox
+    already keys its Idempotency-Key on this when present, so re-delivery dedups."""
+    return str(uuid.uuid4())
+
+
+def _new_traceparent() -> str:
+    """A valid W3C ``traceparent`` (version 00, sampled): freshly rooted for this
+    terminal event when no inbound trace context is being propagated."""
+    return f"00-{secrets.token_hex(16)}-{secrets.token_hex(8)}-01"
 
 
 def _outcome_for_status(status_value: str | None) -> str:
@@ -553,6 +582,7 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> dict:
     source = _load_source_meta(spec_dir)
     status_value = status.get("status")
     issue_number = _correlation_issue_number(status, source)
+    when = status.get("updated_at") or _now_iso()
     return {
         # RFC-0001 core: the six required fields (Factory#4). `correlation_key`
         # is the shared key (issue#, synthetic `tf-<spec_id>` fallback) so the
@@ -562,7 +592,7 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> dict:
         "task_id": status.get("task_id") or spec_dir.name,
         "status": status_value,
         "phase": status.get("phase") or "test",
-        "updated_at": status.get("updated_at") or _now_iso(),
+        "updated_at": when,
         # RFC-0001 §4 optional chain block (upstream/downstream links).
         "correlation": {
             "issue_number": issue_number,
@@ -586,6 +616,15 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> dict:
         # no LLM work; summed across sessions + handback retries via status.json.
         "usage": usage_block_from_status(spec_dir),
         "emitted_at": _now_iso(),
+        # Additive #282 (parity with AIFactory #466). Per-event idempotency id +
+        # CloudEvents-core + W3C trace context, all riding alongside the legacy
+        # fields above — nothing removed until the cross-repo cutover (#284).
+        "id": _new_event_id(),
+        "specversion": _CE_SPECVERSION,
+        "source": _ce_source(),
+        "type": _CE_TYPE,
+        "time": when,
+        "traceparent": _new_traceparent(),
     }
 
 
