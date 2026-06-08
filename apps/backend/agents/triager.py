@@ -43,9 +43,7 @@ import asyncio
 import json
 import logging as _logging
 import os
-import secrets
 import traceback
-import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -471,32 +469,9 @@ def _completion_sentinel_enabled() -> bool:
 # docs/completion-event-envelope.md for the contract.
 # Envelope grew additively in #282 (CloudEvents-core + id + W3C trace context).
 # Mirrors AIFactory's #466 upgrade field-for-field so the two producers emit a
-# parity envelope the CFactory collector can treat uniformly.
+# parity envelope the CFactory collector can treat uniformly. The additive
+# fields are built in agents/completion_envelope.py (testable in isolation).
 _COMPLETION_SCHEMA_VERSION = "1.2"
-
-# CloudEvents 1.0 (CNCF) alignment. ``type`` is the reverse-DNS event kind for
-# TFactory's terminal completion; ``source`` is overridable per deployment.
-_CE_SPECVERSION = "1.0"
-_CE_TYPE = "io.factory.tfactory.completion"
-
-
-def _ce_source() -> str:
-    """CloudEvents ``source`` URI-reference identifying this producer."""
-    return (
-        os.environ.get("TFACTORY_EVENT_SOURCE") or "/tfactory"
-    ).strip() or "/tfactory"
-
-
-def _new_event_id() -> str:
-    """A fresh per-event idempotency id (CloudEvents ``id``). The #281 outbox
-    already keys its Idempotency-Key on this when present, so re-delivery dedups."""
-    return str(uuid.uuid4())
-
-
-def _new_traceparent() -> str:
-    """A valid W3C ``traceparent`` (version 00, sampled): freshly rooted for this
-    terminal event when no inbound trace context is being propagated."""
-    return f"00-{secrets.token_hex(16)}-{secrets.token_hex(8)}-01"
 
 
 def _outcome_for_status(status_value: str | None) -> str:
@@ -577,6 +552,7 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> dict:
     (``schema_version``, ``event``, ``service``, ``correlation_id``,
     ``outcome``) plus repo/branch context + a result summary sit on top.
     """
+    from agents.completion_envelope import cloudevents_fields
     from usage import usage_block_from_status
 
     source = _load_source_meta(spec_dir)
@@ -619,12 +595,9 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> dict:
         # Additive #282 (parity with AIFactory #466). Per-event idempotency id +
         # CloudEvents-core + W3C trace context, all riding alongside the legacy
         # fields above — nothing removed until the cross-repo cutover (#284).
-        "id": _new_event_id(),
-        "specversion": _CE_SPECVERSION,
-        "source": _ce_source(),
-        "type": _CE_TYPE,
-        "time": when,
-        "traceparent": _new_traceparent(),
+        # `time` mirrors the envelope timestamp; the #281 outbox keys its
+        # Idempotency-Key on `id`, so the id is stable across relay re-delivery.
+        **cloudevents_fields(project_id=status.get("project_id"), time_iso=when),
     }
 
 
