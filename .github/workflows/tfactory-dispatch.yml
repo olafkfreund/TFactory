@@ -1,0 +1,53 @@
+name: TFactory dispatch on label
+
+# Trigger: any issue labeled with "tfactory:run"
+# Creates a TFactory test task via the web-server API so the full
+# Planner → Gen-Functional → Executor → Evaluator → Triager pipeline runs.
+# Part of epic #277 (C4).
+
+on:
+  issues:
+    types: [labeled]
+
+concurrency:
+  group: tfactory-dispatch-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  dispatch:
+    if: github.event.label.name == 'tfactory:run'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger TFactory test task
+        run: |
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X POST "${{ vars.TFACTORY_URL }}/api/tasks" \
+            -H "Authorization: Bearer ${{ secrets.TFACTORY_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "issue_number": ${{ github.event.issue.number }},
+              "repo": "${{ github.repository }}",
+              "title": "${{ github.event.issue.title }}"
+            }')
+          HTTP_STATUS=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | head -n-1)
+          echo "HTTP status: $HTTP_STATUS"
+          echo "Response: $BODY"
+          if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
+            echo "::error::TFactory API returned HTTP $HTTP_STATUS"
+            exit 1
+          fi
+          TASK_ID=$(echo "$BODY" | jq -r '.task_id // .spec_id // "unknown"')
+          echo "TFactory task created: $TASK_ID"
+
+      - name: Add tracking comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue comment ${{ github.event.issue.number }} \
+            --repo "${{ github.repository }}" \
+            --body "🏭 **TFactory test task created.** The autonomous pipeline (Planner → Gen-Functional → Executor → Evaluator → Triager) has started. Results will appear in the TFactory portal: \`${{ vars.TFACTORY_URL }}\`"
