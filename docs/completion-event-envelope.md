@@ -66,6 +66,25 @@ additive TFactory detail (RFC §7 permits extra fields):
 Consumers that only need the spine read the six RFC core fields + `correlation`;
 the additive fields are ignored by RFC-conformant consumers (RFC §7).
 
+### v1.2 — CloudEvents alignment + idempotency + trace context (#282)
+
+`schema_version` is now **`1.2`**. The following ride **additively** alongside
+everything above (nothing removed — parity with AIFactory's #466 envelope, and
+validated by `apps/backend/contracts/completion-event.schema.json`):
+
+```jsonc
+{
+  "id": "9f1c…-uuid4",                 // per-event idempotency key — consumers
+                                       // dedup on this; stable across #281 relay
+                                       // re-delivery (the persisted row is resent)
+  "specversion": "1.0",                // CloudEvents core
+  "source": "/tfactory",               // override: TFACTORY_EVENT_SOURCE
+  "type": "io.factory.tfactory.completion",
+  "time": "2026-06-04T16:29:58+00:00", // = updated_at (occurrence time)
+  "traceparent": "00-<32hex>-<16hex>-01" // W3C trace context (OpenTelemetry)
+}
+```
+
 ### `outcome` mapping (normalized across services)
 
 | outcome | meaning | TFactory terminal status |
