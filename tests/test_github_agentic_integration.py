@@ -72,9 +72,11 @@ def test_get_provider_extra_kwargs_github_models_uses_default_model(monkeypatch)
     """GITHUB_MODELS_DEFAULT env var sets the fallback model."""
     monkeypatch.setenv("GITHUB_TOKEN", "ghp_token")
     monkeypatch.setenv("GITHUB_MODELS_DEFAULT", "openai/gpt-4o")
-    from importlib import reload
+    import importlib
+
     import phase_config
-    reload(phase_config)
+
+    importlib.reload(phase_config)
     extra = phase_config.get_provider_extra_kwargs("openai-compatible", "github-models/")
     assert extra["model"] == "openai/gpt-4o"
 
@@ -183,9 +185,10 @@ def test_write_dispatch_metadata_merges_existing(tmp_path):
 @pytest.fixture()
 def mcp_client(tmp_path, monkeypatch):
     """Return a TestClient for the mcp_copilot router with a tmp workspace."""
+    import importlib
+
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
-    import importlib
 
     monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path))
     monkeypatch.delenv("COPILOT_MCP_TFACTORY_TOKEN", raising=False)
