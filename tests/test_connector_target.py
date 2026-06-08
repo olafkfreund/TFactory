@@ -14,7 +14,9 @@ from pydantic import ValidationError
 from tfactory_yml.schema import (
     CONNECTOR_PLATFORMS,
     ConnectorTarget,
+    HttpTarget,
     TFactoryConfig,
+    connector_browser_guidance,
     connector_platform_info,
 )
 
@@ -95,3 +97,80 @@ def test_every_platform_template_exists() -> None:
         if not tmpl:
             continue  # platform whose template is still TBD (e.g. SAP)
         assert (_LIBRARY / tmpl).is_file(), f"{platform} → missing library/{tmpl}"
+
+
+# ── #173: browser/visual lane marker + ServiceNow browser guidance ───────────
+
+
+def test_connector_visual_lane_defaults_off() -> None:
+    t = ConnectorTarget.model_validate(
+        {
+            "name": "snow",
+            "type": "connector",
+            "platform": "servicenow",
+            "base_url": "https://acme.service-now.com",
+        }
+    )
+    assert t.visual is False  # api lane only by default (stable path)
+
+
+def test_connector_visual_lane_opt_in() -> None:
+    t = ConnectorTarget.model_validate(
+        {
+            "name": "snow",
+            "type": "connector",
+            "platform": "servicenow",
+            "base_url": "https://acme.service-now.com",
+            "visual": True,
+        }
+    )
+    assert t.visual is True
+
+
+def test_http_target_visual_lane_marker() -> None:
+    t = HttpTarget.model_validate(
+        {"name": "web", "type": "http", "base_url": "https://app.example.com", "visual": True}
+    )
+    assert t.visual is True
+    # Default off when unset.
+    t2 = HttpTarget.model_validate(
+        {"name": "web", "type": "http", "base_url": "https://app.example.com"}
+    )
+    assert t2.visual is False
+
+
+def test_servicenow_browser_guidance_present() -> None:
+    g = connector_browser_guidance("servicenow")
+    assert g is not None
+    # Steers generation to the iframe + stable selectors, away from dynamic ids.
+    assert "gsft_main" in g
+    assert "getByRole" in g or "getByLabel" in g
+    assert "data-*" in g
+
+
+def test_browser_guidance_absent_platform_returns_none() -> None:
+    # A platform without explicit browser guidance falls back to None
+    # (API-lane only) rather than a stale API hint.
+    assert connector_browser_guidance("salesforce") is None
+    assert connector_browser_guidance("nope") is None
+
+
+def test_connector_visual_lane_in_full_config() -> None:
+    cfg = TFactoryConfig.model_validate(
+        _cfg(
+            {
+                "name": "snow",
+                "type": "connector",
+                "platform": "servicenow",
+                "base_url": "https://acme.service-now.com",
+                "visual": True,
+                "auth": {"type": "ref", "ref": "snow-svc"},
+            },
+            test_credentials={
+                "snow-svc": {"ref": "env:SNOW_TOKEN", "as_secret": "SNOW_PASS"}
+            },
+        )
+    )
+    target = cfg.targets[0]
+    assert target.visual is True
+    assert target.platform == "servicenow"

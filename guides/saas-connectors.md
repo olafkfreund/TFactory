@@ -56,7 +56,11 @@ guidance:
 | `servicenow` | REST (Table API) | `servicenow-table-api.py.tmpl` |
 | `salesforce` | REST + SOQL | `salesforce-rest-query.py.tmpl` |
 | `mulesoft` | REST | `mulesoft-api.py.tmpl` |
-| `sap` | OData (Gateway / S/4HANA) | _TBD_ |
+| `sap` | OData (Gateway / S/4HANA) | `sap-odata.py.tmpl` |
+
+The SAP check handles both OData **v2** (`d.results`) and **v4** (`value`)
+response envelopes and supports either a bearer/OAuth token or HTTP Basic auth
+(set `TFACTORY_TARGET_USER` for Basic) — both resolved from the credential vault.
 
 ## Adding the next platform (the pattern)
 
@@ -83,3 +87,39 @@ that every registered platform points at a real template file.
 Browser-lane SaaS automation (login via `auth.setup.ts` storageState, then
 assert protected pages) remains available for genuinely UI-only flows — see
 `guides/test-target-auth.md`.
+
+## The visual lane (`visual: true`) — #173
+
+A connector (or `http`) target is **api-lane only by default**. To *also* drive
+the real UI and record a visual-inspection run (epic #170 — trace + video +
+step screenshots), opt in with `visual: true`:
+
+```yaml
+targets:
+  - name: snow
+    type: connector
+    platform: servicenow
+    base_url: https://acme.service-now.com
+    visual: true          # adds the browser/visual lane
+    auth:
+      type: ref
+      ref: snow-svc        # storageState SSO via the ref-auth `steps` list
+```
+
+**Two-lane stability split:** the api lane is the stable primary bar; the visual
+lane is inherently more brittle and is for *visual inspection* of SSO-gated
+portals, not the functional contract. Per-platform browser guidance steers
+generation away from flaky selectors — for ServiceNow, scope to the
+`iframe#gsft_main` content frame and prefer ARIA roles / labels / `data-*`
+attributes over the platform's dynamic element ids
+(`connector_browser_guidance("servicenow")`).
+
+SSO is handled by the redirect-aware multi-step auth setup
+(`render_auth_setup_steps`): declare an ordered `steps` list on the ref-auth
+block (`goto` → `fill_username`/`fill_secret` → `click` → `wait_for_url` on the
+post-IdP landing); Playwright follows the SAML/OIDC redirect and the session is
+snapshotted once into `storageState`.
+
+> **Live-tenant verification deferred.** End-to-end ServiceNow SSO + real-UI
+> driving against a live tenant is tracked on #173; the schema/guidance/scaffold
+> here are unit-tested but the live run needs tenant credentials.

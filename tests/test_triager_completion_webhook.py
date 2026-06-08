@@ -126,7 +126,7 @@ def test_envelope_has_normalized_header(
         tmp_path, status="triaged", phase="triager_complete", committed_count=3
     )
     env = _completed_envelope(tmp_path)
-    assert env["schema_version"] == "1.1"
+    assert env["schema_version"] == "1.2"
     assert env["event"] == "completion"
     assert env["service"] == "tfactory"
     assert env["outcome"] == "success"
@@ -208,3 +208,106 @@ def test_envelope_correlation_id_from_source(
     env = _completed_envelope(tmp_path)
     assert env["correlation_id"] == 412
     assert env["branch"] == "feat/x" and env["repo"] == "o/r"
+
+
+# ─── #282 additive envelope upgrade: id + CloudEvents-core + trace context ──
+
+import re  # noqa: E402
+
+_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+_TRACEPARENT_RE = re.compile(r"^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$")
+
+
+def test_envelope_keeps_legacy_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Additive: nothing the old consumers read was removed."""
+    monkeypatch.setenv("TFACTORY_COMPLETION_SENTINEL", "1")
+    _seed_status(tmp_path)
+    _write_status_patch(tmp_path, status="triaged")
+    env = _completed_envelope(tmp_path)
+    for legacy in (
+        "correlation_key",
+        "service",
+        "task_id",
+        "status",
+        "phase",
+        "updated_at",
+        "schema_version",
+        "event",
+        "outcome",
+        "correlation",
+        "result",
+        "usage",
+        "emitted_at",
+    ):
+        assert legacy in env, legacy
+
+
+def test_envelope_has_idempotency_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TFACTORY_COMPLETION_SENTINEL", "1")
+    _seed_status(tmp_path)
+    _write_status_patch(tmp_path, status="triaged")
+    assert _UUID_RE.match(_completed_envelope(tmp_path)["id"])
+
+
+def test_envelope_has_cloudevents_core(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TFACTORY_COMPLETION_SENTINEL", "1")
+    monkeypatch.delenv("TFACTORY_EVENT_SOURCE", raising=False)
+    _seed_status(tmp_path)
+    _write_status_patch(tmp_path, status="triaged")
+    env = _completed_envelope(tmp_path)
+    assert env["specversion"] == "1.0"
+    assert env["type"] == "io.factory.tfactory.completion"
+    assert env["source"] == "/tfactory"
+    assert env["time"] == env["updated_at"]  # CloudEvents time mirrors occurrence
+
+
+def test_envelope_source_overridable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TFACTORY_COMPLETION_SENTINEL", "1")
+    monkeypatch.setenv("TFACTORY_EVENT_SOURCE", "/tfactory/prod")
+    _seed_status(tmp_path)
+    _write_status_patch(tmp_path, status="triaged")
+    assert _completed_envelope(tmp_path)["source"] == "/tfactory/prod"
+
+
+def test_envelope_traceparent_is_valid_w3c(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TFACTORY_COMPLETION_SENTINEL", "1")
+    _seed_status(tmp_path)
+    _write_status_patch(tmp_path, status="triaged")
+    env = _completed_envelope(tmp_path)
+    assert _TRACEPARENT_RE.match(env["traceparent"])
+    assert "tracestate" not in env  # omitted unless supplied
+
+
+def test_envelope_validates_against_published_schema(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Parity with AIFactory: the event validates against the published
+    RFC-0001/CloudEvents schema (#282)."""
+    jsonschema = pytest.importorskip("jsonschema")
+    monkeypatch.setenv("TFACTORY_COMPLETION_SENTINEL", "1")
+    _seed_status(tmp_path)
+    ctx = tmp_path / "context"
+    ctx.mkdir(parents=True, exist_ok=True)
+    (ctx / "source.json").write_text(json.dumps({"issue_number": 412}))
+    _write_status_patch(tmp_path, status="triaged", committed_count=2)
+    env = _completed_envelope(tmp_path)
+    schema_path = (
+        Path(__file__).resolve().parents[1]
+        / "apps"
+        / "backend"
+        / "contracts"
+        / "completion-event.schema.json"
+    )
+    jsonschema.validate(env, json.loads(schema_path.read_text()))

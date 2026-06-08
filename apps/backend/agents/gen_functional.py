@@ -628,6 +628,44 @@ async def run_gen_functional(
             )
             return False
 
+        # Assertion pinning (#283): on a handback re-run the suite is
+        # regenerated from scratch. If a manifest was pinned on the first
+        # failure, the regenerated suite may only *add* assertions — a dropped
+        # or loosened one means the verification bar moved, which can mask the
+        # very bug the handback is meant to fix. Reject the cycle rather than let
+        # a weakened suite advance to the Evaluator and pass. No-op on first
+        # runs (nothing pinned → the gate is off), so normal generation is
+        # unaffected. Best-effort: a guard error never blocks a healthy suite.
+        try:
+            from agents.handback.assertion_manifest import check_drift
+
+            drift = check_drift(spec_dir, spec_dir / "tests")
+        except Exception:  # noqa: BLE001 — never block generation on the guard
+            drift = None
+        if drift is not None and not drift.ok:
+            (spec_dir / "findings").mkdir(parents=True, exist_ok=True)
+            (spec_dir / "findings" / "assertion_drift.json").write_text(
+                json.dumps(drift.to_dict(), indent=2)
+            )
+            _gen_log.warning(
+                "gen_functional: assertion drift REJECTED — %d pinned test "
+                "file(s) weakened/removed on re-generation: %s",
+                len(drift.violations),
+                [v.path for v in drift.violations],
+            )
+            _write_status_patch(
+                spec_dir,
+                status="gen_functional_failed",
+                phase="assertion_drift_rejected",
+                tests_generated=tests_generated,
+                gen_functional_error=(
+                    "regenerated suite weakened pinned assertions in "
+                    f"{len(drift.violations)} file(s); rejected to preserve the "
+                    "verification bar (#283)"
+                ),
+            )
+            return False
+
         _maybe_scaffold_auth(spec_dir, pending)
 
         _write_status_patch(

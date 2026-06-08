@@ -105,6 +105,23 @@ reconciles on it:
   - `TFACTORY_COMPLETION_SENTINEL=1` — writes `findings/COMPLETED.json` a
     same-host watcher can stat instead of polling
 
+  **At-least-once delivery — transactional outbox + retrying relay (#281, epic
+  #284).** The legacy webhook is fire-and-forget: a crash after the terminal
+  transition but before the POST succeeds loses the event. Opt into the durable
+  path with `TFACTORY_COMPLETION_OUTBOX=1` — the Triager atomically enqueues the
+  envelope to `$TFACTORY_WORKSPACE_ROOT/outbox/<id>.json` *before* delivery, so a
+  crash no longer drops it. A relay (`agents/completion_outbox.py`) drains the
+  outbox with exponential backoff, deletes each entry on 2xx, and dead-letters to
+  `outbox/dead/` after `TFACTORY_COMPLETION_OUTBOX_MAX_ATTEMPTS` (default 20).
+  Each POST carries an `Idempotency-Key` header (the envelope `id` when present
+  — #282 — else a generated UUID) so the consumer dedups. Transport-only: no
+  wire-format change; default-off keeps the legacy direct POST. The web-server
+  drives the relay on a timer when `APP_COMPLETION_RELAY_ENABLED=true`
+  (`COMPLETION_RELAY_INTERVAL_SECONDS`, default 30s); operators can also drain
+  manually via `python -m agents.completion_outbox` (`--list` / `--watch`). Tune
+  backoff with `TFACTORY_COMPLETION_OUTBOX_BACKOFF_BASE` (5s) /
+  `_BACKOFF_CAP` (3600s).
+
 **Backstage test-quality scorecard (#240, epic #232)** — on terminal status the
 Triager best-effort emits a per-component fact (accept-rate, the #238/#239
 confidence rollup, flaky count) to Backstage TechInsights, so a Scorecard can
