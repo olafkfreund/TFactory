@@ -136,19 +136,24 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
         settings = get_settings()
         auth_header = request.headers.get("Authorization")
 
-        if not auth_header:
+        # Resolve token: Authorization header takes precedence, then
+        # HTTP-only cookie set by the OIDC callback flow.
+        token: str | None = None
+        if auth_header:
+            if not auth_header.startswith("Bearer "):
+                return JSONResponse(
+                    {"error": "Invalid Authorization header format"},
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                )
+            token = auth_header[7:]
+        else:
+            token = request.cookies.get("access_token")
+
+        if not token:
             return JSONResponse(
                 {"error": "Missing Authorization header"},
                 status_code=status.HTTP_401_UNAUTHORIZED,
             )
-
-        if not auth_header.startswith("Bearer "):
-            return JSONResponse(
-                {"error": "Invalid Authorization header format"},
-                status_code=status.HTTP_401_UNAUTHORIZED,
-            )
-
-        token = auth_header[7:]  # Remove "Bearer " prefix
 
         # Strategy 1: Try JWT validation
         jwt_payload = _try_decode_jwt(token)
