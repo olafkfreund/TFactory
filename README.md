@@ -12,11 +12,13 @@ It generates tests aligned to those criteria across the v0.2 lane spine
 evaluates quality with a 5-signal verdict, commits the tests to the feature
 branch, and posts a triage report to the PR — autonomously.
 
-> Status: **v0.2.0 released (2026-05-29) — 16 of 16 v0.2 tasks delivered ·
-> Browser + API + Integration lanes active · test evidence capture live ·
-> Triager surfaces portal evidence links in every PR comment ·
-> 1177 backend tests** (up from 531 at v0.1.0-mvp). See the
-> [v0.2.0 release](https://github.com/olafkfreund/TFactory/releases/tag/v0.2.0)
+> Status: **v0.7.0 released (2026-06-08)** — at-least-once completion-event
+> delivery (durable outbox + retrying relay), an additive CloudEvents/idempotency
+> envelope, a typed handback contract with bounded `needs_human` retry +
+> assertion pinning, OIDC SSO fix, and SaaS connectors end-to-end (ServiceNow ·
+> Salesforce · MuleSoft · SAP). The TFactory side of the reliable-completion
+> epic is complete. See the
+> [v0.7.0 release](https://github.com/olafkfreund/TFactory/releases/tag/v0.7.0)
 > and [Progress](https://olafkfreund.github.io/TFactory/progress/) page
 > for the per-task log.
 
