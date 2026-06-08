@@ -131,3 +131,47 @@ def test_mark_stuck_emits_needs_human_completion(tmp_path: Path, monkeypatch) ->
     assert env["service"] == "tfactory"
     assert env["phase"] == "needs_human"
     assert isinstance(env["correlation_key"], str)
+
+
+# ── #283 Part A: published, versioned schema conformance (AC) ────────────────
+
+
+def test_triage_contract_is_versioned(tmp_path: Path) -> None:
+    """The contract carries a version so AIFactory can reject a shape it can't read."""
+    from agents.handback.send import CONTRACT_VERSION
+
+    _seed_suite(tmp_path)
+    captured: dict = {}
+    send_correction(
+        build_correction_request(VERDICTS, TRIAGE, SOURCE),
+        tmp_path,
+        dry_run=False,
+        confirm=True,
+        sender_fn=lambda p: captured.update(p) or {},
+    )
+    assert captured["triage"]["contract_version"] == CONTRACT_VERSION
+
+
+def test_triage_contract_validates_against_published_schema(tmp_path: Path) -> None:
+    """AC: the emitted triage report conforms to the published, versioned schema."""
+    import pytest
+
+    jsonschema = pytest.importorskip("jsonschema")
+
+    _seed_suite(tmp_path)
+    captured: dict = {}
+    send_correction(
+        build_correction_request(VERDICTS, TRIAGE, SOURCE),
+        tmp_path,
+        dry_run=False,
+        confirm=True,
+        sender_fn=lambda p: captured.update(p) or {},
+    )
+    schema_path = (
+        Path(__file__).resolve().parents[1]
+        / "apps"
+        / "backend"
+        / "contracts"
+        / "handback-triage-contract.v1.schema.json"
+    )
+    jsonschema.validate(captured["triage"], json.loads(schema_path.read_text()))

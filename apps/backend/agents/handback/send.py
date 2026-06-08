@@ -32,9 +32,15 @@ from typing import Callable
 from .render import render_fix_request_md
 from .request import CorrectionRequest
 
-__all__ = ["SendResult", "send_correction", "default_sender"]
+__all__ = ["SendResult", "send_correction", "default_sender", "CONTRACT_VERSION"]
 
 Sender = Callable[[dict], dict]
+
+# Version of the typed handback triage contract (#283), bumped like RFC-0002
+# when the shape changes. Published schema:
+# apps/backend/contracts/handback-triage-contract.v1.schema.json. AIFactory's
+# #467 gate validates the POSTed ``triage`` block against the matching version.
+CONTRACT_VERSION = "1.0"
 
 # Path AIFactory POSTs back to when its QA Fixer finishes — closes the loop
 # automatically (epic #182). Base URL is this TFactory web-server.
@@ -183,8 +189,11 @@ def send_correction(
         manifest_hash = None
 
     # The typed triage contract (#283) AIFactory's #467 gate validates: the
-    # structured failure report + the pinned manifest hash + correlation key.
+    # versioned, structured failure report + the pinned manifest hash +
+    # correlation key. ``contract_version`` lets the consumer reject a shape it
+    # doesn't understand (versioned like RFC-0002).
     triage = {
+        "contract_version": CONTRACT_VERSION,
         **request.to_dict(),
         "manifest_hash": manifest_hash,
         "correlation_key": correlation_key,
