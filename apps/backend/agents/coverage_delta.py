@@ -194,15 +194,51 @@ def compute_delta(
     )
 
 
+def _jacoco_to_snapshot(path: Path) -> CoverageSnapshot:
+    """Adapt a JaCoCo XML report into the common CoverageSnapshot contract.
+
+    Groups JaCoCo's flat ``(file, line)`` set into the per-file map
+    ``parse_coverage_xml`` produces, so ``compute_delta`` works unchanged for
+    the Java lane.
+    """
+    if not path.exists():
+        raise FileNotFoundError(f"coverage XML not found: {path}")
+    from agents.lang_java.jacoco_coverage import parse_jacoco_xml
+
+    jc = parse_jacoco_xml(path.read_text())
+    by_file: dict[str, set[int]] = {}
+    for file_path, line_no in jc.covered_lines:
+        by_file.setdefault(file_path, set()).add(line_no)
+    return CoverageSnapshot(
+        covered_lines={k: frozenset(v) for k, v in by_file.items()},
+        line_rate=jc.line_rate,
+        total_lines=jc.total_lines,
+    )
+
+
+def parse_coverage(path: Path, fmt: str | None = None) -> CoverageSnapshot:
+    """Parse a coverage report by format into a CoverageSnapshot.
+
+    ``fmt`` is the framework's ``coverage_strategy``: ``jacoco`` (Java) routes
+    to the JaCoCo adapter; anything else (``cobertura``/``lcov``/None) uses the
+    Cobertura parser — the long-standing default, unchanged.
+    """
+    if (fmt or "").strip().lower() == "jacoco":
+        return _jacoco_to_snapshot(path)
+    return parse_coverage_xml(path)
+
+
 def compute_delta_from_paths(
     baseline_path: Path,
     after_path: Path,
+    fmt: str | None = None,
 ) -> CoverageDelta:
-    """Convenience wrapper: parse both files then compute_delta.
+    """Convenience wrapper: parse both files (by ``fmt``) then compute_delta.
 
-    Same error contract as parse_coverage_xml on either side.
+    Same error contract as the underlying parser on either side. ``fmt``
+    defaults to Cobertura so existing callers are unaffected.
     """
     return compute_delta(
-        parse_coverage_xml(baseline_path),
-        parse_coverage_xml(after_path),
+        parse_coverage(baseline_path, fmt),
+        parse_coverage(after_path, fmt),
     )
