@@ -1,0 +1,96 @@
+"""Tests for the WS2 spec-ingestion route — POST /api/specs/ingest.
+
+Mounts only the specs router with a TestClient; the backend seam
+(`create_spec_ingest_workspace` + `_load_projects`) is monkeypatched so nothing
+touches a real workspace or the Planner. Covers happy path + the 404/400/409/422
+error mappings.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+_WEB_SERVER = Path(__file__).resolve().parents[1]
+_BACKEND = Path(__file__).resolve().parents[2] / "backend"
+for _p in (_WEB_SERVER, _BACKEND):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+
+from server.routes import specs  # noqa: E402
+import agents.tools_pkg.tools.task_control as tc  # noqa: E402
+
+
+@pytest.fixture
+def client():
+    app = FastAPI()
+    app.include_router(specs.router)
+    return TestClient(app)
+
+
+@pytest.fixture
+def known_project(monkeypatch):
+    monkeypatch.setattr(
+        tc, "_load_projects", lambda *a, **k: {"projects": [{"id": "proj", "root_path": "/tmp/p"}]}
+    )
+
+
+def _body(**kw):
+    base = {"project_id": "proj", "spec_id": "s1", "spec_text": "# T\n## Acceptance Criteria\n- a"}
+    base.update(kw)
+    return base
+
+
+def test_ingest_happy(client, known_project, monkeypatch):
+    captured = {}
+
+    def fake_create(**kwargs):
+        captured.update(kwargs)
+        return {"spec_dir": "/tmp/p/ws", "source_format": "markdown", "ac_count": 1,
+                "planner_scheduled": False, "warnings": []}
+
+    monkeypatch.setattr(tc, "create_spec_ingest_workspace", fake_create)
+    r = client.post("/api/specs/ingest", json=_body(target_paths=["src/x.py"]))
+    assert r.status_code == 200
+    body = r.json()
+    assert body["task_id"] == "s1" and body["project_id"] == "proj"
+    assert body["source_format"] == "markdown" and body["ac_count"] == 1
+    # request fields threaded through to the seam
+    assert captured["project_root"] == "/tmp/p"
+    assert captured["target_paths"] == ["src/x.py"]
+
+
+def test_unknown_project_404(client, monkeypatch):
+    monkeypatch.setattr(tc, "_load_projects", lambda *a, **k: {"projects": []})
+    r = client.post("/api/specs/ingest", json=_body())
+    assert r.status_code == 404
+    assert "unknown project_id" in r.json()["detail"]
+
+
+def test_value_error_maps_to_400(client, known_project, monkeypatch):
+    def boom(**kwargs):
+        raise ValueError("spec has no acceptance criteria")
+
+    monkeypatch.setattr(tc, "create_spec_ingest_workspace", boom)
+    r = client.post("/api/specs/ingest", json=_body())
+    assert r.status_code == 400
+    assert "no acceptance criteria" in r.json()["detail"]
+
+
+def test_existing_dir_maps_to_409(client, known_project, monkeypatch):
+    def boom(**kwargs):
+        raise FileExistsError("spec_dir already exists: /tmp/p/ws")
+
+    monkeypatch.setattr(tc, "create_spec_ingest_workspace", boom)
+    r = client.post("/api/specs/ingest", json=_body())
+    assert r.status_code == 409
+    assert "already exists" in r.json()["detail"]
+
+
+def test_missing_spec_text_422(client, known_project):
+    r = client.post("/api/specs/ingest", json={"project_id": "proj", "spec_id": "s1"})
+    assert r.status_code == 422

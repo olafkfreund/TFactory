@@ -42,6 +42,7 @@ from .routes import (
     projects,
     provider_runtimes,
     skills,
+    specs,
     tasks,
     terminal,
     test_target_credentials,
@@ -288,6 +289,7 @@ def create_app() -> FastAPI:
     app.include_router(notifications.router)
 
     # Include API routers
+    app.include_router(specs.router)
     app.include_router(projects.router, prefix="/api/projects", tags=["Projects"])
     app.include_router(tasks.router, prefix="/api/tasks", tags=["Tasks"])
     # Execution routes also under /api/tasks for frontend compatibility
