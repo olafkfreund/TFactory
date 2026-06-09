@@ -94,7 +94,7 @@ def _scaffold_aifactory_spec(root: Path, project_id: str, spec_id: str) -> Path:
 
 @pytest.fixture
 def tools(workspace: Path) -> dict:
-    """Return ``{name: handler}`` for the seven TFactory MVP tools."""
+    """Return ``{name: handler}`` for the TFactory MVP tools."""
     raw = create_task_control_tools()
     assert raw, "claude_agent_sdk did not produce tools — check imports"
     return {t.name: t.handler for t in raw}
@@ -116,9 +116,10 @@ def _payload(result: dict) -> dict:
 # ── Tool catalog ─────────────────────────────────────────────────────────
 
 
-def test_seven_mvp_tools_registered(tools: dict) -> None:
+def test_mvp_tools_registered(tools: dict) -> None:
     expected = {
         "task_create_and_run",
+        "task_create_from_spec",  # WS2 — no-AIFactory spec front door (#40)
         "task_status",
         "task_list",
         "project_list",
@@ -127,7 +128,7 @@ def test_seven_mvp_tools_registered(tools: dict) -> None:
         "task_rerun",
     }
     assert set(tools.keys()) == expected
-    assert len(tools) == 7
+    assert len(tools) == 8
 
 
 def test_removed_aifactory_tools_are_absent(tools: dict) -> None:
