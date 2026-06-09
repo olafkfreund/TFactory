@@ -799,6 +799,31 @@ class TestCredentialEntry(BaseModel):
         return v if v is None else _validate_env_var_name(v, "as_secret/as_username")
 
 
+class QualityGatePolicy(BaseModel):
+    """PR quality-gate policy (WS1) — read by ``agents/quality_gate.py``.
+
+    Opt-in (``enabled: false`` by default). When enabled, the Triager publishes
+    a GitHub commit status (``TFactory / tests``) that passes/fails the PR
+    against these thresholds. Example::
+
+        quality_gate:
+          enabled: true
+          min_accepted: 1
+          min_accept_rate: 0.5
+          block_on_mocked_subject: true
+    """
+
+    enabled: bool = False
+    min_accepted: int = Field(default=1, ge=0)
+    min_accept_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    max_flag_rate: float = Field(default=1.0, ge=0.0, le=1.0)
+    block_on_reject: bool = False
+    block_on_survived_mutation: bool = True
+    block_on_mocked_subject: bool = True
+    require_stable_accepts: bool = True
+    context: str = "TFactory / tests"
+
+
 class TFactoryConfig(BaseModel):
     """Parsed representation of a ``.tfactory.yml`` file.
 
@@ -831,6 +856,8 @@ class TFactoryConfig(BaseModel):
     credentials: dict[str, CredentialEntry] | None = None
     # Test-target login credentials (#107): name → secret ref + env mapping.
     test_credentials: dict[str, TestCredentialEntry] | None = None
+    # PR quality gate (WS1): opt-in merge gate published as a GitHub status.
+    quality_gate: QualityGatePolicy | None = None
 
     @model_validator(mode="after")
     def _validate_test_credentials(self) -> TFactoryConfig:
