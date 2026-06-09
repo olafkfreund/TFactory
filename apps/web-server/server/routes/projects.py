@@ -183,19 +183,33 @@ def get_projects_file() -> Path:
     return Path(settings.PROJECTS_DATA_DIR) / "projects.json"
 
 
+def _json_store():
+    """Return the JSON project store, or raise if the db backend is selected.
+
+    WS3 1c routes persistence through the ``ProjectStore`` seam. These sync
+    helpers serve the default ``json`` backend; the org-scoped ``db`` backend
+    needs the async route path (the per-endpoint cutover is the next slice), so
+    we fail loudly rather than silently bypass org-scoping.
+    """
+    from ..services.project_store import JsonProjectStore
+
+    backend = (get_settings().PROJECTS_BACKEND or "json").strip().lower()
+    if backend == "db":
+        raise RuntimeError(
+            "APP_PROJECTS_BACKEND=db requires the async project route path "
+            "(WS3 1c per-endpoint cutover pending)"
+        )
+    return JsonProjectStore(get_projects_file())
+
+
 def load_projects() -> dict[str, dict]:
-    """Load projects from disk."""
-    projects_file = get_projects_file()
-    if projects_file.exists():
-        return json.loads(projects_file.read_text())
-    return {}
+    """Load projects via the JSON project store (behaviour-identical)."""
+    return _json_store().load_all_sync()
 
 
 def save_projects(projects: dict[str, dict]) -> None:
-    """Save projects to disk."""
-    projects_file = get_projects_file()
-    projects_file.parent.mkdir(parents=True, exist_ok=True)
-    projects_file.write_text(json.dumps(projects, indent=2))
+    """Save projects via the JSON project store (behaviour-identical)."""
+    _json_store().save_all_sync(projects)
 
 
 def analyze_project(path: str) -> dict:

@@ -48,19 +48,30 @@ class ProjectStore(Protocol):
 
 
 class JsonProjectStore:
-    """Legacy ``projects.json`` backend (default; single-tenant)."""
+    """Legacy ``projects.json`` backend (default; single-tenant).
+
+    Exposes both the async ``ProjectStore`` interface and ``*_sync`` variants —
+    the JSON path is plain file IO, so synchronous callers (the existing route
+    helpers, pre-async-cutover) can use it without an event loop.
+    """
 
     def __init__(self, projects_file: Path) -> None:
         self._file = projects_file
 
-    async def load_all(self) -> ProjectMap:
+    def load_all_sync(self) -> ProjectMap:
         if self._file.exists():
             return json.loads(self._file.read_text())
         return {}
 
-    async def save_all(self, projects: ProjectMap) -> None:
+    def save_all_sync(self, projects: ProjectMap) -> None:
         self._file.parent.mkdir(parents=True, exist_ok=True)
         self._file.write_text(json.dumps(projects, indent=2))
+
+    async def load_all(self) -> ProjectMap:
+        return self.load_all_sync()
+
+    async def save_all(self, projects: ProjectMap) -> None:
+        self.save_all_sync(projects)
 
 
 class DbProjectStore:
