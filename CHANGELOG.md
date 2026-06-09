@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Factory PARR spine: governed pickup, RFC-0001 completion, Backstage
+## 0.8.0 — Factory PARR spine + CI-parity verification (2026-06-09)
 
 > TFactory stops being a standalone tool and becomes a **verified node in the
 > [Factory](https://factory.freundcloud.com/) line** — it picks up governed test
@@ -8,6 +8,16 @@
 > registers itself in the Backstage software catalog. Part of the Factory
 > PARR-spine epic (Plan · Act · Review · Report).
 
+- **CI-parity verification signal — real imports, not mocks (#302).** A sixth
+  Evaluator signal, inspired by the Hermes agent, that guards against "green
+  that lies" — tests passing locally (against mocks or a developer-shaped env)
+  yet failing in CI. The pytest lane now grades under a CI-matching environment
+  (ambient credentials blanked, `TZ=UTC`, hash seed pinned, locale normalised)
+  on top of the existing `--network=none --read-only` sandbox, and a static
+  "real-imports" check flags any suite passing only by mocking out the subject
+  module under test (`signals_summary.ci_parity: mocked-subject` → demote
+  `accept`→`flag`). Surfaced in the verdict + triage report; documented in
+  `guides/testing-model.md`.
 - **PFactory governed-target pickup (#193–#197).** TFactory now consumes test
   work that [PFactory](https://pfactory.freundcloud.com/) has planned and
   governed, rather than only ad-hoc handovers:

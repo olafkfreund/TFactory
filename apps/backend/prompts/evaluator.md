@@ -43,7 +43,8 @@ The JSON document MUST validate against this shape:
         "coverage_new_lines": 7,
         "stability": "stable" | "flaky" | "consistent_fail" | "error",
         "mutation": "killed" | "survived" | "no_mutation" | "error",
-        "lint_promotion": "no_findings" | "1 promoted" | "1 high (rejected)"
+        "lint_promotion": "no_findings" | "1 promoted" | "1 high (rejected)",
+        "ci_parity": "yes" | "mocked-subject" | "no"
       },
       "semantic_relevance": "high" | "medium" | "low",
       "semantic_notes": "<one-sentence justification of the relevance score>"
@@ -70,10 +71,10 @@ The JSON document MUST validate against this shape:
 
 ---
 
-## The five signals
+## The signals
 
-Four are pre-computed and given to you in the EVALUATOR CONTEXT
-block. The fifth is your call.
+Five are pre-computed and given to you in the EVALUATOR CONTEXT
+block. The sixth (semantic relevance) is your call.
 
 ### 1. Coverage delta (pre-computed)
 
@@ -126,9 +127,34 @@ useful — even if it has good coverage, kill it.
 If `should_reject` is true, **reject** the test. The reasoning is
 already in the promotion result; quote the most relevant one.
 
-### 5. Semantic relevance — YOUR judgement
+### 5. CI parity (pre-computed)
 
-The four signals above are all formal / mechanical. The fifth asks
+`ci_parity` reports whether this test's grade is **CI-trustworthy** —
+the antidote to "green that lies" (a test that passes locally but fails
+in CI). Two facets, surfaced as one status:
+
+- **Env parity** — the lane graded under a CI-matching environment
+  (ambient credentials blanked, `TZ=UTC`, hash seed pinned, locale
+  normalised) on top of the `--network=none --read-only` sandbox.
+- **Real imports** — a static check: does the test import and exercise
+  the subject module, or does it only `mock.patch()` the subject out and
+  assert against a fake?
+
+Status values:
+- `ci_parity: yes` — graded under CI-parity env and the subject is
+  genuinely imported (or no mock-out detected). Trustworthy.
+- `ci_parity: mocked-subject` — the test mocks out the very module it
+  claims to test and never imports it. The green is asserting against a
+  stub, not real behaviour → **flag** (downgrade `accept` → `flag`),
+  even when the other signals are green. Quote the `reason`. Do not
+  hard-reject on this alone — a thin integration seam can legitimately
+  patch a boundary; that is what `flag` (human review) is for.
+- `ci_parity: not computed` — non-Python lane or unresolved subject;
+  ignore.
+
+### 6. Semantic relevance — YOUR judgement
+
+The five signals above are all formal / mechanical. The sixth asks
 a question they can't:
 
 > Does this test, READ AS PROSE, actually verify the behaviour the
@@ -185,6 +211,7 @@ conflict, use this priority order (top wins):
 | mutation | survived | reject |
 | semantic_relevance | low | reject |
 | lint_promotion.should_reject | true | reject |
+| ci_parity | mocked-subject | flag (downgrade accept → flag) |
 | coverage | N/A (browser lane) | skip coverage rule; use other signals |
 | coverage_delta.new_lines | 0 | reject (unless other signals exceptional) |
 | (all signals green) | — | accept |
