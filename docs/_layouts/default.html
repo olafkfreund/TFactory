@@ -9,6 +9,12 @@
   <meta name="description" content="{{ site.description }}">
   <link rel="canonical" href="{{ page.url | absolute_url }}">
 
+  <!-- Favicons (TFactory flask logo). SVG for modern browsers; .ico/PNG fallbacks. -->
+  <link rel="icon" type="image/svg+xml" href="{{ '/assets/logo.svg' | relative_url }}">
+  <link rel="icon" type="image/png" sizes="32x32" href="{{ '/assets/favicon-32x32.png' | relative_url }}">
+  <link rel="icon" href="{{ '/favicon.ico' | relative_url }}" sizes="any">
+  <link rel="apple-touch-icon" href="{{ '/assets/apple-touch-icon.png' | relative_url }}">
+
   <meta property="og:type" content="website">
   <meta property="og:title" content="{% if page.title %}{{ page.title }} · {% endif %}{{ site.title }}">
   <meta property="og:description" content="{{ site.description }}">
