@@ -345,6 +345,7 @@ class EvaluatorSignals:
     mutation: Any = None  # MutationResult | None
     lint_promotion: Any = None  # PromotionResult | None
     flaky_history: Any = None  # FlakyHistory | None  (cross-run flip-rate, #37)
+    ci_parity: Any = None  # CIParityResult | None  (env-parity + real-imports, #302)
 
 
 # ─── Signal-bundle assembly ─────────────────────────────────────────────
@@ -670,6 +671,31 @@ def _lint_promotion_for_subtask(spec_dir: Path, subtask: dict):
     return promote_flake_findings(result, source)
 
 
+def _ci_parity_for_subtask(spec_dir: Path, subtask: dict):
+    """Compute the CI-parity signal (env-parity + real-imports) for one
+    Python test (#302).
+
+    ``env_parity=True`` because the unit/api Docker lanes grade through
+    ``DockerRunner.run_pytest`` with ``ci_parity_env()`` applied. The
+    real-imports facet is a static scan of the generated source against the
+    subtask's ``target``.
+    """
+    from agents.ci_parity import compute_ci_parity
+
+    test_file = spec_dir / subtask["files_to_create"][0]
+    if not test_file.exists():
+        return None
+    try:
+        source = test_file.read_text()
+    except OSError:
+        return None
+    return compute_ci_parity(
+        source,
+        subtask.get("target"),
+        env_parity=True,
+    )
+
+
 def _build_signal_bundle(
     spec_dir: Path,
     project_dir: Path,
@@ -689,6 +715,7 @@ def _build_signal_bundle(
         mutation=_mutation_for_subtask(spec_dir, project_dir, subtask, runner_fn),
         lint_promotion=_lint_promotion_for_subtask(spec_dir, subtask),
         flaky_history=_flaky_history_for_subtask(spec_dir, subtask, stability),
+        ci_parity=_ci_parity_for_subtask(spec_dir, subtask),
     )
 
 
@@ -1077,6 +1104,7 @@ def _build_api_signal_bundle(
         mutation=None,
         lint_promotion=_lint_promotion_for_subtask(spec_dir, subtask),
         flaky_history=_flaky_history_for_subtask(spec_dir, subtask, stability),
+        ci_parity=_ci_parity_for_subtask(spec_dir, subtask),
     )
 
 

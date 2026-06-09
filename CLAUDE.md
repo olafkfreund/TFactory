@@ -62,6 +62,12 @@ Pipeline supporting primitives (also under `agents/`):
   - `preflight_static.py` + `flake_risk_lint.py` — Gen-Functional guards
   - `coverage_delta.py` + `stability_runner.py` + `mutate_probe.py`
     + `lint_promotion.py` — Evaluator's four pre-computed signals
+  - `ci_parity.py` — CI-parity signal (#302): env-parity (the pytest lane
+    grades with creds blanked + `TZ=UTC` + isolation via
+    `docker_runner.ci_parity_env`) + a static "real-imports" check that
+    flags tests passing only by mocking out the subject module. Surfaced as
+    `signals_summary.ci_parity` (`yes` / `mocked-subject` / `no`); a
+    mocked-subject test is demoted `accept → flag`
   - `mutation_dispatch.py` — per-language mutation routing (#41): Python
     (`mutate_probe`) · TypeScript (`lang_typescript/mutate_probe`, Stryker) ·
     Java (`lang_java/mutate_probe`, PIT — wedge #237); the Evaluator dispatches

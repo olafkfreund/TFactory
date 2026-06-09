@@ -320,6 +320,69 @@ def test_run_pytest_omits_cov_arg_when_package_unset(monkeypatch, tmp_path):
     assert "--cov=" not in captured["argv"][-1]
 
 
+# ── CI-parity grading env (#302) ───────────────────────────────────────
+
+
+def test_run_pytest_injects_ci_parity_env_by_default(monkeypatch, tmp_path):
+    """run_pytest grades under the CI-parity env: UTC + blanked creds."""
+    monkeypatch.delenv("TFACTORY_CI_PARITY", raising=False)
+    captured = {}
+
+    def _capture(*args, **kw):
+        captured["argv"] = args[0]
+        return _fake_completed(0)
+
+    monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/docker")
+    monkeypatch.setattr(subprocess, "run", _capture)
+
+    DockerRunner().run_pytest(
+        repo_path=tmp_path, scratch_path=tmp_path, tests_relpath="tests/"
+    )
+    argv = captured["argv"]
+    assert "-e" in argv
+    assert "TZ=UTC" in argv
+    assert "PYTHONHASHSEED=0" in argv
+    # A credential must be blanked (KEY= with empty value).
+    assert "AWS_ACCESS_KEY_ID=" in argv
+
+
+def test_run_pytest_ci_parity_disabled_via_flag(monkeypatch, tmp_path):
+    monkeypatch.delenv("TFACTORY_CI_PARITY", raising=False)
+    captured = {}
+
+    def _capture(*args, **kw):
+        captured["argv"] = args[0]
+        return _fake_completed(0)
+
+    monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/docker")
+    monkeypatch.setattr(subprocess, "run", _capture)
+
+    DockerRunner().run_pytest(
+        repo_path=tmp_path,
+        scratch_path=tmp_path,
+        tests_relpath="tests/",
+        ci_parity=False,
+    )
+    assert "TZ=UTC" not in captured["argv"]
+
+
+def test_run_pytest_ci_parity_disabled_via_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("TFACTORY_CI_PARITY", "0")
+    captured = {}
+
+    def _capture(*args, **kw):
+        captured["argv"] = args[0]
+        return _fake_completed(0)
+
+    monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/docker")
+    monkeypatch.setattr(subprocess, "run", _capture)
+
+    DockerRunner().run_pytest(
+        repo_path=tmp_path, scratch_path=tmp_path, tests_relpath="tests/"
+    )
+    assert "TZ=UTC" not in captured["argv"]
+
+
 # ── extra_env parameter (Task 8 / #24) ─────────────────────────────────
 
 

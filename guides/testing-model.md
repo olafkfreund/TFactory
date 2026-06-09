@@ -75,6 +75,26 @@ The Evaluator computes **5 signals** per test → categorical verdict
 flake-lint · LLM semantic relevance. Cross-run **flaky-history** (flip-rate) is
 authoritative (#239): a FLAKY test is demoted `accept → flag`.
 
+**CI parity (#302) — green that doesn't lie.** Borrowed from the Hermes agent's
+operating contract, a sixth signal guards against tests that pass locally but
+fail in CI. Two facets, surfaced as `signals_summary.ci_parity`:
+
+- **Env parity** — the pytest lane grades under a CI-matching environment
+  (ambient credentials blanked, `TZ=UTC`, `PYTHONHASHSEED=0`, locale
+  normalised) on top of the `--network=none --read-only` sandbox, so a test
+  silently leaning on a developer's creds or timezone fails here the way it
+  would in CI. Owned by `DockerRunner.run_pytest` (`ci_parity_env()`);
+  disable globally with `TFACTORY_CI_PARITY=0`.
+- **Real imports** — a static AST check: a suite whose pass depends on
+  `mock.patch()`-ing out the *subject module under test* (and never importing
+  it) is grading a fake. Such a test is demoted `accept → flag`
+  (`ci_parity: mocked-subject`). Conservative — it never fires when the
+  subject is genuinely imported (even alongside a collaborator patch), nor on
+  generic/unresolved targets.
+
+The status (`yes` / `mocked-subject` / `no`) rides into the triage report's
+per-test signal line and the JSON candidate.
+
 A deterministic **numeric confidence** in `[0,1]` (#238) is derived from the
 weighted signals (renormalised over present signals; flaky-penalised), stamped
 on each verdict's `signals_summary.confidence` plus a run-level

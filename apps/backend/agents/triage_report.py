@@ -246,6 +246,11 @@ def _candidate_to_json(c: TriageCandidate, decisions: dict | None = None) -> dic
         "test_file": c.test_file,
         "verdict": c.verdict,
     }
+    # CI parity (#302): lift the status onto the candidate so portal
+    # consumers don't have to dig into the nested verdict dict.
+    ci_parity = (c.verdict.get("signals_summary") or {}).get("ci_parity")
+    if ci_parity:
+        result["ci_parity"] = ci_parity
     if decisions is not None:
         decision = decisions.get(c.test_id)
         if decision is not None:
@@ -320,6 +325,10 @@ def _signal_summary_line(c: TriageCandidate) -> str:
         f"mutation={summary.get('mutation', '?')}, "
         f"semantic={c.verdict.get('semantic_relevance', '?')}"
     )
+    # CI parity (#302) — only when the Evaluator stamped it (Python lanes).
+    ci_parity = summary.get("ci_parity")
+    if ci_parity:
+        line += f", ci_parity={ci_parity}"
     # Numeric confidence (#238) when the Evaluator stamped it.
     conf = summary.get("confidence")
     if isinstance(conf, (int, float)) and not isinstance(conf, bool):
