@@ -429,6 +429,12 @@ def _pr_comment_dry_run() -> bool:
     return not _truthy(os.environ.get("TFACTORY_TRIAGER_PR_COMMENT"))
 
 
+def _pr_status_dry_run() -> bool:
+    """Default ON (dry). Operator sets TFACTORY_PR_STATUS=1 to actually publish
+    the quality-gate commit status (WS1)."""
+    return not _truthy(os.environ.get("TFACTORY_PR_STATUS"))
+
+
 def _harvest_enabled() -> bool:
     """Default ON. Promote high-confidence accepts into the reusable template
     library. Writing template files into ``<project>/.tfactory/templates/`` is
@@ -891,6 +897,84 @@ def _run_pr_side_effect(project_dir, findings_dir, source_meta, report_md) -> di
     }
 
 
+def _load_quality_gate_policy(spec_dir: Path):
+    """Build the WS1 GatePolicy from the snapshotted ``.tfactory.yml``.
+
+    Reads the ``quality_gate`` block of ``context/tfactory_yml.json`` (written by
+    the snapshotter). Returns a default (disabled) policy when the file or block
+    is absent or unreadable — the gate must never be the thing that breaks a run.
+    """
+    from agents.quality_gate import GatePolicy
+
+    cfg_path = spec_dir / "context" / "tfactory_yml.json"
+    if not cfg_path.exists():
+        return GatePolicy()
+    try:
+        cfg = json.loads(cfg_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return GatePolicy()
+    block = cfg.get("quality_gate") if isinstance(cfg, dict) else None
+    return GatePolicy.from_mapping(block)
+
+
+def _run_pr_status_side_effect(
+    project_dir, findings_dir, source_meta, spec_dir
+) -> dict:
+    """Publish the WS1 quality-gate commit status (dry-run by default).
+
+    No-op unless the ``.tfactory.yml`` ``quality_gate`` block is enabled. Reads
+    ``findings/verdicts.json``, evaluates the gate, and posts a GitHub commit
+    status to the head SHA. Best-effort: any failure is captured into the
+    returned summary, never raised.
+    """
+    from agents.quality_gate import evaluate_gate
+
+    policy = _load_quality_gate_policy(spec_dir)
+    if not policy.enabled:
+        return {"skipped": True, "reason": "quality_gate not enabled"}
+
+    sha = source_meta.get("sha")
+    repo_slug = source_meta.get("repo_slug") or source_meta.get("repo")
+    if not sha or not repo_slug:
+        return {"skipped": True, "reason": "no sha/repo in source.json"}
+
+    verdicts_path = findings_dir / "verdicts.json"
+    try:
+        gate = evaluate_gate(verdicts_path, policy)
+    except ValueError as exc:
+        return {"skipped": True, "reason": f"gate not evaluated: {exc}"}
+
+    target_url = ""
+    pr_number = int(source_meta.get("pr_number") or 0)
+    if pr_number > 0:
+        target_url = f"https://github.com/{repo_slug}/pull/{pr_number}"
+
+    from tools.pr_status import PRStatusRequest, post_pr_status
+
+    request = PRStatusRequest(
+        repo_dir=project_dir,
+        repo_slug=repo_slug,
+        sha=sha,
+        state=gate.state,
+        context=policy.context,
+        description=gate.summary,
+        target_url=target_url,
+    )
+    result = post_pr_status(request, dry_run=_pr_status_dry_run())
+    return {
+        "skipped": False,
+        "passed": gate.passed,
+        "state": gate.state,
+        "summary": gate.summary,
+        "reasons": list(gate.reasons),
+        "counts": gate.counts,
+        "dry_run": result.dry_run,
+        "ok": result.ok,
+        "argv": list(result.argv),
+        "error": result.error,
+    }
+
+
 def _persist_catalog_mutation(
     spec_dir, catalog, keepers, skipped, decisions, generated_by_task, generated_at
 ) -> None:
@@ -1042,6 +1126,16 @@ async def run_triager(
         pr_comment_summary = _run_pr_side_effect(
             project_dir, findings_dir, source_meta, report_md
         )
+        # WS1: publish the quality-gate commit status (no-op unless the
+        # .tfactory.yml quality_gate block is enabled; dry-run unless
+        # TFACTORY_PR_STATUS=1). Best-effort — never breaks the run.
+        try:
+            pr_status_summary = _run_pr_status_side_effect(
+                project_dir, findings_dir, source_meta, spec_dir
+            )
+        except Exception as exc:  # noqa: BLE001 — gate must never break triage
+            _triage_log.warning("pr_status side-effect failed: %s", exc)
+            pr_status_summary = {"skipped": True, "reason": f"error: {exc}"}
 
         # 6b-6c. Catalog mutation + template harvest (both non-fatal side-effects).
         generated_by_task = (
@@ -1074,6 +1168,7 @@ async def run_triager(
             dedup_collision_count=len(dedup_result.collisions),
             git_writer=git_result_summary,
             pr_comment=pr_comment_summary,
+            pr_status=pr_status_summary,
         )
         return True
 
