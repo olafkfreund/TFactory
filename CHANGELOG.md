@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.8.2 — bash sandbox toggle for k3d (2026-06-10)
+
+- **Agent bash no longer breaks under the OS sandbox on k3d (AIFactory #363).** Mirrors AIFactory v3.6.9: bwrap can't mount `/proc` on k3d (the node is a container), so the SDK's bash sandbox broke every agent command. Gated `sandbox.enabled` behind `AIFACTORY_BASH_SANDBOX` (default on); set `false` on the cluster — bash works, isolation via the K8s pod boundary + command allowlist until gVisor lands.
+
+## 0.8.1 — agent sandbox deps (bubblewrap + socat) (2026-06-09)
+
+- **Agent command sandbox now actually engages (#321).** The Chainguard runtime
+  image omitted `bubblewrap` (`bwrap`) and `socat`, so the Claude Agent SDK logged
+  *"Sandbox disabled: … bubblewrap (bwrap) not installed"* and ran agent bash
+  commands with **no** filesystem/network enforcement — unacceptable for a tool
+  that runs generated tests sandboxed. Both are now installed in the runtime
+  `apk` layer. Verified on the cluster: the node allows unprivileged user
+  namespaces, so `bwrap` creates a real sandbox (not just silencing the warning).
+
 ## 0.8.0 — Factory PARR spine + CI-parity verification (2026-06-09)
 
 > TFactory stops being a standalone tool and becomes a **verified node in the
