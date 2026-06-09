@@ -170,6 +170,41 @@ async function _post<T>(endpoint: string, body: unknown, options: FetchOptions =
   return (await response.json()) as T;
 }
 
+// ─── Spec ingestion (WS2 — run TFactory without an AIFactory branch) ───
+
+export interface SpecIngestRequest {
+  project_id: string;
+  spec_id: string;
+  spec_text: string;
+  /** Optional format hint; auto-detected from content when omitted. */
+  format?: 'markdown' | 'gherkin' | 'ears';
+  /** Repo-relative files/modules under test (target-mode; no branch diff). */
+  target_paths?: string[];
+}
+
+export interface SpecIngestResult {
+  task_id: string;
+  project_id: string;
+  spec_dir: string;
+  source_format: string;
+  ac_count: number;
+  planner_scheduled: boolean;
+  warnings: string[];
+}
+
+/**
+ * POST /api/specs/ingest — create a TFactory task from a raw acceptance-criteria
+ * spec (markdown / Gherkin / EARS) without an AIFactory branch. Throws
+ * {@link TFactoryApiError} on a non-2xx (400 unparseable, 404 unknown project,
+ * 409 spec_id collision).
+ */
+export async function ingestSpec(
+  body: SpecIngestRequest,
+  options: FetchOptions = {},
+): Promise<SpecIngestResult> {
+  return _post<SpecIngestResult>('/api/specs/ingest', body, options);
+}
+
 // ─── Merge / dismiss (the human review gate) ──────────────────────────
 
 export interface MergeRequest {
