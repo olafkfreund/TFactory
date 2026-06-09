@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.9.0 — enterprise foundation: PR gate · generic ingestion · tenant hygiene · Java coverage (2026-06-10)
+
+> First slice of the enterprise 90-day plan (`.agent-os/product/enterprise-90day-plan.md`),
+> plus the per-user token + Ollama Cloud groundwork.
+
+- **PR-native quality gate (WS1, #310–#312).** The Triager can publish a GitHub
+  commit status (`TFactory / tests`) that passes/fails a PR against a configurable
+  policy (`agents/quality_gate.py` + `tools/pr_status.py`), opt-in via the
+  `.tfactory.yml` `quality_gate` block + `TFACTORY_PR_STATUS=1`. See `guides/pr-gate.md`.
+- **Run TFactory without AIFactory — generic spec ingestion (WS2, #313–#315).**
+  `create_spec_ingest_workspace` + the `task_create_from_spec` MCP tool +
+  `POST /api/specs/ingest` (with a typed `ingestSpec` client) turn a raw
+  markdown/Gherkin/EARS spec into a native test-gen task — no branch required.
+- **GitHub issue → native TFactory test task (#326/#327).** The portal's
+  issue→task flow now creates a native test-generation task via the ingest
+  endpoint, not an inherited AIFactory coding task.
+- **Tenant hygiene — projects toward org-scoped DB (WS3, #316–#319).** A
+  `projects.json`→DB migration into the owner's Personal org, a `ProjectStore`
+  abstraction (JSON default / org-scoped DB behind `APP_PROJECTS_BACKEND`), a
+  request→org resolver, and the live projects route routed through the store seam.
+- **Java coverage wired into the Evaluator (WS4, #320).** Format-aware coverage
+  parsing dispatches JaCoCo for the Java lane (Cobertura stays the default).
+- **Per-user `acw_` API tokens on the REST surface (#305).** A user-minted key
+  with the `api:full` scope authenticates on `/api/*` (for the handover skill +
+  CLI), with expiry enforcement + `last_used_at` tracking.
+- **Ollama Cloud documented + verified (#306).** Reachable via the
+  `openai-compatible:<model>` path + `OPENAI_COMPATIBLE_*` env; connectivity
+  checker `python -m providers.ollama_cloud_check`. See `guides/ollama-cloud.md`.
+
 ## 0.8.2 — bash sandbox toggle for k3d (2026-06-10)
 
 - **Agent bash no longer breaks under the OS sandbox on k3d (AIFactory #363).** Mirrors AIFactory v3.6.9: bwrap can't mount `/proc` on k3d (the node is a container), so the SDK's bash sandbox broke every agent command. Gated `sandbox.enabled` behind `AIFACTORY_BASH_SANDBOX` (default on); set `false` on the cluster — bash works, isolation via the K8s pod boundary + command allowlist until gVisor lands.
