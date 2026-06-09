@@ -1,11 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
-import { createTask } from '../../../stores/task-store';
+import { ingestSpec } from '../../../lib/tfactory-api';
 import type {
   AnalyzePreviewResult,
   AnalyzePreviewProgress,
   ProposedBatch,
 } from '../../../shared/types/github-api';
-import type { TaskMetadata } from '../../../shared/types';
 
 interface UseAnalyzePreviewProps {
   projectId: string;
@@ -133,16 +132,15 @@ export function useAnalyzePreview({ projectId }: UseAnalyzePreviewProps): UseAna
           ? batch.issues[0].title
           : `**Issues in this batch:**\n${issueList}\n\n**Common themes:** ${batch.commonThemes.join(', ') || 'N/A'}\n\n**Reasoning:** ${batch.reasoning}`;
 
-        // Build metadata
-        const metadata: TaskMetadata = {
-          sourceType: 'github',
-          githubIssueNumbers: issueNumbers,
-          githubIssueNumber: isSingleIssue ? issueNumbers[0] : undefined,
-          githubBatchTheme: batch.theme,
-        };
-
-        // Create the task
-        await createTask(projectId, title, description, metadata);
+        // Native TFactory task (#326): ingest each approved batch as a
+        // test-generation spec — lands on TFactory's pipeline, not the
+        // inherited AIFactory coding task list.
+        await ingestSpec({
+          project_id: projectId,
+          spec_id: `gh-batch-${issueNumbers.join('-')}-${Date.now()}`,
+          spec_text: `# ${title}\n\n${description}`,
+          format: 'markdown',
+        });
       }
     } catch (error) {
       setAnalysisError(error instanceof Error ? error.message : 'Failed to approve batches');
