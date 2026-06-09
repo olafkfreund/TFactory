@@ -53,7 +53,11 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
        ``request.state.user`` with the decoded claims and allow the request.
     2. If the token matches the legacy ``settings.API_TOKEN``, set
        ``request.state.user = None`` (backward compatible) and allow.
-    3. Otherwise reject with 401.
+    3. If the token is a user-minted ``acw_`` API key carrying the
+       ``api:full`` scope, resolve it to its owner and allow (issue #305).
+       Narrower keys (e.g. ``mcp:read``) are rejected here so they stay
+       confined to the scope-gated MCP control plane.
+    4. Otherwise reject with 401.
     """
 
     # Paths that don't require authentication
@@ -177,7 +181,44 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
             }
             return await call_next(request)
 
-        # Neither JWT nor legacy token matched
+        # Strategy 3: user-minted ``acw_`` API key (issue #305).
+        # Accepted on the general REST surface only when the key carries the
+        # ``api:full`` scope — narrow MCP-only keys (mcp:read/...) must not reach
+        # arbitrary /api/* routes (preserves the mcp_remote.auth guard). The key
+        # is resolved to its owning user so requests are attributed correctly.
+        if token.startswith("acw_"):
+            # Imported lazily: the DB-backed MCP auth module pulls in ORM models
+            # and is only relevant once a user actually presents an acw_ key.
+            from .mcp_remote.auth import (
+                REST_API_SCOPE,
+                MCPAuthError,
+                authenticate as authenticate_api_key,
+            )
+
+            try:
+                key = await authenticate_api_key(f"Bearer {token}")
+            except MCPAuthError:
+                key = None
+
+            if key is not None and key.has_scope(REST_API_SCOPE):
+                request.state.user = {
+                    "id": key.user_id,
+                    "email": None,
+                    "role": "user",
+                }
+                return await call_next(request)
+
+            return JSONResponse(
+                {
+                    "error": (
+                        "API key is not valid for REST access "
+                        f"(requires the '{REST_API_SCOPE}' scope)"
+                    )
+                },
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Neither JWT, legacy token, nor a valid API key matched
         return JSONResponse(
             {"error": "Invalid token"},
             status_code=status.HTTP_401_UNAUTHORIZED,
