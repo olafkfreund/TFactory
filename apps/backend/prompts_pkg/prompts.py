@@ -971,6 +971,26 @@ def _format_evaluator_per_test_block(bundle) -> str:
     else:
         flaky_line = "flaky_history: no prior runs"
 
+    # CI parity (#302): env-parity (creds blanked + UTC + isolation, matching
+    # CI) plus a static "real-imports" check — a test that only mocks out the
+    # subject module rather than importing it is grading a fake.
+    ci_parity = _format_signal_value(bundle, "ci_parity", default=None)
+    if ci_parity is not None:
+        status_fn = getattr(ci_parity, "status", None)
+        status_str = (
+            status_fn
+            if isinstance(status_fn, str)
+            else (status_fn() if callable(status_fn) else "?")
+        )
+        ri = _format_signal_value(ci_parity, "real_imports", default="?")
+        ri_str = getattr(ri, "value", ri)
+        reason = _format_signal_value(ci_parity, "reason", default="")
+        ci_parity_line = f"ci_parity: {status_str} (real_imports={ri_str})"
+        if reason:
+            ci_parity_line += f" — {reason}"
+    else:
+        ci_parity_line = "ci_parity: not computed"
+
     return (
         f"### Test `{test_id}`\n\n"
         f"- file: `{test_file}`\n"
@@ -981,6 +1001,7 @@ def _format_evaluator_per_test_block(bundle) -> str:
         f"- {mutation_line}\n"
         f"- {lint_line}\n"
         f"- {flaky_line}\n"
+        f"- {ci_parity_line}\n"
     )
 
 

@@ -40,6 +40,56 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# CI-parity grading environment (issue #302)
+# ---------------------------------------------------------------------------
+#
+# Generated tests can pass against a developer-shaped environment yet fail in
+# CI — "green that lies". To make the verdict trustworthy, the grading lane
+# mirrors CI: ambient credentials blanked, timezone forced to UTC, hash seed
+# pinned, locale normalised. This rides on top of the existing
+# ``--network=none --read-only`` sandbox; here we only shape the container env.
+
+# Credential variables blanked so a test that silently leans on ambient
+# developer creds fails here the same way it would in CI (where none exist).
+# Blanking (``KEY=``) rather than relying on a clean container guards against
+# creds baked into a polluted runner image.
+CI_PARITY_CREDENTIAL_DENYLIST: tuple[str, ...] = (
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "AZURE_CLIENT_SECRET",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+)
+
+# Deterministic, CI-matching runtime knobs.
+CI_PARITY_RUNTIME_ENV: dict[str, str] = {
+    "TZ": "UTC",  # force UTC — no dev-timezone-shaped greens
+    "PYTHONHASHSEED": "0",  # pin hash seed — stable dict/set ordering
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "LANG": "C.UTF-8",  # normalise locale
+    "LC_ALL": "C.UTF-8",
+}
+
+
+def ci_parity_env() -> dict[str, str]:
+    """Return the CI-parity grading env: blanked credentials + UTC +
+    deterministic runtime knobs (issue #302).
+
+    Merged into the pytest lane's container env so the grade matches CI.
+    Credentials are blanked first so an explicit runtime value can never be
+    a credential; the runtime knobs win on any (non-existent) collision.
+    """
+    env: dict[str, str] = dict.fromkeys(CI_PARITY_CREDENTIAL_DENYLIST, "")
+    env.update(CI_PARITY_RUNTIME_ENV)
+    return env
+
+
+# ---------------------------------------------------------------------------
 # Errors
 # ---------------------------------------------------------------------------
 
@@ -296,6 +346,8 @@ class DockerRunner:
         tests_relpath: str,
         cov_package: str | None = None,
         timeout_sec: int = 600,
+        ci_parity: bool = True,
+        env: dict[str, str] | None = None,
     ) -> DockerRunResult:
         """Default pytest invocation for the functional lane.
 
@@ -305,6 +357,15 @@ class DockerRunner:
 
         The cp dance is what lets us keep the repo bind-mounted ro
         while still extending it with generated test files.
+
+        Args:
+            ci_parity: When True (default), grade under the CI-parity env
+                (``ci_parity_env()`` — blanked creds + UTC + isolation,
+                issue #302) so a developer-shaped green can't survive into
+                the verdict. Caller-supplied ``env`` values win over the
+                parity defaults. Set the ``TFACTORY_CI_PARITY=0`` env to
+                disable globally.
+            env: Extra container env merged on top of the parity env.
         """
         cov_arg = f"--cov={cov_package}" if cov_package else ""
         cmd_str = (
@@ -316,9 +377,16 @@ class DockerRunner:
             "--cov-report=xml:/scratch/coverage.xml "
             "--cov-report=term"
         )
+        run_env: dict[str, str] | None = None
+        use_parity = ci_parity and os.environ.get("TFACTORY_CI_PARITY", "1") != "0"
+        if use_parity:
+            run_env = ci_parity_env()
+        if env:
+            run_env = {**(run_env or {}), **env}
         return self.run(
             repo_path=repo_path,
             scratch_path=scratch_path,
             command=["bash", "-lc", cmd_str],
             timeout_sec=timeout_sec,
+            env=run_env,
         )
