@@ -21,7 +21,9 @@ Why not extend ``TokenAuthMiddleware`` instead?
 from __future__ import annotations
 
 import hashlib
+import logging
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,8 +31,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database.engine import get_db
 from ..database.models import ApiKey
 
+logger = logging.getLogger(__name__)
+
 MCP_READ_SCOPE = "mcp:read"
 MCP_WRITE_SCOPE = "mcp:write"
+
+# Scope that lets an ``acw_`` key authenticate on the general REST surface
+# (``/api/*``) via ``TokenAuthMiddleware`` — issue #305. Keys without it stay
+# confined to the scope-gated MCP control plane, preserving the guard that a
+# narrow ``mcp:read`` key can't reach arbitrary REST routes.
+REST_API_SCOPE = "api:full"
 
 
 @dataclass(frozen=True)
@@ -85,10 +95,12 @@ async def authenticate(authorization_header: str | None) -> AuthenticatedKey:
     - Missing ``Authorization`` header
     - Non-Bearer scheme
     - Unknown key (hash doesn't match any row)
-    - Disabled key (``is_active=False``)
+    - Expired key (``expires_at`` in the past)
+
+    On success the key's ``last_used_at`` is stamped (best-effort).
 
     Scope enforcement is the CALLER's job — this function only proves
-    the key exists and is enabled. Use ``require_scope()`` after to
+    the key exists and is unexpired. Use ``require_scope()`` after to
     gate specific tools.
     """
     raw = _strip_bearer(authorization_header)
@@ -113,18 +125,39 @@ async def _lookup_by_digest(session: AsyncSession, digest: str) -> Authenticated
     result = await session.execute(stmt)
     row = result.scalar_one_or_none()
     if row is None:
+        # Revocation is a hard DELETE (routes/api_keys.py::revoke_api_key), so a
+        # missing row is the revoked/never-existed case. There is no soft-delete
+        # ``is_active`` column on ApiKey — don't reference one.
         raise MCPAuthError("Invalid API key")
-    if not row.is_active:
-        raise MCPAuthError("API key has been revoked")
+
+    # Reject expired keys. ``expires_at`` is optional (None = never expires) and
+    # may be stored naive (SQLite) — treat naive as UTC for the comparison.
+    if row.expires_at is not None:
+        expires_at = row.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at <= datetime.now(timezone.utc):
+            raise MCPAuthError("API key has expired")
 
     scopes_raw = row.scopes or ""
     scopes = frozenset(s.strip() for s in scopes_raw.split(",") if s.strip())
-    return AuthenticatedKey(
+    authenticated = AuthenticatedKey(
         key_id=str(row.id),
         scopes=scopes,
         user_id=str(row.user_id) if row.user_id else None,
         org_id=str(row.org_id) if row.org_id else None,
     )
+
+    # Stamp last-used for the audit trail surfaced in Settings. Best-effort:
+    # a write failure must never turn a valid key into an auth error.
+    row.last_used_at = datetime.now(timezone.utc)
+    try:
+        await session.commit()
+    except Exception:  # pragma: no cover - defensive
+        logger.debug("Failed to stamp last_used_at for api key %s", authenticated.key_id)
+        await session.rollback()
+
+    return authenticated
 
 
 def require_scope(key: AuthenticatedKey, scope: str) -> None:

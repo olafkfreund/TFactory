@@ -35,8 +35,9 @@ import type {
 
 const ORG_STORAGE_KEY = 'tfactory.apiKeys.orgId';
 
-// Scopes shipped in PR #162 (mcp_stdio proxy).
+// Scopes shipped in PR #162 (mcp_stdio proxy); api:full added in #305.
 const AVAILABLE_SCOPES: Array<{ id: string; description: string }> = [
+  { id: 'api:full', description: 'Full REST API access — for the handover skill + CLI (Bearer on /api/*)' },
   { id: 'mcp:read', description: 'List + status + logs (read-only tools)' },
   { id: 'project:write', description: 'Create new projects' },
   { id: 'task:write', description: 'Start / stop / recover / approve tasks' },

@@ -3,7 +3,7 @@ import type {
   GitHubInvestigationStatus,
   GitHubInvestigationResult
 } from '../../shared/types';
-import { loadTasks } from '../task-store';
+import { ingestSpec } from '../../lib/tfactory-api';
 
 interface InvestigationState {
   // Investigation state
@@ -102,20 +102,18 @@ export async function investigateGitHubIssue(
       analysis.affected_areas?.length ? `\n**Affected Areas:**\n${analysis.affected_areas.map((a: string) => `- ${a}`).join('\n')}` : '',
     ].filter(Boolean).join('\n');
 
-    const taskResult = await window.API.createTask(projectId, title, description, {
-      sourceType: 'github',
-      githubIssueNumber: issueNumber,
-      complexity: analysis.complexity || undefined,
-      affectedFiles: analysis.affected_areas || undefined,
-      acceptanceCriteria: analysis.suggestions || undefined,
+    // Native TFactory task (#326): ingest the issue + analysis as a
+    // test-generation spec so the work lands on TFactory's own pipeline,
+    // not the inherited AIFactory coding/build task list.
+    const ingested = await ingestSpec({
+      project_id: projectId,
+      spec_id: `gh-issue-${issueNumber}-${Date.now()}`,
+      spec_text: `# ${title}\n\n${description}`,
+      format: 'markdown',
+      target_paths: analysis.affected_areas || undefined,
     });
 
-    const taskId = taskResult.data?.id;
-
-    // Refresh the task store so the new task appears in the UI
-    if (taskId) {
-      await loadTasks(projectId);
-    }
+    const taskId = ingested.task_id;
 
     const investigationResult: GitHubInvestigationResult = {
       success: true,

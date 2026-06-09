@@ -80,3 +80,25 @@ write_spec_markdown(spec, context_dir)     # → context/aifactory_spec.md
 
 `ingest(text, fmt=None, filename=None, title=None)` is the text entry point;
 `detect_format(text, filename=...)` exposes detection on its own.
+
+## Run TFactory on a spec without AIFactory (WS2)
+
+The ingestion above is wired into two first-class entry points that create a
+TFactory task directly from a spec — no AIFactory branch required. Both write
+the canonical `context/aifactory_spec.md` and a **target-mode** `source.json`
+(no branch/diff; the system-under-test is named by `target_paths`), then start
+the pipeline:
+
+- **MCP tool** `task_create_from_spec` — `{project_id, spec_id, spec_text,
+  format?, target_paths?, confirm}`. Preview unless `confirm=true`.
+- **HTTP** `POST /api/specs/ingest` — same fields as a JSON body; the portal's
+  "New test from spec" upload calls this.
+
+```bash
+curl -H "Authorization: Bearer acw_…" -H "Content-Type: application/json" \
+  -d '{"project_id":"demo","spec_id":"login-1","spec_text":"Feature: Login\n  Scenario: ok\n    Then a session is created","target_paths":["src/auth.py"]}' \
+  https://your-tfactory-host/api/specs/ingest
+```
+
+Because a spec-ingest task has no PR `sha`/`repo`, the WS1 PR quality gate
+(`guides/pr-gate.md`) automatically skips for these runs.

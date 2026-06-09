@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     PROJECTS_DATA_DIR: str = ""  # Directory to store project metadata
     BACKEND_PATH: str = ""  # Path to apps/backend
 
+    # WS3 tenant hygiene: project persistence backend. "json" = legacy
+    # projects.json (default, unchanged); "db" = org-scoped DB rows. The route
+    # cutover to the store is a later slice; this flag selects the backend.
+    PROJECTS_BACKEND: str = "json"
+
     # CORS — localhost defaults. Override or extend via APP_CORS_ORIGINS env var.
     # Accepts a comma-separated string ("https://a.com,https://b.com") or a JSON list.
     CORS_ORIGINS: list[str] = [

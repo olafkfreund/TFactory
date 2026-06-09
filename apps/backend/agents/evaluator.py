@@ -553,7 +553,10 @@ def _coverage_delta_for_subtask(
     if not baseline.exists() or not after.exists():
         return None
     try:
-        return compute_delta_from_paths(baseline, after)
+        # Parse by the framework's coverage format (jacoco for Java, Cobertura
+        # otherwise) so non-Python lanes don't feed JaCoCo XML to the Cobertura
+        # parser.
+        return compute_delta_from_paths(baseline, after, fmt=strategy)
     except Exception as exc:  # noqa: BLE001 — defensive
         _eval_log.warning(
             "coverage_delta failed for %s: %s",
