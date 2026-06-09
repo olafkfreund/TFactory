@@ -195,6 +195,109 @@ def _format_json(data: Any) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Generic spec ingestion (WS2 / #40) — run TFactory without AIFactory
+# ---------------------------------------------------------------------------
+
+
+def create_spec_ingest_workspace(
+    *,
+    project_id: str,
+    spec_id: str,
+    spec_text: str,
+    fmt: str | None = None,
+    target_paths: list[str] | None = None,
+    project_root: str = ".",
+    root: Path | None = None,
+    schedule: bool = True,
+) -> dict[str, Any]:
+    """Create a TFactory workspace from a raw acceptance-criteria spec.
+
+    The "no-AIFactory" front door (WS2): ingest markdown / Gherkin / EARS via
+    ``spec_sources``, write ``context/aifactory_spec.md`` + a **target-mode**
+    ``source.json`` (no branch/diff — the SUT is named by ``target_paths``) +
+    ``status.json``, then optionally schedule the Planner (gated by
+    ``TFACTORY_AUTO_PLAN`` like the AIFactory path).
+
+    Parsing happens BEFORE any directory is created, so an unusable spec fails
+    without leaving a half-built workspace.
+
+    Raises:
+        FileExistsError: the spec_dir already exists.
+        ValueError: the spec can't be parsed or has no acceptance criteria.
+    """
+    from spec_sources import SpecFormat, SpecSourceError, ingest, write_spec_markdown
+
+    warnings: list[str] = []
+    spec_dir = _spec_dir(project_id, spec_id, root)
+    if spec_dir.exists():
+        raise FileExistsError(f"spec_dir already exists: {spec_dir}")
+
+    try:
+        fmt_enum = SpecFormat(fmt) if fmt else None
+        spec = ingest(spec_text, fmt=fmt_enum)
+    except (SpecSourceError, ValueError) as exc:
+        raise ValueError(f"could not parse spec: {exc}") from exc
+    if not spec.criteria:
+        raise ValueError("spec has no acceptance criteria")
+
+    spec_dir.mkdir(parents=True, exist_ok=True)
+    for sub in ("context", "tests", "findings", "logs", "memory"):
+        (spec_dir / sub).mkdir(exist_ok=True)
+
+    context_dir = spec_dir / "context"
+    write_spec_markdown(spec, context_dir)
+
+    # Target-mode source.json: no branch/base_ref/diff. The Triager's
+    # PR-status side-effect (WS1) correctly skips when there's no sha/repo.
+    source = {
+        "mode": "spec_ingest",
+        "project_id": project_id,
+        "spec_id": spec_id,
+        "source_format": spec.source_format.value,
+        "target_paths": list(target_paths or []),
+        "created_at": _now_iso(),
+    }
+    (context_dir / "source.json").write_text(json.dumps(source, indent=2))
+
+    status = {
+        "task_id": spec_id,
+        "project_id": project_id,
+        "spec_id": spec_id,
+        "mode": "spec_ingest",
+        "status": "pending",
+        "phase": "created",
+        "lane_progress": dict.fromkeys(_MVP_LANES, "pending"),
+        "created_at": _now_iso(),
+        "updated_at": _now_iso(),
+    }
+    _status_file(project_id, spec_id, root).write_text(json.dumps(status, indent=2))
+
+    planner_scheduled = False
+    if schedule:
+        try:
+            from agents.planner import schedule_planner
+
+            task = schedule_planner(
+                spec_dir=spec_dir,
+                project_dir=Path(project_root).expanduser(),
+                mode="initial",
+            )
+            planner_scheduled = task is not None
+        except ImportError:
+            warnings.append(
+                "planner module not importable — task stays at status=pending"
+            )
+
+    return {
+        "spec_dir": str(spec_dir),
+        "source_format": spec.source_format.value,
+        "ac_count": len(spec.criteria),
+        "planner_scheduled": planner_scheduled,
+        "warnings": warnings,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Tool factory
 # ---------------------------------------------------------------------------
 
@@ -416,6 +519,110 @@ def create_task_control_tools() -> list:
         )
 
     tools.append(task_create_and_run)
+
+    # ── task_create_from_spec (WS2 / #40 — no-AIFactory front door) ───────
+
+    @tool(
+        "task_create_from_spec",
+        "Create a TFactory task from a raw acceptance-criteria spec "
+        "(markdown / Gherkin .feature / EARS) WITHOUT an AIFactory branch — "
+        "the no-AIFactory front door. Ingests the spec, writes the canonical "
+        "context/aifactory_spec.md, and kicks off the Planner. Use this when "
+        "you want tests for a spec/feature file rather than a finished branch.",
+        {
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "string",
+                    "description": "Project ID (from project_list / project_create)",
+                },
+                "spec_id": {
+                    "type": "string",
+                    "description": "A new task/spec ID for this ingestion (becomes the workspace spec_dir name)",
+                },
+                "spec_text": {
+                    "type": "string",
+                    "description": "The raw acceptance-criteria text (markdown, Gherkin .feature, or EARS)",
+                },
+                "format": {
+                    "type": "string",
+                    "enum": ["markdown", "gherkin", "ears"],
+                    "description": "Optional format hint; auto-detected from content when omitted",
+                },
+                "target_paths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional repo-relative files/modules under test (target-mode; there's no branch diff)",
+                },
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Pass true to actually create the workspace. If false, returns a preview.",
+                },
+            },
+            "required": ["project_id", "spec_id", "spec_text"],
+        },
+    )
+    async def task_create_from_spec(args: dict[str, Any]) -> dict[str, Any]:
+        project_id = args["project_id"]
+        spec_id = args["spec_id"]
+        spec_text = args["spec_text"]
+        fmt = args.get("format")
+        target_paths = args.get("target_paths") or []
+        confirm = bool(args.get("confirm", False))
+
+        projects = _load_projects()
+        project_entry = next(
+            (p for p in projects["projects"] if p.get("id") == project_id),
+            None,
+        )
+        if project_entry is None:
+            return _format_error(
+                f"unknown project_id: {project_id!r}. Run project_list / project_create first."
+            )
+
+        spec_dir = _spec_dir(project_id, spec_id)
+        if not confirm:
+            return _format_json(
+                {
+                    "preview": True,
+                    "would_create": str(spec_dir),
+                    "project_id": project_id,
+                    "spec_id": spec_id,
+                    "format": fmt or "auto-detect",
+                    "target_paths": target_paths,
+                    "hint": "Re-run with confirm=true to ingest the spec + start the pipeline.",
+                }
+            )
+
+        try:
+            result = create_spec_ingest_workspace(
+                project_id=project_id,
+                spec_id=spec_id,
+                spec_text=spec_text,
+                fmt=fmt,
+                target_paths=target_paths,
+                project_root=project_entry.get("root_path", "."),
+            )
+        except (FileExistsError, ValueError) as exc:
+            return _format_error(str(exc))
+
+        portal_port = os.environ.get("TFACTORY_PORTAL_PORT", "3103")
+        return _format_json(
+            {
+                "task_id": spec_id,
+                "project_id": project_id,
+                "spec_id": spec_id,
+                "spec_dir": result["spec_dir"],
+                "source_format": result["source_format"],
+                "ac_count": result["ac_count"],
+                "planner_scheduled": result["planner_scheduled"],
+                "warnings": result["warnings"],
+                "portal_url": f"http://localhost:{portal_port}/tasks/{spec_id}",
+            }
+        )
+
+    tools.append(task_create_from_spec)
 
     # ── task_status ──────────────────────────────────────────────────────
 
