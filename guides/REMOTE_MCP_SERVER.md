@@ -29,6 +29,7 @@ The remote server validates **`acw_` API keys** (minted via the web UI), not the
 
 - `mcp:read` — for read tools (list / get / diff)
 - `mcp:write` — for write tools (start / stop / approve / merge)
+- `api:full` — use the key as a `Bearer` on the **general REST API** (`/api/*`), e.g. for the `/handover` skill or a CLI script (issue #305)
 
 A key with only `mcp:read` calling `start_task` gets:
 
@@ -46,6 +47,27 @@ In the TFactory web UI:
 2. Name: `Cursor (read-only)` or whatever helps you identify it
 3. Scopes: tick `mcp:read` (and `mcp:write` if you want write access)
 4. Save — the raw `acw_…` token is shown ONCE. Copy it to your client config.
+
+### Using a key on the REST API (`api:full`) — for `/handover` + CLI
+
+The deployed portal authenticates browser users via Keycloak/OIDC (no static
+token), so programmatic clients that hit the **regular REST surface** —
+not just the MCP control plane — need their own per-user token. Mint a key
+with the **`api:full`** scope and send it as a normal bearer:
+
+```bash
+curl -H "Authorization: Bearer acw_yourKeyHere" \
+     https://your-tfactory-host/api/projects
+```
+
+The request is attributed to the user who minted the key (the same user the
+portal would resolve from an OIDC session), so it sees exactly that user's
+projects/tasks. Point the `/handover` skill's `.mcp.json` token file at this
+`acw_` key to replace the shared `APP_API_TOKEN` stopgap.
+
+> A key **without** `api:full` (e.g. an `mcp:read`-only key) is rejected on
+> `/api/*` with `403` — that's deliberate, so a narrow MCP key can't read the
+> whole REST surface. `api:full` is the explicit opt-in.
 
 ## Client configuration
 
