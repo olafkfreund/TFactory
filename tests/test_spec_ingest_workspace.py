@@ -119,3 +119,43 @@ def test_existing_spec_dir_raises(tmp_path):
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# ─── #71 Phase 3: contract-carrying handoff ────────────────────────────────
+
+
+def test_contract_persisted_for_authoritative_profile(tmp_path):
+    # A signed Task Contract on the handoff is written to
+    # context/task_contract.json — exactly where read_task_contract() looks
+    # first — so the Planner uses the DECLARED tfactory profile, not inference.
+    from agents.task_contract import parse_tfactory_profile, read_task_contract
+
+    contract = {
+        "feature": "GET /api/health",
+        "contract_version": "2",
+        "tfactory": {
+            "lanes": ["unit", "api"],
+            "frameworks": {"unit": "pytest", "api": "pytest"},
+            "ac_to_code_map": {"AC1": ["app/main.py"]},
+        },
+    }
+    _ingest(tmp_path, _MARKDOWN, target_paths=["app/main.py"], contract=contract)
+    sd = _spec_dir(tmp_path)
+
+    assert (sd / "context" / "task_contract.json").exists()
+    got = read_task_contract(sd)
+    assert got is not None and "tfactory" in got
+    prof = parse_tfactory_profile(got)
+    assert prof is not None
+    assert prof.lanes == ("unit", "api")
+
+
+def test_no_contract_means_inference(tmp_path):
+    # No contract (or one without RFC-0002 markers) → no task_contract.json,
+    # so TFactory falls back to inferring tests from the spec. Backward compatible.
+    from agents.task_contract import read_task_contract
+
+    _ingest(tmp_path, _MARKDOWN, target_paths=["app/main.py"])
+    sd = _spec_dir(tmp_path)
+    assert not (sd / "context" / "task_contract.json").exists()
+    assert read_task_contract(sd) is None
