@@ -295,10 +295,18 @@ def create_spec_ingest_workspace(
                 mode="initial",
             )
             planner_scheduled = task is not None
-        except ImportError:
+        except ImportError as exc:
             warnings.append(
-                "planner module not importable — task stays at status=pending"
+                f"planner module not importable — task stays at status=pending: {exc}"
             )
+        except Exception as exc:  # noqa: BLE001 — don't let a scheduling error
+            # silently leave the spec at pending; surface it (TFactory #347).
+            import logging as _lg
+
+            _lg.getLogger(__name__).error(
+                "schedule_planner failed for %s: %r", spec_id, exc, exc_info=exc
+            )
+            warnings.append(f"planner scheduling failed: {exc}")
 
     return {
         "spec_dir": str(spec_dir),

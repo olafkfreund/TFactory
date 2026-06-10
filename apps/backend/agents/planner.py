@@ -792,5 +792,23 @@ def schedule_planner(
         return None
     task = asyncio.create_task(run_planner(spec_dir, project_dir, mode=mode))
     _BG_PLANNER_TASKS.add(task)
-    task.add_done_callback(_BG_PLANNER_TASKS.discard)
+
+    def _on_done(t: asyncio.Task, _sid: str = spec_dir.name) -> None:
+        # Surface background-planner failures — a discard-only callback made a
+        # crashed planner invisible: the ingested spec just sat at
+        # status=pending with no log (TFactory #347).
+        _BG_PLANNER_TASKS.discard(t)
+        if t.cancelled():
+            _planner_log.warning("[planner] background task cancelled spec=%s", _sid)
+            return
+        exc = t.exception()
+        if exc is not None:
+            _planner_log.error(
+                "[planner] background task FAILED spec=%s: %r", _sid, exc, exc_info=exc
+            )
+        else:
+            _planner_log.info("[planner] background task finished spec=%s", _sid)
+
+    task.add_done_callback(_on_done)
+    _planner_log.info("[planner] scheduled background planner spec=%s mode=%s", spec_dir.name, mode)
     return task
