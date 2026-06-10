@@ -19,7 +19,9 @@ _BACKEND = Path(__file__).parent.parent / "apps" / "backend"
 if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
 
-from agents.tools_pkg.tools.task_control import create_spec_ingest_workspace  # noqa: E402
+from agents.tools_pkg.tools.task_control import (
+    create_spec_ingest_workspace,  # noqa: E402
+)
 
 _GHERKIN = """Feature: Login
   Scenario: Successful login
