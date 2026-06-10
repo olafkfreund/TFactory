@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.2 — contract-carrying handoff: test the declared ACs, not inferred ones (2026-06-10)
+
+- **`/api/specs/ingest` now accepts the signed Task Contract and uses it as the authoritative test profile (#71 Phase 3, with AIFactory v3.6.14).** The handoff was contract-less (`{project_id, spec_id, spec_text}`), so the Planner inferred lanes/frameworks and PFactory's declared `tfactory` block (lanes/frameworks/`ac_to_code_map`) was discarded. `SpecIngestRequest` now carries an optional `contract`; `create_spec_ingest_workspace` persists it to `context/task_contract.json` (where `read_task_contract()` looks first) when it has the RFC-0002 markers, so `parse_tfactory_profile` drives lane/framework selection. No contract → inference, unchanged (backward compatible).
+
 ## 0.9.1 — fix AIFactory→TFactory spec ingest project resolution (2026-06-10)
 
 - **`/api/specs/ingest` now resolves projects from the web-server store by id OR name (AIFactory #517).** It resolved via the agent-tools file store (`~/.tfactory/projects.json`), which is empty/diverged from the DB-backed store `/api/projects` uses — so every AIFactory→TFactory handoff 404'd. Now uses the same `load_projects()` source and matches by id or name (AIFactory sends the project name).
