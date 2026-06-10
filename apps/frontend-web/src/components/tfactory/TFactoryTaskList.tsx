@@ -20,6 +20,7 @@ import {
   type TFactoryTaskSummary,
 } from '../../lib/tfactory-api';
 import { formatRelativeTime } from '../../lib/utils';
+import { useVisibilityAwarePolling } from '../../hooks/useVisibilityAwarePolling';
 
 // Locale-independent short date ("May 28") for the row's secondary timestamp.
 const _MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -168,19 +169,16 @@ export function TFactoryTaskList({ onSelectTask, fetchFn, pollMs = 5000 }: Props
 
   // Background auto-refresh: re-fetch on an interval so live status changes
   // (e.g. a watchdog `stalled` flip, #95) surface without a manual reload.
-  // Updates the list only on success — a transient poll error keeps the
-  // last-good rows on screen rather than flipping to the error state.
-  useEffect(() => {
-    if (!pollMs || pollMs <= 0) return;
-    const id = setInterval(() => {
-      listTasks({ fetchFn })
-        .then((response) => setTasks(response.tasks))
-        .catch(() => {
-          /* keep last-good list on a transient poll error */
-        });
-    }, pollMs);
-    return () => clearInterval(id);
-  }, [pollMs, fetchFn]);
+  // Visibility-aware — pauses while the tab is hidden and refetches the moment
+  // it returns to the foreground. Updates the list only on success: a transient
+  // poll error keeps the last-good rows rather than flipping to the error state.
+  useVisibilityAwarePolling(() => {
+    listTasks({ fetchFn })
+      .then((response) => setTasks(response.tasks))
+      .catch(() => {
+        /* keep last-good list on a transient poll error */
+      });
+  }, pollMs);
 
   if (loading) return <LoadingState />;
   if (error) return <ErrorState message={error} />;
