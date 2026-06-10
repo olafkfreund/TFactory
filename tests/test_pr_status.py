@@ -24,13 +24,13 @@ from tools.pr_status import (  # noqa: E402
 
 
 def _req(tmp_path: Path, **kw) -> PRStatusRequest:
-    base = dict(
-        repo_dir=tmp_path,
-        repo_slug="acme/widgets",
-        sha="abc123",
-        state="success",
-        description="Gate passed: 3 accepted",
-    )
+    base = {
+        "repo_dir": tmp_path,
+        "repo_slug": "acme/widgets",
+        "sha": "abc123",
+        "state": "success",
+        "description": "Gate passed: 3 accepted",
+    }
     base.update(kw)
     return PRStatusRequest(**base)
 
