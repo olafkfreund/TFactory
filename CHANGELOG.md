@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.3 — fix AIFactory→TFactory spec ingest project resolution (2026-06-10)
+
+- **`/api/specs/ingest` now resolves projects from the web-server store by id OR name (AIFactory #517).** It resolved via the agent-tools file store (`~/.tfactory/projects.json`), which is empty/diverged from the DB-backed store `/api/projects` uses — so every AIFactory→TFactory handoff 404'd. Now uses the same `load_projects()` source and matches by id or name (AIFactory sends the project name).
+
 ## 0.9.0 — enterprise foundation: PR gate · generic ingestion · tenant hygiene · Java coverage (2026-06-10)
 
 > First slice of the enterprise 90-day plan (`.agent-os/product/enterprise-90day-plan.md`),
