@@ -35,16 +35,23 @@ class SpecIngestRequest(BaseModel):
 async def ingest_spec(req: SpecIngestRequest) -> dict:
     # Imported lazily so the route module loads even in environments where the
     # backend package isn't importable until runtime path setup.
-    from agents.tools_pkg.tools.task_control import (
-        _load_projects,
-        create_spec_ingest_workspace,
-    )
+    from agents.tools_pkg.tools.task_control import create_spec_ingest_workspace
 
-    projects = _load_projects()
-    entry = next(
-        (p for p in projects.get("projects", []) if p.get("id") == req.project_id),
-        None,
-    )
+    # Resolve the project from the web-server's project store (the same source
+    # /api/projects uses), by id OR name. The agent-tools file store
+    # (~/.tfactory/projects.json) can be empty/diverged from this one, which
+    # 404'd every AIFactory→TFactory handoff (#517). AIFactory sends the project
+    # *name*; accept either.
+    from .projects import load_projects
+
+    projects = load_projects()  # {id: project_data}
+    resolved_id = req.project_id
+    entry = projects.get(req.project_id)
+    if entry is None:
+        for pid, data in projects.items():
+            if data.get("name") == req.project_id:
+                entry, resolved_id = data, pid
+                break
     if entry is None:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
@@ -53,12 +60,12 @@ async def ingest_spec(req: SpecIngestRequest) -> dict:
 
     try:
         result = create_spec_ingest_workspace(
-            project_id=req.project_id,
+            project_id=resolved_id,
             spec_id=req.spec_id,
             spec_text=req.spec_text,
             fmt=req.format,
             target_paths=req.target_paths or [],
-            project_root=entry.get("root_path", "."),
+            project_root=entry.get("path") or entry.get("root_path") or ".",
         )
     except FileExistsError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
