@@ -29,6 +29,15 @@ class SpecIngestRequest(BaseModel):
     target_paths: list[str] | None = Field(
         default=None, description="Repo-relative files/modules under test (target-mode)"
     )
+    contract: dict | None = Field(
+        default=None,
+        description=(
+            "Full signed RFC-0002 Task Contract (the AIFactory implementation_plan). "
+            "When present its `tfactory` block (lanes/frameworks/ac_to_code_map) is "
+            "the AUTHORITATIVE test profile; persisted to context/task_contract.json. "
+            "Absent → tests are inferred from spec_text."
+        ),
+    )
 
 
 @router.post("/ingest", summary="Create a TFactory task from a raw spec (no AIFactory branch)")
@@ -66,6 +75,7 @@ async def ingest_spec(req: SpecIngestRequest) -> dict:
             fmt=req.format,
             target_paths=req.target_paths or [],
             project_root=entry.get("path") or entry.get("root_path") or ".",
+            contract=req.contract,
         )
     except FileExistsError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc

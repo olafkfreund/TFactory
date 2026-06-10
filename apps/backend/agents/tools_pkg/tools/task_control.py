@@ -209,6 +209,7 @@ def create_spec_ingest_workspace(
     project_root: str = ".",
     root: Path | None = None,
     schedule: bool = True,
+    contract: dict | None = None,
 ) -> dict[str, Any]:
     """Create a TFactory workspace from a raw acceptance-criteria spec.
 
@@ -246,6 +247,17 @@ def create_spec_ingest_workspace(
 
     context_dir = spec_dir / "context"
     write_spec_markdown(spec, context_dir)
+
+    # Persist the signed Task Contract where read_task_contract() looks first, so
+    # the Planner uses the DECLARED tfactory profile (lanes/frameworks/
+    # ac_to_code_map) as authoritative instead of inferring (#71 Phase 3). Only
+    # when it actually carries the RFC-0002 markers; otherwise inference stands.
+    if isinstance(contract, dict) and (
+        "tfactory" in contract or "contract_version" in contract
+    ):
+        (context_dir / "task_contract.json").write_text(
+            json.dumps(contract, indent=2)
+        )
 
     # Target-mode source.json: no branch/base_ref/diff. The Triager's
     # PR-status side-effect (WS1) correctly skips when there's no sha/repo.
