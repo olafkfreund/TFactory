@@ -16,6 +16,20 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
+# Pin ``agents.planner`` into ``sys.modules`` at startup (this route module is
+# imported when the app boots). A request-time *fresh* import
+# (``from agents.planner import schedule_planner`` inside
+# ``create_spec_ingest_workspace``) was intermittently raising ImportError in
+# the long-lived server process — the import resolves cleanly at startup but
+# not always mid-request — which silently left every ingested spec at
+# status=pending with ``planner_scheduled: false`` (TFactory #347). Importing
+# here once, at boot, turns that lazy import into a fast sys.modules cache hit.
+# Guarded so a minimal venv without the agent SDK can still load the route.
+try:
+    import agents.planner  # noqa: F401
+except Exception:  # pragma: no cover — SDK-less env: lazy import will report it
+    pass
+
 router = APIRouter(prefix="/api/specs", tags=["Spec Ingestion"])
 
 

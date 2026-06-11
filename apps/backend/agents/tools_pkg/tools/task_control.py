@@ -513,12 +513,19 @@ def create_task_control_tools() -> list:
                 mode="initial",
             )
             planner_scheduled = task is not None
-        except ImportError:
+        except ImportError as exc:
             # planner module not importable (e.g. minimal venv without SDK
             # transitive deps); leave status=pending and surface a warning.
             snapshot_warnings.append(
-                "planner module not importable — task stays at status=pending"
+                f"planner module not importable — task stays at status=pending: {exc}"
             )
+        except Exception as exc:  # noqa: BLE001 — don't silently leave pending
+            import logging as _lg
+
+            _lg.getLogger(__name__).error(
+                "schedule_planner failed for %s: %r", task_id, exc, exc_info=exc
+            )
+            snapshot_warnings.append(f"planner scheduling failed: {exc}")
 
         portal_port = os.environ.get("TFACTORY_PORTAL_PORT", "3103")
         return _format_json(
