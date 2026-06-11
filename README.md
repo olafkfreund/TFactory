@@ -12,6 +12,12 @@ It generates tests aligned to those criteria across the v0.2 lane spine
 evaluates quality with a 5-signal verdict, commits the tests to the feature
 branch, and posts a triage report to the PR — autonomously.
 
+> **What's new (June 2026):** the planner now **auto-runs on ingest** (#347, v0.9.3),
+> and the AIFactory handoff carries the **signed contract + deployed URL** (#547) —
+> so TFactory tests the **declared** acceptance criteria against the **real
+> deployment**, including authenticated web UIs (form-login + browser/visual lane
+> → screenshots & findings). See AIFactory `guides/testing-authenticated-web-apps.md`.
+
 > Status: **v0.7.0 released (2026-06-08)** — at-least-once completion-event
 > delivery (durable outbox + retrying relay), an additive CloudEvents/idempotency
 > envelope, a typed handback contract with bounded `needs_human` retry +
