@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.3 — ingest auto-runs the planner: pin agents.planner at startup (#347) (2026-06-11)
+
+- **`/api/specs/ingest` now reliably auto-schedules the Planner (TFactory #347).** Ingested specs were landing at `status=pending` with `planner_scheduled: false` and the warning "planner module not importable" — but only in the long-lived server process. The request-time lazy import `from agents.planner import schedule_planner` (inside `create_spec_ingest_workspace`) intermittently raised `ImportError` mid-request, while the very same import resolved cleanly in every fresh process and at app startup. Fix: `routes/specs.py` now imports `agents.planner` once at module load (app boot), pinning it into `sys.modules` so the downstream lazy import is a fast cache hit instead of a fragile fresh import. This unblocks the AIFactory→TFactory verify leg of the PARR loop (the contract already arrives; now the test pipeline actually runs).
+- **Planner scheduling failures are no longer swallowed.** Both `schedule_planner` call sites in `task_control.py` now catch `Exception` (not just `ImportError`), log the traceback, and surface a `planner scheduling failed: …` warning — so a future regression shows up in logs and the ingest response instead of a silent `pending`.
+
 ## 0.9.2 — contract-carrying handoff: test the declared ACs, not inferred ones (2026-06-10)
 
 - **`/api/specs/ingest` now accepts the signed Task Contract and uses it as the authoritative test profile (#71 Phase 3, with AIFactory v3.6.14).** The handoff was contract-less (`{project_id, spec_id, spec_text}`), so the Planner inferred lanes/frameworks and PFactory's declared `tfactory` block (lanes/frameworks/`ac_to_code_map`) was discarded. `SpecIngestRequest` now carries an optional `contract`; `create_spec_ingest_workspace` persists it to `context/task_contract.json` (where `read_task_contract()` looks first) when it has the RFC-0002 markers, so `parse_tfactory_profile` drives lane/framework selection. No contract → inference, unchanged (backward compatible).
