@@ -16,7 +16,8 @@ logger = logging.getLogger(__name__)
 
 # Model shorthand to full model ID mapping
 MODEL_ID_MAP: dict[str, str] = {
-    "opus": "claude-opus-4-7",
+    "opus": "claude-opus-4-8",
+    "opus-4.7": "claude-opus-4-7",  # legacy alias — kept for users who pinned 4.7
     "opus-1m": "claude-opus-4-6",  # legacy alias — kept for users who pinned 4.6 + 1M beta
     "opus-4.5": "claude-opus-4-5-20251101",
     "sonnet": "claude-sonnet-4-6",
@@ -49,6 +50,7 @@ EFFORT_LEVEL_MAP: dict[str, str] = {
 # Models that support adaptive thinking via effort level (env var)
 # These models get both max_thinking_tokens AND effort_level
 ADAPTIVE_THINKING_MODELS: set[str] = {
+    "claude-opus-4-8",
     "claude-opus-4-7",
     "claude-opus-4-6",
     "claude-sonnet-4-6",
@@ -218,9 +220,12 @@ def is_adaptive_model(model_id: str) -> bool:
 # The constants and helpers below are the entry point for callers that want
 # to use the Claude Agent SDK's `thinking` parameter (post-Jan-2026 SDK).
 # is_adaptive_model() above stays in use for the legacy CLAUDE_CODE_EFFORT_LEVEL
-# path; the gate here is narrower: only Opus 4.7 routes to the SDK-native
-# {"type": "adaptive"} shape — Opus 4.6 stays on the effort-level path.
+# path; the gate here is narrower: only the latest Opus tiers (4.7, 4.8) route to
+# the SDK-native {"type": "adaptive"} shape — Opus 4.6 stays on the effort path.
 _OPUS_47_ID: str = "claude-opus-4-7"
+_OPUS_48_ID: str = "claude-opus-4-8"
+# Opus tiers that use the SDK-native adaptive/interleaved-thinking shapes.
+_SDK_NATIVE_ADAPTIVE_OPUS: frozenset[str] = frozenset({_OPUS_47_ID, _OPUS_48_ID})
 
 INTERLEAVED_THINKING_AGENT_TYPES: frozenset[str] = frozenset({"planner", "coder"})
 INTERLEAVED_THINKING_BETA: str = "interleaved-thinking-2025-05-14"
@@ -254,7 +259,7 @@ def thinking_config_for(
     """
     if explicit_budget is not None and explicit_budget > 0:
         return {"type": "enabled", "budget_tokens": explicit_budget}
-    if model_id == _OPUS_47_ID and thinking_level != "none":
+    if model_id in _SDK_NATIVE_ADAPTIVE_OPUS and thinking_level != "none":
         return {"type": "adaptive"}
     return None
 
@@ -281,7 +286,10 @@ def interleaved_thinking_betas_for(
     Returns:
         List of beta header strings — either [INTERLEAVED_THINKING_BETA] or [].
     """
-    if model_id == _OPUS_47_ID and agent_type in INTERLEAVED_THINKING_AGENT_TYPES:
+    if (
+        model_id in _SDK_NATIVE_ADAPTIVE_OPUS
+        and agent_type in INTERLEAVED_THINKING_AGENT_TYPES
+    ):
         return [INTERLEAVED_THINKING_BETA]
     return []
 
