@@ -219,7 +219,11 @@ body {
   position: fixed;
   right: 1.5rem;
   bottom: 1.5rem;
-  z-index: 1100;
+  /* z-50 (not higher): the popup floats above page content but stays below
+     Radix overlays (dialogs/dropdowns/tooltips, also z-50) which portal to the
+     end of <body> — so the model picker + Custom modal opened inside the popup
+     render above it. Toasts (z-100) also stay on top. */
+  z-index: 50;
   width: 54px;
   height: 54px;
   border-radius: 50%;
@@ -246,7 +250,7 @@ body {
   position: fixed;
   right: 1.5rem;
   bottom: 5.6rem;
-  z-index: 1100;
+  z-index: 50;
   width: 400px;
   max-width: calc(100vw - 3rem);
   height: 70vh;
