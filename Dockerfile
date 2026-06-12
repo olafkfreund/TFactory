@@ -39,6 +39,15 @@ FROM cgr.dev/chainguard/python:latest-dev@sha256:c1d503ebc5088bd0143673af0d02f2d
 
 USER root
 
+# Pull all available Wolfi security patches at build time. The base is pinned
+# by digest for reproducibility, but the digest lags behind freshly-disclosed
+# CVEs (e.g. CVE-2026-45447 in libcrypto3/libssl3, fixed in 3.6.3-r0). Running
+# `apk upgrade` decouples package currency from the base digest so every
+# *fixable* HIGH/CRITICAL is cleared on each rebuild — ending the per-package
+# whack-a-mole (cf. the binutils constraint below). The Trivy gate
+# (test_trivy_no_high_critical) stays green without bumping the digest.
+RUN apk upgrade --no-cache
+
 # System packages from Wolfi APK index. Build tools come bundled in :latest-dev.
 #   git           — worktree operations
 #   curl, wget    — downloads (HEALTHCHECK uses curl)
