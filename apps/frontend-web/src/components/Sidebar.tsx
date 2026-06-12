@@ -4,7 +4,6 @@ import {
   Plus,
   Trash2,
   FlaskConical,
-  Terminal,
   FolderOpen,
   BookOpen,
   AlertCircle,
@@ -14,8 +13,6 @@ import {
   GitPullRequest,
   Gitlab,
   FileText,
-  Sparkles,
-  GitBranch,
   Wrench,
   Lightbulb,
   Cloud,
@@ -69,26 +66,18 @@ interface NavItem {
 }
 
 // Base nav items always shown.
-// TFactory's own job (tests / review queue) leads; the inherited
-// general-agent IDE surfaces (editor/terminals/worktrees) follow.
+// TFactory's own job (tests / review queue) leads. The inherited general-agent
+// IDE surfaces with no role in the test pipeline (Chat→popup, Terminal,
+// Worktrees) are hidden from the nav; their code/mechanisms are retained.
 const baseNavItems: NavItem[] = [
   { id: 'tfactory', labelKey: 'navigation:items.tests', icon: FlaskConical },
   { id: 'editor', labelKey: 'navigation:items.editor', icon: FolderOpen },
-  { id: 'insights', labelKey: 'navigation:items.chat', icon: Sparkles },
-  { id: 'terminals', labelKey: 'navigation:items.terminals', icon: Terminal },
   { id: 'agent-tools', labelKey: 'navigation:items.agentTools', icon: Wrench },
   { id: 'skills', labelKey: 'navigation:items.skills', icon: Lightbulb },
   { id: 'changelog', labelKey: 'navigation:items.changelog', icon: FileText },
-  { id: 'worktrees', labelKey: 'navigation:items.worktrees', icon: GitBranch },
   { id: 'context', labelKey: 'navigation:items.context', icon: BookOpen },
   { id: 'cloud', labelKey: 'navigation:items.cloud', icon: Cloud },
   { id: 'visual-reports', labelKey: 'navigation:items.visualReports', icon: Camera }
-];
-
-// GitHub nav items shown when GitHub is enabled
-const githubNavItems: NavItem[] = [
-  { id: 'github-issues', labelKey: 'navigation:items.githubIssues', icon: Github },
-  { id: 'github-prs', labelKey: 'navigation:items.githubPRs', icon: GitPullRequest }
 ];
 
 export function Sidebar({
@@ -174,18 +163,18 @@ export function Sidebar({
     if (provider) {
       if (provider === 'gitlab') {
         items.push(
-          { id: 'github-issues', labelKey: 'navigation:items.gitlabIssues', icon: Gitlab },
+          { id: 'github-issues', labelKey: 'navigation:items.testPlans', icon: Gitlab },
           { id: 'github-prs', labelKey: 'navigation:items.gitlabMRs', icon: GitPullRequest }
         );
       } else if (provider === 'azure_devops' || provider === 'ado') {
         items.push(
-          { id: 'github-issues', labelKey: 'navigation:items.adoIssues', icon: AlertCircle },
+          { id: 'github-issues', labelKey: 'navigation:items.testPlans', icon: AlertCircle },
           { id: 'github-prs', labelKey: 'navigation:items.adoPRs', icon: GitPullRequest }
         );
       } else {
         // Default / GitHub
         items.push(
-          { id: 'github-issues', labelKey: 'navigation:items.githubIssues', icon: Github },
+          { id: 'github-issues', labelKey: 'navigation:items.testPlans', icon: Github },
           { id: 'github-prs', labelKey: 'navigation:items.githubPRs', icon: GitPullRequest }
         );
       }

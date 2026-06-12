@@ -111,9 +111,12 @@ const markdownComponents = {
 interface InsightsProps {
   projectId: string;
   onNavigate?: (view: 'tfactory' | 'terminals' | 'editor' | 'context' | 'github-issues' | 'github-prs' | 'changelog' | 'insights' | 'worktrees' | 'agent-tools') => void;
+  /** Compact mode for the floating chat popup (CFactory-style): single column,
+   *  session-history sidebar hidden by default. */
+  compact?: boolean;
 }
 
-export function Insights({ projectId, onNavigate }: InsightsProps) {
+export function Insights({ projectId, onNavigate, compact = false }: InsightsProps) {
   const session = useInsightsStore((state) => state.session);
   const sessions = useInsightsStore((state) => state.sessions);
   const status = useInsightsStore((state) => state.status);
@@ -127,7 +130,7 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
   const [inputValue, setInputValue] = useState('');
   const [creatingTask, setCreatingTask] = useState<string | null>(null);
   const [taskCreated, setTaskCreated] = useState<Set<string>>(new Set());
-  const [showSidebar, setShowSidebar] = useState(true);
+  const [showSidebar, setShowSidebar] = useState(!compact);
 
   // Create Task from Chat state
   const [showCreateTaskDialog, setShowCreateTaskDialog] = useState(false);
