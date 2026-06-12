@@ -16,6 +16,20 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
+# Pin ``agents.planner`` into ``sys.modules`` at startup (this route module is
+# imported when the app boots). A request-time *fresh* import
+# (``from agents.planner import schedule_planner`` inside
+# ``create_spec_ingest_workspace``) was intermittently raising ImportError in
+# the long-lived server process — the import resolves cleanly at startup but
+# not always mid-request — which silently left every ingested spec at
+# status=pending with ``planner_scheduled: false`` (TFactory #347). Importing
+# here once, at boot, turns that lazy import into a fast sys.modules cache hit.
+# Guarded so a minimal venv without the agent SDK can still load the route.
+try:
+    import agents.planner  # noqa: F401
+except Exception:  # pragma: no cover — SDK-less env: lazy import will report it
+    pass
+
 router = APIRouter(prefix="/api/specs", tags=["Spec Ingestion"])
 
 
@@ -38,6 +52,14 @@ class SpecIngestRequest(BaseModel):
             "Absent → tests are inferred from spec_text."
         ),
     )
+    # Code reference for the built branch (#547). When repo+branch are present the
+    # ingest materializes the branch into the spec workspace (spec_dir/sut) so the
+    # lanes run against the REAL build, not just the declared contract. Absent →
+    # target-mode (tests the named target_paths / declared profile only).
+    repo: str | None = Field(default=None, description="owner/name of the built repo")
+    branch: str | None = Field(default=None, description="the built branch to test")
+    base_ref: str | None = Field(default=None, description="base ref the branch forked from")
+    head_sha: str | None = Field(default=None, description="exact build commit to pin")
 
 
 @router.post("/ingest", summary="Create a TFactory task from a raw spec (no AIFactory branch)")
@@ -68,11 +90,20 @@ async def ingest_spec(req: SpecIngestRequest) -> dict:
         )
 
     try:
+        code_ref = None
+        if req.repo and req.branch:
+            code_ref = {
+                "repo": req.repo,
+                "branch": req.branch,
+                "base_ref": req.base_ref or "main",
+                "head_sha": req.head_sha or "",
+            }
         result = create_spec_ingest_workspace(
             project_id=resolved_id,
             spec_id=req.spec_id,
             spec_text=req.spec_text,
             fmt=req.format,
+            code_ref=code_ref,
             target_paths=req.target_paths or [],
             project_root=entry.get("path") or entry.get("root_path") or ".",
             contract=req.contract,
