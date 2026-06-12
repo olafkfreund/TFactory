@@ -66,6 +66,7 @@ _MIN_CACHE_TOKENS: dict[str, int] = {
     "claude-sonnet-4-6": 1024,
     "claude-opus-4-6": 4096,
     "claude-opus-4-7": 4096,
+    "claude-opus-4-8": 4096,
 }
 
 # Conservative fallback for unknown models — chosen low so the warning is
@@ -94,9 +95,7 @@ def _make_cache_control(ttl: Literal["ephemeral", "1h"]) -> dict[str, str]:
             guard exists for callers that bypass type checking.
     """
     if ttl not in _VALID_TTLS:
-        raise ValueError(
-            f"Invalid ttl {ttl!r}; must be one of {sorted(_VALID_TTLS)}"
-        )
+        raise ValueError(f"Invalid ttl {ttl!r}; must be one of {sorted(_VALID_TTLS)}")
     if ttl == "1h":
         return {"type": "ephemeral", "ttl": "1h"}
     return {"type": "ephemeral"}
@@ -290,7 +289,9 @@ def build_cached_system_str(
             logger.warning(
                 "Prompt-cache prefix below floor for model %r — "
                 "got ~%d tokens, need ≥%d. Caching will not engage.",
-                model, prefix_tokens, floor,
+                model,
+                prefix_tokens,
+                floor,
             )
 
     # ---------- Mid-process hash-change warning ----------
