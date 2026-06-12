@@ -161,3 +161,73 @@ def test_no_contract_means_inference(tmp_path):
     sd = _spec_dir(tmp_path)
     assert not (sd / "context" / "task_contract.json").exists()
     assert read_task_contract(sd) is None
+
+
+# ─── #547: code-carrying ingest — materialize the built branch ─────────────
+
+
+def test_code_ref_materializes_branch_mode_source(tmp_path, monkeypatch):
+    # When the handoff carries {repo, branch, head_sha}, the ingest clones the
+    # branch into spec_dir/sut and writes a BRANCH-mode source.json so the lanes
+    # test the real build (#547).
+    from agents.tools_pkg.tools import task_control as tcm
+
+    calls = []
+
+    def fake_git(args, cwd=None, timeout=180):
+        calls.append((args, cwd))
+        if args[:1] == ["rev-parse"]:
+            return True, "abc123\n"
+        if args[:1] == ["clone"]:
+            # simulate the clone creating the sut dir
+            if len(args) >= 2:
+                Path(args[-1]).mkdir(parents=True, exist_ok=True)
+            return True, ""
+        return True, ""
+
+    monkeypatch.setattr(tcm, "_git_run", fake_git)
+    result = _ingest(
+        tmp_path,
+        _MARKDOWN,
+        code_ref={"repo": "acme/widget", "branch": "auto-claude/x", "head_sha": "abc123"},
+    )
+    assert result["code_materialized"] is True
+    sd = _spec_dir(tmp_path)
+    source = json.loads((sd / "context" / "source.json").read_text())
+    assert source["mode"] == "spec_ingest_branch"
+    assert source["repo"] == "acme/widget"
+    assert source["branch"] == "auto-claude/x"
+    assert source["head_sha"] == "abc123"
+    assert source["sut_path"].endswith("/sut")
+    # a clone was attempted
+    assert any(a[:1] == ["clone"] for a, _ in calls)
+
+
+def test_failed_clone_degrades_to_target_mode(tmp_path, monkeypatch):
+    # A clone failure must not break ingest — it falls back to target-mode and
+    # records a warning.
+    from agents.tools_pkg.tools import task_control as tcm
+
+    def failing_git(args, cwd=None, timeout=180):
+        return False, "fatal: could not read from remote"
+
+    monkeypatch.setattr(tcm, "_git_run", failing_git)
+    result = _ingest(
+        tmp_path,
+        _MARKDOWN,
+        code_ref={"repo": "acme/widget", "branch": "auto-claude/x"},
+    )
+    assert result["code_materialized"] is False
+    assert any("materialization failed" in w for w in result["warnings"])
+    sd = _spec_dir(tmp_path)
+    source = json.loads((sd / "context" / "source.json").read_text())
+    assert source["mode"] == "spec_ingest"  # target-mode fallback
+
+
+def test_no_code_ref_stays_target_mode(tmp_path):
+    # No code_ref → unchanged target-mode behavior (backward compatible).
+    result = _ingest(tmp_path, _MARKDOWN, target_paths=["app/main.py"])
+    assert result["code_materialized"] is False
+    sd = _spec_dir(tmp_path)
+    source = json.loads((sd / "context" / "source.json").read_text())
+    assert source["mode"] == "spec_ingest"

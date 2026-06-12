@@ -199,6 +199,73 @@ def _format_json(data: Any) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _git_run(
+    args: list[str], cwd: str | None = None, timeout: int = 180
+) -> tuple[bool, str]:
+    """Run a git command, returning ``(ok, combined_output)``. Never raises."""
+    import subprocess
+
+    try:
+        r = subprocess.run(  # noqa: S603,S607 — fixed argv
+            ["git", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout
+        )
+        return r.returncode == 0, (r.stdout or "") + (r.stderr or "")
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, str(exc)
+
+
+def _materialize_code_ref(
+    spec_dir: Path, code_ref: dict, *, runner: Any = None
+) -> dict:
+    """Clone + check out the AIFactory build branch into ``spec_dir/sut`` so the
+    lanes run against the REAL build, not just the declared contract (#547).
+
+    The handoff carries ``{repo, branch, base_ref, head_sha}``; we clone the
+    branch (shallow) and pin the exact sha when known. Best-effort: returns a
+    status dict and never raises — a failed materialization degrades to
+    target-mode rather than breaking ingest.
+    """
+    runner = runner or _git_run
+    repo = code_ref.get("repo")
+    branch = code_ref.get("branch")
+    if not repo or not branch:
+        return {"materialized": False, "reason": "no_repo_or_branch"}
+    head_sha = code_ref.get("head_sha") or ""
+    sut = Path(spec_dir) / "sut"
+    sut.mkdir(parents=True, exist_ok=True)
+
+    # `gh auth setup-git` lets git use the gh token for private repos (idempotent).
+    import subprocess
+
+    try:
+        subprocess.run(  # noqa: S603,S607
+            ["gh", "auth", "setup-git"], capture_output=True, text=True, timeout=30
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    url = code_ref.get("clone_url") or f"https://github.com/{repo}.git"
+    ok, out = runner(["clone", "--depth", "50", "--branch", branch, url, str(sut)])
+    if not ok:
+        # Fall back: clone the default branch, then fetch + checkout the target.
+        ok, out = runner(["clone", "--depth", "50", url, str(sut)])
+        if ok:
+            runner(["fetch", "origin", branch], cwd=str(sut))
+            runner(["checkout", branch], cwd=str(sut))
+    if not ok:
+        return {"materialized": False, "reason": "clone_failed", "detail": out[:300]}
+    if head_sha:
+        # Pin the exact build sha when known (fetch it first in case it's deep).
+        runner(["fetch", "--depth", "50", "origin", head_sha], cwd=str(sut))
+        runner(["checkout", head_sha], cwd=str(sut))
+    okr, rev = runner(["rev-parse", "HEAD"], cwd=str(sut))
+    return {
+        "materialized": True,
+        "sut_path": str(sut),
+        "head_sha": (rev.strip() if okr else "") or head_sha,
+    }
+
+
 def create_spec_ingest_workspace(
     *,
     project_id: str,
@@ -210,6 +277,7 @@ def create_spec_ingest_workspace(
     root: Path | None = None,
     schedule: bool = True,
     contract: dict | None = None,
+    code_ref: dict | None = None,
 ) -> dict[str, Any]:
     """Create a TFactory workspace from a raw acceptance-criteria spec.
 
@@ -255,20 +323,47 @@ def create_spec_ingest_workspace(
     if isinstance(contract, dict) and (
         "tfactory" in contract or "contract_version" in contract
     ):
-        (context_dir / "task_contract.json").write_text(
-            json.dumps(contract, indent=2)
-        )
+        (context_dir / "task_contract.json").write_text(json.dumps(contract, indent=2))
 
-    # Target-mode source.json: no branch/base_ref/diff. The Triager's
-    # PR-status side-effect (WS1) correctly skips when there's no sha/repo.
-    source = {
-        "mode": "spec_ingest",
-        "project_id": project_id,
-        "spec_id": spec_id,
-        "source_format": spec.source_format.value,
-        "target_paths": list(target_paths or []),
-        "created_at": _now_iso(),
-    }
+    # When the handoff carries a code reference (#547), materialize the built
+    # branch into spec_dir/sut so the lanes run against the REAL build, and write
+    # a BRANCH-mode source.json (repo/branch/base_ref/head_sha + sut_path) so the
+    # Triager's PR-status side-effect (WS1) and branch-aware lanes engage. A
+    # failed clone degrades to target-mode rather than breaking ingest.
+    code_status = None
+    if isinstance(code_ref, dict) and code_ref.get("repo") and code_ref.get("branch"):
+        code_status = _materialize_code_ref(spec_dir, code_ref)
+        if not code_status.get("materialized"):
+            warnings.append(
+                f"code materialization failed ({code_status.get('reason')}) — "
+                "falling back to target-mode"
+            )
+
+    if code_status and code_status.get("materialized"):
+        source = {
+            "mode": "spec_ingest_branch",
+            "project_id": project_id,
+            "spec_id": spec_id,
+            "source_format": spec.source_format.value,
+            "repo": code_ref["repo"],
+            "branch": code_ref["branch"],
+            "base_ref": code_ref.get("base_ref") or "main",
+            "head_sha": code_status.get("head_sha") or code_ref.get("head_sha") or "",
+            "sut_path": code_status.get("sut_path"),
+            "target_paths": list(target_paths or []),
+            "created_at": _now_iso(),
+        }
+    else:
+        # Target-mode source.json: no branch/base_ref/diff. The Triager's
+        # PR-status side-effect (WS1) correctly skips when there's no sha/repo.
+        source = {
+            "mode": "spec_ingest",
+            "project_id": project_id,
+            "spec_id": spec_id,
+            "source_format": spec.source_format.value,
+            "target_paths": list(target_paths or []),
+            "created_at": _now_iso(),
+        }
     (context_dir / "source.json").write_text(json.dumps(source, indent=2))
 
     status = {
@@ -295,16 +390,25 @@ def create_spec_ingest_workspace(
                 mode="initial",
             )
             planner_scheduled = task is not None
-        except ImportError:
+        except ImportError as exc:
             warnings.append(
-                "planner module not importable — task stays at status=pending"
+                f"planner module not importable — task stays at status=pending: {exc}"
             )
+        except Exception as exc:  # noqa: BLE001 — don't let a scheduling error
+            # silently leave the spec at pending; surface it (TFactory #347).
+            import logging as _lg
+
+            _lg.getLogger(__name__).error(
+                "schedule_planner failed for %s: %r", spec_id, exc, exc_info=exc
+            )
+            warnings.append(f"planner scheduling failed: {exc}")
 
     return {
         "spec_dir": str(spec_dir),
         "source_format": spec.source_format.value,
         "ac_count": len(spec.criteria),
         "planner_scheduled": planner_scheduled,
+        "code_materialized": bool(code_status and code_status.get("materialized")),
         "warnings": warnings,
     }
 
@@ -505,12 +609,19 @@ def create_task_control_tools() -> list:
                 mode="initial",
             )
             planner_scheduled = task is not None
-        except ImportError:
+        except ImportError as exc:
             # planner module not importable (e.g. minimal venv without SDK
             # transitive deps); leave status=pending and surface a warning.
             snapshot_warnings.append(
-                "planner module not importable — task stays at status=pending"
+                f"planner module not importable — task stays at status=pending: {exc}"
             )
+        except Exception as exc:  # noqa: BLE001 — don't silently leave pending
+            import logging as _lg
+
+            _lg.getLogger(__name__).error(
+                "schedule_planner failed for %s: %r", task_id, exc, exc_info=exc
+            )
+            snapshot_warnings.append(f"planner scheduling failed: {exc}")
 
         portal_port = os.environ.get("TFACTORY_PORTAL_PORT", "3103")
         return _format_json(
