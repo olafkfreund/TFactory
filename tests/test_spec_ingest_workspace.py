@@ -166,12 +166,11 @@ def test_no_contract_means_inference(tmp_path):
 # ─── #547: code-carrying ingest — materialize the built branch ─────────────
 
 
-def test_code_ref_materializes_branch_mode_source(tmp_path, monkeypatch):
+def test_code_ref_materializes_branch_mode_source(tmp_path):
     # When the handoff carries {repo, branch, head_sha}, the ingest clones the
     # branch into spec_dir/sut and writes a BRANCH-mode source.json so the lanes
-    # test the real build (#547).
-    from agents.tools_pkg.tools import task_control as tcm
-
+    # test the real build (#547). The git runner is injected (code_runner) so the
+    # test is hermetic — no module-global monkeypatch, no host git/gh.
     calls = []
 
     def fake_git(args, cwd=None, timeout=180):
@@ -185,11 +184,11 @@ def test_code_ref_materializes_branch_mode_source(tmp_path, monkeypatch):
             return True, ""
         return True, ""
 
-    monkeypatch.setattr(tcm, "_git_run", fake_git)
     result = _ingest(
         tmp_path,
         _MARKDOWN,
         code_ref={"repo": "acme/widget", "branch": "auto-claude/x", "head_sha": "abc123"},
+        code_runner=fake_git,
     )
     assert result["code_materialized"] is True
     sd = _spec_dir(tmp_path)
@@ -203,19 +202,17 @@ def test_code_ref_materializes_branch_mode_source(tmp_path, monkeypatch):
     assert any(a[:1] == ["clone"] for a, _ in calls)
 
 
-def test_failed_clone_degrades_to_target_mode(tmp_path, monkeypatch):
+def test_failed_clone_degrades_to_target_mode(tmp_path):
     # A clone failure must not break ingest — it falls back to target-mode and
     # records a warning.
-    from agents.tools_pkg.tools import task_control as tcm
-
     def failing_git(args, cwd=None, timeout=180):
         return False, "fatal: could not read from remote"
 
-    monkeypatch.setattr(tcm, "_git_run", failing_git)
     result = _ingest(
         tmp_path,
         _MARKDOWN,
         code_ref={"repo": "acme/widget", "branch": "auto-claude/x"},
+        code_runner=failing_git,
     )
     assert result["code_materialized"] is False
     assert any("materialization failed" in w for w in result["warnings"])

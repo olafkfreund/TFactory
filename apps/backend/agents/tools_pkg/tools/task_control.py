@@ -225,6 +225,10 @@ def _materialize_code_ref(
     status dict and never raises — a failed materialization degrades to
     target-mode rather than breaking ingest.
     """
+    # An injected runner means a test is driving us — skip the real
+    # ``gh auth setup-git`` subprocess entirely so tests are hermetic and never
+    # depend on host git/gh state (which leaks under suite ordering).
+    use_real = runner is None
     runner = runner or _git_run
     repo = code_ref.get("repo")
     branch = code_ref.get("branch")
@@ -234,15 +238,16 @@ def _materialize_code_ref(
     sut = Path(spec_dir) / "sut"
     sut.mkdir(parents=True, exist_ok=True)
 
-    # `gh auth setup-git` lets git use the gh token for private repos (idempotent).
-    import subprocess
+    if use_real:
+        # `gh auth setup-git` lets git use the gh token for private repos.
+        import subprocess
 
-    try:
-        subprocess.run(  # noqa: S603,S607
-            ["gh", "auth", "setup-git"], capture_output=True, text=True, timeout=30
-        )
-    except (OSError, subprocess.SubprocessError):
-        pass
+        try:
+            subprocess.run(  # noqa: S603,S607
+                ["gh", "auth", "setup-git"], capture_output=True, text=True, timeout=30
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
 
     url = code_ref.get("clone_url") or f"https://github.com/{repo}.git"
     ok, out = runner(["clone", "--depth", "50", "--branch", branch, url, str(sut)])
@@ -278,6 +283,7 @@ def create_spec_ingest_workspace(
     schedule: bool = True,
     contract: dict | None = None,
     code_ref: dict | None = None,
+    code_runner: Any = None,
 ) -> dict[str, Any]:
     """Create a TFactory workspace from a raw acceptance-criteria spec.
 
@@ -332,7 +338,7 @@ def create_spec_ingest_workspace(
     # failed clone degrades to target-mode rather than breaking ingest.
     code_status = None
     if isinstance(code_ref, dict) and code_ref.get("repo") and code_ref.get("branch"):
-        code_status = _materialize_code_ref(spec_dir, code_ref)
+        code_status = _materialize_code_ref(spec_dir, code_ref, runner=code_runner)
         if not code_status.get("materialized"):
             warnings.append(
                 f"code materialization failed ({code_status.get('reason')}) — "
