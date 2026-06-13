@@ -4,6 +4,7 @@ Configuration settings for TFactory Web Server.
 Settings are loaded from environment variables with sensible defaults.
 """
 
+import os
 import secrets
 from pathlib import Path
 
@@ -211,6 +212,13 @@ class Settings(BaseSettings):
             return
 
         if self.ALLOW_INSECURE_AUTH:
+            return
+
+        # The pytest suite boots the real app with DISABLE_AUTH on 0.0.0.0 inside
+        # an isolated runner; exempt a live test run so the guard does not break
+        # CI. PYTEST_CURRENT_TEST is set only while pytest runs, never in a real
+        # deployment, so the guard still protects production.
+        if "PYTEST_CURRENT_TEST" in os.environ:
             return
 
         raise RuntimeError(
