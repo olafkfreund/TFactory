@@ -41,6 +41,8 @@ from typing import Callable
 from urllib import request as urlrequest
 from urllib.error import HTTPError, URLError
 
+from .net_guard import UnsafeTargetURLError, assert_safe_target_url
+
 # ---------------------------------------------------------------------------
 # Errors
 # ---------------------------------------------------------------------------
@@ -117,6 +119,7 @@ class AppRuntime:
         compose_cmd: tuple[str, ...] | None = None,
         runner_fn: Callable | None = None,
         clock: Callable[[], float] | None = None,
+        allow_private_targets: bool = False,
     ) -> None:
         self.target = target
         self.repo_root = repo_root
@@ -125,6 +128,9 @@ class AppRuntime:
         self._runner_fn = runner_fn or subprocess.run
         self._clock = clock or time.monotonic
         self._started = False
+        # SSRF guard (#359): allow RFC-1918 targets only when the operator
+        # explicitly opts in (link-local / metadata / loopback stay blocked).
+        self._allow_private_targets = allow_private_targets
 
     # ── start / stop ─────────────────────────────────────────────────────
 
@@ -242,6 +248,24 @@ class AppRuntime:
             ``expect_status`` within the budget; ``healthy=False`` + populated
             ``last_status`` / ``last_error`` on timeout.
         """
+        # SSRF guard (#359): reject metadata/link-local/loopback (and private,
+        # unless allowed) targets BEFORE any network fetch — fail closed.
+        try:
+            # The compose app runs on localhost, so loopback is expected here;
+            # link-local / cloud-metadata stays blocked unconditionally.
+            assert_safe_target_url(
+                wait_for.url,
+                allow_private=self._allow_private_targets,
+                allow_loopback=True,
+            )
+        except (UnsafeTargetURLError, OSError) as exc:
+            return HealthCheckResult(
+                url=wait_for.url,
+                last_status=None,
+                last_error=f"blocked_unsafe_target: {exc}",
+                healthy=False,
+            )
+
         deadline = self._clock() + wait_for.timeout_seconds
         last_status: int | None = None
         last_error: str | None = None

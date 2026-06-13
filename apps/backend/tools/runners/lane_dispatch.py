@@ -180,6 +180,7 @@ def dispatch_browser_lane(
     docker_runner: DockerRunner,
     docker_run_kwargs: dict[str, Any],
     app_runtime_cls=None,  # injectable for tests; defaults to AppRuntime
+    allow_private_targets: bool = False,  # SSRF guard opt-in (#359)
 ) -> DispatchResult:
     """Dispatch a Browser-lane (or Integration-lane) test with AppRuntime.
 
@@ -229,7 +230,23 @@ def dispatch_browser_lane(
     if target.wait_for:
         target_url = target.wait_for[0].url
 
-    with runtime_cls(target, repo_root) as runtime:
+    # SSRF guard (#359): refuse to hand a cloud-metadata / link-local URL to
+    # the network-enabled lane before any fetch happens. The compose app this
+    # path targets runs on localhost, so loopback is expected; metadata /
+    # link-local is blocked unconditionally. AppRuntime applies the same
+    # check to its own health-poll.
+    if target_url is not None:
+        from .net_guard import assert_safe_target_url
+
+        assert_safe_target_url(
+            target_url,
+            allow_private=allow_private_targets,
+            allow_loopback=True,
+        )
+
+    with runtime_cls(
+        target, repo_root, allow_private_targets=allow_private_targets
+    ) as runtime:
         runtime.wait_for_healthy()
         if target_url is not None:
             caller_extra_env["TFACTORY_TARGET_URL"] = target_url

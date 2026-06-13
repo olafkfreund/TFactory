@@ -19,20 +19,35 @@ permissions:
 
 jobs:
   dispatch:
-    if: github.event.label.name == 'tfactory:run'
+    # Only act on the tfactory:run label, and only when the issue author is an
+    # org/repo member (defends against drive-by labels on issues filed by
+    # outside contributors triggering the privileged dispatch).
+    if: >-
+      github.event.label.name == 'tfactory:run' &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.issue.author_association)
     runs-on: ubuntu-latest
     steps:
       - name: Trigger TFactory test task
+        # Untrusted fields (issue title/number) are passed via env, never
+        # interpolated into the shell, and the JSON body is built with jq
+        # --arg so a crafted title cannot break quoting or inject commands.
+        env:
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          TFACTORY_URL: ${{ vars.TFACTORY_URL }}
+          TFACTORY_TOKEN: ${{ secrets.TFACTORY_TOKEN }}
+          REPO: ${{ github.repository }}
         run: |
+          PAYLOAD=$(jq -n \
+            --argjson issue_number "$ISSUE_NUMBER" \
+            --arg repo "$REPO" \
+            --arg title "$ISSUE_TITLE" \
+            '{issue_number: $issue_number, repo: $repo, title: $title}')
           RESPONSE=$(curl -s -w "\n%{http_code}" \
-            -X POST "${{ vars.TFACTORY_URL }}/api/tasks" \
-            -H "Authorization: Bearer ${{ secrets.TFACTORY_TOKEN }}" \
+            -X POST "${TFACTORY_URL}/api/tasks" \
+            -H "Authorization: Bearer ${TFACTORY_TOKEN}" \
             -H "Content-Type: application/json" \
-            -d '{
-              "issue_number": ${{ github.event.issue.number }},
-              "repo": "${{ github.repository }}",
-              "title": "${{ github.event.issue.title }}"
-            }')
+            -d "$PAYLOAD")
           HTTP_STATUS=$(echo "$RESPONSE" | tail -n1)
           BODY=$(echo "$RESPONSE" | head -n-1)
           echo "HTTP status: $HTTP_STATUS"
@@ -47,7 +62,10 @@ jobs:
       - name: Add tracking comment
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+          TFACTORY_URL: ${{ vars.TFACTORY_URL }}
         run: |
-          gh issue comment ${{ github.event.issue.number }} \
-            --repo "${{ github.repository }}" \
-            --body "🏭 **TFactory test task created.** The autonomous pipeline (Planner → Gen-Functional → Executor → Evaluator → Triager) has started. Results will appear in the TFactory portal: \`${{ vars.TFACTORY_URL }}\`"
+          gh issue comment "$ISSUE_NUMBER" \
+            --repo "$REPO" \
+            --body "🏭 **TFactory test task created.** The autonomous pipeline (Planner → Gen-Functional → Executor → Evaluator → Triager) has started. Results will appear in the TFactory portal: \`${TFACTORY_URL}\`"
