@@ -49,6 +49,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
+# Single source of truth for the completion-envelope schema version (#360),
+# derived from the vendored JSON schema's ``$id`` so the Python literal and the
+# published contract can never silently drift. Imported at module scope (unlike
+# the other lazy ``agents.*`` imports below) because the value is bound to a
+# module-level constant used when building every completion envelope.
+from agents.completion_schema import (  # noqa: E402 - agents pkg resolved via sys.path
+    COMPLETION_SCHEMA_VERSION as _COMPLETION_SCHEMA_VERSION,
+)
+
 _triage_log = _logging.getLogger(__name__)
 
 
@@ -487,7 +496,8 @@ def _completion_sentinel_enabled() -> bool:
 # Mirrors AIFactory's #466 upgrade field-for-field so the two producers emit a
 # parity envelope the CFactory collector can treat uniformly. The additive
 # fields are built in agents/completion_envelope.py (testable in isolation).
-_COMPLETION_SCHEMA_VERSION = "1.2"
+# ``_COMPLETION_SCHEMA_VERSION`` is the shared single-source-of-truth constant
+# imported at the top of this module from agents/completion_schema.py (#360).
 
 
 def _outcome_for_status(status_value: str | None) -> str:

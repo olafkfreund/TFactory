@@ -28,7 +28,25 @@ if str(_BACKEND_PATH) not in sys.path:
 
 from agents.completion_outbox import relay_once  # noqa: E402  (after sys.path insert)
 
+# The completion-envelope schema version is owned by the backend's
+# single-source-of-truth module (#360), derived from the vendored JSON schema.
+# The web-server imports it rather than re-declaring a literal so the relayed
+# events and the producer can never report a drifting ``schema_version``.
+from agents.completion_schema import (  # noqa: E402  (after sys.path insert)
+    COMPLETION_SCHEMA_VERSION,
+)
+
 logger = logging.getLogger(__name__)
+
+
+def completion_schema_version() -> str:
+    """The completion-envelope schema version the web-server relays.
+
+    Imported from the backend's single source of truth (#360) — exposed here so
+    the web-server reports the *same* version the producer stamps, with a test
+    asserting parity across the two apps.
+    """
+    return COMPLETION_SCHEMA_VERSION
 
 
 def run_one_relay() -> dict:
