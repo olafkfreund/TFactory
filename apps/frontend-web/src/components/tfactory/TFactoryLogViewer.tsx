@@ -96,51 +96,99 @@ export function TFactoryLogViewer({ specId, wsFactory, wsBaseUrl }: Props) {
   useEffect(() => {
     const url = buildLogStreamUrl(specId, envBase);
     const factory = wsFactory ?? ((u: string) => new WebSocket(u));
-    let socket: WebSocket;
-    try {
-      socket = factory(url);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-      setState('error');
-      return;
-    }
-    socketRef.current = socket;
 
-    setState('connecting');
-    setError(null);
+    // Reconnect-with-backoff: a dropped log stream (proxy idle-timeout, network
+    // blip, pod restart) should silently re-establish rather than die. Terminal
+    // server codes (4400 invalid spec / 4404 missing task) are NOT retried —
+    // reconnecting would just fail identically. `disposed` stops any pending
+    // reconnect from firing after unmount.
+    let disposed = false;
+    let attempt = 0;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-    socket.onopen = () => setState('open');
+    const scheduleReconnect = () => {
+      if (disposed) return;
+      // 1s, 2s, 4s … capped at 30s.
+      const delay = Math.min(30_000, 1_000 * 2 ** attempt);
+      attempt += 1;
+      setState('connecting');
+      reconnectTimer = setTimeout(connect, delay);
+    };
 
-    socket.onmessage = (ev: MessageEvent) => {
+    function connect() {
+      if (disposed) return;
+      let socket: WebSocket;
       try {
-        const data = typeof ev.data === 'string' ? ev.data : '';
-        const parsed = JSON.parse(data) as LogStreamPayload;
-        setPayload(parsed);
-        setError(null);
+        socket = factory(url);
       } catch (err) {
-        setError(`Failed to parse log payload: ${err instanceof Error ? err.message : err}`);
-        // Treat as error state so the UI shows the alert clearly
+        // A construction throw is a hard, repeatable failure (bad URL / no
+        // WebSocket) — surface it rather than loop on reconnect.
+        setError(err instanceof Error ? err.message : String(err));
         setState('error');
+        return;
       }
-    };
+      socketRef.current = socket;
 
-    socket.onerror = () => {
-      setState('error');
-      setError('WebSocket error');
-    };
+      setState('connecting');
+      setError(null);
 
-    socket.onclose = (ev: CloseEvent) => {
-      setState('closed');
-      // The backend uses custom codes 4400/4404 for known failures
-      // (path-traversal / missing spec) — surface those distinctly.
-      if (ev.code === 4400) setError('Invalid spec_id');
-      else if (ev.code === 4404) setError(`Task not found: ${specId}`);
-    };
+      socket.onopen = () => {
+        attempt = 0; // healthy connection — reset backoff
+        setState('open');
+      };
+
+      socket.onmessage = (ev: MessageEvent) => {
+        try {
+          const data = typeof ev.data === 'string' ? ev.data : '';
+          const parsed = JSON.parse(data) as LogStreamPayload;
+          setPayload(parsed);
+          setError(null);
+        } catch (err) {
+          setError(`Failed to parse log payload: ${err instanceof Error ? err.message : err}`);
+          // Treat as error state so the UI shows the alert clearly
+          setState('error');
+        }
+      };
+
+      socket.onerror = () => {
+        setState('error');
+        setError('WebSocket error');
+      };
+
+      socket.onclose = (ev: CloseEvent) => {
+        // The backend uses custom codes 4400/4404 for known failures
+        // (path-traversal / missing spec) — terminal, surface and stop.
+        if (ev.code === 4400) {
+          setState('error');
+          setError('Invalid spec_id');
+          return;
+        }
+        if (ev.code === 4404) {
+          setState('error');
+          setError(`Task not found: ${specId}`);
+          return;
+        }
+        // A clean close (1000) is intentional/terminal — stay closed.
+        if (ev.code === 1000) {
+          setState('closed');
+          return;
+        }
+        // Abnormal close (1006 idle-timeout, network drop, pod restart) →
+        // retry with backoff so the live stream re-establishes itself.
+        setState('closed');
+        scheduleReconnect();
+      };
+    }
+
+    connect();
 
     return () => {
+      disposed = true;
+      if (reconnectTimer !== null) clearTimeout(reconnectTimer);
+      const socket = socketRef.current;
       try {
-        if (socket.readyState === WebSocket.OPEN
-          || socket.readyState === WebSocket.CONNECTING) {
+        if (socket && (socket.readyState === WebSocket.OPEN
+          || socket.readyState === WebSocket.CONNECTING)) {
           socket.close();
         }
       } catch {

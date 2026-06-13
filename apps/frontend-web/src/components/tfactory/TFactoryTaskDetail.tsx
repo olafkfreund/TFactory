@@ -36,6 +36,7 @@ import {
 import { LaneStatusGrid } from './LaneStatusGrid';
 import { TFactoryLogViewer } from './TFactoryLogViewer';
 import { VisualBaselines } from './VisualBaselines';
+import { useVisibilityAwarePolling } from '../../hooks/useVisibilityAwarePolling';
 
 type Tab = 'status' | 'lanes' | 'verdicts' | 'report' | 'logs' | 'evidence';
 
@@ -566,19 +567,16 @@ export function TFactoryTaskDetail({ specId, fetchFn, wsFactory, pollMs = 5000 }
 
   // Background auto-refresh: re-fetch the detail on an interval so live
   // status/lane changes (e.g. a watchdog `stalled` flip, #95) surface without
-  // a manual reload. Updates only on success — a transient poll error keeps
-  // the last-good detail rather than flipping to the error state.
-  useEffect(() => {
-    if (!pollMs || pollMs <= 0) return;
-    const id = setInterval(() => {
-      getTaskDetail(specId, { fetchFn })
-        .then((d) => setDetail(d))
-        .catch(() => {
-          /* keep last-good detail on a transient poll error */
-        });
-    }, pollMs);
-    return () => clearInterval(id);
-  }, [pollMs, specId, fetchFn]);
+  // a manual reload. Visibility-aware — pauses while the tab is hidden and
+  // refetches the moment it returns to the foreground. Updates only on success:
+  // a transient poll error keeps the last-good detail rather than erroring.
+  useVisibilityAwarePolling(() => {
+    getTaskDetail(specId, { fetchFn })
+      .then((d) => setDetail(d))
+      .catch(() => {
+        /* keep last-good detail on a transient poll error */
+      });
+  }, pollMs);
 
   const _extractEvidenceFromVerdicts = useCallback((doc: TFactoryVerdictsDocument) => {
     const byTest: Record<string, EvidenceUrls> = {};

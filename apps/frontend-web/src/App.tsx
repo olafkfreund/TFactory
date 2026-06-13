@@ -34,6 +34,7 @@ import { useProjectStore, loadProjects } from './stores/project-store';
 import { useTaskStore, loadTasks } from './stores/task-store';
 import { useSettingsStore, loadSettings } from './stores/settings-store';
 import { useAuthStore } from './stores/auth-store';
+import { useSessionKeepAlive } from './hooks/useSessionKeepAlive';
 import { useIpcListeners } from './hooks/useIpc';
 import { UI_SCALE_MIN, UI_SCALE_MAX, UI_SCALE_DEFAULT } from './shared/constants';
 import type { Task, Project } from './shared/types';
@@ -58,9 +59,15 @@ function AuthenticatedApp() {
   const isSwitchingProject = useProjectStore((state) => state.isSwitchingProject);
   const tasks = useTaskStore((state) => state.tasks);
   const settings = useSettingsStore((state) => state.settings);
+  const logout = useAuthStore((state) => state.logout);
 
   // Set up IPC event listeners for real-time task updates via WebSocket
   useIpcListeners();
+
+  // Keep the auth session warm while the app is open, and bounce to /login the
+  // moment the session expires server-side — instead of leaving a stale tab
+  // that 401s on the next action.
+  useSessionKeepAlive({ onAuthLost: logout });
 
   // Compute open projects for the tab bar (respecting tab order)
   const openProjects = useMemo(() => {

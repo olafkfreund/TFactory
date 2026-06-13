@@ -121,3 +121,110 @@ def test_existing_spec_dir_raises(tmp_path):
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# ─── #71 Phase 3: contract-carrying handoff ────────────────────────────────
+
+
+def test_contract_persisted_for_authoritative_profile(tmp_path):
+    # A signed Task Contract on the handoff is written to
+    # context/task_contract.json — exactly where read_task_contract() looks
+    # first — so the Planner uses the DECLARED tfactory profile, not inference.
+    from agents.task_contract import parse_tfactory_profile, read_task_contract
+
+    contract = {
+        "feature": "GET /api/health",
+        "contract_version": "2",
+        "tfactory": {
+            "lanes": ["unit", "api"],
+            "frameworks": {"unit": "pytest", "api": "pytest"},
+            "ac_to_code_map": {"AC1": ["app/main.py"]},
+        },
+    }
+    _ingest(tmp_path, _MARKDOWN, target_paths=["app/main.py"], contract=contract)
+    sd = _spec_dir(tmp_path)
+
+    assert (sd / "context" / "task_contract.json").exists()
+    got = read_task_contract(sd)
+    assert got is not None and "tfactory" in got
+    prof = parse_tfactory_profile(got)
+    assert prof is not None
+    assert prof.lanes == ("unit", "api")
+
+
+def test_no_contract_means_inference(tmp_path):
+    # No contract (or one without RFC-0002 markers) → no task_contract.json,
+    # so TFactory falls back to inferring tests from the spec. Backward compatible.
+    from agents.task_contract import read_task_contract
+
+    _ingest(tmp_path, _MARKDOWN, target_paths=["app/main.py"])
+    sd = _spec_dir(tmp_path)
+    assert not (sd / "context" / "task_contract.json").exists()
+    assert read_task_contract(sd) is None
+
+
+# ─── #547: code-carrying ingest — materialize the built branch ─────────────
+
+
+def test_code_ref_materializes_branch_mode_source(tmp_path):
+    # When the handoff carries {repo, branch, head_sha}, the ingest clones the
+    # branch into spec_dir/sut and writes a BRANCH-mode source.json so the lanes
+    # test the real build (#547). The git runner is injected (code_runner) so the
+    # test is hermetic — no module-global monkeypatch, no host git/gh.
+    calls = []
+
+    def fake_git(args, cwd=None, timeout=180):
+        calls.append((args, cwd))
+        if args[:1] == ["rev-parse"]:
+            return True, "abc123\n"
+        if args[:1] == ["clone"]:
+            # simulate the clone creating the sut dir
+            if len(args) >= 2:
+                Path(args[-1]).mkdir(parents=True, exist_ok=True)
+            return True, ""
+        return True, ""
+
+    result = _ingest(
+        tmp_path,
+        _MARKDOWN,
+        code_ref={"repo": "acme/widget", "branch": "auto-claude/x", "head_sha": "abc123"},
+        code_runner=fake_git,
+    )
+    assert result["code_materialized"] is True
+    sd = _spec_dir(tmp_path)
+    source = json.loads((sd / "context" / "source.json").read_text())
+    assert source["mode"] == "spec_ingest_branch"
+    assert source["repo"] == "acme/widget"
+    assert source["branch"] == "auto-claude/x"
+    assert source["head_sha"] == "abc123"
+    assert source["sut_path"].endswith("/sut")
+    # a clone was attempted
+    assert any(a[:1] == ["clone"] for a, _ in calls)
+
+
+def test_failed_clone_degrades_to_target_mode(tmp_path):
+    # A clone failure must not break ingest — it falls back to target-mode and
+    # records a warning.
+    def failing_git(args, cwd=None, timeout=180):
+        return False, "fatal: could not read from remote"
+
+    result = _ingest(
+        tmp_path,
+        _MARKDOWN,
+        code_ref={"repo": "acme/widget", "branch": "auto-claude/x"},
+        code_runner=failing_git,
+    )
+    assert result["code_materialized"] is False
+    assert any("materialization failed" in w for w in result["warnings"])
+    sd = _spec_dir(tmp_path)
+    source = json.loads((sd / "context" / "source.json").read_text())
+    assert source["mode"] == "spec_ingest"  # target-mode fallback
+
+
+def test_no_code_ref_stays_target_mode(tmp_path):
+    # No code_ref → unchanged target-mode behavior (backward compatible).
+    result = _ingest(tmp_path, _MARKDOWN, target_paths=["app/main.py"])
+    assert result["code_materialized"] is False
+    sd = _spec_dir(tmp_path)
+    source = json.loads((sd / "context" / "source.json").read_text())
+    assert source["mode"] == "spec_ingest"

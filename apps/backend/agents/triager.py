@@ -406,6 +406,16 @@ def _write_status_patch(spec_dir: Path, **fields: object) -> None:
             maybe_emit_backstage(spec_dir, status)
         except Exception:  # noqa: BLE001 — emitting must never break the run
             pass
+        # Best-effort test-result docs via the vendored docs-emit core (#341).
+        # No-op unless TFACTORY_DOCS_EMIT is set; publishes under the plan's
+        # correlation_key so the run's results resolve next to the plan it
+        # verifies (verify → docs). Never raises.
+        try:
+            from agents.docs_emit_trigger import maybe_emit_docs
+
+            maybe_emit_docs(spec_dir, status)
+        except Exception:  # noqa: BLE001 — emitting must never break the run
+            pass
 
 
 # ─── Mode resolution: dry-run vs real ─────────────────────────────────
