@@ -389,6 +389,45 @@ Design: `docs/plans/2026-05-30-credential-broker-design.md`. Reference:
 `guides/credentials.md`. Cloud SDKs are optional (lazy-imported); a missing
 package degrades only that backend to `available() == False`.
 
+## Network-lane SSRF guard + fail-closed auth bind (#361 / #362)
+
+The browser / api / integration lanes fetch a **target URL that arrives in the
+AIFactory handoff** — i.e. attacker-influenceable input — so the runner stack guards
+it before any fetch:
+
+```
+   handoff target URL ─► net_guard.assert_safe_target_url(url, allow_*…)
+                         │  resolve host (literal IP or every DNS answer)
+                         │  ALWAYS block: 169.254.0.0/16 · fe80::/10 · fc00::/7
+                         │               (cloud-metadata / link-local — no override)
+                         │  block loopback unless allow_loopback=True
+                         │               (AppRuntime compose health-poll opts in)
+                         │  block RFC-1918 unless allow_private=True
+                         ▼
+              UnsafeTargetURLError  ─► lane refuses to fetch
+```
+
+| Module | Role |
+|---|---|
+| `apps/backend/tools/runners/net_guard.py` | stdlib-only SSRF guard; `assert_safe_target_url` / `is_safe_target_url` |
+| `apps/backend/tools/runners/app_runtime.py` | compose health-poll calls the guard with `allow_loopback=True` (localhost is legitimate here) |
+| `apps/backend/tools/runners/lane_dispatch.py` | validates the untrusted handoff URL with no allow-flags before dispatch |
+| `tests/test_net_guard.py` | range coverage incl. mixed public/internal DNS answers |
+
+The metadata / link-local ranges are blocked **unconditionally** — there is no global
+"off" switch, so a hostile input cannot flip one. The local compose app is reachable
+only via an explicit `allow_loopback` opt-in at the trusted call site.
+
+The web-server enforces a parallel rule at boot
+(`apps/web-server/server/config.py`): it **refuses to start** when `DISABLE_AUTH=true`
+while `HOST` is not loopback (an unauthenticated control plane on the network), unless
+an explicit escape-hatch env var is set. A live pytest run is exempted via
+`PYTEST_CURRENT_TEST` (set only while pytest runs, never in a deployment) so the
+trusted-sandbox CI bind on `0.0.0.0` still works while production stays protected. The
+issue-dispatch workflow (`.github/workflows/tfactory-dispatch.yml`) likewise routes the
+untrusted issue title through an `env:` var rather than interpolating it into a `curl`
+command line (Actions script-injection fix).
+
 ## What's NOT in the architecture yet
 
 - **Planner / Generator / Evaluator / Triager agents** (Tasks 5-8). Prompts under `apps/backend/prompts/` will be authored as those tasks land.

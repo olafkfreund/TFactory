@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.9.4 — security hardening: SSRF guard, fail-closed auth bind, CI injection fix; envelope single-source-of-truth (2026-06-13)
+
+- **SSRF guard on the network-enabled test lanes (#361).** The browser / api /
+  integration lanes take their target URL from the (attacker-influenceable) AIFactory
+  handoff and feed it to a health-poll and the test container. New
+  `apps/backend/tools/runners/net_guard.py` resolves the target host and **blocks**
+  cloud-metadata / link-local (`169.254.0.0/16`, `fe80::/10`) and IPv6 unique-local
+  (`fc00::/7`) *unconditionally*, loopback unless `allow_loopback=True` (AppRuntime's
+  compose health-poll opts in; the handoff URL does not), and RFC-1918 unless
+  `allow_private=True`. Every DNS-resolved address is checked, so a mixed
+  public/internal answer still trips it. Closes the IMDS-reachability path on the
+  network lanes.
+- **Fail-closed auth bind (#361, harness exemption #362).** `apps/web-server/server/config.py`
+  gains a startup guard that **refuses to boot** when `DISABLE_AUTH=true` while `HOST`
+  is not loopback (an unauthenticated control plane on the network), unless an explicit
+  escape-hatch env var is set. `#362` exempts a live pytest run (keyed on
+  `PYTEST_CURRENT_TEST`, never present in a real deployment) so CI's trusted-sandbox
+  bind on `0.0.0.0` still works — the guard still protects production unchanged.
+- **GitHub Actions script-injection fix (#361).** `tfactory-dispatch.yml` interpolated
+  the untrusted issue title straight into a `curl` JSON body; it now moves to an `env:`
+  block (`ISSUE_TITLE`) referenced as a shell variable, so a `$(...)`/backtick title
+  can't execute in the runner.
+- **Completion-envelope schema version: one source of truth (#363, tracking #360).**
+  The `schema_version` lived in both the vendored JSON schema `$id` and a Python literal
+  that could silently drift. `apps/backend/agents/completion_schema.py` now parses the
+  version from the schema `$id` at import time; both `apps/backend` (Triager/producer)
+  and `apps/web-server` (relay) read that single constant. A test asserts schema `$id`,
+  schema `title`, and the runtime constant agree, so drift is structurally impossible.
+- **Begin decomposing the `routes/tasks.py` god-file (#364, tracking #360).** Extracted
+  the IDE/terminal launcher routes into `apps/web-server/server/routes/worktree_tools.py`.
+  No behaviour change.
+- **Program CI: post-deploy PARR seam-gate, re-engineered (#367).** The cross-repo
+  reusable-workflow form failed the Deploy workflow at startup; reverted (#366) and
+  re-landed as a steps-based soft gate inside the deploy job (`deploy.yml`).
+
 ## 0.9.3 — ingest auto-runs the planner: pin agents.planner at startup (#347) (2026-06-11)
 
 - **`/api/specs/ingest` now reliably auto-schedules the Planner (TFactory #347).** Ingested specs were landing at `status=pending` with `planner_scheduled: false` and the warning "planner module not importable" — but only in the long-lived server process. The request-time lazy import `from agents.planner import schedule_planner` (inside `create_spec_ingest_workspace`) intermittently raised `ImportError` mid-request, while the very same import resolved cleanly in every fresh process and at app startup. Fix: `routes/specs.py` now imports `agents.planner` once at module load (app boot), pinning it into `sys.modules` so the downstream lazy import is a fast cache hit instead of a fragile fresh import. This unblocks the AIFactory→TFactory verify leg of the PARR loop (the contract already arrives; now the test pipeline actually runs).

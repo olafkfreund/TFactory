@@ -85,6 +85,25 @@ validated by `apps/backend/contracts/completion-event.schema.json`):
 }
 ```
 
+### `schema_version` has one source of truth (#360 / #363)
+
+`schema_version` previously lived in **two** places that had to agree but had no
+mechanism forcing them to: the vendored JSON schema's `$id`
+(`completion-event-<version>.json` in
+`apps/backend/contracts/completion-event.schema.json` — the *published* contract the
+sibling factories validate against) and a Python literal the Triager stamped onto
+every event. Bump one without the other and a consumer sees a `schema_version` that
+contradicts the `$id` it validated — silently.
+
+`apps/backend/agents/completion_schema.py` is now the **single source of truth**: it
+parses the version from the schema `$id` at import time, and both `apps/backend` (the
+Triager, producer) and `apps/web-server` (the relay, via the shared `agents` package)
+read that one constant. There is no second literal to forget. The version becomes a
+function of the published contract — change the schema `$id` and the runtime follows.
+`tests/test_completion_schema_version.py` asserts the schema `$id`, the schema
+`title`, and the runtime constant all report the identical version, so the contract
+can no longer silently drift.
+
 ### `outcome` mapping (normalized across services)
 
 | outcome | meaning | TFactory terminal status |
