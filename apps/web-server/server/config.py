@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     # Authentication
     API_TOKEN: str = ""  # Will generate default if not set
     DISABLE_AUTH: bool = False  # Set to True to disable auth (dev only)
+    # Escape hatch for DISABLE_AUTH on a non-loopback HOST. Off by default so
+    # the startup guard hard-fails an unauthenticated network binding.
+    ALLOW_INSECURE_AUTH: bool = False
 
     # JWT Configuration
     JWT_SECRET: str = ""  # Auto-generated if not set
@@ -189,6 +192,34 @@ class Settings(BaseSettings):
         secret_file.chmod(0o600)  # Owner read/write only
 
         return secret
+
+    def assert_safe_auth_binding(self) -> None:
+        """Refuse to boot unauthenticated on a non-loopback host.
+
+        ``DISABLE_AUTH=true`` injects a default admin into every request
+        (dev-only convenience). Combined with a non-loopback ``HOST`` (the
+        default is ``0.0.0.0``) this exposes an unauthenticated control
+        plane to the network. Hard-fail unless the operator has explicitly
+        opted in via ``APP_ALLOW_INSECURE_AUTH=true``.
+        """
+        if not self.DISABLE_AUTH:
+            return
+
+        loopback_hosts = {"127.0.0.1", "::1", "localhost", "::ffff:127.0.0.1"}
+        host = (self.HOST or "").strip().lower()
+        if host in loopback_hosts:
+            return
+
+        if self.ALLOW_INSECURE_AUTH:
+            return
+
+        raise RuntimeError(
+            "Refusing to start: DISABLE_AUTH is true while HOST="
+            f"{self.HOST!r} is not loopback. This exposes an "
+            "unauthenticated admin control plane to the network. "
+            "Bind HOST to 127.0.0.1/::1 for local dev, or set "
+            "APP_ALLOW_INSECURE_AUTH=true to override (NOT recommended)."
+        )
 
     def _setup_ssl(self) -> None:
         """Set up SSL certificates, generating self-signed if needed."""

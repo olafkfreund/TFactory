@@ -75,6 +75,11 @@ async def lifespan(app: FastAPI):
 
     # Startup
     logger.info("Starting TFactory Web Server...")
+
+    # Security guard (#358): refuse to boot an unauthenticated control plane
+    # on a non-loopback host (DISABLE_AUTH injects a default admin per request).
+    settings.assert_safe_auth_binding()
+
     logger.info(f"Backend path: {settings.BACKEND_PATH}")
     logger.info(f"Projects data dir: {settings.PROJECTS_DATA_DIR}")
 
