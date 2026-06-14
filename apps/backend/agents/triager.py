@@ -585,7 +585,32 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> dict:
     status_value = status.get("status")
     issue_number = _correlation_issue_number(status, source)
     when = status.get("updated_at") or _now_iso()
-    return {
+
+    # RFC-0001a evidence gate: a verify may only report a success OUTCOME if it
+    # produced real verdicts. A "triaged" with zero verdicts evaluated nothing —
+    # downgrade the normalized `outcome` to failure with a no_evidence reason so
+    # no consumer renders it green. We do NOT rewrite TFactory's internal
+    # `status` (its state machine + handback read it) and we deliberately do NOT
+    # treat all-flagged as a failure — `flag` means "needs human attention" by
+    # design and drives the handback loop, which is a valid non-failure outcome.
+    _verdicts = int(status.get("verdicts_count") or 0)
+    evidence = {
+        "proof_kind": "tests",
+        "verdicts": _verdicts,
+        "accepted": int(status.get("committed_count") or 0),
+        "flagged": int(status.get("flagged_count") or 0),
+        "rejected": int(status.get("rejected_count") or 0),
+    }
+    outcome = _outcome_for_status(status_value)
+    halt_reason: str | None = None
+    # Actionable evidence = any real verdict produced (evaluated, accepted, or
+    # flagged). A "triaged" success with NONE of these evaluated nothing.
+    _actionable = _verdicts > 0 or evidence["accepted"] > 0 or evidence["flagged"] > 0
+    if status_value == "triaged" and not _actionable:
+        outcome = "failure"
+        halt_reason = "no_evidence: verify produced no verdicts"
+
+    envelope = {
         # RFC-0001 core: the six required fields (Factory#4). `correlation_key`
         # is the shared key (issue#, synthetic `tf-<spec_id>` fallback) so the
         # CFactory collector can thread this event into a WorkItem.
@@ -609,7 +634,7 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> dict:
         "correlation_id": issue_number,
         "project_id": status.get("project_id"),
         "spec_id": status.get("spec_id") or source.get("spec_id"),
-        "outcome": _outcome_for_status(status_value),
+        "outcome": outcome,
         "repo": source.get("repo_slug") or source.get("repo"),
         "branch": source.get("branch"),
         "pr_number": source.get("pr_number") or None,
@@ -625,6 +650,11 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> dict:
         # Idempotency-Key on `id`, so the id is stable across relay re-delivery.
         **cloudevents_fields(project_id=status.get("project_id"), time_iso=when),
     }
+    # RFC-0001a additive evidence block + the no-evidence reason (when gated).
+    envelope["evidence"] = evidence
+    if halt_reason is not None:
+        envelope["halt_reason"] = halt_reason
+    return envelope
 
 
 def _notify_completion(spec_dir: Path, status: dict) -> None:
