@@ -405,6 +405,51 @@ def get_plan_with_worktree_sync(project_path: Path, spec_id: str) -> tuple[dict,
     return plan, plan_file
 
 
+def _resolve_correlation_issue(spec_dir: Path) -> int | None:
+    """Resolve the GitHub issue number that ties this spec to its upstream
+    AIFactory/PFactory work item — the PARR correlation key the CFactory cockpit
+    uses to attach a TFactory task to its issue-keyed work item (#94).
+
+    The key is stored per spec but only the handback path read it; the task list
+    never surfaced it, so the cockpit fell back to the spec id, never matched the
+    work item, and the test-stage lane stayed empty. Mirror the handback
+    precedence (RFC-0002 contract -> source.json) and return the issue as an int,
+    or None when absent / non-numeric. Best-effort; never raises.
+    """
+    ctx = spec_dir / "context"
+
+    def _load(path: Path) -> dict:
+        try:
+            data = json.loads(path.read_text())
+            return data if isinstance(data, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+    candidates: list = []
+    # RFC-0002 contract drops carry the correlation key directly.
+    for name in ("task_contract.json", "aifactory_plan.json"):
+        candidates.append(_load(ctx / name).get("correlation_key"))
+    # source.json: a top-level key, an embedded contract, or the raw issue.
+    source = _load(ctx / "source.json")
+    embedded = source.get("contract") or source.get("task_contract")
+    if isinstance(embedded, dict):
+        candidates.append(embedded.get("correlation_key"))
+    candidates += [
+        source.get("correlation_key"),
+        source.get("issue_number"),
+        source.get("correlation_id"),
+    ]
+
+    for value in candidates:
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def load_spec_metadata(spec_dir: Path) -> dict:
     """Load metadata for a spec from its files."""
     metadata = {
@@ -647,6 +692,16 @@ def load_spec_metadata(spec_dir: Path) -> dict:
             metadata["task_metadata"] = {}
     else:
         metadata["task_metadata"] = {}
+
+    # Surface the PARR correlation key (GitHub issue number) so the CFactory
+    # cockpit can attach this TFactory task to its issue-keyed work item and
+    # render the test-stage lane (#94). Stored per spec (RFC-0002 contract /
+    # source.json) but never exposed on the task-list row, so the test lane
+    # showed empty even when verification was running.
+    if not metadata["task_metadata"].get("githubIssueNumber"):
+        issue = _resolve_correlation_issue(spec_dir)
+        if issue is not None:
+            metadata["task_metadata"]["githubIssueNumber"] = issue
 
     # Detect status from subtask progress if not already set
     # If any subtasks are completed but not all done, task is in_progress
