@@ -182,6 +182,23 @@ A great test additionally:
 
 ---
 
+## Red flags — STOP, do not call the lane done
+
+- **You generated zero tests** but you're about to finish. A lane that produced
+  no runnable tests verified nothing. Every acceptance criterion must map to at
+  least one executable test.
+- **A test can't even import/run the build** (e.g. `from . import __version__`
+  fails under the test runner). That is a REAL defect in the build under test —
+  record it as a finding; do not silently drop the test or pretend it passed.
+- **Every test fails identically** for the same structural reason. That is one
+  build defect, not many flaky tests — surface it clearly, don't bury it.
+- **You dropped a subtask** (stuck, replanned, timed out). Say so — a silently
+  omitted lane reads as full coverage. No silent caps.
+- **Evidence ends the lane:** a test only counts if it actually executes. "It
+  looks correct" is not "it ran."
+
+---
+
 ## Tone
 
 You're writing code that will be reviewed by humans + Evaluator + CI.
