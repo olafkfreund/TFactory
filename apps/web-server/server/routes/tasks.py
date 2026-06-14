@@ -60,9 +60,15 @@ class Subtask(BaseModel):
     id: str
     title: str
     description: str | None = None
-    status: Literal["pending", "in_progress", "completed", "failed"] = "pending"
+    status: str = "pending"
     files: list[str] = Field(default_factory=list)  # Files affected by this subtask
     verification: SubtaskVerification | None = None  # How to verify completion
+    # Lane + timing for the cockpit's live execution diagram (#94). The test
+    # plan tags each subtask with a lane (unit/browser/api/integration/mutation);
+    # the cockpit aggregates them into a lane pipeline. Additive + optional.
+    lane: str | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
 
 
 class TaskBase(BaseModel):
@@ -616,6 +622,11 @@ def load_spec_metadata(spec_dir: Path) -> dict:
                         status=st.get("status", "pending"),
                         files=files,
                         verification=verification,
+                        # Lane + timing for the live diagram (#94). Present on
+                        # lane-tagged test plans; tolerate absence.
+                        lane=st.get("lane"),
+                        started_at=st.get("started_at"),
+                        completed_at=st.get("completed_at"),
                     ))
         except (json.JSONDecodeError, KeyError):
             pass
@@ -916,6 +927,10 @@ def task_to_dict(task: Task) -> dict:
                     "run": s.verification.run,
                     "scenario": s.verification.scenario,
                 } if s.verification else None,
+                # Lane + timing for the cockpit's live diagram (#94).
+                "lane": getattr(s, "lane", None),
+                "started_at": getattr(s, "started_at", None),
+                "completed_at": getattr(s, "completed_at", None),
             }
             for s in task.subtasks
         ],
