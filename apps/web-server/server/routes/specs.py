@@ -43,6 +43,14 @@ class SpecIngestRequest(BaseModel):
     target_paths: list[str] | None = Field(
         default=None, description="Repo-relative files/modules under test (target-mode)"
     )
+    source_branch: str | None = Field(
+        default=None,
+        description=(
+            "AIFactory build branch to fetch + check out into the project workspace "
+            "before testing, so tests run against the ACTUAL built code (#96). When "
+            "omitted, tests run against whatever is currently checked out."
+        ),
+    )
     contract: dict | None = Field(
         default=None,
         description=(
@@ -90,6 +98,7 @@ async def ingest_spec(req: SpecIngestRequest) -> dict:
             target_paths=req.target_paths or [],
             project_root=entry.get("path") or entry.get("root_path") or ".",
             contract=req.contract,
+            source_branch=req.source_branch,
         )
     except FileExistsError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc

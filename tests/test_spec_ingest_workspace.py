@@ -65,6 +65,54 @@ def _spec_dir(tmp_path: Path, spec_id="spec1") -> Path:
 # ─── happy paths per format ───────────────────────────────────────────────
 
 
+def _git(cwd, *args):
+    import subprocess
+    return subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True)
+
+
+def test_source_branch_recorded_and_warns_when_not_git(tmp_path):
+    """source_branch is recorded in source.json; a non-git project_root surfaces a
+    warning but never aborts ingest (#96)."""
+    result = _ingest(tmp_path, _MARKDOWN, target_paths=["src/x.py"],
+                     project_root=str(tmp_path / "not-a-repo"), source_branch="aifactory/123")
+    assert result["source_format"] == "markdown"
+    assert any("source_branch" in w or "not a git repo" in w for w in result["warnings"])
+    source = json.loads((_spec_dir(tmp_path) / "context" / "source.json").read_text())
+    assert source["source_branch"] == "aifactory/123"
+
+
+def test_source_branch_checks_out_built_code(tmp_path):
+    """The build branch is fetched + checked out into project_root, so the SUT is
+    the ACTUAL built code — the fix for the hollow-verify gap (#96)."""
+    import subprocess
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    _git(origin, "init", "-q")
+    _git(origin, "config", "user.email", "t@t")
+    _git(origin, "config", "user.name", "t")
+    (origin / "README.md").write_text("base")
+    _git(origin, "add", ".")
+    _git(origin, "commit", "-qm", "base")
+    base_branch = _git(origin, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() or "main"
+    _git(origin, "checkout", "-qb", "aifactory/999")
+    (origin / "built.rs").write_text('fn greet() -> &str { "Hello" }')
+    _git(origin, "add", ".")
+    _git(origin, "commit", "-qm", "build")
+    _git(origin, "checkout", "-q", base_branch)
+
+    # project_root = a clone of origin, on the base branch (NO built.rs yet).
+    proj = tmp_path / "proj-clone"
+    subprocess.run(["git", "clone", "-q", str(origin), str(proj)], capture_output=True)
+    assert not (proj / "built.rs").exists()  # base branch lacks the build
+
+    _ingest(tmp_path, _MARKDOWN, target_paths=["built.rs"],
+            project_root=str(proj), source_branch="aifactory/999")
+
+    # After ingest the build branch is checked out — the built code is present.
+    assert (proj / "built.rs").exists()
+    assert "Hello" in (proj / "built.rs").read_text()
+
+
 def test_gherkin_creates_workspace(tmp_path):
     result = _ingest(tmp_path, _GHERKIN, target_paths=["src/auth.py"])
     assert result["source_format"] == "gherkin"
