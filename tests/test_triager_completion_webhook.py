@@ -190,8 +190,43 @@ def test_envelope_outcome_mapping(
 ) -> None:
     monkeypatch.setenv("TFACTORY_COMPLETION_SENTINEL", "1")
     _seed_status(tmp_path)
-    _write_status_patch(tmp_path, status=status_value)
+    patch: dict = {"status": status_value}
+    if status_value == "triaged":
+        # A real triaged carries actionable verdicts (RFC-0001a evidence gate);
+        # without any, it is not a success — see the dedicated test below.
+        patch["committed_count"] = 1
+    _write_status_patch(tmp_path, **patch)
     assert _completed_envelope(tmp_path)["outcome"] == expected
+
+
+def test_evidence_gate_triaged_with_no_verdicts_is_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RFC-0001a: a 'triaged' success that produced NO verdicts (none evaluated,
+    accepted, or flagged) is downgraded to a failure outcome with no_evidence —
+    while the internal `status` and the flag-is-attention semantics are kept."""
+    monkeypatch.setenv("TFACTORY_COMPLETION_SENTINEL", "1")
+    _seed_status(tmp_path)
+    _write_status_patch(tmp_path, status="triaged")  # no verdict counts at all
+    env = _completed_envelope(tmp_path)
+    assert env["status"] == "triaged"          # internal status preserved
+    assert env["outcome"] == "failure"          # but the outcome is not green
+    assert "no_evidence" in (env.get("halt_reason") or "")
+    assert env["evidence"]["proof_kind"] == "tests"
+
+
+def test_evidence_gate_all_flagged_stays_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """All-flagged is NOT a failure — flag means 'needs human attention' by
+    design and drives the handback loop. With flagged verdicts present, the
+    outcome stays success (the gate only catches the no-verdict case)."""
+    monkeypatch.setenv("TFACTORY_COMPLETION_SENTINEL", "1")
+    _seed_status(tmp_path)
+    _write_status_patch(tmp_path, status="triaged", flagged_count=6, verdicts_count=6)
+    env = _completed_envelope(tmp_path)
+    assert env["outcome"] == "success"
+    assert env["evidence"]["flagged"] == 6
 
 
 def test_envelope_correlation_id_from_source(
