@@ -199,6 +199,39 @@ def _format_json(data: Any) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _checkout_source_branch(project_root: Path, branch: str) -> str | None:
+    """Fetch + check out ``branch`` in ``project_root`` so the SUT under test is
+    the actual built code, not the default branch (#96 — closes the hollow-verify
+    gap where TFactory tested a tree that never contained AIFactory's build).
+
+    Best-effort: returns ``None`` on success, or a short warning string on failure
+    (a missing/unfetchable branch must never abort ingest — the spec still lands;
+    tests just run against whatever is checked out). Resolves the SHA so a detached
+    checkout is deterministic and the Triager can record it."""
+    import subprocess
+
+    def _git(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["git", "-C", str(project_root), *args],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+    try:
+        if not (project_root / ".git").exists():
+            return f"source_branch={branch!r} requested but {project_root} is not a git repo"
+        fetch = _git("fetch", "--no-tags", "origin", branch)
+        if fetch.returncode != 0:
+            return f"git fetch origin {branch} failed: {fetch.stderr.strip()[:200]}"
+        co = _git("checkout", "--force", "FETCH_HEAD")
+        if co.returncode != 0:
+            return f"git checkout {branch} failed: {co.stderr.strip()[:200]}"
+        return None
+    except Exception as exc:  # noqa: BLE001 — checkout must never break ingest
+        return f"source_branch checkout error: {exc}"
+
+
 def create_spec_ingest_workspace(
     *,
     project_id: str,
@@ -210,6 +243,7 @@ def create_spec_ingest_workspace(
     root: Path | None = None,
     schedule: bool = True,
     contract: dict | None = None,
+    source_branch: str | None = None,
 ) -> dict[str, Any]:
     """Create a TFactory workspace from a raw acceptance-criteria spec.
 
@@ -255,18 +289,26 @@ def create_spec_ingest_workspace(
     if isinstance(contract, dict) and (
         "tfactory" in contract or "contract_version" in contract
     ):
-        (context_dir / "task_contract.json").write_text(
-            json.dumps(contract, indent=2)
-        )
+        (context_dir / "task_contract.json").write_text(json.dumps(contract, indent=2))
 
-    # Target-mode source.json: no branch/base_ref/diff. The Triager's
-    # PR-status side-effect (WS1) correctly skips when there's no sha/repo.
+    # Check out the AIFactory build branch into project_root so tests run against
+    # the ACTUAL built code (#96). Best-effort: a failure is surfaced as a warning
+    # and ingest proceeds (tests then run against whatever is checked out).
+    if source_branch:
+        warn = _checkout_source_branch(Path(project_root).expanduser(), source_branch)
+        if warn:
+            warnings.append(warn)
+
+    # source.json: target_paths name the SUT; source_branch records which build
+    # was checked out (when supplied). The Triager's PR-status side-effect skips
+    # cleanly when there's no sha/repo.
     source = {
         "mode": "spec_ingest",
         "project_id": project_id,
         "spec_id": spec_id,
         "source_format": spec.source_format.value,
         "target_paths": list(target_paths or []),
+        "source_branch": source_branch,
         "created_at": _now_iso(),
     }
     (context_dir / "source.json").write_text(json.dumps(source, indent=2))
