@@ -59,7 +59,12 @@ additive TFactory detail (RFC §7 permits extra fields):
   "pr_number": 88,
   "result": { "committed_count": 3, "flagged_count": 1, "rejected_count": 2,
               "verdicts_count": 6, "dedup_collision_count": 0 },
-  "emitted_at": "2026-06-04T16:30:00+00:00"
+  "emitted_at": "2026-06-04T16:30:00+00:00",
+
+  // RFC-0001a evidence block (always present; see "Evidence gate" below)
+  "evidence": { "proof_kind": "tests", "verdicts": 6,
+                "accepted": 3, "flagged": 1, "rejected": 2 }
+  // "halt_reason": "no_evidence: verify produced no verdicts"  // only when gated
 }
 ```
 
@@ -111,6 +116,44 @@ can no longer silently drift.
 | `success` | work completed with usable results | `triaged` |
 | `empty` | completed, but nothing actionable produced | `triaged_empty` |
 | `failure` | terminated without usable results | `triager_failed` (+ any `*_failed` / `stuck`) |
+
+### Evidence gate (RFC-0001a)
+
+A verify may only report a **`success` outcome if it produced real evidence**. A
+`triaged` status with zero verdicts evaluated nothing, so reporting it green would
+mislead a consumer into treating an empty run as a clean pass.
+
+The Triager (`_build_completion_envelope`) therefore downgrades a `triaged` status
+to `outcome="failure"` with `halt_reason="no_evidence: verify produced no verdicts"`
+**unless** the run produced *actionable evidence* — any one of:
+
+- `verdicts_count > 0` (the Evaluator emitted at least one verdict), or
+- `committed_count > 0` (at least one test accepted), or
+- `flagged_count > 0` (at least one test flagged).
+
+Two deliberate boundaries:
+
+- **The gate only rewrites the normalized `outcome`.** TFactory's internal `status`
+  is left untouched — its state machine and the hand-back loop read it verbatim.
+- **All-flagged is *not* a failure.** A `flag` means "needs human attention" by
+  design and drives the hand-back loop, which is a valid non-failure outcome; a run
+  with only flagged tests still reports `outcome="success"`.
+
+Every envelope additionally carries an `evidence` block so a consumer can see the
+counts the gate was decided on:
+
+```jsonc
+"evidence": {
+  "proof_kind": "tests",   // TFactory's evidence is the test verdicts
+  "verdicts": 6,           // = verdicts_count
+  "accepted": 3,           // = committed_count
+  "flagged": 1,            // = flagged_count
+  "rejected": 2            // = rejected_count
+}
+```
+
+When (and only when) the gate fires, the envelope also carries
+`"halt_reason": "no_evidence: verify produced no verdicts"`.
 
 ## Channels
 

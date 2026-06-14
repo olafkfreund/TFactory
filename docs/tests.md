@@ -42,6 +42,11 @@ nav_order: 5
 
 - `TestPlan` JSON round-trips identically to the AIFactory `ImplementationPlan` shape.
 - Each `Subtask` carries a `lane` field, validated against the enum `{functional, sast, dast, fuzz, mutation}`.
+  > Note: this is the historical v0.1 enum. The shipped v0.2 lane spine is
+  > `{unit, browser, api, integration, mutation}`; the v0.1 names are deprecated
+  > aliases that still parse (mapped to `unit` with a warning). The same lane value
+  > is now surfaced per-subtask on `GET /api/tasks/{id}` (`lane` / `started_at` /
+  > `completed_at`). See [Architecture](/architecture/).
 - Status transitions enforced: `pending → in_progress → {completed | failed | stuck}` only.
 - Backward serialization with AIFactory's `implementation_plan.json` is NOT required (TFactory is a hard fork).
 

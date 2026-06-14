@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.9.5 — RFC-0001a evidence gate on the completion outcome; opt-in review lane; subtask lane/timing on the API (2026-06-14)
+
+- **RFC-0001a evidence gate on the completion outcome (#373).** The normalized
+  completion envelope no longer reports a green `outcome` for a verify that
+  evaluated nothing. `apps/backend/agents/triager.py` (`_build_completion_envelope`)
+  now downgrades a `triaged` status with **no actionable evidence** to
+  `outcome="failure"` with `halt_reason="no_evidence: verify produced no
+  verdicts"`. Actionable evidence is any real verdict produced — evaluated
+  (`verdicts_count > 0`), accepted (`committed_count > 0`), or flagged
+  (`flagged_count > 0`). An additive `evidence` block (`proof_kind: "tests"`,
+  `verdicts`, `accepted`, `flagged`, `rejected`) rides on every envelope.
+  Note: all-tests-flagged still counts as a non-failure outcome — `flag` means
+  "needs human attention" by design and drives the hand-back loop. The gate only
+  rewrites the normalized `outcome`; TFactory's internal `status` (its state
+  machine + hand-back read it) is left unchanged.
+- **Opt-in review lane — LLM staff-engineer code review (#371/#372).** A new
+  analysis lane (`apps/backend/agents/review_lane.py`, persona prompt
+  `prompts/review_lane.md`, adapted from the vendored `code-reviewer` agent) runs
+  a reviewer over the build's changed code and writes `findings/review.json`. It
+  is **OFF by default**, gated by `TFACTORY_REVIEW_LANE=1`; when enabled it runs
+  in parallel with the Evaluator. It is additive and complementary: it is **not**
+  part of the 5-lane test-runner spine (unit/browser/api/integration/mutation) and
+  never touches the Evaluator/Triager/verdict contract or blocks the verify path.
+- **Subtask lane + timing on `/api/tasks/{id}` (#374).** Subtasks now expose
+  `lane` (the v0.2 test lane: unit/browser/api/integration/mutation), `started_at`,
+  and `completed_at`; the subtask `status` widened to a string so lane states like
+  `stuck`/`blocked` round-trip. These feed CFactory's test-stage lane-pipeline
+  execution diagram. All three fields are additive + optional and tolerate absence
+  on lane-untagged plans (`apps/web-server/server/routes/tasks.py`).
+
 ## 0.9.4 — security hardening: SSRF guard, fail-closed auth bind, CI injection fix; envelope single-source-of-truth (2026-06-13)
 
 - **SSRF guard on the network-enabled test lanes (#361).** The browser / api /

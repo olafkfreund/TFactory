@@ -68,6 +68,45 @@ The framework descriptor registry (`framework_registry/`) catalogs
 The tests-catalog (`tests_catalog/`) persists cross-run continuity via
 `tests-catalog.json` committed alongside generated tests.
 
+## Review lane (analysis, opt-in)
+
+The **review lane** (`apps/backend/agents/review_lane.py`) is an *analysis* lane
+that runs an LLM "staff engineer" reviewer over the build's changed code and
+writes findings to `findings/review.json`. It is **not** part of the 5-lane
+test-runner spine above — it produces a complementary verify signal alongside the
+test lanes and never touches the Evaluator / Triager / verdict contract.
+
+- **Opt-in, default OFF.** `schedule_review(...)` runs the lane only when
+  `TFACTORY_REVIEW_LANE=1`. When enabled it is scheduled (fire-and-forget) from
+  the generator's success path and runs in parallel with the Evaluator.
+- **Additive output.** It writes `findings/review.json` (a list of `findings`)
+  and patches `status.json` (`status="reviewing"` → `reviewed`, with
+  `review_findings_count`). It does not block or feed the verdict path.
+- **Reuses proven plumbing.** The same SDK + session seam as `gen_functional`
+  (`_resolve_client` / `run_agent_session`); the persona prompt is
+  `prompts/review_lane.md`, adapted from the vendored `code-reviewer` agent.
+
+The review lane is vendored from agent-skills and gated so the default verify path
+is unchanged when the flag is unset.
+
+## Liveness watchdog
+
+`apps/backend/agents/liveness.py` turns a silently hung stage into an explicit
+`stalled` status the portal (or a watcher) can surface. A stage that hangs leaves
+`status.json` in an active "-ing" state with a frozen `updated_at`; the watchdog
+compares that timestamp against `now` and, past the idle budget, flips the task to
+`status="stalled"` (preserving the prior state as `stalled_from`, recording
+`stall_idle_seconds`, and emitting a stage event).
+
+- Only the four *active* statuses can stall — `planning`, `generating`,
+  `evaluating`, `triaging` (`ACTIVE_STATUSES`). Handoff and terminal/failed states
+  are excluded so a settled task is never clobbered.
+- `evaluate_liveness` is pure compute (fully unit-testable); `mark_stalled` is the
+  best-effort writer; `check_and_mark` is the convenience the periodic driver calls.
+- Idle budget defaults to 900s (15 min), overridable via
+  `TFACTORY_STALL_DEADLINE_SECONDS`. Missing/corrupt `status.json` or an
+  unparseable `updated_at` fails safe (never flips).
+
 ## CLI commands (v0.2)
 
 ```bash
@@ -320,6 +359,27 @@ Seven tools exposed over stdio to Claude Code via
 
 All seven defined in
 [`task_control.py`](https://github.com/olafkfreund/TFactory/blob/main/apps/backend/agents/tools_pkg/tools/task_control.py).
+
+## Subtask lane + timing on the task API
+
+`GET /api/tasks/{id}` exposes per-subtask **lane** and **timing** so CFactory's
+test-stage execution diagram can render a live lane pipeline. Each subtask in the
+response carries three additive, optional fields alongside the existing
+`id` / `title` / `status` / `files` / `verification`:
+
+| Field | Meaning |
+|---|---|
+| `lane` | the v0.2 test lane the subtask belongs to — `unit` / `browser` / `api` / `integration` / `mutation` (the [`Lane`](https://github.com/olafkfreund/TFactory/blob/main/apps/backend/test_plan/enums.py) enum spine) |
+| `started_at` | ISO-8601 timestamp the subtask began (or `null`) |
+| `completed_at` | ISO-8601 timestamp the subtask finished (or `null`) |
+
+All three are populated only on lane-tagged test plans and tolerate absence
+(`null`) on older or untagged plans — no behaviour change for existing consumers.
+The subtask `status` is a free-form string (rather than a fixed enum) so lane
+states such as `stuck` / `blocked` round-trip cleanly to the cockpit. Both the
+construction site and the serializer live in
+[`apps/web-server/server/routes/tasks.py`](https://github.com/olafkfreund/TFactory/blob/main/apps/web-server/server/routes/tasks.py)
+(the `Subtask` model).
 
 ## Module dependency graph
 
