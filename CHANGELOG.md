@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.6 — surface the PARR correlation key so the cockpit renders the test lane (2026-06-14)
+
+- **The `/api/tasks` list now exposes the GitHub issue / correlation key so CFactory can attach a TFactory task to its work item (#377).** The cockpit keys a work item by the GitHub issue number, but the task-list rows built by `load_spec_metadata` (`apps/web-server/server/routes/tasks.py`) never carried it — even though it lives in each spec's `context/source.json` (`issue_number`) and the RFC-0002 task contract (`correlation_key`). So every TFactory task fell back to correlating by its own spec id, landed on a separate work item, and the cockpit's **test-stage lane stayed empty** even while verification ran. Added `_resolve_correlation_issue()` (RFC-0002 contract → `source.json` precedence, mirroring the handback) and populate the existing typed `TaskMetadata.githubIssueNumber`. No CFactory change needed. 8 new tests.
+- **Pin `fastapi==0.136.3` / `starlette==1.3.1`.** `0.137.0` broke route introspection (`prometheus get_route_name` → `_IncludedRouter` has no `.path`, 500s every `/api` route); pinned alongside the fix and later applied to AIFactory and PFactory.
+
 ## 0.9.5 — RFC-0001a evidence gate on the completion outcome; opt-in review lane; subtask lane/timing on the API (2026-06-14)
 
 - **RFC-0001a evidence gate on the completion outcome (#373).** The normalized
