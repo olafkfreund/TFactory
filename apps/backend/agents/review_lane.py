@@ -11,12 +11,19 @@ Entry point: ``run_review_lane(spec_dir, project_dir, mode, verbose) -> bool``.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 _log = logging.getLogger(__name__)
+
+# Anchor fire-and-forget review tasks so they aren't GC'd mid-flight (mirrors the
+# evaluator's _BG_EVALUATOR_TASKS pattern).
+_BG_REVIEW_TASKS: set[asyncio.Task] = set()
 
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
@@ -130,3 +137,24 @@ async def run_review_lane(
         review_findings_count=count,
     )
     return True
+
+
+def schedule_review(
+    spec_dir: Path,
+    project_dir: Path,
+    mode: Literal["initial", "rerun"] = "initial",
+) -> asyncio.Task | None:
+    """Fire-and-forget review lane, gated by ``TFACTORY_REVIEW_LANE``.
+
+    OPT-IN (default OFF): the review lane only runs when ``TFACTORY_REVIEW_LANE``
+    is "1", so the default verify path is unchanged. When enabled it runs in
+    parallel with the evaluator (both scheduled from gen_functional's success
+    path) and writes an additive ``findings/review.json`` — it never blocks or
+    feeds the verdict path. Returns the scheduled task, or None when disabled.
+    """
+    if os.environ.get("TFACTORY_REVIEW_LANE", "0") != "1":
+        return None
+    task = asyncio.create_task(run_review_lane(spec_dir, project_dir, mode=mode))
+    _BG_REVIEW_TASKS.add(task)
+    task.add_done_callback(_BG_REVIEW_TASKS.discard)
+    return task

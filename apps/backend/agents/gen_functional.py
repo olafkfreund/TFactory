@@ -331,6 +331,21 @@ def _advance_to_evaluator(spec_dir: Path, project_dir: Path) -> None:
         )
 
 
+def _advance_to_review(spec_dir: Path, project_dir: Path) -> None:
+    """Schedule the opt-in review lane after gen_functional's success path.
+
+    Best-effort + lazy import (same defensive shape as _advance_to_evaluator).
+    No-op unless ``TFACTORY_REVIEW_LANE=1`` (the gate lives in schedule_review).
+    The review lane is additive — it never blocks or feeds the verdict path.
+    """
+    try:
+        from agents.review_lane import schedule_review
+
+        schedule_review(spec_dir, project_dir, mode="initial")
+    except Exception as exc:  # noqa: BLE001 — review is additive; never break gen
+        _gen_log.warning("could not auto-schedule review lane: %s", exc)
+
+
 # ─── The agent ──────────────────────────────────────────────────────────
 
 
@@ -678,6 +693,9 @@ async def run_gen_functional(
         # scheduler + stub). Gated by ``TFACTORY_AUTO_EVALUATE`` env;
         # tests pin it off to keep this layer deterministic.
         _advance_to_evaluator(spec_dir, project_dir)
+        # Opt-in review lane (additive, parallel, never feeds the verdict path).
+        # Gated by ``TFACTORY_REVIEW_LANE`` (default OFF).
+        _advance_to_review(spec_dir, project_dir)
         return True
 
     except Exception as exc:

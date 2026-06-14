@@ -112,3 +112,28 @@ async def test_review_lane_session_error_never_raises(dirs, monkeypatch):
     ok = await review_lane.run_review_lane(spec, proj)
     assert ok is False
     assert _read_status(spec)["status"] == "review_failed"
+
+
+@pytest.mark.asyncio
+async def test_schedule_review_is_opt_in_off_by_default(dirs, monkeypatch):
+    # Default OFF — the trigger is a no-op unless TFACTORY_REVIEW_LANE=1.
+    spec, proj = dirs
+    monkeypatch.delenv("TFACTORY_REVIEW_LANE", raising=False)
+    assert review_lane.schedule_review(spec, proj) is None
+
+
+@pytest.mark.asyncio
+async def test_schedule_review_runs_when_enabled(dirs, monkeypatch):
+    spec, proj = dirs
+    monkeypatch.setenv("TFACTORY_REVIEW_LANE", "1")
+    called = {}
+
+    async def fake_run(spec_dir, project_dir, mode="initial"):
+        called["yes"] = True
+        return True
+
+    monkeypatch.setattr(review_lane, "run_review_lane", fake_run)
+    task = review_lane.schedule_review(spec, proj)
+    assert task is not None
+    await task
+    assert called.get("yes") is True
