@@ -88,13 +88,17 @@ def test_source_branch_checks_out_built_code(tmp_path):
     origin = tmp_path / "origin"
     origin.mkdir()
     _git(origin, "init", "-q")
-    _git(origin, "config", "user.email", "t@t"); _git(origin, "config", "user.name", "t")
+    _git(origin, "config", "user.email", "t@t")
+    _git(origin, "config", "user.name", "t")
     (origin / "README.md").write_text("base")
-    _git(origin, "add", "."); _git(origin, "commit", "-qm", "base")
+    _git(origin, "add", ".")
+    _git(origin, "commit", "-qm", "base")
+    base_branch = _git(origin, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() or "main"
     _git(origin, "checkout", "-qb", "aifactory/999")
     (origin / "built.rs").write_text('fn greet() -> &str { "Hello" }')
-    _git(origin, "add", "."); _git(origin, "commit", "-qm", "build")
-    _git(origin, "checkout", "-q", "master") if _git(origin, "rev-parse", "--verify", "master").returncode == 0 else _git(origin, "checkout", "-q", "main")
+    _git(origin, "add", ".")
+    _git(origin, "commit", "-qm", "build")
+    _git(origin, "checkout", "-q", base_branch)
 
     # project_root = a clone of origin, on the base branch (NO built.rs yet).
     proj = tmp_path / "proj-clone"
