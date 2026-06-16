@@ -195,6 +195,90 @@ def _parse_marker_exit(stdout: str | None, prefix: str, default: int) -> int:
     return code
 
 
+# ── Host-execution fallback (no container runtime, e.g. k3d pods) ──────────
+# TFactory's pytest lanes run in a hardened DockerRunner container. In a cluster
+# whose pods have NO container runtime (k3d — the same constraint that forced
+# AIFactory's gates onto k8s Jobs), DockerRunner can't spawn anything and tests
+# never execute ("ModuleNotFoundError: pytest"). This fallback runs pytest on the
+# host in a per-project venv (project deps + pytest installed once) so the
+# generated tests actually run and produce verdicts/junit/coverage. It mirrors
+# AIFactory's default *host* gate runner. Selection: TFACTORY_RUNNER_MODE =
+# host|docker, else auto (host only when no runtime is available).
+_HOST_VENVS: dict[str, Path] = {}
+
+
+def _container_runtime_available() -> bool:
+    import shutil
+
+    return bool(
+        shutil.which(os.environ.get("TFACTORY_CONTAINER_BIN", "docker"))
+        or shutil.which("podman")
+    )
+
+
+def _host_runner_mode() -> bool:
+    mode = os.environ.get("TFACTORY_RUNNER_MODE", "").strip().lower()
+    if mode == "host":
+        return True
+    if mode == "docker":
+        return False
+    return not _container_runtime_available()  # auto: host when no runtime
+
+
+def _ensure_host_venv(project_dir: Path) -> Path:
+    """A per-project venv with the project's deps + pytest/pytest-cov (built once)."""
+    import subprocess
+    import tempfile
+    import venv as _venv
+
+    key = str(Path(project_dir).resolve())
+    cached = _HOST_VENVS.get(key)
+    if cached and (cached / "bin" / "python").exists():
+        return cached
+    vdir = Path(tempfile.mkdtemp(prefix="tf-hostvenv-"))
+    _venv.create(vdir, with_pip=True)
+    py = str(vdir / "bin" / "python")
+    args = [py, "-m", "pip", "install", "-q", "pytest", "pytest-cov"]
+    req = Path(project_dir) / "requirements.txt"
+    if req.exists():
+        args += ["-r", str(req)]
+    subprocess.run(args, capture_output=True, text=True, timeout=600)
+    _HOST_VENVS[key] = vdir
+    return vdir
+
+
+def _run_pytest_on_host(scratch: Path, test_file: Path, extra_env: dict, project_dir: Path):
+    """Run one pytest file on the host (no container) — same result shape as the
+    DockerRunner path. Used when no container runtime is available."""
+    import subprocess
+
+    from tools.runners.docker_runner import DockerRunResult
+
+    vdir = _ensure_host_venv(project_dir)
+    py = str((vdir / "bin" / "python").resolve())
+    name = Path(test_file).name
+    cmd = (
+        f"cd {scratch} && {py} -m pytest tests/{name} -p no:cacheprovider -q "
+        "--junitxml=junit.xml --cov-report=xml:coverage.xml --cov=. 2>&1; "
+        "echo __PYTEST_EXIT=$?"
+    )
+    env = {**os.environ, **extra_env, "PYTHONPATH": str(Path(scratch).resolve())}
+    res = subprocess.run(
+        ["sh", "-c", cmd], capture_output=True, text=True, timeout=300, env=env
+    )
+    code = _parse_marker_exit(res.stdout, "__PYTEST_EXIT=", res.returncode)
+    junit = Path(scratch) / "junit.xml"
+    cov = Path(scratch) / "coverage.xml"
+    return DockerRunResult(
+        returncode=code,
+        stdout=res.stdout,
+        stderr=res.stderr,
+        junit_xml_path=junit if junit.exists() else None,
+        coverage_xml_path=cov if cov.exists() else None,
+        argv=["sh", "-c", cmd],
+    )
+
+
 def _resolve_runner_fn(
     spec_dir: Path,
     project_dir: Path,
@@ -284,6 +368,17 @@ def _resolve_runner_fn(
                 network,
             )
             extra_env.update(test_creds.env)
+            # No container runtime (k3d pod) → run pytest on the host instead, so
+            # the generated tests actually execute and produce verdicts. (Same
+            # result shape; secrets still wiped.)
+            if _host_runner_mode():
+                try:
+                    return _run_pytest_on_host(
+                        scratch, test_file, extra_env, project_dir_arg
+                    )
+                finally:
+                    sandbox_creds.wipe()
+                    test_creds.wipe()
             try:
                 res = runner.run(
                     repo_path=Path(project_dir_arg).resolve(),
