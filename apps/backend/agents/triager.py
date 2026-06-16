@@ -654,6 +654,19 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> dict:
     envelope["evidence"] = evidence
     if halt_reason is not None:
         envelope["halt_reason"] = halt_reason
+    # RFC-0007 (#87): when the contract declared access that couldn't be curated/
+    # reached, surface an honest VAL-3 not_run annotation so no consumer renders
+    # the credentialed lane as covered. Best-effort — never breaks the envelope.
+    try:
+        from agents.access_scope import completion_access_annotation
+        from agents.task_contract import read_tfactory_profile
+
+        _prof = read_tfactory_profile(spec_dir)
+        _acc = completion_access_annotation(_prof.access) if _prof else None
+        if _acc:
+            envelope["access"] = _acc
+    except Exception:  # noqa: BLE001 - the access annotation must never break emit
+        pass
     return envelope
 
 

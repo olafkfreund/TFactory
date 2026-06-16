@@ -115,3 +115,48 @@ def test_reconcile_clean_when_no_needs():
 
     m = {"needs_egress": False, "ready": [], "blocked": [], "credential_refs": []}
     assert reconcile_access(m, egress_enabled=False) == {"ok": True, "gaps": []}
+
+
+def test_completion_access_annotation():
+    from agents.access_scope import completion_access_annotation
+
+    assert completion_access_annotation({"blocked": []}) is None
+    assert completion_access_annotation(None) is None
+    a = completion_access_annotation(
+        {"blocked": [{"resource": "mfa", "reason": "push"}]}
+    )
+    assert a["val3"] == "not_run" and "mfa" in a["reason"] and a["blocked"]
+
+
+def test_envelope_carries_access_when_blocked(tmp_path):
+    import json
+
+    from agents.triager import _build_completion_envelope
+
+    ctx = tmp_path / "context"
+    ctx.mkdir()
+    (ctx / "task_contract.json").write_text(
+        json.dumps(
+            {
+                "tfactory": {"lanes": ["unit"]},
+                "access": {
+                    "requirements": [
+                        {
+                            "resource": "mfa",
+                            "auth_class": "D-un-automatable",
+                            "mvp_note": "push",
+                        }
+                    ]
+                },
+            }
+        )
+    )
+    env = _build_completion_envelope(tmp_path, {"task_id": "042", "status": "triaged"})
+    assert env["access"]["val3"] == "not_run" and "mfa" in env["access"]["reason"]
+
+
+def test_envelope_omits_access_when_unblocked(tmp_path):
+    from agents.triager import _build_completion_envelope
+
+    env = _build_completion_envelope(tmp_path, {"task_id": "042", "status": "triaged"})
+    assert "access" not in env
