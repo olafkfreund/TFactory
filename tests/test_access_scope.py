@@ -76,3 +76,42 @@ def test_curated_without_ref_still_ready_no_ref():
         and m["credential_refs"] == []
         and m["needs_egress"] is True
     )
+
+
+def test_reconcile_egress_disabled_gap():
+    from agents.access_scope import reconcile_access
+
+    m = {"needs_egress": True, "ready": ["api"], "blocked": [], "credential_refs": []}
+    r = reconcile_access(m, egress_enabled=False)
+    assert r["ok"] is False
+    assert r["gaps"][0]["kind"] == "egress_disabled" and r["gaps"][0]["resources"] == [
+        "api"
+    ]
+    # enabled -> no egress gap
+    assert reconcile_access(m, egress_enabled=True)["ok"] is True
+
+
+def test_reconcile_surfaces_blocked():
+    from agents.access_scope import reconcile_access
+
+    m = {
+        "needs_egress": False,
+        "ready": [],
+        "credential_refs": [],
+        "blocked": [{"resource": "mfa", "reason": "push approval"}],
+    }
+    r = reconcile_access(m, egress_enabled=True)
+    assert r["ok"] is False
+    g = r["gaps"][0]
+    assert (
+        g["kind"] == "access_blocked"
+        and g["resource"] == "mfa"
+        and g["reason"] == "push approval"
+    )
+
+
+def test_reconcile_clean_when_no_needs():
+    from agents.access_scope import reconcile_access
+
+    m = {"needs_egress": False, "ready": [], "blocked": [], "credential_refs": []}
+    assert reconcile_access(m, egress_enabled=False) == {"ok": True, "gaps": []}

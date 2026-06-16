@@ -62,3 +62,36 @@ def val3_blocked(mapping: dict) -> bool:
     """True when some access requirement is un-curated/un-automatable — so the
     credentialed (VAL-3) lane cannot honestly run for the whole task."""
     return bool(mapping.get("blocked"))
+
+
+def reconcile_access(mapping: dict, *, egress_enabled: bool) -> dict:
+    """Reconcile the contract's access needs against TFactory's egress config.
+
+    Pure. Surfaces gaps WITHOUT changing anything — egress stays opt-in via
+    ``.tfactory.yml`` (security), so a contract that "needs egress" never
+    auto-enables it; the mismatch is reported for a human/planner to resolve.
+    Returns ``{ok, gaps}`` where each gap is ``{kind, ...}``:
+      - ``egress_disabled``  — curated resources need network but egress is off;
+      - ``access_blocked``   — a resource is un-curated/un-automatable (per
+                               :func:`map_access_for_tfactory`), so it can't be
+                               tested and VAL-3 must report it honestly.
+    """
+    gaps: list[dict] = []
+    if mapping.get("needs_egress") and not egress_enabled:
+        gaps.append(
+            {
+                "kind": "egress_disabled",
+                "resources": list(mapping.get("ready") or []),
+                "detail": "contract declares external access but .tfactory.yml egress "
+                "is disabled (set egress.enabled to test these lanes)",
+            }
+        )
+    for b in mapping.get("blocked") or []:
+        gaps.append(
+            {
+                "kind": "access_blocked",
+                "resource": b.get("resource"),
+                "reason": b.get("reason"),
+            }
+        )
+    return {"ok": not gaps, "gaps": gaps}
