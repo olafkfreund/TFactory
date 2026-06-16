@@ -23,6 +23,8 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from agents.access_scope import map_access_for_tfactory
+
 # Lanes TFactory recognises from the contract. "security" is accepted but
 # TFactory treats app SAST/DAST as out of scope (DEC-002) — it's recorded so the
 # Planner can note the delegation, not generate security tests.
@@ -44,6 +46,9 @@ class TfactoryProfile:
     security_scope: tuple[str, ...] = ()  # owasp:* ; empty => out of scope
     ac_to_code_map: dict[str, tuple[str, ...]] = field(default_factory=dict)
     correlation_key: str | None = None
+    # RFC-0007 (#87): mapped access requirements — see agents.access_scope.
+    # {needs_egress, credential_refs, ready, blocked}.
+    access: dict = field(default_factory=dict)
 
     @property
     def is_empty(self) -> bool:
@@ -56,6 +61,8 @@ class TfactoryProfile:
             or self.mutation_scope
             or self.security_scope
             or self.ac_to_code_map
+            or self.access.get("ready")
+            or self.access.get("blocked")
         )
 
 
@@ -113,9 +120,13 @@ def parse_tfactory_profile(contract: dict | None) -> TfactoryProfile | None:
     """
     if not isinstance(contract, dict):
         return None
+    # RFC-0007 (#87): map the access block independently of the tfactory block —
+    # an access-only contract must still surface its access requirements.
+    access = map_access_for_tfactory(contract.get("access"))
+    access_present = bool(access.get("ready") or access.get("blocked"))
     block = contract.get("tfactory")
     if not isinstance(block, dict):
-        return None
+        return TfactoryProfile(access=access) if access_present else None
 
     lanes = tuple(
         lane for lane in _str_tuple(block.get("lanes")) if lane in _KNOWN_LANES
@@ -151,6 +162,7 @@ def parse_tfactory_profile(contract: dict | None) -> TfactoryProfile | None:
             if isinstance(contract.get("correlation_key"), str)
             else None
         ),
+        access=access,
     )
     return None if profile.is_empty else profile
 
