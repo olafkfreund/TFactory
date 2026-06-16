@@ -95,3 +95,24 @@ def reconcile_access(mapping: dict, *, egress_enabled: bool) -> dict:
             }
         )
     return {"ok": not gaps, "gaps": gaps}
+
+
+def completion_access_annotation(mapping: dict | None) -> dict | None:
+    """Honest VAL-3 annotation for the completion event when access is blocked.
+
+    Returns None when nothing is blocked (no access gap to report). Otherwise an
+    RFC-0006-shaped fragment recording that the credentialed (VAL-3) lane did NOT
+    run and why — so CFactory / any consumer renders it as an explicit gap, never
+    as covered. Carries resource names + reasons, never a secret.
+    """
+    blocked = (mapping or {}).get("blocked") or []
+    if not blocked:
+        return None
+    resources = ", ".join(str(b.get("resource")) for b in blocked)
+    return {
+        "val3": "not_run",
+        "reason": f"access not available for: {resources}",
+        "risk": "credentialed/system (VAL-3) behavior unproven — the target could "
+        "not be reached",
+        "blocked": list(blocked),
+    }
