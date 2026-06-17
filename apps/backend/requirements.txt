@@ -1,6 +1,11 @@
 # Auto-Build Framework Dependencies
 claude-agent-sdk>=0.1.16
 
+# RFC-0005 Tier A: the Nix-lane k8s-Job sandbox (tools/runners/kube_sandbox.py)
+# dispatches ephemeral Jobs via the in-cluster API. Async client, matches the
+# version AIFactory's proven kube_sandbox uses.
+kubernetes-asyncio>=32.0
+
 # CLI framework — used by tfactory.cli (init / migrate commands)
 click>=8.0.0
 
