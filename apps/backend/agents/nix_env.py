@@ -18,6 +18,7 @@ runtime — the lane runs as a k8s Job using the tfactory-runner-nix image).
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -194,14 +195,48 @@ def run_browser_evidence(
         _sh.rmtree(Path(project_dir) / _E2E_STAGE, ignore_errors=True)
 
     findings = Path(spec_dir) / "findings"
+    # Per-spec pass/fail from the Job's junit — this is the REAL browser-lane
+    # signal (the in-container DockerRunner path is blocked in k3d). The evaluator
+    # turns it into the stability signal so a passing UI test can be ACCEPTED and
+    # its acceptance criterion reach VERIFIED.
+    results = parse_browser_junit(Path(project_dir) / _SHOTS / "junit.xml")
     shots = collect_screenshots(project_dir, findings)
+    if results:
+        findings.mkdir(parents=True, exist_ok=True)
+        (findings / "browser_evidence.json").write_text(json.dumps(results, indent=2))
     return {
         "ok": res.ok,
         "output_tail": (res.output or "")[-2000:],
         "serve_command": serve,
         "specs": n_specs,
         "screenshots": [str(p) for p in shots],
+        "results": results,
     }
+
+
+def parse_browser_junit(junit_path: Path) -> dict[str, bool]:
+    """Map each browser spec file -> passed (no failures/errors), from playwright
+    junit (``<testsuite name="<spec>.spec.ts" failures=F errors=E>``). Pure;
+    returns {} when the file is absent/unparseable."""
+    import xml.etree.ElementTree as ET
+
+    p = Path(junit_path)
+    if not p.is_file():
+        return {}
+    try:
+        root = ET.parse(p).getroot()
+    except Exception:  # noqa: BLE001 - a broken report is just "no evidence"
+        return {}
+    out: dict[str, bool] = {}
+    for suite in root.iter("testsuite"):
+        name = suite.get("name") or ""
+        if not name:
+            continue
+        failures = int(suite.get("failures") or 0)
+        errors = int(suite.get("errors") or 0)
+        tests = int(suite.get("tests") or 0)
+        out[name] = tests > 0 and failures == 0 and errors == 0
+    return out
 
 
 def build_browser_job_command(
