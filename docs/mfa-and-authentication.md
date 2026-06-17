@@ -160,16 +160,24 @@ reuse. Enterprise variants (SHA-256/512, 8-digit, non-30s) are configurable per 
 server generators. A malformed seed is rejected at enrolment by the credential API, not as
 a failed login later.
 
-## Scenario 3 — Test against a throwaway target (Class C) [Partial]
+## Scenario 3 — Test MFA against a throwaway real IdP (Class C) [Implemented]
 
-When you do not want to touch a real, MFA-protected system at all, point the tests at a
-disposable one the pipeline owns and seeds with a known identity.
+When you do not want to touch a real, MFA-protected system at all, the pipeline stands up
+a **disposable Keycloak** it owns, seeds a test user whose TOTP secret it chooses, runs the
+MFA login against that real IdP, and tears it down — no production credential anywhere.
 
-Implemented today: ephemeral dependencies via testcontainers (Postgres, Redis, Kafka,
-MinIO) and docker-compose app+deps for the integration lane — no production credential
-involved. Planned (RFC-0007 Class C, not yet built): a one-command ephemeral Keycloak
-realm / disposable cloud project with cost-guarded automatic teardown. Use this when the
-realism of the IdP matters less than avoiding any prod access.
+`agents/ephemeral_keycloak.py` (`EphemeralKeycloak`) generates a realm with a preset OTP
+credential (the secret is random per run; the matching base32 seed is handed to the login),
+boots Keycloak with `--import-realm`, yields `{base_url, username, password, totp_seed}`, and
+**always tears the container down** on exit (cost guard). Proven end to end (2026-06-17): a
+provisioner-spun Keycloak accepted the production `fill_totp` login — Keycloak's own Java
+TOTP verifier agreed with our generator — then the instance was removed.
+
+This is the cleanest way to exercise a full MFA login with zero production access. (The
+container backend is for local/CI; the in-cluster backend — Keycloak as an ephemeral k8s
+Job/Service via the sandbox — is the next increment. Disposable cloud projects remain
+planned.) Ephemeral dependencies (Postgres/Redis/Kafka/MinIO via testcontainers) also
+exist for the integration lane.
 
 ## Scenario 4 — Push approval or hardware key (Class D) [Refused honestly]
 
