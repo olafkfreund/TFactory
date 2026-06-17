@@ -47,10 +47,11 @@ from fastapi import (
     Response,
     WebSocket,
     WebSocketDisconnect,
+)
+from fastapi import (
     status as http_status,
 )
 from pydantic import BaseModel
-
 
 router = APIRouter()
 
@@ -157,14 +158,32 @@ def _artefact_meta(spec_dir: Path) -> dict[str, dict]:
         "triage_report_json": spec_dir / "findings" / "triage_report.json",
         "triage_report_md": spec_dir / "findings" / "triage_report.md",
         "pr_comment_body": spec_dir / "findings" / "pr_comment_body.md",
+        # AC fidelity — the honest "verified X/Y acceptance criteria" ledger the
+        # portal surfaces (per-AC verified/flagged/unverified + linked screenshots).
+        "ac_fidelity_json": spec_dir / "findings" / "ac_fidelity.json",
+        "ac_fidelity_md": spec_dir / "findings" / "ac_fidelity.md",
     }
-    return {
+    meta = {
         name: {
             "path": str(path.relative_to(spec_dir)),
             "exists": path.exists(),
         }
         for name, path in artefacts.items()
     }
+    # List the collected browser screenshots so the portal can render the visual
+    # evidence per acceptance criterion (downloadable via the artifact endpoint).
+    shots_dir = spec_dir / "findings" / "screenshots"
+    shots = (
+        sorted(p.name for p in shots_dir.iterdir() if p.suffix.lower() == ".png")
+        if shots_dir.is_dir()
+        else []
+    )
+    meta["screenshots"] = {
+        "path": "findings/screenshots",
+        "exists": bool(shots),
+        "files": shots,
+    }
+    return meta
 
 
 # ─── Endpoints ──────────────────────────────────────────────────────────
@@ -263,6 +282,22 @@ def get_verdicts(spec_id: str) -> Response:
     """Stream the Evaluator's verdicts.json verbatim."""
     return _serve_artefact_file(
         spec_id, "findings/verdicts.json", "application/json",
+    )
+
+
+@router.get("/{spec_id}/ac-fidelity.json")
+def get_ac_fidelity_json(spec_id: str) -> Response:
+    """Stream the AC-fidelity ledger (per-AC verified/flagged/unverified)."""
+    return _serve_artefact_file(
+        spec_id, "findings/ac_fidelity.json", "application/json",
+    )
+
+
+@router.get("/{spec_id}/ac-fidelity.md")
+def get_ac_fidelity_md(spec_id: str) -> Response:
+    """Stream the human-readable AC-fidelity report."""
+    return _serve_artefact_file(
+        spec_id, "findings/ac_fidelity.md", "text/markdown",
     )
 
 
