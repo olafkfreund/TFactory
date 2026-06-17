@@ -150,6 +150,16 @@ saves the authenticated session (`storageState`), and every generated browser/ap
 reuses that session. The 2FA login is fully automated, with no human in the loop after the
 one-time enrolment, and no static code ever stored.
 
+Validated end-to-end (2026-06-17): a real password + TOTP login flow, where the browser
+generated the code with the production `fill_totp` path and an **independent** server
+verifier (passlib RFC-6238, a different implementation from the browser's node:crypto
+generator) accepted it. The setup logged in and saved the session; a follow-up test reused
+that session to reach the authenticated page. Two checks passed — login, then session
+reuse. Enterprise variants (SHA-256/512, 8-digit, non-30s) are configurable per credential
+(`totp_digits`/`totp_algorithm`/`totp_period`) and cross-verified between the browser and
+server generators. A malformed seed is rejected at enrolment by the credential API, not as
+a failed login later.
+
 ## Scenario 3 — Test against a throwaway target (Class C) [Partial]
 
 When you do not want to touch a real, MFA-protected system at all, point the tests at a
