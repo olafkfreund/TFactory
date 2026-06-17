@@ -1,0 +1,37 @@
+{{- if .Values.rbac.jobSandbox.enabled }}
+# RFC-0005 Tier A — least-privilege RBAC so the TFactory ServiceAccount can
+# manage the ephemeral Nix-lane Jobs it dispatches (tools/runners/kube_sandbox.py).
+# Scoped to this namespace and to exactly what the lifecycle needs:
+# create/get/list/watch/delete jobs + list pods + read pod logs. Nothing else.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "tfactory.fullname" . }}-sandbox
+  labels:
+    {{- include "tfactory.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "tfactory.fullname" . }}-sandbox
+  labels:
+    {{- include "tfactory.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "tfactory.fullname" . }}-sandbox
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "tfactory.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

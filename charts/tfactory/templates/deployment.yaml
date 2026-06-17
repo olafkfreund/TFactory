@@ -31,6 +31,10 @@ spec:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
     spec:
       serviceAccountName: {{ include "tfactory.serviceAccountName" . }}
+      # RFC-0005 Tier A: the Nix-lane sandbox creates ephemeral Jobs via the
+      # in-cluster API, which needs the SA token mounted. Only when jobSandbox
+      # is enabled (the SA Role is least-privilege: jobs + pod logs in-ns).
+      automountServiceAccountToken: {{ .Values.rbac.jobSandbox.enabled }}
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -124,6 +128,15 @@ spec:
             # repos to durable storage instead of the pod's tmpfs root.
             - name: PROJECT_WORKSPACE_ROOT
               value: {{ .Values.workspaces.mountPath | quote }}
+            {{- end }}
+            {{- if .Values.rbac.jobSandbox.enabled }}
+            # RFC-0005 Tier A: the Nix-lane k8s-Job sandbox needs the workspaces
+            # PVC name (to co-mount the worktree into each Job via subPath) and
+            # the thin Nix runner image (toolchains come from the per-task flake).
+            - name: TFACTORY_WORKSPACES_PVC
+              value: {{ include "tfactory.fullname" . }}-workspaces
+            - name: TFACTORY_NIX_RUNNER_IMAGE
+              value: {{ .Values.rbac.jobSandbox.nixRunnerImage | quote }}
             {{- end }}
             {{- if .Values.mcpCredentials.enabled }}
             # MCP credentials — env-var-only providers.  File-based

@@ -110,6 +110,14 @@ serviceAccount:
 
 rbac:
   create: false  # the app doesn't read the K8s API in v1.0
+  # RFC-0005 Tier A: allow the TFactory SA to manage ephemeral Nix-lane Jobs
+  # (tools/runners/kube_sandbox.py). Least-privilege Role (jobs + pod logs in
+  # this namespace only). Needs the SA token mounted — set
+  # serviceAccount.automountServiceAccountToken: true when this is enabled.
+  jobSandbox:
+    enabled: true
+    # Pullable thin Nix base; toolchains come from the per-task flake, not here.
+    nixRunnerImage: "ghcr.io/olafkfreund/tfactory-runner-nix:latest"
 
 podDisruptionBudget:
   enabled: true
