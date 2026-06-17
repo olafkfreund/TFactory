@@ -25,7 +25,13 @@ const STORAGE_STATE = "@@STORAGE_STATE_PATH@@";
 // as an env var (from the encrypted vault); the code is generated HERE, at the
 // moment of fill, so it never expires in flight. This is the same computation an
 // authenticator app does — generation, not a bypass.
-function __tfTotp(secret: string): string {
+function __tfTotp(
+  secret: string,
+  opts: { digits?: number; alg?: string; period?: number } = {},
+): string {
+  const digits = opts.digits ?? 6;
+  const alg = (opts.alg ?? "sha1").toLowerCase();
+  const period = opts.period ?? 30;
   const base32 = (secret || "").replace(/=+$/g, "").replace(/\s/g, "").toUpperCase();
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
   let bits = "";
@@ -37,18 +43,18 @@ function __tfTotp(secret: string): string {
   const bytes: number[] = [];
   for (let i = 0; i + 8 <= bits.length; i += 8) bytes.push(parseInt(bits.slice(i, i + 8), 2));
   const key = Buffer.from(bytes);
-  const counter = Math.floor(Date.now() / 1000 / 30);
+  const counter = Math.floor(Date.now() / 1000 / period);
   const buf = Buffer.alloc(8);
   buf.writeBigInt64BE(BigInt(counter));
-  const hmac = crypto.createHmac("sha1", key).update(buf).digest();
+  const hmac = crypto.createHmac(alg, key).update(buf).digest();
   const offset = hmac[hmac.length - 1] & 0xf;
-  const code =
-    (((hmac[offset] & 0x7f) << 24) |
-      ((hmac[offset + 1] & 0xff) << 16) |
-      ((hmac[offset + 2] & 0xff) << 8) |
-      (hmac[offset + 3] & 0xff)) %
-    1_000_000;
-  return code.toString().padStart(6, "0");
+  const bin =
+    ((hmac[offset] & 0x7f) << 24) |
+    ((hmac[offset + 1] & 0xff) << 16) |
+    ((hmac[offset + 2] & 0xff) << 8) |
+    (hmac[offset + 3] & 0xff);
+  const code = bin % 10 ** digits;
+  return code.toString().padStart(digits, "0");
 }
 
 setup("authenticate", async ({ page }) => {

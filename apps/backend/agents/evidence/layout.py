@@ -283,6 +283,7 @@ def render_auth_setup_steps(
     secret_env: str,
     storage_state_path: str = "state.json",
     totp_env: str | None = None,
+    totp_opts: dict | None = None,
 ) -> str:
     """Render a multi-step ``auth.setup.ts`` from a declarative steps list (#107).
 
@@ -321,10 +322,16 @@ def render_auth_setup_steps(
         elif action == "fill_totp" and sel and totp_env:
             # Class B MFA: generate a fresh RFC-6238 code from the injected seed
             # env var, at fill time (never expires in flight). __tfTotp is the
-            # helper embedded in auth.setup.steps.tmpl.ts.
+            # helper embedded in auth.setup.steps.tmpl.ts. Variant opts (digits/
+            # alg/period) are non-secret config baked in from the credential.
+            o = totp_opts or {}
+            _digits = int(o.get("digits", 6))
+            _alg = _js_str(str(o.get("alg", "sha1")))
+            _period = int(o.get("period", 30))
+            opts_js = f'{{ digits: {_digits}, alg: "{_alg}", period: {_period} }}'
             lines.append(
                 f'  await page.locator("{_js_str(sel)}")'
-                f'.fill(__tfTotp(process.env["{totp_env}"] ?? ""));'
+                f'.fill(__tfTotp(process.env["{totp_env}"] ?? "", {opts_js}));'
             )
         elif action == "wait_for_url" and url:
             lines.append(f'  await page.waitForURL("**/{_js_str(url)}**");')
@@ -379,6 +386,11 @@ def scaffold_auth_setup(spec_dir: Path | str) -> bool:
     # Class B MFA: the env var carrying the TOTP seed (from a `totp` vault
     # credential). When present, a fill_totp step generates the code at run time.
     totp_env = cred.get("as_totp_secret")
+    totp_opts = {
+        "digits": cred.get("totp_digits", 6),
+        "alg": cred.get("totp_algorithm", "sha1"),
+        "period": cred.get("totp_period", 30),
+    }
     base_url = target.get("base_url")
     # Both credential env vars + a base_url are needed either way.
     if not (username_env and secret_env and base_url):
@@ -393,6 +405,7 @@ def scaffold_auth_setup(spec_dir: Path | str) -> bool:
             secret_env=secret_env,
             storage_state_path=_STORAGE_STATE_PATH,
             totp_env=totp_env,
+            totp_opts=totp_opts,
         )
     else:
         # Single-step form login needs an explicit login URL.

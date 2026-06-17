@@ -24,25 +24,44 @@ class TotpError(ValueError):
     """Raised when a TOTP seed is malformed."""
 
 
-def generate_totp(secret: str, *, at: int | None = None, digits: int = 6) -> str:
-    """Return the current TOTP code for a base32 ``secret`` (RFC-6238, SHA-1, 30s).
+_ALGS = {"sha1", "sha256", "sha512"}
 
-    ``at`` (unix seconds) pins the time window for deterministic tests; default is
-    now. Raises :class:`TotpError` on a malformed seed rather than leaking the
-    library's internals.
+
+def generate_totp(
+    secret: str,
+    *,
+    at: int | None = None,
+    digits: int = 6,
+    alg: str = "sha1",
+    period: int = 30,
+) -> str:
+    """Return the current TOTP code for a base32 ``secret`` (RFC-6238).
+
+    Defaults match the common case (SHA-1, 6 digits, 30s — Google Authenticator,
+    Authy, 1Password). ``digits``/``alg``/``period`` cover enterprise IdPs that use
+    SHA-256/512, 8 digits, or other windows. ``at`` (unix seconds) pins the time
+    window for deterministic tests. Raises :class:`TotpError` on a malformed seed
+    or unsupported parameters.
     """
+    alg = (alg or "sha1").lower()
+    if alg not in _ALGS:
+        raise TotpError(f"unsupported TOTP alg: {alg!r} (use sha1|sha256|sha512)")
     try:
-        totp = TOTP(key=_normalise(secret), digits=digits, period=30, alg="sha1")
+        totp = TOTP(key=_normalise(secret), digits=digits, period=period, alg=alg)
         token = totp.generate(time=at) if at is not None else totp.generate()
         return token.token
+    except TotpError:
+        raise
     except Exception as exc:  # noqa: BLE001 - normalise to one error type
         raise TotpError(f"invalid TOTP seed: {type(exc).__name__}") from exc
 
 
-def is_valid_totp_secret(secret: str) -> bool:
-    """True when ``secret`` is a usable base32 TOTP seed (curation-gate check)."""
+def is_valid_totp_secret(
+    secret: str, *, digits: int = 6, alg: str = "sha1", period: int = 30
+) -> bool:
+    """True when ``secret`` (+ params) yields a usable TOTP code (curation check)."""
     try:
-        generate_totp(secret, at=0)
+        generate_totp(secret, at=0, digits=digits, alg=alg, period=period)
         return True
     except TotpError:
         return False
