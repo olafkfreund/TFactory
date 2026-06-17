@@ -55,6 +55,93 @@ class NixPlan:
         )
 
 
+def detect_serve_command(
+    project_dir: Path, env: dict | None = None, *, port: int = 8099
+) -> str | None:
+    """How to start the app inside the materialized env for a browser/api lane.
+
+    Order: the contract ``environment.serve_command`` (authoritative) → else
+    detect from the checkout (FastAPI/Flask via uvicorn, or a node start script).
+    Returns None when nothing is detectable (the lane then runs without serving —
+    honest, not a guess).
+    """
+    if env and env.get("serve_command"):
+        return str(env["serve_command"])
+    pd = Path(project_dir)
+    # Python ASGI: prefer a root app.py exposing `app`, then a src/app package.
+    if (pd / "app.py").is_file() and "app" in (pd / "app.py").read_text(errors="ignore"):
+        return f"python -m uvicorn app:app --host 127.0.0.1 --port {port}"
+    if (pd / "src" / "app" / "main.py").is_file():
+        return f"python -m uvicorn app.main:app --host 127.0.0.1 --port {port}"
+    if (pd / "main.py").is_file() and "app" in (pd / "main.py").read_text(errors="ignore"):
+        return f"python -m uvicorn main:app --host 127.0.0.1 --port {port}"
+    pkg = pd / "package.json"
+    if pkg.is_file() and '"start"' in pkg.read_text(errors="ignore"):
+        return "npm start"
+    return None
+
+
+def nix_runner_from_env():
+    """Build a KubeJobSandbox from the deployment's TFACTORY_* env, or None when
+    the Nix-lane sandbox isn't configured (so callers degrade gracefully)."""
+    import os
+
+    image = os.environ.get("TFACTORY_NIX_RUNNER_IMAGE")
+    if not image:
+        return None
+    from tools.runners.kube_sandbox import KubeJobSandbox
+
+    pvc = os.environ.get("TFACTORY_WORKSPACES_PVC")
+    ns = os.environ.get("TFACTORY_SANDBOX_NAMESPACE", "factory")
+    return KubeJobSandbox(image, namespace=ns, repo_pvc=pvc)
+
+
+_JOB_SCRIPT = "_tf_nix_job.sh"
+
+
+def run_browser_evidence(
+    spec_dir: Path, project_dir: Path, *, port: int = 8099, mount: str = "/work"
+) -> dict | None:
+    """Materialize the flake, dispatch a Nix k8s Job that serves the app + runs
+    the browser lane, and collect screenshots into ``findings/screenshots``.
+
+    Returns a result dict, or None when there's no nix env or the sandbox isn't
+    configured (caller falls back / records the gap honestly). Proven live
+    2026-06-17.
+    """
+    env = environment_from_contract(spec_dir)
+    plan = materialize_flake(spec_dir, project_dir, env=env)
+    if plan is None:
+        return None
+    sandbox = nix_runner_from_env()
+    if sandbox is None:
+        _log.info("run_browser_evidence: TFACTORY_NIX_RUNNER_IMAGE unset; skipping")
+        return None
+
+    serve = detect_serve_command(project_dir, env, port=port)
+    steps = build_browser_job_command(plan.verify_commands, serve_command=serve, port=port)
+    # Write the steps as a script in the worktree to avoid nested-quoting in the
+    # Job command; reference it at the mount path. path:/work avoids nix's git
+    # fetcher (ownership + untracked-flake) on the co-mounted repo.
+    (Path(project_dir) / _JOB_SCRIPT).write_text(
+        "#!/usr/bin/env bash\nset -e\n" + "\n".join(steps) + "\n", encoding="utf-8"
+    )
+    job_cmd = f"nix develop path:{mount}#default --command bash {mount}/{_JOB_SCRIPT}"
+    try:
+        res = sandbox.run([job_cmd], workdir=str(project_dir), timeout=900)
+    finally:
+        (Path(project_dir) / _JOB_SCRIPT).unlink(missing_ok=True)
+
+    findings = Path(spec_dir) / "findings"
+    shots = collect_screenshots(project_dir, findings)
+    return {
+        "ok": res.ok,
+        "output_tail": (res.output or "")[-2000:],
+        "serve_command": serve,
+        "screenshots": [str(p) for p in shots],
+    }
+
+
 def build_browser_job_command(
     verify_commands: list[str],
     *,
