@@ -134,11 +134,18 @@ class LoginStep(BaseModel):
       - ``fill_username`` — fill ``selector`` with the injected username env var
       - ``fill_secret``   — fill ``selector`` with the injected secret env var
       - ``fill``          — fill ``selector`` with the literal ``value`` (non-secret)
+      - ``fill_totp``     — fill ``selector`` with a fresh RFC-6238 TOTP code,
+                            generated at fill time from the bootstrapped seed
+                            (Class B MFA). The seed comes from a ``totp`` vault
+                            credential, injected as an env var; the code is
+                            computed in the login step so it never expires in
+                            flight. We generate the code; we never bypass MFA.
       - ``wait_for_url``  — wait until the URL matches ``url`` (substring/glob)
     """
 
     action: Literal[
-        "goto", "click", "fill_username", "fill_secret", "fill", "wait_for_url"
+        "goto", "click", "fill_username", "fill_secret", "fill", "fill_totp",
+        "wait_for_url",
     ]
     selector: str | None = None  # click / fill* actions
     url: str | None = None  # goto / wait_for_url actions
@@ -792,11 +799,17 @@ class TestCredentialEntry(BaseModel):
     as_username: str | None = None
     username_ref: str | None = None
     kind: Literal["form", "api_token", "basic_auth", "totp"] = "form"
+    # Class B MFA: a SECOND secret ref holding the base32 TOTP seed, exposed as
+    # the ``as_totp_secret`` env var. A fill_totp login step generates a fresh
+    # RFC-6238 code from it at run time. Lets one credential carry password +
+    # authenticator seed for a 2FA login.
+    totp_ref: str | None = None
+    as_totp_secret: str | None = None
 
-    @field_validator("as_secret", "as_username")
+    @field_validator("as_secret", "as_username", "as_totp_secret")
     @classmethod
     def _check_env_names(cls, v: str | None) -> str | None:
-        return v if v is None else _validate_env_var_name(v, "as_secret/as_username")
+        return v if v is None else _validate_env_var_name(v, "as_secret/as_username/as_totp_secret")
 
 
 class QualityGatePolicy(BaseModel):
