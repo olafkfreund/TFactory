@@ -209,18 +209,26 @@ def _python_libs(m: Manifest) -> list[str]:
 
 def nix_develop_argv(
     flake_dir: str, commands: list[str], *, binary: str = "nix",
-    attr: str = "default",
+    attr: str = "default", path_ref: bool = False,
 ) -> list[str]:
     """argv that materializes `flake_dir`'s devShell and runs `commands` in it.
 
     `nix develop <dir>#<attr> -c bash -c "<cmd1> && <cmd2>"`. The flake is GC-rooted
     by the store; first run fetches/builds, later runs are cache hits.
+
+    ``path_ref=True`` uses a ``path:`` flake reference instead of the bare dir.
+    REQUIRED for a co-mounted git worktree (proven live 2026-06-17): a bare dir
+    makes nix use the git fetcher, which (a) rejects the repo on a uid mismatch
+    ("repository not owned by current user") and (b) ignores the untracked
+    generated flake.nix. ``path:`` copies the path directly — no git, no
+    ownership check, untracked flake visible.
     """
     if not commands:
         raise ProvisionError("no commands to run in the nix dev shell")
     joined = " && ".join(commands)
+    ref = f"path:{flake_dir}#{attr}" if path_ref else f"{flake_dir}#{attr}"
     return [
-        binary, "develop", f"{flake_dir}#{attr}",
+        binary, "develop", ref,
         "--command", "bash", "-c", joined,
     ]
 
@@ -275,6 +283,9 @@ def _test() -> None:
     argv = nix_develop_argv("/work", ["pytest -q", "playwright test"])
     assert argv[:3] == ["nix", "develop", "/work#default"], argv
     assert argv[-3:] == ["bash", "-c", "pytest -q && playwright test"], argv
+    # path_ref for a co-mounted git worktree (avoids the git-fetcher ownership trap).
+    argv_p = nix_develop_argv("/work", ["true"], path_ref=True)
+    assert argv_p[2] == "path:/work#default", argv_p
 
     # 5. materialize-or-halt uses proof.verify; empty => true.
     a = materialize_or_halt_argv("/work", env_browser)
