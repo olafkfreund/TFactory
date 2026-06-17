@@ -1168,7 +1168,11 @@ def _browser_evidence_stability(spec_dir: Path, subtask: dict):
     """
     import json as _json
 
-    from agents.stability_runner import StabilityResult, StabilityVerdict
+    from agents.stability_runner import (
+        StabilityResult,
+        StabilityRun,
+        StabilityVerdict,
+    )
 
     ev_path = Path(spec_dir) / "findings" / "browser_evidence.json"
     if not ev_path.is_file():
@@ -1183,7 +1187,14 @@ def _browser_evidence_stability(spec_dir: Path, subtask: dict):
         return None
     passed = bool(results[spec_name])
     verdict = StabilityVerdict.STABLE if passed else StabilityVerdict.CONSISTENT_FAIL
-    return StabilityResult(verdict=verdict, runs=(), seed=0, rerun_count=0)
+    # Represent the junit outcome as a real graded run (rc 0 pass / 1 fail) so
+    # downstream sees a graded result, not "0 runs collected". The Nix Job IS the
+    # run; we record its verdict rather than a 3x re-run.
+    run = StabilityRun(
+        returncode=0 if passed else 1,
+        stdout_tail="browser lane graded from the Nix-Job junit (RFC-0005)",
+    )
+    return StabilityResult(verdict=verdict, runs=(run,), seed=0, rerun_count=1)
 
 
 def _build_browser_signal_bundle(
