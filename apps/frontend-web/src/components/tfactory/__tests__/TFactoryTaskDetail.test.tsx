@@ -74,6 +74,7 @@ const sampleDetail = (overrides: Partial<{
   status: string;
   verdictsExists: boolean;
   reportExists: boolean;
+  acFidelityExists: boolean;
 }> = {}) => ({
   task_id: 'spec-x',
   project_id: 'demo',
@@ -85,6 +86,8 @@ const sampleDetail = (overrides: Partial<{
     triage_report_json: { path: 'findings/triage_report.json', exists: true },
     triage_report_md: { path: 'findings/triage_report.md', exists: overrides.reportExists ?? true },
     pr_comment_body: { path: 'findings/pr_comment_body.md', exists: false },
+    ac_fidelity_json: { path: 'findings/ac_fidelity.json', exists: overrides.acFidelityExists ?? true },
+    ac_fidelity_md: { path: 'findings/ac_fidelity.md', exists: overrides.acFidelityExists ?? true },
   },
 });
 
@@ -305,6 +308,52 @@ describe('<TFactoryTaskDetail> report tab', () => {
     fireEvent.click(screen.getByTestId('tab-report'));
     // No additional fetch — cached
     expect((fetchFn as ReturnType<typeof vi.fn>).mock.calls.length).toBe(callsAfterFirst);
+  });
+});
+
+// ── Acceptance tab (AC-fidelity ledger, lazy load) ───────────────────
+
+describe('<TFactoryTaskDetail> acceptance tab', () => {
+  it('lazy-fetches the AC-fidelity ledger and renders it on tab open', async () => {
+    const md = '# Acceptance-criteria fidelity\n\nVerified 5/5 acceptance criteria.\n';
+    const fetchFn = makeUrlAwareFetch({
+      '/spec-x': { jsonBody: sampleDetail() },
+      '/spec-x/ac-fidelity.md': { textBody: md },
+    });
+    render(<TFactoryTaskDetail specId="spec-x" fetchFn={fetchFn} />);
+    await waitFor(() => screen.getByTestId('tab-acceptance'));
+
+    fireEvent.click(screen.getByTestId('tab-acceptance'));
+    await waitFor(() => screen.getByTestId('ac-fidelity-content'));
+    const panel = screen.getByTestId('ac-fidelity-content');
+    expect(panel.textContent).toContain('Verified 5/5 acceptance criteria');
+    expect(panel.querySelector('h1')?.textContent).toBe('Acceptance-criteria fidelity');
+  });
+
+  it('disables Acceptance tab when ac_fidelity_md artefact is absent', async () => {
+    const fetchFn = makeUrlAwareFetch({
+      '/spec-x': { jsonBody: sampleDetail({ acFidelityExists: false }) },
+    });
+    render(<TFactoryTaskDetail specId="spec-x" fetchFn={fetchFn} />);
+    await waitFor(() => screen.getByTestId('tab-acceptance'));
+    expect(screen.getByTestId('tab-acceptance')).toBeDisabled();
+  });
+
+  it('shows friendly 404 message when the ledger endpoint returns 404', async () => {
+    const fetchFn = makeUrlAwareFetch({
+      '/spec-x': { jsonBody: sampleDetail() },
+      '/spec-x/ac-fidelity.md': {
+        ok: false, status: 404, statusText: 'Not Found',
+        jsonBody: { detail: 'artefact not found' },
+      },
+    });
+    render(<TFactoryTaskDetail specId="spec-x" fetchFn={fetchFn} />);
+    await waitFor(() => screen.getByTestId('tab-acceptance'));
+    fireEvent.click(screen.getByTestId('tab-acceptance'));
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/hasn't reached the Triager/i)).toBeInTheDocument();
   });
 });
 
