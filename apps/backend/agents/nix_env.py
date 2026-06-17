@@ -136,6 +136,7 @@ export default defineConfig({{
   use: {{
     baseURL: 'http://127.0.0.1:{port}',
     screenshot: 'on',
+    video: 'on',
     trace: 'off',
   }},
 }});
@@ -201,6 +202,7 @@ def run_browser_evidence(
     # its acceptance criterion reach VERIFIED.
     results = parse_browser_junit(Path(project_dir) / _SHOTS / "junit.xml")
     shots = collect_screenshots(project_dir, findings)
+    videos = collect_videos(project_dir, findings)
     if results:
         findings.mkdir(parents=True, exist_ok=True)
         (findings / "browser_evidence.json").write_text(json.dumps(results, indent=2))
@@ -210,6 +212,7 @@ def run_browser_evidence(
         "serve_command": serve,
         "specs": n_specs,
         "screenshots": [str(p) for p in shots],
+        "videos": [str(p) for p in videos],
         "results": results,
     }
 
@@ -283,6 +286,31 @@ def collect_screenshots(project_dir: Path, findings_dir: Path, *, shots: str = "
     # collisions across tests don't clobber.
     for f in sorted(src.rglob("*")):
         if f.suffix.lower() in (".png", ".xml") and f.is_file():
+            rel = f.relative_to(src)
+            name = "__".join(rel.parts) if len(rel.parts) > 1 else f.name
+            target = dest / name
+            shutil.copy2(f, target)
+            out.append(target)
+    return out
+
+
+def collect_videos(project_dir: Path, findings_dir: Path, *, shots: str = "shots") -> list[Path]:
+    """Copy Playwright recordings (webm) the Job wrote into findings/videos/.
+
+    `video: 'on'` writes one ``video.webm`` per test into a per-test subdir of
+    outputDir. Flatten into findings/videos with a path-derived name so recordings
+    from different tests don't clobber. Returns destination paths; empty when none.
+    """
+    import shutil
+
+    src = Path(project_dir) / shots
+    if not src.is_dir():
+        return []
+    dest = Path(findings_dir) / "videos"
+    out: list[Path] = []
+    for f in sorted(src.rglob("*")):
+        if f.suffix.lower() in (".webm", ".mp4") and f.is_file():
+            dest.mkdir(parents=True, exist_ok=True)
             rel = f.relative_to(src)
             name = "__".join(rel.parts) if len(rel.parts) > 1 else f.name
             target = dest / name

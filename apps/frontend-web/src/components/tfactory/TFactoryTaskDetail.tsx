@@ -26,6 +26,8 @@ import {
   getAcFidelityMarkdown,
   getTaskDetail,
   getTriageReportMarkdown,
+  screenshotUrl,
+  videoUrl,
   getVerdicts,
   mergeAcceptedTests,
   type EvidenceUrls,
@@ -532,6 +534,83 @@ function EvidenceTab({ specId, evidenceByTest }: { specId: string; evidenceByTes
   );
 }
 
+// ── Browser-lane evidence gallery (screenshots + recordings) ──────────
+//
+// Renders the actual PNGs and Playwright recordings the browser lane captured
+// (served from findings/screenshots/ + findings/videos/). <img>/<video> src
+// carry the session cookie like the visual-baseline images, so they render for
+// a logged-in operator. This is the *visible* proof behind the AC-fidelity
+// ledger's "Verified X/Y" headline.
+
+function EvidenceGallery({
+  specId,
+  screenshots,
+  videos,
+}: {
+  specId: string;
+  screenshots: string[];
+  videos: string[];
+}) {
+  if (screenshots.length === 0 && videos.length === 0) {
+    return (
+      <p data-testid="evidence-gallery-empty" className="mt-4 p-4 text-sm text-muted-foreground">
+        No screenshots or recordings captured — the browser lane produces these when it runs.
+      </p>
+    );
+  }
+  return (
+    <div data-testid="evidence-gallery" className="mt-4 space-y-4">
+      {videos.length > 0 && (
+        <section>
+          <h3 className="mb-2 text-sm font-semibold text-foreground">
+            Recordings ({videos.length})
+          </h3>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            {videos.map((file) => (
+              <figure key={file} className="rounded-lg border border-border bg-card p-2">
+                <video
+                  data-testid={`evidence-video-${file}`}
+                  src={videoUrl(specId, file)}
+                  controls
+                  className="w-full rounded"
+                />
+                <figcaption className="mt-1 truncate text-xs text-muted-foreground" title={file}>
+                  {file}
+                </figcaption>
+              </figure>
+            ))}
+          </div>
+        </section>
+      )}
+      {screenshots.length > 0 && (
+        <section>
+          <h3 className="mb-2 text-sm font-semibold text-foreground">
+            Screenshots ({screenshots.length})
+          </h3>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {screenshots.map((file) => (
+              <figure key={file} className="rounded-lg border border-border bg-card p-2">
+                <a href={screenshotUrl(specId, file)} target="_blank" rel="noreferrer">
+                  <img
+                    data-testid={`evidence-shot-${file}`}
+                    src={screenshotUrl(specId, file)}
+                    alt={file}
+                    loading="lazy"
+                    className="w-full rounded border border-border"
+                  />
+                </a>
+                <figcaption className="mt-1 truncate text-xs text-muted-foreground" title={file}>
+                  {file}
+                </figcaption>
+              </figure>
+            ))}
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
 // ── Main component ───────────────────────────────────────────────────
 
 export function TFactoryTaskDetail({ specId, fetchFn, wsFactory, pollMs = 5000 }: Props) {
@@ -723,6 +802,11 @@ export function TFactoryTaskDetail({ specId, fetchFn, wsFactory, pollMs = 5000 }
                 <MarkdownBody source={acFidelityMd} />
               </div>
             )}
+            <EvidenceGallery
+              specId={specId}
+              screenshots={detail.artefacts.screenshots?.files ?? []}
+              videos={detail.artefacts.videos?.files ?? []}
+            />
           </>
         )}
         {activeTab === 'logs' && <TFactoryLogViewer specId={specId} wsFactory={wsFactory} />}

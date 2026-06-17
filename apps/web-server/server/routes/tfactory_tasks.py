@@ -183,6 +183,23 @@ def _artefact_meta(spec_dir: Path) -> dict[str, dict]:
         "exists": bool(shots),
         "files": shots,
     }
+    # Browser-lane Playwright recordings (webm/mp4), rendered as <video> in the
+    # cockpit alongside the screenshots.
+    vids_dir = spec_dir / "findings" / "videos"
+    vids = (
+        sorted(
+            p.name
+            for p in vids_dir.iterdir()
+            if p.suffix.lower() in (".webm", ".mp4")
+        )
+        if vids_dir.is_dir()
+        else []
+    )
+    meta["videos"] = {
+        "path": "findings/videos",
+        "exists": bool(vids),
+        "files": vids,
+    }
     return meta
 
 
@@ -646,6 +663,74 @@ def get_evidence_artifact(spec_id: str, test_id: str, artifact: str) -> Response
         ) from exc
 
     return Response(content=content, media_type=_evidence_content_type(artifact))
+
+
+# ── Browser-lane media (screenshots / recordings) ──────────────────────────
+#
+# The Nix browser job (RFC-0005 Tier A) writes its PNG screenshots to
+# <spec_dir>/findings/screenshots/ and its Playwright videos to
+# <spec_dir>/findings/videos/ — NOT under findings/evidence/<test_id>/, so the
+# per-test evidence endpoint above can't reach them. These serve them byte-for-
+# byte so the cockpit (and CFactory) can actually render the visual proof the
+# AC-fidelity ledger references.
+
+
+def _serve_findings_media(spec_id: str, subdir: str, artifact: str) -> Response:
+    """Serve a file under ``<spec_dir>/findings/<subdir>/`` byte-for-byte.
+
+    ``subdir`` is a fixed caller-supplied constant (``screenshots`` / ``videos``),
+    never user input. ``artifact`` is validated + traversal-guarded like the
+    per-test evidence endpoint.
+    """
+    _validate_spec_id(spec_id)
+    _validate_artifact(artifact)
+
+    root = _resolve_workspace_root()
+    spec_dir = _find_spec_dir(root, spec_id)
+    if spec_dir is None:
+        raise HTTPException(
+            status_code=http_status.HTTP_404_NOT_FOUND,
+            detail=f"task not found: {spec_id}",
+        )
+
+    base = spec_dir / "findings" / subdir
+    artifact_path = base / artifact
+    try:
+        resolved = artifact_path.resolve()
+        base_resolved = base.resolve()
+        if not str(resolved).startswith(str(base_resolved) + "/") and resolved != base_resolved:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail=f"path traversal rejected: {artifact!r}",
+            )
+    except (OSError, ValueError):
+        pass  # the 404 below handles a non-existent path
+
+    if not artifact_path.is_file():
+        raise HTTPException(
+            status_code=http_status.HTTP_404_NOT_FOUND,
+            detail=f"artifact not found: findings/{subdir}/{artifact}",
+        )
+    try:
+        content = artifact_path.read_bytes()
+    except OSError as exc:
+        raise HTTPException(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"could not read artifact: {exc}",
+        ) from exc
+    return Response(content=content, media_type=_evidence_content_type(artifact))
+
+
+@router.get("/{spec_id}/screenshots/{artifact:path}")
+def get_screenshot(spec_id: str, artifact: str) -> Response:
+    """Serve a browser-lane screenshot: ``findings/screenshots/<artifact>`` (PNG)."""
+    return _serve_findings_media(spec_id, "screenshots", artifact)
+
+
+@router.get("/{spec_id}/videos/{artifact:path}")
+def get_video(spec_id: str, artifact: str) -> Response:
+    """Serve a browser-lane recording: ``findings/videos/<artifact>`` (webm/mp4)."""
+    return _serve_findings_media(spec_id, "videos", artifact)
 
 
 # ── Merge / dismiss (the human review gate) ─────────────────────────

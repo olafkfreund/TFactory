@@ -75,6 +75,8 @@ const sampleDetail = (overrides: Partial<{
   verdictsExists: boolean;
   reportExists: boolean;
   acFidelityExists: boolean;
+  screenshots: string[];
+  videos: string[];
 }> = {}) => ({
   task_id: 'spec-x',
   project_id: 'demo',
@@ -88,6 +90,16 @@ const sampleDetail = (overrides: Partial<{
     pr_comment_body: { path: 'findings/pr_comment_body.md', exists: false },
     ac_fidelity_json: { path: 'findings/ac_fidelity.json', exists: overrides.acFidelityExists ?? true },
     ac_fidelity_md: { path: 'findings/ac_fidelity.md', exists: overrides.acFidelityExists ?? true },
+    screenshots: {
+      path: 'findings/screenshots',
+      exists: (overrides.screenshots ?? ['root-page-title.png']).length > 0,
+      files: overrides.screenshots ?? ['root-page-title.png'],
+    },
+    videos: {
+      path: 'findings/videos',
+      exists: (overrides.videos ?? ['ping-button.webm']).length > 0,
+      files: overrides.videos ?? ['ping-button.webm'],
+    },
   },
 });
 
@@ -354,6 +366,38 @@ describe('<TFactoryTaskDetail> acceptance tab', () => {
       expect(screen.getByRole('alert')).toBeInTheDocument(),
     );
     expect(screen.getByText(/hasn't reached the Triager/i)).toBeInTheDocument();
+  });
+
+  it('renders the screenshot + recording gallery with correct media URLs', async () => {
+    const fetchFn = makeUrlAwareFetch({
+      '/spec-x': { jsonBody: sampleDetail({
+        screenshots: ['root-page-title.png', 'ping-result.png'],
+        videos: ['ping-button.webm'],
+      }) },
+      '/spec-x/ac-fidelity.md': { textBody: '# Acceptance-criteria fidelity\n\nVerified 5/5.\n' },
+    });
+    render(<TFactoryTaskDetail specId="spec-x" fetchFn={fetchFn} />);
+    await waitFor(() => screen.getByTestId('tab-acceptance'));
+    fireEvent.click(screen.getByTestId('tab-acceptance'));
+    await waitFor(() => screen.getByTestId('evidence-gallery'));
+
+    const shot = screen.getByTestId('evidence-shot-root-page-title.png') as HTMLImageElement;
+    expect(shot.getAttribute('src')).toBe('/api/tfactory/tasks/spec-x/screenshots/root-page-title.png');
+    const video = screen.getByTestId('evidence-video-ping-button.webm') as HTMLVideoElement;
+    expect(video.getAttribute('src')).toBe('/api/tfactory/tasks/spec-x/videos/ping-button.webm');
+    expect(screen.getByText('Screenshots (2)')).toBeInTheDocument();
+    expect(screen.getByText('Recordings (1)')).toBeInTheDocument();
+  });
+
+  it('shows the empty-gallery note when no media was captured', async () => {
+    const fetchFn = makeUrlAwareFetch({
+      '/spec-x': { jsonBody: sampleDetail({ screenshots: [], videos: [] }) },
+      '/spec-x/ac-fidelity.md': { textBody: '# AC fidelity\n' },
+    });
+    render(<TFactoryTaskDetail specId="spec-x" fetchFn={fetchFn} />);
+    await waitFor(() => screen.getByTestId('tab-acceptance'));
+    fireEvent.click(screen.getByTestId('tab-acceptance'));
+    await waitFor(() => screen.getByTestId('evidence-gallery-empty'));
   });
 });
 

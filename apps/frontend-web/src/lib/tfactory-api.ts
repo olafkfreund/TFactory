@@ -40,6 +40,8 @@ export interface TFactoryTaskListResponse {
 export interface TFactoryArtefactMeta {
   path: string;
   exists: boolean;
+  /** Present for media artefacts (screenshots/videos): the file names under path. */
+  files?: string[];
 }
 
 export type TFactoryArtefactKey =
@@ -49,7 +51,9 @@ export type TFactoryArtefactKey =
   | 'triage_report_md'
   | 'pr_comment_body'
   | 'ac_fidelity_json'
-  | 'ac_fidelity_md';
+  | 'ac_fidelity_md'
+  | 'screenshots'
+  | 'videos';
 
 export interface TFactoryTaskDetail {
   task_id: string;
@@ -391,6 +395,20 @@ export function evidenceArtifactUrl(
   artifact: string,
 ): string {
   return `${TFACTORY_PREFIX}/${specId}/evidence/${testId}/${artifact}`;
+}
+
+/**
+ * URL for one browser-lane screenshot — use directly as an `<img src>`.
+ * Served from findings/screenshots/; authenticated via the same Bearer/cookie
+ * path as the other artefact GETs.
+ */
+export function screenshotUrl(specId: string, file: string): string {
+  return `${TFACTORY_PREFIX}/${specId}/screenshots/${encodeURIComponent(file)}`;
+}
+
+/** URL for one browser-lane recording — use directly as a `<video src>`. */
+export function videoUrl(specId: string, file: string): string {
+  return `${TFACTORY_PREFIX}/${specId}/videos/${encodeURIComponent(file)}`;
 }
 
 // ─── Visual baselines (#109) ──────────────────────────────────────────
