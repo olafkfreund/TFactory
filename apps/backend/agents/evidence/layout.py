@@ -282,6 +282,7 @@ def render_auth_setup_steps(
     username_env: str,
     secret_env: str,
     storage_state_path: str = "state.json",
+    totp_env: str | None = None,
 ) -> str:
     """Render a multi-step ``auth.setup.ts`` from a declarative steps list (#107).
 
@@ -316,6 +317,14 @@ def render_auth_setup_steps(
         elif action == "fill" and sel and val is not None:
             lines.append(
                 f'  await page.locator("{_js_str(sel)}").fill("{_js_str(val)}");'
+            )
+        elif action == "fill_totp" and sel and totp_env:
+            # Class B MFA: generate a fresh RFC-6238 code from the injected seed
+            # env var, at fill time (never expires in flight). __tfTotp is the
+            # helper embedded in auth.setup.steps.tmpl.ts.
+            lines.append(
+                f'  await page.locator("{_js_str(sel)}")'
+                f'.fill(__tfTotp(process.env["{totp_env}"] ?? ""));'
             )
         elif action == "wait_for_url" and url:
             lines.append(f'  await page.waitForURL("**/{_js_str(url)}**");')
@@ -367,6 +376,9 @@ def scaffold_auth_setup(spec_dir: Path | str) -> bool:
     cred = creds.get(auth.get("ref")) or {}
     username_env = cred.get("as_username")
     secret_env = cred.get("as_secret")
+    # Class B MFA: the env var carrying the TOTP seed (from a `totp` vault
+    # credential). When present, a fill_totp step generates the code at run time.
+    totp_env = cred.get("as_totp_secret")
     base_url = target.get("base_url")
     # Both credential env vars + a base_url are needed either way.
     if not (username_env and secret_env and base_url):
@@ -380,6 +392,7 @@ def scaffold_auth_setup(spec_dir: Path | str) -> bool:
             username_env=username_env,
             secret_env=secret_env,
             storage_state_path=_STORAGE_STATE_PATH,
+            totp_env=totp_env,
         )
     else:
         # Single-step form login needs an explicit login URL.

@@ -126,6 +126,10 @@ class TargetCredentialSpec:
     as_secret: str
     as_username: str | None = None
     username_ref: str | None = None
+    # Class B MFA: a base32 TOTP seed ref + the env var to expose it as. The
+    # login's fill_totp step generates a fresh RFC-6238 code from this seed.
+    totp_ref: str | None = None
+    as_totp_secret: str | None = None
 
 
 def resolve_test_target_credentials(
@@ -178,6 +182,10 @@ def resolve_test_target_credentials(
             env[spec.as_secret] = broker.resolve_ref(spec.ref).value
             if spec.as_username and spec.username_ref:
                 env[spec.as_username] = broker.resolve_ref(spec.username_ref).value
+            # Class B MFA: inject the TOTP seed; the login step turns it into a
+            # fresh code at fill time (never stored as a static code).
+            if spec.as_totp_secret and spec.totp_ref:
+                env[spec.as_totp_secret] = broker.resolve_ref(spec.totp_ref).value
         except Exception:  # noqa: BLE001 - one bad ref must not break the lane
             logger.warning(
                 "failed to resolve test credential %r", spec.name, exc_info=True
@@ -219,6 +227,8 @@ def config_to_credential_specs(
             as_secret=entry.as_secret,
             as_username=entry.as_username,
             username_ref=entry.username_ref,
+            totp_ref=getattr(entry, "totp_ref", None),
+            as_totp_secret=getattr(entry, "as_totp_secret", None),
         )
     ]
 
