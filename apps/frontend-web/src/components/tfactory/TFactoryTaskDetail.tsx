@@ -23,6 +23,7 @@ import {
   TFactoryApiError,
   dismissRun,
   evidenceArtifactUrl,
+  getAcFidelityMarkdown,
   getTaskDetail,
   getTriageReportMarkdown,
   getVerdicts,
@@ -38,7 +39,7 @@ import { TFactoryLogViewer } from './TFactoryLogViewer';
 import { VisualBaselines } from './VisualBaselines';
 import { useVisibilityAwarePolling } from '../../hooks/useVisibilityAwarePolling';
 
-type Tab = 'status' | 'lanes' | 'verdicts' | 'report' | 'logs' | 'evidence';
+type Tab = 'status' | 'lanes' | 'verdicts' | 'report' | 'acceptance' | 'logs' | 'evidence';
 
 interface Props {
   specId: string;
@@ -549,6 +550,11 @@ export function TFactoryTaskDetail({ specId, fetchFn, wsFactory, pollMs = 5000 }
   const [loadingReport, setLoadingReport] = useState(false);
   const [reportRequested, setReportRequested] = useState(false);
 
+  const [acFidelityMd, setAcFidelityMd] = useState<string | null>(null);
+  const [acError, setAcError] = useState<string | null>(null);
+  const [loadingAc, setLoadingAc] = useState(false);
+  const [acRequested, setAcRequested] = useState(false);
+
   const [evidenceByTest, setEvidenceByTest] = useState<Record<string, EvidenceUrls>>({});
 
   useEffect(() => {
@@ -614,10 +620,23 @@ export function TFactoryTaskDetail({ specId, fetchFn, wsFactory, pollMs = 5000 }
           setLoadingReport(false);
         });
     }
+    if (tab === 'acceptance' && !acRequested) {
+      setAcRequested(true);
+      setLoadingAc(true);
+      setAcError(null);
+      getAcFidelityMarkdown(specId, { fetchFn })
+        .then((md) => { setAcFidelityMd(md); setLoadingAc(false); })
+        .catch((err: unknown) => {
+          setAcError(err instanceof TFactoryApiError && err.status === 404
+            ? 'No acceptance ledger yet — task hasn\'t reached the Triager.'
+            : err instanceof Error ? err.message : String(err));
+          setLoadingAc(false);
+        });
+    }
     if (tab === 'evidence' && verdicts && Object.keys(evidenceByTest).length === 0) {
       _extractEvidenceFromVerdicts(verdicts);
     }
-  }, [specId, fetchFn, verdictsRequested, reportRequested, verdicts, evidenceByTest, _extractEvidenceFromVerdicts]);
+  }, [specId, fetchFn, verdictsRequested, reportRequested, acRequested, verdicts, evidenceByTest, _extractEvidenceFromVerdicts]);
 
   if (loadingDetail) {
     return (
@@ -642,6 +661,7 @@ export function TFactoryTaskDetail({ specId, fetchFn, wsFactory, pollMs = 5000 }
   const status = (detail.status_json.status as string | undefined) ?? null;
   const verdictsAvailable = detail.artefacts.verdicts?.exists ?? false;
   const reportAvailable = detail.artefacts.triage_report_md?.exists ?? false;
+  const acAvailable = detail.artefacts.ac_fidelity_md?.exists ?? false;
   const evidenceAvailable = verdictsAvailable;
 
   const laneProgress = detail.status_json.lane_progress as Record<string, string | null> | undefined;
@@ -661,6 +681,7 @@ export function TFactoryTaskDetail({ specId, fetchFn, wsFactory, pollMs = 5000 }
         <TabButton tab="lanes" active={activeTab} onClick={onSelectTab} label="Lanes" />
         <TabButton tab="verdicts" active={activeTab} onClick={onSelectTab} label="Verdicts" disabled={!verdictsAvailable} badge={verdictCount} />
         <TabButton tab="report" active={activeTab} onClick={onSelectTab} label="Report" disabled={!reportAvailable} />
+        <TabButton tab="acceptance" active={activeTab} onClick={onSelectTab} label="Acceptance" disabled={!acAvailable} />
         <TabButton tab="logs" active={activeTab} onClick={onSelectTab} label="Logs" />
         <TabButton tab="evidence" active={activeTab} onClick={onSelectTab} label="Evidence" disabled={!evidenceAvailable} />
       </div>
@@ -689,6 +710,17 @@ export function TFactoryTaskDetail({ specId, fetchFn, wsFactory, pollMs = 5000 }
             {reportMd && (
               <div data-testid="report-md-content" className="rounded-lg border border-border bg-card p-4">
                 <MarkdownBody source={reportMd} />
+              </div>
+            )}
+          </>
+        )}
+        {activeTab === 'acceptance' && (
+          <>
+            {loadingAc && <div role="status" className="p-4 text-sm text-muted-foreground">Loading acceptance ledger…</div>}
+            {acError && <div role="alert" className="p-4 text-sm text-destructive">{acError}</div>}
+            {acFidelityMd && (
+              <div data-testid="ac-fidelity-content" className="rounded-lg border border-border bg-card p-4">
+                <MarkdownBody source={acFidelityMd} />
               </div>
             )}
           </>

@@ -47,7 +47,9 @@ export type TFactoryArtefactKey =
   | 'verdicts'
   | 'triage_report_json'
   | 'triage_report_md'
-  | 'pr_comment_body';
+  | 'pr_comment_body'
+  | 'ac_fidelity_json'
+  | 'ac_fidelity_md';
 
 export interface TFactoryTaskDetail {
   task_id: string;
@@ -327,6 +329,21 @@ export async function getTriageReportMarkdown(
   _validateSpecId(specId);
   return _request<string>(
     `${TFACTORY_PREFIX}/${specId}/triage-report.md`, 'text', options,
+  );
+}
+
+/**
+ * GET /api/tfactory/tasks/{spec_id}/ac-fidelity.md — the acceptance-criteria
+ * fidelity ledger (verified X/Y, per-AC verified/flagged/unverified + linked
+ * screenshots). Returned as a string for the Markdown viewer.
+ */
+export async function getAcFidelityMarkdown(
+  specId: string,
+  options: FetchOptions = {},
+): Promise<string> {
+  _validateSpecId(specId);
+  return _request<string>(
+    `${TFACTORY_PREFIX}/${specId}/ac-fidelity.md`, 'text', options,
   );
 }
 

@@ -11,6 +11,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import {
   TFactoryApiError,
   _internalForTests,
+  getAcFidelityMarkdown,
   getPrCommentBody,
   getTaskDetail,
   getTestPlan,
@@ -218,6 +219,29 @@ describe('getTriageReportMarkdown', () => {
   });
 });
 
+describe('getAcFidelityMarkdown', () => {
+  it('GETs the ac-fidelity.md path and returns text', async () => {
+    const md = '# Acceptance-criteria fidelity\n\nVerified 5/5 acceptance criteria.\n';
+    const fetchFn = makeFetch({ textBody: md });
+    const result = await getAcFidelityMarkdown('042-x', { fetchFn });
+    expect(result).toBe(md);
+    expect(fetchFn).toHaveBeenCalledWith(
+      '/api/tfactory/tasks/042-x/ac-fidelity.md',
+      expect.any(Object),
+    );
+  });
+
+  it('passes through 404 when the ledger is missing', async () => {
+    const fetchFn = makeFetch({
+      ok: false, status: 404, statusText: 'Not Found',
+      jsonBody: { detail: 'artefact not found: findings/ac_fidelity.md' },
+    });
+    await expect(
+      getAcFidelityMarkdown('042-x', { fetchFn }),
+    ).rejects.toMatchObject({ status: 404 });
+  });
+});
+
 describe('getPrCommentBody', () => {
   it('GETs the pr-comment-body.md path and returns text', async () => {
     const md = '# PR Comment\n';
@@ -247,6 +271,7 @@ describe.each([
   ['getVerdicts', getVerdicts],
   ['getTriageReportJson', getTriageReportJson],
   ['getTriageReportMarkdown', getTriageReportMarkdown],
+  ['getAcFidelityMarkdown', getAcFidelityMarkdown],
   ['getTestPlan', getTestPlan],
   ['getPrCommentBody', getPrCommentBody],
 ] as const)('%s rejects bad spec_id client-side', (_name, fn) => {
