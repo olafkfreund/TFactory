@@ -1157,13 +1157,44 @@ def _resolve_browser_runner_fn(
     return _run
 
 
+def _browser_evidence_stability(spec_dir: Path, subtask: dict):
+    """Stability for a browser subtask from the Nix-Job junit (findings/
+    browser_evidence.json), or None when there's no evidence.
+
+    This is the REAL browser-lane signal in k3d: the in-container DockerRunner
+    path can't run, so the per-spec pass/fail the Nix Job already produced is what
+    lets a passing UI test be ACCEPTED (and its acceptance criterion VERIFIED)
+    rather than stuck flagged on an "error" stability.
+    """
+    import json as _json
+
+    from agents.stability_runner import StabilityResult, StabilityVerdict
+
+    ev_path = Path(spec_dir) / "findings" / "browser_evidence.json"
+    if not ev_path.is_file():
+        return None
+    try:
+        results = _json.loads(ev_path.read_text())
+    except Exception:  # noqa: BLE001
+        return None
+    files = subtask.get("files_to_create") or []
+    spec_name = Path(files[0]).name if files else ""
+    if spec_name not in results:
+        return None
+    passed = bool(results[spec_name])
+    verdict = StabilityVerdict.STABLE if passed else StabilityVerdict.CONSISTENT_FAIL
+    return StabilityResult(verdict=verdict, runs=(), seed=0, rerun_count=0)
+
+
 def _build_browser_signal_bundle(
     spec_dir: Path, project_dir: Path, subtask: dict, runner_fn
 ) -> EvaluatorSignals:
-    """Signal bundle for a Browser-lane subtask: 3× stability via Playwright,
-    coverage skipped (Decision 11), mutation skipped (no TS mutation in the
-    browser path)."""
-    stability = _stability_for_subtask(spec_dir, project_dir, subtask, runner_fn)
+    """Signal bundle for a Browser-lane subtask: stability from the Nix-Job junit
+    (the real signal in k3d) when available, else 3× Playwright via the runner;
+    coverage skipped (Decision 11), mutation skipped (no TS mutation here)."""
+    stability = _browser_evidence_stability(spec_dir, subtask)
+    if stability is None:
+        stability = _stability_for_subtask(spec_dir, project_dir, subtask, runner_fn)
     return EvaluatorSignals(
         test_id=subtask["id"],
         test_file=spec_dir / subtask["files_to_create"][0],
