@@ -38,6 +38,29 @@ def test_invalid_seed_rejected():
     assert is_valid_totp_secret(_SEED)
 
 
+def test_totp_variants_match_cross_impl():
+    # Cross-checked against the embedded TS helper (node:crypto) at a fixed time.
+    assert generate_totp(_SEED, at=1700000000, digits=8, alg="sha256") == "32049486"
+    assert generate_totp(_SEED, at=1700000000, alg="sha512", period=60) == "721347"
+
+
+def test_unsupported_alg_rejected():
+    try:
+        generate_totp(_SEED, at=0, alg="md5")
+        raise AssertionError("expected TotpError")
+    except TotpError:
+        pass
+
+
+def test_fill_totp_renders_variant_opts():
+    ts = render_auth_setup_steps(
+        steps=[{"action": "fill_totp", "selector": "#otp"}],
+        username_env="U", secret_env="S", totp_env="TF_TOTP_SEED",
+        totp_opts={"digits": 8, "alg": "sha256", "period": 60},
+    )
+    assert "digits: 8" in ts and 'alg: "sha256"' in ts and "period: 60" in ts
+
+
 def test_fill_totp_renders_runtime_generation():
     steps = [
         {"action": "fill_username", "selector": "#user"},

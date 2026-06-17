@@ -125,6 +125,29 @@ async def create_test_credential(
             detail=f"kind must be one of {sorted(_VALID_KINDS)}",
         )
 
+    # Curation gate (RFC-0007 Class B): validate a TOTP seed at enrolment, so a
+    # malformed/unsupported seed is rejected here with a clear message — not
+    # discovered as a cryptic failed login mid-test. Variant (digits/alg/period)
+    # may be supplied in `extra`.
+    if body.kind == "totp":
+        from agents.totp import is_valid_totp_secret
+
+        ex = body.extra or {}
+        ok = is_valid_totp_secret(
+            body.secret,
+            digits=int(ex.get("totp_digits", ex.get("digits", 6))),
+            alg=str(ex.get("totp_algorithm", ex.get("alg", "sha1"))),
+            period=int(ex.get("totp_period", ex.get("otp_period", ex.get("period", 30)))),
+        )
+        if not ok:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "TOTP seed is not a valid base32 secret for the given "
+                    "digits/algorithm/period; cannot generate codes from it."
+                ),
+            )
+
     cred = TestTargetCredential(
         org_id=body.org_id,
         name=body.name,

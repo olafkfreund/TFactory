@@ -805,6 +805,11 @@ class TestCredentialEntry(BaseModel):
     # authenticator seed for a 2FA login.
     totp_ref: str | None = None
     as_totp_secret: str | None = None
+    # TOTP variant (defaults = the common Google/Authy/1Password case). Set these
+    # for enterprise IdPs that use SHA-256/512, 8 digits, or a non-30s window.
+    totp_digits: int = 6
+    totp_algorithm: Literal["sha1", "sha256", "sha512"] = "sha1"
+    totp_period: int = 30
 
     @field_validator("as_secret", "as_username", "as_totp_secret")
     @classmethod
