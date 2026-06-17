@@ -97,17 +97,61 @@ def nix_runner_from_env():
 
 
 _JOB_SCRIPT = "_tf_nix_job.sh"
+_E2E_STAGE = ".tf_e2e"  # staged generated browser specs (in the worktree)
+_PW_CONFIG = "_tf_pw.config.ts"
+_SHOTS = "shots"
+
+
+def _stage_browser_specs(spec_dir: Path, project_dir: Path) -> int:
+    """Copy the GENERATED browser specs from the spec workspace into a clean dir
+    in the co-mounted worktree, so the Job runs THOSE — not whatever stale
+    *.spec.ts the project repo happens to carry (a real bug found live: the Job
+    picked up a leftover frontend-board.spec.ts pointing at the wrong port).
+    Returns the number staged.
+    """
+    import shutil
+
+    dest = Path(project_dir) / _E2E_STAGE
+    shutil.rmtree(dest, ignore_errors=True)
+    dest.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for src in sorted((Path(spec_dir) / "tests").rglob("*.spec.ts")):
+        shutil.copy2(src, dest / src.name)
+        n += 1
+    return n
+
+
+def _write_pw_config(project_dir: Path, *, port: int) -> None:
+    """Force screenshots from the RUNNER, not the generated test. `screenshot:
+    'on'` captures one per test into outputDir even when the spec never calls
+    page.screenshot (the generated specs don't). baseURL covers specs that read
+    it; the in-job BASE_URL env covers those that read process.env.BASE_URL.
+    """
+    cfg = f"""import {{ defineConfig }} from '@playwright/test';
+export default defineConfig({{
+  testDir: '{_E2E_STAGE}',
+  outputDir: '{_SHOTS}',
+  reporter: [['junit', {{ outputFile: '{_SHOTS}/junit.xml' }}], ['list']],
+  use: {{
+    baseURL: 'http://127.0.0.1:{port}',
+    screenshot: 'on',
+    trace: 'off',
+  }},
+}});
+"""
+    (Path(project_dir) / _PW_CONFIG).write_text(cfg, encoding="utf-8")
 
 
 def run_browser_evidence(
     spec_dir: Path, project_dir: Path, *, port: int = 8099, mount: str = "/work"
 ) -> dict | None:
     """Materialize the flake, dispatch a Nix k8s Job that serves the app + runs
-    the browser lane, and collect screenshots into ``findings/screenshots``.
+    the GENERATED browser specs, and collect screenshots into
+    ``findings/screenshots``.
 
-    Returns a result dict, or None when there's no nix env or the sandbox isn't
-    configured (caller falls back / records the gap honestly). Proven live
-    2026-06-17.
+    Returns a result dict, or None when there's no nix env, the sandbox isn't
+    configured, or there are no generated browser specs to run (caller records
+    the gap honestly). Proven live 2026-06-17.
     """
     env = environment_from_contract(spec_dir)
     plan = materialize_flake(spec_dir, project_dir, env=env)
@@ -118,11 +162,25 @@ def run_browser_evidence(
         _log.info("run_browser_evidence: TFACTORY_NIX_RUNNER_IMAGE unset; skipping")
         return None
 
+    n_specs = _stage_browser_specs(spec_dir, project_dir)
+    if n_specs == 0:
+        _log.info("run_browser_evidence: no generated *.spec.ts to run; skipping")
+        return {"ok": False, "output_tail": "no browser specs", "serve_command": None,
+                "screenshots": [], "specs": 0}
+    _write_pw_config(project_dir, port=port)
+
     serve = detect_serve_command(project_dir, env, port=port)
-    steps = build_browser_job_command(plan.verify_commands, serve_command=serve, port=port)
-    # Write the steps as a script in the worktree to avoid nested-quoting in the
-    # Job command; reference it at the mount path. path:/work avoids nix's git
-    # fetcher (ownership + untracked-flake) on the co-mounted repo.
+    # Scope the run to the staged config (NOT the contract's generic
+    # "playwright test", which would also pick up stale repo specs). Export the
+    # URL env the generated specs read.
+    steps = [
+        f"export BASE_URL=http://127.0.0.1:{port}",
+        f"export APP_URL=http://127.0.0.1:{port}",
+        *build_browser_job_command(
+            [f"playwright test --config {_PW_CONFIG}"],
+            serve_command=serve, port=port, shots_dir=_SHOTS,
+        ),
+    ]
     (Path(project_dir) / _JOB_SCRIPT).write_text(
         "#!/usr/bin/env bash\nset -e\n" + "\n".join(steps) + "\n", encoding="utf-8"
     )
@@ -130,7 +188,10 @@ def run_browser_evidence(
     try:
         res = sandbox.run([job_cmd], workdir=str(project_dir), timeout=900)
     finally:
-        (Path(project_dir) / _JOB_SCRIPT).unlink(missing_ok=True)
+        for f in (_JOB_SCRIPT, _PW_CONFIG):
+            (Path(project_dir) / f).unlink(missing_ok=True)
+        import shutil as _sh
+        _sh.rmtree(Path(project_dir) / _E2E_STAGE, ignore_errors=True)
 
     findings = Path(spec_dir) / "findings"
     shots = collect_screenshots(project_dir, findings)
@@ -138,6 +199,7 @@ def run_browser_evidence(
         "ok": res.ok,
         "output_tail": (res.output or "")[-2000:],
         "serve_command": serve,
+        "specs": n_specs,
         "screenshots": [str(p) for p in shots],
     }
 
@@ -181,9 +243,14 @@ def collect_screenshots(project_dir: Path, findings_dir: Path, *, shots: str = "
     dest = Path(findings_dir) / "screenshots"
     dest.mkdir(parents=True, exist_ok=True)
     out: list[Path] = []
-    for f in sorted(src.iterdir()):
+    # Recurse: playwright's screenshot:'on' writes PNGs into per-test subdirs of
+    # outputDir. Flatten into findings/screenshots with a path-derived name so
+    # collisions across tests don't clobber.
+    for f in sorted(src.rglob("*")):
         if f.suffix.lower() in (".png", ".xml") and f.is_file():
-            target = dest / f.name
+            rel = f.relative_to(src)
+            name = "__".join(rel.parts) if len(rel.parts) > 1 else f.name
+            target = dest / name
             shutil.copy2(f, target)
             out.append(target)
     return out
