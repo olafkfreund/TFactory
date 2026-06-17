@@ -457,18 +457,27 @@ describe('<TFactoryTaskDetail> evidence tab (Task 16)', () => {
     expect(screen.getByTestId('tab-evidence')).toBeInTheDocument();
   });
 
-  it('disables Evidence tab when verdicts artefact is absent', async () => {
+  it('disables Evidence tab when no verdicts AND no browser media exist', async () => {
     const fetchFn = makeUrlAwareFetch({
-      '/spec-x': { jsonBody: sampleDetail({ verdictsExists: false }) },
+      '/spec-x': { jsonBody: sampleDetail({ verdictsExists: false, screenshots: [], videos: [] }) },
     });
     render(<TFactoryTaskDetail specId="spec-x" fetchFn={fetchFn} />);
     await waitFor(() => screen.getByTestId('tab-evidence'));
     expect(screen.getByTestId('tab-evidence')).toBeDisabled();
   });
 
-  it('shows empty message when no verdicts loaded yet', async () => {
+  it('enables Evidence tab when browser media exist even without verdicts', async () => {
     const fetchFn = makeUrlAwareFetch({
-      '/spec-x': { jsonBody: sampleDetail({ verdictsExists: true }) },
+      '/spec-x': { jsonBody: sampleDetail({ verdictsExists: false, screenshots: ['s.png'], videos: [] }) },
+    });
+    render(<TFactoryTaskDetail specId="spec-x" fetchFn={fetchFn} />);
+    await waitFor(() => screen.getByTestId('tab-evidence'));
+    expect(screen.getByTestId('tab-evidence')).not.toBeDisabled();
+  });
+
+  it('shows empty message when no verdicts and no browser media', async () => {
+    const fetchFn = makeUrlAwareFetch({
+      '/spec-x': { jsonBody: sampleDetail({ verdictsExists: true, screenshots: [], videos: [] }) },
     });
     render(<TFactoryTaskDetail specId="spec-x" fetchFn={fetchFn} />);
     await waitFor(() => screen.getByTestId('tab-evidence'));
@@ -476,6 +485,18 @@ describe('<TFactoryTaskDetail> evidence tab (Task 16)', () => {
     fireEvent.click(screen.getByTestId('tab-evidence'));
     await waitFor(() => screen.getByTestId('evidence-empty'));
     expect(screen.getByTestId('evidence-empty')).toBeInTheDocument();
+  });
+
+  it('shows the browser-media gallery in the Evidence tab', async () => {
+    const fetchFn = makeUrlAwareFetch({
+      '/spec-x': { jsonBody: sampleDetail({ verdictsExists: true, screenshots: ['root.png'], videos: ['ping.webm'] }) },
+    });
+    render(<TFactoryTaskDetail specId="spec-x" fetchFn={fetchFn} />);
+    await waitFor(() => screen.getByTestId('tab-evidence'));
+    fireEvent.click(screen.getByTestId('tab-evidence'));
+    await waitFor(() => screen.getByTestId('evidence-gallery'));
+    expect(screen.getByTestId('evidence-shot-root.png')).toBeInTheDocument();
+    expect(screen.getByTestId('evidence-video-ping.webm')).toBeInTheDocument();
   });
 
   it('shows evidence panel after verdicts with evidence_urls are loaded', async () => {
@@ -593,7 +614,7 @@ describe('<TFactoryTaskDetail> evidence tab (Task 16)', () => {
       ],
     };
     const fetchFn = makeUrlAwareFetch({
-      '/spec-x': { jsonBody: sampleDetail({ verdictsExists: true }) },
+      '/spec-x': { jsonBody: sampleDetail({ verdictsExists: true, screenshots: [], videos: [] }) },
       '/spec-x/verdicts.json': { jsonBody: verdictsNoEvidence },
     });
     render(<TFactoryTaskDetail specId="spec-x" fetchFn={fetchFn} />);
