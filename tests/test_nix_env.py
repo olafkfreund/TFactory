@@ -8,9 +8,11 @@ from pathlib import Path
 from agents.nix_env import (
     build_browser_job_command,
     collect_screenshots,
+    detect_serve_command,
     environment_from_contract,
     is_nix_environment,
     materialize_flake,
+    run_browser_evidence,
 )
 
 _BROWSER_ENV = {
@@ -94,6 +96,51 @@ def test_collect_screenshots(tmp_path):
 
 def test_collect_screenshots_noop_when_absent(tmp_path):
     assert collect_screenshots(tmp_path / "proj", tmp_path / "findings") == []
+
+
+def test_detect_serve_command_env_override(tmp_path):
+    assert detect_serve_command(tmp_path, {"serve_command": "custom serve"}) == "custom serve"
+
+
+def test_detect_serve_command_root_app(tmp_path):
+    (tmp_path / "app.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n")
+    cmd = detect_serve_command(tmp_path, None, port=8099)
+    assert cmd == "python -m uvicorn app:app --host 127.0.0.1 --port 8099"
+
+
+def test_detect_serve_command_src_layout(tmp_path):
+    (tmp_path / "src" / "app").mkdir(parents=True)
+    (tmp_path / "src" / "app" / "main.py").write_text("app = 1\n")
+    assert detect_serve_command(tmp_path, None) == (
+        "python -m uvicorn app.main:app --host 127.0.0.1 --port 8099"
+    )
+
+
+def test_detect_serve_command_node(tmp_path):
+    (tmp_path / "package.json").write_text('{"scripts": {"start": "node server.js"}}')
+    assert detect_serve_command(tmp_path, None) == "npm start"
+
+
+def test_detect_serve_command_none(tmp_path):
+    assert detect_serve_command(tmp_path, None) is None
+
+
+def test_run_browser_evidence_noop_without_nix_env(tmp_path, monkeypatch):
+    spec = tmp_path / "specs" / "027"
+    spec.mkdir(parents=True)
+    _write_contract(spec, {"provisioning": {"method": "image"}})  # not nix
+    assert run_browser_evidence(spec, tmp_path) is None
+
+
+def test_run_browser_evidence_noop_when_sandbox_unconfigured(tmp_path, monkeypatch):
+    spec = tmp_path / "specs" / "027"
+    spec.mkdir(parents=True)
+    _write_contract(spec, _BROWSER_ENV)
+    project = tmp_path / "proj"
+    project.mkdir()
+    monkeypatch.delenv("TFACTORY_NIX_RUNNER_IMAGE", raising=False)
+    # nix env present but no runner image configured -> graceful skip (None)
+    assert run_browser_evidence(spec, project) is None
 
 
 def test_non_nix_env_returns_none(tmp_path):

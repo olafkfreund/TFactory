@@ -1754,6 +1754,38 @@ async def run_evaluator(
         #     (#233) — e.g. docker build an image a docker_run target then runs.
         _maybe_run_build(spec_dir, project_dir)
 
+        # 2c. RFC-0005 Tier A browser evidence: when the contract declares a nix
+        #     env and there's a browser lane, run that lane in a Nix k8s Job and
+        #     collect screenshots into findings/. Additive — never blocks the
+        #     verdict pipeline; a no-op when the Nix-lane sandbox isn't configured
+        #     (TFACTORY_NIX_RUNNER_IMAGE unset) or there's no browser lane. Runs
+        #     off the evaluator's loop (the sandbox uses asyncio.run internally).
+        if browser_completed:
+            try:
+                from agents.nix_env import run_browser_evidence
+
+                ev = await asyncio.to_thread(
+                    run_browser_evidence, spec_dir, project_dir
+                )
+                if ev is not None:
+                    _eval_log.info(
+                        "nix browser evidence: ok=%s screenshots=%d",
+                        ev["ok"],
+                        len(ev["screenshots"]),
+                    )
+                    _write_status_patch(
+                        spec_dir,
+                        browser_evidence={
+                            "ok": ev["ok"],
+                            "screenshots": len(ev["screenshots"]),
+                            "serve_command": ev["serve_command"],
+                        },
+                    )
+            except Exception as exc:  # noqa: BLE001 - evidence is best-effort
+                _eval_log.warning(
+                    "nix browser evidence failed (non-blocking): %s", exc
+                )
+
         # 3. Per-test signal computation (real primitives; runner_fn seam
         #    mocked in tests so docker isn't required).
         bundles = _build_all_bundles(
