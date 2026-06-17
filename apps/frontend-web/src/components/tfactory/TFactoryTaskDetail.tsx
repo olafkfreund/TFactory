@@ -515,20 +515,38 @@ function EvidenceTestRow({ specId, testId, urls }: { specId: string; testId: str
   );
 }
 
-function EvidenceTab({ specId, evidenceByTest }: { specId: string; evidenceByTest: Record<string, EvidenceUrls> }) {
+function EvidenceTab({
+  specId,
+  evidenceByTest,
+  screenshots,
+  videos,
+}: {
+  specId: string;
+  evidenceByTest: Record<string, EvidenceUrls>;
+  screenshots: string[];
+  videos: string[];
+}) {
   const entries = Object.entries(evidenceByTest);
+  const hasPerTest = entries.length > 0;
+  const hasBrowserMedia = screenshots.length > 0 || videos.length > 0;
   return (
     <div data-testid="evidence-panel" className="space-y-3 p-1">
+      {/* Browser-lane screenshots + recordings (the Nix Job's findings/), the
+          same gallery the Acceptance tab shows — so the Evidence tab is the
+          dedicated home for captured artifacts and isn't empty when they exist. */}
+      <EvidenceGallery specId={specId} screenshots={screenshots} videos={videos} />
       {/* Visual-regression baselines for a target (#109) — view + accept. */}
       <VisualBaselines specId={specId} />
-      {entries.length === 0 ? (
-        <p data-testid="evidence-empty" className="p-4 text-sm text-muted-foreground">
-          No per-test evidence captured yet — evidence is collected after tests run.
-        </p>
-      ) : (
+      {hasPerTest ? (
         entries.map(([testId, urls]) => (
           <EvidenceTestRow key={testId} specId={specId} testId={testId} urls={urls} />
         ))
+      ) : (
+        !hasBrowserMedia && (
+          <p data-testid="evidence-empty" className="p-4 text-sm text-muted-foreground">
+            No per-test evidence captured yet — evidence is collected after tests run.
+          </p>
+        )
       )}
     </div>
   );
@@ -741,7 +759,10 @@ export function TFactoryTaskDetail({ specId, fetchFn, wsFactory, pollMs = 5000 }
   const verdictsAvailable = detail.artefacts.verdicts?.exists ?? false;
   const reportAvailable = detail.artefacts.triage_report_md?.exists ?? false;
   const acAvailable = detail.artefacts.ac_fidelity_md?.exists ?? false;
-  const evidenceAvailable = verdictsAvailable;
+  const evidenceAvailable =
+    verdictsAvailable ||
+    (detail.artefacts.screenshots?.exists ?? false) ||
+    (detail.artefacts.videos?.exists ?? false);
 
   const laneProgress = detail.status_json.lane_progress as Record<string, string | null> | undefined;
   const laneStatuses = laneProgress ?? { unit: status };
@@ -810,7 +831,14 @@ export function TFactoryTaskDetail({ specId, fetchFn, wsFactory, pollMs = 5000 }
           </>
         )}
         {activeTab === 'logs' && <TFactoryLogViewer specId={specId} wsFactory={wsFactory} />}
-        {activeTab === 'evidence' && <EvidenceTab specId={specId} evidenceByTest={evidenceByTest} />}
+        {activeTab === 'evidence' && (
+          <EvidenceTab
+            specId={specId}
+            evidenceByTest={evidenceByTest}
+            screenshots={detail.artefacts.screenshots?.files ?? []}
+            videos={detail.artefacts.videos?.files ?? []}
+          />
+        )}
       </div>
     </div>
   );
