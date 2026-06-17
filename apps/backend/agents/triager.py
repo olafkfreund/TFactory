@@ -886,6 +886,43 @@ def _render_and_write_report(
     return report, report_md
 
 
+def _write_ac_fidelity(spec_dir, committed, flagged, rejects) -> dict:
+    """Build + write the per-AC fidelity ledger (findings/ac_fidelity.{json,md}).
+
+    Maps the triager's own accept/flag/reject decisions back to the plan's
+    acceptance criteria so the run reports which ACs are actually VERIFIED (>=1
+    accepted test) vs flagged-only vs unverified — the honest headline, never a
+    blanket "done". Returns the summary for status.json; never breaks triage.
+    """
+    try:
+        from agents.ac_fidelity import (
+            attach_screenshots,
+            build_ac_ledger,
+        )
+        from agents.ac_fidelity import (
+            render_markdown as _ac_md,
+        )
+
+        plan_path = spec_dir / "test_plan.json"
+        if not plan_path.is_file():
+            return {}
+        plan = json.loads(plan_path.read_text())
+        verdicts = (
+            [{"test_id": c.test_id, "test_file": c.test_file, "verdict": "accept"} for c in committed]
+            + [{"test_id": c.test_id, "test_file": c.test_file, "verdict": "flag"} for c in flagged]
+            + [{"test_id": c.test_id, "test_file": c.test_file, "verdict": "reject"} for c in rejects]
+        )
+        ledger = attach_screenshots(build_ac_ledger(plan, verdicts), spec_dir / "findings")
+        fd = spec_dir / "findings"
+        fd.mkdir(parents=True, exist_ok=True)
+        (fd / "ac_fidelity.json").write_text(json.dumps(ledger, indent=2))
+        (fd / "ac_fidelity.md").write_text(_ac_md(ledger))
+        return ledger.get("summary", {})
+    except Exception as exc:  # noqa: BLE001 - evidence is best-effort, never fatal
+        _triage_log.warning("ac_fidelity write failed (non-blocking): %s", exc)
+        return {}
+
+
 def _run_git_side_effect(project_dir, committed, flagged, source_meta) -> dict:
     """Commit accepted+flagged test files to the feature branch (dry-run by default).
 
@@ -1180,6 +1217,9 @@ async def run_triager(
             decisions,
         )
 
+        # 4b. AC fidelity: which acceptance criteria are actually verified (honest).
+        ac_summary = _write_ac_fidelity(spec_dir, committed, flagged, rejects)
+
         # 5-6. Side-effects (both dry-run by default per the no-auto-push policy).
         findings_dir = spec_dir / "findings"
         source_meta = _load_source_meta(spec_dir)
@@ -1228,6 +1268,7 @@ async def run_triager(
             committed_count=committed_count,
             rejected_count=len(rejects),
             flagged_count=flagged_count,
+            ac_fidelity=ac_summary,
             dedup_collision_count=len(dedup_result.collisions),
             git_writer=git_result_summary,
             pr_comment=pr_comment_summary,
