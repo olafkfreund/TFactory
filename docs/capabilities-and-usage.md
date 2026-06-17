@@ -86,7 +86,7 @@ and injected as env vars; all secret values are redacted from logs/artifacts.
 You do not defeat MFA. Each access is classified and routed:
 - **A machine-native** (OIDC federation, service accounts, scoped tokens — no MFA in path): **[Implemented]** (native to the sandbox credential path).
 - **B bootstrap-once** (device-code / refresh token / **TOTP seed stored as a secret**, codes generated in-process; captured `storageState`): **[Partial]** — the `totp` kind is stored encrypted and storageState login-once works, but runtime TOTP-code generation is not yet wired into the auth flow.
-- **C ephemeral target** (LocalStack / testcontainers / ephemeral Keycloak / disposable cloud project — no prod credential): **[Partial / RFC-only]** — testcontainers works for local integration; ephemeral Keycloak / disposable cloud project + cost-guard teardown are RFC-only.
+- **C ephemeral target** (testcontainers / ephemeral Keycloak / disposable cloud project — no prod credential): **[Implemented for Keycloak]** — `agents/ephemeral_keycloak.py` provisions a disposable Keycloak with a preset OTP user and auto-teardown (proven: a real-IdP MFA login via the production `fill_totp` flow); testcontainers cover ephemeral deps. In-cluster Keycloak (k8s Job) + disposable cloud projects remain planned.
 - **D un-automatable** (push approval, hardware key, SMS-to-a-person): **[Implemented as an honest refusal]** — `access_scope.py` maps these to "blocked" with a reason; the VAL gate keeps the result honest (never faked).
 
 ## 4. Testing services, including already-deployed Dev/UAT
