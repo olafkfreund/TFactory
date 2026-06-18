@@ -54,14 +54,18 @@ def build_verification_block(
     verdicts: list[dict[str, Any]] | None,
     *,
     target_level: str = DEFAULT_TARGET_LEVEL,
+    val3: Any = None,
 ) -> dict:
     """Build an honest RFC-0006 verification block from a run's verdicts.
 
     ``verdicts`` is ``findings/verdicts.json``'s ``verdicts`` list (each entry
-    carries a ``lane`` and a ``verdict`` of accept/flag/reject). Returns the
-    gate-normalized block: ``{target_level, achieved_level, levels[], claim,
-    _gate}`` — ``achieved_level`` is recomputed from the lanes that truly ran, so
-    it can never overclaim.
+    carries a ``lane`` and a ``verdict`` of accept/flag/reject). ``val3`` is an
+    optional :class:`agents.disposable_target.Val3Outcome` from a real
+    disposable-target run (#75): when it ``ran`` VAL-3 reflects the truth
+    (passed/failed); otherwise VAL-3 stays ``not_run`` with the honest reason.
+    Returns the gate-normalized block: ``{target_level, achieved_level,
+    levels[], claim, _gate}`` — ``achieved_level`` is recomputed from what truly
+    ran, so it can never overclaim.
     """
     verdicts = verdicts or []
     by_level: dict[str, list[str]] = {}
@@ -96,19 +100,33 @@ def build_verification_block(
             )
         levels.append(entry)
 
-    # VAL-3 (effectful against a real disposable host): no target provisioner yet.
-    levels.append(
-        {"level": "VAL-3", "status": "not_run",
-         "reason": "no disposable sandbox target provisioned (RFC-0006 #75); "
-                   "effectful verification against a real host was not run",
-         "risk": "behaviour against a real host/cluster is unverified"}
-    )
+    # VAL-3 (effectful against a real disposable host, #75): reflects a genuine
+    # disposable-target run when one happened; otherwise an honest not_run.
+    if val3 is not None and getattr(val3, "ran", False):
+        if getattr(val3, "passed", False):
+            levels.append({"level": "VAL-3", "status": "passed",
+                           "evidence": "ran against a disposable target (auto-torn-down)"})
+        else:
+            levels.append({"level": "VAL-3", "status": "failed",
+                           "reason": getattr(val3, "reason", "VAL-3 commands failed")})
+    else:
+        levels.append(
+            {"level": "VAL-3", "status": "not_run",
+             "reason": (getattr(val3, "reason", "") if val3 is not None else "")
+                       or "no disposable sandbox target provisioned (RFC-0006 #75); "
+                          "effectful verification against a real host was not run",
+             "risk": "behaviour against a real host/cluster is unverified"}
+        )
 
+    # When a VAL-3 run was attempted, the run targeted VAL-3 — say so; the gate
+    # still recomputes achieved_level from the level statuses (a failed VAL-3
+    # caps it back down), so this can't overclaim.
+    effective_target = "VAL-3" if (val3 is not None and getattr(val3, "ran", False)) else target_level
     block = {
-        "target_level": target_level,
+        "target_level": effective_target,
         # achieved_level is intentionally optimistic here; the gate recomputes the
         # truth from the level statuses below and downgrades any overclaim.
-        "achieved_level": target_level,
+        "achieved_level": effective_target,
         "levels": levels,
     }
     return normalize_verification(block)
@@ -131,4 +149,22 @@ def read_verification_block(
             verdicts = doc.get("verdicts") if isinstance(doc, dict) else None
     except (OSError, ValueError):
         verdicts = None
-    return build_verification_block(verdicts, target_level=target_level)
+    # A VAL-3 disposable-target run (#75) records its outcome here once (the
+    # verify path provisions+runs+tears-down a single time). Reading it keeps
+    # this a pure function — no provisioning, no double-run. Absent → not_run.
+    val3 = None
+    try:
+        v3path = Path(spec_dir) / "findings" / "val3_outcome.json"
+        if v3path.exists():
+            from agents.disposable_target import Val3Outcome
+
+            data = json.loads(v3path.read_text())
+            if isinstance(data, dict):
+                val3 = Val3Outcome(
+                    ran=bool(data.get("ran")),
+                    passed=bool(data.get("passed")),
+                    reason=str(data.get("reason") or ""),
+                )
+    except (OSError, ValueError):
+        val3 = None
+    return build_verification_block(verdicts, target_level=target_level, val3=val3)

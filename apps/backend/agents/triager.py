@@ -1205,6 +1205,25 @@ async def run_triager(
         verdicts = _load_verdicts_or_fail(spec_dir)
         if verdicts is None:
             return False
+        # RFC-0006 #75: run the VAL-3 disposable-target lane ONCE (gated — a
+        # no-op until a contract declares effectful VAL-3 commands AND a target
+        # backend is configured), recording findings/val3_outcome.json before the
+        # verification block is read. Mandatory teardown is guaranteed inside.
+        # Best-effort: never breaks triage; default keeps VAL-3 honestly not_run.
+        try:
+            from agents.disposable_target import record_val3
+            from agents.task_contract import read_tfactory_profile
+
+            _prof = read_tfactory_profile(spec_dir)
+            _src = _load_source_meta(spec_dir)
+            _vprofile = (_src.get("verification") if isinstance(_src, dict) else None) or None
+            record_val3(
+                spec_dir,
+                _vprofile,
+                getattr(_prof, "access", None) if _prof else None,
+            )
+        except Exception:  # noqa: BLE001 - VAL-3 lane must never break triage
+            pass
         candidates = _build_candidates(spec_dir, verdicts)
 
         if not candidates:
