@@ -5,26 +5,23 @@ nav_order: 1
 ---
 
 <section class="hero">
-  <span class="hero__eyebrow"><a href="https://github.com/olafkfreund/TFactory/releases/tag/v0.7.0">v0.7.0</a> · 5 lanes + evidence · at-least-once completion delivery · closed <a href="{{ '/examples/' | relative_url }}">test → fix → re-test</a> loop · visual inspection · cloud posture · runs on any LLM</span>
+  <span class="hero__eyebrow">v0.9 · five-lane pipeline · reproducible Nix execution · visible screenshot + recording evidence · acceptance-criteria fidelity · MFA-authenticated testing · runs on any LLM</span>
   <h1 class="hero__title">Autonomous tests, AI-graded.</h1>
   <p class="hero__subtitle">
     Hand TFactory a finished feature on a branch — from AIFactory, Claude Code,
     or any tool, via the MCP control plane or a plain acceptance-criteria file
     (markdown / Gherkin / EARS). The agent pipeline plans, writes, sandboxes,
-    scores, and commits the suite — autonomously — then posts a triage report
-    to your PR.
+    scores, and commits the suite — autonomously — grades every acceptance
+    criterion against a test that actually ran, and posts a triage report to
+    your PR.
   </p>
   <p>
     <a class="hero__cta hero__cta--primary" href="{{ '/showcase/' | relative_url }}">
-      See the demo →
-    </a>
-    &nbsp;
-    <a class="hero__cta" href="https://github.com/olafkfreund/TFactory/releases/tag/v0.7.0">
-      v0.7.0 release ↗
+      See the demo
     </a>
     &nbsp;
     <a class="hero__cta hero__cta--ghost" href="{{ '/design-plan/' | relative_url }}">
-      Design plan →
+      Design plan
     </a>
   </p>
 </section>
@@ -33,157 +30,82 @@ nav_order: 1
 
 {% include pipeline-diagram.html %}
 
-> **Part of the [Factory family](https://factory.freundcloud.com/)** — a governed, verified, observable autonomous software factory. [PFactory](https://pfactory.freundcloud.com/) plans · [AIFactory](https://aifactory.freundcloud.com/) builds · **TFactory** verifies · [CFactory](https://github.com/olafkfreund/CFactory) watches over all four. → **[Why Factory](https://factory.freundcloud.com/why/)**
+> **Part of the [Factory family](https://factory.freundcloud.com/)** — a governed, verified, observable autonomous software factory. [PFactory](https://pfactory.freundcloud.com/) plans, [AIFactory](https://aifactory.freundcloud.com/) builds, **TFactory** verifies, [CFactory](https://github.com/olafkfreund/CFactory) watches over all four. See **[Why Factory](https://factory.freundcloud.com/why/)**.
 
 ## How it works
 
 <ul class="feature-row">
   <li class="feature-row__card reveal" style="--reveal-delay: 0ms">
-    <span class="feature-row__icon" aria-hidden="true">🪶</span>
     <h3>Spec-aware handover</h3>
-    <p>A Claude Code session in your AIFactory repo runs <code>/handover-to-tfactory</code>. TFactory snapshots the spec + diff, runs five agents, returns a verdicts report.</p>
+    <p>A Claude Code session in your AIFactory repo runs <code>/handover-to-tfactory</code>, or any tool posts acceptance criteria through the MCP control plane. TFactory snapshots the signed contract and the deployed URL, runs five agents, and returns a verdicts report.</p>
   </li>
   <li class="feature-row__card reveal" style="--reveal-delay: 80ms">
-    <span class="feature-row__icon" aria-hidden="true">🛡️</span>
     <h3>Two-layer guardrails</h3>
-    <p>Pre-flight static-checks every <code>import</code> resolves. Flake-risk lint catches dict-iteration order, time.sleep, datetime.now without freeze.</p>
+    <p>A pre-flight static check confirms every <code>import</code> resolves. Flake-risk lint catches dict-iteration order, <code>time.sleep</code>, and <code>datetime.now</code> without a freeze.</p>
   </li>
   <li class="feature-row__card reveal" style="--reveal-delay: 160ms">
-    <span class="feature-row__icon" aria-hidden="true">🔬</span>
-    <h3>5-signal verdicts</h3>
-    <p>Coverage delta · 3× stability re-run · mutate-and-check probe · flake-lint promotion · LLM semantic relevance. Survived-mutation tests don't ship.</p>
+    <h3>Five-signal verdicts</h3>
+    <p>Coverage delta, a 3x stability re-run, a mutate-and-check probe, flake-lint promotion, and LLM semantic relevance. Tests that survive a mutation do not ship.</p>
   </li>
   <li class="feature-row__card reveal" style="--reveal-delay: 240ms">
-    <span class="feature-row__icon" aria-hidden="true">📨</span>
     <h3>Dry-run by default</h3>
-    <p>Per <code>CLAUDE.md</code> no-auto-push policy: git_writer + gh pr comment record argvs without executing. Operators opt in via env vars.</p>
+    <p>Per the no-auto-push policy, the git writer and PR commenter record their commands without executing. Operators opt in explicitly.</p>
   </li>
 </ul>
 
-## New in v0.3 — connect to anything
+## Evidence you can see
 
-<div class="reveal" markdown="1">
+A green checkmark is not proof. For interactive acceptance criteria, the browser
+lane runs in a reproducible per-task Nix toolchain inside an ephemeral Kubernetes
+Job (RFC-0005 Tier A), drives the real deployed app, and captures a screenshot of
+the rendered page plus a recording of the test driving it. The **Acceptance** tab
+grades each criterion against a test that actually passed — an honest
+"verified X/Y", never a blanket "done":
 
-Three capabilities make TFactory usable beyond a single laptop and a single
-model: it can now **assess your cloud infrastructure**, **authenticate to your
-cloud**, and **run on whatever LLM you already pay for**.
+![The Acceptance tab — verified 5/5 acceptance criteria, each linked to its evidence]({{ '/static/img/screenshots/portal-acceptance.png' | relative_url }})
 
-</div>
+The **Evidence** tab renders the captured recordings and screenshots inline, so a
+reviewer can watch the test execute and look at the page it produced:
+
+![The Evidence tab — browser-lane recordings and screenshots]({{ '/static/img/screenshots/portal-evidence-recordings.png' | relative_url }})
+
+The whole pipeline — Plan, Generate, Execute, Report — is a live view in the
+portal, and the same evidence appears on the finished task in the
+[CFactory](https://github.com/olafkfreund/CFactory) cockpit:
+
+![The TFactory pipeline view — Plan, Generate, Execute, Report]({{ '/static/img/screenshots/portal-pipeline.png' | relative_url }})
+
+## Reach anything under test — including behind MFA
 
 <ul class="feature-row">
   <li class="feature-row__card reveal">
-    <span class="feature-row__icon" aria-hidden="true">☁️</span>
-    <h3>Cloud infrastructure testing</h3>
-    <p><strong>Problem:</strong> misconfigurations — public buckets, over-privileged IAM, management ports open to the internet — slip past code review and never fail a test.</p>
-    <p><strong>Solution:</strong> a read-only assessment lane for <strong>AWS · GCP · Azure</strong>: access gate → discovery → Mermaid topology → Prowler/CIS scan (OCSF) → accept / flag / reject verdict → a downloadable remediation plan. Launch it from <code>+Task → Cloud Infrastructure</code>; reports land in the portal. <a href="https://github.com/olafkfreund/TFactory/blob/main/guides/cloud-testing.md">See how →</a></p>
+    <h3>Authenticated and 2FA targets</h3>
+    <p>The <code>.tfactory.yml</code> auth schema covers form, API-token, basic-auth and <strong>TOTP two-factor</strong> credentials with an ordered login-step flow. For MFA we do not bypass anything: the pipeline provisions a disposable identity provider, owns the OTP secret, generates valid RFC-6238 codes at fill time, captures the authenticated page, and tears the IdP down — zero production credentials. <a href="{{ '/credentials/' | relative_url }}">See how</a></p>
   </li>
   <li class="feature-row__card reveal" style="--reveal-delay: 80ms">
-    <span class="feature-row__icon" aria-hidden="true">🔐</span>
     <h3>Credential Broker</h3>
-    <p><strong>Problem:</strong> agents need real cloud/K8s/API credentials to test against live services, but secrets must never touch the repo.</p>
-    <p><strong>Solution:</strong> resolve secrets from a vault (Azure KV · AWS Secrets Manager · GCP Secret Manager · HashiCorp Vault) or local sops/age/agenix, materialise them ephemerally (0600, wiped per task), gated by an explicit <strong>egress opt-in</strong> with an honest manifest. <a href="{{ '/credentials/' | relative_url }}">See how →</a></p>
+    <p>Resolve secrets from a vault (Azure KV, AWS Secrets Manager, GCP Secret Manager, HashiCorp Vault) or local sops / age / agenix, materialise them ephemerally (0600, wiped per task), gated by an explicit egress opt-in with an honest manifest. <a href="{{ '/credentials/' | relative_url }}">See how</a></p>
   </li>
   <li class="feature-row__card reveal" style="--reveal-delay: 160ms">
-    <span class="feature-row__icon" aria-hidden="true">🧠</span>
-    <h3>Run on any LLM</h3>
-    <p><strong>Problem:</strong> teams are locked to one provider, or can't send code to a managed cloud at all.</p>
-    <p><strong>Solution:</strong> a model-string-driven provider factory — Claude SDK, OpenAI Codex, Gemini CLI, GitHub Copilot CLI, Ollama (local), and any OpenAI-compatible endpoint (vLLM / LM Studio / OpenRouter…). Per-phase routing + an honest <a href="https://github.com/olafkfreund/TFactory/blob/main/guides/byo-llm.md">data-egress badge</a> for air-gapped / BYO-LLM runs.</p>
+    <h3>Kubernetes and SaaS</h3>
+    <p>Log-in-once browser sessions (storageState), <code>type: kubernetes</code> port-forward targets, and first-class <code>type: connector</code> SaaS targets (ServiceNow / Salesforce / SAP / MuleSoft). <a href="{{ '/examples/' | relative_url }}">See examples</a></p>
   </li>
 </ul>
 
-## New in v0.4–v0.5 — close the loop, see the UI
-
-<div class="reveal" markdown="1">
-
-Testing found the problem — now do something about it. The newest work turns a
-verdict into action: hand fixes back to AIFactory and re-test, and capture what
-a human would actually *look* at.
-
-</div>
+## A governed node in the Factory line
 
 <ul class="feature-row">
   <li class="feature-row__card reveal">
-    <span class="feature-row__icon" aria-hidden="true">🔁</span>
-    <h3>Closed test → fix → re-test loop</h3>
-    <p><strong>Problem:</strong> finding a bug is half a result — someone still has to fix it and re-run the suite.</p>
-    <p><strong>Solution:</strong> when tests fail, TFactory hands a correction back to <strong>AIFactory's QA Fixer</strong> (<code>/handback-to-aifactory</code>), which patches the same spec; <code>/tfactory-fixloop</code> re-tests on a bound — stopping at green or <code>stuck</code> so it can't churn. Dry-run-first, opt-in send. <a href="{{ '/examples/' | relative_url }}#2-close-the-loop--fix-what-the-tests-found-v050">See how →</a></p>
-  </li>
-  <li class="feature-row__card reveal" style="--reveal-delay: 80ms">
-    <span class="feature-row__icon" aria-hidden="true">📸</span>
-    <h3>Visual Inspection Run</h3>
-    <p><strong>Problem:</strong> assertions don't tell you whether the page <em>looks</em> right.</p>
-    <p><strong>Solution:</strong> record a Playwright run with trace + video + step-labelled <strong>verification and error screenshots</strong>, packaged with a human report + correction plan into <code>automated-test/&lt;datetime&gt;/</code> and the portal's <strong>Visual Reports</strong>. <a href="{{ '/examples/' | relative_url }}#3-test-a-ui-flow-and-capture-what-a-human-would-check">See how →</a></p>
-  </li>
-  <li class="feature-row__card reveal" style="--reveal-delay: 160ms">
-    <span class="feature-row__icon" aria-hidden="true">🎯</span>
-    <h3>Reach anything under test</h3>
-    <p><strong>Problem:</strong> the SUT lives behind auth, inside Kubernetes, or is a SaaS platform.</p>
-    <p><strong>Solution:</strong> log-in-once browser sessions (storageState), <code>type: kubernetes</code> port-forward targets, and first-class <code>type: connector</code> SaaS targets (ServiceNow / Salesforce / SAP / MuleSoft). <a href="{{ '/examples/' | relative_url }}">See examples →</a></p>
-  </li>
-</ul>
-
-## New since v0.5 — a node in the Factory line
-
-<div class="reveal" markdown="1">
-
-TFactory used to be a tool you handed work to. Now it's a **governed node** in
-the [Factory](https://factory.freundcloud.com/) line: it picks up test work
-that [PFactory](https://pfactory.freundcloud.com/) has planned and governed,
-reports completion on a schema the whole line shares, and registers itself in
-the software catalog.
-
-</div>
-
-<ul class="feature-row">
-  <li class="feature-row__card reveal">
-    <span class="feature-row__icon" aria-hidden="true">📥</span>
     <h3>Governed pickup from PFactory</h3>
-    <p><strong>Problem:</strong> ad-hoc handovers don't carry the acceptance contract — TFactory had to infer what "tested" meant.</p>
-    <p><strong>Solution:</strong> TFactory recognises and enqueues <strong>governed test targets</strong> from PFactory, parses the <code>pfactory:meta</code> block as the <strong>test oracle</strong>, then generates, runs, and reports back up the spine. The contract travels with the work.</p>
+    <p>TFactory enqueues governed test targets from <a href="https://pfactory.freundcloud.com/">PFactory</a>, parses the planned acceptance contract as the test oracle, then generates, runs, and reports back up the spine. The contract — signed, with the deployed URL — travels with the work.</p>
   </li>
   <li class="feature-row__card reveal" style="--reveal-delay: 80ms">
-    <span class="feature-row__icon" aria-hidden="true">📡</span>
-    <h3>One completion event, watched by CFactory</h3>
-    <p><strong>Problem:</strong> four services, four ways of saying "done" — nothing could watch the whole line.</p>
-    <p><strong>Solution:</strong> the Triager emits a normalized <strong><a href="https://github.com/olafkfreund/Factory/blob/main/docs/rfc/0001-correlation-key-and-completion-event.md">RFC-0001</a></strong> completion event with a shared <code>correlation_key</code>, so AIFactory · PFactory · TFactory all speak one schema and CFactory watches a single contract. <a href="{{ '/completion-event-envelope/' | relative_url }}">See the envelope →</a></p>
+    <h3>One completion event</h3>
+    <p>The Triager emits a normalized <a href="https://github.com/olafkfreund/Factory/blob/main/docs/rfc/0001-correlation-key-and-completion-event.md">RFC-0001</a> completion event with a shared <code>correlation_key</code>, delivered at-least-once via a durable outbox and idempotency key, so the whole line speaks one schema and CFactory watches a single contract. <a href="{{ '/completion-event-envelope/' | relative_url }}">See the envelope</a></p>
   </li>
   <li class="feature-row__card reveal" style="--reveal-delay: 160ms">
-    <span class="feature-row__icon" aria-hidden="true">🗂️</span>
     <h3>In the Backstage catalog</h3>
-    <p><strong>Problem:</strong> a service nobody can find in the catalog isn't really part of the platform.</p>
-    <p><strong>Solution:</strong> TFactory ships a <code>catalog-info.yaml</code> + TechDocs and is importable into Backstage, with enriched annotations and an AI-assistant skill descriptor — discoverable alongside the rest of the Factory.</p>
-  </li>
-</ul>
-
-## New in v0.7 — done that survives a crash
-
-<div class="reveal" markdown="1">
-
-A distributed line is only as trustworthy as its weakest handoff. v0.7.0 hardens
-the completion handoff so it's **durable, idempotent, traceable, and bounded** —
-then fixes the SSO login that was bouncing everyone back to the door.
-[Read the post →]({% post_url 2026-06-08-when-done-has-to-survive-a-crash %})
-
-</div>
-
-<ul class="feature-row">
-  <li class="feature-row__card reveal">
-    <span class="feature-row__icon" aria-hidden="true">📦</span>
-    <h3>At-least-once completion delivery</h3>
-    <p><strong>Problem:</strong> a crash after the terminal write but before the POST lost the event — CFactory's WorkItem went stale with no replay.</p>
-    <p><strong>Solution:</strong> a durable <strong>transactional outbox + retrying relay</strong> — the Triager enqueues before delivery, a relay drains with backoff + dead-lettering and replays across restarts. Every event carries a UUID <code>id</code> sent as the <code>Idempotency-Key</code>, so retries dedup to effectively-once.</p>
-  </li>
-  <li class="feature-row__card reveal" style="--reveal-delay: 80ms">
-    <span class="feature-row__icon" aria-hidden="true">🔁</span>
-    <h3>A correction loop that knows when to stop</h3>
-    <p><strong>Problem:</strong> an unbounded fix→re-test loop, with assertions that could quietly weaken between rounds and mask a bug.</p>
-    <p><strong>Solution:</strong> a typed, versioned handback contract + a bounded state machine that emits a terminal <code>needs_human</code> instead of looping. Assertions are <strong>pinned</strong> — re-runs are diff-gated to additive-only, and the manifest hash rides on the contract so each round provably tests the same bar.</p>
-  </li>
-  <li class="feature-row__card reveal" style="--reveal-delay: 160ms">
-    <span class="feature-row__icon" aria-hidden="true">🔌</span>
-    <h3>SaaS connectors, end-to-end</h3>
-    <p><strong>Problem:</strong> big platforms (ServiceNow / Salesforce / SAP) are brittle to drive and gated behind SSO.</p>
-    <p><strong>Solution:</strong> all four connector platforms now test end-to-end through a stored credential (SAP's OData check completes the set), plus an opt-in <code>visual: true</code> browser lane with ServiceNow selector guidance for visual inspection.</p>
+    <p>TFactory ships a <code>catalog-info.yaml</code> plus TechDocs and is importable into Backstage, with enriched annotations and an AI-assistant skill descriptor — discoverable alongside the rest of the Factory.</p>
   </li>
 </ul>
 
@@ -191,29 +113,23 @@ then fixes the SSO login that was bouncing everyone back to the door.
 
 <div class="reveal" markdown="1">
 
-v0.2 replaced the v0.1 pipeline-stage decomposition (Functional / SAST /
-DAST / Fuzz / Mutation) with a **modality-based spine** per Decision 2.
-Security scanning is delegated to dedicated security pipelines and is
-out of scope here — TFactory focuses on functional + feature testing.
+The lane spine is modality-based (Decision 2). Security scanning is delegated to
+dedicated security pipelines and is out of scope here — TFactory focuses on
+functional and feature testing.
 
 | Lane | Status | Runtime | Coverage | Evidence captured |
 |---|---|---|---|---|
-| **Unit** | ✅ Active | `tfactory-runner-pytest` + `tfactory-runner-jest` | line (cobertura / lcov) | — |
-| **Browser** | ✅ Active | `tfactory-runner-playwright` + AppRuntime (docker-compose + health-poll) | `null` (per Decision 11 — line coverage doesn't apply when the test drives the browser) | screenshots · video · trace.zip |
-| **API** | ✅ Active | per-framework Docker image + HTTP HAR recorder | line where the test exercises framework code | network.har |
-| **Integration** | ✅ Active | per-framework Docker image + AppRuntime (multi-service compose) | line where applicable | network.har · service logs |
-| **Mutation** | ✅ Active | `mutmut` (Python) / Stryker (TypeScript) — one-mutation-per-run probe in the Evaluator | reported per mutant (killed / survived) | — |
+| **Unit** | Active | `tfactory-runner-pytest` + `tfactory-runner-jest` | line (cobertura / lcov) | — |
+| **Browser** | Active | Nix toolchain in a k8s Job (Playwright); host fallback where applicable | n/a (line coverage doesn't apply when the test drives the browser) | screenshots, video, trace |
+| **API** | Active | per-framework image + HTTP HAR recorder | line where the test exercises framework code | network.har |
+| **Integration** | Active | per-framework image + AppRuntime (multi-service) | line where applicable | network.har, service logs |
+| **Mutation** | Active | `mutmut` (Python) / Stryker (TypeScript) — one-mutation-per-run probe in the Evaluator | reported per mutant (killed / survived) | — |
 
-All five lanes are wired and ship with v0.2.0. Each subtask's lane is
-chosen by the Planner based on its `(language, framework)` via the
-[framework registry](framework-registry/); reviewers see the lifecycle
-phases (`executor_app_running`, `app_not_healthy`, etc.) in the
-LaneStatusGrid and the per-test evidence in the Triager PR comment.
-
-The v0.2 design doc enumerates a longer "future-ramp" set (Go / Rust /
-Ruby support, additional security pipelines via integration) — those
-hook into the existing 5-lane spine through new
-`FrameworkDescriptor`s and don't require lane additions.
+Each subtask's lane is chosen by the Planner from its `(language, framework)` via
+the [framework registry](framework-registry/); reviewers see the lifecycle phases
+in the LaneStatusGrid and the per-test evidence in the Triager PR comment. New
+languages and additional pipelines hook into the same five-lane spine through new
+`FrameworkDescriptor`s — no lane additions required.
 
 </div>
 
@@ -222,12 +138,12 @@ hook into the existing 5-lane spine through new
 <div class="reveal" markdown="1">
 
 ```bash
-# Clone + bootstrap (NixOS / flake-based)
+# Clone and bootstrap (NixOS / flake-based)
 git clone https://github.com/olafkfreund/TFactory
 cd TFactory
 nix develop
 tfactory-minimal-venv   # creates apps/backend/.venv
-tfactory-test           # 531 backend tests, ~10s
+tfactory-test           # backend suite, seconds
 ```
 
 Full walkthrough in the [repo README](https://github.com/olafkfreund/TFactory/blob/main/README.md) plus the [end-to-end smoke guide](https://github.com/olafkfreund/TFactory/blob/main/guides/e2e-smoke.md) for running real scenarios against an AIFactory project.
@@ -238,50 +154,42 @@ Full walkthrough in the [repo README](https://github.com/olafkfreund/TFactory/bl
 
 <ul class="feature-row">
   <li class="feature-row__card reveal" style="--reveal-delay: 0ms">
-    <span class="feature-row__icon">🏗️</span>
     <h3><a href="{{ '/architecture/' | relative_url }}">Architecture</a></h3>
     <p>Directory structure, workspace layout, dataflow.</p>
   </li>
   <li class="feature-row__card reveal" style="--reveal-delay: 70ms">
-    <span class="feature-row__icon">🧭</span>
     <h3><a href="{{ '/design-plan/' | relative_url }}">Design plan</a></h3>
-    <p>10 locked decisions, landscape research, risk register.</p>
+    <p>Locked decisions, landscape research, risk register.</p>
   </li>
   <li class="feature-row__card reveal" style="--reveal-delay: 140ms">
-    <span class="feature-row__icon">📜</span>
-    <h3><a href="{{ '/spec/' | relative_url }}">Spec</a></h3>
-    <p>Agent OS spec: overview, user stories, deliverables.</p>
+    <h3><a href="{{ '/showcase/' | relative_url }}">Showcase</a></h3>
+    <p>The pipeline in action, with real captured evidence.</p>
   </li>
   <li class="feature-row__card reveal" style="--reveal-delay: 210ms">
-    <span class="feature-row__icon">🔧</span>
     <h3><a href="{{ '/technical-spec/' | relative_url }}">Technical spec</a></h3>
     <p>Per-component implementation detail.</p>
   </li>
   <li class="feature-row__card reveal" style="--reveal-delay: 280ms">
-    <span class="feature-row__icon">🧪</span>
-    <h3><a href="{{ '/tests/' | relative_url }}">Test coverage</a></h3>
-    <p>TDD plan: unit / integration / e2e pyramid.</p>
+    <h3><a href="{{ '/credentials/' | relative_url }}">Credentials and MFA</a></h3>
+    <p>The Credential Broker, authenticated targets, and 2FA testing.</p>
   </li>
   <li class="feature-row__card reveal" style="--reveal-delay: 350ms">
-    <span class="feature-row__icon">📋</span>
-    <h3><a href="{{ '/tasks/' | relative_url }}">Tasks</a></h3>
-    <p>All 12 MVP tasks, dependency graph, GitHub issues.</p>
+    <h3><a href="{{ '/tests/' | relative_url }}">Test coverage</a></h3>
+    <p>The TDD plan: unit / integration / e2e pyramid.</p>
   </li>
   <li class="feature-row__card reveal" style="--reveal-delay: 420ms">
-    <span class="feature-row__icon">📈</span>
     <h3><a href="{{ '/progress/' | relative_url }}">Progress</a></h3>
-    <p>Live build log, closed tasks + commits.</p>
+    <p>The live build log: closed tasks and commits.</p>
   </li>
   <li class="feature-row__card reveal" style="--reveal-delay: 490ms">
-    <span class="feature-row__icon">⚡</span>
     <h3><a href="https://github.com/olafkfreund/TFactory/blob/main/CHANGELOG.md">Changelog</a></h3>
-    <p>v0.2.0 release notes (16 task summaries), v0.1.0-mvp history, sharp edges.</p>
+    <p>Release notes and history.</p>
   </li>
 </ul>
 
 ## Tracking
 
-- **Epic + sub-issues** → [github.com/olafkfreund/TFactory/issues](https://github.com/olafkfreund/TFactory/issues)
-- **Source** → [github.com/olafkfreund/TFactory](https://github.com/olafkfreund/TFactory)
-- **Sister project (upstream)** → [github.com/olafkfreund/AIFactory](https://github.com/olafkfreund/AIFactory)
-- **License** → [MIT OR GPL-3.0](https://github.com/olafkfreund/TFactory/blob/main/LICENSE)
+- **Epic and sub-issues** — [github.com/olafkfreund/TFactory/issues](https://github.com/olafkfreund/TFactory/issues)
+- **Source** — [github.com/olafkfreund/TFactory](https://github.com/olafkfreund/TFactory)
+- **Sister project (upstream)** — [github.com/olafkfreund/AIFactory](https://github.com/olafkfreund/AIFactory)
+- **License** — [MIT OR GPL-3.0](https://github.com/olafkfreund/TFactory/blob/main/LICENSE)

@@ -1,32 +1,28 @@
 # TFactory
 
-**Autonomous test generation + execution platform.** Started as a sister
+**Autonomous test generation and execution platform.** Started as a sister
 project to [AIFactory](https://github.com/olafkfreund/AIFactory) — now a
-standalone product you can drive from **any tool**.
+standalone product you can drive from any tool.
 
 Hand TFactory a finished feature's acceptance criteria — from AIFactory,
-**Claude Code**, or anything else, via the **MCP control plane** or a plain
-file (markdown / Gherkin / EARS, see [`guides/spec-sources.md`](guides/spec-sources.md)).
-It generates tests aligned to those criteria across the v0.2 lane spine
-(unit / browser / api / integration / mutation), runs them in a sandbox,
-evaluates quality with a 5-signal verdict, commits the tests to the feature
+Claude Code, or anything else, via the MCP control plane or a plain file
+(markdown / Gherkin / EARS, see [`guides/spec-sources.md`](guides/spec-sources.md)).
+It generates tests aligned to those criteria across the lane spine
+(unit / browser / api / integration / mutation), runs them in an isolated
+sandbox, evaluates quality with a five-signal verdict, grades each acceptance
+criterion against a test that actually ran, commits the suite to the feature
 branch, and posts a triage report to the PR — autonomously.
 
-> **What's new (June 2026):** the planner now **auto-runs on ingest** (#347, v0.9.3),
-> and the AIFactory handoff carries the **signed contract + deployed URL** (#547) —
-> so TFactory tests the **declared** acceptance criteria against the **real
-> deployment**, including authenticated web UIs (form-login + browser/visual lane
-> → screenshots & findings). See AIFactory `guides/testing-authenticated-web-apps.md`.
-
-> Status: **v0.7.0 released (2026-06-08)** — at-least-once completion-event
-> delivery (durable outbox + retrying relay), an additive CloudEvents/idempotency
-> envelope, a typed handback contract with bounded `needs_human` retry +
-> assertion pinning, OIDC SSO fix, and SaaS connectors end-to-end (ServiceNow ·
-> Salesforce · MuleSoft · SAP). The TFactory side of the reliable-completion
-> epic is complete. See the
-> [v0.7.0 release](https://github.com/olafkfreund/TFactory/releases/tag/v0.7.0)
-> and [Progress](https://olafkfreund.github.io/TFactory/progress/) page
-> for the per-task log.
+> **Where we are (June 2026, v0.9.x).** The planner auto-runs on ingest, and the
+> AIFactory handoff carries the signed Task Contract plus the deployed URL — so
+> TFactory tests the *declared* acceptance criteria against the *real*
+> deployment. The browser lane now runs in a reproducible per-task Nix toolchain
+> inside an ephemeral Kubernetes Job (RFC-0005 Tier A), captures screenshots and
+> video recordings, and surfaces them as visible evidence in the portal and in
+> the CFactory cockpit. An acceptance-criteria fidelity ledger reports an honest
+> "verified X/Y" per criterion, and authenticated targets — including ones gated
+> by TOTP two-factor auth — can be tested against a disposable identity provider
+> with zero production credentials.
 
 ## Quickstart (NixOS / flake-based)
 
@@ -36,14 +32,14 @@ nix develop
 
 # (inside the shell)
 tfactory-minimal-venv   # creates apps/backend/.venv with just pytest+pytest-asyncio
-tfactory-test           # runs the non-SDK backend suite (~10s)
+tfactory-test           # runs the non-SDK backend suite
 
 # For the full backend SDK install (graphiti, claude-agent-sdk, etc.):
 bootstrap-venv
 ```
 
-The dev shell brings in **Python 3.13, Node 22, uv, git, gh, just,
-ripgrep, jq, docker-client** plus four shell functions: `bootstrap-venv`,
+The dev shell brings in Python 3.13, Node 22, uv, git, gh, just, ripgrep, jq and
+docker-client, plus four shell functions: `bootstrap-venv`,
 `tfactory-minimal-venv`, `tfactory-test`, `verify-fork`.
 
 For auto-loading via `direnv`:
@@ -54,13 +50,13 @@ direnv allow
 ```
 
 Non-Nix users can fall back to `npm run install:backend` (per the
-[Quickstart](https://olafkfreund.github.io/TFactory/) on Pages) — the
-Nix path just makes setup deterministic.
+[Quickstart](https://tfactory.freundcloud.com/) on the docs site) — the Nix path
+just makes setup deterministic.
 
 > **Note for non-Nix npm users:** the nix devShell sets `NODE_ENV=production`,
-> which makes `npm install` skip devDependencies (including vitest). If
-> you're inside `nix develop` and running `npm install` in `apps/frontend-web/`,
-> first `unset NODE_ENV`. Captured in detail in `guides/e2e-smoke.md`.
+> which makes `npm install` skip devDependencies (including vitest). If you're
+> inside `nix develop` and running `npm install` in `apps/frontend-web/`, first
+> `unset NODE_ENV`. Captured in detail in `guides/e2e-smoke.md`.
 
 ## Running the portal
 
@@ -78,42 +74,117 @@ npm run dev
 
 Then visit **http://localhost:3100** for the TFactory portal.
 
-The portal exposes a `/tfactory` view powered by the components under
-`apps/frontend-web/src/components/tfactory/`:
+The portal's task-detail view (`apps/frontend-web/src/components/tfactory/`) has
+tabs for **Status / Lanes / Verdicts / Report / Acceptance / Logs / Evidence**:
 
-- **TFactoryTaskList** — workspace list with status badges
-- **TFactoryTaskDetail** — tabs for Status / Lanes / Verdicts / Report / Logs
-- **LaneStatusGrid** — Unit / Browser / API / Integration / Mutation lane spine
-- **TFactoryLogViewer** — WebSocket live tail (one snapshot per connect at MVP)
+- **Acceptance** — the acceptance-criteria fidelity ledger ("Verified X/Y"), with
+  each criterion linked to the test and screenshots that prove it.
+- **Evidence** — the browser lane's captured screenshots and video recordings,
+  plus per-test evidence and visual-regression baselines.
+- **Lanes** — the Unit / Browser / API / Integration / Mutation lane spine.
+- **Logs** — a WebSocket live tail of the run.
+
+## High-level architecture
+
+```
+AIFactory finished branch  ->  /handover-to-tfactory  ->  TFactory MCP
+                                                              |
+                                                              v
+                                                          Planner
+                                                              |
+                              +----------+---------+----------+----------+
+                              v          v         v          v          v
+                       Gen-Unit  Gen-Browser  Gen-API  Gen-Integration  Gen-Mut
+                              +----------+----+----+----------+----------+
+                                              v
+                                          Executor   (sandboxed per task)
+                                              v
+                                          Evaluator  (separate agent, 5 signals)
+                                              v
+                                          Triager    ->  git commit + PR comment
+```
+
+Five pipeline stages (Planner / per-lane Generators / Executor / Evaluator /
+Triager) and five lanes (unit / browser / api / integration / mutation), with a
+spec-aware handover from AIFactory. The stages auto-advance via `TFACTORY_AUTO_*`
+env vars; each stage writes its outputs to
+`~/.tfactory/workspaces/{project}/specs/{spec}/` and forwards via a
+fire-and-forget scheduler. See `apps/backend/agents/` for each agent.
+
+### Reproducible execution (RFC-0005 Tier A)
+
+The cluster pods have no container runtime, so the browser lane runs in an
+ephemeral Kubernetes Job using a per-task **Nix** toolchain: the planner declares
+the environment, a flake materializes the exact tools (including a version-matched
+Playwright and its browsers), and the test runs against the real app inside the
+Job. Screenshots land in `findings/screenshots/` and Playwright recordings in
+`findings/videos/`; both are served by the portal and rendered in the Acceptance
+and Evidence tabs.
+
+## Status by lane
+
+The lane spine is modality-based (Decision 2). Security scanning is delegated to
+dedicated pipelines and is out of scope here; TFactory focuses on functional and
+feature testing.
+
+| Lane | Status | Runtime | Coverage | Evidence |
+|---|---|---|---|---|
+| **Unit** | Active | `tfactory-runner-pytest` (Python) / `tfactory-runner-jest` (TypeScript) | line (cobertura / lcov) | — |
+| **Browser** | Active | Nix toolchain in a k8s Job (Playwright); host fallback where applicable | n/a (line coverage doesn't apply when the test drives the browser) | screenshots, video, trace |
+| **API** | Active | per-framework image + HTTP HAR recorder | line where applicable | network.har |
+| **Integration** | Active | per-framework image + AppRuntime (multi-service) | line where applicable | network.har, service logs |
+| **Mutation** | Active | `mutmut` (Python) / Stryker (TypeScript) — one-mutation-per-run probe in the Evaluator | per-mutant (killed / survived) | — |
+
+The Planner picks each subtask's lane from its `(language, framework)` via the
+framework registry (`frameworks/{pytest,jest,playwright}/descriptor.yaml`). New
+languages and additional pipelines slot into this same spine through new
+`FrameworkDescriptor`s — no lane additions required.
+
+## Acceptance-criteria fidelity
+
+A passing test is not the same as a verified requirement. The Triager builds an
+acceptance-criteria ledger that maps each criterion to the tests that exercise it
+and grades it `verified` only when at least one of those tests actually passed —
+reporting an honest "verified X/Y", never a blanket "done". For interactive UI
+criteria, the linked evidence is the screenshot of the rendered page and a
+recording of the test driving it.
+
+## Authenticated and MFA-gated targets
+
+Agents often need to reach real services behind a login. TFactory's
+`.tfactory.yml` auth schema supports form, API-token, basic-auth and **TOTP
+two-factor** credentials, with an ordered login-step flow for SSO. For 2FA we do
+not bypass MFA: following RFC-0007's Class C pattern the pipeline can provision a
+**disposable identity provider** (an ephemeral Keycloak), seed a user whose OTP
+secret it owns, generate valid RFC-6238 codes at run time with a `fill_totp`
+login step, capture the authenticated page, and tear the IdP down — with zero
+production credentials. See [`guides/credentials.md`](guides/credentials.md) and
+the [Credentials](https://tfactory.freundcloud.com/credentials/) page.
 
 ## End-to-end smoke
 
-Once you have a real AIFactory project + a Claude API key + Docker:
+Once you have a real AIFactory project, a Claude API key and Docker:
 
 ```bash
-# List the 9 verification scenarios
-scripts/e2e-smoke.sh --list
+scripts/e2e-smoke.sh --list           # list the verification scenarios
+scripts/e2e-smoke.sh --dry-run --all  # sanity-check the runner (no env, no LLM)
 
-# Dry-run (no env, no LLM calls) — sanity check the runner itself
-scripts/e2e-smoke.sh --dry-run --all
-
-# Real run
 export ANTHROPIC_API_KEY=sk-ant-...
 export TFACTORY_AIFACTORY_ROOT=$HOME/Source/GitHub/MyApp
 export TFACTORY_AIFACTORY_BRANCH=feature/...
 scripts/e2e-smoke.sh --all
 ```
 
-Full walkthrough — including the 3 manual scenarios (mutation,
-hallucination guard, docker-down) — in **`guides/e2e-smoke.md`**.
+Full walkthrough, including the manual scenarios (mutation, hallucination guard,
+docker-down), in **`guides/e2e-smoke.md`**.
 
 ## Tests
 
-| Suite | What | Count | Time |
-|---|---|---|---|
-| Backend non-SDK (`tests/test_*.py`) | Pure-Python primitives + agent loops with mocked SDK | **531** | ~9s |
-| Frontend (`apps/frontend-web/src/**/*.test.tsx`) | vitest + React Testing Library | **112** | ~1.5s |
-| End-to-end smoke (`scripts/e2e-smoke.sh`) | Real LLM + Docker + git + gh — **manual** | 9 scenarios | — |
+| Suite | What | Time |
+|---|---|---|
+| Backend non-SDK (`tests/test_*.py`) | Pure-Python primitives + agent loops with a mocked SDK | seconds |
+| Frontend (`apps/frontend-web/src/**/*.test.tsx`) | vitest + React Testing Library | seconds |
+| End-to-end smoke (`scripts/e2e-smoke.sh`) | Real LLM + Docker + git + gh — operator-driven | manual |
 
 CI runs the first two on every commit; the third is operator-driven.
 
@@ -128,125 +199,62 @@ cd apps/frontend-web && ../../node_modules/.bin/vitest run
 scripts/verify-fork.sh --no-import
 ```
 
-## Docs
-
-Full project documentation is published as a GitHub Pages site:
-**https://olafkfreund.github.io/TFactory/**
-
-Direct links:
-
-- [Design Plan](https://olafkfreund.github.io/TFactory/design-plan/) — full rationale, 10 locked decisions, landscape research, risk register
-- [Spec](https://olafkfreund.github.io/TFactory/spec/) — Agent OS spec
-- [Technical Spec](https://olafkfreund.github.io/TFactory/technical-spec/) — architecture detail
-- [Test Coverage Spec](https://olafkfreund.github.io/TFactory/tests/) — TDD plan
-- [Task Breakdown](https://olafkfreund.github.io/TFactory/tasks/) — 12 tasks with dependency graph
-
-In-repo guides (`guides/`):
-
-- **`guides/e2e-smoke.md`** — operator guide for the 9 verification scenarios
-- **`guides/planner-manual-smoke.md`** — Planner-only sibling smoke
-- **`guides/HANDOVER_WORKFLOW.md`** — how to trigger TFactory from a live Claude Code session
-- **`guides/CLAUDE_CODE_MCP_TOOLS.md`** — driving TFactory tasks from the MCP control plane
-- **`guides/byo-llm.md`** — run TFactory **fully on your own infrastructure**
-  (Ollama / vLLM / LM Studio / LocalAI) with a verifiable no-egress guarantee —
-  for GDPR / HIPAA / air-gapped teams. `python apps/backend/byo_llm.py <model>`
-  prints the live data-egress posture (🔒 Local / 🏠 Self-hosted / ☁️ Managed)
-- **`guides/spec-sources.md`** — use TFactory **without AIFactory**: ingest any
-  acceptance-criteria source (markdown / Gherkin `.feature` / EARS) into the
-  pipeline via `python apps/backend/spec_sources.py <file>`
-
-## Project tracking
-
-- **Epic + sub-issues:** https://github.com/olafkfreund/TFactory/issues
-- **Discussions / questions:** open an issue with the `question` label
-
-## High-level architecture
-
-```
-AIFactory finished branch  ─►  /handover-to-tfactory  ─►  TFactory MCP
-                                                              │
-                                                              ▼
-                                                          Planner
-                                                              │
-                              ┌──────────┬─────────┬──────────┼──────────┐
-                              ▼          ▼         ▼          ▼          ▼
-                       Gen-Unit  Gen-Browser  Gen-API  Gen-Integration  Gen-Mut
-                              └──────────┴────┬────┴──────────┴──────────┘
-                                              ▼
-                                          Executor  (Docker per task)
-                                              ▼
-                                          Evaluator  (separate agent)
-                                              ▼
-                                          Triager   ─►  git commit + PR comment
-```
-
-Five pipeline stages (Planner / per-lane Generators / Executor / Evaluator /
-Triager), five lanes (unit / browser / api / integration / mutation), Docker
-sandbox, spec-aware handover from AIFactory.
-
-The four-stage chain auto-advances via `TFACTORY_AUTO_*` env vars; each
-stage writes its outputs to `~/.tfactory/workspaces/{project}/specs/{spec}/`
-and forwards via a fire-and-forget scheduler. See `apps/backend/agents/`
-for each agent's implementation.
-
-## Status by lane
-
-v0.2 swapped the v0.1 pipeline-stage decomposition for a
-**modality-based spine** (Decision 2). Security scanning is delegated to
-dedicated pipelines and out of scope here; TFactory focuses on
-functional + feature testing.
-
-| Lane | v0.2.0 status | Runtime | Coverage | Evidence |
-|---|---|---|---|---|
-| **Unit** | ✅ Active | `tfactory-runner-pytest` (Python) · `tfactory-runner-jest` (TypeScript) | line (cobertura / lcov) | — |
-| **Browser** | ✅ Active | `tfactory-runner-playwright` + `AppRuntime` (docker-compose + HTTP HEAD health-poll) | `null` (Decision 11 — line coverage doesn't apply when the test drives the browser) | screenshots · video · trace.zip |
-| **API** | ✅ Active | per-framework Docker image + HTTP HAR recorder | line where applicable | network.har |
-| **Integration** | ✅ Active | per-framework Docker image + `AppRuntime` (multi-service compose) | line where applicable | network.har · service logs |
-| **Mutation** | ✅ Active | `mutmut` (Python) / Stryker (TypeScript) — one-mutation-per-run probe inside the Evaluator | per-mutant (killed / survived) | — |
-
-All five lanes shipped with v0.2.0. The Planner picks each subtask's
-lane from its `(language, framework)` via the framework registry
-(`frameworks/{pytest,jest,playwright}/descriptor.yaml`). New languages
-(Go / Rust / Ruby) and additional security-pipeline integrations slot
-into this same spine through new `FrameworkDescriptor`s — no lane
-additions required.
-
 ## Connect to your environment — Credential Broker
 
-Agents often need to reach **real services and cloud environments** (a staging
-API, a Kubernetes cluster, a GCP/AWS/Azure project) to plan and run tests — but
-secrets must never land in the repo. The **Credential Broker** (epic
+Agents often need to reach real services and cloud environments (a staging API, a
+Kubernetes cluster, a GCP/AWS/Azure project) to plan and run tests — but secrets
+must never land in the repo. The Credential Broker (epic
 [#62](https://github.com/olafkfreund/TFactory/issues/62)) resolves credentials
 from a pluggable backend and exposes them to the agents ephemerally:
 
-- **Backends:** Azure Key Vault · AWS Secrets Manager · GCP Secret Manager ·
-  HashiCorp Vault · local **sops / age / agenix** · plain env. One ref syntax
+- **Backends:** Azure Key Vault, AWS Secrets Manager, GCP Secret Manager,
+  HashiCorp Vault, local sops / age / agenix, or plain env. One ref syntax
   (`vault:path#field`, `gcp-sm://proj/secret`, `sops:file#key`, …); cloud SDKs
   load lazily so an absent package never breaks startup.
-- **Ephemeral + redacted:** file credentials (kubeconfig, GCP ADC) are written
-  `0600` to a per-task scratch dir and **wiped** when the task ends; resolved
-  values are redacted from logs.
-- **Honest egress:** off by default — *no* cloud credential is resolved unless
-  the project opts in (`.tfactory.yml` `egress.enabled`).
-  `python -m tfactory_secrets.cli audit` prints a secret-free manifest of
-  exactly what would leave your network.
-
-**Why:** it extends the existing `core/mcp_credentials.py` ambient chain
-(K8s / AWS-IRSA / Azure-MI / GCP-ADC) with a vault-fetch head rather than
-reinventing auth, and keeps the same honest-egress posture as
-[BYO-LLM](guides/byo-llm.md). See [`guides/credentials.md`](guides/credentials.md)
-and the [Credentials](https://olafkfreund.github.io/TFactory/credentials/) page.
+- **Ephemeral and redacted:** file credentials (kubeconfig, GCP ADC) are written
+  `0600` to a per-task scratch dir and wiped when the task ends; resolved values
+  are redacted from logs.
+- **Honest egress:** off by default — no cloud credential is resolved unless the
+  project opts in (`.tfactory.yml` `egress.enabled`).
+  `python -m tfactory_secrets.cli audit` prints a secret-free manifest of exactly
+  what would leave your network.
 
 ## Run on any LLM
 
-TFactory routes each pipeline phase to a provider purely from the **model
-string** — no separate provider switch. Supported: the **Claude Agent SDK**
-(primary), **OpenAI Codex**, **Gemini CLI**, **GitHub Copilot CLI**, **Ollama**
-(local), and any **OpenAI-compatible** endpoint (vLLM / LM Studio / OpenRouter /
-Together / Groq / LocalAI). This lets a team run on a flat-rate subscription, a
-self-hosted model, or fully air-gapped — with an honest **data-egress badge**
-(`python apps/backend/byo_llm.py <model>`) so you always know whether a run
-keeps data on your network. See [`guides/byo-llm.md`](guides/byo-llm.md).
+TFactory routes each pipeline phase to a provider purely from the model string —
+no separate provider switch. Supported: the Claude Agent SDK (primary), OpenAI
+Codex, Gemini CLI, GitHub Copilot CLI, Ollama (local), and any OpenAI-compatible
+endpoint (vLLM / LM Studio / OpenRouter / Together / Groq / LocalAI). This lets a
+team run on a flat-rate subscription, a self-hosted model, or fully air-gapped —
+with an honest data-egress badge (`python apps/backend/byo_llm.py <model>`) so you
+always know whether a run keeps data on your network. See
+[`guides/byo-llm.md`](guides/byo-llm.md).
+
+## Docs
+
+Full project documentation is published at **https://tfactory.freundcloud.com/**.
+
+Direct links:
+
+- [Architecture](https://tfactory.freundcloud.com/architecture/) — directory structure, workspace layout, dataflow
+- [Showcase](https://tfactory.freundcloud.com/showcase/) — the pipeline in action with real evidence
+- [Design Plan](https://tfactory.freundcloud.com/design-plan/) — rationale, locked decisions, risk register
+- [Technical Spec](https://tfactory.freundcloud.com/technical-spec/) — per-component detail
+- [Credentials](https://tfactory.freundcloud.com/credentials/) — the Credential Broker and MFA
+- [Progress](https://tfactory.freundcloud.com/progress/) — the per-task build log
+
+In-repo guides (`guides/`):
+
+- **`guides/e2e-smoke.md`** — operator guide for the verification scenarios
+- **`guides/HANDOVER_WORKFLOW.md`** — how to trigger TFactory from a live Claude Code session
+- **`guides/CLAUDE_CODE_MCP_TOOLS.md`** — driving TFactory tasks from the MCP control plane
+- **`guides/byo-llm.md`** — run TFactory fully on your own infrastructure with a verifiable no-egress guarantee
+- **`guides/spec-sources.md`** — use TFactory without AIFactory: ingest any acceptance-criteria source (markdown / Gherkin / EARS)
+
+## Project tracking
+
+- **Epic and sub-issues:** https://github.com/olafkfreund/TFactory/issues
+- **Discussions / questions:** open an issue with the `question` label
 
 ## License
 
