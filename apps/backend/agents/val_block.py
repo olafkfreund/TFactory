@@ -23,7 +23,11 @@ from typing import Any
 
 from agents.verification_gate import normalize_verification
 
-__all__ = ["build_verification_block", "read_verification_block", "DEFAULT_TARGET_LEVEL"]
+__all__ = [
+    "build_verification_block",
+    "read_verification_block",
+    "DEFAULT_TARGET_LEVEL",
+]
 
 DEFAULT_TARGET_LEVEL = "VAL-2"  # the ceiling TFactory can reach without a VAL-3 target
 
@@ -35,6 +39,11 @@ _LANE_LEVEL = {
     "api": "VAL-2",
     "integration": "VAL-2",
     "browser": "VAL-2",
+    # RFC-0010: the differential/equivalence lane runs the new impl against the
+    # legacy reference oracle over the golden corpus in an ephemeral env — same
+    # assurance tier as integration. Partial parity yields reject verdicts, which
+    # fail VAL-2 and cap achieved_level, so equivalence can never overclaim.
+    "equivalence": "VAL-2",
 }
 _PASS_VERDICTS = {"accept", "flag"}  # flag = accepted-with-note (still ran+passed)
 
@@ -85,8 +94,13 @@ def build_verification_block(
     # any verdict was produced; otherwise nothing ran.
     any_ran = bool(verdicts)
     levels.append(
-        {"level": "VAL-0", "status": "passed" if any_ran else "not_run",
-         "reason": None if any_ran else "no tests executed — toolchain/static unproven"}
+        {
+            "level": "VAL-0",
+            "status": "passed" if any_ran else "not_run",
+            "reason": None
+            if any_ran
+            else "no tests executed — toolchain/static unproven",
+        }
     )
 
     # VAL-1 / VAL-2 from the lanes that ran.
@@ -104,24 +118,39 @@ def build_verification_block(
     # disposable-target run when one happened; otherwise an honest not_run.
     if val3 is not None and getattr(val3, "ran", False):
         if getattr(val3, "passed", False):
-            levels.append({"level": "VAL-3", "status": "passed",
-                           "evidence": "ran against a disposable target (auto-torn-down)"})
+            levels.append(
+                {
+                    "level": "VAL-3",
+                    "status": "passed",
+                    "evidence": "ran against a disposable target (auto-torn-down)",
+                }
+            )
         else:
-            levels.append({"level": "VAL-3", "status": "failed",
-                           "reason": getattr(val3, "reason", "VAL-3 commands failed")})
+            levels.append(
+                {
+                    "level": "VAL-3",
+                    "status": "failed",
+                    "reason": getattr(val3, "reason", "VAL-3 commands failed"),
+                }
+            )
     else:
         levels.append(
-            {"level": "VAL-3", "status": "not_run",
-             "reason": (getattr(val3, "reason", "") if val3 is not None else "")
-                       or "no disposable sandbox target provisioned (RFC-0006 #75); "
-                          "effectful verification against a real host was not run",
-             "risk": "behaviour against a real host/cluster is unverified"}
+            {
+                "level": "VAL-3",
+                "status": "not_run",
+                "reason": (getattr(val3, "reason", "") if val3 is not None else "")
+                or "no disposable sandbox target provisioned (RFC-0006 #75); "
+                "effectful verification against a real host was not run",
+                "risk": "behaviour against a real host/cluster is unverified",
+            }
         )
 
     # When a VAL-3 run was attempted, the run targeted VAL-3 — say so; the gate
     # still recomputes achieved_level from the level statuses (a failed VAL-3
     # caps it back down), so this can't overclaim.
-    effective_target = "VAL-3" if (val3 is not None and getattr(val3, "ran", False)) else target_level
+    effective_target = (
+        "VAL-3" if (val3 is not None and getattr(val3, "ran", False)) else target_level
+    )
     block = {
         "target_level": effective_target,
         # achieved_level is intentionally optimistic here; the gate recomputes the
