@@ -28,6 +28,7 @@ Run directly for the self-tests: `python3 scripts/nix_provisioner.py`.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass, field
 
@@ -89,6 +90,52 @@ class Manifest:
             provisioning_ref=prov.get("ref"),
             provisioning_generated=bool(prov.get("generated", False)),
         )
+
+
+# RFC-0005 §3.2 provisioning tiers. Resolved from the manifest's
+# provisioning.method; the value is the engine that materializes the env.
+_TIER_BY_METHOD = {
+    "nix": "nix",  # Tier A — hermetic Nix flake (preferred)
+    "image": "catalog",  # Tier B — prebuilt catalog image by (language, version)
+    "catalog": "catalog",
+    "build": "build",  # Tier C — on-demand build, content-addressed + cached
+    "on-demand": "build",
+    "setup": "setup",  # Tier D — in-container setup script (last resort)
+}
+
+
+def resolve_tier(env: dict) -> str:
+    """Resolve the provisioning tier (RFC-0005 §3.2) for a contract environment.
+
+    Returns one of ``nix`` | ``catalog`` | ``build`` | ``setup``. Defaults to
+    ``nix`` — the hermetic, content-addressed, any-toolchain tier — so an
+    unrecognised method degrades to the reproducible path rather than failing.
+    """
+    method = (Manifest.from_contract(env).provisioning_method or "nix").lower()
+    return _TIER_BY_METHOD.get(method, "nix")
+
+
+def manifest_digest(env: dict, *, length: int = 16) -> str:
+    """Content-addressed digest of a manifest's *environment-defining* fields.
+
+    This is the cache key / image tag that makes Tier B/C "second run is instant"
+    explicit: two manifests that describe the same toolchain (same language,
+    toolchain versions, system_packages, network class, browser need) hash to the
+    same value — regardless of build/verify *commands*, which don't change the
+    environment. (Tier A's Nix store content-addresses the build itself; this is
+    the manifest-level key the image tiers need.) Deterministic + pure.
+    """
+    m = Manifest.from_contract(env)
+    key = {
+        "language": (m.language or "").lower(),
+        "toolchain": {k: str(v) for k, v in sorted(m.toolchain.items())},
+        "system_packages": sorted(p.lower() for p in m.system_packages),
+        "network": m.network or "",
+        "browser": _needs_browser(m),
+        "nixpkgs": DEFAULT_NIXPKGS if resolve_tier(env) == "nix" else "",
+    }
+    blob = json.dumps(key, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(blob).hexdigest()[:length]
 
 
 def _needs_browser(m: Manifest) -> bool:
