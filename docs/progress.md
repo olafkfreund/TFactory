@@ -8,16 +8,43 @@ nav_order: 8
 # Progress
 
 > Live delivery snapshot, updated by hand as merges land — last refresh
-> **2026-06-18** (TFactory v0.9.x). Older milestones kept below as the
-> historical record. Full
-> detail per release in the
+> **2026-06-18** (TFactory **v0.9.3**, shipped). Recent milestones and the
+> dated historical record are kept below. Full detail per release in the
 > [changelog](https://github.com/olafkfreund/TFactory/blob/main/CHANGELOG.md).
 
-## At-a-glance — current
+## Current status — v0.9.3 (shipped)
+
+TFactory is in production as a **governed node in the
+[Factory](https://factory.freundcloud.com/) line**: PFactory plans, AIFactory
+builds, **TFactory verifies**, CFactory watches. It generates, runs, evaluates,
+and triages tests against the code AIFactory ships, then reports back up the
+spine.
+
+What is live today:
+
+- **Five agents** — Planner · Gen-Functional · Executor · Evaluator · Triager.
+- **Five lanes, all active** — unit · browser · api · integration · mutation.
+- **Browser lane** runs in a per-task Nix toolchain inside an ephemeral
+  Kubernetes Job (RFC-0005 Tier A); it captures **screenshots + video
+  recordings** (plus traces), rendered in the portal Acceptance / Evidence tabs
+  and the CFactory cockpit.
+- **Acceptance-criteria fidelity** — "verified X/Y" against the governed criteria.
+- **MFA for SUTs** — TOTP + a disposable Keycloak realm (RFC-0007 Class C).
+- **Credential Broker** — pluggable secrets backends, ephemeral creds, egress
+  gate, OIDC / workload-identity federation.
+- **Runs on any LLM** — model-string routing, no provider lock-in.
+- **RFC-0001 completion event** — one normalized cross-service envelope with a
+  shared `correlation_key`, delivered at-least-once; CFactory consumes a single
+  contract across AIFactory · PFactory · TFactory.
+- **Governed pickup from PFactory** — `pfactory:meta` is the test oracle.
+- **Backstage catalog** — `catalog-info.yaml` + TechDocs + an AI-assistant skill
+  descriptor.
+- **Bidirectional hand-back loop** — bounded corrections returned to AIFactory's
+  QA Fixer, then re-tested.
 
 ```
-Unreleased — Factory PARR spine: governed pickup + RFC-0001 + Backstage
-  ████████████████████████████  #193–#197 · #198 #211 #214 #224 · #215 #216 #223
+v0.9.x — Factory PARR node (current, shipped)
+  ████████████████████████████  governed pickup · RFC-0001 event · Backstage · Nix browser lane
 
 v0.5.0 — Bidirectional AIFactory ↔ TFactory integration   (2026-06-03)
   ████████████████████████████  epic #182 — 7 phases shipped + #108 live-fix
@@ -35,10 +62,12 @@ Releases:  https://github.com/olafkfreund/TFactory/releases
 Backend tests: 531 (v0.1) → 1225 (v0.2) → 2803 (v0.5)
 ```
 
-## Unreleased — Factory PARR spine
+## Recent milestones
 
-TFactory becomes a **verified node in the
-[Factory](https://factory.freundcloud.com/) line** rather than a standalone tool:
+### Factory PARR spine (shipped, v0.9.x)
+
+TFactory became a **verified node in the Factory line** rather than a standalone
+tool:
 
 - **Governed pickup from PFactory (#193–#197)** — recognise + enqueue governed
   test targets, parse `pfactory:meta` as the test oracle, then generate · run ·
@@ -165,15 +194,16 @@ when none is present.
 ```
   Planner ─► Gen-Functional ─► Executor ─► Evaluator ─► Triager
   (polyglot   (generic via      (DockerRunner    (5 signals;     (catalog-aware
-   per #21)    descriptor #22)   + AppRuntime     null coverage;  in #27 →
-                                  for Browser     TS primitives   evidence-links
-                                  #24)            #25)            from 5d8f588)
+   per #21)    descriptor #22)   + AppRuntime     null coverage;  + completion
+                                  + Nix Job for   TS primitives)  event +
+                                  Browser lane)                   evidence-links)
 ```
 
-All 16 v0.2 tasks shipped + the deferred Triager evidence-links
-follow-up landed. The pipeline is now end-to-end demonstrable —
-see the [live v0.2.0 showcase]({{ '/showcase/' | relative_url }})
-running against [olafkfreund/tfactory-demo](https://github.com/olafkfreund/tfactory-demo).
+The full pipeline runs end-to-end in production across all five lanes. The
+historical v0.2.0 showcase — five Playwright tests generated from a five-AC user
+story, with evidence captured — remains published at
+[`/showcase/`]({{ '/showcase/' | relative_url }}) running against
+[olafkfreund/tfactory-demo](https://github.com/olafkfreund/tfactory-demo).
 
 ## v0.2.0 demo + showcase
 
@@ -187,7 +217,11 @@ A live end-to-end run published at [`/showcase/`]({{ '/showcase/' | relative_url
 
 ## Health signals
 
-- Pass — `scripts/verify-fork.sh --no-import` — passes against the v0.2 module set
+> Test counts below are the last recorded snapshot (through v0.5.0); the suite
+> has continued to grow through v0.9.x. See the
+> [changelog](https://github.com/olafkfreund/TFactory/blob/main/CHANGELOG.md) for
+> current per-release figures.
+
 - Pass — pytest (backend) — **2803 tests** at v0.5.0 (1225 at v0.2.0)
 - Pass — All 5 portal endpoints respond shim-compatibly without fastapi installed
 - Pass — Pages site builds + deploys on every push to `main` (Cayman + custom layout)
