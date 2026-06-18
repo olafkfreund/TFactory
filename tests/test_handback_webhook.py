@@ -123,6 +123,65 @@ async def test_already_running_does_not_double_fire(tmp_path):
     assert res["action"] == "already_running"
 
 
+# ── #348: the bounded handback loop, end-to-end on a failing verdict ─────────
+
+
+def _settle_with_new_failure(sd: Path, *, failures: tuple[str, ...]) -> None:
+    """Simulate AIFactory's re-handoff: write a fresh failing verdict set and
+    return the task to a settled (triaged) state, ready for the next webhook."""
+    verdicts = [{"test_id": "t_ok", "verdict": "accept"}]
+    verdicts += [{"test_id": t, "verdict": "reject"} for t in failures]
+    (sd / "findings" / "verdicts.json").write_text(json.dumps({"verdicts": verdicts}))
+    status = json.loads((sd / "status.json").read_text())
+    status.update({"status": "triaged", "phase": "triager_complete"})
+    (sd / "status.json").write_text(json.dumps(status))
+
+
+async def test_failing_verdict_drives_bounded_loop_to_needs_human(tmp_path, monkeypatch):
+    """End-to-end (#348): a verdict that keeps failing drives retest →
+    retest → terminal needs_human at the cap (2), emitting the RFC-0001
+    completion event. The outbound apply-correction POST is covered by
+    test_handback_283; this exercises the inbound bounded re-test loop that
+    was previously only tested branch-by-branch, never as a progression."""
+    monkeypatch.setenv("TFACTORY_COMPLETION_SENTINEL", "1")
+    monkeypatch.delenv("TFACTORY_COMPLETION_WEBHOOK", raising=False)
+    sd = _seed(tmp_path, failures=("t1",))  # cycle 0
+
+    # Cycle 1: first failing verdict → retest, cycle recorded as 1.
+    r1 = await _call()
+    assert r1["action"] == "retest" and r1["cycle"] == 1
+
+    # AIFactory "fixes" but a DIFFERENT test now fails (progress, not stuck).
+    _settle_with_new_failure(sd, failures=("t2",))
+    r2 = await _call()
+    assert r2["action"] == "retest" and r2["cycle"] == 2
+
+    # Still failing after the 2nd correction → cap reached → terminal needs_human.
+    _settle_with_new_failure(sd, failures=("t3",))
+    r3 = await _call()
+    assert r3["action"] == "stuck" and "cap" in r3["reason"]
+
+    status = json.loads((sd / "status.json").read_text())
+    assert status["status"] == "stuck" and status["needs_human"] is True
+    # RFC-0001 terminal completion event fired with the needs_human phase.
+    env = json.loads((sd / "findings" / "COMPLETED.json").read_text())
+    assert env["service"] == "tfactory" and env["phase"] == "needs_human"
+
+
+async def test_no_progress_failing_verdict_is_stuck_before_cap(tmp_path, monkeypatch):
+    """The SAME tests failing after a correction is 'no progress' → needs_human
+    even before the cycle cap, so a thrashing fixer can't burn both cycles."""
+    monkeypatch.setenv("TFACTORY_COMPLETION_SENTINEL", "1")
+    sd = _seed(tmp_path, failures=("t1",))
+    r1 = await _call()
+    assert r1["action"] == "retest" and r1["cycle"] == 1
+    # AIFactory's "fix" leaves the SAME test failing → no progress.
+    _settle_with_new_failure(sd, failures=("t1",))
+    r2 = await _call()
+    assert r2["action"] == "stuck" and "no progress" in r2["reason"]
+    assert json.loads((sd / "status.json").read_text())["needs_human"] is True
+
+
 # ── auth + correlation guards ────────────────────────────────────────────
 
 
