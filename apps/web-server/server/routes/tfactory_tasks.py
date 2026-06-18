@@ -136,6 +136,12 @@ def _summary_row(status_path: Path) -> dict[str, Any]:
         except OSError:
             updated_at = ""
 
+    # RFC-0001 correlation: surface the upstream GitHub issue (captured into
+    # source.json at ingest) so the cockpit threads this test task with its
+    # PFactory plan + AIFactory build.
+    source_doc = _read_json(spec_dir / "context" / "source.json") or {}
+    aifactory_src = source_doc.get("aifactory") if isinstance(source_doc, dict) else None
+
     return {
         "task_id": status_doc.get("task_id") or spec_id,
         "project_id": project_id,
@@ -143,6 +149,7 @@ def _summary_row(status_path: Path) -> dict[str, Any]:
         "status": status_doc.get("status"),
         "phase": status_doc.get("phase"),
         "updated_at": updated_at,
+        "source": {"aifactory": aifactory_src} if isinstance(aifactory_src, dict) else {},
     }
 
 
