@@ -86,25 +86,30 @@ tabs for **Status / Lanes / Verdicts / Report / Acceptance / Logs / Evidence**:
 
 ## High-level architecture
 
-```
-AIFactory finished branch  ->  /handover-to-tfactory  ->  TFactory MCP
-                                                              |
-                                                              v
-                                                          Planner
-                                                              |
-                              +----------+---------+----------+----------+
-                              v          v         v          v          v
-                       Gen-Unit  Gen-Browser  Gen-API  Gen-Integration  Gen-Mut
-                              +----------+----+----+----------+----------+
-                                              v
-                                          Executor   (sandboxed per task)
-                                              v
-                                          Evaluator  (separate agent, 5 signals)
-                                              v
-                                          Triager    ->  git commit + PR comment
+```mermaid
+flowchart TD
+    H["AIFactory branch / Claude Code / any tool<br/>handover: signed contract + deployed URL"] --> P["Planner<br/>(test_plan.json)"]
+
+    P --> U["Gen-Unit"]
+    P --> B["Gen-Browser"]
+    P --> A["Gen-API"]
+    P --> I["Gen-Integration"]
+    P --> M["Gen-Mutation"]
+
+    U --> X["Executor<br/>(sandboxed per task)"]
+    B --> X
+    A --> X
+    I --> X
+    M --> X
+
+    X --> E["Evaluator<br/>(five-signal verdict)"]
+    E --> T["Triager"]
+    T --> R["git commit + PR comment"]
 ```
 
-Five pipeline stages (Planner / per-lane Generators / Executor / Evaluator /
+The middle row is the **five-lane spine** — one generator per modality (unit,
+browser, api, integration, mutation). Five pipeline stages (Planner / per-lane
+Generators / Executor / Evaluator /
 Triager) and five lanes (unit / browser / api / integration / mutation), with a
 spec-aware handover from AIFactory. The stages auto-advance via `TFACTORY_AUTO_*`
 env vars; each stage writes its outputs to

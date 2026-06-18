@@ -14,31 +14,30 @@ reflects what's actually on `main` as of the last commit — see
 
 ## Pipeline spine (5 lanes)
 
+```mermaid
+flowchart TD
+    H["AIFactory branch / Claude Code / any tool"] -->|"/handover-to-tfactory"| MCP["TFactory MCP"]
+    MCP --> P["Planner<br/>(test_plan.json)"]
+
+    P --> U["Gen-Unit"]
+    P --> B["Gen-Browser"]
+    P --> A["Gen-API"]
+    P --> I["Gen-Integration"]
+    P --> M["Gen-Mutation"]
+
+    U --> X["Executor<br/>(sandboxed per subtask · .tfactory.yml target addressing;<br/>browser lane in a Nix k8s Job, RFC-0005 Tier A)"]
+    B --> X
+    A --> X
+    I --> X
+    M --> X
+
+    X --> E["Evaluator<br/>(five-signal verdict: coverage · stability ·<br/>mutation · lint-promotion · semantic-relevance)"]
+    E --> T["Triager<br/>(update-in-place vs create-new via tests-catalog.json)"]
+    T --> R["git commit + PR comment<br/>(dry-run by default)"]
 ```
-AIFactory finished branch  ─►  /handover-to-tfactory  ─►  TFactory MCP
-                                                              │
-                                                              ▼
-                                                         Planner
-                                                    (test_plan.json)
-                                                              │
-                        ┌──────────┬──────────┬──────────────┼──────────────┐
-                        ▼          ▼          ▼               ▼              ▼
-                    Gen-Unit   Gen-Browser Gen-API      Gen-Integration  Gen-Mutation
-                        └──────────┴─────┬──┴──────────────── ┘──────────────┘
-                                         ▼
-                              Executor (Docker per subtask,
-                             .tfactory.yml target addressing,
-                              AppRuntime for browser/api)
-                                         ▼
-                              Evaluator  (5-signal verdicts:
-                               coverage · stability · mutation ·
-                               lint-promotion · semantic-relevance)
-                                         ▼
-                              Triager (update-in-place vs create-new
-                               via .tfactory/tests-catalog.json)
-                                         ▼
-                              git commit + PR comment (dry-run default)
-```
+
+The middle row is the five-lane spine — one generator per modality (unit,
+browser, api, integration, mutation).
 
 All five lanes are wired (TFactory v0.9.x). Lane
 dispatch is gated per the `Lane` enum: `Lane.UNIT` runs pytest;
