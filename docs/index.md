@@ -154,6 +154,10 @@ Full walkthrough in the [repo README](https://github.com/olafkfreund/TFactory/bl
 
 <ul class="feature-row">
   <li class="feature-row__card reveal" style="--reveal-delay: 0ms">
+    <h3><a href="{{ '/creating-tests/' | relative_url }}">Creating tests</a></h3>
+    <p>Three ways in — a spec/issue, the portal wizard, or a handover — and every parameter.</p>
+  </li>
+  <li class="feature-row__card reveal" style="--reveal-delay: 0ms">
     <h3><a href="{{ '/architecture/' | relative_url }}">Architecture</a></h3>
     <p>Directory structure, workspace layout, dataflow.</p>
   </li>
