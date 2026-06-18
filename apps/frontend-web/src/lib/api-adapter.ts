@@ -986,6 +986,31 @@ function setupEventBroadcast(): void {
         log.debug(`[WS Broadcast] ${event.type}`);
       }
       emitEvent(event.type, event.payload);
+
+      // Auto-surface newly-started tasks (#329): a task created outside this
+      // tab (via the API or a cross-service handoff) only updates EXISTING
+      // cards through emitEvent — updateTaskStatus no-ops for a task the store
+      // has never seen. When a `task:*` event references a task that belongs to
+      // the selected project but isn't in the store yet, load the project's
+      // tasks once so the new card appears live (no manual reload, no
+      // over-fetching — fires only for a genuinely-unknown task in the current
+      // project). Mirrors AIFactory PR #516.
+      if (event.type.startsWith('task:')) {
+        const taskId = (event.payload as { taskId?: string })?.taskId;
+        if (taskId) {
+          void Promise.all([
+            import('../stores/project-store'),
+            import('../stores/task-store'),
+          ]).then(([projectMod, taskMod]) => {
+            const projectId = projectMod.useProjectStore.getState().selectedProjectId;
+            if (!projectId || !taskId.startsWith(`${projectId}:`)) return;
+            const known = taskMod.useTaskStore
+              .getState()
+              .tasks.some((x) => x.id === taskId);
+            if (!known) void taskMod.loadTasks(projectId);
+          }).catch(() => {});
+        }
+      }
     }
   });
 
