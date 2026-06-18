@@ -117,6 +117,47 @@ def _completed_envelope(spec_dir: Path) -> dict:
     return json.loads((spec_dir / "findings" / "COMPLETED.json").read_text())
 
 
+def _seed_verdicts(spec_dir: Path, verdicts: list[dict]) -> None:
+    (spec_dir / "findings").mkdir(parents=True, exist_ok=True)
+    (spec_dir / "findings" / "verdicts.json").write_text(json.dumps({"verdicts": verdicts}))
+
+
+def test_envelope_carries_honest_verification_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RFC-0006 #74: the completion envelope (and findings/verification.json)
+    carry a gate-normalized VAL block; a unit+api pass is VAL-2 with VAL-3
+    surfaced as a gap — never silently 'done'."""
+    monkeypatch.setenv("TFACTORY_COMPLETION_SENTINEL", "1")
+    _seed_status(tmp_path)
+    _seed_verdicts(tmp_path, [
+        {"test_id": "u1", "lane": "unit", "verdict": "accept"},
+        {"test_id": "a1", "lane": "api", "verdict": "accept"},
+    ])
+    _write_status_patch(
+        tmp_path, status="triaged", phase="triager_complete", committed_count=2
+    )
+    env = _completed_envelope(tmp_path)
+    block = env["verification"]
+    assert block["achieved_level"] == "VAL-2"
+    assert "VAL-3 not_run" in block["claim"]
+    # persisted alongside the findings for the cockpit/PR surface (#76)
+    disk = json.loads((tmp_path / "findings" / "verification.json").read_text())
+    assert disk["achieved_level"] == "VAL-2"
+
+
+def test_envelope_verification_caps_on_a_failed_lane(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TFACTORY_COMPLETION_SENTINEL", "1")
+    _seed_status(tmp_path)
+    _seed_verdicts(tmp_path, [{"test_id": "u1", "lane": "unit", "verdict": "reject"}])
+    _write_status_patch(tmp_path, status="triaged", phase="triager_complete")
+    block = _completed_envelope(tmp_path)["verification"]
+    # a failed unit lane (VAL-1) caps the honest ceiling at VAL-0
+    assert block["achieved_level"] == "VAL-0"
+
+
 def test_envelope_has_normalized_header(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

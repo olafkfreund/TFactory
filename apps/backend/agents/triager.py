@@ -667,6 +667,25 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> dict:
             envelope["access"] = _acc
     except Exception:  # noqa: BLE001 - the access annotation must never break emit
         pass
+    # RFC-0006 (#74): attribute the lanes that actually ran (verdicts.json) to
+    # VAL levels and attach the gate-normalized verification block — honest
+    # achieved_level + claim, with VAL-3 surfaced as a gap (no disposable target,
+    # #75). CFactory renders it (#76) so a VAL-2 result never looks like "done".
+    # Best-effort; also persisted to findings/verification.json.
+    try:
+        from agents.val_block import build_verification_block
+
+        _vpath = spec_dir / "findings" / "verdicts.json"
+        _vdoc = json.loads(_vpath.read_text()) if _vpath.exists() else {}
+        _block = build_verification_block(
+            _vdoc.get("verdicts") if isinstance(_vdoc, dict) else None
+        )
+        envelope["verification"] = _block
+        _fdir = spec_dir / "findings"
+        _fdir.mkdir(parents=True, exist_ok=True)
+        (_fdir / "verification.json").write_text(json.dumps(_block, indent=2))
+    except Exception:  # noqa: BLE001 - verification block must never break emit
+        pass
     return envelope
 
 
