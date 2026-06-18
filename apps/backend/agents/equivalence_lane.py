@@ -242,13 +242,13 @@ def merge_verdicts(spec_dir: Path, new_verdicts: list[dict[str, Any]]) -> None:
     path.write_text(json.dumps(doc, indent=2), encoding="utf-8")
 
 
-def _docker_oracle_runner() -> RunnerFn:
+def _docker_oracle_runner(image: str = "tfactory-runner-pytest:latest") -> RunnerFn:
     """Real oracle runner: run the Python harness in a hardened DockerRunner.
 
-    Stages the oracle source + harness into scratch (the proven evaluator
-    pattern), passes the input vectors as a scratch file, runs ``--network=none
-    --read-only`` with ``ci_parity_env``. Imported lazily so unit tests that
-    inject a fake runner never need Docker.
+    Mounts the source at ``/work:ro`` and a scratch dir (harness + vectors) at
+    ``/scratch:rw``, then runs ``python /scratch/harness.py /scratch/vectors.json``
+    with ``PYTHONPATH=/work`` under ``--network=none --read-only`` + ci-parity env.
+    Imported lazily so unit tests that inject a fake runner never need Docker.
     """
     import shutil as _sh
     import tempfile as _tmp
@@ -258,26 +258,18 @@ def _docker_oracle_runner() -> RunnerFn:
     def _run(harness: Path, root: Path, stdin: str) -> Any:
         scratch = Path(_tmp.mkdtemp(prefix="tf-equiv-"))
         try:
-            for item in Path(root).iterdir():
-                if item.name == ".git":
-                    continue
-                dst = scratch / item.name
-                if item.is_dir():
-                    _sh.copytree(item, dst, dirs_exist_ok=True)
-                else:
-                    _sh.copy2(item, dst)
             (scratch / "vectors.json").write_text(stdin, encoding="utf-8")
             (scratch / "harness.py").write_text(
                 generate_python_oracle_harness(), encoding="utf-8"
             )
-            runner = DockerRunner(
-                image="tfactory-runner-pytest:latest",
-                network="none",
-                read_only_rootfs=False,
-            )
+            runner = DockerRunner(image=image, network="none", read_only_rootfs=True)
+            env = ci_parity_env()
+            env["PYTHONPATH"] = "/work"
             return runner.run(
-                "cd /scratch && python harness.py vectors.json",
-                extra_env=ci_parity_env(),
+                repo_path=Path(root),
+                scratch_path=scratch,
+                command=["python", "/scratch/harness.py", "/scratch/vectors.json"],
+                extra_env=env,
             )
         finally:
             _sh.rmtree(scratch, ignore_errors=True)
@@ -304,16 +296,19 @@ def run_from_spec(
     eq = (contract.get("tfactory") or {}).get("equivalence") or {}
     if not eq:
         return None
+    import os
+
     project_dir = Path(project_dir)
     oracle_root = project_dir / ".aifactory" / "oracle"
     if not oracle_root.exists():
         oracle_root = project_dir
+    image = os.getenv("TFACTORY_EQUIVALENCE_IMAGE", "tfactory-runner-pytest:latest")
     result = run_equivalence_lane(
         contract,
         oracle_root=oracle_root,
         candidate_root=project_dir,
-        oracle_runner=oracle_runner or _docker_oracle_runner(),
-        candidate_runner=candidate_runner or _docker_oracle_runner(),
+        oracle_runner=oracle_runner or _docker_oracle_runner(image),
+        candidate_runner=candidate_runner or _docker_oracle_runner(image),
         findings_dir=Path(spec_dir) / "findings",
     )
     merge_verdicts(spec_dir, result["verdicts"])
