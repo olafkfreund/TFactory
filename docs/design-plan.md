@@ -7,73 +7,34 @@ nav_order: 2
 
 # TFactory Design Plan
 
-> Date: 2026-05-28
 > Author: design via super-brainstorm session
-> Status: Design locked — ready for implementation planning
+> Status: Shipped (v0.9.x) — this page records the design rationale and locked decisions.
+> Originally locked: 2026-05-28 (kept for provenance)
 
 ---
 
 ## Context
 
-The user operates **AIFactory** at `/home/olafkfreund/Source/GitHub/AIFactory` — a
-multi-agent autonomous coding platform built on the Claude Agent SDK. AIFactory's
-`/handover` slash command hands an interactive Claude Code session over to an
-async backend pipeline (Planner → Coder → QA → draft PR).
+TFactory ships as a governed node in the Factory line: **PFactory plans,
+AIFactory builds, TFactory verifies, CFactory watches.** AIFactory is a
+multi-agent autonomous coding platform built on the Claude Agent SDK; its
+`/handover` flow hands a completed spec and branch over to TFactory for
+verification.
 
-The user wants a sister platform, **TFactory** (Test Factory), purpose-built for
-autonomous test generation and execution: functional, integration, e2e, plus
-security testing (SAST, deps, secrets), dynamic testing (DAST, LLM fuzz harnesses),
-and quality gating (mutation testing, property-based tests).
+TFactory (Test Factory) is purpose-built for autonomous test generation and
+execution across five lanes — unit, browser, api, integration, and mutation —
+with honest acceptance-criteria fidelity reporting. Security scanning (SAST,
+deps, secrets, DAST) is delegated to dedicated pipelines and is out of scope for
+TFactory.
 
-**Triggering workflow:** AIFactory's Coder finishes a spec → user runs
-`/handover-to-tfactory` → TFactory receives the spec + completed branch, generates
-tests aligned to acceptance criteria, scans the changed code for vulns, executes
-everything sandboxed, triages, and commits tests + posts a findings report back
-to the same PR.
+**Triggering workflow:** AIFactory finishes a spec → handover to TFactory →
+TFactory receives the spec + completed branch, generates tests aligned to
+acceptance criteria, executes everything in a sandboxed per-task toolchain,
+triages, and commits tests + posts a findings report back to the same PR.
 
 ---
 
-## Findings from Phase 1 exploration
-
-### AIFactory anatomy (the surface we're forking)
-
-- **Pipeline:** Planner → Coder → QA, phase-bound, not a pluggable agent registry.
-- **Skill commands** live at `.claude/skills/{name}/SKILL.md` — YAML frontmatter + procedural markdown.
-- **`/handover` skill** at `.claude/skills/handover/SKILL.md` calls
-  `mcp__aifactory__task_create_and_run`. The MCP server is at
-  `apps/backend/mcp_server/aifactory_server.py`.
-- **Spec dir** = single source of truth, at
-  `~/.aifactory/workspaces/{project_id}/specs/{spec_id}/` with
-  `spec.md`, `implementation_plan.json`, `context/`, `logs/`, `memory/`.
-- **Implementation plan model** at `apps/backend/implementation_plan/models.py` —
-  domain-agnostic phase/subtask containers, directly reusable.
-- **Prompt assembly** at `apps/backend/prompts_pkg/` — loads markdown templates
-  + injects project context; reusable.
-- **Project analyzer** at `apps/backend/context/project_analyzer.py` — detects
-  language, deps, test framework; reusable.
-- **Command executor** at `apps/backend/tools/executor.py` — captures stdout/stderr;
-  reusable.
-- **MCP tool registry** at `apps/backend/agents/tools_pkg/registry.py` — pattern
-  reusable.
-- **QA agent** at `apps/backend/qa/qa_reviewer.py` and `qa_fixer.py` — runs tests,
-  parses output, loops to coder. Closest existing analog to what TFactory needs.
-- **Memory layer** at `apps/backend/agents/memory_manager.py` — Graphiti primary,
-  file-based JSON fallback.
-- **Provider abstraction** at `apps/backend/providers/` — OpenAI/Anthropic/Ollama/LocalAI.
-- **Portal** at `apps/web-server/` (FastAPI) + `apps/frontend-web/` (React 19 + Vite).
-
-### What needs real rework (not just renaming)
-
-- `prompts/coder*.md` says "write code, implement feature, git commit" — TFactory
-  needs entirely new agent personas (one per lane, plus planner/evaluator/triager).
-- `apps/backend/runners/github/` assumes PR-merge workflow — TFactory's git
-  side-effect is "add tests to existing branch + comment on PR".
-- QA loop's acceptance criteria is "code matches spec" — TFactory's is
-  "tests cover acceptance criteria + kill mutants + surface vulns".
-- Spec creation pipeline (`spec_runner.py`, `spec_agents/`) is not needed in
-  TFactory — TFactory consumes specs, doesn't create them. Delete or repurpose.
-
-### Landscape signals (May 2026)
+## Landscape signals (May 2026)
 
 - Canonical multi-agent QA pattern (independently converged on by OpenAI + Anthropic):
   **Planner → Generator → Executor → Evaluator → Triager.** Evaluator structurally
@@ -95,16 +56,16 @@ to the same PR.
 
 | # | Decision | Choice |
 |---|---|---|
-| 1 | Repo strategy | **Hard fork** — `cp -r AIFactory TFactory`, then surgically rework |
-| 2 | Vision scope | **All four lanes** — functional, SAST+deps, DAST+fuzz, mutation+property |
+| 1 | Repo strategy | **Hard fork** — TFactory began as a fork of AIFactory, then surgically reworked into its own service |
+| 2 | Vision scope | **Five lanes** — unit, browser, api, integration, mutation (all active). Security scanning delegated to dedicated pipelines, out of scope |
 | 3 | Handover payload | **Spec-aware** — `{project_id, spec_id, branch, base_ref}`; TFactory reads AIFactory's spec dir read-only |
-| 4 | Agent topology | **Shared planner, per-lane generators, shared executor/evaluator/triager** (6 agent roles) |
-| 5 | Execution env | **Tiered** — native for SAST, Docker per task for runtime lanes |
-| 6 | MVP languages | **Python + TypeScript** for full vision; **Python only** at MVP cut |
-| 7 | Deliverable | **Auto-commit tests to AIFactory's feature branch + PR comment with report** |
+| 4 | Agent topology | **Shared planner, per-lane generators, shared executor/evaluator/triager** (five agent roles: Planner, Gen-Functional/per-lane generators, Executor, Evaluator, Triager) |
+| 5 | Execution env | **Per-task Nix toolchain in an ephemeral Kubernetes Job** (RFC-0005 Tier A) — repo checked out, network honest opt-in only |
+| 6 | LLM routing | **Runs on any LLM via model-string routing** — provider-agnostic, no hard Anthropic dependency |
+| 7 | Deliverable | **Auto-commit tests to AIFactory's feature branch + PR comment with report**; honest "verified X/Y" acceptance-criteria fidelity per criterion |
 | 8 | Persistence | **`~/.tfactory/workspaces/{project_id}/specs/{spec_id}/`** mirroring AIFactory layout |
-| 9 | Portal/UI | **Retheme inherited portal** at `:3102` — keep layout shell/auth/task list, drop spec-creation, add lane status + findings table + mutation gauge |
-| 10 | MVP cut | **Walking skeleton** — functional lane only, Python only, full pipeline end-to-end |
+| 9 | Portal/UI | **Retheme inherited portal** — keep layout shell/auth/task list, drop spec-creation, add lane status, Acceptance and Evidence tabs (screenshots + Playwright video), and findings table |
+| 10 | Credentials and MFA | **Credential Broker** (vault/sops/age/agenix, ephemeral, honest egress opt-in); MFA via TOTP (RFC-6238) + disposable ephemeral Keycloak (RFC-0007 Class C), zero production credentials |
 
 ---
 
@@ -127,13 +88,13 @@ to the same PR.
                                      v
                             ┌────────────────┐
                             │ TFactory MCP   │
-                            │ server :3103   │   (stdio)
+                            │ server         │   (stdio)
                             └────────┬───────┘
                                      │
                                      v
                             ┌────────────────┐
                             │ TFactory web   │
-                            │ backend :3102  │   FastAPI
+                            │ backend        │   FastAPI
                             └────────┬───────┘
                                      │ creates spec dir
                                      │ enqueues task
@@ -146,22 +107,22 @@ to the same PR.
                                      │ emits test_plan.json
                                      │ (lane-tagged subtasks)
                                      v
-              ┌──────────┬───────────┼───────────┬──────────┐
-              │          │           │           │          │
-              v          v           v           v          v
-        ┌─────────┐┌─────────┐ ┌─────────┐ ┌─────────┐
-        │Gen-Func ││Gen-SAST │ │Gen-DAST │ │Gen-Mut  │
-        │  pytest ││ semgrep │ │ ZAP +   │ │ mutmut  │
-        │  (LLM)  ││ bandit  │ │ fuzz    │ │ harness │
-        │         ││ deps    │ │ harness │ │         │
-        └────┬────┘└────┬────┘ └────┬────┘ └────┬────┘
-             │          │           │           │
-             └──────────┴───────────┼───────────┘
+        ┌─────────┬─────────┬────────┼────────┬──────────┐
+        │         │         │        │        │          │
+        v         v         v        v        v
+   ┌────────┐┌────────┐┌────────┐┌────────┐┌────────┐
+   │Gen-unit ││Gen-     ││Gen-api ││Gen-     ││Gen-mut │
+   │ pytest  ││browser  ││        ││integr.  ││ mutmut │
+   │ (LLM)   ││Playwright││        ││         ││harness │
+   └────┬────┘└────┬────┘└───┬────┘└───┬────┘└───┬────┘
+        │          │         │         │         │
+        └──────────┴─────────┼─────────┴─────────┘
                                     │
                                     v
                           ┌──────────────────┐
-                          │    EXECUTOR      │ shared runner;
-                          │ docker per task  │ native for SAST
+                          │    EXECUTOR      │ per-task Nix
+                          │ ephemeral k8s    │ toolchain in an
+                          │ Job (RFC-0005)   │ ephemeral Job
                           └────────┬─────────┘
                                    │
                                    v
@@ -169,7 +130,7 @@ to the same PR.
                           │   EVALUATOR      │ scores quality:
                           │ structurally     │  - coverage delta
                           │ separate         │  - mutation score
-                          │                  │  - severity / dedup
+                          │                  │  - ac-fidelity X/Y
                           │                  │  - flake-risk lint
                           └────────┬─────────┘
                                    │
@@ -184,7 +145,8 @@ to the same PR.
         │   - git commit tests on AIFactory feature branch │
         │   - gh pr comment <pr> --body REPORT             │
         │   - write artifacts to ~/.tfactory/workspaces/   │
-        │   - portal :3102 shows live status               │
+        │   - portal + CFactory cockpit show live status   │
+        │   - screenshots + Playwright video as evidence   │
         └──────────────────────────────────────────────────┘
 ```
 
@@ -201,21 +163,21 @@ to the same PR.
     diff.patch            # base_ref..branch
     project_analysis.json # languages, frameworks, deps
   tests/                  # generated test artifacts pre-commit
-    functional/
-    sec/
+    unit/
+    browser/
+    api/
+    integration/
   findings/
-    sast.json
-    deps.json
-    secrets.json
-    dast.json              # phase 5
-    fuzz/                  # phase 5
-    mutation.json          # phase 2
+    mutation.json
+    ac_fidelity.json       # honest verified X/Y per criterion
+  evidence/
+    screenshots/           # browser lane
+    video/                 # Playwright recordings
   report.md
   report.json
   logs/
     planner.log
     gen_functional.log
-    gen_sast.log
     executor.log
     evaluator.log
     triager.log
@@ -223,219 +185,126 @@ to the same PR.
     session_insights.json
 ```
 
-### Repository layout post-fork
+### Repository layout
 
 ```
-TFactory/                         # cp -r AIFactory, then surgically edit
+TFactory/
   apps/
     backend/
       agents/
-        planner.py                # rewrite for test planning
-        gen_functional.py         # NEW
-        gen_sast.py               # NEW
-        gen_dast.py               # NEW (phase 5)
-        gen_mutation.py           # NEW (phase 2)
-        evaluator.py              # NEW — structurally separate
-        triager.py                # NEW
-        # delete: coder.py
+        planner.py                # test planning
+        gen_functional.py         # per-lane generators
+        evaluator.py              # structurally separate
+        triager.py
       prompts/
-        planner.md                # rewrite
-        gen_functional.md         # NEW
-        gen_sast.md               # NEW
-        gen_dast.md               # NEW (phase 5)
-        gen_mutation.md           # NEW (phase 2)
-        evaluator.md              # NEW
-        triager.md                # NEW
-        # delete: coder.md, qa_*.md (logic absorbed into evaluator)
-      qa/                         # delete entirely — replaced by evaluator
+        planner.md
+        gen_functional.md
+        evaluator.md
+        triager.md
       mcp_server/
-        tfactory_server.py        # rename, rewire tool surface
+        tfactory_server.py        # MCP tool surface
       tools/
-        executor.py               # adapt: add docker-runner shim
+        executor.py
         runners/
-          docker_runner.py        # NEW
-          lang_registry.py        # NEW per-lang tool tables
-        # delete: github PR-merge workflow
+          lang_registry.py        # per-lang tool tables
       context/
-        project_analyzer.py       # reuse as-is
-      providers/                  # reuse as-is
-      implementation_plan/        # keep models; rename to test_plan/
-      memory/                     # reuse as-is
-      spec_runner.py              # delete — TFactory consumes, doesn't create
-      spec_agents/                # delete
-    web-server/                   # reuse FastAPI; trim spec-creation routes
-    frontend-web/                 # retheme: drop wizard, add findings/lanes
+        project_analyzer.py       # detects language, deps, frameworks
+      providers/                  # model-string routing, any LLM
+      test_plan/                  # plan models
+      memory/
+    web-server/                   # FastAPI portal backend
+    frontend-web/                 # portal: lanes, Acceptance + Evidence tabs
   .claude/skills/
-    handover-to-tfactory/         # NEW — mirrors AIFactory's handover SKILL.md
-    # delete: aifactory-spec (TFactory has no spec creation)
-  .mcp.json                       # point at start-tfactory-mcp.sh
+    handover-to-tfactory/         # handover skill
+  .mcp.json
   scripts/
     start-tfactory-mcp.sh
     start-tfactory-portal.sh
-  docker/
-    runners/
-      python.Dockerfile           # NEW
-      node.Dockerfile             # NEW (phase 4)
-  CLAUDE.md                       # update for TFactory-specific guidance
+  CLAUDE.md
 ```
+
+The per-task execution toolchain is provisioned as a Nix flake inside an
+ephemeral Kubernetes Job (RFC-0005 Tier A) rather than per-language Docker
+images.
 
 ### Tooling table
 
-| Lane | Python | TypeScript (phase 4) |
+| Lane | Python | TypeScript |
 |---|---|---|
-| Functional | `pytest` (+ unittest) | `vitest` (preferred) / `jest` |
-| SAST | Semgrep + Bandit | Semgrep + eslint-plugin-security |
-| Dep CVE | `pip-audit` + OSV | `npm audit` + OSV |
-| Secrets | `gitleaks` / `trufflehog` | same |
-| DAST (phase 5) | OWASP ZAP automation | OWASP ZAP automation |
-| Fuzzing (phase 5) | `atheris` | `jsfuzz` / `fast-check` |
-| Mutation (phase 2) | `mutmut` (default) / `cosmic-ray` | `stryker` |
-| Property (phase 2+) | `Hypothesis` | `fast-check` |
+| Unit | `pytest` (+ unittest) | `vitest` (preferred) / `jest` |
+| Browser | Playwright (screenshots + video) | Playwright (screenshots + video) |
+| API | `pytest` + `httpx` | `vitest` + `supertest` |
+| Integration | `pytest` | `vitest` / `jest` |
+| Mutation | `mutmut` (default) / `cosmic-ray` | `stryker` |
+
+The browser lane runs Playwright in the per-task Nix toolchain inside an
+ephemeral Kubernetes Job and captures screenshots plus video recordings,
+rendered in the portal Acceptance and Evidence tabs and the CFactory cockpit.
+Security scanning (SAST, deps, secrets, DAST) is delegated to dedicated
+pipelines and is out of scope for TFactory.
 
 Per-language tool selection lives in `apps/backend/tools/runners/lang_registry.py`
 so generator prompts can ask "what's the mutation tool for this project?" via MCP tool.
 
 ---
 
-## MVP scope (Phase 1)
+## What shipped
 
-### What ships
+As of v0.9.x, TFactory runs the full pipeline end-to-end:
 
-1. `cp -r AIFactory TFactory` and rename/strip down per layout above.
-2. `/handover-to-tfactory` Claude Code skill that calls
-   `mcp__tfactory__task_create_and_run` with
-   `{project_id, spec_id, branch, base_ref}`.
-3. TFactory MCP server (`apps/backend/mcp_server/tfactory_server.py`) exposing:
-   - `task_create_and_run`
-   - `task_status`
-   - `task_list`
-   - `project_list`, `project_create`
-   - `report_get` — markdown + json
-   - `task_rerun` (single lane)
-4. **Planner agent** that reads `aifactory_spec.md` + diff + acceptance criteria,
-   emits `test_plan.json` with `functional` subtasks only at MVP.
-5. **Gen-Functional agent** (Python only) — pytest test generator with:
-   - Pre-flight static check: imports resolve, target methods exist (kill hallucinations).
-   - Flake-risk lint (unordered collection assertions, timing assumptions).
-   - Allow-listed API exposure: agent only sees the diff'd code + its direct deps' public API, not the wider universe.
-6. **Executor** with Docker runner shim. One base image at MVP:
-   `tfactory-runner-python` (Debian slim + Python 3.12 + pytest + coverage).
-   Repo bind-mounted read-only, scratch volume writable, network off.
-7. **Evaluator** (structurally separate agent) — coverage delta, flake-lint
-   score, basic LLM judgment of "are these tests semantically relevant".
-   Mutation scoring deferred to Phase 2 — flag this as a known gap in the
-   MVP report ("trivial-test risk; mutation gate ships in Phase 2").
-8. **Triager** — dedup, rank, render `report.md` + `report.json`.
-9. **Git side-effects** — `git commit` tests under `tests/` on the AIFactory
-   feature branch; `gh pr comment <pr>` with the report body.
-10. **Portal** — retheme inherited React app on port `:3102`:
-    - `/tasks` (list, status)
-    - `/tasks/<id>` (live logs, single-lane tabs — only `functional` lit at MVP)
-    - `/projects`
-    - skip `/findings` cross-task view at MVP
+- **Five agents** — Planner, Gen-Functional / per-lane generators, Executor,
+  Evaluator, Triager.
+- **Five lanes** — unit, browser, api, integration, mutation — all active.
+- **Browser lane** runs Playwright in a per-task Nix toolchain inside an
+  ephemeral Kubernetes Job (RFC-0005 Tier A), capturing screenshots and video
+  recordings rendered in the portal Acceptance and Evidence tabs and the
+  CFactory cockpit.
+- **Honest acceptance-criteria fidelity** — "verified X/Y" reported per
+  criterion.
+- **Credential Broker** (vault/sops/age/agenix, ephemeral, honest egress
+  opt-in) with MFA via TOTP (RFC-6238) and disposable ephemeral Keycloak
+  (RFC-0007 Class C); zero production credentials.
+- **Provider-agnostic** — runs on any LLM via model-string routing.
+- **Side-effects** — auto-commits tests to the AIFactory feature branch, posts
+  the report as a PR comment, and delivers an RFC-0001 completion event
+  at-least-once.
+- A governed node in the Factory line: PFactory plans, AIFactory builds,
+  TFactory verifies, CFactory watches.
 
-### What's explicitly NOT in MVP
-
-- SAST, deps, secrets, DAST, fuzz, mutation lanes (all phase 2+)
-- TypeScript target (phase 4)
-- Other languages (phase 6+)
-- Spec creation in TFactory (never — TFactory consumes specs)
-- Cross-task findings triage view in portal
-- Audit log / cost reporting (phase later — note as gap)
-- E2B / Firecracker isolation (Docker is enough at MVP)
-
----
-
-## Phase roadmap
-
-| Phase | Adds | Why this order |
-|---|---|---|
-| **1 (MVP)** | Pipeline end-to-end; functional lane; Python; auto-commit + PR comment; retheme portal | Proves the architecture |
-| **2** | Mutation lane (`mutmut`); evaluator gains mutation-score gating; tests with 0 kills are flagged or auto-rejected | Closes the trivial-test loophole — non-negotiable for trust |
-| **3** | SAST (Semgrep + Bandit) + deps (`pip-audit` + OSV) + secrets (`gitleaks`); findings table in portal; cross-task triage view | Easy, high-value, no code-execution risk |
-| **4** | TypeScript across all lit lanes — `vitest`, Semgrep + `eslint-plugin-security`, `npm audit`, `stryker` | Dogfoods AIFactory frontend; same pipeline, new generator prompts + Docker image |
-| **5** | DAST (OWASP ZAP) + fuzzing (`atheris`, `jsfuzz`); network policy maturation; optional E2B/Firecracker for fuzz isolation | Harder infra, biggest blast-radius risk — last for a reason |
-| **6** | Language expansion: Go, Rust, Ruby. Per-language Docker images + tool registry entries | Linear, low-architecture-risk work |
-
----
-
-## Critical files to create or modify
-
-### New files (MVP)
-
-- `TFactory/.claude/skills/handover-to-tfactory/SKILL.md` — mirror of AIFactory's `handover/SKILL.md` (160 lines) with payload schema swapped.
-- `TFactory/apps/backend/mcp_server/tfactory_server.py` — rename of AIFactory's `aifactory_server.py`; tool list swapped per MVP spec.
-- `TFactory/apps/backend/agents/planner.py` — net new (AIFactory's planner is for code, not tests).
-- `TFactory/apps/backend/agents/gen_functional.py` — net new.
-- `TFactory/apps/backend/agents/evaluator.py` — net new.
-- `TFactory/apps/backend/agents/triager.py` — net new.
-- `TFactory/apps/backend/prompts/planner.md` — net new (test-oriented).
-- `TFactory/apps/backend/prompts/gen_functional.md` — net new.
-- `TFactory/apps/backend/prompts/evaluator.md` — net new.
-- `TFactory/apps/backend/prompts/triager.md` — net new.
-- `TFactory/apps/backend/tools/runners/docker_runner.py` — net new.
-- `TFactory/apps/backend/tools/runners/lang_registry.py` — net new.
-- `TFactory/docker/runners/python.Dockerfile` — net new.
-- `TFactory/scripts/start-tfactory-mcp.sh` — adapt from AIFactory's `start-aifactory-mcp.sh`.
-
-### Files to delete from the fork
-
-- `TFactory/apps/backend/agents/coder.py` and `coder_*` siblings
-- `TFactory/apps/backend/qa/` (logic absorbed into evaluator)
-- `TFactory/apps/backend/spec_runner.py`
-- `TFactory/apps/backend/spec_agents/`
-- `TFactory/apps/backend/prompts/coder*.md`, `qa_*.md`, `complexity_assessor.md`, `followup_planner.md`
-- `TFactory/.claude/skills/aifactory-spec/`
-- `TFactory/.claude/skills/handover/` (replaced by `handover-to-tfactory/`)
-- `TFactory/apps/backend/runners/github/` PR-merge workflow (replaced by simpler `gh pr comment` + commit logic in triager)
-- `TFactory/apps/frontend-web/` spec creation wizard + plan approval components
-
-### Files to reuse as-is
-
-- `TFactory/apps/backend/context/project_analyzer.py`
-- `TFactory/apps/backend/providers/` (whole package)
-- `TFactory/apps/backend/agents/memory_manager.py`
-- `TFactory/apps/backend/tools/executor.py` (with the docker runner added alongside, not replacing)
-- `TFactory/apps/backend/implementation_plan/models.py` (rename module to `test_plan/` but keep model shape)
-
-### AIFactory side (small change)
-
-- Add new skill `AIFactory/.claude/skills/handover-to-tfactory/` that calls
-  `mcp__tfactory__task_create_and_run` after AIFactory's QA passes.
-- Optionally, add `--also-test` flag to AIFactory's `/handover` to auto-chain.
-- This is the only AIFactory-side change — TFactory stays the active party.
+Security scanning (SAST, deps, secrets, DAST) is out of scope — delegated to
+dedicated pipelines.
 
 ---
 
 ## Verification plan
 
-End-to-end smoke that MVP works:
+The end-to-end smoke that proves the pipeline works:
 
-1. **Pick a real AIFactory spec.** Use any small Python feature AIFactory has already
-   shipped (e.g., a new endpoint + handler) so we have a known-good spec dir.
-2. **Run TFactory locally.** `scripts/start-tfactory-portal.sh` (FastAPI on `:3102`,
-   React on `:3103` or however the fork lands). Confirm portal loads and tasks
-   list is empty.
+1. **Pick a real AIFactory spec.** Any small feature AIFactory has already
+   shipped (e.g., a new endpoint + handler) gives a known-good spec dir.
+2. **Run TFactory.** Start the portal; confirm it loads and the tasks list is
+   empty.
 3. **Trigger handover.** In a Claude Code session, run
    `/handover-to-tfactory --spec <spec_id>`. Expect:
    - Task appears in `~/.tfactory/workspaces/<project_id>/specs/<new_id>/`.
    - `task.md`, `context/source.json`, snapshot of AIFactory spec, diff written.
-   - Portal `:3102/tasks` shows it pending → planning → generating → running →
+   - Portal shows it pending → planning → generating → running →
      evaluating → triaging → done.
-4. **Check generated tests.** `cd <project> && git log --oneline` — should show a
+4. **Check generated tests.** `cd <project> && git log --oneline` — shows a
    new commit `tfactory: tests for <spec_id>` with files under `tests/`.
-5. **Run the generated tests against current code.** `pytest tests/`. Should pass.
+5. **Run the generated tests against current code.** They pass.
 6. **Mutate one line of the feature code, rerun.** At least one generated test
-   should fail (proves tests have signal).
-7. **Check PR comment.** `gh pr view <pr> --comments` — TFactory's report should
-   be there, summarising coverage delta + (placeholder) mutation note + flake-lint
-   warnings if any.
+   fails (proves tests have signal).
+7. **Check PR comment.** `gh pr view <pr> --comments` — TFactory's report is
+   there, summarising coverage delta, mutation score, acceptance-criteria
+   fidelity (verified X/Y), and flake-lint warnings if any.
 8. **Hallucination guard test.** Feed Planner a spec referring to a method that
-   doesn't actually exist in the diffed code. Expect Gen-Functional to detect
-   via pre-flight check and ask Planner to revise, not emit a hallucinated test.
-9. **Failure-path test.** Kill the docker daemon mid-task. Expect graceful
-   failure with a clear error in `report.md` and task status `failed`, not a
-   hang.
+   doesn't actually exist in the diffed code. Gen-Functional detects it
+   via the pre-flight check and asks Planner to revise, rather than emit a
+   hallucinated test.
+9. **Failure-path test.** Disrupt the ephemeral Kubernetes Job mid-task. The
+   task fails gracefully with a clear error in `report.md` and status
+   `failed`, not a hang.
 
 ---
 
@@ -444,34 +313,9 @@ End-to-end smoke that MVP works:
 | Risk | Mitigation in this design |
 |---|---|
 | LLM tests hallucinate imports / methods (~39% of failures) | Pre-flight static check in Gen-Functional: every `import` and every method call resolves against the project's actual symbols before commit. Reject + replan if not. |
-| LLM tests are trivial (assert True, no mutation kills) | Mutation lane in Phase 2 is the gate. MVP explicitly notes this gap; evaluator can run a sanity-check "would these tests fail if I delete a random line of the feature code" as a cheap proxy. |
-| LLM tests are flaky | Evaluator runs each new test 3x in MVP; static lint for unordered-collection + timing patterns. |
-| Generated test code does something nasty (deletes files, exfiltrates) | Docker runner, network off by default, repo bind-mounted read-only at the runner. |
+| LLM tests are trivial (assert True, no mutation kills) | The mutation lane is the gate — tests with zero kills are flagged or rejected. Acceptance-criteria fidelity is reported honestly as verified X/Y per criterion. |
+| LLM tests are flaky | Evaluator reruns each new test; static lint for unordered-collection + timing patterns. |
+| Generated test code does something nasty (deletes files, exfiltrates) | Per-task Nix toolchain in an ephemeral Kubernetes Job; network is honest opt-in only. Credentials are brokered ephemerally (vault/sops/age/agenix) with zero production credentials and MFA via TOTP + disposable ephemeral Keycloak. |
 | AIFactory spec schema changes break TFactory | TFactory snapshots AIFactory's spec into its own `context/` at handover time — TFactory operates on the snapshot, not a live reference. Schema check at the read boundary. |
 | Cost runaway on long specs | Per-task token budget cap enforced at Executor layer; planner instructed to scope to diff lines only. |
-| AIFactory and TFactory infra modules drift | Acknowledged trade-off of hard fork. Mitigation deferred — could later extract a `factory-core` package once divergence is painful. |
-| Portal becomes confusing with empty lane tabs at MVP | At MVP, hide lane tabs whose generator is not yet implemented; show them as "coming in Phase N" placeholders. |
-
----
-
-## Recommended next step
-
-With this design locked, the natural next move is to break it into an
-implementation backlog. Three options:
-
-- **A) `/superhuman`** — let the AI-native SDLC skill decompose the MVP scope
-  into dependency-graphed sub-tasks and execute them in parallel waves. Best
-  fit given the user already runs AIFactory; this is the AIFactory analog
-  inside Claude Code.
-- **B) `/create-spec`** — use the user's own Agent OS workflow to turn this
-  plan into a structured `.agent-os/specs/2026-05-28-tfactory-mvp/` spec
-  with tasks.md, then `/execute-tasks`. Most aligned with the user's stated
-  preferences in `~/.agent-os/`.
-- **C) Hand this plan to AIFactory itself.** Drop this plan into AIFactory
-  via its own `/handover`, let it bootstrap TFactory by forking + gutting +
-  scaffolding the new files. Most poetic; also stress-tests AIFactory on
-  a non-trivial spec.
-
-My recommendation: **B** — `/create-spec` produces a checkable task list that
-fits the user's Agent OS conventions. **C** is more fun and is a credible
-victory lap once the MVP shape is real.
+| AIFactory and TFactory infra modules drift | Acknowledged trade-off of the hard-fork origin — divergence could later be reconciled by extracting a `factory-core` package if it becomes painful. |

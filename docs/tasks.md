@@ -5,30 +5,92 @@ permalink: /tasks/
 nav_order: 6
 ---
 
-# Spec Tasks
+# Tasks
 
-> **Historical record — v0.1.0-mvp planning checklist (2026-05-28).** This page
-> is the original walking-skeleton task plan, kept for provenance. Everything
-> below shipped in [v0.1.0-mvp](https://github.com/olafkfreund/TFactory/releases/tag/v0.1.0-mvp);
-> the live status board is [Progress]({{ '/progress/' | relative_url }}).
->
-> **Shipped since (releases all on GitHub):**
-> - **v0.2.0** — Enterprise Test Framework Spine (16/16 tasks, #16–#32)
-> - **v0.3.0** — Cloud testing AWS/GCP/Azure (epic #133) + Credential Broker (#62) + portal redesign
-> - **v0.4.0** — Visual Inspection Run (epic #170) + SaaS connector targets (#111)
-> - **v0.5.0** — Bidirectional AIFactory ↔ TFactory loop (epic #182) + k8s live-fix (#108)
-> - **v0.9.x (current)** — five agents / five lanes; browser lane in a per-task Nix
->   toolchain on an ephemeral k8s Job (RFC-0005 Tier A) with screenshots + video;
->   acceptance-criteria fidelity; MFA via TOTP + disposable Keycloak (RFC-0007 Class C);
->   model-string routing on any LLM; RFC-0001 at-least-once completion event
->
-> Per-phase detail is on [Progress]({{ '/progress/' | relative_url }}); real-life
-> walk-throughs for every feature are on [Examples]({{ '/examples/' | relative_url }}).
+> **Status: delivered — shipped through v0.9.x (current release v0.9.3, June
+> 2026).** TFactory is a live, governed node in the
+> [Factory](https://factory.freundcloud.com/) line. This page summarises what
+> was built; the live status board is [Progress]({{ '/progress/' | relative_url }})
+> and real-life walk-throughs for every feature are on
+> [Examples]({{ '/examples/' | relative_url }}).
 
-These are the tasks that were planned in the spec at `@.agent-os/specs/2026-05-28-tfactory-mvp-walking-skeleton/spec.md`.
+## What was built
+
+TFactory generates, runs, evaluates, and triages tests for code that AIFactory
+builds and PFactory governs — then reports back up the spine while CFactory
+watches. The product is in production; the items below are all shipped and
+active.
+
+### Five agents (pipeline)
+
+```
+Planner ─► Gen-Functional ─► Executor ─► Evaluator ─► Triager
+```
+
+- **Planner** — reads acceptance criteria + the source diff, emits lane-tagged,
+  polyglot subtasks (language / framework / target / intent).
+- **Gen-Functional** — generates tests per the framework descriptor, with a
+  pre-flight static check (rejects hallucinated imports/methods) and a flake-risk
+  lint; requests a replan on rejection.
+- **Executor** — dispatches each lane to its runner: a sandboxed Docker/Nix
+  toolchain, with an app runtime brought up for browser/api lanes.
+- **Evaluator** — multi-signal verdict (coverage delta, stability re-runs,
+  mutate-and-check probe, semantic relevance), including TypeScript primitives
+  and null-not-zero coverage handling for the browser lane.
+- **Triager** — dedups and ranks findings, decides update-in-place / create-new /
+  skip against the tests catalog, writes the report, and emits the completion
+  event with portal evidence links.
+
+### Five lanes (all active)
+
+- **unit**, **browser**, **api**, **integration**, **mutation** — each
+  independently lit in the portal's `LaneStatusGrid`.
+- The **browser** lane runs in a per-task Nix toolchain inside an ephemeral
+  Kubernetes Job (RFC-0005 Tier A); it captures screenshots, video recordings,
+  and traces, rendered in the portal Acceptance / Evidence tabs and the CFactory
+  cockpit.
+
+### Newer capabilities
+
+- **Acceptance-criteria fidelity** — runs report "verified X/Y" against the
+  governed acceptance criteria, not just pass/fail counts.
+- **MFA for systems under test** — TOTP plus a disposable Keycloak realm
+  (RFC-0007 Class C), so authenticated SUTs can be exercised without faking MFA.
+- **Credential Broker** — pluggable secrets backends, ephemeral file
+  credentials, honest egress gate, OIDC / workload-identity federation.
+- **Runs on any LLM** — model-string routing; no provider lock-in, works on the
+  Claude subscription or API keys.
+- **RFC-0001 completion event** — the Triager emits one normalized cross-service
+  envelope with a shared `correlation_key`, delivered at-least-once; CFactory
+  consumes a single contract across AIFactory · PFactory · TFactory.
+- **Governed pickup from PFactory** — recognises and enqueues governed test
+  targets and treats `pfactory:meta` as the test oracle.
+- **Backstage catalog** — `catalog-info.yaml` + TechDocs + an AI-assistant skill
+  descriptor; TFactory is onboarded in the Software Catalog.
+- **Bidirectional hand-back loop** — when tests find problems, TFactory hands a
+  bounded correction back to AIFactory's QA Fixer, then re-tests.
+
+### Reaching real systems under test
+
+- Cloud infrastructure testing across AWS · GCP · Azure (read-only posture
+  assessment → topology → CIS/Prowler → remediation plan).
+- SaaS connector targets (ServiceNow / Salesforce / SAP / MuleSoft) over
+  credential-vault auth.
+- Multi-step / SSO login with session reuse (`storageState` login-once) and
+  visual-regression baselines wired to the portal store.
+
+## MVP task breakdown (delivered)
+
+> **Historical record — the original v0.1.0-mvp walking-skeleton plan
+> (2026-05-28), kept for provenance.** Everything below shipped in
+> [v0.1.0-mvp](https://github.com/olafkfreund/TFactory/releases/tag/v0.1.0-mvp)
+> and has since been extended through v0.9.x. It is preserved to show how the
+> skeleton was assembled, not as an open to-do list.
+
+These were the tasks planned in the spec at `@.agent-os/specs/2026-05-28-tfactory-mvp-walking-skeleton/spec.md`.
 
 > Created: 2026-05-28
-> Status: **Shipped — v0.1.0-mvp**
+> Status: **Delivered — v0.1.0-mvp**
 > Source design: `/home/olafkfreund/.claude/plans/virtual-cooking-bumblebee.md`
 > Approach: TDD throughout — write tests first, implement, verify green.
 
@@ -175,10 +237,17 @@ Tasks 2, 3, 4 can be executed in parallel after 1. Tasks 5 and 6 can be parallel
 - If any sub-task fails 3 attempts, mark the parent `[!]` with `Blocked: <reason>` and surface to the user instead of looping further.
 - If the design plan's spec schema assumptions break (e.g., AIFactory ships a backward-incompatible spec format change), stop and refer back to the design plan's risk register entry "AIFactory spec schema changes break TFactory" — re-snapshot from the snapshotted contract is the right escape.
 
-## Out of scope (reminder, see spec.md for full list)
+## Out of scope at MVP (since delivered)
 
-- Mutation, SAST, DAST, fuzz lanes
-- TypeScript and other-language runners
-- E2B / Firecracker isolation
-- Cross-task findings triage view
-- factory-core shared library extraction
+> This was the deferred list for v0.1.0-mvp. Most of it has since shipped — it is
+> kept here only to record what the walking skeleton deliberately left out.
+
+- Mutation lane and the additional lanes — **delivered** (unit / browser / api /
+  integration / mutation all active).
+- TypeScript and other-language runners — **delivered** (polyglot Planner +
+  per-framework runner images).
+- Cross-task findings triage view — addressed via the catalog-aware Triager
+  (update-in-place / create-new / skip).
+- Stronger per-task isolation — delivered via per-task Nix toolchains in
+  ephemeral Kubernetes Jobs (RFC-0005 Tier A).
+- factory-core shared-library extraction — see the wider Factory program.
