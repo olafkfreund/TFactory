@@ -31,7 +31,7 @@ flowchart TD
     Q -->|Push / hardware key / SMS to a person| CD[Class D: un-automatable]
     CA --> RA[Use the federated identity / token. Implemented.]
     CB --> RB[Generate the TOTP code from the vault seed at login. Implemented.]
-    CC --> RC[Provision a disposable target. Partial: testcontainers now; ephemeral IdP planned.]
+    CC --> RC[Provision a disposable target. Implemented: ephemeral Keycloak + testcontainers.]
     CD --> RD[Refuse honestly. Cap the assurance level, record the reason. Never faked.]
 ```
 
@@ -39,7 +39,7 @@ flowchart TD
 | --- | --- | --- | --- |
 | A machine-native | OIDC federation, service accounts, scoped tokens | No | Implemented |
 | B bootstrap-once | password + **TOTP seed stored once**, codes generated in-process; captured `storageState` | Cleared once at enrolment | Implemented |
-| C ephemeral target | LocalStack / testcontainers / disposable IdP — no prod credential | None | Partial (testcontainers; disposable IdP planned) |
+| C ephemeral target | LocalStack / testcontainers / disposable IdP — no prod credential | None | Implemented (ephemeral Keycloak + testcontainers; in-cluster IdP next) |
 | D un-automatable | push approval, hardware key (WebAuthn), SMS-to-a-person | Hard block | Refused honestly (never faked) |
 
 The principle that makes this trustworthy: **we never claim a test ran when the access
@@ -195,8 +195,8 @@ that does not gate on D. We would rather tell you a gate is un-automatable than 
 
 - The 2FA case people actually hit — authenticator-app TOTP — is solved end to end:
   enrol once, generate codes in-process, reuse the session. [Implemented]
-- Machine identities (Class A) and the refusal path (Class D) are implemented; disposable
-  targets (Class C) are partial.
+- Machine identities (Class A), disposable targets (Class C, via an ephemeral Keycloak the
+  pipeline owns and tears down), and the refusal path (Class D) are all implemented.
 - Nothing here bypasses or weakens MFA. We generate codes from a seed a human deliberately
   enrolled, store only the seed (encrypted, redacted), and refuse what genuinely cannot be
   automated.

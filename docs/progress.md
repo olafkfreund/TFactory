@@ -8,7 +8,8 @@ nav_order: 8
 # Progress
 
 > Live delivery snapshot, updated by hand as merges land — last refresh
-> **2026-06-05**. Older milestones kept below as the historical record. Full
+> **2026-06-18** (TFactory v0.9.x). Older milestones kept below as the
+> historical record. Full
 > detail per release in the
 > [changelog](https://github.com/olafkfreund/TFactory/blob/main/CHANGELOG.md).
 
@@ -186,14 +187,14 @@ A live end-to-end run published at [`/showcase/`]({{ '/showcase/' | relative_url
 
 ## Health signals
 
-- ✅ `scripts/verify-fork.sh --no-import` — passes against the v0.2 module set
-- ✅ pytest (backend) — **2803 tests** at v0.5.0 (1225 at v0.2.0)
-- ✅ All 5 portal endpoints respond shim-compatibly without fastapi installed
-- ✅ Pages site builds + deploys on every push to `main` (Cayman + custom layout)
-- ✅ Showcase page renders the live SUT in an iframe + inline triage report with working evidence links
-- ⚪ Docker integration — runner images build under CI; per-image smoke
+- Pass — `scripts/verify-fork.sh --no-import` — passes against the v0.2 module set
+- Pass — pytest (backend) — **2803 tests** at v0.5.0 (1225 at v0.2.0)
+- Pass — All 5 portal endpoints respond shim-compatibly without fastapi installed
+- Pass — Pages site builds + deploys on every push to `main` (Cayman + custom layout)
+- Pass — Showcase page renders the live SUT in an iframe + inline triage report with working evidence links
+- Partial — Docker integration — runner images build under CI; per-image smoke
   tests skip locally without a daemon (recovers via `tfactory-test`)
-- ⚪ End-to-end smoke (`scripts/e2e-smoke.sh`) — 9 scenarios, operator-driven
+- Partial — End-to-end smoke (`scripts/e2e-smoke.sh`) — 9 scenarios, operator-driven
 
 ## Cross-references
 

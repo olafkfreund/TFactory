@@ -7,11 +7,11 @@ nav_order: 3
 
 # Spec Requirements Document
 
-> ⏳ **Historical record — v0.1.0-mvp spec snapshot (2026-05-28).** Documents
-> the v0.1 Functional-lane MVP. The shipped product moved to the v0.2 modality
-> spine (unit / browser / api / integration / mutation) and dropped security
-> lanes from scope — see [Architecture](/architecture/) + the repo README for
-> current state.
+> **Historical record — v0.1.0-mvp spec snapshot (2026-05-28).** Documents
+> the v0.1 Functional-lane MVP. The shipped product moved to the five-lane
+> modality spine (unit / browser / api / integration / mutation) and dropped
+> security lanes from scope — see [Architecture](/architecture/) + the repo
+> README for current state.
 
 > Spec: TFactory MVP — Walking Skeleton (Functional Lane, Python)
 > Created: 2026-05-28

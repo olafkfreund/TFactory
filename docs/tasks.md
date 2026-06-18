@@ -17,6 +17,10 @@ nav_order: 6
 > - **v0.3.0** — Cloud testing AWS/GCP/Azure (epic #133) + Credential Broker (#62) + portal redesign
 > - **v0.4.0** — Visual Inspection Run (epic #170) + SaaS connector targets (#111)
 > - **v0.5.0** — Bidirectional AIFactory ↔ TFactory loop (epic #182) + k8s live-fix (#108)
+> - **v0.9.x (current)** — five agents / five lanes; browser lane in a per-task Nix
+>   toolchain on an ephemeral k8s Job (RFC-0005 Tier A) with screenshots + video;
+>   acceptance-criteria fidelity; MFA via TOTP + disposable Keycloak (RFC-0007 Class C);
+>   model-string routing on any LLM; RFC-0001 at-least-once completion event
 >
 > Per-phase detail is on [Progress]({{ '/progress/' | relative_url }}); real-life
 > walk-throughs for every feature are on [Examples]({{ '/examples/' | relative_url }}).
@@ -33,7 +37,7 @@ These are the tasks that were planned in the spec at `@.agent-os/specs/2026-05-2
 - Each numbered task is a meaningful unit of work that ends in a commit.
 - Sub-tasks `.1`, `.2`, ... are executed in order; the first is always "write tests" and the last is always "verify all tests pass".
 - After every numbered task, run the full unit + integration test suites and confirm green before starting the next.
-- Mark `[~]` for in-progress, `[x]` for done, `[!]` for blocked (with `⚠️` reason).
+- Mark `[~]` for in-progress, `[x]` for done, `[!]` for blocked (with a `Blocked:` reason).
 
 ## Tasks
 
@@ -168,7 +172,7 @@ Tasks 2, 3, 4 can be executed in parallel after 1. Tasks 5 and 6 can be parallel
 
 ## Stop conditions
 
-- If any sub-task fails 3 attempts, mark the parent `[!]` with `⚠️ <reason>` and surface to the user instead of looping further.
+- If any sub-task fails 3 attempts, mark the parent `[!]` with `Blocked: <reason>` and surface to the user instead of looping further.
 - If the design plan's spec schema assumptions break (e.g., AIFactory ships a backward-incompatible spec format change), stop and refer back to the design plan's risk register entry "AIFactory spec schema changes break TFactory" — re-snapshot from the snapshotted contract is the right escape.
 
 ## Out of scope (reminder, see spec.md for full list)

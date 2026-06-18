@@ -12,7 +12,7 @@ the runtime pieces connect when a TFactory task fires. Everything below
 reflects what's actually on `main` as of the last commit — see
 [Progress]({{ '/progress/' | relative_url }}) for the live task status.
 
-## v0.2 pipeline spine (5 lanes)
+## Pipeline spine (5 lanes)
 
 ```
 AIFactory finished branch  ─►  /handover-to-tfactory  ─►  TFactory MCP
@@ -40,27 +40,29 @@ AIFactory finished branch  ─►  /handover-to-tfactory  ─►  TFactory MCP
                               git commit + PR comment (dry-run default)
 ```
 
-All five lanes are wired as of v0.2.0 (released 2026-05-29). Lane
+All five lanes are wired (TFactory v0.9.x). Lane
 dispatch is gated per the `Lane` enum: `Lane.UNIT` runs pytest;
-`Lane.BROWSER` runs Playwright wrapped in `AppRuntime` (docker-compose
-start → HTTP HEAD health-poll → tear down with `--volumes`);
-`Lane.API` and `Lane.INTEGRATION` use the same per-framework Docker
-runner image dispatch plus the HTTP HAR recorder from
+`Lane.BROWSER` runs Playwright in a per-task Nix toolchain inside an
+ephemeral Kubernetes Job (RFC-0005 Tier A), capturing screenshots
+(`findings/screenshots/`) and Playwright video recordings
+(`findings/videos/`); `Lane.API` and `Lane.INTEGRATION` use the same
+per-framework Docker runner image dispatch plus the HTTP HAR recorder from
 `agents/evidence/http_recorder.py`; `Lane.MUTATION` shells out to
 Stryker for TypeScript or `mutate_probe.py` for Python. Evidence
-artefacts (screenshots / video / trace / HAR) are captured per test
-under `findings/evidence/<test_id>/`, served by the portal endpoint
-and linked from the Triager PR comment.
+artefacts (screenshots / video / trace / HAR) are captured per test,
+served by the portal and rendered in the task-detail Acceptance and
+Evidence tabs, and also surfaced in the CFactory cockpit on the finished
+task.
 
-## v0.2 lane status
+## Lane status
 
 | Lane | Phase | Framework examples | Status |
 |------|-------|--------------------|--------|
-| **Unit**        | **1** | pytest, Jest, vitest | **Active** |
-| **Browser**     | **2** | Playwright (chromium/firefox/webkit) | **Active** (AppRuntime) |
-| **API**         | **3** | pytest-httpx, supertest, dredd | **Active** |
-| **Integration** | **4** | testcontainers-python, testcontainers-node | **Active** |
-| **Mutation**    | **5** | mutmut, cosmic-ray, Stryker | **Active** |
+| **Unit**        | **1** | pytest, Jest, vitest | Active |
+| **Browser**     | **2** | Playwright (chromium/firefox/webkit) | Active (Nix toolchain in ephemeral Kubernetes Job) |
+| **API**         | **3** | pytest-httpx, supertest, dredd | Active |
+| **Integration** | **4** | testcontainers-python, testcontainers-node | Active |
+| **Mutation**    | **5** | mutmut, cosmic-ray, Stryker | Active |
 
 The framework descriptor registry (`framework_registry/`) catalogs
 80 frameworks across the five lanes; `.tfactory.yml` configures targets
@@ -107,7 +109,7 @@ compares that timestamp against `now` and, past the idle budget, flips the task 
   `TFACTORY_STALL_DEADLINE_SECONDS`. Missing/corrupt `status.json` or an
   unparseable `updated_at` fails safe (never flips).
 
-## CLI commands (v0.2)
+## CLI commands
 
 ```bash
 # Scaffold a new .tfactory.yml + empty tests-catalog.json
@@ -138,24 +140,24 @@ TFactory/
 │   │   │       │   ├── progress.py      # in-agent: status updates
 │   │   │       │   ├── qa.py            # in-agent: validation
 │   │   │       │   ├── subtask.py       # in-agent: subtask state
-│   │   │       │   └── task_control.py  # ★ MVP MCP surface (7 tools)
+│   │   │       │   └── task_control.py  # MVP MCP surface (7 tools)
 │   │   │       └── http_client.py
 │   │   ├── mcp_server/
 │   │   │   └── tfactory_server.py       # stdio MCP entrypoint
 │   │   ├── test_plan/                   # ← renamed from implementation_plan
-│   │   │   ├── enums.py                 # ★ Lane enum added in Task 3
-│   │   │   ├── subtask.py               # ★ .lane field added in Task 3
+│   │   │   ├── enums.py                 # Lane enum added in Task 3
+│   │   │   ├── subtask.py               # .lane field added in Task 3
 │   │   │   ├── phase.py
 │   │   │   ├── plan.py                  # ImplementationPlan model
 │   │   │   ├── story.py
 │   │   │   ├── verification.py
 │   │   │   └── factories.py
-│   │   ├── workspaces/                  # ★ NEW in Task 3
+│   │   ├── workspaces/                  # NEW in Task 3
 │   │   │   └── snapshotter.py           # AIFactory → TFactory snapshot
 │   │   ├── tools/
 │   │   │   ├── executor.py              # in-agent tool runner (inherited)
 │   │   │   ├── definitions.py
-│   │   │   └── runners/                 # ★ NEW in Task 4
+│   │   │   └── runners/                 # NEW in Task 4
 │   │   │       ├── docker_runner.py     # sandboxed test exec
 │   │   │       ├── lane_dispatch.py     # lane → runner routing
 │   │   │       └── lang_registry.py     # per-lang, per-lane tool table
@@ -167,12 +169,12 @@ TFactory/
 │   └── frontend-web/                    # React — Task 10 retheme
 ├── docker/
 │   └── runners/
-│       └── python.Dockerfile            # ★ NEW in Task 4
+│       └── python.Dockerfile            # NEW in Task 4
 ├── .claude/
 │   └── skills/
-│       └── handover-to-tfactory/        # ★ NEW in Task 2
+│       └── handover-to-tfactory/        # NEW in Task 2
 │           └── SKILL.md
-├── companion-skills/                    # ★ NEW in Task 2
+├── companion-skills/                    # NEW in Task 2
 │   └── aifactory-handover-to-tfactory/
 │       └── SKILL.md                     # installs into AIFactory
 ├── docs/                                # Jekyll source for this site
@@ -190,22 +192,22 @@ TFactory/
 │       ├── spec.md, tasks.md
 │       └── sub-specs/{technical-spec.md, tests.md}
 ├── scripts/
-│   ├── verify-fork.sh                   # ★ NEW in Task 1
+│   ├── verify-fork.sh                   # NEW in Task 1
 │   ├── start-tfactory-mcp.sh            # renamed from start-aifactory-mcp.sh
 │   └── ... (other inherited scripts)
 ├── tests/
-│   ├── test_tfactory_mcp_tools.py       # ★ Task 2 (21 cases)
-│   ├── test_test_plan_lane.py           # ★ Task 3 (10 cases)
-│   ├── test_snapshotter.py              # ★ Task 3 (11 cases)
-│   ├── test_docker_runner.py            # ★ Task 4 (28 cases)
-│   ├── test_lang_registry.py            # ★ Task 4 (10 cases)
-│   ├── test_lane_dispatch.py            # ★ Task 4 (10 cases)
+│   ├── test_tfactory_mcp_tools.py       # Task 2 (21 cases)
+│   ├── test_test_plan_lane.py           # Task 3 (10 cases)
+│   ├── test_snapshotter.py              # Task 3 (11 cases)
+│   ├── test_docker_runner.py            # Task 4 (28 cases)
+│   ├── test_lang_registry.py            # Task 4 (10 cases)
+│   ├── test_lane_dispatch.py            # Task 4 (10 cases)
 │   └── ... (inherited; some quarantined)
 └── charts/tfactory/                     # Helm chart (renamed)
 ```
 
-★ = TFactory-original work; everything else inherited from the AIFactory
-fork and adapted by string-replace.
+Entries marked "NEW" / "Task N" are TFactory-original work; everything else
+is inherited from the AIFactory fork and adapted by string-replace.
 
 ## Workspace layout (runtime)
 
@@ -264,7 +266,7 @@ AIFactory spec can change without breaking in-flight TFactory work.
                           ▼
             ~/.tfactory/workspaces/.../specs/X/
                           │
-                          │  Tasks 5-8 will pick up here:
+                          │  the pipeline picks up here:
                           ▼
                   Planner agent reads context/aifactory_spec.md +
                   context/diff.patch and emits test_plan.json
@@ -324,20 +326,18 @@ docker ↔ podman is a config change. Binary picked from
 
 ## Tool registry (Task 4)
 
-v0.2 lane spine — security scanning is out of scope (delegated to dedicated
+Lane spine — security scanning is out of scope (delegated to dedicated
 pipelines); see `apps/backend/tools/runners/lang_registry.py` for the source
 of truth.
 
 | Language | Unit | Browser | API | Integration | Mutation |
 |---|---|---|---|---|---|
-| **Python** | pytest ★ | playwright-python | httpx+pytest | testcontainers | mutmut |
-| **TypeScript** | jest ★ | playwright ★ | supertest | testcontainers-node | stryker |
+| **Python** | pytest | playwright-python | httpx+pytest | testcontainers | mutmut |
+| **TypeScript** | jest | playwright | supertest | testcontainers-node | stryker |
 | Java / .NET | — | — | — | — | — (v0.3+) |
 | Go / Rust / Ruby | — | — | — | — | — (v0.4+) |
 
-★ = lit today (Python unit + TypeScript unit/browser).
-
-★ = the only `available_at_mvp=True` cell.
+All five lanes are lit for Python and TypeScript.
 [`lang_registry.py`](https://github.com/olafkfreund/TFactory/blob/main/apps/backend/tools/runners/lang_registry.py)
 holds the live source.
 
@@ -369,7 +369,7 @@ response carries three additive, optional fields alongside the existing
 
 | Field | Meaning |
 |---|---|
-| `lane` | the v0.2 test lane the subtask belongs to — `unit` / `browser` / `api` / `integration` / `mutation` (the [`Lane`](https://github.com/olafkfreund/TFactory/blob/main/apps/backend/test_plan/enums.py) enum spine) |
+| `lane` | the test lane the subtask belongs to — `unit` / `browser` / `api` / `integration` / `mutation` (the [`Lane`](https://github.com/olafkfreund/TFactory/blob/main/apps/backend/test_plan/enums.py) enum spine) |
 | `started_at` | ISO-8601 timestamp the subtask began (or `null`) |
 | `completed_at` | ISO-8601 timestamp the subtask finished (or `null`) |
 
@@ -490,10 +490,6 @@ command line (Actions script-injection fix).
 
 ## What's NOT in the architecture yet
 
-- **Planner / Generator / Evaluator / Triager agents** (Tasks 5-8). Prompts under `apps/backend/prompts/` will be authored as those tasks land.
-- **Portal retheme** (Tasks 9-10). The inherited FastAPI app + React frontend are present but still configured for AIFactory's coder pipeline.
-- **REST endpoints** for the seven MCP tools. Phase-9 portal will mirror them so the React frontend can read the same state.
-- **CI workflow** updates. `.github/workflows/` inherited; pending Task 12's docs+tag pass.
 - **factory-core shared lib**. Hard-fork trade-off — accepted infra drift for clean separation. May extract later.
 
 ## Development environment (Nix / devenv)

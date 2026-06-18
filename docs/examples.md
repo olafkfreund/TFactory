@@ -165,7 +165,7 @@ python apps/backend/byo_llm.py <model>   # exits 0 only if the run stays local
 
 TFactory runs on the Claude Agent SDK by default but also Codex CLI, GitHub
 Copilot CLI, Gemini CLI, **Ollama**, and any OpenAI-compatible endpoint (LM
-Studio, vLLM, …). The BYO-LLM classifier shows an honest **"🔒 Local — no data
+Studio, vLLM, …). The BYO-LLM classifier shows an honest **"Local — no data
 egress"** badge so you can prove it.
 
 **What you get.** The same pipeline on a model you control.
