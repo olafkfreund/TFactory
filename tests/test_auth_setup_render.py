@@ -37,6 +37,26 @@ def test_config_with_auth_adds_setup_project_and_storage_state(tmp_path: Path) -
     assert "@@" not in rendered
 
 
+def test_config_storage_state_only_on_chromium_not_global_or_setup(tmp_path: Path) -> None:
+    """Regression: storageState must live ONLY on the chromium project's `use`.
+
+    If it sits in the global `use`, the `setup` project inherits it and dies trying
+    to READ state.json before the login has written it ("Error reading storage
+    state ... ENOENT") — the requires_auth flow could never run. It also must be on
+    chromium so the saved session is actually loaded. Proven by a live MFA run.
+    """
+    rendered = render_playwright_config(
+        tmp_path / "ev", "http://localhost:3000", requires_auth=True
+    )
+    # On the chromium project's use line (right after the devices spread).
+    assert 'devices["Desktop Chrome"], storageState: "state.json"' in rendered
+    # The setup project carries no storageState (it creates it).
+    setup_line = next(ln for ln in rendered.splitlines() if 'name: "setup"' in ln)
+    assert "storageState" not in setup_line
+    # Exactly one storageState in the whole config (not duplicated into global use).
+    assert rendered.count("storageState") == 1
+
+
 def test_config_custom_storage_state_path(tmp_path: Path) -> None:
     rendered = render_playwright_config(
         tmp_path / "ev",

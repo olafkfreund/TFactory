@@ -200,13 +200,17 @@ def render_playwright_config(
     tmpl = tmpl_path.read_text(encoding="utf-8")
 
     if requires_auth:
-        storage_state_use = f'\n    storageState: "{storage_state_path}",'
+        # storageState belongs ONLY on the chromium project — the one that REUSES
+        # the saved session. It must NOT be global `use`: the `setup` project would
+        # then inherit it and fail trying to READ state.json before the login has
+        # created it (and chromium must carry it to actually load the session).
+        chromium_storage_state = f', storageState: "{storage_state_path}"'
         setup_project = '\n    { name: "setup", testMatch: /auth\\.setup\\.ts/ },'
         chromium_deps = '\n      dependencies: ["setup"],'
     else:
         # No auth → all three render empty so the config is unchanged (and the
         # no-placeholder-leakage invariant holds).
-        storage_state_use = setup_project = chromium_deps = ""
+        chromium_storage_state = setup_project = chromium_deps = ""
 
     if visual_target:
         # Point toHaveScreenshot baselines at the portal-managed visual_baseline
@@ -228,7 +232,7 @@ def render_playwright_config(
         .replace("@@SCREENSHOT_POLICY@@", screenshot_policy)
         .replace("@@VIDEO_POLICY@@", video_policy)
         .replace("@@TRACE_POLICY@@", trace_policy)
-        .replace("@@STORAGE_STATE_USE@@", storage_state_use)
+        .replace("@@CHROMIUM_STORAGE_STATE@@", chromium_storage_state)
         .replace("@@SETUP_PROJECT@@", setup_project)
         .replace("@@CHROMIUM_DEPS@@", chromium_deps)
         .replace("@@SNAPSHOT_PATH_TEMPLATE@@", snapshot_path_template)

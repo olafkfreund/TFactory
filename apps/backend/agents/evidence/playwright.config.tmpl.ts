@@ -39,7 +39,7 @@ export default defineConfig({
     trace: "@@TRACE_POLICY@@",
 
     // Headless by default; the Docker container has no display server
-    headless: true,@@STORAGE_STATE_USE@@
+    headless: true,
   },
 
   reporter: [
@@ -50,7 +50,7 @@ export default defineConfig({
   projects: [@@SETUP_PROJECT@@
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"] },@@CHROMIUM_DEPS@@
+      use: { ...devices["Desktop Chrome"]@@CHROMIUM_STORAGE_STATE@@ },@@CHROMIUM_DEPS@@
     },
   ],
 });
