@@ -247,7 +247,9 @@ def _ensure_host_venv(project_dir: Path) -> Path:
     return vdir
 
 
-def _run_pytest_on_host(scratch: Path, test_file: Path, extra_env: dict, project_dir: Path):
+def _run_pytest_on_host(
+    scratch: Path, test_file: Path, extra_env: dict, project_dir: Path
+):
     """Run one pytest file on the host (no container) — same result shape as the
     DockerRunner path. Used when no container runtime is available."""
     import subprocess
@@ -1741,6 +1743,40 @@ async def _run_evaluator_session(spec_dir, project_dir, bundles, verbose) -> boo
     return True
 
 
+def _equivalence_lane_enabled() -> bool:
+    return os.getenv("TFACTORY_EQUIVALENCE_LANE", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _maybe_run_equivalence_lane(spec_dir: Path, project_dir: Path) -> None:
+    """Run the RFC-0010 equivalence lane when enabled + the contract declares one.
+
+    Reads the signed contract from ``context/task_contract.json``; no-op when the
+    flag is off, the contract is absent, or it carries no ``tfactory.equivalence``
+    block. Best-effort — a failure here never fails the verify.
+    """
+    if not _equivalence_lane_enabled():
+        return
+    try:
+        contract_path = Path(spec_dir) / "context" / "task_contract.json"
+        if not contract_path.is_file():
+            return
+        contract = json.loads(contract_path.read_text())
+        if not ((contract.get("tfactory") or {}).get("equivalence")):
+            return
+        from agents.equivalence_lane import run_from_spec
+
+        result = run_from_spec(spec_dir, project_dir, contract)
+        if result is not None:
+            _eval_log.info("equivalence lane: %s", result.get("claim"))
+    except Exception as exc:  # noqa: BLE001 - equivalence is best-effort
+        _eval_log.warning("equivalence lane skipped: %s", exc)
+
+
 async def run_evaluator(
     spec_dir: Path,
     project_dir: Path,
@@ -1824,9 +1860,7 @@ async def run_evaluator(
                         },
                     )
             except Exception as exc:  # noqa: BLE001 - evidence is best-effort
-                _eval_log.warning(
-                    "nix browser evidence failed (non-blocking): %s", exc
-                )
+                _eval_log.warning("nix browser evidence failed (non-blocking): %s", exc)
 
         # 3. Per-test signal computation (real primitives; runner_fn seam
         #    mocked in tests so docker isn't required).
@@ -1840,7 +1874,13 @@ async def run_evaluator(
         )
 
         # 4-5. Invoke the SDK session + validate the verdicts it wrote.
-        return await _run_evaluator_session(spec_dir, project_dir, bundles, verbose)
+        ok = await _run_evaluator_session(spec_dir, project_dir, bundles, verbose)
+        # 6. RFC-0010 differential/equivalence lane (opt-in). Runs the legacy
+        #    oracle vs the new impl over the golden corpus and merges its VAL-2
+        #    verdicts. Guarded by env + the contract carrying an equivalence
+        #    block; best-effort and never fatal to the verify.
+        _maybe_run_equivalence_lane(spec_dir, project_dir)
+        return ok
 
     except Exception as exc:
         _eval_log.error("evaluator failed: %s\n%s", exc, traceback.format_exc())
