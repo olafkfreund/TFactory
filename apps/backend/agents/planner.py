@@ -266,6 +266,11 @@ def _validate_framework_consistency(plan, registry) -> tuple[bool, str]:
 # omits stuck subtasks from the commit phase but they remain in the plan
 # for the report.
 _STUCK_AFTER_REPLANS = 2
+# Global ceiling on total replans across the whole plan. "Stuck" only flags a
+# single subtask (the Triager omits it) but does not halt the run, so a plan can
+# oscillate plan<->generate indefinitely. When the summed replan_count over all
+# subtasks hits this budget, fail the run loudly instead of looping forever.
+_GLOBAL_REPLAN_BUDGET = 12
 
 
 def _load_replan_request(spec_dir: Path) -> tuple[bool, str, dict | None]:
@@ -490,6 +495,32 @@ def _finalize_replan(
         subtask_count = _HARD_SUBTASK_CAP
 
     plan_after.save(spec_dir / "test_plan.json")
+
+    # Global replan budget: bound the plan<->generate loop so a run can't
+    # oscillate forever (it would otherwise sit "running" until something else
+    # kills it). Fail loudly with the budget in the status so it's diagnosable.
+    total_replans = sum(
+        (getattr(s, "replan_count", 0) or 0) for p in plan_after.phases for s in p.subtasks
+    )
+    if total_replans >= _GLOBAL_REPLAN_BUDGET:
+        _write_status_patch(
+            spec_dir,
+            status="failed",
+            phase="planner_replan_budget_exhausted",
+            planner_warnings=warnings
+            + [
+                f"global replan budget {_GLOBAL_REPLAN_BUDGET} exhausted "
+                f"(total replans={total_replans}); failing the run instead of "
+                "looping — inspect rejected subtasks"
+            ],
+            subtask_count=subtask_count,
+            last_replan_for=original_subtask_id,
+            last_replan_count=new_count,
+            last_replan_stuck=became_stuck,
+            total_replans=total_replans,
+        )
+        return  # do NOT advance — terminal
+
     _write_status_patch(
         spec_dir,
         status="planned",
