@@ -37,10 +37,16 @@ __all__ = [
 ]
 
 # Only these "an agent is actively running" statuses can stall. Handoff states
-# (planned/generated/evaluated/replan_needed) and terminal/failed states are
-# excluded on purpose — flipping them would risk false positives (auto-fire may
-# be off, or the task is already settled).
-ACTIVE_STATUSES = frozenset({"planning", "generating", "evaluating", "triaging"})
+# (planned/generated/evaluated/replan_needed) and terminal/failed states
+# (reviewed/review_failed/triaged/...) are excluded on purpose — flipping them
+# would risk false positives (auto-fire may be off, or the task is already
+# settled). ``reviewing`` is included (RFC-0008 §3.3b, #423): the review-phase
+# agent (review_lane) sets status=reviewing, and a dead review subprocess used
+# to leave the task at ``reviewing`` forever because the watchdog never watched
+# it — the exact taskboard-demo hang.
+ACTIVE_STATUSES = frozenset(
+    {"planning", "generating", "evaluating", "triaging", "reviewing"}
+)
 
 # Which agent owns each active status — used to label the emitted stage event.
 _STATUS_TO_STAGE = {
@@ -48,6 +54,7 @@ _STATUS_TO_STAGE = {
     "generating": "gen_functional",
     "evaluating": "evaluator",
     "triaging": "triager",
+    "reviewing": "review",
 }
 
 # Default idle budget before an active stage is considered stalled. Generous —

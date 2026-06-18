@@ -57,6 +57,23 @@ def test_every_active_status_can_stall(tmp_path: Path, status: str) -> None:
     assert evaluate_liveness(tmp_path, now=_NOW, deadline_seconds=_DEADLINE).stalled
 
 
+def test_stuck_reviewing_is_stalled_and_flips(tmp_path: Path) -> None:
+    """RFC-0008 §3.3b (#423): a review-phase agent that dies leaves status at
+    ``reviewing``; the watchdog must catch it instead of hanging forever."""
+    assert "reviewing" in ACTIVE_STATUSES
+    _write_status(
+        tmp_path,
+        status="reviewing",
+        phase="review_ai_started",
+        updated_at=_iso(_NOW - timedelta(seconds=1800)),
+    )
+    v = evaluate_liveness(tmp_path, now=_NOW, deadline_seconds=_DEADLINE)
+    assert v.stalled is True and v.status == "reviewing"
+    assert check_and_mark(tmp_path, now=_NOW, deadline_seconds=_DEADLINE)
+    after = json.loads((tmp_path / "status.json").read_text())
+    assert after["status"] == "stalled" and after["stalled_from"] == "reviewing"
+
+
 # ── evaluate_liveness: the non-stalled / fail-safe cases ────────────────────
 
 
