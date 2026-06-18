@@ -92,18 +92,57 @@ _REGISTRY: dict[str, dict[str, ToolSpec | None]] = {
 }
 
 
-def get_tool_for_lane(language: str, lane: str) -> ToolSpec | None:
+def _tool_from_manifest(manifest: dict | None) -> ToolSpec | None:
+    """Synthesize an on-demand ToolSpec from the RFC-0005 environment manifest.
+
+    A language absent from the static registry no longer has to dead-end: if the
+    contract's ``environment`` manifest declares how to verify the code
+    (``verify_commands``, provisioned via the manifest's toolchain — typically
+    Nix, see agents/nix_env.py), we run that. The binary is the first verify
+    command's program, recorded for display only — execution uses the full
+    command list in the provisioned env. Returns None when the manifest carries
+    no verify commands (nothing to run → the caller's honest error stands).
+    """
+    if not isinstance(manifest, dict):
+        return None
+    cmds = manifest.get("verify_commands") or []
+    if not (isinstance(cmds, list) and cmds):
+        return None
+    first = str(cmds[0]).strip()
+    binary = first.split()[0] if first else "verify"
+    return ToolSpec(
+        binary=binary,
+        description="on-demand from environment manifest (RFC-0005)",
+        available_at_mvp=False,
+        phase="manifest",
+    )
+
+
+def get_tool_for_lane(
+    language: str, lane: str, *, manifest: dict | None = None
+) -> ToolSpec | None:
     """Return the ToolSpec for ``(language, lane)`` or None if unimpl.
 
+    For a language not in the static registry (e.g. C++, Elixir), the catalog is
+    *extensible on-demand* (RFC-0005 Phase 4): if ``manifest`` (the contract's
+    ``environment`` block) declares ``verify_commands``, a ToolSpec is
+    synthesized from it so the language no longer dead-ends. Only when there is
+    no manifest verify path is ``UnsupportedLanguageError`` raised — an honest
+    "we genuinely don't know how to verify this", not a static-table gap.
+
     Raises:
-        UnsupportedLanguageError: if ``language`` isn't in the registry
-            at all (e.g. C++, Elixir).
+        UnsupportedLanguageError: language absent from the registry AND no
+            manifest verify path to fall back to.
     """
     lang = language.lower()
     if lang not in _REGISTRY:
+        spec = _tool_from_manifest(manifest)
+        if spec is not None:
+            return spec
         raise UnsupportedLanguageError(
-            f"language {language!r} not in tfactory registry; "
-            f"supported: {sorted(_REGISTRY)}"
+            f"language {language!r} not in tfactory registry "
+            f"(supported: {sorted(_REGISTRY)}) and no environment-manifest "
+            "verify_commands to provision on-demand"
         )
     return _REGISTRY[lang].get(lane)
 

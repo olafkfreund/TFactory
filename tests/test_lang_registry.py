@@ -164,3 +164,29 @@ def test_tool_spec_is_frozen():
     spec = get_tool_for_lane("python", "unit")
     with pytest.raises((AttributeError, Exception)):
         spec.binary = "nope"  # type: ignore[misc]
+
+
+# --- RFC-0005 Phase 4 (#67): extensible/on-demand catalog via the manifest ---
+from tools.runners.lang_registry import (  # noqa: E402
+    get_tool_for_lane as _gtfl,
+    UnsupportedLanguageError as _ULE,
+)
+
+
+def test_known_language_unchanged_by_manifest_param():
+    assert _gtfl("python", "unit").binary == "pytest"
+    # manifest is ignored for a registry language
+    assert _gtfl("python", "unit", manifest={"verify_commands": ["nope"]}).binary == "pytest"
+
+
+def test_unknown_language_with_manifest_synthesizes_ondemand_spec():
+    spec = _gtfl("elixir", "unit", manifest={"language": "elixir", "verify_commands": ["mix test", "mix credo"]})
+    assert spec is not None and spec.binary == "mix" and spec.phase == "manifest"
+
+
+def test_unknown_language_without_manifest_still_raises_honestly():
+    import pytest
+    with pytest.raises(_ULE):
+        _gtfl("cpp", "unit")
+    with pytest.raises(_ULE):
+        _gtfl("cpp", "unit", manifest={"verify_commands": []})  # empty → no path
