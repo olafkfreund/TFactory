@@ -667,6 +667,21 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> dict:
             envelope["access"] = _acc
     except Exception:  # noqa: BLE001 - the access annotation must never break emit
         pass
+    # RFC-0006 (#74): attribute the lanes that actually ran (verdicts.json) to
+    # VAL levels and attach the gate-normalized verification block — honest
+    # achieved_level + claim, with VAL-3 surfaced as a gap (no disposable target,
+    # #75). CFactory renders it (#76) so a VAL-2 result never looks like "done".
+    # Best-effort; also persisted to findings/verification.json.
+    try:
+        from agents.val_block import read_verification_block
+
+        _block = read_verification_block(spec_dir)
+        envelope["verification"] = _block
+        _fdir = spec_dir / "findings"
+        _fdir.mkdir(parents=True, exist_ok=True)
+        (_fdir / "verification.json").write_text(json.dumps(_block, indent=2))
+    except Exception:  # noqa: BLE001 - verification block must never break emit
+        pass
     return envelope
 
 
@@ -882,6 +897,16 @@ def _render_and_write_report(
     findings_dir.mkdir(parents=True, exist_ok=True)
     (findings_dir / "triage_report.json").write_text(render_json(report))
     report_md = render_markdown(report)
+    # RFC-0006 (#76): lead the PR comment with the honest assurance-level claim so
+    # a reviewer can never read a VAL-2 result as fully "done". Best-effort.
+    try:
+        from agents.val_block import read_verification_block
+
+        _claim = read_verification_block(spec_dir).get("claim")
+        if _claim:
+            report_md = f"**Verification:** {_claim}\n\n{report_md}"
+    except Exception:  # noqa: BLE001 - the claim header must never break the report
+        pass
     (findings_dir / "triage_report.md").write_text(report_md)
     return report, report_md
 
