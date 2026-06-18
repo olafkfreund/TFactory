@@ -85,7 +85,7 @@ and injected as env vars; all secret values are redacted from logs/artifacts.
 ### 2FA / MFA — the 4-class model (RFC-0007)
 You do not defeat MFA. Each access is classified and routed:
 - **A machine-native** (OIDC federation, service accounts, scoped tokens — no MFA in path): **[Implemented]** (native to the sandbox credential path).
-- **B bootstrap-once** (device-code / refresh token / **TOTP seed stored as a secret**, codes generated in-process; captured `storageState`): **[Partial]** — the `totp` kind is stored encrypted and storageState login-once works, but runtime TOTP-code generation is not yet wired into the auth flow.
+- **B bootstrap-once** (device-code / refresh token / **TOTP seed stored as a secret**, codes generated in-process; captured `storageState`): **[Implemented]** — the `totp` kind is stored encrypted, storageState login-once works, and runtime RFC-6238 TOTP-code generation is wired into the auth flow via `fill_totp`.
 - **C ephemeral target** (testcontainers / ephemeral Keycloak / disposable cloud project — no prod credential): **[Implemented for Keycloak]** — `agents/ephemeral_keycloak.py` provisions a disposable Keycloak with a preset OTP user and auto-teardown (proven: a real-IdP MFA login via the production `fill_totp` flow); testcontainers cover ephemeral deps. In-cluster Keycloak (k8s Job) + disposable cloud projects remain planned.
 - **D un-automatable** (push approval, hardware key, SMS-to-a-person): **[Implemented as an honest refusal]** — `access_scope.py` maps these to "blocked" with a reason; the VAL gate keeps the result honest (never faked).
 
@@ -190,7 +190,7 @@ language-specific hooks.
   browser lanes for Python/TypeScript (Java partial), the 6-signal verdict, testing live
   Dev/UAT targets with vault-backed auth, k8s/compose targets, cloud CSPM, the RFC-0005 Nix
   per-task toolchain with real browser screenshots, and MCP/HTTP handover.
-- Partial / opt-in: TOTP runtime code-gen, ephemeral cloud targets, air-gapped operation,
+- Partial / opt-in: ephemeral cloud targets, air-gapped operation,
   Java lane depth, visual-regression baseline review.
 - Absent (be clear with stakeholders): chaos testing, performance/load, contract (Pact),
   accessibility, app SAST/DAST (delegated by design), GitLab issue ingest, and label-driven

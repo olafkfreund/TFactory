@@ -21,7 +21,7 @@ with real verdicts (bottom). Each one shows at least one **passing** test and
 one **failing** test caught by a deliberately seeded bug — proof the grader
 actually distinguishes good tests from bad.
 
-These seven demos span the full v0.2 lane spine — **browser** (Playwright),
+These seven demos span the full lane spine — **browser** (Playwright),
 **unit** (pytest + coverage + 3× stability + mutation), **api** (httpx against a
 running service), and **polyglot** (Python pytest **and** TypeScript Jest in one
 run) — to show TFactory tests **far more than web pages**, and grades them on

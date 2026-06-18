@@ -26,7 +26,7 @@ TFactory:
    `ghcr.io/<owner>/tfactory-runner-nix` image (Nix + flakes only) and co-mounts the
    project worktree from the `tfactory-data` PVC at `/work`.
 3. For a browser lane, serves the app and runs the generated Playwright specs, capturing
-   screenshots into `findings/screenshots/`.
+   screenshots into `findings/screenshots/` and video recordings into `findings/videos/`.
 
 ## 2. How the Job runs the flake (pods and sandboxing)
 

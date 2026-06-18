@@ -168,11 +168,11 @@ assertion failure (or at the final passing state for AC#1-4):
 
 | AC | Result | Screenshot |
 |---|---|---|
-| **AC#1** Generate produces non-empty text | ✅ pass | ![AC#1](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac1-generate-non-empty/test-finished-1.png) |
-| **AC#2** Greeting category vocabulary | ✅ pass | ![AC#2](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac2-greeting-vocab/test-finished-1.png) |
-| **AC#3** Snarky tone vocabulary | ✅ pass | ![AC#3](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac3-snarky-vocab/test-finished-1.png) |
-| **AC#4** Clear empties output | ✅ pass | ![AC#4](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac4-clear-empty/test-finished-1.png) |
-| **AC#5** Two clicks → different text | ❌ **fail (seeded bug)** | ![AC#5](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac5-different-text/test-failed-1.png) |
+| **AC#1** Generate produces non-empty text | pass | ![AC#1](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac1-generate-non-empty/test-finished-1.png) |
+| **AC#2** Greeting category vocabulary | pass | ![AC#2](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac2-greeting-vocab/test-finished-1.png) |
+| **AC#3** Snarky tone vocabulary | pass | ![AC#3](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac3-snarky-vocab/test-finished-1.png) |
+| **AC#4** Clear empties output | pass | ![AC#4](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac4-clear-empty/test-finished-1.png) |
+| **AC#5** Two clicks → different text | **fail (seeded bug)** | ![AC#5](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac5-different-text/test-failed-1.png) |
 
 </div>
 
@@ -209,7 +209,7 @@ comment when `TFACTORY_TRIAGER_PR_COMMENT=1` is set.
 
 > **Mode:** initial
 > **Generated at:** 2026-05-29T10:33:18Z
-> **Pipeline:** Planner ✅ → Gen-Functional (Browser-lane manual seed; see note) → Executor (`tfactory-runner-playwright:latest`) ✅ → Evaluator (manual scoring; see note) → Triager (this report)
+> **Pipeline:** Planner → Gen-Functional (Browser-lane manual seed; see note) → Executor (`tfactory-runner-playwright:latest`) → Evaluator (manual scoring; see note) → Triager (this report)
 
 ## Summary
 
@@ -218,8 +218,8 @@ comment when `TFACTORY_TRIAGER_PR_COMMENT=1` is set.
 | Subtasks planned | 5 |
 | Tests generated | 5 |
 | Tests executed | 5 |
-| **Accepted (passing)** | **4** ✅ |
-| **Rejected (failing)** | **1** ❌ — AC#5 (seeded cache bug) |
+| **Accepted (passing)** | **4** |
+| **Rejected (failing)** | **1** — AC#5 (seeded cache bug) |
 | Coverage strategy | `null` (Browser lane per Decision 11) |
 
 ## Committed (accept)
@@ -227,22 +227,22 @@ comment when `TFACTORY_TRIAGER_PR_COMMENT=1` is set.
 - **`generate-produces-non-empty-text`** — `tests/e2e/generate-produces-non-empty-text.spec.ts`
   - signals: stability=stable (1/1 run), coverage=N/A (browser lane), semantic=high
   - intent: CREATE new tests/e2e/generate-produces-non-empty-text.spec.ts
-  - evidence: 📸 [screenshot](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac1-generate-non-empty/test-finished-1.png)
+  - evidence: [screenshot](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac1-generate-non-empty/test-finished-1.png)
 
 - **`greeting-category-vocabulary`** — `tests/e2e/greeting-category-vocabulary.spec.ts`
   - signals: stability=stable, coverage=N/A, semantic=high
   - intent: CREATE new tests/e2e/greeting-category-vocabulary.spec.ts
-  - evidence: 📸 [screenshot](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac2-greeting-vocab/test-finished-1.png)
+  - evidence: [screenshot](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac2-greeting-vocab/test-finished-1.png)
 
 - **`snarky-tone-vocabulary`** — `tests/e2e/snarky-tone-vocabulary.spec.ts`
   - signals: stability=stable, coverage=N/A, semantic=high
   - intent: CREATE new tests/e2e/snarky-tone-vocabulary.spec.ts
-  - evidence: 📸 [screenshot](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac3-snarky-vocab/test-finished-1.png)
+  - evidence: [screenshot](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac3-snarky-vocab/test-finished-1.png)
 
 - **`clear-empties-output`** — `tests/e2e/clear-empties-output.spec.ts`
   - signals: stability=stable, coverage=N/A, semantic=high
   - intent: CREATE new tests/e2e/clear-empties-output.spec.ts
-  - evidence: 📸 [screenshot](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac4-clear-empty/test-finished-1.png)
+  - evidence: [screenshot](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac4-clear-empty/test-finished-1.png)
 
 ## Rejected (reject — surfaced for human review)
 
@@ -250,16 +250,16 @@ comment when `TFACTORY_TRIAGER_PR_COMMENT=1` is set.
   - **VERDICT: REJECT** — test ran cleanly and correctly identified a real bug in the SUT
   - signals: stability=stable (deterministic failure), coverage=N/A, semantic=high (test logic is sound; the SUT has a defect)
   - reason: AC#5 expected two consecutive Generate clicks to produce *different* text. The SUT's `src/generate.ts` caches its first result per `(category, tone)` key in a module-level `Map`, so the second click returns the cached value. Test correctly detected this.
-  - evidence: 📸 [screenshot](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac5-different-text/test-failed-1.png) · 🎥 [video.webm](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac5-different-text/video.webm) · 🔍 [trace.zip](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac5-different-text/trace.zip)
+  - evidence: [screenshot](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac5-different-text/test-failed-1.png) · [video.webm](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac5-different-text/video.webm) · [trace.zip](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac5-different-text/trace.zip)
   - **operator action required:** fix the `src/generate.ts` cache bug, then re-run; the test will then accept.
 
 ## What this demonstrates about TFactory v0.2.0
 
-1. ✅ **Polyglot Planner** — read the `spec.md` + `.tfactory.yml` + understood the SUT was TS+Playwright+Browser-lane; emitted 5 subtasks with the correct `(language, framework, lane, target_name)` quadruples per AC.
-2. ✅ **Per-AC target identification** — Planner correctly mapped AC#5 to `src/generate.ts::generate` (the seeded bug location), AC#1–4 to `src/App.tsx::App` (UI surface).
-3. ✅ **Framework Docker runner** — `tfactory-runner-playwright:latest` ran the tests with Playwright 1.49 + Chromium against the live Pages URL.
-4. ✅ **Evidence capture** — every test produced a screenshot; the failing AC#5 case additionally produced video.webm + trace.zip for human inspection (per Decision 12 in the design doc).
-5. ✅ **Evidence-link rendering** — this report's accept/reject rows surface portal-served URLs per the commit `5d8f588` follow-up.
+1. **Polyglot Planner** — read the `spec.md` + `.tfactory.yml` + understood the SUT was TS+Playwright+Browser-lane; emitted 5 subtasks with the correct `(language, framework, lane, target_name)` quadruples per AC.
+2. **Per-AC target identification** — Planner correctly mapped AC#5 to `src/generate.ts::generate` (the seeded bug location), AC#1–4 to `src/App.tsx::App` (UI surface).
+3. **Framework Docker runner** — `tfactory-runner-playwright:latest` ran the tests with Playwright 1.49 + Chromium against the live Pages URL.
+4. **Evidence capture** — every test produced a screenshot; the failing AC#5 case additionally produced video.webm + trace.zip for human inspection (per Decision 12 in the design doc).
+5. **Evidence-link rendering** — this report's accept/reject rows surface portal-served URLs per the commit `5d8f588` follow-up.
 
 ## Honest caveats
 

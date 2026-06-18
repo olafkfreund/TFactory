@@ -34,19 +34,16 @@ egress gate.
 
 <ul class="feature-row">
   <li class="feature-row__card reveal">
-    <span class="feature-row__icon" aria-hidden="true">🔌</span>
     <h3>Pluggable backends</h3>
     <p>Resolve secrets from a vault — <strong>Azure Key Vault</strong>, <strong>AWS Secrets Manager</strong>, <strong>GCP Secret Manager</strong>, <strong>HashiCorp Vault</strong> — or local encrypted files (<strong>sops / age / agenix</strong>). One ref syntax, lazily-loaded SDKs.</p>
   </li>
   <li class="feature-row__card reveal" style="--reveal-delay: 80ms">
-    <span class="feature-row__icon" aria-hidden="true">🎟️</span>
     <h3>Ephemeral by design</h3>
     <p>File credentials (kubeconfig, GCP ADC) are written <strong>0600</strong> to a per-task scratch dir and <strong>wiped</strong> when the task ends. Values are redacted from logs. Never persisted in the clear.</p>
   </li>
   <li class="feature-row__card reveal" style="--reveal-delay: 160ms">
-    <span class="feature-row__icon" aria-hidden="true">☁️</span>
     <h3>Honest egress</h3>
-    <p>Off by default — <strong>no cloud credential is resolved</strong> unless the project opts in. <code>tfactory_secrets.cli audit</code> prints a secret-free manifest of exactly what would leave your network, with a 🔒 / 🏠 / ☁️ badge.</p>
+    <p>Off by default — <strong>no cloud credential is resolved</strong> unless the project opts in. <code>tfactory_secrets.cli audit</code> prints a secret-free manifest of exactly what would leave your network, with a local / on-host / cloud badge.</p>
   </li>
 </ul>
 
