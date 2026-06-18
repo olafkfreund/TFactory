@@ -2,7 +2,7 @@
 layout: post
 title: "Evidence you can see: screenshots, recordings, and a login that beats 2FA"
 subtitle: "A green checkmark is not proof. The newest TFactory work makes the verdict legible — visible screenshots and recordings in the cockpit, an honest per-criterion ledger, and a real two-factor login captured on its way through."
-date: 2026-06-18 12:00:00
+date: 2026-06-18 06:00:00
 author: DataSeek Team
 ---
 
