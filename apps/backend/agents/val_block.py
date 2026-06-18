@@ -17,11 +17,13 @@ point of the RFC — a VAL-2 result must never look like "done".
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 from agents.verification_gate import normalize_verification
 
-__all__ = ["build_verification_block", "DEFAULT_TARGET_LEVEL"]
+__all__ = ["build_verification_block", "read_verification_block", "DEFAULT_TARGET_LEVEL"]
 
 DEFAULT_TARGET_LEVEL = "VAL-2"  # the ceiling TFactory can reach without a VAL-3 target
 
@@ -110,3 +112,23 @@ def build_verification_block(
         "levels": levels,
     }
     return normalize_verification(block)
+
+
+def read_verification_block(
+    spec_dir: Path | str, *, target_level: str = DEFAULT_TARGET_LEVEL
+) -> dict:
+    """Build the verification block from a spec's ``findings/verdicts.json``.
+
+    Convenience reader so the completion envelope and the PR-comment report can
+    share one source of truth. Best-effort: a missing/unreadable verdicts file
+    yields the honest "NOT VERIFIED" block (via the gate). Never raises.
+    """
+    verdicts: list[dict[str, Any]] | None = None
+    try:
+        path = Path(spec_dir) / "findings" / "verdicts.json"
+        if path.exists():
+            doc = json.loads(path.read_text())
+            verdicts = doc.get("verdicts") if isinstance(doc, dict) else None
+    except (OSError, ValueError):
+        verdicts = None
+    return build_verification_block(verdicts, target_level=target_level)

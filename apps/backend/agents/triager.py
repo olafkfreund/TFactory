@@ -673,13 +673,9 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> dict:
     # #75). CFactory renders it (#76) so a VAL-2 result never looks like "done".
     # Best-effort; also persisted to findings/verification.json.
     try:
-        from agents.val_block import build_verification_block
+        from agents.val_block import read_verification_block
 
-        _vpath = spec_dir / "findings" / "verdicts.json"
-        _vdoc = json.loads(_vpath.read_text()) if _vpath.exists() else {}
-        _block = build_verification_block(
-            _vdoc.get("verdicts") if isinstance(_vdoc, dict) else None
-        )
+        _block = read_verification_block(spec_dir)
         envelope["verification"] = _block
         _fdir = spec_dir / "findings"
         _fdir.mkdir(parents=True, exist_ok=True)
@@ -901,6 +897,16 @@ def _render_and_write_report(
     findings_dir.mkdir(parents=True, exist_ok=True)
     (findings_dir / "triage_report.json").write_text(render_json(report))
     report_md = render_markdown(report)
+    # RFC-0006 (#76): lead the PR comment with the honest assurance-level claim so
+    # a reviewer can never read a VAL-2 result as fully "done". Best-effort.
+    try:
+        from agents.val_block import read_verification_block
+
+        _claim = read_verification_block(spec_dir).get("claim")
+        if _claim:
+            report_md = f"**Verification:** {_claim}\n\n{report_md}"
+    except Exception:  # noqa: BLE001 - the claim header must never break the report
+        pass
     (findings_dir / "triage_report.md").write_text(report_md)
     return report, report_md
 
