@@ -32,14 +32,16 @@ _ALIASES = {
     "javascript": "typescript",
     "js": "typescript",  # JS tests run via the Jest/TS probe
     "java": "java",
+    "rust": "rust",
+    "rs": "rust",
 }
 
 # Languages with a wired mutation backend. C# (Stryker.NET) is registry-known
 # but not yet implemented — see lang_registry.py.
-SUPPORTED_LANGUAGES = frozenset({"python", "typescript", "java"})
+SUPPORTED_LANGUAGES = frozenset({"python", "typescript", "java", "rust"})
 
 # File extension for the written mutant, per language.
-_MUTANT_EXT = {"python": "py", "typescript": "ts", "java": "java"}
+_MUTANT_EXT = {"python": "py", "typescript": "ts", "java": "java", "rust": "rs"}
 
 
 def normalize_language(language: str | None) -> str:
@@ -97,4 +99,8 @@ def run_language_mutation(
         from agents.lang_java.mutate_probe import run_java_mutate_probe
 
         return run_java_mutate_probe(test_file, project_dir, runner_fn=runner_fn)
+    if lang == "rust":
+        from agents.lang_rust.mutate_probe import run_rust_mutate_probe
+
+        return run_rust_mutate_probe(test_file, project_dir, runner_fn=runner_fn)
     return None
