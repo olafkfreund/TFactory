@@ -302,6 +302,18 @@ def create_spec_ingest_workspace(
     # source.json: target_paths name the SUT; source_branch records which build
     # was checked out (when supplied). The Triager's PR-status side-effect skips
     # cleanly when there's no sha/repo.
+    # RFC-0001 correlation: capture the upstream GitHub issue from the signed
+    # contract (provenance.github_issue, or a numeric correlation_key) so the
+    # cockpit threads this test task with its PFactory plan + AIFactory build.
+    github_issue = None
+    if isinstance(contract, dict):
+        prov = contract.get("provenance")
+        if isinstance(prov, dict) and prov.get("github_issue") is not None:
+            github_issue = prov.get("github_issue")
+        if github_issue is None:
+            corr = contract.get("correlation_key")
+            if corr is not None and str(corr).isdigit():
+                github_issue = int(corr)
     source = {
         "mode": "spec_ingest",
         "project_id": project_id,
@@ -310,6 +322,7 @@ def create_spec_ingest_workspace(
         "target_paths": list(target_paths or []),
         "source_branch": source_branch,
         "created_at": _now_iso(),
+        "aifactory": {"github_issue": github_issue},
     }
     (context_dir / "source.json").write_text(json.dumps(source, indent=2))
 
