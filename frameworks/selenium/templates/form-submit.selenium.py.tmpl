@@ -1,0 +1,27 @@
+---
+description: Selenium form submit + validation — submit a form and assert the result message
+requires_target: true
+requires_auth: false
+vars:
+  - test_name
+  - page_path
+  - field_selector
+  - field_value
+  - submit_selector
+  - result_selector
+  - expected_text
+---
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
+
+
+def test_${test_name}(driver, base_url):
+    driver.get(base_url + "${page_path}")
+    wait = WebDriverWait(driver, 10)
+    wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "${field_selector}"))).send_keys(
+        "${field_value}"
+    )
+    driver.find_element(By.CSS_SELECTOR, "${submit_selector}").click()
+    result = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, "${result_selector}")))
+    assert "${expected_text}" in result.text

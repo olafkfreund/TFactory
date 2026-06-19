@@ -1,0 +1,27 @@
+---
+description: Karate auth flow — obtain a token, then call a protected endpoint with it
+requires_target: true
+requires_auth: true
+vars:
+  - feature_name
+  - token_path
+  - protected_path
+  - username_env
+  - secret_env
+---
+Feature: ${feature_name}
+
+  Background:
+    * url baseUrl
+
+  Scenario: token then protected call
+    Given path '${token_path}'
+    And request { username: '#(karate.properties["${username_env}"])', password: '#(karate.properties["${secret_env}"])' }
+    When method post
+    Then status 200
+    * def token = response.access_token
+
+    Given path '${protected_path}'
+    And header Authorization = 'Bearer ' + token
+    When method get
+    Then status 200

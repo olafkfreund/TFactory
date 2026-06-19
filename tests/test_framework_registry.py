@@ -624,3 +624,23 @@ def test_real_enterprise_frameworks() -> None:
     # the BDD overlay must instruct emitting BOTH artifacts
     assert "step definition" in cucumber.context_block.lower()
     assert ".feature" in cucumber.context_block
+
+
+@pytest.mark.skipif(
+    not _REAL_FRAMEWORKS_DIR.is_dir(),
+    reason=f"frameworks/ directory not found at {_REAL_FRAMEWORKS_DIR}",
+)
+def test_enterprise_framework_templates_exist() -> None:
+    """Each enterprise descriptor's declared templates ship on disk with frontmatter."""
+    for name in ("karate", "selenium", "cucumber"):
+        desc = get_descriptor(name, frameworks_dir=_REAL_FRAMEWORKS_DIR)
+        assert desc.templates, f"{name} declares no templates"
+        tdir = _REAL_FRAMEWORKS_DIR / name / "templates"
+        for tmpl in desc.templates:
+            fp = tdir / tmpl
+            assert fp.is_file(), f"{name}: declared template {tmpl} is missing"
+            assert fp.read_text().startswith("---"), f"{name}/{tmpl} lacks frontmatter"
+    # Cucumber is a two-artifact overlay: it must ship a feature + steps + world.
+    cucumber = {t for t in get_descriptor("cucumber", frameworks_dir=_REAL_FRAMEWORKS_DIR).templates}
+    assert any(t.endswith(".feature.tmpl") for t in cucumber)
+    assert any("steps" in t for t in cucumber) and any("world" in t for t in cucumber)

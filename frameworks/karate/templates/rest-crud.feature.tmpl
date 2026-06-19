@@ -1,0 +1,28 @@
+---
+description: Karate REST CRUD — create then read a resource and assert the round-trip
+requires_target: true
+requires_auth: false
+vars:
+  - feature_name
+  - resource_path
+  - create_payload
+  - id_field
+---
+Feature: ${feature_name}
+
+  Background:
+    * url baseUrl
+    * configure headers = { 'Content-Type': 'application/json' }
+
+  Scenario: create then read ${resource_path}
+    Given path '${resource_path}'
+    And request ${create_payload}
+    When method post
+    Then status 201
+    And match response.${id_field} == '#present'
+    * def id = response.${id_field}
+
+    Given path '${resource_path}', id
+    When method get
+    Then status 200
+    And match response.${id_field} == id

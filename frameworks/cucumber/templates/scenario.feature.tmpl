@@ -1,0 +1,17 @@
+---
+description: Cucumber Gherkin scenario — business-language steps (paired with steps.ts)
+requires_target: true
+requires_auth: false
+vars:
+  - feature_name
+  - scenario_name
+  - given_step
+  - when_step
+  - then_step
+---
+Feature: ${feature_name}
+
+  Scenario: ${scenario_name}
+    Given ${given_step}
+    When ${when_step}
+    Then ${then_step}
