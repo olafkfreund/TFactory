@@ -412,3 +412,76 @@ def test_v02_prompt_includes_all_universal_anti_patterns(
     # Universal guards present in the generic body
     assert "timeout" in p.lower()
     assert "replan" in p.lower() or "replan_request" in p.lower() or "test_plan.json" in p
+
+
+# ── Multi-artifact overlays (Cucumber: .feature + steps + World) ────────
+
+
+class _CucumberDesc:
+    name = "cucumber"
+    context_block = "cucumber context: emit a .feature plus step definitions"
+    multi_artifact = True
+
+
+def _bdd_subtask() -> dict:
+    """A Cucumber subtask that emits three files in one consistent set."""
+    return {
+        "id": "ac1-checkout-bdd",
+        "description": "Checkout flow as a Gherkin scenario + step defs",
+        "lane": "browser",
+        "target": "app/checkout",
+        "rationale": "AC#1: user completes checkout",
+        "files_to_create": [
+            "features/checkout.feature",
+            "features/step_definitions/checkout.steps.ts",
+            "features/support/world.ts",
+        ],
+        "verification": {"type": "command", "command": "npx cucumber-js"},
+    }
+
+
+def test_cucumber_descriptor_emits_multi_file_instruction() -> None:
+    """multi_artifact descriptor → the prompt instructs writing ALL files,
+    not a single one, with the Gherkin↔step-defs consistency rule."""
+    p = get_tfactory_gen_functional_prompt(
+        Path("/ws/demo"), Path("/p"), _bdd_subtask(),
+        framework_descriptor=_CucumberDesc(),
+    )
+    assert "write ALL of these files" in p
+    # Every artifact path is listed, resolved against spec_dir.
+    assert "/ws/demo/features/checkout.feature" in p
+    assert "/ws/demo/features/step_definitions/checkout.steps.ts" in p
+    assert "/ws/demo/features/support/world.ts" in p
+    # The consistency rule that keeps the two artifacts in sync.
+    assert "MUST match the step" in p
+    # The single-file phrasing must NOT appear for a multi-artifact set.
+    assert "write the file at:" not in p
+
+
+def test_single_artifact_descriptor_keeps_single_file_instruction(
+    subtask_dataclass: Subtask,
+) -> None:
+    """A normal (single-file) framework keeps the 'write the file at:' phrasing."""
+    p = get_tfactory_gen_functional_prompt(
+        Path("/ws/demo"), Path("/p"), subtask_dataclass,
+        framework_descriptor=_PytestDesc(),
+    )
+    assert "write the file at:" in p
+    assert "/ws/demo/tests/test_login_expiry.py" in p
+    assert "write ALL of these files" not in p
+
+
+def test_multiple_files_trigger_multi_file_instruction_without_flag() -> None:
+    """Even without the descriptor flag, >1 files_to_create lists all of them."""
+    sd = {
+        "id": "x", "description": "y", "lane": "functional",
+        "target": "f.py::g", "rationale": "AC#X",
+        "files_to_create": ["tests/test_a.py", "tests/test_b.py"],
+        "verification": {"type": "command", "run": "pytest tests/"},
+    }
+    p = get_tfactory_gen_functional_prompt(
+        Path("/ws"), Path("/p"), sd, framework_descriptor=_PytestDesc(),
+    )
+    assert "write ALL of these files" in p
+    assert "/ws/tests/test_a.py" in p
+    assert "/ws/tests/test_b.py" in p

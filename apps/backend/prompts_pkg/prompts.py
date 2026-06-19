@@ -810,6 +810,25 @@ def get_tfactory_gen_functional_prompt(
 
     write_path = files_to_create[0] if files_to_create else "?"
 
+    # Multi-artifact overlays (e.g. Cucumber: .feature + step defs + World) must
+    # write EVERY file in files_to_create as one consistent set, not a single
+    # file. Triggered by the descriptor flag, or whenever the planner emitted
+    # more than one file to create.
+    multi_artifact = (
+        bool(getattr(framework_descriptor, "multi_artifact", False))
+        or len(files_to_create) > 1
+    )
+    if multi_artifact and files_to_create:
+        _files = "\n".join(f"    - `{spec_dir / p}`" for p in files_to_create)
+        write_instruction = (
+            "- write ALL of these files (one consistent artifact set):\n"
+            f"{_files}\n"
+            "  The Gherkin step text in the .feature MUST match the step "
+            "definitions exactly; every step has exactly one definition."
+        )
+    else:
+        write_instruction = f"- write the file at: `{spec_dir / write_path}`"
+
     # SUBTASK CONTEXT block (shared by both the v0.1 and v0.2 paths).
     context = (
         "## SUBTASK CONTEXT (TFactory Gen-Functional)\n\n"
@@ -819,7 +838,7 @@ def get_tfactory_gen_functional_prompt(
         f"- language:          {language}\n"
         f"- framework:         {framework}\n"
         f"- intent:            {intent}\n"
-        f"- write the file at: `{spec_dir / write_path}`\n"
+        f"{write_instruction}\n"
         f"- verification:      `{verification_cmd}`\n\n"
         f"Concrete paths for this run:\n\n"
         f"- spec_dir:    `{spec_dir}`\n"

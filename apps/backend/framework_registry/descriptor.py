@@ -124,6 +124,10 @@ class FrameworkDescriptor:
     coverage_strategy: Literal["lcov", "cobertura", "jacoco", "skip"]
     context_block: str
     evaluator_hooks: tuple[str, ...]
+    # When true the framework is a multi-artifact overlay (e.g. Cucumber: a
+    # .feature PLUS its step definitions + a World). Gen-Functional then writes
+    # every file in ``files_to_create`` as one consistent set, not a single file.
+    multi_artifact: bool = False
 
     def __post_init__(self) -> None:
         """Validate invariants that can't be expressed as type hints."""
