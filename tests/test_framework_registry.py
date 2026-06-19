@@ -306,6 +306,31 @@ def test_evaluator_hooks_defaults_to_empty_tuple() -> None:
     assert desc.evaluator_hooks == ()
 
 
+def test_multi_artifact_defaults_to_false() -> None:
+    """If 'multi_artifact' is absent, it defaults to False (single-file framework)."""
+    data = copy.deepcopy(_PYTEST_DICT)
+    data.pop("multi_artifact", None)
+    desc = validate_descriptor(data)
+    assert desc.multi_artifact is False
+
+
+def test_multi_artifact_true_is_loaded() -> None:
+    """A descriptor declaring 'multi_artifact: true' (e.g. Cucumber) loads it."""
+    data = copy.deepcopy(_PYTEST_DICT)
+    data["multi_artifact"] = True
+    desc = validate_descriptor(data)
+    assert desc.multi_artifact is True
+
+
+def test_shipped_cucumber_descriptor_is_multi_artifact() -> None:
+    """The real cucumber descriptor.yaml ships with multi_artifact: true."""
+    repo_root = Path(__file__).resolve().parents[1]
+    cucumber_yaml = repo_root / "frameworks" / "cucumber" / "descriptor.yaml"
+    data = yaml.safe_load(cucumber_yaml.read_text(encoding="utf-8"))
+    desc = validate_descriptor(data)
+    assert desc.multi_artifact is True
+
+
 # ---------------------------------------------------------------------------
 # 7. load_registry happy path
 # ---------------------------------------------------------------------------

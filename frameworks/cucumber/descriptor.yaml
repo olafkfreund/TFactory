@@ -13,6 +13,10 @@ language: typescript
 lanes:
   - browser
 
+# BDD overlay: Gen-Functional must emit BOTH the .feature and its step
+# definitions (+ a World) as one consistent set — not a single file.
+multi_artifact: true
+
 # @cucumber/cucumber 10.x/11.x (ESM, modern API).
 version_range: ">=10,<12"
 

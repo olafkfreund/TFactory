@@ -290,4 +290,5 @@ def validate_descriptor(data: dict) -> FrameworkDescriptor:
         coverage_strategy=coverage_strategy,  # type: ignore[arg-type]
         context_block=context_block_raw,
         evaluator_hooks=tuple(evaluator_hooks),
+        multi_artifact=bool(data.get("multi_artifact", False)),
     )
