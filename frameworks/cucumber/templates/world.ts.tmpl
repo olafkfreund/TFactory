@@ -1,0 +1,26 @@
+---
+description: Cucumber custom World + hooks — owns the browser/page per scenario
+requires_target: true
+requires_auth: false
+vars:
+  - target_base_url
+---
+import { setWorldConstructor, World, Before, After } from '@cucumber/cucumber';
+import { chromium, Browser, Page } from 'playwright';
+
+export class CustomWorld extends World {
+  browser!: Browser;
+  page!: Page;
+  baseUrl = process.env.TFACTORY_TARGET_URL ?? '${target_base_url}';
+}
+setWorldConstructor(CustomWorld);
+
+Before(async function (this: CustomWorld) {
+  this.browser = await chromium.launch();
+  this.page = await this.browser.newPage();
+});
+
+After(async function (this: CustomWorld) {
+  await this.page?.close();
+  await this.browser?.close();
+});

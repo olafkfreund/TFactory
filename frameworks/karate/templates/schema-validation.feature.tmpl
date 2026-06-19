@@ -1,0 +1,20 @@
+---
+description: Karate schema validation — assert a response matches a fuzzy schema (types, not exact values)
+requires_target: true
+requires_auth: false
+vars:
+  - feature_name
+  - resource_path
+  - schema
+---
+Feature: ${feature_name}
+
+  Background:
+    * url baseUrl
+
+  Scenario: ${resource_path} matches the expected schema
+    Given path '${resource_path}'
+    When method get
+    Then status 200
+    # fuzzy matchers (#string/#number/#uuid/#present) — robust to volatile values
+    And match response == ${schema}
