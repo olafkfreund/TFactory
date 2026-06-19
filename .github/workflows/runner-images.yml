@@ -3,13 +3,17 @@
 # Build all TFactory framework runner images on push to main and on PRs
 # that touch any Dockerfile or this workflow file.
 #
-# Registry push is deferred to a separate task once a registry (GHCR or ECR)
-# is provisioned. For now the workflow verifies each image builds successfully
-# and passes a hello-world smoke by loading it into the local Docker daemon.
+# On PRs the workflow only builds + smoke-tests each image (no publish). On
+# push to main, after the smoke passes, each image is published to GHCR so the
+# in-cluster lanes can pull it. The k3d cluster authenticates via its existing
+# `ghcr-pull` secret.
 #
-# Image tags produced (build-only, not pushed):
-#   tfactory-runner-{pytest,jest,playwright,vitest,cypress,cloud}:<commit-sha>
-#   tfactory-runner-{pytest,jest,playwright,vitest,cypress,cloud}:latest
+# Image tags produced:
+#   tfactory-runner-{pytest,jest,playwright,vitest,cypress,java,selenium,cucumber,cloud}:<commit-sha>
+#   tfactory-runner-{...}:latest                      (loaded locally for the smoke test)
+# Published to GHCR on main only:
+#   ghcr.io/<owner>/tfactory-runner-{...}:<commit-sha>
+#   ghcr.io/<owner>/tfactory-runner-{...}:latest
 
 name: Build runner images
 
@@ -31,6 +35,7 @@ concurrency:
 
 permissions:
   contents: read
+  packages: write   # publish runner images to GHCR (push to main only)
 
 jobs:
   build:
@@ -201,3 +206,29 @@ jobs:
                 checkov --version
               ;;
           esac
+
+      # Publish to GHCR — only on push to main, and only after the smoke above
+      # passed (a broken image never reaches the registry). PRs (incl. forks)
+      # skip these steps, so they stay build-and-smoke only.
+      - name: Log in to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Re-run the build to push: every layer is already in the GHA cache from
+      # the build step above, so this is effectively just a registry upload.
+      - name: Push tfactory-runner-${{ matrix.runner }} to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@v5
+        with:
+          context: docker/tfactory-runner-${{ matrix.runner }}
+          file: docker/tfactory-runner-${{ matrix.runner }}/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/tfactory-runner-${{ matrix.runner }}:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/tfactory-runner-${{ matrix.runner }}:latest
+          cache-from: type=gha,scope=runner-${{ matrix.runner }}
+          cache-to: type=gha,mode=max,scope=runner-${{ matrix.runner }}
