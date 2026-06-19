@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.11.0 — enterprise test frameworks: Karate, Selenium, Cucumber (2026-06-19)
+
+- **Three new framework descriptors** (per `docs/plans/2026-05-28-enterprise-test-frameworks-design.md`), registered + validated by the framework registry so the planner can detect/select them and Gen-Functional has a context block:
+  - **Karate** (`frameworks/karate/`) — JVM API-testing DSL, API lane, single-artifact `.feature` files (built-in step defs); reuses the `tfactory-runner-java` image (Maven fetches the karate dep per-project). `coverage_strategy: skip`.
+  - **Selenium** (`frameworks/selenium/`) — Python browser lane; new `tfactory-runner-selenium` image (Python + selenium 4 + chromium + matching chromedriver). The context block mandates explicit `WebDriverWait` (Selenium has no auto-wait — the #1 flake source). **Image built + a real headless browser run validated locally.**
+  - **Cucumber** (`frameworks/cucumber/`) — cucumber-js BDD overlay, browser lane; new `tfactory-runner-cucumber` image (Playwright base + @cucumber/cucumber). The context block requires emitting BOTH the `.feature` and the matching step definitions (the two-artifact model).
+- **Runner images** added to the `runner-images.yml` build matrix (`selenium`, `cucumber`) with hello-world smokes; Karate rides the existing `java` image.
+- Registry test covers the three new descriptors (language/lanes/context guarantees).
+
 ## 0.10.1 — equivalence lane: in-cluster k8s-Job backend (RFC-0010) (2026-06-19)
 
 - **In-cluster execution backend for the equivalence lane.** `agents/equivalence_lane.py` gains `_kube_oracle_runner` (runs the oracle harness as an ephemeral Kubernetes Job via `KubeJobSandbox` — the pods have no container runtime) selected by `TFACTORY_EQUIVALENCE_BACKEND=kube` (default `docker`). The small source tree + harness + vectors are embedded base64 in the Job command. **Smoke-validated on a live k3d cluster**: faithful rewrite 100% parity / PASS, buggy `fee()` 67% / FAIL. `scripts/demo_equivalence.py --kube` runs it end to end.

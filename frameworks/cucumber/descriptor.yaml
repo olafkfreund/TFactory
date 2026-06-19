@@ -1,0 +1,70 @@
+# frameworks/cucumber/descriptor.yaml
+#
+# Cucumber (cucumber-js / TypeScript) descriptor — BDD overlay, Browser lane.
+#
+# Cucumber is a *style overlay*, not a standalone runner: a `.feature` file of
+# Gherkin scenarios PLUS step-definition code that drives the system under test.
+# Generation is therefore TWO artifacts that must stay in sync — the planner's
+# Gen-Functional step emits both (see context_block). Driven via cucumber-js;
+# the steps here use a browser driver (Playwright/Selenium under the hood).
+#
+name: cucumber
+language: typescript
+lanes:
+  - browser
+
+# @cucumber/cucumber 10.x/11.x (ESM, modern API).
+version_range: ">=10,<12"
+
+runtime:
+  image: tfactory-runner-cucumber:latest
+  entrypoint:
+    - npx
+    - cucumber-js
+
+manifest_signals:
+  - "package.json:@cucumber/cucumber"
+  - "cucumber.js"
+  - "cucumber.json"
+
+# Cucumber needs BOTH the features and their step definitions.
+test_path_conventions:
+  - "features/**/*.feature"
+  - "features/step_definitions/**/*.ts"
+  - "features/support/**/*.ts"
+
+templates:
+  - scenario.feature.tmpl
+  - steps.ts.tmpl
+  - world.ts.tmpl
+
+# Coverage flows through the underlying driver / served app — not the overlay.
+coverage_strategy: skip
+
+context_block: |
+  You are generating Cucumber (cucumber-js, TypeScript) BDD tests. This is an
+  OVERLAY: you must emit TWO consistent artifacts.
+
+  1) A .feature file (Gherkin):
+     - Feature + Scenarios written in business language (Given/When/Then/And).
+     - Use Scenario Outline + Examples for data variations, not copy-paste.
+     - Keep steps declarative ("When the user submits the form"), not UI-specific.
+
+  2) Step definitions (features/step_definitions/*.ts):
+     - One Given/When/Then per Gherkin step; the text MUST match the .feature
+       exactly (parameterise with {string}/{int} + cucumber expressions).
+     - Steps drive the system via the World (this) — a custom World
+       (features/support/world.ts) holds the browser/page or API client.
+     - Use Before/After hooks to set up + tear down the driver per scenario.
+     - Assertions live in the step defs (expect/assert), never in the .feature.
+
+  Consistency rules:
+    - Every Gherkin step has exactly one matching step definition (no
+      undefined/ambiguous steps).
+    - No business logic in step text; no Gherkin in step-def comments.
+
+  Determinism:
+    - Explicit waits in the driver layer; never fixed sleeps.
+    - Reset state in Before hooks; don't depend on scenario order.
+
+evaluator_hooks: []

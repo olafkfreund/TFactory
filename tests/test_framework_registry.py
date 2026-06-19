@@ -597,3 +597,30 @@ def test_real_acceptance_criterion() -> None:
     """Task 1 acceptance criterion: load_registry returns dict with 'playwright'."""
     registry = load_registry(frameworks_dir=_REAL_FRAMEWORKS_DIR)
     assert "playwright" in registry
+
+
+@pytest.mark.skipif(
+    not _REAL_FRAMEWORKS_DIR.is_dir(),
+    reason=f"frameworks/ directory not found at {_REAL_FRAMEWORKS_DIR}",
+)
+def test_real_enterprise_frameworks() -> None:
+    """RFC-0010 enterprise frameworks: Karate (api) / Selenium + Cucumber (browser)."""
+    registry = load_registry(frameworks_dir=_REAL_FRAMEWORKS_DIR)
+    assert {"karate", "selenium", "cucumber"} <= set(registry)
+
+    karate = get_descriptor("karate", frameworks_dir=_REAL_FRAMEWORKS_DIR)
+    assert karate.language == "java"
+    assert [lane.value for lane in karate.lanes] == ["api"]
+    assert karate.coverage_strategy == "skip"
+
+    selenium = get_descriptor("selenium", frameworks_dir=_REAL_FRAMEWORKS_DIR)
+    assert selenium.language == "python"
+    assert [lane.value for lane in selenium.lanes] == ["browser"]
+    # the anti-flake guidance must be present (Selenium has no auto-wait)
+    assert "WebDriverWait" in selenium.context_block
+
+    cucumber = get_descriptor("cucumber", frameworks_dir=_REAL_FRAMEWORKS_DIR)
+    assert cucumber.language == "typescript"
+    # the BDD overlay must instruct emitting BOTH artifacts
+    assert "step definition" in cucumber.context_block.lower()
+    assert ".feature" in cucumber.context_block
