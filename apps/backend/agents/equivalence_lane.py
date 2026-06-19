@@ -102,11 +102,20 @@ def _parse_results(stdout: str) -> list[dict[str, Any]]:
     end = stdout.rfind("]")
     if start == -1 or end == -1 or end < start:
         return []
+    blob = stdout[start : end + 1]
     try:
-        data = json.loads(stdout[start : end + 1])
-        return data if isinstance(data, list) else []
+        data = json.loads(blob)
     except ValueError:
-        return []
+        # Some log transports (e.g. certain k8s pod-log clients) re-serialise the
+        # captured stdout as a Python literal (single quotes). The data is the
+        # same; parse it safely as a literal.
+        import ast
+
+        try:
+            data = ast.literal_eval(blob)
+        except (ValueError, SyntaxError):
+            return []
+    return data if isinstance(data, list) else []
 
 
 def capture_oracle(
@@ -302,14 +311,59 @@ def run_from_spec(
     oracle_root = project_dir / ".aifactory" / "oracle"
     if not oracle_root.exists():
         oracle_root = project_dir
-    image = os.getenv("TFACTORY_EQUIVALENCE_IMAGE", "tfactory-runner-pytest:latest")
+    # Backend: 'docker' (default, local DockerRunner) or 'kube' (in-cluster
+    # k8s-Job — the AIFactory/TFactory pods have no container runtime).
+    backend = os.getenv("TFACTORY_EQUIVALENCE_BACKEND", "docker").strip().lower()
+    if backend == "kube":
+        image = os.getenv("TFACTORY_EQUIVALENCE_IMAGE", "tfactory-runner-nix:latest")
+        default_runner = _kube_oracle_runner(image)
+    else:
+        image = os.getenv("TFACTORY_EQUIVALENCE_IMAGE", "tfactory-runner-pytest:latest")
+        default_runner = _docker_oracle_runner(image)
     result = run_equivalence_lane(
         contract,
         oracle_root=oracle_root,
         candidate_root=project_dir,
-        oracle_runner=oracle_runner or _docker_oracle_runner(image),
-        candidate_runner=candidate_runner or _docker_oracle_runner(image),
+        oracle_runner=oracle_runner or default_runner,
+        candidate_runner=candidate_runner or default_runner,
         findings_dir=Path(spec_dir) / "findings",
     )
     merge_verdicts(spec_dir, result["verdicts"])
     return result
+
+
+def _kube_oracle_runner(
+    image: str = "tfactory-runner-nix:latest", namespace: str = "factory"
+) -> RunnerFn:
+    """Oracle runner via an in-cluster k8s Job (RFC-0005 substrate).
+
+    The pods have no container runtime, so the equivalence lane runs the harness
+    as an ephemeral Kubernetes Job. The (small) source tree + harness + vectors
+    are embedded base64 in the Job command — for large repos the PVC co-mount
+    path (KubeJobSandbox repo_pvc) is preferred. Lazily imports the kube deps so
+    unit tests that inject a fake runner never need a cluster.
+    """
+    import base64
+    import io
+    import tarfile
+
+    from tools.runners.kube_sandbox import KubeJobSandbox
+
+    def _run(_harness: Path, root: Path, stdin: str) -> Any:
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            tar.add(str(root), arcname=".")
+        src = base64.b64encode(buf.getvalue()).decode()
+        harness = base64.b64encode(generate_python_oracle_harness().encode()).decode()
+        vectors = base64.b64encode(stdin.encode()).decode()
+        cmd = (
+            "set -e; mkdir -p /tmp/o && "
+            f"echo {src} | base64 -d | tar xz -C /tmp/o && "
+            f"echo {harness} | base64 -d > /tmp/o/h.py && "
+            f"echo {vectors} | base64 -d > /tmp/o/v.json && "
+            "cd /tmp/o && PYTHONPATH=/tmp/o python h.py v.json"
+        )
+        res = KubeJobSandbox(image=image, namespace=namespace).run([cmd], timeout=300)
+        return type("R", (), {"stdout": res.output, "returncode": res.exit_code})()
+
+    return _run

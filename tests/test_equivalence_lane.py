@@ -60,6 +60,13 @@ def test_parse_results_tolerates_log_noise():
     assert el._parse_results("") == []
 
 
+def test_parse_results_python_literal_fallback():
+    # Some k8s pod-log clients re-serialise stdout as a Python literal (single
+    # quotes); the data is the same and must still parse.
+    out = "[{'id': '1', 'output': {'refunded': 100}}]"
+    assert el._parse_results(out) == [{"id": "1", "output": {"refunded": 100}}]
+
+
 # ── capture + candidate via injected runners ────────────────────────────
 
 

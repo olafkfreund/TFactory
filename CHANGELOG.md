@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.1 — equivalence lane: in-cluster k8s-Job backend (RFC-0010) (2026-06-19)
+
+- **In-cluster execution backend for the equivalence lane.** `agents/equivalence_lane.py` gains `_kube_oracle_runner` (runs the oracle harness as an ephemeral Kubernetes Job via `KubeJobSandbox` — the pods have no container runtime) selected by `TFACTORY_EQUIVALENCE_BACKEND=kube` (default `docker`). The small source tree + harness + vectors are embedded base64 in the Job command. **Smoke-validated on a live k3d cluster**: faithful rewrite 100% parity / PASS, buggy `fee()` 67% / FAIL. `scripts/demo_equivalence.py --kube` runs it end to end.
+- **Robust result parsing.** `_parse_results` now falls back to a Python-literal parse when JSON decode fails — some k8s pod-log clients re-serialise captured stdout with single quotes; the data is identical and must still parse.
+
 ## 0.10.0 — behavioral-equivalence lane for language migrations (RFC-0010) (2026-06-18)
 
 - **Differential/equivalence verification for a language rewrite ([RFC-0010](https://github.com/olafkfreund/Factory/blob/main/docs/rfc/0010-code-aware-planning-and-behavioral-equivalence.md), Factory#105).** `agents/equivalence_runner.py` is the pure core: it compares the new implementation against the legacy reference oracle over the golden corpus with numeric tolerance, order-sensitive structures, strict bools, and a cross-language error-class map (Python `ValueError` ≡ Rust `InvalidInput`). A `ParityReport` yields `parity_ratio`, per-vector verdicts, and an **honest claim** — partial parity, critical-vector divergence, and uncovered modules can never read as full equivalence.
