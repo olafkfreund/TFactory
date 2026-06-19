@@ -1,0 +1,73 @@
+# frameworks/karate/descriptor.yaml
+#
+# Karate (JVM) descriptor — API lane.
+#
+# Karate is a Gherkin-based API-testing DSL where the step definitions are
+# BUILT IN — a `.feature` file is a complete, runnable test (no glue code), which
+# is what makes it a single-artifact generation target (unlike Cucumber). Runs on
+# JUnit 5 in the shared tfactory-runner-java image (JDK 21 + Maven).
+#
+name: karate
+language: java
+lanes:
+  - api
+
+# Karate 1.4+ ships the stable `karate-junit5` runner used below.
+version_range: ">=1.4,<2.0"
+
+runtime:
+  image: tfactory-runner-java:latest
+  entrypoint:
+    - mvn
+    - "-B"
+    - "test"
+
+# Detection signals for an existing Karate project.
+manifest_signals:
+  - "pom.xml:karate"
+  - "pom.xml:karate-junit5"
+  - "karate-config.js"
+  - "build.gradle:karate"
+
+# Karate features live with the JUnit runners (resources) or alongside tests.
+test_path_conventions:
+  - "src/test/java/**/*.feature"
+  - "src/test/resources/**/*.feature"
+  - "**/*.feature"
+
+templates:
+  - rest-crud.feature.tmpl
+  - auth-flow.feature.tmpl
+  - schema-validation.feature.tmpl
+
+# API lane: coverage is on the served app, not the DSL — same stance as browser.
+coverage_strategy: skip
+
+context_block: |
+  You are generating Karate API tests (.feature files) on the JVM.
+
+  Structure:
+    - One Feature per endpoint/resource; one Scenario per behaviour.
+    - Use a Background for the shared base url + headers.
+    - karate-config.js supplies per-environment config (baseUrl, tokens) —
+      read it with karate.get('baseUrl'); never hard-code hosts.
+
+  Requests + assertions (the Karate DSL):
+    - Given url baseUrl  And path 'orders', orderId
+    - When method get   (or post/put/delete; set `request <payload>` first)
+    - Then status 200
+    - And match response == { id: '#string', total: '#number' }
+      — prefer fuzzy matchers (#string/#number/#uuid/#present) over brittle
+      exact values; use match each for arrays.
+
+  Reuse + data:
+    - Factor shared flows into a callable feature: * def r = call read('login.feature')
+    - Drive cases with Scenario Outline + Examples, not copy-paste.
+
+  Do NOT:
+    - write Java step-definition glue (Karate has none — the .feature IS the test);
+    - assert on volatile fields (timestamps, generated ids) with exact values;
+    - embed secrets — pull them from karate-config.js / env.
+
+# Karate is a DSL — there is no per-test code to mutate, so no mutation hook.
+evaluator_hooks: []

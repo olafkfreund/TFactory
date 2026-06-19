@@ -1,0 +1,73 @@
+# frameworks/selenium/descriptor.yaml
+#
+# Selenium (Python) descriptor — Browser lane.
+#
+# The cross-language browser-automation standard, driven here via pytest in
+# Python. Unlike Playwright, Selenium has NO auto-wait, so the context block
+# mandates explicit waits — the #1 source of browser-test flake. Runs in a
+# dedicated image carrying a real browser + matching webdriver.
+#
+name: selenium
+language: python
+lanes:
+  - browser
+
+# Selenium 4.x (the modern WebDriver-BiDi era; 4.0 dropped the legacy API).
+version_range: ">=4.0,<5.0"
+
+runtime:
+  # Image (Task: runner-images) = Python + selenium + chromium + chromedriver.
+  image: tfactory-runner-selenium:latest
+  entrypoint:
+    - python
+    - "-m"
+    - pytest
+    - "--junitxml=/scratch/junit.xml"
+
+manifest_signals:
+  - "requirements.txt:selenium"
+  - "pyproject.toml:selenium"
+  - "Pipfile:selenium"
+
+test_path_conventions:
+  - "tests/e2e/**/*.py"
+  - "tests/**/test_*selenium*.py"
+  - "tests/**/test_*e2e*.py"
+
+templates:
+  - login-flow.selenium.py.tmpl
+  - form-submit.selenium.py.tmpl
+  - data-loaded-page.selenium.py.tmpl
+
+# Browser lane: instruments the served app, not the test code — coverage N/A.
+coverage_strategy: skip
+
+context_block: |
+  You are generating Selenium browser tests in Python (pytest).
+
+  CRITICAL — Selenium has no auto-wait. Every interaction must wait explicitly:
+    - from selenium.webdriver.support.ui import WebDriverWait
+    - from selenium.webdriver.support import expected_conditions as EC
+    - WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.ID, "submit")))
+    - NEVER use time.sleep() — it is the #1 cause of flaky Selenium tests.
+
+  Selectors (in order of preference):
+    1. By.ID / By.NAME
+    2. By.CSS_SELECTOR with a data-testid (e.g. '[data-testid="submit"]')
+    3. By.CSS_SELECTOR (semantic) — last resort; avoid brittle nth-child.
+    NEVER use absolute XPath.
+
+  Page Object Model:
+    - When >1 test touches a page, put its locators + actions in a Page Object
+      class (pages/login_page.py); tests call methods, not raw locators.
+
+  Driver + determinism:
+    - Use a headless Chrome fixture (--headless=new, --no-sandbox in CI) provided
+      by conftest.py; one driver per test, torn down in a finally/fixture.
+    - The base URL comes from a fixture / env (TFACTORY_TARGET_URL); never hard-code.
+
+  Auth:
+    - Prefer seeding a session cookie / token over driving the login UI in every
+      test; drive the login UI once in a fixture if unavoidable.
+
+evaluator_hooks: []

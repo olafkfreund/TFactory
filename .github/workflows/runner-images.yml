@@ -39,7 +39,7 @@ jobs:
     strategy:
       fail-fast: false   # keep building remaining images if one fails
       matrix:
-        runner: [pytest, jest, playwright, vitest, cypress, java, cloud]
+        runner: [pytest, jest, playwright, vitest, cypress, java, selenium, cucumber, cloud]
 
     steps:
       - name: Checkout
@@ -115,6 +115,34 @@ jobs:
                 --tmpfs /tmp:rw,size=256m \
                 tfactory-runner-playwright:latest \
                 npx playwright --version
+              ;;
+            selenium)
+              docker run --rm \
+                --network=none \
+                --read-only \
+                --tmpfs /tmp:rw,size=128m \
+                tfactory-runner-selenium:latest \
+                python -c 'import selenium; print("tfactory-runner-selenium ok", selenium.__version__)'
+              docker run --rm \
+                --network=none \
+                --read-only \
+                --tmpfs /tmp:rw,size=128m \
+                tfactory-runner-selenium:latest \
+                chromedriver --version
+              ;;
+            cucumber)
+              docker run --rm \
+                --network=none \
+                --read-only \
+                --tmpfs /tmp:rw,size=256m \
+                tfactory-runner-cucumber:latest \
+                node -e 'console.log("tfactory-runner-cucumber ok")'
+              docker run --rm \
+                --network=none \
+                --read-only \
+                --tmpfs /tmp:rw,size=256m \
+                tfactory-runner-cucumber:latest \
+                npx cucumber-js --version
               ;;
             vitest)
               docker run --rm \
