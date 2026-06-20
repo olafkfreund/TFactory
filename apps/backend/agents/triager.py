@@ -673,9 +673,24 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> dict:
     # #75). CFactory renders it (#76) so a VAL-2 result never looks like "done".
     # Best-effort; also persisted to findings/verification.json.
     try:
-        from agents.val_block import read_verification_block
+        from agents.val_block import DEFAULT_TARGET_LEVEL, read_verification_block
 
-        _block = read_verification_block(spec_dir)
+        # RFC-0011: a higher autonomy_tier raises the VAL *floor* (target level).
+        # Absent/unknown tier => keep the default target (back-compat). The gate
+        # still recomputes achieved_level from what truly ran, so raising the
+        # floor can never overclaim — it only surfaces a larger honest gap.
+        _target = DEFAULT_TARGET_LEVEL
+        try:
+            from agents.task_contract import read_task_contract
+            from agents.tier_floor import tier_from_contract, val_floor_for
+
+            _floor = val_floor_for(tier_from_contract(read_task_contract(spec_dir)))
+            if _floor is not None:
+                _target = _floor
+        except Exception:  # noqa: BLE001 - tier read must never break emit
+            pass
+
+        _block = read_verification_block(spec_dir, target_level=_target)
         envelope["verification"] = _block
         _fdir = spec_dir / "findings"
         _fdir.mkdir(parents=True, exist_ok=True)
