@@ -1974,6 +1974,49 @@ class AgentService:
                 )
                 logger.info("[AgentService._monitor_process] _update_plan_status call completed")
 
+                # RFC-0016 (#465): record the terminal transition in the durable
+                # job-state store. Read the spec's native status + verdict count
+                # from status.json so the canonical lifecycle mapping is honest:
+                # a "triaged" with zero verdicts maps to `stuck` (#464), a
+                # `review_failed` to `failed`, etc. Best-effort; never raises.
+                try:
+                    from . import job_state_store as _jss
+                    _native_status: str | None = None
+                    _phase: str | None = None
+                    _has_verdict = True
+                    try:
+                        _status_path = (
+                            project_path / ".tfactory" / "specs" / spec_id / "status.json"
+                        )
+                        if _status_path.is_file():
+                            _sj = json.loads(_status_path.read_text())
+                            _native_status = _sj.get("status")
+                            _phase = _sj.get("phase")
+                            _has_verdict = int(_sj.get("verdicts_count") or 0) > 0
+                    except (json.JSONDecodeError, OSError):
+                        pass
+                    # Fall back to the process exit when status.json is absent.
+                    if _native_status is None:
+                        _native_status = "completed" if return_code == 0 else "failed"
+                    _err = (
+                        None
+                        if return_code == 0
+                        else f"verify exited with code {return_code}"
+                    )
+                    asyncio.create_task(
+                        _jss.record_terminal(
+                            task_id,
+                            service_status=_native_status,
+                            phase=_phase,
+                            has_verdict=_has_verdict,
+                            error=_err,
+                        )
+                    )
+                except Exception:
+                    logger.debug(
+                        "[AgentService] job-state terminal hook failed", exc_info=True
+                    )
+
             # Send email/in-app notifications on task completion or failure
             _notif_user_id = self._task_user_ids.pop(task_id, "")
 
@@ -2772,6 +2815,18 @@ class AgentService:
 
         self.running_tasks[task_id] = proc
 
+        # RFC-0016 (#465): mirror the in-memory running set into the durable
+        # Postgres job-state store so the admission count/running set survive a
+        # restart and are multi-replica safe. Best-effort + fire-and-forget so
+        # it never delays or breaks the live verify.
+        try:
+            from . import job_state_store as _jss
+            asyncio.create_task(
+                _jss.record_started(task_id, service_status="running")
+            )
+        except Exception:
+            logger.debug("[AgentService] job-state start hook failed", exc_info=True)
+
         # Initialize tracking for sequence numbers and start time
         self._task_sequence_numbers[task_id] = 0
         self._task_start_times[task_id] = datetime.now().isoformat()
@@ -2941,6 +2996,51 @@ class AgentService:
     def get_running_tasks(self) -> list[str]:
         """Get list of running task IDs."""
         return list(self.running_tasks.keys())
+
+    async def active_job_count(self) -> int:
+        """Durable, multi-replica-safe count of in-flight verifies (RFC-0016).
+
+        Reads the live count of ``queued|running`` rows from the Postgres
+        job-state store rather than this pod's in-memory ``running_tasks`` —
+        so the number the admission cap reads survives a restart and is
+        consistent across replicas (the cap *enforcement* is a thin follow-up
+        that consumes this count). Falls back to the in-memory size if the
+        store is unreachable.
+        """
+        try:
+            from ..database.engine import async_session_factory
+            from . import job_state_store as _jss
+
+            async with async_session_factory() as session:
+                return await _jss.get_job_state_store(session).active_count()
+        except Exception:
+            logger.warning(
+                "[AgentService] durable active-count failed; "
+                "falling back to in-memory running_tasks",
+                exc_info=True,
+            )
+            return len(self.running_tasks)
+
+    async def recover_in_flight_jobs(self) -> list[str]:
+        """Reconstruct in-flight verify ids from the durable store (RFC-0016).
+
+        A new/restarted control-plane replica calls this to learn which jobs
+        were in flight before it started, instead of trusting an empty
+        in-memory ``running_tasks``. Returns the job ids (spec/task ids).
+        """
+        try:
+            from ..database.engine import async_session_factory
+            from . import job_state_store as _jss
+
+            async with async_session_factory() as session:
+                records = await _jss.get_job_state_store(session).recover_in_flight()
+            return [r["job_id"] for r in records]
+        except Exception:
+            logger.warning(
+                "[AgentService] in-flight recovery failed (returning empty)",
+                exc_info=True,
+            )
+            return []
 
 
 # Global service instance
