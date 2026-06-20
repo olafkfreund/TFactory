@@ -604,6 +604,8 @@ def get_tfactory_planner_prompt(spec_dir: Path, project_dir: Path) -> str:
     catalog_block = _build_tests_catalog_block(spec_dir)
     # RFC-0002 declared test profile (#246) — authoritative over inference.
     profile_block = _build_contract_profile_block(spec_dir)
+    # RFC-0012 house testing-standards — follow the team's own test conventions.
+    house_block = _build_house_standards_block(spec_dir)
 
     context = (
         "## SPEC CONTEXT (TFactory Planner — initial mode)\n\n"
@@ -620,11 +622,70 @@ def get_tfactory_planner_prompt(spec_dir: Path, project_dir: Path) -> str:
         f"Emit `test_plan.json` via Write at: `{spec_dir / 'test_plan.json'}`\n\n"
         "---\n\n"
         f"{profile_block}"
+        f"{house_block}"
         f"{registry_block}\n"
         f"{catalog_block}\n"
         "---\n\n"
     )
     return context + body
+
+
+def _build_house_standards_block(spec_dir: Path) -> str:
+    """Render the team's house testing-standards block (RFC-0012), or "".
+
+    Surfaces ``epic_context.house_standards`` from the RFC-0002 contract so the
+    Planner generates tests the way *this team* tests (its frameworks, test
+    layout, golden-path guides) rather than generic defaults. Best-effort:
+    degrades to "" when no standards were retrieved; the fail-closed
+    ``standards_conformance`` gate catches a retrieved standard that is ignored.
+    """
+    try:
+        from agents.task_contract import read_task_contract
+
+        contract = read_task_contract(spec_dir)
+    except Exception:  # noqa: BLE001 — never break planning on a contract read
+        contract = None
+    if not isinstance(contract, dict):
+        return ""
+    epic_context = contract.get("epic_context")
+    house = epic_context.get("house_standards") if isinstance(epic_context, dict) else None
+    if not isinstance(house, dict) or not house.get("available"):
+        return ""
+    sources = [s for s in house.get("sources", []) if isinstance(s, dict)]
+    if not sources:
+        return ""
+
+    tools: list[str] = []
+    test_layout: list[str] = []
+    techdocs: list[str] = []
+    lifecycle = None
+    for src in sources:
+        conv = src.get("conventions")
+        if isinstance(conv, dict):
+            tools += [str(t) for t in conv.get("code_quality_tools", []) or []]
+            layout = conv.get("test_layout")
+            if layout:
+                test_layout.append(str(layout))
+        techdocs += [str(r) for r in src.get("techdocs_refs", []) or []]
+        lifecycle = lifecycle or src.get("lifecycle")
+
+    lines = ["## HOUSE TESTING STANDARDS (RFC-0012 — FOLLOW THESE)\n"]
+    lines.append(
+        "This team has its own standards. Plan tests the way they test — over "
+        "generic defaults. The `standards_conformance` gate fails the build when "
+        "a retrieved standard is ignored.\n"
+    )
+    if tools:
+        lines.append(f"- **Quality tools to honor:** {', '.join(dict.fromkeys(tools))}")
+    if test_layout:
+        lines.append(f"- **Test layout:** {', '.join(dict.fromkeys(test_layout))}")
+    if lifecycle:
+        lines.append(f"- **Component lifecycle:** {lifecycle}")
+    if techdocs:
+        lines.append("- **Consult these team testing guides (TechDocs):**")
+        for ref in dict.fromkeys(techdocs):
+            lines.append(f"  - `{ref}`")
+    return "\n".join(lines) + "\n\n"
 
 
 def _build_contract_profile_block(spec_dir: Path) -> str:
