@@ -717,8 +717,12 @@ def _deploy_gate_annotation(spec_dir: Path) -> dict | None:
     handback then enforce it. Production apply stays human-gated.
     """
     try:
-        from agents.deploy_policy import deploy_gate_for_spec  # noqa: PLC0415 - lazy by design
-        from agents.task_contract import read_task_contract  # noqa: PLC0415 - lazy by design
+        from agents.deploy_policy import (  # noqa: PLC0415 - lazy by design
+            deploy_gate_for_spec,
+        )
+        from agents.task_contract import (  # noqa: PLC0415 - lazy by design
+            read_task_contract,
+        )
 
         gate = deploy_gate_for_spec(read_task_contract(spec_dir), spec_dir)
         return gate if gate.get("required") else None
