@@ -47,6 +47,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from agents.workspace_status import truthy as _truthy
+
 logger = logging.getLogger(__name__)
 
 # A deliver function takes the envelope + its idempotency id and returns True
@@ -63,8 +65,8 @@ _DEFAULT_BACKOFF_CAP = 3600.0
 _DEFAULT_MAX_ATTEMPTS = 20
 
 
-def _truthy(value: str | None) -> bool:
-    return bool(value) and value.strip().lower() in ("1", "true", "yes", "on")
+# ``_truthy`` is the shared env-truthiness check (agents.workspace_status, #451),
+# aliased so the existing call sites below stay unchanged.
 
 
 def outbox_enabled() -> bool:

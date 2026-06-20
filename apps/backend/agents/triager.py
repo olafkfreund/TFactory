@@ -27,7 +27,6 @@ import logging as _logging
 import os
 import traceback
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
@@ -42,6 +41,12 @@ from agents.completion_envelope import (
 )
 from agents.completion_schema import (  # noqa: E402 - agents pkg resolved via sys.path
     COMPLETION_SCHEMA_VERSION as _COMPLETION_SCHEMA_VERSION,
+)
+from agents.workspace_status import (
+    now_iso,
+    read_status,
+    truthy,
+    write_status_patch,
 )
 
 _triage_log = _logging.getLogger(__name__)
@@ -354,18 +359,17 @@ def _mutate_catalog(
 # ─── Workspace helpers ─────────────────────────────────────────────────
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+# ─── Workspace helpers — shared via agents.workspace_status (#451).
+# Thin module-local aliases keep the existing call sites unchanged; _now_iso /
+# _read_status delegate straight to the shared implementation. _truthy aliases
+# the shared env-truthiness check. _write_status_patch reuses the shared core
+# write (which also emits the stage event) and then layers the Triager-specific
+# terminal-status completion callbacks on top.
+_now_iso = now_iso
 
 
 def _read_status(spec_dir: Path) -> dict:
-    status_path = spec_dir / "status.json"
-    if not status_path.exists():
-        return {}
-    try:
-        return json.loads(status_path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return {}
+    return read_status(spec_dir)
 
 
 # Terminal statuses the Triager can land on. A completion callback fires once
@@ -374,14 +378,10 @@ _TERMINAL_STATUSES = frozenset({"triaged", "triaged_empty", "triager_failed"})
 
 
 def _write_status_patch(spec_dir: Path, **fields: object) -> None:
+    # Shared core: merge + persist + emit the "triager" stage event (#95).
+    write_status_patch(spec_dir, "triager", **fields)
+    # Re-read the merged document for the terminal-status callbacks below.
     status = _read_status(spec_dir)
-    status.update(fields)
-    status["updated_at"] = _now_iso()
-    (spec_dir / "status.json").write_text(json.dumps(status, indent=2))
-    # Best-effort push-based progress event (#95); no-op unless opted in.
-    from agents.stage_events import emit_stage_event
-
-    emit_stage_event(spec_dir, status, stage="triager")
     # Fire the completion callback exactly once, when the task goes terminal.
     if fields.get("status") in _TERMINAL_STATUSES:
         _notify_completion(spec_dir, status)
@@ -414,10 +414,7 @@ def _write_status_patch(spec_dir: Path, **fields: object) -> None:
 # ─── Mode resolution: dry-run vs real ─────────────────────────────────
 
 
-def _truthy(env_val: str | None) -> bool:
-    if env_val is None:
-        return False
-    return env_val.strip().lower() in ("1", "true", "yes", "on")
+_truthy = truthy
 
 
 def _git_writer_dry_run() -> bool:

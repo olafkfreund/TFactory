@@ -37,6 +37,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from agents.workspace_status import truthy as _truthy
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -75,8 +77,8 @@ class Val3Outcome:
     output: str = ""
 
 
-def _truthy(value: str | None) -> bool:
-    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+# ``_truthy`` is the shared env-truthiness check (agents.workspace_status, #451),
+# aliased so the existing call sites below stay unchanged.
 
 
 def should_provision_val3(
