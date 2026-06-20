@@ -5,9 +5,8 @@ Final agent in the six-agent TFactory pipeline:
     Planner → Gen-Functional → Executor → Evaluator → Triager
 
 Reads ``findings/verdicts.json`` (written by the Evaluator), wraps
-each entry as a TriageCandidate, filters out rejects, dedups +
-ranks via the commit-2 primitives, renders triage_report.{md,json}
-via commit-3's renderer, then invokes the commit-4 git_writer +
+each entry as a TriageCandidate, filters out rejects, dedups + ranks,
+renders triage_report.{md,json}, then invokes the git_writer +
 pr_comment helpers (both DRY-RUN by default for safety — production
 opts in via env flags).
 
@@ -15,26 +14,9 @@ Per CLAUDE.md: "NO automatic pushes to GitHub - user controls when
 to push". Real-run defaults are off; the operator flips them per
 deployment.
 
-Task 8 commits (all landed):
-
-  ✓ commit 1 — Auto-fire scaffold + stub
-  ✓ commit 2 — Dedup + rank primitives
-  ✓ commit 3 — Triage report rendering (golden-file snapshot)
-  ✓ commit 4 — git_writer + pr_comment helpers (dry-run first)
-  ✓ commit 5 — Real run_triager wires everything
-  ✓ commit 6 — Integration test + close #9
-
-  (Sub-task 8.4 — trim AIFactory's runners/github/ to a minimal
-  pr_comment.py — is deferred to a follow-up commit; the web-server
-  still consumes pieces of that tree and needs careful surgery.)
-
-Task 11 commits (v0.2 catalog-aware Triager):
-
-  ✓ commit 1 — Catalog read at Triager start + CandidateDecision dataclass
-  ✓ commit 2 — lookup_by_ac integration + intent derivation
-  ✓ commit 3 — UPDATE vs CREATE branching + framework path derivation
-  ✓ commit 4 — SKIP for operator_locked + report rendering with intent
-  ✓ commit 5 — Catalog mutation + 18+ test cases + close #27
+The catalog-aware path (v0.2) reads the tests catalog at Triager start,
+derives intent, branches UPDATE vs CREATE (SKIP for operator_locked),
+and mutates the catalog on a successful run.
 """
 
 from __future__ import annotations

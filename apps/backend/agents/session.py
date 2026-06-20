@@ -67,10 +67,12 @@ def _append_build_progress(
     commit_ref = f" ({commit_hash[:8]})" if commit_hash else ""
     line = f"  [x] {subtask_id}: {desc}{commit_ref}\n"
     try:
-        with open(progress_file, "a") as f:
+        with progress_file.open("a") as f:
             f.write(line)
-    except OSError:
-        pass
+    except OSError as e:
+        # Best-effort frontend breadcrumb — degrade quietly but leave a trace
+        # so a disappearing build-progress.txt is debuggable (was silent).
+        logger.debug("Could not append to %s: %s", progress_file, e)
 
 
 async def post_session_processing(

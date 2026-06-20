@@ -10,18 +10,9 @@ mutate-and-check, lint promotion + the LLM's semantic-relevance call),
 hands them to an LLM via the evaluator.md prompt, then validates the
 verdicts.json the LLM writes.
 
-Task 7 commits (all landed):
+Browser-lane AppRuntime status transitions:
 
-  ✓ commit 1 — Auto-fire scaffold + stub
-  ✓ commit 2 — Coverage-delta + 3× stability re-run primitives
-  ✓ commit 3 — Mutate-and-check probe + flake-lint promotion primitives
-  ✓ commit 4 — evaluator.md prompt + assembly helper
-  ✓ commit 5 — Real run_evaluator with SDK + 5 signals → verdicts.json
-  ✓ commit 6 — Integration test + close #8
-
-Task 8 additions (Browser-lane AppRuntime status transitions):
-
-  The Evaluator now surfaces two Browser-lane phases in status.json so
+  The Evaluator surfaces two Browser-lane phases in status.json so
   the portal's LaneStatusGrid can show operators what is happening:
 
     ``executor_app_running``  — docker-compose services are up + healthy;
@@ -73,8 +64,12 @@ from agents.evaluator_verdicts import _validate_verdicts
 
 _eval_log = _logging.getLogger(__name__)
 
-# Stamped into verdicts.json for traceability of which Evaluator produced them.
-_EVALUATOR_VERSION = "task7-commit5"
+# Schema version stamped into verdicts.json for traceability of the verdicts
+# document format the Evaluator produces. Bump when the verdicts.json shape
+# changes; this is a contract version, not a commit-provenance string.
+_VERDICTS_SCHEMA_VERSION = "1.0"
+# Back-compat alias: external readers/tests referenced this name.
+_EVALUATOR_VERSION = _VERDICTS_SCHEMA_VERSION
 
 
 # ─── Workspace helpers (local copy — same pattern as planner/gen_functional)
@@ -1274,7 +1269,7 @@ def _write_empty_verdicts(spec_dir: Path, mode: str) -> None:
     (verdicts_dir / "verdicts.json").write_text(
         json.dumps(
             {
-                "evaluator_version": _EVALUATOR_VERSION,
+                "evaluator_version": _VERDICTS_SCHEMA_VERSION,
                 "mode": mode,
                 "verdicts": [],
                 "generated_at": _now_iso(),
