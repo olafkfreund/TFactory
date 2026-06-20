@@ -1360,6 +1360,8 @@ CRITICAL_MODULES = frozenset(
         "test_build_deploy_test",  # build → deploy → test orchestration (#233)
         "test_java_lane",  # Java JUnit + PIT + JaCoCo wedge (#237)
         "test_task_contract",  # RFC-0002 task-contract reader (#245)
+        "test_model_routing",  # RFC-0014 routed test_gen model/runtime (#461)
+        "test_gen_functional_routing",  # RFC-0014 gen_functional consumes test_gen (#461)
         "test_planner_contract_profile",  # contract → planner profile block (#246)
         "test_contract_scope",  # honor coverage/mutation/security scope (#247)
         "test_ac_to_code_map",  # ac_to_code_map precise targeting (#248)
