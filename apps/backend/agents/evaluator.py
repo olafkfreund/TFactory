@@ -39,14 +39,19 @@ Browser-lane AppRuntime status transitions:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging as _logging
 import os
+import shutil
 import traceback
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
+
+if TYPE_CHECKING:
+    from tools.runners.docker_runner import DockerRunResult
 
 # Cohesive helpers extracted to focused modules (issue #450, god-file split).
 # Re-imported here so the in-module callers and the public/test import paths
@@ -60,6 +65,11 @@ from agents.evaluator_targets import (
     _test_credential_specs,
 )
 from agents.evaluator_verdicts import _validate_verdicts
+from agents.nix_env import (
+    environment_from_contract,
+    is_nix_environment,
+    run_pytest_lane_via_nix,
+)
 from agents.workspace_status import now_iso, read_status, write_status_patch
 
 _eval_log = _logging.getLogger(__name__)
@@ -223,6 +233,89 @@ def _host_runner_mode() -> bool:
     return not _container_runtime_available()  # auto: host when no runtime
 
 
+def _nix_verify_mode(spec_dir: Path) -> bool:
+    """Whether the pytest lane should run via the Nix k8s Job (RFC-0016 #469).
+
+    nixjob is the DEFAULT verify execution path: ON when a Nix runner image is
+    configured (``TFACTORY_NIX_RUNNER_IMAGE``) AND the spec's contract declares a
+    nix environment — the toolchain then comes from the per-task flake, matching
+    the build env with no drift. ``TFACTORY_VERIFY_BACKEND`` overrides:
+    ``nixjob`` forces it on (even without a contract nix env, e.g. a repo-owned
+    flake), ``docker``/``host`` force the legacy runner. If nixjob is selected but
+    unavailable at run time, the caller falls back to host/docker — a config gap
+    must never hard-fail the lane.
+    """
+    backend = os.environ.get("TFACTORY_VERIFY_BACKEND", "").strip().lower()
+    if backend in ("docker", "host"):
+        return False
+    if backend == "nixjob":
+        return True
+    if not os.environ.get("TFACTORY_NIX_RUNNER_IMAGE"):
+        return False
+    try:
+        return is_nix_environment(environment_from_contract(spec_dir))
+    except Exception:  # noqa: BLE001 - any contract-read issue → legacy runner
+        return False
+
+
+def _maybe_nix_verify(
+    spec_dir: Path,
+    project_dir: Path,
+    test_file: Path,
+    extra_env: dict[str, str],
+) -> DockerRunResult | None:
+    """Run the pytest lane via the Nix k8s Job when selected, else None.
+
+    Returns the DockerRunResult-shaped result on a real run, or None when nixjob
+    isn't selected / is unavailable / errors — so the caller falls through to the
+    legacy host/docker runner. Never raises (a config gap must not fail the lane).
+    """
+    if not _nix_verify_mode(spec_dir):
+        return None
+    try:
+        nix_res = run_pytest_lane_via_nix(
+            spec_dir, project_dir, test_file, extra_env=extra_env, timeout=300
+        )
+    except Exception as exc:  # noqa: BLE001 - never fail the lane on a config gap
+        _eval_log.warning(
+            "[evaluator] nixjob verify errored (%s); falling back to host/docker",
+            exc,
+        )
+        return None
+    if nix_res is None:
+        _eval_log.info(
+            "[evaluator] nixjob verify unavailable for %s; falling back to host/docker",
+            Path(spec_dir).name,
+        )
+    return nix_res
+
+
+def _stage_sut_into_scratch(scratch: Path, test_file: Path, project_dir: Path) -> None:
+    """Copy the SUT into ``scratch`` and drop the specific test under ``tests/``.
+
+    Done on the host (scratch is bind-mounted rw in the docker path) so the
+    read-only /work mount + container-uid write constraints don't bite, and the
+    whole tree is made world-writable for the non-root container uid. Shared by
+    the host + docker pytest runners.
+    """
+    for item in Path(project_dir).iterdir():
+        if item.name == ".git":
+            continue
+        dst = scratch / item.name
+        if item.is_dir():
+            shutil.copytree(item, dst, dirs_exist_ok=True)
+        else:
+            shutil.copy2(item, dst)
+    tdir = scratch / "tests"
+    tdir.mkdir(exist_ok=True)
+    shutil.copy2(test_file, tdir / Path(test_file).name)
+    # The container runs as a non-root uid; make scratch world-writable.
+    for p in scratch.rglob("*"):
+        with contextlib.suppress(OSError):
+            p.chmod(0o777)
+    scratch.chmod(0o777)
+
+
 def _ensure_host_venv(project_dir: Path) -> Path:
     """A per-project venv with the project's deps + pytest/pytest-cov (built once)."""
     import subprocess
@@ -312,27 +405,7 @@ def _resolve_runner_fn(
     def _run(test_file: Path, project_dir_arg: Path, seed: int) -> DockerRunResult:
         scratch = Path(_tmp.mkdtemp(prefix="tf-pytest-"))
         try:
-            # Host-side staging: copy the SUT, then drop the specific test file
-            # under tests/. Doing this on the host (scratch is bind-mounted rw)
-            # sidesteps the read-only /work mount + container-uid write issues.
-            for item in Path(project_dir_arg).iterdir():
-                if item.name == ".git":
-                    continue
-                dst = scratch / item.name
-                if item.is_dir():
-                    _sh.copytree(item, dst, dirs_exist_ok=True)
-                else:
-                    _sh.copy2(item, dst)
-            tdir = scratch / "tests"
-            tdir.mkdir(exist_ok=True)
-            _sh.copy2(test_file, tdir / Path(test_file).name)
-            # The container runs as a non-root uid; make scratch world-writable.
-            for p in scratch.rglob("*"):
-                try:
-                    p.chmod(0o777)
-                except OSError:
-                    pass
-            scratch.chmod(0o777)
+            _stage_sut_into_scratch(scratch, test_file, project_dir_arg)
 
             runner = DockerRunner(image=image, network=network, read_only_rootfs=False)
             cmd = (
@@ -368,6 +441,16 @@ def _resolve_runner_fn(
                 network,
             )
             extra_env.update(test_creds.env)
+            # RFC-0016 #469: nixjob is the DEFAULT verify path. Run the lane inside
+            # the per-task Nix dev shell as a k8s Job (toolchain from the flake, no
+            # drift). Returns None / falls through to the legacy host/docker runner
+            # on any config gap — never hard-fails the lane. Creds are env-only here
+            # and get wiped by whichever fallback path runs below.
+            nix_res = _maybe_nix_verify(spec_dir, project_dir_arg, test_file, extra_env)
+            if nix_res is not None:
+                sandbox_creds.wipe()
+                test_creds.wipe()
+                return nix_res
             # No container runtime (k3d pod) → run pytest on the host instead, so
             # the generated tests actually execute and produce verdicts. (Same
             # result shape; secrets still wiped.)

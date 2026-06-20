@@ -59,26 +59,37 @@ def _make_test_plan(num_completed: int = 1) -> dict:
     """Build a test_plan.json with N completed functional subtasks."""
     subtasks = []
     for i in range(num_completed):
-        subtasks.append({
-            "id": f"st{i}",
-            "description": f"Subtask {i}",
-            "status": "completed",
-            "lane": "functional",
-            "target": f"app/m{i}.py::f{i}",
-            "rationale": f"AC#{i+1}",
-            "files_to_create": [f"tests/test_{i}.py"],
-            "verification": {
-                "type": "command",
-                "command": f"pytest tests/test_{i}.py",
-            },
-        })
+        subtasks.append(
+            {
+                "id": f"st{i}",
+                "description": f"Subtask {i}",
+                "status": "completed",
+                "lane": "functional",
+                "target": f"app/m{i}.py::f{i}",
+                "rationale": f"AC#{i + 1}",
+                "files_to_create": [f"tests/test_{i}.py"],
+                "verification": {
+                    "type": "command",
+                    "command": f"pytest tests/test_{i}.py",
+                },
+            }
+        )
     return {
-        "feature": "x", "workflow_type": "feature", "services_involved": [],
-        "phases": [{
-            "phase": 1, "name": "main", "type": "implementation",
-            "subtasks": subtasks, "parallel_safe": False,
-        }],
-        "final_acceptance": [], "status": "in_progress", "planStatus": "pending",
+        "feature": "x",
+        "workflow_type": "feature",
+        "services_involved": [],
+        "phases": [
+            {
+                "phase": 1,
+                "name": "main",
+                "type": "implementation",
+                "subtasks": subtasks,
+                "parallel_safe": False,
+            }
+        ],
+        "final_acceptance": [],
+        "status": "in_progress",
+        "planStatus": "pending",
     }
 
 
@@ -86,11 +97,13 @@ def _write_test_file(spec_dir: Path, relpath: str) -> Path:
     """Write a clean, lint-passing pytest file."""
     f = spec_dir / relpath
     f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(textwrap.dedent('''
+    f.write_text(
+        textwrap.dedent('''
         """Test file."""
         def test_x():
             assert 1 == 1
-    ''').lstrip())
+    ''').lstrip()
+    )
     return f
 
 
@@ -100,14 +113,18 @@ def spec_dir(tmp_path: Path) -> Path:
     d.mkdir(parents=True)
     for sub in ("context", "tests", "findings", "logs", "memory"):
         (d / sub).mkdir()
-    (d / "status.json").write_text(json.dumps({
-        "task_id": "001-feat",
-        "project_id": "demo",
-        "spec_id": "001-feat",
-        "status": "generated",
-        "phase": "gen_functional_complete",
-        "tests_generated": 1,
-    }))
+    (d / "status.json").write_text(
+        json.dumps(
+            {
+                "task_id": "001-feat",
+                "project_id": "demo",
+                "spec_id": "001-feat",
+                "status": "generated",
+                "phase": "gen_functional_complete",
+                "tests_generated": 1,
+            }
+        )
+    )
     return d
 
 
@@ -122,9 +139,11 @@ def project_dir(tmp_path: Path) -> Path:
 
 
 def _install_runner_mock(
-    monkeypatch: pytest.MonkeyPatch, returncode: int = 0,
+    monkeypatch: pytest.MonkeyPatch,
+    returncode: int = 0,
 ) -> None:
     """Replace _resolve_runner_fn with a fixture that doesn't touch docker."""
+
     class _FakeResult:
         def __init__(self, rc: int):
             self.returncode = rc
@@ -146,9 +165,13 @@ def _install_sdk_mocks(
     captured_prompt: list[str] | None = None,
 ) -> None:
     """Mock the SDK seams; on _invoke_session, call verdicts_writer."""
+
     class _CM:
-        async def __aenter__(self): return self
-        async def __aexit__(self, *_): return None
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
 
     async def _resolve(*_a, **_kw):
         return _CM()
@@ -196,7 +219,9 @@ def _good_verdicts(test_ids: list[str], dest: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_happy_single_subtask(
-    spec_dir: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     (spec_dir / "test_plan.json").write_text(json.dumps(_make_test_plan(1)))
     _write_test_file(spec_dir, "tests/test_0.py")
@@ -219,7 +244,9 @@ async def test_happy_single_subtask(
 
 @pytest.mark.asyncio
 async def test_happy_multi_subtask(
-    spec_dir: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     (spec_dir / "test_plan.json").write_text(json.dumps(_make_test_plan(3)))
     for i in range(3):
@@ -242,15 +269,19 @@ async def test_happy_multi_subtask(
 
 @pytest.mark.asyncio
 async def test_no_completed_subtasks_is_evaluated_empty(
-    spec_dir: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """No SDK call should happen — early exit at evaluated_empty."""
     (spec_dir / "test_plan.json").write_text(json.dumps(_make_test_plan(0)))
     _install_runner_mock(monkeypatch)
 
     sdk_called = {"n": 0}
+
     def _write(spec_dir_arg, _prompt):
         sdk_called["n"] += 1
+
     _install_sdk_mocks(monkeypatch, _write)
 
     ok = await run_evaluator(spec_dir, project_dir)
@@ -266,7 +297,9 @@ async def test_no_completed_subtasks_is_evaluated_empty(
 
 @pytest.mark.asyncio
 async def test_missing_plan_is_evaluator_failed(
-    spec_dir: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # No test_plan.json written
     _install_runner_mock(monkeypatch)
@@ -281,7 +314,9 @@ async def test_missing_plan_is_evaluator_failed(
 
 @pytest.mark.asyncio
 async def test_malformed_plan_is_evaluator_failed(
-    spec_dir: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     (spec_dir / "test_plan.json").write_text("not json at all")
     _install_runner_mock(monkeypatch)
@@ -299,7 +334,9 @@ async def test_malformed_plan_is_evaluator_failed(
 
 @pytest.mark.asyncio
 async def test_agent_didnt_write_verdicts_is_evaluator_failed(
-    spec_dir: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     (spec_dir / "test_plan.json").write_text(json.dumps(_make_test_plan(1)))
     _write_test_file(spec_dir, "tests/test_0.py")
@@ -316,7 +353,9 @@ async def test_agent_didnt_write_verdicts_is_evaluator_failed(
 
 @pytest.mark.asyncio
 async def test_verdicts_invalid_json(
-    spec_dir: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     (spec_dir / "test_plan.json").write_text(json.dumps(_make_test_plan(1)))
     _write_test_file(spec_dir, "tests/test_0.py")
@@ -324,6 +363,7 @@ async def test_verdicts_invalid_json(
 
     def _write(spec_dir_arg, _prompt):
         (spec_dir_arg / "findings" / "verdicts.json").write_text("not json {")
+
     _install_sdk_mocks(monkeypatch, _write)
 
     ok = await run_evaluator(spec_dir, project_dir)
@@ -335,16 +375,24 @@ async def test_verdicts_invalid_json(
 
 @pytest.mark.asyncio
 async def test_verdicts_missing_array(
-    spec_dir: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     (spec_dir / "test_plan.json").write_text(json.dumps(_make_test_plan(1)))
     _write_test_file(spec_dir, "tests/test_0.py")
     _install_runner_mock(monkeypatch)
 
     def _write(spec_dir_arg, _prompt):
-        (spec_dir_arg / "findings" / "verdicts.json").write_text(json.dumps({
-            "evaluator_version": "x", "verdicts": "not an array",
-        }))
+        (spec_dir_arg / "findings" / "verdicts.json").write_text(
+            json.dumps(
+                {
+                    "evaluator_version": "x",
+                    "verdicts": "not an array",
+                }
+            )
+        )
+
     _install_sdk_mocks(monkeypatch, _write)
 
     ok = await run_evaluator(spec_dir, project_dir)
@@ -355,17 +403,24 @@ async def test_verdicts_missing_array(
 
 @pytest.mark.asyncio
 async def test_verdicts_invalid_verdict_value(
-    spec_dir: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     (spec_dir / "test_plan.json").write_text(json.dumps(_make_test_plan(1)))
     _write_test_file(spec_dir, "tests/test_0.py")
     _install_runner_mock(monkeypatch)
 
     def _write(spec_dir_arg, _prompt):
-        (spec_dir_arg / "findings" / "verdicts.json").write_text(json.dumps({
-            "evaluator_version": "x",
-            "verdicts": [{"test_id": "st0", "verdict": "maybe-yes"}],
-        }))
+        (spec_dir_arg / "findings" / "verdicts.json").write_text(
+            json.dumps(
+                {
+                    "evaluator_version": "x",
+                    "verdicts": [{"test_id": "st0", "verdict": "maybe-yes"}],
+                }
+            )
+        )
+
     _install_sdk_mocks(monkeypatch, _write)
 
     ok = await run_evaluator(spec_dir, project_dir)
@@ -377,16 +432,23 @@ async def test_verdicts_invalid_verdict_value(
 
 @pytest.mark.asyncio
 async def test_verdicts_missing_test_id(
-    spec_dir: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     (spec_dir / "test_plan.json").write_text(json.dumps(_make_test_plan(1)))
     _write_test_file(spec_dir, "tests/test_0.py")
     _install_runner_mock(monkeypatch)
 
     def _write(spec_dir_arg, _prompt):
-        (spec_dir_arg / "findings" / "verdicts.json").write_text(json.dumps({
-            "verdicts": [{"verdict": "accept"}],  # no test_id
-        }))
+        (spec_dir_arg / "findings" / "verdicts.json").write_text(
+            json.dumps(
+                {
+                    "verdicts": [{"verdict": "accept"}],  # no test_id
+                }
+            )
+        )
+
     _install_sdk_mocks(monkeypatch, _write)
 
     ok = await run_evaluator(spec_dir, project_dir)
@@ -400,18 +462,27 @@ async def test_verdicts_missing_test_id(
 
 @pytest.mark.asyncio
 async def test_session_error_is_evaluator_failed(
-    spec_dir: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     (spec_dir / "test_plan.json").write_text(json.dumps(_make_test_plan(1)))
     _write_test_file(spec_dir, "tests/test_0.py")
     _install_runner_mock(monkeypatch)
 
     class _CM:
-        async def __aenter__(self): return self
-        async def __aexit__(self, *_): return None
-    async def _resolve(*_a, **_kw): return _CM()
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+    async def _resolve(*_a, **_kw):
+        return _CM()
+
     async def _invoke(*_a, **_kw):
         raise RuntimeError("session blew up")
+
     monkeypatch.setattr("agents.evaluator._resolve_evaluator_client", _resolve)
     monkeypatch.setattr("agents.evaluator._invoke_session", _invoke)
 
@@ -428,7 +499,9 @@ async def test_session_error_is_evaluator_failed(
 
 @pytest.mark.asyncio
 async def test_prompt_includes_signal_context(
-    spec_dir: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The prompt the agent sees should include the per-test
     EVALUATOR CONTEXT block with the subtask's id + target."""
@@ -437,8 +510,10 @@ async def test_prompt_includes_signal_context(
     _install_runner_mock(monkeypatch)
 
     captured: list[str] = []
+
     def _write(spec_dir_arg, _prompt):
         _good_verdicts(["st0"], spec_dir_arg / "findings" / "verdicts.json")
+
     _install_sdk_mocks(monkeypatch, _write, captured_prompt=captured)
 
     await run_evaluator(spec_dir, project_dir)
@@ -464,8 +539,10 @@ async def test_prompt_includes_signal_context(
 def test_evaluator_signals_dataclass() -> None:
     """Sanity: the bundle dataclass has the documented fields."""
     sig = EvaluatorSignals(
-        test_id="x", test_file=Path("/x.py"),
-        target="a::b", rationale="ac",
+        test_id="x",
+        test_file=Path("/x.py"),
+        target="a::b",
+        rationale="ac",
     )
     assert sig.test_id == "x"
     assert sig.coverage_delta is None
@@ -478,17 +555,23 @@ def test_evaluator_signals_dataclass() -> None:
 
 
 def test_schedule_disabled_returns_none(
-    spec_dir: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("TFACTORY_AUTO_EVALUATE", "0")
+
     async def _run():
         return schedule_evaluator(spec_dir, project_dir)
+
     assert asyncio.run(_run()) is None
 
 
 @pytest.mark.asyncio
 async def test_schedule_enabled_returns_task(
-    spec_dir: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("TFACTORY_AUTO_EVALUATE", "1")
     # Make the real-path early-exit at evaluated_empty (no plan)
@@ -507,7 +590,9 @@ async def test_schedule_enabled_returns_task(
 
 @pytest.mark.asyncio
 async def test_gen_functional_success_path_schedules_evaluator(
-    spec_dir: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from agents import gen_functional
 
@@ -521,6 +606,7 @@ async def test_gen_functional_success_path_schedules_evaluator(
         return None
 
     import agents.evaluator as eval_mod
+
     monkeypatch.setattr(eval_mod, "schedule_evaluator", _capture)
 
     gen_functional._advance_to_evaluator(spec_dir, project_dir)
@@ -529,11 +615,17 @@ async def test_gen_functional_success_path_schedules_evaluator(
 
 
 def test_advance_to_evaluator_swallows_import_errors(
-    spec_dir: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from agents import gen_functional
 
-    original_import = __builtins__["__import__"] if isinstance(__builtins__, dict) else __builtins__.__import__
+    original_import = (
+        __builtins__["__import__"]
+        if isinstance(__builtins__, dict)
+        else __builtins__.__import__
+    )
 
     def _selective_raiser(name, *args, **kwargs):
         if name == "agents.evaluator":
@@ -824,7 +916,8 @@ def test_validate_verdicts_accepts_absent_coverage_pct(tmp_path: Path) -> None:
 
 
 def test_validate_verdicts_warns_on_unexpected_numeric_for_browser_lane(
-    tmp_path: Path, caplog,
+    tmp_path: Path,
+    caplog,
 ) -> None:
     """When skip_coverage_test_ids includes the test_id and the LLM emits a
     numeric coverage_delta_pct, a warning is logged and the verdict is
@@ -847,3 +940,75 @@ def test_validate_verdicts_warns_on_unexpected_numeric_for_browser_lane(
     assert count == 1
     # Warning should mention the test_id and the numeric value
     assert any("browser-test-0" in r.message for r in caplog.records)
+
+
+# ── _nix_verify_mode precedence (RFC-0016 #469) ──────────────────────────
+
+
+def _contract_dir(tmp_path: Path, env: dict | None) -> Path:
+    spec = tmp_path / "specs" / "099"
+    (spec / "context").mkdir(parents=True, exist_ok=True)
+    contract: dict = {"contract_version": "2", "tfactory": {"lanes": ["unit"]}}
+    if env is not None:
+        contract["environment"] = env
+    (spec / "context" / "task_contract.json").write_text(json.dumps(contract))
+    return spec
+
+
+_NIX_ENV = {"provisioning": {"method": "nix", "generated": True}}
+_IMG_ENV = {"provisioning": {"method": "image"}}
+
+
+def test_nix_verify_mode_default_on_with_image_and_nix_env(tmp_path, monkeypatch):
+    from agents.evaluator import _nix_verify_mode
+
+    monkeypatch.setenv("TFACTORY_NIX_RUNNER_IMAGE", "ghcr.io/x/nix:latest")
+    monkeypatch.delenv("TFACTORY_VERIFY_BACKEND", raising=False)
+    spec = _contract_dir(tmp_path, _NIX_ENV)
+    assert _nix_verify_mode(spec) is True
+
+
+def test_nix_verify_mode_off_when_not_nix_env(tmp_path, monkeypatch):
+    from agents.evaluator import _nix_verify_mode
+
+    monkeypatch.setenv("TFACTORY_NIX_RUNNER_IMAGE", "ghcr.io/x/nix:latest")
+    monkeypatch.delenv("TFACTORY_VERIFY_BACKEND", raising=False)
+    spec = _contract_dir(tmp_path, _IMG_ENV)
+    assert _nix_verify_mode(spec) is False
+
+
+def test_nix_verify_mode_off_without_image(tmp_path, monkeypatch):
+    from agents.evaluator import _nix_verify_mode
+
+    monkeypatch.delenv("TFACTORY_NIX_RUNNER_IMAGE", raising=False)
+    monkeypatch.delenv("TFACTORY_VERIFY_BACKEND", raising=False)
+    spec = _contract_dir(tmp_path, _NIX_ENV)
+    assert _nix_verify_mode(spec) is False
+
+
+def test_nix_verify_mode_backend_force_nixjob(tmp_path, monkeypatch):
+    from agents.evaluator import _nix_verify_mode
+
+    # forced even without a contract nix env (e.g. a repo-owned flake)
+    monkeypatch.setenv("TFACTORY_VERIFY_BACKEND", "nixjob")
+    monkeypatch.delenv("TFACTORY_NIX_RUNNER_IMAGE", raising=False)
+    spec = _contract_dir(tmp_path, _IMG_ENV)
+    assert _nix_verify_mode(spec) is True
+
+
+def test_nix_verify_mode_backend_force_docker_overrides(tmp_path, monkeypatch):
+    from agents.evaluator import _nix_verify_mode
+
+    monkeypatch.setenv("TFACTORY_VERIFY_BACKEND", "docker")
+    monkeypatch.setenv("TFACTORY_NIX_RUNNER_IMAGE", "ghcr.io/x/nix:latest")
+    spec = _contract_dir(tmp_path, _NIX_ENV)
+    assert _nix_verify_mode(spec) is False
+
+
+def test_nix_verify_mode_backend_force_host_overrides(tmp_path, monkeypatch):
+    from agents.evaluator import _nix_verify_mode
+
+    monkeypatch.setenv("TFACTORY_VERIFY_BACKEND", "host")
+    monkeypatch.setenv("TFACTORY_NIX_RUNNER_IMAGE", "ghcr.io/x/nix:latest")
+    spec = _contract_dir(tmp_path, _NIX_ENV)
+    assert _nix_verify_mode(spec) is False

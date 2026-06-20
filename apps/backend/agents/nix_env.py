@@ -18,17 +18,24 @@ runtime — the lane runs as a k8s Job using the tfactory-runner-nix image).
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from agents.task_contract import read_task_contract
+from tools.runners.docker_runner import DockerRunResult
 from tools.runners.nix_provisioner import (
     Manifest,
     generate_flake,
     nix_develop_argv,
 )
+
+if TYPE_CHECKING:
+    from tools.runners.kube_sandbox import KubeJobSandbox
 
 _log = logging.getLogger(__name__)
 
@@ -86,7 +93,7 @@ def detect_serve_command(
     return None
 
 
-def nix_runner_from_env():
+def nix_runner_from_env() -> KubeJobSandbox | None:
     """Build a KubeJobSandbox from the deployment's TFACTORY_* env, or None when
     the Nix-lane sandbox isn't configured (so callers degrade gracefully)."""
     import os
@@ -111,6 +118,115 @@ _JOB_SCRIPT = "_tf_nix_job.sh"
 _E2E_STAGE = ".tf_e2e"  # staged generated browser specs (in the worktree)
 _PW_CONFIG = "_tf_pw.config.ts"
 _SHOTS = "shots"
+_PYTEST_STAGE = ".tf_pytest"  # staged junit/coverage the Nix Job writes back
+_NIX_MOUNT = "/work"  # where KubeJobSandbox co-mounts the worktree in the Job
+
+
+def run_pytest_lane_via_nix(
+    spec_dir: Path,
+    project_dir: Path,
+    test_file: Path,
+    *,
+    extra_env: dict[str, str] | None = None,
+    timeout: int = 300,
+) -> DockerRunResult | None:
+    """Run ONE pytest file inside the per-task Nix dev shell as a k8s Job.
+
+    The toolchain (python + pytest + pytest-cov) comes from the materialized flake
+    (declared in the contract ``environment``), not the image — so the verify env
+    matches the build env with no drift. The worktree is co-mounted at
+    ``_NIX_MOUNT``; the test is staged into ``tests/`` there (the Job sees the real
+    worktree, not a host scratch copy, so ``from <module> import ...`` resolves the
+    same way the DockerRunner path does), pytest writes junit + coverage into a
+    staging dir on the worktree, and we collect them back as a DockerRunResult-
+    shaped result.
+
+    Returns None when there's no nix environment or the sandbox isn't configured,
+    so the caller falls back to the host/docker runner. Mirrors the staging +
+    collection pattern of ``run_browser_evidence``.
+    """
+    mount = _NIX_MOUNT
+    env = environment_from_contract(spec_dir)
+    plan = materialize_flake(spec_dir, project_dir, env=env)
+    if plan is None:
+        return None
+    sandbox = nix_runner_from_env()
+    if sandbox is None:
+        _log.info("run_pytest_lane_via_nix: TFACTORY_NIX_RUNNER_IMAGE unset; skipping")
+        return None
+
+    pd = Path(project_dir)
+    name = Path(test_file).name
+    tests_dir = pd / "tests"
+    tests_dir.mkdir(exist_ok=True)
+    staged_test = tests_dir / name
+    # Stage the specific (generated or mutated) test into the worktree's tests/
+    # dir so the co-mounted Job runs THAT file. The SUT already lives in the
+    # worktree, so unlike the host/docker path we don't copy the whole project.
+    if Path(test_file).resolve() != staged_test.resolve():
+        shutil.copy2(test_file, staged_test)
+    stage = pd / _PYTEST_STAGE
+    shutil.rmtree(stage, ignore_errors=True)
+    stage.mkdir(parents=True, exist_ok=True)
+    # The Job runs as a non-root uid against the co-mounted worktree; make the
+    # staging dir writable so pytest can drop junit/coverage there.
+    with contextlib.suppress(OSError):
+        stage.chmod(0o777)
+
+    # Inject seed/credentials the host/docker path would set, exported in-shell so
+    # the test process inherits them (PYTHONHASHSEED, TFACTORY_TARGET_URL, ...).
+    exports = "".join(
+        f"export {k}={_shquote(str(v))}\n" for k, v in (extra_env or {}).items()
+    )
+    pytest_cmd = (
+        f"cd {mount} && "
+        f"python -m pytest tests/{name} -p no:cacheprovider -q "
+        f"--junitxml={mount}/{_PYTEST_STAGE}/junit.xml "
+        f"--cov-report=xml:{mount}/{_PYTEST_STAGE}/coverage.xml --cov=. 2>&1; "
+        "echo __PYTEST_EXIT=$?"
+    )
+    (pd / _JOB_SCRIPT).write_text(
+        "#!/usr/bin/env bash\nset +e\n" + exports + pytest_cmd + "\n",
+        encoding="utf-8",
+    )
+    job_cmd = f"nix develop path:{mount}#default --command bash {mount}/{_JOB_SCRIPT}"
+    try:
+        res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)
+    finally:
+        (pd / _JOB_SCRIPT).unlink(missing_ok=True)
+        staged_test.unlink(missing_ok=True)
+
+    code = _parse_pytest_exit(res.output)
+    junit = stage / "junit.xml"
+    cov = stage / "coverage.xml"
+    return DockerRunResult(
+        returncode=code,
+        stdout=res.output or "",
+        stderr="",
+        junit_xml_path=junit if junit.is_file() else None,
+        coverage_xml_path=cov if cov.is_file() else None,
+        argv=["nix", "develop", f"path:{mount}#default", "--", "pytest", name],
+    )
+
+
+def _shquote(s: str) -> str:
+    """Minimal POSIX single-quote escaping for an in-shell `export`."""
+    return "'" + s.replace("'", "'\"'\"'") + "'"
+
+
+def _parse_pytest_exit(output: str | None) -> int:
+    """Recover the pytest exit code from the ``__PYTEST_EXIT=<n>`` marker line.
+
+    The Job wraps pytest in a shell that always exits 0 (so the Job is
+    "succeeded") and appends the real code on a marker line. Returns the last
+    parseable marker, or 1 when none is present (treat a missing marker as a
+    failure rather than a false pass)."""
+    code = 1
+    for line in (output or "").splitlines():
+        if line.startswith("__PYTEST_EXIT="):
+            with contextlib.suppress(ValueError):
+                code = int(line.split("=", 1)[1])
+    return code
 
 
 def _stage_browser_specs(spec_dir: Path, project_dir: Path) -> int:
