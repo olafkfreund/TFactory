@@ -158,6 +158,40 @@ def test_envelope_verification_caps_on_a_failed_lane(
     assert block["achieved_level"] == "VAL-0"
 
 
+def test_envelope_tier_raises_val_floor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RFC-0011 (#444): a hard autonomy_tier raises the VAL target floor to VAL-3.
+
+    A unit-only pass still honestly reaches only VAL-1; the higher floor merely
+    surfaces a larger gap (target VAL-3) — it can never overclaim.
+    """
+    monkeypatch.setenv("TFACTORY_COMPLETION_SENTINEL", "1")
+    _seed_status(tmp_path)
+    (tmp_path / "context").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "context" / "task_contract.json").write_text(
+        json.dumps({"contract_version": "2", "execution": {"autonomy_tier": "hard"}})
+    )
+    _seed_verdicts(tmp_path, [{"test_id": "u1", "lane": "unit", "verdict": "accept"}])
+    _write_status_patch(tmp_path, status="triaged", phase="triager_complete")
+    block = _completed_envelope(tmp_path)["verification"]
+    assert block["target_level"] == "VAL-3"
+    # the truth is still only VAL-1 — the floor cannot fake a result
+    assert block["achieved_level"] == "VAL-1"
+
+
+def test_envelope_absent_tier_keeps_default_floor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Back-compat: no autonomy_tier => the default VAL-2 target is unchanged."""
+    monkeypatch.setenv("TFACTORY_COMPLETION_SENTINEL", "1")
+    _seed_status(tmp_path)
+    _seed_verdicts(tmp_path, [{"test_id": "u1", "lane": "unit", "verdict": "accept"}])
+    _write_status_patch(tmp_path, status="triaged", phase="triager_complete")
+    block = _completed_envelope(tmp_path)["verification"]
+    assert block["target_level"] == "VAL-2"
+
+
 def test_envelope_has_normalized_header(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

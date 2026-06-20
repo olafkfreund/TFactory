@@ -641,7 +641,27 @@ def _build_contract_profile_block(spec_dir: Path) -> str:
         profile = read_tfactory_profile(spec_dir)
     except Exception:  # noqa: BLE001 — never break planning on a contract read
         profile = None
-    if profile is None:
+    # RFC-0011: a difficulty tier raises the required-lane floor (and forces the
+    # equivalence lane on a migration/rewrite). Read it from the full contract so
+    # a tier can apply even when there is no explicit tfactory block. Additive:
+    # absent tier => no tier lanes, behaviour unchanged.
+    tier_lanes: tuple[str, ...] = ()
+    try:
+        from agents.task_contract import read_task_contract
+        from agents.tier_floor import (
+            change_mode_from_contract,
+            lanes_for,
+            tier_from_contract,
+        )
+
+        _contract = read_task_contract(spec_dir)
+        tier_lanes = lanes_for(
+            tier_from_contract(_contract), change_mode_from_contract(_contract)
+        )
+    except Exception:  # noqa: BLE001 — never break planning on a tier read
+        tier_lanes = ()
+
+    if profile is None and not tier_lanes:
         return ""
 
     lines = ["## DECLARED TEST PROFILE (RFC-0002 — AUTHORITATIVE)\n"]
@@ -651,13 +671,34 @@ def _build_contract_profile_block(spec_dir: Path) -> str:
         "frameworks/endpoints. Infer from the diff ONLY for fields left "
         "unspecified below. Do not add lanes the profile omits.\n"
     )
-    if profile.lanes:
-        lines.append(f"- **lanes** (generate these): {', '.join(profile.lanes)}")
-        if "security" in profile.lanes:
+
+    # Merge the contract-declared lanes with the tier-required floor. The tier
+    # ADDS lanes (a higher tier raises rigor); it never removes declared lanes.
+    declared = tuple(profile.lanes) if profile is not None else ()
+    required = list(declared)
+    for lane in tier_lanes:
+        if lane not in required:
+            required.append(lane)
+    profile_lanes = tuple(required)
+
+    if profile_lanes:
+        lines.append(f"- **lanes** (generate these): {', '.join(profile_lanes)}")
+        if tier_lanes:
+            added = [ln for ln in tier_lanes if ln not in declared]
+            if added:
+                lines.append(
+                    "  - NOTE: the difficulty tier (RFC-0011) requires these "
+                    f"additional lanes: {', '.join(added)}."
+                )
+        if profile is not None and "security" in profile.lanes:
             lines.append(
                 "  - NOTE: `security` lane is OUT OF SCOPE for TFactory (DEC-002) — "
                 "delegate to dedicated security pipelines; do not generate SAST/DAST."
             )
+    if profile is None:
+        # Tier-only profile (no RFC-0002 tfactory block): the lanes above are the
+        # whole story — the per-lane framework/endpoint detail is inferred.
+        return "\n".join(lines) + "\n\n---\n\n"
     if profile.frameworks:
         fw = ", ".join(f"{k}={v}" for k, v in profile.frameworks.items())
         lines.append(f"- **frameworks** (lane→framework): {fw}")
