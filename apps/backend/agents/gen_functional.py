@@ -66,23 +66,103 @@ def _write_status_patch(spec_dir: Path, **fields: object) -> None:
 # ─── SDK seams (mockable in tests) ──────────────────────────────────────
 
 
+# RFC-0014 runtime -> TFactory test-gen provider. Only runtimes that map to a
+# provider TFactory can actually generate tests with appear here; the gated
+# fan-out runtimes (claude-subagents, dynamic-workflow, antigravity) have no
+# TFactory provider and are intentionally absent, so they never override the
+# provider inferred from the model string.
+_RUNTIME_TO_PROVIDER: dict[str, str] = {
+    "claude": "claude",
+    "codex": "codex",
+    "ollama": "ollama",
+    "ollama-cloud": "ollama",
+}
+
+
+def _apply_runtime_override(
+    inferred_provider: str,
+    model: str,
+    runtime: str | None,
+) -> str:
+    """Optionally override the model-inferred provider with the routed runtime.
+
+    Only overrides when the runtime maps to a TFactory-supported test-gen
+    provider *and* the model string was provider-ambiguous — i.e. inference fell
+    back to its ``"claude"`` default for a model that is not actually a Claude
+    model (no ``claude``/``opus``/``sonnet``/``haiku`` signal). An explicitly
+    Claude model, an already-provider-prefixed model, or an unmapped/gated
+    runtime leaves the inferred provider untouched (back-compat).
+    """
+    if runtime is None:
+        return inferred_provider
+    mapped = _RUNTIME_TO_PROVIDER.get(runtime)
+    if mapped is None or mapped == inferred_provider:
+        return inferred_provider
+    # Only disambiguate; never override a confidently-inferred provider.
+    if inferred_provider != "claude":
+        return inferred_provider
+    lowered = model.strip().lower()
+    is_explicit_claude = lowered.startswith("claude-") or lowered in {
+        "opus",
+        "opus-1m",
+        "opus-4.5",
+        "opus-4.7",
+        "sonnet",
+        "haiku",
+    }
+    if is_explicit_claude:
+        return inferred_provider
+    return mapped
+
+
 async def _resolve_client(spec_dir: Path, project_dir: Path):
     """Resolve the Claude Agent SDK client for the generation phase.
 
     Same pattern as planner._resolve_planner_client — heavy imports
     deferred to runtime so tests can mock this seam without the SDK chain.
     """
+    from agents.model_routing import (  # noqa: PLC0415 - lazy by design
+        routed_test_gen_model,
+        runtime_from_contract,
+    )
+    from agents.task_contract import (  # noqa: PLC0415 - lazy by design
+        read_task_contract,
+    )
     from core.client import create_client
     from phase_config import (
         get_phase_model,
         get_phase_thinking_budget,
         get_provider_extra_kwargs,
         infer_provider_from_model,
+        resolve_model_id,
     )
     from providers.factory import get_provider
 
-    gen_model = get_phase_model(spec_dir, "coding", None)
+    # RFC-0014: prefer the cost-aware router's routed ``test_gen`` model from the
+    # contract's ``execution.phase_models`` (a cheap-but-capable model the router
+    # picked for test generation). Degrade to today's behaviour — the "coding"
+    # phase model — when the contract has no routed entry.
+    contract = read_task_contract(spec_dir)
+    routed_model = routed_test_gen_model(contract)
+    # The routed value is a shorthand/provider-prefixed string; resolve it to a
+    # full model ID exactly as get_phase_model would for the fallback path.
+    gen_model = (
+        resolve_model_id(routed_model)
+        if routed_model is not None
+        else get_phase_model(spec_dir, "coding", None)
+    )
+    # The provider is inferred from the model string (its prefix carries the
+    # provider). Honour the declared ``execution.runtime`` only when (a) a model
+    # was routed, (b) the runtime maps to a TFactory-supported test-gen provider,
+    # and (c) the model string is otherwise provider-ambiguous (inference fell
+    # through to its env/"claude" default for a non-claude model). Gated runtimes
+    # with no TFactory provider (claude-subagents, dynamic-workflow, antigravity)
+    # are recorded but never override the inferred provider — back-compat.
     provider_name = infer_provider_from_model(gen_model)
+    if routed_model is not None:
+        provider_name = _apply_runtime_override(
+            provider_name, gen_model, runtime_from_contract(contract)
+        )
     if provider_name == "claude":
         thinking_budget = get_phase_thinking_budget(spec_dir, "coding")
         return create_client(
