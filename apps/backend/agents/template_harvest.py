@@ -25,9 +25,10 @@ import json
 import logging
 import os
 import re
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 _log = logging.getLogger(__name__)
 
@@ -77,7 +78,9 @@ def _passes_bar(candidate: Any) -> bool:
     sig = _signals(verdict)
     stability = sig.get("stability")
     mutation = sig.get("mutation")
-    semantic = _get(verdict, "semantic_relevance", default=sig.get("semantic_relevance"))
+    semantic = _get(
+        verdict, "semantic_relevance", default=sig.get("semantic_relevance")
+    )
     return (
         stability in ("stable", None)
         and mutation in _MUTATION_OK
@@ -95,23 +98,29 @@ def _parametrise_python(body: str) -> tuple[str, list[str]]:
         return body, []
     mod = None
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module and node.module not in (
-            "__future__",
-            "pytest",
-            "httpx",
+        if (
+            isinstance(node, ast.ImportFrom)
+            and node.module
+            and node.module
+            not in (
+                "__future__",
+                "pytest",
+                "httpx",
+            )
         ):
             mod = node.module
             break
     if not mod:
         return body, []
-    new = re.sub(rf"\bfrom\s+{re.escape(mod)}\s+import\b", "from ${module_path} import", body)
+    new = re.sub(
+        rf"\bfrom\s+{re.escape(mod)}\s+import\b", "from ${module_path} import", body
+    )
     return new, ["module_path"]
 
 
 def _fingerprint(body: str) -> str:
     norm = re.sub(r"\s+", " ", body).strip()
     return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:16]
-
 
 
 def _load_index(lib_root: Path) -> dict:
@@ -126,7 +135,9 @@ def _load_index(lib_root: Path) -> dict:
 
 def _write_index(lib_root: Path, index: dict) -> None:
     lib_root.mkdir(parents=True, exist_ok=True)
-    (lib_root / "templates-index.json").write_text(json.dumps(index, indent=2, sort_keys=True))
+    (lib_root / "templates-index.json").write_text(
+        json.dumps(index, indent=2, sort_keys=True)
+    )
 
 
 def _detect_from_ext(rel: str) -> tuple[str, str]:
@@ -163,7 +174,9 @@ def _harvest_one(
     test_id = meta["test_id"]
     covers = meta["covers_acs"]
     rationale = meta["rationale"]
-    description = (rationale.splitlines()[0] if rationale else f"Harvested from {test_id}")[:160]
+    description = (
+        rationale.splitlines()[0] if rationale else f"Harvested from {test_id}"
+    )[:160]
 
     if (language or "").lower() == "python":
         tmpl_body, tvars = _parametrise_python(body)
@@ -191,7 +204,17 @@ def _harvest_one(
     out.write_text(content, encoding="utf-8")
 
     index["templates"].append(
-        {k: front[k] for k in ("description", "framework", "lane", "harvested_from", "fingerprint", "harvested_at")}
+        {
+            k: front[k]
+            for k in (
+                "description",
+                "framework",
+                "lane",
+                "harvested_from",
+                "fingerprint",
+                "harvested_at",
+            )
+        }
         | {"file": str(out.relative_to(lib_root))}
     )
     _write_index(lib_root, index)
@@ -249,7 +272,9 @@ def harvest_accepted_tests(
             "language": st.get("language") or _get(verdict, "language") or ext_lang,
             "lane": st.get("lane") or _get(verdict, "lane") or "unit",
             "test_id": _get(candidate, "test_id", default=st.get("id") or "harvested"),
-            "covers_acs": list(st.get("covers_acs") or _get(verdict, "covers_acs", default=[]) or []),
+            "covers_acs": list(
+                st.get("covers_acs") or _get(verdict, "covers_acs", default=[]) or []
+            ),
             "rationale": rationale,
         }
         for lib_root in roots:

@@ -220,7 +220,7 @@ def render_playwright_config(
         # passed to toHaveScreenshot('<arg>'); {ext} = the image extension.
         safe_target = _safe_component(visual_target, kind="target")
         snapshot_path_template = (
-            f'\n  snapshotPathTemplate: '
+            f"\n  snapshotPathTemplate: "
             f'"findings/visual_baselines/{safe_target}/{{arg}}{{ext}}",'
         )
     else:

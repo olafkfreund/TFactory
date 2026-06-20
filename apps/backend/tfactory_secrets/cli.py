@@ -28,7 +28,11 @@ def _cmd_audit(args) -> int:
     egress_cfg = getattr(cfg, "egress", None) if cfg else None
     manifest = build_manifest(creds, egress_cfg)
     if args.json:
-        print(json.dumps({"enabled": egress_enabled(project), **manifest.to_dict()}, indent=2))
+        print(
+            json.dumps(
+                {"enabled": egress_enabled(project), **manifest.to_dict()}, indent=2
+            )
+        )
     else:
         print(manifest.render_markdown())
     return 0
@@ -58,8 +62,10 @@ def _cmd_resolve(args) -> int:
             print(f"resolve failed: {exc}", file=sys.stderr)
             return 1
     # Never print the value — only a redacted summary.
-    print(f"resolved {args.ref}  →  backend={val.backend} "
-          f"source={val.source} value=<{len(val.value)} chars>")
+    print(
+        f"resolved {args.ref}  →  backend={val.backend} "
+        f"source={val.source} value=<{len(val.value)} chars>"
+    )
     return 0
 
 
@@ -72,12 +78,17 @@ def main(argv: list[str] | None = None) -> int:
     p_audit.add_argument("--json", action="store_true")
     p_audit.set_defaults(func=_cmd_audit)
 
-    sub.add_parser("doctor", help="report backend availability").set_defaults(func=_cmd_doctor)
+    sub.add_parser("doctor", help="report backend availability").set_defaults(
+        func=_cmd_doctor
+    )
 
     p_res = sub.add_parser("resolve", help="resolve a single ref (redacted output)")
     p_res.add_argument("ref")
-    p_res.add_argument("--allow-egress", action="store_true",
-                       help="permit non-local backends to egress")
+    p_res.add_argument(
+        "--allow-egress",
+        action="store_true",
+        help="permit non-local backends to egress",
+    )
     p_res.set_defaults(func=_cmd_resolve)
 
     args = parser.parse_args(argv)

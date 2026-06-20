@@ -104,7 +104,7 @@ def generate_subtask_prompt(
     verification = subtask.get("verification", {})
 
     # Get relative spec path
-    relative_spec = get_relative_spec_path(spec_dir, project_dir)
+    get_relative_spec_path(spec_dir, project_dir)
 
     # Build the prompt
     sections = []
@@ -252,9 +252,7 @@ def generate_planner_prompt(spec_dir: Path, project_dir: Path | None = None) -> 
     if planner_file.exists():
         prompt = planner_file.read_text()
     else:
-        prompt = (
-            "Read spec.md and create test_plan.json with phases and subtasks."
-        )
+        prompt = "Read spec.md and create test_plan.json with phases and subtasks."
 
     # Use project_dir for relative paths, or infer from spec_dir
     if project_dir is None:

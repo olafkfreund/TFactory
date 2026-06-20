@@ -25,9 +25,10 @@ path for self-hosted installs. The Checks API is a future enhancement.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import Protocol
 
 # GitHub commit-status states.
 _VALID_STATES = frozenset({"error", "failure", "pending", "success"})

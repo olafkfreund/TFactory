@@ -648,7 +648,9 @@ def _build_house_standards_block(spec_dir: Path) -> str:
     if not isinstance(contract, dict):
         return ""
     epic_context = contract.get("epic_context")
-    house = epic_context.get("house_standards") if isinstance(epic_context, dict) else None
+    house = (
+        epic_context.get("house_standards") if isinstance(epic_context, dict) else None
+    )
     if not isinstance(house, dict) or not house.get("available"):
         return ""
     sources = [s for s in house.get("sources", []) if isinstance(s, dict)]

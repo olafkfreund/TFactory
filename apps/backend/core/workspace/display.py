@@ -19,7 +19,7 @@ from worktree import WorktreeManager
 def show_build_summary(manager: WorktreeManager, spec_name: str) -> None:
     """Show a summary of what was built."""
     summary = manager.get_change_summary(spec_name)
-    files = manager.get_changed_files(spec_name)
+    manager.get_changed_files(spec_name)
 
     total = summary["new_files"] + summary["modified_files"] + summary["deleted_files"]
 
@@ -131,9 +131,7 @@ def print_merge_success(
                 ]
             )
             if spec_name:
-                lines.append(
-                    f"  python tfactory/run.py --spec {spec_name} --discard"
-                )
+                lines.append(f"  python tfactory/run.py --spec {spec_name} --discard")
         else:
             lines.extend(
                 [

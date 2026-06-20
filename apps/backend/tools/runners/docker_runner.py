@@ -32,9 +32,9 @@ import logging
 import os
 import shutil
 import subprocess
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Mapping, Sequence
 
 logger = logging.getLogger(__name__)
 

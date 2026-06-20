@@ -27,9 +27,10 @@ no-surprises posture of the Triager's other side-effects.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 # GitHub commit-status states we emit (subset of error/failure/pending/success).
 STATE_SUCCESS = "success"

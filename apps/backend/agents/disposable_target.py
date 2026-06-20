@@ -31,22 +31,23 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterator, Protocol
+from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "DisposableTarget",
-    "should_provision_val3",
-    "select_backend",
-    "disposable_target",
+    "Val3Outcome",
     "attempt_val3",
+    "disposable_target",
     "record_val3",
     "register_provisioner",
-    "Val3Outcome",
+    "select_backend",
+    "should_provision_val3",
 ]
 
 
@@ -105,7 +106,10 @@ def should_provision_val3(
 
     backend = select_backend(env=env)
     if backend is None:
-        return False, "no disposable-target backend available (local VM / sandbox cloud)"
+        return (
+            False,
+            "no disposable-target backend available (local VM / sandbox cloud)",
+        )
 
     # RFC-0007: a credentialed lane that couldn't be curated/reached stays not_run.
     acc = access or {}
@@ -175,7 +179,9 @@ def disposable_target(
             try:
                 target.teardown()
             except Exception as exc:  # noqa: BLE001 — teardown must never raise out
-                logger.error("VAL-3 target teardown failed for %s: %s", target.name, exc)
+                logger.error(
+                    "VAL-3 target teardown failed for %s: %s", target.name, exc
+                )
 
 
 def attempt_val3(
@@ -198,7 +204,9 @@ def attempt_val3(
     if not ok:
         return Val3Outcome(ran=False, reason=reason)
 
-    commands = (((profile or {}).get("levels") or {}).get("VAL-3") or {}).get("commands") or []
+    commands = (((profile or {}).get("levels") or {}).get("VAL-3") or {}).get(
+        "commands"
+    ) or []
     with disposable_target(spec, env=env) as target:
         if target is None:
             return Val3Outcome(
@@ -211,7 +219,8 @@ def attempt_val3(
             outputs.append(out)
             if not passed:
                 return Val3Outcome(
-                    ran=True, passed=False,
+                    ran=True,
+                    passed=False,
                     reason=f"VAL-3 command failed on {target.name}: {cmd}",
                     output="\n".join(outputs),
                 )

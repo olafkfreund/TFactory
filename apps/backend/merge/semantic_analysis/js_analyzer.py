@@ -78,12 +78,10 @@ def extract_js_elements(
                         content = get_text(child)
 
                         # Check if it's a function (arrow function or function expression)
-                        is_function = False
                         if value_node and value_node.type in {
                             "arrow_function",
                             "function",
                         }:
-                            is_function = True
                             elements[f"function:{name}"] = ExtractedElement(
                                 element_type="function",
                                 name=name,

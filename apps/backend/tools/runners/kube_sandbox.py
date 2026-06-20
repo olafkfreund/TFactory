@@ -161,8 +161,13 @@ class KubeJobSandbox:
                     self.data_root,
                 )
         manifest = build_job_manifest(
-            name, self.image, commands,
-            namespace=self.namespace, timeout=timeout, **repo_kw, **self.manifest_kw,
+            name,
+            self.image,
+            commands,
+            namespace=self.namespace,
+            timeout=timeout,
+            **repo_kw,
+            **self.manifest_kw,
         )
         api = client.ApiClient()
         batch, core = client.BatchV1Api(api), client.CoreV1Api(api)
@@ -188,7 +193,9 @@ class KubeJobSandbox:
                     )
                 except Exception as exc:  # noqa: BLE001
                     output = f"(log unavailable: {exc})"
-            return JobRunResult(succeeded, 0 if succeeded else 1, (output or "").strip())
+            return JobRunResult(
+                succeeded, 0 if succeeded else 1, (output or "").strip()
+            )
         finally:
             try:
                 await batch.delete_namespaced_job(

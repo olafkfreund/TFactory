@@ -110,7 +110,10 @@ def get_gemini_binary(custom_path: str | None = None) -> str:
     if shutil.which("antigravity"):
         return "antigravity"
     from pathlib import Path
-    custom_path_default = Path.home() / ".gemini" / "antigravity-cli" / "bin" / "antigravity"
+
+    custom_path_default = (
+        Path.home() / ".gemini" / "antigravity-cli" / "bin" / "antigravity"
+    )
     if custom_path_default.exists():
         return str(custom_path_default)
     if shutil.which("gemini"):
@@ -188,9 +191,7 @@ class GeminiCLIProvider(BaseLLMProvider):
                     prompt builder (may be several kB of text).
         """
         self._pending_prompt = prompt
-        logger.debug(
-            "GeminiCLIProvider: prompt stored (length=%d)", len(prompt)
-        )
+        logger.debug("GeminiCLIProvider: prompt stored (length=%d)", len(prompt))
 
     def receive_response(self) -> AsyncIterator[Any]:
         """Return an async generator that runs the Gemini CLI subprocess.
@@ -227,8 +228,14 @@ class GeminiCLIProvider(BaseLLMProvider):
         # Resolve the executable path early so callers get a clear error
         # message rather than a confusing FileNotFoundError from asyncio.
         resolved_binary = get_gemini_binary(self._gemini_path)
-        resolved_path = shutil.which(resolved_binary) if not resolved_binary.startswith("/") else resolved_binary
-        if resolved_path is None or (resolved_binary.startswith("/") and not Path(resolved_binary).exists()):
+        resolved_path = (
+            shutil.which(resolved_binary)
+            if not resolved_binary.startswith("/")
+            else resolved_binary
+        )
+        if resolved_path is None or (
+            resolved_binary.startswith("/") and not Path(resolved_binary).exists()
+        ):
             raise RuntimeError(
                 f"Gemini CLI executable not found: '{self._gemini_path}'. "
                 "Install the Gemini CLI or pass the correct path via "
@@ -238,9 +245,7 @@ class GeminiCLIProvider(BaseLLMProvider):
         cmd = self._build_command()
         cwd = str(self._working_dir) if self._working_dir else None
 
-        logger.debug(
-            "GeminiCLIProvider: spawning subprocess cmd=%r cwd=%r", cmd, cwd
-        )
+        logger.debug("GeminiCLIProvider: spawning subprocess cmd=%r cwd=%r", cmd, cwd)
 
         proc: asyncio.subprocess.Process | None = None
         try:
@@ -283,9 +288,7 @@ class GeminiCLIProvider(BaseLLMProvider):
         # A non-zero exit with no stdout is a fatal error.
         if proc.returncode != 0 and not stdout_text:
             error_detail = stderr_text or f"exit code {proc.returncode}"
-            raise RuntimeError(
-                f"Gemini CLI exited with an error: {error_detail}"
-            )
+            raise RuntimeError(f"Gemini CLI exited with an error: {error_detail}")
 
         # Log stderr as a warning when present but non-fatal.
         if stderr_text:

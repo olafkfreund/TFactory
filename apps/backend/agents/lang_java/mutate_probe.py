@@ -19,10 +19,11 @@ from __future__ import annotations
 
 import re
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 
 class JavaMutationVerdict(str, Enum):

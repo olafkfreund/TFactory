@@ -500,7 +500,9 @@ def _finalize_replan(
     # oscillate forever (it would otherwise sit "running" until something else
     # kills it). Fail loudly with the budget in the status so it's diagnosable.
     total_replans = sum(
-        (getattr(s, "replan_count", 0) or 0) for p in plan_after.phases for s in p.subtasks
+        (getattr(s, "replan_count", 0) or 0)
+        for p in plan_after.phases
+        for s in p.subtasks
     )
     if total_replans >= _GLOBAL_REPLAN_BUDGET:
         _write_status_patch(
@@ -841,5 +843,7 @@ def schedule_planner(
             _planner_log.info("[planner] background task finished spec=%s", _sid)
 
     task.add_done_callback(_on_done)
-    _planner_log.info("[planner] scheduled background planner spec=%s mode=%s", spec_dir.name, mode)
+    _planner_log.info(
+        "[planner] scheduled background planner spec=%s mode=%s", spec_dir.name, mode
+    )
     return task

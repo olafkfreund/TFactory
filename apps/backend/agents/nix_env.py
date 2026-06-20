@@ -70,11 +70,15 @@ def detect_serve_command(
         return str(env["serve_command"])
     pd = Path(project_dir)
     # Python ASGI: prefer a root app.py exposing `app`, then a src/app package.
-    if (pd / "app.py").is_file() and "app" in (pd / "app.py").read_text(errors="ignore"):
+    if (pd / "app.py").is_file() and "app" in (pd / "app.py").read_text(
+        errors="ignore"
+    ):
         return f"python -m uvicorn app:app --host 127.0.0.1 --port {port}"
     if (pd / "src" / "app" / "main.py").is_file():
         return f"python -m uvicorn app.main:app --host 127.0.0.1 --port {port}"
-    if (pd / "main.py").is_file() and "app" in (pd / "main.py").read_text(errors="ignore"):
+    if (pd / "main.py").is_file() and "app" in (pd / "main.py").read_text(
+        errors="ignore"
+    ):
         return f"python -m uvicorn main:app --host 127.0.0.1 --port {port}"
     pkg = pd / "package.json"
     if pkg.is_file() and '"start"' in pkg.read_text(errors="ignore"):
@@ -167,8 +171,13 @@ def run_browser_evidence(
     n_specs = _stage_browser_specs(spec_dir, project_dir)
     if n_specs == 0:
         _log.info("run_browser_evidence: no generated *.spec.ts to run; skipping")
-        return {"ok": False, "output_tail": "no browser specs", "serve_command": None,
-                "screenshots": [], "specs": 0}
+        return {
+            "ok": False,
+            "output_tail": "no browser specs",
+            "serve_command": None,
+            "screenshots": [],
+            "specs": 0,
+        }
     _write_pw_config(project_dir, port=port)
 
     serve = detect_serve_command(project_dir, env, port=port)
@@ -180,7 +189,9 @@ def run_browser_evidence(
         f"export APP_URL=http://127.0.0.1:{port}",
         *build_browser_job_command(
             [f"playwright test --config {_PW_CONFIG}"],
-            serve_command=serve, port=port, shots_dir=_SHOTS,
+            serve_command=serve,
+            port=port,
+            shots_dir=_SHOTS,
         ),
     ]
     (Path(project_dir) / _JOB_SCRIPT).write_text(
@@ -193,6 +204,7 @@ def run_browser_evidence(
         for f in (_JOB_SCRIPT, _PW_CONFIG):
             (Path(project_dir) / f).unlink(missing_ok=True)
         import shutil as _sh
+
         _sh.rmtree(Path(project_dir) / _E2E_STAGE, ignore_errors=True)
 
     findings = Path(spec_dir) / "findings"
@@ -268,7 +280,9 @@ def build_browser_job_command(
     return steps
 
 
-def collect_screenshots(project_dir: Path, findings_dir: Path, *, shots: str = "shots") -> list[Path]:
+def collect_screenshots(
+    project_dir: Path, findings_dir: Path, *, shots: str = "shots"
+) -> list[Path]:
     """Copy PNG/junit evidence the Job wrote into the worktree into findings/.
 
     Returns the destination paths. No-op (empty list) when the Job produced none.
@@ -294,7 +308,9 @@ def collect_screenshots(project_dir: Path, findings_dir: Path, *, shots: str = "
     return out
 
 
-def collect_videos(project_dir: Path, findings_dir: Path, *, shots: str = "shots") -> list[Path]:
+def collect_videos(
+    project_dir: Path, findings_dir: Path, *, shots: str = "shots"
+) -> list[Path]:
     """Copy Playwright recordings (webm) the Job wrote into findings/videos/.
 
     `video: 'on'` writes one ``video.webm`` per test into a per-test subdir of

@@ -32,9 +32,10 @@ network HAR for the test before trusting the AI-generated assertion.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING
 
 from agents.triage_dedup import DedupCollision, TriageCandidate
 

@@ -80,8 +80,13 @@ def package_run(
                 shutil.copy2(src, shots / dst_name)
                 rel = f"screenshots/{dst_name}"
         placed.append(
-            StepResult(n=step.n, label=step.label, state=step.state,
-                       screenshot=rel, error=step.error)
+            StepResult(
+                n=step.n,
+                label=step.label,
+                state=step.state,
+                screenshot=rel,
+                error=step.error,
+            )
         )
 
     # Copy the recording, re-pointing meta to the run-relative paths.
@@ -89,8 +94,13 @@ def package_run(
     trace_rel = _copy_if(evidence, meta.trace, rec, "trace.zip")
 
     placed_meta = RunMeta(
-        id=meta.id, target=meta.target, created_at=meta.created_at,
-        steps=placed, video=video_rel, trace=trace_rel, verdict=meta.verdict,
+        id=meta.id,
+        target=meta.target,
+        created_at=meta.created_at,
+        steps=placed,
+        video=video_rel,
+        trace=trace_rel,
+        verdict=meta.verdict,
     )
 
     meta_json = run_dir / "meta.json"
@@ -101,7 +111,9 @@ def package_run(
     return PackagedRun(run_dir=run_dir, report_md=report_md, meta_json=meta_json)
 
 
-def _copy_if(evidence: Path, src_name: str | None, dest_dir: Path, dst_name: str) -> str | None:
+def _copy_if(
+    evidence: Path, src_name: str | None, dest_dir: Path, dst_name: str
+) -> str | None:
     """Copy ``evidence/<src_name>`` → ``dest_dir/<dst_name>``; return run-relative path."""
     if not src_name:
         return None
@@ -112,7 +124,9 @@ def _copy_if(evidence: Path, src_name: str | None, dest_dir: Path, dst_name: str
     return f"{dest_dir.name}/{dst_name}"
 
 
-def finalize_run(run_dir, meta: RunMeta, *, generate=None, repo: str | None = None) -> None:
+def finalize_run(
+    run_dir, meta: RunMeta, *, generate=None, repo: str | None = None
+) -> None:
     """Write the P2 artifacts into an already-packaged run dir (#172):
     ``correction-plan.md`` (LLM seam + deterministic fallback) and ``issues.json``
     (the GitHub epic + child-per-failure specs, dry-run). Best-effort each.

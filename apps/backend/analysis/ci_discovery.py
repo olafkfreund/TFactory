@@ -300,7 +300,6 @@ class CIDiscovery:
             matches = sh_pattern.findall(content)
 
             steps = []
-            test_related = False
 
             for cmd in matches:
                 steps.append(cmd)
@@ -309,7 +308,7 @@ class CIDiscovery:
                 if any(
                     kw in cmd.lower() for kw in ["test", "pytest", "jest", "coverage"]
                 ):
-                    test_related = True
+                    pass
 
             # Extract stage names
             stage_pattern = re.compile(r'stage\s*\([\'"]([^\'"]+)[\'"]\)')

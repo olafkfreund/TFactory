@@ -88,18 +88,29 @@ def connections_to_targets(
     out: list[DocsTarget] = []
     for conn in connections:
         kind = (conn.get("kind") or "").lower()
-        use = kind in selected if selected is not None else bool(conn.get("enabled_by_default"))
+        use = (
+            kind in selected
+            if selected is not None
+            else bool(conn.get("enabled_by_default"))
+        )
         if not use:
             continue
         if kind == "backstage":
-            out.append(BackstageTarget(
-                base_url=conn.get("base_url"), repo=repo, git_write=git_write,
-            ))
+            out.append(
+                BackstageTarget(
+                    base_url=conn.get("base_url"),
+                    repo=repo,
+                    git_write=git_write,
+                )
+            )
         elif kind == "confluence":
-            out.append(ConfluenceTarget(
-                base_url=conn.get("base_url"), token=conn.get("api_token"),
-                space=conn.get("space"),
-            ))
+            out.append(
+                ConfluenceTarget(
+                    base_url=conn.get("base_url"),
+                    token=conn.get("api_token"),
+                    space=conn.get("space"),
+                )
+            )
     return out
 
 

@@ -69,7 +69,7 @@ class MergePipeline:
         Returns:
             MergeResult with merged content or conflict info
         """
-        task_ids = [s.task_id for s in task_snapshots]
+        [s.task_id for s in task_snapshots]
         logger.info(f"Merging {file_path} with {len(task_snapshots)} task(s)")
 
         # If only one task modified the file, no conflict possible

@@ -24,9 +24,9 @@ from typing import Any
 from agents.verification_gate import normalize_verification
 
 __all__ = [
+    "DEFAULT_TARGET_LEVEL",
     "build_verification_block",
     "read_verification_block",
-    "DEFAULT_TARGET_LEVEL",
 ]
 
 DEFAULT_TARGET_LEVEL = "VAL-2"  # the ceiling TFactory can reach without a VAL-3 target

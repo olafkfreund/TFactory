@@ -39,7 +39,7 @@ def _standards(available: bool = True) -> dict:
                     },
                 ],
             }
-        }
+        },
     }
 
 
@@ -63,5 +63,11 @@ def test_unavailable_returns_empty(tmp_path: Path):
 
 
 def test_no_sources_returns_empty(tmp_path: Path):
-    _write_contract(tmp_path, {"contract_version": "2", "epic_context": {"house_standards": {"available": True, "sources": []}}})
+    _write_contract(
+        tmp_path,
+        {
+            "contract_version": "2",
+            "epic_context": {"house_standards": {"available": True, "sources": []}},
+        },
+    )
     assert _build_house_standards_block(tmp_path) == ""

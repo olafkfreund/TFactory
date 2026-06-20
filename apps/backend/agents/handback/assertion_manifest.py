@@ -35,15 +35,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 __all__ = [
+    "MANIFEST_NAME",
+    "AssertionViolation",
+    "DriftReport",
+    "check_drift",
     "compute_manifest",
+    "diff_manifest",
     "manifest_hash",
     "pin_manifest",
     "read_pinned_manifest",
-    "diff_manifest",
-    "check_drift",
-    "AssertionViolation",
-    "DriftReport",
-    "MANIFEST_NAME",
 ]
 
 MANIFEST_NAME = "assertion_manifest.json"

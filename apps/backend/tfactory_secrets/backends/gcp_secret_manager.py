@@ -60,7 +60,9 @@ class GcpSecretManagerBackend(SecretsBackend):
 
         value = resp.payload.data.decode("utf-8")
         return SecretValue(
-            value=value, backend=self.name, ref=ref.raw,
+            value=value,
+            backend=self.name,
+            ref=ref.raw,
             source=f"gcp-sm:{project}/{ref.locator}/{version}",
         )
 

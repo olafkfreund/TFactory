@@ -12,7 +12,8 @@ from __future__ import annotations
 import base64
 import json
 import subprocess
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 # api(method, path, body|None) -> parsed JSON dict
 GhApi = Callable[[str, str, "dict | None"], dict]

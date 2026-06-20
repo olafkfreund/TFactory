@@ -59,7 +59,11 @@ def store_root() -> Path:
 
 def _safe_dir(assessment_id: str) -> Path | None:
     """Resolve ``<root>/<id>`` if ``id`` is a safe single component + exists."""
-    if not assessment_id or not _ID_RE.match(assessment_id) or assessment_id in {".", ".."}:
+    if (
+        not assessment_id
+        or not _ID_RE.match(assessment_id)
+        or assessment_id in {".", ".."}
+    ):
         return None
     d = store_root() / assessment_id
     return d if d.is_dir() else None
@@ -172,14 +176,22 @@ def _render_pdf(d: Path, md_name: str) -> Path | None:
         html = Path(tmp) / "doc.html"
         subprocess.run(
             [pandoc, str(md), "-f", "gfm", "-t", "html", "-s", "-o", str(html)],
-            capture_output=True, timeout=60,
+            capture_output=True,
+            timeout=60,
         )
         if not html.is_file():
             return None
         subprocess.run(
-            [chrome, "--headless", "--no-sandbox", "--disable-gpu",
-             f"--print-to-pdf={pdf}", f"file://{html}"],
-            capture_output=True, timeout=120,
+            [
+                chrome,
+                "--headless",
+                "--no-sandbox",
+                "--disable-gpu",
+                f"--print-to-pdf={pdf}",
+                f"file://{html}",
+            ],
+            capture_output=True,
+            timeout=120,
         )
     return pdf if pdf.is_file() else None
 

@@ -64,7 +64,9 @@ def maybe_emit_docs(spec_dir: Path, status: dict[str, Any]) -> list[dict] | None
         results = emit_bundle(bundle, targets=targets)
         logger.info(
             "docs-emit published test results for %s (key=%s): %s",
-            spec_id, correlation_key, results,
+            spec_id,
+            correlation_key,
+            results,
         )
         return results
     except Exception as exc:  # noqa: BLE001 — emitting must never break the run

@@ -52,10 +52,11 @@ import json
 import logging as _logging
 import os
 import traceback
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Literal, Protocol
+from typing import Any, Literal, Protocol
 
 _eval_log = _logging.getLogger(__name__)
 
