@@ -1984,15 +1984,18 @@ class AgentService:
                     _native_status: str | None = None
                     _phase: str | None = None
                     _has_verdict = True
+                    _correlation_key: str | int | None = None
+                    _spec_dir = project_path / ".tfactory" / "specs" / spec_id
                     try:
-                        _status_path = (
-                            project_path / ".tfactory" / "specs" / spec_id / "status.json"
-                        )
+                        _status_path = _spec_dir / "status.json"
                         if _status_path.is_file():
                             _sj = json.loads(_status_path.read_text())
                             _native_status = _sj.get("status")
                             _phase = _sj.get("phase")
                             _has_verdict = int(_sj.get("verdicts_count") or 0) > 0
+                            _correlation_key = (
+                                _sj.get("correlation_key") or _sj.get("issue_number")
+                            )
                     except (json.JSONDecodeError, OSError):
                         pass
                     # Fall back to the process exit when status.json is absent.
@@ -2003,6 +2006,28 @@ class AgentService:
                         if return_code == 0
                         else f"verify exited with code {return_code}"
                     )
+                    # RFC-0016 #190: upload findings + evidence to object storage
+                    # and stamp the artifacts[] URIs onto the durable row.
+                    # Fail-open: never blocks/changes the verdict.
+                    _artifacts: list[dict] | None = None
+                    try:
+                        # The web-server PYTHONPATH doesn't reliably include
+                        # apps/backend; add it explicitly (canonical server
+                        # pattern, see background/completion_relay.py).
+                        _backend_path = Path(__file__).resolve().parents[3] / "backend"
+                        if str(_backend_path) not in sys.path:
+                            sys.path.insert(0, str(_backend_path))
+                        from agents.verify_artifacts import emit_verify_artifacts
+                        _uploaded = emit_verify_artifacts(
+                            _spec_dir,
+                            job_id=task_id,
+                            correlation_key=_correlation_key,
+                        )
+                        _artifacts = _uploaded or None
+                    except Exception:
+                        logger.debug(
+                            "[AgentService] artifact emission failed", exc_info=True
+                        )
                     asyncio.create_task(
                         _jss.record_terminal(
                             task_id,
@@ -2010,6 +2035,7 @@ class AgentService:
                             phase=_phase,
                             has_verdict=_has_verdict,
                             error=_err,
+                            artifacts=_artifacts,
                         )
                     )
                 except Exception:

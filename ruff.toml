@@ -10,6 +10,7 @@
 extend-exclude = [
     "apps/backend/agents/verification_gate.py",
     "apps/backend/tools/runners/nix_provisioner.py",
+    "apps/backend/tools/runners/artifact_store.py",
 ]
 
 [lint]

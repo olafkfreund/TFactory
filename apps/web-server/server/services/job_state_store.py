@@ -571,6 +571,7 @@ async def record_terminal(
     result: dict[str, Any] | None = None,
     usage: dict[str, Any] | None = None,
     error: str | None = None,
+    artifacts: list[dict[str, Any]] | None = None,
 ) -> str | None:
     """Durably record a verify's terminal/advance transition. Best-effort.
 
@@ -579,6 +580,10 @@ async def record_terminal(
     failed/stuck→error, no-verdict→stuck). When the job releases its execution
     slot (terminal/stuck), the FIFO-next queued verify is promoted into the freed
     slot (RFC-0016 admission control).
+
+    ``artifacts`` (RFC-0016 #190) are object-store ``artifacts[]`` references
+    (URIs, never blobs) for the verify's outputs — uploaded best-effort by the
+    caller and stamped onto the durable row here.
 
     Returns the ``job_id`` of any verify promoted as a result (so the caller can
     start it), or ``None``.
@@ -596,6 +601,7 @@ async def record_terminal(
                 result=result,
                 usage=usage,
                 error=error,
+                artifacts=artifacts,
             )
             # If this verify released its slot (terminal/stuck), promote the
             # FIFO-next queued verify into the freed slot (RFC-0016 admission).

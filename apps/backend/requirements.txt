@@ -44,3 +44,10 @@ tree-sitter-typescript>=0.21.0
 
 # RFC-6238 TOTP generation for Class B MFA (agents/totp.py).
 passlib>=1.7.4
+
+# RFC-0016 #190 — object-store artifact emission. The vendored
+# tools/runners/artifact_store.py imports boto3 lazily to push verify
+# findings/evidence to MinIO; the Phase-2 verify Job (agents/verify_pipeline.py)
+# runs from this image, so boto3 must be present here too. Upload is fail-open:
+# absent boto3 simply no-ops the emission, never the verdict.
+boto3>=1.35.0
