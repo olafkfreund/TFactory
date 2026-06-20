@@ -95,7 +95,11 @@ def _kube_runtime_for(target: dict | None, *, runtime_cls=None):
     (on success *and* failure). Auth rides the materialised read-only kubeconfig
     (``KUBECONFIG``). Returns None for non-k8s targets (the static-URL path).
     """
-    if not target or target.get("type") != "kubernetes" or not target.get("port_forward"):
+    if (
+        not target
+        or target.get("type") != "kubernetes"
+        or not target.get("port_forward")
+    ):
         return None
     cls = runtime_cls or KubernetesRuntime
     t = SimpleNamespace(
