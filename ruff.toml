@@ -1,5 +1,17 @@
 # Ruff configuration for MagesticAI
 
+# Vendored verification-core copies (Factory#158): these files are byte-exact
+# mirrors of the Factory hub canonical (scripts/) and are governed by the
+# byte-exact drift gate (verification-core-drift workflow), NOT this repo's style
+# bar. Reformatting them under the local config (default line-length 88) would
+# make them diverge from the hub canonical (formatted at line-length 100) and
+# break the drift gate. Excluded from format/lint here for the same reason the
+# Factory hub excludes its shared/factory-github vendored mirror.
+extend-exclude = [
+    "apps/backend/agents/verification_gate.py",
+    "apps/backend/tools/runners/nix_provisioner.py",
+]
+
 [lint]
 # Enable common rule sets
 select = [

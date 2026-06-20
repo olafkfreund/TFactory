@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""RFC-0006 never-overclaim gate — vendored from Factory hub (RFC-0006 #74).
-
-Vendored verbatim from `Factory/scripts/verification_gate.py` (the reference
-implementation, kept the single source of truth). Pure + dependency-free; sync
-from the hub (only lint-conformance renames here, e.g. l→lvl for E741). Used by
-`agents.val_block` to recompute an honest
-`achieved_level` from the real lane outcomes of a verify run.
+"""RFC-0006 never-overclaim gate (reference implementation).
 
 The integrity rule: a completion may report a verification status ONLY at the
 level it actually proved, and must declare every gap. This function normalizes a
@@ -27,15 +21,54 @@ Run directly to execute the self-tests: `python3 scripts/verification_gate.py`.
 
 from __future__ import annotations
 
+from typing import TypedDict
+
 LEVELS = ["VAL-0", "VAL-1", "VAL-2", "VAL-3", "VAL-4"]
 _NON_PASSED = {"failed", "not_run", "skipped"}
+
+
+class LevelEntry(TypedDict, total=False):
+    """One rung of the assurance ladder in a verification block.
+
+    `level` and `status` are expected on every entry; the remainder
+    (`reason`/`risk`/`evidence` and any producer extras) are optional, so the
+    whole TypedDict is `total=False`.
+    """
+
+    level: str
+    status: str
+    reason: str
+    risk: str
+    evidence: str
+
+
+class GateResult(TypedDict):
+    """The `_gate` audit stamp recording how the block was normalized."""
+
+    violations: list[str]
+    downgraded: bool
+
+
+class VerificationBlock(TypedDict, total=False):
+    """A producer's verification block (input) / the normalized copy (output).
+
+    Loose by design (`total=False`): producers may omit fields, and the gate
+    fills/overwrites `achieved_level`, `claim`, `levels`, and `_gate` so the
+    result can never overclaim.
+    """
+
+    target_level: str
+    achieved_level: str
+    levels: list[LevelEntry]
+    claim: str
+    _gate: GateResult
 
 
 def _idx(level: str) -> int:
     return LEVELS.index(level) if level in LEVELS else -1
 
 
-def normalize_verification(block: dict | None) -> dict:
+def normalize_verification(block: VerificationBlock | None) -> VerificationBlock:
     """Return an honest, never-overclaiming copy of a verification block."""
     violations: list[str] = []
 
@@ -55,7 +88,7 @@ def normalize_verification(block: dict | None) -> dict:
             "_gate": {"violations": ["missing_verification_block"], "downgraded": True},
         }
 
-    levels = [dict(lvl) for lvl in block["levels"]]
+    levels: list[LevelEntry] = [lvl.copy() for lvl in block["levels"]]
 
     # Force a reason on every gap (honesty: a gap with no explanation is itself a gap).
     for lvl in levels:
@@ -91,9 +124,78 @@ def normalize_verification(block: dict | None) -> dict:
         if gaps:
             claim += " NOT verified: " + "; ".join(gaps) + "."
 
-    out = dict(block)
+    out: VerificationBlock = block.copy()
     out["levels"] = levels
     out["achieved_level"] = achieved
     out["claim"] = claim
     out["_gate"] = {"violations": violations, "downgraded": bool(violations)}
     return out
+
+
+# --------------------------------------------------------------------------- #
+# Self-tests (run: python3 scripts/verification_gate.py)
+# --------------------------------------------------------------------------- #
+def _test() -> None:
+    # 1. Overclaim is downgraded to the truth.
+    r = normalize_verification(
+        {
+            "target_level": "VAL-3",
+            "achieved_level": "VAL-3",
+            "levels": [
+                {"level": "VAL-0", "status": "passed"},
+                {"level": "VAL-2", "status": "passed"},
+                {"level": "VAL-3", "status": "not_run", "reason": "no sandbox target"},
+            ],
+        }
+    )
+    assert r["achieved_level"] == "VAL-2", r
+    assert any(v.startswith("overclaim") for v in r["_gate"]["violations"]), r
+    assert "NOT verified: VAL-3 not_run" in r["claim"], r["claim"]
+
+    # 2. Missing block -> VAL-0, never "tested".
+    r = normalize_verification(None)
+    assert r["achieved_level"] == "VAL-0" and "NOT VERIFIED" in r["claim"], r
+
+    # 3. A failure caps the ceiling (cannot "pass" above a broken floor).
+    r = normalize_verification(
+        {
+            "target_level": "VAL-2",
+            "achieved_level": "VAL-2",
+            "levels": [
+                {"level": "VAL-0", "status": "failed", "reason": "lint errors"},
+                {"level": "VAL-2", "status": "passed"},
+            ],
+        }
+    )
+    assert r["achieved_level"] == "VAL-0", r
+
+    # 4. Missing reason on a gap is injected + flagged.
+    r = normalize_verification(
+        {
+            "target_level": "VAL-2",
+            "achieved_level": "VAL-0",
+            "levels": [{"level": "VAL-2", "status": "not_run"}],
+        }
+    )
+    assert any(v.startswith("missing_reason") for v in r["_gate"]["violations"]), r
+    assert r["levels"][0]["reason"] == "(no reason provided)", r
+
+    # 5. Honest happy path: no overclaim, clean claim.
+    r = normalize_verification(
+        {
+            "target_level": "VAL-2",
+            "achieved_level": "VAL-2",
+            "levels": [
+                {"level": "VAL-0", "status": "passed"},
+                {"level": "VAL-2", "status": "passed", "evidence": "idempotence: 0 changed"},
+            ],
+        }
+    )
+    assert r["achieved_level"] == "VAL-2" and not r["_gate"]["downgraded"], r
+    assert r["claim"] == "Verified to VAL-2.", r["claim"]
+
+    print("verification_gate self-tests: 5 passed")
+
+
+if __name__ == "__main__":
+    _test()
