@@ -58,6 +58,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
+# Cohesive helpers extracted to focused modules (issue #450, god-file split).
+# Re-imported here so the in-module callers and the public/test import paths
+# (agents.evaluator._validate_verdicts, ._resolve_target, ._kube_runtime_for,
+# etc.) keep working unchanged after the split.
+from agents.evaluator_targets import (
+    _browser_target_url,
+    _docker_run_runtime_for,
+    _kube_runtime_for,
+    _resolve_target,
+    _test_credential_specs,
+)
+from agents.evaluator_verdicts import _validate_verdicts
+
 _eval_log = _logging.getLogger(__name__)
 
 # Stamped into verdicts.json for traceability of which Evaluator produced them.
@@ -837,131 +850,6 @@ def _completed_browser_subtasks(plan: dict) -> list[dict]:
     return _filter_completed_subtasks(plan, lambda st: st.get("lane") == "browser")
 
 
-def _browser_target_url(spec_dir: Path, subtask: dict) -> str | None:
-    """Resolve the base_url for the subtask's target from the snapshotted
-    .tfactory.yml (context/tfactory_yml.json). Falls back to the default
-    target when the subtask has no target_name.
-
-    The trailing slash is stripped: the parser normalises base_url to end in
-    ``/``, but api tests build URLs as ``f"{base_url}/api/..."`` — a trailing
-    slash would produce ``//api/...`` (a different path → spurious 404s). A
-    bare origin is also valid for Playwright ``page.goto``.
-    """
-    ctx = spec_dir / "context" / "tfactory_yml.json"
-    if not ctx.exists():
-        return None
-    try:
-        cfg = json.loads(ctx.read_text())
-    except (json.JSONDecodeError, OSError):
-        return None
-    targets = cfg.get("targets") or []
-    want = subtask.get("target_name") or cfg.get("default_target")
-
-    def _norm(u: str) -> str:
-        # Strip a single trailing slash from the origin/path, but never reduce
-        # to empty (keep at least the scheme+host).
-        return u[:-1] if (u.endswith("/") and not u.endswith("://")) else u
-
-    for t in targets:
-        if t.get("name") == want and t.get("base_url"):
-            return _norm(t["base_url"])
-    # last resort: first http target with a base_url
-    for t in targets:
-        if t.get("base_url"):
-            return _norm(t["base_url"])
-    return None
-
-
-def _resolve_target(spec_dir: Path, subtask: dict) -> dict | None:
-    """Resolve the subtask's *target object* from the snapshotted .tfactory.yml.
-
-    Like :func:`_browser_target_url` but returns the whole target dict (so the
-    caller can branch on ``type``), preferring the subtask's ``target_name``,
-    then the config ``default_target``, then the first target.
-    """
-    ctx = spec_dir / "context" / "tfactory_yml.json"
-    if not ctx.exists():
-        return None
-    try:
-        cfg = json.loads(ctx.read_text())
-    except (json.JSONDecodeError, OSError):
-        return None
-    targets = cfg.get("targets") or []
-    want = subtask.get("target_name") or cfg.get("default_target")
-    for t in targets:
-        if t.get("name") == want:
-            return t
-    return targets[0] if targets else None
-
-
-def _kube_runtime_for(target: dict | None, *, runtime_cls=None):
-    """A ``KubernetesRuntime`` for a kubernetes port-forward target, else None (#108).
-
-    When the resolved target is ``type: kubernetes`` with ``port_forward: true``,
-    the api/browser lane has no static ``base_url`` — the URL only exists while a
-    ``kubectl port-forward`` is live. The caller uses the returned runtime as a
-    context manager so the forward is up during the test run and torn down after
-    (on success *and* failure). Auth rides the materialised read-only kubeconfig
-    (``KUBECONFIG``). Returns None for non-k8s targets (the static-URL path).
-    """
-    if (
-        not target
-        or target.get("type") != "kubernetes"
-        or not target.get("port_forward")
-    ):
-        return None
-    from types import SimpleNamespace
-
-    from tools.runners.kubernetes_runtime import KubernetesRuntime
-
-    cls = runtime_cls or KubernetesRuntime
-    t = SimpleNamespace(
-        name=target.get("name"),
-        context=target.get("context"),
-        namespace=target.get("namespace"),
-        service=target.get("service"),
-        port=target.get("port"),
-        # KubernetesRuntime.start() reads target.port_forward — without it the
-        # real runtime AttributeErrors (the mocked dispatch test never hits
-        # start(), so this only surfaces live). #108.
-        port_forward=target.get("port_forward"),
-    )
-    return cls(t, kubeconfig=os.environ.get("KUBECONFIG"))
-
-
-def _docker_run_runtime_for(target: dict | None, *, runtime_cls=None):
-    """A ``DockerRunRuntime`` for a ``type: docker_run`` target, else None (#233).
-
-    Runs the (typically just-built) image for the lane lifetime, health-polls
-    its ``wait_for`` URLs, and exposes ``target_url``. Caller uses it as a
-    context manager so the container is removed on success *and* failure.
-    """
-    if not target or target.get("type") != "docker_run":
-        return None
-    from types import SimpleNamespace
-
-    from tools.runners.docker_run_runtime import DockerRunRuntime
-
-    cls = runtime_cls or DockerRunRuntime
-    wait_for = [
-        SimpleNamespace(
-            url=wf.get("url"),
-            expect_status=wf.get("expect_status", 200),
-            timeout_seconds=wf.get("timeout_seconds", 60),
-        )
-        for wf in (target.get("wait_for") or [])
-    ]
-    t = SimpleNamespace(
-        name=target.get("name"),
-        image=target.get("image"),
-        ports=target.get("ports") or [],
-        env=target.get("env") or {},
-        command=target.get("command"),
-        wait_for=wait_for,
-    )
-    return cls(t)
-
-
 def _maybe_run_build(spec_dir: Path, project_dir: Path) -> None:
     """Run `.tfactory.yml` ``build:`` steps before the lanes (#233).
 
@@ -994,41 +882,6 @@ def _maybe_run_build(spec_dir: Path, project_dir: Path) -> None:
             )
     except Exception as exc:  # noqa: BLE001 — build wiring must never crash the run
         _eval_log.warning("build step execution skipped: %s", exc)
-
-
-def _test_credential_specs(spec_dir: Path, subtask: dict | None) -> list:
-    """TargetCredentialSpec list for a subtask's ``ref``-auth target (#107).
-
-    Reads the snapshotted .tfactory.yml: when the subtask's target uses
-    ``auth: {type: ref}``, turn the referenced ``test_credentials`` entry into a
-    resolver spec (``resolve_test_target_credentials`` injects it as login env).
-    Empty list when there is no ref-auth / no matching credential.
-    """
-    if subtask is None:
-        return []
-    from tools.runners.sandbox_credentials import TargetCredentialSpec
-
-    target = _resolve_target(spec_dir, subtask)
-    auth = (target or {}).get("auth") or {}
-    if auth.get("type") != "ref" or not auth.get("ref"):
-        return []
-    ctx = spec_dir / "context" / "tfactory_yml.json"
-    try:
-        cfg = json.loads(ctx.read_text())
-    except (OSError, json.JSONDecodeError, ValueError):
-        return []
-    entry = (cfg.get("test_credentials") or {}).get(auth["ref"])
-    if not entry:
-        return []
-    return [
-        TargetCredentialSpec(
-            name=auth["ref"],
-            ref=entry["ref"],
-            as_secret=entry["as_secret"],
-            as_username=entry.get("as_username"),
-            username_ref=entry.get("username_ref"),
-        )
-    ]
 
 
 def _stage_browser_test(spec_dir: Path, project_dir: Path, subtask: dict) -> None:
@@ -1363,123 +1216,10 @@ def _build_jest_signal_bundle(
 
 
 # ─── Verdicts.json validation ───────────────────────────────────────────
-
-
-_VALID_VERDICTS = frozenset({"accept", "reject", "flag"})
-
-
-def _loads_tolerant(text: str) -> tuple[object, bool]:
-    """Parse JSON that may carry a markdown fence or trailing prose.
-
-    Thin wrapper over the shared agent-output envelope (#96): strict parse,
-    then fence-strip / first-value ``raw_decode`` / outermost brace-match.
-
-    Returns ``(doc, salvaged)`` — ``salvaged`` is True when the lenient path
-    recovered the object, so the caller can rewrite a clean file. Raises
-    ``json.JSONDecodeError`` when no JSON object can be recovered (preserved
-    for the existing caller).
-    """
-    from agents.output_envelope import OutputEnvelopeError, extract_json
-
-    try:
-        return extract_json(text)
-    except OutputEnvelopeError as exc:
-        raise json.JSONDecodeError(str(exc), text or "", 0) from None
-
-
-def _validate_verdicts(
-    path: Path,
-    skip_coverage_test_ids: frozenset[str] | None = None,
-) -> tuple[bool, str, int]:
-    """Validate the agent's verdicts.json.
-
-    Args:
-        path: Path to the verdicts.json file to validate.
-        skip_coverage_test_ids: Optional set of test IDs whose framework has
-            ``coverage_strategy == "skip"``.  When provided, a numeric
-            ``signals_summary.coverage_delta_pct`` on one of these tests
-            triggers a WARNING (the LLM should have left it null) but the
-            verdict is still **accepted** — we don't reject a verdict over a
-            cosmetic mismatch.
-
-    Returns:
-        (ok, error_message, verdicts_count).
-        On success: (True, "", N). On failure: (False, "reason", 0).
-
-    Accepted values for ``signals_summary.coverage_delta_pct``:
-        - ``null`` / Python ``None`` — browser lane or coverage not computed.
-        - Any ``int`` or ``float`` — numeric coverage delta percentage.
-        - Key absent entirely — backward-compat; treated as null.
-
-    Rejected values:
-        - A string (e.g. ``"12.3"`` or ``"N/A"``).
-        - Any other non-numeric type.
-    """
-    _skip_ids: frozenset[str] = skip_coverage_test_ids or frozenset()
-
-    if not path.exists():
-        return False, "verdicts.json not written by agent", 0
-    try:
-        doc, salvaged = _loads_tolerant(path.read_text())
-    except json.JSONDecodeError as exc:
-        return False, f"verdicts.json is not valid JSON: {exc}", 0
-    if not isinstance(doc, dict):
-        return False, "verdicts.json root is not an object", 0
-    if salvaged:
-        # The agent wrapped the JSON in a fence or appended trailing prose.
-        # Rewrite the canonical object so the Triager (which json.loads the
-        # same file) doesn't trip over it.
-        _eval_log.warning(
-            "verdicts.json had extra data around the JSON; rewrote the salvaged object."
-        )
-        try:
-            path.write_text(json.dumps(doc, indent=2))
-        except OSError:
-            pass
-    verdicts = doc.get("verdicts")
-    if not isinstance(verdicts, list):
-        return False, "verdicts.json missing 'verdicts' array", 0
-    for i, v in enumerate(verdicts):
-        if not isinstance(v, dict):
-            return False, f"verdict[{i}] is not an object", 0
-        if "test_id" not in v:
-            return False, f"verdict[{i}] missing 'test_id'", 0
-        if v.get("verdict") not in _VALID_VERDICTS:
-            return (
-                False,
-                (
-                    f"verdict[{i}] has invalid 'verdict': "
-                    f"{v.get('verdict')!r} (must be one of {sorted(_VALID_VERDICTS)})"
-                ),
-                0,
-            )
-        # Validate signals_summary.coverage_delta_pct when present.
-        # Accepted: null (None) or a numeric value (int/float).
-        # Rejected: a string (the LLM must not emit "12.3" or "N/A" as text).
-        signals = v.get("signals_summary")
-        if isinstance(signals, dict) and "coverage_delta_pct" in signals:
-            cdp = signals["coverage_delta_pct"]
-            if cdp is not None and not isinstance(cdp, (int, float)):
-                return (
-                    False,
-                    (
-                        f"verdict[{i}].signals_summary.coverage_delta_pct "
-                        f"must be a number or null, got {cdp!r}"
-                    ),
-                    0,
-                )
-            # Warn if the LLM emitted a numeric value for a skip-coverage test.
-            test_id = v.get("test_id", "")
-            if test_id in _skip_ids and isinstance(cdp, (int, float)):
-                _eval_log.warning(
-                    "verdict[%d] test_id=%r is on a skip-coverage framework "
-                    "but signals_summary.coverage_delta_pct=%r is numeric; "
-                    "the LLM should have left it null — accepting verdict anyway",
-                    i,
-                    test_id,
-                    cdp,
-                )
-    return True, "", len(verdicts)
+#
+# Extracted to agents.evaluator_verdicts (issue #450). Re-imported below so
+# the public/test import paths (agents.evaluator._validate_verdicts etc.) and
+# the in-module callers keep working unchanged.
 
 
 def _advance_to_triager(spec_dir: Path, project_dir: Path) -> None:
