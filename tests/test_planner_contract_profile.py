@@ -12,6 +12,7 @@ import pytest
 from prompts_pkg.prompts import (
     _build_contract_profile_block,
     get_tfactory_planner_prompt,
+    get_tfactory_planner_replan_prompt,
 )
 
 
@@ -119,3 +120,15 @@ def test_absent_tier_leaves_declared_lanes_unchanged(spec):
     block = _build_contract_profile_block(spec)
     assert "lanes** (generate these): unit" in block
     assert "RFC-0011" not in block
+
+
+def test_replan_prompt_preserves_tier_lanes(spec):
+    # The handback/replan loop must keep the tier lane floor in front of the planner.
+    _write_full_contract(spec, {
+        "contract_version": "2",
+        "execution": {"autonomy_tier": "hard"},
+        "tfactory": {"lanes": ["unit"]},
+    })
+    prompt = get_tfactory_planner_replan_prompt(spec, spec)
+    assert "DECLARED TEST PROFILE" in prompt
+    assert "unit, api, integration, mutation" in prompt

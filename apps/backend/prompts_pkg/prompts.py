@@ -773,7 +773,12 @@ def get_tfactory_planner_replan_prompt(spec_dir: Path, project_dir: Path) -> str
         f"Write the updated plan back to: `{spec_dir / 'test_plan.json'}`\n\n"
         "---\n\n"
     )
-    return context + body
+    # RFC-0011 (#444): on a handback/replan, keep the authoritative DECLARED TEST
+    # PROFILE in front of the planner so the difficulty-tier lane floor (and any
+    # forced equivalence lane) is preserved across the loop. Empty when no
+    # contract/tier is present → replan behaviour unchanged.
+    profile_block = _build_contract_profile_block(spec_dir)
+    return context + profile_block + body
 
 
 def get_tfactory_gen_functional_prompt(
