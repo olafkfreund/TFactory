@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-# VENDORED from Factory hub scripts/nix_provisioner.py (RFC-0005 Tier A).
-# Keep in sync with the hub; do not diverge. Pure stdlib, no TFactory deps.
 """nix_provisioner — RFC-0005 Tier A (Nix) materialization, shared across the fleet.
 
 Turns an RFC-0005 `environment` manifest (the contract `$defs.environment` block)
@@ -195,8 +193,7 @@ def generate_flake(env: dict, *, nixpkgs: str = DEFAULT_NIXPKGS) -> str:
     env_lines = ""
     if browser:
         let_lines = (
-            "\n      fontsConf = pkgs.makeFontsConf "
-            "{ fontDirectories = [ pkgs.dejavu_fonts ]; };"
+            "\n      fontsConf = pkgs.makeFontsConf { fontDirectories = [ pkgs.dejavu_fonts ]; };"
         )
         env_lines = (
             "\n        # Nix-provided, version-matched browsers — no network "
@@ -306,9 +303,7 @@ def _test() -> None:
     assert "python313.withPackages" in flake, flake
     assert "playwright-test" in flake and "nodejs_22" in flake, flake
     assert "PLAYWRIGHT_BROWSERS_PATH" in flake, flake
-    assert "pkgs.chromium" not in flake, (
-        "bare chromium must be dropped for the pw stack"
-    )
+    assert "pkgs.chromium" not in flake, "bare chromium must be dropped for the pw stack"
     assert "fastapi" in flake and "pytest" in flake, flake  # web+test libs inferred
     # fonts: headless chromium needs them to render text in a minimal container.
     assert "dejavu_fonts" in flake and "FONTCONFIG_FILE" in flake, flake
