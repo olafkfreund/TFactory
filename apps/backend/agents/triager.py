@@ -398,7 +398,10 @@ def _write_status_patch(spec_dir: Path, **fields: object) -> None:
 
             maybe_emit_backstage(spec_dir, status)
         except Exception:  # noqa: BLE001 — emitting must never break the run
-            pass
+            _triage_log.debug(
+                "triager: best-effort Backstage emit failed (degraded)",
+                exc_info=True,
+            )
         # Best-effort test-result docs via the vendored docs-emit core (#341).
         # No-op unless TFACTORY_DOCS_EMIT is set; publishes under the plan's
         # correlation_key so the run's results resolve next to the plan it
@@ -408,7 +411,10 @@ def _write_status_patch(spec_dir: Path, **fields: object) -> None:
 
             maybe_emit_docs(spec_dir, status)
         except Exception:  # noqa: BLE001 — emitting must never break the run
-            pass
+            _triage_log.debug(
+                "triager: best-effort docs emit failed (degraded)",
+                exc_info=True,
+            )
 
 
 # ─── Mode resolution: dry-run vs real ─────────────────────────────────
@@ -647,7 +653,9 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> CompletionEnvelo
         if _acc:
             envelope["access"] = _acc
     except Exception:  # noqa: BLE001 - the access annotation must never break emit
-        pass
+        _triage_log.debug(
+            "triager: access annotation unavailable (degraded)", exc_info=True
+        )
     # RFC-0006 (#74): attribute the lanes that actually ran (verdicts.json) to
     # VAL levels and attach the gate-normalized verification block — honest
     # achieved_level + claim, with VAL-3 surfaced as a gap (no disposable target,
@@ -669,7 +677,10 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> CompletionEnvelo
             if _floor is not None:
                 _target = _floor
         except Exception:  # noqa: BLE001 - tier read must never break emit
-            pass
+            _triage_log.debug(
+                "triager: VAL floor (tier) read failed; keeping default target",
+                exc_info=True,
+            )
 
         _block = read_verification_block(spec_dir, target_level=_target)
         envelope["verification"] = _block
@@ -677,7 +688,9 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> CompletionEnvelo
         _fdir.mkdir(parents=True, exist_ok=True)
         (_fdir / "verification.json").write_text(json.dumps(_block, indent=2))
     except Exception:  # noqa: BLE001 - verification block must never break emit
-        pass
+        _triage_log.debug(
+            "triager: verification block emit failed (degraded)", exc_info=True
+        )
     # RFC-0013 (#447): when the contract's deployment block marks the change
     # high-risk or production, surface the deploy gate verdict so the merge
     # policy / handback can hold a change back without a DRY-RUN deploy proof.
@@ -722,7 +735,9 @@ def _notify_completion(spec_dir: Path, status: dict) -> None:
             findings_dir.mkdir(parents=True, exist_ok=True)
             (findings_dir / "COMPLETED.json").write_text(json.dumps(payload, indent=2))
         except OSError:
-            pass
+            _triage_log.debug(
+                "triager: completion sentinel write failed (degraded)", exc_info=True
+            )
 
     url = _completion_webhook_url()
     if not url:
@@ -740,9 +755,12 @@ def _notify_completion(spec_dir: Path, status: dict) -> None:
             enqueue(payload)
             relay_once()  # best-effort immediate delivery; undelivered persist
             return
-    except Exception:
-        # Outbox must never break the pipeline; fall through to legacy POST.
-        pass
+    except Exception:  # noqa: BLE001 - outbox must never break the pipeline
+        # Fall through to the legacy direct POST below.
+        _triage_log.debug(
+            "triager: completion outbox path failed; falling back to direct POST",
+            exc_info=True,
+        )
 
     try:
         import urllib.request

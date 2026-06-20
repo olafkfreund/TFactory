@@ -1439,7 +1439,11 @@ async def _run_evaluator_session(spec_dir, project_dir, bundles, verbose) -> boo
                 try:
                     flaky_by_test_id[b.test_id] = fh.as_dict()
                 except Exception:  # noqa: BLE001 — skip a malformed entry
-                    pass
+                    _eval_log.debug(
+                        "evaluator: skipping malformed flaky_history for %s",
+                        b.test_id,
+                        exc_info=True,
+                    )
         doc = json.loads(verdicts_path.read_text())
         enrich_verdicts(doc, flaky_by_test_id)
         # Honor the RFC-0002 contract execution scope (#247): record declared

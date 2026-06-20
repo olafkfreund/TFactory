@@ -41,9 +41,10 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from agents.workspace_status import now_iso as _now_iso
 
 try:
     from claude_agent_sdk import tool
@@ -82,8 +83,8 @@ def _workspace_root() -> Path:
     return Path(root).expanduser() if root else _DEFAULT_ROOT
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+# ``_now_iso`` is the shared timestamp helper (agents.workspace_status, #451),
+# imported under its existing module-local name so call sites stay unchanged.
 
 
 def write_visual_inspection_meta(
