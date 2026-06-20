@@ -1,25 +1,36 @@
 name: ratchet (code-quality)
 
-# Diff-scoped code-quality ratchet (Factory coding-standards section 4.6).
+# Factory coding-standards adoption for the TFactory Python backend.
 #
-# Enforces the shared strict baseline (standards/ruff.toml, vendored from the
-# Factory hub at the SHA in standards/PINNED_SHA) as a NO-REGRESSION ratchet on
-# the files a PR changes: for every changed backend Python file, the ruff
-# violation count at the PR head may not exceed the count on the base branch.
-# Touching a legacy hotspot therefore forces it to get cleaner (or at least not
-# dirtier); untouched legacy is left alone until someone edits it.
+# This is a RATCHET gate (coding-standards.md section 4.6): the shared strict
+# baseline (standards/ruff.toml, vendored from the Factory hub at the SHA in
+# standards/PINNED_SHA) runs ONLY on the Python files a PR changes. For every
+# changed backend Python file the ruff violation count at HEAD may not exceed the
+# count on the PR base - untouched legacy hotspots are allowed until touched, so
+# the gate is green at adoption and tightens monotonically. A whole-repo strict
+# gate is intentionally NOT made blocking (the legacy violation count would make
+# it instantly red).
 #
-# This is intentionally SEPARATE from the existing `backend (ruff + pytest)`
-# job: it neither weakens that legacy whole-repo lint nor depends on it, and a
-# whole-repo strict gate is deliberately NOT made blocking yet (the legacy
-# violation count would make it instantly red). A whole-repo
-# `ruff format --check` IS gated, because formatting is auto-applied and the
-# adoption PR already formatted the tree.
+# Reuses the fleet reference ratchet (scripts/ratchet_lint.py, vendored verbatim
+# from CFactory) so every service runs the identical no-regression check.
+#
+# This is intentionally SEPARATE from the existing `backend (ruff + pytest)` and
+# `critical (fast PR gate)` jobs in ci.yml: it neither weakens nor depends on
+# their legacy whole-repo lint (root ruff.toml). It also runs a whole-repo
+# `ruff format --check` (formatting is auto-applied, never reviewed - section
+# 3.6) and a drift gate confirming the vendored configs still match the pinned
+# hub baseline.
+#
+# mypy --strict on changed files is INFORMATIONAL (continue-on-error): the legacy
+# backend is largely untyped, so it surfaces type debt without making the
+# adoption PR red.
 #
 # Adopts: Factory#154 / issues #449, #452.
 
 on:
   pull_request:
+    branches: [dev, main]
+  push:
     branches: [dev, main]
 
 concurrency:
@@ -29,95 +40,107 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  RUFF_VERSION: "0.15.17"
+  MYPY_VERSION: "1.20.1"
+  PACKAGE_DIR: "apps/backend"
+
 jobs:
   ratchet:
-    name: ratchet (ruff no-regression on changed py)
+    name: ratchet (ruff no-regression on changed py) + mypy (informational)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          # Need full history so we can read each changed file at the base.
+          # Need history back to the PR base for the diff-scoped ratchet.
           fetch-depth: 0
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
+      - uses: actions/setup-python@v5
         with:
-          version: "latest"
+          python-version: "3.12"
 
-      - name: Install pinned ruff
-        run: uv tool install 'ruff==0.14.10'
-
-      - name: Ratchet ruff strict baseline on changed backend Python
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      - name: Install lint toolchain + backend deps (pinned)
         run: |
-          set -euo pipefail
-          RUFF="uv tool run --from ruff==0.14.10 ruff"
-          MERGE_BASE="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"
+          python -m pip install --upgrade pip
+          pip install "ruff==${RUFF_VERSION}" "mypy==${MYPY_VERSION}"
+          # Backend deps so mypy can resolve imports on changed files.
+          pip install -r apps/backend/requirements.txt -r tests/requirements-test.txt || true
 
-          # Changed backend Python files that still exist at HEAD.
-          mapfile -t FILES < <(git diff --name-only --diff-filter=ACMR \
-            "$MERGE_BASE" "$HEAD_SHA" -- 'apps/backend/**/*.py')
-
-          if [ "${#FILES[@]}" -eq 0 ]; then
-            echo "No backend Python files changed; ratchet is a no-op."
-            exit 0
+      - name: Determine base ref
+        id: base
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "ref=origin/${{ github.base_ref }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=HEAD~1" >> "$GITHUB_OUTPUT"
           fi
 
-          # Count strict-baseline violations for a single file's content,
-          # passed on stdin so we can score the BASE revision too.
-          count_violations() {
-            local fname="$1"
-            # ruff prints one line per finding with --output-format concise;
-            # count them. Empty / clean file -> 0.
-            $RUFF check --config standards/ruff.toml --no-fix \
-              --output-format concise --stdin-filename "$fname" - \
-              2>/dev/null | grep -cE '^[^ ].*:[0-9]+:[0-9]+: ' || true
-          }
+      - name: Ratchet (ruff on changed files; blocks net-new violations)
+        run: python scripts/ratchet_lint.py --base "${{ steps.base.outputs.ref }}" --package "${PACKAGE_DIR}"
 
-          fail=0
-          for f in "${FILES[@]}"; do
-            head_n="$(git show "$HEAD_SHA:$f" | count_violations "$f")"
-            if git cat-file -e "$MERGE_BASE:$f" 2>/dev/null; then
-              base_n="$(git show "$MERGE_BASE:$f" | count_violations "$f")"
-            else
-              base_n=0   # new file: any violation is a regression from 0
-            fi
-            if [ "$head_n" -gt "$base_n" ]; then
-              echo "REGRESSION  $f : $base_n -> $head_n strict violations"
-              $RUFF check --config standards/ruff.toml --no-fix "$f" || true
-              fail=1
-            else
-              echo "ok          $f : $base_n -> $head_n"
-            fi
-          done
-
-          if [ "$fail" -ne 0 ]; then
-            echo ""
-            echo "Ratchet failed: a changed file increased its strict-baseline"
-            echo "violation count. Fix the new violations (run: ruff check"
-            echo "--config standards/ruff.toml --fix <file>) — see"
-            echo "standards/coding-standards.md."
-            exit 1
-          fi
+      - name: mypy --strict on changed files (informational)
+        # Non-blocking for now: the legacy backend is largely untyped, so
+        # mypy --strict over touched files reports a large existing backlog. This
+        # surfaces type debt without making the adoption PR red.
+        continue-on-error: true
+        env:
+          MYPYPATH: apps/backend
+          PYTHONPATH: apps/backend
+        run: |
+          mapfile -t files < <(git diff --name-only --diff-filter=AM "${{ steps.base.outputs.ref }}...HEAD" -- "${PACKAGE_DIR}" | grep '\.py$' || true)
+          if [ ${#files[@]} -eq 0 ]; then echo "no changed Python files"; exit 0; fi
+          mypy --config-file standards/mypy.ini "${files[@]}" || true
 
   format-check:
     name: ruff format --check (apps/backend)
     runs-on: ubuntu-latest
     # Formatting is auto-applied, never reviewed (standards section 3.6).
-    # Safe to gate: `ruff format` was applied across apps/backend in the
-    # adoption PR, so the tree is already format-clean.
+    # Pinned to the SAME ruff version the tree was formatted with so the check
+    # is deterministic; a version skew here was the original red.
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
+      - uses: actions/setup-python@v5
         with:
-          version: "latest"
-
-      - name: Install pinned ruff
-        run: uv tool install 'ruff==0.14.10'
-
+          python-version: "3.12"
+      - name: Install ruff (pinned)
+        run: pip install "ruff==${RUFF_VERSION}"
       - name: Ruff format check (apps/backend)
-        run: uv tool run --from 'ruff==0.14.10' ruff format --check apps/backend
+        run: ruff format --check apps/backend
+
+  config-drift:
+    name: shared-baseline drift gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: tfactory
+      - name: Read pinned hub SHA
+        id: pin
+        run: echo "sha=$(tr -d '[:space:]' < tfactory/standards/PINNED_SHA)" >> "$GITHUB_OUTPUT"
+      - name: Check out hub standards at the pinned SHA
+        uses: actions/checkout@v4
+        with:
+          repository: olafkfreund/Factory
+          ref: ${{ steps.pin.outputs.sha }}
+          path: factory-hub
+          # If Factory is private, a token with read access is needed here.
+        continue-on-error: true
+        id: hub
+      - name: Diff vendored configs against the pinned hub baseline
+        if: steps.hub.outcome == 'success'
+        run: |
+          set -e
+          # Vendored copies may carry a header above the body; compare the rule
+          # body only by stripping leading comment / blank lines from both sides.
+          strip() { grep -vE '^[[:space:]]*([#;]|$)' "$1"; }
+          for f in ruff.toml mypy.ini .editorconfig; do
+            if ! diff <(strip "tfactory/standards/$f") <(strip "factory-hub/standards/$f"); then
+              echo "DRIFT: tfactory/standards/$f diverged from the pinned hub baseline (standards/$f)."
+              echo "Re-vendor from the hub and bump standards/PINNED_SHA, or justify a tighten-only override."
+              exit 1
+            fi
+          done
+          echo "No drift: vendored configs match the pinned hub baseline."
+      - name: Hub unavailable (private repo / no token)
+        if: steps.hub.outcome != 'success'
+        run: echo "Hub checkout unavailable; skipping drift diff (configure a read token to enforce)."

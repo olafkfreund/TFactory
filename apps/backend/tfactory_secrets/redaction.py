@@ -49,9 +49,9 @@ def scrub_patterns(text: str) -> str:
         try:
             text = re.sub(
                 pattern,
-                lambda m: m.group(0).replace(m.group(1), _MASK)
-                if m.groups()
-                else _MASK,
+                lambda m: (
+                    m.group(0).replace(m.group(1), _MASK) if m.groups() else _MASK
+                ),
                 text,
                 flags=re.IGNORECASE,
             )
