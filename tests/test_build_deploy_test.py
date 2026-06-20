@@ -139,15 +139,22 @@ def _target(**kw):
 def test_runtime_start_argv_and_target_url():
     r = _DockerRunner()
     wf = [SimpleNamespace(url="http://localhost:3000/health", expect_status=200, timeout_seconds=30)]
-    rt = DockerRunRuntime(_target(wait_for=wf), runner_fn=r, clock=lambda: 0.0)
+    # Pin the allocated host port so the assertions are deterministic; the
+    # declared container port (3000) is bound to this dynamic host port
+    # (RFC-0016 #465), and target_url is rewritten to it.
+    rt = DockerRunRuntime(
+        _target(wait_for=wf), runner_fn=r, clock=lambda: 0.0, port_picker=lambda: 54999
+    )
     res = rt.start()
     assert res.started and res.container_id == "container123"
     run_argv = next(a for a in r.calls if a[:2] == ["docker", "run"])
     assert "-d" in run_argv
-    assert "-p" in run_argv and "3000:3000" in run_argv
+    # dynamic host port -> declared container port, NOT the fixed 3000:3000
+    assert "-p" in run_argv and "54999:3000" in run_argv
+    assert "3000:3000" not in run_argv
     assert "FOO=bar" in run_argv
     assert run_argv[-1] == "myapp:test"
-    assert rt.target_url == "http://localhost:3000/health"
+    assert rt.target_url == "http://localhost:54999/health"
 
 
 def test_runtime_start_failure_raises():
@@ -158,10 +165,14 @@ def test_runtime_start_failure_raises():
 
 def test_runtime_stop_removes_container():
     r = _DockerRunner()
-    rt = DockerRunRuntime(_target(), runner_fn=r, clock=lambda: 0.0)
+    # Pin the unique container name so the rm assertion is deterministic; in
+    # production the name carries a per-run uuid suffix (RFC-0016 #465).
+    rt = DockerRunRuntime(
+        _target(), name="tfactory-run-api-deadbeef", runner_fn=r, clock=lambda: 0.0
+    )
     rt.start()
     rt.stop()
-    assert ["docker", "rm", "-f", "tfactory-run-api"] in r.calls
+    assert ["docker", "rm", "-f", "tfactory-run-api-deadbeef"] in r.calls
 
 
 def test_runtime_context_manager_tears_down():

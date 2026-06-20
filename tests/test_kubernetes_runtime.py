@@ -85,11 +85,13 @@ def _popen_for(proc: _FakeProc):
 
 
 def test_port_forward_argv_with_kubeconfig() -> None:
+    # No explicit local_port -> default to 0 (auto-free) so concurrent
+    # port-forwards never clash on a fixed local port (RFC-0016 #465).
     rt = KubernetesRuntime(_target(port=8080), kubeconfig="/kc/config")
     assert rt.port_forward_argv() == [
         "kubectl", "--kubeconfig", "/kc/config",
         "--context", "prod-readonly", "-n", "example-app",
-        "port-forward", "service/billing", "8080:8080",
+        "port-forward", "service/billing", "0:8080",
     ]
 
 

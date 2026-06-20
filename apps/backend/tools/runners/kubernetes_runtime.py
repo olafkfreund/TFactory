@@ -72,8 +72,9 @@ class KubernetesRuntime:
         kubeconfig: Path to the materialised kubeconfig (from
             ``sandbox_credentials``); passed as ``--kubeconfig``. ``None`` falls
             back to kubectl's ambient config (e.g. in-cluster).
-        local_port: Local port to bind. Defaults to the target's remote port;
-            pass ``0`` to let kubectl choose a free port (parsed from output).
+        local_port: Local port to bind. Defaults to ``0`` (kubectl picks a free
+            port, parsed from its output) so concurrent port-forwards never clash
+            on a fixed local port (RFC-0016 #465). Pass an explicit port to pin.
         kubectl_cmd: Override the kubectl binary tuple (default ``("kubectl",)``).
         popen_fn: Replaces ``subprocess.Popen`` — injectable in tests.
         clock: Replaces ``time.monotonic`` — injectable in tests.
@@ -121,10 +122,11 @@ class KubernetesRuntime:
             raise KubernetesRuntimeError(
                 f"kubernetes target {t.name!r} requires 'port' to port-forward"
             )
+        # Default to 0 (auto-free) so concurrent port-forwards don't clash on a
+        # fixed local port (RFC-0016 #465); kubectl prints the chosen port and
+        # ``_await_ready`` parses it back. An explicit local_port pins the bind.
         local = (
-            self._requested_local_port
-            if self._requested_local_port is not None
-            else t.port
+            self._requested_local_port if self._requested_local_port is not None else 0
         )
         argv = list(self.kubectl_cmd)
         if self.kubeconfig:
