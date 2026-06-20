@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import subprocess
 import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -120,6 +121,7 @@ class AppRuntime:
         runner_fn: Callable | None = None,
         clock: Callable[[], float] | None = None,
         allow_private_targets: bool = False,
+        project_name: str | None = None,
     ) -> None:
         self.target = target
         self.repo_root = repo_root
@@ -128,6 +130,12 @@ class AppRuntime:
         self._runner_fn = runner_fn or subprocess.run
         self._clock = clock or time.monotonic
         self._started = False
+        # UNIQUE compose project name per run (RFC-0016 #465): without an
+        # explicit ``-p``, compose derives the project from the directory name,
+        # so two concurrent stacks from the same repo collide on container /
+        # network / volume names. The uuid suffix keeps each run isolated; the
+        # same value is reused for up AND down so teardown targets this stack.
+        self.project_name = project_name or f"tf-{uuid.uuid4().hex[:8]}"
         # SSRF guard (#359): allow RFC-1918 targets only when the operator
         # explicitly opts in (link-local / metadata / loopback stay blocked).
         self._allow_private_targets = allow_private_targets
@@ -151,6 +159,8 @@ class AppRuntime:
         argv = (
             list(self.compose_cmd)
             + [
+                "-p",
+                self.project_name,
                 "-f",
                 str(compose_file_abs),
                 "up",
@@ -186,6 +196,8 @@ class AppRuntime:
             return
         compose_file_abs = self.repo_root / self.target.compose_file
         argv = list(self.compose_cmd) + [
+            "-p",
+            self.project_name,
             "-f",
             str(compose_file_abs),
             "down",
