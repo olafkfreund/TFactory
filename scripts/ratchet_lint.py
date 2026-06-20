@@ -57,6 +57,21 @@ PACKAGE_DEFAULT = "apps/backend"
 # mypy emits "<path>:<line>: error: <msg>  [code]"; count only real errors.
 _MYPY_ERROR_RE = re.compile(r"^(?P<path>.+?):\d+: error:")
 
+# Byte-exact vendored copies of Factory-hub canonical modules. These are NOT
+# governed by this repo's strict style bar — they MUST stay identical to the hub
+# canonical and are policed by the byte-exact drift gates
+# (verification-core-drift.yml) instead. Reformatting/retyping them to satisfy
+# the local ratchet would make them diverge from the hub and break that gate, so
+# the ratchet skips them (the same reason ruff.toml excludes them from
+# format/lint). Paths are relative to the repo root.
+VENDORED_SKIP = frozenset(
+    {
+        "apps/backend/agents/verification_gate.py",
+        "apps/backend/tools/runners/nix_provisioner.py",
+        "apps/backend/tools/runners/artifact_store.py",
+    }
+)
+
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, capture_output=True, text=True, check=False)
@@ -78,6 +93,7 @@ def changed_python_files(base: str, package: str) -> list[str]:
             path.suffix == ".py"
             and (pkg in path.parents or pkg == path.parent)
             and path.exists()
+            and str(path) not in VENDORED_SKIP  # byte-exact vendored copies
         ):
             out.append(str(path))
     return out

@@ -77,7 +77,13 @@ async def run_verify_pipeline(
     return ok, final_status
 
 
-async def _record_terminal(job_id: str, *, final_status: str) -> None:
+async def _record_terminal(
+    job_id: str,
+    *,
+    final_status: str,
+    spec_dir: Path | None = None,
+    correlation_key: str | int | None = None,
+) -> None:
     """Idempotently write the Job's terminal job-state row. Best-effort.
 
     Imports the web-server durable store lazily (it lives in a sibling app) so
@@ -86,11 +92,28 @@ async def _record_terminal(job_id: str, *, final_status: str) -> None:
     key) at dispatch; this only advances it to a terminal state. ``has_verdict``
     drives the #464 no-verdict→stuck rule: a terminal-by-name status with no real
     verdict is recorded ``stuck``, not ``done``.
+
+    RFC-0016 #190: before the terminal write, upload the verify's findings +
+    evidence to object storage and stamp the resulting ``artifacts[]`` URIs onto
+    the row. Both steps are fail-open — a store/upload failure never changes the
+    verdict the Job already wrote to its workspace.
     """
     has_verdict = final_status in _VERDICT_STATUSES
     error = None
     if final_status in _FAILED_STATUSES:
         error = f"verify failed in-Job (status={final_status})"
+
+    artifacts: list[dict[str, object]] | None = None
+    if spec_dir is not None:
+        from agents.verify_artifacts import (  # noqa: PLC0415 - lazy by design
+            emit_verify_artifacts,
+        )
+
+        uploaded = emit_verify_artifacts(
+            spec_dir, job_id=job_id, correlation_key=correlation_key
+        )
+        artifacts = uploaded or None
+
     try:
         from server.services import (  # type: ignore[import-not-found]  # noqa: PLC0415
             job_state_store as jss,
@@ -109,6 +132,7 @@ async def _record_terminal(job_id: str, *, final_status: str) -> None:
         has_verdict=has_verdict,
         result={"status": final_status} if final_status else None,
         error=error,
+        artifacts=artifacts,
     )
 
 
@@ -140,7 +164,14 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     if args.job_id:
-        asyncio.run(_record_terminal(args.job_id, final_status=final_status))
+        asyncio.run(
+            _record_terminal(
+                args.job_id,
+                final_status=final_status,
+                spec_dir=spec_dir,
+                correlation_key=args.correlation_key,
+            )
+        )
     else:
         _log.warning(
             "[verify-pipeline] no --job-id/$JOB_ID; skipping durable terminal write"
