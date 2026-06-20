@@ -77,7 +77,7 @@ def format_compact(status: BuildStatus) -> str:
     parts = []
 
     # State indicator
-    state_icons = {
+    {
         BuildState.PLANNING: ("", "P"),
         BuildState.BUILDING: (icon(Icons.LIGHTNING), "B"),
         BuildState.QA: ("", "Q"),

@@ -27,11 +27,17 @@ _BACKEND_REGISTRY: dict[str, tuple[str, str]] = {
     "localfile": ("tfactory_secrets.backends.localfile", "LocalFileBackend"),
     "vault": ("tfactory_secrets.backends.vault", "VaultBackend"),
     "azure_keyvault": (
-        "tfactory_secrets.backends.azure_keyvault", "AzureKeyVaultBackend"),
+        "tfactory_secrets.backends.azure_keyvault",
+        "AzureKeyVaultBackend",
+    ),
     "aws_secrets_manager": (
-        "tfactory_secrets.backends.aws_secrets_manager", "AwsSecretsManagerBackend"),
+        "tfactory_secrets.backends.aws_secrets_manager",
+        "AwsSecretsManagerBackend",
+    ),
     "gcp_secret_manager": (
-        "tfactory_secrets.backends.gcp_secret_manager", "GcpSecretManagerBackend"),
+        "tfactory_secrets.backends.gcp_secret_manager",
+        "GcpSecretManagerBackend",
+    ),
 }
 
 # Recognised backends whose implementation lands in a later child issue.
@@ -71,8 +77,7 @@ def resolve_canonical(name: str) -> str:
     canonical = _ALIASES.get(name.strip().lower())
     if canonical is None:
         raise ValueError(
-            f"Unknown secrets backend {name!r}. "
-            f"Supported: {sorted(set(_ALIASES))}"
+            f"Unknown secrets backend {name!r}. Supported: {sorted(set(_ALIASES))}"
         )
     return canonical
 
@@ -93,7 +98,9 @@ def get_secrets_backend(name: str, **kwargs: Any) -> SecretsBackend:
             raise NotImplementedError(
                 f"Secrets backend {canonical!r} is not implemented yet — see {planned}."
             )
-        raise ValueError(f"No registry entry for backend {canonical!r}")  # pragma: no cover
+        raise ValueError(
+            f"No registry entry for backend {canonical!r}"
+        )  # pragma: no cover
 
     module_path, class_name = entry
     try:

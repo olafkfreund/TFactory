@@ -49,7 +49,9 @@ _MODEL_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$")
 
 # Lines from here onward are Copilot's post-run usage/billing summary, not
 # model output — trimmed before returning the assistant text.
-_TRAILER_RE = re.compile(r"^(Total (usage|duration|code changes)|Usage by model:)", re.M)
+_TRAILER_RE = re.compile(
+    r"^(Total (usage|duration|code changes)|Usage by model:)", re.M
+)
 
 
 class CopilotAgenticProvider(BaseLLMProvider):
@@ -83,7 +85,7 @@ class CopilotAgenticProvider(BaseLLMProvider):
         # provider. The CLI only accepts the bare model name, so strip it once
         # here (mirrors OllamaAgenticProvider).
         if model and model.lower().startswith("copilot:"):
-            model = model[len("copilot:"):]
+            model = model[len("copilot:") :]
         if model and not _MODEL_NAME_RE.match(model):
             raise ValueError(
                 f"Invalid model name '{model}': must be alphanumeric with . _ : / - separators"
@@ -136,10 +138,14 @@ class CopilotAgenticProvider(BaseLLMProvider):
 
     async def _run_copilot(self) -> AsyncGenerator[Any, None]:
         if not self._pending_prompt:
-            logger.warning("CopilotAgenticProvider.receive_response() called before query()")
+            logger.warning(
+                "CopilotAgenticProvider.receive_response() called before query()"
+            )
             return
         if not self._resolved_path:
-            raise RuntimeError("Copilot CLI not resolved — use 'async with' context manager")
+            raise RuntimeError(
+                "Copilot CLI not resolved — use 'async with' context manager"
+            )
 
         cmd = [
             self._resolved_path,

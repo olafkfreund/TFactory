@@ -143,9 +143,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
     async def query(self, prompt: str) -> None:
         """Store the prompt for execution when ``receive_response()`` is called."""
         self._pending_prompt = prompt
-        logger.debug(
-            "OpenAICompatibleProvider: prompt stored (length=%d)", len(prompt)
-        )
+        logger.debug("OpenAICompatibleProvider: prompt stored (length=%d)", len(prompt))
 
     def receive_response(self) -> AsyncIterator[Any]:
         """Return an async generator that calls ``/v1/chat/completions``."""
@@ -167,9 +165,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         payload = self._build_payload(self._pending_prompt)
         url = f"{self._base_url}{_PATH_CHAT}"
 
-        logger.debug(
-            "OpenAICompatibleProvider: POST %s model=%r", url, self._model
-        )
+        logger.debug("OpenAICompatibleProvider: POST %s model=%r", url, self._model)
 
         try:
             response_data = await asyncio.wait_for(

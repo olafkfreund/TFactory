@@ -102,9 +102,7 @@ def render_remediation_plan(
             n += 1
             regions = ", ".join(sorted(it["regions"])) if it["regions"] else "global"
             lines.append(f"### {n}. {it['title']}")
-            lines.append(
-                f"_{it['severity']} · {it['count']} affected · {regions}_"
-            )
+            lines.append(f"_{it['severity']} · {it['count']} affected · {regions}_")
             if it["resources"]:
                 more = "" if it["count"] <= len(it["resources"]) else " …"
                 lines.append(f"- **Affected:** {', '.join(it['resources'])}{more}")

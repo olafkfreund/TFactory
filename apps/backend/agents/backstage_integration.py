@@ -19,9 +19,9 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
 
 _FACT_NAME = "tfactory.test_quality"
 _DEFAULT_TIMEOUT = 5.0

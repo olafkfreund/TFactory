@@ -144,7 +144,12 @@ class LoginStep(BaseModel):
     """
 
     action: Literal[
-        "goto", "click", "fill_username", "fill_secret", "fill", "fill_totp",
+        "goto",
+        "click",
+        "fill_username",
+        "fill_secret",
+        "fill",
+        "fill_totp",
         "wait_for_url",
     ]
     selector: str | None = None  # click / fill* actions
@@ -814,7 +819,11 @@ class TestCredentialEntry(BaseModel):
     @field_validator("as_secret", "as_username", "as_totp_secret")
     @classmethod
     def _check_env_names(cls, v: str | None) -> str | None:
-        return v if v is None else _validate_env_var_name(v, "as_secret/as_username/as_totp_secret")
+        return (
+            v
+            if v is None
+            else _validate_env_var_name(v, "as_secret/as_username/as_totp_secret")
+        )
 
 
 class QualityGatePolicy(BaseModel):

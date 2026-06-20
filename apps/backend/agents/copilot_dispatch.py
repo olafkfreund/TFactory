@@ -351,8 +351,8 @@ def read_dispatch_metadata(spec_dir: Path) -> dict[str, Any] | None:
 
 
 __all__ = [
+    "CopilotDispatchError",
     "dispatch_test_writing",
     "find_copilot_pr",
     "read_dispatch_metadata",
-    "CopilotDispatchError",
 ]

@@ -110,7 +110,9 @@ def _render_markdown(
     graded_candidates = committed + flagged + rejected
     if graded_candidates:
         parts.append("\n" + _h(2, "Per-test verdicts"))
-        parts.append("| Test | Verdict | Coverage Δ | Mutation | Stability | CI-parity |\n")
+        parts.append(
+            "| Test | Verdict | Coverage Δ | Mutation | Stability | CI-parity |\n"
+        )
         parts.append("|---|---|---|---|---|---|\n")
         parts.extend(_verdict_rows(graded_candidates))
 
@@ -146,7 +148,9 @@ def render_test_results(
     )
 
     summary = triage.get("summary") or {}
-    committed_n = int(summary.get("committed_count", len(triage.get("committed") or [])))
+    committed_n = int(
+        summary.get("committed_count", len(triage.get("committed") or []))
+    )
     flagged_n = int(summary.get("flagged_count", len(triage.get("flagged") or [])))
     rejected_n = int(summary.get("rejected_count", len(triage.get("rejected") or [])))
     graded = committed_n + flagged_n + rejected_n

@@ -70,7 +70,7 @@ def parse_ref(raw: str) -> SecretRef:
             f"Known schemes: {sorted(_SCHEME_TO_BACKEND)}"
         )
 
-    body = raw[len(scheme) + 1:]  # strip ``scheme:``
+    body = raw[len(scheme) + 1 :]  # strip ``scheme:``
 
     if scheme in _AUTHORITY_SCHEMES:
         return _parse_authority(scheme, backend, body, raw)
@@ -80,6 +80,7 @@ def parse_ref(raw: str) -> SecretRef:
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
+
 
 def _scheme_of(raw: str) -> str:
     scheme, sep, _ = raw.strip().partition(":")
@@ -135,7 +136,9 @@ def _parse_authority(scheme: str, backend: str, body: str, raw: str) -> SecretRe
         # aws-sm://<secret-name-which-may-contain-slashes>[#json-field]
         path, fld = _split_field(rest)
         if not path:
-            raise InvalidSecretRefError(f"AWS Secrets Manager ref missing name: {raw!r}")
+            raise InvalidSecretRefError(
+                f"AWS Secrets Manager ref missing name: {raw!r}"
+            )
         return SecretRef(backend=backend, raw=raw, locator=path, field=fld)
 
     if scheme == "gcp-sm":
@@ -148,11 +151,16 @@ def _parse_authority(scheme: str, backend: str, body: str, raw: str) -> SecretRe
         project, secret = parts[0], parts[1]
         version = parts[2] if len(parts) > 2 and parts[2] else None
         return SecretRef(
-            backend=backend, raw=raw, locator=secret, version=version,
+            backend=backend,
+            raw=raw,
+            locator=secret,
+            version=version,
             extra={"project": project},
         )
 
-    raise InvalidSecretRefError(f"Unhandled authority scheme {scheme!r}")  # pragma: no cover
+    raise InvalidSecretRefError(
+        f"Unhandled authority scheme {scheme!r}"
+    )  # pragma: no cover
 
 
-__all__ = ["parse_ref", "infer_backend_from_ref"]
+__all__ = ["infer_backend_from_ref", "parse_ref"]

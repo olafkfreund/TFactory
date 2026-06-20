@@ -88,7 +88,6 @@ def finalize_workspace(
 
     # Get the worktree path for test instructions
     worktree_info = manager.get_worktree_info(spec_name)
-    staging_path = worktree_info.path if worktree_info else None
 
     # Enhanced menu for post-build options
     options = [

@@ -35,8 +35,8 @@ from __future__ import annotations
 import re
 import subprocess
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 # kubectl prints a forwarding line per bound loopback address once the tunnel is
 # live, e.g. "Forwarding from 127.0.0.1:8080 -> 80" and/or

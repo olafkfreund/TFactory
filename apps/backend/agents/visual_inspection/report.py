@@ -52,7 +52,9 @@ def render_inspection_report(meta: RunMeta) -> str:
         icon = _STATE_ICON.get(s["state"], s["state"])
         shot = s.get("screenshot")
         cell = f"![{s['label']}]({shot})" if shot else "—"
-        lines.append(f"| {s['n']} | {_md_escape(s['label'])} | {icon} {s['state']} | {cell} |")
+        lines.append(
+            f"| {s['n']} | {_md_escape(s['label'])} | {icon} {s['state']} | {cell} |"
+        )
     lines.append("")
 
     # ── failures / problems (for human tracking) ──────────────────────────

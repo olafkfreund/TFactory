@@ -29,9 +29,10 @@ The git workflow this module orchestrates:
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import Protocol
 
 
 def _sign_enabled() -> bool:

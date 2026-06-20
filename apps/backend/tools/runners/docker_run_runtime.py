@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import subprocess
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 from urllib import request as urlrequest
 from urllib.error import HTTPError, URLError
 

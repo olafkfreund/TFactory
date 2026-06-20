@@ -948,11 +948,22 @@ def _write_ac_fidelity(spec_dir, committed, flagged, rejects) -> dict:
             return {}
         plan = json.loads(plan_path.read_text())
         verdicts = (
-            [{"test_id": c.test_id, "test_file": c.test_file, "verdict": "accept"} for c in committed]
-            + [{"test_id": c.test_id, "test_file": c.test_file, "verdict": "flag"} for c in flagged]
-            + [{"test_id": c.test_id, "test_file": c.test_file, "verdict": "reject"} for c in rejects]
+            [
+                {"test_id": c.test_id, "test_file": c.test_file, "verdict": "accept"}
+                for c in committed
+            ]
+            + [
+                {"test_id": c.test_id, "test_file": c.test_file, "verdict": "flag"}
+                for c in flagged
+            ]
+            + [
+                {"test_id": c.test_id, "test_file": c.test_file, "verdict": "reject"}
+                for c in rejects
+            ]
         )
-        ledger = attach_screenshots(build_ac_ledger(plan, verdicts), spec_dir / "findings")
+        ledger = attach_screenshots(
+            build_ac_ledger(plan, verdicts), spec_dir / "findings"
+        )
         fd = spec_dir / "findings"
         fd.mkdir(parents=True, exist_ok=True)
         (fd / "ac_fidelity.json").write_text(json.dumps(ledger, indent=2))
@@ -1231,7 +1242,9 @@ async def run_triager(
 
             _prof = read_tfactory_profile(spec_dir)
             _src = _load_source_meta(spec_dir)
-            _vprofile = (_src.get("verification") if isinstance(_src, dict) else None) or None
+            _vprofile = (
+                _src.get("verification") if isinstance(_src, dict) else None
+            ) or None
             record_val3(
                 spec_dir,
                 _vprofile,

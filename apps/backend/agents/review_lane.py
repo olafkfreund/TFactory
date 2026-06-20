@@ -79,7 +79,11 @@ async def _invoke_session(client, prompt: str, spec_dir: Path, verbose: bool):
 
     async with client:
         return await run_agent_session(
-            client, prompt, spec_dir, verbose, phase=LogPhase.CODING,
+            client,
+            prompt,
+            spec_dir,
+            verbose,
+            phase=LogPhase.CODING,
         )
 
 
@@ -114,11 +118,15 @@ async def run_review_lane(
         from agents.gen_functional import _resolve_client  # reuse the proven seam
 
         client = await _resolve_client(spec_dir, project_dir)
-        await _invoke_session(client, _build_prompt(spec_dir, project_dir), spec_dir, verbose)
+        await _invoke_session(
+            client, _build_prompt(spec_dir, project_dir), spec_dir, verbose
+        )
     except Exception as exc:  # noqa: BLE001 — never break verify
         _log.warning("review lane failed: %s", exc)
         _write_status_patch(
-            spec_dir, phase=f"review_{mode}_failed", status="review_failed",
+            spec_dir,
+            phase=f"review_{mode}_failed",
+            status="review_failed",
             review_error=str(exc)[:300],
         )
         return False
@@ -127,13 +135,17 @@ async def run_review_lane(
     if count is None:
         # The contract requires the reviewer to write findings/review.json.
         _write_status_patch(
-            spec_dir, phase=f"review_{mode}_failed", status="review_failed",
+            spec_dir,
+            phase=f"review_{mode}_failed",
+            status="review_failed",
             review_error="no_evidence: reviewer wrote no findings/review.json",
         )
         return False
 
     _write_status_patch(
-        spec_dir, phase=f"review_{mode}_complete", status="reviewed",
+        spec_dir,
+        phase=f"review_{mode}_complete",
+        status="reviewed",
         review_findings_count=count,
     )
     return True

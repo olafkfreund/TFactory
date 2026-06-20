@@ -57,6 +57,7 @@ async def _read_with_limit(
 
     Returns ``(content, was_truncated)``.
     """
+
     def _do_read() -> tuple[str, bool]:
         with open(path, encoding=encoding, errors="replace") as f:
             data = f.read(max_chars + 1)
@@ -126,7 +127,7 @@ class ToolExecutor:
                 content=(
                     f"Error: {tool_name} arguments must be a JSON object, got "
                     f"{type(tool_input).__name__}. Re-send the call with named "
-                    "parameters, e.g. {\"file_path\": ..., \"content\": ...}."
+                    'parameters, e.g. {"file_path": ..., "content": ...}.'
                 ),
                 is_error=True,
             )
@@ -254,6 +255,7 @@ class ToolExecutor:
                 content = "\n".join(content)
             else:
                 import json as _json
+
                 content = _json.dumps(content, indent=2, default=str)
 
         resolved, error = self._validate_path(file_path)
@@ -338,9 +340,7 @@ class ToolExecutor:
             )
             if hook_result.get("decision") == "block":
                 reason = hook_result.get("reason", "Command blocked by security policy")
-                return ToolResultBlock(
-                    content=f"Security: {reason}", is_error=True
-                )
+                return ToolResultBlock(content=f"Security: {reason}", is_error=True)
         except ImportError:
             logger.error("security.hooks not available — blocking all bash commands")
             return ToolResultBlock(
@@ -465,9 +465,7 @@ class ToolExecutor:
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(self._working_dir),
             )
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=30.0
-            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30.0)
         except asyncio.TimeoutError:
             return ToolResultBlock(
                 content=f"Grep timed out searching for: {pattern}",

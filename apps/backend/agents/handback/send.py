@@ -24,15 +24,15 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
 
 from .render import render_fix_request_md
 from .request import CorrectionRequest
 
-__all__ = ["SendResult", "send_correction", "default_sender", "CONTRACT_VERSION"]
+__all__ = ["CONTRACT_VERSION", "SendResult", "default_sender", "send_correction"]
 
 Sender = Callable[[dict], dict]
 

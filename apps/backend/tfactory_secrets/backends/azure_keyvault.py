@@ -63,7 +63,9 @@ class AzureKeyVaultBackend(SecretsBackend):
             ) from exc
 
         return SecretValue(
-            value=secret.value, backend=self.name, ref=ref.raw,
+            value=secret.value,
+            backend=self.name,
+            ref=ref.raw,
             source=f"azurekv:{vault}/{ref.locator}",
         )
 

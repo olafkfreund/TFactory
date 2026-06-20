@@ -313,20 +313,25 @@ def handle_build_command(
 
         elif not skip_qa and is_qa_approved(spec_dir):
             # QA was pre-approved by coder agent - emit phase events for proper logging
-            emit_phase(ExecutionPhase.QA_REVIEW, "QA pre-approved by coder agent", progress=100)
+            emit_phase(
+                ExecutionPhase.QA_REVIEW, "QA pre-approved by coder agent", progress=100
+            )
 
             print("\n" + "=" * 70)
             print("  QA PRE-APPROVED BY CODER")
             print("=" * 70)
             print("\nThe coder agent has validated all acceptance criteria.")
-            print("Implementation meets requirements - no additional QA review needed.\n")
+            print(
+                "Implementation meets requirements - no additional QA review needed.\n"
+            )
 
             emit_phase(ExecutionPhase.COMPLETE, "QA validation passed (pre-approved)")
 
             # Sync implementation plan to main project
             if sync_plan_to_source(spec_dir, source_spec_dir):
                 debug_info(
-                    "run.py", "Implementation plan synced to main project after pre-approved QA"
+                    "run.py",
+                    "Implementation plan synced to main project after pre-approved QA",
                 )
 
         # Post-build finalization (only for isolated sequential mode)

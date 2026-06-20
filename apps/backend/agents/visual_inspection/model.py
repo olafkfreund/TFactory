@@ -14,12 +14,12 @@ import re
 from dataclasses import dataclass, field
 
 __all__ = [
-    "StepResult",
     "RunMeta",
-    "verdict_for",
-    "slugify",
-    "new_run_id",
+    "StepResult",
     "build_meta",
+    "new_run_id",
+    "slugify",
+    "verdict_for",
 ]
 
 _VERDICTS = ("pass", "attention", "fail")

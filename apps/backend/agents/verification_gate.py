@@ -43,11 +43,14 @@ def normalize_verification(block: dict | None) -> dict:
         return {
             "target_level": (block or {}).get("target_level", "VAL-0"),
             "achieved_level": "VAL-0",
-            "levels": [{
-                "level": "VAL-0", "status": "not_run",
-                "reason": "no verification block declared by the producer",
-                "risk": "nothing was proven; treat as unverified",
-            }],
+            "levels": [
+                {
+                    "level": "VAL-0",
+                    "status": "not_run",
+                    "reason": "no verification block declared by the producer",
+                    "risk": "nothing was proven; treat as unverified",
+                }
+            ],
             "claim": "NOT VERIFIED — no verification was declared; treat as unproven.",
             "_gate": {"violations": ["missing_verification_block"], "downgraded": True},
         }
@@ -81,7 +84,8 @@ def normalize_verification(block: dict | None) -> dict:
     ]
     if achieved == "VAL-0" and not passed:
         claim = "NOT VERIFIED beyond static at best — " + (
-            "; ".join(gaps) if gaps else "no level passed")
+            "; ".join(gaps) if gaps else "no level passed"
+        )
     else:
         claim = f"Verified to {achieved}."
         if gaps:

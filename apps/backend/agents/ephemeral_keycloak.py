@@ -107,7 +107,9 @@ def _runtime() -> str:
     for b in ("podman", "docker"):
         if shutil.which(b):
             return b
-    raise RuntimeError("no container runtime (need docker or podman) for the local backend")
+    raise RuntimeError(
+        "no container runtime (need docker or podman) for the local backend"
+    )
 
 
 class EphemeralKeycloak:
@@ -144,11 +146,23 @@ class EphemeralKeycloak:
     def run_argv(self, binary: str, realm_file: str) -> list[str]:
         """Pure: the container run argv (unit-testable without a runtime)."""
         return [
-            binary, "run", "-d", "--rm", "--name", self._name,
-            "-p", f"{self.port}:8080",
-            "-e", "KEYCLOAK_ADMIN=admin", "-e", "KEYCLOAK_ADMIN_PASSWORD=admin",
-            "-v", f"{realm_file}:/opt/keycloak/data/import/realm.json:ro",
-            self.image, "start-dev", "--import-realm",
+            binary,
+            "run",
+            "-d",
+            "--rm",
+            "--name",
+            self._name,
+            "-p",
+            f"{self.port}:8080",
+            "-e",
+            "KEYCLOAK_ADMIN=admin",
+            "-e",
+            "KEYCLOAK_ADMIN_PASSWORD=admin",
+            "-v",
+            f"{realm_file}:/opt/keycloak/data/import/realm.json:ro",
+            self.image,
+            "start-dev",
+            "--import-realm",
         ]
 
     def __enter__(self) -> EphemeralIdp:
@@ -159,7 +173,9 @@ class EphemeralKeycloak:
         tmp = Path(tempfile.mkdtemp(prefix="tf-kc-"))
         realm_file = tmp / "realm.json"
         realm_file.write_text(
-            json.dumps(build_realm(self._secret, realm=self.realm, username=self.username))
+            json.dumps(
+                build_realm(self._secret, realm=self.realm, username=self.username)
+            )
         )
         argv = self.run_argv(rt, str(realm_file))
         subprocess.run(argv, check=True, capture_output=True, text=True, timeout=120)
@@ -167,8 +183,11 @@ class EphemeralKeycloak:
         self._await_ready()
         base = f"http://127.0.0.1:{self.port}"
         return EphemeralIdp(
-            base_url=base, realm=self.realm, username=self.username,
-            password="test-password", totp_seed=totp_seed_for(self._secret),
+            base_url=base,
+            realm=self.realm,
+            username=self.username,
+            password="test-password",
+            totp_seed=totp_seed_for(self._secret),
         )
 
     def _await_ready(self, timeout_s: int = 90) -> None:
@@ -188,7 +207,10 @@ class EphemeralKeycloak:
         try:
             subprocess.run(
                 [_runtime(), "rm", "-f", self._name],
-                check=False, capture_output=True, text=True, timeout=30,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
             )
         except Exception:  # noqa: BLE001 - teardown is best-effort, never raises
             pass

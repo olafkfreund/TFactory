@@ -30,8 +30,8 @@ from pathlib import Path
 
 __all__ = [
     "LoopDecision",
-    "failure_signature",
     "decide_loop",
+    "failure_signature",
     "max_cycles",
     "read_loop_state",
     "record_cycle",

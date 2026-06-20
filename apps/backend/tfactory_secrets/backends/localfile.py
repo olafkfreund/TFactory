@@ -109,14 +109,13 @@ class LocalFileBackend(SecretsBackend):
                 "SOPS_AGE_KEY_FILE) to your age key file, or place it at "
                 "~/.config/sops/age/keys.txt."
             )
-        return _run_decrypt(
-            [binary, "-d", "-i", str(identity), str(path)], path
-        )
+        return _run_decrypt([binary, "-d", "-i", str(identity), str(path)], path)
 
 
 # ---------------------------------------------------------------------------
 # helpers (module-level so tests can monkeypatch the decryption seam)
 # ---------------------------------------------------------------------------
+
 
 def _run_decrypt(cmd: list[str], path: Path) -> str:
     """Run a decryption command and return stdout, or raise SecretsError."""
@@ -128,7 +127,9 @@ def _run_decrypt(cmd: list[str], path: Path) -> str:
             timeout=_DECRYPT_TIMEOUT,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        raise BackendUnavailableError(f"Decryption of {path} failed to run: {exc}") from exc
+        raise BackendUnavailableError(
+            f"Decryption of {path} failed to run: {exc}"
+        ) from exc
     if proc.returncode != 0:
         raise SecretsError(
             f"Decryption of {path} failed (exit {proc.returncode}): "

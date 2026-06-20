@@ -140,9 +140,9 @@ def build_manifest(credentials: dict | None, egress_cfg) -> EgressManifest:
 
 
 __all__ = [
-    "egress_enabled",
-    "badge_for",
-    "build_manifest",
     "EgressManifest",
     "ManifestRow",
+    "badge_for",
+    "build_manifest",
+    "egress_enabled",
 ]

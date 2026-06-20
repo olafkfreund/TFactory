@@ -384,8 +384,8 @@ def reset_config_cache() -> None:
 
 
 __all__ = [
+    "CREDENTIALS_CONFIG_PATH",
     "CredentialBroker",
     "inject_task_credentials",
     "reset_config_cache",
-    "CREDENTIALS_CONFIG_PATH",
 ]

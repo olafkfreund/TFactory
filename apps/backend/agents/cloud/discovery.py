@@ -21,8 +21,8 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 __all__ = ["AccessResult", "CloudDiscoveryError", "access_check", "discover"]
 
@@ -99,21 +99,27 @@ def _aws_access(profile: str | None, runner: Callable | None) -> AccessResult:
         + _profile_args("aws", profile),
     )
     if cmd.returncode != 0:
-        return AccessResult(ok=False, provider="aws", error="sts get-caller-identity failed")
+        return AccessResult(
+            ok=False, provider="aws", error="sts get-caller-identity failed"
+        )
     try:
         data = json.loads(cmd.stdout)
     except (json.JSONDecodeError, ValueError):
         return AccessResult(ok=False, provider="aws", error="unparseable identity")
     return AccessResult(
-        ok=True, provider="aws", account=data.get("Account"),
+        ok=True,
+        provider="aws",
+        account=data.get("Account"),
         identity=_aws_identity_name(data.get("Arn", "")),
     )
 
 
 def _gcp_access(profile: str | None, runner: Callable | None) -> AccessResult:
     # ``profile`` overrides the project; otherwise read the active gcloud config.
-    acct = _run(runner, ["gcloud", "auth", "list", "--filter=status:ACTIVE",
-                         "--format=value(account)"])
+    acct = _run(
+        runner,
+        ["gcloud", "auth", "list", "--filter=status:ACTIVE", "--format=value(account)"],
+    )
     identity = acct.stdout.strip() or None
     if profile:
         project = profile
@@ -137,7 +143,9 @@ def _azure_access(profile: str | None, runner: Callable | None) -> AccessResult:
     except (json.JSONDecodeError, ValueError):
         return AccessResult(ok=False, provider="azure", error="unparseable identity")
     user = (data.get("user") or {}).get("name")
-    return AccessResult(ok=True, provider="azure", account=data.get("id"), identity=user)
+    return AccessResult(
+        ok=True, provider="azure", account=data.get("id"), identity=user
+    )
 
 
 _ACCESS = {"aws": _aws_access, "gcp": _gcp_access, "azure": _azure_access}
@@ -236,7 +244,9 @@ def _gcp_discover(inv: dict, project: str | None, wanted, runner) -> None:
     """GCP global inventory via host ``gcloud`` (storage buckets + service accounts)."""
     proj = ["--project", project] if project else []
     if wanted("storage"):
-        b = _run(runner, ["gcloud", "storage", "buckets", "list", "--format=json"] + proj)
+        b = _run(
+            runner, ["gcloud", "storage", "buckets", "list", "--format=json"] + proj
+        )
         n = _json_list_len(b)
         if n is not None:
             inv["global"]["storage"] = {"count": n}

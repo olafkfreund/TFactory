@@ -17,8 +17,8 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 from .assessment import CloudFinding, parse_ocsf
 from .remediation import _group_fails
@@ -43,7 +43,11 @@ class IssueSpec:
 
 def _child_body(it: dict, provider: str, account: str) -> str:
     resources = ", ".join(it["resources"]) if it["resources"] else "—"
-    more = "" if it["count"] <= len(it["resources"]) else f" (+{it['count'] - len(it['resources'])} more)"
+    more = (
+        ""
+        if it["count"] <= len(it["resources"])
+        else f" (+{it['count'] - len(it['resources'])} more)"
+    )
     refs = "\n".join(f"- {r}" for r in it["references"][:5]) or "- (none)"
     return (
         f"**Provider:** {provider} · **Account:** {account} · "
@@ -105,7 +109,17 @@ def _gh(argv: list[str]) -> tuple[int, str]:
 
 
 def _create_issue(run: Callable, repo: str, spec: IssueSpec) -> str:
-    argv = ["gh", "issue", "create", "--repo", repo, "--title", spec.title, "--body", spec.body]
+    argv = [
+        "gh",
+        "issue",
+        "create",
+        "--repo",
+        repo,
+        "--title",
+        spec.title,
+        "--body",
+        spec.body,
+    ]
     for label in spec.labels:
         argv += ["--label", label]
     _rc, out = run(argv)
@@ -139,7 +153,13 @@ def register_issues(
     for c in children:
         linked = IssueSpec(c.title, c.body + f"\n\nPart of epic #{epic_num}.", c.labels)
         created.append(_create_issue(run, repo, linked))
-    return {"dry_run": False, "repo": repo, "epic": epic_url, "children": created, "count": len(created)}
+    return {
+        "dry_run": False,
+        "repo": repo,
+        "epic": epic_url,
+        "children": created,
+        "count": len(created),
+    }
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
@@ -149,11 +169,17 @@ def _main(argv: list[str] | None = None) -> int:
     import argparse
 
     p = argparse.ArgumentParser(description="Register cloud findings as GitHub issues.")
-    p.add_argument("source", help="Prowler OCSF JSON, or a cloud_issues.json specs file")
+    p.add_argument(
+        "source", help="Prowler OCSF JSON, or a cloud_issues.json specs file"
+    )
     p.add_argument("--repo", required=True, help="owner/repo")
     p.add_argument("--provider", default="aws")
     p.add_argument("--account", default="?")
-    p.add_argument("--create", action="store_true", help="actually create issues (default: dry-run)")
+    p.add_argument(
+        "--create",
+        action="store_true",
+        help="actually create issues (default: dry-run)",
+    )
     args = p.parse_args(argv)
 
     data = json.loads(open(args.source, encoding="utf-8").read())
@@ -162,7 +188,9 @@ def _main(argv: list[str] | None = None) -> int:
         children = [IssueSpec(**c) for c in data["children"]]
     else:  # raw OCSF
         findings = parse_ocsf(data)
-        epic, children = build_issue_specs(findings, provider=args.provider, account=args.account)
+        epic, children = build_issue_specs(
+            findings, provider=args.provider, account=args.account
+        )
 
     result = register_issues(epic, children, args.repo, create=args.create)
     print(json.dumps(result, indent=2))

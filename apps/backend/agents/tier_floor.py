@@ -30,12 +30,12 @@ already declared. Never-overclaim still lives in
 from __future__ import annotations
 
 __all__ = [
-    "val_floor_for",
-    "lanes_for",
-    "tier_from_contract",
-    "change_mode_from_contract",
     "EQUIVALENCE_LANE",
     "MIGRATION_MODE",
+    "change_mode_from_contract",
+    "lanes_for",
+    "tier_from_contract",
+    "val_floor_for",
 ]
 
 EQUIVALENCE_LANE = "equivalence"

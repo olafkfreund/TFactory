@@ -58,7 +58,10 @@ def get_gemini_binary(custom_path: str | None = None) -> str:
     if shutil.which("antigravity"):
         return "antigravity"
     from pathlib import Path
-    custom_path_default = Path.home() / ".gemini" / "antigravity-cli" / "bin" / "antigravity"
+
+    custom_path_default = (
+        Path.home() / ".gemini" / "antigravity-cli" / "bin" / "antigravity"
+    )
     if custom_path_default.exists():
         return str(custom_path_default)
     if shutil.which("gemini"):
@@ -124,12 +127,20 @@ class GeminiAgenticProvider(BaseLLMProvider):
     async def _run_gemini(self) -> AsyncGenerator[Any, None]:
         """Spawn gemini --yolo, stream output as AssistantMessage blocks."""
         if not self._pending_prompt:
-            logger.warning("GeminiAgenticProvider.receive_response() called before query()")
+            logger.warning(
+                "GeminiAgenticProvider.receive_response() called before query()"
+            )
             return
 
         resolved_binary = get_gemini_binary(self._gemini_path)
-        resolved_path = shutil.which(resolved_binary) if not resolved_binary.startswith("/") else resolved_binary
-        if resolved_path is None or (resolved_binary.startswith("/") and not Path(resolved_binary).exists()):
+        resolved_path = (
+            shutil.which(resolved_binary)
+            if not resolved_binary.startswith("/")
+            else resolved_binary
+        )
+        if resolved_path is None or (
+            resolved_binary.startswith("/") and not Path(resolved_binary).exists()
+        ):
             raise RuntimeError(
                 f"Gemini CLI executable not found: '{self._gemini_path}'. "
                 "Install the Gemini CLI or pass the correct path."

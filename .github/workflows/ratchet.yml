@@ -1,0 +1,146 @@
+name: ratchet (code-quality)
+
+# Factory coding-standards adoption for the TFactory Python backend.
+#
+# This is a RATCHET gate (coding-standards.md section 4.6): the shared strict
+# baseline (standards/ruff.toml, vendored from the Factory hub at the SHA in
+# standards/PINNED_SHA) runs ONLY on the Python files a PR changes. For every
+# changed backend Python file the ruff violation count at HEAD may not exceed the
+# count on the PR base - untouched legacy hotspots are allowed until touched, so
+# the gate is green at adoption and tightens monotonically. A whole-repo strict
+# gate is intentionally NOT made blocking (the legacy violation count would make
+# it instantly red).
+#
+# Reuses the fleet reference ratchet (scripts/ratchet_lint.py, vendored verbatim
+# from CFactory) so every service runs the identical no-regression check.
+#
+# This is intentionally SEPARATE from the existing `backend (ruff + pytest)` and
+# `critical (fast PR gate)` jobs in ci.yml: it neither weakens nor depends on
+# their legacy whole-repo lint (root ruff.toml). It also runs a whole-repo
+# `ruff format --check` (formatting is auto-applied, never reviewed - section
+# 3.6) and a drift gate confirming the vendored configs still match the pinned
+# hub baseline.
+#
+# mypy --strict on changed files is INFORMATIONAL (continue-on-error): the legacy
+# backend is largely untyped, so it surfaces type debt without making the
+# adoption PR red.
+#
+# Adopts: Factory#154 / issues #449, #452.
+
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev, main]
+
+concurrency:
+  group: ratchet-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  RUFF_VERSION: "0.15.17"
+  MYPY_VERSION: "1.20.1"
+  PACKAGE_DIR: "apps/backend"
+
+jobs:
+  ratchet:
+    name: ratchet (ruff no-regression on changed py) + mypy (informational)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need history back to the PR base for the diff-scoped ratchet.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install lint toolchain + backend deps (pinned)
+        run: |
+          python -m pip install --upgrade pip
+          pip install "ruff==${RUFF_VERSION}" "mypy==${MYPY_VERSION}"
+          # Backend deps so mypy can resolve imports on changed files.
+          pip install -r apps/backend/requirements.txt -r tests/requirements-test.txt || true
+
+      - name: Determine base ref
+        id: base
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "ref=origin/${{ github.base_ref }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=HEAD~1" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Ratchet (ruff on changed files; blocks net-new violations)
+        run: python scripts/ratchet_lint.py --base "${{ steps.base.outputs.ref }}" --package "${PACKAGE_DIR}"
+
+      - name: mypy --strict on changed files (informational)
+        # Non-blocking for now: the legacy backend is largely untyped, so
+        # mypy --strict over touched files reports a large existing backlog. This
+        # surfaces type debt without making the adoption PR red.
+        continue-on-error: true
+        env:
+          MYPYPATH: apps/backend
+          PYTHONPATH: apps/backend
+        run: |
+          mapfile -t files < <(git diff --name-only --diff-filter=AM "${{ steps.base.outputs.ref }}...HEAD" -- "${PACKAGE_DIR}" | grep '\.py$' || true)
+          if [ ${#files[@]} -eq 0 ]; then echo "no changed Python files"; exit 0; fi
+          mypy --config-file standards/mypy.ini "${files[@]}" || true
+
+  format-check:
+    name: ruff format --check (apps/backend)
+    runs-on: ubuntu-latest
+    # Formatting is auto-applied, never reviewed (standards section 3.6).
+    # Pinned to the SAME ruff version the tree was formatted with so the check
+    # is deterministic; a version skew here was the original red.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff (pinned)
+        run: pip install "ruff==${RUFF_VERSION}"
+      - name: Ruff format check (apps/backend)
+        run: ruff format --check apps/backend
+
+  config-drift:
+    name: shared-baseline drift gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: tfactory
+      - name: Read pinned hub SHA
+        id: pin
+        run: echo "sha=$(tr -d '[:space:]' < tfactory/standards/PINNED_SHA)" >> "$GITHUB_OUTPUT"
+      - name: Check out hub standards at the pinned SHA
+        uses: actions/checkout@v4
+        with:
+          repository: olafkfreund/Factory
+          ref: ${{ steps.pin.outputs.sha }}
+          path: factory-hub
+          # If Factory is private, a token with read access is needed here.
+        continue-on-error: true
+        id: hub
+      - name: Diff vendored configs against the pinned hub baseline
+        if: steps.hub.outcome == 'success'
+        run: |
+          set -e
+          # Vendored copies may carry a header above the body; compare the rule
+          # body only by stripping leading comment / blank lines from both sides.
+          strip() { grep -vE '^[[:space:]]*([#;]|$)' "$1"; }
+          for f in ruff.toml mypy.ini .editorconfig; do
+            if ! diff <(strip "tfactory/standards/$f") <(strip "factory-hub/standards/$f"); then
+              echo "DRIFT: tfactory/standards/$f diverged from the pinned hub baseline (standards/$f)."
+              echo "Re-vendor from the hub and bump standards/PINNED_SHA, or justify a tighten-only override."
+              exit 1
+            fi
+          done
+          echo "No drift: vendored configs match the pinned hub baseline."
+      - name: Hub unavailable (private repo / no token)
+        if: steps.hub.outcome != 'success'
+        run: echo "Hub checkout unavailable; skipping drift diff (configure a read token to enforce)."
