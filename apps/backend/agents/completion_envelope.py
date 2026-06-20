@@ -26,6 +26,7 @@ from __future__ import annotations
 import os
 import re
 import uuid
+from typing import Any, TypedDict
 
 # CloudEvents spec version we align to.
 CLOUDEVENTS_SPECVERSION = "1.0"
@@ -38,6 +39,74 @@ COMPLETION_EVENT_TYPE = "io.factory.tfactory.completion"
 # W3C trace-context ``traceparent``: version "-" trace-id(32hex) "-" span-id(16hex)
 # "-" flags(2hex). https://www.w3.org/TR/trace-context/#traceparent-header
 _TRACEPARENT_RE = re.compile(r"^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$")
+
+
+class CompletionCorrelation(TypedDict, total=False):
+    """RFC-0001 §4 optional chain block (upstream/downstream links)."""
+
+    issue_number: int | None
+    spec_id: str | None
+    branch: str | None
+    pr_number: int | None
+
+
+class CompletionEvidence(TypedDict):
+    """RFC-0001a evidence block — what the verify actually produced."""
+
+    proof_kind: str
+    verdicts: int
+    accepted: int
+    flagged: int
+    rejected: int
+
+
+class CompletionEnvelope(TypedDict, total=False):
+    """The v1 normalized completion-event envelope TFactory emits (#198).
+
+    Built by :func:`agents.triager._build_completion_envelope`. The RFC-0001
+    core fields (``correlation_key``, ``service``, ``task_id``, ``status``,
+    ``phase``, ``updated_at``) are always populated; every other key is additive
+    and may be absent, so the whole shape is ``total=False`` (the builder is the
+    single source of truth for which keys are present). This is a *typing-only*
+    description — it does not change the serialized JSON.
+    """
+
+    # RFC-0001 core (Factory#4) — always present in practice.
+    correlation_key: str
+    service: str
+    task_id: str
+    status: str | None
+    phase: str
+    updated_at: str
+    # RFC-0001 §4 optional chain block.
+    correlation: CompletionCorrelation
+    # Additive normalized header + #85/#198 flat fields.
+    schema_version: str
+    event: str
+    correlation_id: int | None
+    project_id: str | None
+    spec_id: str | None
+    outcome: str
+    repo: str | None
+    branch: str | None
+    pr_number: int | None
+    result: dict[str, Any]
+    usage: dict[str, Any]
+    emitted_at: str
+    # #282 CloudEvents-core + idempotency id + W3C trace context.
+    id: str
+    specversion: str
+    source: str
+    type: str
+    time: str
+    traceparent: str
+    tracestate: str
+    # RFC-0001a evidence + optional no-evidence reason.
+    evidence: CompletionEvidence
+    halt_reason: str
+    # RFC-0007 / RFC-0006 best-effort annotations.
+    access: dict[str, Any]
+    verification: dict[str, Any]
 
 
 def new_event_id() -> str:
@@ -139,6 +208,9 @@ def validate_cloudevents_core(envelope: dict) -> list[str]:
 __all__ = [
     "CLOUDEVENTS_SPECVERSION",
     "COMPLETION_EVENT_TYPE",
+    "CompletionCorrelation",
+    "CompletionEnvelope",
+    "CompletionEvidence",
     "cloudevents_fields",
     "event_source",
     "new_event_id",

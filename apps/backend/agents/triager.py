@@ -47,13 +47,17 @@ import traceback
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 # Single source of truth for the completion-envelope schema version (#360),
 # derived from the vendored JSON schema's ``$id`` so the Python literal and the
 # published contract can never silently drift. Imported at module scope (unlike
 # the other lazy ``agents.*`` imports below) because the value is bound to a
 # module-level constant used when building every completion envelope.
+from agents.completion_envelope import (
+    CompletionEnvelope,
+    CompletionEvidence,
+)
 from agents.completion_schema import (  # noqa: E402 - agents pkg resolved via sys.path
     COMPLETION_SCHEMA_VERSION as _COMPLETION_SCHEMA_VERSION,
 )
@@ -558,7 +562,7 @@ def _correlation_key(spec_dir: Path, status: dict, source: dict) -> str:
     return f"tf-{spec_id}"
 
 
-def _completion_result_summary(status: dict) -> dict:
+def _completion_result_summary(status: dict) -> dict[str, Any]:
     """Service-specific result counts for the envelope (absent keys omitted)."""
     keys = (
         "committed_count",
@@ -570,7 +574,7 @@ def _completion_result_summary(status: dict) -> dict:
     return {k: status[k] for k in keys if k in status}
 
 
-def _build_completion_envelope(spec_dir: Path, status: dict) -> dict:
+def _build_completion_envelope(spec_dir: Path, status: dict) -> CompletionEnvelope:
     """Build the v1 normalized completion-event envelope (#198).
 
     The flat #85 fields (``task_id``, ``project_id``, ``status``, ``phase``,
@@ -594,7 +598,7 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> dict:
     # treat all-flagged as a failure — `flag` means "needs human attention" by
     # design and drives the handback loop, which is a valid non-failure outcome.
     _verdicts = int(status.get("verdicts_count") or 0)
-    evidence = {
+    evidence: CompletionEvidence = {
         "proof_kind": "tests",
         "verdicts": _verdicts,
         "accepted": int(status.get("committed_count") or 0),
@@ -610,7 +614,7 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> dict:
         outcome = "failure"
         halt_reason = "no_evidence: verify produced no verdicts"
 
-    envelope = {
+    envelope: CompletionEnvelope = {
         # RFC-0001 core: the six required fields (Factory#4). `correlation_key`
         # is the shared key (issue#, synthetic `tf-<spec_id>` fallback) so the
         # CFactory collector can thread this event into a WorkItem.
@@ -705,7 +709,7 @@ def _notify_completion(spec_dir: Path, status: dict) -> None:
     POSTs an env-gated webhook (opt-in), both carrying the v1 normalized
     completion-event envelope (#198). Every failure is swallowed so the
     pipeline can never break on notification."""
-    payload = _build_completion_envelope(spec_dir, status)
+    payload: CompletionEnvelope = _build_completion_envelope(spec_dir, status)
 
     if _completion_sentinel_enabled():
         try:
