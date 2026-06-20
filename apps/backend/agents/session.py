@@ -8,8 +8,10 @@ memory updates and recovery tracking.
 
 import json
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from claude_agent_sdk import ClaudeSDKClient
 from core.error_utils import (
@@ -37,6 +39,7 @@ from ui import (
     print_key_value,
     print_status,
 )
+from usage import record_in_status, usage_from_obj
 
 from .base import sanitize_error_message
 from .memory_manager import save_session_memory
@@ -324,6 +327,249 @@ async def post_session_processing(
         return False
 
 
+def _extract_tool_input_display(inp: dict | None) -> str | None:
+    """Pick a single human-readable summary line from a tool's input dict.
+
+    Pure helper: mirrors the original inline priority order
+    (pattern > file_path > command > path) with the same truncation rules.
+    """
+    if not inp:
+        return None
+    if "pattern" in inp:
+        return f"pattern: {inp['pattern']}"
+    if "file_path" in inp:
+        fp = inp["file_path"]
+        if len(fp) > 50:
+            fp = "..." + fp[-47:]
+        return fp
+    if "command" in inp:
+        cmd = inp["command"]
+        if len(cmd) > 50:
+            cmd = cmd[:47] + "..."
+        return cmd
+    if "path" in inp:
+        return inp["path"]
+    return None
+
+
+@dataclass
+class _StreamState:
+    """Mutable accumulator threaded through the per-message handlers.
+
+    Holds the running response text, the in-flight tool name, message/tool
+    counters and the cache/usage totals folded into status.json at session end.
+    Extracted so run_agent_session is a thin async driver over one handler per
+    message type (issue #450); no behavior change.
+    """
+
+    response_text: str = ""
+    current_tool: str | None = None
+    message_count: int = 0
+    tool_count: int = 0
+    cache_read_total: int = 0
+    cache_write_total: int = 0
+    last_session_id: str | None = None
+    session_usage: Any = None
+
+
+def _handle_assistant_message(
+    msg: Any,
+    state: _StreamState,
+    task_logger: Any,
+    phase: LogPhase,
+    verbose: bool,
+) -> None:
+    """Render an AssistantMessage: stream text blocks and announce tool calls."""
+    for block in msg.content:
+        block_type = type(block).__name__
+
+        if block_type == "TextBlock" and hasattr(block, "text"):
+            state.response_text += block.text
+            print(block.text, end="", flush=True)
+            # Log text to task logger (persist without double-printing)
+            if task_logger and block.text.strip():
+                task_logger.log(
+                    block.text,
+                    LogEntryType.TEXT,
+                    phase,
+                    print_to_console=False,
+                )
+        elif block_type == "ToolUseBlock" and hasattr(block, "name"):
+            tool_name = block.name
+            state.tool_count += 1
+
+            # Safely extract tool input (handles None, non-dict, etc.)
+            inp = get_safe_tool_input(block)
+            tool_input_display = _extract_tool_input_display(inp)
+
+            debug(
+                "session",
+                f"Tool call #{state.tool_count}: {tool_name}",
+                tool_input=tool_input_display,
+                full_input=str(inp)[:500] if inp else None,
+            )
+
+            # Log tool start (handles printing too)
+            if task_logger:
+                task_logger.tool_start(
+                    tool_name,
+                    tool_input_display,
+                    phase,
+                    print_to_console=True,
+                )
+            else:
+                print(f"\n[Tool: {tool_name}]", flush=True)
+
+            if verbose and hasattr(block, "input"):
+                input_str = str(block.input)
+                if len(input_str) > 300:
+                    print(f"   Input: {input_str[:300]}...", flush=True)
+                else:
+                    print(f"   Input: {input_str}", flush=True)
+            state.current_tool = tool_name
+
+
+def _handle_tool_result_block(
+    block: Any,
+    state: _StreamState,
+    task_logger: Any,
+    phase: LogPhase,
+    verbose: bool,
+) -> None:
+    """Render one ToolResultBlock (blocked / error / success) and clear state."""
+    result_content = getattr(block, "content", "")
+    is_error = getattr(block, "is_error", False)
+
+    # Check if command was blocked by security hook
+    if "blocked" in str(result_content).lower():
+        debug_error(
+            "session",
+            f"Tool BLOCKED: {state.current_tool}",
+            result=str(result_content)[:300],
+        )
+        print(f"   [BLOCKED] {result_content}", flush=True)
+        if task_logger and state.current_tool:
+            task_logger.tool_end(
+                state.current_tool,
+                success=False,
+                result="BLOCKED",
+                detail=str(result_content),
+                phase=phase,
+            )
+    elif is_error:
+        # Show errors (truncated)
+        error_str = str(result_content)[:500]
+        debug_error(
+            "session",
+            f"Tool error: {state.current_tool}",
+            error=error_str[:200],
+        )
+        print(f"   [Error] {error_str}", flush=True)
+        if task_logger and state.current_tool:
+            # Store full error in detail for expandable view
+            task_logger.tool_end(
+                state.current_tool,
+                success=False,
+                result=error_str[:100],
+                detail=str(result_content),
+                phase=phase,
+            )
+    else:
+        # Tool succeeded
+        debug_detailed(
+            "session",
+            f"Tool success: {state.current_tool}",
+            result_length=len(str(result_content)),
+        )
+        if verbose:
+            result_str = str(result_content)[:200]
+            print(f"   [Done] {result_str}", flush=True)
+        else:
+            print("   [Done]", flush=True)
+        if task_logger and state.current_tool:
+            # Store full result in detail for expandable view (only for certain
+            # tools). Skip storing for very large outputs like Glob results.
+            detail_content = None
+            if state.current_tool in (
+                "Read",
+                "Grep",
+                "Bash",
+                "Edit",
+                "Write",
+            ):
+                result_str = str(result_content)
+                # Only store if not too large (detail truncation in logger)
+                if len(result_str) < 50000:  # 50KB max before truncation
+                    detail_content = result_str
+            task_logger.tool_end(
+                state.current_tool,
+                success=True,
+                detail=detail_content,
+                phase=phase,
+            )
+
+    state.current_tool = None
+
+
+def _handle_user_message(
+    msg: Any,
+    state: _StreamState,
+    task_logger: Any,
+    phase: LogPhase,
+    verbose: bool,
+) -> None:
+    """Render a UserMessage by dispatching each ToolResultBlock."""
+    for block in msg.content:
+        if type(block).__name__ == "ToolResultBlock":
+            _handle_tool_result_block(block, state, task_logger, phase, verbose)
+
+
+def _handle_result_message(
+    msg: Any,
+    state: _StreamState,
+    task_logger: Any,
+    phase: LogPhase,
+) -> None:
+    """Fold a ResultMessage's cache/usage stats into the stream state.
+
+    Logs cache-hit statistics from ResultMessage.usage so operators can verify
+    that the static CLAUDE.md prefix is being reused across calls. usage is
+    dict[str, Any] | None per the SDK types. Fields set by the Anthropic API
+    when caching is active:
+      cache_read_input_tokens     - tokens served from cache (0.10x price)
+      cache_creation_input_tokens - tokens written to cache (1.25x / 2x price)
+      input_tokens                - tokens after the last cache breakpoint
+    Reference: https://platform.claude.com/docs/en/docs/build-with-claude/prompt-caching
+    """
+    usage = getattr(msg, "usage", None) or {}
+    cache_read = usage.get("cache_read_input_tokens", 0)
+    cache_write = usage.get("cache_creation_input_tokens", 0)
+    input_tokens = usage.get("input_tokens", 0)
+    if cache_read or cache_write:
+        # Per-turn line at DEBUG - high cardinality, only useful when
+        # verifying caching. Aggregate at session end.
+        logger.debug(
+            "Prompt cache: read=%d tok write=%d tok input=%d tok session=%s",
+            cache_read,
+            cache_write,
+            input_tokens,
+            getattr(msg, "session_id", "?"),
+        )
+        if task_logger:
+            task_logger.log(
+                f"[cache] read={cache_read} write={cache_write} input={input_tokens}",
+                LogEntryType.TEXT,
+                phase,
+                print_to_console=False,
+            )
+    state.cache_read_total += cache_read
+    state.cache_write_total += cache_write
+    state.last_session_id = getattr(msg, "session_id", state.last_session_id)
+    # ResultMessage.usage is cumulative for the session; keep the latest so we
+    # record each session exactly once (#224).
+    state.session_usage = usage_from_obj(msg) or state.session_usage
+
+
 async def run_agent_session(
     client: ClaudeSDKClient,
     message: str,
@@ -363,9 +609,7 @@ async def run_agent_session(
 
     # Get task logger for this spec
     task_logger = get_task_logger(spec_dir)
-    current_tool = None
-    message_count = 0
-    tool_count = 0
+    state = _StreamState()
 
     try:
         # Send the query
@@ -373,231 +617,38 @@ async def run_agent_session(
         await client.query(message)
         debug_success("session", "Query sent successfully")
 
-        # Collect response text and show tool use
-        response_text = ""
-        # Running totals for prompt-cache usage — emitted as a single
-        # logger.info at session end (per-turn lines are debug-level below).
-        _cache_read_total = 0
-        _cache_write_total = 0
-        _last_session_id: str | None = None
-        # Final (cumulative) token usage for this session — folded into
-        # status.json at session end so the completion event can emit an
-        # RFC-0001 usage block for the cockpit Tokens page (#224).
-        _session_usage = None
         debug("session", "Starting to receive response stream...")
         async for msg in safe_receive_messages(client, caller="session"):
             msg_type = type(msg).__name__
-            message_count += 1
+            state.message_count += 1
             debug_detailed(
                 "session",
-                f"Received message #{message_count}",
+                f"Received message #{state.message_count}",
                 msg_type=msg_type,
             )
 
-            # Handle AssistantMessage (text and tool use)
             if msg_type == "AssistantMessage" and hasattr(msg, "content"):
-                for block in msg.content:
-                    block_type = type(block).__name__
-
-                    if block_type == "TextBlock" and hasattr(block, "text"):
-                        response_text += block.text
-                        print(block.text, end="", flush=True)
-                        # Log text to task logger (persist without double-printing)
-                        if task_logger and block.text.strip():
-                            task_logger.log(
-                                block.text,
-                                LogEntryType.TEXT,
-                                phase,
-                                print_to_console=False,
-                            )
-                    elif block_type == "ToolUseBlock" and hasattr(block, "name"):
-                        tool_name = block.name
-                        tool_input_display = None
-                        tool_count += 1
-
-                        # Safely extract tool input (handles None, non-dict, etc.)
-                        inp = get_safe_tool_input(block)
-
-                        # Extract meaningful tool input for display
-                        if inp:
-                            if "pattern" in inp:
-                                tool_input_display = f"pattern: {inp['pattern']}"
-                            elif "file_path" in inp:
-                                fp = inp["file_path"]
-                                if len(fp) > 50:
-                                    fp = "..." + fp[-47:]
-                                tool_input_display = fp
-                            elif "command" in inp:
-                                cmd = inp["command"]
-                                if len(cmd) > 50:
-                                    cmd = cmd[:47] + "..."
-                                tool_input_display = cmd
-                            elif "path" in inp:
-                                tool_input_display = inp["path"]
-
-                        debug(
-                            "session",
-                            f"Tool call #{tool_count}: {tool_name}",
-                            tool_input=tool_input_display,
-                            full_input=str(inp)[:500] if inp else None,
-                        )
-
-                        # Log tool start (handles printing too)
-                        if task_logger:
-                            task_logger.tool_start(
-                                tool_name,
-                                tool_input_display,
-                                phase,
-                                print_to_console=True,
-                            )
-                        else:
-                            print(f"\n[Tool: {tool_name}]", flush=True)
-
-                        if verbose and hasattr(block, "input"):
-                            input_str = str(block.input)
-                            if len(input_str) > 300:
-                                print(f"   Input: {input_str[:300]}...", flush=True)
-                            else:
-                                print(f"   Input: {input_str}", flush=True)
-                        current_tool = tool_name
-
-            # Handle UserMessage (tool results)
+                _handle_assistant_message(msg, state, task_logger, phase, verbose)
             elif msg_type == "UserMessage" and hasattr(msg, "content"):
-                for block in msg.content:
-                    block_type = type(block).__name__
-
-                    if block_type == "ToolResultBlock":
-                        result_content = getattr(block, "content", "")
-                        is_error = getattr(block, "is_error", False)
-
-                        # Check if command was blocked by security hook
-                        if "blocked" in str(result_content).lower():
-                            debug_error(
-                                "session",
-                                f"Tool BLOCKED: {current_tool}",
-                                result=str(result_content)[:300],
-                            )
-                            print(f"   [BLOCKED] {result_content}", flush=True)
-                            if task_logger and current_tool:
-                                task_logger.tool_end(
-                                    current_tool,
-                                    success=False,
-                                    result="BLOCKED",
-                                    detail=str(result_content),
-                                    phase=phase,
-                                )
-                        elif is_error:
-                            # Show errors (truncated)
-                            error_str = str(result_content)[:500]
-                            debug_error(
-                                "session",
-                                f"Tool error: {current_tool}",
-                                error=error_str[:200],
-                            )
-                            print(f"   [Error] {error_str}", flush=True)
-                            if task_logger and current_tool:
-                                # Store full error in detail for expandable view
-                                task_logger.tool_end(
-                                    current_tool,
-                                    success=False,
-                                    result=error_str[:100],
-                                    detail=str(result_content),
-                                    phase=phase,
-                                )
-                        else:
-                            # Tool succeeded
-                            debug_detailed(
-                                "session",
-                                f"Tool success: {current_tool}",
-                                result_length=len(str(result_content)),
-                            )
-                            if verbose:
-                                result_str = str(result_content)[:200]
-                                print(f"   [Done] {result_str}", flush=True)
-                            else:
-                                print("   [Done]", flush=True)
-                            if task_logger and current_tool:
-                                # Store full result in detail for expandable view (only for certain tools)
-                                # Skip storing for very large outputs like Glob results
-                                detail_content = None
-                                if current_tool in (
-                                    "Read",
-                                    "Grep",
-                                    "Bash",
-                                    "Edit",
-                                    "Write",
-                                ):
-                                    result_str = str(result_content)
-                                    # Only store if not too large (detail truncation happens in logger)
-                                    if (
-                                        len(result_str) < 50000
-                                    ):  # 50KB max before truncation
-                                        detail_content = result_str
-                                task_logger.tool_end(
-                                    current_tool,
-                                    success=True,
-                                    detail=detail_content,
-                                    phase=phase,
-                                )
-
-                        current_tool = None
-
-            # Log cache-hit statistics from ResultMessage.usage so operators can
-            # verify that the static CLAUDE.md prefix is being reused across calls.
-            # usage is dict[str, Any] | None per the SDK types.
-            # Fields set by the Anthropic API when caching is active:
-            #   cache_read_input_tokens    — tokens served from cache (0.10× price)
-            #   cache_creation_input_tokens — tokens written to cache (1.25× / 2× price)
-            #   input_tokens               — tokens after the last cache breakpoint
-            # Reference: https://platform.claude.com/docs/en/docs/build-with-claude/prompt-caching
+                _handle_user_message(msg, state, task_logger, phase, verbose)
             elif msg_type == "ResultMessage":
-                _usage = getattr(msg, "usage", None) or {}
-                _cache_read = _usage.get("cache_read_input_tokens", 0)
-                _cache_write = _usage.get("cache_creation_input_tokens", 0)
-                _input_tokens = _usage.get("input_tokens", 0)
-                if _cache_read or _cache_write:
-                    # Per-turn line at DEBUG — high cardinality, only useful
-                    # when verifying caching. Aggregate at session end.
-                    logger.debug(
-                        "Prompt cache: read=%d tok write=%d tok input=%d tok session=%s",
-                        _cache_read,
-                        _cache_write,
-                        _input_tokens,
-                        getattr(msg, "session_id", "?"),
-                    )
-                    if task_logger:
-                        task_logger.log(
-                            f"[cache] read={_cache_read} write={_cache_write} input={_input_tokens}",
-                            LogEntryType.TEXT,
-                            phase,
-                            print_to_console=False,
-                        )
-                _cache_read_total += _cache_read
-                _cache_write_total += _cache_write
-                _last_session_id = getattr(msg, "session_id", _last_session_id)
-                # ResultMessage.usage is cumulative for the session; keep the
-                # latest so we record each session exactly once (#224).
-                from usage import usage_from_obj
-
-                _session_usage = usage_from_obj(msg) or _session_usage
+                _handle_result_message(msg, state, task_logger, phase)
 
         # Aggregated cache totals — one line per agent session so operators
         # can confirm the static prefix is being reused across turns.
-        if _cache_read_total or _cache_write_total:
+        if state.cache_read_total or state.cache_write_total:
             logger.info(
                 "Prompt cache totals — read=%d tok write=%d tok session=%s",
-                _cache_read_total,
-                _cache_write_total,
-                _last_session_id or "?",
+                state.cache_read_total,
+                state.cache_write_total,
+                state.last_session_id or "?",
             )
 
         # Fold this session's token usage into the spec's running total (#224).
         # Best-effort and additive: accumulates across the task's many sessions
         # and handback retries; the completion event reads the sum back.
-        if _session_usage is not None:
-            from usage import record_in_status
-
-            record_in_status(spec_dir, _session_usage)
+        if state.session_usage is not None:
+            record_in_status(spec_dir, state.session_usage)
 
         print("\n" + "-" * 70 + "\n")
 
@@ -606,20 +657,20 @@ async def run_agent_session(
             debug_success(
                 "session",
                 "Session completed - build is complete",
-                message_count=message_count,
-                tool_count=tool_count,
-                response_length=len(response_text),
+                message_count=state.message_count,
+                tool_count=state.tool_count,
+                response_length=len(state.response_text),
             )
-            return "complete", response_text, {}
+            return "complete", state.response_text, {}
 
         debug_success(
             "session",
             "Session completed - continuing",
-            message_count=message_count,
-            tool_count=tool_count,
-            response_length=len(response_text),
+            message_count=state.message_count,
+            tool_count=state.tool_count,
+            response_length=len(state.response_text),
         )
-        return "continue", response_text, {}
+        return "continue", state.response_text, {}
 
     except Exception as e:
         # Detect specific error types for better retry handling
@@ -642,8 +693,8 @@ async def run_agent_session(
             f"Session error: {e}",
             exception_type=type(e).__name__,
             error_category=error_type,
-            message_count=message_count,
-            tool_count=tool_count,
+            message_count=state.message_count,
+            tool_count=state.tool_count,
         )
 
         # Sanitize error message to remove potentially sensitive data
