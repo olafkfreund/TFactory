@@ -148,6 +148,31 @@ def test_docker_run_handles_ports_without_explicit_host():
     assert "45000:3000" in runner.run_argvs()[0]
 
 
+def test_docker_run_carries_cpu_and_memory_caps():
+    # RFC-0016 #465: the runtime-lane SUT container must cap cpu/mem so concurrent
+    # verifies can't oversubscribe the host.
+    runner = _RecordingRunner()
+    rt = DockerRunRuntime(_docker_target(), runner_fn=runner, clock=lambda: 0.0)
+    rt.start()
+    argv = runner.run_argvs()[0]
+    assert "--cpus" in argv
+    assert argv[argv.index("--cpus") + 1] == "2"
+    assert "--memory" in argv
+    assert argv[argv.index("--memory") + 1] == "2g"
+
+
+def test_docker_run_resource_caps_overridable():
+    runner = _RecordingRunner()
+    rt = DockerRunRuntime(
+        _docker_target(), runner_fn=runner, clock=lambda: 0.0,
+        cpus="4", memory="8g",
+    )
+    rt.start()
+    argv = runner.run_argvs()[0]
+    assert argv[argv.index("--cpus") + 1] == "4"
+    assert argv[argv.index("--memory") + 1] == "8g"
+
+
 # ── 2. AppRuntime: distinct compose project names ────────────────────────────
 
 

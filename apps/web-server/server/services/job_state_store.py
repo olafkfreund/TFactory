@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any
 
@@ -54,7 +55,36 @@ KIND = "verify"
 # Lifecycle states that occupy an admission slot (RFC-0016).
 _ACTIVE_STATES = (st.QUEUED, st.RUNNING)
 
+# Admission cap (RFC-0016 #465). Each verify spawns runtime/test containers that
+# each request ~cpu 2 / mem 2g; with no cap, 5-10 concurrent verifies OOM the
+# pod. We cap the number of *running* verifies — extra verifies wait in `queued`
+# (not hard-failed) and are auto-promoted FIFO as running ones finish.
+_MAX_CONCURRENT_ENV = "TFACTORY_MAX_CONCURRENT_VERIFIES"
+_DEFAULT_MAX_CONCURRENT = 4
+
 _FALLBACK_WARNED = False
+
+
+def max_concurrent_verifies() -> int:
+    """The configured cap on concurrently *running* verifies (RFC-0016).
+
+    Read live from ``TFACTORY_MAX_CONCURRENT_VERIFIES`` (default 4). A value
+    ``<= 0`` means **unlimited** — admission always grants a slot immediately.
+    An unparseable value falls back to the default and warns once.
+    """
+    raw = os.environ.get(_MAX_CONCURRENT_ENV)
+    if raw is None or raw.strip() == "":
+        return _DEFAULT_MAX_CONCURRENT
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning(
+            "[job-state] %s=%r is not an integer; using default %d",
+            _MAX_CONCURRENT_ENV,
+            raw,
+            _DEFAULT_MAX_CONCURRENT,
+        )
+        return _DEFAULT_MAX_CONCURRENT
 
 
 def _warn_not_multi_replica_safe(backend: str) -> None:
@@ -176,6 +206,98 @@ class DbJobStateStore:
             )
         )
         return int(result.scalar_one())
+
+    async def running_count(self) -> int:
+        """Count verifies currently *running* (holding an execution slot).
+
+        The admission cap limits this number (queued jobs wait for a slot but do
+        not consume one), distinct from ``active_count`` which also counts queued.
+        """
+        result = await self._session.execute(
+            select(func.count())
+            .select_from(JobState)
+            .where(
+                JobState.service == SERVICE,
+                JobState.lifecycle_state == st.RUNNING,
+            )
+        )
+        return int(result.scalar_one())
+
+    async def try_admit(self, job_id: str, **enqueue_kwargs: Any) -> dict[str, Any]:
+        """Admit a verify under the concurrency cap — atomically, multi-replica safe.
+
+        Ensures a row exists for ``job_id`` (idempotent ``enqueue``), then, inside
+        a single ``SELECT ... FOR UPDATE``-guarded transaction (Postgres), counts
+        running verifies and either:
+
+          - grants a slot (lifecycle_state → ``running``) when under the cap, or
+          - leaves the job ``queued`` when at the cap — so a new verify WAITS
+            instead of hard-failing or starting and OOMing the pod.
+
+        ``<= 0`` cap = unlimited → always grants. An already-running job is
+        returned as-is (idempotent). The locking serializes concurrent admits so
+        two replicas can't both grant the same final slot and exceed the cap.
+
+        Returns the resulting record; callers inspect ``lifecycle_state`` to learn
+        whether they were admitted (``running``) or queued (``queued``).
+        """
+        # Make sure the row exists first (its own short txn). enqueue is idempotent
+        # and locks the row, so it won't clobber an in-flight job.
+        await self.enqueue(job_id, **enqueue_kwargs)
+
+        cap = max_concurrent_verifies()
+        # Lock the candidate row for the whole admit decision so the count→grant
+        # is atomic against concurrent admits (FOR UPDATE on Postgres).
+        row = await self._locked_row(job_id)
+        if row is None:  # pragma: no cover — enqueue just created it
+            raise KeyError(f"job_id {job_id!r} not found")
+        if row.lifecycle_state == st.RUNNING:
+            # Already admitted — nothing to do (idempotent re-admit).
+            await self._session.commit()
+            return row_to_record(row)
+
+        # Count running EXCLUDING this row (it's queued). Under the cap → grant.
+        running = await self.running_count()
+        if cap <= 0 or running < cap:
+            row.lifecycle_state = st.RUNNING
+            adm = _loads(row.admission_json) or {}
+            adm["started_at"] = _now().isoformat()
+            adm["queue_position"] = None
+            row.admission_json = _dumps(adm)
+        await self._session.commit()
+        await self._session.refresh(row)
+        return row_to_record(row)
+
+    async def next_queued_job_id(self) -> str | None:
+        """Oldest ``queued`` verify awaiting a slot, or ``None`` (FIFO by created_at).
+
+        A control plane that just finished a verify calls this to find the next
+        job to promote, so a freed slot is reused in arrival order.
+        """
+        result = await self._session.execute(
+            select(JobState.job_id)
+            .where(
+                JobState.service == SERVICE,
+                JobState.lifecycle_state == st.QUEUED,
+            )
+            .order_by(JobState.created_at.asc(), JobState.job_id.asc())
+            .limit(1)
+        )
+        return result.scalars().first()
+
+    async def promote_next(self) -> dict[str, Any] | None:
+        """Promote the oldest queued verify to ``running`` if under the cap.
+
+        Called when a running verify finishes (a slot freed). Picks the FIFO-next
+        queued job and admits it via :meth:`try_admit`, which re-checks the cap
+        under a row lock. Returns the promoted record, or ``None`` when nothing is
+        queued or the cap is still saturated.
+        """
+        job_id = await self.next_queued_job_id()
+        if job_id is None:
+            return None
+        rec = await self.try_admit(job_id)
+        return rec if rec.get("lifecycle_state") == st.RUNNING else None
 
     async def recover_in_flight(self) -> list[dict[str, Any]]:
         """Reconstruct in-flight state (a new/restarted replica calls this)."""
@@ -364,6 +486,51 @@ def get_job_state_store(session: AsyncSession) -> DbJobStateStore:
 # *enforcement* on top of ``active_count()`` is a thin follow-up.
 
 
+async def try_admit_verify(
+    job_id: str,
+    *,
+    correlation_key: str | int | None = None,
+    service_status: str | None = None,
+    phase: str | None = None,
+) -> bool:
+    """Admit a verify under the concurrency cap (RFC-0016). Best-effort.
+
+    Returns ``True`` when the verify was granted a slot (caller should START it
+    now) and ``False`` when it was QUEUED (caller should NOT start it — it will be
+    promoted automatically when a running verify finishes, via
+    :func:`record_terminal`). On any store error this returns ``True`` so a
+    durable-store outage never blocks a verify (fail-open — same posture as the
+    rest of this best-effort facade).
+    """
+    try:
+        async with async_session_factory() as session:
+            store = get_job_state_store(session)
+            rec = await store.try_admit(
+                job_id,
+                correlation_key=correlation_key,
+                service_status=service_status,
+                phase=phase,
+            )
+            admitted = rec.get("lifecycle_state") == st.RUNNING
+            if not admitted:
+                logger.info(
+                    "[job-state] verify job_id=%s queued behind admission cap "
+                    "(%s=%d); will auto-start when a slot frees",
+                    job_id,
+                    _MAX_CONCURRENT_ENV,
+                    max_concurrent_verifies(),
+                )
+            return admitted
+    except Exception:  # noqa: BLE001 — admission must never hard-block a verify
+        logger.warning(
+            "[job-state] admission check failed for job_id=%s; "
+            "admitting (fail-open)",
+            job_id,
+            exc_info=True,
+        )
+        return True
+
+
 async def record_started(
     job_id: str,
     *,
@@ -371,7 +538,12 @@ async def record_started(
     service_status: str | None = None,
     phase: str | None = None,
 ) -> None:
-    """Durably record that a verify started (queued → running). Best-effort."""
+    """Durably record that a verify started (queued → running). Best-effort.
+
+    Unconditionally grants a slot (no cap check) — use :func:`try_admit_verify`
+    when the caller wants the admission decision. Kept for the start-recording
+    seam that runs *after* a verify has already been admitted/spawned.
+    """
     try:
         async with async_session_factory() as session:
             store = get_job_state_store(session)
@@ -399,19 +571,24 @@ async def record_terminal(
     result: dict[str, Any] | None = None,
     usage: dict[str, Any] | None = None,
     error: str | None = None,
-) -> None:
+) -> str | None:
     """Durably record a verify's terminal/advance transition. Best-effort.
 
     Maps the native ``service_status`` to a canonical lifecycle state and
     enforces the never-overclaim invariants (terminal→result+ended_at,
-    failed/stuck→error, no-verdict→stuck). No-ops if the row is absent.
+    failed/stuck→error, no-verdict→stuck). When the job releases its execution
+    slot (terminal/stuck), the FIFO-next queued verify is promoted into the freed
+    slot (RFC-0016 admission control).
+
+    Returns the ``job_id`` of any verify promoted as a result (so the caller can
+    start it), or ``None``.
     """
     try:
         async with async_session_factory() as session:
             store = get_job_state_store(session)
             if await store.get(job_id) is None:
                 await store.enqueue(job_id, service_status=service_status, phase=phase)
-            await store.update_status(
+            rec = await store.update_status(
                 job_id,
                 service_status=service_status,
                 phase=phase,
@@ -420,9 +597,22 @@ async def record_terminal(
                 usage=usage,
                 error=error,
             )
+            # If this verify released its slot (terminal/stuck), promote the
+            # FIFO-next queued verify into the freed slot (RFC-0016 admission).
+            if rec.get("lifecycle_state") not in _ACTIVE_STATES:
+                promoted = await store.promote_next()
+                if promoted is not None:
+                    logger.info(
+                        "[job-state] promoted queued verify job_id=%s to running "
+                        "after job_id=%s finished",
+                        promoted.get("job_id"),
+                        job_id,
+                    )
+                    return promoted.get("job_id")
     except Exception:  # noqa: BLE001 — durable tracking must never break a verify
         logger.warning(
             "[job-state] failed to record terminal for job_id=%s (continuing)",
             job_id,
             exc_info=True,
         )
+    return None

@@ -61,8 +61,16 @@ class DockerRunRuntime:
         runner_fn: Callable | None = None,
         clock: Callable[[], float] | None = None,
         port_picker: Callable[[], int] | None = None,
+        cpus: str = "2",
+        memory: str = "2g",
     ) -> None:
         self.target = target
+        # RFC-0016 (#465): the runtime lane's system-under-test container must
+        # carry explicit cpu/mem caps so N concurrent verifies can't oversubscribe
+        # the host. Matches DockerRunner's defaults (--cpus 2 / --memory 2g);
+        # passed as docker run --cpus/--memory below.
+        self.cpus = cpus
+        self.memory = memory
         # Container name is UNIQUE per run (RFC-0016 #465): a fixed
         # ``tfactory-run-{name}`` collides when the same target runs twice
         # concurrently. The short uuid suffix keeps the name readable while
@@ -128,7 +136,19 @@ class DockerRunRuntime:
             capture_output=True,
             text=True,
         )
-        argv = [*self.docker_cmd, "run", "-d", "--name", self.container_name]
+        argv = [
+            *self.docker_cmd,
+            "run",
+            "-d",
+            "--name",
+            self.container_name,
+            # RFC-0016 (#465): cap CPU/memory so concurrent runtime lanes bin-pack
+            # and a fleet of verifies can't oversubscribe the host.
+            "--cpus",
+            str(self.cpus),
+            "--memory",
+            str(self.memory),
+        ]
         # Bind each declared container port to a DYNAMIC free host port instead
         # of the fixed ``host:container`` mapping (RFC-0016 #465). Fixed host
         # ports collide when the same target runs twice concurrently.
