@@ -72,7 +72,20 @@ def _warn_not_multi_replica_safe(backend: str) -> None:
 
 
 def _now() -> datetime:
+    """Tz-aware UTC now — for ISO-string JSON timestamps (admission bookkeeping)."""
     return datetime.now(timezone.utc)
+
+
+def _now_naive() -> datetime:
+    """Naive UTC now — for DateTime columns.
+
+    The ``job_states`` timestamp columns are ``TIMESTAMP WITHOUT TIME ZONE``
+    (matching every other model in this codebase, which use naive ``DateTime`` +
+    ``func.now()``). asyncpg rejects a tz-aware datetime for a naive column
+    ("can't subtract offset-naive and offset-aware datetimes"), so column writes
+    MUST be naive. We store wall-clock UTC, consistent with ``func.now()``.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _dumps(value: Any) -> str | None:
@@ -298,7 +311,7 @@ class DbJobStateStore:
         # in-flight. done/failed additionally MUST carry a result.
         if st.is_terminal(lifecycle) or lifecycle == st.STUCK:
             if row.ended_at is None:
-                row.ended_at = _now()
+                row.ended_at = _now_naive()
             if st.is_terminal(lifecycle) and row.result_json is None:
                 # Preserve never-overclaim: a terminal job with no explicit
                 # result still records a minimal, honest verdict envelope.
@@ -325,7 +338,7 @@ class DbJobStateStore:
         row.lifecycle_state = st.STUCK
         row.error = error
         if row.ended_at is None:
-            row.ended_at = _now()
+            row.ended_at = _now_naive()
         await self._session.commit()
         await self._session.refresh(row)
         return row_to_record(row)
