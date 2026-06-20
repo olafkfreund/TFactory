@@ -21,6 +21,7 @@ import asyncio
 import logging
 import uuid
 from dataclasses import dataclass
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -70,20 +71,20 @@ def build_job_manifest(
     Omitted entirely when ``nix_store_pvc`` is None, leaving cold-fetch unchanged.
     """
     command = " && ".join(commands)
-    container = {
+    container: dict[str, Any] = {
         "name": "lane",
         "image": image,
         "command": ["bash", "-c", command],
         "resources": {"limits": {"cpu": cpus, "memory": memory}},
     }
-    pod_spec: dict = {
+    pod_spec: dict[str, Any] = {
         "restartPolicy": "Never",
         "automountServiceAccountToken": False,  # the lane needs no k8s API
         "imagePullSecrets": [{"name": image_pull_secret}],
         "containers": [container],
     }
-    volumes: list[dict] = []
-    mounts: list[dict] = []
+    volumes: list[dict[str, Any]] = []
+    mounts: list[dict[str, Any]] = []
     if repo_pvc:
         container["workingDir"] = workdir
         mounts.append(
