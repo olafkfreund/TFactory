@@ -169,7 +169,9 @@ def is_lane_lit(lane: str) -> bool:
     'lit' for compatibility through v0.2 (they map to 'unit' on dispatch).
     The RFC-0013 ``deploy`` lane is lit too (DRY-RUN deploy verification).
     """
-    return lane in _MVP_LIT_LANES or lane in _DEPRECATED_V01_ALIASES or lane == DEPLOY_LANE
+    return (
+        lane in _MVP_LIT_LANES or lane in _DEPRECATED_V01_ALIASES or lane == DEPLOY_LANE
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -301,7 +303,9 @@ def dispatch_browser_lane(
             allow_loopback=True,
         )
 
-    with runtime_cls(target, repo_root, allow_private_targets=allow_private_targets) as runtime:
+    with runtime_cls(
+        target, repo_root, allow_private_targets=allow_private_targets
+    ) as runtime:
         runtime.wait_for_healthy()
         if target_url is not None:
             caller_extra_env["TFACTORY_TARGET_URL"] = target_url

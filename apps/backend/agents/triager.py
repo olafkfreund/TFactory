@@ -978,13 +978,18 @@ def _write_ac_fidelity(spec_dir, committed, flagged, rejects) -> dict:
                 {"test_id": c.test_id, "test_file": c.test_file, "verdict": "accept"}
                 for c in committed
             ]
-            + [{"test_id": c.test_id, "test_file": c.test_file, "verdict": "flag"} for c in flagged]
+            + [
+                {"test_id": c.test_id, "test_file": c.test_file, "verdict": "flag"}
+                for c in flagged
+            ]
             + [
                 {"test_id": c.test_id, "test_file": c.test_file, "verdict": "reject"}
                 for c in rejects
             ]
         )
-        ledger = attach_screenshots(build_ac_ledger(plan, verdicts), spec_dir / "findings")
+        ledger = attach_screenshots(
+            build_ac_ledger(plan, verdicts), spec_dir / "findings"
+        )
         fd = spec_dir / "findings"
         fd.mkdir(parents=True, exist_ok=True)
         (fd / "ac_fidelity.json").write_text(json.dumps(ledger, indent=2))
@@ -1007,17 +1012,23 @@ def _run_git_side_effect(project_dir, committed, flagged, source_meta) -> dict:
     from tools.git_writer import GitWriteRequest, write_tests_to_branch
 
     branch = source_meta.get("branch") or ""
-    files_to_commit = tuple((c.test_file, c.source) for c in (*committed, *flagged) if c.source)
+    files_to_commit = tuple(
+        (c.test_file, c.source) for c in (*committed, *flagged) if c.source
+    )
     if not (branch and files_to_commit):
         return {
             "skipped": True,
-            "reason": ("no branch in source.json" if not branch else "no readable test sources"),
+            "reason": (
+                "no branch in source.json" if not branch else "no readable test sources"
+            ),
         }
     request = GitWriteRequest(
         repo_dir=project_dir,
         branch=branch,
         files=files_to_commit,
-        commit_msg=(f"tfactory: add {len(committed)} accepted + {len(flagged)} flagged tests"),
+        commit_msg=(
+            f"tfactory: add {len(committed)} accepted + {len(flagged)} flagged tests"
+        ),
     )
     git_write_result = write_tests_to_branch(request, dry_run=_git_writer_dry_run())
     return {
@@ -1083,7 +1094,9 @@ def _load_quality_gate_policy(spec_dir: Path):
     return GatePolicy.from_mapping(block)
 
 
-def _run_pr_status_side_effect(project_dir, findings_dir, source_meta, spec_dir) -> dict:
+def _run_pr_status_side_effect(
+    project_dir, findings_dir, source_meta, spec_dir
+) -> dict:
     """Publish the WS1 quality-gate commit status (dry-run by default).
 
     No-op unless the ``.tfactory.yml`` ``quality_gate`` block is enabled. Reads
@@ -1254,7 +1267,9 @@ async def run_triager(
 
             _prof = read_tfactory_profile(spec_dir)
             _src = _load_source_meta(spec_dir)
-            _vprofile = (_src.get("verification") if isinstance(_src, dict) else None) or None
+            _vprofile = (
+                _src.get("verification") if isinstance(_src, dict) else None
+            ) or None
             record_val3(
                 spec_dir,
                 _vprofile,
@@ -1305,8 +1320,12 @@ async def run_triager(
         # 5-6. Side-effects (both dry-run by default per the no-auto-push policy).
         findings_dir = spec_dir / "findings"
         source_meta = _load_source_meta(spec_dir)
-        git_result_summary = _run_git_side_effect(project_dir, committed, flagged, source_meta)
-        pr_comment_summary = _run_pr_side_effect(project_dir, findings_dir, source_meta, report_md)
+        git_result_summary = _run_git_side_effect(
+            project_dir, committed, flagged, source_meta
+        )
+        pr_comment_summary = _run_pr_side_effect(
+            project_dir, findings_dir, source_meta, report_md
+        )
         # WS1: publish the quality-gate commit status (no-op unless the
         # .tfactory.yml quality_gate block is enabled; dry-run unless
         # TFACTORY_PR_STATUS=1). Best-effort — never breaks the run.
@@ -1319,7 +1338,9 @@ async def run_triager(
             pr_status_summary = {"skipped": True, "reason": f"error: {exc}"}
 
         # 6b-6c. Catalog mutation + template harvest (both non-fatal side-effects).
-        generated_by_task = source_meta.get("spec_id") or source_meta.get("task_id") or "unknown"
+        generated_by_task = (
+            source_meta.get("spec_id") or source_meta.get("task_id") or "unknown"
+        )
         _persist_catalog_mutation(
             spec_dir,
             catalog,
@@ -1334,7 +1355,9 @@ async def run_triager(
         # 7. Record summaries in status.json.
         committed_count = len(committed)
         flagged_count = len(flagged)
-        final_status = "triaged" if (committed_count or flagged_count) else "triaged_empty"
+        final_status = (
+            "triaged" if (committed_count or flagged_count) else "triaged_empty"
+        )
         _write_status_patch(
             spec_dir,
             status=final_status,

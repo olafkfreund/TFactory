@@ -66,7 +66,14 @@ _EFFECTFUL_TOKENS: frozenset[str] = frozenset(
 )
 # Flags that make an otherwise-effectful verb safe (dry-run / plan only).
 _DRY_RUN_FLAGS: frozenset[str] = frozenset(
-    {"--dry-run", "--dry-run=server", "--dry-run=client", "plan", "template", "validate"}
+    {
+        "--dry-run",
+        "--dry-run=server",
+        "--dry-run=client",
+        "plan",
+        "template",
+        "validate",
+    }
 )
 
 
@@ -185,7 +192,9 @@ _K8S_GLOBS = ("k8s/**/*.yaml", "**/kustomization.yaml", "**/*.k8s.yaml")
 
 def _matches(files: Iterable[str], globs: Iterable[str]) -> bool:
     fs = list(files)
-    return any(fnmatch.fnmatch(f, g) or fnmatch.fnmatch("/" + f, g) for f in fs for g in globs)
+    return any(
+        fnmatch.fnmatch(f, g) or fnmatch.fnmatch("/" + f, g) for f in fs for g in globs
+    )
 
 
 def plan_deploy_steps(
@@ -281,7 +290,9 @@ def plan_deploy_steps(
 # --------------------------------------------------------------------------- #
 
 
-def _default_run_fn(argv: tuple[str, ...]) -> StepResult:  # pragma: no cover - shells out
+def _default_run_fn(
+    argv: tuple[str, ...],
+) -> StepResult:  # pragma: no cover - shells out
     """Live runner: shell out to the tool. Unit tests inject a fake instead."""
     proc = subprocess.run(  # noqa: S603 - argv is assembled from fixed descriptors
         list(argv), capture_output=True, text=True, timeout=900, check=False
@@ -375,7 +386,9 @@ def _aggregate(statuses: list[str]) -> str:
     return "not_run"
 
 
-def build_deploy_verification(results: list[StepResult], *, target_level: str = "VAL-2") -> dict:
+def build_deploy_verification(
+    results: list[StepResult], *, target_level: str = "VAL-2"
+) -> dict:
     """Map step results onto an honest RFC-0006 deploy VAL block.
 
     Produces VAL-0 (lint/scan) and VAL-2 (dry-run) rungs only, then hands the

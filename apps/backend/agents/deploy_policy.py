@@ -118,7 +118,9 @@ def deploy_requirement_from_contract(contract: dict | None) -> DeployRequirement
     )
 
 
-def evaluate_deploy_gate(contract: dict | None, deploy_verification: dict | None) -> dict:
+def evaluate_deploy_gate(
+    contract: dict | None, deploy_verification: dict | None
+) -> dict:
     """Decide whether the deploy gate blocks merge, for the merge policy/handback.
 
     Given the contract and the deploy lane's (gate-normalized) ``verification``
@@ -151,7 +153,9 @@ def evaluate_deploy_gate(contract: dict | None, deploy_verification: dict | None
 
     human_approval = req.production_classification == _PRODUCTION
 
-    if not isinstance(deploy_verification, dict) or not deploy_verification.get("levels"):
+    if not isinstance(deploy_verification, dict) or not deploy_verification.get(
+        "levels"
+    ):
         return {
             "required": True,
             "blocks_merge": True,
