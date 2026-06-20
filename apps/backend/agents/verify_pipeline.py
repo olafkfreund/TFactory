@@ -103,6 +103,18 @@ async def _record_terminal(
     if final_status in _FAILED_STATUSES:
         error = f"verify failed in-Job (status={final_status})"
 
+    # RFC-0015 §4 D2: persist the requirement->test->VAL traceability matrix onto
+    # the durable job_states row (the #468 store / #465 verification data) so the
+    # CFactory matrix view (#126) can render AC x test x VAL x verdict straight
+    # from Postgres, not just from the spec workspace. Best-effort: read it from
+    # the verification block the triager already wrote to findings; a missing or
+    # unreadable block just omits the key (the row's result is otherwise unchanged).
+    result: dict[str, object] = {"status": final_status} if final_status else {}
+    if spec_dir is not None:
+        trace = _read_traceability(spec_dir)
+        if trace:
+            result["traceability"] = trace
+
     artifacts: list[dict[str, object]] | None = None
     if spec_dir is not None:
         from agents.verify_artifacts import (  # noqa: PLC0415 - lazy by design
@@ -130,10 +142,33 @@ async def _record_terminal(
         job_id,
         service_status=final_status or None,
         has_verdict=has_verdict,
-        result={"status": final_status} if final_status else None,
+        result=result or None,
         error=error,
         artifacts=artifacts,
     )
+
+
+def _read_traceability(spec_dir: Path) -> list[dict[str, object]] | None:
+    """Read the RFC-0015 D2 traceability rows from the emitted verification block.
+
+    The triager writes ``findings/verification.json`` (the RFC-0006 block) with the
+    additive ``traceability[]`` array. This reads it back so the durable terminal
+    write can carry the matrix. Best-effort: a missing/unreadable block or a block
+    without traceability yields ``None`` (the row's result is then unchanged).
+    """
+    try:
+        path = spec_dir / "findings" / "verification.json"
+        if not path.is_file():
+            return None
+        import json  # noqa: PLC0415 - lazy; this path is best-effort
+
+        block = json.loads(path.read_text())
+        if not isinstance(block, dict):
+            return None
+        trace = block.get("traceability")
+        return trace if isinstance(trace, list) and trace else None
+    except (OSError, ValueError):
+        return None
 
 
 def main(argv: list[str] | None = None) -> int:
