@@ -71,11 +71,20 @@ def build_job_manifest(
     Omitted entirely when ``nix_store_pvc`` is None, leaving cold-fetch unchanged.
     """
     command = " && ".join(commands)
+    # RFC-0016 (#465): carry explicit cpu/mem *requests* as well as *limits*. The
+    # scheduler bin-packs on requests, so without them a fleet of verify Jobs all
+    # land on one node and oversubscribe it (the limits alone don't reserve
+    # capacity). requests == limits gives each lane a guaranteed reservation that
+    # also caps it, so N concurrent verifies schedule across nodes instead of
+    # piling up and OOMing.
     container: dict[str, Any] = {
         "name": "lane",
         "image": image,
         "command": ["bash", "-c", command],
-        "resources": {"limits": {"cpu": cpus, "memory": memory}},
+        "resources": {
+            "requests": {"cpu": cpus, "memory": memory},
+            "limits": {"cpu": cpus, "memory": memory},
+        },
     }
     pod_spec: dict[str, Any] = {
         "restartPolicy": "Never",

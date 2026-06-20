@@ -44,6 +44,23 @@ def test_timeout_and_ttl_passthrough():
     assert m["spec"]["ttlSecondsAfterFinished"] == 90
 
 
+def test_resources_carry_requests_and_limits():
+    # RFC-0016 #465: the scheduler bin-packs on requests, so the Job must carry
+    # explicit cpu/mem *requests* (== limits) — not limits alone — or a fleet of
+    # verify Jobs piles onto one node and oversubscribes it.
+    m = build_job_manifest("jr", "img", ["true"], cpus="3", memory="6Gi")
+    res = m["spec"]["template"]["spec"]["containers"][0]["resources"]
+    assert res["requests"] == {"cpu": "3", "memory": "6Gi"}
+    assert res["limits"] == {"cpu": "3", "memory": "6Gi"}
+
+
+def test_resources_default_requests_present():
+    m = build_job_manifest("jr2", "img", ["true"])
+    res = m["spec"]["template"]["spec"]["containers"][0]["resources"]
+    assert res["requests"]["cpu"] == "2"
+    assert res["requests"]["memory"] == "4Gi"
+
+
 def test_no_warm_nix_store_by_default():
     # RFC-0016 #197: cold behavior unchanged when no warm-store PVC named.
     m = build_job_manifest("j4", "img", ["nix --version"])

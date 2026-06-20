@@ -268,6 +268,157 @@ async def test_for_update_skipped_on_sqlite(session):
     assert row is not None
 
 
+# ─── admission control (RFC-0016 #465) ──────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_max_concurrent_default_and_env(monkeypatch):
+    import server.services.job_state_store as jss
+
+    monkeypatch.delenv("TFACTORY_MAX_CONCURRENT_VERIFIES", raising=False)
+    assert jss.max_concurrent_verifies() == 4  # documented default
+    monkeypatch.setenv("TFACTORY_MAX_CONCURRENT_VERIFIES", "2")
+    assert jss.max_concurrent_verifies() == 2
+    monkeypatch.setenv("TFACTORY_MAX_CONCURRENT_VERIFIES", "0")
+    assert jss.max_concurrent_verifies() == 0  # unlimited sentinel
+    monkeypatch.setenv("TFACTORY_MAX_CONCURRENT_VERIFIES", "-1")
+    assert jss.max_concurrent_verifies() == -1
+    monkeypatch.setenv("TFACTORY_MAX_CONCURRENT_VERIFIES", "garbage")
+    assert jss.max_concurrent_verifies() == 4  # bad value → default
+
+
+@pytest.mark.asyncio
+async def test_try_admit_grants_under_cap(session, monkeypatch):
+    monkeypatch.setenv("TFACTORY_MAX_CONCURRENT_VERIFIES", "2")
+    store = get_job_state_store(session)
+    a = await store.try_admit("a")
+    b = await store.try_admit("b")
+    assert a["lifecycle_state"] == st.RUNNING
+    assert b["lifecycle_state"] == st.RUNNING
+    assert await store.running_count() == 2
+
+
+@pytest.mark.asyncio
+async def test_try_admit_at_cap_enqueues_not_started(session, monkeypatch):
+    monkeypatch.setenv("TFACTORY_MAX_CONCURRENT_VERIFIES", "2")
+    store = get_job_state_store(session)
+    await store.try_admit("a")
+    await store.try_admit("b")
+    c = await store.try_admit("c")
+    # At the cap: c WAITS in queued — not started, not hard-failed.
+    assert c["lifecycle_state"] == st.QUEUED
+    assert await store.running_count() == 2
+    assert await store.active_count() == 3  # 2 running + 1 queued
+
+
+@pytest.mark.asyncio
+async def test_cap_unlimited_when_zero_or_negative(session, monkeypatch):
+    monkeypatch.setenv("TFACTORY_MAX_CONCURRENT_VERIFIES", "0")
+    store = get_job_state_store(session)
+    for jid in ("a", "b", "c", "d", "e"):
+        rec = await store.try_admit(jid)
+        assert rec["lifecycle_state"] == st.RUNNING
+    assert await store.running_count() == 5
+
+
+@pytest.mark.asyncio
+async def test_finishing_verify_promotes_fifo(session, monkeypatch):
+    monkeypatch.setenv("TFACTORY_MAX_CONCURRENT_VERIFIES", "1")
+    store = get_job_state_store(session)
+    a = await store.try_admit("a")
+    assert a["lifecycle_state"] == st.RUNNING
+    # b and c queue behind the cap=1, in arrival (FIFO) order.
+    assert (await store.try_admit("b"))["lifecycle_state"] == st.QUEUED
+    assert (await store.try_admit("c"))["lifecycle_state"] == st.QUEUED
+
+    # a finishes → the oldest queued (b) is promoted, not c.
+    await store.update_status("a", service_status="triaged", has_verdict=True)
+    promoted = await store.promote_next()
+    assert promoted is not None
+    assert promoted["job_id"] == "b"
+    assert promoted["lifecycle_state"] == st.RUNNING
+    # c still waits (cap=1, b now running).
+    assert (await store.get("c"))["lifecycle_state"] == st.QUEUED
+
+
+@pytest.mark.asyncio
+async def test_promote_next_noop_when_saturated(session, monkeypatch):
+    monkeypatch.setenv("TFACTORY_MAX_CONCURRENT_VERIFIES", "1")
+    store = get_job_state_store(session)
+    await store.try_admit("a")  # running, fills the only slot
+    await store.try_admit("b")  # queued
+    # No slot free → promote_next must not promote.
+    assert await store.promote_next() is None
+    assert (await store.get("b"))["lifecycle_state"] == st.QUEUED
+
+
+@pytest.mark.asyncio
+async def test_try_admit_idempotent_on_running(session, monkeypatch):
+    monkeypatch.setenv("TFACTORY_MAX_CONCURRENT_VERIFIES", "2")
+    store = get_job_state_store(session)
+    first = await store.try_admit("a")
+    again = await store.try_admit("a")
+    assert first["lifecycle_state"] == st.RUNNING
+    assert again["lifecycle_state"] == st.RUNNING
+    assert await store.running_count() == 1  # not double-counted
+
+
+@pytest.mark.asyncio
+async def test_for_update_prevents_exceeding_cap_under_concurrent_admits(monkeypatch):
+    """Two replicas admitting at the same time must not both win the last slot.
+
+    Each admit takes ``SELECT ... FOR UPDATE`` on its row, then re-counts running
+    jobs before granting. With a real Postgres the row lock serializes the two
+    transactions; here we assert the design: a) the locking SELECT carries FOR
+    UPDATE on Postgres, and b) when admits are serialized (as the lock forces),
+    the cap holds. We drive real serialized admits on SQLite (FOR UPDATE n/a but
+    the same count→grant logic) to prove the cap arithmetic, and separately
+    assert the lock is requested on Postgres.
+    """
+    # (b) the cap arithmetic holds when admits are serialized.
+    engine = create_async_engine(
+        "sqlite+aiosqlite://",
+        poolclass=StaticPool,
+        connect_args={"check_same_thread": False},
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setenv("TFACTORY_MAX_CONCURRENT_VERIFIES", "2")
+    granted = 0
+    async with factory() as s:
+        store = get_job_state_store(s)
+        for jid in ("a", "b", "c", "d"):
+            rec = await store.try_admit(jid)
+            if rec["lifecycle_state"] == st.RUNNING:
+                granted += 1
+    assert granted == 2  # never exceeds the cap
+    await engine.dispose()
+
+    # (a) the grant path locks the row FOR UPDATE on Postgres.
+    captured: list[str] = []
+
+    class _FakeBind:
+        class dialect:  # noqa: N801
+            name = "postgresql"
+
+    class _FakeResult:
+        def scalar_one_or_none(self):
+            return None
+
+    class _FakeSession:
+        bind = _FakeBind()
+
+        async def execute(self, stmt):
+            captured.append(str(stmt))
+            return _FakeResult()
+
+    store = DbJobStateStore.__new__(DbJobStateStore)
+    store._session = _FakeSession()  # type: ignore[attr-defined]
+    await store._locked_row("x")
+    assert "FOR UPDATE" in captured[-1].upper()
+
+
 # ─── SQLite fallback warning ────────────────────────────────────────────────
 
 

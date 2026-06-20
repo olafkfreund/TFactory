@@ -2778,6 +2778,15 @@ class AgentService:
                 cmd, task_id,
             )
 
+        # RFC-0016 (#465): admission control. Each verify spawns runtime/test
+        # containers that each request ~cpu 2 / mem 2g; with no cap, 5-10
+        # concurrent verifies OOM the pod. Block here until the durable store
+        # grants a slot under TFACTORY_MAX_CONCURRENT_VERIFIES — the verify WAITS
+        # in `queued` rather than starting and oversubscribing. A freed slot
+        # (a finishing verify) auto-promotes the FIFO-next queued job; this poll
+        # observes that promotion. Fail-open if the store is unreachable.
+        await self._await_verify_admission(task_id)
+
         # Start subprocess with a pseudo-TTY to prevent "Stream closed" errors
         # Claude Code CLI expects a TTY for permission handling
         import pty
@@ -2815,10 +2824,12 @@ class AgentService:
 
         self.running_tasks[task_id] = proc
 
-        # RFC-0016 (#465): mirror the in-memory running set into the durable
-        # Postgres job-state store so the admission count/running set survive a
-        # restart and are multi-replica safe. Best-effort + fire-and-forget so
-        # it never delays or breaks the live verify.
+        # RFC-0016 (#465): re-assert the running row in the durable Postgres
+        # job-state store. Admission (_await_verify_admission, above) has already
+        # granted the slot (queued → running); this is an idempotent
+        # belt-and-suspenders that also covers the fail-open path where the
+        # admission store was briefly unreachable. Best-effort + fire-and-forget
+        # so it never delays or breaks the live verify.
         try:
             from . import job_state_store as _jss
             asyncio.create_task(
@@ -3003,8 +3014,7 @@ class AgentService:
         Reads the live count of ``queued|running`` rows from the Postgres
         job-state store rather than this pod's in-memory ``running_tasks`` —
         so the number the admission cap reads survives a restart and is
-        consistent across replicas (the cap *enforcement* is a thin follow-up
-        that consumes this count). Falls back to the in-memory size if the
+        consistent across replicas. Falls back to the in-memory size if the
         store is unreachable.
         """
         try:
@@ -3020,6 +3030,86 @@ class AgentService:
                 exc_info=True,
             )
             return len(self.running_tasks)
+
+    # Poll cadence (seconds) while a verify waits for an admission slot. Small
+    # enough to pick up a freed slot promptly, large enough to be cheap. A
+    # class attribute so tests can shrink it.
+    _ADMISSION_POLL_SECONDS: float = 2.0
+
+    async def _await_verify_admission(self, task_id: str) -> None:
+        """Block until the durable store grants this verify an admission slot.
+
+        Polls :func:`job_state_store.try_admit_verify` (atomic count→grant under
+        a row lock) until it returns ``True``. While at the cap the verify stays
+        ``queued`` (not started, not hard-failed); a finishing verify promotes the
+        FIFO-next queued job, which a subsequent poll observes as a grant. With
+        ``TFACTORY_MAX_CONCURRENT_VERIFIES <= 0`` (unlimited) the first call
+        always grants. Fail-open: a store error admits immediately so a durable
+        outage never strands a verify.
+        """
+        from . import job_state_store as _jss
+
+        waited = False
+        while True:
+            admitted = await _jss.try_admit_verify(task_id, service_status="running")
+            if admitted:
+                if waited:
+                    logger.info(
+                        "[AgentService] verify %s admitted after waiting for a "
+                        "free slot (cap=%d)",
+                        task_id,
+                        _jss.max_concurrent_verifies(),
+                    )
+                return
+            if not waited:
+                waited = True
+                logger.info(
+                    "[AgentService] verify %s queued behind admission cap "
+                    "(cap=%d); waiting for a free slot",
+                    task_id,
+                    _jss.max_concurrent_verifies(),
+                )
+                # Surface the wait to the cockpit without faking progress.
+                await self._safe_emit_task_status(task_id, "queued", "admission_cap")
+            await asyncio.sleep(self._ADMISSION_POLL_SECONDS)
+
+    async def admission_status(self) -> dict[str, int]:
+        """Cap + current active/queued/running counts (RFC-0016). Cheap, durable.
+
+        Surfaces the admission picture for status endpoints: the configured cap,
+        how many verifies are running, how many are queued behind the cap, and the
+        total active (queued+running). Falls back to the in-memory running set if
+        the durable store is unreachable.
+        """
+        from . import job_state_store as _jss
+
+        cap = _jss.max_concurrent_verifies()
+        try:
+            from ..database.engine import async_session_factory
+
+            async with async_session_factory() as session:
+                store = _jss.get_job_state_store(session)
+                running = await store.running_count()
+                active = await store.active_count()
+            return {
+                "max_concurrent": cap,
+                "running": running,
+                "queued": max(active - running, 0),
+                "active": active,
+            }
+        except Exception:
+            logger.warning(
+                "[AgentService] admission_status durable read failed; "
+                "falling back to in-memory running_tasks",
+                exc_info=True,
+            )
+            n = len(self.running_tasks)
+            return {
+                "max_concurrent": cap,
+                "running": n,
+                "queued": 0,
+                "active": n,
+            }
 
     async def recover_in_flight_jobs(self) -> list[str]:
         """Reconstruct in-flight verify ids from the durable store (RFC-0016).
