@@ -693,3 +693,96 @@ class KmsDataKey(Base):
             f"<KmsDataKey id={self.id!r} org_id={self.org_id!r} "
             f"kms_key_id={self.kms_key_id!r}>"
         )
+
+
+# ---------------------------------------------------------------------------
+# Job-state (RFC-0016 — durable, multi-replica-safe verify-task state)
+# ---------------------------------------------------------------------------
+
+
+class JobState(Base):
+    """Durable, shared representation of one verify job (RFC-0016, TFactory #465).
+
+    Conforms to the Factory hub's ``apis/job-state.schema.json`` with
+    ``service="tfactory"`` and ``kind="verify"``. This row replaces the per-pod
+    in-memory ``AgentService.running_tasks`` dict (and the pod-local SQLite
+    ``emptyDir``) as the authoritative store for in-flight + completed verifies,
+    so that (a) any control-plane replica can read/advance any job, (b) the
+    admission cap/queue survive a pod restart, and (c) a never-verdict job is
+    representable as ``stuck`` for a reconciler to reap (#464).
+
+    Concurrency safety: writers that grant an admission slot or advance state
+    take a row lock (``SELECT ... FOR UPDATE`` on Postgres) inside a transaction
+    so two replicas can't double-start a ``job_id`` or exceed the cap. Artifacts
+    are referenced by URI (``artifacts_json``), never inlined — large blobs live
+    in object storage (concurrency-conventions.md §2).
+    """
+
+    __tablename__ = "job_states"
+    __table_args__ = (
+        # The admission cap + a new replica's in-flight recovery both query
+        # "active jobs for this service" — index the lifecycle column for it.
+        Index("ix_job_states_lifecycle_state", "lifecycle_state"),
+        Index("ix_job_states_correlation_key", "correlation_key"),
+    )
+
+    # job_id == TFactory's spec/task id (service-assigned). Primary key.
+    job_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    # schema_version mirrors job-state.schema.json `schema_version` ("1").
+    schema_version: Mapped[str] = mapped_column(
+        String(8), nullable=False, default="1", server_default="1"
+    )
+    # RFC-0001 correlation key (upstream GitHub issue number) threading the job
+    # across PFactory/AIFactory/TFactory/CFactory. Stored as text so a UUID or
+    # an integer issue number both round-trip; null until known.
+    correlation_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Fixed for TFactory verify jobs, but stored so the table matches the shared
+    # schema (and a future shared store could host other services).
+    service: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="tfactory", server_default="tfactory"
+    )
+    kind: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="verify", server_default="verify"
+    )
+    # Canonical lifecycle (apis/status-taxonomy.json):
+    # queued | running | review | done | failed | stuck.
+    lifecycle_state: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="queued", server_default="queued"
+    )
+    # Raw service-native status (e.g. "triaged", "reviewing", "review_failed").
+    service_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Optional finer-grained phase (e.g. "review_initial_complete").
+    phase: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Execution attempt counter (RFC-0008 failover / restart increments).
+    attempt: Mapped[int] = mapped_column(
+        nullable=False, default=1, server_default="1"
+    )
+    # JSON blobs (Text for SQLite/Postgres portability — never large content).
+    # admission bookkeeping: {enqueued_at, queue_position, started_at}.
+    admission_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # worker_ref: {kind, namespace, job_name, node}. Null in Phase 1 (subprocess).
+    worker_ref_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # artifacts[]: list of {role, uri, content_type, bytes} — URIs only.
+    artifacts_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Terminal result payload (verdict + VAL level + per-lane pass/fail).
+    # MUST be set when lifecycle_state is terminal (done/failed).
+    result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # usage: {input_tokens, output_tokens, total_tokens, cost_usd, model}.
+    usage_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Human-readable failure reason — REQUIRED when failed/stuck (never-overclaim).
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+    # Set when lifecycle_state becomes terminal (done/failed).
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    def __repr__(self) -> str:
+        return (
+            f"<JobState job_id={self.job_id!r} "
+            f"lifecycle_state={self.lifecycle_state!r} "
+            f"service_status={self.service_status!r}>"
+        )
