@@ -13,7 +13,16 @@ from agents.nix_env import (
     is_nix_environment,
     materialize_flake,
     run_browser_evidence,
+    run_pytest_lane_via_nix,
 )
+
+_UNIT_ENV = {
+    "language": "python",
+    "system_packages": [],
+    "verify_commands": ["pytest -q"],
+    "provisioning": {"method": "nix", "ref": "flake.nix", "generated": True},
+    "network": "none",
+}
 
 _BROWSER_ENV = {
     "language": "python",
@@ -99,7 +108,10 @@ def test_collect_screenshots_noop_when_absent(tmp_path):
 
 
 def test_detect_serve_command_env_override(tmp_path):
-    assert detect_serve_command(tmp_path, {"serve_command": "custom serve"}) == "custom serve"
+    assert (
+        detect_serve_command(tmp_path, {"serve_command": "custom serve"})
+        == "custom serve"
+    )
 
 
 def test_detect_serve_command_root_app(tmp_path):
@@ -141,6 +153,101 @@ def test_run_browser_evidence_noop_when_sandbox_unconfigured(tmp_path, monkeypat
     monkeypatch.delenv("TFACTORY_NIX_RUNNER_IMAGE", raising=False)
     # nix env present but no runner image configured -> graceful skip (None)
     assert run_browser_evidence(spec, project) is None
+
+
+# ── run_pytest_lane_via_nix (RFC-0016 #469) ──────────────────────────────
+
+
+def test_run_pytest_lane_via_nix_noop_without_nix_env(tmp_path):
+    spec = tmp_path / "specs" / "027"
+    spec.mkdir(parents=True)
+    _write_contract(spec, {"provisioning": {"method": "image"}})  # not nix
+    project = tmp_path / "proj"
+    project.mkdir()
+    test_file = project / "tests" / "test_x.py"
+    test_file.parent.mkdir(parents=True)
+    test_file.write_text("def test_x(): assert True\n")
+    assert run_pytest_lane_via_nix(spec, project, test_file) is None
+
+
+def test_run_pytest_lane_via_nix_noop_when_sandbox_unconfigured(tmp_path, monkeypatch):
+    spec = tmp_path / "specs" / "027"
+    spec.mkdir(parents=True)
+    _write_contract(spec, _UNIT_ENV)
+    project = tmp_path / "proj"
+    project.mkdir()
+    test_file = project / "test_x.py"
+    test_file.write_text("def test_x(): assert True\n")
+    monkeypatch.delenv("TFACTORY_NIX_RUNNER_IMAGE", raising=False)
+    # nix env present but no runner image -> graceful skip (caller falls back)
+    assert run_pytest_lane_via_nix(spec, project, test_file) is None
+
+
+def test_run_pytest_lane_via_nix_result_shape(tmp_path, monkeypatch):
+    """With a fake sandbox + junit, returns a DockerRunResult-shaped green result."""
+    spec = tmp_path / "specs" / "027"
+    spec.mkdir(parents=True)
+    _write_contract(spec, _UNIT_ENV)
+    project = tmp_path / "proj"
+    project.mkdir()
+    test_file = project / "src_test.py"
+    test_file.write_text("def test_ok(): assert True\n")
+
+    captured = {}
+
+    class _FakeRes:
+        ok = True
+        exit_code = 0
+        output = "1 passed\n__PYTEST_EXIT=0\n"
+
+    class _FakeSandbox:
+        def run(self, commands, *, workdir=None, timeout=300):
+            captured["commands"] = commands
+            captured["workdir"] = workdir
+            # Simulate the Job writing junit + coverage into the staging dir.
+            stage = Path(workdir) / ".tf_pytest"
+            stage.mkdir(parents=True, exist_ok=True)
+            (stage / "junit.xml").write_text("<testsuites/>")
+            (stage / "coverage.xml").write_text("<coverage/>")
+            return _FakeRes()
+
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: _FakeSandbox())
+    res = run_pytest_lane_via_nix(
+        spec, project, test_file, extra_env={"PYTHONHASHSEED": "7"}
+    )
+    assert res is not None
+    assert res.returncode == 0 and res.ok is True
+    assert res.junit_xml_path is not None and res.junit_xml_path.is_file()
+    assert res.coverage_xml_path is not None and res.coverage_xml_path.is_file()
+    # The Job ran the proven `nix develop path:/work#default` recipe.
+    assert captured["commands"][0].startswith("nix develop path:/work#default")
+    # The seed env was exported into the in-shell job script.
+    script = project / "_tf_nix_job.sh"
+    assert not script.exists()  # cleaned up after the run
+
+
+def test_run_pytest_lane_via_nix_missing_marker_is_failure(tmp_path, monkeypatch):
+    spec = tmp_path / "specs" / "027"
+    spec.mkdir(parents=True)
+    _write_contract(spec, _UNIT_ENV)
+    project = tmp_path / "proj"
+    project.mkdir()
+    test_file = project / "src_test.py"
+    test_file.write_text("def test_ok(): assert True\n")
+
+    class _FakeRes:
+        ok = False
+        exit_code = 1
+        output = "boom (no marker line)\n"
+
+    class _FakeSandbox:
+        def run(self, commands, *, workdir=None, timeout=300):
+            return _FakeRes()
+
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: _FakeSandbox())
+    res = run_pytest_lane_via_nix(spec, project, test_file)
+    # No __PYTEST_EXIT marker -> treated as failure (never a false pass).
+    assert res is not None and res.returncode == 1 and res.ok is False
 
 
 def test_non_nix_env_returns_none(tmp_path):
