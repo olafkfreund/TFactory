@@ -36,41 +36,29 @@ import json
 import logging as _logging
 import os
 import traceback
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
+
+from agents.workspace_status import now_iso, read_status, write_status_patch
 
 _gen_log = _logging.getLogger(__name__)
 
 
-# ─── Helpers shared with planner.py — keep these local to avoid an extra
-#    import surface. If the duplication starts hurting, factor into a
-#    new agents/_workspace_io.py module. ──────────────────────────────────
+# ─── Workspace helpers — shared via agents.workspace_status (#451).
+# Thin module-local aliases keep the existing call sites unchanged while the
+# single shared implementation does the work; the stage discriminator
+# ("gen_functional") is bound here.
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+_now_iso = now_iso
 
 
 def _read_status(spec_dir: Path) -> dict:
-    status_path = spec_dir / "status.json"
-    if not status_path.exists():
-        return {}
-    try:
-        return json.loads(status_path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return {}
+    return read_status(spec_dir)
 
 
 def _write_status_patch(spec_dir: Path, **fields: object) -> None:
-    status = _read_status(spec_dir)
-    status.update(fields)
-    status["updated_at"] = _now_iso()
-    (spec_dir / "status.json").write_text(json.dumps(status, indent=2))
-    # Best-effort push-based progress event (#95); no-op unless opted in.
-    from agents.stage_events import emit_stage_event
-
-    emit_stage_event(spec_dir, status, stage="gen_functional")
+    write_status_patch(spec_dir, "gen_functional", **fields)
 
 
 # ─── The agent itself ─────────────────────────────────────────────────────

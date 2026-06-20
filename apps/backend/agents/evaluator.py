@@ -45,7 +45,6 @@ import os
 import traceback
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
@@ -61,6 +60,7 @@ from agents.evaluator_targets import (
     _test_credential_specs,
 )
 from agents.evaluator_verdicts import _validate_verdicts
+from agents.workspace_status import now_iso, read_status, write_status_patch
 
 _eval_log = _logging.getLogger(__name__)
 
@@ -72,32 +72,21 @@ _VERDICTS_SCHEMA_VERSION = "1.0"
 _EVALUATOR_VERSION = _VERDICTS_SCHEMA_VERSION
 
 
-# ─── Workspace helpers (local copy — same pattern as planner/gen_functional)
+# ─── Workspace helpers — shared via agents.workspace_status (#451).
+# Thin module-local aliases keep the existing call sites unchanged while the
+# single shared implementation does the work; the stage discriminator
+# ("evaluator") is bound here.
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+_now_iso = now_iso
 
 
 def _read_status(spec_dir: Path) -> dict:
-    status_path = spec_dir / "status.json"
-    if not status_path.exists():
-        return {}
-    try:
-        return json.loads(status_path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return {}
+    return read_status(spec_dir)
 
 
 def _write_status_patch(spec_dir: Path, **fields: object) -> None:
-    status = _read_status(spec_dir)
-    status.update(fields)
-    status["updated_at"] = _now_iso()
-    (spec_dir / "status.json").write_text(json.dumps(status, indent=2))
-    # Best-effort push-based progress event (#95); no-op unless opted in.
-    from agents.stage_events import emit_stage_event
-
-    emit_stage_event(spec_dir, status, stage="evaluator")
+    write_status_patch(spec_dir, "evaluator", **fields)
 
 
 # ─── SDK seams (mockable in tests) ──────────────────────────────────────
@@ -1450,7 +1439,11 @@ async def _run_evaluator_session(spec_dir, project_dir, bundles, verbose) -> boo
                 try:
                     flaky_by_test_id[b.test_id] = fh.as_dict()
                 except Exception:  # noqa: BLE001 — skip a malformed entry
-                    pass
+                    _eval_log.debug(
+                        "evaluator: skipping malformed flaky_history for %s",
+                        b.test_id,
+                        exc_info=True,
+                    )
         doc = json.loads(verdicts_path.read_text())
         enrich_verdicts(doc, flaky_by_test_id)
         # Honor the RFC-0002 contract execution scope (#247): record declared

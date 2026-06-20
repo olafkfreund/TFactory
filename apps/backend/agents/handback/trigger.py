@@ -21,16 +21,16 @@ import json
 import os
 from pathlib import Path
 
+from agents.workspace_status import truthy as _truthy
+
 from .request import build_correction_request
 from .send import SendResult, send_correction
 
 __all__ = ["maybe_handback"]
 
 
-def _truthy(env_val: str | None) -> bool:
-    if env_val is None:
-        return False
-    return env_val.strip().lower() in ("1", "true", "yes", "on")
+# ``_truthy`` is the shared env-truthiness check (agents.workspace_status, #451),
+# aliased so the existing call sites below stay unchanged.
 
 
 def _prepare_enabled() -> bool:

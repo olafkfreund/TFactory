@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
+from agents.workspace_status import read_status
+
 _log = logging.getLogger(__name__)
 
 # Anchor fire-and-forget review tasks so they aren't GC'd mid-flight (mirrors the
@@ -28,18 +30,17 @@ _BG_REVIEW_TASKS: set[asyncio.Task] = set()
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
 
+# ``read_status`` is the shared implementation (agents.workspace_status, #451).
+# ``_now_iso`` / ``_write_status_patch`` deliberately stay local: this lane uses
+# microsecond-precision timestamps (no ``timespec="seconds"``) and wraps the
+# stage-event emit in a best-effort guard so a progress-event failure can never
+# break the review lane — neither matches the shared helper's behaviour.
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
 def _read_status(spec_dir: Path) -> dict:
-    status_path = spec_dir / "status.json"
-    if not status_path.exists():
-        return {}
-    try:
-        return json.loads(status_path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return {}
+    return read_status(spec_dir)
 
 
 def _write_status_patch(spec_dir: Path, **fields: object) -> None:
