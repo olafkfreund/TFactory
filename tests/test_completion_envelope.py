@@ -56,7 +56,9 @@ def test_event_source_env_override(monkeypatch):
 def test_cloudevents_fields_shape(monkeypatch):
     monkeypatch.delenv("TFACTORY_EVENT_SOURCE", raising=False)
     monkeypatch.delenv("TRACEPARENT", raising=False)
-    fields = ce.cloudevents_fields(project_id="demo", time_iso="2026-06-08T00:00:00+00:00")
+    fields = ce.cloudevents_fields(
+        project_id="demo", time_iso="2026-06-08T00:00:00+00:00"
+    )
     assert fields["specversion"] == "1.0"
     assert fields["type"] == "io.factory.tfactory.completion"
     assert fields["source"] == "/tfactory"
@@ -203,3 +205,103 @@ def test_outbox_uses_envelope_id_as_idempotency_key(tmp_path):
     )
     entry_id = ob.enqueue(env, root=tmp_path / "outbox")
     assert entry_id == env["id"]  # stable across retries → consumer dedups
+
+
+# ---------------------------------------------------------------------------
+# Typed envelope shape (#451) — the CompletionEnvelope TypedDict must describe
+# the *actual* serialized shape, and typing the builder must NOT change the JSON.
+# ---------------------------------------------------------------------------
+
+
+def test_envelope_serialized_shape_is_unchanged(tmp_path, monkeypatch):
+    """Pin the exact set of top-level keys the builder emits so that introducing
+    the typed model (CompletionEnvelope) provably keeps the JSON identical."""
+    monkeypatch.delenv("TFACTORY_EVENT_SOURCE", raising=False)
+    monkeypatch.delenv("TRACEPARENT", raising=False)
+    monkeypatch.delenv("TRACESTATE", raising=False)
+    from agents.triager import _build_completion_envelope
+
+    spec_dir = tmp_path / "spec"
+    spec_dir.mkdir()
+    status = {
+        "task_id": "001",
+        "project_id": "demo",
+        "status": "triaged",
+        "updated_at": "2026-06-08T12:00:00+00:00",
+        "verdicts_count": 3,
+        "committed_count": 2,
+    }
+    env = _build_completion_envelope(spec_dir, status)
+
+    expected_keys = {
+        # RFC-0001 core
+        "correlation_key",
+        "service",
+        "task_id",
+        "status",
+        "phase",
+        "updated_at",
+        # RFC-0001 §4 chain block
+        "correlation",
+        # normalized header + #85/#198 flat fields
+        "schema_version",
+        "event",
+        "correlation_id",
+        "project_id",
+        "spec_id",
+        "outcome",
+        "repo",
+        "branch",
+        "pr_number",
+        "result",
+        "usage",
+        "emitted_at",
+        # #282 CloudEvents-core + idempotency + trace
+        "id",
+        "specversion",
+        "source",
+        "type",
+        "time",
+        "traceparent",
+        # RFC-0001a evidence
+        "evidence",
+        # RFC-0006 verification block (best-effort; present for a normal spec)
+        "verification",
+    }
+    assert set(env.keys()) == expected_keys
+
+
+def test_typeddict_declares_every_emitted_key(tmp_path, monkeypatch):
+    """Every key the builder can emit must be declared on the CompletionEnvelope
+    TypedDict, so the type is an honest description of the runtime shape."""
+    monkeypatch.delenv("TFACTORY_EVENT_SOURCE", raising=False)
+    monkeypatch.delenv("TRACEPARENT", raising=False)
+    from agents.triager import _build_completion_envelope
+
+    spec_dir = tmp_path / "spec"
+    spec_dir.mkdir()
+    env = _build_completion_envelope(
+        spec_dir, {"task_id": "1", "project_id": "p", "status": "triaged"}
+    )
+
+    declared = set(ce.CompletionEnvelope.__annotations__)
+    undeclared = set(env.keys()) - declared
+    assert undeclared == set(), f"envelope keys not on the TypedDict: {undeclared}"
+
+
+def test_envelope_is_plain_json_serializable(tmp_path, monkeypatch):
+    """A TypedDict is a plain dict at runtime; typing the builder must not change
+    JSON serialization (the serialized event must round-trip byte-stably)."""
+    import json
+
+    monkeypatch.delenv("TRACEPARENT", raising=False)
+    from agents.triager import _build_completion_envelope
+
+    spec_dir = tmp_path / "spec"
+    spec_dir.mkdir()
+    env = _build_completion_envelope(
+        spec_dir, {"task_id": "9", "project_id": "p", "status": "triaged"}
+    )
+    assert isinstance(env, dict)
+    dumped = json.dumps(env, indent=2)
+    assert json.loads(dumped) == env
