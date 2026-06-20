@@ -42,3 +42,33 @@ def test_timeout_and_ttl_passthrough():
     m = build_job_manifest("j3", "img", ["true"], timeout=600, ttl_seconds=90)
     assert m["spec"]["activeDeadlineSeconds"] == 600
     assert m["spec"]["ttlSecondsAfterFinished"] == 90
+
+
+def test_no_warm_nix_store_by_default():
+    # RFC-0016 #197: cold behavior unchanged when no warm-store PVC named.
+    m = build_job_manifest("j4", "img", ["nix --version"])
+    t = m["spec"]["template"]["spec"]
+    assert "initContainers" not in t
+    assert "volumes" not in t
+
+
+def test_warm_nix_store_mounted_with_seed_init():
+    # RFC-0016 #197: whole /nix served from the warm-store PVC + seed initContainer.
+    m = build_job_manifest(
+        "j5",
+        "ghcr.io/olafkfreund/tfactory-runner-nix:latest",
+        ["nix develop path:/work#default -c cargo test"],
+        repo_pvc="tfactory-data",
+        repo_subpath="ws/proj",
+        nix_store_pvc="tfactory-nix-store",
+    )
+    t = m["spec"]["template"]["spec"]
+    vols = {v["name"]: v for v in t["volumes"]}
+    assert vols["nix-store"]["persistentVolumeClaim"]["claimName"] == "tfactory-nix-store"
+    assert "repo" in vols
+    mounts = {vm["name"]: vm for vm in t["containers"][0]["volumeMounts"]}
+    assert mounts["nix-store"]["mountPath"] == "/nix"
+    init = t["initContainers"][0]
+    assert init["name"] == "seed-nix-store"
+    assert init["volumeMounts"][0]["mountPath"] == "/warm"
+    assert "/warm/store" in init["command"][-1]

@@ -98,7 +98,13 @@ def nix_runner_from_env():
 
     pvc = os.environ.get("TFACTORY_WORKSPACES_PVC")
     ns = os.environ.get("TFACTORY_SANDBOX_NAMESPACE", "factory")
-    return KubeJobSandbox(image, namespace=ns, repo_pvc=pvc)
+    # RFC-0016 #197: opt-in warm /nix/store PVC so the toolchain closure persists
+    # across Nix lane Jobs instead of cold-fetching each run. Absent → no mount,
+    # so nothing breaks if the PVC is not provisioned.
+    nix_store_pvc = os.environ.get("TFACTORY_NIX_STORE_PVC") or None
+    return KubeJobSandbox(
+        image, namespace=ns, repo_pvc=pvc, nix_store_pvc=nix_store_pvc
+    )
 
 
 _JOB_SCRIPT = "_tf_nix_job.sh"

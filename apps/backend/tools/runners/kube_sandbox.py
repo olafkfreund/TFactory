@@ -52,6 +52,7 @@ def build_job_manifest(
     workdir: str = "/work",
     repo_ro: bool = False,
     network_none: bool = False,
+    nix_store_pvc: str | None = None,
 ) -> dict:
     """Pure builder for the per-task Job manifest. No cluster access.
 
@@ -59,6 +60,14 @@ def build_job_manifest(
     ``workdir`` (the browser lane writes screenshots/junit into it, which
     TFactory collects after the Job). The browser lane needs egress to fetch the
     nixpkgs binary cache + reach the app, so ``network_none`` is False by default.
+
+    When ``nix_store_pvc`` is given (RFC-0016 #197), the whole ``/nix`` tree is
+    served from that warm-store PVC so per-task Nix lane Jobs stop cold-fetching
+    the toolchain closure every run. ``/nix`` (not just ``/nix/store``) is mounted
+    because the store and its sqlite db (``/nix/var/nix/db``) must stay
+    consistent. An initContainer seeds the PVC from the image's own ``/nix`` on
+    first use (when empty) so the nix binary's own closure survives the overlay.
+    Omitted entirely when ``nix_store_pvc`` is None, leaving cold-fetch unchanged.
     """
     command = " && ".join(commands)
     container = {
@@ -73,22 +82,50 @@ def build_job_manifest(
         "imagePullSecrets": [{"name": image_pull_secret}],
         "containers": [container],
     }
+    volumes: list[dict] = []
+    mounts: list[dict] = []
     if repo_pvc:
         container["workingDir"] = workdir
-        container["volumeMounts"] = [
+        mounts.append(
             {
                 "name": "repo",
                 "mountPath": workdir,
                 "subPath": repo_subpath,
                 "readOnly": repo_ro,
             }
-        ]
-        pod_spec["volumes"] = [
+        )
+        volumes.append(
             {
                 "name": "repo",
                 "persistentVolumeClaim": {"claimName": repo_pvc, "readOnly": repo_ro},
             }
+        )
+    if nix_store_pvc:
+        mounts.append({"name": "nix-store", "mountPath": "/nix"})
+        volumes.append(
+            {
+                "name": "nix-store",
+                "persistentVolumeClaim": {"claimName": nix_store_pvc},
+            }
+        )
+        pod_spec["initContainers"] = [
+            {
+                "name": "seed-nix-store",
+                "image": image,
+                "command": [
+                    "sh",
+                    "-c",
+                    "if [ ! -e /warm/store ]; then "
+                    "cp -a /nix/. /warm/ && echo 'seeded warm nix store'; "
+                    "else echo 'warm nix store already populated'; fi",
+                ],
+                "volumeMounts": [{"name": "nix-store", "mountPath": "/warm"}],
+            }
         ]
+    if mounts:
+        container["volumeMounts"] = mounts
+    if volumes:
+        pod_spec["volumes"] = volumes
     return {
         "apiVersion": "batch/v1",
         "kind": "Job",
