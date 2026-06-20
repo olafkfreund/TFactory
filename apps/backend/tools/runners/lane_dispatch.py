@@ -32,10 +32,12 @@ Browser + Integration lane dispatch (Task 8 / #24):
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .deploy_runner import run_deploy_lane
 from .docker_runner import DockerRunner, DockerRunResult
 
 # ---------------------------------------------------------------------------
@@ -90,8 +92,9 @@ class DispatchResult:
     """What the dispatcher hands back to the Executor (Task 8)."""
 
     lane: str
-    runner_used: str  # "docker" | "native" | "stub"
+    runner_used: str  # "docker" | "native" | "stub" | "deploy"
     docker_result: DockerRunResult | None = None
+    deploy_result: Any | None = None  # DeployLaneResult for the RFC-0013 deploy lane
     notes: list[str] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
@@ -164,8 +167,64 @@ def is_lane_lit(lane: str) -> bool:
 
     Accepts v0.1 aliases (functional/sast/dast/fuzz) — they're considered
     'lit' for compatibility through v0.2 (they map to 'unit' on dispatch).
+    The RFC-0013 ``deploy`` lane is lit too (DRY-RUN deploy verification).
     """
-    return lane in _MVP_LIT_LANES or lane in _DEPRECATED_V01_ALIASES
+    return (
+        lane in _MVP_LIT_LANES or lane in _DEPRECATED_V01_ALIASES or lane == DEPLOY_LANE
+    )
+
+
+# ---------------------------------------------------------------------------
+# Deploy-lane dispatch (RFC-0013 / #446) — DRY-RUN deploy verification
+# ---------------------------------------------------------------------------
+
+DEPLOY_LANE = "deploy"
+
+
+def dispatch_deploy_lane(  # noqa: PLR0913 - explicit keyword-only deploy-lane knobs
+    *,
+    files: list[str],
+    required_scans: list[str] | None = None,
+    target_level: str = "VAL-2",
+    spec_dir: Path | None = None,  # when set, persist the VAL block to findings/
+    run_fn=None,  # injectable for tests; defaults to a real subprocess runner
+    tool_available=None,  # injectable for tests; defaults to shutil.which
+):
+    """Dispatch the RFC-0013 ``deploy`` lane — DRY-RUN deploy verification only.
+
+    Runs the dry-run deploy steps (``terraform plan``, ``helm template |
+    kubeconform``, ``kubectl apply --dry-run=server``) and the IaC/container
+    scans that apply to ``files``, then returns a :class:`DispatchResult` whose
+    ``deploy_result`` carries the steps and the gate-normalized VAL block. A
+    production apply is NEVER assembled or run (RFC-0013). Absent any deploy
+    files this is a no-op (empty steps, honest not_run VAL block).
+
+    When ``spec_dir`` is given, the gate-normalized verification block is
+    persisted to ``<spec_dir>/findings/deploy_verification.json`` so the
+    completion envelope / merge policy (``agents.deploy_policy``) can read it.
+    """
+    result = run_deploy_lane(
+        files,
+        required_scans=required_scans,
+        target_level=target_level,
+        run_fn=run_fn,
+        tool_available=tool_available,
+    )
+    if spec_dir is not None:
+        try:
+            findings = Path(spec_dir) / "findings"
+            findings.mkdir(parents=True, exist_ok=True)
+            (findings / "deploy_verification.json").write_text(
+                json.dumps(result.verification, indent=2)
+            )
+        except OSError:
+            pass
+    return DispatchResult(
+        lane=DEPLOY_LANE,
+        runner_used="deploy",
+        deploy_result=result,
+        notes=list(result.notes),
+    )
 
 
 # ---------------------------------------------------------------------------

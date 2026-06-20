@@ -115,8 +115,7 @@ def _load_catalog_from_spec(spec_dir: Path):
         return TestsCatalog.from_dict(raw)
     except Exception as exc:  # noqa: BLE001
         _triage_log.warning(
-            "triager: could not parse tests_catalog.json — "
-            "falling back to v0.1 (all CREATE): %s",
+            "triager: could not parse tests_catalog.json — falling back to v0.1 (all CREATE): %s",
             exc,
         )
         return None
@@ -253,8 +252,7 @@ def _derive_create_path(test_id: str, framework: str) -> str:
         # Registry unavailable (expected in test envs without frameworks/) or
         # a malformed convention pattern — fall back below, but leave a trail.
         _triage_log.debug(
-            "could not derive create-path from registry for %r/%r: %s — "
-            "using extension fallback",
+            "could not derive create-path from registry for %r/%r: %s — using extension fallback",
             test_id,
             framework,
             exc,
@@ -701,7 +699,35 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> CompletionEnvelo
         (_fdir / "verification.json").write_text(json.dumps(_block, indent=2))
     except Exception:  # noqa: BLE001 - verification block must never break emit
         pass
+    # RFC-0013 (#447): when the contract's deployment block marks the change
+    # high-risk or production, surface the deploy gate verdict so the merge
+    # policy / handback can hold a change back without a DRY-RUN deploy proof.
+    _gate = _deploy_gate_annotation(spec_dir)
+    if _gate is not None:
+        envelope["deploy_gate"] = _gate
     return envelope
+
+
+def _deploy_gate_annotation(spec_dir: Path) -> dict | None:
+    """Return the RFC-0013 deploy-gate verdict for the envelope, or None.
+
+    Additive + best-effort — absent a deployment block (or on any error) this is a
+    no-op so the envelope is unchanged (back-compat). Only returns a verdict when
+    the deploy lane was *required* (high-risk / production); the merge policy /
+    handback then enforce it. Production apply stays human-gated.
+    """
+    try:
+        from agents.deploy_policy import (  # noqa: PLC0415 - lazy by design
+            deploy_gate_for_spec,
+        )
+        from agents.task_contract import (  # noqa: PLC0415 - lazy by design
+            read_task_contract,
+        )
+
+        gate = deploy_gate_for_spec(read_task_contract(spec_dir), spec_dir)
+        return gate if gate.get("required") else None
+    except Exception:  # noqa: BLE001 - the deploy gate must never break emit
+        return None
 
 
 def _notify_completion(spec_dir: Path, status: dict) -> None:
@@ -1189,8 +1215,7 @@ def _maybe_harvest(spec_dir, project_dir, keepers) -> None:
         )
         if harvested:
             _triage_log.info(
-                "triager: harvested %d accepted test(s) into the reusable "
-                "template library",
+                "triager: harvested %d accepted test(s) into the reusable template library",
                 len(harvested),
             )
     except Exception as exc:  # noqa: BLE001 — non-fatal side-effect
