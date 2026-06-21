@@ -2,7 +2,12 @@
 
 RFC-0016 Phase 2 (TFactory #466). This is the thin, deterministic runnable that
 the per-task k8s Job executes when the control/execution split is enabled
-(``TFACTORY_VERIFY_EXEC=kubejob``). It runs the same Evaluator → Triager pipeline
+(``TFACTORY_VERIFY_EXEC=kubejob``). The Job runs it on the TFactory **runtime
+image** (which ships this ``agents`` package) with the backend on PYTHONPATH —
+NOT the thin nix-runner image, which has no ``agents`` (TFactory #466). The
+per-lane test Jobs this pipeline dispatches still run on the nix-runner image and
+get the SUT toolchain from ``nix develop``. It runs the same Evaluator → Triager
+pipeline
 the control plane runs in-pod today, but **synchronously** (no fire-and-forget
 auto-advance) so the Job process owns the whole verify and exits with a real
 status the reaper/reconciler can trust.
