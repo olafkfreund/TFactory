@@ -67,6 +67,34 @@ accept / flag / reject (`agents/evaluator.py`, `stability_runner.py`, `mutate_pr
 - Accessibility (axe-core, pa11y, Lighthouse): **[Absent]** (deferred).
 - Application SAST/DAST of the code under test: **[Absent]** by design — delegated to dedicated security pipelines (DEC-002).
 
+### Verification Assurance Level (the VAL ladder) [Implemented]
+A single pass/fail collapses too much. Per RFC-0006 every run reports a
+**Verification Assurance Level** — a ladder stating how far the result was
+actually verified (suite executed → API/integration hit → browser-verified),
+where a level is only claimable when the evidence for it exists. The Report tab
+leads with it (e.g. `Verified to VAL-0. NOT verified: VAL-1 failed; VAL-2
+not_run`), and a lane that did not run is `not_run`, never a silent pass. The VAL
+gate keeps the verdict honest; the RFC-0015 traceability matrix maps each
+requirement to the test and the VAL it earned. See the
+[Portal Gallery]({{ '/gallery/' | relative_url }}) for the Report and Acceptance
+tabs on a real run.
+
+### Verify execution model [Partial — in-pod default; Job-native in progress]
+Two execution paths exist for the verify pipeline:
+- **In-pod (default, live):** the Evaluator runs each lane inside the
+  long-lived service pod. Where there is no container runtime (e.g. a k3d pod),
+  a **host-venv pytest fallback** stages the system-under-test into a scratch
+  worktree and runs pytest in a host virtualenv, collecting JUnit XML + coverage
+  — so the verdict comes from a real execution, not a skipped run. **[Implemented]**
+- **Job-native (RFC-0016/0017, in progress):** run the whole verify pipeline as
+  a per-task Kubernetes Job in a contract-declared Nix toolchain that matches the
+  build env with no drift. The mechanism and its blocking fixes are merged (the
+  Job runs on the TFactory image, #479; LLM credentials injected into the Job
+  env, #480), but **the production default is still the in-pod path** — the
+  default flip (#466/#469) is gated behind `TFACTORY_NIX_RUNNER_IMAGE`, falls
+  back to in-pod when absent, and was **reverted pending re-validation**. It is
+  not live yet.
+
 ## 3. Authentication and MFA
 
 ### Target auth in `.tfactory.yml` [Implemented]

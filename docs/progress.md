@@ -8,7 +8,7 @@ nav_order: 8
 # Progress
 
 > Live delivery snapshot, updated by hand as merges land — last refresh
-> **2026-06-18** (TFactory **v0.9.3**, shipped). Recent milestones and the
+> **2026-06-21** (TFactory **v0.9.3**, shipped). Recent milestones and the
 > dated historical record are kept below. Full detail per release in the
 > [changelog](https://github.com/olafkfreund/TFactory/blob/main/CHANGELOG.md).
 
@@ -28,7 +28,13 @@ What is live today:
   Kubernetes Job (RFC-0005 Tier A); it captures **screenshots + video
   recordings** (plus traces), rendered in the portal Acceptance / Evidence tabs
   and the CFactory cockpit.
+- **Verification Assurance Level (VAL) ladder** — every run states how far it was
+  actually verified (RFC-0006); the Report tab leads with the VAL line and a lane
+  that did not run is `not_run`, never a silent pass.
 - **Acceptance-criteria fidelity** — "verified X/Y" against the governed criteria.
+- **Host-venv pytest fallback** — where there is no container runtime, pytest runs
+  in a host virtualenv against the real code, so the verdict comes from a genuine
+  execution rather than a skipped lane.
 - **MFA for SUTs** — TOTP + a disposable Keycloak realm (RFC-0007 Class C).
 - **Credential Broker** — pluggable secrets backends, ephemeral creds, egress
   gate, OIDC / workload-identity federation.
@@ -63,6 +69,24 @@ Backend tests: 531 (v0.1) → 1225 (v0.2) → 2803 (v0.5)
 ```
 
 ## Recent milestones
+
+### Week of 2026-06-15 → 06-21 — verdict honesty + the verify-Job rollout
+
+- **VAL ladder, end to end (RFC-0006, shipped)** — the verdict now states *how
+  far* a run was verified, surfaced on the Report tab above the triage buckets,
+  with the RFC-0015 requirement→test→VAL traceability matrix alongside it (#463).
+- **Host-venv pytest fallback (shipped)** — fixes the case where the pytest lane
+  could not launch its runner (no container runtime) and so never ran the
+  generated tests; it now executes pytest in a host virtualenv against the real
+  code and collects JUnit + coverage.
+- **Job-native verify execution (RFC-0016/0017, in progress — NOT the live
+  default)** — the verify pipeline can run as a per-task k8s Job in a
+  contract-declared Nix toolchain. Merged this week: the Job runs on the TFactory
+  image so the agents import (#479), and the Job env receives LLM provider
+  credentials (#480). **The production default remains the in-pod path** — the
+  default flip (#466/#469) is gated and was reverted pending re-validation after
+  Job-native build validation did not pass cleanly. #479/#480 are the fixes that
+  brought it close; the flip waits on a green re-validation.
 
 ### Factory PARR spine (shipped, v0.9.x)
 
