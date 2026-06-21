@@ -151,6 +151,12 @@ class VerifyJobConfig:
     timeout: int = 3600
     ttl_seconds: int = 300
     nix_develop: bool = True
+    # Mount-relative dir that holds the per-task ``flake.nix`` materialized before
+    # dispatch. The verify Job ``nix develop``s THIS dir (not the data root) — the
+    # data root is mounted at ``mount`` so spec+project resolve, but the flake is
+    # materialized into the project worktree (like the lane path), so the develop
+    # ref must point there. Defaults to the project subpath.
+    flake_subpath: str | None = None
 
 
 def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
@@ -184,8 +190,17 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
     if cfg.nix_develop:
         # path: (not a bare ref) — a bare flake ref hits nix's git fetcher and
         # breaks on the Job-root vs worktree-uid mismatch (RFC-0016 §4.1 gotcha).
+        # The flake lives in the project worktree (materialized before dispatch,
+        # like the lane path), so develop THAT dir — not the data root, which has
+        # no flake.nix and would fail with "flake.nix does not exist" at /work.
+        flake_sub = (
+            cfg.flake_subpath
+            if cfg.flake_subpath is not None
+            else (cfg.project_subpath)
+        )
+        flake_dir = f"{cfg.mount}/{flake_sub}" if flake_sub else cfg.mount
         inner = (
-            f"nix develop path:{cfg.mount}#default --command bash -c {_shq(verify_cmd)}"
+            f"nix develop path:{flake_dir}#default --command bash -c {_shq(verify_cmd)}"
         )
     else:
         inner = verify_cmd
@@ -257,9 +272,15 @@ async def dispatch_verify_job(  # noqa: PLR0913 - 3 domain args + injectable sea
     ``worker_ref`` set to the Job *before* applying, so the control plane can
     reconcile by polling Postgres and the reaper can find an orphaned dispatch.
 
+    Before applying the Job it materializes the per-task ``flake.nix`` into the
+    project worktree (the same seam the nixjob lane uses), so the Job's
+    ``nix develop`` finds a flake — without this the Job failed exit=1
+    "flake.nix does not exist". A non-nix task degrades to running the verify
+    directly on the image (no ``nix develop``) rather than stranding.
+
     ``sandbox`` / ``store`` / ``apply_fn`` are injectable for tests; in production
-    they default to ``nix_runner_from_env()``, the durable store opened on its own
-    session, and the real ``create_namespaced_job`` k8s apply.
+    they default to ``nix_runner_from_env()``, the durable store opened on a fresh
+    engine bound to the calling loop, and the real ``create_namespaced_job`` apply.
     """
     if sandbox is None:
         from agents.nix_env import nix_runner_from_env  # noqa: PLC0415 - lazy by design
@@ -291,6 +312,14 @@ async def dispatch_verify_job(  # noqa: PLR0913 - 3 domain args + injectable sea
         store=store,
     )
 
+    # Materialize the per-task flake into the project worktree BEFORE dispatching,
+    # exactly like the nixjob LANE path does (run_pytest_lane_via_nix). The verify
+    # Job runs ``nix develop path:.../project#default``; without this step the Job
+    # fails exit=1 with "flake.nix does not exist". Best-effort: a missing/non-nix
+    # manifest degrades to no flake (the Job's nix_develop is suppressed so it runs
+    # the verify directly on the image — honest, never strands the dispatch).
+    has_flake = _materialize_verify_flake(spec_dir, project_dir)
+
     # Build the verify-orchestration manifest from the sandbox coordinates and
     # apply it. The manifest carries the dedicated SA + JOB_ID/CORRELATION_KEY/
     # DATABASE_URL env the Job needs to write its own terminal row.
@@ -305,6 +334,11 @@ async def dispatch_verify_job(  # noqa: PLR0913 - 3 domain args + injectable sea
         namespace=namespace,
         nix_store_pvc=getattr(sandbox, "nix_store_pvc", None),
         correlation_key=correlation_key,
+        # The flake was materialized into the project worktree, so develop there.
+        # When there's no nix manifest, run the verify directly (no nix develop) so
+        # a non-nix task isn't stranded on a missing flake.
+        flake_subpath=project_subpath,
+        nix_develop=has_flake,
     )
     manifest = build_verify_job_manifest(cfg)
     _log.info(
@@ -385,28 +419,142 @@ def _pvc_subpath(path: Path, sandbox: Any) -> str:
     return sub or ""
 
 
+def _materialize_verify_flake(spec_dir: Path, project_dir: Path) -> bool:
+    """Write the per-task ``flake.nix`` into ``project_dir`` (the lane-path seam).
+
+    Reuses ``agents.nix_env.materialize_flake`` (which renders the contract's
+    RFC-0005 ``environment`` into a generated flake, respecting a repo-owned one)
+    so the verify-orchestration Job has the same toolchain the build + lane paths
+    do — no drift, no reinvention. Returns ``True`` when a flake is present at
+    ``project_dir`` after this call (so the Job should ``nix develop`` it), or
+    ``False`` when there is no nix manifest (the caller then runs the verify
+    directly on the image). Best-effort: any error degrades to ``False`` rather
+    than stranding the dispatch.
+    """
+    try:
+        from agents.nix_env import (  # noqa: PLC0415 - lazy by design
+            environment_from_contract,
+            materialize_flake,
+        )
+
+        env = environment_from_contract(spec_dir)
+        plan = materialize_flake(spec_dir, project_dir, env=env)
+        if plan is not None:
+            _log.info(
+                "[verify-dispatch] materialized flake.nix into %s for verify Job",
+                project_dir,
+            )
+            return True
+        # No nix manifest, but a repo may still carry a hand-written flake.nix.
+        if (Path(project_dir) / "flake.nix").exists():
+            return True
+        _log.info(
+            "[verify-dispatch] no nix environment for %s; verify Job will run "
+            "the pipeline directly on the image (no nix develop)",
+            spec_dir.name,
+        )
+        return False
+    except Exception:  # noqa: BLE001 — flake gap must not strand the dispatch
+        _log.warning(
+            "[verify-dispatch] flake materialization failed for %s; verify Job "
+            "will run directly on the image",
+            spec_dir.name,
+            exc_info=True,
+        )
+        return (Path(project_dir) / "flake.nix").exists()
+
+
 @asynccontextmanager
 async def _store_for(store: Any) -> AsyncIterator[tuple[Any, bool]]:
     """Yield a durable job-state store + whether we own its session.
 
     When the caller injects a ``store`` (tests, or a request-scoped store) we use
-    it and own nothing. Otherwise we open the web-server durable store on its own
-    session (the control plane / reaper isn't request-scoped). The web-server
-    package is a sibling app not on the backend's import path at type-check time,
-    so the import is lazy + ignored for mypy; at runtime it resolves in the pod.
+    it and own nothing. Otherwise we open the web-server durable store on a
+    **fresh engine bound to the current running loop** (the control plane / reaper
+    isn't request-scoped). The web-server package is a sibling app not on the
+    backend's import path at type-check time, so the import is lazy + ignored for
+    mypy; at runtime it resolves in the pod.
+
+    Why a fresh engine and not the process-global ``async_session_factory``:
+    asyncpg (and aiosqlite) bind a connection to the loop that created it, so a
+    pooled connection from the app's main-loop engine raises ``RuntimeError: got
+    Future attached to a different loop`` when reused from the **blocking dispatch
+    path**, which runs on its own private loop in a worker thread (see
+    ``gen_functional._run_dispatch_blocking``). Creating the engine here means its
+    connections are always opened on the loop that uses them. This mirrors how
+    PFactory's durable store keeps DB I/O on a single, owned loop (PFactory #220).
+    The owned engine is disposed when the context exits so no connection leaks.
     """
     if store is not None:
         yield store, False
         return
-    from server.database.engine import (  # type: ignore[import-not-found]  # noqa: PLC0415
-        async_session_factory,
-    )
     from server.services import (  # type: ignore[import-not-found]  # noqa: PLC0415
         job_state_store as jss,
     )
 
-    async with async_session_factory() as session:
-        yield jss.get_job_state_store(session), True
+    engine, factory = _fresh_store_engine()
+    try:
+        async with factory() as session:
+            yield jss.get_job_state_store(session), True
+    finally:
+        await engine.dispose()
+
+
+def _fresh_store_engine() -> tuple[Any, Any]:
+    """Build a throwaway async engine + sessionmaker bound to the current loop.
+
+    Reuses the web-server's resolved ``DATABASE_URL`` + driver connect-args so the
+    fresh engine targets the same Postgres (or SQLite-dev fallback) the app uses —
+    only the *loop affinity* differs. asyncpg/aiosqlite connections are created
+    lazily on first use, i.e. on whichever loop drives the session, so opening the
+    engine on the dispatch's private loop keeps every Future on that one loop.
+
+    The SQLAlchemy async API is reached through a single ``Any`` seam
+    (:func:`_import_sqlalchemy_async`) — the same shape as
+    :func:`_import_kubernetes_asyncio` — so mypy --strict stays clean whether or
+    not the SQLAlchemy stubs are installed in the lint env (the ratchet installs
+    deps best-effort), and ``warn_unused_ignores`` never trips either way.
+    """
+    eng: Any = _import_engine_module()
+    sa_async: Any = _import_sqlalchemy_async()
+
+    # _resolve_database_url / _connect_args_for are module-level helpers in
+    # engine.py (not class members); reuse them so the fresh engine matches the
+    # app's URL + driver args exactly.
+    url = eng._resolve_database_url()
+    engine = sa_async.create_async_engine(
+        url,
+        echo=False,
+        pool_pre_ping=True,
+        connect_args=eng._connect_args_for(url),
+    )
+    factory = sa_async.async_sessionmaker(engine, expire_on_commit=False)
+    return engine, factory
+
+
+def _import_engine_module() -> Any:
+    """Lazily import the web-server's DB engine module behind an ``Any`` seam.
+
+    The web-server (``server.*``) is a sibling app not on the backend's import
+    path at type-check time; the dynamic import keeps mypy from resolving it (and
+    so from needing an ``# type: ignore`` that would be unused where it *is*
+    resolvable). Resolves at runtime in the pod.
+    """
+    import importlib  # noqa: PLC0415 - lazy by design
+
+    return importlib.import_module("server.database.engine")
+
+
+def _import_sqlalchemy_async() -> Any:
+    """Lazily import ``sqlalchemy.ext.asyncio`` behind an ``Any`` seam.
+
+    Mirrors :func:`_import_kubernetes_asyncio`: a dynamic import so mypy --strict
+    is clean regardless of whether the SQLAlchemy stubs are present in the lint
+    env, with no static ``import-not-found`` and no unused-ignore.
+    """
+    import importlib  # noqa: PLC0415 - lazy by design
+
+    return importlib.import_module("sqlalchemy.ext.asyncio")
 
 
 async def _record_dispatch(

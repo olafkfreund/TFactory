@@ -155,12 +155,30 @@ def test_manifest_is_a_job_with_nix_base_image():
 def test_manifest_runs_verify_pipeline_via_nix_develop():
     m = build_verify_job_manifest(_cfg())
     cmd = m["spec"]["template"]["spec"]["containers"][0]["command"][2]
-    assert "nix develop path:/work#default" in cmd
+    # nix develop targets the PROJECT worktree where the flake is materialized
+    # (the data root at /work has no flake.nix — that was BUG 2).
+    assert "nix develop path:/work/workspaces/proj#default" in cmd
     assert "python -m agents.verify_pipeline" in cmd
     assert "--spec /work/workspaces/proj/.tfactory/specs/042" in cmd
     assert "--project /work/workspaces/proj" in cmd
     assert "--job-id proj-abc:042-verify" in cmd
     assert "--correlation-key 482" in cmd
+
+
+def test_manifest_nix_develop_targets_explicit_flake_subpath():
+    # When the flake lives in a different dir than the project, develop that dir.
+    m = build_verify_job_manifest(_cfg(flake_subpath="workspaces/proj/env"))
+    cmd = m["spec"]["template"]["spec"]["containers"][0]["command"][2]
+    assert "nix develop path:/work/workspaces/proj/env#default" in cmd
+
+
+def test_manifest_without_nix_develop_runs_verify_directly():
+    # A non-nix task (no flake) must run the verify directly on the image, not
+    # nix develop a nonexistent flake.
+    m = build_verify_job_manifest(_cfg(nix_develop=False))
+    cmd = m["spec"]["template"]["spec"]["containers"][0]["command"][2]
+    assert "nix develop" not in cmd
+    assert "python -m agents.verify_pipeline" in cmd
 
 
 def test_manifest_uses_tfactory_sandbox_sa_no_token_automount():
@@ -435,3 +453,149 @@ async def test_reconcile_tick_ignores_non_k8s_rows(store):
     )
     assert reaped == 0
     assert (await store.get("inpod-1"))["lifecycle_state"] == "running"
+
+
+# ─── BUG 2: the verify Job gets a flake.nix at /work before nix develop ────────
+
+
+def _write_nix_contract(spec_dir: Path) -> None:
+    """Drop a task contract with a nix environment so materialize_flake fires."""
+    import json
+
+    ctx = spec_dir / "context"
+    ctx.mkdir(parents=True, exist_ok=True)
+    (ctx / "task_contract.json").write_text(
+        json.dumps(
+            {
+                "contract_version": "1",
+                "environment": {
+                    "language": "python",
+                    "toolchain": {"python": "3.13"},
+                    "provisioning": {"method": "nix", "generated": True},
+                    "verify_commands": ["python -m pytest -q"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+async def test_dispatch_materializes_flake_into_project_before_apply(tmp_path, store):
+    # The verify-orchestration Job runs `nix develop path:.../project#default`; the
+    # per-task flake must be materialized into the project worktree BEFORE the Job,
+    # else it fails exit=1 "flake.nix does not exist" (BUG 2).
+    data_root = tmp_path / "data"
+    project_dir = data_root / "workspaces" / "proj"
+    spec_dir = project_dir / ".tfactory" / "specs" / "042"
+    spec_dir.mkdir(parents=True, exist_ok=True)
+    _write_nix_contract(spec_dir)
+
+    sandbox = _FakeSandbox(namespace="factory", data_root=str(data_root))
+    apply = _RecordingApply()
+    result = await vd.dispatch_verify_job(
+        job_id="proj:042",
+        spec_dir=spec_dir,
+        project_dir=project_dir,
+        sandbox=sandbox,
+        store=store,
+        apply_fn=apply,
+    )
+    assert result is not None
+    # The flake was materialized into the project worktree.
+    assert (project_dir / "flake.nix").is_file()
+    # And the applied Job develops THAT dir (project subpath), not the data root.
+    _, manifest = apply.calls[0]
+    cmd = manifest["spec"]["template"]["spec"]["containers"][0]["command"][2]
+    assert "nix develop path:/work/workspaces/proj#default" in cmd
+
+
+async def test_dispatch_without_nix_manifest_runs_verify_directly(tmp_path, store):
+    # No contract / no nix environment → no flake; the Job must run the verify
+    # pipeline directly on the image rather than nix-developing a missing flake.
+    data_root = tmp_path / "data"
+    project_dir = data_root / "workspaces" / "proj"
+    spec_dir = project_dir / ".tfactory" / "specs" / "043"
+    spec_dir.mkdir(parents=True, exist_ok=True)
+
+    sandbox = _FakeSandbox(namespace="factory", data_root=str(data_root))
+    apply = _RecordingApply()
+    result = await vd.dispatch_verify_job(
+        job_id="proj:043",
+        spec_dir=spec_dir,
+        project_dir=project_dir,
+        sandbox=sandbox,
+        store=store,
+        apply_fn=apply,
+    )
+    assert result is not None
+    assert not (project_dir / "flake.nix").exists()
+    _, manifest = apply.calls[0]
+    cmd = manifest["spec"]["template"]["spec"]["containers"][0]["command"][2]
+    assert "nix develop" not in cmd
+    assert "python -m agents.verify_pipeline" in cmd
+
+
+# ─── BUG 1: the dispatch record succeeds across a private loop (no cross-loop) ──
+
+
+def test_record_dispatch_succeeds_on_a_foreign_loop(tmp_path, monkeypatch):
+    """The blocking dispatch path runs on its OWN loop (``asyncio.run`` in a worker
+    thread); the durable store write must still succeed (BUG 1: asyncpg "Future
+    attached to a different loop" when a main-loop-pinned pooled connection is
+    reused from another loop). The fix makes ``_store_for`` open a fresh engine on
+    the using loop. We drive the REAL ``DbJobStateStore`` that ``_store_for`` opens
+    against a file-backed SQLite DB, across two independent ``asyncio.run`` loops —
+    the production call shape — and assert the dispatch records a durable row that a
+    later reconcile (on yet another loop) reads and marks terminal.
+
+    (SQLite opens a connection per loop so it cannot reproduce asyncpg's exact
+    loop-pinning failure; this test pins the *correct* behaviour the fresh-engine
+    fix guarantees — the store write + reconcile succeed across loop boundaries —
+    which is what stranded the verify before the fix.)
+    """
+    import asyncio
+
+    db_path = tmp_path / "loop.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+
+    # Create the schema once (on a throwaway loop) so the store has a table.
+    async def _make_schema() -> None:
+        eng = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+        async with eng.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        await eng.dispose()
+
+    asyncio.run(_make_schema())
+
+    sandbox = _FakeSandbox(namespace="factory")
+    apply = _RecordingApply()
+
+    # Run the dispatch on a fresh loop — _store_for must open its engine on THIS
+    # loop (not reuse a main-loop-pinned one), so the write doesn't raise.
+    async def _go() -> object:
+        return await vd.dispatch_verify_job(
+            job_id="loop:1",
+            spec_dir=Path("/home/nonroot/.tfactory/ws/proj/spec"),
+            project_dir=Path("/home/nonroot/.tfactory/ws/proj"),
+            sandbox=sandbox,
+            store=None,  # exercise the real _store_for fresh-engine path
+            apply_fn=apply,
+        )
+
+    result = asyncio.run(_go())
+    assert result is not None  # dispatch recorded + applied without a loop error
+
+    # The durable row landed; reconcile (also on its own loop) can read it and a
+    # terminal write marks it done — the reaper/reconciler can now produce a verdict.
+    async def _verdict() -> str:
+        rec = await vd.reconcile_verify_job("loop:1")
+        assert rec is not None
+        assert rec["lifecycle_state"] == "queued"
+        assert rec["worker_ref"]["kind"] == "k8s-job"
+        # The Job writes its terminal row; emulate that write, then reconcile.
+        async with vd._store_for(None) as (s, _owned):
+            await s.update_status("loop:1", service_status="triaged", has_verdict=True)
+        done = await vd.reconcile_verify_job("loop:1")
+        return done["lifecycle_state"]
+
+    assert asyncio.run(_verdict()) == "done"
