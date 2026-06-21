@@ -307,6 +307,215 @@ def test_manifest_labels_durable_coordinates():
 # ─── dispatch_verify_job (fall back vs record) ────────────────────────────────
 
 
+# ─── #466 env round-4: the verify Job carries the LLM credential (env, not argv) ─
+#
+# The verify pipeline's evaluator calls create_client → require_auth_token; the
+# round-3 Job env lacked the OAuth token, so it died ``ValueError: No OAuth token
+# found`` (SAME class as the AIFactory build Job). The fix injects
+# CLAUDE_CODE_OAUTH_TOKEN into the container env — secretKeyRef when configured
+# (no literal in the manifest), else a resolved value — NEVER argv (cf. #477).
+
+
+def _clear_oauth_env(monkeypatch):
+    for var in (
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_AUTH_TOKEN",
+        "TFACTORY_VERIFY_OAUTH_SECRET_NAME",
+        "TFACTORY_VERIFY_OAUTH_SECRET_KEY",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+
+def _env_of(manifest_or_cfg):
+    c = manifest_or_cfg["spec"]["template"]["spec"]["containers"][0]
+    return c["env"]
+
+
+def test_manifest_injects_oauth_via_secret_ref(monkeypatch):
+    # Preferred path: a configured Secret name → secretKeyRef, NO literal token.
+    _clear_oauth_env(monkeypatch)
+    monkeypatch.setenv("TFACTORY_VERIFY_OAUTH_SECRET_NAME", "tfactory-claude-oauth")
+    env = _env_of(build_verify_job_manifest(_cfg()))
+    tok = next(e for e in env if e["name"] == "CLAUDE_CODE_OAUTH_TOKEN")
+    assert "value" not in tok  # no literal token in the manifest
+    ref = tok["valueFrom"]["secretKeyRef"]
+    assert ref["name"] == "tfactory-claude-oauth"
+    assert ref["key"] == "oauth-token"  # default key
+
+
+def test_manifest_secret_ref_key_overridable(monkeypatch):
+    _clear_oauth_env(monkeypatch)
+    monkeypatch.setenv("TFACTORY_VERIFY_OAUTH_SECRET_NAME", "s")
+    monkeypatch.setenv("TFACTORY_VERIFY_OAUTH_SECRET_KEY", "claude-token")
+    env = _env_of(build_verify_job_manifest(_cfg()))
+    ref = next(e for e in env if e["name"] == "CLAUDE_CODE_OAUTH_TOKEN")["valueFrom"]
+    assert ref["secretKeyRef"]["key"] == "claude-token"
+
+
+def test_manifest_injects_resolved_oauth_value_when_no_secret(monkeypatch):
+    # Fallback: no Secret configured → resolve via core.auth and set as an env
+    # VALUE (still env, never argv). The token comes from the pod env here.
+    _clear_oauth_env(monkeypatch)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-deadbeef")
+    env = _env_of(build_verify_job_manifest(_cfg()))
+    tok = next(e for e in env if e["name"] == "CLAUDE_CODE_OAUTH_TOKEN")
+    assert tok["value"] == "sk-ant-oat01-deadbeef"
+    assert "valueFrom" not in tok
+
+
+def test_manifest_omits_oauth_when_unresolvable(monkeypatch):
+    # No Secret, no resolvable token → the entry is omitted (the Job fails closed
+    # inside with 'No OAuth token found' rather than getting a blank/poison value).
+    _clear_oauth_env(monkeypatch)
+    monkeypatch.setattr(vd, "_resolve_oauth_token", lambda: None)
+    env = _env_of(build_verify_job_manifest(_cfg()))
+    assert all(e["name"] != "CLAUDE_CODE_OAUTH_TOKEN" for e in env)
+
+
+def test_oauth_token_never_appears_in_argv(monkeypatch):
+    # SECURITY: the resolved token must be in the env ONLY, never on the command
+    # line (cf. the separate PAT-in-argv leak #477).
+    _clear_oauth_env(monkeypatch)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-secret-xyz")
+    m = build_verify_job_manifest(_cfg())
+    cmd = m["spec"]["template"]["spec"]["containers"][0]["command"]
+    assert all("sk-ant-oat01-secret-xyz" not in part for part in cmd)
+
+
+def test_secret_ref_token_value_never_in_manifest(monkeypatch):
+    # With a secretKeyRef the literal token is nowhere in the rendered manifest.
+    _clear_oauth_env(monkeypatch)
+    monkeypatch.setenv("TFACTORY_VERIFY_OAUTH_SECRET_NAME", "s")
+    # Even if a token is ALSO resolvable, the secretKeyRef path wins → no literal.
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-should-not-leak")
+    import json as _json
+
+    rendered = _json.dumps(build_verify_job_manifest(_cfg()))
+    assert "sk-ant-oat01-should-not-leak" not in rendered
+
+
+def test_manifest_passes_through_sdk_provider_env(monkeypatch):
+    # Custom endpoint + model overrides forwarded so the Job resolves as in-pod.
+    _clear_oauth_env(monkeypatch)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-x")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://proxy.example/v1")
+    monkeypatch.setenv("ANTHROPIC_DEFAULT_OPUS_MODEL", "claude-opus-4-8")
+    env = {
+        e["name"]: e.get("value") for e in _env_of(build_verify_job_manifest(_cfg()))
+    }
+    assert env["ANTHROPIC_BASE_URL"] == "https://proxy.example/v1"
+    assert env["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "claude-opus-4-8"
+
+
+def test_manifest_forwards_non_claude_provider_env(monkeypatch):
+    # A verify routed to a NON-Claude model needs that provider's env too — the
+    # evaluator routes by model (openai/gemini/ollama/github). Claude-only
+    # injection would break any non-Claude verify. Forward the full set.
+    _clear_oauth_env(monkeypatch)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-x")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-123")
+    monkeypatch.setenv("OPENAI_COMPATIBLE_BASE_URL", "https://ollama.example/v1")
+    monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "ock-456")
+    monkeypatch.setenv("GEMINI_API_KEY", "gem-789")
+    monkeypatch.setenv("GOOGLE_API_KEY", "goog-789")
+    monkeypatch.setenv("OLLAMA_API_KEY", "oll-000")
+    monkeypatch.setenv("OLLAMA_CLOUD_BASE_URL", "https://ollama.cloud")
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_zzz")
+    monkeypatch.setenv("GITHUB_MODELS_DEFAULT", "openai/gpt-4.1")
+    monkeypatch.setenv("QA_LLM_PROVIDER", "openai")
+    env = {
+        e["name"]: e.get("value") for e in _env_of(build_verify_job_manifest(_cfg()))
+    }
+    assert env["OPENAI_API_KEY"] == "sk-openai-123"
+    assert env["OPENAI_COMPATIBLE_BASE_URL"] == "https://ollama.example/v1"
+    assert env["OPENAI_COMPATIBLE_API_KEY"] == "ock-456"
+    assert env["GEMINI_API_KEY"] == "gem-789"
+    assert env["GOOGLE_API_KEY"] == "goog-789"
+    assert env["OLLAMA_API_KEY"] == "oll-000"
+    assert env["OLLAMA_CLOUD_BASE_URL"] == "https://ollama.cloud"
+    assert env["GITHUB_TOKEN"] == "ghp_zzz"
+    assert env["GITHUB_MODELS_DEFAULT"] == "openai/gpt-4.1"
+    assert env["QA_LLM_PROVIDER"] == "openai"
+
+
+def test_manifest_provider_secrets_via_secret_ref(monkeypatch):
+    # With an env-Secret configured, provider SECRETS (keys/tokens) source via
+    # secretKeyRef (no literal in the manifest); non-secret config stays a value.
+    _clear_oauth_env(monkeypatch)
+    monkeypatch.setenv(
+        "TFACTORY_VERIFY_PROVIDER_SECRET_NAME", "tfactory-provider-creds"
+    )
+    monkeypatch.setenv("OPENAI_COMPATIBLE_BASE_URL", "https://ollama.example/v1")
+    env = {e["name"]: e for e in _env_of(build_verify_job_manifest(_cfg()))}
+    oai = env["OPENAI_API_KEY"]  # secret → ref even though not set on the pod
+    ref = oai["valueFrom"]["secretKeyRef"]
+    assert ref["name"] == "tfactory-provider-creds"
+    assert ref["key"] == "openai-api-key"
+    assert ref["optional"] is True
+    assert "value" not in oai
+    # non-secret config still forwarded as a plain value
+    assert env["OPENAI_COMPATIBLE_BASE_URL"]["value"] == "https://ollama.example/v1"
+
+
+def test_provider_secret_value_never_in_manifest(monkeypatch):
+    # SECURITY: with the env-Secret path the literal provider key is nowhere in
+    # the rendered manifest, even if also set on the pod env.
+    _clear_oauth_env(monkeypatch)
+    monkeypatch.setenv("TFACTORY_VERIFY_PROVIDER_SECRET_NAME", "s")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-should-not-leak")
+    import json as _json
+
+    rendered = _json.dumps(build_verify_job_manifest(_cfg()))
+    assert "sk-openai-should-not-leak" not in rendered
+
+
+def test_manifest_excludes_anthropic_api_key(monkeypatch):
+    # ANTHROPIC_API_KEY is never forwarded (auth.py never falls back to it —
+    # forwarding would risk silent API billing).
+    _clear_oauth_env(monkeypatch)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-x")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api-should-not-forward")
+    env = _env_of(build_verify_job_manifest(_cfg()))
+    assert all(e["name"] != "ANTHROPIC_API_KEY" for e in env)
+
+
+def test_manifest_omits_sdk_env_when_unset(monkeypatch):
+    _clear_oauth_env(monkeypatch)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-x")
+    for var in (
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_MODEL",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    env_names = {e["name"] for e in _env_of(build_verify_job_manifest(_cfg()))}
+    assert "ANTHROPIC_BASE_URL" not in env_names
+    assert "ANTHROPIC_MODEL" not in env_names
+
+
+async def test_dispatch_propagates_oauth_env_to_applied_job(monkeypatch, store):
+    # End-to-end: the applied verify Job manifest carries the OAuth credential the
+    # evaluator needs — the round-4 fix for the 'No OAuth token found' Failed Job.
+    _clear_oauth_env(monkeypatch)
+    monkeypatch.setenv("TFACTORY_IMAGE", _RUNTIME_IMAGE)
+    monkeypatch.setenv("TFACTORY_VERIFY_OAUTH_SECRET_NAME", "tfactory-claude-oauth")
+    sandbox = _FakeSandbox(namespace="factory")
+    apply = _RecordingApply()
+    result = await vd.dispatch_verify_job(
+        job_id="proj:046",
+        spec_dir=Path("/home/nonroot/.tfactory/ws/proj/spec"),
+        project_dir=Path("/home/nonroot/.tfactory/ws/proj"),
+        sandbox=sandbox,
+        store=store,
+        apply_fn=apply,
+    )
+    assert result is not None
+    _, manifest = apply.calls[0]
+    env = _env_of(manifest)
+    tok = next(e for e in env if e["name"] == "CLAUDE_CODE_OAUTH_TOKEN")
+    assert tok["valueFrom"]["secretKeyRef"]["name"] == "tfactory-claude-oauth"
+
+
 async def test_dispatch_falls_back_when_sandbox_unconfigured(monkeypatch, store):
     # No TFACTORY_NIX_RUNNER_IMAGE → nix_runner_from_env() is None → None.
     monkeypatch.delenv("TFACTORY_NIX_RUNNER_IMAGE", raising=False)
@@ -538,9 +747,7 @@ async def test_reconcile_tick_ignores_non_k8s_rows(store):
     # An in-pod verify row (no k8s-job worker_ref) is not the loop's concern.
     await store.enqueue("inpod-1")
     await store.grant_slot("inpod-1")
-    reaped = await vd.reconcile_and_reap_once(
-        store=store, probe_fn=await _probe({})
-    )
+    reaped = await vd.reconcile_and_reap_once(store=store, probe_fn=await _probe({}))
     assert reaped == 0
     assert (await store.get("inpod-1"))["lifecycle_state"] == "running"
 

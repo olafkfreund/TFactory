@@ -34,6 +34,20 @@ Reused seams (no new infra):
 Reaper: ``reap_if_orphaned`` marks a vanished / deadline-exceeded Job ``stuck``
 in the durable store so a no-verdict verify surfaces instead of stranding (#464).
 
+Credential SCOPE (TFactory #466 env round-4): the verify Job inherits the LLM
+provider credentials the in-pod control plane reads from **environment** —
+``CLAUDE_CODE_OAUTH_TOKEN`` plus the non-Claude provider env the evaluator routes
+to (OpenAI / OpenAI-compatible / Gemini / Google / Ollama-cloud / GitHub Models).
+After this change the in-Job verify works for any model whose provider authenticates
+via **env** (the common case). It does NOT yet seed CLI **credential FILES**
+(``~/.codex/auth.json``, ``~/.gemini/oauth_creds.json``, copilot ``apps.json``,
+or a file-mounted ``~/.claude/.credentials.json``) into the Job pod; providers
+that authenticate only via those files (file-only Codex/Copilot/Gemini-OAuth) are
+deferred to a follow-up that adds a credential-seeding initContainer to the Job
+pod spec. This repo's chart does not currently define such a seed/cli-creds path
+for the control-plane pod either, so the env set is the credential surface that
+exists here today.
+
 This module is I/O-light and unit-tested with a mocked sandbox + store; no test
 needs a real cluster or Postgres.
 """
@@ -111,6 +125,105 @@ _DEFAULT_BACKEND_PATH = "/home/projects/MagesticAI/apps/backend"
 # (``…/apps/web-server``), derived from the backend path's parent.
 _WEB_SERVER_DIRNAME = "web-server"
 
+# ── LLM credential for the verify orchestration Job (TFactory #466, env round-4) ─
+#
+# The verify pipeline runs the evaluator/test-gen, which calls
+# ``agents.evaluator → create_client → core.auth.require_auth_token``. The Job
+# env (round-3) carried only JOB_ID/FACTORY_SERVICE/DATABASE_URL/PYTHONPATH, so
+# the evaluator died ``ValueError: No OAuth token found`` and the Job ended
+# terminal Failed with no verdict — the SAME class of defect as the AIFactory
+# build Job. The fix injects the Claude Code OAuth token into the Job container
+# ``env`` (NEVER argv — see also the separate PAT-in-argv issue #477), so the
+# orchestration resolves the same credential the in-pod control plane uses.
+#
+# Two injection modes, preferred first:
+#   1. secretKeyRef — when ``TFACTORY_VERIFY_OAUTH_SECRET_NAME`` (+ optional
+#      ``TFACTORY_VERIFY_OAUTH_SECRET_KEY``, default ``oauth-token``) is set, the
+#      env is sourced ``valueFrom.secretKeyRef`` so the literal token never lands
+#      in the manifest / etcd / Job spec — k8s injects it at pod start. This is
+#      the recommended production path: the operator creates one Secret with a
+#      flat ``oauth-token`` key and rotates it independently.
+#   2. resolved value — otherwise the token is resolved at dispatch time via
+#      ``core.auth.get_auth_token`` (env → TFactory profiles → ~/.claude
+#      credentials file → keychain, the exact in-pod resolution order) and set as
+#      a literal ``env`` value. Still NOT argv; mirrors how the in-pod path reads
+#      its own credential. Used in dev / single-replica deploys that mount the
+#      credentials file but have no flat-key Secret.
+#
+# The evaluator routes by model (agents/evaluator._make_evaluator_client →
+# infer_provider_from_model): Claude uses create_client (Claude OAuth above);
+# non-Claude models (openai / openai-compatible / gemini / ollama-cloud / github
+# models) resolve their OWN provider credentials from env in phase_config +
+# providers/. So a verify routed to a non-Claude model needs that provider's env
+# too — Claude-only injection would green the default verify but break any
+# non-Claude one. We therefore forward the FULL provider/runtime env the in-pod
+# control plane reads (each only when set on the pod), as container ``env`` —
+# secretKeyRef for secrets when an env-source Secret is configured, else a
+# resolved value (never argv, cf. #477). ``ANTHROPIC_API_KEY`` is deliberately
+# excluded (core.auth never falls back to it — forwarding would risk silent API
+# billing). CLI-FILE creds (~/.codex/auth.json, ~/.gemini/oauth_creds.json,
+# copilot apps.json) are NOT seeded into the Job here — see the SCOPE note below.
+# These are env-var / Secret-KEY NAMES, not credentials (S105 false positives).
+_OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN"  # noqa: S105 - env var name, not a secret
+_ENV_OAUTH_SECRET_NAME = "TFACTORY_VERIFY_OAUTH_SECRET_NAME"  # noqa: S105 - env var name
+_ENV_OAUTH_SECRET_KEY = "TFACTORY_VERIFY_OAUTH_SECRET_KEY"  # noqa: S105 - env var name
+_DEFAULT_OAUTH_SECRET_KEY = "oauth-token"  # noqa: S105 - default Secret key name
+# Provider/runtime env forwarded to the verify Job when set on the pod. Two sets:
+# the Claude SDK custom-endpoint/model/runtime knobs (mirrors core.auth.
+# SDK_ENV_VARS) AND the non-Claude provider keys/base-urls the evaluator reads
+# from env (verified against phase_config.py + providers/ in this repo). Secrets
+# (API keys/tokens) and config (base URLs/model defaults) are forwarded the same
+# way — value when resolved on the pod, or secretKeyRef when an env-Secret is
+# configured (see _provider_env_entries). ANTHROPIC_API_KEY is intentionally
+# absent (no silent API billing). QA_LLM_PROVIDER is also forwarded so the Job
+# infers the same provider as the control plane when set.
+_SDK_PASSTHROUGH_ENV: tuple[str, ...] = (
+    # Claude SDK custom endpoint + model overrides + runtime knobs.
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "NO_PROXY",
+    "DISABLE_TELEMETRY",
+    "DISABLE_COST_WARNINGS",
+    "API_TIMEOUT_MS",
+    # Non-Claude provider credentials + config the evaluator resolves from env
+    # (phase_config.py / providers/*). Forwarded only when present on the pod.
+    "OPENAI_API_KEY",
+    "OPENAI_COMPATIBLE_API_KEY",
+    "OPENAI_COMPATIBLE_BASE_URL",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "OLLAMA_API_KEY",
+    "OLLAMA_CLOUD_BASE_URL",
+    "GITHUB_TOKEN",
+    "GITHUB_MODELS_DEFAULT",
+    "QA_LLM_PROVIDER",
+)
+# Of the forwarded set, these are SECRETS (API keys / tokens). When an env-Secret
+# is configured (_ENV_PROVIDER_SECRET_NAME) they are sourced via secretKeyRef so
+# the literal never lands in the manifest; the rest (base URLs / model defaults /
+# provider name) are non-secret config forwarded as plain values regardless.
+_PROVIDER_SECRET_ENV: frozenset[str] = frozenset(
+    {
+        "ANTHROPIC_AUTH_TOKEN",
+        "OPENAI_API_KEY",
+        "OPENAI_COMPATIBLE_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "OLLAMA_API_KEY",
+        "GITHUB_TOKEN",
+    }
+)
+# Optional env-source Secret for the provider secrets above. When set, each secret
+# env is sourced ``valueFrom.secretKeyRef`` (name = this value, key = the lower-
+# kebab of the env var, e.g. OPENAI_API_KEY -> openai-api-key) so no literal key
+# lands in the manifest/etcd. When unset, secrets are forwarded as resolved values
+# from the pod env (still env, never argv).
+_ENV_PROVIDER_SECRET_NAME = "TFACTORY_VERIFY_PROVIDER_SECRET_NAME"  # noqa: S105 - env var name
+
 
 def resolve_verify_image(fallback_image: str) -> str:
     """Resolve the image for the verify-orchestration Job (TFactory #466).
@@ -152,6 +265,114 @@ def resolve_backend_path() -> str:
     override via ``APP_BACKEND_PATH``.
     """
     return os.environ.get(_ENV_BACKEND_PATH, "").strip() or _DEFAULT_BACKEND_PATH
+
+
+def _oauth_secret_ref() -> tuple[str, str] | None:
+    """Return ``(secret_name, secret_key)`` for the OAuth token, or None.
+
+    The preferred injection path: when ``TFACTORY_VERIFY_OAUTH_SECRET_NAME`` is
+    set the verify Job sources ``CLAUDE_CODE_OAUTH_TOKEN`` via
+    ``valueFrom.secretKeyRef`` so the literal token never lands in the manifest /
+    etcd. The key defaults to ``oauth-token`` and is overridable via
+    ``TFACTORY_VERIFY_OAUTH_SECRET_KEY``.
+    """
+    name = os.environ.get(_ENV_OAUTH_SECRET_NAME, "").strip()
+    if not name:
+        return None
+    key = os.environ.get(_ENV_OAUTH_SECRET_KEY, "").strip() or _DEFAULT_OAUTH_SECRET_KEY
+    return name, key
+
+
+def _resolve_oauth_token() -> str | None:
+    """Resolve the Claude Code OAuth token the in-pod control plane would use.
+
+    Delegates to ``core.auth.get_auth_token`` so the verify Job's resolution order
+    matches the control plane exactly (env → TFactory profiles → ~/.claude
+    credentials file → keychain). Returns None when no token is resolvable (the
+    Job is then dispatched without it and the same fail-closed ValueError surfaces
+    inside the Job, rather than silently running unauthenticated).
+    """
+    from core.auth import get_auth_token  # noqa: PLC0415 - lazy by design
+
+    return get_auth_token()
+
+
+def _oauth_env_entry() -> dict[str, Any] | None:
+    """Build the ``CLAUDE_CODE_OAUTH_TOKEN`` env entry for the verify Job.
+
+    Prefers a ``secretKeyRef`` (no literal token in the manifest); falls back to a
+    resolved ``value`` from ``core.auth`` (still env, never argv). Returns None
+    when neither a Secret is configured nor a token resolves — the Job then runs
+    without the credential and fails closed inside (``No OAuth token found``)
+    instead of being given a blank/poison value.
+    """
+    ref = _oauth_secret_ref()
+    if ref is not None:
+        name, key = ref
+        return {
+            "name": _OAUTH_TOKEN_ENV,
+            "valueFrom": {"secretKeyRef": {"name": name, "key": key}},
+        }
+    token = _resolve_oauth_token()
+    if token:
+        return {"name": _OAUTH_TOKEN_ENV, "value": token}
+    _log.warning(
+        "[verify-dispatch] no OAuth credential for the verify Job: neither %s is "
+        "set nor a token resolves via core.auth (env/profiles/~/.claude/keychain). "
+        "The verify Job will fail closed with 'No OAuth token found'. Set %s to a "
+        "Secret with a flat token key, or ensure the credential is resolvable in "
+        "the control-plane pod.",
+        _ENV_OAUTH_SECRET_NAME,
+        _ENV_OAUTH_SECRET_NAME,
+    )
+    return None
+
+
+def _env_to_secret_key(var: str) -> str:
+    """Map an env var name to its kebab-case Secret key (OPENAI_API_KEY ->
+    openai-api-key)."""
+    return var.lower().replace("_", "-")
+
+
+def _provider_env_entries() -> list[dict[str, Any]]:
+    """Provider/runtime env entries to forward to the verify Job, when set.
+
+    Forwards the full provider/runtime set (Claude SDK custom endpoint + model
+    overrides AND the non-Claude provider keys/base-urls the evaluator reads from
+    env) so a verify routed to ANY provider resolves the same credentials the
+    in-pod control plane does — not just Claude.
+
+    Secrets (API keys/tokens) are sourced via ``secretKeyRef`` when an env-Secret
+    is configured (``TFACTORY_VERIFY_PROVIDER_SECRET_NAME``) so no literal lands in
+    the manifest; otherwise they are forwarded as resolved values from the pod env
+    (still ``env``, never argv). Non-secret config (base URLs / model defaults /
+    provider name) is always forwarded as a plain value. Only pod-set vars are
+    emitted; ``ANTHROPIC_API_KEY`` is never in the set (no silent API billing).
+    """
+    secret_name = os.environ.get(_ENV_PROVIDER_SECRET_NAME, "").strip()
+    out: list[dict[str, Any]] = []
+    for var in _SDK_PASSTHROUGH_ENV:
+        is_secret = var in _PROVIDER_SECRET_ENV
+        # Secrets can come from the env-Secret even if not literally set on the
+        # pod; non-secrets only forward when present on the pod env.
+        if is_secret and secret_name:
+            out.append(
+                {
+                    "name": var,
+                    "valueFrom": {
+                        "secretKeyRef": {
+                            "name": secret_name,
+                            "key": _env_to_secret_key(var),
+                            "optional": True,
+                        }
+                    },
+                }
+            )
+            continue
+        val = os.environ.get(var)
+        if val:
+            out.append({"name": var, "value": val})
+    return out
 
 
 def _pythonpath_for(backend_path: str) -> str:
@@ -278,6 +499,12 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
         ``DATABASE_URL`` (passed through so the store write lands in the same
         Postgres), and ``PYTHONPATH`` (the backend + web-server dirs so
         ``agents`` / ``server`` import);
+      - the LLM credential the evaluator/test-gen needs (#466 env round-4):
+        ``CLAUDE_CODE_OAUTH_TOKEN`` via ``secretKeyRef`` when a Secret is
+        configured (no literal token in the manifest), else a value resolved from
+        ``core.auth`` — always via container ``env``, never argv (cf. #477) — plus
+        the SDK provider/runtime passthrough env so custom endpoints / model maps
+        resolve as they do in-pod;
       - the verify command ``python -m agents.verify_pipeline``. By default this
         runs directly on the verify image (``cfg.image`` — the TFactory runtime
         image, which ships ``agents``); the orchestration does not nix-develop
@@ -356,6 +583,16 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
     db_url = os.environ.get(cfg.database_url_env)
     if db_url:
         env.append({"name": cfg.database_url_env, "value": db_url})
+    # LLM credential (TFactory #466 env round-4): the verify pipeline's evaluator
+    # calls create_client → require_auth_token. Without it the Job died
+    # ``ValueError: No OAuth token found``. Inject CLAUDE_CODE_OAUTH_TOKEN via the
+    # container env — secretKeyRef when a Secret is configured (no literal in the
+    # manifest/etcd), else a resolved value. NEVER argv (cf. #477). Plus the SDK
+    # provider/runtime env so custom endpoints / model maps resolve as in-pod.
+    oauth_env = _oauth_env_entry()
+    if oauth_env is not None:
+        env.append(oauth_env)
+    env.extend(_provider_env_entries())
     container = pod_spec["containers"][0]
     container["env"] = env
 
