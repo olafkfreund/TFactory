@@ -35,11 +35,12 @@ needs a real cluster or Postgres.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -237,7 +238,7 @@ def _shq(s: str) -> str:
 # ── Dispatch (opt-in) ────────────────────────────────────────────────────────
 
 
-async def dispatch_verify_job(  # noqa: PLR0913 - 3 domain args + injectable sandbox/store seams
+async def dispatch_verify_job(  # noqa: PLR0913 - 3 domain args + injectable seams
     *,
     job_id: str,
     spec_dir: Path,
@@ -245,16 +246,20 @@ async def dispatch_verify_job(  # noqa: PLR0913 - 3 domain args + injectable san
     correlation_key: str | int | None = None,
     sandbox: Any = None,
     store: Any = None,
+    apply_fn: Any = None,
 ) -> VerifyDispatch | None:
     """Dispatch a verify Job for ``spec_dir`` and record its durable coordinates.
 
     Returns the ``VerifyDispatch`` (job/namespace/worker_ref) on success, or
-    ``None`` when the Nix-lane sandbox isn't configured (caller falls back to the
-    in-pod path). Writes a ``queued`` job-state row with ``worker_ref`` set to the
-    Job so the control plane can reconcile by polling Postgres.
+    ``None`` when the Nix-lane sandbox isn't configured **or the apply failed**
+    (the caller then falls back to the in-pod path — the split never strands a
+    verify on a config/cluster gap). Writes a ``queued`` job-state row with
+    ``worker_ref`` set to the Job *before* applying, so the control plane can
+    reconcile by polling Postgres and the reaper can find an orphaned dispatch.
 
-    ``sandbox`` / ``store`` are injectable for tests; in production they default
-    to ``nix_runner_from_env()`` and the durable store opened on its own session.
+    ``sandbox`` / ``store`` / ``apply_fn`` are injectable for tests; in production
+    they default to ``nix_runner_from_env()``, the durable store opened on its own
+    session, and the real ``create_namespaced_job`` k8s apply.
     """
     if sandbox is None:
         from agents.nix_env import nix_runner_from_env  # noqa: PLC0415 - lazy by design
@@ -277,8 +282,8 @@ async def dispatch_verify_job(  # noqa: PLR0913 - 3 domain args + injectable san
     }
 
     # Record the queued row + worker_ref BEFORE applying the Job, so a reaper can
-    # find an orphan even if the apply/watch is interrupted (the row, not the
-    # cluster, is the source of truth — concurrency-conventions.md §3).
+    # find an orphan even if the apply is interrupted (the row, not the cluster,
+    # is the source of truth — concurrency-conventions.md §3).
     await _record_dispatch(
         job_id,
         correlation_key=correlation_key,
@@ -286,19 +291,89 @@ async def dispatch_verify_job(  # noqa: PLR0913 - 3 domain args + injectable san
         store=store,
     )
 
-    # Hand off to the proven sandbox lifecycle. The sandbox's own manifest builder
-    # already supplies image/PVCs; we run the verify entrypoint as the command.
+    # Build the verify-orchestration manifest from the sandbox coordinates and
+    # apply it. The manifest carries the dedicated SA + JOB_ID/CORRELATION_KEY/
+    # DATABASE_URL env the Job needs to write its own terminal row.
     spec_subpath = _pvc_subpath(spec_dir, sandbox)
     project_subpath = _pvc_subpath(project_dir, sandbox)
+    cfg = VerifyJobConfig(
+        job_id=job_id,
+        image=getattr(sandbox, "image", ""),
+        spec_subpath=spec_subpath,
+        project_subpath=project_subpath,
+        repo_pvc=getattr(sandbox, "repo_pvc", None),
+        namespace=namespace,
+        nix_store_pvc=getattr(sandbox, "nix_store_pvc", None),
+        correlation_key=correlation_key,
+    )
+    manifest = build_verify_job_manifest(cfg)
     _log.info(
         "[verify-dispatch] dispatching verify Job %s (spec=%s project=%s)",
         name,
         spec_subpath,
         project_subpath,
     )
+    try:
+        await _apply_verify_job(manifest, namespace, apply_fn=apply_fn)
+    except Exception:  # noqa: BLE001 — apply gap must not strand: fall back in-pod
+        _log.warning(
+            "[verify-dispatch] apply of verify Job %s failed; caller should fall "
+            "back to in-pod (the queued row will advance with the same job_id)",
+            name,
+            exc_info=True,
+        )
+        return None
+
     return VerifyDispatch(
         job_id=job_id, job_name=name, namespace=namespace, worker_ref=worker_ref
     )
+
+
+async def _apply_verify_job(
+    manifest: dict[str, Any], namespace: str, *, apply_fn: Any = None
+) -> None:
+    """Fire-and-forget create the verify Job (reconcile-by-poll owns the rest).
+
+    Unlike the synchronous sandbox lane (``KubeJobSandbox.run`` applies, watches,
+    then deletes), the verify Job is created and left to run: it writes its own
+    terminal job-state row and is GC'd by ``ttlSecondsAfterFinished``. The control
+    plane reconciles + reaps by polling Postgres, so no watch loop is held here.
+
+    ``apply_fn(namespace, manifest)`` is injectable for tests; production loads
+    the in-cluster (or kubeconfig) client lazily and calls ``create_namespaced_job``.
+    """
+    if apply_fn is not None:
+        await apply_fn(namespace, manifest)
+        return
+    api, batch = await _k8s_batch()
+    try:
+        await batch.create_namespaced_job(namespace, manifest)
+    finally:
+        await api.close()
+
+
+async def _k8s_batch() -> tuple[Any, Any]:
+    """Load kube config (in-cluster, kubeconfig fallback) and return ``(api, batch)``.
+
+    Isolates the untyped ``kubernetes_asyncio`` API behind a single ``Any`` seam so
+    mypy --strict stays clean whether or not the (stub-less) package is installed,
+    and the lazy import keeps the backend importable without a cluster.
+    """
+    k8s: Any = _import_kubernetes_asyncio()
+    client, config = k8s.client, k8s.config
+    try:
+        config.load_incluster_config()
+    except Exception:  # noqa: BLE001 - dev/test fallback
+        await config.load_kube_config()
+    api = client.ApiClient()
+    return api, client.BatchV1Api(api)
+
+
+def _import_kubernetes_asyncio() -> Any:
+    """Lazily import the (untyped, stub-less) ``kubernetes_asyncio`` package."""
+    import importlib  # noqa: PLC0415 - lazy by design
+
+    return importlib.import_module("kubernetes_asyncio")
 
 
 def _pvc_subpath(path: Path, sandbox: Any) -> str:
@@ -433,3 +508,106 @@ async def reap_if_orphaned(
             "[verify-dispatch] reap failed for job_id=%s", job_id, exc_info=True
         )
         return None
+
+
+# ── Control-plane reconcile + reap loop (wired into the app lifespan) ──────────
+#
+# Mirrors AIFactory build_backend's kubejob reconcile loop (RFC-0016 #671): when
+# verifies run as k8s Jobs, the control plane polls Postgres for terminal
+# transitions the Jobs wrote (so a missed completion event never strands a
+# verify) and reaps vanished / deadline-exceeded Jobs on an interval. The loop is
+# started from the web-server lifespan only when verify_exec_mode() == kubejob.
+
+
+def _is_k8s_job_ref(record: dict[str, Any]) -> bool:
+    """True when a durable row points at a dispatched verify k8s Job."""
+    ref = record.get("worker_ref") or {}
+    return isinstance(ref, dict) and ref.get("kind") == "k8s-job"
+
+
+async def _probe_job(
+    namespace: str, job_name: str, *, probe_fn: Any = None
+) -> tuple[bool, bool]:
+    """Return ``(job_exists, job_active)`` for the named Job. Fail-safe.
+
+    Defaults to a lazy in-cluster ``read_namespaced_job`` probe; injectable for
+    tests. On any probe error the Job is reported ``(exists=True, active=True)``
+    so a transient API blip never makes the reaper reap a live verify.
+    """
+    if probe_fn is not None:
+        result: tuple[bool, bool] = await probe_fn(namespace, job_name)
+        return result
+    try:
+        api, batch = await _k8s_batch()
+        try:
+            job = await batch.read_namespaced_job(job_name, namespace)
+        finally:
+            await api.close()
+    except Exception:  # noqa: BLE001 - a probe gap must not reap a live verify
+        _log.debug(
+            "[verify-dispatch] job probe failed for %s/%s (treating as active)",
+            namespace,
+            job_name,
+            exc_info=True,
+        )
+        return True, True
+    st = getattr(job, "status", None)
+    active = bool(getattr(st, "active", 0)) if st is not None else False
+    return True, active
+
+
+async def reconcile_and_reap_once(*, store: Any = None, probe_fn: Any = None) -> int:
+    """One reconcile + reap pass over active verify k8s-Job rows. Never raises.
+
+    Lists the durable active (queued/running) verify rows, and for each one that
+    points at a dispatched k8s Job: reconciles (a terminal row the Job wrote is
+    left as-is) and reaps an orphan (Job vanished / finished with no verdict).
+    Returns the number of rows reaped ``stuck`` (for observability / tests).
+    """
+    reaped = 0
+    try:
+        async with _store_for(store) as (s, _owned):
+            rows = await s.recover_in_flight()
+            for rec in rows:
+                if not _is_k8s_job_ref(rec):
+                    continue
+                job_id = rec.get("job_id")
+                if not job_id:
+                    continue
+                ref = rec.get("worker_ref") or {}
+                namespace = ref.get("namespace") or "factory"
+                job_name = ref.get("job_name") or verify_job_name(job_id)
+                # Reconcile first: a terminal row the Job already wrote wins.
+                if is_terminal_record(await reconcile_verify_job(job_id, store=s)):
+                    continue
+                exists, active = await _probe_job(
+                    namespace, job_name, probe_fn=probe_fn
+                )
+                reaped_rec = await reap_if_orphaned(
+                    job_id, job_exists=exists, job_active=active, store=s
+                )
+                if reaped_rec is not None:
+                    reaped += 1
+    except Exception:  # noqa: BLE001 - a bad tick must not crash the loop
+        _log.warning("[verify-dispatch] reconcile/reap tick failed", exc_info=True)
+    return reaped
+
+
+async def reconcile_and_reap_loop(
+    *, stop: asyncio.Event, interval_seconds: float = 15.0, probe_fn: Any = None
+) -> None:
+    """Periodic reconcile-by-poll + reaper for k8s-Job verifies (mirrors #671).
+
+    Started from the web-server lifespan only when verify_exec_mode() == kubejob.
+    Each tick reconciles terminal transitions the Jobs wrote and reaps vanished
+    Jobs, so a missed completion event never strands a verify. Never raises — a
+    bad tick is logged and the loop continues.
+    """
+    _log.info(
+        "[verify-dispatch] reconcile loop started (interval=%.0fs)", interval_seconds
+    )
+    while not stop.is_set():
+        await reconcile_and_reap_once(probe_fn=probe_fn)
+        with suppress(TimeoutError):
+            await asyncio.wait_for(stop.wait(), timeout=interval_seconds)
+    _log.info("[verify-dispatch] reconcile loop stopped")

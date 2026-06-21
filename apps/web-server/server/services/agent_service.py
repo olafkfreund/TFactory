@@ -2665,6 +2665,13 @@ class AgentService:
         # Run Claude in non-interactive mode - bypass permission prompts
         env["CLAUDE_CODE_ENTRYPOINT"] = "cli"  # Signal non-interactive mode
         env["CI"] = "true"  # Many CLI tools use this to detect non-interactive mode
+        # RFC-0016/0017 (#466): the canonical durable job-state id the control
+        # plane keys the row by is the task_id ("{project}:{spec}"), not the bare
+        # spec_id. Propagate it as $JOB_ID so the in-process verify (and, when
+        # TFACTORY_VERIFY_EXEC=kubejob, the dispatched verify Job) writes its
+        # terminal row under the SAME id the reconcile loop polls — never a
+        # spec-id row the control plane doesn't track.
+        env["JOB_ID"] = task_id
 
         # Quick Mode: Use simplified prompts (~70% fewer tokens)
         if mode == "quick":

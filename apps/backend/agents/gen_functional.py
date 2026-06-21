@@ -383,11 +383,21 @@ def _resolve_framework_descriptor(subtask):
 
 
 def _advance_to_evaluator(spec_dir: Path, project_dir: Path) -> None:
-    """Schedule the Evaluator after gen_functional's success path.
+    """Advance to the verify (evaluate→triage) after gen_functional's success path.
+
+    RFC-0016/0017 (#466) control/execution split: when ``TFACTORY_VERIFY_EXEC=kubejob``
+    the verify is dispatched as a single k8s Job (running ``agents.verify_pipeline``
+    on the nix-base image) instead of running in-pod. The split is fail-safe — if
+    the Nix-lane sandbox isn't configured (no ``TFACTORY_NIX_RUNNER_IMAGE``) or the
+    apply fails, ``dispatch_verify_job`` returns ``None`` and we fall back to the
+    in-pod path so the verify is never stranded on a config/cluster gap. Default
+    (unset / any other value) keeps today's in-pod ``schedule_evaluator`` behaviour.
 
     Lazy import — same defensive shape as _advance_to_planner_replan.
     Gated by ``TFACTORY_AUTO_EVALUATE`` (default ON; tests pin off).
     """
+    if _dispatch_verify_as_job_if_enabled(spec_dir, project_dir):
+        return
     try:
         from agents.evaluator import schedule_evaluator
 
@@ -397,6 +407,85 @@ def _advance_to_evaluator(spec_dir: Path, project_dir: Path) -> None:
             "could not auto-schedule evaluator: %s",
             exc,
         )
+
+
+def _dispatch_verify_as_job_if_enabled(spec_dir: Path, project_dir: Path) -> bool:
+    """Dispatch the verify as a k8s Job when the kubejob split is enabled.
+
+    Returns ``True`` when the verify was dispatched as a Job (caller must NOT also
+    run the in-pod path), or ``False`` when the in-pod path should run (mode is
+    in-pod, or the kubejob dispatch fell back — fail-safe). Best-effort: any
+    unexpected error falls back to in-pod rather than dropping the verify.
+
+    The durable job-state id is the canonical ``$JOB_ID`` the control plane keys
+    the row by (set by the web-server when it spawns this process); it falls back
+    to the spec id for CLI runs that don't set it. The Job writes its own terminal
+    row under this id, so the control plane reconciles by polling the same row.
+    """
+    try:
+        from agents.verify_dispatch import (  # noqa: PLC0415 - lazy by design
+            verify_exec_mode,
+        )
+
+        if verify_exec_mode() != "kubejob":
+            return False
+
+        status = _read_status(spec_dir)
+        job_id = os.environ.get("JOB_ID") or spec_dir.name
+        correlation_key = status.get("correlation_key") or status.get("issue_number")
+        return _run_dispatch_blocking(job_id, spec_dir, project_dir, correlation_key)
+    except Exception as exc:  # noqa: BLE001 — never drop the verify on a wiring error
+        _gen_log.warning(
+            "verify kubejob dispatch errored (%s); falling back to in-pod", exc
+        )
+        return False
+
+
+def _run_dispatch_blocking(
+    job_id: str,
+    spec_dir: Path,
+    project_dir: Path,
+    correlation_key: object,
+) -> bool:
+    """Run dispatch_verify_job to completion and report whether it dispatched.
+
+    Returns ``True`` only when a Job was actually dispatched (the verify is now
+    running as a Job); ``False`` on fall-back (in-pod should run).
+    """
+    from agents.verify_dispatch import (  # noqa: PLC0415 - lazy by design
+        dispatch_verify_job,
+    )
+
+    async def _go() -> bool:
+        result = await dispatch_verify_job(
+            job_id=job_id,
+            spec_dir=spec_dir,
+            project_dir=project_dir,
+            correlation_key=correlation_key,  # type: ignore[arg-type]
+        )
+        if result is None:
+            _gen_log.info(
+                "verify kubejob dispatch fell back to in-pod for job_id=%s", job_id
+            )
+            return False
+        _gen_log.info(
+            "verify dispatched as k8s Job %s (job_id=%s)", result.job_name, job_id
+        )
+        return True
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop is not None:
+        # Called from within the async pipeline: run the dispatch on a private
+        # loop in a worker thread so we can return a sync decision without
+        # re-entering the running loop.
+        import concurrent.futures  # noqa: PLC0415 - lazy; only on the kubejob path
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            return ex.submit(lambda: asyncio.run(_go())).result()
+    return asyncio.run(_go())
 
 
 def _advance_to_review(spec_dir: Path, project_dir: Path) -> None:
