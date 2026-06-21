@@ -683,6 +683,12 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> CompletionEnvelo
             )
 
         _block = read_verification_block(spec_dir, target_level=_target)
+        # RFC-0015 §4 D2: surface the requirement->test->VAL traceability matrix
+        # the fleet already computes (AC ledger + VAL block) as a first-class
+        # verification.traceability[] block (consumed by the CFactory matrix view,
+        # #126). Additive + best-effort: an uncovered AC degrades to tests:[] +
+        # not_run, and any failure leaves the verification block unchanged.
+        _attach_traceability(spec_dir, _block)
         envelope["verification"] = _block
         _fdir = spec_dir / "findings"
         _fdir.mkdir(parents=True, exist_ok=True)
@@ -698,6 +704,37 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> CompletionEnvelo
     if _gate is not None:
         envelope["deploy_gate"] = _gate
     return envelope
+
+
+def _attach_traceability(spec_dir: Path, verification_block: dict[str, Any]) -> None:
+    """Attach the RFC-0015 §4 D2 traceability matrix to ``verification_block``.
+
+    Joins the AC->test ledger (the plan's acceptance phases x the evaluator
+    verdicts) with the run's VAL block into one row per AC and sets
+    ``verification_block["traceability"]`` when any row results. Additive +
+    best-effort: a missing plan/verdicts file or any error leaves the block
+    unchanged (an uncovered AC degrades to a not_run row inside
+    :func:`agents.traceability.build_traceability`).
+    """
+    try:
+        from agents.ac_fidelity import build_ac_ledger  # noqa: PLC0415 - lazy by design
+        from agents.traceability import (  # noqa: PLC0415 - lazy by design
+            build_traceability,
+        )
+
+        plan_path = spec_dir / "test_plan.json"
+        verdicts_path = spec_dir / "findings" / "verdicts.json"
+        if not (plan_path.is_file() and verdicts_path.is_file()):
+            return
+        plan = json.loads(plan_path.read_text())
+        vdoc = json.loads(verdicts_path.read_text())
+        verdicts = vdoc.get("verdicts") if isinstance(vdoc, dict) else None
+        ledger = build_ac_ledger(plan, verdicts or [])
+        trace = build_traceability(ledger, verification_block)
+        if trace:
+            verification_block["traceability"] = trace
+    except Exception:  # noqa: BLE001 - traceability must never break emit
+        _triage_log.debug("triager: traceability emit failed (degraded)", exc_info=True)
 
 
 def _deploy_gate_annotation(spec_dir: Path) -> dict | None:
