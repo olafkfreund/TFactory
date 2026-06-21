@@ -4,8 +4,13 @@ Env-gated control/execution split for the verify pipeline. Today the control
 plane runs the evaluate→triage pipeline **in-pod** (``run_evaluator`` /
 ``run_triager`` as background tasks). This module adds an **opt-in** path that
 instead dispatches a single Kubernetes Job per spec that runs the whole verify
-(``python -m agents.verify_pipeline``) on the thin nix-base image, so the control
-plane stays thin and verifies scale across nodes + survive a control-plane roll.
+(``python -m agents.verify_pipeline``) on the **TFactory runtime image** (which
+ships the ``agents`` backend package — the thin nix-runner image does NOT, and
+running the orchestration there died ``ModuleNotFoundError: No module named
+'agents'``, TFactory #466), so the control plane stays thin and verifies scale
+across nodes + survive a control-plane roll. The orchestration Job itself does
+not need nix; the per-lane test Jobs it dispatches still run on the nix-runner
+image and get the SUT toolchain from ``nix develop`` (mirrors AIFactory #686).
 
 Default is OFF: ``verify_exec_mode()`` returns ``inpod`` unless
 ``TFACTORY_VERIFY_EXEC=kubejob``. When kubejob is selected but the sandbox isn't
@@ -64,6 +69,102 @@ _KUBEJOB = "kubejob"
 
 # Verify orchestration entrypoint the Job runs (see agents/verify_pipeline.py).
 _VERIFY_MODULE = "agents.verify_pipeline"
+
+# ── Verify-orchestration Job image + backend path (TFactory #466, mirrors #686) ─
+#
+# The orchestration Job runs ``python -m agents.verify_pipeline`` — the TFactory
+# *backend*, not the SUT. It therefore needs an image that SHIPS the ``agents``
+# package, i.e. the TFactory runtime image — NOT the thin nix-runner image
+# (TFACTORY_NIX_RUNNER_IMAGE), which only carries the per-task SUT toolchain and
+# has no ``agents``. Running the orchestration on the nix runner died with
+# ``ModuleNotFoundError: No module named 'agents'``.
+#
+# The orchestration Job does NOT itself need nix: it only imports + runs the
+# pipeline; the per-LANE test Jobs it dispatches (run_evaluator →
+# run_pytest_lane_via_nix → kube_sandbox) still run on the nix runner image and
+# get the SUT toolchain from ``nix develop`` there. So the verify Job is a plain
+# ``python -m agents.verify_pipeline`` on the TFactory image, no outer nix
+# develop — exactly the AIFactory #686/#671 "run the service's own image" fix.
+#
+# Image resolution precedence (first non-empty wins), mirroring AIFactory's
+# ``_resolve_build_image``:
+#   1. TFACTORY_VERIFY_IMAGE  — explicit operator override for the verify Job ONLY.
+#   2. TFACTORY_IMAGE         — the running Deployment's own image ref, injected by
+#                               the chart (the pod can't read its own image from
+#                               the downward API, so flat-manifest gitops pins it).
+#                               Guaranteed to ship the agents package + python.
+#   3. the thin nix-runner image — last-resort fallback (logged WARNING): keeps
+#                               the manifest buildable in dev/test where neither
+#                               var is set, but it CANNOT import agents.
+#
+# TFACTORY_NIX_RUNNER_IMAGE is deliberately NOT repointed: the per-lane test Jobs
+# still need the thin SUT-toolchain image.
+_ENV_VERIFY_IMAGE = "TFACTORY_VERIFY_IMAGE"
+_ENV_RUNNING_IMAGE = "TFACTORY_IMAGE"
+# Where the TFactory backend (the ``agents`` package) lives inside the runtime
+# image. Set on PYTHONPATH so ``python -m agents.verify_pipeline`` imports. The
+# image bakes this layout (Dockerfile ENV APP_BACKEND_PATH); gitops can override.
+_ENV_BACKEND_PATH = "APP_BACKEND_PATH"
+_DEFAULT_BACKEND_PATH = "/home/projects/MagesticAI/apps/backend"
+# The verify pipeline's terminal store write imports ``server.*`` (the web-server
+# sibling app), so its dir goes on PYTHONPATH too. It sits next to the backend
+# (``…/apps/web-server``), derived from the backend path's parent.
+_WEB_SERVER_DIRNAME = "web-server"
+
+
+def resolve_verify_image(fallback_image: str) -> str:
+    """Resolve the image for the verify-orchestration Job (TFactory #466).
+
+    The orchestration Job runs ``python -m agents.verify_pipeline`` and so must
+    land on an image that ships the TFactory ``agents`` package (the runtime
+    image), never the thin nix-runner image (which has no ``agents`` →
+    ``ModuleNotFoundError``). See the module-level note for precedence.
+
+    ``fallback_image`` is the thin nix-runner image; it is returned only as a
+    last resort (with a WARNING) so the manifest stays buildable in dev/test
+    where neither image env is set.
+    """
+    explicit = os.environ.get(_ENV_VERIFY_IMAGE, "").strip()
+    if explicit:
+        return explicit
+    running = os.environ.get(_ENV_RUNNING_IMAGE, "").strip()
+    if running:
+        return running
+    _log.warning(
+        "[verify-dispatch] neither %s nor %s set — falling back to the thin nix "
+        "runner image %r for the verify-orchestration Job. That image has no "
+        "`agents` package and will fail with ModuleNotFoundError; set %s (or the "
+        "chart-injected %s) to the TFactory runtime image.",
+        _ENV_VERIFY_IMAGE,
+        _ENV_RUNNING_IMAGE,
+        fallback_image,
+        _ENV_VERIFY_IMAGE,
+        _ENV_RUNNING_IMAGE,
+    )
+    return fallback_image
+
+
+def resolve_backend_path() -> str:
+    """Absolute path of the TFactory backend dir inside the verify image.
+
+    Set on the Job's PYTHONPATH so ``python -m agents.verify_pipeline`` resolves
+    the ``agents`` package. Defaults to the image's baked layout; gitops can
+    override via ``APP_BACKEND_PATH``.
+    """
+    return os.environ.get(_ENV_BACKEND_PATH, "").strip() or _DEFAULT_BACKEND_PATH
+
+
+def _pythonpath_for(backend_path: str) -> str:
+    """PYTHONPATH value for the verify Job: backend dir + web-server sibling.
+
+    ``python -m agents.verify_pipeline`` needs the backend (``agents``) on the
+    path; the pipeline's terminal store write additionally imports ``server.*``
+    from the web-server sibling app (``…/apps/web-server``). Both go on the path,
+    backend first. The web-server dir is derived from the backend's parent so a
+    gitops override of ``APP_BACKEND_PATH`` keeps them co-located.
+    """
+    web_server = str(Path(backend_path).parent / _WEB_SERVER_DIRNAME)
+    return f"{backend_path}:{web_server}"
 
 
 def verify_exec_mode() -> str:
@@ -151,6 +252,11 @@ class VerifyJobConfig:
     timeout: int = 3600
     ttl_seconds: int = 300
     nix_develop: bool = True
+    # PYTHONPATH entry so ``python -m agents.verify_pipeline`` imports the TFactory
+    # backend (the ``agents`` package) on the verify image. The verify Job runs the
+    # TFactory backend, not the SUT, so it needs the backend on the path. Defaults
+    # to the image's baked backend layout.
+    backend_path: str = _DEFAULT_BACKEND_PATH
     # Mount-relative dir that holds the per-task ``flake.nix`` materialized before
     # dispatch. The verify Job ``nix develop``s THIS dir (not the data root) — the
     # data root is mounted at ``mount`` so spec+project resolve, but the flake is
@@ -162,18 +268,22 @@ class VerifyJobConfig:
 def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
     """Build the k8s Job manifest that runs the verify orchestration. Pure.
 
-    Wraps the proven ``kube_sandbox.build_job_manifest`` (nix-base image, warm
-    ``/nix`` store, worktree co-mount, no API-token automount) and then layers
-    the orchestration-Job specifics §3 requires that the lane builder does not:
+    Wraps the proven ``kube_sandbox.build_job_manifest`` (warm ``/nix`` store,
+    worktree co-mount, no API-token automount) and then layers the
+    orchestration-Job specifics §3 requires that the lane builder does not:
       - the dedicated ``tfactory-sandbox`` service account (the verify Job writes
         its own job-state row + may touch the cluster, unlike a pure lane);
-      - the short scalar env the Job needs to find its durable row: ``JOB_ID``,
-        ``CORRELATION_KEY``, ``FACTORY_SERVICE``, and ``DATABASE_URL`` (passed
-        through from the control plane's env so the Job's store write lands in the
-        same Postgres);
-      - the verify command (``python -m agents.verify_pipeline``) wrapped in
-        ``nix develop path:/work#default`` so the toolchain comes from the
-        per-task flake, not a fat image.
+      - the short scalar env the Job needs to find its durable row + import the
+        backend: ``JOB_ID``, ``CORRELATION_KEY``, ``FACTORY_SERVICE``,
+        ``DATABASE_URL`` (passed through so the store write lands in the same
+        Postgres), and ``PYTHONPATH`` (the backend + web-server dirs so
+        ``agents`` / ``server`` import);
+      - the verify command ``python -m agents.verify_pipeline``. By default this
+        runs directly on the verify image (``cfg.image`` — the TFactory runtime
+        image, which ships ``agents``); the orchestration does not nix-develop
+        (the per-lane test Jobs it spawns do). When ``cfg.nix_develop`` is set it
+        is wrapped in ``nix develop path:.../#default`` for callers that want the
+        toolchain from a per-task flake instead.
     """
     from tools.runners.kube_sandbox import (  # noqa: PLC0415 - lazy by design
         build_job_manifest,
@@ -228,6 +338,17 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
         {"name": "JOB_ID", "value": cfg.job_id},
         {"name": "FACTORY_SERVICE", "value": SERVICE},
     ]
+    # PYTHONPATH so ``python -m agents.verify_pipeline`` imports the TFactory
+    # backend (``agents``) AND the web-server (``server.*``, for the terminal store
+    # write) on the verify image. The orchestration Job runs the TFactory backend,
+    # not the SUT. Without this the Job died ``ModuleNotFoundError: No module named
+    # 'agents'`` (the thin nix runner has no backend; the runtime image does NOT
+    # bake PYTHONPATH — the in-pod control plane runs from the web-server WORKDIR).
+    # Set the dirs explicitly — no ``$(PYTHONPATH)`` self-ref: the image leaves
+    # PYTHONPATH unset, so k8s would not expand it and the literal would poison the
+    # path.
+    if cfg.backend_path:
+        env.append({"name": "PYTHONPATH", "value": _pythonpath_for(cfg.backend_path)})
     if cfg.correlation_key is not None:
         env.append({"name": "CORRELATION_KEY", "value": str(cfg.correlation_key)})
     # Pass DATABASE_URL through so the Job's terminal write lands in the same
@@ -272,11 +393,19 @@ async def dispatch_verify_job(  # noqa: PLR0913 - 3 domain args + injectable sea
     ``worker_ref`` set to the Job *before* applying, so the control plane can
     reconcile by polling Postgres and the reaper can find an orphaned dispatch.
 
-    Before applying the Job it materializes the per-task ``flake.nix`` into the
-    project worktree (the same seam the nixjob lane uses), so the Job's
-    ``nix develop`` finds a flake — without this the Job failed exit=1
-    "flake.nix does not exist". A non-nix task degrades to running the verify
-    directly on the image (no ``nix develop``) rather than stranding.
+    The orchestration Job runs ``python -m agents.verify_pipeline`` on the
+    **TFactory runtime image** (``resolve_verify_image``), NOT the thin nix-runner
+    image — the orchestration runs the TFactory *backend*, which only the runtime
+    image ships (the nix runner died ``ModuleNotFoundError: No module named
+    'agents'``, TFactory #466). The orchestration Job does NOT itself nix-develop:
+    it imports + runs the pipeline; the per-LANE test Jobs it then dispatches
+    (run_evaluator → run_pytest_lane_via_nix → kube_sandbox) still run on the
+    nix-runner image and get the SUT toolchain from ``nix develop`` there. So the
+    entrypoint is a plain ``python -m agents.verify_pipeline`` with the backend on
+    PYTHONPATH — mirroring AIFactory's #686/#671 "run the service's own image".
+    The nix-runner ``sandbox`` is still used for the PVC / namespace / data-root
+    coordinates (and to gate on TFACTORY_NIX_RUNNER_IMAGE so a config gap falls
+    back to in-pod cleanly); only the orchestration image differs.
 
     ``sandbox`` / ``store`` / ``apply_fn`` are injectable for tests; in production
     they default to ``nix_runner_from_env()``, the durable store opened on a fresh
@@ -312,33 +441,29 @@ async def dispatch_verify_job(  # noqa: PLR0913 - 3 domain args + injectable sea
         store=store,
     )
 
-    # Materialize the per-task flake into the project worktree BEFORE dispatching,
-    # exactly like the nixjob LANE path does (run_pytest_lane_via_nix). The verify
-    # Job runs ``nix develop path:.../project#default``; without this step the Job
-    # fails exit=1 with "flake.nix does not exist". Best-effort: a missing/non-nix
-    # manifest degrades to no flake (the Job's nix_develop is suppressed so it runs
-    # the verify directly on the image — honest, never strands the dispatch).
-    has_flake = _materialize_verify_flake(spec_dir, project_dir)
-
     # Build the verify-orchestration manifest from the sandbox coordinates and
     # apply it. The manifest carries the dedicated SA + JOB_ID/CORRELATION_KEY/
-    # DATABASE_URL env the Job needs to write its own terminal row.
+    # DATABASE_URL/PYTHONPATH env the Job needs to import the backend and write its
+    # own terminal row. The image is the TFactory RUNTIME image (resolve_verify_
+    # image), not the thin nix runner — the orchestration runs the `agents` package.
+    # No flake is materialized here and the orchestration does NOT nix-develop: the
+    # per-lane test Jobs it dispatches materialize + nix-develop their own flake.
     spec_subpath = _pvc_subpath(spec_dir, sandbox)
     project_subpath = _pvc_subpath(project_dir, sandbox)
+    verify_image = resolve_verify_image(getattr(sandbox, "image", ""))
     cfg = VerifyJobConfig(
         job_id=job_id,
-        image=getattr(sandbox, "image", ""),
+        image=verify_image,
         spec_subpath=spec_subpath,
         project_subpath=project_subpath,
         repo_pvc=getattr(sandbox, "repo_pvc", None),
         namespace=namespace,
         nix_store_pvc=getattr(sandbox, "nix_store_pvc", None),
         correlation_key=correlation_key,
-        # The flake was materialized into the project worktree, so develop there.
-        # When there's no nix manifest, run the verify directly (no nix develop) so
-        # a non-nix task isn't stranded on a missing flake.
-        flake_subpath=project_subpath,
-        nix_develop=has_flake,
+        backend_path=resolve_backend_path(),
+        # The orchestration Job runs the verify pipeline directly on the runtime
+        # image (it imports the backend); only the lanes it spawns nix-develop.
+        nix_develop=False,
     )
     manifest = build_verify_job_manifest(cfg)
     _log.info(
@@ -417,51 +542,6 @@ def _pvc_subpath(path: Path, sandbox: Any) -> str:
     data_root = getattr(sandbox, "data_root", "/home/nonroot/.tfactory")
     sub = pvc_subpath(str(path), data_root)
     return sub or ""
-
-
-def _materialize_verify_flake(spec_dir: Path, project_dir: Path) -> bool:
-    """Write the per-task ``flake.nix`` into ``project_dir`` (the lane-path seam).
-
-    Reuses ``agents.nix_env.materialize_flake`` (which renders the contract's
-    RFC-0005 ``environment`` into a generated flake, respecting a repo-owned one)
-    so the verify-orchestration Job has the same toolchain the build + lane paths
-    do — no drift, no reinvention. Returns ``True`` when a flake is present at
-    ``project_dir`` after this call (so the Job should ``nix develop`` it), or
-    ``False`` when there is no nix manifest (the caller then runs the verify
-    directly on the image). Best-effort: any error degrades to ``False`` rather
-    than stranding the dispatch.
-    """
-    try:
-        from agents.nix_env import (  # noqa: PLC0415 - lazy by design
-            environment_from_contract,
-            materialize_flake,
-        )
-
-        env = environment_from_contract(spec_dir)
-        plan = materialize_flake(spec_dir, project_dir, env=env)
-        if plan is not None:
-            _log.info(
-                "[verify-dispatch] materialized flake.nix into %s for verify Job",
-                project_dir,
-            )
-            return True
-        # No nix manifest, but a repo may still carry a hand-written flake.nix.
-        if (Path(project_dir) / "flake.nix").exists():
-            return True
-        _log.info(
-            "[verify-dispatch] no nix environment for %s; verify Job will run "
-            "the pipeline directly on the image (no nix develop)",
-            spec_dir.name,
-        )
-        return False
-    except Exception:  # noqa: BLE001 — flake gap must not strand the dispatch
-        _log.warning(
-            "[verify-dispatch] flake materialization failed for %s; verify Job "
-            "will run directly on the image",
-            spec_dir.name,
-            exc_info=True,
-        )
-        return (Path(project_dir) / "flake.nix").exists()
 
 
 @asynccontextmanager

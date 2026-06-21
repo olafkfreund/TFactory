@@ -4,13 +4,20 @@
 Covers:
 - ``verify_exec_mode`` selects in-pod (default / any other value) vs kubejob
   (``TFACTORY_VERIFY_EXEC=kubejob``).
-- ``build_verify_job_manifest`` produces a correct Job: nix-base image, the
-  ``python -m agents.verify_pipeline`` command wrapped in ``nix develop``, the
-  worktree + warm-store mounts, the ``tfactory-sandbox`` SA, no token automount,
-  and the JOB_ID / CORRELATION_KEY / FACTORY_SERVICE env.
+- ``build_verify_job_manifest`` produces a correct Job: the configured image, the
+  ``python -m agents.verify_pipeline`` command (plain, or wrapped in ``nix
+  develop`` when ``nix_develop`` is set), the worktree + warm-store mounts, the
+  ``tfactory-sandbox`` SA, no token automount, and the JOB_ID / CORRELATION_KEY /
+  FACTORY_SERVICE / PYTHONPATH env.
+- ``resolve_verify_image`` prefers TFACTORY_VERIFY_IMAGE, then TFACTORY_IMAGE,
+  then the thin nix-runner fallback (the #466 "use the service's own image" fix
+  so the orchestration Job can import the ``agents`` backend).
 - ``verify_job_name`` is DNS-1123 safe and prefixed ``factory-tfactory-``.
 - ``dispatch_verify_job`` returns None (fall back to in-pod) when the sandbox is
-  unconfigured, and records a queued row + k8s-job worker_ref when it is.
+  unconfigured, and records a queued row + k8s-job worker_ref when it is; the
+  applied Job runs on the verify (runtime) image, plain ``python -m
+  agents.verify_pipeline`` (no outer nix develop — the lanes it spawns do that),
+  with the backend on PYTHONPATH.
 - ``reconcile_verify_job`` / ``is_terminal_record`` mark terminal from the
   durable row (the control plane reconciles by polling Postgres).
 - ``reap_if_orphaned`` marks a vanished or deadline-exceeded Job ``stuck`` (#464)
@@ -33,6 +40,8 @@ from agents.verify_dispatch import (
     VerifyJobConfig,
     build_verify_job_manifest,
     is_terminal_record,
+    resolve_backend_path,
+    resolve_verify_image,
     verify_exec_mode,
     verify_job_name,
 )
@@ -50,6 +59,10 @@ from server.services.job_state_store import (  # noqa: E402
 )
 
 _IMAGE = "ghcr.io/olafkfreund/tfactory-runner-nix:latest"
+# The TFactory RUNTIME image (ships the `agents` backend) the verify Job uses.
+_RUNTIME_IMAGE = "ghcr.io/olafkfreund/tfactory:latest"
+_BACKEND_PATH = "/home/projects/MagesticAI/apps/backend"
+_WEB_SERVER_PATH = "/home/projects/MagesticAI/apps/web-server"
 
 
 @pytest_asyncio.fixture
@@ -110,6 +123,37 @@ def test_verify_exec_mode_unknown_value_is_inpod(monkeypatch):
     assert verify_exec_mode() == "inpod"
 
 
+# ─── resolve_verify_image / resolve_backend_path (#466 "service's own image") ──
+
+
+def test_resolve_verify_image_prefers_explicit_override(monkeypatch):
+    monkeypatch.setenv("TFACTORY_VERIFY_IMAGE", _RUNTIME_IMAGE)
+    monkeypatch.setenv("TFACTORY_IMAGE", "ghcr.io/x/other:1")
+    # The explicit verify-image override wins, even over the running image.
+    assert resolve_verify_image(_IMAGE) == _RUNTIME_IMAGE
+
+
+def test_resolve_verify_image_uses_running_image_when_no_override(monkeypatch):
+    monkeypatch.delenv("TFACTORY_VERIFY_IMAGE", raising=False)
+    monkeypatch.setenv("TFACTORY_IMAGE", _RUNTIME_IMAGE)
+    # The chart-injected running image is the default verify image (ships agents).
+    assert resolve_verify_image(_IMAGE) == _RUNTIME_IMAGE
+
+
+def test_resolve_verify_image_falls_back_to_nix_runner_when_unset(monkeypatch):
+    monkeypatch.delenv("TFACTORY_VERIFY_IMAGE", raising=False)
+    monkeypatch.delenv("TFACTORY_IMAGE", raising=False)
+    # Last resort (dev/test): the thin nix runner — logged WARNING, still buildable.
+    assert resolve_verify_image(_IMAGE) == _IMAGE
+
+
+def test_resolve_backend_path_default_and_override(monkeypatch):
+    monkeypatch.delenv("APP_BACKEND_PATH", raising=False)
+    assert resolve_backend_path() == _BACKEND_PATH
+    monkeypatch.setenv("APP_BACKEND_PATH", "/opt/tf/backend")
+    assert resolve_backend_path() == "/opt/tf/backend"
+
+
 # ─── verify_job_name (DNS-1123 safe, prefixed) ────────────────────────────────
 
 
@@ -133,36 +177,48 @@ def test_verify_job_name_sanitizes_and_truncates():
 def _cfg(**kw) -> VerifyJobConfig:
     base = {
         "job_id": "proj-abc:042-verify",
-        "image": _IMAGE,
+        # The verify Job runs on the RUNTIME image (ships `agents`), not the thin
+        # nix runner — that was the #466 ModuleNotFoundError bug.
+        "image": _RUNTIME_IMAGE,
         "spec_subpath": "workspaces/proj/.tfactory/specs/042",
         "project_subpath": "workspaces/proj",
         "repo_pvc": "tfactory-data",
         "nix_store_pvc": "tfactory-nix-store",
         "correlation_key": 482,
+        "backend_path": _BACKEND_PATH,
     }
     base.update(kw)
     return VerifyJobConfig(**base)  # type: ignore[arg-type]
 
 
-def test_manifest_is_a_job_with_nix_base_image():
+def test_manifest_is_a_job_with_the_configured_image():
     m = build_verify_job_manifest(_cfg())
     assert m["kind"] == "Job"
     assert m["spec"]["backoffLimit"] == 0  # no silent retries
     c = m["spec"]["template"]["spec"]["containers"][0]
-    assert c["image"] == _IMAGE
+    assert c["image"] == _RUNTIME_IMAGE
 
 
-def test_manifest_runs_verify_pipeline_via_nix_develop():
-    m = build_verify_job_manifest(_cfg())
+def test_manifest_runs_verify_pipeline_directly_by_default():
+    # Default (nix_develop=False) — the orchestration Job runs the pipeline plainly
+    # on the runtime image; the lanes it spawns nix-develop, not this Job (#466).
+    m = build_verify_job_manifest(_cfg(nix_develop=False))
     cmd = m["spec"]["template"]["spec"]["containers"][0]["command"][2]
-    # nix develop targets the PROJECT worktree where the flake is materialized
-    # (the data root at /work has no flake.nix — that was BUG 2).
-    assert "nix develop path:/work/workspaces/proj#default" in cmd
+    assert "nix develop" not in cmd
     assert "python -m agents.verify_pipeline" in cmd
     assert "--spec /work/workspaces/proj/.tfactory/specs/042" in cmd
     assert "--project /work/workspaces/proj" in cmd
     assert "--job-id proj-abc:042-verify" in cmd
     assert "--correlation-key 482" in cmd
+
+
+def test_manifest_can_still_wrap_in_nix_develop():
+    # The builder retains the nix-develop capability for callers that want the
+    # toolchain from a per-task flake; it targets the PROJECT worktree.
+    m = build_verify_job_manifest(_cfg(nix_develop=True))
+    cmd = m["spec"]["template"]["spec"]["containers"][0]["command"][2]
+    assert "nix develop path:/work/workspaces/proj#default" in cmd
+    assert "python -m agents.verify_pipeline" in cmd
 
 
 def test_manifest_nix_develop_targets_explicit_flake_subpath():
@@ -206,6 +262,27 @@ def test_manifest_carries_job_state_env():
     assert env["JOB_ID"] == "proj-abc:042-verify"
     assert env["FACTORY_SERVICE"] == "tfactory"
     assert env["CORRELATION_KEY"] == "482"
+
+
+def test_manifest_sets_pythonpath_so_agents_imports():
+    # The #466 fix: without the backend on PYTHONPATH the verify Job died
+    # `ModuleNotFoundError: No module named 'agents'`. Both the backend (agents)
+    # and the web-server sibling (server.* for the terminal store write) are set.
+    c = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]["containers"][0]
+    env = {e["name"]: e["value"] for e in c["env"]}
+    entries = env["PYTHONPATH"].split(":")
+    assert _BACKEND_PATH in entries
+    assert _WEB_SERVER_PATH in entries
+    # The image leaves PYTHONPATH unset, so there must be NO literal k8s self-ref
+    # ($(PYTHONPATH)) that k8s would fail to expand and leave as poison text.
+    assert "$(PYTHONPATH)" not in env["PYTHONPATH"]
+
+
+def test_manifest_omits_pythonpath_when_backend_path_blank():
+    c = build_verify_job_manifest(_cfg(backend_path=""))["spec"]["template"]["spec"][
+        "containers"
+    ][0]
+    assert all(e["name"] != "PYTHONPATH" for e in c["env"])
 
 
 def test_manifest_passes_database_url_through_when_set(monkeypatch):
@@ -269,9 +346,13 @@ async def test_dispatch_records_queued_row_with_k8s_worker_ref(store):
     assert rec["correlation_key"] == "99"
 
 
-async def test_dispatch_applies_the_verify_job_manifest(store):
+async def test_dispatch_applies_the_verify_job_manifest(monkeypatch, store):
     # The dispatch must actually create the Job (#466: it never did before the
-    # wiring fix). The applied manifest is the verify-orchestration Job.
+    # wiring fix). The applied manifest is the verify-orchestration Job, on the
+    # RUNTIME image (not the thin nix runner), running the pipeline directly with
+    # the backend on PYTHONPATH — the #466 ModuleNotFoundError fix.
+    monkeypatch.setenv("TFACTORY_IMAGE", _RUNTIME_IMAGE)
+    monkeypatch.delenv("APP_BACKEND_PATH", raising=False)
     sandbox = _FakeSandbox(namespace="factory")
     apply = _RecordingApply()
     result = await vd.dispatch_verify_job(
@@ -287,8 +368,17 @@ async def test_dispatch_applies_the_verify_job_manifest(store):
     ns, manifest = apply.calls[0]
     assert ns == "factory"
     assert manifest["kind"] == "Job"
-    cmd = manifest["spec"]["template"]["spec"]["containers"][0]["command"][2]
+    container = manifest["spec"]["template"]["spec"]["containers"][0]
+    # The orchestration Job runs the TFactory RUNTIME image, NOT the nix runner.
+    assert container["image"] == _RUNTIME_IMAGE
+    cmd = container["command"][2]
     assert "python -m agents.verify_pipeline" in cmd
+    # No outer nix develop: the orchestration runs the pipeline directly; the lanes
+    # it spawns nix-develop. (Without this the Job tried to nix the SUT toolchain.)
+    assert "nix develop" not in cmd
+    # Backend on PYTHONPATH so `agents` imports (the #466 ModuleNotFoundError fix).
+    env = {e["name"]: e["value"] for e in container["env"]}
+    assert _BACKEND_PATH in env["PYTHONPATH"].split(":")
 
 
 async def test_dispatch_falls_back_to_inpod_when_apply_fails(store):
@@ -455,80 +545,73 @@ async def test_reconcile_tick_ignores_non_k8s_rows(store):
     assert (await store.get("inpod-1"))["lifecycle_state"] == "running"
 
 
-# ─── BUG 2: the verify Job gets a flake.nix at /work before nix develop ────────
+# ─── #466: the verify Job runs on the runtime image, not the thin nix runner ───
+#
+# The orchestration Job runs `python -m agents.verify_pipeline` — the TFactory
+# backend — so it MUST land on an image that ships `agents`. Running it on the
+# thin nix runner died `ModuleNotFoundError: No module named 'agents'`. It does
+# NOT nix-develop (the lanes it spawns do); the SUT toolchain is a per-lane Job
+# concern, not an orchestration concern. (mirrors AIFactory #686.)
 
 
-def _write_nix_contract(spec_dir: Path) -> None:
-    """Drop a task contract with a nix environment so materialize_flake fires."""
-    import json
-
-    ctx = spec_dir / "context"
-    ctx.mkdir(parents=True, exist_ok=True)
-    (ctx / "task_contract.json").write_text(
-        json.dumps(
-            {
-                "contract_version": "1",
-                "environment": {
-                    "language": "python",
-                    "toolchain": {"python": "3.13"},
-                    "provisioning": {"method": "nix", "generated": True},
-                    "verify_commands": ["python -m pytest -q"],
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-
-
-async def test_dispatch_materializes_flake_into_project_before_apply(tmp_path, store):
-    # The verify-orchestration Job runs `nix develop path:.../project#default`; the
-    # per-task flake must be materialized into the project worktree BEFORE the Job,
-    # else it fails exit=1 "flake.nix does not exist" (BUG 2).
-    data_root = tmp_path / "data"
-    project_dir = data_root / "workspaces" / "proj"
-    spec_dir = project_dir / ".tfactory" / "specs" / "042"
-    spec_dir.mkdir(parents=True, exist_ok=True)
-    _write_nix_contract(spec_dir)
-
-    sandbox = _FakeSandbox(namespace="factory", data_root=str(data_root))
+async def test_dispatch_uses_runtime_image_not_nix_runner(monkeypatch, store):
+    # The applied verify Job runs on the TFACTORY_IMAGE (runtime, ships agents),
+    # NOT the sandbox's thin nix-runner image — the #466 ModuleNotFoundError fix.
+    monkeypatch.setenv("TFACTORY_IMAGE", _RUNTIME_IMAGE)
+    sandbox = _FakeSandbox(namespace="factory")  # sandbox.image is the nix runner
     apply = _RecordingApply()
     result = await vd.dispatch_verify_job(
         job_id="proj:042",
-        spec_dir=spec_dir,
-        project_dir=project_dir,
+        spec_dir=Path("/home/nonroot/.tfactory/ws/proj/spec"),
+        project_dir=Path("/home/nonroot/.tfactory/ws/proj"),
         sandbox=sandbox,
         store=store,
         apply_fn=apply,
     )
     assert result is not None
-    # The flake was materialized into the project worktree.
-    assert (project_dir / "flake.nix").is_file()
-    # And the applied Job develops THAT dir (project subpath), not the data root.
     _, manifest = apply.calls[0]
-    cmd = manifest["spec"]["template"]["spec"]["containers"][0]["command"][2]
-    assert "nix develop path:/work/workspaces/proj#default" in cmd
+    container = manifest["spec"]["template"]["spec"]["containers"][0]
+    assert container["image"] == _RUNTIME_IMAGE
+    assert container["image"] != sandbox.image  # not the thin nix runner
 
 
-async def test_dispatch_without_nix_manifest_runs_verify_directly(tmp_path, store):
-    # No contract / no nix environment → no flake; the Job must run the verify
-    # pipeline directly on the image rather than nix-developing a missing flake.
-    data_root = tmp_path / "data"
-    project_dir = data_root / "workspaces" / "proj"
-    spec_dir = project_dir / ".tfactory" / "specs" / "043"
-    spec_dir.mkdir(parents=True, exist_ok=True)
-
-    sandbox = _FakeSandbox(namespace="factory", data_root=str(data_root))
+async def test_dispatch_verify_image_override_is_honored(monkeypatch, store):
+    # An explicit TFACTORY_VERIFY_IMAGE override wins for the verify Job.
+    override = "ghcr.io/x/tfactory-verify:pinned"
+    monkeypatch.setenv("TFACTORY_VERIFY_IMAGE", override)
+    monkeypatch.setenv("TFACTORY_IMAGE", _RUNTIME_IMAGE)
+    sandbox = _FakeSandbox(namespace="factory")
     apply = _RecordingApply()
     result = await vd.dispatch_verify_job(
-        job_id="proj:043",
-        spec_dir=spec_dir,
-        project_dir=project_dir,
+        job_id="proj:044",
+        spec_dir=Path("/home/nonroot/.tfactory/ws/proj/spec"),
+        project_dir=Path("/home/nonroot/.tfactory/ws/proj"),
         sandbox=sandbox,
         store=store,
         apply_fn=apply,
     )
     assert result is not None
-    assert not (project_dir / "flake.nix").exists()
+    _, manifest = apply.calls[0]
+    assert manifest["spec"]["template"]["spec"]["containers"][0]["image"] == override
+
+
+async def test_dispatch_runs_pipeline_directly_no_nix_develop(monkeypatch, store):
+    # The orchestration Job runs the pipeline directly (no outer nix develop) — the
+    # lanes it spawns nix-develop, not this Job. True even for a nix task: the
+    # orchestration only imports + runs the backend; it never touches the SUT
+    # toolchain itself.
+    monkeypatch.setenv("TFACTORY_IMAGE", _RUNTIME_IMAGE)
+    sandbox = _FakeSandbox(namespace="factory")
+    apply = _RecordingApply()
+    result = await vd.dispatch_verify_job(
+        job_id="proj:045",
+        spec_dir=Path("/home/nonroot/.tfactory/ws/proj/spec"),
+        project_dir=Path("/home/nonroot/.tfactory/ws/proj"),
+        sandbox=sandbox,
+        store=store,
+        apply_fn=apply,
+    )
+    assert result is not None
     _, manifest = apply.calls[0]
     cmd = manifest["spec"]["template"]["spec"]["containers"][0]["command"][2]
     assert "nix develop" not in cmd
