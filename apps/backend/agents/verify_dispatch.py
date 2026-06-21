@@ -322,8 +322,13 @@ def _oauth_env_entry() -> dict[str, Any] | None:
         "The verify Job will fail closed with 'No OAuth token found'. Set %s to a "
         "Secret with a flat token key, or ensure the credential is resolvable in "
         "the control-plane pod.",
-        _ENV_OAUTH_SECRET_NAME,
-        _ENV_OAUTH_SECRET_NAME,
+        # CodeQL false positive (py/clear-text-logging-sensitive-data): these are
+        # the constant env-var NAME ("TFACTORY_VERIFY_OAUTH_SECRET_NAME"), not a
+        # credential VALUE. No token is ever logged here — this branch only runs
+        # when no token resolves, and the resolved token only ever lands in a Job
+        # env entry (never a log). Suppress the name-heuristic finding.
+        _ENV_OAUTH_SECRET_NAME,  # codeql[py/clear-text-logging-sensitive-data]
+        _ENV_OAUTH_SECRET_NAME,  # codeql[py/clear-text-logging-sensitive-data]
     )
     return None
 
