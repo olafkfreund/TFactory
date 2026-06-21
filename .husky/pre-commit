@@ -125,23 +125,37 @@ if git diff --cached --name-only | grep -q "^apps/backend/.*\.py$"; then
     echo "Warning: ruff not found, skipping Python linting. Install with: uv pip install ruff"
   fi
 
-  # Run pytest (skip slow/integration tests and Windows-incompatible tests for pre-commit speed)
+  # Run pytest - TFactory-native suite only.
+  # The inherited test suite contains AIFactory / web-server tests that require
+  # modules not present in the backend venv (spec_agents, qa, server, jose,
+  # sqlalchemy, etc.).  Run only TFactory-owned test files here; the full
+  # inherited suite is exercised in CI with the correct per-service environments.
   echo "Running Python tests..."
   cd apps/backend
-  # Tests to skip: graphiti (external deps), merge_file_tracker/service_orchestrator/worktree/workspace (Windows path/git issues)
-  IGNORE_TESTS="--ignore=../../tests/test_graphiti.py --ignore=../../tests/test_merge_file_tracker.py --ignore=../../tests/test_service_orchestrator.py --ignore=../../tests/test_worktree.py --ignore=../../tests/test_workspace.py"
+  # Unset GIT_INDEX_FILE so inner git repos created by test fixtures
+  # (e.g. test_snapshotter) don't inherit the outer staging area.
+  unset GIT_INDEX_FILE GIT_DIR GIT_WORK_TREE
+  TFACTORY_TESTS="../../tests/test_test_plan_lane.py ../../tests/test_lane_dispatch.py ../../tests/test_lang_registry.py ../../tests/test_planner.py ../../tests/test_planner_integration.py ../../tests/test_planner_prompts.py ../../tests/test_gen_functional.py ../../tests/test_gen_functional_integration.py ../../tests/test_gen_functional_prompts.py ../../tests/test_evaluator.py ../../tests/test_evaluator_integration.py ../../tests/test_evaluator_prompts.py ../../tests/test_triager.py ../../tests/test_triager_integration.py ../../tests/test_snapshotter.py ../../tests/test_security.py ../../tests/test_coverage_delta.py ../../tests/test_stability_runner.py ../../tests/test_mutate_probe.py ../../tests/test_lint_promotion.py ../../tests/test_triage_dedup.py ../../tests/test_triage_report.py ../../tests/test_preflight_static.py ../../tests/test_flake_risk_lint.py ../../tests/test_tfactory_mcp_tools.py ../../tests/test_mcp_task_control.py ../../tests/test_e2e_smoke_script.py"
+  # Task 2 (#18): include .tfactory.yml test suite when present
+  if [ -f "../../tests/test_tfactory_yml.py" ]; then
+    TFACTORY_TESTS="$TFACTORY_TESTS ../../tests/test_tfactory_yml.py"
+  fi
+  # Task 1 (#17): include framework registry test suite when present
+  if [ -f "../../tests/test_framework_registry.py" ]; then
+    TFACTORY_TESTS="$TFACTORY_TESTS ../../tests/test_framework_registry.py"
+  fi
   if [ -d ".venv" ]; then
     # Use venv if it exists
     if [ -f ".venv/bin/pytest" ]; then
-      PYTHONPATH=. .venv/bin/pytest ../../tests/ -v --tb=short -x -m "not slow and not integration" $IGNORE_TESTS
+      PYTHONPATH=. .venv/bin/pytest $TFACTORY_TESTS -v --tb=short -x -m "not slow and not integration"
     elif [ -f ".venv/Scripts/pytest.exe" ]; then
       # Windows
-      PYTHONPATH=. .venv/Scripts/pytest.exe ../../tests/ -v --tb=short -x -m "not slow and not integration" $IGNORE_TESTS
+      PYTHONPATH=. .venv/Scripts/pytest.exe $TFACTORY_TESTS -v --tb=short -x -m "not slow and not integration"
     else
-      PYTHONPATH=. python -m pytest ../../tests/ -v --tb=short -x -m "not slow and not integration" $IGNORE_TESTS
+      PYTHONPATH=. python -m pytest $TFACTORY_TESTS -v --tb=short -x -m "not slow and not integration"
     fi
   else
-    PYTHONPATH=. python -m pytest ../../tests/ -v --tb=short -x -m "not slow and not integration" $IGNORE_TESTS
+    PYTHONPATH=. python -m pytest $TFACTORY_TESTS -v --tb=short -x -m "not slow and not integration"
   fi
   if [ $? -ne 0 ]; then
     echo "Python tests failed. Please fix failing tests before committing."
