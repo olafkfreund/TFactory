@@ -636,6 +636,112 @@ def test_advance_to_evaluator_swallows_import_errors(
         gen_functional._advance_to_evaluator(spec_dir, project_dir)
 
 
+# ── RFC-0016/0017 #466 — kubejob verify dispatch wiring ────────────────────────
+#
+# Default (unset) keeps the in-pod schedule_evaluator path; TFACTORY_VERIFY_EXEC=
+# kubejob dispatches the verify as a k8s Job instead; a failed/None dispatch falls
+# back to in-pod so the verify is never stranded.
+
+
+def test_advance_kubejob_dispatches_job_and_skips_inpod(
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agents import gen_functional
+
+    monkeypatch.setenv("TFACTORY_VERIFY_EXEC", "kubejob")
+    monkeypatch.setenv("JOB_ID", "proj:042")
+
+    import agents.verify_dispatch as vd_mod
+
+    seen: dict = {}
+
+    async def _fake_dispatch(*, job_id, spec_dir, project_dir, correlation_key=None):
+        seen["job_id"] = job_id
+        seen["spec_dir"] = spec_dir
+        return vd_mod.VerifyDispatch(
+            job_id=job_id,
+            job_name=vd_mod.verify_job_name(job_id),
+            namespace="factory",
+            worker_ref={"kind": "k8s-job"},
+        )
+
+    monkeypatch.setattr(vd_mod, "dispatch_verify_job", _fake_dispatch)
+
+    # If in-pod ran, this would raise — assert it is NOT called on the Job path.
+    import agents.evaluator as eval_mod
+
+    def _boom(*a, **k):  # pragma: no cover - must not be reached
+        raise AssertionError("in-pod schedule_evaluator must not run on kubejob path")
+
+    monkeypatch.setattr(eval_mod, "schedule_evaluator", _boom)
+
+    gen_functional._advance_to_evaluator(spec_dir, project_dir)
+    assert seen["job_id"] == "proj:042"
+    assert seen["spec_dir"] == spec_dir
+
+
+def test_advance_unset_uses_inpod_path(
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agents import gen_functional
+
+    monkeypatch.delenv("TFACTORY_VERIFY_EXEC", raising=False)
+    monkeypatch.setenv("TFACTORY_AUTO_EVALUATE", "1")
+
+    import agents.evaluator as eval_mod
+    import agents.verify_dispatch as vd_mod
+
+    called: dict = {}
+
+    def _capture(sd, pd, mode="initial"):
+        called["inpod"] = True
+        return None
+
+    async def _no_dispatch(**kwargs):  # pragma: no cover - must not be reached
+        raise AssertionError("dispatch must not run when verify exec is in-pod")
+
+    monkeypatch.setattr(eval_mod, "schedule_evaluator", _capture)
+    monkeypatch.setattr(vd_mod, "dispatch_verify_job", _no_dispatch)
+
+    gen_functional._advance_to_evaluator(spec_dir, project_dir)
+    assert called.get("inpod") is True
+
+
+def test_advance_kubejob_falls_back_to_inpod_when_dispatch_returns_none(
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # dispatch_verify_job returns None when the sandbox / DATABASE_URL gap means
+    # the Job can't run — the wiring must then run the in-pod path, not drop the
+    # verify.
+    from agents import gen_functional
+
+    monkeypatch.setenv("TFACTORY_VERIFY_EXEC", "kubejob")
+
+    import agents.evaluator as eval_mod
+    import agents.verify_dispatch as vd_mod
+
+    called: dict = {}
+
+    async def _none_dispatch(**kwargs):
+        return None  # sandbox unconfigured / apply failed → fall back
+
+    def _capture(sd, pd, mode="initial"):
+        called["inpod"] = True
+        return None
+
+    monkeypatch.setattr(vd_mod, "dispatch_verify_job", _none_dispatch)
+    monkeypatch.setattr(eval_mod, "schedule_evaluator", _capture)
+
+    gen_functional._advance_to_evaluator(spec_dir, project_dir)
+    assert called.get("inpod") is True
+
+
 # ── Task 10 (#26) — Coverage adapter (null vs zero) ────────────────────
 #
 # Tests for _framework_coverage_strategy, _coverage_delta_for_subtask,

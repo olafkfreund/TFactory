@@ -68,6 +68,31 @@ from .websockets import terminal as terminal_ws
 logger = logging.getLogger(__name__)
 
 
+def _import_verify_dispatch():
+    """Import the backend ``agents.verify_dispatch`` module, or None on failure.
+
+    The verify control/execution split (#466) lives in apps/backend, which isn't
+    always on the web-server's import path; add it explicitly (the canonical
+    server pattern, see services/agent_service.py + background/completion_relay).
+    Returns None when the module can't be imported (dev/test) so the lifespan
+    degrades gracefully to the in-pod default.
+    """
+    import sys
+
+    backend_path = Path(__file__).resolve().parents[2] / "backend"
+    if str(backend_path) not in sys.path:
+        sys.path.insert(0, str(backend_path))
+    try:
+        from agents import verify_dispatch  # noqa: PLC0415 - lazy by design
+
+        return verify_dispatch
+    except Exception:  # noqa: BLE001 - optional; in-pod default still works
+        logger.debug(
+            "verify_dispatch import failed; in-pod verify default", exc_info=True
+        )
+        return None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler for startup/shutdown."""
@@ -138,9 +163,37 @@ async def lifespan(app: FastAPI):
             settings.COMPLETION_RELAY_INTERVAL_SECONDS,
         )
 
+    # RFC-0016/0017 (#466) control/execution split: when verifies run as k8s Jobs
+    # (TFACTORY_VERIFY_EXEC=kubejob), the control plane reconciles by polling
+    # Postgres for the terminal rows the Jobs wrote + reaps vanished/deadline
+    # Jobs on an interval, so a missed completion event never strands a verify.
+    # Off by default — no-op for the in-pod path (loop only starts on kubejob).
+    app.state.verify_reconcile_stop = None
+    app.state.verify_reconcile_task = None
+    _vd = _import_verify_dispatch()
+    if _vd is not None and _vd.verify_exec_mode() == "kubejob":
+        vr_stop = asyncio.Event()
+        app.state.verify_reconcile_stop = vr_stop
+        app.state.verify_reconcile_task = asyncio.create_task(
+            _vd.reconcile_and_reap_loop(stop=vr_stop)
+        )
+        logger.info(
+            "RFC-0016 #466 kubejob verify backend enabled — reconcile loop started"
+        )
+    else:
+        logger.info("RFC-0016 #466 kubejob verify backend disabled (in-pod default)")
+
     yield
 
     # Shutdown
+    vr_task = getattr(app.state, "verify_reconcile_task", None)
+    if vr_task is not None:
+        app.state.verify_reconcile_stop.set()
+        try:
+            await asyncio.wait_for(vr_task, timeout=5.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            vr_task.cancel()
+
     sweep_task = getattr(app.state, "liveness_sweep_task", None)
     if sweep_task is not None:
         sweep_task.cancel()

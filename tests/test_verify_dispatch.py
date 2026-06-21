@@ -73,6 +73,22 @@ class _FakeSandbox:
     def __init__(self, namespace="factory", data_root="/home/nonroot/.tfactory"):
         self.namespace = namespace
         self.data_root = data_root
+        self.image = _IMAGE
+        self.repo_pvc = "tfactory-data"
+        self.nix_store_pvc = "tfactory-nix-store"
+
+
+class _RecordingApply:
+    """Injectable ``apply_fn`` that records the manifest it was asked to create."""
+
+    def __init__(self, fail: bool = False):
+        self.calls: list[tuple[str, dict]] = []
+        self.fail = fail
+
+    async def __call__(self, namespace: str, manifest: dict) -> None:
+        self.calls.append((namespace, manifest))
+        if self.fail:
+            raise RuntimeError("simulated k8s apply failure")
 
 
 # ─── verify_exec_mode (env selects in-pod vs kubejob) ─────────────────────────
@@ -212,6 +228,7 @@ async def test_dispatch_falls_back_when_sandbox_unconfigured(monkeypatch, store)
 
 async def test_dispatch_records_queued_row_with_k8s_worker_ref(store):
     sandbox = _FakeSandbox(namespace="factory")
+    apply = _RecordingApply()
     result = await vd.dispatch_verify_job(
         job_id="proj:042-verify",
         spec_dir=Path("/home/nonroot/.tfactory/ws/proj/spec"),
@@ -219,6 +236,7 @@ async def test_dispatch_records_queued_row_with_k8s_worker_ref(store):
         correlation_key=99,
         sandbox=sandbox,
         store=store,
+        apply_fn=apply,
     )
     assert result is not None
     assert result.job_name == verify_job_name("proj:042-verify")
@@ -231,6 +249,44 @@ async def test_dispatch_records_queued_row_with_k8s_worker_ref(store):
     assert rec["lifecycle_state"] == "queued"
     assert rec["worker_ref"]["kind"] == "k8s-job"
     assert rec["correlation_key"] == "99"
+
+
+async def test_dispatch_applies_the_verify_job_manifest(store):
+    # The dispatch must actually create the Job (#466: it never did before the
+    # wiring fix). The applied manifest is the verify-orchestration Job.
+    sandbox = _FakeSandbox(namespace="factory")
+    apply = _RecordingApply()
+    result = await vd.dispatch_verify_job(
+        job_id="proj:042",
+        spec_dir=Path("/home/nonroot/.tfactory/ws/proj/spec"),
+        project_dir=Path("/home/nonroot/.tfactory/ws/proj"),
+        sandbox=sandbox,
+        store=store,
+        apply_fn=apply,
+    )
+    assert result is not None
+    assert len(apply.calls) == 1
+    ns, manifest = apply.calls[0]
+    assert ns == "factory"
+    assert manifest["kind"] == "Job"
+    cmd = manifest["spec"]["template"]["spec"]["containers"][0]["command"][2]
+    assert "python -m agents.verify_pipeline" in cmd
+
+
+async def test_dispatch_falls_back_to_inpod_when_apply_fails(store):
+    # A cluster/apply gap must NOT strand the verify: dispatch returns None so the
+    # caller runs the in-pod path instead.
+    sandbox = _FakeSandbox(namespace="factory")
+    apply = _RecordingApply(fail=True)
+    result = await vd.dispatch_verify_job(
+        job_id="proj:043",
+        spec_dir=Path("/home/nonroot/.tfactory/ws/proj/spec"),
+        project_dir=Path("/home/nonroot/.tfactory/ws/proj"),
+        sandbox=sandbox,
+        store=store,
+        apply_fn=apply,
+    )
+    assert result is None  # → caller falls back to in-pod
 
 
 # ─── reconcile_verify_job + is_terminal_record ────────────────────────────────
@@ -315,3 +371,67 @@ async def test_reap_no_row_is_noop(store):
         )
         is None
     )
+
+
+# ─── control-plane reconcile + reap tick (the wired loop's body) ──────────────
+
+
+async def _probe(_results):
+    async def _fn(namespace, job_name):
+        return _results.get(job_name, (True, True))
+
+    return _fn
+
+
+async def _dispatch(store, job_id, correlation_key=None):
+    return await vd.dispatch_verify_job(
+        job_id=job_id,
+        spec_dir=Path(f"/home/nonroot/.tfactory/ws/{job_id}/spec"),
+        project_dir=Path(f"/home/nonroot/.tfactory/ws/{job_id}"),
+        correlation_key=correlation_key,
+        sandbox=_FakeSandbox(),
+        store=store,
+        apply_fn=_RecordingApply(),
+    )
+
+
+async def test_reconcile_tick_reaps_vanished_dispatched_job(store):
+    d = await _dispatch(store, "proj:100")
+    assert d is not None
+    job_name = d.job_name
+    probe_fn = await _probe({job_name: (False, False)})  # Job gone, row still active
+
+    reaped = await vd.reconcile_and_reap_once(store=store, probe_fn=probe_fn)
+    assert reaped == 1
+    rec = await store.get("proj:100")
+    assert rec["lifecycle_state"] == "stuck"
+    assert "vanished" in (rec["error"] or "")
+
+
+async def test_reconcile_tick_leaves_running_job(store):
+    d = await _dispatch(store, "proj:101")
+    probe_fn = await _probe({d.job_name: (True, True)})  # still active
+    reaped = await vd.reconcile_and_reap_once(store=store, probe_fn=probe_fn)
+    assert reaped == 0
+    assert (await store.get("proj:101"))["lifecycle_state"] == "queued"
+
+
+async def test_reconcile_tick_skips_terminal_row(store):
+    await _dispatch(store, "proj:102")
+    # The Job wrote its terminal verdict row (done) — the tick must not touch it.
+    await store.update_status("proj:102", service_status="triaged", has_verdict=True)
+    probe_fn = await _probe({})  # default (exists, active) — irrelevant once terminal
+    reaped = await vd.reconcile_and_reap_once(store=store, probe_fn=probe_fn)
+    assert reaped == 0
+    assert (await store.get("proj:102"))["lifecycle_state"] == "done"
+
+
+async def test_reconcile_tick_ignores_non_k8s_rows(store):
+    # An in-pod verify row (no k8s-job worker_ref) is not the loop's concern.
+    await store.enqueue("inpod-1")
+    await store.grant_slot("inpod-1")
+    reaped = await vd.reconcile_and_reap_once(
+        store=store, probe_fn=await _probe({})
+    )
+    assert reaped == 0
+    assert (await store.get("inpod-1"))["lifecycle_state"] == "running"
