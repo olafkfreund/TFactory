@@ -316,19 +316,21 @@ def _oauth_env_entry() -> dict[str, Any] | None:
     token = _resolve_oauth_token()
     if token:
         return {"name": _OAUTH_TOKEN_ENV, "value": token}
+    # NOTE: the Secret-name env var is named as a STATIC string literal in the
+    # message below (not passed as a logging arg). The constant
+    # ``_ENV_OAUTH_SECRET_NAME`` is the env-var NAME ("TFACTORY_VERIFY_OAUTH_..."),
+    # never a credential value — but CodeQL's clear-text-logging heuristic taints
+    # any ``*SECRET*``-named symbol that reaches a logger. Inlining the literal
+    # keeps the message identical while removing the (mis-flagged) symbol from the
+    # log call. No token value is ever logged here: this branch only runs when no
+    # token resolves, and a resolved token only lands in a Job env entry.
     _log.warning(
-        "[verify-dispatch] no OAuth credential for the verify Job: neither %s is "
-        "set nor a token resolves via core.auth (env/profiles/~/.claude/keychain). "
-        "The verify Job will fail closed with 'No OAuth token found'. Set %s to a "
-        "Secret with a flat token key, or ensure the credential is resolvable in "
-        "the control-plane pod.",
-        # CodeQL false positive (py/clear-text-logging-sensitive-data): these are
-        # the constant env-var NAME ("TFACTORY_VERIFY_OAUTH_SECRET_NAME"), not a
-        # credential VALUE. No token is ever logged here — this branch only runs
-        # when no token resolves, and the resolved token only ever lands in a Job
-        # env entry (never a log). Suppress the name-heuristic finding.
-        _ENV_OAUTH_SECRET_NAME,  # codeql[py/clear-text-logging-sensitive-data]
-        _ENV_OAUTH_SECRET_NAME,  # codeql[py/clear-text-logging-sensitive-data]
+        "[verify-dispatch] no OAuth credential for the verify Job: neither "
+        "TFACTORY_VERIFY_OAUTH_SECRET_NAME is set nor a token resolves via "
+        "core.auth (env/profiles/~/.claude/keychain). The verify Job will fail "
+        "closed with 'No OAuth token found'. Set TFACTORY_VERIFY_OAUTH_SECRET_NAME "
+        "to a Secret with a flat token key, or ensure the credential is resolvable "
+        "in the control-plane pod."
     )
     return None
 
