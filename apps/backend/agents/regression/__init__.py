@@ -16,6 +16,7 @@ from .nix_runner import (
     UnsupportedFrameworkError,
     outcome_from_run_result,
 )
+from .orchestrator import RegressionRequest, run_regression
 from .report import render_json, render_markdown
 from .runner import RegressionRunner, run_corpus
 from .store import (
@@ -34,6 +35,7 @@ __all__ = [
     "NixSubstrateUnavailableError",
     "RegressionClass",
     "RegressionDiff",
+    "RegressionRequest",
     "RegressionRun",
     "RegressionRunner",
     "TestOutcome",
@@ -52,6 +54,7 @@ __all__ = [
     "render_json",
     "render_markdown",
     "run_corpus",
+    "run_regression",
     "save_run",
     "set_baseline",
 ]
