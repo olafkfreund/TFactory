@@ -94,12 +94,20 @@ def set_baseline(reg_dir: Path, run_id: str) -> None:
 
 
 def list_runs(reg_dir: Path) -> list[str]:
-    """Return all stored run_ids (sorted), excluding pointer files."""
+    """Return all stored run_ids (sorted), excluding pointer/aux/report files.
+
+    Run files are ``<run_id>.json``. The same directory also holds pointer
+    files, the quarantine + coverage-trend stores, and ``<run_id>-report.json``
+    reports — none of which are runs, so they must be filtered out.
+    """
     if not reg_dir.exists():
         return []
-    pointers = {_LATEST, _BASELINE}
+    # Sibling non-run JSON files written into the regression dir.
+    aux = {_LATEST, _BASELINE, "quarantine.json", "coverage_trend.json"}
     return sorted(
         p.stem
         for p in reg_dir.glob("*.json")
-        if p.name not in pointers and not p.name.endswith(".tmp")
+        if p.name not in aux
+        and not p.name.endswith(".tmp")
+        and not p.name.endswith("-report.json")
     )

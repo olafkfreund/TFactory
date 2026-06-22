@@ -58,6 +58,7 @@ from .store import (
     save_run,
     set_baseline,
 )
+from .summary import project_regression_summary
 from .trigger import ProjectScheduleConfig, run_for_project
 
 __all__ = [
@@ -94,6 +95,7 @@ __all__ = [
     "load_run",
     "load_trend",
     "outcome_from_run_result",
+    "project_regression_summary",
     "quarantine_entry_for",
     "quarantine_path",
     "quarantined_ids",
