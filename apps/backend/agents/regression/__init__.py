@@ -27,6 +27,11 @@ from .quarantine import (
     quarantined_ids,
     release_from_quarantine,
 )
+from .quarantine_policy import (
+    quarantine_entry_for,
+    should_quarantine,
+    should_release,
+)
 from .report import render_json, render_markdown
 from .runner import RegressionRunner, run_corpus
 from .store import (
@@ -65,6 +70,7 @@ __all__ = [
     "load_quarantine",
     "load_run",
     "outcome_from_run_result",
+    "quarantine_entry_for",
     "quarantine_path",
     "quarantined_ids",
     "regression_dir",
@@ -75,4 +81,6 @@ __all__ = [
     "run_regression",
     "save_run",
     "set_baseline",
+    "should_quarantine",
+    "should_release",
 ]
