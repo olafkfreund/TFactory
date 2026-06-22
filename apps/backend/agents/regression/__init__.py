@@ -11,6 +11,7 @@ from .corpus import CorpusEntry, group_by_lane, load_corpus
 from .diff import RegressionClass, RegressionDiff, classify, diff_runs
 from .models import RegressionRun, TestOutcome, TestStatus
 from .report import render_json, render_markdown
+from .runner import RegressionRunner, run_corpus
 from .store import (
     list_runs,
     load_baseline,
@@ -26,6 +27,7 @@ __all__ = [
     "RegressionClass",
     "RegressionDiff",
     "RegressionRun",
+    "RegressionRunner",
     "TestOutcome",
     "TestStatus",
     "classify",
@@ -39,6 +41,7 @@ __all__ = [
     "regression_dir",
     "render_json",
     "render_markdown",
+    "run_corpus",
     "save_run",
     "set_baseline",
 ]
