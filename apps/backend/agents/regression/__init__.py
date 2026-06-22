@@ -9,6 +9,14 @@ from __future__ import annotations
 
 from .cli import main as cli_main
 from .corpus import CorpusEntry, group_by_lane, load_corpus
+from .coverage_trend import (
+    CoveragePoint,
+    DriftResult,
+    compute_drift,
+    coverage_trend_path,
+    load_trend,
+    record_coverage,
+)
 from .diff import RegressionClass, RegressionDiff, classify, diff_runs
 from .models import RegressionRun, TestOutcome, TestStatus
 from .nix_runner import (
@@ -47,6 +55,8 @@ from .store import (
 
 __all__ = [
     "CorpusEntry",
+    "CoveragePoint",
+    "DriftResult",
     "NixJobRunner",
     "NixSubstrateUnavailableError",
     "QuarantineEntry",
@@ -62,6 +72,8 @@ __all__ = [
     "add_to_quarantine",
     "classify",
     "cli_main",
+    "compute_drift",
+    "coverage_trend_path",
     "diff_runs",
     "group_by_lane",
     "is_quarantined",
@@ -71,10 +83,12 @@ __all__ = [
     "load_latest",
     "load_quarantine",
     "load_run",
+    "load_trend",
     "outcome_from_run_result",
     "quarantine_entry_for",
     "quarantine_path",
     "quarantined_ids",
+    "record_coverage",
     "regression_dir",
     "release_from_quarantine",
     "render_json",
