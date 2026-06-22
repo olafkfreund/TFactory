@@ -21,13 +21,15 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 MemoryBackendType = Literal["graphiti", "file"]
 
 from ..config import get_settings
-from . import changelog, context, files, git, github
+from . import changelog, context, files, git, github, github_pr
 
 router = APIRouter()
 
 # Include project-specific sub-routers
 # These will be available under /api/projects/{projectId}/...
 router.include_router(github.project_router, prefix="/{projectId}/github", tags=["GitHub"])
+# PR-operation routes extracted from github.py into github_pr (#360); same prefix.
+router.include_router(github_pr.router, prefix="/{projectId}/github", tags=["GitHub"])
 router.include_router(changelog.router, prefix="/{projectId}/changelog", tags=["Changelog"])
 router.include_router(changelog.insights_router, prefix="/{projectId}/insights", tags=["Insights"])
 router.include_router(files.insights_router, prefix="/{projectId}/files/insights", tags=["Files Insights"])
