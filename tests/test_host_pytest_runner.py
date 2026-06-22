@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from agents.evaluator import (
     _container_runtime_available,
     _ensure_host_venv,
@@ -57,10 +59,12 @@ def test_run_pytest_on_host_executes_and_passes(monkeypatch, tmp_path):
         import pytest as _pt
         _pt.skip("pytest-cov not in test venv", allow_module_level=False)
         return
-    fake_venv = tmp_path / "venv"
-    (fake_venv / "bin").mkdir(parents=True)
-    (fake_venv / "bin" / "python").symlink_to(sys.executable)
-    monkeypatch.setattr("agents.evaluator._ensure_host_venv", lambda pd: fake_venv)
+    # Point the host runner at THIS real venv: its bin/python activates the
+    # venv (via pyvenv.cfg) so pytest + pytest-cov are importable. A bare
+    # bin/python symlink to sys.executable does NOT — with no pyvenv.cfg it
+    # never activates a venv, so pytest is missing ("No module named pytest").
+    real_venv = Path(sys.prefix)
+    monkeypatch.setattr("agents.evaluator._ensure_host_venv", lambda pd: real_venv)
 
     res = _run_pytest_on_host(scratch, test_file, {}, proj)
     assert res.returncode == 0
