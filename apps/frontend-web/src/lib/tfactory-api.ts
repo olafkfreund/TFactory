@@ -464,6 +464,67 @@ export async function acceptVisualBaseline(
   return _post<AcceptBaselineResult>(ep, { source }, options);
 }
 
+// ─── Regression suite (RFC-0018 #489) ─────────────────────────────────
+
+export interface RegressionTotals {
+  total: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+  quarantined: number;
+}
+
+export interface RegressionRunSummary {
+  run_id: string;
+  ran_at: string;
+  commit: string | null;
+  totals: RegressionTotals;
+  coverage_pct: number | null;
+}
+
+export interface RegressionDiffDto {
+  run_id: string;
+  baseline_run_id: string | null;
+  has_regressions: boolean;
+  counts: Record<string, number>;
+  entries: Record<string, string>;
+}
+
+export interface CoveragePointDto {
+  run_id: string;
+  ran_at: string;
+  coverage_pct: number;
+  commit: string | null;
+}
+
+export interface RegressionQuarantineEntry {
+  test_id: string;
+  reason: string;
+  since_run: string;
+  flip_rate: number | null;
+}
+
+export interface RegressionSummary {
+  latest_run_id: string | null;
+  baseline_run_id: string | null;
+  has_regressions: boolean | null;
+  runs: RegressionRunSummary[];
+  latest: Record<string, unknown> | null;
+  latest_diff: RegressionDiffDto | null;
+  latest_drift: Record<string, unknown> | null;
+  coverage_trend: CoveragePointDto[];
+  quarantined: RegressionQuarantineEntry[];
+}
+
+/** GET /api/projects/{projectId}/regression — the portal regression read-model. */
+export async function getRegressionSummary(
+  projectId: string,
+  options: FetchOptions = {},
+): Promise<RegressionSummary> {
+  const ep = `${API_BASE}/projects/${encodeURIComponent(projectId)}/regression`;
+  return _request<RegressionSummary>(ep, 'json', options);
+}
+
 // ─── Internal exports for tests ───────────────────────────────────────
 
 export const _internalForTests = {
