@@ -10,6 +10,12 @@ from __future__ import annotations
 from .corpus import CorpusEntry, group_by_lane, load_corpus
 from .diff import RegressionClass, RegressionDiff, classify, diff_runs
 from .models import RegressionRun, TestOutcome, TestStatus
+from .nix_runner import (
+    NixJobRunner,
+    NixSubstrateUnavailableError,
+    UnsupportedFrameworkError,
+    outcome_from_run_result,
+)
 from .report import render_json, render_markdown
 from .runner import RegressionRunner, run_corpus
 from .store import (
@@ -24,12 +30,15 @@ from .store import (
 
 __all__ = [
     "CorpusEntry",
+    "NixJobRunner",
+    "NixSubstrateUnavailableError",
     "RegressionClass",
     "RegressionDiff",
     "RegressionRun",
     "RegressionRunner",
     "TestOutcome",
     "TestStatus",
+    "UnsupportedFrameworkError",
     "classify",
     "diff_runs",
     "group_by_lane",
@@ -38,6 +47,7 @@ __all__ = [
     "load_corpus",
     "load_latest",
     "load_run",
+    "outcome_from_run_result",
     "regression_dir",
     "render_json",
     "render_markdown",
