@@ -60,6 +60,7 @@ from .routes import mcp_copilot as mcp_copilot_routes
 from .routes import settings as settings_routes
 from .routes import settings_api_profiles as settings_api_profiles_routes
 from .routes import settings_claude_profiles as settings_claude_profiles_routes
+from .routes import settings_llm_providers as settings_llm_providers_routes
 from .services.skills_service import init_skills_service
 from .websockets import events as events_ws
 from .websockets import logs as logs_ws
@@ -411,6 +412,12 @@ def create_app() -> FastAPI:
     # API-profile settings endpoints — extracted from settings.py (#360).
     app.include_router(
         settings_api_profiles_routes.router,
+        prefix="/api/settings",
+        tags=["Settings"],
+    )
+    # Local-LLM / Ollama / OpenAI-compat settings endpoints — #360.
+    app.include_router(
+        settings_llm_providers_routes.router,
         prefix="/api/settings",
         tags=["Settings"],
     )
