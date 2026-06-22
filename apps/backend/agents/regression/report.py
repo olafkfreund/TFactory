@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .coverage_trend import DriftResult
 from .diff import RegressionClass, RegressionDiff
 from .models import RegressionRun
 
@@ -24,7 +25,9 @@ _SECTION_ORDER = (
 )
 
 
-def render_markdown(diff: RegressionDiff, run: RegressionRun) -> str:
+def render_markdown(
+    diff: RegressionDiff, run: RegressionRun, drift: DriftResult | None = None
+) -> str:
     """Render a human-readable regression report."""
     totals = run.totals
     lines: list[str] = []
@@ -42,6 +45,12 @@ def render_markdown(diff: RegressionDiff, run: RegressionRun) -> str:
     )
     if run.coverage_pct is not None:
         lines.append(f"- Coverage: {run.coverage_pct:.1f}%")
+    if drift is not None and drift.delta is not None:
+        flag = " — COVERAGE DROPPED" if drift.dropped else ""
+        lines.append(
+            f"- Coverage drift: {drift.delta:+.1f} pts vs baseline "
+            f"{drift.baseline_pct:.1f}%{flag}"
+        )
     lines.append("")
 
     counts = diff.counts
@@ -57,6 +66,12 @@ def render_markdown(diff: RegressionDiff, run: RegressionRun) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def render_json(diff: RegressionDiff, run: RegressionRun) -> dict[str, Any]:
-    """Structured report: the run plus its classified diff."""
-    return {"run": run.to_dict(), "diff": diff.to_dict()}
+def render_json(
+    diff: RegressionDiff, run: RegressionRun, drift: DriftResult | None = None
+) -> dict[str, Any]:
+    """Structured report: the run, its classified diff, and coverage drift."""
+    return {
+        "run": run.to_dict(),
+        "diff": diff.to_dict(),
+        "drift": drift.to_dict() if drift is not None else None,
+    }
