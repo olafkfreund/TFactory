@@ -22,6 +22,14 @@ from pathlib import Path
 from agents.flaky_history import FlakyClass, load_history
 
 from .corpus import load_corpus
+from .coverage_trend import (
+    CoveragePoint,
+    DriftResult,
+    compute_drift,
+    coverage_trend_path,
+    load_trend,
+    record_coverage,
+)
 from .diff import RegressionDiff, diff_runs
 from .models import RegressionRun, TestOutcome, TestStatus
 from .quarantine import quarantine_path, quarantined_ids
@@ -105,6 +113,7 @@ def run_regression(
         commit=request.commit,
         target_url=request.target_url,
         baseline_run_id=baseline.run_id if baseline else None,
+        coverage_pct=_aggregate_coverage(outcomes),
     )
 
     flaky_lookup = (
@@ -114,8 +123,11 @@ def run_regression(
     )
     diff = diff_runs(run, baseline, flaky_lookup=flaky_lookup)
 
+    # Coverage trend: drift vs the trailing baseline, then record this point.
+    drift = _coverage_drift_and_record(reg_dir, run)
+
     save_run(reg_dir, run)
-    _write_reports(reg_dir, run, diff)
+    _write_reports(reg_dir, run, diff, drift)
 
     logger.info(
         "regression: run=%s done — %s (regressions=%d)",
@@ -141,12 +153,59 @@ def _apply_quarantine(reg_dir: Path, outcomes: list[TestOutcome]) -> list[TestOu
     ]
 
 
-def _write_reports(reg_dir: Path, run: RegressionRun, diff: RegressionDiff) -> None:
+def _aggregate_coverage(outcomes: list[TestOutcome]) -> float | None:
+    """Project coverage for the run: mean of per-test coverage, or None.
+
+    None when no outcome carries a coverage figure (e.g. browser-only runs or
+    until per-test coverage is populated), in which case no trend is recorded.
+    """
+    pcts = [o.coverage_pct for o in outcomes if o.coverage_pct is not None]
+    if not pcts:
+        return None
+    return round(sum(pcts) / len(pcts), 2)
+
+
+def _coverage_drift_and_record(reg_dir: Path, run: RegressionRun) -> DriftResult | None:
+    """Compute drift vs the trailing baseline, then record this run's point.
+
+    Returns None when the run has no coverage figure. Drift is computed BEFORE
+    recording so the new point isn't its own baseline.
+    """
+    if run.coverage_pct is None:
+        return None
+    path = coverage_trend_path(reg_dir)
+    drift = compute_drift(load_trend(path), run.coverage_pct)
+    record_coverage(
+        path,
+        CoveragePoint(
+            run_id=run.run_id,
+            ran_at=run.ran_at,
+            coverage_pct=run.coverage_pct,
+            commit=run.commit,
+        ),
+    )
+    if drift.dropped:
+        logger.warning(
+            "regression: coverage dropped %.1f pts (%.1f%% -> %.1f%%) at run=%s",
+            -drift.delta if drift.delta is not None else 0.0,
+            drift.baseline_pct if drift.baseline_pct is not None else 0.0,
+            run.coverage_pct,
+            run.run_id,
+        )
+    return drift
+
+
+def _write_reports(
+    reg_dir: Path,
+    run: RegressionRun,
+    diff: RegressionDiff,
+    drift: DriftResult | None = None,
+) -> None:
     reg_dir.mkdir(parents=True, exist_ok=True)
     (reg_dir / f"{run.run_id}-report.md").write_text(
-        render_markdown(diff, run), encoding="utf-8"
+        render_markdown(diff, run, drift), encoding="utf-8"
     )
     (reg_dir / f"{run.run_id}-report.json").write_text(
-        json.dumps(render_json(diff, run), indent=2, sort_keys=True),
+        json.dumps(render_json(diff, run, drift), indent=2, sort_keys=True),
         encoding="utf-8",
     )
