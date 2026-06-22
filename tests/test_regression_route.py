@@ -48,6 +48,34 @@ def test_empty_project_returns_valid_shape(client):
     assert body["quarantined"] == []
 
 
+def test_trigger_run_schedules_and_returns_run_id(client, monkeypatch):
+    cl, root = client
+    calls = []
+    import server.routes.regression as route_mod
+
+    monkeypatch.setattr(
+        route_mod, "run_for_project", lambda config, **kw: calls.append((config, kw))
+    )
+    resp = cl.post("/api/projects/demo/regression/run")
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["status"] == "scheduled"
+    assert body["run_id"].startswith("run-")
+    # TestClient executes background tasks after the response
+    assert len(calls) == 1
+    cfg, kw = calls[0]
+    assert cfg.project_id == "demo"
+    assert cfg.workspace_root == root
+    assert cfg.repo_root == root / "demo"
+    assert "now" in kw
+
+
+def test_trigger_run_rejects_invalid_id(client):
+    cl, _ = client
+    resp = cl.post("/api/projects/bad id!/regression/run")
+    assert resp.status_code == 400
+
+
 def test_returns_seeded_run(client):
     cl, root = client
     reg = regression_dir(root, "demo")
