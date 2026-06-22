@@ -52,6 +52,7 @@ from .store import (
     save_run,
     set_baseline,
 )
+from .trigger import ProjectScheduleConfig, run_for_project
 
 __all__ = [
     "CorpusEntry",
@@ -59,6 +60,7 @@ __all__ = [
     "DriftResult",
     "NixJobRunner",
     "NixSubstrateUnavailableError",
+    "ProjectScheduleConfig",
     "QuarantineEntry",
     "RegressionClass",
     "RegressionDiff",
@@ -94,6 +96,7 @@ __all__ = [
     "render_json",
     "render_markdown",
     "run_corpus",
+    "run_for_project",
     "run_regression",
     "save_run",
     "set_baseline",
