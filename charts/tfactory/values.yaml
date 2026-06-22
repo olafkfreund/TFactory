@@ -321,6 +321,31 @@ workspaces:
   mountPath: "/var/lib/tfactory/workspaces"
 
 # ---------------------------------------------------------------------------
+# Regression schedule (RFC-0018 #488) — nightly CronJob that re-runs each
+# configured project's persisted corpus on the Nix-Job substrate and diffs vs
+# the stored baseline, so regressions on ``main`` are caught automatically.
+#
+# Default-off. Requires ``workspaces.enabled=true`` (per-project worktrees live
+# on that PVC, at ``<mountPath>/<project>``) and normally
+# ``rbac.jobSandbox.enabled=true`` (the run spawns ephemeral Nix-lane Jobs).
+# ---------------------------------------------------------------------------
+regressionSchedule:
+  enabled: false
+  # Cron schedule (cluster timezone). Default 03:00 daily.
+  schedule: "0 3 * * *"
+  # Project ids to re-run; each must have a worktree at <mountPath>/<project>.
+  projects: []
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+
+# ---------------------------------------------------------------------------
 # Remote Control — Claude Code's native --remote-control flag.
 #
 # When per-task ``enableRemoteControl: true`` is set (or the project's
