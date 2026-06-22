@@ -46,6 +46,7 @@ from .routes import (
     specs,
     tasks,
     tasks_logs,
+    tasks_plan,
     tasks_worktree,
     terminal,
     test_target_credentials,
@@ -358,6 +359,8 @@ def create_app() -> FastAPI:
     app.include_router(tasks_logs.router, prefix="/api/tasks", tags=["Tasks"])
     # Worktree endpoints — extracted from tasks.py (#360); same /api/tasks prefix.
     app.include_router(tasks_worktree.router, prefix="/api/tasks", tags=["Tasks"])
+    # Plan-approval endpoints — extracted from tasks.py (#360); same prefix.
+    app.include_router(tasks_plan.router, prefix="/api/tasks", tags=["Tasks"])
     # Execution routes also under /api/tasks for frontend compatibility
     app.include_router(execution.router, prefix="/api/tasks", tags=["Task Execution"])
     # TFactory portal endpoints (Task 9 / #10) — read-only over the
