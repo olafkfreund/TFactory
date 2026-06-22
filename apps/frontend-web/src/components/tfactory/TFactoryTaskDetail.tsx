@@ -39,9 +39,18 @@ import {
 import { LaneStatusGrid } from './LaneStatusGrid';
 import { TFactoryLogViewer } from './TFactoryLogViewer';
 import { VisualBaselines } from './VisualBaselines';
+import { RegressionPanel } from './RegressionPanel';
 import { useVisibilityAwarePolling } from '../../hooks/useVisibilityAwarePolling';
 
-type Tab = 'status' | 'lanes' | 'verdicts' | 'report' | 'acceptance' | 'logs' | 'evidence';
+type Tab =
+  | 'status'
+  | 'lanes'
+  | 'verdicts'
+  | 'report'
+  | 'acceptance'
+  | 'logs'
+  | 'evidence'
+  | 'regression';
 
 interface Props {
   specId: string;
@@ -784,6 +793,7 @@ export function TFactoryTaskDetail({ specId, fetchFn, wsFactory, pollMs = 5000 }
         <TabButton tab="acceptance" active={activeTab} onClick={onSelectTab} label="Acceptance" disabled={!acAvailable} />
         <TabButton tab="logs" active={activeTab} onClick={onSelectTab} label="Logs" />
         <TabButton tab="evidence" active={activeTab} onClick={onSelectTab} label="Evidence" disabled={!evidenceAvailable} />
+        <TabButton tab="regression" active={activeTab} onClick={onSelectTab} label="Regression" />
       </div>
 
       <div role="tabpanel" id={`tab-panel-${activeTab}`} data-testid={`panel-${activeTab}`}>
@@ -838,6 +848,9 @@ export function TFactoryTaskDetail({ specId, fetchFn, wsFactory, pollMs = 5000 }
             screenshots={detail.artefacts.screenshots?.files ?? []}
             videos={detail.artefacts.videos?.files ?? []}
           />
+        )}
+        {activeTab === 'regression' && (
+          <RegressionPanel projectId={detail.project_id} />
         )}
       </div>
     </div>
