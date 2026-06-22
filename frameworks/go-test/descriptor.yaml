@@ -1,0 +1,66 @@
+# frameworks/go-test/descriptor.yaml
+#
+# Go `go test` descriptor (#443). Adds the Go standard testing toolchain to the
+# framework registry so the Planner can detect/select it and Gen-Functional has
+# a Go context block.
+#
+# Coverage: `go test -coverprofile` emits Go's own profile format; the runner
+# converts it to Cobertura (gocover-cobertura) so the Evaluator's coverage-delta
+# signal works the same as pytest/junit. junit output comes from gotestsum.
+#
+# Related decisions:
+#   Decision 1  — generic prompts + framework descriptor registry
+#   Decision 11 — per-framework coverage_strategy (cobertura for go test)
+name: go-test
+language: go
+lanes:
+  - unit
+
+# Go's testing package ships with the toolchain; pin to a modern, generics-
+# capable Go (1.21+ is the current supported series at v0.12 release time).
+version_range: ">=1.21,<2.0"
+
+runtime:
+  # Built in gitops (runner-images.yml): nix/go base + gotestsum +
+  # gocover-cobertura. Until that image lands, the Nix-flake-per-task substrate
+  # (RFC-0005) supplies the Go toolchain from the contract environment manifest.
+  image: tfactory-runner-go:latest
+  entrypoint:
+    - sh
+    - "-c"
+    - >-
+      gotestsum --junitfile=/scratch/junit.xml --format=testname --
+      -coverprofile=/scratch/cover.out -covermode=atomic ./... ;
+      gocover-cobertura < /scratch/cover.out > /scratch/coverage.xml
+
+# Manifest signals the Planner uses to detect a Go module.
+manifest_signals:
+  - "go.mod"
+  - "go.sum"
+  - "go.mod:module"
+
+# Go's convention: tests live next to the code in *_test.go files.
+test_path_conventions:
+  - "**/*_test.go"
+
+coverage_strategy: cobertura
+
+context_block: |
+  You are generating Go tests with the standard `testing` package (`go test`).
+  Test structure:
+    - One `func TestXxx(t *testing.T)` per behaviour; the name must start with
+      `Test` and be exported-style (e.g. `TestReturnsEmptyWhenInputBlank`).
+    - Prefer table-driven tests: a slice of cases iterated with `t.Run(name, ...)`
+      so each case is a named subtest.
+    - Keep tests in the same package (`package foo`) for white-box, or
+      `package foo_test` for black-box API tests.
+  Assertions:
+    - Use the standard library: `if got != want { t.Errorf("got %v, want %v", got, want) }`.
+    - Use `t.Fatalf` to stop a test that cannot continue; `t.Errorf` to continue.
+    - If `github.com/stretchr/testify` is already a dependency, `assert`/`require`
+      are fine; otherwise do NOT add new dependencies.
+  Error paths:
+    - Assert both the happy path AND at least one boundary / error case
+      (e.g. invalid input returns a non-nil error).
+  Do not call `os.Exit` or `log.Fatal` in tests, and never use `time.Sleep` for
+  synchronisation (a deterministic-flake source).

@@ -105,9 +105,7 @@ def _make_frameworks_dir(tmp_path: Path, descriptors: dict[str, dict]) -> Path:
     for name, data in descriptors.items():
         fw_sub = fw_dir / name
         fw_sub.mkdir(parents=True)
-        (fw_sub / "descriptor.yaml").write_text(
-            yaml.dump(data), encoding="utf-8"
-        )
+        (fw_sub / "descriptor.yaml").write_text(yaml.dump(data), encoding="utf-8")
     return fw_dir
 
 
@@ -233,7 +231,9 @@ def test_specifier_set_membership() -> None:
 def test_unknown_lane_raises() -> None:
     """An unrecognised lane name raises FrameworkDescriptorError."""
     data = copy.deepcopy(_PYTEST_DICT)
-    data["lanes"] = ["sast"]  # v0.1 alias — now invalid (maps to unit with warning but not rejected)
+    data["lanes"] = [
+        "sast"
+    ]  # v0.1 alias — now invalid (maps to unit with warning but not rejected)
     # sast IS a v0.1 alias, but it maps to UNIT with DeprecationWarning.
     # Use a truly unknown lane:
     data["lanes"] = ["does-not-exist-lane"]
@@ -573,6 +573,22 @@ def test_real_jest_descriptor() -> None:
     not _REAL_FRAMEWORKS_DIR.is_dir(),
     reason=f"frameworks/ directory not found at {_REAL_FRAMEWORKS_DIR}",
 )
+def test_real_go_test_descriptor() -> None:
+    """The real go-test descriptor (#443) has correct values."""
+    assert "go-test" in load_registry(frameworks_dir=_REAL_FRAMEWORKS_DIR)
+    desc = get_descriptor("go-test", frameworks_dir=_REAL_FRAMEWORKS_DIR)
+    assert desc.language == "go"
+    assert Lane.UNIT in desc.lanes
+    assert desc.coverage_strategy == "cobertura"
+    assert any("_test.go" in p for p in desc.test_path_conventions)
+    assert any("go.mod" in s for s in desc.manifest_signals)
+    assert "go test" in desc.context_block or "testing" in desc.context_block
+
+
+@pytest.mark.skipif(
+    not _REAL_FRAMEWORKS_DIR.is_dir(),
+    reason=f"frameworks/ directory not found at {_REAL_FRAMEWORKS_DIR}",
+)
 def test_real_vitest_descriptor() -> None:
     """The real Vitest descriptor — Unit lane, lcov, jest-compatible (#110)."""
     desc = get_descriptor("vitest", frameworks_dir=_REAL_FRAMEWORKS_DIR)
@@ -666,6 +682,11 @@ def test_enterprise_framework_templates_exist() -> None:
             assert fp.is_file(), f"{name}: declared template {tmpl} is missing"
             assert fp.read_text().startswith("---"), f"{name}/{tmpl} lacks frontmatter"
     # Cucumber is a two-artifact overlay: it must ship a feature + steps + world.
-    cucumber = {t for t in get_descriptor("cucumber", frameworks_dir=_REAL_FRAMEWORKS_DIR).templates}
+    cucumber = {
+        t
+        for t in get_descriptor(
+            "cucumber", frameworks_dir=_REAL_FRAMEWORKS_DIR
+        ).templates
+    }
     assert any(t.endswith(".feature.tmpl") for t in cucumber)
     assert any("steps" in t for t in cucumber) and any("world" in t for t in cucumber)
