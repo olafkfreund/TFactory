@@ -373,6 +373,25 @@ def _validate_custom_mcp_server(server: dict) -> bool:
     return True
 
 
+def _externalize_secret_env(
+    cfg: dict[str, Any], sink: dict[str, Any]
+) -> dict[str, Any]:
+    """Move a catalog MCP server's ``env`` into the claude process environment.
+
+    SECURITY (#477, #599-class): the claude-agent-sdk serialises the whole
+    mcpServers dict — including each server's ``env`` VALUES — into a
+    ``--mcp-config <json>`` argv, visible via ``ps aux``. Leaving the GitHub PAT
+    (et al.) in the server config would leak it on the command line. So we pop
+    the server's ``env`` into ``sink`` (the claude process env -> ``options.env``);
+    the MCP server subprocess inherits those vars, and nothing secret reaches
+    argv. Mutates and returns ``cfg``.
+    """
+    secret_env = cfg.pop("env", None)
+    if isinstance(secret_env, dict) and secret_env:
+        sink.update({k: str(v) for k, v in secret_env.items()})
+    return cfg
+
+
 def load_project_mcp_config(project_dir: Path) -> dict:
     """
     Load MCP configuration from project's .tfactory/.env file.
@@ -412,10 +431,7 @@ def load_project_mcp_config(project_dir: Path) -> dict:
                     key = key.strip()
                     value = value.strip().strip("\"'")
                     # Include global MCP toggles
-                    if key in mcp_keys:
-                        config[key] = value
-                    # Include per-agent MCP overrides (AGENT_MCP_<agent>_ADD/REMOVE)
-                    elif key.startswith("AGENT_MCP_"):
+                    if key in mcp_keys or key.startswith("AGENT_MCP_"):
                         config[key] = value
                     # Include custom MCP servers (parse JSON with schema validation)
                     elif key == "CUSTOM_MCP_SERVERS":
@@ -858,7 +874,11 @@ def create_client(
                 if entry.credential_provider
                 else None
             )
-            mcp_servers[entry.id] = entry.build_server_config(creds, read_only=True)
+            # SECURITY (#477): externalize the server's env (e.g. the GitHub PAT)
+            # into the claude process env so it never lands in the --mcp-config argv.
+            mcp_servers[entry.id] = _externalize_secret_env(
+                entry.build_server_config(creds, read_only=True), sdk_env
+            )
     except ImportError as exc:
         print(f"   - MCP catalog unavailable ({exc}); catalog servers skipped")
 
