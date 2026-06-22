@@ -18,6 +18,12 @@ from .coverage_trend import (
     record_coverage,
 )
 from .diff import RegressionClass, RegressionDiff, classify, diff_runs
+from .impact import (
+    build_ac_index,
+    select_by_acs,
+    select_by_changed_files,
+    select_impacted,
+)
 from .models import RegressionRun, TestOutcome, TestStatus
 from .nix_runner import (
     NixJobRunner,
@@ -72,6 +78,7 @@ __all__ = [
     "TestStatus",
     "UnsupportedFrameworkError",
     "add_to_quarantine",
+    "build_ac_index",
     "classify",
     "cli_main",
     "compute_drift",
@@ -99,6 +106,9 @@ __all__ = [
     "run_for_project",
     "run_regression",
     "save_run",
+    "select_by_acs",
+    "select_by_changed_files",
+    "select_impacted",
     "set_baseline",
     "should_quarantine",
     "should_release",
