@@ -15,7 +15,7 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
@@ -36,7 +36,7 @@ _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 # stage-event emit in a best-effort guard so a progress-event failure can never
 # break the review lane — neither matches the shared helper's behaviour.
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _read_status(spec_dir: Path) -> dict:
@@ -113,7 +113,14 @@ async def run_review_lane(
     """
     spec_dir = Path(spec_dir)
     (spec_dir / "findings").mkdir(parents=True, exist_ok=True)
-    _write_status_patch(spec_dir, phase=f"review_{mode}_started", status="reviewing")
+    # The review lane runs in PARALLEL with the evaluator/triager and is purely
+    # additive (#464): it must NOT write the top-level ``status``/``phase`` or it
+    # clobbers the verdict-bearing terminal state (the live dogfood run ended at
+    # ``reviewed``/``review_initial_complete`` with no verdict because this lane
+    # finished last). Its progress lives under ``review_status``/``review_phase``.
+    _write_status_patch(
+        spec_dir, review_phase=f"review_{mode}_started", review_status="reviewing"
+    )
 
     try:
         from agents.gen_functional import _resolve_client  # reuse the proven seam
@@ -126,8 +133,8 @@ async def run_review_lane(
         _log.warning("review lane failed: %s", exc)
         _write_status_patch(
             spec_dir,
-            phase=f"review_{mode}_failed",
-            status="review_failed",
+            review_phase=f"review_{mode}_failed",
+            review_status="review_failed",
             review_error=str(exc)[:300],
         )
         return False
@@ -137,16 +144,16 @@ async def run_review_lane(
         # The contract requires the reviewer to write findings/review.json.
         _write_status_patch(
             spec_dir,
-            phase=f"review_{mode}_failed",
-            status="review_failed",
+            review_phase=f"review_{mode}_failed",
+            review_status="review_failed",
             review_error="no_evidence: reviewer wrote no findings/review.json",
         )
         return False
 
     _write_status_patch(
         spec_dir,
-        phase=f"review_{mode}_complete",
-        status="reviewed",
+        review_phase=f"review_{mode}_complete",
+        review_status="reviewed",
         review_findings_count=count,
     )
     return True
