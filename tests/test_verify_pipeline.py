@@ -155,7 +155,7 @@ def test_main_exits_zero_on_success(monkeypatch, tmp_path):
 
     recorded = {}
 
-    async def fake_record(job_id, *, final_status):
+    async def fake_record(job_id, *, final_status, spec_dir=None, correlation_key=None):
         recorded["job_id"] = job_id
         recorded["final_status"] = final_status
 

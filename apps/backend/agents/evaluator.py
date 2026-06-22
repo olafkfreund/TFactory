@@ -348,7 +348,10 @@ def _run_pytest_on_host(
     from tools.runners.docker_runner import DockerRunResult
 
     vdir = _ensure_host_venv(project_dir)
-    py = str((vdir / "bin" / "python").resolve())
+    # Use the venv python as-is — do NOT resolve() the symlink, which would
+    # jump past the venv to the base interpreter and lose the venv's
+    # site-packages (pytest/pytest-cov would then be missing).
+    py = str(vdir / "bin" / "python")
     name = Path(test_file).name
     cmd = (
         f"cd {scratch} && {py} -m pytest tests/{name} -p no:cacheprovider -q "
