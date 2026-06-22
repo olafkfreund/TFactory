@@ -16,15 +16,17 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from agents.flaky_history import FlakyClass, load_history
 
 from .corpus import load_corpus
 from .diff import RegressionDiff, diff_runs
-from .models import RegressionRun
+from .models import RegressionRun, TestOutcome, TestStatus
+from .quarantine import quarantine_path, quarantined_ids
 from .report import render_json, render_markdown
+from .retry import DEFAULT_MAX_ATTEMPTS, RetryingRunner
 from .runner import RegressionRunner, run_corpus
 from .store import load_baseline, save_run
 
@@ -48,6 +50,8 @@ class RegressionRequest:
     target_url: str | None = None
     lanes: tuple[str, ...] | None = None
     flaky_store_path: Path | None = None
+    # Per-test attempts (within-run retry); 1 disables retry.
+    retry_attempts: int = DEFAULT_MAX_ATTEMPTS
 
 
 def _flaky_lookup_from_store(store_path: Path) -> Callable[[str], FlakyClass]:
@@ -80,7 +84,17 @@ def run_regression(
         request.run_id,
         len(entries),
     )
-    outcomes = run_corpus(entries, runner)
+
+    # Within-run retry: absorb transient blips before they look like failures.
+    active_runner = (
+        RetryingRunner(runner, request.retry_attempts)
+        if request.retry_attempts > 1
+        else runner
+    )
+    outcomes = run_corpus(entries, active_runner)
+
+    # Cross-run quarantine: chronically-flaky tests are excluded from the gate.
+    outcomes = _apply_quarantine(reg_dir, outcomes)
 
     baseline = load_baseline(reg_dir)
     run = RegressionRun(
@@ -110,6 +124,21 @@ def run_regression(
         len(diff.regressions),
     )
     return run, diff
+
+
+def _apply_quarantine(reg_dir: Path, outcomes: list[TestOutcome]) -> list[TestOutcome]:
+    """Mark quarantined tests' outcomes as QUARANTINED (excluded from the gate).
+
+    Reads the per-project quarantine store; a quarantined test is reported but
+    never fails the run, regardless of its raw pass/fail this time.
+    """
+    quarantined = quarantined_ids(quarantine_path(reg_dir))
+    if not quarantined:
+        return outcomes
+    return [
+        replace(o, status=TestStatus.QUARANTINED) if o.test_id in quarantined else o
+        for o in outcomes
+    ]
 
 
 def _write_reports(reg_dir: Path, run: RegressionRun, diff: RegressionDiff) -> None:
