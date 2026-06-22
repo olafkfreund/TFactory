@@ -37,16 +37,30 @@ async def test_review_lane_writes_findings_and_marks_reviewed(dirs, monkeypatch)
     async def fake_session(client, prompt, spec_dir, verbose):
         fp = Path(spec_dir) / "findings"
         fp.mkdir(parents=True, exist_ok=True)
-        (fp / "review.json").write_text(json.dumps({
-            "reviewer_version": "review-lane-v1",
-            "findings": [
-                {"axis": "correctness", "severity": "high", "file": "a.py",
-                 "finding": "x", "suggestion": "y"},
-                {"axis": "security", "severity": "low", "file": "b.py",
-                 "finding": "z", "suggestion": "w"},
-            ],
-            "summary": "ok",
-        }))
+        (fp / "review.json").write_text(
+            json.dumps(
+                {
+                    "reviewer_version": "review-lane-v1",
+                    "findings": [
+                        {
+                            "axis": "correctness",
+                            "severity": "high",
+                            "file": "a.py",
+                            "finding": "x",
+                            "suggestion": "y",
+                        },
+                        {
+                            "axis": "security",
+                            "severity": "low",
+                            "file": "b.py",
+                            "finding": "z",
+                            "suggestion": "w",
+                        },
+                    ],
+                    "summary": "ok",
+                }
+            )
+        )
         return ("done", "", {})
 
     monkeypatch.setattr(review_lane, "_invoke_session", fake_session)
@@ -54,9 +68,44 @@ async def test_review_lane_writes_findings_and_marks_reviewed(dirs, monkeypatch)
     ok = await review_lane.run_review_lane(spec, proj)
     assert ok is True
     status = _read_status(spec)
-    assert status["status"] == "reviewed"
+    # The review lane records its progress under namespaced keys (#464) — it must
+    # NOT touch the top-level status/phase (the verdict pipeline owns those).
+    assert status["review_status"] == "reviewed"
     assert status["review_findings_count"] == 2
-    assert status["phase"] == "review_initial_complete"
+    assert status["review_phase"] == "review_initial_complete"
+    assert "status" not in status and "phase" not in status
+
+
+@pytest.mark.asyncio
+async def test_review_lane_does_not_clobber_verdict_status(dirs, monkeypatch):
+    """#464: review runs in parallel with the verdict pipeline and must not
+    overwrite its terminal status/phase."""
+    spec, proj = dirs
+    # Pre-seed a verdict-bearing terminal status (as the evaluator would write).
+    (spec / "status.json").write_text(
+        json.dumps({"status": "evaluated", "phase": "evaluator_complete"})
+    )
+    monkeypatch.setattr(
+        "agents.gen_functional._resolve_client", AsyncMock(return_value=object())
+    )
+
+    async def fake_session(client, prompt, spec_dir, verbose):
+        fp = Path(spec_dir) / "findings"
+        fp.mkdir(parents=True, exist_ok=True)
+        (fp / "review.json").write_text(
+            json.dumps({"reviewer_version": "v1", "findings": [], "summary": "ok"})
+        )
+        return ("done", "", {})
+
+    monkeypatch.setattr(review_lane, "_invoke_session", fake_session)
+
+    await review_lane.run_review_lane(spec, proj)
+    status = _read_status(spec)
+    # the evaluator's terminal verdict status survives
+    assert status["status"] == "evaluated"
+    assert status["phase"] == "evaluator_complete"
+    # and the review outcome is recorded alongside, namespaced
+    assert status["review_status"] == "reviewed"
 
 
 @pytest.mark.asyncio
@@ -70,7 +119,9 @@ async def test_review_lane_clean_review_is_valid(dirs, monkeypatch):
     async def fake_session(client, prompt, spec_dir, verbose):
         fp = Path(spec_dir) / "findings"
         fp.mkdir(parents=True, exist_ok=True)
-        (fp / "review.json").write_text(json.dumps({"findings": [], "summary": "clean"}))
+        (fp / "review.json").write_text(
+            json.dumps({"findings": [], "summary": "clean"})
+        )
         return ("done", "", {})
 
     monkeypatch.setattr(review_lane, "_invoke_session", fake_session)
@@ -94,7 +145,7 @@ async def test_review_lane_no_findings_file_is_failed(dirs, monkeypatch):
     ok = await review_lane.run_review_lane(spec, proj)
     assert ok is False
     status = _read_status(spec)
-    assert status["status"] == "review_failed"
+    assert status["review_status"] == "review_failed"
     assert "no_evidence" in status.get("review_error", "")
 
 
@@ -111,7 +162,7 @@ async def test_review_lane_session_error_never_raises(dirs, monkeypatch):
     monkeypatch.setattr(review_lane, "_invoke_session", boom)
     ok = await review_lane.run_review_lane(spec, proj)
     assert ok is False
-    assert _read_status(spec)["status"] == "review_failed"
+    assert _read_status(spec)["review_status"] == "review_failed"
 
 
 @pytest.mark.asyncio
