@@ -104,6 +104,9 @@ async def _run(spec_dir_factory: Callable[[], Path]) -> None:
         create_all_tools,
         create_magestic_ai_mcp_server,
     )
+    from agents.tools_pkg.tools.regression import (  # noqa: PLC0415
+        create_regression_tools,
+    )
     from agents.tools_pkg.tools.task_control import create_task_control_tools
     from claude_agent_sdk import create_sdk_mcp_server
     from mcp.server.models import InitializationOptions
@@ -134,10 +137,11 @@ async def _run(spec_dir_factory: Callable[[], Path]) -> None:
         sys.exit(2)
 
     task_control_tools = create_task_control_tools()
+    regression_tools = create_regression_tools()
     sdk_cfg = create_sdk_mcp_server(
         name="tfactory",
         version="1.0.0",
-        tools=spec_internal_tools + task_control_tools,
+        tools=spec_internal_tools + task_control_tools + regression_tools,
     )
 
     server = sdk_cfg["instance"]  # mcp.server.lowlevel.server.Server
