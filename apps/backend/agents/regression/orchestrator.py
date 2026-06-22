@@ -31,6 +31,7 @@ from .coverage_trend import (
     record_coverage,
 )
 from .diff import RegressionDiff, diff_runs
+from .impact import select_impacted
 from .models import RegressionRun, TestOutcome, TestStatus
 from .quarantine import quarantine_path, quarantined_ids
 from .report import render_json, render_markdown
@@ -60,6 +61,10 @@ class RegressionRequest:
     flaky_store_path: Path | None = None
     # Per-test attempts (within-run retry); 1 disables retry.
     retry_attempts: int = DEFAULT_MAX_ATTEMPTS
+    # Impact selection: when either is set, only re-run the corpus subset
+    # covering these changed AC ids / changed test files (full corpus otherwise).
+    changed_acs: tuple[str, ...] | None = None
+    changed_files: tuple[str, ...] | None = None
 
 
 def _flaky_lookup_from_store(store_path: Path) -> Callable[[str], FlakyClass]:
@@ -86,11 +91,19 @@ def run_regression(
     """
     reg_dir = request.reg_dir
     entries = load_corpus(request.repo_root, lanes=request.lanes)
+    selected = bool(request.changed_acs or request.changed_files)
+    if selected:
+        entries = select_impacted(
+            entries,
+            changed_acs=list(request.changed_acs or ()),
+            changed_files=list(request.changed_files or ()),
+        )
     logger.info(
-        "regression: project=%s run=%s — %d test(s) in corpus",
+        "regression: project=%s run=%s — %d test(s)%s",
         request.project_id,
         request.run_id,
         len(entries),
+        " (impact-selected)" if selected else " in corpus",
     )
 
     # Within-run retry: absorb transient blips before they look like failures.
@@ -121,7 +134,16 @@ def run_regression(
         if request.flaky_store_path
         else None
     )
-    diff = diff_runs(run, baseline, flaky_lookup=flaky_lookup)
+    # For an impact-selected (partial) run, scope the baseline to the tests we
+    # actually re-ran so un-selected baseline tests aren't mis-classified as
+    # "dropped". run.baseline_run_id still records the real baseline.
+    diff_baseline = baseline
+    if selected and baseline is not None:
+        ran = set(run.test_ids)
+        diff_baseline = replace(
+            baseline, results=tuple(r for r in baseline.results if r.test_id in ran)
+        )
+    diff = diff_runs(run, diff_baseline, flaky_lookup=flaky_lookup)
 
     # Coverage trend: drift vs the trailing baseline, then record this point.
     drift = _coverage_drift_and_record(reg_dir, run)

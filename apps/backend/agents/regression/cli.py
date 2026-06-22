@@ -60,6 +60,8 @@ def build_request(
         target_url=args.target_url,
         lanes=parse_lanes(args.lanes),
         flaky_store_path=Path(args.flaky_store) if args.flaky_store else None,
+        changed_acs=parse_lanes(args.changed_acs),
+        changed_files=parse_lanes(args.changed_files),
     )
 
 
@@ -93,6 +95,14 @@ def _build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--target-url", help="deployed target URL for the tests")
     run_p.add_argument("--lanes", help="comma-separated lane filter, e.g. unit,api")
     run_p.add_argument("--flaky-store", help="path to the flaky-history store json")
+    run_p.add_argument(
+        "--changed-acs",
+        help="comma-separated changed AC ids; re-run only covering tests",
+    )
+    run_p.add_argument(
+        "--changed-files",
+        help="comma-separated changed test files; re-run only those tests",
+    )
     return parser
 
 
