@@ -19,11 +19,11 @@ Store format (JSON, one file per run) is defined in
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 
-class TestStatus(str, Enum):
+class TestStatus(StrEnum):
     """Outcome of a single test in a regression run."""
 
     __test__ = False  # not a pytest test class despite the Test* name

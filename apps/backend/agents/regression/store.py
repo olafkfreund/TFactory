@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from .models import RegressionRun
 
@@ -29,7 +30,7 @@ def regression_dir(workspace_root: Path, project_id: str) -> Path:
     return Path(workspace_root) / project_id / "regression"
 
 
-def _write_json(path: Path, data: dict) -> None:
+def _write_json(path: Path, data: dict[str, Any]) -> None:
     """Persist *data* atomically (write-temp-then-rename)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -37,7 +38,7 @@ def _write_json(path: Path, data: dict) -> None:
     tmp.replace(path)
 
 
-def _read_json(path: Path) -> dict | None:
+def _read_json(path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
     try:

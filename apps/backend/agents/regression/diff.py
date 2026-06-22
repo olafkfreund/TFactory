@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from agents.flaky_history import FlakyClass
@@ -32,11 +32,11 @@ from agents.flaky_history import FlakyClass
 from .models import RegressionRun, TestStatus
 
 
-class RegressionClass(str, Enum):
+class RegressionClass(StrEnum):
     REGRESSION = "regression"
     FIXED = "fixed"
     STILL_FAILING = "still_failing"
-    STABLE_PASS = "stable_pass"
+    STABLE_PASS = "stable_pass"  # noqa: S105 — a regression class, not a secret
     FLAKY = "flaky"
     QUARANTINED = "quarantined"
     NEW = "new"
@@ -66,15 +66,17 @@ def classify(
     if is_flaky:
         return RegressionClass.FLAKY
 
-    base_fail = baseline_status.is_fail
-    cur_fail = current_status.is_fail
-    if not base_fail and cur_fail:
-        return RegressionClass.REGRESSION
-    if base_fail and not cur_fail:
-        return RegressionClass.FIXED
-    if base_fail and cur_fail:
-        return RegressionClass.STILL_FAILING
-    return RegressionClass.STABLE_PASS
+    # pass/fail transition matrix keyed by (was-failing, is-failing)
+    return _TRANSITION[(baseline_status.is_fail, current_status.is_fail)]
+
+
+# (baseline_fail, current_fail) -> regression class
+_TRANSITION: dict[tuple[bool, bool], RegressionClass] = {
+    (False, True): RegressionClass.REGRESSION,
+    (True, False): RegressionClass.FIXED,
+    (True, True): RegressionClass.STILL_FAILING,
+    (False, False): RegressionClass.STABLE_PASS,
+}
 
 
 @dataclass(frozen=True)
