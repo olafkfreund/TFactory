@@ -7,6 +7,7 @@ and no network; the re-run executor (#484) builds on top of this.
 
 from __future__ import annotations
 
+from .corpus import CorpusEntry, group_by_lane, load_corpus
 from .diff import RegressionClass, RegressionDiff, classify, diff_runs
 from .models import RegressionRun, TestOutcome, TestStatus
 from .report import render_json, render_markdown
@@ -21,6 +22,7 @@ from .store import (
 )
 
 __all__ = [
+    "CorpusEntry",
     "RegressionClass",
     "RegressionDiff",
     "RegressionRun",
@@ -28,8 +30,10 @@ __all__ = [
     "TestStatus",
     "classify",
     "diff_runs",
+    "group_by_lane",
     "list_runs",
     "load_baseline",
+    "load_corpus",
     "load_latest",
     "load_run",
     "regression_dir",
