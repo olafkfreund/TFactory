@@ -58,6 +58,7 @@ from .routes import llm_endpoints as llm_endpoints_routes
 from .routes import logs as logs_routes
 from .routes import mcp_copilot as mcp_copilot_routes
 from .routes import settings as settings_routes
+from .routes import settings_claude_profiles as settings_claude_profiles_routes
 from .services.skills_service import init_skills_service
 from .websockets import events as events_ws
 from .websockets import logs as logs_ws
@@ -398,6 +399,13 @@ def create_app() -> FastAPI:
     app.include_router(mcp_copilot_routes.router)
     app.include_router(
         settings_routes.router, prefix="/api/settings", tags=["Settings"]
+    )
+    # Claude-profile settings endpoints — extracted from settings.py (#360);
+    # same /api/settings prefix.
+    app.include_router(
+        settings_claude_profiles_routes.router,
+        prefix="/api/settings",
+        tags=["Settings"],
     )
     app.include_router(
         cli_accounts_routes.router, prefix="/api/settings", tags=["CLI Accounts"]
