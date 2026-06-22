@@ -47,6 +47,7 @@ from .routes import (
     skills,
     specs,
     tasks,
+    tasks_clarifications,
     tasks_logs,
     tasks_plan,
     tasks_views,
@@ -361,6 +362,8 @@ def create_app() -> FastAPI:
     app.include_router(specs.router)
     app.include_router(projects.router, prefix="/api/projects", tags=["Projects"])
     app.include_router(tasks.router, prefix="/api/tasks", tags=["Tasks"])
+    # Task clarification endpoints — extracted from tasks.py (#360); same prefix.
+    app.include_router(tasks_clarifications.router, prefix="/api/tasks", tags=["Tasks"])
     # Task log endpoints — extracted from tasks.py (#360); same /api/tasks prefix.
     app.include_router(tasks_logs.router, prefix="/api/tasks", tags=["Tasks"])
     # Worktree endpoints — extracted from tasks.py (#360); same /api/tasks prefix.
