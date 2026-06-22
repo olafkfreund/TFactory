@@ -35,6 +35,7 @@ from .routes import (
     files,
     git,
     git_credentials,
+    git_updates,
     github,
     github_auth,
     mcp,
@@ -477,7 +478,10 @@ def create_app() -> FastAPI:
         git.claude_code_router, prefix="/api/claude-code", tags=["Claude Code"]
     )
     app.include_router(git.mcp_router, prefix="/api/mcp", tags=["MCP"])
-    app.include_router(git.updates_router, prefix="/api/updates", tags=["Updates"])
+    # Source-update endpoints — extracted from git.py into git_updates (#360).
+    app.include_router(
+        git_updates.router, prefix="/api/updates", tags=["Updates"]
+    )
 
     # Memory infrastructure routes
     app.include_router(context.router, prefix="/api/memory", tags=["Memory"])
