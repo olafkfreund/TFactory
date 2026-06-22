@@ -7,6 +7,7 @@ and no network; the re-run executor (#484) builds on top of this.
 
 from __future__ import annotations
 
+from .cli import main as cli_main
 from .corpus import CorpusEntry, group_by_lane, load_corpus
 from .diff import RegressionClass, RegressionDiff, classify, diff_runs
 from .models import RegressionRun, TestOutcome, TestStatus
@@ -42,6 +43,7 @@ __all__ = [
     "TestStatus",
     "UnsupportedFrameworkError",
     "classify",
+    "cli_main",
     "diff_runs",
     "group_by_lane",
     "list_runs",

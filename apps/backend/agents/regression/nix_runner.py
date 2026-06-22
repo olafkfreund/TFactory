@@ -49,9 +49,7 @@ class UnsupportedFrameworkError(NotImplementedError):
     """No Nix-Job runner yet for this corpus entry's framework (later slice)."""
 
 
-def outcome_from_run_result(
-    entry: CorpusEntry, result: DockerRunResult
-) -> TestOutcome:
+def outcome_from_run_result(entry: CorpusEntry, result: DockerRunResult) -> TestOutcome:
     """Map a runner :class:`DockerRunResult` onto a :class:`TestOutcome` (pure)."""
     status = TestStatus.PASSED if result.ok else TestStatus.FAILED
     return TestOutcome(
