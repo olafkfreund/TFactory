@@ -33,6 +33,7 @@ from .quarantine_policy import (
     should_release,
 )
 from .report import render_json, render_markdown
+from .retry import RetryingRunner
 from .runner import RegressionRunner, run_corpus
 from .store import (
     list_runs,
@@ -54,6 +55,7 @@ __all__ = [
     "RegressionRequest",
     "RegressionRun",
     "RegressionRunner",
+    "RetryingRunner",
     "TestOutcome",
     "TestStatus",
     "UnsupportedFrameworkError",
