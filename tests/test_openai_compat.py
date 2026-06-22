@@ -30,13 +30,18 @@ if str(_WEB_SERVER) not in sys.path:
 # Minimal FastAPI application containing only the settings router
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(scope="module")
 def _app() -> FastAPI:
-    """Minimal FastAPI app with only the settings router mounted."""
+    """Minimal FastAPI app with the settings routers mounted."""
     from server.routes.settings import router as settings_router
+    from server.routes.settings_llm_providers import (
+        router as settings_llm_router,  # #360: openai-compat/ollama moved here
+    )
 
     app = FastAPI(title="Settings Test App")
     app.include_router(settings_router, prefix="/settings")
+    app.include_router(settings_llm_router, prefix="/settings")
     return app
 
 
@@ -127,7 +132,7 @@ class TestListOpenAICompatModels:
                 {"id": "mistral-7b-instruct"},
                 {"id": "llama3"},
                 {"id": "text-embedding-ada-002"},  # should be filtered out
-                {"id": "bge-m3"},                  # should be filtered out
+                {"id": "bge-m3"},  # should be filtered out
             ]
         }
 
@@ -280,5 +285,3 @@ class TestOpenAICompatConnectionTest:
         assert resp.status_code == 200
         data = resp.json()
         assert data.get("success") is False
-
-
