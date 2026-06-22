@@ -36,6 +36,7 @@ from .routes import (
     git,
     git_credentials,
     github,
+    github_auth,
     mcp,
     notifications,
     organizations,
@@ -433,6 +434,8 @@ def create_app() -> FastAPI:
 
     # GitHub routes
     app.include_router(github.router, prefix="/api/github", tags=["GitHub"])
+    # GitHub CLI/auth/token endpoints — extracted from github.py (#360); same prefix.
+    app.include_router(github_auth.router, prefix="/api/github", tags=["GitHub"])
 
     # Capability discovery (Epic #44 R2) — always mounted; the frontend
     # consults this on load to know whether to render the Live Agent
