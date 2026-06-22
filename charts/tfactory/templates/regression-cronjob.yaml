@@ -1,0 +1,96 @@
+{{- if .Values.regressionSchedule.enabled }}
+{{- /*
+RFC-0018 #488 — nightly regression CronJob.
+
+Re-runs each configured project's persisted test corpus on the Nix-flake-per-task
+k8s Job substrate (RFC-0005 Tier A) and diffs against the stored baseline, so
+regressions on `main` are caught without anyone triggering a run. Default-off;
+requires workspaces.enabled (the per-project worktrees live on that PVC) and
+rbac.jobSandbox.enabled (the run creates ephemeral Nix Jobs).
+*/}}
+{{- if not .Values.workspaces.enabled }}
+{{- fail "regressionSchedule.enabled=true requires workspaces.enabled=true (the per-project worktrees live on the workspaces PVC)" }}
+{{- end }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "tfactory.fullname" . }}-regression
+  labels:
+    {{- include "tfactory.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.regressionSchedule.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: {{ .Values.regressionSchedule.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.regressionSchedule.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+            {{- include "tfactory.selectorLabels" . | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          serviceAccountName: {{ include "tfactory.serviceAccountName" . }}
+          # The run creates ephemeral Nix-lane Jobs via the in-cluster API.
+          automountServiceAccountToken: {{ .Values.rbac.jobSandbox.enabled }}
+          {{- with .Values.image.pullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          {{- with .Values.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: regression
+              image: {{ include "tfactory.image" . }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              securityContext:
+                {{- toYaml .Values.containerSecurityContext | nindent 16 }}
+              envFrom:
+                - configMapRef:
+                    name: {{ include "tfactory.fullname" . }}-config
+              env:
+                - name: PROJECT_WORKSPACE_ROOT
+                  value: {{ .Values.workspaces.mountPath | quote }}
+                {{- if .Values.rbac.jobSandbox.enabled }}
+                - name: TFACTORY_WORKSPACES_PVC
+                  value: {{ include "tfactory.fullname" . }}-workspaces
+                - name: TFACTORY_NIX_RUNNER_IMAGE
+                  value: {{ .Values.rbac.jobSandbox.nixRunnerImage | quote }}
+                {{- end }}
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  ws="{{ .Values.workspaces.mountPath }}"
+                  rc=0
+                  for p in {{ .Values.regressionSchedule.projects | join " " }}; do
+                    echo "regression: project $p"
+                    python -m agents.regression run \
+                      --project "$p" \
+                      --repo-root "$ws/$p" \
+                      --workspace "$ws" || rc=$?
+                  done
+                  exit $rc
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+                - name: tfactory-data
+                  mountPath: /home/nonroot/.tfactory
+                - name: tfactory-workspaces
+                  mountPath: {{ .Values.workspaces.mountPath | quote }}
+              resources:
+                {{- toYaml .Values.regressionSchedule.resources | nindent 16 }}
+          volumes:
+            - name: tmp
+              emptyDir: {}
+            - name: tfactory-data
+              emptyDir: {}
+            - name: tfactory-workspaces
+              persistentVolumeClaim:
+                claimName: {{ include "tfactory.fullname" . }}-workspaces
+{{- end }}
