@@ -41,6 +41,7 @@ from .routes import (
     organizations,
     projects,
     provider_runtimes,
+    regression,
     skills,
     specs,
     tasks,
@@ -331,6 +332,7 @@ def create_app() -> FastAPI:
 
     # Provider runtime version manager (#121)
     app.include_router(provider_runtimes.router)
+    app.include_router(regression.router)
     app.include_router(cloud.router)
     app.include_router(visual_inspection.router)
 
