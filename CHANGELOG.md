@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.12.0 — continuous regression suite (RFC-0018) (2026-06-22)
+
+- **Regression suite & continuous verification ([RFC-0018](https://github.com/olafkfreund/Factory/blob/main/docs/rfc/0018-regression-suite-and-continuous-verification.md), epic #482).** TFactory now re-runs a project's persisted `tests-catalog.json` corpus over time and diffs against a stored baseline, turning one-shot feature verification into continuous regression detection. New `agents/regression/` subsystem (see `docs/regression-suite.md`):
+  - **Executor** — loads the corpus, runs each test on the Nix-flake-per-task k8s Job substrate (RFC-0005 Tier A — the same `nix_provisioner` + `kube_sandbox` path AIFactory build/verify uses; refuses to silently fall back to the host runner), assembles an immutable `RegressionRun`, diffs against the baseline, and writes `regression_report.{md,json}`.
+  - **Classification** — each test is `regression` / `fixed` / `still_failing` / `stable_pass` / `flaky` / `quarantined` / `new` / `dropped`.
+  - **Within-run retry** — a transient fail-then-pass is absorbed (configurable attempts), not a false regression.
+  - **Cross-run flaky quarantine** — chronically flaky tests (flip-rate over a window) are excluded from the gate, still run and reported, operator-releasable, with auto-release when they stabilise.
+  - **Coverage trend + drift** — project coverage is recorded per run; a drop beyond a threshold is flagged in the report.
+  - **Impact-based selection** — `--changed-acs` / `--changed-files` re-run only the covering subset; a partial run scopes its baseline so unselected tests are not mis-classified as dropped.
+- **Triggers** — `python -m agents.regression run` (CLI), a default-off nightly **k8s CronJob** (`regressionSchedule.*` in the Helm values), an on-demand **HTTP** endpoint `POST /api/projects/{id}/regression/run`, and a **`regression_run` MCP tool**.
+- **Portal** — `GET /api/projects/{id}/regression` read-model plus a **Regression** tab in the task detail (verdict, regressions/fixes, quarantine, run history).
+- Around 110 unit tests across the subsystem. Also repaired two pre-existing backend test failures (`_run_pytest_on_host` venv resolution, a stale `verify_pipeline` stub) and a `store.list_runs` bug surfaced by the read-model.
+
 ## 0.11.0 — enterprise test frameworks: Karate, Selenium, Cucumber (2026-06-19)
 
 - **Three new framework descriptors** (per `docs/plans/2026-05-28-enterprise-test-frameworks-design.md`), registered + validated by the framework registry so the planner can detect/select them and Gen-Functional has a context block:
