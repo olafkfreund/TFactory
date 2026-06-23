@@ -493,6 +493,81 @@ class VerifyJobConfig:
     flake_subpath: str | None = None
 
 
+# -- file-auth CLI credential seeding (#481) --------------------------------- #
+# Mirror of AIFactory #690 for the verify Job: file-auth providers
+# (codex/gemini-oauth/copilot) authenticate via credential FILES seeded in-pod
+# by the control-plane seed-creds path, NOT env. A fresh verify Job pod has
+# none, so a verify routed to a file-auth provider fails in-Job. Opt-in via a
+# configured secret name (default off → the env-auth path #480 is unchanged, and
+# dev/test without the secret are unaffected). The control plane sets
+# TFACTORY_VERIFY_CLI_CREDS_SECRET=factory-cli-creds.
+_ENV_CLI_CREDS_SECRET = "TFACTORY_VERIFY_CLI_CREDS_SECRET"  # noqa: S105 - env var name
+# Verify image HOME (data_root /home/nonroot/.tfactory) — where the CLIs look.
+_VERIFY_HOME = "/home/nonroot"
+# (secret key in the cli-creds secret  ->  path under HOME). Mirrors the
+# control-plane seed-creds initContainer in factory-gitops.
+_CLI_CRED_FILES: tuple[tuple[str, str], ...] = (
+    ("claude-credentials.json", ".claude/.credentials.json"),
+    ("codex-auth.json", ".codex/auth.json"),
+    ("copilot-apps.json", ".config/github-copilot/apps.json"),
+    ("gemini-oauth_creds.json", ".gemini/oauth_creds.json"),
+)
+# emptyDir home dirs shared between the seed initContainer and the verify container.
+_SEED_HOME_VOLUMES: tuple[tuple[str, str], ...] = (
+    ("cc-claude", f"{_VERIFY_HOME}/.claude"),
+    ("cc-codex", f"{_VERIFY_HOME}/.codex"),
+    ("cc-gemini", f"{_VERIFY_HOME}/.gemini"),
+    ("cc-config", f"{_VERIFY_HOME}/.config"),
+)
+
+
+def _inject_verify_seed_creds(manifest: dict[str, Any]) -> None:
+    """Add a ``seed-creds`` initContainer that materializes the file-auth CLI
+    credentials into the verify Job pod (#481, mirrors AIFactory #690). No-op
+    unless a secret name is configured. Mutates the manifest in place. Pure
+    (env-only) → unit-testable.
+    """
+    secret = os.environ.get(_ENV_CLI_CREDS_SECRET, "").strip()
+    if not secret:
+        return  # default off: env-auth-only path (#480) unchanged
+    pod = manifest["spec"]["template"]["spec"]
+    home_mounts = [{"name": n, "mountPath": p} for n, p in _SEED_HOME_VOLUMES]
+
+    volumes = pod.setdefault("volumes", [])
+    for name, _path in _SEED_HOME_VOLUMES:
+        volumes.append({"name": name, "emptyDir": {}})
+    volumes.append({"name": "cli-creds", "secret": {"secretName": secret}})
+
+    # cp is tolerant (a partial secret must not fail the whole verify): only copy
+    # files that exist, and never let a missing one abort via ``set -e``.
+    mkdirs = " ".join(
+        f"{_VERIFY_HOME}/{d}"
+        for d in (".claude", ".codex", ".gemini", ".config/github-copilot")
+    )
+    lines = [f"mkdir -p {mkdirs}"]
+    lines += [
+        f"[ -f /seed/{key} ] && cp /seed/{key} {_VERIFY_HOME}/{rel} || true"
+        for key, rel in _CLI_CRED_FILES
+    ]
+    lines.append(
+        f"chmod -R g+rwX {_VERIFY_HOME}/.claude {_VERIFY_HOME}/.codex "
+        f"{_VERIFY_HOME}/.gemini {_VERIFY_HOME}/.config || true"
+    )
+    pod.setdefault("initContainers", []).append(
+        {
+            "name": "seed-creds",
+            "image": "busybox:1.36",
+            "command": ["sh", "-c"],
+            "args": ["\n".join(lines)],
+            "volumeMounts": [
+                *home_mounts,
+                {"name": "cli-creds", "mountPath": "/seed", "readOnly": True},
+            ],
+        }
+    )
+    pod["containers"][0].setdefault("volumeMounts", []).extend(home_mounts)
+
+
 def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
     """Build the k8s Job manifest that runs the verify orchestration. Pure.
 
@@ -608,6 +683,8 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
     manifest["metadata"]["labels"].update(
         {"factory.io/job-id": _short(cfg.job_id), "factory.io/kind": KIND}
     )
+    # #481: seed file-auth CLI creds into the Job pod (opt-in; env-auth unchanged).
+    _inject_verify_seed_creds(manifest)
     return manifest
 
 

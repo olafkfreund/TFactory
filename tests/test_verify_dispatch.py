@@ -191,6 +191,52 @@ def _cfg(**kw) -> VerifyJobConfig:
     return VerifyJobConfig(**base)  # type: ignore[arg-type]
 
 
+def test_seed_creds_off_by_default(monkeypatch):
+    # No TFACTORY_VERIFY_CLI_CREDS_SECRET → env-auth-only path (#480) unchanged:
+    # no seed initContainer, no cc-* / cli-creds volumes.
+    monkeypatch.delenv("TFACTORY_VERIFY_CLI_CREDS_SECRET", raising=False)
+    pod = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
+    # The base manifest has a seed-nix-store initContainer; we must NOT add a
+    # seed-creds one (nor any cli-creds / cc-* volumes) when off.
+    init_names = {c["name"] for c in pod.get("initContainers", [])}
+    assert "seed-creds" not in init_names
+    vol_names = {v["name"] for v in pod.get("volumes", [])}
+    assert "cli-creds" not in vol_names
+    assert "cc-claude" not in vol_names
+
+
+def test_seed_creds_injected_when_secret_configured(monkeypatch):
+    # #481: opt-in file-auth credential seeding into the verify Job pod.
+    monkeypatch.setenv("TFACTORY_VERIFY_CLI_CREDS_SECRET", "factory-cli-creds")
+    pod = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
+
+    init = next(c for c in pod["initContainers"] if c["name"] == "seed-creds")
+    assert init["image"].startswith("busybox")
+    seed_mount = next(mt for mt in init["volumeMounts"] if mt["name"] == "cli-creds")
+    assert seed_mount["mountPath"] == "/seed"
+    assert seed_mount.get("readOnly") is True
+    script = init["args"][0]
+    for key in (
+        "claude-credentials.json",
+        "codex-auth.json",
+        "copilot-apps.json",
+        "gemini-oauth_creds.json",
+    ):
+        assert f"/seed/{key}" in script
+    assert "|| true" in script  # tolerant: a missing provider file never aborts
+
+    cli = next(v for v in pod["volumes"] if v["name"] == "cli-creds")
+    assert cli["secret"]["secretName"] == "factory-cli-creds"
+
+    mounts = {mt["mountPath"] for mt in pod["containers"][0]["volumeMounts"]}
+    assert {
+        "/home/nonroot/.claude",
+        "/home/nonroot/.codex",
+        "/home/nonroot/.gemini",
+        "/home/nonroot/.config",
+    } <= mounts
+
+
 def test_manifest_is_a_job_with_the_configured_image():
     m = build_verify_job_manifest(_cfg())
     assert m["kind"] == "Job"
