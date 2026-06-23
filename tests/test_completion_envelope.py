@@ -305,3 +305,49 @@ def test_envelope_is_plain_json_serializable(tmp_path, monkeypatch):
     assert isinstance(env, dict)
     dumped = json.dumps(env, indent=2)
     assert json.loads(dumped) == env
+
+
+# ── running cost: usage snapshot for a non-terminal verify run ───────────────
+
+
+def test_emit_usage_snapshot_posts_when_nonterminal_with_usage(tmp_path, monkeypatch):
+    import agents.triager as tr
+    import usage as usage_mod
+
+    posted: list = []
+    monkeypatch.setattr(tr, "_deliver_completion", lambda p: posted.append(p))
+    monkeypatch.setattr(
+        usage_mod,
+        "usage_block_from_status",
+        lambda _sd: {"total_tokens": 4242, "cost_usd": 0.1},
+    )
+
+    spec_dir = tmp_path / "spec"
+    spec_dir.mkdir()
+    status = {
+        "task_id": "001",
+        "project_id": "demo",
+        "status": "evaluated",  # NON-terminal (triager didn't reach a verdict)
+        "updated_at": "2026-06-08T12:00:00+00:00",
+    }
+    tr.emit_usage_snapshot(spec_dir, status)
+
+    assert len(posted) == 1
+    assert posted[0]["status"] == "evaluated"
+    assert posted[0]["usage"]["total_tokens"] == 4242
+
+
+def test_emit_usage_snapshot_noop_without_usage(tmp_path, monkeypatch):
+    import agents.triager as tr
+    import usage as usage_mod
+
+    posted: list = []
+    monkeypatch.setattr(tr, "_deliver_completion", lambda p: posted.append(p))
+    monkeypatch.setattr(
+        usage_mod, "usage_block_from_status", lambda _sd: {"total_tokens": 0}
+    )
+
+    spec_dir = tmp_path / "spec"
+    spec_dir.mkdir()
+    tr.emit_usage_snapshot(spec_dir, {"status": "evaluated"})
+    assert posted == []

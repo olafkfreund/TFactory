@@ -776,6 +776,14 @@ def _notify_completion(spec_dir: Path, status: dict) -> None:
                 "triager: completion sentinel write failed (degraded)", exc_info=True
             )
 
+    _deliver_completion(payload)
+
+
+def _deliver_completion(payload: CompletionEnvelope) -> None:
+    """POST the completion envelope to the env-gated webhook — the durable outbox
+    (at-least-once, #281) when ``TFACTORY_COMPLETION_OUTBOX`` is set, else a direct
+    best-effort POST. Shared by the terminal notifier and the running-cost usage
+    snapshot. Best-effort: every failure is swallowed."""
     url = _completion_webhook_url()
     if not url:
         return
@@ -813,6 +821,32 @@ def _notify_completion(spec_dir: Path, status: dict) -> None:
     except Exception:
         # Webhook is best-effort; never surface failures into the pipeline.
         pass
+
+
+def emit_usage_snapshot(spec_dir: Path, status: dict[str, object]) -> None:
+    """Emit a NON-terminal, usage-bearing completion event so the cockpit reflects
+    RUNNING cost for a verify run that spent LLM tokens (planner / gen-functional /
+    evaluator) but did NOT reach a terminal triage status — e.g. the run halted at
+    a gate or wrote a non-terminal final status.
+
+    Cost accrues continuously, so usage must reach CFactory independent of a
+    terminal verdict. The triager's terminal path already carries the full
+    ``usage`` block; this fills the gap for runs that never terminally triage.
+    Posts the env-gated webhook only (NO ``COMPLETED`` sentinel — the run is not
+    done). Best-effort; no-op when there is no usage to report. Never raises."""
+    try:
+        payload: CompletionEnvelope = _build_completion_envelope(spec_dir, status)
+        # The envelope already computed the usage block (usage_block_from_status);
+        # read it from there rather than re-importing, so there's no usage to
+        # report -> no emit.
+        usage = payload.get("usage") or {}
+        if int(usage.get("total_tokens", 0) or 0) <= 0:
+            return
+        _deliver_completion(payload)
+    except Exception:  # noqa: BLE001 - usage reporting must never break the pipeline
+        _triage_log.debug(
+            "triager: usage snapshot emit failed (best-effort)", exc_info=True
+        )
 
 
 # ─── The agent itself ───────────────────────────────────────────────────
