@@ -1,6 +1,7 @@
 ---
 title: Regression Suite
 layout: default
+permalink: /regression-suite/
 ---
 
 # Regression suite and continuous verification (RFC-0018)

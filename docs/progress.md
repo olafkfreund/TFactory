@@ -79,14 +79,18 @@ Backend tests: 531 (v0.1) → 1225 (v0.2) → 2803 (v0.5)
   could not launch its runner (no container runtime) and so never ran the
   generated tests; it now executes pytest in a host virtualenv against the real
   code and collects JUnit + coverage.
-- **Job-native verify execution (RFC-0016/0017, in progress — NOT the live
-  default)** — the verify pipeline can run as a per-task k8s Job in a
-  contract-declared Nix toolchain. Merged this week: the Job runs on the TFactory
-  image so the agents import (#479), and the Job env receives LLM provider
-  credentials (#480). **The production default remains the in-pod path** — the
-  default flip (#466/#469) is gated and was reverted pending re-validation after
-  Job-native build validation did not pass cleanly. #479/#480 are the fixes that
-  brought it close; the flip waits on a green re-validation.
+- **Job-native verify execution (RFC-0016/0017) — default flip LIVE
+  (#466 closed, 2026-06-23)** — the verify pipeline runs as a per-task k8s Job in
+  a contract-declared Nix toolchain. `TFACTORY_VERIFY_EXEC=kubejob` is set on the
+  reference deployment (gitops d9db3d5). The earlier blockers are resolved: the
+  Job runs on the TFactory image so the agents import (#479), the Job env receives
+  LLM provider credentials (#480), and file-auth CLI creds are seeded into the Job
+  via an initContainer (#481). Proven live by a `dispatch_verify_job` smoke — a
+  real Job ran the full pipeline (evaluator executed the generated pytest,
+  stability 3/3, mutation killed; triager ran an in-Job LLM session) → verdict
+  `accept` with a durable `done`/`triaged` job-state row and traceability matrix.
+  The in-pod path remains as the safe fallback (the shipped code default), but the
+  live deployment is Job-native.
 
 ### Factory PARR spine (shipped, v0.9.x)
 
