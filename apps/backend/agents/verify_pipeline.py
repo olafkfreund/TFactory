@@ -78,6 +78,20 @@ async def run_verify_pipeline(
     triage_ok = await run_triager(spec_dir, project_dir, mode=mode)  # type: ignore[arg-type]
 
     final_status = str(read_status(spec_dir).get("status") or "")
+
+    # Running-cost: when the triager reaches a terminal status it emits a
+    # completion event carrying the full usage block. If the run spent LLM tokens
+    # (planner / gen-functional / evaluator) but did NOT terminally triage (a gate
+    # halt, or a non-terminal final status), no event carried that cost — emit a
+    # usage snapshot so the cockpit still reflects the accrued spend. Best-effort.
+    from agents.triager import (  # noqa: PLC0415 - lazy by design
+        _TERMINAL_STATUSES,
+        emit_usage_snapshot,
+    )
+
+    if final_status not in _TERMINAL_STATUSES:
+        emit_usage_snapshot(spec_dir, read_status(spec_dir))
+
     ok = eval_ok and triage_ok
     return ok, final_status
 
