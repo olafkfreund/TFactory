@@ -835,12 +835,13 @@ def emit_usage_snapshot(spec_dir: Path, status: dict[str, object]) -> None:
     Posts the env-gated webhook only (NO ``COMPLETED`` sentinel — the run is not
     done). Best-effort; no-op when there is no usage to report. Never raises."""
     try:
-        from usage import usage_block_from_status
-
-        usage = usage_block_from_status(spec_dir)
-        if not usage or int(usage.get("total_tokens", 0) or 0) <= 0:
-            return
         payload: CompletionEnvelope = _build_completion_envelope(spec_dir, status)
+        # The envelope already computed the usage block (usage_block_from_status);
+        # read it from there rather than re-importing, so there's no usage to
+        # report -> no emit.
+        usage = payload.get("usage") or {}
+        if int(usage.get("total_tokens", 0) or 0) <= 0:
+            return
         _deliver_completion(payload)
     except Exception:  # noqa: BLE001 - usage reporting must never break the pipeline
         _triage_log.debug(
