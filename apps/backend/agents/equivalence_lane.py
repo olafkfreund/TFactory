@@ -26,9 +26,12 @@ import hashlib
 import json
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from agents.equivalence_runner import ParityReport, compare_corpus
+
+if TYPE_CHECKING:
+    from agents.execution_sandbox import ExecutionSandbox
 
 # A runner executes a command in the sandbox and returns an object exposing
 # ``.stdout`` (str) and ``.returncode`` (int). Matches the DockerRunner result
@@ -363,7 +366,10 @@ def _kube_oracle_runner(
             f"echo {vectors} | base64 -d > /tmp/o/v.json && "
             "cd /tmp/o && PYTHONPATH=/tmp/o python h.py v.json"
         )
-        res = KubeJobSandbox(image=image, namespace=namespace).run([cmd], timeout=300)
-        return type("R", (), {"stdout": res.output, "returncode": res.exit_code})()
+        # Consume the live Nix-Job engine through the unified seam (#426). The
+        # returned JobRunResult now exposes `.stdout`/`.returncode` directly, so
+        # the historical ad-hoc result shim is gone.
+        sandbox: ExecutionSandbox = KubeJobSandbox(image=image, namespace=namespace)
+        return sandbox.run([cmd], timeout=300)
 
     return _run
