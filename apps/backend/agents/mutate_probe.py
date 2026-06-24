@@ -44,7 +44,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Protocol
+
+from agents.run_result import RunResultLike
 
 
 class MutationVerdict(str, Enum):
@@ -56,15 +57,9 @@ class MutationVerdict(str, Enum):
     ERROR = "error"  # runner raised, or mutation broke parse
 
 
-class _RunResultLike(Protocol):
-    """Duck-type for DockerRunResult — same shape as stability_runner."""
-
-    @property
-    def returncode(self) -> int: ...
-    @property
-    def stdout(self) -> str: ...
-    @property
-    def stderr(self) -> str: ...
+# Shared structural result contract (extracted to agents/run_result.py, #426).
+# Aliased to the historical local name so the annotation below stays unchanged.
+_RunResultLike = RunResultLike
 
 
 @dataclass(frozen=True)
