@@ -148,6 +148,22 @@ def _python_attr(m: Manifest) -> str:
     return _PY_ATTR.get(ver or "", "python313")
 
 
+# go toolchain version -> nixpkgs attr. Bare `go` tracks the pinned nixpkgs'
+# default Go (always present); a requested minor only maps to an explicit
+# attr for versions we know exist in the pin, else degrades to `go` rather
+# than emitting a non-existent attr (which would fail the flake eval).
+_GO_ATTR = {
+    "1.21": "go_1_21",
+    "1.22": "go_1_22",
+    "1.23": "go_1_23",
+}
+
+
+def _go_attr(m: Manifest) -> str:
+    ver = m.toolchain.get("go")
+    return _GO_ATTR.get(ver or "", "go")
+
+
 # nixpkgs top-level attrs we know how to map system_packages onto. Browser libs
 # come bundled with playwright-driver.browsers, so a bare 'chromium' is dropped
 # in favour of the playwright stack (added separately) to avoid version skew.
@@ -167,16 +183,22 @@ def generate_flake(env: dict, *, nixpkgs: str = DEFAULT_NIXPKGS) -> str:
     consumers call the Nix binaries directly.
     """
     m = Manifest.from_contract(env)
-    py = _python_attr(m)
-    py_pkgs = [_PY_PKG_ALIASES.get(p, p) for p in _python_libs(m)]
+    lang = (m.language or "python").lower()
     sys_attrs = _system_pkg_attrs(m)
 
     pkg_lines: list[str] = []
-    if py_pkgs:
-        joined = " ".join(py_pkgs)
-        pkg_lines.append(f"(pkgs.{py}.withPackages (p: with p; [ {joined} ]))")
+    if lang == "go":
+        # Go has no withPackages set — the toolchain is one attr; test/coverage
+        # tools (gotestsum, gocover-cobertura) ride in as system_packages.
+        pkg_lines.append(f"pkgs.{_go_attr(m)}")
     else:
-        pkg_lines.append(f"pkgs.{py}")
+        py = _python_attr(m)
+        py_pkgs = [_PY_PKG_ALIASES.get(p, p) for p in _python_libs(m)]
+        if py_pkgs:
+            joined = " ".join(py_pkgs)
+            pkg_lines.append(f"(pkgs.{py}.withPackages (p: with p; [ {joined} ]))")
+        else:
+            pkg_lines.append(f"pkgs.{py}")
     sys_attrs_with_node = list(sys_attrs)
     browser = _needs_browser(m)
     if browser:
@@ -329,6 +351,24 @@ def _test() -> None:
     }
     f3 = generate_flake(env_sys)
     assert "pkgs.pkg-config" in f3 and "pkgs.openssl" in f3, f3
+
+    # 3b. go manifest -> go toolchain + test/coverage tools, no python/withPackages.
+    env_go = {
+        "language": "go",
+        "toolchain": {"go": "1.22"},
+        "system_packages": ["gotestsum", "gocover-cobertura"],
+        "verify_commands": ["go test ./..."],
+        "provisioning": {"method": "nix", "ref": "flake.nix", "generated": True},
+    }
+    fg = generate_flake(env_go)
+    assert "pkgs.go_1_22" in fg, fg
+    assert "pkgs.gotestsum" in fg and "pkgs.gocover-cobertura" in fg, fg
+    assert "withPackages" not in fg and "python" not in fg, fg
+    assert "pytest" not in fg, fg  # no python libs inferred for a go env
+    # unknown/unset go version degrades to bare `pkgs.go` (no system pkgs here,
+    # so `pkgs.go` is the sole package line — no false match on gocover etc.).
+    fg2 = generate_flake({"language": "go", "verify_commands": ["go test ./..."]})
+    assert "pkgs.go" in fg2 and "pkgs.gocover" not in fg2, fg2
 
     # 4. nix develop argv shape.
     argv = nix_develop_argv("/work", ["pytest -q", "playwright test"])
