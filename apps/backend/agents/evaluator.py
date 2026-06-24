@@ -1281,6 +1281,100 @@ def _build_jest_signal_bundle(
     )
 
 
+# ─── Go-lane signal computation (Go unit tests via the per-task Nix shell) ──
+#
+# Go ``_test.go`` files live next to the code they test, so there's no
+# single-file staging like pytest/Jest — the generated tests are copied into
+# the worktree at their repo-relative paths and ``gotestsum ./...`` runs the
+# whole module inside the per-task Nix dev shell (RFC-0005 Tier A k8s Job).
+
+
+def _completed_go_subtasks(plan: dict) -> list[dict]:
+    """Completed unit-lane Go subtasks Gen-Functional generated.
+
+    Like pytest/Jest these sit in the unit lane, but they're Go — so they run
+    via the per-task Nix dev shell (gotestsum over the whole module), not the
+    pytest runner. The pytest filter excludes them (language != python) and the
+    Jest filter excludes them (language != typescript), so without this lane a
+    Go subtask would be silently dropped.
+    """
+    return _filter_completed_subtasks(
+        plan,
+        lambda st: (
+            st.get("lane") in ("unit", "functional")
+            and st.get("language") == "go"
+        ),
+    )
+
+
+def _stage_go_test(spec_dir: Path, project_dir: Path, subtask: dict) -> None:
+    """Copy a Go subtask's generated ``_test.go`` files from the workspace into
+    the worktree at their repo-relative paths, so ``go test ./...`` (which runs
+    over the co-mounted worktree) sees them next to the code they exercise."""
+    import shutil as _sh
+
+    for rel in subtask.get("files_to_create") or []:
+        src = spec_dir / rel
+        if not src.exists():
+            continue
+        dst = Path(project_dir) / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        _sh.copy2(src, dst)
+
+
+def _resolve_go_runner_fn(spec_dir: Path, project_dir: Path):
+    """Return a runner_fn(test_file, project_dir, seed) -> DockerRunResult that
+    runs the Go module's tests in the per-task Nix dev shell (gotestsum ./...).
+
+    ``test_file`` is used only as the module-resolution hint (Go runs the whole
+    module each call, since its ``_test.go`` files live next to the code). When
+    the Nix-lane sandbox isn't configured (``TFACTORY_NIX_RUNNER_IMAGE`` unset)
+    the lane returns a failing result so the gap surfaces honestly in the
+    stability signal rather than silently passing.
+    """
+    from agents.nix_env import run_gotest_lane_via_nix
+    from tools.runners.docker_runner import DockerRunResult
+
+    def _run(test_file: Path, project_dir_arg: Path, seed: int) -> DockerRunResult:
+        # Prefer the repo-relative path as the hint so the module resolver finds
+        # the right go.mod in a multi-module repo; fall back to the raw path.
+        try:
+            hint = Path(test_file).relative_to(spec_dir)
+        except ValueError:
+            hint = Path(test_file)
+        res = run_gotest_lane_via_nix(spec_dir, Path(project_dir_arg), hint=hint)
+        if res is not None:
+            return res
+        return DockerRunResult(
+            returncode=1,
+            stdout="",
+            stderr="go nix lane unavailable: TFACTORY_NIX_RUNNER_IMAGE unset",
+            argv=["nix", "develop", "--", "go", "test", "./..."],
+        )
+
+    return _run
+
+
+def _build_go_signal_bundle(
+    spec_dir: Path, project_dir: Path, subtask: dict, runner_fn
+) -> EvaluatorSignals:
+    """Signal bundle for a Go unit subtask: 3× stability via gotestsum over the
+    module; coverage_delta + mutation skipped in the demo path (the lane emits
+    Cobertura coverage, but there's no before/after baseline to diff yet)."""
+    stability = _stability_for_subtask(spec_dir, project_dir, subtask, runner_fn)
+    return EvaluatorSignals(
+        test_id=subtask["id"],
+        test_file=spec_dir / subtask["files_to_create"][0],
+        target=subtask.get("target") or "?",
+        rationale=subtask.get("rationale") or "?",
+        coverage_delta=None,
+        stability=stability,
+        mutation=None,
+        lint_promotion=_lint_promotion_for_subtask(spec_dir, subtask),
+        flaky_history=_flaky_history_for_subtask(spec_dir, subtask, stability),
+    )
+
+
 # ─── Verdicts.json validation ───────────────────────────────────────────
 #
 # Extracted to agents.evaluator_verdicts (issue #450). Re-imported below so
@@ -1413,11 +1507,12 @@ def _gate_target_health(spec_dir, subtask, target, target_url) -> None:
         _eval_log.warning("health gate skipped: %s", exc)
 
 
-def _build_all_bundles(spec_dir, project_dir, unit, browser, api, jest) -> list:
+def _build_all_bundles(spec_dir, project_dir, unit, browser, api, jest, go) -> list:
     """Compute the per-test signal bundle for every completed subtask.
 
     runner_fn is the mockable seam — tests pass canned results so Docker isn't
     required. Browser/api targets may be Kubernetes (port-forwarded, #108).
+    Go runs the whole module in the per-task Nix dev shell (gotestsum ./...).
     """
     bundles = []
     if unit:
@@ -1463,6 +1558,16 @@ def _build_all_bundles(spec_dir, project_dir, unit, browser, api, jest) -> list:
         bundles += [
             _build_jest_signal_bundle(spec_dir, project_dir, st, jest_runner)
             for st in jest
+        ]
+    if go:
+        # Stage every generated _test.go into the worktree first, then run the
+        # module: `go test ./...` must see all of them on every stability pass.
+        for st in go:
+            _stage_go_test(spec_dir, project_dir, st)
+        go_runner = _resolve_go_runner_fn(spec_dir, project_dir)
+        bundles += [
+            _build_go_signal_bundle(spec_dir, project_dir, st, go_runner)
+            for st in go
         ]
     return bundles
 
@@ -1632,7 +1737,14 @@ async def run_evaluator(
         browser_completed = _completed_browser_subtasks(plan)
         api_completed = _completed_api_subtasks(plan)
         jest_completed = _completed_jest_subtasks(plan)
-        completed = unit_completed + browser_completed + api_completed + jest_completed
+        go_completed = _completed_go_subtasks(plan)
+        completed = (
+            unit_completed
+            + browser_completed
+            + api_completed
+            + jest_completed
+            + go_completed
+        )
 
         # 2. No work — early exit with evaluated_empty.
         if not completed:
@@ -1682,6 +1794,7 @@ async def run_evaluator(
             browser_completed,
             api_completed,
             jest_completed,
+            go_completed,
         )
 
         # 4-5. Invoke the SDK session + validate the verdicts it wrote.
