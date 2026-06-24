@@ -246,6 +246,138 @@ def test_run_pytest_lane_via_nix_missing_marker_is_failure(tmp_path, monkeypatch
     assert res is not None and res.returncode == 1 and res.ok is False
 
 
+# ── run_gotest_lane_via_nix (Go test-execution lane, TFactory#443) ──────────
+
+_GO_CONTRACT_ENV = {
+    "language": "go",
+    "toolchain": {"go": "1.22"},
+    "system_packages": ["gotestsum", "gocover-cobertura"],
+    "verify_commands": ["go test ./..."],
+    "provisioning": {"method": "nix", "ref": "flake.nix", "generated": True},
+    "network": "none",
+}
+
+
+def test_go_environment_prefers_contract_then_synthesizes(tmp_path):
+    from agents.nix_env import go_environment
+
+    spec = tmp_path / "specs" / "g1"
+    spec.mkdir(parents=True)
+    # No contract -> synthesized bare-go env carrying the JUnit/coverage tools.
+    syn = go_environment(spec)
+    assert syn["language"] == "go" and syn["toolchain"] == {}
+    assert "gotestsum" in syn["system_packages"]
+    assert syn["provisioning"]["method"] == "nix"
+    # A contract declaring a go nix env wins (authoritative toolchain).
+    _write_contract(spec, _GO_CONTRACT_ENV)
+    assert go_environment(spec)["toolchain"] == {"go": "1.22"}
+    # A non-go contract env is ignored for the go lane -> synthesize instead.
+    _write_contract(spec, _UNIT_ENV)  # python
+    assert go_environment(spec)["toolchain"] == {}
+
+
+def test_go_module_dir_walks_up_to_go_mod(tmp_path):
+    from agents.nix_env import _go_module_dir
+
+    proj = tmp_path / "proj"
+    mod = proj / "scenarios" / "go-hello"
+    pkg = mod / "greeting"
+    pkg.mkdir(parents=True)
+    (mod / "go.mod").write_text("module example.com/hello\n")
+    test_file = pkg / "greet_test.go"
+    test_file.write_text("package greeting\n")
+    # hint inside a nested package -> walk up to the enclosing module root.
+    assert _go_module_dir(proj, test_file) == mod.resolve()
+    # no hint -> shallowest go.mod under the project.
+    assert _go_module_dir(proj, None) == mod.resolve()
+    # no go.mod anywhere -> project root.
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    assert _go_module_dir(bare, None) == bare.resolve()
+
+
+def test_run_gotest_lane_via_nix_noop_when_sandbox_unconfigured(tmp_path, monkeypatch):
+    from agents.nix_env import run_gotest_lane_via_nix
+
+    spec = tmp_path / "specs" / "g1"
+    spec.mkdir(parents=True)
+    project = tmp_path / "proj"
+    mod = project / "scenarios" / "go-hello"
+    mod.mkdir(parents=True)
+    (mod / "go.mod").write_text("module x\n")
+    monkeypatch.delenv("TFACTORY_NIX_RUNNER_IMAGE", raising=False)
+    # synthesized nix env present but no runner image -> graceful skip (None).
+    assert run_gotest_lane_via_nix(spec, project) is None
+
+
+def test_run_gotest_lane_via_nix_result_shape(tmp_path, monkeypatch):
+    """With a fake sandbox + reports, returns a DockerRunResult-shaped green result."""
+    from agents.nix_env import run_gotest_lane_via_nix
+
+    spec = tmp_path / "specs" / "g1"
+    spec.mkdir(parents=True)  # no contract -> synthesized go env
+    project = tmp_path / "proj"
+    mod = project / "scenarios" / "go-hello"
+    mod.mkdir(parents=True)
+    (mod / "go.mod").write_text("module example.com/hello\n")
+    (mod / "greet_test.go").write_text("package main\n")
+
+    captured = {}
+
+    class _FakeSandbox:
+        def run(self, commands, *, workdir=None, timeout=600):
+            captured["commands"] = commands
+            captured["timeout"] = timeout
+            captured["script"] = (Path(workdir) / "_tf_nix_job.sh").read_text()
+            # Simulate the Job writing JUnit + Cobertura into the staging dir.
+            stage = Path(workdir) / ".tf_gotest"
+            stage.mkdir(parents=True, exist_ok=True)
+            (stage / "junit.xml").write_text("<testsuites/>")
+            (stage / "coverage.xml").write_text("<coverage/>")
+            return JobRunResult(ok=True, exit_code=0, output="ok\n__GOTEST_EXIT=0\n")
+
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: _FakeSandbox())
+    res = run_gotest_lane_via_nix(
+        spec, project, hint=mod / "greet_test.go", extra_env={"CGO_ENABLED": "0"}
+    )
+    assert res is not None
+    assert res.returncode == 0 and res.ok is True
+    assert res.junit_xml_path is not None and res.junit_xml_path.is_file()
+    assert res.coverage_xml_path is not None and res.coverage_xml_path.is_file()
+    # The Job ran the proven `nix develop path:/work#default` recipe.
+    assert captured["commands"][0].startswith("nix develop path:/work#default")
+    # The synthesized flake carries the go toolchain + tools (PR-A).
+    flake = (project / "flake.nix").read_text()
+    assert "pkgs.go" in flake and "gotestsum" in flake, flake
+    # The job cd'd into the module subdir and ran gotestsum over ./... + cobertura.
+    script = captured["script"]
+    assert "cd /work/scenarios/go-hello" in script, script
+    assert "gotestsum --junitfile=/work/.tf_gotest/junit.xml" in script, script
+    assert "./..." in script and "gocover-cobertura" in script, script
+    assert "export CGO_ENABLED='0'" in script, script
+    assert not (project / "_tf_nix_job.sh").exists()  # cleaned up after the run
+
+
+def test_run_gotest_lane_via_nix_missing_marker_is_failure(tmp_path, monkeypatch):
+    from agents.nix_env import run_gotest_lane_via_nix
+
+    spec = tmp_path / "specs" / "g1"
+    spec.mkdir(parents=True)
+    project = tmp_path / "proj"
+    mod = project / "m"
+    mod.mkdir(parents=True)
+    (mod / "go.mod").write_text("module x\n")
+
+    class _FakeSandbox:
+        def run(self, commands, *, workdir=None, timeout=600):
+            return JobRunResult(ok=False, exit_code=1, output="boom (no marker)\n")
+
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: _FakeSandbox())
+    res = run_gotest_lane_via_nix(spec, project)
+    # No __GOTEST_EXIT marker -> treated as failure (never a false pass).
+    assert res is not None and res.returncode == 1 and res.ok is False
+
+
 def test_non_nix_env_returns_none(tmp_path):
     spec = tmp_path / "specs" / "027"
     spec.mkdir(parents=True)
