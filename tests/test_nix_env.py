@@ -15,6 +15,7 @@ from agents.nix_env import (
     run_browser_evidence,
     run_pytest_lane_via_nix,
 )
+from tools.runners.kube_sandbox import JobRunResult
 
 _UNIT_ENV = {
     "language": "python",
@@ -195,11 +196,6 @@ def test_run_pytest_lane_via_nix_result_shape(tmp_path, monkeypatch):
 
     captured = {}
 
-    class _FakeRes:
-        ok = True
-        exit_code = 0
-        output = "1 passed\n__PYTEST_EXIT=0\n"
-
     class _FakeSandbox:
         def run(self, commands, *, workdir=None, timeout=300):
             captured["commands"] = commands
@@ -209,7 +205,10 @@ def test_run_pytest_lane_via_nix_result_shape(tmp_path, monkeypatch):
             stage.mkdir(parents=True, exist_ok=True)
             (stage / "junit.xml").write_text("<testsuites/>")
             (stage / "coverage.xml").write_text("<coverage/>")
-            return _FakeRes()
+            # Return the real seam-conforming result the Nix engine produces.
+            return JobRunResult(
+                ok=True, exit_code=0, output="1 passed\n__PYTEST_EXIT=0\n"
+            )
 
     monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: _FakeSandbox())
     res = run_pytest_lane_via_nix(
@@ -235,14 +234,11 @@ def test_run_pytest_lane_via_nix_missing_marker_is_failure(tmp_path, monkeypatch
     test_file = project / "src_test.py"
     test_file.write_text("def test_ok(): assert True\n")
 
-    class _FakeRes:
-        ok = False
-        exit_code = 1
-        output = "boom (no marker line)\n"
-
     class _FakeSandbox:
         def run(self, commands, *, workdir=None, timeout=300):
-            return _FakeRes()
+            return JobRunResult(
+                ok=False, exit_code=1, output="boom (no marker line)\n"
+            )
 
     monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: _FakeSandbox())
     res = run_pytest_lane_via_nix(spec, project, test_file)
