@@ -36,6 +36,23 @@ class JobRunResult:
     exit_code: int
     output: str
 
+    # RunResultLike conformance (agents/run_result.py, #426): expose the same
+    # structural surface as DockerRunResult so the Nix-Job and Docker engines
+    # return one shape. The Job collects combined pod logs into `output`, so
+    # `stdout` mirrors it and `stderr` is empty (the stream split is not
+    # preserved by the kubernetes log API used here).
+    @property
+    def returncode(self) -> int:
+        return self.exit_code
+
+    @property
+    def stdout(self) -> str:
+        return self.output
+
+    @property
+    def stderr(self) -> str:
+        return ""
+
 
 def build_job_manifest(
     name: str,

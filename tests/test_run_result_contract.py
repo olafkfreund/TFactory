@@ -6,9 +6,8 @@ every backend must satisfy. These tests pin that contract:
   - ``DockerRunResult`` (the Docker per-lane path) conforms structurally.
   - The historical per-module ``_RunResultLike`` aliases all resolve to the one
     shared ``RunResultLike`` (no more triplicated copies).
-  - The Nix-Job ``JobRunResult`` does NOT yet conform — documenting the next
-    increment (give it ``returncode``/``stdout``/``stderr`` so both engines
-    return one shape).
+  - The Nix-Job ``JobRunResult`` also conforms (via alias properties), so both
+    execution engines return one structural shape.
 """
 
 from __future__ import annotations
@@ -41,11 +40,13 @@ def test_non_conforming_object_is_rejected():
     assert not isinstance(_Bare(), RunResultLike)
 
 
-def test_job_run_result_does_not_yet_conform():
-    # Records the current gap the next PR closes: the Nix-Job result exposes
-    # exit_code/output, not returncode/stdout/stderr.
+def test_job_run_result_conforms_via_alias_properties():
+    # The Nix-Job result now exposes the structural surface too: returncode,
+    # stdout and stderr alias exit_code / output / "" so both engines match.
     from tools.runners.kube_sandbox import JobRunResult
 
-    job = JobRunResult(ok=True, exit_code=0, output="logs")
-    assert not isinstance(job, RunResultLike)
-    assert not hasattr(job, "returncode")
+    job = JobRunResult(ok=False, exit_code=2, output="boom")
+    assert isinstance(job, RunResultLike)
+    assert job.returncode == 2
+    assert job.stdout == "boom"
+    assert job.stderr == ""
