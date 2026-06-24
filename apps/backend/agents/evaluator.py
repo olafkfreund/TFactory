@@ -1301,8 +1301,7 @@ def _completed_go_subtasks(plan: dict) -> list[dict]:
     return _filter_completed_subtasks(
         plan,
         lambda st: (
-            st.get("lane") in ("unit", "functional")
-            and st.get("language") == "go"
+            st.get("lane") in ("unit", "functional") and st.get("language") == "go"
         ),
     )
 
@@ -1356,12 +1355,20 @@ def _resolve_go_runner_fn(spec_dir: Path, project_dir: Path):
 
 
 def _build_go_signal_bundle(
-    spec_dir: Path, project_dir: Path, subtask: dict, runner_fn
+    spec_dir: Path, project_dir: Path, subtask: dict, runner_fn, stability=None
 ) -> EvaluatorSignals:
     """Signal bundle for a Go unit subtask: 3× stability via gotestsum over the
     module; coverage_delta + mutation skipped in the demo path (the lane emits
-    Cobertura coverage, but there's no before/after baseline to diff yet)."""
-    stability = _stability_for_subtask(spec_dir, project_dir, subtask, runner_fn)
+    Cobertura coverage, but there's no before/after baseline to diff yet).
+
+    ``stability`` may be precomputed and shared across the module's subtasks:
+    ``go test ./...`` is module-wide, so every Go unit subtask in the same module
+    has the IDENTICAL stability result — computing it once (see _build_all_bundles)
+    avoids dispatching 3 redundant Nix Jobs PER subtask, where a single transient
+    Job-dispatch error would otherwise flip the whole module to stability=ERROR
+    and downgrade accept→flag. Falls back to a per-subtask compute when None."""
+    if stability is None:
+        stability = _stability_for_subtask(spec_dir, project_dir, subtask, runner_fn)
     return EvaluatorSignals(
         test_id=subtask["id"],
         test_file=spec_dir / subtask["files_to_create"][0],
@@ -1565,8 +1572,22 @@ def _build_all_bundles(spec_dir, project_dir, unit, browser, api, jest, go) -> l
         for st in go:
             _stage_go_test(spec_dir, project_dir, st)
         go_runner = _resolve_go_runner_fn(spec_dir, project_dir)
+        # `go test ./...` is MODULE-WIDE, so its 3× stability result is identical
+        # for every Go unit subtask in the module. Compute it ONCE and share it,
+        # rather than 3 Nix Jobs PER subtask (12 for 4 subtasks) — fewer dispatches
+        # are faster and far less likely to hit a transient Job-dispatch error that
+        # flips the whole module to stability=ERROR (accept→flag). Use the first
+        # subtask's test_file as the representative; a None result (test missing /
+        # sandbox unconfigured) falls back to a per-subtask compute below.
+        shared_go_stability = (
+            _stability_for_subtask(spec_dir, project_dir, go[0], go_runner)
+            if go
+            else None
+        )
         bundles += [
-            _build_go_signal_bundle(spec_dir, project_dir, st, go_runner)
+            _build_go_signal_bundle(
+                spec_dir, project_dir, st, go_runner, stability=shared_go_stability
+            )
             for st in go
         ]
     return bundles

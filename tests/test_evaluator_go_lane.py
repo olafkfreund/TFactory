@@ -117,9 +117,7 @@ def test_go_runner_fails_closed_when_sandbox_unconfigured(
 ) -> None:
     # run_gotest_lane_via_nix returns None (TFACTORY_NIX_RUNNER_IMAGE unset);
     # the runner must report a failure, never a silent pass.
-    monkeypatch.setattr(
-        "agents.nix_env.run_gotest_lane_via_nix", lambda *a, **k: None
-    )
+    monkeypatch.setattr("agents.nix_env.run_gotest_lane_via_nix", lambda *a, **k: None)
     runner = _resolve_go_runner_fn(tmp_path / "spec", tmp_path / "project")
     res = runner(tmp_path / "spec" / "x_test.go", tmp_path / "project", 0)
     assert res.returncode == 1
@@ -175,9 +173,7 @@ def test_build_all_bundles_stages_and_builds_go_bundle(
     go = _completed_go_subtasks(
         {"phases": [{"phase": 1, "name": "m", "subtasks": [_go_subtask()]}]}
     )
-    bundles = _build_all_bundles(
-        spec_dir, project_dir, [], [], [], [], go
-    )
+    bundles = _build_all_bundles(spec_dir, project_dir, [], [], [], [], go)
 
     # The generated test was staged into the worktree before running.
     assert (project_dir / rel).is_file()
@@ -186,3 +182,48 @@ def test_build_all_bundles_stages_and_builds_go_bundle(
     assert bundles[0].test_id == "st-go-0"
     # The Nix lane ran (3× stability → at least one call).
     assert calls and all(c == project_dir for c in calls)
+
+
+def test_go_module_stability_computed_once_and_shared(tmp_path, monkeypatch):
+    # `go test ./...` is module-wide, so its stability is identical for every Go
+    # unit subtask. The evaluator must compute it ONCE (3 reruns) and share it
+    # across the module's subtasks — NOT 3 Nix Jobs per subtask (which a single
+    # transient dispatch error would flip to stability=ERROR → accept downgrades
+    # to flag).
+    spec_dir = tmp_path / "spec"
+    project_dir = tmp_path / "project"
+    subtasks = []
+    for i in range(3):
+        rel = f"greet_{i}_test.go"
+        (spec_dir / rel).parent.mkdir(parents=True, exist_ok=True)
+        (spec_dir / rel).write_text("package main\n")
+        subtasks.append(
+            {
+                "id": f"st-go-{i}",
+                "status": "completed",
+                "lane": "unit",
+                "language": "go",
+                "files_to_create": [rel],
+            }
+        )
+
+    calls = []
+
+    def _fake(spec, proj, *, hint=None, **k):
+        calls.append(hint)
+        return DockerRunResult(returncode=0, stdout="PASS", argv=["go", "test"])
+
+    monkeypatch.setattr("agents.nix_env.run_gotest_lane_via_nix", _fake)
+
+    go = _completed_go_subtasks(
+        {"phases": [{"phase": 1, "name": "m", "subtasks": subtasks}]}
+    )
+    bundles = _build_all_bundles(spec_dir, project_dir, [], [], [], [], go)
+
+    # A bundle per subtask, but the module test ran ONCE (3 stability reruns),
+    # not 3× per subtask (which would be 9 calls for 3 subtasks).
+    assert len(bundles) == 3
+    assert len(calls) == 3  # 3 reruns of the single shared module stability
+    # Every bundle shares the SAME stability object (computed once).
+    stabilities = {id(b.stability) for b in bundles}
+    assert len(stabilities) == 1
