@@ -48,7 +48,9 @@ import traceback
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal
+
+from agents.run_result import RunResultLike
 
 if TYPE_CHECKING:
     from tools.runners.docker_runner import DockerRunResult
@@ -171,15 +173,9 @@ async def _invoke_session(
 # ─── Runner-fn seam for stability + mutation primitives ─────────────────
 
 
-class _RunResultLike(Protocol):
-    """Same duck-type as stability_runner/mutate_probe expect."""
-
-    @property
-    def returncode(self) -> int: ...
-    @property
-    def stdout(self) -> str: ...
-    @property
-    def stderr(self) -> str: ...
+# Shared structural result contract (extracted to agents/run_result.py, #426).
+# Aliased to the historical local name so the annotation below stays unchanged.
+_RunResultLike = RunResultLike
 
 
 _PYTEST_IMAGE = "tfactory-runner-pytest:latest"

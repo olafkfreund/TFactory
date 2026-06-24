@@ -33,7 +33,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Protocol
+
+from agents.run_result import RunResultLike
 
 # How many times to re-run. Three is the smallest N that can yield
 # all four verdict outcomes (stable, flaky, consistent_fail, error)
@@ -56,16 +57,9 @@ class StabilityVerdict(str, Enum):
     ERROR = "error"  # the runner itself raised, not a test failure
 
 
-class _RunResultLike(Protocol):
-    """Duck-type for DockerRunResult — keeps this module decoupled
-    from the docker_runner import for circular-import safety."""
-
-    @property
-    def returncode(self) -> int: ...
-    @property
-    def stdout(self) -> str: ...
-    @property
-    def stderr(self) -> str: ...
+# Shared structural result contract (extracted to agents/run_result.py, #426).
+# Aliased to the historical local name so the annotation below stays unchanged.
+_RunResultLike = RunResultLike
 
 
 @dataclass(frozen=True)
