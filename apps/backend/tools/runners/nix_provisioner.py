@@ -361,14 +361,14 @@ def _test() -> None:
         "provisioning": {"method": "nix", "ref": "flake.nix", "generated": True},
     }
     fg = generate_flake(env_go)
-    assert "pkgs.go_1_22" in fg, fg
-    assert "pkgs.gotestsum" in fg and "pkgs.gocover-cobertura" in fg, fg
-    assert "withPackages" not in fg and "python" not in fg, fg
-    assert "pytest" not in fg, fg  # no python libs inferred for a go env
+    assert "pkgs.go_1_22" in fg, fg  # noqa: S101
+    assert "pkgs.gotestsum" in fg and "pkgs.gocover-cobertura" in fg, fg  # noqa: S101
+    assert "withPackages" not in fg and "python" not in fg, fg  # noqa: S101
+    assert "pytest" not in fg, fg  # noqa: S101 — no python libs inferred for a go env
     # unknown/unset go version degrades to bare `pkgs.go` (no system pkgs here,
     # so `pkgs.go` is the sole package line — no false match on gocover etc.).
     fg2 = generate_flake({"language": "go", "verify_commands": ["go test ./..."]})
-    assert "pkgs.go" in fg2 and "pkgs.gocover" not in fg2, fg2
+    assert "pkgs.go" in fg2 and "pkgs.gocover" not in fg2, fg2  # noqa: S101
 
     # 4. nix develop argv shape.
     argv = nix_develop_argv("/work", ["pytest -q", "playwright test"])
