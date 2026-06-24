@@ -120,6 +120,83 @@ async def _clone_and_register_project(
     return pdata, pid
 
 
+def _existing_project_dir(configured: str | None) -> str | None:
+    """Return ``configured`` iff it is a safe, existing directory, else ``None``.
+
+    Project paths are always persisted absolute + canonical
+    (``projects.register`` stores ``str(Path(...).resolve())``). Re-assert that
+    invariant before the filesystem touch: reject empty, non-absolute, or
+    parent-traversal (``..``) values so a malformed/hostile project ``path`` —
+    reachable from the spec-ingest request chain via self-registration — can
+    never flow into ``Path.is_dir`` as an uncontrolled path expression.
+    """
+    from pathlib import Path
+
+    if not configured:
+        return None
+    candidate = Path(configured)
+    if not candidate.is_absolute() or ".." in candidate.parts:
+        return None
+    return configured if candidate.is_dir() else None
+
+
+async def _ensure_project_clone(
+    entry: dict, resolved_id: str, *, source_branch: str | None
+) -> str:
+    """Make sure the project's on-disk clone exists, re-cloning if it was recycled.
+
+    A registered project's working tree can vanish out from under TFactory — a
+    pod restart on an ephemeral volume, a PVC reset, a manual cleanup — while the
+    project DB record persists. The planner then resolves ``project_dir`` to that
+    now-missing path and the agent SDK raises "Working directory does not exist",
+    surfacing as ``status=planner_failed`` / ``phase=planner_initial_exception``
+    before any test lane runs (#539). Self-heal: if the path is gone but we know
+    where it came from (``clonedFrom``), re-clone it — idempotent, since the same
+    git URL maps to the same workspace slug → same path — and persist. If we
+    don't know the origin, fail with a clear 409 rather than a downstream planner
+    crash.
+
+    Returns the resolved (possibly re-created) project path.
+    """
+    import os
+    from pathlib import Path
+
+    from ..services.project_workspace_service import clone_or_update
+    from .projects import load_projects, save_projects
+
+    configured = entry.get("path") or entry.get("root_path")
+    existing = _existing_project_dir(configured)
+    if existing is not None:
+        return existing
+
+    git_url = entry.get("clonedFrom")
+    if not git_url:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail=(
+                f"project {resolved_id!r} working directory is missing "
+                f"({configured!r}) and has no clonedFrom origin to restore it "
+                "from; re-register the project with a git_url"
+            ),
+        )
+
+    branch = entry.get("clonedBranch") or source_branch
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    credential = ("x-access-token", token) if token else None
+    cloned = await clone_or_update(
+        git_url=git_url, branch=branch, credential=credential
+    )
+    path = str(Path(cloned).resolve())
+
+    # Persist the re-materialized path so subsequent reads see a live clone.
+    projects = load_projects()
+    if resolved_id in projects:
+        projects[resolved_id]["path"] = path
+        save_projects(projects)
+    entry["path"] = path
+    return path
+
+
 @router.post(
     "/ingest", summary="Create a TFactory task from a raw spec (no AIFactory branch)"
 )
@@ -161,6 +238,13 @@ async def ingest_spec(req: SpecIngestRequest) -> dict:
             ),
         )
 
+    # The project is registered, but its on-disk clone may have been recycled
+    # (pod/PVC restart) — re-materialize it before the planner resolves it as a
+    # working dir, or the planner fails with planner_initial_exception (#539).
+    project_root = await _ensure_project_clone(
+        entry, resolved_id, source_branch=req.source_branch
+    )
+
     try:
         result = create_spec_ingest_workspace(
             project_id=resolved_id,
@@ -168,7 +252,7 @@ async def ingest_spec(req: SpecIngestRequest) -> dict:
             spec_text=req.spec_text,
             fmt=req.format,
             target_paths=req.target_paths or [],
-            project_root=entry.get("path") or entry.get("root_path") or ".",
+            project_root=project_root,
             contract=req.contract,
             source_branch=req.source_branch,
         )
