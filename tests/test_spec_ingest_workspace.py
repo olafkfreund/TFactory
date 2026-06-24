@@ -67,16 +67,26 @@ def _spec_dir(tmp_path: Path, spec_id="spec1") -> Path:
 
 def _git(cwd, *args):
     import subprocess
-    return subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True)
+
+    return subprocess.run(
+        ["git", "-C", str(cwd), *args], capture_output=True, text=True
+    )
 
 
 def test_source_branch_recorded_and_warns_when_not_git(tmp_path):
     """source_branch is recorded in source.json; a non-git project_root surfaces a
     warning but never aborts ingest (#96)."""
-    result = _ingest(tmp_path, _MARKDOWN, target_paths=["src/x.py"],
-                     project_root=str(tmp_path / "not-a-repo"), source_branch="aifactory/123")
+    result = _ingest(
+        tmp_path,
+        _MARKDOWN,
+        target_paths=["src/x.py"],
+        project_root=str(tmp_path / "not-a-repo"),
+        source_branch="aifactory/123",
+    )
     assert result["source_format"] == "markdown"
-    assert any("source_branch" in w or "not a git repo" in w for w in result["warnings"])
+    assert any(
+        "source_branch" in w or "not a git repo" in w for w in result["warnings"]
+    )
     source = json.loads((_spec_dir(tmp_path) / "context" / "source.json").read_text())
     assert source["source_branch"] == "aifactory/123"
 
@@ -85,6 +95,7 @@ def test_source_branch_checks_out_built_code(tmp_path):
     """The build branch is fetched + checked out into project_root, so the SUT is
     the ACTUAL built code — the fix for the hollow-verify gap (#96)."""
     import subprocess
+
     origin = tmp_path / "origin"
     origin.mkdir()
     _git(origin, "init", "-q")
@@ -93,7 +104,9 @@ def test_source_branch_checks_out_built_code(tmp_path):
     (origin / "README.md").write_text("base")
     _git(origin, "add", ".")
     _git(origin, "commit", "-qm", "base")
-    base_branch = _git(origin, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() or "main"
+    base_branch = (
+        _git(origin, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() or "main"
+    )
     _git(origin, "checkout", "-qb", "aifactory/999")
     (origin / "built.rs").write_text('fn greet() -> &str { "Hello" }')
     _git(origin, "add", ".")
@@ -105,8 +118,13 @@ def test_source_branch_checks_out_built_code(tmp_path):
     subprocess.run(["git", "clone", "-q", str(origin), str(proj)], capture_output=True)
     assert not (proj / "built.rs").exists()  # base branch lacks the build
 
-    _ingest(tmp_path, _MARKDOWN, target_paths=["built.rs"],
-            project_root=str(proj), source_branch="aifactory/999")
+    _ingest(
+        tmp_path,
+        _MARKDOWN,
+        target_paths=["built.rs"],
+        project_root=str(proj),
+        source_branch="aifactory/999",
+    )
 
     # After ingest the build branch is checked out — the built code is present.
     assert (proj / "built.rs").exists()
@@ -198,6 +216,47 @@ def test_contract_persisted_for_authoritative_profile(tmp_path):
     prof = parse_tfactory_profile(got)
     assert prof is not None
     assert prof.lanes == ("unit", "api")
+
+
+def test_contract_phase_models_written_to_task_metadata(tmp_path):
+    # The handoff contract's execution.phase_models (the build's model choice,
+    # e.g. Ollama) is translated into spec_dir/task_metadata.json so the verify
+    # lanes (evaluator/planner/qa via get_phase_model) run on the same provider
+    # instead of TFactory's default. Only the get_phase_model keys are kept.
+    import json as _json
+
+    contract = {
+        "contract_version": "2",
+        "execution": {
+            "phase_models": {
+                "spec": "openai-compatible:gpt-oss:120b",
+                "planning": "openai-compatible:gpt-oss:120b",
+                "coding": "openai-compatible:gpt-oss:120b",
+                "qa": "openai-compatible:gpt-oss:120b",
+                "qa_fixer": "openai-compatible:gpt-oss:120b",
+                "test_gen": "openai-compatible:gpt-oss:120b",
+            }
+        },
+    }
+    _ingest(tmp_path, _MARKDOWN, target_paths=["app/main.py"], contract=contract)
+    meta_path = _spec_dir(tmp_path) / "task_metadata.json"
+    assert meta_path.exists()
+    meta = _json.loads(meta_path.read_text())
+    assert meta["isAutoProfile"] is True
+    assert set(meta["phaseModels"]) == {"spec", "planning", "coding", "qa", "qa_fixer"}
+    assert meta["phaseModels"]["coding"] == "openai-compatible:gpt-oss:120b"
+
+
+def test_no_phase_models_no_task_metadata(tmp_path):
+    # A contract without execution.phase_models writes no task_metadata.json
+    # (verify keeps its default model resolution).
+    _ingest(
+        tmp_path,
+        _MARKDOWN,
+        target_paths=["app/main.py"],
+        contract={"contract_version": "2", "tfactory": {"lanes": ["unit"]}},
+    )
+    assert not (_spec_dir(tmp_path) / "task_metadata.json").exists()
 
 
 def test_no_contract_means_inference(tmp_path):

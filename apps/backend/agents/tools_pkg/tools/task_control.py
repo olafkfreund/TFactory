@@ -292,6 +292,27 @@ def create_spec_ingest_workspace(
     ):
         (context_dir / "task_contract.json").write_text(json.dumps(contract, indent=2))
 
+    # Route the verify lanes to the build's chosen models. The handoff contract
+    # carries them in execution.phase_models (set by AIFactory when the build ran
+    # on a non-default provider, e.g. Ollama). get_phase_model — used by the
+    # evaluator/planner/qa lanes — reads task_metadata.json, so translate the
+    # contract's phase_models into one here. Without this, a verify of an
+    # Ollama-built task silently falls back to TFactory's default (sonnet).
+    exec_block = contract.get("execution") if isinstance(contract, dict) else None
+    phase_models = (
+        exec_block.get("phase_models") if isinstance(exec_block, dict) else None
+    )
+    if isinstance(phase_models, dict) and phase_models:
+        pm = {
+            k: phase_models[k]
+            for k in ("spec", "planning", "coding", "qa", "qa_fixer")
+            if isinstance(phase_models.get(k), str)
+        }
+        if pm:
+            (spec_dir / "task_metadata.json").write_text(
+                json.dumps({"isAutoProfile": True, "phaseModels": pm}, indent=2)
+            )
+
     # Check out the AIFactory build branch into project_root so tests run against
     # the ACTUAL built code (#96). Best-effort: a failure is surfaced as a warning
     # and ingest proceeds (tests then run against whatever is checked out).
