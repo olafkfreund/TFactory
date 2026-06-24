@@ -341,3 +341,88 @@ def test_planner_prompt_mentions_tfactory_yml_and_catalog_context_files() -> Non
     p = get_tfactory_planner_prompt(Path("/ws/x"), Path("/p"))
     assert "tfactory_yml.json" in p
     assert "tests_catalog.json" in p
+
+
+# =============================================================================
+# #443 — deterministic language detection (no more pytest-by-default for Go)
+# =============================================================================
+
+from prompts_pkg.prompts import _build_detected_language_block  # noqa: E402
+
+
+def _spec_with_ac(tmp_path: Path, ac_text: str) -> Path:
+    spec_dir = tmp_path / "spec"
+    (spec_dir / "context").mkdir(parents=True)
+    (spec_dir / "context" / "aifactory_spec.md").write_text(ac_text)
+    return spec_dir
+
+
+def test_detect_go_from_ac_commands(tmp_path: Path) -> None:
+    """`go test` in the AC text pins the project to (go, go-test), not pytest."""
+    spec_dir = _spec_with_ac(tmp_path, "## AC\n- AC#6: `go test ./...` passes.")
+    block = _build_detected_language_block(spec_dir, tmp_path / "proj")
+    assert "DETECTED PROJECT LANGUAGE" in block
+    assert "**go** project" in block
+    assert "language: go" in block
+    assert "framework: go-test" in block
+    assert "Do NOT emit pytest" in block
+
+
+def test_ac_command_wins_over_ambiguous_manifests(tmp_path: Path) -> None:
+    """A go.mod + pyproject.toml repo still routes to Go when the AC says `go test`."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "go.mod").write_text("module hello\n")
+    (proj / "pyproject.toml").write_text("[project]\nname='x'\n")
+    spec_dir = _spec_with_ac(tmp_path, "Verify with `go test ./...`.")
+    block = _build_detected_language_block(spec_dir, proj)
+    assert "**go** project" in block
+    assert "language: go" in block
+    # the Python manifest is reported as corroboration, never as the choice
+    assert "pyproject.toml" in block
+
+
+def test_detect_python_has_no_pytest_warning(tmp_path: Path) -> None:
+    """A pytest AC pins Python and omits the 'do NOT emit pytest' warning."""
+    spec_dir = _spec_with_ac(tmp_path, "- run `pytest tests/`")
+    block = _build_detected_language_block(spec_dir, tmp_path / "proj")
+    assert "**python** project" in block
+    assert "language: python" in block
+    assert "Do NOT emit pytest" not in block
+
+
+def test_detect_from_manifest_only_when_unambiguous(tmp_path: Path) -> None:
+    """No AC command but a lone go.mod → Go by manifest."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "go.mod").write_text("module hello\n")
+    spec_dir = _spec_with_ac(tmp_path, "Greet the user politely.")
+    block = _build_detected_language_block(spec_dir, proj)
+    assert "**go** project" in block
+
+
+def test_no_signal_emits_detect_via_glob_guidance(tmp_path: Path) -> None:
+    """No AC command and no manifest → tell the agent to detect, never assume pytest."""
+    spec_dir = _spec_with_ac(tmp_path, "Greet the user politely.")
+    block = _build_detected_language_block(spec_dir, tmp_path / "proj")
+    assert "No deterministic language signal" in block
+    assert "never assume pytest" in block
+
+
+def test_full_prompt_includes_detected_language_block(tmp_path: Path) -> None:
+    """get_tfactory_planner_prompt threads the detected-language block in."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "go.mod").write_text("module hello\n")
+    spec_dir = _spec_with_ac(tmp_path, "- AC#6: `go test ./...` passes.")
+    p = get_tfactory_planner_prompt(spec_dir, proj)
+    assert "## DETECTED PROJECT LANGUAGE" in p
+    assert "framework: go-test" in p
+
+
+def test_planner_body_offers_go_in_schema_and_registry() -> None:
+    """planner.md now lists Go as a language option and go-test as a framework."""
+    p = get_tfactory_planner_prompt(Path("/ws/x"), Path("/p"))
+    assert "go" in p and "go-test" in p
+    # the framework registry block enumerates the real go-test descriptor
+    assert "go-test: language=go" in p
