@@ -35,6 +35,7 @@ from tools.runners.nix_provisioner import (
 )
 
 if TYPE_CHECKING:
+    from agents.execution_sandbox import ExecutionSandbox
     from tools.runners.kube_sandbox import KubeJobSandbox
 
 _log = logging.getLogger(__name__)
@@ -150,7 +151,9 @@ def run_pytest_lane_via_nix(
     plan = materialize_flake(spec_dir, project_dir, env=env)
     if plan is None:
         return None
-    sandbox = nix_runner_from_env()
+    # Consume the engine purely through the unified seam (#426): this lane works
+    # with any ExecutionSandbox the factory returns, not just KubeJobSandbox.
+    sandbox: ExecutionSandbox | None = nix_runner_from_env()
     if sandbox is None:
         _log.info("run_pytest_lane_via_nix: TFACTORY_NIX_RUNNER_IMAGE unset; skipping")
         return None
@@ -196,12 +199,12 @@ def run_pytest_lane_via_nix(
         (pd / _JOB_SCRIPT).unlink(missing_ok=True)
         staged_test.unlink(missing_ok=True)
 
-    code = _parse_pytest_exit(res.output)
+    code = _parse_pytest_exit(res.stdout)
     junit = stage / "junit.xml"
     cov = stage / "coverage.xml"
     return DockerRunResult(
         returncode=code,
-        stdout=res.output or "",
+        stdout=res.stdout or "",
         stderr="",
         junit_xml_path=junit if junit.is_file() else None,
         coverage_xml_path=cov if cov.is_file() else None,
@@ -285,7 +288,8 @@ def run_browser_evidence(
     plan = materialize_flake(spec_dir, project_dir, env=env)
     if plan is None:
         return None
-    sandbox = nix_runner_from_env()
+    # Same unified-seam consumption as run_pytest_lane_via_nix (#426).
+    sandbox: ExecutionSandbox | None = nix_runner_from_env()
     if sandbox is None:
         _log.info("run_browser_evidence: TFACTORY_NIX_RUNNER_IMAGE unset; skipping")
         return None
@@ -341,8 +345,8 @@ def run_browser_evidence(
         findings.mkdir(parents=True, exist_ok=True)
         (findings / "browser_evidence.json").write_text(json.dumps(results, indent=2))
     return {
-        "ok": res.ok,
-        "output_tail": (res.output or "")[-2000:],
+        "ok": res.returncode == 0,
+        "output_tail": (res.stdout or "")[-2000:],
         "serve_command": serve,
         "specs": n_specs,
         "screenshots": [str(p) for p in shots],
