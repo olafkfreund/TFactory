@@ -79,15 +79,17 @@ class TaskCreate(TaskBase):
     """Model for creating a new task."""
 
     project_id: str = Field(..., description="ID of the project this task belongs to")
-    metadata: Optional["TaskMetadataUpdate"] = Field(None, description="Optional task metadata")
+    metadata: Optional["TaskMetadataUpdate"] = Field(
+        None, description="Optional task metadata"
+    )
 
 
 class SelectedSkill(BaseModel):
     """A skill selected to be applied to a task."""
 
-    id: str           # '{category}/{skill_name}'
-    name: str         # human-readable display name
-    category: str     # parent category
+    id: str  # '{category}/{skill_name}'
+    name: str  # human-readable display name
+    category: str  # parent category
     source: str | None = None  # optional source URL from skill metadata
 
 
@@ -132,10 +134,14 @@ class Task(TaskBase):
     subtasks: list[Subtask] = Field(default_factory=list)
     created_at: str = Field(..., description="ISO timestamp")
     updated_at: str = Field(..., description="ISO timestamp")
-    worktree_path: str | None = Field(None, description="Path to git worktree if active")
+    worktree_path: str | None = Field(
+        None, description="Path to git worktree if active"
+    )
     branch_name: str | None = Field(None, description="Git branch name")
     metadata: TaskMetadata | None = Field(None, description="Task metadata")
-    review_reason: str | None = Field(None, description="Reason for human review (e.g., 'plan_review')")
+    review_reason: str | None = Field(
+        None, description="Reason for human review (e.g., 'plan_review')"
+    )
 
 
 class TaskList(BaseModel):
@@ -333,6 +339,7 @@ def sync_worktree_to_main_spec(project_path: Path, spec_id: str) -> bool:
         # Only sync if worktree has more progress (more completed subtasks)
         if worktree_completed > main_completed:
             import logging
+
             logger = logging.getLogger(__name__)
             logger.info(
                 f"[WorktreeSync] Syncing plan for {spec_id}: "
@@ -344,7 +351,10 @@ def sync_worktree_to_main_spec(project_path: Path, spec_id: str) -> bool:
         return False
     except (json.JSONDecodeError, OSError) as e:
         import logging
-        logging.getLogger(__name__).warning(f"[WorktreeSync] Failed to sync {spec_id}: {e}")
+
+        logging.getLogger(__name__).warning(
+            f"[WorktreeSync] Failed to sync {spec_id}: {e}"
+        )
         return False
 
 
@@ -520,14 +530,18 @@ def load_spec_metadata(spec_dir: Path) -> dict:
                 else:
                     # Check validation phase completed (strongest completion signal)
                     validation_phase = phases.get("validation", {})
-                    if validation_phase.get("status") == "completed" and validation_phase.get("entries"):
+                    if validation_phase.get(
+                        "status"
+                    ) == "completed" and validation_phase.get("entries"):
                         metadata["phase"] = "validation"
                         metadata["status"] = "human_review"
                         metadata["reviewReason"] = "completed"
                     else:
                         # Fall back to coding phase completed
                         coding_phase = phases.get("coding", {})
-                        if coding_phase.get("status") == "completed" and coding_phase.get("entries"):
+                        if coding_phase.get(
+                            "status"
+                        ) == "completed" and coding_phase.get("entries"):
                             metadata["phase"] = "coding"
                             metadata["status"] = "human_review"
                             metadata["reviewReason"] = "completed"
@@ -572,7 +586,10 @@ def load_spec_metadata(spec_dir: Path) -> dict:
             # Check for qa_signoff.status == "approved" which means task completed QA
             # This should show as human_review for final merge approval
             qa_signoff = plan.get("qa_signoff") or {}
-            if qa_signoff.get("status") == "approved" and metadata["status"] == "backlog":
+            if (
+                qa_signoff.get("status") == "approved"
+                and metadata["status"] == "backlog"
+            ):
                 metadata["status"] = "human_review"
                 metadata["reviewReason"] = "completed"
 
@@ -655,21 +672,26 @@ def load_spec_metadata(spec_dir: Path) -> dict:
                             # Simple string verification becomes a command
                             verification = SubtaskVerification(type="command", run=v)
                     elif st.get("verification_method"):
-                        verification = SubtaskVerification(type="command", run=st["verification_method"])
+                        verification = SubtaskVerification(
+                            type="command", run=st["verification_method"]
+                        )
 
-                    metadata["subtasks"].append(Subtask(
-                        id=st.get("id", str(i)),
-                        title=st.get("title") or st.get("description", f"Subtask {i+1}")[:80],
-                        description=st.get("description") or st.get("notes"),
-                        status=st.get("status", "pending"),
-                        files=files,
-                        verification=verification,
-                        # Lane + timing for the live diagram (#94). Present on
-                        # lane-tagged test plans; tolerate absence.
-                        lane=st.get("lane"),
-                        started_at=st.get("started_at"),
-                        completed_at=st.get("completed_at"),
-                    ))
+                    metadata["subtasks"].append(
+                        Subtask(
+                            id=st.get("id", str(i)),
+                            title=st.get("title")
+                            or st.get("description", f"Subtask {i + 1}")[:80],
+                            description=st.get("description") or st.get("notes"),
+                            status=st.get("status", "pending"),
+                            files=files,
+                            verification=verification,
+                            # Lane + timing for the live diagram (#94). Present on
+                            # lane-tagged test plans; tolerate absence.
+                            lane=st.get("lane"),
+                            started_at=st.get("started_at"),
+                            completed_at=st.get("completed_at"),
+                        )
+                    )
         except (json.JSONDecodeError, KeyError):
             pass
 
@@ -811,7 +833,15 @@ def get_execution_progress(spec_dir: Path, subtasks: list) -> dict | None:
     """
     # Also check worktree for task_logs.json
     project_path = spec_dir.parent.parent  # .tfactory/specs -> project root
-    worktree_spec_dir = project_path / "worktrees" / "tasks" / spec_dir.name / ".tfactory" / "specs" / spec_dir.name
+    worktree_spec_dir = (
+        project_path
+        / "worktrees"
+        / "tasks"
+        / spec_dir.name
+        / ".tfactory"
+        / "specs"
+        / spec_dir.name
+    )
 
     task_logs_file = None
     for check_dir in [worktree_spec_dir, spec_dir]:
@@ -955,7 +985,9 @@ def task_to_dict(task: Task) -> dict:
                         if "archivedAt" in plan:
                             archive_metadata["archivedAt"] = plan["archivedAt"]
                         if "archivedInVersion" in plan:
-                            archive_metadata["archivedInVersion"] = plan["archivedInVersion"]
+                            archive_metadata["archivedInVersion"] = plan[
+                                "archivedInVersion"
+                            ]
                     except json.JSONDecodeError:
                         pass
 
@@ -978,7 +1010,9 @@ def task_to_dict(task: Task) -> dict:
                     "type": s.verification.type,
                     "run": s.verification.run,
                     "scenario": s.verification.scenario,
-                } if s.verification else None,
+                }
+                if s.verification
+                else None,
                 # Lane + timing for the cockpit's live diagram (#94).
                 "lane": getattr(s, "lane", None),
                 "started_at": getattr(s, "started_at", None),
@@ -999,7 +1033,9 @@ def task_to_dict(task: Task) -> dict:
         result["executionProgress"] = execution_progress
 
     # Include task metadata (settings from requirements.json)
-    metadata_payload = task.metadata.model_dump(exclude_none=True) if task.metadata else {}
+    metadata_payload = (
+        task.metadata.model_dump(exclude_none=True) if task.metadata else {}
+    )
     if archive_metadata:
         metadata_payload.update(archive_metadata)  # Add archive info if any
     if metadata_payload:
@@ -1138,10 +1174,24 @@ Created via Magestic AI Web UI
 
             # Sync task_metadata.json for phase_config.py to read model/thinking settings
             # Also include selectedSkills so agent_service.py can inject skill context
-            model_fields = ["model", "thinkingLevel", "isAutoProfile", "phaseModels", "phaseThinking", "mode", "selectedSkills"]
-            task_metadata = {field: metadata_dict[field] for field in model_fields if field in metadata_dict}
+            model_fields = [
+                "model",
+                "thinkingLevel",
+                "isAutoProfile",
+                "phaseModels",
+                "phaseThinking",
+                "mode",
+                "selectedSkills",
+            ]
+            task_metadata = {
+                field: metadata_dict[field]
+                for field in model_fields
+                if field in metadata_dict
+            }
             if task_metadata:
-                (spec_dir / "task_metadata.json").write_text(json.dumps(task_metadata, indent=2))
+                (spec_dir / "task_metadata.json").write_text(
+                    json.dumps(task_metadata, indent=2)
+                )
 
     (spec_dir / "requirements.json").write_text(json.dumps(requirements, indent=2))
 
@@ -1159,7 +1209,9 @@ def _resolve_task(task_id: str) -> tuple[str, str, Path, Path]:
     Raises HTTPException on invalid input or missing resources.
     """
     if ":" not in task_id:
-        raise HTTPException(status_code=400, detail="Invalid task_id format (expected projectId:specId)")
+        raise HTTPException(
+            status_code=400, detail="Invalid task_id format (expected projectId:specId)"
+        )
 
     project_id, spec_id = task_id.split(":", 1)
     projects = load_projects()
@@ -1279,10 +1331,10 @@ async def update_task(task_id: str, update: TaskUpdate):
         if update.description:
             # Replace description paragraph (second section after title)
             # Split by double newline: [title, description, rest...]
-            sections = current_content.split('\n\n', 2)
+            sections = current_content.split("\n\n", 2)
             if len(sections) >= 2:
                 sections[1] = update.description
-                current_content = '\n\n'.join(sections)
+                current_content = "\n\n".join(sections)
 
         spec_file.write_text(current_content)
 
@@ -1346,7 +1398,16 @@ async def update_task(task_id: str, update: TaskUpdate):
 
             # Update model-related fields that phase_config.py expects
             # Also include selectedSkills so agent_service.py can inject skill context
-            model_fields = ["model", "thinkingLevel", "isAutoProfile", "phaseModels", "phaseThinking", "mode", "requireReviewBeforeCoding", "selectedSkills"]
+            model_fields = [
+                "model",
+                "thinkingLevel",
+                "isAutoProfile",
+                "phaseModels",
+                "phaseThinking",
+                "mode",
+                "requireReviewBeforeCoding",
+                "selectedSkills",
+            ]
             for field in model_fields:
                 if field in metadata_dict:
                     if metadata_dict[field] is None:
@@ -1368,35 +1429,45 @@ async def update_task(task_id: str, update: TaskUpdate):
 
 @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_task(task_id: str):
-    """Delete a task (removes spec directory)."""
-    if ":" not in task_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid task ID format",
-        )
+    """Delete a task (removes its spec directory).
 
-    project_id, spec_id = task_id.split(":", 1)
+    Accepts both id shapes:
+      - ``project_id:spec_id`` — an AIFactory-style task; resolve the project
+        directly.
+      - bare ``spec_id`` — a SPEC-INGEST task (created via /api/specs/ingest) is
+        keyed by its spec_id with no project prefix, and that's what the cockpit's
+        Remove action sends. Previously this 400'd ("Invalid task ID format"), so
+        a failed ingested task was unremovable and kept reappearing via the
+        reconcile poll. Resolve it by finding the project whose workspace holds
+        the spec.
+    """
     projects = load_projects()
 
-    if project_id not in projects:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found",
-        )
+    if ":" in task_id:
+        project_id, spec_id = task_id.split(":", 1)
+        if project_id not in projects:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found",
+            )
+        candidates = [projects[project_id]]
+    else:
+        # Bare spec_id (spec-ingest): search every project's workspace for it.
+        spec_id = task_id
+        candidates = list(projects.values())
 
-    project_path = Path(projects[project_id]["path"])
-    spec_dir = project_path / ".tfactory" / "specs" / spec_id
-
-    if not spec_dir.exists():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Task not found",
-        )
-
-    # Remove directory (recursively)
     import shutil
 
-    shutil.rmtree(spec_dir)
+    for entry in candidates:
+        spec_dir = Path(entry["path"]) / ".tfactory" / "specs" / spec_id
+        if spec_dir.exists():
+            shutil.rmtree(spec_dir)
+            return
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Task not found",
+    )
 
 
 class ApprovePlanRequest(BaseModel):
@@ -1418,8 +1489,6 @@ class RejectPlanRequest(BaseModel):
     )
 
 
-
-
 def _try_close_github_issue(project_path: Path, spec_dir: Path) -> None:
     """Try to close a linked GitHub issue. Logs but doesn't raise on failure."""
     try:
@@ -1437,18 +1506,24 @@ def _try_close_github_issue(project_path: Path, spec_dir: Path) -> None:
         if not issue_number:
             return
         from .github import run_gh_command
+
         result = run_gh_command(
             ["issue", "close", str(issue_number)],
             cwd=str(project_path),
         )
         if result["success"]:
             import logging
-            logging.getLogger(__name__).info(f"Auto-closed GitHub issue #{issue_number}")
+
+            logging.getLogger(__name__).info(
+                f"Auto-closed GitHub issue #{issue_number}"
+            )
         else:
             import logging
+
             logging.getLogger(__name__).warning(
                 f"Failed to auto-close GitHub issue #{issue_number}: {result.get('error', 'unknown')}"
             )
     except Exception as e:
         import logging
+
         logging.getLogger(__name__).warning(f"Error auto-closing GitHub issue: {e}")
