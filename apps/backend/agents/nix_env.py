@@ -120,6 +120,7 @@ _E2E_STAGE = ".tf_e2e"  # staged generated browser specs (in the worktree)
 _PW_CONFIG = "_tf_pw.config.ts"
 _SHOTS = "shots"
 _PYTEST_STAGE = ".tf_pytest"  # staged junit/coverage the Nix Job writes back
+_GOTEST_STAGE = ".tf_gotest"  # staged junit/coverage the Go Nix Job writes back
 _NIX_MOUNT = "/work"  # where KubeJobSandbox co-mounts the worktree in the Job
 
 
@@ -212,24 +213,164 @@ def run_pytest_lane_via_nix(
     )
 
 
+def go_environment(spec_dir: Path) -> dict:
+    """The Go nix environment for the verify lane.
+
+    Prefer the contract ``environment`` block when it declares a *Go* nix env
+    (authoritative — the same toolchain the build used, no drift). Otherwise
+    SYNTHESIZE a minimal Go devShell: a spec-ingest task (a raw acceptance spec,
+    no contract) carries no environment block, so a Go plan would have no
+    toolchain to run against. The synthesized env pins bare ``go`` plus the
+    JUnit/coverage tools (gotestsum, gocover-cobertura) as system packages —
+    PR-A taught ``generate_flake`` to render exactly this.
+    """
+    env = environment_from_contract(spec_dir)
+    if is_nix_environment(env) and (env.get("language") or "").lower() == "go":
+        return env  # type: ignore[return-value]  # narrowed by is_nix_environment
+    return {
+        "language": "go",
+        "toolchain": {},
+        "system_packages": ["gotestsum", "gocover-cobertura"],
+        "verify_commands": ["go test ./..."],
+        "provisioning": {"method": "nix", "generated": True},
+        "network": "none",
+    }
+
+
+def _go_module_dir(project_dir: Path, hint: Path | None) -> Path:
+    """Resolve the Go module root (the dir holding ``go.mod``) inside the worktree.
+
+    ``go test ./...`` runs from the module root, which is often a subdir of the
+    clone (e.g. ``scenarios/go-hello/``), not the repo root. Prefer the module
+    enclosing ``hint`` (a test file / target path — walk up to its ``go.mod``);
+    else the shallowest ``go.mod`` under the project; else the project root.
+    Always returns a directory at or below ``project_dir``.
+    """
+    pd = Path(project_dir).resolve()
+    if hint is not None:
+        start = Path(hint)
+        start = start if start.is_absolute() else pd / start
+        if start.suffix:  # a file path -> begin the walk at its parent dir
+            start = start.parent
+        start = start.resolve()
+        if pd == start or pd in start.parents:
+            for d in (start, *start.parents):
+                if (d / "go.mod").is_file():
+                    return d
+                if d == pd:
+                    break
+    mods = sorted(
+        (m for m in pd.rglob("go.mod") if m.is_file()), key=lambda p: len(p.parts)
+    )
+    return mods[0].parent if mods else pd
+
+
+def run_gotest_lane_via_nix(
+    spec_dir: Path,
+    project_dir: Path,
+    *,
+    hint: Path | None = None,
+    extra_env: dict[str, str] | None = None,
+    timeout: int = 600,
+) -> DockerRunResult | None:
+    """Run the Go module's tests inside the per-task Nix dev shell as a k8s Job.
+
+    The Go toolchain (go + gotestsum + gocover-cobertura) comes from the
+    materialized flake — declared in the contract ``environment`` or, for a
+    spec-ingest task with no contract, synthesized by :func:`go_environment` — so
+    the verify env never drifts from the build env. The worktree is co-mounted at
+    ``_NIX_MOUNT``; the Job ``cd``s into the resolved module root and runs
+    ``gotestsum ... ./...`` over the WHOLE module (Go ``_test.go`` files live next
+    to the code they test, so there's no single-file staging like the pytest
+    lane), then converts the coverage profile to Cobertura XML. JUnit + coverage
+    are written into a staging dir on the worktree and collected back as a
+    DockerRunResult, exactly like :func:`run_pytest_lane_via_nix`.
+
+    Returns None when the sandbox isn't configured (caller falls back).
+    """
+    mount = _NIX_MOUNT
+    env = go_environment(spec_dir)
+    plan = materialize_flake(spec_dir, project_dir, env=env)
+    if plan is None:
+        return None
+    sandbox: ExecutionSandbox | None = nix_runner_from_env()
+    if sandbox is None:
+        _log.info("run_gotest_lane_via_nix: TFACTORY_NIX_RUNNER_IMAGE unset; skipping")
+        return None
+
+    pd = Path(project_dir)
+    module_dir = _go_module_dir(pd, hint)
+    rel = "." if module_dir == pd.resolve() else str(module_dir.relative_to(pd.resolve()))
+    run_dir = mount if rel == "." else f"{mount}/{rel}"
+
+    stage = pd / _GOTEST_STAGE
+    shutil.rmtree(stage, ignore_errors=True)
+    stage.mkdir(parents=True, exist_ok=True)
+    # The Job runs as a non-root uid against the co-mounted worktree; make the
+    # staging dir writable so gotestsum/gocover-cobertura can drop reports there.
+    with contextlib.suppress(OSError):
+        stage.chmod(0o777)
+
+    exports = "".join(
+        f"export {k}={_shquote(str(v))}\n" for k, v in (extra_env or {}).items()
+    )
+    sd = f"{mount}/{_GOTEST_STAGE}"
+    # gotestsum runs `go test ./...` (emitting JUnit) and forwards -coverprofile;
+    # set +e + the marker line recover the real test exit (the wrapper exits 0 so
+    # the Job "succeeds"); gocover-cobertura converts the profile to Cobertura XML.
+    gotest_cmd = (
+        f"cd {run_dir} && "
+        f"gotestsum --junitfile={sd}/junit.xml --format=testname -- "
+        f"-coverprofile={sd}/cover.out -covermode=atomic ./... 2>&1; "
+        f"echo __GOTEST_EXIT=$?; "
+        f"gocover-cobertura < {sd}/cover.out > {sd}/coverage.xml 2>/dev/null || true"
+    )
+    (pd / _JOB_SCRIPT).write_text(
+        "#!/usr/bin/env bash\nset +e\n" + exports + gotest_cmd + "\n",
+        encoding="utf-8",
+    )
+    job_cmd = f"nix develop path:{mount}#default --command bash {mount}/{_JOB_SCRIPT}"
+    try:
+        res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)
+    finally:
+        (pd / _JOB_SCRIPT).unlink(missing_ok=True)
+
+    code = _parse_exit_marker(res.stdout, "__GOTEST_EXIT=")
+    junit = stage / "junit.xml"
+    cov = stage / "coverage.xml"
+    return DockerRunResult(
+        returncode=code,
+        stdout=res.stdout or "",
+        stderr="",
+        junit_xml_path=junit if junit.is_file() else None,
+        coverage_xml_path=cov if cov.is_file() else None,
+        argv=["nix", "develop", f"path:{mount}#default", "--", "go", "test", "./..."],
+    )
+
+
 def _shquote(s: str) -> str:
     """Minimal POSIX single-quote escaping for an in-shell `export`."""
     return "'" + s.replace("'", "'\"'\"'") + "'"
 
 
-def _parse_pytest_exit(output: str | None) -> int:
-    """Recover the pytest exit code from the ``__PYTEST_EXIT=<n>`` marker line.
+def _parse_exit_marker(output: str | None, prefix: str) -> int:
+    """Recover an exit code from a ``<prefix><n>`` marker line emitted by a Job.
 
-    The Job wraps pytest in a shell that always exits 0 (so the Job is
+    The Job wraps the test command in a shell that always exits 0 (so the Job is
     "succeeded") and appends the real code on a marker line. Returns the last
     parseable marker, or 1 when none is present (treat a missing marker as a
     failure rather than a false pass)."""
     code = 1
     for line in (output or "").splitlines():
-        if line.startswith("__PYTEST_EXIT="):
+        if line.startswith(prefix):
             with contextlib.suppress(ValueError):
                 code = int(line.split("=", 1)[1])
     return code
+
+
+def _parse_pytest_exit(output: str | None) -> int:
+    """Recover the pytest exit code from the ``__PYTEST_EXIT=<n>`` marker line."""
+    return _parse_exit_marker(output, "__PYTEST_EXIT=")
 
 
 def _stage_browser_specs(spec_dir: Path, project_dir: Path) -> int:
