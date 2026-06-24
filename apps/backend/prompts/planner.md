@@ -56,8 +56,8 @@ The file must be valid JSON that loads cleanly into the
   "description": "<one sentence, imperative — 'Verify the API returns 401 when ...'>",
   "status": "pending",
   "lane": "<unit|browser|api|integration|mutation>",
-  "language": "<python|typescript>",
-  "framework": "<pytest|jest|playwright>",
+  "language": "<python|typescript|go|rust>",
+  "framework": "<pytest|jest|playwright|go-test>",
   "target_name": "<.tfactory.yml target name, or null if no target declared>",
   "intent": "<create|update|skip>",
   "target": "<repo-relative path>::<symbol>",
@@ -86,6 +86,22 @@ The file must be valid JSON that loads cleanly into the
 ## Picking the framework (algorithm — apply in order)
 
 For each acceptance criterion (AC) you plan a subtask for:
+
+### Step 0 — Determine the target LANGUAGE first
+
+Before anything else, decide the project's language. **The DETECTED PROJECT
+LANGUAGE block injected above is authoritative when present** — honour it. If it
+is absent or inconclusive, derive the language from the acceptance-criteria
+*commands* and the project manifest:
+
+- AC says `go test` / `go build`, or a `go.mod` exists → **`(go, go-test, unit)`**.
+- AC says `cargo test` / `cargo build`, or a `Cargo.toml` exists → **`rust`**.
+- AC says `pytest`, or `pyproject.toml` / `setup.py` exists → **`(python, pytest, unit)`**.
+- AC says `npm test` / `jest` / `vitest`, or `package.json` exists → **`(typescript, jest, unit)`**.
+
+Set BOTH `language` and `framework` on every subtask to match. **Never leave
+`language` null and never default a non-Python target to pytest** — that emits
+`.py` tests for a `.go`/`.rs`/`.ts` target, which run nothing.
 
 ### Step 1 — Check the TESTS CATALOG (injected above)
 
@@ -120,8 +136,11 @@ Look at the files changed in `diff.patch`:
 - Majority `.py` files → `(python, pytest, unit)` for unit / function tests.
 - Majority `.ts` / `.tsx` files → `(typescript, jest, unit)` for unit /
   component tests.
-- Mixed → emit separate subtasks: pytest subtasks for Python files, Jest
-  subtasks for TypeScript files.
+- Majority `.go` files → `(go, go-test, unit)`; tests live in `*_test.go`
+  next to the code.
+- Majority `.rs` files → `rust` (use the registry's Rust unit framework).
+- Mixed → emit separate subtasks per language (pytest for `.py`, Jest for
+  `.ts`, go-test for `.go`).
 - If a TypeScript file is an E2E spec (name pattern `*.spec.ts`,
   `*.e2e.ts`) and there is a Playwright descriptor in the FRAMEWORK
   REGISTRY → use `(typescript, playwright, browser)`.
@@ -148,7 +167,9 @@ If no registry entry satisfies the constraint, default to
 4. **`target`** = `<repo-relative path>::<symbol>`. Verify via Glob/Grep.
 5. **`rationale`** — copy AC text verbatim (≤ 200 chars) or `"AC#N: ..."`.
 6. **`files_to_create`** — one file per subtask. pytest → `tests/unit/test_*.py`;
-   jest → `tests/*.test.ts`; playwright → `tests/e2e/*.spec.ts`.
+   jest → `tests/*.test.ts`; playwright → `tests/e2e/*.spec.ts`;
+   go-test → `<pkg>/<name>_test.go` **next to the code under test** (Go requires
+   `_test.go` files to sit in the package they test, not a separate `tests/` dir).
 7. **Mixed repos** — emit subtasks in *both* languages when diff touches both.
    Do NOT skip TypeScript subtasks; v0.2 lights multiple lanes.
 8. **No `replan-*` phases** in the initial plan.

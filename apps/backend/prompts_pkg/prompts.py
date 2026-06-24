@@ -511,6 +511,149 @@ def _build_framework_registry_block() -> str:
         )
 
 
+# Acceptance-criteria *command* tokens → target language. This is the PRIMARY
+# language signal (#443): a Go spec says "`go test ./...` passes", a Python one
+# says "pytest", etc. Ordered by priority; first hit wins. Manifest files only
+# corroborate (a repo can carry go.mod AND pyproject.toml — e.g. the polyglot
+# benchmark repo — so a manifest scan alone is ambiguous).
+_AC_COMMAND_LANGUAGE: tuple[tuple[str, str], ...] = (
+    ("go test", "go"),
+    ("go build", "go"),
+    ("cargo test", "rust"),
+    ("cargo build", "rust"),
+    ("pytest", "python"),
+    ("npm test", "typescript"),
+    ("jest", "typescript"),
+    ("vitest", "typescript"),
+)
+
+
+def _unit_framework_for_language(registry: dict, language: str) -> str | None:
+    """Return the registered unit-lane framework for ``language`` (or ``None``)."""
+    for name, desc in sorted(registry.items()):
+        if desc.language != language:
+            continue
+        if any(
+            (ln.value if hasattr(ln, "value") else str(ln)) == "unit"
+            for ln in desc.lanes
+        ):
+            return name
+    return None
+
+
+def _build_detected_language_block(spec_dir: Path, project_dir: Path) -> str:
+    """Pin the target language deterministically so the Planner can't default to pytest.
+
+    The framework-picking algorithm in ``planner.md`` is diff-/stack-sniff based and
+    was Python/TypeScript-biased: a Go (or other) project whose changed files the
+    agent could not classify fell through to the ``(python, pytest)`` default — it
+    emitted ``.py`` tests for a ``.go`` target and left ``language: None`` (#443).
+
+    This block reads two deterministic signals and states the ``(language,
+    framework)`` the agent MUST use for unit subtasks:
+      1. the spec's acceptance-criteria *commands* (PRIMARY — ``go test`` → Go);
+      2. the project's manifest files (CORROBORATING — ``go.mod`` → Go), derived
+         from each registry descriptor's ``manifest_signals``.
+
+    Best-effort: when no signal is found it tells the agent to detect the language
+    via Glob rather than guessing. Never raises — degrades to guidance text.
+    """
+    header = "## DETECTED PROJECT LANGUAGE"
+
+    try:
+        from framework_registry import load_registry  # deferred: not on hot path
+
+        registry = load_registry()
+    except Exception:  # noqa: BLE001 — never break planning on a registry read
+        registry = {}
+
+    # (1) PRIMARY: scan the frozen spec text for acceptance-criteria commands.
+    spec_text = ""
+    for rel in ("context/aifactory_spec.md", "context/source.json"):
+        try:
+            spec_text += (spec_dir / rel).read_text(encoding="utf-8").lower()
+        except Exception:  # noqa: BLE001 — missing/unreadable context is fine
+            pass
+    ac_language: str | None = None
+    for token, language in _AC_COMMAND_LANGUAGE:
+        if token in spec_text:
+            ac_language = language
+            break
+
+    # (2) CORROBORATING: which registered manifests actually exist on disk.
+    manifest_to_lang: dict[str, str] = {}
+    for desc in registry.values():
+        for sig in desc.manifest_signals:
+            manifest_to_lang.setdefault(sig.split(":", 1)[0], desc.language)
+    present_manifests = sorted(
+        fname for fname in manifest_to_lang if _safe_manifest_exists(project_dir, fname)
+    )
+    manifest_langs = sorted({manifest_to_lang[f] for f in present_manifests})
+
+    chosen = ac_language or (manifest_langs[0] if len(manifest_langs) == 1 else None)
+
+    if chosen is None:
+        if manifest_langs:
+            return (
+                f"{header}\n"
+                f"Multiple language manifests are present "
+                f"({', '.join(present_manifests)}) and the acceptance criteria name "
+                "no build/test command. Determine the target language from the "
+                "changed files / target path before choosing a framework — do NOT "
+                "default to pytest for a non-Python target.\n"
+            )
+        return (
+            f"{header}\n"
+            "No deterministic language signal (no AC build/test command, no known "
+            "manifest). Detect the language via Glob on the project before choosing "
+            "a framework; never assume pytest.\n"
+        )
+
+    framework = _unit_framework_for_language(registry, chosen)
+    signal = (
+        f"the acceptance criteria invoke a `{_first_ac_token(spec_text)}` command"
+        if ac_language
+        else f"the project manifest ({', '.join(present_manifests)}) is {chosen}"
+    )
+    corroboration = (
+        f" (manifest scan saw: {', '.join(present_manifests)})"
+        if present_manifests
+        else ""
+    )
+    fw_clause = (
+        f" Use `framework: {framework}` for unit subtasks."
+        if framework
+        else " No unit framework is registered for this language yet; pick the "
+        "closest registry entry and note it in `rationale`."
+    )
+    py_warning = (
+        " Do NOT emit pytest / `.py` tests for this target."
+        if chosen != "python"
+        else ""
+    )
+    return (
+        f"{header}\n"
+        f"This is a **{chosen}** project — {signal}{corroboration}. "
+        f"Set `language: {chosen}` on every unit subtask.{fw_clause}{py_warning}\n"
+    )
+
+
+def _first_ac_token(spec_text: str) -> str:
+    """Return the first AC command token found in ``spec_text`` (for the message)."""
+    for token, _ in _AC_COMMAND_LANGUAGE:
+        if token in spec_text:
+            return token
+    return "build/test"
+
+
+def _safe_manifest_exists(project_dir: Path, fname: str) -> bool:
+    """``(project_dir / fname).is_file()`` guarded against odd values."""
+    try:
+        return (project_dir / fname).is_file()
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _build_tests_catalog_block(spec_dir: Path) -> str:
     """Return a TESTS CATALOG summary block for the planner prompt.
 
@@ -601,6 +744,9 @@ def get_tfactory_planner_prompt(spec_dir: Path, project_dir: Path) -> str:
     # Registry + catalog blocks (Task 5, #21). Deferred imports inside
     # helper functions avoid circular imports at module level.
     registry_block = _build_framework_registry_block()
+    # Deterministic language pin (#443) — keep the agent from defaulting a Go (or
+    # other non-Python) target to pytest. Sits next to the registry it references.
+    language_block = _build_detected_language_block(spec_dir, project_dir)
     catalog_block = _build_tests_catalog_block(spec_dir)
     # RFC-0002 declared test profile (#246) — authoritative over inference.
     profile_block = _build_contract_profile_block(spec_dir)
@@ -624,6 +770,7 @@ def get_tfactory_planner_prompt(spec_dir: Path, project_dir: Path) -> str:
         f"{profile_block}"
         f"{house_block}"
         f"{registry_block}\n"
+        f"{language_block}\n"
         f"{catalog_block}\n"
         "---\n\n"
     )
