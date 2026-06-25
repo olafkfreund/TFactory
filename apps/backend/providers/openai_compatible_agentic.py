@@ -41,6 +41,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import urllib.error
 import urllib.request
 from collections.abc import AsyncGenerator, AsyncIterator
@@ -372,6 +373,19 @@ class OpenAICompatibleAgenticProvider(BaseLLMProvider):
         }
         # Default to deterministic output for code-generation tasks
         body.setdefault("temperature", 0)
+        # Local reasoning models (e.g. Ollama gemma/gpt-oss) spend the response
+        # budget on hidden "thinking" tokens; uncapped, on a large prompt they can
+        # return finish=length with EMPTY content/tool_calls — which silently
+        # breaks structured/tool turns (the planner never writes test_plan.json).
+        # These opt-in env knobs bound the reasoning effort and reserve an explicit
+        # output budget so the model actually emits. Unset → unchanged (the cloud
+        # OpenAI / ollama.com defaults that already work stay untouched).
+        _effort = os.environ.get("OPENAI_COMPATIBLE_REASONING_EFFORT", "").strip()
+        if _effort:
+            body.setdefault("reasoning_effort", _effort)
+        _max_tokens = os.environ.get("OPENAI_COMPATIBLE_MAX_TOKENS", "").strip()
+        if _max_tokens.isdigit():
+            body.setdefault("max_tokens", int(_max_tokens))
         body.update(self._extra_options)
         return body
 
