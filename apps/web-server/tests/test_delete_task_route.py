@@ -33,6 +33,25 @@ def test_delete_bare_spec_id_ingest_task(tmp_path):
     assert not spec_dir.exists()
 
 
+def test_delete_bare_spec_id_in_workspace_tree(tmp_path):
+    # The REAL spec-ingest (verify lane) location is the MCP workspace tree —
+    # <workspace_root>/workspaces/<project_id>/specs/<spec_id> — NOT under a
+    # registered project path. The old handler only checked the project-local
+    # layout, so a verify task 404'd on delete and kept resurrecting via the
+    # reconcile poll ("Remove says done but the card stays").
+    from server.routes import tasks
+
+    ws_spec = tmp_path / "workspaces" / "76ddfb71" / "specs" / "049-go-hello"
+    ws_spec.mkdir(parents=True)
+    (ws_spec / "status.json").write_text("{}")
+    with (
+        patch.object(tasks, "load_projects", return_value={}),
+        patch.dict("os.environ", {"TFACTORY_WORKSPACE_ROOT": str(tmp_path)}),
+    ):
+        asyncio.run(tasks.delete_task("049-go-hello"))
+    assert not ws_spec.exists()
+
+
 def test_delete_project_qualified_task(tmp_path):
     from server.routes import tasks
 
