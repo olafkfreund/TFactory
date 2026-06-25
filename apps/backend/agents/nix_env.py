@@ -300,7 +300,9 @@ def run_gotest_lane_via_nix(
 
     pd = Path(project_dir)
     module_dir = _go_module_dir(pd, hint)
-    rel = "." if module_dir == pd.resolve() else str(module_dir.relative_to(pd.resolve()))
+    rel = (
+        "." if module_dir == pd.resolve() else str(module_dir.relative_to(pd.resolve()))
+    )
     run_dir = mount if rel == "." else f"{mount}/{rel}"
 
     stage = pd / _GOTEST_STAGE

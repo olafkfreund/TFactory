@@ -1464,6 +1464,28 @@ async def delete_task(task_id: str):
             shutil.rmtree(spec_dir)
             return
 
+    # Spec-ingest tasks (the verify lane, created via /api/specs/ingest) do NOT
+    # live under a registered project path — they live in the MCP workspace tree
+    # at ``<workspace_root>/workspaces/<project_id>/specs/<spec_id>``. The loop
+    # above only checks the project-local layout, so an ingested verify task 404s
+    # on delete and keeps RESURRECTING via the reconcile poll (the cockpit's
+    # Remove reported "done" but the card came straight back). Search the
+    # workspace tree too before giving up.
+    import glob as _glob
+    import os as _os
+
+    # Same resolution as task_control._workspace_root (env override > default),
+    # replicated inline to avoid a cross-package import from the web-server.
+    _ws_root = Path(
+        _os.environ.get("TFACTORY_WORKSPACE_ROOT") or (Path.home() / ".tfactory")
+    ).expanduser()
+    pattern = str(_ws_root / "workspaces" / "*" / "specs" / spec_id)
+    for sd in _glob.glob(pattern):
+        spec_dir = Path(sd)
+        if spec_dir.exists():
+            shutil.rmtree(spec_dir)
+            return
+
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
         detail="Task not found",
