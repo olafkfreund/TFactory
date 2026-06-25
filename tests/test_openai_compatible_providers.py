@@ -288,6 +288,20 @@ class TestAgenticProvider:
         oversized = '{"x":"' + "a" * 60_000 + '"}'
         assert OpenAICompatibleAgenticProvider._parse_tool_args(oversized) == {}
 
+    def test_extra_roots_grants_writable_path_outside_working_dir(
+        self, tmp_path
+    ) -> None:
+        # The Planner writes test_plan.json into spec_dir, OUTSIDE the SUT
+        # working_dir; extra_roots must reach the ToolExecutor or the Write is
+        # denied (planner_invalid_missing for local/openai-compatible models).
+        spec = tmp_path / "spec"
+        spec.mkdir()
+        p = OpenAICompatibleAgenticProvider(
+            working_dir=tmp_path / "proj", tool_names=["Write"], extra_roots=[spec]
+        )
+        assert spec.resolve() in p._extra_roots
+        assert spec.resolve() in p._executor._extra_roots
+
     def test_build_payload_includes_tools(self) -> None:
         p = OpenAICompatibleAgenticProvider(
             working_dir=Path("/tmp"), tool_names=["Read"]

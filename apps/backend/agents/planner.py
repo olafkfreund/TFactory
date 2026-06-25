@@ -115,12 +115,14 @@ async def _resolve_planner_client(spec_dir: Path, project_dir: Path):
     # name for openai-compatible / studio endpoints) — let it win and avoid
     # passing model= twice (TypeError: multiple values for 'model').
     extra = get_provider_extra_kwargs(provider_name, planning_model)
-    # The Ollama provider runs file ops through TFactory's ToolExecutor, which
-    # is sandboxed to working_dir (the SUT project). The Planner writes
-    # test_plan.json into the spec/workspace dir, outside that boundary — so
-    # allow it explicitly. Other agentic providers (codex/copilot/gemini) use
-    # their own sandboxes and don't take this kwarg.
-    if provider_name == "ollama":
+    # The Ollama AND OpenAI-compatible providers run file ops through TFactory's
+    # ToolExecutor, sandboxed to working_dir (the SUT project). The Planner writes
+    # test_plan.json into the spec/workspace dir, OUTSIDE that boundary — so allow
+    # it explicitly, else the Write is denied and the plan never persists
+    # (planner_invalid_missing). openai-compatible covers local Ollama reached via
+    # OPENAI_COMPATIBLE_BASE_URL plus github-models. Other agentic providers
+    # (codex/copilot/gemini) use their own sandboxes and don't take this kwarg.
+    if provider_name in ("ollama", "openai-compatible", "github-models"):
         extra["extra_roots"] = [spec_dir]
     return get_provider(
         provider_name,
