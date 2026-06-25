@@ -123,6 +123,9 @@ class OpenAICompatibleAgenticProvider(BaseLLMProvider):
         # without this the Write is denied and the plan is never persisted
         # (planner_invalid_missing). Mirrors OllamaAgenticProvider.
         self._extra_roots: list[Path] = [Path(r).resolve() for r in (extra_roots or [])]
+        # Flipped to True once a model 400s on `reasoning_effort` (non-thinking
+        # models reject it); _build_payload then stops sending it.
+        self._reasoning_effort_unsupported = False
 
         effective_tools = tool_names or _DEFAULT_TOOL_NAMES
         self._tool_defs = get_tool_definitions(effective_tools)
@@ -388,7 +391,7 @@ class OpenAICompatibleAgenticProvider(BaseLLMProvider):
         # output budget so the model actually emits. Unset → unchanged (the cloud
         # OpenAI / ollama.com defaults that already work stay untouched).
         _effort = os.environ.get("OPENAI_COMPATIBLE_REASONING_EFFORT", "").strip()
-        if _effort:
+        if _effort and not self._reasoning_effort_unsupported:
             body.setdefault("reasoning_effort", _effort)
         _max_tokens = os.environ.get("OPENAI_COMPATIBLE_MAX_TOKENS", "").strip()
         if _max_tokens.isdigit():
@@ -420,6 +423,22 @@ class OpenAICompatibleAgenticProvider(BaseLLMProvider):
                 error_body = exc.read().decode("utf-8", errors="replace")[:500]
             except Exception:
                 pass
+            # Non-reasoning models (e.g. Ollama qwen2.5-coder) 400 when sent
+            # `reasoning_effort` ("... does not support thinking"). That knob is
+            # only meant for thinking models (gemma4/gpt-oss); drop it, remember
+            # so later turns skip it, and retry once — otherwise our opt-in knob
+            # would hard-break every non-thinking openai-compatible model.
+            if (
+                exc.code == 400
+                and "reasoning_effort" in payload
+                and (
+                    "thinking" in error_body.lower()
+                    or "reasoning" in error_body.lower()
+                )
+            ):
+                self._reasoning_effort_unsupported = True
+                retry = {k: v for k, v in payload.items() if k != "reasoning_effort"}
+                return self._http_post(url, retry)
             raise RuntimeError(
                 f"OpenAI-compatible API HTTP error {exc.code}: {exc.reason}. "
                 f"Response body: {error_body}"
