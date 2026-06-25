@@ -107,6 +107,7 @@ class OpenAICompatibleAgenticProvider(BaseLLMProvider):
         tool_names: list[str] | None = None,
         extra_headers: dict[str, str] | None = None,
         extra_options: dict[str, Any] | None = None,
+        extra_roots: list[Path] | None = None,
     ) -> None:
         self._model = model
         self._base_url = base_url.rstrip("/")
@@ -117,12 +118,18 @@ class OpenAICompatibleAgenticProvider(BaseLLMProvider):
         self._extra_headers: dict[str, str] = extra_headers or {}
         self._extra_options: dict[str, Any] = extra_options or {}
         self._pending_prompt: str | None = None
+        # Extra writable roots OUTSIDE working_dir (the SUT). The Planner writes
+        # test_plan.json into spec_dir, which is not under the project boundary —
+        # without this the Write is denied and the plan is never persisted
+        # (planner_invalid_missing). Mirrors OllamaAgenticProvider.
+        self._extra_roots: list[Path] = [Path(r).resolve() for r in (extra_roots or [])]
 
         effective_tools = tool_names or _DEFAULT_TOOL_NAMES
         self._tool_defs = get_tool_definitions(effective_tools)
         self._executor = ToolExecutor(
             working_dir=self._working_dir,
             bash_timeout=min(timeout, 120),
+            extra_roots=self._extra_roots,
         )
 
         logger.debug(
