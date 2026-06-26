@@ -55,6 +55,7 @@ from .routes import (
     terminal,
     test_target_credentials,
     visual_inspection,
+    portal_tests,
 )
 from .routes import cli_accounts as cli_accounts_routes
 from .routes import llm_endpoints as llm_endpoints_routes
@@ -344,6 +345,7 @@ def create_app() -> FastAPI:
     app.include_router(provider_runtimes.router)
     app.include_router(regression.router)
     app.include_router(cloud.router)
+    app.include_router(portal_tests.router)
     app.include_router(visual_inspection.router)
 
     # Audit log routes (prefix defined in router: /api/orgs)
@@ -482,9 +484,7 @@ def create_app() -> FastAPI:
     )
     app.include_router(git.mcp_router, prefix="/api/mcp", tags=["MCP"])
     # Source-update endpoints — extracted from git.py into git_updates (#360).
-    app.include_router(
-        git_updates.router, prefix="/api/updates", tags=["Updates"]
-    )
+    app.include_router(git_updates.router, prefix="/api/updates", tags=["Updates"])
 
     # Memory infrastructure routes
     app.include_router(context.router, prefix="/api/memory", tags=["Memory"])
@@ -560,7 +560,9 @@ def create_app() -> FastAPI:
 
     static_dir = Path(__file__).parent.parent / "static"
     if static_dir.exists():
-        app.mount("/", SPAStaticFiles(directory=str(static_dir), html=True), name="static")
+        app.mount(
+            "/", SPAStaticFiles(directory=str(static_dir), html=True), name="static"
+        )
     else:
         # Placeholder for development
         @app.get("/")

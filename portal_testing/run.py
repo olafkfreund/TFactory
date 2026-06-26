@@ -55,10 +55,7 @@ def run_portal(key: str) -> Path:
         console_errors: list[str] = []
         page = context.new_page()
         page.set_default_timeout(config.NAV_TIMEOUT_MS)
-        page.on(
-            "console",
-            lambda m: console_errors.append(m.text) if m.type == "error" else None,
-        )
+        page.on("console", lambda m: console_errors.append(m.text) if m.type == "error" else None)
         page.on("pageerror", lambda e: console_errors.append(str(e)))
 
         try:
@@ -70,6 +67,7 @@ def run_portal(key: str) -> Path:
             crawler = PortalCrawler(page, shots_dir, console_errors)
             crawler.landing()
             if login_info.get("logged_in"):
+                crawler.dismiss_blocking_modals()
                 crawler.crawl_navigation()
                 crawler.crawl_dropdowns()
                 crawler.crawl_dialogs()
@@ -90,13 +88,7 @@ def run_portal(key: str) -> Path:
             video_rel = f"video/{dest.name}"
 
     report = write_report(portal, login_info, steps, out_dir, video_rel, _stamp())
-    log.info(
-        "[%s] report -> %s (%d steps, login=%s)",
-        key,
-        report,
-        len(steps),
-        login_info.get("logged_in"),
-    )
+    log.info("[%s] report -> %s (%d steps, login=%s)", key, report, len(steps), login_info.get("logged_in"))
     return report
 
 

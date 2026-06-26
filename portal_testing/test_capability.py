@@ -1,4 +1,5 @@
 """portal-ui capability: config well-formed + descriptor present/valid."""
+
 from pathlib import Path
 
 import yaml
@@ -15,7 +16,9 @@ def test_four_portals_configured():
 
 
 def test_descriptor_registered():
-    d = yaml.safe_load((_ROOT / "frameworks" / "portal-ui" / "descriptor.yaml").read_text())
+    d = yaml.safe_load(
+        (_ROOT / "frameworks" / "portal-ui" / "descriptor.yaml").read_text()
+    )
     assert d["name"] == "portal-ui"
     assert d["lanes"] == ["browser"]
     assert d["language"] == "python"
