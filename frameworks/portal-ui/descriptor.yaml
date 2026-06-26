@@ -1,0 +1,48 @@
+# frameworks/portal-ui/descriptor.yaml
+#
+# Portal UI — exploratory, MFA'd browser testing of a deployed web portal.
+#
+# Unlike the per-repo browser frameworks (playwright/cypress), this capability
+# does not generate test code against a source tree; it drives a LIVE portal
+# behind Keycloak (TOTP MFA), exercises every nav item / dropdown / dialog,
+# captures screenshots + a screencast, and emits a findings report. This is the
+# capability tracked by #553 (exploratory multi-portal UI/feature testing).
+#
+# Substrate: nix-provided Python Playwright + browsers (the proven
+# nix_provisioner pattern, RFC-0005) so the browser launches on NixOS / in a
+# k8s Job without a pip browser download.
+name: portal-ui
+language: python
+lanes:
+  - browser
+
+version_range: ">=1.44"
+
+runtime:
+  # Runs via the vendored harness under apps/backend/portal_testing/, on the
+  # nix browser substrate (see portal_testing/flake.nix). In-cluster this is a
+  # k8s Job (no container runtime in the pod); locally it's `nix develop`. The
+  # image is a nix-baked runner carrying python+playwright+browsers (the
+  # nix_provisioner browser stack), distinct from the per-repo node runners.
+  image: tfactory-runner-portal-ui:nix
+  entrypoint:
+    - python
+    - -m
+    - portal_testing.run
+
+# This capability is portal-driven, not repo-driven: there are no manifest
+# signals or in-repo test paths to detect. It is selected explicitly when a
+# task targets a deployed portal URL.
+manifest_signals: []
+test_path_conventions: []
+
+# Browser lane: instruments the served application, not test code (Decision 11).
+coverage_strategy: skip
+
+context_block: |
+  You are exercising a deployed web portal behind Keycloak (TOTP MFA).
+  Drive the portal's own /login -> "Sign in with SSO" -> Keycloak
+  username/password -> TOTP, then exhaustively click every nav item, dropdown,
+  and dialog. Capture a screenshot per control and record the run as a
+  screencast. Open or cancel dialogs — never commit destructive actions.
+  Report any console error, blank view, or failed interaction as a finding.
