@@ -111,9 +111,9 @@ async def start_auto_fix_one(projectId: str, issueNumber: int) -> dict[str, Any]
     except ValueError:
         logger.exception("[auto_fix] start_auto_fix failed project=%s", projectId)
         raise HTTPException(status_code=404, detail="Project or resource not found")
-    except Exception as e:
+    except Exception:
         logger.exception(
             "[auto_fix] start_auto_fix failed project=%s issue=%d",
             projectId, issueNumber,
         )
-        raise HTTPException(status_code=500, detail=f"start failed: {e}")
+        raise HTTPException(status_code=500, detail="start failed")

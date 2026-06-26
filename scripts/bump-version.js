@@ -29,7 +29,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execSync, execFileSync } = require('child_process');
 
 // Colors for terminal output
 const colors = {
@@ -107,6 +107,17 @@ function exec(command, options = {}) {
     return execSync(command, { encoding: 'utf8', stdio: 'pipe', ...options }).trim();
   } catch (err) {
     error(`Command failed: ${command}\n${err.message}`);
+  }
+}
+
+// Execute a command without a shell — the binary and each argument are passed
+// as a separate argv element, so no value (including the argv-derived version
+// string) can be interpreted by a shell (command-injection barrier).
+function execFile(file, args, options = {}) {
+  try {
+    return execFileSync(file, args, { encoding: 'utf8', stdio: 'pipe', ...options }).trim();
+  } catch (err) {
+    error(`Command failed: ${file} ${args.join(' ')}\n${err.message}`);
   }
 }
 
@@ -211,7 +222,7 @@ function main() {
 
   // 4. Validate release (check for branch/tag conflicts)
   info('Validating release...');
-  exec(`node ${path.join(__dirname, 'validate-release.js')} v${newVersion}`);
+  execFile('node', [path.join(__dirname, 'validate-release.js'), `v${newVersion}`]);
   success('Release validation passed');
 
   // 5. Update all version files
@@ -258,8 +269,8 @@ function main() {
 
   // 7. Create git commit
   info('Creating git commit...');
-  exec('git add apps/frontend-web/package.json package.json apps/backend/__init__.py');
-  exec(`git commit -m "chore: bump version to ${newVersion}"`);
+  execFile('git', ['add', 'apps/frontend-web/package.json', 'package.json', 'apps/backend/__init__.py']);
+  execFile('git', ['commit', '-m', `chore: bump version to ${newVersion}`]);
   success(`Created commit: "chore: bump version to ${newVersion}"`);
 
   // Note: Tags are NOT created here anymore. GitHub Actions will create the tag

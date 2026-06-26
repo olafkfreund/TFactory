@@ -745,6 +745,24 @@ async def check_mcp_health(server: McpServerConfig):
     """Check health of an MCP server."""
     if server.type == "http" and server.url:
         import urllib.request
+        from urllib.parse import urlparse
+
+        # SSRF guard: an MCP server URL is configured by the operator themselves
+        # and, by design, very often points at a local/LAN endpoint (most MCP
+        # servers run on localhost). Blocking private/loopback hosts would break
+        # that intended use case, so we deliberately do not. We DO restrict the
+        # scheme to http/https so a configured value cannot be coerced into a
+        # file://, gopher://, ftp:// (etc.) request.
+        parsed = urlparse(server.url)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            return {
+                "success": True,
+                "data": {
+                    "serverId": server.id,
+                    "status": "unhealthy",
+                    "message": "Unsupported or invalid server URL",
+                },
+            }
         try:
             req = urllib.request.Request(server.url, method="HEAD")
             if server.headers:

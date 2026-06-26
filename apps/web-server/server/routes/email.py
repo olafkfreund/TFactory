@@ -9,6 +9,7 @@ Handles:
 """
 
 import html
+import json
 import logging
 import os
 import secrets
@@ -659,5 +660,16 @@ def _oauth_result_html(
 
 
 def _js_string(s: str) -> str:
-    """Escape a string for safe embedding in JavaScript."""
-    return "'" + s.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n") + "'"
+    """Build a JS string literal that is safe inside an inline ``<script>``.
+
+    ``json.dumps`` produces a valid, fully-escaped JS string literal (quotes,
+    backslashes, control chars). We additionally escape ``<``, ``>`` and ``&``
+    as ``\\uXXXX`` so a value containing ``</script>`` cannot break out of the
+    surrounding ``<script>`` tag (reflective-XSS barrier).
+    """
+    return (
+        json.dumps(s)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+    )
