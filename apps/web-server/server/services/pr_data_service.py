@@ -431,8 +431,9 @@ class PRDataService:
         # against the allow-list (no leading dash / charset) before use.
         try:
             username = _require_safe_gh_arg(username.strip(), "username")
-        except ValueError as exc:
-            return {"success": False, "error": str(exc)}
+        except ValueError:
+            logger.exception("Invalid username for PR assignment")
+            return {"success": False, "error": "Invalid username"}
 
         result = _run_gh(
             ["pr", "edit", str(pr_number), "--add-assignee", username],

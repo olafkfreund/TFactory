@@ -604,12 +604,12 @@ async def check_new_and_start_all(project_id: str) -> dict[str, Any]:
         try:
             result = await start_auto_fix(project_id, iss["number"])
             started.append({**iss, **result})
-        except Exception as e:  # pragma: no cover — bubble for visibility
-            logger.warning(
-                "[auto_fix] start failed project=%s issue=%d err=%s",
-                project_id, iss["number"], e,
+        except Exception:  # pragma: no cover — bubble for visibility
+            logger.exception(
+                "[auto_fix] start failed project=%s issue=%d",
+                project_id, iss["number"],
             )
-            errors.append({"issueNumber": iss["number"], "error": str(e)})
+            errors.append({"issueNumber": iss["number"], "error": "Failed to start auto-fix"})
 
     # Advance any delegated tasks alongside polling for new issues.
     delegation_summary: dict[str, Any] = {}

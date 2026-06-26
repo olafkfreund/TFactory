@@ -75,7 +75,12 @@ async def scan_delegated_tasks(project_id: str) -> dict[str, Any]:
             project_id,
             e,
         )
-        return {"checked": 0, "promoted": [], "declined": [], "error": str(e)}
+        return {
+            "checked": 0,
+            "promoted": [],
+            "declined": [],
+            "error": "Provider unavailable",
+        }
 
     # GitHub Copilot (V1) and GitLab Duo Workflow (V1.5) are both wired.
     # Azure DevOps has no autonomous agent equivalent — skip with a notice.

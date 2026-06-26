@@ -128,11 +128,11 @@ class ConflictService:
             )
             return result
 
-        except Exception as e:
-            logger.error(f"Conflict detection failed: {e}")
+        except Exception:
+            logger.exception("Conflict detection failed")
             return {
                 "success": False,
-                "error": str(e),
+                "error": "Conflict detection failed",
                 "conflicts": [],
                 "stats": {
                     "totalFiles": 0,
@@ -250,11 +250,11 @@ class ConflictService:
             )
             return result
 
-        except Exception as e:
-            logger.error(f"Conflict resolution failed: {e}")
+        except Exception:
+            logger.exception("Conflict resolution failed")
             return {
                 "success": False,
-                "error": str(e),
+                "error": "Conflict resolution failed",
                 "resolved": [],
                 "remaining": [],
             }
@@ -330,8 +330,8 @@ class ConflictService:
                 "error": report.error,
             }
 
-        except Exception as e:
-            logger.error(f"Resolution sync failed: {e}")
+        except Exception:
+            logger.exception("Resolution sync failed")
             return {
                 "success": False,
                 "resolved": [],
@@ -346,7 +346,7 @@ class ConflictService:
                     "aiCallsMade": 0,
                     "tokensUsed": 0,
                 },
-                "error": str(e),
+                "error": "Resolution sync failed",
             }
 
     async def ai_merge_three_way(
@@ -388,11 +388,11 @@ class ConflictService:
             )
             return result
 
-        except Exception as e:
-            logger.error(f"AI merge failed: {e}")
+        except Exception:
+            logger.exception("AI merge failed")
             return {
                 "success": False,
-                "error": str(e),
+                "error": "AI merge failed",
             }
 
     def _ai_merge_three_way_sync(
@@ -477,11 +477,11 @@ TASK: Intelligently merge both sets of changes into the base.
                     "error": "No response from AI",
                 }
 
-        except Exception as e:
-            logger.error(f"AI merge sync failed: {e}")
+        except Exception:
+            logger.exception("AI merge sync failed")
             return {
                 "success": False,
-                "error": str(e),
+                "error": "AI merge sync failed",
             }
 
     async def resolve_conflict_markers(
@@ -514,11 +514,11 @@ TASK: Intelligently merge both sets of changes into the base.
             )
             return result
 
-        except Exception as e:
-            logger.error(f"Conflict marker resolution failed: {e}")
+        except Exception:
+            logger.exception("Conflict marker resolution failed")
             return {
                 "success": False,
-                "error": str(e),
+                "error": "Conflict marker resolution failed",
             }
 
     def _resolve_conflict_markers_sync(
@@ -627,11 +627,11 @@ Return ONLY the raw file content."""
                     "error": "No response from AI",
                 }
 
-        except Exception as e:
-            logger.error(f"Conflict marker resolution sync failed: {e}")
+        except Exception:
+            logger.exception("Conflict marker resolution sync failed")
             return {
                 "success": False,
-                "error": str(e),
+                "error": "Conflict marker resolution sync failed",
             }
 
 
