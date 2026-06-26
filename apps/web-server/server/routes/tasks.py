@@ -13,6 +13,7 @@ from typing import Literal, Optional
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
+from ._specpath import _validate_component, safe_spec_dir
 from .projects import load_projects
 
 router = APIRouter()
@@ -306,7 +307,7 @@ def sync_worktree_to_main_spec(project_path: Path, spec_id: str) -> bool:
 
     Returns True if sync was performed, False otherwise.
     """
-    main_spec_dir = project_path / ".tfactory" / "specs" / spec_id
+    main_spec_dir = safe_spec_dir(project_path, spec_id)
     worktree_spec_dir = get_worktree_spec_dir(project_path, spec_id)
 
     if not worktree_spec_dir:
@@ -399,7 +400,7 @@ def get_plan_with_worktree_sync(project_path: Path, spec_id: str) -> tuple[dict,
     sync_worktree_to_main_spec(project_path, spec_id)
 
     # Read from main spec (now potentially updated)
-    main_spec_dir = project_path / ".tfactory" / "specs" / spec_id
+    main_spec_dir = safe_spec_dir(project_path, spec_id)
     plan_file = main_spec_dir / "test_plan.json"
 
     plan = {}
@@ -1108,7 +1109,7 @@ async def get_task(task_id: str):
         )
 
     project_path = Path(projects[project_id]["path"])
-    spec_dir = project_path / ".tfactory" / "specs" / spec_id
+    spec_dir = safe_spec_dir(project_path, spec_id)
 
     if not spec_dir.exists():
         raise HTTPException(
@@ -1220,7 +1221,7 @@ def _resolve_task(task_id: str) -> tuple[str, str, Path, Path]:
         raise HTTPException(status_code=404, detail="Project not found")
 
     project_path = Path(projects[project_id]["path"])
-    spec_dir = project_path / ".tfactory" / "specs" / spec_id
+    spec_dir = safe_spec_dir(project_path, spec_id)
 
     if not spec_dir.exists():
         raise HTTPException(status_code=404, detail="Task spec not found")
@@ -1254,7 +1255,7 @@ async def update_task_status(task_id: str, update: TaskStatusUpdate):
         )
 
     project_path = Path(projects[project_id]["path"])
-    spec_dir = project_path / ".tfactory" / "specs" / spec_id
+    spec_dir = safe_spec_dir(project_path, spec_id)
 
     if not spec_dir.exists():
         raise HTTPException(
@@ -1305,7 +1306,7 @@ async def update_task(task_id: str, update: TaskUpdate):
         )
 
     project_path = Path(projects[project_id]["path"])
-    spec_dir = project_path / ".tfactory" / "specs" / spec_id
+    spec_dir = safe_spec_dir(project_path, spec_id)
 
     if not spec_dir.exists():
         raise HTTPException(
@@ -1459,7 +1460,7 @@ async def delete_task(task_id: str):
     import shutil
 
     for entry in candidates:
-        spec_dir = Path(entry["path"]) / ".tfactory" / "specs" / spec_id
+        spec_dir = safe_spec_dir(Path(entry["path"]), spec_id)
         if spec_dir.exists():
             shutil.rmtree(spec_dir)
             return
@@ -1479,7 +1480,9 @@ async def delete_task(task_id: str):
     _ws_root = Path(
         _os.environ.get("TFACTORY_WORKSPACE_ROOT") or (Path.home() / ".tfactory")
     ).expanduser()
-    pattern = str(_ws_root / "workspaces" / "*" / "specs" / spec_id)
+    # spec_id is request-controlled and feeds a glob whose matches are rmtree'd;
+    # reject any traversal/separator component before it reaches the filesystem.
+    pattern = str(_ws_root / "workspaces" / "*" / "specs" / _validate_component(spec_id))
     for sd in _glob.glob(pattern):
         spec_dir = Path(sd)
         if spec_dir.exists():

@@ -17,6 +17,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, status
 
+from ._specpath import safe_spec_dir
 from .projects import load_projects
 from .tasks import ApprovePlanRequest, RejectPlanRequest
 
@@ -49,7 +50,7 @@ async def approve_plan(
         )
 
     project_path = Path(projects[project_id]["path"])
-    spec_dir = project_path / ".tfactory" / "specs" / spec_id
+    spec_dir = safe_spec_dir(project_path, spec_id)
 
     if not spec_dir.exists():
         raise HTTPException(
@@ -196,7 +197,7 @@ async def reject_plan(task_id: str, request: RejectPlanRequest = RejectPlanReque
         )
 
     project_path = Path(projects[project_id]["path"])
-    spec_dir = project_path / ".tfactory" / "specs" / spec_id
+    spec_dir = safe_spec_dir(project_path, spec_id)
     if not spec_dir.exists():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Task not found"

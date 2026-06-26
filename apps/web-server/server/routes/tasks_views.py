@@ -16,6 +16,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, status
 
+from ._specpath import safe_spec_dir
 from .projects import load_projects
 
 router = APIRouter()
@@ -44,7 +45,7 @@ async def get_qa_report(task_id: str):
         )
 
     project_path = Path(projects[project_id]["path"])
-    spec_dir = project_path / ".tfactory" / "specs" / spec_id
+    spec_dir = safe_spec_dir(project_path, spec_id)
     qa_report_file = spec_dir / "qa_report.md"
 
     if not qa_report_file.exists():
@@ -103,7 +104,7 @@ async def stream_agent_console(task_id: str):
         )
 
     project_path = Path(projects[project_id]["path"])
-    spec_dir = project_path / ".tfactory" / "specs" / spec_id
+    spec_dir = safe_spec_dir(project_path, spec_id)
     if not spec_dir.exists():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Task not found"
@@ -198,7 +199,7 @@ async def get_plan_html(task_id: str):
         )
 
     project_path = Path(projects[project_id]["path"])
-    spec_dir = project_path / ".tfactory" / "specs" / spec_id
+    spec_dir = safe_spec_dir(project_path, spec_id)
 
     if not spec_dir.exists():
         raise HTTPException(

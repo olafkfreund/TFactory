@@ -24,6 +24,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from ..paths import get_data_dir, get_data_file
+from ._specpath import safe_spec_dir
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -86,7 +87,7 @@ async def get_worktree_merge_preview(task_id: str):
         else:
             project_path = Path(project.get("path", ""))
 
-        spec_dir = project_path / ".tfactory" / "specs" / task_id
+        spec_dir = safe_spec_dir(project_path, task_id)
 
         if spec_dir.exists():
             # Found the task
@@ -454,7 +455,7 @@ async def resolve_worktree_conflicts(
             "error": "Task ID must include project ID (format: project_id:spec_id)",
         }
 
-    spec_dir = project_path / ".tfactory" / "specs" / spec_id
+    spec_dir = safe_spec_dir(project_path, spec_id)
     worktree_path = project_path / ".tfactory" / "worktrees" / "tasks" / spec_id
 
     if not spec_dir.exists():
@@ -754,7 +755,7 @@ async def resolve_uncommitted_conflicts(task_id: str):
         else:
             project_path = Path(project.get("path", ""))
 
-        spec_dir = project_path / ".tfactory" / "specs" / task_id
+        spec_dir = safe_spec_dir(project_path, task_id)
 
         if spec_dir.exists():
             worktree_path = project_path / ".tfactory" / "worktrees" / "tasks" / task_id
@@ -1033,7 +1034,7 @@ async def resolve_git_merge_conflicts(task_id: str):
         else:
             project_path = Path(project.get("path", ""))
 
-        spec_dir = project_path / ".tfactory" / "specs" / task_id
+        spec_dir = safe_spec_dir(project_path, task_id)
 
         if spec_dir.exists():
             worktree_path = project_path / ".tfactory" / "worktrees" / "tasks" / task_id
@@ -1332,7 +1333,7 @@ async def abort_worktree_merge(task_id: str):
             "error": "Task ID must include project ID (format: project_id:spec_id)",
         }
 
-    spec_dir = project_path / ".tfactory" / "specs" / spec_id
+    spec_dir = safe_spec_dir(project_path, spec_id)
     if not spec_dir.exists():
         return {"success": False, "error": f"Task {task_id} not found"}
 
@@ -1461,7 +1462,7 @@ async def create_pr_from_task(task_id: str, options: CreatePRFromTaskOptions = N
             "error": "Task ID must include project ID (format: project_id:spec_id)",
         }
 
-    spec_dir = project_path / ".tfactory" / "specs" / spec_id
+    spec_dir = safe_spec_dir(project_path, spec_id)
     if not spec_dir.exists():
         return {"success": False, "error": f"Task {task_id} not found"}
 
@@ -1788,7 +1789,7 @@ async def merge_worktree(task_id: str, options: WorktreeMergeOptions = None):
             "error": "Task ID must include project ID (format: project_id:spec_id)",
         }
 
-    spec_dir = project_path / ".tfactory" / "specs" / spec_id
+    spec_dir = safe_spec_dir(project_path, spec_id)
     if not spec_dir.exists():
         return {"success": False, "error": f"Task {task_id} not found"}
 
@@ -1942,7 +1943,7 @@ async def get_worktree_status(task_id: str):
             # Search all projects for this spec
             for proj in projects_data.values():
                 path = Path(proj["path"])
-                if (path / ".tfactory" / "specs" / spec_id).exists():
+                if (safe_spec_dir(path, spec_id)).exists():
                     project_path = path
                     break
     else:
@@ -1951,7 +1952,7 @@ async def get_worktree_status(task_id: str):
             if project_id and project.get("id") == project_id:
                 project_path = path
                 break
-            elif (path / ".tfactory" / "specs" / spec_id).exists():
+            elif (safe_spec_dir(path, spec_id)).exists():
                 project_path = path
                 break
 
@@ -2091,7 +2092,7 @@ async def get_worktree_diff(task_id: str):
         else:
             for proj in projects_data.values():
                 path = Path(proj["path"])
-                if (path / ".tfactory" / "specs" / spec_id).exists():
+                if (safe_spec_dir(path, spec_id)).exists():
                     project_path = path
                     break
     else:
@@ -2100,7 +2101,7 @@ async def get_worktree_diff(task_id: str):
             if project_id and project.get("id") == project_id:
                 project_path = path
                 break
-            elif (path / ".tfactory" / "specs" / spec_id).exists():
+            elif (safe_spec_dir(path, spec_id)).exists():
                 project_path = path
                 break
 
