@@ -51,3 +51,15 @@ def test_adapter_builds_visual_inspection_run(tmp_path):
     assert meta["portal"] == "tfactory"
     assert (run_dir / "screenshots" / "01-landing.png").is_file()
     assert json.loads((run_dir / "issues.json").read_text()) == []
+
+
+def test_job_mounts_data_pvc_and_pull_secret():
+    m = build_portal_ui_job_manifest("cfactory", "r9", data_pvc="tfactory-data")
+    spec = m["spec"]["template"]["spec"]
+    assert spec["imagePullSecrets"] == [{"name": "ghcr-pull"}]
+    vol = spec["volumes"][0]
+    assert vol["persistentVolumeClaim"]["claimName"] == "tfactory-data"
+    c = spec["containers"][0]
+    assert {"name": "data", "mountPath": "/home/nonroot/.tfactory"} in c["volumeMounts"]
+    env = {e["name"]: e.get("value") for e in c["env"]}
+    assert env["HOME"] == "/home/nonroot"

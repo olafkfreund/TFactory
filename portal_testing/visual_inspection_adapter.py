@@ -11,9 +11,9 @@ frontend change.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
-import sys
 from pathlib import Path
 
 from . import config
@@ -75,19 +75,27 @@ def build_run_dir(
     return run_dir
 
 
-def publish(portal_key: str, report_dir: Path, run_id: str) -> Path | None:
-    """Register the portal-ui run in the visual-inspection store. Best-effort:
-    returns the store path, or None if the backend store isn't importable."""
-    try:
-        # The store lives in the TFactory backend; on the runtime image it's on
-        # PYTHONPATH. Add the conventional path as a fallback.
-        backend = Path(__file__).resolve().parents[1] / "apps" / "backend"
-        if backend.is_dir() and str(backend) not in sys.path:
-            sys.path.insert(0, str(backend))
-        from agents.visual_inspection import store  # type: ignore
-    except ImportError:
-        return None
-    staged = build_run_dir(
-        portal_key, report_dir, run_id, dest_parent=report_dir.parent / "_vi"
+def visual_inspection_root() -> Path:
+    """The Visual Inspection store root the portal's tab reads. Honours
+    ``TFACTORY_VISUAL_INSPECTION_ROOT`` (set on the dispatch Job, pointing at the
+    co-mounted control-plane data PVC) and falls back to ``~/.tfactory/
+    visual-inspections`` — the same resolution as ``agents.visual_inspection.store``.
+    """
+    override = os.environ.get("TFACTORY_VISUAL_INSPECTION_ROOT")
+    return (
+        Path(override) if override else Path.home() / ".tfactory" / "visual-inspections"
     )
-    return store.write_run(staged)
+
+
+def publish(portal_key: str, report_dir: Path, run_id: str) -> Path | None:
+    """Write the portal-ui run straight into the Visual Inspection store root.
+
+    Self-contained (no backend import): writes the ``meta.json``/``report.md``/
+    screenshots/``issues.json`` run-dir layout that ``agents.visual_inspection.
+    store`` reads, directly under the store root. In-cluster the Job co-mounts
+    the control-plane data PVC at that root so the run surfaces in the portal's
+    Visual Reports tab. Returns the run path.
+    """
+    root = visual_inspection_root()
+    root.mkdir(parents=True, exist_ok=True)
+    return build_run_dir(portal_key, report_dir, run_id, dest_parent=root)
