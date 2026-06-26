@@ -673,6 +673,16 @@ async def search_files(
     results = []
     truncated = False
 
+    # `query` and `file_pattern` are request-controlled and flow into the rg
+    # argv. Reject option-like (leading ``-``) values so they cannot be
+    # interpreted as rg flags, and place the positional `query`/`full_path`
+    # after a ``--`` end-of-options marker (py/command-line-injection).
+    if query.startswith("-") or file_pattern.startswith("-"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Search query and file pattern must not start with '-'",
+        )
+
     # Try ripgrep first
     try:
         cmd = [
@@ -680,6 +690,7 @@ async def search_files(
             "--json",
             "--max-count", str(max_results),
             "--glob", file_pattern,
+            "--",
             query,
             str(full_path),
         ]
@@ -703,8 +714,10 @@ async def search_files(
                 continue
 
     except (FileNotFoundError, subprocess.TimeoutExpired):
-        # Fallback to Python search
-        pattern = re.compile(query, re.IGNORECASE)
+        # Fallback to Python search. `query` is request-controlled, so escape
+        # it before compiling: it is matched as a literal string rather than an
+        # attacker-supplied regex (py/regex-injection).
+        pattern = re.compile(re.escape(query), re.IGNORECASE)
         for file_path in full_path.rglob(file_pattern):
             if len(results) >= max_results:
                 truncated = True
@@ -754,10 +767,20 @@ async def get_git_diff(
             detail="Not a git repository",
         )
 
+    # `base` and `path` are request-controlled and flow into the git argv as
+    # positionals. Reject an option-like (leading ``-``) base so it cannot be
+    # read as a git flag, and pass `path` after a ``--`` pathspec separator
+    # (py/command-line-injection).
+    if base.startswith("-"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Base ref must not start with '-'",
+        )
+
     try:
         cmd = ["git", "diff", "--name-status", base]
         if path:
-            cmd.append(path)
+            cmd += ["--", path]
 
         proc = subprocess.run(
             cmd,

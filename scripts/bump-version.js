@@ -61,6 +61,12 @@ function warning(message) {
   log(`⚠️  ${message}`, colors.yellow);
 }
 
+// Escape a string for safe interpolation into a RegExp (escapes every regex
+// metacharacter, not just dots) to prevent regex injection.
+function escapeRegExp(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 // Parse semver version
 function parseVersion(version) {
   const match = version.match(/^(\d+)\.(\d+)\.(\d+)$/);
@@ -85,10 +91,13 @@ function bumpVersion(currentVersion, bumpType) {
       return `${version.major}.${version.minor + 1}.0`;
     case 'patch':
       return `${version.major}.${version.minor}.${version.patch + 1}`;
-    default:
-      // Assume it's a specific version
-      parseVersion(bumpType); // Validate format
-      return bumpType;
+    default: {
+      // Assume it's a specific version. Validate AND rebuild the value from the
+      // parsed integers so no untrusted argv string flows into the shell
+      // commands built downstream (command-injection barrier).
+      const v = parseVersion(bumpType);
+      return `${v.major}.${v.minor}.${v.patch}`;
+    }
   }
 }
 
@@ -161,7 +170,7 @@ function checkChangelogEntry(version) {
   const content = fs.readFileSync(changelogPath, 'utf8');
 
   // Look for "## X.Y.Z" or "## X.Y.Z -" header
-  const versionPattern = new RegExp(`^## ${version.replace(/\./g, '\\.')}(\\s|-)`, 'm');
+  const versionPattern = new RegExp(`^## ${escapeRegExp(version)}(\\s|-)`, 'm');
 
   if (versionPattern.test(content)) {
     return true;

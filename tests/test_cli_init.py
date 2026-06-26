@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 from cli import tfactory_main
 from click.testing import CliRunner
 
@@ -53,7 +54,9 @@ class TestInitNonInteractive:
         text = yml_path.read_text()
         assert "version" in text
         assert "api" in text
-        assert "https://api.staging.example.com" in text
+        # Precise check on the parsed value (not a loose URL substring match).
+        config = yaml.safe_load(text)
+        assert config["targets"][0]["base_url"] == "https://api.staging.example.com"
 
     def test_creates_tfactory_yml_with_bearer_auth(self, tmp_path: Path) -> None:
         result = run_init(
@@ -131,7 +134,9 @@ class TestInitNonInteractive:
         assert result.exit_code == 0, result.output
         text = existing.read_text()
         assert "new-api" in text
-        assert "new.example.com" in text
+        # Precise check on the parsed value (not a loose URL substring match).
+        config = yaml.safe_load(text)
+        assert any(t["base_url"] == "https://new.example.com" for t in config["targets"])
 
     def test_validates_generated_yaml_via_load_tfactory_yml(self, tmp_path: Path) -> None:
         """Validate that the generated YAML is parseable by load_tfactory_yml."""

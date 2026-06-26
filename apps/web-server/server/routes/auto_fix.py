@@ -96,9 +96,9 @@ async def check_new_issues(projectId: str) -> dict[str, Any]:
         result = await auto_fix_service.check_new_and_start_all(projectId)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
+    except Exception:
         logger.exception("[auto_fix] check_new_issues failed project=%s", projectId)
-        raise HTTPException(status_code=500, detail=f"check failed: {e}")
+        raise HTTPException(status_code=500, detail="check failed")
     return result
 
 

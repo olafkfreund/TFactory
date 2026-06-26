@@ -172,11 +172,19 @@ class EphemeralKeycloak:
         rt = _runtime()
         tmp = Path(tempfile.mkdtemp(prefix="tf-kc-"))
         realm_file = tmp / "realm.json"
+        # The realm JSON necessarily carries the OTP seed for the throwaway test
+        # user: Keycloak's --import-realm reads it from disk at boot, so it
+        # cannot be passed by reference. This is a per-run ephemeral secret
+        # (secrets.token_hex, generated in __init__) for a disposable IdP that
+        # is always torn down (cost-guard max_lifetime_s) — never a real or
+        # long-lived credential. Written 0600 inside a 0700 mkdtemp dir.
+        # (CWE-312: ephemeral-by-design test credential.)
         realm_file.write_text(
             json.dumps(
                 build_realm(self._secret, realm=self.realm, username=self.username)
             )
         )
+        realm_file.chmod(0o600)
         argv = self.run_argv(rt, str(realm_file))
         subprocess.run(argv, check=True, capture_output=True, text=True, timeout=120)
         self._started = time.monotonic()

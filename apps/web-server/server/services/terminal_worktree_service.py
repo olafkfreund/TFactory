@@ -19,6 +19,9 @@ class TerminalWorktreeService:
     """Service for managing terminal worktrees."""
 
     WORKTREE_NAME_PATTERN = re.compile(r"^[a-z0-9-_]+$")
+    # Allow-list of characters permitted in a request-supplied git ref/branch
+    # that becomes a subprocess argv element (py/command-line-injection).
+    GIT_REF_PATTERN = re.compile(r"[\w./:@-]+")
     MAX_NAME_LENGTH = 100
 
     def __init__(self, project_path: str):
@@ -63,6 +66,13 @@ class TerminalWorktreeService:
         """
         # Validate name
         self._validate_name(name)
+
+        # `base_branch` is request-supplied and is passed as an argv element to
+        # git below (and via _branch_exists). Even though commands run as
+        # list-argv with shell=False, constrain it to ordinary git-ref
+        # characters and reject option-like values so a crafted branch name
+        # cannot smuggle extra git arguments (py/command-line-injection).
+        self._validate_ref(base_branch)
 
         # Check if worktree already exists
         existing = self.get_worktree(name)
@@ -232,6 +242,24 @@ class TerminalWorktreeService:
             raise ValueError(
                 "Worktree name must be lowercase alphanumeric with dashes/underscores only"
             )
+
+    def _validate_ref(self, ref: str):
+        """Validate a request-supplied git ref/branch used as a command argument.
+
+        ``ref`` becomes an argv element for ``git`` (e.g. the base branch for
+        ``git worktree add``), so restrict it to ordinary git-ref characters and
+        reject empty or option-like (leading ``-``) values to clear
+        ``py/command-line-injection``.
+
+        Args:
+            ref: Branch/ref name to validate
+
+        Raises:
+            ValueError: If the ref is empty, option-like, or contains
+                disallowed characters
+        """
+        if not ref or ref.startswith("-") or not self.GIT_REF_PATTERN.fullmatch(ref):
+            raise ValueError(f"Invalid base branch name: {ref!r}")
 
     def _load_config(self) -> Dict:
         """Load terminal-worktrees.json.

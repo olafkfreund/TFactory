@@ -483,7 +483,7 @@ class InsightsService:
             token, _pid, profile_name = provider._resolve_claude_token()
             if token:
                 env["CLAUDE_CODE_OAUTH_TOKEN"] = token
-                logger.info(f"[InsightsService] generate_task using profile: {profile_name}")
+                logger.info("[InsightsService] generate_task using resolved Claude profile")
         except Exception:
             pass
 

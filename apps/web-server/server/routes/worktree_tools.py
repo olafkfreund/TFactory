@@ -9,6 +9,7 @@ Behavior-preserving: routes keep the same paths and the same prefix
 ("/api/tasks") via include_router in routes/tasks.py.
 """
 
+import logging
 import re
 import subprocess
 from pathlib import Path
@@ -19,6 +20,7 @@ from pydantic import BaseModel
 from ._specpath import safe_join
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 # Characters allowed in a value that is placed into a subprocess argv element.
@@ -268,10 +270,11 @@ async def open_worktree_in_ide(request: OpenInIDERequest):
             "success": False,
             "error": f"IDE command not found. Make sure '{ide}' is installed and in your PATH."
         }
-    except Exception as e:
+    except Exception:
+        logger.exception("Failed to open worktree in IDE")
         return {
             "success": False,
-            "error": f"Failed to open IDE: {str(e)}"
+            "error": "Failed to open IDE"
         }
 
 
@@ -318,10 +321,11 @@ async def open_worktree_in_terminal(request: OpenInTerminalRequest):
             "success": False,
             "error": f"Terminal command not found. Make sure '{terminal}' is installed and in your PATH."
         }
-    except Exception as e:
+    except Exception:
+        logger.exception("Failed to open worktree in terminal")
         return {
             "success": False,
-            "error": f"Failed to open terminal: {str(e)}"
+            "error": "Failed to open terminal"
         }
 
 

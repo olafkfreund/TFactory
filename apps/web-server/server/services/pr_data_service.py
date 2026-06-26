@@ -12,11 +12,29 @@ the correct working directory (and therefore the correct GitHub remote).
 
 import json
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+# Allow-list for request-supplied values (e.g. a GitHub username) that flow
+# into a gh subprocess argv. Rejecting option-like (leading ``-``) and
+# out-of-charset values stops a request-controlled value from being
+# interpreted as a CLI option or otherwise injected (py/command-line-injection).
+_GH_ARG_RE = re.compile(r"[\w./@+-]+")
+
+
+def _require_safe_gh_arg(value: str, label: str = "argument") -> str:
+    """Validate a request-supplied gh argument against an allow-list before it
+    becomes a subprocess argv element. Raises ``ValueError`` on a leading-dash
+    (option-like) or out-of-charset value.
+    """
+    if not isinstance(value, str) or value.startswith("-") or not _GH_ARG_RE.fullmatch(value):
+        raise ValueError(f"Invalid {label}")
+    return value
 
 
 # ============================================================================
@@ -408,6 +426,13 @@ class PRDataService:
         """
         if not username or not username.strip():
             return {"success": False, "error": "Username cannot be empty"}
+
+        # username is request-controlled and flows into the gh argv; validate
+        # against the allow-list (no leading dash / charset) before use.
+        try:
+            username = _require_safe_gh_arg(username.strip(), "username")
+        except ValueError as exc:
+            return {"success": False, "error": str(exc)}
 
         result = _run_gh(
             ["pr", "edit", str(pr_number), "--add-assignee", username],

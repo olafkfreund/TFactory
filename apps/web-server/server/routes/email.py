@@ -8,6 +8,7 @@ Handles:
 - Checking OAuth credential configuration status
 """
 
+import html
 import logging
 import os
 import secrets
@@ -397,9 +398,7 @@ async def outlook_oauth_callback(
             message="Failed to save email account to database",
         )
 
-    logger.info(
-        "Outlook account connected for user %s: %s", user_id, email_address
-    )
+    logger.info("Outlook account connected for user %s", user_id)
 
     return _oauth_result_html(
         success=True,
@@ -619,9 +618,7 @@ async def gmail_oauth_callback(
             provider="gmail",
         )
 
-    logger.info(
-        "Gmail account connected for user %s: %s", user_id, email_address
-    )
+    logger.info("Gmail account connected for user %s", user_id)
 
     return _oauth_result_html(
         success=True,
@@ -636,11 +633,11 @@ def _oauth_result_html(
 ) -> HTMLResponse:
     """Return HTML that communicates the OAuth result to the opener window and closes itself."""
     status_text = "success" if success else "error"
-    html = f"""<!DOCTYPE html>
+    document = f"""<!DOCTYPE html>
 <html>
 <head><title>TFactory - Email Connection</title></head>
 <body>
-<p>{message}</p>
+<p>{html.escape(message)}</p>
 <script>
   if (window.opener) {{
     window.opener.postMessage({{
@@ -655,7 +652,7 @@ def _oauth_result_html(
 </script>
 </body>
 </html>"""
-    return HTMLResponse(content=html)
+    return HTMLResponse(content=document)
 
 
 def _js_string(s: str) -> str:

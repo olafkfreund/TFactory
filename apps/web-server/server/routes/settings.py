@@ -725,10 +725,11 @@ async def update_auto_switch_settings(settings_update: AutoSwitchSettingsUpdate)
         if auto_switch_file.exists():
             try:
                 current = json.loads(auto_switch_file.read_text())
-            except json.JSONDecodeError as e:
+            except json.JSONDecodeError:
+                logger.exception("Failed to parse existing auto-switch.json")
                 return {
                     "success": False,
-                    "error": f"Failed to parse existing auto-switch.json: {str(e)}"
+                    "error": "Failed to parse existing auto-switch settings"
                 }
         
         # Update with new values (only non-None values from Pydantic model)
@@ -747,8 +748,9 @@ async def update_auto_switch_settings(settings_update: AutoSwitchSettingsUpdate)
         
         return {"success": True, "data": current}
         
-    except Exception as e:
-        return {"success": False, "error": f"Failed to update auto-switch settings: {str(e)}"}
+    except Exception:
+        logger.exception("Failed to update auto-switch settings")
+        return {"success": False, "error": "Failed to update auto-switch settings"}
 
 
 class RetryWithProfileRequest(BaseModel):
@@ -853,8 +855,9 @@ async def retry_with_profile(request: RetryWithProfileRequest):
 
         return response
 
-    except Exception as e:
-        return {"success": False, "error": f"Failed to switch profile: {str(e)}"}
+    except Exception:
+        logger.exception("Failed to switch profile")
+        return {"success": False, "error": "Failed to switch profile"}
 
 
 @router.post("/usage-update")

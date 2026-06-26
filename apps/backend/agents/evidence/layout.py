@@ -434,6 +434,11 @@ def scaffold_auth_setup(spec_dir: Path | str) -> bool:
 
     tests_dir = spec_dir / "tests"
     tests_dir.mkdir(parents=True, exist_ok=True)
+    # auth.setup.ts contains NO secret material: render_auth_setup() emits only
+    # the *name* of the injected env var (a process.env[...] lookup resolved at
+    # run time), never the credential value (see render_auth_setup docstring).
+    # The clear-text-storage signal here is a false positive driven by the
+    # `secret_env` variable name. (CWE-312: env-var reference, not a secret.)
     (tests_dir / "auth.setup.ts").write_text(setup_ts, encoding="utf-8")
     (spec_dir / "playwright.config.ts").write_text(config_ts, encoding="utf-8")
     return True

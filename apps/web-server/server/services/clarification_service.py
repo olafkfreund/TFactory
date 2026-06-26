@@ -168,7 +168,7 @@ async def generate_clarification_questions(
         token, _pid, profile_name = provider._resolve_claude_token()
         if token:
             env["CLAUDE_CODE_OAUTH_TOKEN"] = token
-            logger.info(f"[ClarificationService] Using profile: {profile_name}")
+            logger.info("[ClarificationService] Using resolved Claude profile")
     except Exception:
         pass
 

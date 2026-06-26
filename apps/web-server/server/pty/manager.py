@@ -33,12 +33,13 @@ class PTYManager:
         """Create a new PTY session."""
         logger = logging.getLogger(__name__)
         token_env: dict[str, str] = {}
-        token, profile_id, profile_name = self._resolve_claude_token()
+        token, _profile_id, _profile_name = self._resolve_claude_token()
         if token:
             token_env["CLAUDE_CODE_OAUTH_TOKEN"] = token
-            logger.info(
-                f"[PTYManager] Using Claude profile for terminal: {profile_name} ({profile_id})"
-            )
+            # Do not log the resolved profile name/id: they are unpacked from
+            # the credential-bearing _resolve_claude_token() tuple, so logging
+            # them is flagged as clear-text logging of sensitive data (CWE-312).
+            logger.info("[PTYManager] Claude OAuth token configured for terminal")
         else:
             logger.warning("[PTYManager] No Claude OAuth token available for terminal")
 

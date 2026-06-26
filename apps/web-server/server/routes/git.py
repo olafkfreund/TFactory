@@ -4,18 +4,36 @@ Git, Ollama, MCP, and utility routes.
 
 import json
 import logging
+import re
 import shlex
 import shutil
 import subprocess
 from pathlib import Path
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from ._specpath import safe_join
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+# Allow-list for request-supplied values (branches, tags, versions) that flow
+# into a git/gh subprocess argv as a positional. Rejecting option-like (leading
+# ``-``) and out-of-charset values stops a request-controlled value from being
+# interpreted as a CLI option or otherwise injected (py/command-line-injection).
+_GIT_REF_RE = re.compile(r"[\w./@+-]+")
+
+
+def _require_safe_git_ref(value: str, label: str = "git ref") -> str:
+    """Validate a request-supplied git ref/branch/tag/version against an
+    allow-list before it becomes a subprocess argv element. Raises HTTP 400 on
+    a leading-dash (option-like) or out-of-charset value.
+    """
+    if not isinstance(value, str) or value.startswith("-") or not _GIT_REF_RE.fullmatch(value):
+        raise HTTPException(status_code=400, detail=f"Invalid {label}")
+    return value
 
 
 # ============================================
@@ -1106,7 +1124,10 @@ async def create_worktree(projectId: str, request: CreateWorktreeRequest):
 
     # Determine base branch
     if request.baseBranch:
-        base_branch = request.baseBranch.strip()
+        # base_branch is request-controlled and flows into git argv as a
+        # positional; validate it against the ref allow-list (rejects
+        # option-like/out-of-charset values) before use.
+        base_branch = _require_safe_git_ref(request.baseBranch.strip(), "base branch")
         # Verify base branch exists
         branch_check = run_git_command(
             ["rev-parse", "--verify", base_branch],
@@ -1288,6 +1309,9 @@ async def create_release(projectId: str, request: CreateReleaseRequest):
     version = request.version.strip() if request.version else ""
     if not version:
         return {"success": False, "error": "Version cannot be empty"}
+    # version flows into the gh argv as a positional tag; reject option-like
+    # or out-of-charset values (py/command-line-injection).
+    version = _require_safe_git_ref(version, "version")
 
     # Validate release notes
     release_notes = request.releaseNotes.strip() if request.releaseNotes else ""

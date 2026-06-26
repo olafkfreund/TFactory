@@ -5,6 +5,7 @@ Handles CRUD operations for projects (git repositories that Magestic AI manages)
 """
 
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
@@ -25,6 +26,8 @@ from . import changelog, context, files, git, github, github_pr
 from ._specpath import safe_component
 
 router = APIRouter()
+
+logger = logging.getLogger(__name__)
 
 # Include project-specific sub-routers
 # These will be available under /api/projects/{projectId}/...
@@ -637,8 +640,9 @@ async def initialize_project(project_id: str):
 
         # Return nested format expected by frontend
         return {"success": True, "data": {"success": True}}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    except Exception:
+        logger.exception("Failed to initialize project")
+        return {"success": False, "error": "Failed to initialize project"}
 
 
 @router.get("/{project_id}/version")
@@ -965,8 +969,9 @@ async def list_project_worktrees(project_id: str):
                 })
 
         return {"worktrees": enriched_worktrees}
-    except Exception as e:
-        return {"worktrees": [], "error": str(e)}
+    except Exception:
+        logger.exception("Failed to list worktrees for project")
+        return {"worktrees": [], "error": "Failed to list worktrees"}
 
 
 @router.get("/{project_id}/tasks")
