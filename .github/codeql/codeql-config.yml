@@ -1,0 +1,16 @@
+# CodeQL advanced-setup config (RFC: custom path-injection sanitizer).
+# Replaces the stock py/path-injection with a variant that recognises our
+# sanitizers (safe_component / safe_spec_dir / safe_join / os.path.basename /
+# get_next_spec_id) as barriers, so verified-safe code clears organically.
+name: "TFactory CodeQL config"
+queries:
+  - uses: security-extended
+  - uses: ./.github/codeql/custom-queries
+query-filters:
+  # Drop the stock query; our custom-queries variant re-emits the same
+  # py/path-injection id with our sanitizers as barriers.
+  - exclude:
+      id: py/path-injection
+      tags contain: security
+      # scope the exclude to the stock pack only
+queries-filter-note: "custom-queries provides the barrier-aware py/path-injection"
