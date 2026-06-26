@@ -124,7 +124,7 @@ export function TaskFiles({ task, worktreeSpecsPath }: TaskFilesProps) {
       const filteredEntries = entries.filter((file) => {
         if (file.type === 'directory') {
           return !HIDDEN_DIRECTORIES.some(hidden =>
-            hidden.includes('*') ? file.name.endsWith(hidden.replace('*', '')) : file.name === hidden
+            hidden.includes('*') ? file.name.endsWith(hidden.replace(/\*/g, '')) : file.name === hidden
           );
         }
         return ALLOWED_EXTENSIONS.some(ext => file.name.endsWith(ext));

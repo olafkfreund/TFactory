@@ -107,9 +107,10 @@ async def sse_endpoint(request: Request):
     """
     try:
         key = await authenticate(request.headers.get("Authorization"))
-    except MCPAuthError as exc:
+    except MCPAuthError:
+        logger.exception("MCP SSE authentication failed")
         return JSONResponse(
-            {"error": str(exc)}, status_code=status.HTTP_401_UNAUTHORIZED
+            {"error": "Unauthorized"}, status_code=status.HTTP_401_UNAUTHORIZED
         )
 
     token = _current_key.set(key)

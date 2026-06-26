@@ -12,6 +12,7 @@ servers run.
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,8 @@ if str(_BACKEND_DIR) not in sys.path:
 
 
 router = APIRouter(prefix="/api/projects", tags=["MCP"])
+
+logger = logging.getLogger(__name__)
 
 
 def _load_projects() -> dict[str, dict]:
@@ -54,8 +57,9 @@ def _describe_creds_status(provider: str) -> dict[str, Any]:
             "available": status.available,
             "source": status.source,
         }
-    except ImportError as exc:
-        return {"available": False, "source": f"framework-unavailable:{exc}"}
+    except ImportError:
+        logger.exception("MCP credential framework unavailable for provider %s", provider)
+        return {"available": False, "source": "framework-unavailable"}
 
 
 def _describe_marker_status(
@@ -113,10 +117,11 @@ async def get_mcp_status(project_id: str) -> dict[str, Any]:
     try:
         from agents.tools_pkg.mcp_catalog import CATALOG
         from prompts_pkg.project_context import detect_infra_markers
-    except ImportError as exc:
+    except ImportError:
+        logger.exception("MCP framework unavailable")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"MCP framework unavailable: {exc}",
+            detail="MCP framework unavailable",
         )
 
     if project_path.exists():

@@ -761,7 +761,7 @@ class AgentService:
             else:
                 logger.warning("[AgentService] Active profile has no token; env not updated")
 
-            logger.info(f"[AgentService] Updated active profile: {old_active} → {profile_id} (reason: {reason})")
+            logger.info(f"[AgentService] Updated active profile (reason: {reason})")
 
             # Emit WebSocket event for system-wide profile change
             from ..websockets.events import broadcast_event
@@ -882,7 +882,7 @@ class AgentService:
         env["CLAUDE_CODE_OAUTH_TOKEN"] = token
 
         # Log profile switch
-        logger.info(f"[AgentService] Retrying with profile: {profile_name} ({profile_id})")
+        logger.info("[AgentService] Retrying with alternate Claude profile")
 
         # Emit WebSocket event for profile switch
         await self._emit_profile_switch(
@@ -2507,7 +2507,7 @@ class AgentService:
         if token:
             env["CLAUDE_CODE_OAUTH_TOKEN"] = token
             logger.info(
-                f"[AgentService] Using Claude profile for spec creation: {profile_name} ({profile_id})"
+                "[AgentService] Using Claude profile for spec creation"
             )
             # Store for potential retry tracking
             self._task_profiles[task_id] = {
@@ -2738,7 +2738,7 @@ class AgentService:
         token, profile_id, profile_name = self._resolve_claude_token()
         if token:
             env["CLAUDE_CODE_OAUTH_TOKEN"] = token
-            logger.info(f"[AgentService] Using Claude profile: {profile_name} ({profile_id})")
+            logger.info("[AgentService] Using Claude profile")
             # Store for potential retry — read model from task_metadata.json
             exec_model = "sonnet"  # default
             exec_spec_dir = project_path / ".tfactory" / "specs" / spec_id

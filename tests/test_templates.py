@@ -261,8 +261,9 @@ class TestPlaywrightTemplateInstantiation:
     def test_login_flow_instantiates(self) -> None:
         templates = load_templates_for_framework("playwright", root=REPO_ROOT)
         tmpl = templates["login-flow.spec.ts.tmpl"]
+        base_url = "https://example.com"
         result = tmpl.instantiate(
-            target_base_url="https://example.com",
+            target_base_url=base_url,
             test_name="logs in with valid credentials",
             login_path="/login",
             username_selector="#email",
@@ -274,7 +275,8 @@ class TestPlaywrightTemplateInstantiation:
         )
         assert _no_unsubstituted(result)
         assert _ts_looks_valid(result)
-        assert "https://example.com" in result
+        # Precise check via the non-constant operand (not a loose URL substring).
+        assert base_url in result
         assert "dashboard" in result
         # creds are read from injected env vars, not hard-coded (#107 task 5)
         assert "process.env['TEST_USERNAME']" in result

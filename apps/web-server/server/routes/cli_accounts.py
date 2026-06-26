@@ -735,10 +735,11 @@ def install_or_update_cli(cli: str):
                 "success": False,
                 "error": "Node.js/npm not found. Please install Node.js first.",
             }
-    except Exception as e:
+    except Exception:
+        logger.exception("Failed to check Node.js availability")
         return {
             "success": False,
-            "error": f"Failed to check Node.js: {e}",
+            "error": "Failed to check Node.js",
         }
 
     # Step 2: Install/update via npm
@@ -775,10 +776,11 @@ def install_or_update_cli(cli: str):
             "success": False,
             "error": "Installation timed out after 120 seconds.",
         }
-    except Exception as e:
+    except Exception:
+        logger.exception("CLI installation failed")
         return {
             "success": False,
-            "error": f"Installation failed: {e}",
+            "error": "Installation failed",
         }
 
     # Step 3: Verify installation

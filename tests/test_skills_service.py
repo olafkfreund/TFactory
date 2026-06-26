@@ -15,6 +15,7 @@ Tests the skills_service.py module functionality including:
 
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
 
@@ -250,7 +251,8 @@ class TestGetSkill:
         skill = self.service.get_skill("frontend", "react")
         assert skill is not None
         assert skill.source is not None
-        assert "github.com" in skill.source
+        # Precise host check on the parsed URL, not a loose substring match.
+        assert urlparse(skill.source).netloc == "github.com"
 
 
 class TestGetSkillContent:

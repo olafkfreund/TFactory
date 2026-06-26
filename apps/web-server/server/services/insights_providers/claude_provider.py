@@ -175,7 +175,7 @@ class ClaudeProvider(ProviderStrategy):
         token, profile_id, profile_name = self._resolve_claude_token()
         if token:
             env["CLAUDE_CODE_OAUTH_TOKEN"] = token
-            logger.info(f"[ClaudeProvider] Using profile: {profile_name} ({profile_id})")
+            logger.info("[ClaudeProvider] Using resolved Claude profile")
         else:
             logger.warning("[ClaudeProvider] No OAuth token available")
 

@@ -424,10 +424,14 @@ class SecurityScanner:
         return self._bandit_available
 
     def _redact_secret(self, text: str) -> str:
-        """Redact a secret for safe logging."""
-        if len(text) <= 8:
-            return "*" * len(text)
-        return text[:4] + "*" * (len(text) - 8) + text[-4:]
+        """Redact a secret for safe logging/storage.
+
+        Reveals no characters of the secret (not even a masked prefix — a
+        partial reveal is still clear-text exposure, CWE-312). Only the
+        length is retained, derived via ``len()`` so the secret value itself
+        never flows into the returned string.
+        """
+        return f"<redacted: {len(text)} chars>"
 
     def _save_results(self, spec_dir: Path, result: SecurityScanResult) -> None:
         """Save scan results to spec directory."""
@@ -579,8 +583,10 @@ def main() -> None:
 
         if result.secrets:
             print("\nSecrets Detected:")
-            for secret in result.secrets:
-                print(f"  - {secret['pattern']} in {secret['file']}:{secret['line']}")
+            for finding in result.secrets:
+                # Only non-sensitive locator metadata is printed here; the
+                # matched secret is redacted at capture (never logged, CWE-312).
+                print(f"  - {finding['pattern']} in {finding['file']}:{finding['line']}")
 
         if result.vulnerabilities:
             print(f"\nVulnerabilities ({len(result.vulnerabilities)}):")

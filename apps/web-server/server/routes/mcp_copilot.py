@@ -52,7 +52,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request, status as http_status
+from fastapi import APIRouter, HTTPException, Request
+from fastapi import status as http_status
 from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
@@ -461,9 +462,9 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
 
         try:
             result_data = handler(tool_args)
-        except Exception as exc:
+        except Exception:
             logger.exception("mcp_copilot: tool %r raised unexpected error", tool_name)
-            return _err(-32603, f"Internal error: {exc}")
+            return _err(-32603, "Internal error")
 
         return _ok({
             "content": [{"type": "text", "text": json.dumps(result_data, indent=2)}],

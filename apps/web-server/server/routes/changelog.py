@@ -4,7 +4,6 @@ Changelog and Insights routes.
 Handles changelog generation and AI-powered insights chat.
 """
 
-import asyncio
 import base64
 import json
 import logging
@@ -20,6 +19,30 @@ from ._specpath import safe_component
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+# Allow-lists for request-supplied values that flow into git subprocess argv.
+# Prevents request-controlled input from being interpreted as a git option or
+# otherwise injected into the command (py/command-line-injection).
+_GIT_REF_RE = re.compile(r"[\w./@-]+")
+_GIT_DATE_RE = re.compile(r"[\w.:+/\s-]+")
+
+
+def _require_safe_git_ref(value: str, label: str) -> str:
+    """Validate a request-supplied git ref/branch/tag against an allow-list.
+
+    Rejects option-like (leading ``-``) and out-of-charset values.
+    """
+    if not isinstance(value, str) or value.startswith("-") or not _GIT_REF_RE.fullmatch(value):
+        raise HTTPException(status_code=400, detail=f"Invalid {label}")
+    return value
+
+
+def _require_safe_git_date(value: str, label: str) -> str:
+    """Validate a request-supplied git date string against an allow-list."""
+    if not isinstance(value, str) or value.startswith("-") or not _GIT_DATE_RE.fullmatch(value):
+        raise HTTPException(status_code=400, detail=f"Invalid {label}")
+    return value
 
 
 # ============================================
@@ -164,11 +187,12 @@ async def load_task_specs(projectId: str = Path(...), request: LoadSpecsRequest 
                     "content": content,
                     "path": str(spec_path.relative_to(project_path))
                 })
-            except Exception as e:
+            except Exception:
+                logger.exception("Failed to read spec for task %s", task_id)
                 specs.append({
                     "taskId": task_id,
                     "content": None,
-                    "error": str(e)
+                    "error": "Failed to read spec"
                 })
         else:
             # Try finding by glob pattern for numeric prefix
@@ -181,11 +205,12 @@ async def load_task_specs(projectId: str = Path(...), request: LoadSpecsRequest 
                         "content": content,
                         "path": str(matching[0].relative_to(project_path))
                     })
-                except Exception as e:
+                except Exception:
+                    logger.exception("Failed to read spec for task %s", task_id)
                     specs.append({
                         "taskId": task_id,
                         "content": None,
-                        "error": str(e)
+                        "error": "Failed to read spec"
                     })
             else:
                 specs.append({
@@ -303,7 +328,7 @@ async def save_changelog(projectId: str = Path(...), request: ChangelogSaveReque
         package_json = project_path / "package.json"
         if package_json.exists():
             try:
-                with open(package_json, 'r') as f:
+                with open(package_json) as f:
                     pkg = json.load(f)
                 pkg['version'] = request.version
                 with open(package_json, 'w') as f:
@@ -355,8 +380,9 @@ async def save_changelog(projectId: str = Path(...), request: ChangelogSaveReque
                 "updatedFiles": updated_files
             }
         }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    except Exception:
+        logger.exception("Failed to apply changelog")
+        return {"success": False, "error": "Failed to apply changelog"}
 
 
 @router.get("")
@@ -403,12 +429,13 @@ async def read_existing_changelog(projectId: str = Path(...)):
                 "lastVersion": last_version
             }
         }
-    except Exception as e:
+    except Exception:
+        logger.exception("Failed to read existing changelog")
         return {
             "success": True,
             "data": {
                 "exists": True,
-                "error": str(e)
+                "error": "Failed to read changelog"
             }
         }
 
@@ -527,8 +554,9 @@ async def get_changelog_branches(projectId: str = Path(...)):
         return {"success": True, "data": branch_objects}
     except subprocess.TimeoutExpired:
         return {"success": False, "error": "Git command timed out"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    except Exception:
+        logger.exception("Failed to list git branches")
+        return {"success": False, "error": "Failed to list branches"}
 
 
 @router.get("/tags")
@@ -590,8 +618,9 @@ async def get_changelog_tags(projectId: str = Path(...)):
         return {"success": True, "data": tag_objects}
     except subprocess.TimeoutExpired:
         return {"success": False, "error": "Git command timed out"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    except Exception:
+        logger.exception("Failed to list git tags")
+        return {"success": False, "error": "Failed to list tags"}
 
 
 @router.post("/commits-preview")
@@ -619,26 +648,35 @@ async def get_commits_preview(projectId: str = Path(...), request: CommitsPrevie
             # Compare two branches - use ref (git-resolvable) if provided, fall back to name
             base_branch = options.get("baseBranchRef") or options.get("baseBranch", "main")
             compare_branch = options.get("compareBranchRef") or options.get("compareBranch", "HEAD")
+            base_branch = _require_safe_git_ref(base_branch, "base branch")
+            compare_branch = _require_safe_git_ref(compare_branch, "compare branch")
             cmd.append(f"{base_branch}..{compare_branch}")
         else:
             # History mode with various options
             history_type = options.get("type", "last-n")
 
             if history_type == "last-n":
-                count = options.get("count", 20)
+                try:
+                    count = int(options.get("count", 20))
+                except (TypeError, ValueError):
+                    raise HTTPException(status_code=400, detail="Invalid commit count") from None
                 cmd.extend(["-n", str(count)])
             elif history_type == "since-date":
                 since_date = options.get("sinceDate")
                 if since_date:
+                    since_date = _require_safe_git_date(since_date, "since date")
                     cmd.extend(["--since", since_date])
             elif history_type == "since-version":
                 from_tag = options.get("fromTag")
                 if from_tag:
+                    from_tag = _require_safe_git_ref(from_tag, "from tag")
                     cmd.append(f"{from_tag}..HEAD")
             elif history_type == "tag-range":
                 from_tag = options.get("fromTag")
                 to_tag = options.get("toTag", "HEAD")
                 if from_tag:
+                    from_tag = _require_safe_git_ref(from_tag, "from tag")
+                    to_tag = _require_safe_git_ref(to_tag, "to tag")
                     cmd.append(f"{from_tag}..{to_tag}")
 
             # Optionally exclude merge commits
@@ -676,10 +714,13 @@ async def get_commits_preview(projectId: str = Path(...), request: CommitsPrevie
                 })
 
         return {"success": True, "data": commits}
+    except HTTPException:
+        raise
     except subprocess.TimeoutExpired:
         return {"success": False, "error": "Git command timed out"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    except Exception:
+        logger.exception("Failed to preview commits")
+        return {"success": False, "error": "Failed to preview commits"}
 
 
 @router.post("/images")
@@ -739,10 +780,11 @@ async def save_changelog_image(projectId: str = Path(...), request: SaveImageReq
 
         try:
             image_bytes = base64.b64decode(image_data_str)
-        except Exception as decode_error:
+        except Exception:
+            logger.exception("Failed to decode base64 image data")
             return {
                 "success": False,
-                "error": f"Failed to decode base64 image data: {str(decode_error)}"
+                "error": "Failed to decode base64 image data"
             }
 
         # Validate decoded data is not empty
@@ -770,8 +812,9 @@ async def save_changelog_image(projectId: str = Path(...), request: SaveImageReq
 
     except HTTPException:
         raise
-    except Exception as e:
-        return {"success": False, "error": f"Failed to save image: {str(e)}"}
+    except Exception:
+        logger.exception("Failed to save changelog image")
+        return {"success": False, "error": "Failed to save image"}
 
 
 # ============================================
@@ -958,7 +1001,7 @@ async def create_task_from_insights(projectId: str = Path(...), request: CreateT
         return {"success": True, "data": result}
     except Exception as e:
         logger.error(f"create_task_from_insights failed: {e}", exc_info=True)
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": "Failed to create task"}
 
 
 @insights_router.post("/generate-task")
@@ -976,7 +1019,7 @@ async def generate_task_from_chat(projectId: str = Path(...), request: GenerateT
         return {"success": True, "data": result}
     except Exception as e:
         logger.error(f"generate_task_from_chat failed: {e}", exc_info=True)
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": "Failed to generate task"}
 
 
 @insights_router.get("/sessions")

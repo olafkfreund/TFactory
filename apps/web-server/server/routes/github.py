@@ -4,23 +4,38 @@ GitHub integration routes.
 Handles GitHub OAuth, repository management, issues, PRs, and releases.
 """
 
-import asyncio
 import json
 import logging
 import re
-import shutil
 import subprocess
 import sys
 from pathlib import Path as FilePath
 
-from fastapi import APIRouter, Query
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from ._specpath import safe_component
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+# Allow-list for request-supplied values (repo names, owners, versions) that
+# flow into a gh subprocess argv as a positional. Rejecting option-like
+# (leading ``-``) and out-of-charset values stops a request-controlled value
+# from being interpreted as a CLI option or otherwise injected
+# (py/command-line-injection).
+_GH_REF_RE = re.compile(r"[\w./@+-]+")
+
+
+def _require_safe_gh_ref(value: str, label: str = "value") -> str:
+    """Validate a request-supplied repo/owner/version value against an
+    allow-list before it becomes a positional subprocess argv element. Raises
+    HTTP 400 on a leading-dash (option-like) or out-of-charset value.
+    """
+    if not isinstance(value, str) or value.startswith("-") or not _GH_REF_RE.fullmatch(value):
+        raise HTTPException(status_code=400, detail=f"Invalid {label}")
+    return value
 
 
 # ============================================
@@ -395,6 +410,10 @@ async def get_github_branches(
     repo: str = Query(...),
 ):
     """Get branches for a GitHub repository."""
+    # `repo` is request-controlled and is interpolated into the gh api path
+    # argv element; validate it (owner/repo charset, no leading dash) so it
+    # cannot inject a CLI option or path (py/command-line-injection).
+    repo = _require_safe_gh_ref(repo, "repository")
     result = run_gh_command([
         "api", f"repos/{repo}/branches", "--jq", ".[].name"
     ])
@@ -407,7 +426,12 @@ async def get_github_branches(
 @router.post("/repos")
 async def create_github_repo(request: CreateRepoRequest):
     """Create a new GitHub repository."""
-    args = ["repo", "create", request.repoName, "--confirm"]
+    # repoName/orgName flow into the gh argv as the positional repo target;
+    # validate against the ref allow-list so they cannot be interpreted as CLI
+    # options (py/command-line-injection). `description` stays an option-value
+    # of --description (free text) and is consumed as a single argv element.
+    repo_name = _require_safe_gh_ref(request.repoName, "repository name")
+    args = ["repo", "create", repo_name, "--confirm"]
     if request.description:
         args.extend(["--description", request.description])
     if request.private:
@@ -415,7 +439,8 @@ async def create_github_repo(request: CreateRepoRequest):
     else:
         args.append("--public")
     if request.orgName:
-        args[2] = f"{request.orgName}/{request.repoName}"
+        org_name = _require_safe_gh_ref(request.orgName, "organization name")
+        args[2] = f"{org_name}/{repo_name}"
 
     result = run_gh_command(args)
     if result["success"]:
@@ -1034,10 +1059,11 @@ async def investigate_github_issue(
                     all_comments = await _get_provider_issue_comments(provider, issueNumber)
                 except Exception:
                     all_comments = []
-            except Exception as exc:
+            except Exception:
+                logger.exception("Failed to fetch issue %s", issueNumber)
                 return {
                     "success": False,
-                    "error": f"Failed to fetch issue: {exc}",
+                    "error": "Failed to fetch issue",
                 }
         else:
             # Fetch issue details using gh CLI
@@ -1267,7 +1293,11 @@ async def create_github_release(projectId: str, request: CreateReleaseRequest):
     if not project_path:
         return {"success": False, "error": f"Project {projectId} not found"}
 
-    args = ["release", "create", request.version, "--title", request.version, "--notes", request.releaseNotes]
+    # version flows into the gh argv as a positional tag (and --title value);
+    # validate it (no leading dash / charset) to prevent option injection
+    # (py/command-line-injection). releaseNotes stays a --notes option-value.
+    version = _require_safe_gh_ref(request.version, "version")
+    args = ["release", "create", version, "--title", version, "--notes", request.releaseNotes]
     if request.draft:
         args.append("--draft")
     if request.prerelease:

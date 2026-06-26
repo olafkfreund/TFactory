@@ -64,5 +64,7 @@ def free_port() -> int:
     import socket
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("", 0))
+        # Bind to loopback only: this fixture just reserves a free local port
+        # for tests to publish a container to; it never needs all interfaces.
+        s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]

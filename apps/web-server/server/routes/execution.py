@@ -599,11 +599,11 @@ async def recover_task(task_id: str, request: RecoverTaskRequest = RecoverTaskRe
             plan["status"] = reset_status
             plan.pop("reviewReason", None)
             plan_file.write_text(json.dumps(plan, indent=2))
-        except Exception as e:
+        except Exception:
             # If auto-restart fails, still return success for recovery
             import logging
-            logging.getLogger(__name__).warning(f"Auto-restart failed for {task_id}: {e}")
-            auto_restart_error = str(e)
+            logging.getLogger(__name__).exception("Auto-restart failed for %s", task_id)
+            auto_restart_error = "Auto-restart failed"
 
     # Emit status change via WebSocket (single final status to avoid UI flicker)
     await emit_task_status(task_id, reset_status)

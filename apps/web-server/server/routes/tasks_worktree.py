@@ -864,8 +864,9 @@ async def resolve_uncommitted_conflicts(task_id: str):
                     "success": False,
                     "error": f"Failed to stash changes: {result.stderr or result.stdout}",
                 }
-    except subprocess.CalledProcessError as e:
-        return {"success": False, "error": f"Failed to stash changes: {e.stderr}"}
+    except subprocess.CalledProcessError:
+        logger.exception("Failed to stash changes before resolving uncommitted conflicts")
+        return {"success": False, "error": "Failed to stash changes"}
 
     resolved_files = []
     failed_files = []
@@ -1250,9 +1251,9 @@ async def resolve_git_merge_conflicts(task_id: str):
         else:
             commit_result = f"Commit failed: {result.stderr}"
             logger.warning(f"Failed to auto-commit merge: {result.stderr}")
-    except Exception as e:
-        commit_result = f"Commit error: {str(e)}"
-        logger.error(f"Error during auto-commit: {e}")
+    except Exception:
+        commit_result = "Commit error: an unexpected error occurred"
+        logger.exception("Error during auto-commit")
 
     return {
         "success": True,
@@ -1370,9 +1371,9 @@ async def abort_worktree_merge(task_id: str):
                     errors.append(f"Worktree: {result.stderr.strip()}")
         except subprocess.TimeoutExpired:
             errors.append("Worktree: git merge --abort timed out")
-        except Exception as e:
-            logger.error(f"Error aborting merge in worktree: {e}")
-            errors.append(f"Worktree: {str(e)}")
+        except Exception:
+            logger.exception("Error aborting merge in worktree")
+            errors.append("Worktree: failed to abort merge")
 
     # Try to abort merge in main project
     if project_path and project_path.exists():
@@ -1402,9 +1403,9 @@ async def abort_worktree_merge(task_id: str):
                     errors.append(f"Main project: {result.stderr.strip()}")
         except subprocess.TimeoutExpired:
             errors.append("Main project: git merge --abort timed out")
-        except Exception as e:
-            logger.error(f"Error aborting merge in main project: {e}")
-            errors.append(f"Main project: {str(e)}")
+        except Exception:
+            logger.exception("Error aborting merge in main project")
+            errors.append("Main project: failed to abort merge")
 
     if aborted_locations:
         return {
@@ -1678,8 +1679,9 @@ async def create_pr_from_task(task_id: str, options: CreatePRFromTaskOptions = N
                 "success": False,
                 "error": f"Provider {provider_type_value!r} does not support PR creation yet",
             }
-        except Exception as exc:
-            return {"success": False, "error": f"Failed to create PR: {exc}"}
+        except Exception:
+            logger.exception("Failed to create PR via provider")
+            return {"success": False, "error": "Failed to create PR"}
 
     # Create the PR using gh CLI (GitHub-only path)
     head_ref = worktree_branch

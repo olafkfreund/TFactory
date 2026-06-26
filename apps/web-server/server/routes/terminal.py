@@ -6,10 +6,10 @@ WebSocket I/O is handled in websockets/terminal.py.
 """
 
 import json
+import logging
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -21,6 +21,7 @@ from ._specpath import safe_component
 from .projects import load_projects
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 # --------------------------------------------------------------------------
@@ -360,8 +361,9 @@ async def list_terminal_worktrees(project: str = Query(...)):
         service = TerminalWorktreeService(project)
         worktrees = service.list_worktrees()
         return {"success": True, "data": worktrees}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    except Exception:
+        logger.exception("Failed to list terminal worktrees")
+        return {"success": False, "error": "Failed to list terminal worktrees"}
 
 
 @router.post("/worktrees", response_model=TerminalWorktreeResult)
@@ -415,13 +417,15 @@ async def remove_terminal_worktree(
         service = TerminalWorktreeService(project)
         success = service.remove_worktree(name, deleteBranch)
         return {"success": success}
-    except ValueError as e:
-        return {"success": False, "error": str(e)}
-    except subprocess.CalledProcessError as e:
-        error_msg = f"Git error: {e.stderr if e.stderr else str(e)}"
-        return {"success": False, "error": error_msg}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    except ValueError:
+        logger.exception("Invalid request to remove terminal worktree")
+        return {"success": False, "error": "Failed to remove terminal worktree"}
+    except subprocess.CalledProcessError:
+        logger.exception("Git error while removing terminal worktree")
+        return {"success": False, "error": "Git error while removing terminal worktree"}
+    except Exception:
+        logger.exception("Failed to remove terminal worktree")
+        return {"success": False, "error": "Failed to remove terminal worktree"}
 
 
 @router.get("/sessions/{date}")
