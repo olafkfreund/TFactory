@@ -6,9 +6,7 @@ Runs `codex exec --model <model> "<message>"` as a subprocess.
 
 import asyncio
 import logging
-import os
 import shlex
-import subprocess
 import time
 from pathlib import Path
 
@@ -32,7 +30,10 @@ class CodexProvider(ProviderStrategy):
 
     async def detect(self) -> ProviderInfo:
         # Reuse cli_accounts detection logic
-        from ...routes.cli_accounts import _detect_cli_version, _detect_codex_credentials
+        from ...routes.cli_accounts import (
+            _detect_cli_version,
+            _detect_codex_credentials,
+        )
 
         version = _detect_cli_version("codex")
         installed = version is not None

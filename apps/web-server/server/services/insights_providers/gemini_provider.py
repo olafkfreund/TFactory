@@ -6,7 +6,6 @@ Runs `gemini --prompt "<message>"` as a subprocess.
 
 import asyncio
 import logging
-import os
 import shlex
 import shutil
 import time
