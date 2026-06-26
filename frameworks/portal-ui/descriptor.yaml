@@ -19,7 +19,7 @@ lanes:
 version_range: ">=1.44"
 
 runtime:
-  # Runs via the vendored harness under apps/backend/portal_testing/, on the
+  # Runs via the vendored harness under portal_testing/, on the
   # nix browser substrate (see portal_testing/flake.nix). In-cluster this is a
   # k8s Job (no container runtime in the pod); locally it's `nix develop`. The
   # image is a nix-baked runner carrying python+playwright+browsers (the
