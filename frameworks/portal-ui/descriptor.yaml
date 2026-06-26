@@ -24,7 +24,7 @@ runtime:
   # k8s Job (no container runtime in the pod); locally it's `nix develop`. The
   # image is a nix-baked runner carrying python+playwright+browsers (the
   # nix_provisioner browser stack), distinct from the per-repo node runners.
-  image: tfactory-runner-portal-ui:nix
+  image: ghcr.io/olafkfreund/tfactory-runner-portal-ui:latest
   entrypoint:
     - python
     - -m

@@ -20,11 +20,16 @@ from typing import Any
 # The portals the capability knows about (kept in sync with config.PORTALS).
 PORTAL_KEYS = ("pfactory", "aifactory", "tfactory", "cfactory")
 
-DEFAULT_IMAGE = "tfactory-runner-portal-ui:nix"
+DEFAULT_IMAGE = "ghcr.io/olafkfreund/tfactory-runner-portal-ui:latest"
 DEFAULT_NAMESPACE = "factory"
 # Secret holding the enrolled MFA test user (provisioned by keycloak_provision).
 DEFAULT_MFA_SECRET = "portal-ui-test-user"
 _MFA_ENV = ("TEST_USER", "TEST_PASSWORD", "TEST_TOTP_SECRET")
+# The control-plane data PVC carries the Visual Inspection store at
+# ~/.tfactory/visual-inspections. Co-mounting it (single-node) lets the Job's
+# publish surface in the portal's Visual Reports tab.
+DEFAULT_DATA_PVC = "tfactory-data"
+_HOME = "/home/nonroot"
 
 
 def portal_ui_job_name(portal_key: str, run_id: str) -> str:
@@ -38,13 +43,15 @@ def build_portal_ui_job_manifest(
     image: str | None = None,
     namespace: str | None = None,
     mfa_secret: str | None = None,
-    browsers_path: str | None = None,
+    data_pvc: str | None = None,
 ) -> dict[str, Any]:
     """Build the k8s Job manifest that runs the portal-ui harness for one portal.
 
     The Job runs ``python -m portal_testing.run <portal> --visual-inspection``
-    on the nix browser image, with the MFA credentials sourced from a Secret and
-    the nix-provided browsers wired via ``PLAYWRIGHT_BROWSERS_PATH``.
+    on the portal-ui runner image (MS Playwright base — chromium + browsers
+    baked), with the MFA credentials sourced from a Secret (via env, never argv).
+    It co-mounts the control-plane data PVC at ``~/.tfactory`` so the published
+    run lands in the Visual Inspection store the portal's tab reads.
     """
     if portal_key not in PORTAL_KEYS:
         raise ValueError(f"unknown portal {portal_key!r}; have {PORTAL_KEYS}")
@@ -53,6 +60,7 @@ def build_portal_ui_job_manifest(
     mfa_secret = mfa_secret or os.environ.get(
         "PORTAL_UI_MFA_SECRET", DEFAULT_MFA_SECRET
     )
+    data_pvc = data_pvc or os.environ.get("TFACTORY_DATA_PVC", DEFAULT_DATA_PVC)
     name = portal_ui_job_name(portal_key, run_id)
 
     env: list[dict[str, Any]] = [
@@ -60,13 +68,8 @@ def build_portal_ui_job_manifest(
         for var in _MFA_ENV
     ]
     env.append({"name": "PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS", "value": "true"})
-    if browsers_path or os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
-        env.append(
-            {
-                "name": "PLAYWRIGHT_BROWSERS_PATH",
-                "value": browsers_path or os.environ["PLAYWRIGHT_BROWSERS_PATH"],
-            }
-        )
+    # HOME resolves the Visual Inspection store onto the co-mounted data PVC.
+    env.append({"name": "HOME", "value": _HOME})
 
     return {
         "apiVersion": "batch/v1",
@@ -83,6 +86,13 @@ def build_portal_ui_job_manifest(
                 "metadata": {"labels": {"app": "tfactory", "lane": "portal-ui"}},
                 "spec": {
                     "restartPolicy": "Never",
+                    "imagePullSecrets": [{"name": "ghcr-pull"}],
+                    "volumes": [
+                        {
+                            "name": "data",
+                            "persistentVolumeClaim": {"claimName": data_pvc},
+                        }
+                    ],
                     "containers": [
                         {
                             "name": "portal-ui",
@@ -95,6 +105,9 @@ def build_portal_ui_job_manifest(
                                 run_id,
                             ],
                             "env": env,
+                            "volumeMounts": [
+                                {"name": "data", "mountPath": f"{_HOME}/.tfactory"}
+                            ],
                         }
                     ],
                 },
