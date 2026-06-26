@@ -28,9 +28,13 @@ PR-C.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import re
+import stat
+import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -81,11 +85,18 @@ def slug_from_git_url(git_url: str) -> str:
     return slug or "workspace"
 
 
-def _inject_credential(git_url: str, username: str, token: str) -> str:
-    """Rewrite an HTTPS git URL to embed a PAT (#82 PR-C).
+def _inject_credential(git_url: str, username: str) -> str:
+    """Rewrite an HTTPS git URL to carry the *username only* (#82 PR-C).
 
     ``https://github.com/owner/repo.git`` →
-    ``https://oauth2:<token>@github.com/owner/repo.git``
+    ``https://oauth2@github.com/owner/repo.git``
+
+    The token is deliberately NOT embedded in the URL: a URL passed to
+    ``git`` becomes an argv element, readable by any process via
+    ``/proc/<pid>/cmdline`` for the duration of the clone (security
+    review H1). The password is supplied out-of-band via ``GIT_ASKPASS``
+    (see :func:`_git_askpass_env`); git asks the helper for the password
+    because the URL carries a username but no password.
 
     SSH URLs (``git@host:...``) are returned unchanged — they auth via
     keys, not URLs; stored Deploy Keys are a separate path (out of
@@ -94,7 +105,77 @@ def _inject_credential(git_url: str, username: str, token: str) -> str:
     if not git_url.startswith("https://"):
         return git_url
     rest = git_url[len("https://") :]
-    return f"https://{username}:{token}@{rest}"
+    return f"https://{username}@{rest}"
+
+
+# Tiny POSIX askpass helper. git invokes it as ``<script> "<prompt>"`` and
+# reads the answer from stdout. We branch on the prompt: git asks for the
+# username first ("Username for '...'"), then the password. Both values come
+# from the environment (``GIT_USER`` / ``GIT_PASS``) — never argv — so the
+# token never appears in any process command line.
+_GIT_ASKPASS_SCRIPT = """#!/bin/sh
+case "$1" in
+  Username*) printf '%s' "$GIT_USER" ;;
+  *)         printf '%s' "$GIT_PASS" ;;
+esac
+"""
+
+
+@contextlib.contextmanager
+def _git_askpass_env(username: str, token: str) -> Iterator[dict[str, str]]:
+    """Yield env vars that feed a git credential via ``GIT_ASKPASS``.
+
+    Writes the askpass helper to a ``0700`` temp file and points
+    ``GIT_ASKPASS`` at it. The token travels in ``GIT_PASS`` (read by the
+    script), so it never lands in argv or in git's persisted config. The
+    script is removed when the context exits.
+    """
+    handle = tempfile.NamedTemporaryFile(
+        mode="w", prefix="git-askpass-", suffix=".sh", delete=False
+    )
+    try:
+        handle.write(_GIT_ASKPASS_SCRIPT)
+        handle.close()
+        os.chmod(handle.name, stat.S_IRWXU)  # 0700 — owner-only rwx
+        yield {
+            "GIT_ASKPASS": handle.name,
+            "GIT_TERMINAL_PROMPT": "0",
+            "GIT_USER": username,
+            "GIT_PASS": token,
+        }
+    finally:
+        try:
+            os.unlink(handle.name)
+        except OSError:
+            pass
+
+
+_ALLOWED_GIT_URL_SCHEMES = ("https://", "http://", "ssh://", "git://")
+_SCP_LIKE_GIT_URL = re.compile(r"^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:")
+_SAFE_GIT_REF = re.compile(r"[\w./@+-]+")
+
+
+def validate_git_url(git_url: str) -> str:
+    """Reject a clone URL that could trigger git transport-helper RCE (review C1).
+
+    Allows only standard remote transports (https/http/ssh/git) and scp-like
+    ``user@host:path``; rejects ``ext::``/other ``::`` transport helpers,
+    ``file://`` (local-repo read), and any leading-dash (option-injection) value.
+    Returns the validated URL; raises ``GitOperationError`` otherwise.
+    """
+    url = (git_url or "").strip()
+    if not url or url.startswith("-") or "::" in url:
+        raise GitOperationError(f"Disallowed git URL: {git_url!r}")
+    if url.startswith(_ALLOWED_GIT_URL_SCHEMES) or _SCP_LIKE_GIT_URL.match(url):
+        return url
+    raise GitOperationError(f"Disallowed git URL scheme: {git_url!r}")
+
+
+def _validate_git_ref(ref: str) -> str:
+    """Reject an option-like / out-of-charset git ref before it becomes argv."""
+    if ref.startswith("-") or not _SAFE_GIT_REF.fullmatch(ref):
+        raise GitOperationError(f"Invalid git ref: {ref!r}")
+    return ref
 
 
 async def clone_or_update(
@@ -131,6 +212,11 @@ async def clone_or_update(
     Raises:
         GitOperationError: On any non-zero ``git`` exit code or timeout.
     """
+    # Reject transport-helper / option-injection clone URLs before any git op
+    # (review C1: ext::sh -c ... RCE). Defense in depth with GIT_ALLOW_PROTOCOL.
+    git_url = validate_git_url(git_url)
+    if branch is not None:
+        branch = _validate_git_ref(branch)
     # The directory name derives from the request-supplied git URL (or an
     # explicit slug override); confirm it is a single literal path component so
     # it can't escape the workspace root (py/path-injection).
@@ -139,89 +225,120 @@ async def clone_or_update(
     )
     workspace.parent.mkdir(parents=True, exist_ok=True)
 
-    # Build the URL that actually gets passed to ``git`` for network ops.
-    # Note: ``credential`` is the secret material — never log it.
+    # Build the URL that actually gets passed to ``git`` for network ops, plus
+    # the credential env. The token is NEVER embedded in the URL/argv (security
+    # review H1): the URL carries only the username and the password is fed via
+    # GIT_ASKPASS, so it can't be read from ``/proc/<pid>/cmdline``.
+    # ``credential`` is the secret material — never log it.
     fetch_url = git_url
+    askpass_ctx: contextlib.AbstractContextManager[dict[str, str]]
     if credential is not None:
         username, token = credential
-        fetch_url = _inject_credential(git_url, username, token)
+        fetch_url = _inject_credential(git_url, username)
+        askpass_ctx = _git_askpass_env(username, token)
+    else:
+        askpass_ctx = contextlib.nullcontext({})
 
-    if (workspace / ".git").is_dir():
-        # Existing clone — fetch + reset/fast-forward.
-        # For credentialed pulls, point origin at the URL-with-token
-        # FOR THIS OPERATION ONLY, then restore the sanitized origin so
-        # the credential doesn't end up in ``.git/config``.
-        if credential is not None:
-            await _run_git(
-                ["remote", "set-url", "origin", fetch_url],
-                cwd=workspace,
-                timeout=timeout_seconds,
-            )
-        try:
-            await _run_git(
-                ["fetch", "--prune", "origin"],
-                cwd=workspace,
-                timeout=timeout_seconds,
-            )
-            if branch:
+    with askpass_ctx as cred_env:
+        if (workspace / ".git").is_dir():
+            # Existing clone — fetch + reset/fast-forward.
+            # For credentialed pulls, point origin at the username-only URL
+            # FOR THIS OPERATION ONLY, then restore the bare origin afterwards.
+            if credential is not None:
                 await _run_git(
-                    ["checkout", branch],
+                    ["remote", "set-url", "origin", fetch_url],
                     cwd=workspace,
                     timeout=timeout_seconds,
                 )
-            await _run_git(
-                ["pull", "--ff-only"],
-                cwd=workspace,
-                timeout=timeout_seconds,
-            )
-        finally:
-            if credential is not None:
-                # Restore origin to the sanitized URL so credentials
-                # don't leak via ``git config``.
-                try:
+            try:
+                await _run_git(
+                    ["fetch", "--prune", "origin"],
+                    cwd=workspace,
+                    timeout=timeout_seconds,
+                    extra_env=cred_env,
+                )
+                if branch:
                     await _run_git(
-                        ["remote", "set-url", "origin", git_url],
+                        ["checkout", branch],
                         cwd=workspace,
                         timeout=timeout_seconds,
                     )
-                except GitOperationError:
-                    pass
-        logger.info("[workspace] pulled latest into %s", workspace)
-        return workspace
+                await _run_git(
+                    ["pull", "--ff-only"],
+                    cwd=workspace,
+                    timeout=timeout_seconds,
+                    extra_env=cred_env,
+                )
+            finally:
+                if credential is not None:
+                    # Restore origin to the bare URL so even the username
+                    # doesn't linger in ``.git/config``.
+                    try:
+                        await _run_git(
+                            ["remote", "set-url", "origin", git_url],
+                            cwd=workspace,
+                            timeout=timeout_seconds,
+                        )
+                    except GitOperationError:
+                        pass
+            logger.info("[workspace] pulled latest into %s", workspace)
+            return workspace
 
-    # Fresh clone
-    cmd = ["clone"]
-    if branch:
-        cmd.extend(["--branch", branch])
-    cmd.extend([fetch_url, str(workspace)])
-    await _run_git(cmd, cwd=workspace.parent, timeout=timeout_seconds)
-    if credential is not None:
-        # Strip the credential from origin so it isn't persisted in
-        # the workspace's ``.git/config``.
-        try:
-            await _run_git(
-                ["remote", "set-url", "origin", git_url],
-                cwd=workspace,
-                timeout=timeout_seconds,
-            )
-        except GitOperationError:
-            pass
-    logger.info("[workspace] cloned %s → %s", git_url, workspace)
-    return workspace
+        # Fresh clone. ``--`` ends option parsing so a hostile URL/dir starting
+        # with ``-`` can't be read as a git flag (review C1 arg-injection).
+        cmd = ["clone"]
+        if branch:
+            cmd.extend(["--branch", branch])
+        cmd.extend(["--", fetch_url, str(workspace)])
+        await _run_git(
+            cmd, cwd=workspace.parent, timeout=timeout_seconds, extra_env=cred_env
+        )
+        if credential is not None:
+            # Strip the credential username from origin so it isn't persisted
+            # in the workspace's ``.git/config``.
+            try:
+                await _run_git(
+                    ["remote", "set-url", "origin", git_url],
+                    cwd=workspace,
+                    timeout=timeout_seconds,
+                )
+            except GitOperationError:
+                pass
+        logger.info("[workspace] cloned %s → %s", git_url, workspace)
+        return workspace
 
 
 class GitOperationError(RuntimeError):
     """Raised when a git operation fails or times out."""
 
 
-async def _run_git(args: list[str], *, cwd: Path, timeout: float) -> str:
-    """Run ``git <args>`` with a timeout. Returns stdout on success."""
+async def _run_git(
+    args: list[str],
+    *,
+    cwd: Path,
+    timeout: float,
+    extra_env: dict[str, str] | None = None,
+) -> str:
+    """Run ``git <args>`` with a timeout. Returns stdout on success.
+
+    ``extra_env`` is merged on top of the base environment — used to thread
+    the ``GIT_ASKPASS`` credential vars (security review H1) into the network
+    operations without ever putting the token on the command line.
+    """
     cmd = ["git", *args]
     logger.debug("[workspace] running: git %s (cwd=%s)", " ".join(args), cwd)
+    # Defense in depth against a malicious clone URL (Factory security review C1):
+    # restrict git's transports so the ``ext::`` / transport-helper RCE vector
+    # (e.g. ``git clone 'ext::sh -c ...'``) is refused even if URL validation is
+    # bypassed. Only the standard fetch transports are allowed.
+    env = {**os.environ, "GIT_ALLOW_PROTOCOL": "https:http:ssh:git:file"}
+    if extra_env:
+        env.update(extra_env)
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             cwd=str(cwd),
+            env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )

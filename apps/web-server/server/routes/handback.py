@@ -100,7 +100,9 @@ def _resolve_ids(payload: AIFactoryCompletePayload) -> tuple[str, str]:
             detail="provide tfactory_task_id or project_id + spec_id",
         )
     for part in (project_id, spec_id):
-        if not part or not _SPEC_ID_RE.match(part):
+        # ``_SPEC_ID_RE`` admits ``.``/``..`` as a full match — reject them so a
+        # single-level traversal can't escape the specs root (security review L1).
+        if not part or not _SPEC_ID_RE.match(part) or part in (".", ".."):
             raise HTTPException(
                 status_code=http_status.HTTP_400_BAD_REQUEST,
                 detail=f"invalid id component: {part!r}",

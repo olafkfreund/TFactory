@@ -6,7 +6,6 @@ Runs `gemini --prompt "<message>"` as a subprocess.
 
 import asyncio
 import logging
-import os
 import shlex
 import shutil
 import time
@@ -64,6 +63,16 @@ class GeminiProvider(ProviderStrategy):
         cmd = ["bash", "-l", "-c"]
 
         effective_model = model or (model_config or {}).get("model", "gemini-2.5-flash")
+
+        # The gemini CLI takes model + prompt as ``--flag value`` pairs (no
+        # positional), so a ``--`` separator doesn't apply. Reject an
+        # option-like model value instead: otherwise ``--model --yolo`` would
+        # be parsed as the dangerous ``--yolo`` flag rather than a model name
+        # (security review M4). The prompt is bound to the explicit ``--prompt``
+        # flag below. A legitimate model id never starts with ``-``.
+        if effective_model.startswith("-"):
+            logger.warning("[GeminiProvider] Rejected option-like model: %r", effective_model)
+            raise ValueError(f"invalid model value: {effective_model!r}")
 
         # Build prompt with conversation context for stateless CLI
         full_prompt = message

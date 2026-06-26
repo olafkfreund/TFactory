@@ -6,9 +6,7 @@ Runs `codex exec --model <model> "<message>"` as a subprocess.
 
 import asyncio
 import logging
-import os
 import shlex
-import subprocess
 import time
 from pathlib import Path
 
@@ -32,7 +30,10 @@ class CodexProvider(ProviderStrategy):
 
     async def detect(self) -> ProviderInfo:
         # Reuse cli_accounts detection logic
-        from ...routes.cli_accounts import _detect_cli_version, _detect_codex_credentials
+        from ...routes.cli_accounts import (
+            _detect_cli_version,
+            _detect_codex_credentials,
+        )
 
         version = _detect_cli_version("codex")
         installed = version is not None
@@ -74,7 +75,10 @@ class CodexProvider(ProviderStrategy):
             if context_parts:
                 full_prompt = "\n".join(context_parts) + f"\n[user]: {message}"
 
-        codex_cmd = f"codex exec --model {shlex.quote(effective_model)} {shlex.quote(full_prompt)}"
+        # ``--`` ends option parsing so a prompt starting with ``--`` is treated
+        # as the positional message, never as a codex CLI flag (security
+        # review M4). The values are also shell-quoted for the ``bash -c`` host.
+        codex_cmd = f"codex exec --model {shlex.quote(effective_model)} -- {shlex.quote(full_prompt)}"
 
         cmd.append(codex_cmd)
 

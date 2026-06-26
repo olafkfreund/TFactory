@@ -122,6 +122,43 @@ def run_gh_command(args: list[str], cwd: str | None = None) -> dict:
         return {"success": False, "error": "Failed to run GitHub CLI command"}
 
 
+def _exclude_tfactory_from_git(project_path: "FilePath") -> None:
+    """Ensure ``.tfactory/`` is excluded from this repo's git tracking.
+
+    Appends ``.tfactory/`` to ``<project>/.git/info/exclude`` (the repo-local,
+    untracked exclude file) so the secret directory is never committed even if
+    the repo's ``.gitignore`` does not list it. Idempotent: the line is only
+    added once. A no-op (best effort) when the path is not a git repo.
+    """
+    try:
+        git_dir = project_path / ".git"
+        if not git_dir.exists():
+            # Not a git working tree (or a bare/clone we don't manage) -> nothing to do.
+            return
+
+        exclude_path = git_dir / "info" / "exclude"
+        exclude_path.parent.mkdir(parents=True, exist_ok=True)
+
+        line = ".tfactory/"
+        existing_lines: set[str] = set()
+        if exclude_path.exists():
+            existing_lines = {
+                ln.strip() for ln in exclude_path.read_text().splitlines()
+            }
+
+        if line in existing_lines:
+            return
+
+        with exclude_path.open("a", encoding="utf-8") as fh:
+            # Ensure we start on a fresh line if the file lacks a trailing newline.
+            if exclude_path.stat().st_size > 0:
+                fh.write("\n")
+            fh.write(f"{line}\n")
+    except Exception:
+        # Best-effort hardening; never block token persistence on this.
+        logger.warning("Failed to update .git/info/exclude for %s", project_path)
+
+
 def _persist_cli_token_to_project(project_id: str) -> bool:
     """Persist the gh CLI token to a project's .tfactory/.env file.
 
@@ -143,6 +180,12 @@ def _persist_cli_token_to_project(project_id: str) -> bool:
 
     project_path = FilePath(projects[project_id]["path"])
     env_path = project_path / ".tfactory" / ".env"
+
+    # Defense-in-depth: ensure the secret directory can never be committed
+    # to this repo, even if its .gitignore does not list it. We use the
+    # repo-local, untracked .git/info/exclude so a later `git add -A` /
+    # commit / push by the agent cannot leak the live PAT to the remote.
+    _exclude_tfactory_from_git(project_path)
 
     try:
         existing = {}

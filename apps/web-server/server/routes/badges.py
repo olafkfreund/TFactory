@@ -63,8 +63,13 @@ def test_acceptance_badge(project_id: str, spec_id: str) -> Response:
     from agents.badge import acceptance_badge, render_badge_svg
 
     # Reject path-traversal-y ids with a grey badge rather than a 4xx (keeps the
-    # README image intact).
-    if not (_ID_RE.match(project_id) and _ID_RE.match(spec_id)):
+    # README image intact). ``_ID_RE`` admits ``.``/``..`` as a full match, so
+    # reject those explicitly — this is an UNAUTHENTICATED endpoint (review L1).
+    if (
+        not (_ID_RE.match(project_id) and _ID_RE.match(spec_id))
+        or project_id in (".", "..")
+        or spec_id in (".", "..")
+    ):
         return _svg_response(render_badge_svg("tests", "no data", "#9f9f9f"))
 
     spec_dir = _resolve_workspace_root() / "workspaces" / project_id / "specs" / spec_id

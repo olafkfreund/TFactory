@@ -239,7 +239,7 @@ async def open_worktree_in_ide(request: OpenInIDERequest):
     # (command-line-injection).
     worktree_path = _safe_arg(_validated_worktree_path(request.worktreePath))
     ide = request.ide
-    custom_path = _safe_arg(request.customPath) if request.customPath else request.customPath
+    custom_path = _safe_arg(request.customPath) if request.customPath else None
 
     # Validate the path exists
     if not Path(worktree_path).exists():
@@ -290,7 +290,7 @@ async def open_worktree_in_terminal(request: OpenInTerminalRequest):
     # (command-line-injection).
     worktree_path = _safe_arg(_validated_worktree_path(request.worktreePath))
     terminal = request.terminal
-    custom_path = _safe_arg(request.customPath) if request.customPath else request.customPath
+    custom_path = _safe_arg(request.customPath) if request.customPath else None
 
     # Validate the path exists
     if not Path(worktree_path).exists():

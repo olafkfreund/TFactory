@@ -456,7 +456,6 @@ async def serve_project_file(
     except UnicodeDecodeError:
         html_content = file_path.read_text(encoding="latin-1")
 
-    # Carry the token through to rewritten URLs
     html_dir = file_path.parent
 
     def _rewrite_url(match: re.Match) -> str:
@@ -482,10 +481,13 @@ async def serve_project_file(
         except ValueError:
             return match.group(0)  # leave unchanged
 
+        # NOTE: deliberately do NOT append the bearer ``token`` query param here.
+        # Putting the auth token in the served URL would expose it to any JS in
+        # the (untrusted) served HTML via location.search. Asset requests rely on
+        # the existing Authorization header / cookie instead.
         params = urllib.parse.urlencode({
             "path": str(resolved),
             "root": str(root_path),
-            "token": token,
         })
         return f'{attr}={quote}/api/files/serve?{params}{quote}'
 
@@ -496,7 +498,22 @@ async def serve_project_file(
         html_content,
     )
 
-    return HTMLResponse(content=rewritten, media_type="text/html")
+    # Harden the same-origin response against untrusted served HTML: a
+    # restrictive CSP neutralizes script execution / token exfiltration while
+    # still letting the portal render test/coverage reports (images, inline
+    # styles). ``sandbox`` strips scripts, popups, and same-origin privileges.
+    security_headers = {
+        "Content-Security-Policy": (
+            "default-src 'none'; img-src 'self' data:; "
+            "style-src 'unsafe-inline'; sandbox"
+        ),
+        "X-Content-Type-Options": "nosniff",
+    }
+    return HTMLResponse(
+        content=rewritten,
+        media_type="text/html",
+        headers=security_headers,
+    )
 
 
 @router.get("/{project_id}/list", response_model=DirectoryListing)
