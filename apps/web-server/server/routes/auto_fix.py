@@ -94,8 +94,9 @@ async def check_new_issues(projectId: str) -> dict[str, Any]:
     """
     try:
         result = await auto_fix_service.check_new_and_start_all(projectId)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError:
+        logger.exception("[auto_fix] check_new_and_start_all failed project=%s", projectId)
+        raise HTTPException(status_code=404, detail="Project or resource not found")
     except Exception:
         logger.exception("[auto_fix] check_new_issues failed project=%s", projectId)
         raise HTTPException(status_code=500, detail="check failed")
@@ -107,8 +108,9 @@ async def start_auto_fix_one(projectId: str, issueNumber: int) -> dict[str, Any]
     """Import + start the agent on a single issue."""
     try:
         return await auto_fix_service.start_auto_fix(projectId, issueNumber)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError:
+        logger.exception("[auto_fix] start_auto_fix failed project=%s", projectId)
+        raise HTTPException(status_code=404, detail="Project or resource not found")
     except Exception as e:
         logger.exception(
             "[auto_fix] start_auto_fix failed project=%s issue=%d",
