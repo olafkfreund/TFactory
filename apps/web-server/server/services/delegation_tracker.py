@@ -108,7 +108,12 @@ async def scan_delegated_tasks(project_id: str) -> dict[str, Any]:
             project_id,
             e,
         )
-        return {"checked": len(delegated), "promoted": [], "declined": [], "error": str(e)}
+        return {
+            "checked": len(delegated),
+            "promoted": [],
+            "declined": [],
+            "error": "Failed to fetch delegated PRs",
+        }
 
     now = datetime.now(timezone.utc)
 
