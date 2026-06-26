@@ -3,6 +3,7 @@ Git, Ollama, MCP, and utility routes.
 """
 
 import json
+import logging
 import shlex
 import shutil
 import subprocess
@@ -12,6 +13,7 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 # ============================================
@@ -31,8 +33,9 @@ def run_git_command(args: list[str], cwd: str) -> dict:
         if result.returncode != 0:
             return {"success": False, "error": result.stderr.strip()}
         return {"success": True, "output": result.stdout.strip()}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    except Exception:
+        logger.exception("git command failed: %s", " ".join(args))
+        return {"success": False, "error": "Failed to run git command"}
 
 
 @router.get("/branches")

@@ -65,8 +65,9 @@ def _run_gh(args: list[str], cwd: str | None = None, timeout: int = 30) -> dict:
         return {"success": False, "error": "GitHub CLI (gh) not installed"}
     except subprocess.TimeoutExpired:
         return {"success": False, "error": "Command timed out"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    except Exception:
+        logger.exception("gh CLI command failed")
+        return {"success": False, "error": "Failed to run GitHub CLI command"}
 
 
 # ============================================================================
@@ -234,8 +235,9 @@ class PRDataService:
 
         try:
             review_data = json.loads(review_file.read_text())
-        except (json.JSONDecodeError, OSError) as e:
-            return {"success": False, "error": f"Failed to read review data: {e}"}
+        except (json.JSONDecodeError, OSError):
+            logger.exception("Failed to read review data for PR #%s", pr_number)
+            return {"success": False, "error": "Failed to read review data"}
 
         findings = review_data.get("findings", [])
 
@@ -532,8 +534,9 @@ class PRDataService:
             return {"success": True, "data": _convert_keys(result_data)}
         except json.JSONDecodeError:
             return {"success": False, "error": "Failed to parse stored review data"}
-        except OSError as e:
-            return {"success": False, "error": f"Failed to read review file: {e}"}
+        except OSError:
+            logger.exception("Failed to read review file for PR #%s", pr_number)
+            return {"success": False, "error": "Failed to read review file"}
 
     def delete_review(
         self,
@@ -553,8 +556,9 @@ class PRDataService:
 
         try:
             review_file.unlink()
-        except OSError as e:
-            return {"success": False, "error": f"Failed to delete review file: {e}"}
+        except OSError:
+            logger.exception("Failed to delete review file for PR #%s", pr_number)
+            return {"success": False, "error": "Failed to delete review file"}
 
         # Update the index file to remove the entry
         index_file = _review_index_path(project_path)
@@ -591,8 +595,9 @@ class PRDataService:
             return {"success": True, "data": logs_data}
         except json.JSONDecodeError:
             return {"success": False, "error": "Failed to parse review logs"}
-        except OSError as e:
-            return {"success": False, "error": f"Failed to read logs file: {e}"}
+        except OSError:
+            logger.exception("Failed to read logs file for PR #%s", pr_number)
+            return {"success": False, "error": "Failed to read logs file"}
 
     # ------------------------------------------------------------------
     # Private helpers

@@ -127,8 +127,9 @@ def install_github_cli():
         log.info("GitHub CLI installed successfully")
     except subprocess.TimeoutExpired:
         return {"success": False, "error": "Installation timed out (120s)"}
-    except Exception as e:
-        return {"success": False, "error": f"Installation failed: {e}"}
+    except Exception:
+        logger.exception("GitHub CLI installation failed")
+        return {"success": False, "error": "Installation failed"}
 
     # Step 3: Verify installation
     version_str = "unknown"
@@ -141,10 +142,11 @@ def install_github_cli():
                 "success": False,
                 "error": f"Installation completed but verification failed: {result.stderr.strip()}",
             }
-    except Exception as e:
+    except Exception:
+        logger.exception("GitHub CLI installation verification failed")
         return {
             "success": False,
-            "error": f"Installation completed but verification failed: {e}",
+            "error": "Installation completed but verification failed",
         }
 
     return {
@@ -380,13 +382,14 @@ async def start_github_auth():
             },
         }
 
-    except Exception as e:
+    except Exception:
+        logger.exception("Failed to start GitHub authentication")
         _gh_auth_proc = None
         return {
             "success": True,
             "data": {
                 "success": False,
-                "message": f"Failed to start authentication: {e}",
+                "message": "Failed to start authentication",
             },
         }
 

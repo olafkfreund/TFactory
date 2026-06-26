@@ -226,8 +226,9 @@ async def rename_claude_profile(profile_id: str, update: ProfileRename):
         # Save with secure permissions (0o600 set in save_profiles)
         save_profiles(data)
         return {"success": True}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    except Exception:
+        logger.exception("Failed to rename Claude profile")
+        return {"success": False, "error": "Failed to rename profile"}
 
 
 class ActiveProfileRequest(BaseModel):
@@ -255,8 +256,9 @@ async def set_active_claude_profile(request: ActiveProfileRequest):
         save_profiles(data)
         _sync_env_token_for_active_profile(data, request.profileId, logger)
         return {"success": True}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    except Exception:
+        logger.exception("Failed to set active Claude profile")
+        return {"success": False, "error": "Failed to set active profile"}
 
 
 @router.post("/claude-profiles/{profile_id}/initialize")
@@ -285,8 +287,9 @@ async def initialize_claude_profile(profile_id: str):
 
         save_profiles(data)
         return {"success": True}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    except Exception:
+        logger.exception("Failed to initialize Claude profile")
+        return {"success": False, "error": "Failed to initialize profile"}
 
 
 def _poll_token_and_save(
@@ -453,8 +456,9 @@ async def set_claude_profile_token(profile_id: str, request: SetTokenRequest):
         save_profiles(data)
         _sync_env_token_for_active_profile(data, data.get("activeProfileId"), logger)
         return {"success": True}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    except Exception:
+        logger.exception("Failed to set Claude profile token")
+        return {"success": False, "error": "Failed to set profile token"}
 
 
 @router.get("/claude-profiles/best")

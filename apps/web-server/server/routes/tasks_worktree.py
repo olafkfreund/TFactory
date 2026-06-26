@@ -196,16 +196,14 @@ async def get_worktree_merge_preview(task_id: str):
         # Legacy fallback: Check for conflict markers (older git versions < 2.38)
         elif "<<<<<<" in result.stdout:
             has_conflicts = True
-    except subprocess.CalledProcessError as e:
-        # Command failed - check output for conflict indicators
-        output = (e.stdout or "") + (e.stderr or "")
-        if "CONFLICT" in output or "<<<<<<" in output:
-            has_conflicts = True
-            for line in output.split("\n"):
-                if line.startswith("CONFLICT") and " in " in line:
-                    file_path = line.split(" in ")[-1].strip()
-                    if file_path:
-                        conflicting_files.append(file_path)
+    except subprocess.CalledProcessError:
+        # Command failed - treat as conflicts present. The exception's captured
+        # output is logged server-side only; it is never surfaced in the API
+        # response (avoids leaking command/stack-trace text to clients).
+        logger.exception(
+            "git merge-tree failed while computing merge preview for task %s", task_id
+        )
+        has_conflicts = True
 
     # Filter out gitignored files from conflict list (e.g. build artifacts)
     if conflicting_files:
@@ -947,9 +945,11 @@ async def resolve_uncommitted_conflicts(task_id: str):
                         }
                     )
 
-            except Exception as e:
-                logger.error(f"Failed to resolve {file_path}: {e}")
-                failed_files.append({"file": file_path, "error": str(e)})
+            except Exception:
+                logger.exception("Failed to resolve %s", file_path)
+                failed_files.append(
+                    {"file": file_path, "error": "Failed to resolve file"}
+                )
 
     finally:
         # Drop the stash only if we created one

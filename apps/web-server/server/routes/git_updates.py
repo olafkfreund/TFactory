@@ -176,10 +176,11 @@ async def download_source_update():
             },
         }
 
-    except Exception as e:
+    except Exception:
+        logger.exception("Failed to update Magestic AI source")
         return {
             "success": False,
-            "error": f"Failed to update Magestic AI source: {str(e)}",
+            "error": "Failed to update Magestic AI source",
         }
 
 

@@ -56,8 +56,9 @@ async def get_project_github_prs(
             prs_raw = await provider.fetch_prs(filters)
             prs = [github._map_provider_pr(pr) for pr in prs_raw]
             return {"success": True, "data": prs}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+        except Exception:
+            logger.exception("Failed to list pull requests")
+            return {"success": False, "error": "Failed to list pull requests"}
 
     from ..services.pr_data_service import get_pr_data_service
 
@@ -245,9 +246,11 @@ async def post_pr_comment(
             provider = github._get_project_provider(projectId)
             comment_id = await provider.add_comment(prNumber, request.body)
             return {"success": True, "data": {"commentId": comment_id}}
-        except Exception as e:
+        except Exception:
+            logger.exception("Failed to post comment to PR #%s", prNumber)
             return JSONResponse(
-                status_code=500, content={"success": False, "error": str(e)}
+                status_code=500,
+                content={"success": False, "error": "Failed to post comment"},
             )
 
     from ..services.pr_data_service import get_pr_data_service
@@ -289,9 +292,11 @@ async def approve_pr(
             )
             await provider.post_review(prNumber, review)
             return {"success": True}
-        except Exception as e:
+        except Exception:
+            logger.exception("Failed to approve PR #%s", prNumber)
             return JSONResponse(
-                status_code=500, content={"success": False, "error": str(e)}
+                status_code=500,
+                content={"success": False, "error": "Failed to approve PR"},
             )
 
     from ..services.pr_data_service import get_pr_data_service
@@ -332,9 +337,11 @@ async def merge_pr(
                     status_code=500,
                     content={"success": False, "error": "Failed to merge PR"},
                 )
-        except Exception as e:
+        except Exception:
+            logger.exception("Failed to merge PR #%s", prNumber)
             return JSONResponse(
-                status_code=500, content={"success": False, "error": str(e)}
+                status_code=500,
+                content={"success": False, "error": "Failed to merge PR"},
             )
 
     from ..services.pr_data_service import get_pr_data_service

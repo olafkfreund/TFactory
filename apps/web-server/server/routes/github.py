@@ -6,6 +6,7 @@ Handles GitHub OAuth, repository management, issues, PRs, and releases.
 
 import asyncio
 import json
+import logging
 import re
 import shutil
 import subprocess
@@ -17,6 +18,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 # ============================================
@@ -98,8 +100,9 @@ def run_gh_command(args: list[str], cwd: str | None = None) -> dict:
         return {"success": False, "error": "GitHub CLI (gh) not installed"}
     except subprocess.TimeoutExpired:
         return {"success": False, "error": "Command timed out"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    except Exception:
+        logger.exception("gh CLI command failed")
+        return {"success": False, "error": "Failed to run GitHub CLI command"}
 
 
 def _persist_cli_token_to_project(project_id: str) -> bool:
