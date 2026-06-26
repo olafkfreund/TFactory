@@ -995,8 +995,10 @@ async def list_project_tasks(project_id: str):
     spec_dirs = tasks_module.get_spec_dirs(project_path)
 
     all_tasks = []
+    repo = tasks_module.project_repo(projects[project_id])  # W5 (#218)
     for spec_dir in spec_dirs:
         task = tasks_module.spec_to_task(project_id, spec_dir)
+        task.repo = repo
         all_tasks.append(tasks_module.task_to_dict(task))
 
     # Sort by created_at descending
