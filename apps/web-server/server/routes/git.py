@@ -298,10 +298,12 @@ async def pull_ollama_model(request: PullModelRequest):
         else:
             return {"success": False, "error": f"Pull failed: {status}"}
 
-    except urllib.error.URLError as e:
-        return {"success": False, "error": f"Failed to connect to Ollama: {e}"}
-    except Exception as e:
-        return {"success": False, "error": f"Failed to pull model: {e}"}
+    except urllib.error.URLError:
+        logger.exception("Failed to connect to Ollama")
+        return {"success": False, "error": "Failed to connect to Ollama"}
+    except Exception:
+        logger.exception("Failed to pull model")
+        return {"success": False, "error": "Failed to pull model"}
 
 
 # ============================================
@@ -446,8 +448,9 @@ async def install_claude_code():
             log.info("fnm installed successfully")
         except subprocess.TimeoutExpired:
             return {"success": False, "error": "fnm installation timed out (60s)"}
-        except Exception as e:
-            return {"success": False, "error": f"Failed at step 'Install fnm': {e}"}
+        except Exception:
+            logger.exception("Failed at step 'Install fnm'")
+            return {"success": False, "error": "Failed at step 'Install fnm'"}
 
         # 3b: Install Node.js LTS via fnm
         try:
@@ -461,8 +464,9 @@ async def install_claude_code():
             log.info("Node.js LTS installed via fnm")
         except subprocess.TimeoutExpired:
             return {"success": False, "error": "Node.js installation timed out (120s)"}
-        except Exception as e:
-            return {"success": False, "error": f"Failed at step 'Install Node.js': {e}"}
+        except Exception:
+            logger.exception("Failed at step 'Install Node.js'")
+            return {"success": False, "error": "Failed at step 'Install Node.js'"}
 
         # 3c: Set fnm default so login shells pick it up
         try:
@@ -479,10 +483,11 @@ async def install_claude_code():
                     "error": "Node.js installed but not found in PATH after fnm setup",
                 }
             log.info(f"Node.js verified: {result.stdout.strip()}")
-        except Exception as e:
+        except Exception:
+            logger.exception("Node.js installed but verification failed")
             return {
                 "success": False,
-                "error": f"Node.js installed but verification failed: {e}",
+                "error": "Node.js installed but verification failed",
             }
 
     # Step 4: Install Claude Code CLI
@@ -501,8 +506,9 @@ async def install_claude_code():
         log.info("Claude Code CLI installed")
     except subprocess.TimeoutExpired:
         return {"success": False, "error": "npm install timed out (180s)"}
-    except Exception as e:
-        return {"success": False, "error": f"Failed at step 'Install Claude Code': {e}"}
+    except Exception:
+        logger.exception("Failed at step 'Install Claude Code'")
+        return {"success": False, "error": "Failed at step 'Install Claude Code'"}
 
     # Step 5: Verify installation
     version_str = "unknown"
@@ -515,10 +521,11 @@ async def install_claude_code():
                 "success": False,
                 "error": f"Installation completed but verification failed: {result.stderr.strip()}",
             }
-    except Exception as e:
+    except Exception:
+        logger.exception("Claude Code installation verification failed")
         return {
             "success": False,
-            "error": f"Installation completed but verification failed: {e}",
+            "error": "Installation completed but verification failed",
         }
 
     return {
@@ -732,13 +739,14 @@ async def check_mcp_health(server: McpServerConfig):
                     "message": "Server responded"
                 }
             }
-        except Exception as e:
+        except Exception:
+            logger.exception("MCP server health check failed")
             return {
                 "success": True,
                 "data": {
                     "serverId": server.id,
                     "status": "unhealthy",
-                    "message": str(e)
+                    "message": "Health check failed"
                 }
             }
 
@@ -904,8 +912,9 @@ async def squash_commits(projectId: str, request: SquashCommitsRequest):
 
     except HTTPException:
         raise
-    except Exception as e:
-        return {"success": False, "error": f"Failed to load project: {str(e)}"}
+    except Exception:
+        logger.exception("Failed to load project")
+        return {"success": False, "error": "Failed to load project"}
 
     # Validate commit count
     count = request.count
@@ -1078,8 +1087,9 @@ async def create_worktree(projectId: str, request: CreateWorktreeRequest):
 
     except HTTPException:
         raise
-    except Exception as e:
-        return {"success": False, "error": f"Failed to load project: {str(e)}"}
+    except Exception:
+        logger.exception("Failed to load project")
+        return {"success": False, "error": "Failed to load project"}
 
     # Validate worktree name (alphanumeric, dashes, underscores only)
     name = request.name.strip()
@@ -1129,10 +1139,11 @@ async def create_worktree(projectId: str, request: CreateWorktreeRequest):
     # Create parent directories
     try:
         worktrees_base.mkdir(parents=True, exist_ok=True)
-    except Exception as e:
+    except Exception:
+        logger.exception("Failed to create worktree directory")
         return {
             "success": False,
-            "error": f"Failed to create worktree directory: {str(e)}"
+            "error": "Failed to create worktree directory"
         }
 
     # Build git worktree add command
@@ -1235,8 +1246,9 @@ def run_gh_command(args: list[str], cwd: str) -> dict:
         return {"success": False, "error": "GitHub CLI (gh) not installed"}
     except subprocess.TimeoutExpired:
         return {"success": False, "error": "Command timed out"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    except Exception:
+        logger.exception("GitHub CLI command failed")
+        return {"success": False, "error": "Failed to run GitHub CLI command"}
 
 
 @releases_router.post("")
@@ -1317,8 +1329,9 @@ async def create_release(projectId: str, request: CreateReleaseRequest):
 
     except HTTPException:
         raise
-    except Exception as e:
-        return {"success": False, "error": f"Failed to load project: {str(e)}"}
+    except Exception:
+        logger.exception("Failed to load project")
+        return {"success": False, "error": "Failed to load project"}
 
     # Ensure version starts with 'v' if not already present (conventional)
     if not version.startswith('v'):
@@ -1348,8 +1361,9 @@ async def create_release(projectId: str, request: CreateReleaseRequest):
             "output": result.get("output", "")
         }
 
-    except Exception as e:
+    except Exception:
+        logger.exception("Failed to create GitHub release")
         return {
             "success": False,
-            "error": f"Failed to create GitHub release: {str(e)}"
+            "error": "Failed to create GitHub release"
         }

@@ -256,11 +256,12 @@ async def _monitor_gh_auth(proc: asyncio.subprocess.Process):
             proc.kill()
         except Exception:
             pass
-    except Exception as e:
+    except Exception:
+        logger.exception("GitHub authentication failed")
         _gh_auth_status = {
             "complete": True,
             "success": False,
-            "error": f"Authentication failed: {e}",
+            "error": "Authentication failed",
         }
     finally:
         _gh_auth_proc = None

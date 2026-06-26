@@ -807,7 +807,8 @@ async def check_project_github_connection(projectId: str):
                     "error": None,
                 }
             }
-        except Exception as e:
+        except Exception:
+            logger.exception("GitHub connection check failed")
             return {
                 "success": True,
                 "data": {
@@ -815,7 +816,7 @@ async def check_project_github_connection(projectId: str):
                     "repoFullName": None,
                     "repoDescription": None,
                     "issueCount": 0,
-                    "error": f"Connection failed: {str(e)}",
+                    "error": "Connection failed",
                 }
             }
 
@@ -888,8 +889,9 @@ async def get_project_github_issues(
             issues_raw = await provider.fetch_issues(filters)
             issues = [_map_provider_issue(issue, provider.repo) for issue in issues_raw]
             return {"success": True, "data": issues}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+        except Exception:
+            logger.exception("GitHub issue operation failed")
+            return {"success": False, "error": "GitHub request failed"}
 
     args = [
         "issue", "list",
@@ -925,8 +927,9 @@ async def get_project_github_issue(projectId: str, issueNumber: int):
             provider = _get_project_provider(projectId)
             issue = await provider.fetch_issue(issueNumber)
             return {"success": True, "data": _map_provider_issue(issue, provider.repo)}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+        except Exception:
+            logger.exception("GitHub issue operation failed")
+            return {"success": False, "error": "GitHub request failed"}
 
     result = run_gh_command(
         ["issue", "view", str(issueNumber), "--json", "number,title,body,state,labels,assignees,author,milestone,createdAt,updatedAt,closedAt,comments,url"],
@@ -956,8 +959,9 @@ async def get_project_github_issue_comments(projectId: str, issueNumber: int):
             provider = _get_project_provider(projectId)
             comments = await _get_provider_issue_comments(provider, issueNumber)
             return {"success": True, "data": comments}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+        except Exception:
+            logger.exception("GitHub issue operation failed")
+            return {"success": False, "error": "GitHub request failed"}
 
     result = run_gh_command(
         ["issue", "view", str(issueNumber), "--json", "comments"],
@@ -1126,10 +1130,11 @@ async def investigate_github_issue(
             "data": investigation_data
         }
 
-    except Exception as e:
+    except Exception:
+        logger.exception("Failed to investigate issue")
         return {
             "success": False,
-            "error": f"Failed to investigate issue: {str(e)}"
+            "error": "Failed to investigate issue"
         }
 
 
@@ -1236,8 +1241,9 @@ async def close_github_issue(projectId: str, issueNumber: int):
             provider = _get_project_provider(projectId)
             success = await provider.close_issue(issueNumber)
             return {"success": success}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+        except Exception:
+            logger.exception("GitHub issue operation failed")
+            return {"success": False, "error": "GitHub request failed"}
 
     result = run_gh_command(
         ["issue", "close", str(issueNumber)],
