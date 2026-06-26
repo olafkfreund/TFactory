@@ -586,7 +586,9 @@ def main() -> None:
             for finding in result.secrets:
                 # Only non-sensitive locator metadata is printed here; the
                 # matched secret is redacted at capture (never logged, CWE-312).
-                print(f"  - {finding['pattern']} in {finding['file']}:{finding['line']}")
+                print(
+                    f"  - {finding['pattern']} in {finding['file']}:{finding['line']}"
+                )
 
         if result.vulnerabilities:
             print(f"\nVulnerabilities ({len(result.vulnerabilities)}):")
