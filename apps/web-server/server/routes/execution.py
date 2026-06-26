@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from ..services.agent_service import get_agent_service
 from ..websockets.events import emit_task_status
+from ._specpath import safe_component
 from .projects import load_projects
 from .tasks import sync_worktree_to_main_spec
 
@@ -115,6 +116,7 @@ async def start_task(task_id: str, request: StartTaskRequest, raw_request: Reque
         )
 
     project_id, spec_id = task_id.split(":", 1)
+    spec_id = safe_component(spec_id)
     projects = load_projects()
 
     if project_id not in projects:
@@ -525,6 +527,7 @@ async def recover_task(task_id: str, request: RecoverTaskRequest = RecoverTaskRe
         )
 
     project_id, spec_id = task_id.split(":", 1)
+    spec_id = safe_component(spec_id)
     projects = load_projects()
 
     if project_id not in projects:

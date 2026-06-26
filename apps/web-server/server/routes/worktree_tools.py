@@ -9,13 +9,59 @@ Behavior-preserving: routes keep the same paths and the same prefix
 ("/api/tasks") via include_router in routes/tasks.py.
 """
 
+import re
 import subprocess
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from ._specpath import safe_join
+
 router = APIRouter()
+
+
+# Characters allowed in a value that is placed into a subprocess argv element.
+# Deliberately excludes shell metacharacters (``; | & $ `` `` < > ( ) { } * ?``
+# quotes, newline, ...) so a request-controlled value cannot smuggle a command
+# even if it ever reached a shell. Path-like values (absolute/relative dirs and
+# executable names, with spaces, colons and Windows backslashes) still match.
+_SAFE_ARG = re.compile(r"[\w./:\\ -]+")
+
+
+def _validated_worktree_path(worktree_path: str) -> str:
+    """Confirm a request-supplied worktree path stays inside a known project.
+
+    The path arrives from the request body and is attacker-controlled. Worktrees
+    always live under a registered project root, so we confirm containment with
+    :func:`safe_join` (which resolves and range-checks the path), clearing the
+    ``py/path-injection`` taint. A path outside every known project -- or a
+    traversal attempt -- is refused with HTTP 400.
+    """
+    from .projects import load_projects
+
+    for project in load_projects().values():
+        root = project.get("path")
+        if not root:
+            continue
+        try:
+            return str(safe_join(Path(root), worktree_path))
+        except HTTPException:
+            continue
+    raise HTTPException(status_code=400, detail="Path is not within a known project")
+
+
+def _safe_arg(value: str) -> str:
+    """Return ``value`` if it holds no shell metacharacters, else raise 400.
+
+    Applied to the request-controlled strings that compose a subprocess command
+    (the worktree path and any custom executable path) so they cannot inject a
+    command -- belt-and-suspenders alongside the list-argv / ``shell=False`` form
+    already used by ``subprocess.Popen``. Clears ``py/command-line-injection``.
+    """
+    if not _SAFE_ARG.fullmatch(value):
+        raise HTTPException(status_code=400, detail="Invalid command value")
+    return value
 
 
 
@@ -185,9 +231,13 @@ async def open_worktree_in_ide(request: OpenInIDERequest):
     Open a worktree path in the specified IDE.
     Used by the web UI to launch external IDE applications.
     """
-    worktree_path = request.worktreePath
+    # Sanitize request-controlled inputs before they reach the filesystem or a
+    # subprocess: containment-check the worktree path (path-injection) and
+    # reject shell metacharacters in the values that compose the command
+    # (command-line-injection).
+    worktree_path = _safe_arg(_validated_worktree_path(request.worktreePath))
     ide = request.ide
-    custom_path = request.customPath
+    custom_path = _safe_arg(request.customPath) if request.customPath else request.customPath
 
     # Validate the path exists
     if not Path(worktree_path).exists():
@@ -231,9 +281,13 @@ async def open_worktree_in_terminal(request: OpenInTerminalRequest):
     Open a worktree path in the specified terminal emulator.
     Used by the web UI to launch external terminal applications.
     """
-    worktree_path = request.worktreePath
+    # Sanitize request-controlled inputs before they reach the filesystem or a
+    # subprocess: containment-check the worktree path (path-injection) and
+    # reject shell metacharacters in the values that compose the command
+    # (command-line-injection).
+    worktree_path = _safe_arg(_validated_worktree_path(request.worktreePath))
     terminal = request.terminal
-    custom_path = request.customPath
+    custom_path = _safe_arg(request.customPath) if request.customPath else request.customPath
 
     # Validate the path exists
     if not Path(worktree_path).exists():

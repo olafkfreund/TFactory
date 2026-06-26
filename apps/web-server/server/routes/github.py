@@ -17,6 +17,8 @@ from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from ._specpath import safe_component
+
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
@@ -1183,7 +1185,10 @@ async def import_github_issues(projectId: str, request: ImportIssuesRequest):
         # Remove non-alphanumeric chars except hyphens
         title_slug = "".join(c for c in title_slug if c.isalnum() or c == "-")
         spec_name = f"{next_num:03d}-gh{issue_number}-{title_slug}"
-        spec_dir = specs_dir / spec_name
+        # spec_name is built from request-derived values (issue number / title);
+        # confirm it is a single literal path component before it is used to
+        # create and write into a directory (py/path-injection).
+        spec_dir = specs_dir / safe_component(spec_name)
         spec_dir.mkdir(parents=True, exist_ok=True)
 
         # Write requirements.json

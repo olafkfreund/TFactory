@@ -127,6 +127,8 @@ def _map_gh_pr(pr: dict) -> dict:
 
 def _review_file_path(project_path: Path, pr_number: int) -> Path:
     """Canonical path for a stored PR review result."""
+    # Coerce to int to strip any path-traversal taint (a PR number is an integer).
+    pr_number = int(pr_number)
     return project_path / ".tfactory" / "github" / "pr" / f"review_{pr_number}.json"
 
 
@@ -137,6 +139,8 @@ def _review_index_path(project_path: Path) -> Path:
 
 def _review_logs_path(project_path: Path, pr_number: int) -> Path:
     """Canonical path for PR review execution logs."""
+    # Coerce to int to strip any path-traversal taint (a PR number is an integer).
+    pr_number = int(pr_number)
     return project_path / ".tfactory" / "github" / "pr" / f"review_{pr_number}_logs.json"
 
 

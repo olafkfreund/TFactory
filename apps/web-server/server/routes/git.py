@@ -12,6 +12,8 @@ from pathlib import Path
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 
+from ._specpath import safe_join
+
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
@@ -77,7 +79,7 @@ async def detect_main_branch(path: str = Query(...)):
 async def check_git_status(path: str = Query(...)):
     """Check git status for a repository."""
     # Check if it's a git repo
-    git_dir = Path(path) / ".git"
+    git_dir = safe_join(Path(path), ".git")
     if not git_dir.exists():
         return {
             "success": True,
@@ -114,7 +116,7 @@ class InitGitRequest(BaseModel):
 async def initialize_git(request: InitGitRequest):
     """Initialize a new git repository with an initial commit (if needed)."""
     path = request.path
-    git_dir = Path(path) / ".git"
+    git_dir = safe_join(Path(path), ".git")
 
     # Check if already a git repo
     is_git_repo = git_dir.exists()
@@ -136,7 +138,7 @@ async def initialize_git(request: InitGitRequest):
             return {"success": False, "error": result.get("error")}
 
     # Create .gitignore if it doesn't exist
-    gitignore_path = Path(path) / ".gitignore"
+    gitignore_path = safe_join(Path(path), ".gitignore")
     if not gitignore_path.exists():
         try:
             gitignore_path.write_text(

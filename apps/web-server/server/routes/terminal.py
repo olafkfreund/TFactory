@@ -9,7 +9,7 @@ import json
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..config import get_settings
 from ..pty.manager import get_pty_manager
 from ..services.terminal_worktree_service import TerminalWorktreeService
+from ._specpath import safe_component
 from .projects import load_projects
 
 router = APIRouter()
@@ -261,12 +262,25 @@ async def clear_terminal_sessions(project: str | None = None):
     dirs_to_clear = []
 
     if project:
-        # Clear sessions for a specific project
-        project_path = Path(project)
-        if project_path.exists():
-            sessions_dir = project_path / ".tfactory" / "terminal-sessions"
-            if sessions_dir.exists():
-                dirs_to_clear.append(sessions_dir)
+        # Clear sessions for a specific project. Resolve the request-supplied
+        # path against the registered projects and use the stored (trusted)
+        # path, so deletion can only target a known project's session
+        # directory, never an arbitrary filesystem location (py/path-injection).
+        projects = load_projects()
+        trusted_path = next(
+            (
+                p["path"]
+                for p in projects.values()
+                if isinstance(p, dict) and p.get("path") == project
+            ),
+            None,
+        )
+        if trusted_path:
+            project_path = Path(trusted_path)
+            if project_path.exists():
+                sessions_dir = project_path / ".tfactory" / "terminal-sessions"
+                if sessions_dir.exists():
+                    dirs_to_clear.append(sessions_dir)
     else:
         # Clear default sessions location
         default_sessions_dir = Path.home() / ".tfactory" / "terminal-sessions"
@@ -527,9 +541,12 @@ async def save_terminal_buffer(terminal_id: str, request: dict):
         # Create sessions directory if it doesn't exist
         sessions_dir.mkdir(parents=True, exist_ok=True)
 
-        # Generate session filename with timestamp
+        # Generate session filename with timestamp. terminal_id is request
+        # supplied, so reduce it to a single literal path component before it
+        # forms the session filename (py/path-injection).
+        safe_terminal_id = safe_component(terminal_id)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        session_filename = f"terminal_{terminal_id}_{timestamp}.json"
+        session_filename = f"terminal_{safe_terminal_id}_{timestamp}.json"
         session_file = sessions_dir / session_filename
 
         # Prepare session data

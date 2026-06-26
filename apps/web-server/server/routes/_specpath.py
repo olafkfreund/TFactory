@@ -44,6 +44,21 @@ def safe_component(name: str) -> str:
     return base
 
 
+def safe_join(base: Path, *parts: str) -> Path:
+    """Join request-controlled ``parts`` onto ``base``, staying within ``base``.
+
+    Unlike :func:`safe_component`, each part may legitimately contain separators
+    (e.g. a relative file path). The joined path is resolved and confirmed to be
+    inside ``base``; anything that escapes (via ``..`` or an absolute component)
+    is refused with HTTP 400. Returns the validated absolute path.
+    """
+    base_real = os.path.realpath(base)
+    joined_real = os.path.realpath(base.joinpath(*parts))
+    if joined_real != base_real and not joined_real.startswith(base_real + os.sep):
+        raise HTTPException(status_code=400, detail="Invalid path")
+    return Path(joined_real)
+
+
 def safe_spec_dir(base: Path, spec_id: str) -> Path:
     """Return ``<base>/.tfactory/specs/<spec_id>``, rejecting path traversal.
 

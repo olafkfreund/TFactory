@@ -259,6 +259,8 @@ class PRReviewService:
         _load_env_file(project_path / ".tfactory" / ".env", env)
 
         # Initialize execution log writer
+        # Coerce to int to strip any path-traversal taint (a PR number is an integer).
+        pr_number = int(pr_number)
         logs_dir = project_path / ".tfactory" / "github" / "pr"
         logs_file = logs_dir / f"review_{pr_number}_logs.json"
         log_writer = PRReviewLogWriter(logs_file, pr_number)
@@ -498,6 +500,8 @@ class PRReviewService:
         # Try to read stored review result JSON from the project's .tfactory directory
         # Runner saves to: .tfactory/github/pr/review_{pr_number}.json
         result_data = None
+        # Coerce to int to strip any path-traversal taint (a PR number is an integer).
+        pr_number = int(pr_number)
         review_file = (
             project_path / ".tfactory" / "github" / "pr" / f"review_{pr_number}.json"
         )

@@ -18,6 +18,7 @@ from enum import Enum
 from pathlib import Path
 
 from ..config import get_settings
+from ..routes._specpath import safe_component
 from ..utils.subprocess_env import make_subprocess_env
 from ..websockets.events import (
     emit_subtask_update,
@@ -1236,6 +1237,10 @@ class AgentService:
         import logging
         logger = logging.getLogger(__name__)
 
+        # Sanitize request-derived spec_id before building any filesystem path
+        # (CodeQL py/path-injection): reject traversal attempts up front.
+        spec_id = safe_component(spec_id)
+
         # Paths
         worktree_spec = project_path / ".tfactory" / "worktrees" / "tasks" / spec_id / ".tfactory" / "specs" / spec_id
         main_spec = project_path / ".tfactory" / "specs" / spec_id
@@ -1482,6 +1487,12 @@ class AgentService:
         import logging
         logger = logging.getLogger(__name__)
 
+        # Sanitize request-derived spec_id before it is used to build any
+        # filesystem path (CodeQL py/path-injection). None is valid here — the
+        # spec-creation flow has no spec_id yet.
+        if spec_id is not None:
+            spec_id = safe_component(spec_id)
+
         try:
             # Periodic sync loop (every 3 seconds) while process is running
             sync_interval = 3.0
@@ -1507,6 +1518,8 @@ class AgentService:
                         detected_spec_id = None
                         if ":" in task_id:
                             _, detected_spec_id = task_id.split(":", 1)
+                            # Sanitize before building a path (py/path-injection).
+                            detected_spec_id = safe_component(detected_spec_id)
 
                         if detected_spec_id:
                             detected_spec_dir = project_path / ".tfactory" / "specs" / detected_spec_id
@@ -2163,6 +2176,8 @@ class AgentService:
         """
         import logging
         logger = logging.getLogger(__name__)
+        # Sanitize request-derived spec_id before building a path (py/path-injection).
+        spec_id = safe_component(spec_id)
         plan_file = project_path / ".tfactory" / "specs" / spec_id / "test_plan.json"
         logger.info(f"[AgentService._update_plan_status] CALLED for spec_id={spec_id}, status={status}, task_id={task_id}")
         logger.info(f"[AgentService._update_plan_status] plan_file path: {plan_file}")
@@ -2385,6 +2400,8 @@ class AgentService:
         # Parse spec_id from task_id (format: "project_id:spec_id")
         if ":" in task_id:
             _, spec_id = task_id.split(":", 1)
+            # Sanitize before building a path (py/path-injection).
+            spec_id = safe_component(spec_id)
             spec_dir = project_path / ".tfactory" / "specs" / spec_id
         else:
             # Fallback: no project ID prefix (shouldn't happen in web mode)
@@ -2577,6 +2594,10 @@ class AgentService:
 
         if task_id in self.running_tasks:
             raise ValueError(f"Task {task_id} is already running")
+
+        # Sanitize request-derived spec_id before it is used to build any
+        # filesystem path below (CodeQL py/path-injection).
+        spec_id = safe_component(spec_id)
 
         # Build command
         cmd = [

@@ -287,6 +287,9 @@ def get_worktree_spec_dir(project_path: Path, spec_id: str) -> Path | None:
 
     Worktree layout: .tfactory/worktrees/tasks/{spec_id}/.tfactory/specs/{spec_id}/
     """
+    # spec_id is request-controlled and used as two path segments below; reject
+    # any traversal/separator component before it reaches the filesystem.
+    spec_id = safe_component(spec_id)
     worktree_spec_dir = (
         project_path
         / ".tfactory"
@@ -974,7 +977,9 @@ def task_to_dict(task: Task) -> dict:
         projects = load_projects()
         if task.project_id in projects:
             project_path = Path(projects[task.project_id]["path"])
-            spec_dir = project_path / ".tfactory" / "specs" / task.spec_id
+            spec_dir = (
+                project_path / ".tfactory" / "specs" / safe_component(task.spec_id)
+            )
             if spec_dir.exists():
                 specs_path = str(spec_dir)  # Store path for frontend Files tab
                 execution_progress = get_execution_progress(spec_dir, task.subtasks)
@@ -1215,6 +1220,9 @@ def _resolve_task(task_id: str) -> tuple[str, str, Path, Path]:
         )
 
     project_id, spec_id = task_id.split(":", 1)
+    # Reject path traversal in the request-supplied spec id and reassign so every
+    # caller of _resolve_task receives a sanitized spec_id (CodeQL py/path-injection).
+    spec_id = safe_component(spec_id)
     projects = load_projects()
 
     if project_id not in projects:

@@ -34,6 +34,8 @@ import re
 from pathlib import Path
 from urllib.parse import urlparse
 
+from ..routes._specpath import safe_component
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_WORKSPACE_ROOT = Path.home() / ".tfactory" / "workspaces"
@@ -129,7 +131,12 @@ async def clone_or_update(
     Raises:
         GitOperationError: On any non-zero ``git`` exit code or timeout.
     """
-    workspace = (root or workspace_root()) / (slug or slug_from_git_url(git_url))
+    # The directory name derives from the request-supplied git URL (or an
+    # explicit slug override); confirm it is a single literal path component so
+    # it can't escape the workspace root (py/path-injection).
+    workspace = (root or workspace_root()) / safe_component(
+        slug or slug_from_git_url(git_url)
+    )
     workspace.parent.mkdir(parents=True, exist_ok=True)
 
     # Build the URL that actually gets passed to ``git`` for network ops.

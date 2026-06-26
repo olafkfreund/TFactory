@@ -12,6 +12,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from ..routes._specpath import safe_component
+
 
 class TerminalWorktreeService:
     """Service for managing terminal worktrees."""
@@ -70,7 +72,10 @@ class TerminalWorktreeService:
         # Ensure .tfactory/worktrees/terminal/ directory exists
         self.worktrees_dir.mkdir(parents=True, exist_ok=True)
 
-        worktree_path = self.worktrees_dir / name
+        # `name` is request-supplied; in addition to _validate_name above,
+        # confirm it is a single literal path component before joining it onto
+        # the worktrees directory (py/path-injection).
+        worktree_path = self.worktrees_dir / safe_component(name)
         branch_name = f"terminal/{name}" if create_git_branch else None
 
         # Check if project is a git repository
