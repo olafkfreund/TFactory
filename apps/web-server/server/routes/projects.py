@@ -22,6 +22,7 @@ MemoryBackendType = Literal["graphiti", "file"]
 
 from ..config import get_settings
 from . import changelog, context, files, git, github, github_pr
+from ._specpath import safe_component
 
 router = APIRouter()
 
@@ -1169,7 +1170,7 @@ async def archive_tasks(project_id: str, request: ArchiveTasksRequest):
         else:
             spec_id = task_id
 
-        spec_dir = specs_dir / spec_id
+        spec_dir = specs_dir / safe_component(spec_id)
         if not spec_dir.exists():
             errors.append(f"Task {spec_id} not found")
             continue
@@ -1232,7 +1233,7 @@ async def unarchive_tasks(project_id: str, request: UnarchiveTasksRequest):
         else:
             spec_id = task_id
 
-        spec_dir = specs_dir / spec_id
+        spec_dir = specs_dir / safe_component(spec_id)
         if not spec_dir.exists():
             errors.append(f"Task {spec_id} not found")
             continue

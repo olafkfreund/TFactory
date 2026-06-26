@@ -16,6 +16,8 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
+from ._specpath import safe_component
+
 # Pin ``agents.planner`` into ``sys.modules`` at startup (this route module is
 # imported when the app boots). A request-time *fresh* import
 # (``from agents.planner import schedule_planner`` inside
@@ -245,10 +247,16 @@ async def ingest_spec(req: SpecIngestRequest) -> dict:
         entry, resolved_id, source_branch=req.source_branch
     )
 
+    # Both ids become path segments under workspaces/<project_id>/specs/<spec_id>
+    # inside create_spec_ingest_workspace; they originate from the request body,
+    # so reject path traversal before they reach the filesystem (py/path-injection).
+    safe_project_id = safe_component(resolved_id)
+    safe_spec_id = safe_component(req.spec_id)
+
     try:
         result = create_spec_ingest_workspace(
-            project_id=resolved_id,
-            spec_id=req.spec_id,
+            project_id=safe_project_id,
+            spec_id=safe_spec_id,
             spec_text=req.spec_text,
             fmt=req.format,
             target_paths=req.target_paths or [],

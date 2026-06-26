@@ -24,7 +24,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from ..paths import get_data_dir, get_data_file
-from ._specpath import safe_spec_dir
+from ._specpath import safe_component, safe_spec_dir
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -99,7 +99,8 @@ async def get_worktree_merge_preview(task_id: str):
         return {"success": False, "error": f"Task {task_id} not found"}
 
     # Find the worktree
-    worktree_path = project_path / ".tfactory" / "worktrees" / "tasks" / task_id
+    safe_id = safe_component(task_id)
+    worktree_path = project_path / ".tfactory" / "worktrees" / "tasks" / safe_id
 
     if not worktree_path.exists():
         return {"success": False, "error": "No worktree found for this task"}
@@ -424,6 +425,7 @@ async def resolve_worktree_conflicts(
     # task_id could be "project_id:spec_id" or just "spec_id"
     if ":" in task_id:
         project_id, spec_id = task_id.split(":", 1)
+        spec_id = safe_component(spec_id)
         # Look up project path
         projects_file = get_data_file("projects.json")
         if not projects_file.exists():
@@ -756,7 +758,8 @@ async def resolve_uncommitted_conflicts(task_id: str):
         spec_dir = safe_spec_dir(project_path, task_id)
 
         if spec_dir.exists():
-            worktree_path = project_path / ".tfactory" / "worktrees" / "tasks" / task_id
+            safe_id = safe_component(task_id)
+            worktree_path = project_path / ".tfactory" / "worktrees" / "tasks" / safe_id
             break
     else:
         return {"success": False, "error": f"Task {task_id} not found"}
@@ -1037,7 +1040,8 @@ async def resolve_git_merge_conflicts(task_id: str):
         spec_dir = safe_spec_dir(project_path, task_id)
 
         if spec_dir.exists():
-            worktree_path = project_path / ".tfactory" / "worktrees" / "tasks" / task_id
+            safe_id = safe_component(task_id)
+            worktree_path = project_path / ".tfactory" / "worktrees" / "tasks" / safe_id
             break
     else:
         return {"success": False, "error": f"Task {task_id} not found"}
@@ -1304,6 +1308,7 @@ async def abort_worktree_merge(task_id: str):
     # task_id could be "project_id:spec_id" or just "spec_id"
     if ":" in task_id:
         project_id, spec_id = task_id.split(":", 1)
+        spec_id = safe_component(spec_id)
         # Look up project path
         projects_file = get_data_file("projects.json")
         if not projects_file.exists():
@@ -1433,6 +1438,7 @@ async def create_pr_from_task(task_id: str, options: CreatePRFromTaskOptions = N
     # task_id could be "project_id:spec_id" or just "spec_id"
     if ":" in task_id:
         project_id, spec_id = task_id.split(":", 1)
+        spec_id = safe_component(spec_id)
         # Look up project path
         projects_file = get_data_file("projects.json")
         if not projects_file.exists():
@@ -1762,6 +1768,7 @@ async def merge_worktree(task_id: str, options: WorktreeMergeOptions = None):
     # task_id could be "project_id:spec_id" or just "spec_id"
     if ":" in task_id:
         project_id, spec_id = task_id.split(":", 1)
+        spec_id = safe_component(spec_id)
         # Look up project path
         projects_file = get_data_file("projects.json")
         if not projects_file.exists():
@@ -1923,6 +1930,8 @@ async def get_worktree_status(task_id: str):
         spec_id = task_id
         project_id = None
 
+    spec_id = safe_component(spec_id)
+
     # Find project path
     projects_data_dir = get_data_dir()
     projects_file = projects_data_dir / "projects.json"
@@ -2077,6 +2086,8 @@ async def get_worktree_diff(task_id: str):
     else:
         spec_id = task_id
         project_id = None
+
+    spec_id = safe_component(spec_id)
 
     # Find project path
     projects_data_dir = get_data_dir()
@@ -2296,6 +2307,7 @@ async def discard_worktree(task_id: str):
     # task_id could be "project_id:spec_id" or just "spec_id"
     if ":" in task_id:
         project_id, spec_id = task_id.split(":", 1)
+        spec_id = safe_component(spec_id)
         # Look up project path
         projects_file = get_data_file("projects.json")
         if not projects_file.exists():

@@ -15,6 +15,7 @@ import logging
 
 from fastapi import APIRouter
 
+from ._specpath import safe_component
 from .tasks import (
     ClarificationAnswersRequest,
     ClarificationQuestion,
@@ -32,6 +33,10 @@ logger = logging.getLogger(__name__)
 async def generate_clarifications(task_id: str):
     """Generate clarification questions for a task using an LLM."""
     from ..services.clarification_service import generate_clarification_questions
+
+    # Reassign so the sanitized value is what flows into _resolve_task's path
+    # build -- a CodeQL py/path-injection barrier must be intraprocedural.
+    task_id = safe_component(task_id)
 
     project_id, spec_id, project_path, spec_dir = _resolve_task(task_id)
 
@@ -58,6 +63,10 @@ async def submit_clarification_answers(
     task_id: str, request: ClarificationAnswersRequest
 ):
     """Submit answers to clarification questions and append them to the task."""
+    # Reassign so the sanitized value is what flows into _resolve_task's path
+    # build -- a CodeQL py/path-injection barrier must be intraprocedural.
+    task_id = safe_component(task_id)
+
     project_id, spec_id, project_path, spec_dir = _resolve_task(task_id)
 
     if not request.answers:

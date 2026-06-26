@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException, Path
 from pydantic import BaseModel
 
 from ..services.insights_service import get_insights_service
+from ._specpath import safe_component
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +152,10 @@ async def load_task_specs(projectId: str = Path(...), request: LoadSpecsRequest 
     for task_id in request.taskIds:
         # Try to find spec.md for this task
         # Task IDs are like "001-feature-name"
-        spec_path = specs_dir / task_id / "spec.md"
+        # Reduce the request-supplied task id to a single path component
+        # before it touches the filesystem (py/path-injection).
+        safe_id = safe_component(task_id)
+        spec_path = specs_dir / safe_id / "spec.md"
         if spec_path.exists():
             try:
                 content = spec_path.read_text()
@@ -168,7 +172,7 @@ async def load_task_specs(projectId: str = Path(...), request: LoadSpecsRequest 
                 })
         else:
             # Try finding by glob pattern for numeric prefix
-            matching = list(specs_dir.glob(f"{task_id}*/spec.md"))
+            matching = list(specs_dir.glob(f"{safe_id}*/spec.md"))
             if matching:
                 try:
                     content = matching[0].read_text()
@@ -717,6 +721,10 @@ async def save_changelog_image(projectId: str = Path(...), request: SaveImageReq
         # Validate filename has an extension
         if "." not in filename:
             return {"success": False, "error": "Filename must include an extension (e.g., .png, .jpg)"}
+
+        # Collapse to a single, literal path component so the request-supplied
+        # filename can't escape the assets directory (py/path-injection).
+        filename = safe_component(filename)
 
         # Create assets directory if it doesn't exist
         assets_dir = project_path / ".tfactory" / "assets"

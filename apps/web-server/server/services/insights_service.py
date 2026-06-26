@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from ..routes._specpath import safe_component
 from ..websockets.events import broadcast_event
 from .insights_providers import get_provider
 
@@ -107,6 +108,10 @@ class InsightsService:
 
     def _get_session_file(self, project_path: Path, session_id: str) -> Path:
         """Get the file path for a specific session."""
+        # session_id is request-controlled; clear path-traversal taint before it
+        # is joined onto the sessions dir (py/path-injection). All session
+        # path builds funnel through here, so every caller is safe by construction.
+        session_id = safe_component(session_id)
         return self._get_sessions_dir(project_path) / f"{session_id}.json"
 
     def _get_current_session_file(self, project_path: Path) -> Path:

@@ -24,6 +24,7 @@ from pydantic import BaseModel
 
 from ..auth import _try_decode_jwt
 from ..config import get_settings
+from ._specpath import safe_join
 
 logger = logging.getLogger(__name__)
 
@@ -195,19 +196,9 @@ def resolve_path(project_id: str, relative_path: str) -> Path:
     if not relative_path or relative_path == ".":
         return project_path
 
-    # Resolve the full path
-    full_path = (project_path / relative_path).resolve()
-
-    # Security check: ensure path is within project
-    try:
-        full_path.relative_to(project_path)
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied: path outside project directory",
-        )
-
-    return full_path
+    # Resolve the full path, rejecting any traversal outside the project root.
+    # safe_join raises HTTPException(400) for paths that escape project_path.
+    return safe_join(project_path, relative_path)
 
 
 # --------------------------------------------------------------------------
@@ -440,16 +431,13 @@ async def serve_project_file(
     # Authenticate: check token from query param or Authorization header
     if not _validate_serve_token(request, token):
         raise HTTPException(status_code=401, detail="Authentication required")
-    file_path = Path(path).expanduser().resolve()
     root_path = Path(root).expanduser().resolve()
 
-    # Security: file must exist inside the declared project root
+    # Security: file must exist inside the declared project root.
+    # safe_join rejects (HTTP 400) any path that escapes root_path.
     if not root_path.is_dir():
         raise HTTPException(status_code=400, detail="Root is not a directory")
-    try:
-        file_path.relative_to(root_path)
-    except ValueError:
-        raise HTTPException(status_code=403, detail="Access denied: path outside project root")
+    file_path = safe_join(root_path, str(Path(path).expanduser()))
 
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
