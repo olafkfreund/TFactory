@@ -13,12 +13,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, status
 
-from ._specpath import safe_component
 from .projects import load_projects
 
 router = APIRouter()
@@ -41,9 +41,10 @@ async def get_task_logs(task_id: str):
         )
 
     project_id, spec_id = task_id.split(":", 1)
-    # Reject path traversal in the request-supplied spec id before it is used to
-    # build any filesystem path below (CodeQL py/path-injection).
-    spec_id = safe_component(spec_id)
+    # Strip any directory components from the request-supplied id so it cannot
+    # escape the specs root (CodeQL py/path-injection); a traversal attempt then
+    # resolves to a non-existent spec (404) rather than an arbitrary path.
+    spec_id = os.path.basename(spec_id)
     logger.info(f"[GetTaskLogs] project_id={project_id}, spec_id={spec_id}")
 
     projects = load_projects()
