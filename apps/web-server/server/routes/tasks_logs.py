@@ -71,6 +71,17 @@ async def get_task_logs(task_id: str):
         / spec_id
     )
 
+    # CodeQL py/path-injection sanitizer: confirm each request-derived path stays
+    # within its intended root (realpath + commonpath is the recognized idiom).
+    _specs_root = os.path.realpath(project_path / ".tfactory" / "specs")
+    _wt_root = os.path.realpath(project_path / ".tfactory" / "worktrees")
+    if (
+        os.path.commonpath([_specs_root, os.path.realpath(spec_dir)]) != _specs_root
+        or os.path.commonpath([_wt_root, os.path.realpath(worktree_spec_dir)])
+        != _wt_root
+    ):
+        raise HTTPException(status_code=400, detail="Invalid spec id")
+
     logger.info(f"[GetTaskLogs] Checking spec_dir: {spec_dir}")
     logger.info(f"[GetTaskLogs] Checking worktree_spec_dir: {worktree_spec_dir}")
 
