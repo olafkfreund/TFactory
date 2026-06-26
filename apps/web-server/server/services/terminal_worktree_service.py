@@ -71,7 +71,7 @@ class TerminalWorktreeService:
         # list-argv with shell=False, constrain it to ordinary git-ref
         # characters and reject option-like values so a crafted branch name
         # cannot smuggle extra git arguments (py/command-line-injection).
-        self._validate_ref(base_branch)
+        base_branch = self._validate_ref(base_branch)
 
         # Check if worktree already exists
         existing = self.get_worktree(name)
@@ -242,16 +242,20 @@ class TerminalWorktreeService:
                 "Worktree name must be lowercase alphanumeric with dashes/underscores only"
             )
 
-    def _validate_ref(self, ref: str):
+    def _validate_ref(self, ref: str) -> str:
         """Validate a request-supplied git ref/branch used as a command argument.
 
         ``ref`` becomes an argv element for ``git`` (e.g. the base branch for
         ``git worktree add``), so restrict it to ordinary git-ref characters and
         reject empty or option-like (leading ``-``) values to clear
-        ``py/command-line-injection``.
+        ``py/command-line-injection``. Returns the validated ref so callers
+        reassign it (the sanitized value is what flows to the subprocess).
 
         Args:
             ref: Branch/ref name to validate
+
+        Returns:
+            The validated ref (unchanged).
 
         Raises:
             ValueError: If the ref is empty, option-like, or contains
@@ -259,6 +263,7 @@ class TerminalWorktreeService:
         """
         if not ref or ref.startswith("-") or not self.GIT_REF_PATTERN.fullmatch(ref):
             raise ValueError(f"Invalid base branch name: {ref!r}")
+        return ref
 
     def _load_config(self) -> dict:
         """Load terminal-worktrees.json.

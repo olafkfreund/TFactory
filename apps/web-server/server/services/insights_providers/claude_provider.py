@@ -162,6 +162,10 @@ class ClaudeProvider(ProviderStrategy):
         elif model:
             cmd.extend(["--model", model])
 
+        # ``--`` ends option parsing so a message starting with ``--`` (e.g.
+        # ``--dangerously-skip-permissions``) is treated as the positional
+        # prompt, never as a CLI flag (security review M4).
+        cmd.append("--")
         cmd.append(message)
 
         # Scrub ANTHROPIC_API_KEY (OAuth-only policy — see core/auth.py).

@@ -74,7 +74,10 @@ class CodexProvider(ProviderStrategy):
             if context_parts:
                 full_prompt = "\n".join(context_parts) + f"\n[user]: {message}"
 
-        codex_cmd = f"codex exec --model {shlex.quote(effective_model)} {shlex.quote(full_prompt)}"
+        # ``--`` ends option parsing so a prompt starting with ``--`` is treated
+        # as the positional message, never as a codex CLI flag (security
+        # review M4). The values are also shell-quoted for the ``bash -c`` host.
+        codex_cmd = f"codex exec --model {shlex.quote(effective_model)} -- {shlex.quote(full_prompt)}"
 
         cmd.append(codex_cmd)
 

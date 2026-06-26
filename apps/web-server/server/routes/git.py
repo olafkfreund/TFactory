@@ -192,10 +192,31 @@ async def initialize_git(request: InitGitRequest):
 ollama_router = APIRouter()
 
 
+def _safe_ollama_base_url(base_url: str | None) -> str:
+    """Validate a request-supplied Ollama base URL (SSRF guard, review H2).
+
+    Ollama may legitimately run on the LAN (e.g. host.k3d.internal), so private
+    ranges aren't blocked, but the scheme must be http/https, the cloud-metadata
+    endpoint is blocked, and only ``scheme://netloc`` is returned -- dropping any
+    path/query/fragment so the appended ``/api/...`` can't be truncated (``#``)
+    or redirected to another resource.
+    """
+    if not base_url or not base_url.strip():
+        return "http://localhost:11434"
+    from urllib.parse import urlparse
+
+    parsed = urlparse(base_url.strip())
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise HTTPException(status_code=400, detail="Invalid Ollama base URL")
+    if parsed.hostname in ("169.254.169.254", "metadata.google.internal"):
+        raise HTTPException(status_code=400, detail="Disallowed Ollama base URL")
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
 def check_ollama_running(base_url: str | None = None) -> bool:
     """Check if Ollama server is running."""
     import urllib.request
-    url = base_url or "http://localhost:11434"
+    url = _safe_ollama_base_url(base_url)
     try:
         urllib.request.urlopen(f"{url}/api/tags", timeout=5)
         return True
@@ -240,7 +261,7 @@ async def list_ollama_models(baseUrl: str | None = Query(None)):
     import json
     import urllib.request
 
-    url = baseUrl or "http://localhost:11434"
+    url = _safe_ollama_base_url(baseUrl)
     try:
         response = urllib.request.urlopen(f"{url}/api/tags", timeout=10)
         data = json.loads(response.read().decode())
@@ -256,7 +277,7 @@ async def list_ollama_embedding_models(baseUrl: str | None = Query(None)):
     import json
     import urllib.request
 
-    url = baseUrl or "http://localhost:11434"
+    url = _safe_ollama_base_url(baseUrl)
 
     # Get installed models from Ollama
     installed_models = set()
@@ -295,7 +316,7 @@ async def pull_ollama_model(request: PullModelRequest):
     import json
     import urllib.request
 
-    url = request.baseUrl or "http://localhost:11434"
+    url = _safe_ollama_base_url(request.baseUrl)
     model_name = request.modelName
 
     try:
