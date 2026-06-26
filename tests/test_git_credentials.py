@@ -29,28 +29,25 @@ if str(_WEB_SERVER) not in sys.path:
 
 
 def test_inject_credential_rewrites_https():
+    # Security review H1: the URL carries the USERNAME only -- the token is
+    # delivered out-of-band via GIT_ASKPASS, never embedded in the URL/argv.
     from server.services.project_workspace_service import _inject_credential
-    out = _inject_credential(
-        "https://github.com/olaf/repo.git",
-        username="oauth2",
-        token="ghp_secret",
-    )
-    assert out == "https://oauth2:ghp_secret@github.com/olaf/repo.git"
+    out = _inject_credential("https://github.com/olaf/repo.git", username="oauth2")
+    assert out == "https://oauth2@github.com/olaf/repo.git"
+    assert "ghp_secret" not in out  # no token anywhere
 
 
 def test_inject_credential_leaves_ssh_untouched():
     """SSH URLs auth via keys, not URLs — must not be rewritten."""
     from server.services.project_workspace_service import _inject_credential
     url = "git@github.com:olaf/repo.git"
-    assert _inject_credential(url, "oauth2", "secret") == url
+    assert _inject_credential(url, "oauth2") == url
 
 
 def test_inject_credential_handles_nested_paths():
     from server.services.project_workspace_service import _inject_credential
-    out = _inject_credential(
-        "https://gitlab.com/group/sub/repo.git", "oauth2", "tok"
-    )
-    assert out == "https://oauth2:tok@gitlab.com/group/sub/repo.git"
+    out = _inject_credential("https://gitlab.com/group/sub/repo.git", "oauth2")
+    assert out == "https://oauth2@gitlab.com/group/sub/repo.git"
 
 
 # ---------------------------------------------------------------------------
@@ -72,14 +69,17 @@ def _mock_proc(returncode: int = 0):
 
 @pytest.mark.asyncio
 async def test_clone_or_update_with_credential_injects_then_sanitizes(tmp_path):
-    """Fresh clone with a credential: git sees the token in the URL,
-    then the sanitized origin gets set via ``git remote set-url``."""
+    """Fresh clone with a credential: the URL carries the username only and the
+    token is delivered via GIT_ASKPASS (never in argv, review H1); the sanitized
+    origin is then set via ``git remote set-url``."""
     from server.services import project_workspace_service as svc
 
     captured: list[list[str]] = []
+    captured_env: list[dict] = []
 
     async def fake_create_subprocess_exec(*args, **kw):
         captured.append(list(args))
+        captured_env.append(kw.get("env") or {})
         return _mock_proc(returncode=0)
 
     with patch("asyncio.create_subprocess_exec", new=fake_create_subprocess_exec):
@@ -90,11 +90,13 @@ async def test_clone_or_update_with_credential_injects_then_sanitizes(tmp_path):
             credential=("oauth2", "ghp_secret"),
         )
 
-    # Find the clone command — it carries the URL with token embedded.
-    clone_cmd = next(c for c in captured if c[1] == "clone")
-    assert any("oauth2:ghp_secret@github.com" in arg for arg in clone_cmd), (
-        f"Clone URL must carry the credential; got {clone_cmd}"
-    )
+    # The clone URL carries the username only -- the token must NOT be in argv.
+    clone_idx = next(i for i, c in enumerate(captured) if c[1] == "clone")
+    clone_cmd = captured[clone_idx]
+    assert any("oauth2@github.com" in arg for arg in clone_cmd), clone_cmd
+    assert all("ghp_secret" not in arg for arg in clone_cmd), "token leaked into argv"
+    # The token is delivered out-of-band via GIT_ASKPASS (GIT_PASS env).
+    assert captured_env[clone_idx].get("GIT_PASS") == "ghp_secret"
 
     # After clone, ``git remote set-url`` must restore the sanitized URL.
     sanitize_cmd = next(
