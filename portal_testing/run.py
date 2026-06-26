@@ -55,7 +55,10 @@ def run_portal(key: str) -> Path:
         console_errors: list[str] = []
         page = context.new_page()
         page.set_default_timeout(config.NAV_TIMEOUT_MS)
-        page.on("console", lambda m: console_errors.append(m.text) if m.type == "error" else None)
+        page.on(
+            "console",
+            lambda m: console_errors.append(m.text) if m.type == "error" else None,
+        )
         page.on("pageerror", lambda e: console_errors.append(str(e)))
 
         try:
@@ -88,19 +91,36 @@ def run_portal(key: str) -> Path:
             video_rel = f"video/{dest.name}"
 
     report = write_report(portal, login_info, steps, out_dir, video_rel, _stamp())
-    log.info("[%s] report -> %s (%d steps, login=%s)", key, report, len(steps), login_info.get("logged_in"))
+    log.info(
+        "[%s] report -> %s (%d steps, login=%s)",
+        key,
+        report,
+        len(steps),
+        login_info.get("logged_in"),
+    )
     return report
 
 
 def main(argv: list[str]) -> int:
-    target = argv[1] if len(argv) > 1 else "all"
+    publish_vi = "--visual-inspection" in argv
+    run_id = ""
+    if "--run-id" in argv:
+        run_id = argv[argv.index("--run-id") + 1]
+    positionals = [a for a in argv[1:] if not a.startswith("--") and a != run_id]
+    target = positionals[0] if positionals else "all"
     keys = list(config.PORTALS) if target == "all" else [target]
     for k in keys:
         if k not in config.PORTALS:
             log.error("unknown portal %r (have: %s)", k, ", ".join(config.PORTALS))
             return 2
         try:
-            run_portal(k)
+            report = run_portal(k)
+            if publish_vi:
+                from .visual_inspection_adapter import publish
+
+                rid = run_id or f"portal-{k}-{report.parent.name}"
+                where = publish(k, report.parent, rid)
+                log.info("[%s] published to visual-inspection store: %s", k, where)
         except Exception:  # noqa: BLE001 - keep going to the next portal
             log.exception("[%s] run failed", k)
     return 0
