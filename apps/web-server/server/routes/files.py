@@ -8,6 +8,7 @@ Handles file operations for the Monaco editor:
 - Git diff viewing
 """
 
+import logging
 import mimetypes
 import re
 import subprocess
@@ -15,8 +16,6 @@ import urllib.parse
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
-
-import logging
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, HTMLResponse

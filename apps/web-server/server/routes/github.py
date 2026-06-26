@@ -4,17 +4,14 @@ GitHub integration routes.
 Handles GitHub OAuth, repository management, issues, PRs, and releases.
 """
 
-import asyncio
 import json
 import logging
 import re
-import shutil
 import subprocess
 import sys
 from pathlib import Path as FilePath
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from ._specpath import safe_component

@@ -9,13 +9,12 @@ import logging
 import os
 import shutil
 import subprocess
-import threading
 import time
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Query, Body
-from pydantic import BaseModel, ConfigDict, Field, field_validator, AliasChoices
+from fastapi import APIRouter, HTTPException
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 # --------------------------------------------------------------------------
 # Type Definitions for Validation
@@ -400,7 +399,6 @@ async def get_api_token():
 async def regenerate_api_token():
     """Regenerate the API token."""
     import secrets
-    from pathlib import Path
 
     from ..paths import get_data_file
 
@@ -1204,7 +1202,6 @@ async def import_claude_credentials():
         profiles_data = {"profiles": [], "activeProfileId": None}
 
     # Create an imported profile
-    import time
     from datetime import datetime
     profile_id = f"imported-{int(time.time())}"
     new_profile = {
