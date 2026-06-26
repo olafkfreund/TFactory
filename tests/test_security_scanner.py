@@ -402,18 +402,20 @@ class TestEdgeCases:
     def test_redact_secret_short(self, scanner):
         """Test secret redaction for short strings."""
         redacted = scanner._redact_secret("abc123")
+        # Length-only redaction: no characters of the secret are revealed.
         assert "abc123" not in redacted
-        assert "*" in redacted
+        assert "redacted" in redacted
 
     def test_redact_secret_long(self, scanner):
         """Test secret redaction for long strings."""
         secret = "sk-test1234567890abcdefghij"
         redacted = scanner._redact_secret(secret)
 
-        # Should show first 4 and last 4 chars
-        assert redacted.startswith("sk-t")
-        assert redacted.endswith("ghij")
-        assert "*" in redacted
+        # Length-only redaction: not even a prefix/suffix of the secret leaks
+        # (a partial reveal is still clear-text exposure, CodeQL clear-text-logging).
+        assert secret not in redacted
+        assert "sk-test" not in redacted
+        assert "redacted" in redacted
 
     def test_is_python_project_detection(self, scanner, temp_dir):
         """Test Python project detection."""
