@@ -6,30 +6,42 @@ escape the intended root -- a path-traversal vulnerability (CodeQL
 ``py/path-injection``). ``safe_spec_dir`` validates the identifier before it ever
 reaches the filesystem, so every caller that routes through it is safe by
 construction.
+
+The value that actually reaches the filesystem is the result of
+``os.path.basename`` -- a normalization CodeQL recognizes as stripping every
+directory component, so the taint is cleared at the source and propagates to
+callers. We additionally *reject* (rather than silently strip) any input that
+isn't already a bare component, so a traversal attempt fails loudly with HTTP
+400 instead of being quietly rewritten.
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from fastapi import HTTPException
 
 
-def _validate_component(name: str) -> str:
-    """Reject anything that is not a single, literal path component.
+def safe_component(name: str) -> str:
+    """Return ``name`` if it is a single, literal path component, else raise.
 
-    Blocks empty values, ``.``/``..``, embedded path separators, and NUL bytes
-    -- the traversal vectors that turn a request value into an arbitrary path.
+    ``os.path.basename`` strips any directory portion; if the result differs
+    from the input (or is empty / ``.`` / ``..``), the input was a traversal
+    attempt and is refused with HTTP 400. The returned value is what callers
+    must feed to the filesystem -- it is provably a bare component, which clears
+    the path-injection taint.
     """
+    base = os.path.basename(name)
     if (
-        not name
-        or name in (".", "..")
-        or "/" in name
-        or "\\" in name
-        or "\x00" in name
+        not base
+        or base in (".", "..")
+        or base != name
+        or "\\" in base
+        or "\x00" in base
     ):
         raise HTTPException(status_code=400, detail="Invalid spec identifier")
-    return name
+    return base
 
 
 def safe_spec_dir(base: Path, spec_id: str) -> Path:
@@ -40,11 +52,4 @@ def safe_spec_dir(base: Path, spec_id: str) -> Path:
     valid-but-absent id is returned as-is (callers probe ``.exists()``); only a
     malicious component raises.
     """
-    specs_root = base / ".tfactory" / "specs"
-    spec_dir = specs_root / _validate_component(spec_id)
-    # Defense in depth: the resolved path must stay within the specs root.
-    root_resolved = specs_root.resolve()
-    dir_resolved = spec_dir.resolve()
-    if dir_resolved != root_resolved and root_resolved not in dir_resolved.parents:
-        raise HTTPException(status_code=400, detail="Invalid spec identifier")
-    return spec_dir
+    return base / ".tfactory" / "specs" / safe_component(spec_id)

@@ -13,7 +13,7 @@ from typing import Literal, Optional
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
-from ._specpath import _validate_component, safe_spec_dir
+from ._specpath import safe_component, safe_spec_dir
 from .projects import load_projects
 
 router = APIRouter()
@@ -1482,7 +1482,7 @@ async def delete_task(task_id: str):
     ).expanduser()
     # spec_id is request-controlled and feeds a glob whose matches are rmtree'd;
     # reject any traversal/separator component before it reaches the filesystem.
-    pattern = str(_ws_root / "workspaces" / "*" / "specs" / _validate_component(spec_id))
+    pattern = str(_ws_root / "workspaces" / "*" / "specs" / safe_component(spec_id))
     for sd in _glob.glob(pattern):
         spec_dir = Path(sd)
         if spec_dir.exists():
