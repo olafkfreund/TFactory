@@ -279,9 +279,9 @@ async def list_ollama_models(
                 )
 
             return {"models": models}
-    except Exception as e:
-        logger.warning(f"Failed to list Ollama models: {e}")
-        return {"success": False, "error": str(e)}
+    except Exception:
+        logger.exception("Failed to list Ollama models")
+        return {"success": False, "error": "Failed to list Ollama models"}
 
 
 @router.get("/openai-compat/models")
@@ -321,9 +321,9 @@ async def list_openai_compat_models(
             models.append({"name": model_id})
 
         return {"models": models}
-    except Exception as e:
-        logger.warning(f"Failed to list OpenAI-compatible models from {baseUrl}: {e}")
-        return {"success": False, "error": str(e)}
+    except Exception:
+        logger.exception("Failed to list OpenAI-compatible models from %s", baseUrl)
+        return {"success": False, "error": "Failed to list models"}
 
 
 class OpenAICompatTestRequest(BaseModel):
@@ -368,11 +368,11 @@ async def test_openai_compat_connection(request: OpenAICompatTestRequest):
             "modelCount": model_count,
             "message": f"Connected successfully. {model_count} model(s) available.",
         }
-    except Exception as e:
-        logger.warning(
-            f"OpenAI-compatible connection test failed for {request.baseUrl}: {e}"
+    except Exception:
+        logger.exception(
+            "OpenAI-compatible connection test failed for %s", request.baseUrl
         )
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": "Connection test failed"}
 
 
 @router.post("/ollama/pull")
@@ -403,9 +403,9 @@ async def pull_ollama_model(
                     "success": True,
                     "message": f"Model {modelName} pulled successfully",
                 }
-    except Exception as e:
-        logger.warning(f"Failed to pull Ollama model: {e}")
-        return {"success": False, "error": str(e)}
+    except Exception:
+        logger.exception("Failed to pull Ollama model")
+        return {"success": False, "error": "Failed to pull Ollama model"}
 
 
 @router.post("/ollama/test")
@@ -444,6 +444,6 @@ async def test_ollama_connection(
             test_response.raise_for_status()
 
             return {"success": True, "message": "Connection successful!"}
-    except Exception as e:
-        logger.warning(f"Ollama connection test failed: {e}")
-        return {"success": False, "error": str(e)}
+    except Exception:
+        logger.exception("Ollama connection test failed")
+        return {"success": False, "error": "Connection test failed"}

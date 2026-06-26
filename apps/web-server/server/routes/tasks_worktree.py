@@ -197,16 +197,14 @@ async def get_worktree_merge_preview(task_id: str):
         # Legacy fallback: Check for conflict markers (older git versions < 2.38)
         elif "<<<<<<" in result.stdout:
             has_conflicts = True
-    except subprocess.CalledProcessError as e:
-        # Command failed - check output for conflict indicators
-        output = (e.stdout or "") + (e.stderr or "")
-        if "CONFLICT" in output or "<<<<<<" in output:
-            has_conflicts = True
-            for line in output.split("\n"):
-                if line.startswith("CONFLICT") and " in " in line:
-                    file_path = line.split(" in ")[-1].strip()
-                    if file_path:
-                        conflicting_files.append(file_path)
+    except subprocess.CalledProcessError:
+        # Command failed - treat as conflicts present. The exception's captured
+        # output is logged server-side only; it is never surfaced in the API
+        # response (avoids leaking command/stack-trace text to clients).
+        logger.exception(
+            "git merge-tree failed while computing merge preview for task %s", task_id
+        )
+        has_conflicts = True
 
     # Filter out gitignored files from conflict list (e.g. build artifacts)
     if conflicting_files:
@@ -660,9 +658,9 @@ async def resolve_worktree_conflicts(
                 logger.error(f"AI resolution failed for {file_path}: {error_msg}")
                 failed_files.append({"file": file_path, "error": error_msg})
 
-        except Exception as e:
-            logger.error(f"Failed to resolve {file_path}: {e}")
-            failed_files.append({"file": file_path, "error": str(e)})
+        except Exception:
+            logger.exception("Failed to resolve %s", file_path)
+            failed_files.append({"file": file_path, "error": "Failed to resolve file"})
 
     if failed_files:
         return {
@@ -948,9 +946,11 @@ async def resolve_uncommitted_conflicts(task_id: str):
                         }
                     )
 
-            except Exception as e:
-                logger.error(f"Failed to resolve {file_path}: {e}")
-                failed_files.append({"file": file_path, "error": str(e)})
+            except Exception:
+                logger.exception("Failed to resolve %s", file_path)
+                failed_files.append(
+                    {"file": file_path, "error": "Failed to resolve file"}
+                )
 
     finally:
         # Drop the stash only if we created one
@@ -1199,9 +1199,9 @@ async def resolve_git_merge_conflicts(task_id: str):
                 logger.error(f"AI resolution failed for {file_path}: {error_msg}")
                 failed_files.append({"file": file_path, "error": error_msg})
 
-        except Exception as e:
-            logger.error(f"Failed to resolve {file_path}: {e}")
-            failed_files.append({"file": file_path, "error": str(e)})
+        except Exception:
+            logger.exception("Failed to resolve %s", file_path)
+            failed_files.append({"file": file_path, "error": "Failed to resolve file"})
 
     if failed_files:
         return {
@@ -1482,8 +1482,9 @@ async def create_pr_from_task(task_id: str, options: CreatePRFromTaskOptions = N
             check=True,
         )
         worktree_branch = result.stdout.strip()
-    except subprocess.CalledProcessError as e:
-        return {"success": False, "error": f"Could not determine worktree branch: {e}"}
+    except subprocess.CalledProcessError:
+        logger.exception("Could not determine worktree branch")
+        return {"success": False, "error": "Could not determine worktree branch"}
 
     # Get the base branch (from options or detect from main project)
     base_branch = options.baseBranch
@@ -1595,8 +1596,9 @@ async def create_pr_from_task(task_id: str, options: CreatePRFromTaskOptions = N
             }
     except subprocess.TimeoutExpired:
         return {"success": False, "error": "Push timed out"}
-    except Exception as e:
-        return {"success": False, "error": f"Failed to push branch: {e}"}
+    except Exception:
+        logger.exception("Failed to push branch")
+        return {"success": False, "error": "Failed to push branch"}
 
     # Load task title/description for PR defaults
     pr_title = options.title
@@ -1809,8 +1811,9 @@ async def merge_worktree(task_id: str, options: WorktreeMergeOptions = None):
             check=True,
         )
         worktree_branch = result.stdout.strip()
-    except subprocess.CalledProcessError as e:
-        return {"success": False, "error": f"Could not determine worktree branch: {e}"}
+    except subprocess.CalledProcessError:
+        logger.exception("Could not determine worktree branch")
+        return {"success": False, "error": "Could not determine worktree branch"}
 
     # Get the current branch in main repo
     try:
@@ -2371,8 +2374,9 @@ async def discard_worktree(task_id: str):
                 "message": f"Successfully discarded worktree for {spec_id}",
             },
         }
-    except Exception as e:
-        return {"success": False, "error": f"Failed to discard worktree: {str(e)}"}
+    except Exception:
+        logger.exception("Failed to discard worktree")
+        return {"success": False, "error": "Failed to discard worktree"}
 
 
 # ============================================

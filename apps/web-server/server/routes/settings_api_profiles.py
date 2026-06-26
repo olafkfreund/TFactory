@@ -239,8 +239,9 @@ async def update_api_profile(profile_id: str, profile_update: ApiProfileUpdate):
 
         return {"success": True, "data": updated_profile}
 
-    except Exception as e:
-        return {"success": False, "error": f"Failed to update API profile: {str(e)}"}
+    except Exception:
+        logger.exception("Failed to update API profile")
+        return {"success": False, "error": "Failed to update API profile"}
 
 
 @router.delete("/api-profiles/{profile_id}")
@@ -308,8 +309,9 @@ async def delete_api_profile(profile_id: str):
             "deletedProfileId": profile_id,
         }
 
-    except Exception as e:
-        return {"success": False, "error": f"Failed to delete API profile: {str(e)}"}
+    except Exception:
+        logger.exception("Failed to delete API profile")
+        return {"success": False, "error": "Failed to delete API profile"}
 
 
 @router.post("/api-profiles/active")
@@ -336,8 +338,9 @@ async def set_active_api_profile(request: dict):
         data["activeProfileId"] = profile_id
         save_api_profiles(data)
         return {"success": True}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    except Exception:
+        logger.exception("Failed to set active API profile")
+        return {"success": False, "error": "Failed to set active API profile"}
 
 
 class TestConnectionRequest(BaseModel):
@@ -357,8 +360,9 @@ async def test_api_connection(request: TestConnectionRequest):
         )
         urllib.request.urlopen(req, timeout=10)
         return {"success": True, "data": {"connected": True}}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    except Exception:
+        logger.exception("API connection test failed")
+        return {"success": False, "error": "Connection test failed"}
 
 
 @router.post("/api-profiles/discover-models")
@@ -376,5 +380,6 @@ async def discover_api_models(request: TestConnectionRequest):
         data = json_module.loads(response.read().decode())
         models = [m.get("id") for m in data.get("data", [])]
         return {"success": True, "data": models}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    except Exception:
+        logger.exception("Failed to discover API models")
+        return {"success": False, "error": "Failed to discover models"}
