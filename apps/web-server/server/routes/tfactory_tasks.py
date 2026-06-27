@@ -140,16 +140,22 @@ def _summary_row(status_path: Path) -> dict[str, Any]:
     # source.json at ingest) so the cockpit threads this test task with its
     # PFactory plan + AIFactory build.
     source_doc = _read_json(spec_dir / "context" / "source.json") or {}
-    aifactory_src = source_doc.get("aifactory") if isinstance(source_doc, dict) else None
+    aifactory_src = (
+        source_doc.get("aifactory") if isinstance(source_doc, dict) else None
+    )
 
     return {
         "task_id": status_doc.get("task_id") or spec_id,
         "project_id": project_id,
         "spec_id": spec_id,
+        # Surface the spec title so the cockpit/Pipeline cards aren't blank.
+        "title": status_doc.get("title"),
         "status": status_doc.get("status"),
         "phase": status_doc.get("phase"),
         "updated_at": updated_at,
-        "source": {"aifactory": aifactory_src} if isinstance(aifactory_src, dict) else {},
+        "source": {"aifactory": aifactory_src}
+        if isinstance(aifactory_src, dict)
+        else {},
     }
 
 
@@ -195,9 +201,7 @@ def _artefact_meta(spec_dir: Path) -> dict[str, dict]:
     vids_dir = spec_dir / "findings" / "videos"
     vids = (
         sorted(
-            p.name
-            for p in vids_dir.iterdir()
-            if p.suffix.lower() in (".webm", ".mp4")
+            p.name for p in vids_dir.iterdir() if p.suffix.lower() in (".webm", ".mp4")
         )
         if vids_dir.is_dir()
         else []
@@ -269,7 +273,9 @@ def get_task(spec_id: str) -> dict:
 
 
 def _serve_artefact_file(
-    spec_id: str, relpath: str, media_type: str,
+    spec_id: str,
+    relpath: str,
+    media_type: str,
 ) -> Response:
     """Locate ``spec_id`` and serve the file at ``spec_dir/relpath``.
 
@@ -305,7 +311,9 @@ def _serve_artefact_file(
 def get_verdicts(spec_id: str) -> Response:
     """Stream the Evaluator's verdicts.json verbatim."""
     return _serve_artefact_file(
-        spec_id, "findings/verdicts.json", "application/json",
+        spec_id,
+        "findings/verdicts.json",
+        "application/json",
     )
 
 
@@ -313,7 +321,9 @@ def get_verdicts(spec_id: str) -> Response:
 def get_ac_fidelity_json(spec_id: str) -> Response:
     """Stream the AC-fidelity ledger (per-AC verified/flagged/unverified)."""
     return _serve_artefact_file(
-        spec_id, "findings/ac_fidelity.json", "application/json",
+        spec_id,
+        "findings/ac_fidelity.json",
+        "application/json",
     )
 
 
@@ -321,7 +331,9 @@ def get_ac_fidelity_json(spec_id: str) -> Response:
 def get_ac_fidelity_md(spec_id: str) -> Response:
     """Stream the human-readable AC-fidelity report."""
     return _serve_artefact_file(
-        spec_id, "findings/ac_fidelity.md", "text/markdown",
+        spec_id,
+        "findings/ac_fidelity.md",
+        "text/markdown",
     )
 
 
@@ -329,7 +341,9 @@ def get_ac_fidelity_md(spec_id: str) -> Response:
 def get_triage_report_json(spec_id: str) -> Response:
     """Stream the Triager's triage_report.json verbatim."""
     return _serve_artefact_file(
-        spec_id, "findings/triage_report.json", "application/json",
+        spec_id,
+        "findings/triage_report.json",
+        "application/json",
     )
 
 
@@ -337,7 +351,9 @@ def get_triage_report_json(spec_id: str) -> Response:
 def get_triage_report_md(spec_id: str) -> Response:
     """Stream the Triager's triage_report.md verbatim."""
     return _serve_artefact_file(
-        spec_id, "findings/triage_report.md", "text/markdown",
+        spec_id,
+        "findings/triage_report.md",
+        "text/markdown",
     )
 
 
@@ -345,7 +361,9 @@ def get_triage_report_md(spec_id: str) -> Response:
 def get_test_plan(spec_id: str) -> Response:
     """Stream the Planner's test_plan.json verbatim."""
     return _serve_artefact_file(
-        spec_id, "test_plan.json", "application/json",
+        spec_id,
+        "test_plan.json",
+        "application/json",
     )
 
 
@@ -354,7 +372,9 @@ def get_pr_comment_body(spec_id: str) -> Response:
     """Stream findings/pr_comment_body.md — present when the Triager
     skipped a real gh pr comment (no PR number in source.json)."""
     return _serve_artefact_file(
-        spec_id, "findings/pr_comment_body.md", "text/markdown",
+        spec_id,
+        "findings/pr_comment_body.md",
+        "text/markdown",
     )
 
 
@@ -413,7 +433,9 @@ def _tail_lines(path: Path, n: int) -> list[str]:
     return lines[-n:] if n > 0 else []
 
 
-def tail_log_payload(spec_id: str, lines_per_file: int = DEFAULT_LOG_TAIL_LINES) -> dict:
+def tail_log_payload(
+    spec_id: str, lines_per_file: int = DEFAULT_LOG_TAIL_LINES
+) -> dict:
     """Build the JSON payload the WS endpoint sends.
 
     Returns:
@@ -442,8 +464,7 @@ def tail_log_payload(spec_id: str, lines_per_file: int = DEFAULT_LOG_TAIL_LINES)
 
     files = _resolve_log_files(spec_dir)
     payload_files = {
-        name: _tail_lines(path, lines_per_file)
-        for name, path in files.items()
+        name: _tail_lines(path, lines_per_file) for name, path in files.items()
     }
     return {
         "spec_id": spec_id,
@@ -641,7 +662,10 @@ def get_evidence_artifact(spec_id: str, test_id: str, artifact: str) -> Response
     try:
         resolved = artifact_path.resolve()
         evidence_base_resolved = evidence_base.resolve()
-        if not str(resolved).startswith(str(evidence_base_resolved) + "/") and resolved != evidence_base_resolved:
+        if (
+            not str(resolved).startswith(str(evidence_base_resolved) + "/")
+            and resolved != evidence_base_resolved
+        ):
             raise HTTPException(
                 status_code=http_status.HTTP_400_BAD_REQUEST,
                 detail=f"path traversal rejected: {artifact!r}",
@@ -705,7 +729,10 @@ def _serve_findings_media(spec_id: str, subdir: str, artifact: str) -> Response:
     try:
         resolved = artifact_path.resolve()
         base_resolved = base.resolve()
-        if not str(resolved).startswith(str(base_resolved) + "/") and resolved != base_resolved:
+        if (
+            not str(resolved).startswith(str(base_resolved) + "/")
+            and resolved != base_resolved
+        ):
             raise HTTPException(
                 status_code=http_status.HTTP_400_BAD_REQUEST,
                 detail=f"path traversal rejected: {artifact!r}",
@@ -770,16 +797,23 @@ def merge_accepted_tests(spec_id: str, body: MergeRequest) -> dict[str, Any]:
 
     verdicts_doc = _read_json(spec_dir / "findings" / "verdicts.json")
     if not verdicts_doc:
-        raise HTTPException(status_code=404, detail="no verdicts.json — task hasn't been evaluated")
+        raise HTTPException(
+            status_code=404, detail="no verdicts.json — task hasn't been evaluated"
+        )
     wanted = {"accept"} | ({"flag"} if body.include_flagged else set())
-    selected = [v for v in verdicts_doc.get("verdicts", []) if v.get("verdict") in wanted]
+    selected = [
+        v for v in verdicts_doc.get("verdicts", []) if v.get("verdict") in wanted
+    ]
     if not selected:
         raise HTTPException(status_code=400, detail="no accepted tests to merge")
 
     source = _read_json(spec_dir / "context" / "source.json") or {}
     branch = (body.target_branch or source.get("branch") or "").strip()
     if not branch:
-        raise HTTPException(status_code=400, detail="no target branch (set target_branch or context/source.json)")
+        raise HTTPException(
+            status_code=400,
+            detail="no target branch (set target_branch or context/source.json)",
+        )
 
     files: list[tuple[str, str]] = []
     for v in selected:
@@ -802,10 +836,15 @@ def merge_accepted_tests(spec_id: str, body: MergeRequest) -> dict[str, Any]:
         files.append((rel, content))
 
     if not files:
-        raise HTTPException(status_code=400, detail="no readable test files for the selected verdicts")
+        raise HTTPException(
+            status_code=400, detail="no readable test files for the selected verdicts"
+        )
 
     if not body.dry_run and not body.repo_dir:
-        raise HTTPException(status_code=400, detail="repo_dir is required for a real (non-dry-run) merge")
+        raise HTTPException(
+            status_code=400,
+            detail="repo_dir is required for a real (non-dry-run) merge",
+        )
     repo_dir = Path(body.repo_dir) if body.repo_dir else spec_dir
 
     from tools.git_writer import GitWriteRequest, write_tests_to_branch
@@ -848,7 +887,9 @@ def dismiss_run(spec_id: str) -> dict[str, Any]:
     try:
         status_path.write_text(json.dumps(doc, indent=2), encoding="utf-8")
     except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"could not write status.json: {exc}") from exc
+        raise HTTPException(
+            status_code=500, detail=f"could not write status.json: {exc}"
+        ) from exc
     return {"ok": True, "dismissed": True, "dismissed_at": doc["dismissed_at"]}
 
 
