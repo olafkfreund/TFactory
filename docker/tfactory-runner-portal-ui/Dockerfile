@@ -17,9 +17,12 @@ FROM mcr.microsoft.com/playwright/python:v1.49.0-noble
 
 WORKDIR /app
 
-# pyotp mints the real TOTP for the Keycloak MFA step. Playwright + browsers are
-# already in the base.
-RUN pip install --no-cache-dir pyotp>=2.9
+# The MS base bakes the browser binaries (/ms-playwright) + OS deps, but NOT the
+# python package — install playwright matching the baked browsers, plus pyotp for
+# the real TOTP at the Keycloak MFA step. PLAYWRIGHT_BROWSERS_PATH points at the
+# baked browsers so nothing is downloaded at runtime.
+RUN pip install --no-cache-dir playwright==1.49.0 "pyotp>=2.9"
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 # Vendor the harness. `python -m portal_testing.run` resolves it from /app.
 COPY portal_testing/ /app/portal_testing/

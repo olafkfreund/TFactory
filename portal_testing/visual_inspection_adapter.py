@@ -163,6 +163,9 @@ def publish_as_tfactory_spec(portal_key: str, report_dir: Path, run_id: str) -> 
     )
 
     spec_dir = tfactory_workspace_root() / "workspaces" / "portal-ui" / "specs" / run_id
+    # Idempotent: clear any prior artefacts for this run_id so stale files (e.g. a
+    # verdicts.json from an earlier layout) don't linger and mis-render the detail.
+    shutil.rmtree(spec_dir, ignore_errors=True)
     (spec_dir / "context").mkdir(parents=True, exist_ok=True)
     (spec_dir / "findings").mkdir(parents=True, exist_ok=True)
 
