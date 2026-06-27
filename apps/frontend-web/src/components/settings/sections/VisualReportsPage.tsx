@@ -211,7 +211,18 @@ function DetailView({ detail, onBack, loading }: { detail: Detail; onBack: () =>
                 <FileText className="h-4 w-4" /> Inspection report
               </h3>
               <div className={MD_CLASS}>
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{detail.reportMarkdown}</ReactMarkdown>
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  urlTransform={(url) =>
+                    url.startsWith('screenshots/')
+                      ? `/api/visual-inspections/${encodeURIComponent(id)}/screenshots/${encodeURIComponent(
+                          url.slice('screenshots/'.length)
+                        )}`
+                      : url
+                  }
+                >
+                  {detail.reportMarkdown}
+                </ReactMarkdown>
               </div>
             </section>
           )}
