@@ -58,4 +58,32 @@ def download_visual_artifact(run_id: str, kind: str):
     path = store.download_path(run_id, kind)
     if path is None or not Path(path).is_file():
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="artifact not available")
-    return FileResponse(path, media_type=_DOWNLOAD_MEDIA[kind], filename=f"visual-{run_id}-{kind}")
+    return FileResponse(
+        path, media_type=_DOWNLOAD_MEDIA[kind], filename=f"visual-{run_id}-{kind}"
+    )
+
+
+import re as _re  # noqa: E402
+
+# Inline-image filename guard: a flat screenshot name, no path separators / traversal.
+_SCREENSHOT_NAME = _re.compile(r"^[A-Za-z0-9._-]+\.(png|jpg|jpeg|webp)$")
+
+
+@router.get("/{run_id}/screenshots/{name}", summary="Serve a run screenshot inline")
+def get_visual_screenshot(run_id: str, name: str):
+    """Serve a screenshot from a run's ``screenshots/`` dir so the report's
+    ``![](screenshots/x.png)`` images render in the Visual Reports tab. The
+    filename is allow-listed (no separators/traversal) and the run dir comes from
+    the store's validated resolver."""
+    if not _SCREENSHOT_NAME.match(name):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, detail="invalid screenshot name"
+        )
+    run_dir = store._safe_dir(run_id)  # validates run_id; None if absent
+    if run_dir is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="run not found")
+    path = run_dir / "screenshots" / name
+    if not path.is_file():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="screenshot not found")
+    media = "image/jpeg" if name.lower().endswith((".jpg", ".jpeg")) else "image/png"
+    return FileResponse(path, media_type=media)
