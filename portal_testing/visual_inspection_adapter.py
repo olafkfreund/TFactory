@@ -39,14 +39,22 @@ def build_run_dir(
     """Assemble a visual-inspection run dir from a portal-ui report. Returns it."""
     portal = config.PORTALS[portal_key]
     report_md = (report_dir / "report.md").read_text(encoding="utf-8")
-    counts = _parse_coverage(report_md)
+    cov = _parse_coverage(report_md)
     logged_in = _logged_in(report_md)
-    findings = counts["findings"]
-    verdict = (
-        "pass"
-        if (logged_in and findings == 0)
-        else ("needs-review" if logged_in else "fail")
-    )
+    findings = cov["findings"]
+    # Counts + verdict use the canonical Visual Inspection schema the portal's
+    # tab renders: counts.{steps,passed,failed} and a verdict in
+    # {pass, attention, fail} (fail → FAIL badge, attention → warning accent,
+    # else → PASS). A control with a finding is a "fail"; the rest pass.
+    steps = cov["screenshots"]
+    failed = min(findings, steps)
+    passed = max(0, steps - failed)
+    if not logged_in:
+        verdict = "fail"
+    elif findings > 0:
+        verdict = "attention"
+    else:
+        verdict = "pass"
 
     run_dir = dest_parent / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -57,10 +65,12 @@ def build_run_dir(
     meta = {
         "target": f"{portal.name} — {portal.url}",
         "verdict": verdict,
-        "counts": {k: counts[k] for k in ("nav", "dropdowns", "dialogs", "findings")},
+        "counts": {"steps": steps, "passed": passed, "failed": failed},
         "kind": "portal-ui",
         "portal": portal_key,
         "logged_in": logged_in,
+        # Extra portal-ui coverage detail (harmless to the generic renderer).
+        "coverage": {k: cov[k] for k in ("nav", "dropdowns", "dialogs", "findings")},
     }
     (run_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     # Findings as issues.json (the tab + GitHub-issues flow both read this shape).
@@ -85,6 +95,75 @@ def visual_inspection_root() -> Path:
     return (
         Path(override) if override else Path.home() / ".tfactory" / "visual-inspections"
     )
+
+
+def tfactory_workspace_root() -> Path:
+    """Root the ``/api/tfactory/tasks`` list globs (``<root>/workspaces/...``).
+    Honours ``TFACTORY_WORKSPACE_ROOT``; defaults to ``~/.tfactory`` (the
+    co-mounted control-plane data PVC in-cluster) — same as the backend's
+    ``_resolve_workspace_root``.
+    """
+    override = os.environ.get("TFACTORY_WORKSPACE_ROOT")
+    return Path(override) if override else Path.home() / ".tfactory"
+
+
+def publish_as_tfactory_spec(portal_key: str, report_dir: Path, run_id: str) -> Path:
+    """Register the portal-ui run as a TFactory spec so it appears as a finished
+    TEST in BOTH the Pipeline "Report" lane AND the cockpit (both read
+    ``/api/tfactory/tasks``, which globs ``workspaces/*/specs/*/status.json``).
+
+    Writes ``status: triaged`` (the Report-lane terminal status) under a
+    standalone ``portal-ui`` project, plus the verdict, the report, and the
+    screenshots as artefacts. No upstream GitHub issue (a portal health test is
+    not tied to a work item), so the cockpit threads it by its own run id and
+    shows it in the Finished lane.
+    """
+    portal = config.PORTALS[portal_key]
+    report_md = (report_dir / "report.md").read_text(encoding="utf-8")
+    cov = _parse_coverage(report_md)
+    logged_in = _logged_in(report_md)
+    findings = cov["findings"]
+    verdict = (
+        "pass"
+        if (logged_in and findings == 0)
+        else ("attention" if logged_in else "fail")
+    )
+
+    spec_dir = tfactory_workspace_root() / "workspaces" / "portal-ui" / "specs" / run_id
+    (spec_dir / "context").mkdir(parents=True, exist_ok=True)
+    (spec_dir / "findings").mkdir(parents=True, exist_ok=True)
+
+    status_doc = {
+        "task_id": run_id,
+        "project_id": "portal-ui",
+        "status": "triaged",  # → Pipeline "Report" lane / cockpit terminal
+        "phase": "triager_report_done",
+        "title": f"Portal UI — {portal.name}",
+        "verdict": verdict,
+        "lane_progress": {"browser": "triaged"},
+    }
+    (spec_dir / "status.json").write_text(
+        json.dumps(status_doc, indent=2), encoding="utf-8"
+    )
+    # Standalone test — no upstream issue (cockpit falls back to the run id).
+    (spec_dir / "context" / "source.json").write_text(
+        json.dumps({"aifactory": {"github_issue": None}}, indent=2), encoding="utf-8"
+    )
+    (spec_dir / "findings" / "verdicts.json").write_text(
+        json.dumps(
+            {
+                "verdict": verdict,
+                "counts": {"steps": cov["screenshots"], "findings": findings},
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (spec_dir / "report.md").write_text(report_md, encoding="utf-8")
+    shots = report_dir / "screenshots"
+    if shots.is_dir():
+        shutil.copytree(shots, spec_dir / "screenshots", dirs_exist_ok=True)
+    return spec_dir
 
 
 def publish(portal_key: str, report_dir: Path, run_id: str) -> Path | None:

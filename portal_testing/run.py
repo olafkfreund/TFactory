@@ -116,11 +116,16 @@ def main(argv: list[str]) -> int:
         try:
             report = run_portal(k)
             if publish_vi:
-                from .visual_inspection_adapter import publish
+                from .visual_inspection_adapter import publish, publish_as_tfactory_spec
 
                 rid = run_id or f"portal-{k}-{report.parent.name}"
                 where = publish(k, report.parent, rid)
                 log.info("[%s] published to visual-inspection store: %s", k, where)
+                # Also register as a TFactory spec so it shows as a finished TEST
+                # in the Pipeline Report lane + the cockpit (both read
+                # /api/tfactory/tasks).
+                spec = publish_as_tfactory_spec(k, report.parent, rid)
+                log.info("[%s] registered TFactory spec: %s", k, spec)
         except Exception:  # noqa: BLE001 - keep going to the next portal
             log.exception("[%s] run failed", k)
     return 0
