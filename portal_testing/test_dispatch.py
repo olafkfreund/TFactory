@@ -104,8 +104,9 @@ def test_publish_as_tfactory_spec(tmp_path, monkeypatch):
     assert status["status"] == "triaged"  # → Report lane
     assert status["project_id"] == "portal-ui"
     assert status["verdict"] == "pass"
-    assert (spec_dir / "screenshots" / "01-landing.png").is_file()
-    assert (spec_dir / "findings" / "verdicts.json").is_file()
+    assert (spec_dir / "findings" / "triage_report.md").is_file()
+    assert (spec_dir / "findings" / "screenshots" / "01-landing.png").is_file()
+    assert not (spec_dir / "findings" / "verdicts.json").exists()
 
 
 def test_adapter_counts_interaction_failures(tmp_path):

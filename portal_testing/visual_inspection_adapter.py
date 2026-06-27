@@ -64,6 +64,12 @@ def _verdict(logged_in: bool, failed: int, steps: int, console_errors: int) -> s
     return "pass"
 
 
+def _strip_image_links(md: str) -> str:
+    """Drop markdown image embeds so the detail "Report" tab has no broken
+    images (screenshots render in the detail gallery from findings/screenshots/)."""
+    return re.sub(r"!\[[^\]]*\]\([^)]*\)", "", md)
+
+
 def build_run_dir(
     portal_key: str, report_dir: Path, run_id: str, dest_parent: Path
 ) -> Path:
@@ -157,6 +163,9 @@ def publish_as_tfactory_spec(portal_key: str, report_dir: Path, run_id: str) -> 
     )
 
     spec_dir = tfactory_workspace_root() / "workspaces" / "portal-ui" / "specs" / run_id
+    # Idempotent: clear any prior artefacts for this run_id so stale files (e.g. a
+    # verdicts.json from an earlier layout) don't linger and mis-render the detail.
+    shutil.rmtree(spec_dir, ignore_errors=True)
     (spec_dir / "context").mkdir(parents=True, exist_ok=True)
     (spec_dir / "findings").mkdir(parents=True, exist_ok=True)
 
@@ -176,24 +185,21 @@ def publish_as_tfactory_spec(portal_key: str, report_dir: Path, run_id: str) -> 
     (spec_dir / "context" / "source.json").write_text(
         json.dumps({"aifactory": {"github_issue": None}}, indent=2), encoding="utf-8"
     )
-    (spec_dir / "findings" / "verdicts.json").write_text(
-        json.dumps(
-            {
-                "verdict": verdict,
-                "counts": {
-                    "controls": cov["nav"] + cov["dropdowns"] + cov["dialogs"],
-                    "interaction_failures": interaction_failures,
-                    "console_errors": console_errors,
-                },
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
+    # The task-detail "Report" tab renders findings/triage_report.md; its inline
+    # image links would 404 (the page serves screenshots from the artefact
+    # endpoint, not relative paths), so strip them — the screenshots show in the
+    # detail's gallery from findings/screenshots/ instead.
+    (spec_dir / "findings" / "triage_report.md").write_text(
+        _strip_image_links(report_md), encoding="utf-8"
     )
     (spec_dir / "report.md").write_text(report_md, encoding="utf-8")
     shots = report_dir / "screenshots"
     if shots.is_dir():
-        shutil.copytree(shots, spec_dir / "screenshots", dirs_exist_ok=True)
+        shutil.copytree(
+            shots, spec_dir / "findings" / "screenshots", dirs_exist_ok=True
+        )
+    # NB: no findings/verdicts.json — portal-ui is a report+evidence run, not a
+    # per-test accept/flag verdict set; the Verdicts tab stays cleanly disabled.
     return spec_dir
 
 
