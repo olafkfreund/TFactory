@@ -15,6 +15,7 @@ available.
 from __future__ import annotations
 
 import os
+import shlex
 from typing import Any
 
 # The portals the capability knows about (kept in sync with config.PORTALS).
@@ -44,6 +45,7 @@ def build_portal_ui_job_manifest(
     namespace: str | None = None,
     mfa_secret: str | None = None,
     data_pvc: str | None = None,
+    startup_delay_seconds: int = 0,
 ) -> dict[str, Any]:
     """Build the k8s Job manifest that runs the portal-ui harness for one portal.
 
@@ -52,6 +54,12 @@ def build_portal_ui_job_manifest(
     baked), with the MFA credentials sourced from a Secret (via env, never argv).
     It co-mounts the control-plane data PVC at ``~/.tfactory`` so the published
     run lands in the Visual Inspection store the portal's tab reads.
+
+    ``startup_delay_seconds`` prepends a ``sleep`` before the harness so Jobs
+    submitted together stagger their Keycloak logins. This is REQUIRED when
+    running multiple portals with the same MFA user: a TOTP code is one-time-use,
+    so two logins in the same 30s window collide (the second is rejected). Pick a
+    delay > 30s per portal index. ``exec`` keeps the MFA creds in env (not argv).
     """
     if portal_key not in PORTAL_KEYS:
         raise ValueError(f"unknown portal {portal_key!r}; have {PORTAL_KEYS}")
@@ -70,6 +78,15 @@ def build_portal_ui_job_manifest(
     env.append({"name": "PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS", "value": "true"})
     # HOME resolves the Visual Inspection store onto the co-mounted data PVC.
     env.append({"name": "HOME", "value": _HOME})
+
+    run_args = [portal_key, "--visual-inspection", "--run-id", run_id]
+    if startup_delay_seconds > 0:
+        inner = shlex.join(["python", "-m", "portal_testing.run", *run_args])
+        command = ["sh", "-c", f"sleep {int(startup_delay_seconds)}; exec {inner}"]
+        args: list[str] = []
+    else:
+        command = ["python", "-m", "portal_testing.run"]
+        args = run_args
 
     return {
         "apiVersion": "batch/v1",
@@ -97,13 +114,8 @@ def build_portal_ui_job_manifest(
                         {
                             "name": "portal-ui",
                             "image": image,
-                            "command": ["python", "-m", "portal_testing.run"],
-                            "args": [
-                                portal_key,
-                                "--visual-inspection",
-                                "--run-id",
-                                run_id,
-                            ],
+                            "command": command,
+                            "args": args,
                             "env": env,
                             # Headless Chromium is CPU-bound; without a request
                             # the pod gets throttled and click actionability
@@ -147,3 +159,27 @@ def dispatch_portal_ui(portal_key: str, run_id: str, **kwargs: Any) -> str:
         namespace=manifest["metadata"]["namespace"], body=manifest
     )
     return manifest["metadata"]["name"]
+
+
+def dispatch_all_portals(
+    run_prefix: str, *, stagger_seconds: int = 40, **kwargs: Any
+) -> list[str]:
+    """Dispatch a portal-ui Job for EVERY portal at once, each Job self-staggering
+    its Keycloak login by ``index * stagger_seconds`` so the same MFA user's
+    one-time TOTP codes land in different 30s windows (no replay collision).
+
+    Submits immediately (no blocking sleep in the caller) — the delay lives in
+    each Job's command. Returns the Job names. ``stagger_seconds`` must exceed the
+    TOTP period (30s); 40s is a safe default.
+    """
+    names: list[str] = []
+    for i, portal in enumerate(PORTAL_KEYS):
+        names.append(
+            dispatch_portal_ui(
+                portal,
+                f"{run_prefix}-{portal}",
+                startup_delay_seconds=i * stagger_seconds,
+                **kwargs,
+            )
+        )
+    return names

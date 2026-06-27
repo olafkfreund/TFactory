@@ -110,8 +110,9 @@ def test_publish_as_tfactory_spec(tmp_path, monkeypatch):
 
 
 def test_adapter_counts_interaction_failures(tmp_path):
-    from portal_testing.visual_inspection_adapter import build_run_dir
     import json
+
+    from portal_testing.visual_inspection_adapter import build_run_dir
 
     rd = tmp_path / "p"
     rd.mkdir()
@@ -129,3 +130,27 @@ def test_adapter_counts_interaction_failures(tmp_path):
     # 1 of 5 failed → not a majority → attention (the test still ran).
     assert meta["verdict"] == "attention"
     assert meta["counts"] == {"steps": 5, "passed": 4, "failed": 1}
+
+
+def test_startup_delay_staggers_login_without_leaking_creds():
+    m = build_portal_ui_job_manifest("aifactory", "r1", startup_delay_seconds=80)
+    c = m["spec"]["template"]["spec"]["containers"][0]
+    assert c["command"][0:2] == ["sh", "-c"]
+    assert c["command"][2].startswith("sleep 80; exec ")
+    assert "portal_testing.run" in c["command"][2] and "aifactory" in c["command"][2]
+    assert c["args"] == []
+    # MFA creds still come from the Secret via env — never on the command line.
+    flat = " ".join(c["command"])
+    assert "TEST_PASSWORD" not in flat and "TEST_TOTP_SECRET" not in flat
+    env = {e["name"]: e for e in c["env"]}
+    assert (
+        env["TEST_TOTP_SECRET"]["valueFrom"]["secretKeyRef"]["key"]
+        == "TEST_TOTP_SECRET"
+    )
+
+
+def test_no_delay_keeps_plain_command():
+    m = build_portal_ui_job_manifest("tfactory", "r2")
+    c = m["spec"]["template"]["spec"]["containers"][0]
+    assert c["command"] == ["python", "-m", "portal_testing.run"]
+    assert c["args"][0] == "tfactory"
