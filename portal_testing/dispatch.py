@@ -105,6 +105,14 @@ def build_portal_ui_job_manifest(
                                 run_id,
                             ],
                             "env": env,
+                            # Headless Chromium is CPU-bound; without a request
+                            # the pod gets throttled and click actionability
+                            # checks time out (clicks that pass locally fail
+                            # in-cluster). Give it enough to drive the browser.
+                            "resources": {
+                                "requests": {"cpu": "1", "memory": "1Gi"},
+                                "limits": {"memory": "3Gi"},
+                            },
                             "volumeMounts": [
                                 {"name": "data", "mountPath": f"{_HOME}/.tfactory"}
                             ],

@@ -31,7 +31,9 @@ class Step:
 
 
 def _slug(text: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", (text or "step").lower()).strip("-")[:50] or "step"
+    return (
+        re.sub(r"[^a-z0-9]+", "-", (text or "step").lower()).strip("-")[:50] or "step"
+    )
 
 
 def _visible_texts(page: Page, selector: str, limit: int = 40) -> list[tuple[str, str]]:
@@ -76,8 +78,13 @@ class PortalCrawler:
 
     def landing(self) -> None:
         self.steps.append(
-            Step("page", "Landing", url=self.page.url, screenshot=self._shot("landing"),
-                 console_errors=self._drain_console())
+            Step(
+                "page",
+                "Landing",
+                url=self.page.url,
+                screenshot=self._shot("landing"),
+                console_errors=self._drain_console(),
+            )
         )
 
     def dismiss_blocking_modals(self) -> None:
@@ -90,17 +97,31 @@ class PortalCrawler:
         (Initialize/Create/Delete/Confirm).
         """
         for _ in range(3):  # a modal may reveal another beneath it
-            dialog = self.page.locator("[role='dialog'], .modal, [class*='dialog']").first
+            dialog = self.page.locator(
+                "[role='dialog'], .modal, [class*='dialog']"
+            ).first
             if not (dialog.count() and dialog.is_visible()):
                 return
             label = "modal"
             try:
-                label = (dialog.inner_text(timeout=1000) or "modal").strip().split("\n")[0][:40]
+                label = (
+                    (dialog.inner_text(timeout=1000) or "modal")
+                    .strip()
+                    .split("\n")[0][:40]
+                )
             except Exception:  # noqa: BLE001
                 pass
             dismissed = False
-            for sel in ["text=Skip for now", "text=Skip", "text=Not now", "text=Maybe later",
-                        "text=Cancel", "text=Close", "[aria-label='Close']", "button:has-text('×')"]:
+            for sel in [
+                "text=Skip for now",
+                "text=Skip",
+                "text=Not now",
+                "text=Maybe later",
+                "text=Cancel",
+                "text=Close",
+                "[aria-label='Close']",
+                "button:has-text('×')",
+            ]:
                 b = self.page.locator(sel).first
                 try:
                     if b.count() and b.is_visible():
@@ -113,8 +134,13 @@ class PortalCrawler:
                 self.page.keyboard.press("Escape")
             self.page.wait_for_timeout(700)
             self.steps.append(
-                Step("dialog", f"dismissed: {label}", screenshot=self._shot(f"modal-{label}"),
-                     dialog_opened=True, note="blocking modal dismissed before crawl")
+                Step(
+                    "dialog",
+                    f"dismissed: {label}",
+                    screenshot=self._shot(f"modal-{label}"),
+                    dialog_opened=True,
+                    note="blocking modal dismissed before crawl",
+                )
             )
 
     def crawl_navigation(self) -> None:
@@ -145,17 +171,38 @@ class PortalCrawler:
         for text in labels:
             loc = self._relocate_nav(text, nav_sel)
             if loc is None:
-                self.steps.append(Step("nav", text, note="not found on re-query (DOM changed)"))
+                self.steps.append(
+                    Step("nav", text, note="not found on re-query (DOM changed)")
+                )
                 continue
             try:
-                loc.click(timeout=4000)
+                self._robust_click(loc)
                 self.page.wait_for_timeout(1300)
                 self.steps.append(
-                    Step("nav", text, url=self.page.url, screenshot=self._shot(f"nav-{text}"),
-                         console_errors=self._drain_console())
+                    Step(
+                        "nav",
+                        text,
+                        url=self.page.url,
+                        screenshot=self._shot(f"nav-{text}"),
+                        console_errors=self._drain_console(),
+                    )
                 )
             except Exception as exc:  # noqa: BLE001
                 self.steps.append(Step("nav", text, note=f"click failed: {exc}"[:120]))
+
+    def _robust_click(self, loc) -> None:
+        """Click resiliently on a slow/throttled environment (e.g. a CPU-limited
+        k8s Job pod): scroll into view, allow a generous actionability timeout,
+        and fall back to a forced click if an animation keeps the node 'unstable'.
+        """
+        try:
+            loc.scroll_into_view_if_needed(timeout=3000)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            loc.click(timeout=10000)
+        except Exception:  # noqa: BLE001 - last resort: bypass actionability checks
+            loc.click(timeout=5000, force=True)
 
     def _relocate_nav(self, text: str, nav_sel: str):
         """Find a nav element by its accessible name, fresh from the live DOM."""
@@ -182,31 +229,53 @@ class PortalCrawler:
             try:
                 self.page.locator(sel).first.click(timeout=3000)
                 self.page.wait_for_timeout(700)
-                opened = self.page.locator("[role='menu'], [role='listbox'], .dropdown-menu, [class*='menu']").first.count() > 0
+                opened = (
+                    self.page.locator(
+                        "[role='menu'], [role='listbox'], .dropdown-menu, [class*='menu']"
+                    ).first.count()
+                    > 0
+                )
                 self.steps.append(
-                    Step("dropdown", text or "dropdown", screenshot=self._shot(f"dropdown-{text}"),
-                         dialog_opened=opened, console_errors=self._drain_console())
+                    Step(
+                        "dropdown",
+                        text or "dropdown",
+                        screenshot=self._shot(f"dropdown-{text}"),
+                        dialog_opened=opened,
+                        console_errors=self._drain_console(),
+                    )
                 )
                 self.page.keyboard.press("Escape")
                 self.page.wait_for_timeout(300)
             except Exception as exc:  # noqa: BLE001
-                self.steps.append(Step("dropdown", text or "dropdown", note=f"failed: {exc}"[:100]))
+                self.steps.append(
+                    Step("dropdown", text or "dropdown", note=f"failed: {exc}"[:100])
+                )
 
     def crawl_dialogs(self) -> None:
         """Click buttons that look like they open dialogs and capture the modal."""
         btns = _visible_texts(self.page, "button, [role='button'], a[class*='btn']")
-        opener = re.compile(r"new|add|create|edit|settings|config|delete|import|connect|invite|profile|key|token", re.I)
+        opener = re.compile(
+            r"new|add|create|edit|settings|config|delete|import|connect|invite|profile|key|token",
+            re.I,
+        )
         for text, sel in btns:
             if not opener.search(text):
                 continue
             try:
                 self.page.locator(sel).first.click(timeout=3000)
                 self.page.wait_for_timeout(900)
-                dialog = self.page.locator("[role='dialog'], .modal, [class*='dialog']").first
+                dialog = self.page.locator(
+                    "[role='dialog'], .modal, [class*='dialog']"
+                ).first
                 if dialog.count() and dialog.is_visible():
                     self.steps.append(
-                        Step("dialog", text, screenshot=self._shot(f"dialog-{text}"),
-                             dialog_opened=True, console_errors=self._drain_console())
+                        Step(
+                            "dialog",
+                            text,
+                            screenshot=self._shot(f"dialog-{text}"),
+                            dialog_opened=True,
+                            console_errors=self._drain_console(),
+                        )
                     )
                     # Close it (Escape, then any Cancel/Close) without committing.
                     self.page.keyboard.press("Escape")

@@ -33,6 +33,37 @@ def _logged_in(report_md: str) -> bool:
     return "logged in: **True**" in report_md
 
 
+def _classify_findings(report_md: str) -> tuple[int, int]:
+    """Split the report's Findings into (interaction_failures, console_errors).
+
+    A failed *interaction* (a click that didn't work) is a real test failure; a
+    *console error* (e.g. the portal's expected 401s) is informational.
+    """
+    section = report_md.split("## Findings")[-1].split("## Walkthrough")[0]
+    interaction = 0
+    console = 0
+    for ln in section.splitlines():
+        if not ln.strip().startswith("- "):
+            continue
+        if "Interaction failed" in ln or "Login did not complete" in ln:
+            interaction += 1
+        elif "Console error" in ln:
+            console += 1
+    return interaction, console
+
+
+def _verdict(logged_in: bool, failed: int, steps: int, console_errors: int) -> str:
+    """fail = couldn't run (no login) or a majority of controls failed;
+    attention = ran but some controls failed / console errors; else pass."""
+    if not logged_in:
+        return "fail"
+    if steps and failed > steps // 2:
+        return "fail"
+    if failed > 0 or console_errors > 0:
+        return "attention"
+    return "pass"
+
+
 def build_run_dir(
     portal_key: str, report_dir: Path, run_id: str, dest_parent: Path
 ) -> Path:
@@ -41,20 +72,17 @@ def build_run_dir(
     report_md = (report_dir / "report.md").read_text(encoding="utf-8")
     cov = _parse_coverage(report_md)
     logged_in = _logged_in(report_md)
-    findings = cov["findings"]
     # Counts + verdict use the canonical Visual Inspection schema the portal's
     # tab renders: counts.{steps,passed,failed} and a verdict in
-    # {pass, attention, fail} (fail → FAIL badge, attention → warning accent,
-    # else → PASS). A control with a finding is a "fail"; the rest pass.
-    steps = cov["screenshots"]
-    failed = min(findings, steps)
+    # {pass, attention, fail}. "steps" = the controls exercised (nav + dropdowns
+    # + dialogs). A "failed" step is a FAILED INTERACTION (a click that didn't
+    # work) — NOT a benign console error (e.g. the portal's expected 401s), which
+    # is informational and only nudges the verdict to "attention".
+    steps = cov["nav"] + cov["dropdowns"] + cov["dialogs"]
+    interaction_failures, console_errors = _classify_findings(report_md)
+    failed = min(interaction_failures, steps)
     passed = max(0, steps - failed)
-    if not logged_in:
-        verdict = "fail"
-    elif findings > 0:
-        verdict = "attention"
-    else:
-        verdict = "pass"
+    verdict = _verdict(logged_in, failed, steps, console_errors)
 
     run_dir = dest_parent / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -122,11 +150,10 @@ def publish_as_tfactory_spec(portal_key: str, report_dir: Path, run_id: str) -> 
     report_md = (report_dir / "report.md").read_text(encoding="utf-8")
     cov = _parse_coverage(report_md)
     logged_in = _logged_in(report_md)
-    findings = cov["findings"]
-    verdict = (
-        "pass"
-        if (logged_in and findings == 0)
-        else ("attention" if logged_in else "fail")
+    interaction_failures, console_errors = _classify_findings(report_md)
+    steps = cov["nav"] + cov["dropdowns"] + cov["dialogs"]
+    verdict = _verdict(
+        logged_in, min(interaction_failures, steps), steps, console_errors
     )
 
     spec_dir = tfactory_workspace_root() / "workspaces" / "portal-ui" / "specs" / run_id
@@ -153,7 +180,11 @@ def publish_as_tfactory_spec(portal_key: str, report_dir: Path, run_id: str) -> 
         json.dumps(
             {
                 "verdict": verdict,
-                "counts": {"steps": cov["screenshots"], "findings": findings},
+                "counts": {
+                    "controls": cov["nav"] + cov["dropdowns"] + cov["dialogs"],
+                    "interaction_failures": interaction_failures,
+                    "console_errors": console_errors,
+                },
             },
             indent=2,
         ),

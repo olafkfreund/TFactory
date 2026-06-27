@@ -48,7 +48,7 @@ def test_adapter_builds_visual_inspection_run(tmp_path):
     meta = json.loads((run_dir / "meta.json").read_text())
     # Canonical Visual Inspection schema (what the tab renders).
     assert meta["verdict"] == "pass"
-    assert meta["counts"] == {"steps": 14, "passed": 14, "failed": 0}
+    assert meta["counts"] == {"steps": 17, "passed": 17, "failed": 0}
     assert meta["coverage"]["findings"] == 0
     assert meta["portal"] == "tfactory"
     assert (run_dir / "screenshots" / "01-landing.png").is_file()
@@ -69,8 +69,9 @@ def test_adapter_verdict_attention_on_findings(tmp_path):
             / "meta.json"
         ).read_text()
     )
+    # A console error → attention, but it is NOT a failed interaction.
     assert meta["verdict"] == "attention"
-    assert meta["counts"] == {"steps": 10, "passed": 7, "failed": 3}
+    assert meta["counts"] == {"steps": 10, "passed": 10, "failed": 0}
 
 
 def test_job_mounts_data_pvc_and_pull_secret():
@@ -105,3 +106,25 @@ def test_publish_as_tfactory_spec(tmp_path, monkeypatch):
     assert status["verdict"] == "pass"
     assert (spec_dir / "screenshots" / "01-landing.png").is_file()
     assert (spec_dir / "findings" / "verdicts.json").is_file()
+
+
+def test_adapter_counts_interaction_failures(tmp_path):
+    from portal_testing.visual_inspection_adapter import build_run_dir
+    import json
+
+    rd = tmp_path / "p"
+    rd.mkdir()
+    (rd / "report.md").write_text(
+        "# P\nlogged in: **True**\n\n## Coverage\n\n"
+        "| N | D | Dl | S | F |\n|-|-|-|-|-|\n| 5 | 0 | 0 | 3 | 2 |\n\n"
+        "## Findings\n\n- **Interaction failed** on Tests (nav): click failed\n"
+        "- **Console error** on Files\n\n## Walkthrough\n"
+    )
+    meta = json.loads(
+        (
+            build_run_dir("pfactory", rd, "r", dest_parent=tmp_path / "v") / "meta.json"
+        ).read_text()
+    )
+    # 1 of 5 failed → not a majority → attention (the test still ran).
+    assert meta["verdict"] == "attention"
+    assert meta["counts"] == {"steps": 5, "passed": 4, "failed": 1}

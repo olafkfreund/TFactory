@@ -121,12 +121,28 @@ def ensure_logged_in(page: Page, portal: config.Portal, auth: config.Auth) -> di
         if not auth.totp_secret:
             info["notes"].append("OTP required but TEST_TOTP_SECRET not set")
             return info
-        page.locator(_OTP_SEL).first.fill(pyotp.TOTP(auth.totp_secret).now())
-        _click_first(page, _SUBMIT_SEL)
-        try:
-            page.wait_for_load_state("networkidle", timeout=15000)
-        except PWTimeout:
-            page.wait_for_timeout(3000)
+        totp = pyotp.TOTP(auth.totp_secret)
+        # The OTP is time-boxed (30s). A code minted just before a window
+        # boundary can be rejected by the time it's submitted, and clock skew
+        # between the Job pod and Keycloak compounds it. Retry with a freshly
+        # minted code (waiting a beat to land in a clean window) so a transient
+        # "Invalid authenticator code" doesn't fail the whole run.
+        for attempt in range(3):
+            field = page.locator(_OTP_SEL).first
+            if not field.count():
+                break  # OTP accepted — moved off the form
+            field.fill("")
+            field.fill(totp.now())
+            _click_first(page, _SUBMIT_SEL)
+            try:
+                page.wait_for_load_state("networkidle", timeout=15000)
+            except PWTimeout:
+                page.wait_for_timeout(3000)
+            if not page.locator(_OTP_SEL).count():
+                break  # left the OTP form → success
+            if attempt < 2:
+                info["notes"].append(f"OTP retry {attempt + 1} (code rejected)")
+                page.wait_for_timeout(2000)  # let the time window roll over
 
     info["logged_in"] = not on_keycloak(page) and not page.locator(_USER_SEL).count()
     if not info["logged_in"]:
