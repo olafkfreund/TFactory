@@ -21,6 +21,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from agents.regression._io import write_json
+
 _QUARANTINE_FILE = "quarantine.json"
 
 
@@ -66,13 +68,6 @@ def _read(path: Path) -> dict[str, dict[str, Any]]:
         return {}
 
 
-def _write(path: Path, data: dict[str, dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, sort_keys=True))
-    tmp.replace(path)
-
-
 def load_quarantine(path: Path) -> dict[str, QuarantineEntry]:
     """Return all quarantine entries keyed by ``test_id``."""
     return {tid: QuarantineEntry.from_dict(tid, d) for tid, d in _read(path).items()}
@@ -91,7 +86,7 @@ def add_to_quarantine(path: Path, entry: QuarantineEntry) -> None:
     """Quarantine *entry*'s test (idempotent upsert; persisted atomically)."""
     data = _read(path)
     data[entry.test_id] = entry.to_dict()
-    _write(path, data)
+    write_json(path, data)
 
 
 def release_from_quarantine(path: Path, test_id: str) -> bool:
@@ -100,5 +95,5 @@ def release_from_quarantine(path: Path, test_id: str) -> bool:
     if test_id not in data:
         return False
     del data[test_id]
-    _write(path, data)
+    write_json(path, data)
     return True

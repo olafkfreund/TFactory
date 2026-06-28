@@ -19,6 +19,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from agents.regression._io import write_json
+
 from .models import RegressionRun
 
 _LATEST = "latest.json"
@@ -28,14 +30,6 @@ _BASELINE = "baseline.json"
 def regression_dir(workspace_root: Path, project_id: str) -> Path:
     """Return the per-project regression directory (not created)."""
     return Path(workspace_root) / project_id / "regression"
-
-
-def _write_json(path: Path, data: dict[str, Any]) -> None:
-    """Persist *data* atomically (write-temp-then-rename)."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, sort_keys=True))
-    tmp.replace(path)
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -56,11 +50,11 @@ def save_run(reg_dir: Path, run: RegressionRun, *, set_latest: bool = True) -> P
     diff against.
     """
     path = reg_dir / f"{run.run_id}.json"
-    _write_json(path, run.to_dict())
+    write_json(path, run.to_dict())
     if set_latest:
-        _write_json(reg_dir / _LATEST, {"run_id": run.run_id})
+        write_json(reg_dir / _LATEST, {"run_id": run.run_id})
     if _read_json(reg_dir / _BASELINE) is None:
-        _write_json(reg_dir / _BASELINE, {"run_id": run.run_id})
+        write_json(reg_dir / _BASELINE, {"run_id": run.run_id})
     return path
 
 
@@ -90,7 +84,7 @@ def set_baseline(reg_dir: Path, run_id: str) -> None:
     """Pin *run_id* as the baseline for future diffs (operator action)."""
     if not (reg_dir / f"{run_id}.json").exists():
         raise FileNotFoundError(f"no such regression run: {run_id}")
-    _write_json(reg_dir / _BASELINE, {"run_id": run_id})
+    write_json(reg_dir / _BASELINE, {"run_id": run_id})
 
 
 def list_runs(reg_dir: Path) -> list[str]:
