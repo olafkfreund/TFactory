@@ -15,6 +15,10 @@ from pydantic import BaseModel, Field
 
 from ._specpath import safe_join
 
+# Single source of truth for the gh-CLI wrapper lives in github.py (its heaviest
+# user); re-exported here so existing `from .git import run_gh_command` resolves.
+from .github import run_gh_command
+
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
@@ -1281,36 +1285,6 @@ class CreateReleaseRequest(BaseModel):
     version: str
     releaseNotes: str
     platform: str = "github"
-
-
-def run_gh_command(args: list[str], cwd: str) -> dict:
-    """Run a gh CLI command and return result.
-
-    Args:
-        args: Command arguments (without 'gh' prefix)
-        cwd: Working directory for command execution
-
-    Returns:
-        Dict with success status, output or error message
-    """
-    try:
-        result = subprocess.run(
-            ["gh"] + args,
-            capture_output=True,
-            text=True,
-            cwd=cwd,
-            timeout=30
-        )
-        if result.returncode != 0:
-            return {"success": False, "error": result.stderr.strip()}
-        return {"success": True, "output": result.stdout.strip()}
-    except FileNotFoundError:
-        return {"success": False, "error": "GitHub CLI (gh) not installed"}
-    except subprocess.TimeoutExpired:
-        return {"success": False, "error": "Command timed out"}
-    except Exception:
-        logger.exception("GitHub CLI command failed")
-        return {"success": False, "error": "Failed to run GitHub CLI command"}
 
 
 @releases_router.post("")
