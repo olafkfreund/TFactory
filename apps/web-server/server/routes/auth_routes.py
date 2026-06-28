@@ -87,7 +87,7 @@ class MessageResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _create_access_token(user: User) -> str:
+def create_access_token(user: User) -> str:
     """Create a short-lived access token containing user claims."""
     settings = get_settings()
     expires = datetime.now(timezone.utc) + timedelta(
@@ -260,7 +260,7 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
 
     return AuthResponse(
         user=UserResponse.model_validate(user),
-        access_token=_create_access_token(user),
+        access_token=create_access_token(user),
         refresh_token=_create_refresh_token(user),
     )
 
@@ -296,7 +296,7 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
 
     return AuthResponse(
         user=UserResponse.model_validate(user),
-        access_token=_create_access_token(user),
+        access_token=create_access_token(user),
         refresh_token=_create_refresh_token(user),
     )
 
@@ -352,7 +352,7 @@ async def refresh(body: RefreshRequest, db: AsyncSession = Depends(get_db)):
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    return TokenResponse(access_token=_create_access_token(user))
+    return TokenResponse(access_token=create_access_token(user))
 
 
 @router.post(
