@@ -25,6 +25,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from agents._mutation_common import mutate_first_assertion
+
 
 class JavaMutationVerdict(str, Enum):
     KILLED = "killed"  # mutant failed — assertion is meaningful
@@ -73,17 +75,7 @@ def _mutate_line(line: str) -> tuple[str, str] | None:
 
 def mutate_source(source: str) -> tuple[str | None, str | None]:
     """Mutate the first applicable assertion. Returns (mutated_source, desc)."""
-    lines = source.splitlines(keepends=True)
-    for i, line in enumerate(lines):
-        result = _mutate_line(line)
-        if result:
-            mutated_line, desc = result
-            # preserve the original line ending
-            if line.endswith("\n") and not mutated_line.endswith("\n"):
-                mutated_line += "\n"
-            lines[i] = mutated_line
-            return "".join(lines), desc
-    return None, None
+    return mutate_first_assertion(source, _mutate_line)
 
 
 def run_java_mutate_probe(
