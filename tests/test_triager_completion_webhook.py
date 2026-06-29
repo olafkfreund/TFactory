@@ -201,11 +201,10 @@ def test_envelope_has_normalized_header(
         tmp_path, status="triaged", phase="triager_complete", committed_count=3
     )
     env = _completed_envelope(tmp_path)
-    assert env["schema_version"] == "1.2"
-    assert env["event"] == "completion"
     assert env["service"] == "tfactory"
     assert env["outcome"] == "success"
-    assert env["correlation_id"] is None  # no issue number on this run
+    # #471 cutover: correlation_id dropped; the chain block carries the issue.
+    assert env["correlation"]["issue_number"] is None  # no issue number on this run
     assert env["result"] == {"committed_count": 3}
     # backward-compat flat fields still present
     assert env["task_id"] == "042" and env["status"] == "triaged"
@@ -213,7 +212,9 @@ def test_envelope_has_normalized_header(
 
 # ─── RFC-0001 conformance (#211) ────────────────────────────────────────
 
-_RFC_CORE = {"correlation_key", "service", "task_id", "status", "phase", "updated_at"}
+# #471 cutover: ``time`` (CloudEvents) replaced the legacy ``updated_at`` as the
+# canonical occurrence timestamp.
+_RFC_CORE = {"correlation_key", "service", "task_id", "status", "phase", "time"}
 
 
 def test_envelope_has_rfc0001_core_fields(
@@ -316,7 +317,7 @@ def test_envelope_correlation_id_from_source(
     )
     _write_status_patch(tmp_path, status="triaged")
     env = _completed_envelope(tmp_path)
-    assert env["correlation_id"] == 412
+    assert env["correlation"]["issue_number"] == 412
     assert env["branch"] == "feat/x" and env["repo"] == "o/r"
 
 
@@ -338,22 +339,20 @@ def test_envelope_keeps_legacy_fields(
     _seed_status(tmp_path)
     _write_status_patch(tmp_path, status="triaged")
     env = _completed_envelope(tmp_path)
-    for legacy in (
+    # #471 cutover: updated_at/schema_version/event no longer emitted.
+    for field in (
         "correlation_key",
         "service",
         "task_id",
         "status",
         "phase",
-        "updated_at",
-        "schema_version",
-        "event",
         "outcome",
         "correlation",
         "result",
         "usage",
         "emitted_at",
     ):
-        assert legacy in env, legacy
+        assert field in env, field
 
 
 def test_envelope_has_idempotency_id(
@@ -376,7 +375,7 @@ def test_envelope_has_cloudevents_core(
     assert env["specversion"] == "1.0"
     assert env["type"] == "io.factory.tfactory.completion"
     assert env["source"] == "/tfactory"
-    assert env["time"] == env["updated_at"]  # CloudEvents time mirrors occurrence
+    assert env["time"]  # #471: CloudEvents time is the canonical occurrence timestamp
 
 
 def test_envelope_source_overridable(

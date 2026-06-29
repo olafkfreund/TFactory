@@ -56,23 +56,12 @@ def test_schema_title_matches_version():
     )
 
 
-def test_triager_constant_is_the_shared_source_of_truth():
-    """The backend producer stamps the shared constant — no private literal."""
-    from agents import triager
-
-    assert triager._COMPLETION_SCHEMA_VERSION == cs.COMPLETION_SCHEMA_VERSION
-
-
-def test_emitted_envelope_schema_version_matches_schema():
-    """End-to-end: the value the Triager writes into the envelope equals the
-    version the published JSON schema declares."""
-    from agents.triager import _build_completion_envelope
-
-    env = _build_completion_envelope(
-        Path("/tmp/nonexistent-spec-dir-for-version-check"),
-        {"status": "triaged", "phase": "test", "task_id": "t-1"},
-    )
-    assert env["schema_version"] == cs.COMPLETION_SCHEMA_VERSION
+# #471 cutover: the Triager no longer stamps ``schema_version`` into the envelope
+# (the legacy field was dropped), so the two tests that asserted the emitted value
+# (``test_triager_constant_is_the_shared_source_of_truth`` and
+# ``test_emitted_envelope_schema_version_matches_schema``) were removed. The schema
+# ``$id`` version + the web-server's reported version remain the source of truth,
+# guarded by the tests below.
 
 
 def test_both_apps_report_the_same_schema_version():
