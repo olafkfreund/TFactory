@@ -67,11 +67,20 @@ async def run_verify_pipeline(
     os.environ["TFACTORY_AUTO_EVALUATE"] = "0"
     os.environ["TFACTORY_AUTO_TRIAGE"] = "0"
 
+    from agents.deploy_lane import maybe_run_deploy_lane  # noqa: PLC0415
     from agents.evaluator import run_evaluator  # noqa: PLC0415 - lazy by design
     from agents.triager import run_triager  # noqa: PLC0415 - lazy by design
     from agents.workspace_status import read_status  # noqa: PLC0415 - lazy by design
 
     eval_ok = await run_evaluator(spec_dir, project_dir, mode=mode)  # type: ignore[arg-type]
+
+    # RFC-0013 deploy gate (#597): when the contract marks the change high-risk or
+    # production, run the DRY-RUN deploy lane and persist the proof BEFORE triage,
+    # so the triager's deploy-gate (_deploy_gate_annotation) reads a real
+    # verification instead of always holding for a missing proof. Best-effort +
+    # DRY-RUN only — never blocks the pipeline on its own.
+    maybe_run_deploy_lane(spec_dir, project_dir)
+
     # Always attempt triage even on a soft evaluator miss: an empty/failed
     # evaluation still needs the triager to render the honest report. A hard
     # evaluator crash already wrote evaluator_failed to status.json.
