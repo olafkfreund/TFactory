@@ -39,9 +39,6 @@ from agents.completion_envelope import (
     CompletionEnvelope,
     CompletionEvidence,
 )
-from agents.completion_schema import (  # noqa: E402 - agents pkg resolved via sys.path
-    COMPLETION_SCHEMA_VERSION as _COMPLETION_SCHEMA_VERSION,
-)
 from agents.workspace_status import (
     now_iso,
     read_status,
@@ -606,7 +603,6 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> CompletionEnvelo
         "task_id": status.get("task_id") or spec_dir.name,
         "status": status_value,
         "phase": status.get("phase") or "test",
-        "updated_at": when,
         # RFC-0001 §4 optional chain block (upstream/downstream links).
         "correlation": {
             "issue_number": issue_number,
@@ -614,11 +610,9 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> CompletionEnvelo
             "branch": source.get("branch"),
             "pr_number": source.get("pr_number") or None,
         },
-        # Additive TFactory detail (RFC §7 — extra fields are allowed) + the
-        # #85/#198 flat fields retained for backward-compat.
-        "schema_version": _COMPLETION_SCHEMA_VERSION,
-        "event": "completion",
-        "correlation_id": issue_number,
+        # Additive TFactory detail (RFC §7 — extra fields are allowed). #471
+        # cutover: the legacy schema_version/event/correlation_id/updated_at
+        # duplicates were dropped — CloudEvents-core (below) is canonical.
         "project_id": status.get("project_id"),
         "spec_id": status.get("spec_id") or source.get("spec_id"),
         "outcome": outcome,
