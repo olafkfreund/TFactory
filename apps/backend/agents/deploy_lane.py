@@ -28,6 +28,26 @@ from tools.runners.lane_dispatch import dispatch_deploy_lane
 _IAC_NAMES = ("Chart.yaml", "values.yaml", "kustomization.yaml")
 
 
+def _persist_deploy_verification(
+    spec_dir: Path, verification: dict[str, object]
+) -> None:
+    """Write the gate-normalized VAL block to ``findings/deploy_verification.json``
+    — the exact artifact the triager's deploy-gate reads. Mirrors the persistence
+    ``lane_dispatch.dispatch_deploy_lane`` does for the local path, so the Nix
+    path produces the same proof file. Best-effort: a write error is swallowed
+    (deploy gating must never break the verify pipeline)."""
+    import json  # noqa: PLC0415 - lazy
+
+    try:
+        findings = spec_dir / "findings"
+        findings.mkdir(parents=True, exist_ok=True)
+        (findings / "deploy_verification.json").write_text(
+            json.dumps(verification, indent=2)
+        )
+    except OSError:
+        pass
+
+
 def _discover_deploy_files(project_dir: Path) -> list[str]:
     """Repo-relative paths of the IaC files the deploy lane keys on.
 
@@ -122,8 +142,29 @@ def maybe_run_deploy_lane(
             else None
         )
 
+        files = _discover_deploy_files(Path(project_dir))
+
+        # Prefer the per-task Nix-Job substrate: the live verify pod ships no
+        # deploy toolchain, so only the Nix path can produce a *real* proof there
+        # (#597). Tests inject ``run_fn`` to drive the deterministic local path;
+        # live runs (run_fn is None) try the Nix Job first and fall back to the
+        # local runner when the sandbox isn't configured (dev/CI).
+        if run_fn is None:
+            from agents.nix_env import run_deploy_lane_via_nix  # noqa: PLC0415 - lazy
+
+            nix_result = run_deploy_lane_via_nix(
+                Path(project_dir),
+                files=files,
+                required_scans=required_scans,
+                target_level=requirement.target_level,
+            )
+            if nix_result is not None:
+                verification: dict[str, object] = nix_result.verification
+                _persist_deploy_verification(Path(spec_dir), verification)
+                return verification
+
         result = dispatch_deploy_lane(
-            files=_discover_deploy_files(Path(project_dir)),
+            files=files,
             required_scans=required_scans,
             target_level=requirement.target_level,
             spec_dir=Path(spec_dir),
@@ -132,7 +173,7 @@ def maybe_run_deploy_lane(
         )
         if result.deploy_result is None:
             return None
-        verification: dict[str, object] = result.deploy_result.verification
+        verification = result.deploy_result.verification
         return verification
     except Exception:  # noqa: BLE001 - deploy gating must never break the verify pipeline
         return None

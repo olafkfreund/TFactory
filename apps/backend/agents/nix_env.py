@@ -36,6 +36,7 @@ from tools.runners.nix_provisioner import (
 
 if TYPE_CHECKING:
     from agents.execution_sandbox import ExecutionSandbox
+    from tools.runners.deploy_runner import DeployLaneResult
     from tools.runners.kube_sandbox import KubeJobSandbox
 
 _log = logging.getLogger(__name__)
@@ -121,7 +122,17 @@ _PW_CONFIG = "_tf_pw.config.ts"
 _SHOTS = "shots"
 _PYTEST_STAGE = ".tf_pytest"  # staged junit/coverage the Nix Job writes back
 _GOTEST_STAGE = ".tf_gotest"  # staged junit/coverage the Go Nix Job writes back
+_DEPLOY_STAGE = ".tf_deploy"  # generated deploy flake dir (co-mounted in the Job)
 _NIX_MOUNT = "/work"  # where KubeJobSandbox co-mounts the worktree in the Job
+
+# The deploy-lane tools we can run hermetically inside a per-task Nix Job (#597):
+# tfsec + checkov are static IaC scanners — offline, free in nixpkgs, no cluster
+# and no ``terraform init``/providers. ``terraform plan`` (unfree provider + init)
+# and ``kubectl apply --dry-run=server`` (live cluster API + RBAC) need more than
+# a hermetic Job offers, so they stay an honest ``not_run`` until the VAL-2 rung
+# is wired (see #597 follow-up). A tool absent from this set is never a silent
+# pass — ``run_deploy_lane``'s ``tool_available`` records it as ``not_run``.
+_DEPLOY_NIX_TOOLS: tuple[str, ...] = ("tfsec", "checkov")
 
 
 def run_pytest_lane_via_nix(
@@ -373,6 +384,161 @@ def _parse_exit_marker(output: str | None, prefix: str) -> int:
 def _parse_pytest_exit(output: str | None) -> int:
     """Recover the pytest exit code from the ``__PYTEST_EXIT=<n>`` marker line."""
     return _parse_exit_marker(output, "__PYTEST_EXIT=")
+
+
+def _slice_marked_segment(output: str, begin: str, end_prefix: str) -> str:
+    """Return the text between a ``begin`` marker line and the next ``end_prefix``
+    marker line — one deploy step's captured output. Best-effort: returns "" when
+    the markers aren't both present (the step's status still comes from the exit
+    marker, so a missing segment never changes the verdict)."""
+    lines = (output or "").splitlines()
+    try:
+        start = next(i for i, ln in enumerate(lines) if ln.strip() == begin)
+    except StopIteration:
+        return ""
+    seg: list[str] = []
+    for ln in lines[start + 1 :]:
+        if ln.startswith(end_prefix):
+            break
+        seg.append(ln)
+    return "\n".join(seg)
+
+
+def deploy_environment() -> dict[str, object]:
+    """Synthesize the Nix env manifest for the DRY-RUN deploy lane (#597).
+
+    The deploy *verifier's* toolchain — not the app's — so it is synthesized here
+    rather than read from the contract ``environment`` (which declares the build/
+    test toolchain). Pins the static IaC scanners we can run hermetically in a Job
+    (:data:`_DEPLOY_NIX_TOOLS`); the heavier dry-run rungs ride the #597 follow-up.
+    Mirrors :func:`go_environment`'s synthesis shape so ``generate_flake`` renders
+    a reproducible single-devShell flake.
+    """
+    return {
+        "language": "python",  # harmless base shell; the scanners ride as system_packages
+        "toolchain": {},
+        "system_packages": list(_DEPLOY_NIX_TOOLS),
+        "verify_commands": [],
+        "provisioning": {"method": "nix", "generated": True},
+        "network": "none",
+    }
+
+
+def run_deploy_lane_via_nix(  # noqa: PLR0913 - explicit keyword-only deploy-lane knobs
+    project_dir: Path,
+    *,
+    files: list[str],
+    required_scans: list[str] | None = None,
+    target_level: str = "VAL-2",
+    sandbox: ExecutionSandbox | None = None,
+    timeout: int = 600,
+) -> DeployLaneResult | None:
+    """Run the RFC-0013 DRY-RUN deploy lane inside a per-task Nix Job (#597).
+
+    The live k3d verify pod ships no terraform/helm/kubectl/scanners, so the
+    deploy executor's local runner could only ever record an honest ``not_run``
+    (VAL-0). This mirrors :func:`run_gotest_lane_via_nix`: it writes a generated
+    deploy flake into a dedicated ``.tf_deploy`` dir in the co-mounted worktree
+    (never clobbering an app-owned ``flake.nix``), runs the available-tool deploy
+    steps in ONE Nix Job against the IaC at the worktree root, recovers each
+    step's exit code from a marker line, then feeds the results to
+    :func:`run_deploy_lane` so the honest, gate-normalized VAL block is built by
+    the same code the local path uses (a tool absent from the flake stays an
+    honest ``not_run`` — never a silent pass).
+
+    Returns a :class:`DeployLaneResult`, or ``None`` when the Nix sandbox isn't
+    configured or no deploy step can run in-Job (caller falls back to the local
+    runner, which yields the same honest block).
+    """
+    from tools.runners.deploy_runner import (  # noqa: PLC0415 - lazy, avoids import cost
+        StepResult,
+        plan_deploy_steps,
+        run_deploy_lane,
+    )
+
+    sandbox = sandbox if sandbox is not None else nix_runner_from_env()
+    if sandbox is None:
+        _log.info("run_deploy_lane_via_nix: TFACTORY_NIX_RUNNER_IMAGE unset; skipping")
+        return None
+
+    available = set(_DEPLOY_NIX_TOOLS)
+    planned = plan_deploy_steps(files, required_scans=required_scans)
+    runnable = [s for s in planned if s.tool in available]
+    if not runnable:
+        # No deploy step is runnable in a hermetic Job; let the caller fall back
+        # to the local runner (which produces the identical honest not_run block).
+        return None
+
+    pd = Path(project_dir)
+    mount = _NIX_MOUNT
+
+    # Write the generated deploy flake into a dedicated subdir so it never
+    # overwrites an app-owned flake.nix at the worktree root.
+    flake_dir = pd / _DEPLOY_STAGE
+    flake_dir.mkdir(parents=True, exist_ok=True)
+    (flake_dir / _FLAKE).write_text(
+        generate_flake(deploy_environment()), encoding="utf-8"
+    )
+
+    # One Job runs every runnable step, each bracketed by markers so we can
+    # recover per-step status + output. ``cd`` to the worktree root so the
+    # scanners see the IaC; ``set +e`` keeps a failing scan from aborting the rest.
+    body = [f"cd {mount}"]
+    for i, step in enumerate(runnable):
+        argv = " ".join(_shquote(a) for a in step.argv)
+        body.append(f"echo __DEPLOY_STEP_{i}_BEGIN")
+        body.append(f"{argv}; echo __DEPLOY_STEP_{i}_EXIT=$?")
+    (pd / _JOB_SCRIPT).write_text(
+        "#!/usr/bin/env bash\nset +e\n" + "\n".join(body) + "\n", encoding="utf-8"
+    )
+
+    job_cmd = (
+        f"nix develop path:{mount}/{_DEPLOY_STAGE}#default "
+        f"--command bash {mount}/{_JOB_SCRIPT}"
+    )
+    try:
+        res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)
+    finally:
+        (pd / _JOB_SCRIPT).unlink(missing_ok=True)
+
+    out = res.stdout or ""
+    precomputed: dict[tuple[str, ...], StepResult] = {}
+    for i, step in enumerate(runnable):
+        code = _parse_exit_marker(out, f"__DEPLOY_STEP_{i}_EXIT=")
+        seg = _slice_marked_segment(
+            out, f"__DEPLOY_STEP_{i}_BEGIN", f"__DEPLOY_STEP_{i}_EXIT="
+        )
+        status = "passed" if code == 0 else "failed"
+        precomputed[tuple(step.argv)] = StepResult(
+            name=step.name,
+            level=step.level,
+            status=status,
+            returncode=code,
+            reason=None if status == "passed" else f"exit {code}",
+            output=seg,
+        )
+
+    def _run_fn(argv: tuple[str, ...]) -> StepResult:
+        return precomputed.get(
+            tuple(argv),
+            StepResult(
+                name=argv[0],
+                level="VAL-0",
+                status="not_run",
+                reason="step not executed in deploy Job",
+            ),
+        )
+
+    # Rebuild the honest VAL block through the shared core: tool_available reflects
+    # exactly what the deploy flake provides, so terraform/kubectl/prowler are an
+    # honest not_run while tfsec/checkov carry their real Job verdict.
+    return run_deploy_lane(
+        files,
+        required_scans=required_scans,
+        target_level=target_level,
+        run_fn=_run_fn,
+        tool_available=lambda t: t in available,
+    )
 
 
 def _stage_browser_specs(spec_dir: Path, project_dir: Path) -> int:
