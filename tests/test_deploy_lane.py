@@ -135,31 +135,29 @@ class _FakeSandbox:
         return _FakeJobResult(self._stdout)
 
 
-def _two_scanner_stdout(exit0: int = 0, exit1: int = 0) -> str:
-    """Job stdout for the two runnable deploy steps of a ``main.tf`` fixture
-    (index 0 = tfsec, index 1 = checkov), each bracketed by exit markers."""
+def _tfsec_stdout(exit0: int = 0) -> str:
+    """Job stdout for the single runnable deploy step of a ``main.tf`` fixture
+    (index 0 = tfsec — the only tool in the hermetic deploy flake), bracketed by
+    exit markers."""
     return "\n".join(
         [
             "__DEPLOY_STEP_0_BEGIN",
             "tfsec: no problems detected",
             f"__DEPLOY_STEP_0_EXIT={exit0}",
-            "__DEPLOY_STEP_1_BEGIN",
-            "checkov: passed all checks",
-            f"__DEPLOY_STEP_1_EXIT={exit1}",
         ]
     )
 
 
-def test_run_deploy_lane_via_nix_runs_scanners_in_one_job(tmp_path: Path) -> None:
-    """The Nix path runs tfsec+checkov in ONE Job, writes the flake to a dedicated
-    subdir (never clobbering an app flake), and builds an honest VAL-0 proof: the
-    scanners that ran carry their real verdict while terraform stays not_run."""
+def test_run_deploy_lane_via_nix_runs_scanner_in_one_job(tmp_path: Path) -> None:
+    """The Nix path runs tfsec in ONE Job, writes the flake to a dedicated subdir
+    (never clobbering an app flake), and builds an honest VAL-0 proof: the scanner
+    that ran carries its real verdict while terraform/checkov stay not_run."""
     from agents.nix_env import run_deploy_lane_via_nix
 
     project = tmp_path / "project"
     project.mkdir()
     (project / "main.tf").write_text('resource "null_resource" "x" {}')
-    sandbox = _FakeSandbox(_two_scanner_stdout())
+    sandbox = _FakeSandbox(_tfsec_stdout())
 
     result = run_deploy_lane_via_nix(project, files=["main.tf"], sandbox=sandbox)
 
@@ -171,11 +169,11 @@ def test_run_deploy_lane_via_nix_runs_scanners_in_one_job(tmp_path: Path) -> Non
     assert not (project / "flake.nix").exists()
     by_name = {s.name: s.status for s in result.steps}
     assert by_name["tfsec"] == "passed"
-    assert by_name["checkov"] == "passed"
-    # terraform/kubectl/prowler aren't in the deploy flake → honest not_run.
+    # checkov/terraform/kubectl/prowler aren't in the deploy flake → honest not_run.
+    assert by_name["checkov"] == "not_run"
     assert by_name["terraform-validate"] == "not_run"
     assert by_name["terraform-plan"] == "not_run"
-    # Exactly one Job ran both scanners.
+    # Exactly one Job ran the scanner.
     assert len(sandbox.calls) == 1
 
 
@@ -202,13 +200,13 @@ def test_run_deploy_lane_via_nix_failed_scan_is_not_a_silent_pass(
     project = tmp_path / "project"
     project.mkdir()
     (project / "main.tf").write_text('resource "null_resource" "x" {}')
-    sandbox = _FakeSandbox(_two_scanner_stdout(exit1=1))
+    sandbox = _FakeSandbox(_tfsec_stdout(exit0=1))
 
     result = run_deploy_lane_via_nix(project, files=["main.tf"], sandbox=sandbox)
 
     assert result is not None
     assert result.ok is False
-    assert {s.name: s.status for s in result.steps}["checkov"] == "failed"
+    assert {s.name: s.status for s in result.steps}["tfsec"] == "failed"
 
 
 def test_maybe_run_deploy_lane_prefers_nix_when_configured(
@@ -223,7 +221,7 @@ def test_maybe_run_deploy_lane_prefers_nix_when_configured(
     project.mkdir()
     (project / "main.tf").write_text('resource "null_resource" "x" {}')
     _write_contract(spec_dir, {"risk_class": "high"})
-    sandbox = _FakeSandbox(_two_scanner_stdout())
+    sandbox = _FakeSandbox(_tfsec_stdout())
     monkeypatch.setattr(nx, "nix_runner_from_env", lambda: sandbox)
 
     result = maybe_run_deploy_lane(spec_dir, project)  # run_fn=None → live Nix path
