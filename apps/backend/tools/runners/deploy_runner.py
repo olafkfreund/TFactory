@@ -168,9 +168,15 @@ SCAN_DESCRIPTORS: dict[str, dict] = {
         # on a HIGH/CRITICAL misconfig so the gate can hold. Replaces checkov, whose
         # insecure ``ecdsa`` transitive dep aborts flake eval (see ``nix_env``).
         "argv": (
-            "trivy", "config", ".",
-            "--skip-check-update", "--quiet",
-            "--severity", "HIGH,CRITICAL", "--exit-code", "1",
+            "trivy",
+            "config",
+            ".",
+            "--skip-check-update",
+            "--quiet",
+            "--severity",
+            "HIGH,CRITICAL",
+            "--exit-code",
+            "1",
         ),
         "detect": ("*.tf", "**/*.tf", "**/Chart.yaml", "k8s/**/*.yaml", "**/*.yaml"),
         "description": "Multi-framework IaC misconfig scan (Terraform, Helm, k8s, CFN).",
