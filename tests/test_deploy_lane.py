@@ -135,48 +135,57 @@ class _FakeSandbox:
         return _FakeJobResult(self._stdout)
 
 
-def _scanner_stdout(tfsec_exit: int = 0, trivy_exit: int = 0) -> str:
-    """Job stdout for the two runnable deploy steps of a ``main.tf`` fixture
-    (index 0 = tfsec, index 1 = trivy — the tools in the hermetic deploy flake),
-    each bracketed by exit markers."""
-    return "\n".join(
-        [
-            "__DEPLOY_STEP_0_BEGIN",
-            "tfsec: no problems detected",
-            f"__DEPLOY_STEP_0_EXIT={tfsec_exit}",
-            "__DEPLOY_STEP_1_BEGIN",
-            "trivy: no HIGH/CRITICAL misconfigurations",
-            f"__DEPLOY_STEP_1_EXIT={trivy_exit}",
+def _deploy_stdout(
+    *,
+    tf_init: int = 0,
+    tf_validate: int = 0,
+    tf_plan: int = 0,
+    tfsec: int = 0,
+    trivy: int = 0,
+) -> str:
+    """Job stdout for the five runnable deploy steps of a ``main.tf`` fixture, in
+    ``plan_deploy_steps`` order: terraform-init(0), terraform-validate(1),
+    terraform-plan(2), tfsec(3), trivy(4) — each bracketed by exit markers."""
+    exits = [tf_init, tf_validate, tf_plan, tfsec, trivy]
+    lines: list[str] = []
+    for i, code in enumerate(exits):
+        lines += [
+            f"__DEPLOY_STEP_{i}_BEGIN",
+            f"step {i}",
+            f"__DEPLOY_STEP_{i}_EXIT={code}",
         ]
-    )
+    return "\n".join(lines)
 
 
-def test_run_deploy_lane_via_nix_runs_scanners_in_one_job(tmp_path: Path) -> None:
-    """The Nix path runs tfsec+trivy in ONE Job, writes the flake to a dedicated
-    subdir (never clobbering an app flake), and builds an honest VAL-0 proof: the
-    scanners that ran carry their real verdict while terraform stays not_run."""
+def test_run_deploy_lane_via_nix_runs_terraform_and_scanners(tmp_path: Path) -> None:
+    """The Nix path runs the OpenTofu rung + tfsec/trivy in ONE Job, writes the
+    flake to a dedicated subdir (never clobbering an app flake), and reaches VAL-2
+    when terraform-plan passes (the dry-run ceiling); prowler stays not_run."""
     from agents.nix_env import run_deploy_lane_via_nix
 
     project = tmp_path / "project"
     project.mkdir()
     (project / "main.tf").write_text('resource "null_resource" "x" {}')
-    sandbox = _FakeSandbox(_scanner_stdout())
+    sandbox = _FakeSandbox(_deploy_stdout())
 
     result = run_deploy_lane_via_nix(project, files=["main.tf"], sandbox=sandbox)
 
     assert result is not None
-    assert result.verification["achieved_level"] == "VAL-0"
+    # terraform-plan (VAL-2) passed → achieved the dry-run ceiling.
+    assert result.verification["achieved_level"] == "VAL-2"
     # The generated deploy flake lives in the dedicated subdir, not the worktree
     # root, so it can never overwrite an app-owned flake.nix.
     assert (project / ".tf_deploy" / "flake.nix").exists()
     assert not (project / "flake.nix").exists()
     by_name = {s.name: s.status for s in result.steps}
+    assert by_name["terraform-init"] == "passed"
+    assert by_name["terraform-validate"] == "passed"
+    assert by_name["terraform-plan"] == "passed"
     assert by_name["tfsec"] == "passed"
     assert by_name["trivy"] == "passed"
-    # terraform/kubectl/prowler aren't in the deploy flake → honest not_run.
-    assert by_name["terraform-validate"] == "not_run"
-    assert by_name["terraform-plan"] == "not_run"
-    # Exactly one Job ran both scanners.
+    # prowler isn't in the deploy flake → honest not_run.
+    assert by_name["cloud-prowler"] == "not_run"
+    # Exactly one Job ran every step.
     assert len(sandbox.calls) == 1
 
 
@@ -204,7 +213,7 @@ def test_run_deploy_lane_via_nix_failed_scan_is_not_a_silent_pass(
     project.mkdir()
     (project / "main.tf").write_text('resource "null_resource" "x" {}')
     # trivy (the strict gate) exits non-zero on a HIGH/CRITICAL misconfig.
-    sandbox = _FakeSandbox(_scanner_stdout(trivy_exit=1))
+    sandbox = _FakeSandbox(_deploy_stdout(trivy=1))
 
     result = run_deploy_lane_via_nix(project, files=["main.tf"], sandbox=sandbox)
 
@@ -225,15 +234,15 @@ def test_maybe_run_deploy_lane_prefers_nix_when_configured(
     project.mkdir()
     (project / "main.tf").write_text('resource "null_resource" "x" {}')
     _write_contract(spec_dir, {"risk_class": "high"})
-    sandbox = _FakeSandbox(_scanner_stdout())
+    sandbox = _FakeSandbox(_deploy_stdout())
     monkeypatch.setattr(nx, "nix_runner_from_env", lambda: sandbox)
 
     result = maybe_run_deploy_lane(spec_dir, project)  # run_fn=None → live Nix path
 
     assert result is not None
-    assert result["achieved_level"] == "VAL-0"
+    assert result["achieved_level"] == "VAL-2"
     proof = json.loads((spec_dir / _PROOF).read_text())
-    assert proof["achieved_level"] == "VAL-0"
+    assert proof["achieved_level"] == "VAL-2"
     assert len(sandbox.calls) == 1
 
 
