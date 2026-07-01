@@ -11,8 +11,8 @@ What it runs (only the steps whose files are present in the change):
 
   - terraform : ``terraform validate`` (VAL-0) + ``terraform plan`` (VAL-2, no apply)
   - helm/k8s  : ``helm template | kubeconform`` and ``kubectl apply --dry-run=server``
-  - scans     : ``tfsec`` / ``checkov`` (IaC), reusing the cloud-prowler image for
-                container/cloud posture (descriptors in :data:`SCAN_DESCRIPTORS`).
+  - scans     : ``tfsec`` / ``trivy config`` (IaC), reusing the cloud-prowler image
+                for container/cloud posture (descriptors in :data:`SCAN_DESCRIPTORS`).
 
 Design: **pure command assembly + an injectable runner**. :func:`run_deploy_lane`
 takes a ``run_fn(argv) -> StepResult`` so it is fully unit-testable without any of
@@ -159,12 +159,21 @@ SCAN_DESCRIPTORS: dict[str, dict] = {
         "detect": ("*.tf", "**/*.tf"),
         "description": "IaC static analysis for Terraform (CVE/misconfig).",
     },
-    "checkov": {
-        "tool": "checkov",
+    "trivy": {
+        "tool": "trivy",
         "level": "VAL-0",
-        "argv": ("checkov", "-d", ".", "--compact", "--quiet"),
+        # ``config`` = misconfiguration scanning (Terraform, Helm, k8s, Dockerfile,
+        # CloudFormation). ``--skip-check-update`` uses trivy's embedded rego checks
+        # so the scan is hermetic (no ghcr fetch); ``--exit-code 1`` fails the step
+        # on a HIGH/CRITICAL misconfig so the gate can hold. Replaces checkov, whose
+        # insecure ``ecdsa`` transitive dep aborts flake eval (see ``nix_env``).
+        "argv": (
+            "trivy", "config", ".",
+            "--skip-check-update", "--quiet",
+            "--severity", "HIGH,CRITICAL", "--exit-code", "1",
+        ),
         "detect": ("*.tf", "**/*.tf", "**/Chart.yaml", "k8s/**/*.yaml", "**/*.yaml"),
-        "description": "Multi-framework IaC scan (Terraform, Helm, k8s, CFN).",
+        "description": "Multi-framework IaC misconfig scan (Terraform, Helm, k8s, CFN).",
     },
     "cloud-prowler": {
         "tool": "prowler",
@@ -256,8 +265,8 @@ def plan_deploy_steps(
     forced = {s.strip().lower() for s in (required_scans or [])}
     # Map RFC-0013 scan names onto the concrete scanners we run.
     _scan_aliases = {
-        "iac-scan": ("tfsec", "checkov"),
-        "sast": ("checkov",),
+        "iac-scan": ("tfsec", "trivy"),
+        "sast": ("trivy",),
         "secret-scan": (),  # handled by a dedicated lane, not assembled here
         "dependency-audit": (),
     }
