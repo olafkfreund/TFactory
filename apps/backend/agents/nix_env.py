@@ -126,19 +126,19 @@ _DEPLOY_STAGE = ".tf_deploy"  # generated deploy flake dir (co-mounted in the Jo
 _NIX_MOUNT = "/work"  # where KubeJobSandbox co-mounts the worktree in the Job
 
 # The deploy-lane tools we can run hermetically inside a per-task Nix Job (#597,
-# #603): both ``tfsec`` and ``trivy`` are pure Go binaries (no insecure transitive
-# deps), so their flake evaluates cleanly and they run offline with no cluster and
-# no ``terraform init``/providers — ``tfsec`` a terraform-specific report-only scan,
-# ``trivy config`` the multi-framework misconfig gate (with ``--skip-check-update``
-# for embedded rego checks). ``checkov`` was dropped (#603): in the pinned nixpkgs
-# it pulls ``python3.13-ecdsa`` marked insecure (CVE-2024-23342), so ``pkgs.checkov``
-# refuses to evaluate and aborts the whole ``nix develop`` (proven live 2026-06-30).
-# ``terraform plan`` (unfree provider + init) and ``kubectl apply --dry-run=server``
-# (live cluster API + RBAC) need more than a hermetic Job offers, so they stay an
-# honest ``not_run`` until the VAL-2 rung is wired (#603). A tool absent from this
-# set is never a silent pass — ``run_deploy_lane``'s ``tool_available`` records it
-# as ``not_run``.
-_DEPLOY_NIX_TOOLS: tuple[str, ...] = ("tfsec", "trivy")
+# #603): ``tfsec`` + ``trivy`` are pure Go binaries (no insecure transitive deps),
+# ``opentofu`` is the free Terraform (``tofu``) — all evaluate cleanly in the flake
+# and run offline with no cluster. ``tfsec`` = terraform report-only scan, ``trivy
+# config`` = multi-framework misconfig gate (``--skip-check-update`` = embedded
+# rego checks), ``opentofu`` = the ``tofu init``/``validate``/``plan`` rung
+# (init -backend=false installs any declared providers via the Job's network).
+# ``checkov`` was dropped (#603): in the pinned nixpkgs it pulls
+# ``python3.13-ecdsa`` marked insecure (CVE-2024-23342), so ``pkgs.checkov`` refuses
+# to evaluate and aborts the whole ``nix develop`` (proven live 2026-06-30). Unfree
+# ``terraform`` and ``kubectl apply --dry-run=server`` (live cluster API + RBAC)
+# stay an honest ``not_run``. A tool absent from this set is never a silent pass —
+# ``run_deploy_lane``'s ``tool_available`` records it as ``not_run``.
+_DEPLOY_NIX_TOOLS: tuple[str, ...] = ("tfsec", "trivy", "opentofu")
 
 
 def run_pytest_lane_via_nix(

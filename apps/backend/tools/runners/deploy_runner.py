@@ -9,7 +9,8 @@ fleet.
 
 What it runs (only the steps whose files are present in the change):
 
-  - terraform : ``terraform validate`` (VAL-0) + ``terraform plan`` (VAL-2, no apply)
+  - terraform : ``tofu init``/``validate`` (VAL-0) + ``tofu plan`` (VAL-2, no apply)
+                via OpenTofu (free/hermetic; unfree ``terraform`` won't nix-eval)
   - helm/k8s  : ``helm template | kubeconform`` and ``kubectl apply --dry-run=server``
   - scans     : ``tfsec`` / ``trivy config`` (IaC), reusing the cloud-prowler image
                 for container/cloud posture (descriptors in :data:`SCAN_DESCRIPTORS`).
@@ -225,12 +226,27 @@ def plan_deploy_steps(
     steps: list[DeployStep] = []
 
     if _matches(files, _TERRAFORM_GLOBS):
+        # OpenTofu (``tofu``) is the free, hermetic Terraform: it evaluates in the
+        # per-task Nix flake (unlike unfree ``terraform``) and needs no cluster.
+        # The steps run in one working dir (same Job / same cwd), so ``init``'s
+        # ``.terraform/`` persists to ``validate`` and ``plan``. ``init
+        # -backend=false`` skips backend config but still installs declared
+        # providers; ``validate``/``plan`` never apply.
+        steps.append(
+            DeployStep(
+                name="terraform-init",
+                level="VAL-0",
+                argv=("tofu", "init", "-backend=false", "-input=false", "-no-color"),
+                tool="opentofu",
+                kind="dry-run",
+            )
+        )
         steps.append(
             DeployStep(
                 name="terraform-validate",
                 level="VAL-0",
-                argv=("terraform", "validate"),
-                tool="terraform",
+                argv=("tofu", "validate", "-no-color"),
+                tool="opentofu",
                 kind="dry-run",
             )
         )
@@ -239,8 +255,8 @@ def plan_deploy_steps(
                 name="terraform-plan",
                 level="VAL-2",
                 # -input=false + no -auto-approve: a plan never applies.
-                argv=("terraform", "plan", "-input=false", "-lock=false"),
-                tool="terraform",
+                argv=("tofu", "plan", "-input=false", "-lock=false", "-no-color"),
+                tool="opentofu",
                 kind="dry-run",
             )
         )
