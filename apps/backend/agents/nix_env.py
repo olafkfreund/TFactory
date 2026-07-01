@@ -125,19 +125,20 @@ _GOTEST_STAGE = ".tf_gotest"  # staged junit/coverage the Go Nix Job writes back
 _DEPLOY_STAGE = ".tf_deploy"  # generated deploy flake dir (co-mounted in the Job)
 _NIX_MOUNT = "/work"  # where KubeJobSandbox co-mounts the worktree in the Job
 
-# The deploy-lane tools we can run hermetically inside a per-task Nix Job (#597):
-# ``tfsec`` is a static IaC scanner — offline, free, a pure Go binary (no insecure
-# transitive deps), so its flake evaluates cleanly and it runs with no cluster and
-# no ``terraform init``/providers. ``checkov`` is deliberately NOT here: in the
-# pinned nixpkgs it pulls ``python3.13-ecdsa`` which is marked insecure
-# (CVE-2024-23342), so ``pkgs.checkov`` refuses to evaluate and would abort the
-# whole ``nix develop`` (proven live, 2026-06-30) — re-add it (or switch to
-# ``trivy``) once that's resolved. ``terraform plan`` (unfree provider + init) and
-# ``kubectl apply --dry-run=server`` (live cluster API + RBAC) need more than a
-# hermetic Job offers, so they stay an honest ``not_run`` until the VAL-2 rung is
-# wired (see #597 follow-up). A tool absent from this set is never a silent pass —
-# ``run_deploy_lane``'s ``tool_available`` records it as ``not_run``.
-_DEPLOY_NIX_TOOLS: tuple[str, ...] = ("tfsec",)
+# The deploy-lane tools we can run hermetically inside a per-task Nix Job (#597,
+# #603): both ``tfsec`` and ``trivy`` are pure Go binaries (no insecure transitive
+# deps), so their flake evaluates cleanly and they run offline with no cluster and
+# no ``terraform init``/providers — ``tfsec`` a terraform-specific report-only scan,
+# ``trivy config`` the multi-framework misconfig gate (with ``--skip-check-update``
+# for embedded rego checks). ``checkov`` was dropped (#603): in the pinned nixpkgs
+# it pulls ``python3.13-ecdsa`` marked insecure (CVE-2024-23342), so ``pkgs.checkov``
+# refuses to evaluate and aborts the whole ``nix develop`` (proven live 2026-06-30).
+# ``terraform plan`` (unfree provider + init) and ``kubectl apply --dry-run=server``
+# (live cluster API + RBAC) need more than a hermetic Job offers, so they stay an
+# honest ``not_run`` until the VAL-2 rung is wired (#603). A tool absent from this
+# set is never a silent pass — ``run_deploy_lane``'s ``tool_available`` records it
+# as ``not_run``.
+_DEPLOY_NIX_TOOLS: tuple[str, ...] = ("tfsec", "trivy")
 
 
 def run_pytest_lane_via_nix(
@@ -536,7 +537,7 @@ def run_deploy_lane_via_nix(  # noqa: PLR0913 - explicit keyword-only deploy-lan
 
     # Rebuild the honest VAL block through the shared core: tool_available reflects
     # exactly what the deploy flake provides, so terraform/kubectl/prowler are an
-    # honest not_run while tfsec/checkov carry their real Job verdict.
+    # honest not_run while tfsec/trivy carry their real Job verdict.
     return run_deploy_lane(
         files,
         required_scans=required_scans,
