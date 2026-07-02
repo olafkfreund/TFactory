@@ -44,6 +44,7 @@ __all__ = [
 DEPLOY_LANE = "deploy"
 
 _HIGH_RISK = "high"
+_MEDIUM_RISK = "medium"
 _PRODUCTION = "production"
 
 
@@ -92,9 +93,16 @@ def _norm(value: object) -> str | None:
 def deploy_requirement_from_contract(contract: dict | None) -> DeployRequirement:
     """Derive the deploy-lane requirement from a contract's ``deployment`` block.
 
-    Returns ``required=True`` when ``risk_class == "high"`` or
-    ``production_classification == "production"`` (RFC-0013 §3). An absent
-    deployment block, or a low/medium non-prod one, yields ``required=False``.
+    Returns ``required=True`` when any of the following hold (RFC-0013 §3):
+      * ``risk_class == "high"``   — highest structural risk;
+      * ``risk_class == "medium"`` — intermediate risk, still warrants a dry-run
+                                      proof before merge (additive; was not_run before);
+      * ``production_classification == "production"`` — touches prod.
+
+    An absent deployment block, or a ``risk_class == "low"`` non-prod one, yields
+    ``required=False``. The dry-run production guard (``assert_dry_run`` /
+    ``ProductionApplyError``) lives in ``deploy_runner``, NOT here, so widening
+    the trigger cannot cause an effectful apply.
     """
     block = deployment_block_from_contract(contract)
     if block is None:
@@ -106,6 +114,8 @@ def deploy_requirement_from_contract(contract: dict | None) -> DeployRequirement
     reasons: list[str] = []
     if risk == _HIGH_RISK:
         reasons.append("risk_class=high")
+    if risk == _MEDIUM_RISK:
+        reasons.append("risk_class=medium")
     if prod == _PRODUCTION:
         reasons.append("production_classification=production")
 

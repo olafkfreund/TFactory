@@ -42,15 +42,29 @@ def test_deployment_block_reader_is_tolerant():
 # ── requirement derivation ──────────────────────────────────────────────
 
 
-def test_low_and_medium_risk_do_not_force_deploy_lane():
-    for risk in ("low", "medium"):
-        contract = {"deployment": {"risk_class": risk, "production_classification": "internal"}}
-        req = deploy_requirement_from_contract(contract)
-        assert req.required is False
+def test_low_risk_does_not_force_deploy_lane():
+    contract = {
+        "deployment": {"risk_class": "low", "production_classification": "internal"}
+    }
+    req = deploy_requirement_from_contract(contract)
+    assert req.required is False
+
+
+def test_medium_risk_forces_deploy_lane():
+    """risk_class=medium now triggers the dry-run lane (issue #252)."""
+    contract = {
+        "deployment": {"risk_class": "medium", "production_classification": "internal"}
+    }
+    req = deploy_requirement_from_contract(contract)
+    assert req.required is True
+    assert "risk_class=medium" in req.reasons
+    assert req.lanes(("unit",)) == ("unit", DEPLOY_LANE)
 
 
 def test_high_risk_forces_deploy_lane():
-    contract = {"deployment": {"risk_class": "high", "production_classification": "preprod"}}
+    contract = {
+        "deployment": {"risk_class": "high", "production_classification": "preprod"}
+    }
     req = deploy_requirement_from_contract(contract)
     assert req.required is True
     assert "risk_class=high" in req.reasons
@@ -58,7 +72,12 @@ def test_high_risk_forces_deploy_lane():
 
 
 def test_production_classification_forces_deploy_lane():
-    contract = {"deployment": {"risk_class": "medium", "production_classification": "production"}}
+    contract = {
+        "deployment": {
+            "risk_class": "medium",
+            "production_classification": "production",
+        }
+    }
     req = deploy_requirement_from_contract(contract)
     assert req.required is True
     assert "production_classification=production" in req.reasons
@@ -89,14 +108,22 @@ def test_gate_blocks_when_required_but_no_verification():
 
 def test_gate_blocks_when_dry_run_floor_not_reached():
     contract = {"deployment": {"risk_class": "high"}}
-    verification = {"achieved_level": "VAL-0", "levels": [{"level": "VAL-0", "status": "failed"}]}
+    verification = {
+        "achieved_level": "VAL-0",
+        "levels": [{"level": "VAL-0", "status": "failed"}],
+    }
     verdict = evaluate_deploy_gate(contract, verification)
     assert verdict["blocks_merge"] is True
 
 
 def test_gate_passes_on_dry_run_proof_but_prod_still_needs_human():
-    contract = {"deployment": {"risk_class": "high", "production_classification": "production"}}
-    verification = {"achieved_level": "VAL-2", "levels": [{"level": "VAL-2", "status": "passed"}]}
+    contract = {
+        "deployment": {"risk_class": "high", "production_classification": "production"}
+    }
+    verification = {
+        "achieved_level": "VAL-2",
+        "levels": [{"level": "VAL-2", "status": "passed"}],
+    }
     verdict = evaluate_deploy_gate(contract, verification)
     assert verdict["blocks_merge"] is False
     assert verdict["human_approval_required"] is True
@@ -104,8 +131,13 @@ def test_gate_passes_on_dry_run_proof_but_prod_still_needs_human():
 
 
 def test_gate_passes_for_high_nonprod_with_dry_run_proof():
-    contract = {"deployment": {"risk_class": "high", "production_classification": "preprod"}}
-    verification = {"achieved_level": "VAL-2", "levels": [{"level": "VAL-2", "status": "passed"}]}
+    contract = {
+        "deployment": {"risk_class": "high", "production_classification": "preprod"}
+    }
+    verification = {
+        "achieved_level": "VAL-2",
+        "levels": [{"level": "VAL-2", "status": "passed"}],
+    }
     verdict = evaluate_deploy_gate(contract, verification)
     assert verdict["blocks_merge"] is False
     assert verdict["human_approval_required"] is False
@@ -122,9 +154,16 @@ def test_deploy_gate_for_spec_reads_persisted_block(tmp_path):
     findings = tmp_path / "findings"
     findings.mkdir()
     (findings / "deploy_verification.json").write_text(
-        json.dumps({"achieved_level": "VAL-2", "levels": [{"level": "VAL-2", "status": "passed"}]})
+        json.dumps(
+            {
+                "achieved_level": "VAL-2",
+                "levels": [{"level": "VAL-2", "status": "passed"}],
+            }
+        )
     )
-    contract = {"deployment": {"risk_class": "high", "production_classification": "preprod"}}
+    contract = {
+        "deployment": {"risk_class": "high", "production_classification": "preprod"}
+    }
     verdict = deploy_gate_for_spec(contract, tmp_path)
     assert verdict["required"] is True
     assert verdict["blocks_merge"] is False
