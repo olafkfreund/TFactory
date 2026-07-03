@@ -147,7 +147,7 @@ def run_pytest_lane_via_nix(
     test_file: Path,
     *,
     extra_env: dict[str, str] | None = None,
-    timeout: int = 300,
+    timeout: int = 900,
 ) -> DockerRunResult | None:
     """Run ONE pytest file inside the per-task Nix dev shell as a k8s Job.
 

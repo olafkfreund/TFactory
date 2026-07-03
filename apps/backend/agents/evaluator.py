@@ -270,7 +270,15 @@ def _maybe_nix_verify(
         return None
     try:
         nix_res = run_pytest_lane_via_nix(
-            spec_dir, project_dir, test_file, extra_env=extra_env, timeout=300
+            # Cold Nix builds (seed /nix + build python+fastapi+httpx+pytest from
+            # the flake) can exceed 5 min on first use; the warm store amortizes
+            # later runs. Give it room so the lane doesn't time out to an empty
+            # log and misgrade a passing test (#621).
+            spec_dir,
+            project_dir,
+            test_file,
+            extra_env=extra_env,
+            timeout=900,
         )
     except Exception as exc:  # noqa: BLE001 - never fail the lane on a config gap
         _eval_log.warning(
