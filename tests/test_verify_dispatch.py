@@ -7,8 +7,8 @@ Covers:
 - ``build_verify_job_manifest`` produces a correct Job: the configured image, the
   ``python -m agents.verify_pipeline`` command (plain, or wrapped in ``nix
   develop`` when ``nix_develop`` is set), the worktree + warm-store mounts, the
-  ``tfactory-sandbox`` SA, no token automount, and the JOB_ID / CORRELATION_KEY /
-  FACTORY_SERVICE / PYTHONPATH env.
+  ``tfactory-sandbox`` SA with token automount (it dispatches nested lane Jobs),
+  and the JOB_ID / CORRELATION_KEY / FACTORY_SERVICE / PYTHONPATH env.
 - ``resolve_verify_image`` prefers TFACTORY_VERIFY_IMAGE, then TFACTORY_IMAGE,
   then the thin nix-runner fallback (the #466 "use the service's own image" fix
   so the orchestration Job can import the ``agents`` backend).
@@ -283,10 +283,14 @@ def test_manifest_without_nix_develop_runs_verify_directly():
     assert "python -m agents.verify_pipeline" in cmd
 
 
-def test_manifest_uses_tfactory_sandbox_sa_no_token_automount():
+def test_manifest_uses_tfactory_sandbox_sa_with_token_automount():
+    # The verify Job dispatches nested per-lane Jobs (Nix pytest/browser lanes via
+    # KubeJobSandbox.create_namespaced_job), so it needs the SA token mounted to
+    # authenticate to the k8s API — otherwise the nested dispatch fails and the
+    # lane silently falls back to the host runner.
     ps = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
     assert ps["serviceAccountName"] == "tfactory-sandbox"
-    assert ps["automountServiceAccountToken"] is False
+    assert ps["automountServiceAccountToken"] is True
 
 
 def test_manifest_mounts_worktree_and_warm_nix_store():
