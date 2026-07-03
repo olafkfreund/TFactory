@@ -117,15 +117,11 @@ def test_extract_handles_empty_source() -> None:
 
 def test_extract_walks_into_function_bodies() -> None:
     """Imports inside functions / classes are still imports — collect them."""
-    src = (
-        "def f():\n"
-        "    import json\n"
-        "class C:\n"
-        "    from pathlib import Path\n"
-    )
+    src = "def f():\n    import json\nclass C:\n    from pathlib import Path\n"
     imports, _ = extract_imports(src)
     assert {(i.module, i.name) for i in imports} == {
-        ("json", None), ("pathlib", "Path"),
+        ("json", None),
+        ("pathlib", "Path"),
     }
 
 
@@ -171,6 +167,19 @@ def test_check_star_import_only_verifies_module() -> None:
     imp = PreflightImport(module="json", name="*")
     check_import(imp)
     assert imp.failed is False
+
+
+def test_check_import_resolves_src_layout_package(tmp_path) -> None:
+    """A src-layout package (``<project>/src/<pkg>``) imports when the project
+    dir is supplied — ``<project>/src`` is added to PYTHONPATH so no install
+    step is needed. Regression guard for the #609 replan loop."""
+    pkg = tmp_path / "src" / "orders_api"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (pkg / "main.py").write_text("app = object()\n")
+    imp = PreflightImport(module="orders_api.main", name="app")
+    check_import(imp, project_dir=tmp_path)
+    assert imp.failed is False, imp.reason
 
 
 # ── preflight_check end-to-end ──────────────────────────────────────────

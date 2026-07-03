@@ -330,6 +330,18 @@ def _ensure_host_venv(project_dir: Path) -> Path:
     if req.exists():
         args += ["-r", str(req)]
     subprocess.run(args, capture_output=True, text=True, timeout=600)
+    # Install the SUT itself when it ships a pyproject.toml (best-effort). This
+    # pulls in the project's declared deps AND registers the package — covering
+    # src-layout repos that have no requirements.txt, so ``from <pkg> import ...``
+    # resolves in the venv. A failure here is non-fatal: the src PYTHONPATH added
+    # by the runner still lets bare-source imports resolve.
+    if (Path(project_dir) / "pyproject.toml").exists():
+        subprocess.run(
+            [py, "-m", "pip", "install", "-q", "-e", str(project_dir)],
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
     _HOST_VENVS[key] = vdir
     return vdir
 
@@ -354,7 +366,12 @@ def _run_pytest_on_host(
         "--junitxml=junit.xml --cov-report=xml:coverage.xml --cov=. 2>&1; "
         "echo __PYTEST_EXIT=$?"
     )
-    env = {**os.environ, **extra_env, "PYTHONPATH": str(Path(scratch).resolve())}
+    scratch_root = Path(scratch).resolve()
+    pythonpath = str(scratch_root)
+    src_dir = scratch_root / "src"
+    if src_dir.is_dir():
+        pythonpath = f"{src_dir}{os.pathsep}{pythonpath}"
+    env = {**os.environ, **extra_env, "PYTHONPATH": pythonpath}
     res = subprocess.run(
         ["sh", "-c", cmd], capture_output=True, text=True, timeout=300, env=env
     )
@@ -414,7 +431,13 @@ def _resolve_runner_fn(
                 "--cov-report=xml:/scratch/coverage.xml --cov=. 2>&1; "
                 "echo __PYTEST_EXIT=$?"
             )
-            extra_env = {"PYTHONHASHSEED": str(seed)}
+            # ``/scratch/src`` first so src-layout packages import inside the
+            # container; ``/scratch`` covers flat layouts. A missing path is
+            # simply ignored by the interpreter.
+            extra_env = {
+                "PYTHONHASHSEED": str(seed),
+                "PYTHONPATH": f"/scratch/src{os.pathsep}/scratch",
+            }
             if target_url:
                 extra_env["TFACTORY_TARGET_URL"] = target_url
                 extra_env["APP_URL"] = target_url
