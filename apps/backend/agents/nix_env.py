@@ -218,8 +218,25 @@ def run_pytest_lane_via_nix(
         encoding="utf-8",
     )
     job_cmd = f"nix develop path:{mount}#default --command bash {mount}/{_JOB_SCRIPT}"
+    # #623: a per-task Nix build can fail transiently — concurrent stability +
+    # mutation lane Jobs contend for the RWO /nix-store PVC, and the nixpkgs
+    # tarball fetch can flake. Retry ONLY when pytest never emitted its exit
+    # marker (i.e. the build/setup failed before the test ran, not a genuine test
+    # failure) — so a real fail (e.g. a caught hardcode) is never masked.
+    attempts = 2
     try:
         res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)
+        for attempt in range(1, attempts):
+            if "__PYTEST_EXIT=" in (res.stdout or ""):
+                break
+            _log.warning(
+                "run_pytest_lane_via_nix: no pytest exit marker (nix build likely "
+                "failed transiently); retry %d/%d. tail=%r",
+                attempt + 1,
+                attempts,
+                (res.stdout or "")[-300:],
+            )
+            res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)
     finally:
         (pd / _JOB_SCRIPT).unlink(missing_ok=True)
         staged_test.unlink(missing_ok=True)
