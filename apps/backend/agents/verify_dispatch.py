@@ -641,9 +641,13 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
 
     pod_spec = manifest["spec"]["template"]["spec"]
     # The verify Job (unlike a pure lane) writes its job-state row, so it gets the
-    # dedicated SA. Token automount stays False — the SA is for identity/RBAC, the
-    # store write goes over DATABASE_URL, not the k8s API.
+    # dedicated SA. It ALSO dispatches nested per-lane Jobs (the Nix pytest/browser
+    # lanes call ``create_namespaced_job`` via KubeJobSandbox), so it needs the SA
+    # token actually mounted — otherwise the nested dispatch fails to authenticate
+    # to the k8s API and the lane silently falls back to the host runner. Leaf lane
+    # Jobs keep ``automountServiceAccountToken: False`` (they need no API).
     pod_spec["serviceAccountName"] = cfg.service_account
+    pod_spec["automountServiceAccountToken"] = True
 
     env = [
         {"name": "JOB_ID", "value": cfg.job_id},
