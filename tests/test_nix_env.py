@@ -486,3 +486,35 @@ def test_repo_owned_flake_respected_when_not_generated(tmp_path):
     assert plan is not None and plan.generated is False
     # not overwritten
     assert (project / "flake.nix").read_text() == "# repo-owned, hand-written\n"
+
+
+def test_run_pytest_lane_via_nix_holds_nix_lock_during_dispatch(tmp_path, monkeypatch):
+    """The Nix Job dispatch runs under the process-wide _NIX_JOB_LOCK so
+    concurrent lane Jobs don't contend on the RWO /nix-store (#623)."""
+    from agents.nix_env import _NIX_JOB_LOCK
+
+    spec = tmp_path / "specs" / "027"
+    spec.mkdir(parents=True)
+    _write_contract(spec, _UNIT_ENV)
+    project = tmp_path / "proj"
+    project.mkdir()
+    test_file = project / "src_test.py"
+    test_file.write_text("def test_ok(): assert True\n")
+
+    seen = {}
+
+    class _LockSensingSandbox:
+        def run(self, commands, *, workdir=None, timeout=300):
+            # The lock must be held while a dispatch is in flight.
+            seen["locked"] = _NIX_JOB_LOCK.locked()
+            stage = Path(workdir) / ".tf_pytest"
+            stage.mkdir(parents=True, exist_ok=True)
+            (stage / "junit.xml").write_text("<testsuites/>")
+            return JobRunResult(ok=True, exit_code=0, output="__PYTEST_EXIT=0\n")
+
+    monkeypatch.setattr(
+        "agents.nix_env.nix_runner_from_env", lambda: _LockSensingSandbox()
+    )
+    run_pytest_lane_via_nix(spec, project, test_file)
+    assert seen.get("locked") is True  # dispatch happened under the lock
+    assert not _NIX_JOB_LOCK.locked()  # and released afterwards

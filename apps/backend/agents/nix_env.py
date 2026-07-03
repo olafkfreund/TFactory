@@ -22,6 +22,7 @@ import contextlib
 import json
 import logging
 import shutil
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -140,6 +141,11 @@ _NIX_MOUNT = "/work"  # where KubeJobSandbox co-mounts the worktree in the Job
 # ``run_deploy_lane``'s ``tool_available`` records it as ``not_run``.
 _DEPLOY_NIX_TOOLS: tuple[str, ...] = ("tfsec", "trivy", "opentofu")
 
+# Serializes Nix-lane Job dispatch within a verify process — the /nix-store PVC
+# is RWO, so concurrent Jobs can't co-mount it (#623). run() offloads to threads
+# (#620), so a threading.Lock is the right primitive.
+_NIX_JOB_LOCK = threading.Lock()
+
 
 def run_pytest_lane_via_nix(
     spec_dir: Path,
@@ -225,18 +231,25 @@ def run_pytest_lane_via_nix(
     # failure) — so a real fail (e.g. a caught hardcode) is never masked.
     attempts = 2
     try:
-        res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)
-        for attempt in range(1, attempts):
-            if "__PYTEST_EXIT=" in (res.stdout or ""):
-                break
-            _log.warning(
-                "run_pytest_lane_via_nix: no pytest exit marker (nix build likely "
-                "failed transiently); retry %d/%d. tail=%r",
-                attempt + 1,
-                attempts,
-                (res.stdout or "")[-300:],
-            )
+        # Serialize Nix Job dispatch process-wide: the /nix-store PVC is
+        # ReadWriteOnce, so concurrent lane Jobs (stability x3 + one per mutant)
+        # can't co-mount it and their builds flake to consistent_fail. Proven:
+        # one isolated lane Job passes (4 passed), a fully-concurrent evaluator
+        # run rejects the same test. The lock makes them run one at a time; the
+        # warm store keeps each build fast (#623).
+        with _NIX_JOB_LOCK:
             res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)
+            for attempt in range(1, attempts):
+                if "__PYTEST_EXIT=" in (res.stdout or ""):
+                    break
+                _log.warning(
+                    "run_pytest_lane_via_nix: no pytest exit marker (nix build "
+                    "likely failed transiently); retry %d/%d. tail=%r",
+                    attempt + 1,
+                    attempts,
+                    (res.stdout or "")[-300:],
+                )
+                res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)
     finally:
         (pd / _JOB_SCRIPT).unlink(missing_ok=True)
         staged_test.unlink(missing_ok=True)
