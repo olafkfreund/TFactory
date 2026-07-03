@@ -225,6 +225,35 @@ def test_run_pytest_lane_via_nix_result_shape(tmp_path, monkeypatch):
     assert not script.exists()  # cleaned up after the run
 
 
+def test_run_pytest_lane_via_nix_exports_src_pythonpath(tmp_path, monkeypatch):
+    """The Job script puts <work>/src on PYTHONPATH so a src-layout package
+    imports inside the hermetic Nix Job (#615)."""
+    spec = tmp_path / "specs" / "027"
+    spec.mkdir(parents=True)
+    _write_contract(spec, _UNIT_ENV)
+    project = tmp_path / "proj"
+    project.mkdir()
+    test_file = project / "src_test.py"
+    test_file.write_text("def test_ok(): assert True\n")
+
+    captured = {}
+
+    class _FakeSandbox:
+        def run(self, commands, *, workdir=None, timeout=300):
+            # The job script still exists during run (cleaned up afterwards).
+            captured["script"] = (Path(workdir) / "_tf_nix_job.sh").read_text()
+            stage = Path(workdir) / ".tf_pytest"
+            stage.mkdir(parents=True, exist_ok=True)
+            (stage / "junit.xml").write_text("<testsuites/>")
+            return JobRunResult(ok=True, exit_code=0, output="__PYTEST_EXIT=0\n")
+
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: _FakeSandbox())
+    run_pytest_lane_via_nix(spec, project, test_file)
+    assert 'export PYTHONPATH="/work/src:/work' in captured["script"]
+    # exported before the pytest invocation so the test process inherits it
+    assert captured["script"].index("PYTHONPATH") < captured["script"].index("pytest")
+
+
 def test_run_pytest_lane_via_nix_missing_marker_is_failure(tmp_path, monkeypatch):
     spec = tmp_path / "specs" / "027"
     spec.mkdir(parents=True)
@@ -236,9 +265,7 @@ def test_run_pytest_lane_via_nix_missing_marker_is_failure(tmp_path, monkeypatch
 
     class _FakeSandbox:
         def run(self, commands, *, workdir=None, timeout=300):
-            return JobRunResult(
-                ok=False, exit_code=1, output="boom (no marker line)\n"
-            )
+            return JobRunResult(ok=False, exit_code=1, output="boom (no marker line)\n")
 
     monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: _FakeSandbox())
     res = run_pytest_lane_via_nix(spec, project, test_file)
