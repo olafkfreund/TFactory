@@ -2,7 +2,43 @@
 
 from __future__ import annotations
 
-from tools.runners.kube_sandbox import build_job_manifest, pvc_subpath
+import asyncio
+
+from tools.runners.kube_sandbox import (
+    JobRunResult,
+    KubeJobSandbox,
+    build_job_manifest,
+    pvc_subpath,
+)
+
+
+def _sandbox_with_fake_run() -> KubeJobSandbox:
+    sb = KubeJobSandbox("img", namespace="factory")
+
+    async def _fake(commands, timeout, workdir):
+        return JobRunResult(ok=True, exit_code=0, output="hi")
+
+    sb._run_async = _fake  # type: ignore[method-assign]
+    return sb
+
+
+def test_run_works_without_a_running_loop():
+    res = _sandbox_with_fake_run().run(["echo hi"])
+    assert res.ok and res.exit_code == 0 and res.output == "hi"
+
+
+def test_run_works_inside_a_running_event_loop():
+    # The async verify evaluator calls sandbox.run() from within a running loop.
+    # asyncio.run() would raise "cannot be called from a running event loop" there
+    # (which the caller swallowed into a silent host fallback), so run() must
+    # offload to a dedicated thread. Regression guard for the Nix-lane dispatch.
+    sb = _sandbox_with_fake_run()
+
+    async def caller():
+        return sb.run(["echo hi"])
+
+    res = asyncio.run(caller())
+    assert res.ok and res.output == "hi"
 
 
 def test_toolchain_only_job_has_no_volume():
@@ -18,8 +54,11 @@ def test_toolchain_only_job_has_no_volume():
 
 def test_repo_comount_rw_for_browser_lane():
     m = build_job_manifest(
-        "j2", "img", ["nix develop /work#default -c playwright test"],
-        repo_pvc="tf-workspaces", repo_subpath="workspaces/proj",
+        "j2",
+        "img",
+        ["nix develop /work#default -c playwright test"],
+        repo_pvc="tf-workspaces",
+        repo_subpath="workspaces/proj",
     )
     c = m["spec"]["template"]["spec"]["containers"][0]
     assert c["workingDir"] == "/work"
@@ -81,7 +120,9 @@ def test_warm_nix_store_mounted_with_seed_init():
     )
     t = m["spec"]["template"]["spec"]
     vols = {v["name"]: v for v in t["volumes"]}
-    assert vols["nix-store"]["persistentVolumeClaim"]["claimName"] == "tfactory-nix-store"
+    assert (
+        vols["nix-store"]["persistentVolumeClaim"]["claimName"] == "tfactory-nix-store"
+    )
     assert "repo" in vols
     mounts = {vm["name"]: vm for vm in t["containers"][0]["volumeMounts"]}
     assert mounts["nix-store"]["mountPath"] == "/nix"
