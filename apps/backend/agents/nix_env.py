@@ -199,6 +199,13 @@ def run_pytest_lane_via_nix(
     exports = "".join(
         f"export {k}={_shquote(str(v))}\n" for k, v in (extra_env or {}).items()
     )
+    # src-layout: make ``<work>/src`` (and ``<work>``) importable so
+    # ``from <pkg> import ...`` resolves inside the hermetic Nix Job — the host
+    # runner does the same (evaluator._run_pytest_on_host). Without it a
+    # ``src/<pkg>/`` package fails at collection and every AC shows as an error
+    # rather than its real pass/fail. Prepended to any PYTHONPATH exported above
+    # (#615).
+    srcpath = f'export PYTHONPATH="{mount}/src:{mount}${{PYTHONPATH:+:$PYTHONPATH}}"\n'
     pytest_cmd = (
         f"cd {mount} && "
         f"python -m pytest tests/{name} -p no:cacheprovider -q "
@@ -207,7 +214,7 @@ def run_pytest_lane_via_nix(
         "echo __PYTEST_EXIT=$?"
     )
     (pd / _JOB_SCRIPT).write_text(
-        "#!/usr/bin/env bash\nset +e\n" + exports + pytest_cmd + "\n",
+        "#!/usr/bin/env bash\nset +e\n" + exports + srcpath + pytest_cmd + "\n",
         encoding="utf-8",
     )
     job_cmd = f"nix develop path:{mount}#default --command bash {mount}/{_JOB_SCRIPT}"
