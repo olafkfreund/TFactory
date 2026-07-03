@@ -336,11 +336,12 @@ def _ensure_host_venv(project_dir: Path) -> Path:
     # resolves in the venv. A failure here is non-fatal: the src PYTHONPATH added
     # by the runner still lets bare-source imports resolve.
     if (Path(project_dir) / "pyproject.toml").exists():
-        subprocess.run(
+        subprocess.run(  # noqa: S603 — fixed pip argv, no untrusted input
             [py, "-m", "pip", "install", "-q", "-e", str(project_dir)],
             capture_output=True,
             text=True,
             timeout=600,
+            check=False,
         )
     _HOST_VENVS[key] = vdir
     return vdir
