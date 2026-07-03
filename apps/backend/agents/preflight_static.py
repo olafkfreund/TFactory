@@ -215,9 +215,15 @@ def check_import(
     env = os.environ.copy()
     if project_dir is not None:
         existing = env.get("PYTHONPATH", "")
-        env["PYTHONPATH"] = (
-            f"{project_dir}{os.pathsep}{existing}" if existing else str(project_dir)
-        )
+        # Put the project root on PYTHONPATH, and — for src-layout packages
+        # (``<project>/src/<pkg>``) — the ``src`` dir too, so ``import <pkg>``
+        # resolves without an install step.
+        roots = [str(project_dir)]
+        src_dir = Path(project_dir) / "src"
+        if src_dir.is_dir():
+            roots.insert(0, str(src_dir))
+        parts = roots + ([existing] if existing else [])
+        env["PYTHONPATH"] = os.pathsep.join(parts)
 
     try:
         proc = subprocess.run(
