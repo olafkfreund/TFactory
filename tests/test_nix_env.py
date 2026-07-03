@@ -254,6 +254,67 @@ def test_run_pytest_lane_via_nix_exports_src_pythonpath(tmp_path, monkeypatch):
     assert captured["script"].index("PYTHONPATH") < captured["script"].index("pytest")
 
 
+def test_run_pytest_lane_via_nix_retries_on_missing_marker(tmp_path, monkeypatch):
+    """A Nix build that produces no __PYTEST_EXIT marker (transient build failure)
+    is retried once; the recovered result is used (#623)."""
+    spec = tmp_path / "specs" / "027"
+    spec.mkdir(parents=True)
+    _write_contract(spec, _UNIT_ENV)
+    project = tmp_path / "proj"
+    project.mkdir()
+    test_file = project / "src_test.py"
+    test_file.write_text("def test_ok(): assert True\n")
+
+    calls = {"n": 0}
+
+    class _FlakySandbox:
+        def run(self, commands, *, workdir=None, timeout=300):
+            calls["n"] += 1
+            stage = Path(workdir) / ".tf_pytest"
+            stage.mkdir(parents=True, exist_ok=True)
+            if calls["n"] == 1:  # transient build failure — no marker
+                return JobRunResult(
+                    ok=False, exit_code=1, output="[kube-sandbox] empty lane log"
+                )
+            (stage / "junit.xml").write_text("<testsuites/>")
+            return JobRunResult(
+                ok=True, exit_code=0, output="1 passed\n__PYTEST_EXIT=0\n"
+            )
+
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: _FlakySandbox())
+    res = run_pytest_lane_via_nix(spec, project, test_file)
+    assert calls["n"] == 2  # retried once
+    assert res is not None and res.returncode == 0
+
+
+def test_run_pytest_lane_via_nix_no_retry_on_real_result(tmp_path, monkeypatch):
+    """A real pytest result (marker present) is NOT retried, even on failure —
+    a caught bug (e.g. the hardcode) must never be masked by a retry (#623)."""
+    spec = tmp_path / "specs" / "027"
+    spec.mkdir(parents=True)
+    _write_contract(spec, _UNIT_ENV)
+    project = tmp_path / "proj"
+    project.mkdir()
+    test_file = project / "src_test.py"
+    test_file.write_text("def test_ok(): assert True\n")
+
+    calls = {"n": 0}
+
+    class _FailSandbox:
+        def run(self, commands, *, workdir=None, timeout=300):
+            calls["n"] += 1
+            stage = Path(workdir) / ".tf_pytest"
+            stage.mkdir(parents=True, exist_ok=True)
+            return JobRunResult(
+                ok=False, exit_code=1, output="1 failed\n__PYTEST_EXIT=1\n"
+            )
+
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: _FailSandbox())
+    res = run_pytest_lane_via_nix(spec, project, test_file)
+    assert calls["n"] == 1  # real failure -> no retry
+    assert res is not None and res.returncode == 1
+
+
 def test_run_pytest_lane_via_nix_missing_marker_is_failure(tmp_path, monkeypatch):
     spec = tmp_path / "specs" / "027"
     spec.mkdir(parents=True)
