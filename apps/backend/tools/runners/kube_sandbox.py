@@ -18,6 +18,7 @@ async lifecycle (create -> watch -> logs -> delete) uses `kubernetes_asyncio`.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import logging
 import uuid
 from dataclasses import dataclass
@@ -272,4 +273,17 @@ class KubeJobSandbox:
     def run(
         self, commands: list[str], *, workdir: str | None = None, timeout: int = 900
     ) -> JobRunResult:
-        return asyncio.run(self._run_async(commands, timeout, workdir))
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop — the simple synchronous case.
+            return asyncio.run(self._run_async(commands, timeout, workdir))
+        # Called from WITHIN a running event loop (the async verify evaluator runs
+        # this Nix lane). ``asyncio.run()`` would raise "cannot be called from a
+        # running event loop", which the caller swallows into a silent host
+        # fallback — so the Nix lane never dispatched in the kubejob path. Run the
+        # coroutine to completion on a dedicated thread with its own loop.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(
+                lambda: asyncio.run(self._run_async(commands, timeout, workdir))
+            ).result()
