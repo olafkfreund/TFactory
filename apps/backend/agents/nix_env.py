@@ -819,7 +819,9 @@ def materialize_flake(
     if repo_has_flake and not m.provisioning_generated:
         _log.info("nix_env: respecting repo-owned %s (manifest not generated)", _FLAKE)
     else:
-        flake_path.write_text(generate_flake(env), encoding="utf-8")
+        flake_path.write_text(
+            generate_flake(env, project_dir=project_dir), encoding="utf-8"
+        )
         _log.info("nix_env: wrote generated %s for %s", _FLAKE, spec_dir.name)
 
     return NixPlan(
