@@ -55,6 +55,31 @@ class JobRunResult:
         return ""
 
 
+def _container_state(cs: Any) -> str:
+    """One-word state for a (init)container status: waiting/running/terminated."""
+    s = getattr(cs, "state", None)
+    if s and getattr(s, "waiting", None):
+        return f"waiting({s.waiting.reason})"
+    if s and getattr(s, "running", None):
+        return "running"
+    if s and getattr(s, "terminated", None):
+        return f"terminated(exit={s.terminated.exit_code},{s.terminated.reason})"
+    return "unknown"
+
+
+def _describe_pod(pod: Any) -> str:
+    """A compact phase + per-container state summary for a diagnostic message."""
+    st = getattr(pod, "status", None)
+    if st is None:
+        return "no pod status"
+    parts = [f"phase={getattr(st, 'phase', '?')}"]
+    for cs in st.init_container_statuses or []:
+        parts.append(f"init/{cs.name}={_container_state(cs)}")
+    for cs in st.container_statuses or []:
+        parts.append(f"{cs.name}={_container_state(cs)}")
+    return " ".join(parts)
+
+
 def build_job_manifest(
     name: str,
     image: str,
@@ -239,28 +264,45 @@ class KubeJobSandbox:
         try:
             await batch.create_namespaced_job(self.namespace, manifest)
             succeeded = False
+            terminal = False
             for _ in range(max(1, timeout // 3)):
                 st = (await batch.read_namespaced_job(name, self.namespace)).status
                 if st and st.succeeded:
-                    succeeded = True
+                    succeeded = terminal = True
                     break
                 if st and st.failed:
+                    terminal = True
                     break
                 await asyncio.sleep(3)
             pods = await core.list_namespaced_pod(
                 self.namespace, label_selector=f"job-name={name}"
             )
+            pod = pods.items[0] if pods.items else None
             output = ""
-            if pods.items:
+            if pod is not None:
                 try:
+                    # Read the work container explicitly — the pod also has a
+                    # seed-nix-store initContainer, and the default target can be
+                    # the wrong / not-yet-started container on a slow Nix build.
                     output = await core.read_namespaced_pod_log(
-                        pods.items[0].metadata.name, self.namespace
+                        pod.metadata.name, self.namespace, container="lane"
                     )
                 except Exception as exc:  # noqa: BLE001
                     output = f"(log unavailable: {exc})"
-            return JobRunResult(
-                succeeded, 0 if succeeded else 1, (output or "").strip()
-            )
+            output = (output or "").strip()
+            # Never return a silent empty log (#621): a build that outran the wait
+            # budget, or a lane container still starting, must surface as an env
+            # diagnostic so the caller marks the lane errored rather than grading a
+            # passing test as a failure.
+            if not terminal or not output:
+                note = (
+                    "job did not reach a terminal state within the wait budget"
+                    if not terminal
+                    else "empty lane log"
+                )
+                diag = _describe_pod(pod) if pod is not None else "no pod created"
+                output = f"{output}\n[kube-sandbox] {note}; {diag}".strip()
+            return JobRunResult(succeeded, 0 if succeeded else 1, output)
         finally:
             try:
                 await batch.delete_namespaced_job(

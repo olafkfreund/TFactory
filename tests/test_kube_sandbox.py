@@ -130,3 +130,49 @@ def test_warm_nix_store_mounted_with_seed_init():
     assert init["name"] == "seed-nix-store"
     assert init["volumeMounts"][0]["mountPath"] == "/warm"
     assert "/warm/store" in init["command"][-1]
+
+
+def test_container_state_variants():
+    from types import SimpleNamespace as NS
+
+    from tools.runners.kube_sandbox import _container_state
+
+    assert (
+        _container_state(NS(state=NS(waiting=NS(reason="PodInitializing"))))
+        == "waiting(PodInitializing)"
+    )
+    assert _container_state(NS(state=NS(waiting=None, running=object()))) == "running"
+    assert (
+        _container_state(
+            NS(
+                state=NS(
+                    waiting=None,
+                    running=None,
+                    terminated=NS(exit_code=1, reason="Error"),
+                )
+            )
+        )
+        == "terminated(exit=1,Error)"
+    )
+
+
+def test_describe_pod_summarizes_phase_and_containers():
+    from types import SimpleNamespace as NS
+
+    from tools.runners.kube_sandbox import _describe_pod
+
+    pod = NS(
+        status=NS(
+            phase="Running",
+            init_container_statuses=[
+                NS(name="seed-nix-store", state=NS(waiting=None, running=object()))
+            ],
+            container_statuses=[
+                NS(name="lane", state=NS(waiting=NS(reason="PodInitializing")))
+            ],
+        )
+    )
+    d = _describe_pod(pod)
+    assert "phase=Running" in d
+    assert "init/seed-nix-store=running" in d
+    assert "lane=waiting(PodInitializing)" in d
