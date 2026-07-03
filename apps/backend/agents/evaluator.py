@@ -330,19 +330,25 @@ def _ensure_host_venv(project_dir: Path) -> Path:
     if req.exists():
         args += ["-r", str(req)]
     subprocess.run(args, capture_output=True, text=True, timeout=600)
-    # Install the SUT itself when it ships a pyproject.toml (best-effort). This
-    # pulls in the project's declared deps AND registers the package — covering
-    # src-layout repos that have no requirements.txt, so ``from <pkg> import ...``
-    # resolves in the venv. A failure here is non-fatal: the src PYTHONPATH added
-    # by the runner still lets bare-source imports resolve.
+    # Install the SUT itself when it ships a pyproject.toml (best-effort). The
+    # bare install pulls in the project's runtime deps AND registers the package
+    # — covering src-layout repos that have no requirements.txt, so
+    # ``from <pkg> import ...`` resolves in the venv. The ``[test]``/``[dev]``
+    # passes then pull common test-only deps (e.g. httpx for FastAPI's
+    # TestClient) that live in an optional-dependencies group. Each pass is
+    # non-fatal: an undeclared extra simply fails without affecting the others,
+    # and the src PYTHONPATH added by the runner still resolves bare-source
+    # imports if every install fails (#613).
     if (Path(project_dir) / "pyproject.toml").exists():
-        subprocess.run(  # noqa: S603 — fixed pip argv, no untrusted input
-            [py, "-m", "pip", "install", "-q", "-e", str(project_dir)],
-            capture_output=True,
-            text=True,
-            timeout=600,
-            check=False,
-        )
+        pdir = str(project_dir)
+        for target in (pdir, f"{pdir}[test]", f"{pdir}[dev]"):
+            subprocess.run(  # noqa: S603 — fixed pip argv, no untrusted input
+                [py, "-m", "pip", "install", "-q", "-e", target],
+                capture_output=True,
+                text=True,
+                timeout=600,
+                check=False,
+            )
     _HOST_VENVS[key] = vdir
     return vdir
 
