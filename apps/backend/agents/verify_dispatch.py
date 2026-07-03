@@ -671,6 +671,23 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
     db_url = os.environ.get(cfg.database_url_env)
     if db_url:
         env.append({"name": cfg.database_url_env, "value": db_url})
+    # Propagate the Nix-lane sandbox coordinates so the verify pipeline running
+    # inside THIS Job can dispatch the nested per-task Nix Job
+    # (run_pytest_lane_via_nix -> nix_runner_from_env reads these). They live on
+    # the control-plane Deployment but are NOT inherited by the dispatched Job, so
+    # without this ``nix_runner_from_env`` returns None inside the Job and the lane
+    # silently falls back to the host runner — the RFC-0005 flake env then never
+    # runs in the kubejob path. (The mounted SA token lets the nested create Job
+    # authenticate; these tell it what image/PVCs to use.)
+    for _nix_var in (
+        "TFACTORY_NIX_RUNNER_IMAGE",
+        "TFACTORY_WORKSPACES_PVC",
+        "TFACTORY_NIX_STORE_PVC",
+        "TFACTORY_SANDBOX_NAMESPACE",
+    ):
+        _nix_val = os.environ.get(_nix_var)
+        if _nix_val:
+            env.append({"name": _nix_var, "value": _nix_val})
     # LLM credential (TFactory #466 env round-4): the verify pipeline's evaluator
     # calls create_client → require_auth_token. Without it the Job died
     # ``ValueError: No OAuth token found``. Inject CLAUDE_CODE_OAUTH_TOKEN via the

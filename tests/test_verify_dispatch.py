@@ -283,6 +283,36 @@ def test_manifest_without_nix_develop_runs_verify_directly():
     assert "python -m agents.verify_pipeline" in cmd
 
 
+def test_manifest_propagates_nix_sandbox_env_when_set(monkeypatch):
+    # The verify pipeline running inside the Job dispatches the nested Nix lane
+    # Job via nix_runner_from_env(), which reads these off the env. They live on
+    # the Deployment but aren't inherited by the dispatched Job, so the manifest
+    # must forward them — else the Nix lane silently falls back to host.
+    monkeypatch.setenv(
+        "TFACTORY_NIX_RUNNER_IMAGE", "ghcr.io/x/tfactory-runner-nix:latest"
+    )
+    monkeypatch.setenv("TFACTORY_WORKSPACES_PVC", "tfactory-data")
+    monkeypatch.setenv("TFACTORY_NIX_STORE_PVC", "tfactory-nix-store")
+    ps = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
+    env = {e["name"]: e["value"] for e in ps["containers"][0]["env"]}
+    assert env["TFACTORY_NIX_RUNNER_IMAGE"] == "ghcr.io/x/tfactory-runner-nix:latest"
+    assert env["TFACTORY_WORKSPACES_PVC"] == "tfactory-data"
+    assert env["TFACTORY_NIX_STORE_PVC"] == "tfactory-nix-store"
+
+
+def test_manifest_omits_nix_sandbox_env_when_unset(monkeypatch):
+    for v in (
+        "TFACTORY_NIX_RUNNER_IMAGE",
+        "TFACTORY_WORKSPACES_PVC",
+        "TFACTORY_NIX_STORE_PVC",
+        "TFACTORY_SANDBOX_NAMESPACE",
+    ):
+        monkeypatch.delenv(v, raising=False)
+    ps = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
+    names = {e["name"] for e in ps["containers"][0]["env"]}
+    assert "TFACTORY_NIX_RUNNER_IMAGE" not in names
+
+
 def test_manifest_uses_tfactory_sandbox_sa_with_token_automount():
     # The verify Job dispatches nested per-lane Jobs (Nix pytest/browser lanes via
     # KubeJobSandbox.create_namespaced_job), so it needs the SA token mounted to
