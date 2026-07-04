@@ -296,55 +296,6 @@ def mutate_source_candidates(source: str) -> list[tuple[str, MutationApplied]]:
 # ─── Public entrypoint ──────────────────────────────────────────────────
 
 
-def _probe_one_candidate(
-    mutated: str,
-    mutation: MutationApplied,
-    test_file: Path,
-    project_dir: Path,
-    runner_fn: Callable[[Path, Path, int], _RunResultLike],
-    *,
-    write_mutant_to: Path | None,
-    seed: int,
-    tail_chars: int,
-) -> MutationResult:
-    """Run one mutation candidate through the runner; ERROR/KILLED/SURVIVED."""
-    # Caller-controlled placement of the mutant file.
-    runner_target = test_file
-    if write_mutant_to is not None:
-        try:
-            write_mutant_to.parent.mkdir(parents=True, exist_ok=True)
-            write_mutant_to.write_text(mutated)
-            runner_target = write_mutant_to
-        except OSError as exc:
-            return MutationResult(
-                verdict=MutationVerdict.ERROR,
-                mutation=mutation,
-                mutated_source=mutated,
-                error_message=f"could not write mutant to {write_mutant_to}: {exc}",
-            )
-
-    try:
-        res = runner_fn(runner_target, project_dir, seed)
-    except Exception as exc:  # noqa: BLE001 — runner errors → ERROR verdict
-        return MutationResult(
-            verdict=MutationVerdict.ERROR,
-            mutation=mutation,
-            mutated_source=mutated,
-            error_message=f"{type(exc).__name__}: {exc}"[:500],
-        )
-
-    verdict = (
-        MutationVerdict.KILLED if res.returncode != 0 else MutationVerdict.SURVIVED
-    )
-    return MutationResult(
-        verdict=verdict,
-        mutation=mutation,
-        mutated_source=mutated,
-        runner_stdout_tail=(res.stdout or "")[-tail_chars:],
-        runner_stderr_tail=(res.stderr or "")[-tail_chars:],
-    )
-
-
 def run_mutate_probe(
     test_file: Path,
     project_dir: Path,
@@ -403,18 +354,52 @@ def run_mutate_probe(
     if not candidates:
         return MutationResult(verdict=MutationVerdict.NO_MUTATION)
 
+    def _probe_one(mutated: str, mutation: MutationApplied) -> MutationResult:
+        """Run one mutation candidate through the runner; ERROR/KILLED/SURVIVED.
+
+        Closes over ``test_file``/``project_dir``/``runner_fn``/
+        ``write_mutant_to``/``seed``/``tail_chars`` — kept as a nested
+        closure (rather than a module-level helper) so it isn't its own
+        many-argument function.
+        """
+        runner_target = test_file
+        if write_mutant_to is not None:
+            try:
+                write_mutant_to.parent.mkdir(parents=True, exist_ok=True)
+                write_mutant_to.write_text(mutated)
+                runner_target = write_mutant_to
+            except OSError as exc:
+                return MutationResult(
+                    verdict=MutationVerdict.ERROR,
+                    mutation=mutation,
+                    mutated_source=mutated,
+                    error_message=f"could not write mutant to {write_mutant_to}: {exc}",
+                )
+
+        try:
+            res = runner_fn(runner_target, project_dir, seed)
+        except Exception as exc:  # noqa: BLE001 — runner errors → ERROR verdict
+            return MutationResult(
+                verdict=MutationVerdict.ERROR,
+                mutation=mutation,
+                mutated_source=mutated,
+                error_message=f"{type(exc).__name__}: {exc}"[:500],
+            )
+
+        verdict = (
+            MutationVerdict.KILLED if res.returncode != 0 else MutationVerdict.SURVIVED
+        )
+        return MutationResult(
+            verdict=verdict,
+            mutation=mutation,
+            mutated_source=mutated,
+            runner_stdout_tail=(res.stdout or "")[-tail_chars:],
+            runner_stderr_tail=(res.stderr or "")[-tail_chars:],
+        )
+
     first_result: MutationResult | None = None
     for mutated, mutation in candidates:
-        candidate_result = _probe_one_candidate(
-            mutated,
-            mutation,
-            test_file,
-            project_dir,
-            runner_fn,
-            write_mutant_to=write_mutant_to,
-            seed=seed,
-            tail_chars=tail_chars,
-        )
+        candidate_result = _probe_one(mutated, mutation)
         if candidate_result.verdict == MutationVerdict.KILLED:
             # Strongest possible signal: some test in this file DOES catch
             # this class of mutation (#630) — no need to probe the rest.
