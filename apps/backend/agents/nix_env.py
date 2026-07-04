@@ -22,7 +22,9 @@ import contextlib
 import json
 import logging
 import shutil
+import tempfile
 import threading
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -159,12 +161,13 @@ def run_pytest_lane_via_nix(
 
     The toolchain (python + pytest + pytest-cov) comes from the materialized flake
     (declared in the contract ``environment``), not the image — so the verify env
-    matches the build env with no drift. The worktree is co-mounted at
-    ``_NIX_MOUNT``; the test is staged into ``tests/`` there (the Job sees the real
-    worktree, not a host scratch copy, so ``from <module> import ...`` resolves the
-    same way the DockerRunner path does), pytest writes junit + coverage into a
-    staging dir on the worktree, and we collect them back as a DockerRunResult-
-    shaped result.
+    matches the build env with no drift. To keep concurrent runs from clobbering
+    the shared project checkout, the SUT is copied into a per-run scratch dir under
+    the workspaces PVC (#623); the flake + the specific test are materialized there,
+    the scratch is co-mounted at ``_NIX_MOUNT`` so ``from <module> import ...``
+    resolves like the DockerRunner path, pytest writes junit + coverage into a
+    staging dir on the scratch, and we copy those back (off the scratch) as a
+    DockerRunResult-shaped result before removing the scratch.
 
     Returns None when there's no nix environment or the sandbox isn't configured,
     so the caller falls back to the host/docker runner. Mirrors the staging +
@@ -172,8 +175,7 @@ def run_pytest_lane_via_nix(
     """
     mount = _NIX_MOUNT
     env = environment_from_contract(spec_dir)
-    plan = materialize_flake(spec_dir, project_dir, env=env)
-    if plan is None:
+    if not is_nix_environment(env):
         return None
     # Consume the engine purely through the unified seam (#426): this lane works
     # with any ExecutionSandbox the factory returns, not just KubeJobSandbox.
@@ -182,61 +184,86 @@ def run_pytest_lane_via_nix(
         _log.info("run_pytest_lane_via_nix: TFACTORY_NIX_RUNNER_IMAGE unset; skipping")
         return None
 
-    pd = Path(project_dir)
+    # #623: isolate every run in a per-run scratch COPY of the checkout, instead of
+    # mutating the shared project checkout in place. All specs for a project share
+    # ONE checkout, and each run writes flake.nix + a job script + a staging dir
+    # into it; overlapping specs/mutation runs clobber each other and flake a
+    # passing test to consistent_fail (proven: the same test passes in isolation
+    # but rejects in-pipeline). The scratch is a sibling under the workspaces PVC
+    # (so the Job can co-mount it by subPath) and is removed after the run — the
+    # same isolation the docker path gets from _stage_sut_into_scratch.
+    src = Path(project_dir)
+    scratch = src.parent / f"_nixrun-{uuid.uuid4().hex[:12]}"
     name = Path(test_file).name
-    tests_dir = pd / "tests"
-    tests_dir.mkdir(exist_ok=True)
-    staged_test = tests_dir / name
-    # Stage the specific (generated or mutated) test into the worktree's tests/
-    # dir so the co-mounted Job runs THAT file. The SUT already lives in the
-    # worktree, so unlike the host/docker path we don't copy the whole project.
-    if Path(test_file).resolve() != staged_test.resolve():
-        shutil.copy2(test_file, staged_test)
-    stage = pd / _PYTEST_STAGE
-    shutil.rmtree(stage, ignore_errors=True)
-    stage.mkdir(parents=True, exist_ok=True)
-    # The Job runs as a non-root uid against the co-mounted worktree; make the
-    # staging dir writable so pytest can drop junit/coverage there.
-    with contextlib.suppress(OSError):
-        stage.chmod(0o777)
-
-    # Inject seed/credentials the host/docker path would set, exported in-shell so
-    # the test process inherits them (PYTHONHASHSEED, TFACTORY_TARGET_URL, ...).
-    exports = "".join(
-        f"export {k}={_shquote(str(v))}\n" for k, v in (extra_env or {}).items()
-    )
-    # src-layout: make ``<work>/src`` (and ``<work>``) importable so
-    # ``from <pkg> import ...`` resolves inside the hermetic Nix Job — the host
-    # runner does the same (evaluator._run_pytest_on_host). Without it a
-    # ``src/<pkg>/`` package fails at collection and every AC shows as an error
-    # rather than its real pass/fail. Prepended to any PYTHONPATH exported above
-    # (#615).
-    srcpath = f'export PYTHONPATH="{mount}/src:{mount}${{PYTHONPATH:+:$PYTHONPATH}}"\n'
-    pytest_cmd = (
-        f"cd {mount} && "
-        f"python -m pytest tests/{name} -p no:cacheprovider -q "
-        f"--junitxml={mount}/{_PYTEST_STAGE}/junit.xml "
-        f"--cov-report=xml:{mount}/{_PYTEST_STAGE}/coverage.xml --cov=. 2>&1; "
-        "echo __PYTEST_EXIT=$?"
-    )
-    (pd / _JOB_SCRIPT).write_text(
-        "#!/usr/bin/env bash\nset +e\n" + exports + srcpath + pytest_cmd + "\n",
-        encoding="utf-8",
-    )
-    job_cmd = f"nix develop path:{mount}#default --command bash {mount}/{_JOB_SCRIPT}"
-    # #623: a per-task Nix build can fail transiently — concurrent stability +
-    # mutation lane Jobs contend for the RWO /nix-store PVC, and the nixpkgs
-    # tarball fetch can flake. Retry ONLY when pytest never emitted its exit
-    # marker (i.e. the build/setup failed before the test ran, not a genuine test
-    # failure) — so a real fail (e.g. a caught hardcode) is never masked.
-    attempts = 2
     try:
-        # Serialize Nix Job dispatch process-wide: the /nix-store PVC is
-        # ReadWriteOnce, so concurrent lane Jobs (stability x3 + one per mutant)
-        # can't co-mount it and their builds flake to consistent_fail. Proven:
-        # one isolated lane Job passes (4 passed), a fully-concurrent evaluator
-        # run rejects the same test. The lock makes them run one at a time; the
-        # warm store keeps each build fast (#623).
+        # Copy the SUT into the scratch (skip .git + any prior lane artifacts).
+        shutil.copytree(
+            src,
+            scratch,
+            ignore=shutil.ignore_patterns(
+                ".git",
+                _PYTEST_STAGE,
+                _GOTEST_STAGE,
+                _E2E_STAGE,
+                _DEPLOY_STAGE,
+                _JOB_SCRIPT,
+            ),
+            dirs_exist_ok=True,
+        )
+        plan = materialize_flake(spec_dir, scratch, env=env)
+        if plan is None:
+            return None
+        pd = scratch
+        tests_dir = pd / "tests"
+        tests_dir.mkdir(exist_ok=True)
+        staged_test = tests_dir / name
+        # Stage the specific (generated or mutated) test into the scratch's tests/
+        # dir so the co-mounted Job runs THAT file.
+        if Path(test_file).resolve() != staged_test.resolve():
+            shutil.copy2(test_file, staged_test)
+        stage = pd / _PYTEST_STAGE
+        stage.mkdir(parents=True, exist_ok=True)
+        # The Job runs as a non-root uid against the co-mounted scratch; make the
+        # staging dir writable so pytest can drop junit/coverage there.
+        with contextlib.suppress(OSError):
+            stage.chmod(0o777)
+
+        # Inject seed/credentials the host/docker path would set, exported in-shell
+        # so the test process inherits them (PYTHONHASHSEED, TFACTORY_TARGET_URL...).
+        exports = "".join(
+            f"export {k}={_shquote(str(v))}\n" for k, v in (extra_env or {}).items()
+        )
+        # src-layout: make ``<work>/src`` (and ``<work>``) importable so
+        # ``from <pkg> import ...`` resolves inside the hermetic Nix Job — the host
+        # runner does the same (evaluator._run_pytest_on_host). Without it a
+        # ``src/<pkg>/`` package fails at collection and every AC shows as an error
+        # rather than its real pass/fail. Prepended to any PYTHONPATH above (#615).
+        srcpath = (
+            f'export PYTHONPATH="{mount}/src:{mount}${{PYTHONPATH:+:$PYTHONPATH}}"\n'
+        )
+        pytest_cmd = (
+            f"cd {mount} && "
+            f"python -m pytest tests/{name} -p no:cacheprovider -q "
+            f"--junitxml={mount}/{_PYTEST_STAGE}/junit.xml "
+            f"--cov-report=xml:{mount}/{_PYTEST_STAGE}/coverage.xml --cov=. 2>&1; "
+            "echo __PYTEST_EXIT=$?"
+        )
+        (pd / _JOB_SCRIPT).write_text(
+            "#!/usr/bin/env bash\nset +e\n" + exports + srcpath + pytest_cmd + "\n",
+            encoding="utf-8",
+        )
+        job_cmd = (
+            f"nix develop path:{mount}#default --command bash {mount}/{_JOB_SCRIPT}"
+        )
+        # A per-task Nix build can fail transiently (the nixpkgs fetch can flake).
+        # Retry ONLY when pytest never emitted its exit marker (a build/setup
+        # failure before the test ran, not a genuine test failure) — so a real
+        # fail (e.g. a caught hardcode) is never masked.
+        attempts = 2
+        # Serialize dispatch: the /nix-store PVC is RWO, so concurrent lane Jobs
+        # (across specs) can't co-mount it; the lock runs them one at a time and
+        # the warm store keeps each build fast (#623). run() offloads to a thread
+        # (#620), so a threading.Lock is the right primitive.
         with _NIX_JOB_LOCK:
             res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)
             for attempt in range(1, attempts):
@@ -250,13 +277,22 @@ def run_pytest_lane_via_nix(
                     (res.stdout or "")[-300:],
                 )
                 res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)
+
+        # Copy the small junit/coverage OFF the PVC scratch so the returned paths
+        # survive the scratch cleanup below (the caller reads them after we return).
+        out_dir = Path(tempfile.mkdtemp(prefix="tf-nixjunit-"))
+        junit = out_dir / "junit.xml"
+        cov = out_dir / "coverage.xml"
+        for produced, dest in (
+            (stage / "junit.xml", junit),
+            (stage / "coverage.xml", cov),
+        ):
+            if produced.is_file():
+                shutil.copy2(produced, dest)
     finally:
-        (pd / _JOB_SCRIPT).unlink(missing_ok=True)
-        staged_test.unlink(missing_ok=True)
+        shutil.rmtree(scratch, ignore_errors=True)
 
     code = _parse_pytest_exit(res.stdout)
-    junit = stage / "junit.xml"
-    cov = stage / "coverage.xml"
     return DockerRunResult(
         returncode=code,
         stdout=res.stdout or "",
