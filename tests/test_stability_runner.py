@@ -28,6 +28,7 @@ from agents.stability_runner import (
     StabilityRun,
     StabilityVerdict,
     check_stability,
+    classify_pytest_failure,
 )
 
 # ── Fake DockerRunResult ───────────────────────────────────────────────
@@ -247,3 +248,183 @@ def test_stability_run_ok_property() -> None:
     assert StabilityRun(returncode=0).ok is True
     assert StabilityRun(returncode=1).ok is False
     assert StabilityRun(returncode=2).ok is False
+
+
+# ── classify_pytest_failure (#629) ─────────────────────────────────────
+# The Evaluator's judge LLM used to guess "import error" for a
+# consistent_fail that was actually a real assertion failure. These pin
+# the deterministic classifier against realistic pytest stdout/stderr
+# shapes so that regression is caught by unit tests, not a confused human.
+
+_ASSERTION_FAILURE_STDOUT = """
+============================= test session starts ==============================
+collected 6 items
+
+tests/test_orders.py::test_total_price FAILED                          [ 16%]
+tests/test_orders.py::test_line_items FAILED                           [ 33%]
+
+=================================== FAILURES ====================================
+_______________________________ test_total_price ________________________________
+
+    def test_total_price():
+>       assert 0.0 == 300.0
+E       assert 0.0 == 300.0
+
+tests/test_orders.py:42: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_orders.py::test_total_price - assert 0.0 == 300.0
+FAILED tests/test_orders.py::test_line_items - assert 0.0 == 300.0
+============================== 6 failed in 0.34s ================================
+"""
+
+_IMPORT_ERROR_STDOUT = """
+============================= test session starts ==============================
+collected 0 items / 1 error
+
+==================================== ERRORS ======================================
+______________________ ERROR collecting tests/test_orders.py ______________________
+ImportError while importing test module '/app/tests/test_orders.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+../../.venv/lib/python3.11/site-packages/_pytest/python.py:493: in import_module
+    mod = import_path(...)
+E   ModuleNotFoundError: No module named 'orders_api'
+=========================== short test summary info ============================
+ERROR tests/test_orders.py
+=============================== 1 error during collection ========================
+"""
+
+_CLEAN_SUCCESS_STDOUT = """
+============================= test session starts ==============================
+collected 6 items
+
+tests/test_orders.py::test_total_price PASSED                          [ 16%]
+tests/test_orders.py::test_line_items PASSED                           [ 33%]
+
+============================== 6 passed in 0.12s ================================
+"""
+
+
+def test_classify_assertion_failure() -> None:
+    """A genuine assertion failure (exit 1) is classified 'assertion', not
+    mislabelled as an import error (#629 — the demo hardcode bug: pytest
+    output `assert 0.0 == 300.0`, `6 failed`)."""
+    assert classify_pytest_failure(_ASSERTION_FAILURE_STDOUT, 1) == "assertion"
+
+
+def test_classify_import_error_via_marker() -> None:
+    assert classify_pytest_failure(_IMPORT_ERROR_STDOUT, 2) == "import"
+
+
+def test_classify_import_error_by_exit_code_alone() -> None:
+    """Exit code 2 (pytest's collection-error code) is import even without a
+    recognised marker string — the exit code itself is the strongest signal."""
+    assert (
+        classify_pytest_failure("some unrecognised collection failure", 2) == "import"
+    )
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        "ModuleNotFoundError: No module named 'orders_api'",
+        "ImportError: cannot import name 'Foo' from 'bar'",
+        "No module named 'orders_api'",
+        "1 error during collection",
+        "errors during collection",
+        "cannot import name 'Foo'",
+    ],
+)
+def test_classify_import_markers(marker: str) -> None:
+    assert classify_pytest_failure(marker, 1) == "import"
+
+
+def test_classify_assertion_requires_exit_code_one() -> None:
+    """Assertion markers alone (without exit code 1) don't classify as
+    'assertion' — e.g. exit code 2 always wins as 'import' regardless of
+    stray text that happens to contain 'assert'."""
+    assert classify_pytest_failure(_ASSERTION_FAILURE_STDOUT, 2) == "import"
+
+
+def test_classify_unrecognised_failure_is_unknown() -> None:
+    assert classify_pytest_failure("boom, something else broke", 3) == "unknown"
+
+
+def test_classify_clean_pass_is_not_misclassified() -> None:
+    """A clean passing run must never be classified as 'import' or
+    'assertion' — there's no failure to classify."""
+    assert classify_pytest_failure(_CLEAN_SUCCESS_STDOUT, 0) == "unknown"
+
+
+def test_classify_empty_stdout() -> None:
+    assert classify_pytest_failure("", 1) == "unknown"
+    assert classify_pytest_failure("", 0) == "unknown"
+
+
+# ── StabilityResult.failure_kind (#629) ────────────────────────────────
+
+
+def test_failure_kind_none_when_stable() -> None:
+    result = StabilityResult(
+        verdict=StabilityVerdict.STABLE,
+        runs=(StabilityRun(returncode=0), StabilityRun(returncode=0)),
+    )
+    assert result.failure_kind is None
+
+
+def test_failure_kind_none_when_flaky() -> None:
+    result = StabilityResult(
+        verdict=StabilityVerdict.FLAKY,
+        runs=(StabilityRun(returncode=0), StabilityRun(returncode=1)),
+    )
+    assert result.failure_kind is None
+
+
+def test_failure_kind_none_when_error() -> None:
+    result = StabilityResult(verdict=StabilityVerdict.ERROR, runs=())
+    assert result.failure_kind is None
+
+
+def test_failure_kind_assertion_for_consistent_fail(
+    test_file: Path,
+    project_dir: Path,
+) -> None:
+    """End-to-end via check_stability: all three runs fail with a real
+    assertion → failure_kind='assertion', not a phantom import guess."""
+
+    def _runner(_tf, _pd, _seed):
+        return _FakeRunResult(returncode=1, stdout=_ASSERTION_FAILURE_STDOUT)
+
+    result = check_stability(test_file, project_dir, _runner)
+    assert result.verdict == StabilityVerdict.CONSISTENT_FAIL
+    assert result.failure_kind == "assertion"
+
+
+def test_failure_kind_import_for_consistent_fail(
+    test_file: Path,
+    project_dir: Path,
+) -> None:
+    def _runner(_tf, _pd, _seed):
+        return _FakeRunResult(returncode=2, stdout=_IMPORT_ERROR_STDOUT)
+
+    result = check_stability(test_file, project_dir, _runner)
+    assert result.verdict == StabilityVerdict.CONSISTENT_FAIL
+    assert result.failure_kind == "import"
+
+
+def test_failure_kind_checks_stderr_too(
+    test_file: Path,
+    project_dir: Path,
+) -> None:
+    """The classifier looks at stderr as well as stdout — some pytest
+    configurations route the traceback to stderr."""
+
+    def _runner(_tf, _pd, _seed):
+        return _FakeRunResult(
+            returncode=2,
+            stdout="",
+            stderr=_IMPORT_ERROR_STDOUT,
+        )
+
+    result = check_stability(test_file, project_dir, _runner)
+    assert result.failure_kind == "import"

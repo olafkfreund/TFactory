@@ -11,6 +11,7 @@ import json
 import os
 import re
 from pathlib import Path
+from typing import Any
 
 from .project_context import (
     detect_project_capabilities,
@@ -1146,7 +1147,7 @@ def get_tfactory_gen_functional_prompt(
 # ─── Task 7 (#8) — Evaluator helper ──────────────────────────────────────
 
 
-def _format_signal_value(obj, *keys, default="?"):
+def _format_signal_value(obj: Any, *keys: str, default: Any = "?") -> Any:
     """Duck-typed accessor: try each key/attr in order; return the first
     non-None value. Lets the helper accept dataclass-shaped OR dict-shaped
     signal inputs (commit 5 will pass dataclasses; future callers may
@@ -1203,6 +1204,21 @@ def _format_evaluator_per_test_block(bundle) -> str:
         verdict_str = getattr(verdict, "value", verdict)
         rerun_count = _format_signal_value(stability, "rerun_count", default="?")
         stability_line = f"stability: {verdict_str} ({rerun_count} runs)"
+        # Deterministic failure-kind classifier (#629) — tells a
+        # consistent_fail apart from a real assertion failure vs. an
+        # import/collection error, so the LLM doesn't have to guess (and
+        # the guess doesn't get quoted as fact in the PR comment).
+        failure_kind = _format_signal_value(stability, "failure_kind", default=None)
+        if failure_kind == "assertion":
+            stability_line += (
+                " — the test executed; its assertions failed "
+                "(NOT an import/collection error)"
+            )
+        elif failure_kind == "import":
+            stability_line += (
+                " — the subject module could not be imported/collected "
+                "in the sandbox (import/collection error)"
+            )
     else:
         stability_line = "stability: not computed"
 
