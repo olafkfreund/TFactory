@@ -969,3 +969,14 @@ def test_record_dispatch_succeeds_on_a_foreign_loop(tmp_path, monkeypatch):
         return done["lifecycle_state"]
 
     assert asyncio.run(_verdict()) == "done"
+
+
+def test_verify_job_sets_data_root_env():
+    """The verify Job declares TFACTORY_DATA_ROOT = its mount, so the nested Nix
+    sandbox resolves co-mount subPaths against the right PVC root — without it
+    pvc_subpath returns None, the Nix Job mounts nothing, and every AC rejects on
+    an empty /work (#623)."""
+    m = build_verify_job_manifest(_cfg())
+    env = m["spec"]["template"]["spec"]["containers"][0]["env"]
+    dr = next((e for e in env if e["name"] == "TFACTORY_DATA_ROOT"), None)
+    assert dr is not None and dr["value"] == "/work"  # VerifyJobConfig.mount default

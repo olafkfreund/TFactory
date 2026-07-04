@@ -554,3 +554,24 @@ def test_run_pytest_lane_via_nix_isolates_shared_checkout(tmp_path, monkeypatch)
     assert not list(project.parent.glob("_nixrun-*"))
     # junit survives the scratch cleanup (copied off it)
     assert res.junit_xml_path is not None and res.junit_xml_path.is_file()
+
+
+def test_nix_runner_from_env_honors_data_root(monkeypatch):
+    """nix_runner_from_env passes TFACTORY_DATA_ROOT to the sandbox so pvc_subpath
+    resolves co-mounts when the PVC is mounted at a non-default path (#623)."""
+    from agents.nix_env import nix_runner_from_env
+
+    monkeypatch.setenv("TFACTORY_NIX_RUNNER_IMAGE", "img:latest")
+    monkeypatch.setenv("TFACTORY_DATA_ROOT", "/work")
+    sb = nix_runner_from_env()
+    assert sb is not None and sb.data_root == "/work"
+
+
+def test_nix_runner_from_env_default_data_root(monkeypatch):
+    """Absent TFACTORY_DATA_ROOT, the sandbox keeps its control-plane default."""
+    from agents.nix_env import nix_runner_from_env
+
+    monkeypatch.setenv("TFACTORY_NIX_RUNNER_IMAGE", "img:latest")
+    monkeypatch.delenv("TFACTORY_DATA_ROOT", raising=False)
+    sb = nix_runner_from_env()
+    assert sb is not None and sb.data_root == "/home/nonroot/.tfactory"
