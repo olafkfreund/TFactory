@@ -1679,6 +1679,11 @@ async def _run_evaluator_session(spec_dir, project_dir, bundles, verbose) -> boo
         from agents.confidence import enrich_verdicts
 
         flaky_by_test_id = {}
+        # Deterministic import-vs-assertion classification for a
+        # consistent_fail (#629) — fixes the `reasons` narrative regardless
+        # of what the judge LLM guessed. Only populated when stability
+        # actually ran and landed on CONSISTENT_FAIL.
+        failure_kind_by_test_id = {}
         for b in bundles:
             fh = getattr(b, "flaky_history", None)
             if fh is not None:
@@ -1690,8 +1695,17 @@ async def _run_evaluator_session(spec_dir, project_dir, bundles, verbose) -> boo
                         b.test_id,
                         exc_info=True,
                     )
+            stability = getattr(b, "stability", None)
+            failure_kind = (
+                getattr(stability, "failure_kind", None) if stability else None
+            )
+            if failure_kind is not None:
+                failure_kind_by_test_id[b.test_id] = {
+                    "failure_kind": failure_kind,
+                    "rerun_count": getattr(stability, "rerun_count", 3),
+                }
         doc = json.loads(verdicts_path.read_text())
-        enrich_verdicts(doc, flaky_by_test_id)
+        enrich_verdicts(doc, flaky_by_test_id, failure_kind_by_test_id)
         # Honor the RFC-0002 contract execution scope (#247): record declared
         # coverage_target / mutation_scope / security_scope into the run output.
         try:
