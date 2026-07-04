@@ -518,3 +518,39 @@ def test_run_pytest_lane_via_nix_holds_nix_lock_during_dispatch(tmp_path, monkey
     run_pytest_lane_via_nix(spec, project, test_file)
     assert seen.get("locked") is True  # dispatch happened under the lock
     assert not _NIX_JOB_LOCK.locked()  # and released afterwards
+
+
+def test_run_pytest_lane_via_nix_isolates_shared_checkout(tmp_path, monkeypatch):
+    """The lane runs against a per-run scratch COPY, never mutating the shared
+    project checkout, and cleans the scratch up afterwards (#623)."""
+    spec = tmp_path / "specs" / "027"
+    spec.mkdir(parents=True)
+    _write_contract(spec, _UNIT_ENV)
+    project = tmp_path / "proj"
+    (project / "src").mkdir(parents=True)
+    (project / "src" / "pkg.py").write_text("x = 1\n")
+    test_file = project / "src_test.py"
+    test_file.write_text("def test_ok(): assert True\n")
+
+    captured = {}
+
+    class _FakeSandbox:
+        def run(self, commands, *, workdir=None, timeout=300):
+            captured["is_scratch"] = Path(workdir).resolve() != project.resolve()
+            stage = Path(workdir) / ".tf_pytest"
+            stage.mkdir(parents=True, exist_ok=True)
+            (stage / "junit.xml").write_text("<testsuites/>")
+            return JobRunResult(ok=True, exit_code=0, output="__PYTEST_EXIT=0\n")
+
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: _FakeSandbox())
+    res = run_pytest_lane_via_nix(spec, project, test_file)
+    assert res is not None and res.returncode == 0
+    assert captured["is_scratch"] is True  # ran against a scratch, not the checkout
+    # the shared checkout is never written to
+    assert not (project / "flake.nix").exists()
+    assert not (project / "_tf_nix_job.sh").exists()
+    assert not (project / "tests").exists()
+    # no scratch sibling is left behind
+    assert not list(project.parent.glob("_nixrun-*"))
+    # junit survives the scratch cleanup (copied off it)
+    assert res.junit_xml_path is not None and res.junit_xml_path.is_file()
