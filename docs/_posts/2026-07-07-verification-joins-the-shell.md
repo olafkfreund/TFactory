@@ -2,7 +2,7 @@
 layout: post
 title: "Verification joins the shell — and takes the screenshots for this post"
 subtitle: "TFactory picks up the fleet-wide shell and the latest models. The same MFA browser harness that verifies the portals captured every authenticated screenshot you see here. A one-page showcase is ready to download."
-date: 2026-07-07 12:00:00
+date: 2026-07-07 06:00:00
 author: DataSeek Team
 ---
 
