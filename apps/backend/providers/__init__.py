@@ -41,7 +41,7 @@ Package layout
         gemini_agentic.py   — GeminiAgenticProvider (Gemini CLI sandbox)
         ollama.py           — OllamaProvider   (local Ollama text-only adapter)
         ollama_agentic.py   — OllamaAgenticProvider (native tool calling)
-        factory.py          — Unified get_provider() + legacy get_qa_llm_provider()
+        factory.py          — Unified get_provider() phase-aware factory
 
 Usage::
 
