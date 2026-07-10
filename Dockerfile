@@ -66,6 +66,13 @@ RUN apk upgrade --no-cache
 #                   (test_trivy_no_high_critical). Constraint, not =2.46-r2, so
 #                   the build stays green when Wolfi revs the package further;
 #                   drop this once the base digest ships the fix (Renovate).
+#   libexpat1     — the :latest-dev base bundles libexpat1 2.8.1-r1, which
+#                   carries CVE-2026-56131/56407/56408 (HIGH; use-after-free +
+#                   integer overflows, fixed in 2.8.2-r0). The pinned snapshot
+#                   lags so `apk upgrade` can't reach it; force a build-newer rev
+#                   to clear the P0.8 Trivy gate. Constraint (not =2.8.2-r0) so
+#                   the build stays green as Wolfi revs further; drop once the
+#                   base digest ships the fix (Renovate).
 #   bubblewrap    — OS-level bash sandbox for agent commands. Without it the
 #                   Claude Agent SDK logs "Sandbox disabled: ... bubblewrap
 #                   (bwrap) not installed" and runs commands with NO filesystem
@@ -83,6 +90,7 @@ RUN apk add --no-cache \
         git \
         gh \
         gnupg \
+        "libexpat1>2.8.1-r1" \
         nodejs \
         npm \
         socat \
