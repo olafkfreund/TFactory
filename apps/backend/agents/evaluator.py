@@ -70,6 +70,7 @@ from agents.evaluator_targets import (
 )
 from agents.evaluator_verdicts import _validate_verdicts
 from agents.nix_env import (
+    detect_serve_command,
     environment_from_contract,
     is_nix_environment,
     run_pytest_lane_via_nix,
@@ -335,7 +336,11 @@ def _ensure_host_venv(project_dir: Path) -> Path:
     vdir = Path(tempfile.mkdtemp(prefix="tf-hostvenv-"))
     _venv.create(vdir, with_pip=True)
     py = str(vdir / "bin" / "python")
-    args = [py, "-m", "pip", "install", "-q", "pytest", "pytest-cov"]
+    # requests (#612): api-lane subtasks are generated as plain requests-based
+    # httpx-free tests hitting TFACTORY_TARGET_URL (see the pytest framework
+    # descriptor's api-lane context_block) — install it unconditionally so
+    # those tests import cleanly even when the SUT itself doesn't declare it.
+    args = [py, "-m", "pip", "install", "-q", "pytest", "pytest-cov", "requests"]
     req = Path(project_dir) / "requirements.txt"
     if req.exists():
         args += ["-r", str(req)]
@@ -1520,8 +1525,84 @@ def _build_kube_or_static_bundle(
             runtime.wait_for_healthy()
             return make_bundle(make_runner(runtime.target_url))
     target_url = _browser_target_url(spec_dir, st)
+    if target_url is None:
+        # api lane, spec-ingest, no .tfactory.yml target configured (#612):
+        # self-serve the SUT instead of leaving VAL-2 permanently unreachable.
+        self_served = _maybe_self_serve_api_bundle(
+            spec_dir, project_dir, st, make_runner, make_bundle
+        )
+        if self_served is not None:
+            return self_served
     _gate_target_health(spec_dir, st, target, target_url)
     return make_bundle(make_runner(target_url))
+
+
+def _maybe_self_serve_api_bundle(spec_dir, project_dir, st, make_runner, make_bundle):
+    """Self-serve the SUT for an api-lane subtask with no configured target.
+
+    The spec-ingest case (#612): a freshly-generated app has no
+    ``.tfactory.yml`` target yet, so ``_browser_target_url`` returns None and
+    the api lane would otherwise always run with no app to hit (VAL-2 stuck
+    ``not_run``/failed). Detects the app's entrypoint (``agents.nix_env.
+    detect_serve_command``), boots it on a free host port via
+    ``LocalServeRuntime``, health-polls it, runs the bundle against it, and
+    always tears the process down.
+
+    Only engages when the lane's test process will run in the SAME
+    host/network-namespace as this self-served app — i.e. when the run is
+    NOT using the Nix k8s Job backend (that lane executes in a separate pod
+    and could never reach a ``127.0.0.1`` URL bound here). When nixjob is
+    selected, or nothing is detectable/startable, returns None so the caller
+    falls through to the existing honest no-target path unchanged. Never
+    raises into the run — self-serve is best-effort.
+    """
+    if st.get("lane") != "api":
+        return None
+    if _nix_verify_mode(spec_dir):
+        _eval_log.info(
+            "api lane self-serve skipped for %s: nixjob backend runs the test "
+            "in a separate pod that can't reach a host-local URL (follow-up)",
+            st.get("id"),
+        )
+        return None
+    try:
+        from tools.runners.free_port import find_free_port
+        from tools.runners.local_serve_runtime import (
+            LocalServeRuntime,
+            LocalServeRuntimeError,
+        )
+
+        env = environment_from_contract(spec_dir)
+        port = find_free_port()
+        serve_cmd = detect_serve_command(Path(project_dir), env, port=port)
+        if not serve_cmd:
+            _eval_log.info(
+                "api lane self-serve: no serve command detected for %s", st.get("id")
+            )
+            return None
+        serve_cmd = _host_serve_command(serve_cmd, Path(project_dir))
+        runtime = LocalServeRuntime(serve_cmd, Path(project_dir), port)
+        with runtime:
+            runtime.wait_for_healthy()
+            return make_bundle(make_runner(runtime.target_url))
+    except LocalServeRuntimeError as exc:
+        _eval_log.warning("api lane self-serve did not become healthy: %s", exc)
+        return None
+    except Exception as exc:  # noqa: BLE001 — self-serve is best-effort
+        _eval_log.warning("api lane self-serve errored (non-blocking): %s", exc)
+        return None
+
+
+def _host_serve_command(serve_cmd: str, project_dir: Path) -> str:
+    """Rewrite a bare ``python`` serve command to use the project's host venv
+    interpreter (built by ``_ensure_host_venv``), so the self-served app sees
+    the SUT's installed deps (e.g. uvicorn/fastapi) instead of falling
+    through to whatever ``python`` resolves to on PATH. Non-Python serve
+    commands (e.g. ``npm start``) are returned unchanged."""
+    if not serve_cmd.startswith("python "):
+        return serve_cmd
+    venv_py = str(_ensure_host_venv(project_dir) / "bin" / "python")
+    return venv_py + serve_cmd[len("python") :]
 
 
 def _gate_target_health(spec_dir, subtask, target, target_url) -> None:

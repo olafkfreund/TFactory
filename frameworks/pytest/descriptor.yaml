@@ -14,8 +14,10 @@ name: pytest
 language: python
 lanes:
   - unit
-  # api: Python API/contract tests are pytest tests driving httpx against a
-  # running HTTP target (declared in .tfactory.yml). The Evaluator runs the
+  # api: Python API/contract tests are pytest tests driving `requests` against
+  # a running HTTP target. The target is either declared in .tfactory.yml, or
+  # (spec-ingest, #612) self-served by the Evaluator from the detected app
+  # entrypoint when no target is configured. Either way the Evaluator runs the
   # api lane with network access + TFACTORY_TARGET_URL injected.
   - api
 
@@ -97,6 +99,27 @@ context_block: |
   Parametrize:
     - Use @pytest.mark.parametrize to cover multiple inputs/edge cases in one test function
     - Always include a descriptive ID: @pytest.mark.parametrize("x,y", [...], ids=[...])
+
+  API lane (lane: api) — functional/HTTP acceptance criteria, NOT unit tests:
+    - The target is a running instance of the SUT itself, reachable at
+      os.environ["TFACTORY_TARGET_URL"] (a base URL like "http://127.0.0.1:PORT",
+      no trailing slash). Read it at test time, not import time.
+    - Use the `requests` library (already installed) to drive real HTTP calls —
+      no TestClient/ASGI transport, no mocking the app: this lane proves the
+      app boots and answers over the network, not just that the code is importable.
+    - One test per acceptance criterion: assert status_code, response headers,
+      and response JSON/body shape against what the AC actually specifies.
+    - Do not assume a fixed request/response schema beyond what the AC states —
+      assert only what the criterion actually claims.
+    - Example:
+        import os
+        import requests
+
+        BASE_URL = os.environ["TFACTORY_TARGET_URL"]
+
+        def test_health_endpoint_returns_200():
+            resp = requests.get(f"{BASE_URL}/health", timeout=10)
+            assert resp.status_code == 200
 
 # Evaluator hooks — dotted-path references for per-language Evaluator primitives.
 # Populated in Task 9 (#25).  Empty tuples are valid until then.
