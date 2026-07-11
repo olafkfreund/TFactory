@@ -550,6 +550,9 @@ def _completion_result_summary(status: dict) -> dict[str, Any]:
         "rejected_count",
         "verdicts_count",
         "dedup_collision_count",
+        # Judge majority-vote split summary (#649 calibration hook); present
+        # only when the evaluator ran best-of-N (TFACTORY_VERDICT_VOTES > 1).
+        "verdict_vote",
     )
     return {k: status[k] for k in keys if k in status}
 
