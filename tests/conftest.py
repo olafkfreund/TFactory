@@ -283,6 +283,21 @@ def pytest_runtest_setup(item):
 
 
 # =============================================================================
+# EVALUATOR JUDGE VOTE DEFAULT (#649)
+# =============================================================================
+# The evaluator judge session defaults to best-of-3 majority voting in
+# production. The legacy evaluator tests were written against the single-pass
+# contract (one session call, one verdicts.json); pin votes=1 suite-wide so
+# they keep testing what they always tested. The vote path has its own tests
+# (tests/test_verdict_vote.py), which opt in by re-setting this env.
+
+
+@pytest.fixture(autouse=True)
+def _single_judge_vote(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TFACTORY_VERDICT_VOTES", "1")
+
+
+# =============================================================================
 # DIRECTORY FIXTURES
 # =============================================================================
 
