@@ -108,6 +108,31 @@ Two design choices, both the result of a live end-to-end run that found real bug
 - Job backend: `tools/runners/kube_sandbox.py` (ported from AIFactory's proven
   `core/kube_sandbox.py`) — pure manifest builder plus a create/watch/logs/delete
   lifecycle via `kubernetes_asyncio`.
+- Hardening (#651): every Job pod pins `seccompProfile: RuntimeDefault` and its
+  containers run with `allowPrivilegeEscalation: false` and `capabilities: drop ALL`
+  plus add-backs (`CHOWN`, `DAC_OVERRIDE`, `FOWNER`) that the root nix user needs to
+  write the uid-65532 co-mounted worktree and seed the warm store. `runAsNonRoot` is
+  deliberately absent: the nix-runner image runs builds as root by design (see the
+  uid-mismatch note in section 2); moving to a nonroot nix image is the upgrade path.
+  The Helm chart additionally ships a `NetworkPolicy` for the Job pods
+  (`networkPolicy.jobPods`): default-deny ingress, egress limited to DNS, public
+  443 (substituters/git/LLM APIs), the kube API server, and same-namespace services.
+
+### Warm `/nix` store trust assumption (shared-cache poisoning)
+
+When `TFACTORY_NIX_STORE_PVC` is set, all per-task Jobs mount ONE warm `/nix`
+PVC read-write and share it across tasks. A malicious SUT or test run can
+therefore tamper with store paths that later Jobs consume (cross-task cache
+poisoning); the deploy lane is the highest-value target because `tofu init`
+executes provider binaries selected by the untrusted IaC input. This is an
+accepted, documented trade-off today: task isolation on this substrate is
+namespaces + policy + dropped capabilities, not a per-task store. Mitigations,
+in preference order, when this assumption stops being acceptable:
+
+1. Mount the warm store read-only into task Jobs with a local scratch overlay
+   store for new builds.
+2. Periodic `nix store verify --all` against the upstream substituters.
+3. Per-task (unshared) stores — reverts to cold-fetch cost.
 
 ## 5. What teams and operators do
 
