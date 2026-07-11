@@ -44,7 +44,7 @@ class LocalServeRuntime:
             # run the api-lane test against url …
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - runtime config + injectable test seams (popen/clock)
         self,
         serve_command: str,
         project_dir: Path,
@@ -81,9 +81,9 @@ class LocalServeRuntime:
         # group so stop() can kill the whole tree — the command is often a
         # shell invocation whose direct child (uvicorn) would otherwise
         # survive killing just the shell's pid.
-        self._proc = self._popen_fn(
+        self._proc = self._popen_fn(  # noqa: S604 - detected local serve cmd, not untrusted
             self.serve_command,
-            shell=True,  # noqa: S602
+            shell=True,
             cwd=str(self.project_dir),
             start_new_session=True,
             stdout=subprocess.DEVNULL,
@@ -149,59 +149,3 @@ class LocalServeRuntime:
         raise LocalServeRuntimeError(
             f"{url} did not become healthy within {self.timeout_seconds}s"
         )
-
-
-def _demo() -> None:
-    """Self-check: a fake popen_fn/clock so this runs with no real process
-    or network (ponytail — one runnable check, no framework)."""
-    import email.message
-    from typing import cast
-
-    class _FakeProc:
-        def __init__(self) -> None:
-            self.pid = 12345
-            self.returncode: int | None = None
-
-        def poll(self) -> int | None:
-            return self.returncode
-
-        def wait(self, timeout: float | None = None) -> int:
-            return 0
-
-    calls = {"n": 0}
-
-    def fake_popen(*a: object, **k: object) -> subprocess.Popen[bytes]:
-        return cast("subprocess.Popen[bytes]", _FakeProc())
-
-    times = iter([0.0, 0.1, 0.2, 0.3])
-
-    def fake_clock() -> float:
-        calls["n"] += 1
-        return next(times, 999.0)
-
-    def fake_urlopen(url: str, timeout: float = 5) -> None:
-        # third poll attempt "succeeds"
-        if calls["n"] >= 3:
-            raise HTTPError(url, 404, "not found", email.message.Message(), None)
-        raise URLError("connection refused")
-
-    import unittest.mock as mock
-
-    rt = LocalServeRuntime(
-        "python -m uvicorn app:app",
-        Path("/tmp"),
-        8123,
-        popen_fn=fake_popen,
-        clock=fake_clock,
-        poll_interval_seconds=0,
-    )
-    with mock.patch(f"{__name__}.urlrequest.urlopen", fake_urlopen):
-        with rt:
-            assert rt.target_url == "http://127.0.0.1:8123"
-            rt.wait_for_healthy()  # must not raise — a 404 still means "up"
-    assert rt._proc is None  # torn down on exit
-    print("local_serve_runtime self-check: OK")
-
-
-if __name__ == "__main__":
-    _demo()

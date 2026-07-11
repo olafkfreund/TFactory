@@ -1537,7 +1537,13 @@ def _build_kube_or_static_bundle(
     return make_bundle(make_runner(target_url))
 
 
-def _maybe_self_serve_api_bundle(spec_dir, project_dir, st, make_runner, make_bundle):
+def _maybe_self_serve_api_bundle(
+    spec_dir: Path,
+    project_dir: Path,
+    st: dict[str, Any],
+    make_runner: Callable[[str], Any],
+    make_bundle: Callable[[Any], Any],
+) -> Any | None:
     """Self-serve the SUT for an api-lane subtask with no configured target.
 
     The spec-ingest case (#612): a freshly-generated app has no
@@ -1566,8 +1572,9 @@ def _maybe_self_serve_api_bundle(spec_dir, project_dir, st, make_runner, make_bu
         )
         return None
     try:
-        from tools.runners.free_port import find_free_port
-        from tools.runners.local_serve_runtime import (
+        # deferred best-effort imports (file convention)
+        from tools.runners.free_port import find_free_port  # noqa: PLC0415
+        from tools.runners.local_serve_runtime import (  # noqa: PLC0415
             LocalServeRuntime,
             LocalServeRuntimeError,
         )
