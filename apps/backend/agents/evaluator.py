@@ -45,12 +45,14 @@ import logging as _logging
 import os
 import shutil
 import traceback
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from agents.run_result import RunResultLike
+from agents.verdict_vote import majority_vote
 
 if TYPE_CHECKING:
     from tools.runners.docker_runner import DockerRunResult
@@ -1642,7 +1644,7 @@ def _vote_count() -> int:
 
 async def _judge_once(
     spec_dir: Path, project_dir: Path, prompt: str, verbose: bool
-) -> tuple[dict | None, str, str]:
+) -> tuple[dict[str, Any] | None, str, str]:
     """One independent judge call: session + verdicts.json validation (#649).
 
     Returns ``(doc, "", "")`` on success, or ``(None, phase, error)`` on any
@@ -1661,20 +1663,61 @@ async def _judge_once(
     if not ok:
         return None, "evaluator_invalid_verdicts", err
     try:
-        return json.loads(verdicts_path.read_text()), "", ""
+        doc = json.loads(verdicts_path.read_text())
     except (OSError, json.JSONDecodeError) as exc:
         return None, "evaluator_invalid_verdicts", f"verdicts.json unreadable: {exc}"
+    if not isinstance(doc, dict):
+        return None, "evaluator_invalid_verdicts", "verdicts.json root is not an object"
+    return doc, "", ""
 
 
-def _entry_for(doc: dict | None, test_id: str) -> dict | None:
+async def _collect_judge_docs(
+    spec_dir: Path, project_dir: Path, prompt: str, verbose: bool, n: int
+) -> tuple[list[dict[str, Any] | None], tuple[str, str] | None]:
+    """Run ``n`` independent judge calls; keep per-call docs + first failure."""
+    docs: list[dict[str, Any] | None] = []
+    first_failure: tuple[str, str] | None = None
+    for i in range(n):
+        doc, fail_phase, fail_err = await _judge_once(
+            spec_dir, project_dir, prompt, verbose
+        )
+        docs.append(doc)
+        if doc is None:
+            first_failure = first_failure or (fail_phase, fail_err)
+        elif n > 1:
+            # Per-call audit trail (verdicts.json itself is cleared per call).
+            (spec_dir / "findings" / f"verdicts.vote{i}.json").write_text(
+                json.dumps(doc, indent=2)
+            )
+    return docs, first_failure
+
+
+def _entry_for(doc: dict[str, Any] | None, test_id: str) -> dict[str, Any] | None:
     """Find one test's verdict entry in a judge run's doc (None-tolerant)."""
-    for v in (doc or {}).get("verdicts") or []:
+    verdicts = (doc or {}).get("verdicts")
+    if not isinstance(verdicts, list):
+        return None
+    for v in verdicts:
         if isinstance(v, dict) and v.get("test_id") == test_id:
             return v
     return None
 
 
-async def _merge_voted_verdicts(docs: list) -> tuple[dict, dict]:
+def _voted_test_ids(docs: list[dict[str, Any] | None]) -> list[str]:
+    """Union of test_ids across judge runs, first-seen order preserved."""
+    order: list[str] = []
+    for doc in docs:
+        verdicts = (doc or {}).get("verdicts")
+        for v in verdicts if isinstance(verdicts, list) else []:
+            tid = v.get("test_id") if isinstance(v, dict) else None
+            if isinstance(tid, str) and tid and tid not in order:
+                order.append(tid)
+    return order
+
+
+async def _merge_voted_verdicts(
+    docs: list[dict[str, Any] | None],
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """Merge N judge runs into one verdicts doc via per-test majority vote (#649).
 
     A run that crashed/was invalid (``None`` doc) or is simply missing a test
@@ -1683,41 +1726,36 @@ async def _merge_voted_verdicts(docs: list) -> tuple[dict, dict]:
     the doc carries a ``verdict_vote`` split summary for calibration.
     Returns ``(merged_doc, vote_summary)``.
     """
-    from collections import Counter
-
-    from agents.verdict_vote import majority_vote
-
     base = next(d for d in docs if d is not None)
 
-    async def _replay(i: int) -> dict | None:
+    async def _replay(i: int) -> dict[str, Any] | None:
         return docs[i]
 
-    order: list[str] = []
-    for doc in docs:
-        for v in (doc or {}).get("verdicts") or []:
-            tid = v.get("test_id") if isinstance(v, dict) else None
-            if tid and tid not in order:
-                order.append(tid)
-
-    merged: list[dict] = []
-    splits: Counter = Counter()
+    order = _voted_test_ids(docs)
+    merged: list[dict[str, Any]] = []
+    splits: Counter[str] = Counter()
     for tid in order:
-        result = await majority_vote(
-            _replay,
-            lambda doc, _tid=tid: (_entry_for(doc, _tid) or {}).get("verdict"),
-            n=len(docs),
-        )
+
+        def _extract(doc: dict[str, Any] | None, _tid: str = tid) -> str | None:
+            entry = _entry_for(doc, _tid)
+            value = entry.get("verdict") if entry else None
+            return value if isinstance(value, str) else None
+
+        result = await majority_vote(_replay, _extract, n=len(docs))
         splits[result.split] += 1
         # Prefer a majority voter's entry for the payload; fall back to any
         # run that produced the test (a crash-driven reject majority may have
         # no entry of its own).
-        entry = None
+        entry: dict[str, Any] | None = None
         for i, vote in enumerate(result.votes):
-            if vote == result.majority and _entry_for(docs[i], tid) is not None:
-                entry = dict(_entry_for(docs[i], tid))
+            candidate = _entry_for(docs[i], tid)
+            if vote == result.majority and candidate is not None:
+                entry = dict(candidate)
                 break
         if entry is None:
-            entry = dict(next(e for e in (_entry_for(d, tid) for d in docs) if e))
+            entry = dict(
+                next(e for e in (_entry_for(d, tid) for d in docs) if e is not None)
+            )
         if entry.get("verdict") != result.majority:
             reasons = entry.get("reasons")
             entry["reasons"] = (list(reasons) if isinstance(reasons, list) else []) + [
@@ -1743,7 +1781,7 @@ async def _merge_voted_verdicts(docs: list) -> tuple[dict, dict]:
     doc = dict(base)
     doc["verdicts"] = merged
     contested = sum(c for s, c in splits.items() if not s.endswith("-0"))
-    summary = {
+    summary: dict[str, Any] = {
         "calls": len(docs),
         "failed_calls": sum(1 for d in docs if d is None),
         "tests": len(order),
@@ -1754,7 +1792,12 @@ async def _merge_voted_verdicts(docs: list) -> tuple[dict, dict]:
     return doc, summary
 
 
-async def _run_evaluator_session(spec_dir, project_dir, bundles, verbose) -> bool:
+async def _run_evaluator_session(
+    spec_dir: Path,
+    project_dir: Path,
+    bundles: list[EvaluatorSignals],
+    verbose: bool,
+) -> bool:
     """Invoke the judge LLM best-of-N (#649) and write the voted verdicts.json.
 
     The judge session is the one GATING LLM verdict in TFactory, so it never
@@ -1771,20 +1814,9 @@ async def _run_evaluator_session(spec_dir, project_dir, bundles, verbose) -> boo
     prompt = get_tfactory_evaluator_prompt(spec_dir, project_dir, bundles)
     verdicts_path = spec_dir / "findings" / "verdicts.json"
     n = _vote_count()
-    docs: list[dict | None] = []
-    first_failure: tuple[str, str] | None = None
-    for i in range(n):
-        doc, fail_phase, fail_err = await _judge_once(
-            spec_dir, project_dir, prompt, verbose
-        )
-        docs.append(doc)
-        if doc is None:
-            first_failure = first_failure or (fail_phase, fail_err)
-        elif n > 1:
-            # Per-call audit trail (verdicts.json itself is cleared per call).
-            (spec_dir / "findings" / f"verdicts.vote{i}.json").write_text(
-                json.dumps(doc, indent=2)
-            )
+    docs, first_failure = await _collect_judge_docs(
+        spec_dir, project_dir, prompt, verbose, n
+    )
 
     if all(d is None for d in docs):
         fail_phase, fail_err = first_failure or ("evaluator_session_error", "unknown")
@@ -1796,7 +1828,7 @@ async def _run_evaluator_session(spec_dir, project_dir, bundles, verbose) -> boo
         )
         return False
 
-    vote_summary: dict | None = None
+    vote_summary: dict[str, Any] | None = None
     if n > 1:
         merged, vote_summary = await _merge_voted_verdicts(docs)
         verdicts_path.write_text(json.dumps(merged, indent=2))
