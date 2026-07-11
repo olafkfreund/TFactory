@@ -145,6 +145,26 @@ networkPolicy:
     # Default: only the ingress controller may reach us.
     fromIngressNamespace: "ingress-nginx"
     extraRules: []
+  # Per-task Job pods (verify orchestration, nix lanes, deploy lane) carry
+  # `app: tfactory-sandbox` — NOT the Helm selectorLabels — so the policy
+  # above never matched them and they ran with unrestricted network (#651).
+  # This adds default-deny ingress + least-necessary egress for those pods.
+  jobPods:
+    enabled: true
+    # 443/tcp to public IPs: nix substituters, git remotes, LLM APIs, the
+    # OpenTofu registry (deploy lane).
+    allowExternalHttps: true
+    # Same-namespace egress: Postgres (job-state row), MinIO, TFactory API.
+    allowIntraNamespace: true
+    # The verify-orchestration Job dispatches nested lane Jobs via the k8s
+    # API. Enforcement is post-DNAT, so target the API server's real
+    # endpoint (node IP:6443 on k3s). Tighten cidr to the control-plane
+    # node(s) where known.
+    kubeApiServer:
+      enabled: true
+      cidr: "0.0.0.0/0"
+      port: 6443
+    extraEgressRules: []
 
 migrations:
   # Production: false. Operators run the alembic Job out-of-band so

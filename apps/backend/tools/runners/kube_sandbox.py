@@ -30,6 +30,32 @@ logger = logging.getLogger(__name__)
 # deployment.yaml); project clones live under workspaces/<name>.
 _DEFAULT_DATA_ROOT = "/home/nonroot/.tfactory"
 
+# ── Job-pod hardening (#651, Factory#274 compensating controls) ───────────────
+#
+# Pod-level: pin the RuntimeDefault seccomp profile (previously unset =
+# Unconfined on most CRI defaults). `runAsNonRoot` is deliberately NOT set:
+# the nix-runner image (nixos/nix) runs its builds as root by design — the
+# co-mounted worktree files are uid 65532 (created by the control plane) and
+# the warm-store seed copies the image's root-owned /nix — so forcing nonroot
+# would break every nix lane. The root user is preserved; the capability
+# add-backs below are what that root user actually needs against the
+# uid-mismatched co-mount, everything else is dropped.
+POD_SECURITY_CONTEXT: dict[str, Any] = {
+    "seccompProfile": {"type": "RuntimeDefault"},
+}
+# Container-level: no privilege escalation, drop ALL capabilities, then add
+# back only what the root nix user needs to work on the uid-65532 co-mount:
+#   DAC_OVERRIDE — write the 65532-owned worktree at /work (junit/screenshots)
+#   FOWNER       — chmod/utimes on 65532-owned files (git/tar/playwright)
+#   CHOWN        — `cp -a` ownership preservation when seeding the warm store
+# For the nonroot verify-orchestration Job these add-backs are inert (a
+# non-root process gets no effective capabilities from them).
+CONTAINER_SECURITY_CONTEXT: dict[str, Any] = {
+    "allowPrivilegeEscalation": False,
+    "privileged": False,
+    "capabilities": {"drop": ["ALL"], "add": ["CHOWN", "DAC_OVERRIDE", "FOWNER"]},
+}
+
 
 @dataclass
 class JobRunResult:
@@ -128,11 +154,13 @@ def build_job_manifest(
             "requests": {"cpu": cpus, "memory": memory},
             "limits": {"cpu": cpus, "memory": memory},
         },
+        "securityContext": dict(CONTAINER_SECURITY_CONTEXT),
     }
     pod_spec: dict[str, Any] = {
         "restartPolicy": "Never",
         "automountServiceAccountToken": False,  # the lane needs no k8s API
         "imagePullSecrets": [{"name": image_pull_secret}],
+        "securityContext": dict(POD_SECURITY_CONTEXT),
         "containers": [container],
     }
     volumes: list[dict[str, Any]] = []
@@ -173,6 +201,7 @@ def build_job_manifest(
                     "else echo 'warm nix store already populated'; fi",
                 ],
                 "volumeMounts": [{"name": "nix-store", "mountPath": "/warm"}],
+                "securityContext": dict(CONTAINER_SECURITY_CONTEXT),
             }
         ]
     if mounts:

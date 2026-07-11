@@ -237,6 +237,29 @@ def test_seed_creds_injected_when_secret_configured(monkeypatch):
     } <= mounts
 
 
+def test_seed_creds_init_container_is_hardened(monkeypatch):
+    # #651: the seed-creds initContainer carries the same hardened
+    # securityContext as the lane/seed containers (no escalation, drop ALL +
+    # co-mount add-backs).
+    monkeypatch.setenv("TFACTORY_VERIFY_CLI_CREDS_SECRET", "factory-cli-creds")
+    pod = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
+    init = next(c for c in pod["initContainers"] if c["name"] == "seed-creds")
+    sc = init["securityContext"]
+    assert sc["allowPrivilegeEscalation"] is False
+    assert sc["capabilities"]["drop"] == ["ALL"]
+
+
+def test_verify_job_pod_pins_seccomp_runtime_default():
+    # #651: the verify-orchestration Job inherits the shared builder's pod
+    # hardening (seccomp RuntimeDefault) and its container the restricted
+    # securityContext.
+    pod = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
+    assert pod["securityContext"]["seccompProfile"] == {"type": "RuntimeDefault"}
+    sc = pod["containers"][0]["securityContext"]
+    assert sc["allowPrivilegeEscalation"] is False
+    assert sc["capabilities"]["drop"] == ["ALL"]
+
+
 def test_manifest_is_a_job_with_the_configured_image():
     m = build_verify_job_manifest(_cfg())
     assert m["kind"] == "Job"

@@ -555,12 +555,21 @@ def _inject_verify_seed_creds(manifest: dict[str, Any]) -> None:
         f"chmod -R g+rwX {_VERIFY_HOME}/.claude {_VERIFY_HOME}/.codex "
         f"{_VERIFY_HOME}/.gemini {_VERIFY_HOME}/.config || true"
     )
+    # Same hardened container securityContext as the lane/seed containers
+    # (#651): no escalation, drop ALL + the co-mount add-backs. busybox runs as
+    # root (required today: the emptyDir home volumes are root-owned and the
+    # copied files stay world-readable for the nonroot verify container).
+    from tools.runners.kube_sandbox import (  # noqa: PLC0415 - lazy by design
+        CONTAINER_SECURITY_CONTEXT,
+    )
+
     pod.setdefault("initContainers", []).append(
         {
             "name": "seed-creds",
             "image": "busybox:1.36",
             "command": ["sh", "-c"],
             "args": ["\n".join(lines)],
+            "securityContext": dict(CONTAINER_SECURITY_CONTEXT),
             "volumeMounts": [
                 *home_mounts,
                 {"name": "cli-creds", "mountPath": "/seed", "readOnly": True},

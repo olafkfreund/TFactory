@@ -132,6 +132,31 @@ def test_warm_nix_store_mounted_with_seed_init():
     assert "/warm/store" in init["command"][-1]
 
 
+def test_job_pod_and_container_are_hardened():
+    # #651 (Factory#274 compensating controls): seccomp RuntimeDefault pinned on
+    # the pod; no privilege escalation + drop ALL on every container. The root
+    # nix user keeps only the co-mount add-backs (uid-65532 worktree writes +
+    # warm-store seeding); runAsNonRoot is deliberately NOT set — the nix-runner
+    # image builds as root by design.
+    m = build_job_manifest(
+        "jh",
+        "img",
+        ["true"],
+        repo_pvc="tfactory-data",
+        repo_subpath="ws/p",
+        nix_store_pvc="tfactory-nix-store",
+    )
+    pod = m["spec"]["template"]["spec"]
+    assert pod["securityContext"] == {"seccompProfile": {"type": "RuntimeDefault"}}
+    assert "runAsNonRoot" not in pod["securityContext"]
+    for c in [*pod["containers"], *pod.get("initContainers", [])]:
+        sc = c["securityContext"]
+        assert sc["allowPrivilegeEscalation"] is False
+        assert sc["privileged"] is False
+        assert sc["capabilities"]["drop"] == ["ALL"]
+        assert set(sc["capabilities"]["add"]) == {"CHOWN", "DAC_OVERRIDE", "FOWNER"}
+
+
 def test_container_state_variants():
     from types import SimpleNamespace as NS
 
