@@ -2,11 +2,12 @@
  * @vitest-environment jsdom
  */
 /**
- * OnboardingWizard integration tests
+ * OnboardingWizard integration tests (#652)
  *
- * Integration tests for the complete onboarding wizard flow.
- * Verifies step navigation, OAuth/API key paths, back button behavior,
- * and progress indicator.
+ * Exercises the current provider-choice step machine:
+ *   welcome -> provider-choice -> claude | openai_compat | skip paths.
+ * The react-i18next mock returns raw keys, so assertions use translation
+ * keys and data-testids rather than English copy.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -14,38 +15,10 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import { OnboardingWizard } from './OnboardingWizard';
 
-// Mock react-i18next to avoid initialization issues
+// Mock react-i18next: t returns the key so tests assert on stable keys.
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string) => {
-      // Return the key itself or provide specific translations
-      // Keys are without namespace since component uses useTranslation('namespace')
-      const translations: Record<string, string> = {
-        'welcome.title': 'Welcome to TFactory',
-        'welcome.subtitle': 'AI-powered autonomous coding assistant',
-        'welcome.getStarted': 'Get Started',
-        'welcome.skip': 'Skip Setup',
-        'wizard.helpText': 'Let us help you get started with AI Factory',
-        'welcome.features.aiPowered.title': 'AI-Powered',
-        'welcome.features.aiPowered.description': 'Powered by Claude',
-        'welcome.features.specDriven.title': 'Spec-Driven',
-        'welcome.features.specDriven.description': 'Create from specs',
-        'welcome.features.memory.title': 'Memory',
-        'welcome.features.memory.description': 'Remembers context',
-        'welcome.features.parallel.title': 'Parallel',
-        'welcome.features.parallel.description': 'Work in parallel',
-        'authChoice.title': 'Choose Your Authentication Method',
-        'authChoice.subtitle': 'Select how you want to authenticate',
-        'authChoice.oauthTitle': 'Sign in with Anthropic',
-        'authChoice.oauthDesc': 'OAuth authentication',
-        'authChoice.apiKeyTitle': 'Use Custom API Key',
-        'authChoice.apiKeyDesc': 'Enter your own API key',
-        'authChoice.skip': 'Skip for now',
-        // Common translations
-        'common:actions.close': 'Close'
-      };
-      return translations[key] || key;
-    },
+    t: (key: string) => key,
     i18n: { language: 'en' }
   }),
   Trans: ({ children }: { children: React.ReactNode }) => children
@@ -53,41 +26,41 @@ vi.mock('react-i18next', () => ({
 
 // Mock the settings store
 const mockUpdateSettings = vi.fn();
-const mockLoadSettings = vi.fn();
-const mockProfiles: any[] = [];
 
 vi.mock('../../stores/settings-store', () => ({
   useSettingsStore: vi.fn((selector) => {
     const state = {
       settings: { onboardingCompleted: false },
       isLoading: false,
-      profiles: mockProfiles,
-      activeProfileId: null,
-      updateSettings: mockUpdateSettings,
-      loadSettings: mockLoadSettings
+      updateSettings: mockUpdateSettings
     };
     if (!selector) return state;
     return selector(state);
   })
 }));
 
-// Mock electronAPI
-const mockSaveSettings = vi.fn().mockResolvedValue({ success: true });
+// Mock window.API (the wizard and its steps talk to the backend through it)
+const mockSaveSettings = vi.fn();
+const mockCheckClaudeCredentialsExist = vi.fn();
+const mockImportClaudeCredentials = vi.fn();
+const mockCheckClaudeCodeVersion = vi.fn();
 
-Object.defineProperty(window, 'electronAPI', {
+Object.defineProperty(window, 'API', {
   value: {
     saveSettings: mockSaveSettings,
-    onAppUpdateDownloaded: vi.fn(),
-    // OAuth-related methods needed for OAuthStep component
-    onTerminalOAuthToken: vi.fn(() => vi.fn()), // Returns unsubscribe function
-    getOAuthToken: vi.fn().mockResolvedValue(null),
-    startOAuthFlow: vi.fn().mockResolvedValue({ success: true }),
-    loadProfiles: vi.fn().mockResolvedValue([])
+    checkClaudeCredentialsExist: mockCheckClaudeCredentialsExist,
+    importClaudeCredentials: mockImportClaudeCredentials,
+    checkClaudeCodeVersion: mockCheckClaudeCodeVersion
   },
   writable: true
 });
 
-describe('OnboardingWizard Integration Tests', () => {
+// Helpers to drive the wizard
+function goToProviderChoice() {
+  fireEvent.click(screen.getByText('welcome.getStarted'));
+}
+
+describe('OnboardingWizard', () => {
   const defaultProps = {
     open: true,
     onOpenChange: vi.fn()
@@ -95,288 +68,239 @@ describe('OnboardingWizard Integration Tests', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-  });
-
-  describe('OAuth Path Navigation', () => {
-    // Skipped: OAuth integration tests require full OAuth step mocking - not API Profile related
-    it.skip('should navigate: welcome → auth-choice → oauth', async () => {
-      render(<OnboardingWizard {...defaultProps} />);
-
-      // Start at welcome step
-      expect(screen.getByText(/Welcome to TFactory/)).toBeInTheDocument();
-
-      // Click "Get Started" to go to auth-choice
-      const getStartedButton = screen.getByRole('button', { name: /Get Started/ });
-      fireEvent.click(getStartedButton);
-
-      // Should now show auth choice step
-      await waitFor(() => {
-        expect(screen.getByText(/Choose Your Authentication Method/)).toBeInTheDocument();
-      });
-
-      // Click OAuth option
-      const oauthButton = screen.getByTestId('auth-option-oauth');
-      fireEvent.click(oauthButton);
-
-      // Should navigate to oauth step
-      await waitFor(() => {
-        expect(screen.getByText(/Sign in with Anthropic/)).toBeInTheDocument();
-      });
+    mockSaveSettings.mockResolvedValue({ success: true });
+    mockCheckClaudeCredentialsExist.mockResolvedValue({
+      success: true,
+      data: { exists: true }
     });
-
-    // Skipped: OAuth path test requires full OAuth step mocking
-    it.skip('should show correct progress indicator for OAuth path', async () => {
-      render(<OnboardingWizard {...defaultProps} />);
-
-      // Click through to auth-choice
-      fireEvent.click(screen.getByRole('button', { name: /Get Started/ }));
-      await waitFor(() => {
-        expect(screen.getByText(/Choose Your Authentication Method/)).toBeInTheDocument();
-      });
-
-      // Verify progress indicator shows 5 steps
-      const progressIndicators = document.querySelectorAll('[class*="step"]');
-      expect(progressIndicators.length).toBeGreaterThanOrEqual(4); // At least 4 steps shown
+    mockImportClaudeCredentials.mockResolvedValue({ success: true });
+    mockCheckClaudeCodeVersion.mockResolvedValue({
+      success: true,
+      data: { installed: true, isOutdated: false, version: '2.0.0' }
     });
   });
 
-  describe('API Key Path Navigation', () => {
-    // Skipped: Test requires ProfileEditDialog integration mock
-    it.skip('should skip oauth step when API key path chosen', async () => {
+  describe('Welcome Step', () => {
+    it('shows the welcome step when opened', () => {
       render(<OnboardingWizard {...defaultProps} />);
 
-      // Start at welcome step
-      expect(screen.getByText(/Welcome to TFactory/)).toBeInTheDocument();
-
-      // Click "Get Started" to go to auth-choice
-      fireEvent.click(screen.getByRole('button', { name: /Get Started/ }));
-      await waitFor(() => {
-        expect(screen.getByText(/Choose Your Authentication Method/)).toBeInTheDocument();
-      });
-
-      // Click API Key option
-      const apiKeyButton = screen.getByTestId('auth-option-apikey');
-      fireEvent.click(apiKeyButton);
-
-      // Profile dialog should open
-      await waitFor(() => {
-        expect(screen.getByTestId('profile-edit-dialog')).toBeInTheDocument();
-      });
-
-      // Close dialog (simulating profile creation - in real scenario this would trigger skip)
-      const closeButton = screen.queryByText(/Close|Cancel/);
-      if (closeButton) {
-        fireEvent.click(closeButton);
-      }
+      expect(screen.getByText('welcome.title')).toBeInTheDocument();
+      expect(screen.getByText('welcome.getStarted')).toBeInTheDocument();
+      expect(screen.getByText('welcome.skip')).toBeInTheDocument();
     });
 
-    // Skipped (#652): asserts the removed auth-choice flow; wizard now uses provider-choice.
-    it.skip('should not show OAuth step text on auth-choice screen', async () => {
-      render(<OnboardingWizard {...defaultProps} />);
-
-      // Navigate to auth-choice
-      fireEvent.click(screen.getByRole('button', { name: /Get Started/ }));
-      await waitFor(() => {
-        expect(screen.getByText(/Choose Your Authentication Method/)).toBeInTheDocument();
-      });
-
-      // When profile is created via API key path, should skip oauth
-      // This is tested via component behavior - the wizard should advance
-      // directly to graphiti step, bypassing oauth
-      const oauthStepText = screen.queryByText(/OAuth Authentication/);
-      // Before API key selection, oauth text from different context shouldn't be visible
-      expect(oauthStepText).toBeNull();
-    });
-  });
-
-  describe('Back Button Behavior After API Key Path', () => {
-    // Skipped (#652): asserts the removed auth-choice flow; wizard now uses provider-choice.
-    it.skip('should go back to auth-choice (not oauth) when coming from API key path', async () => {
-      render(<OnboardingWizard {...defaultProps} />);
-
-      // This test verifies that when oauth is bypassed (API key path taken),
-      // going back from graphiti returns to auth-choice, not oauth
-
-      // Navigate: welcome → auth-choice
-      fireEvent.click(screen.getByText(/Get Started/));
-      await waitFor(() => {
-        expect(screen.getByText(/Choose Your Authentication Method/)).toBeInTheDocument();
-      });
-
-      // The back button behavior is controlled by oauthBypassed state
-      // When API key path is taken, oauthBypassed=true
-      // Going back from graphiti should skip oauth step
-      const authChoiceHeading = screen.getByText(/Choose Your Authentication Method/);
-      expect(authChoiceHeading).toBeInTheDocument();
-    });
-  });
-
-  describe('First-Run Detection', () => {
-    it('should show wizard for users with no auth configured', () => {
-      render(<OnboardingWizard {...defaultProps} open={true} />);
-
-      // Wizard should be visible
-      expect(screen.getByText(/Welcome to TFactory/)).toBeInTheDocument();
-    });
-
-    it('should not show wizard for users with existing OAuth', () => {
-      // This is tested in App.tsx integration tests
-      // Here we verify the wizard can be closed
-      const { rerender } = render(<OnboardingWizard {...defaultProps} open={true} />);
-
-      expect(screen.getByText(/Welcome to TFactory/)).toBeInTheDocument();
-
-      // Close wizard
-      rerender(<OnboardingWizard {...defaultProps} open={false} />);
-
-      // Wizard content should not be visible
-      expect(screen.queryByText(/Welcome to TFactory/)).not.toBeInTheDocument();
-    });
-
-    it('should not show wizard for users with existing API profiles', () => {
-      // This is tested in App.tsx integration tests
-      // The wizard respects the open prop
+    it('does not render when closed', () => {
       render(<OnboardingWizard {...defaultProps} open={false} />);
 
-      expect(screen.queryByText(/Welcome to TFactory/)).not.toBeInTheDocument();
+      expect(screen.queryByText('welcome.title')).not.toBeInTheDocument();
     });
-  });
 
-  describe('Skip and Completion', () => {
-    // Skipped (#652): skip moved from a welcome-step button to a provider-choice option.
-    it.skip('should complete wizard when skip is clicked', async () => {
+    it('does not show the progress indicator on the welcome step', () => {
       render(<OnboardingWizard {...defaultProps} />);
 
-      // Click skip on welcome step
-      const skipButton = screen.getByRole('button', { name: /Skip Setup/ });
-      fireEvent.click(skipButton);
+      expect(screen.queryByText('steps.welcome')).not.toBeInTheDocument();
+      expect(screen.queryByText('steps.providerChoice')).not.toBeInTheDocument();
+    });
 
-      // Should call saveSettings
+    it('skip on welcome completes onboarding and closes the wizard', async () => {
+      const onOpenChange = vi.fn();
+      render(<OnboardingWizard {...defaultProps} onOpenChange={onOpenChange} />);
+
+      fireEvent.click(screen.getByText('welcome.skip'));
+
       await waitFor(() => {
         expect(mockSaveSettings).toHaveBeenCalledWith({ onboardingCompleted: true });
       });
+      expect(mockUpdateSettings).toHaveBeenCalledWith({ onboardingCompleted: true });
+      expect(onOpenChange).toHaveBeenCalledWith(false);
     });
+  });
 
-    it('should call onOpenChange when wizard is closed', async () => {
-      const mockOnOpenChange = vi.fn();
-      render(<OnboardingWizard {...defaultProps} onOpenChange={mockOnOpenChange} />);
+  describe('Provider Choice Step', () => {
+    it('navigates welcome -> provider-choice and shows all three provider cards', async () => {
+      render(<OnboardingWizard {...defaultProps} />);
 
-      // Click skip to close wizard
-      const skipButton = screen.getByRole('button', { name: /Skip Setup/ });
-      fireEvent.click(skipButton);
+      goToProviderChoice();
 
       await waitFor(() => {
-        expect(mockOnOpenChange).toHaveBeenCalledWith(false);
+        expect(screen.getByText('providerChoice.title')).toBeInTheDocument();
+      });
+      expect(screen.getByTestId('provider-choice-claude')).toBeInTheDocument();
+      expect(screen.getByTestId('provider-choice-openai-compat')).toBeInTheDocument();
+      expect(screen.getByTestId('provider-choice-skip')).toBeInTheDocument();
+    });
+
+    it('shows the progress indicator on the provider-choice step', async () => {
+      render(<OnboardingWizard {...defaultProps} />);
+
+      goToProviderChoice();
+
+      await waitFor(() => {
+        expect(screen.getByText('steps.providerChoice')).toBeInTheDocument();
+      });
+      expect(screen.getByText('steps.welcome')).toBeInTheDocument();
+    });
+
+    it('back returns to the welcome step', async () => {
+      render(<OnboardingWizard {...defaultProps} />);
+
+      goToProviderChoice();
+      await waitFor(() => {
+        expect(screen.getByText('providerChoice.title')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByText('common:back'));
+
+      await waitFor(() => {
+        expect(screen.getByText('welcome.getStarted')).toBeInTheDocument();
+      });
+      expect(screen.queryByText('providerChoice.title')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('Claude Path', () => {
+    it('choosing Claude goes to import-credentials when credentials exist', async () => {
+      render(<OnboardingWizard {...defaultProps} />);
+
+      goToProviderChoice();
+      await waitFor(() => {
+        expect(screen.getByTestId('provider-choice-claude')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByTestId('provider-choice-claude'));
+
+      await waitFor(() => {
+        expect(screen.getByText('importCredentials.title')).toBeInTheDocument();
+      });
+      expect(mockCheckClaudeCredentialsExist).toHaveBeenCalled();
+      // Claude path extends the progress steps
+      expect(screen.getByText('steps.importCredentials')).toBeInTheDocument();
+      expect(screen.getByText('steps.claudeCode')).toBeInTheDocument();
+    });
+
+    it('auto-advances to the claude-code step when no credentials exist', async () => {
+      mockCheckClaudeCredentialsExist.mockResolvedValue({
+        success: true,
+        data: { exists: false }
+      });
+      render(<OnboardingWizard {...defaultProps} />);
+
+      goToProviderChoice();
+      await waitFor(() => {
+        expect(screen.getByTestId('provider-choice-claude')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByTestId('provider-choice-claude'));
+
+      // ImportCredentialsStep finds nothing and calls onNext -> claude-code step
+      await waitFor(() => {
+        expect(mockCheckClaudeCodeVersion).toHaveBeenCalled();
+      });
+      expect(screen.queryByText('importCredentials.title')).not.toBeInTheDocument();
+    });
+
+    it('importing credentials jumps straight to completion', async () => {
+      render(<OnboardingWizard {...defaultProps} />);
+
+      goToProviderChoice();
+      await waitFor(() => {
+        expect(screen.getByTestId('provider-choice-claude')).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByTestId('provider-choice-claude'));
+      await waitFor(() => {
+        expect(screen.getByText('importCredentials.importButton')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByText('importCredentials.importButton'));
+
+      await waitFor(() => {
+        expect(mockImportClaudeCredentials).toHaveBeenCalled();
+      });
+      // Import success auto-advances to completion after a 1.5s delay
+      await waitFor(
+        () => {
+          expect(screen.getByText('completion.title')).toBeInTheDocument();
+        },
+        { timeout: 3000 }
+      );
+    });
+  });
+
+  describe('OpenAI Compatible Path', () => {
+    it('choosing OpenAI Compatible goes to the setup step', async () => {
+      render(<OnboardingWizard {...defaultProps} />);
+
+      goToProviderChoice();
+      await waitFor(() => {
+        expect(screen.getByTestId('provider-choice-openai-compat')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByTestId('provider-choice-openai-compat'));
+
+      await waitFor(() => {
+        expect(screen.getByText('openaiCompatSetup.title')).toBeInTheDocument();
+      });
+      // OpenAI path: welcome, provider-choice, setup, done
+      expect(screen.getByText('steps.openaiCompatSetup')).toBeInTheDocument();
+      expect(screen.queryByText('steps.claudeCode')).not.toBeInTheDocument();
+    });
+
+    it('skipping the setup step reaches completion', async () => {
+      render(<OnboardingWizard {...defaultProps} />);
+
+      goToProviderChoice();
+      await waitFor(() => {
+        expect(screen.getByTestId('provider-choice-openai-compat')).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByTestId('provider-choice-openai-compat'));
+      await waitFor(() => {
+        expect(screen.getByText('openaiCompatSetup.skip')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByText('openaiCompatSetup.skip'));
+
+      await waitFor(() => {
+        expect(screen.getByText('completion.title')).toBeInTheDocument();
       });
     });
   });
 
-  describe('Step Progress Indicator', () => {
-    // Skipped: Progress indicator tests require step-by-step CSS class inspection
-    it.skip('should display progress indicator for non-welcome/completion steps', async () => {
+  describe('Skip Path and Completion', () => {
+    it('choosing Skip goes directly to completion', async () => {
       render(<OnboardingWizard {...defaultProps} />);
 
-      // On welcome step, no progress indicator shown
-      expect(screen.queryByText(/Welcome/)).toBeInTheDocument();
-      const progressBeforeNav = document.querySelector('[class*="progress"]');
-      // Progress indicator may not be visible on welcome step
-
-      // Navigate to auth-choice
-      fireEvent.click(screen.getByRole('button', { name: /Get Started/ }));
+      goToProviderChoice();
       await waitFor(() => {
-        expect(screen.getByText(/Choose Your Authentication Method/)).toBeInTheDocument();
+        expect(screen.getByTestId('provider-choice-skip')).toBeInTheDocument();
       });
 
-      // Progress indicator should now be visible
-      // The WizardProgress component should be rendered
-      const progressElement = document.querySelector('[class*="step"]');
-      expect(progressElement).toBeTruthy();
-    });
+      fireEvent.click(screen.getByTestId('provider-choice-skip'));
 
-    // Skipped: Step count test requires i18n step labels
-    it.skip('should show correct number of steps (5 total)', async () => {
-      render(<OnboardingWizard {...defaultProps} />);
-
-      // Navigate to auth-choice
-      fireEvent.click(screen.getByRole('button', { name: /Get Started/ }));
       await waitFor(() => {
-        expect(screen.getByText(/Choose Your Authentication Method/)).toBeInTheDocument();
-      });
-
-      // Check for step labels in progress indicator
-      const steps = [
-        'Welcome',
-        'Auth Method',
-        'OAuth',
-        'Memory',
-        'Done'
-      ];
-
-      // At least some step labels should be present (not all may be visible at current step)
-      const visibleSteps = steps.filter(step => screen.queryByText(step));
-      expect(visibleSteps.length).toBeGreaterThan(0);
-    });
-  });
-
-  describe('AC Coverage', () => {
-    // Skipped (#652): asserts the removed auth-choice flow; wizard now uses provider-choice.
-    it.skip('AC1: First-run screen displays with two auth options', async () => {
-      render(<OnboardingWizard {...defaultProps} />);
-
-      // Navigate to auth-choice
-      fireEvent.click(screen.getByRole('button', { name: /Get Started/ }));
-      await waitFor(() => {
-        expect(screen.getByText(/Choose Your Authentication Method/)).toBeInTheDocument();
-      });
-
-      // Both options should be visible
-      expect(screen.getByText(/Sign in with Anthropic/)).toBeInTheDocument();
-      expect(screen.getByText(/Use Custom API Key/)).toBeInTheDocument();
-    });
-
-    // Skipped: OAuth path test requires full OAuth step mocking
-    it.skip('AC2: OAuth path initiates existing OAuth flow', async () => {
-      render(<OnboardingWizard {...defaultProps} />);
-
-      fireEvent.click(screen.getByText(/Get Started/));
-      await waitFor(() => {
-        expect(screen.getByText(/Choose Your Authentication Method/)).toBeInTheDocument();
-      });
-
-      const oauthButton = screen.getByTestId('auth-option-oauth');
-      fireEvent.click(oauthButton);
-
-      // Should proceed to OAuth step
-      await waitFor(() => {
-        // OAuth step content should be visible
-        expect(document.querySelector('.fullscreen-dialog')).toBeInTheDocument();
+        expect(screen.getByText('completion.title')).toBeInTheDocument();
       });
     });
 
-    // Skipped (#652): asserts the removed auth-choice flow; wizard now uses provider-choice.
-    it.skip('AC3: API Key path opens profile management dialog', async () => {
-      render(<OnboardingWizard {...defaultProps} />);
+    it('finish on completion saves onboardingCompleted and closes the wizard', async () => {
+      const onOpenChange = vi.fn();
+      render(<OnboardingWizard {...defaultProps} onOpenChange={onOpenChange} />);
 
-      fireEvent.click(screen.getByText(/Get Started/));
+      goToProviderChoice();
       await waitFor(() => {
-        expect(screen.getByText(/Choose Your Authentication Method/)).toBeInTheDocument();
+        expect(screen.getByTestId('provider-choice-skip')).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByTestId('provider-choice-skip'));
+      await waitFor(() => {
+        expect(screen.getByText('completion.finish')).toBeInTheDocument();
       });
 
-      const apiKeyButton = screen.getByTestId('auth-option-apikey');
-      fireEvent.click(apiKeyButton);
+      fireEvent.click(screen.getByText('completion.finish'));
 
-      // ProfileEditDialog should open
       await waitFor(() => {
-        expect(screen.getByTestId('profile-edit-dialog')).toBeInTheDocument();
+        expect(mockSaveSettings).toHaveBeenCalledWith({ onboardingCompleted: true });
       });
-    });
-
-    it('AC4: Existing auth skips wizard', () => {
-      // Wizard with open=false simulates existing auth scenario
-      render(<OnboardingWizard {...defaultProps} open={false} />);
-
-      // Wizard should not be visible
-      expect(screen.queryByText(/Welcome to TFactory/)).not.toBeInTheDocument();
+      expect(mockUpdateSettings).toHaveBeenCalledWith({ onboardingCompleted: true });
+      expect(onOpenChange).toHaveBeenCalledWith(false);
     });
   });
 });
