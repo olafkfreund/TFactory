@@ -691,13 +691,43 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> CompletionEnvelo
         _triage_log.debug(
             "triager: verification block emit failed (degraded)", exc_info=True
         )
-    # RFC-0013 (#447): when the contract's deployment block marks the change
-    # high-risk or production, surface the deploy gate verdict so the merge
-    # policy / handback can hold a change back without a DRY-RUN deploy proof.
+    # RFC-0013 deploy gate (#447) + #650 dependency review — both gate
+    # annotations applied by one helper (see _apply_gate_annotations).
+    _apply_gate_annotations(spec_dir, envelope)
+    return envelope
+
+
+def _apply_gate_annotations(spec_dir: Path, envelope: CompletionEnvelope) -> None:
+    """Attach the deploy-gate and dependency-review verdicts to the envelope.
+
+    RFC-0013 (#447): when the contract's deployment block marks the change
+    high-risk or production, surface the deploy gate verdict so the merge
+    policy / handback can hold a change back without a DRY-RUN deploy proof.
+
+    #650: agent-added dependency review — the 6th verdict signal. Surface the
+    persisted block on the envelope so CFactory can render the findings, and
+    GATE on fail (unpinned or HIGH/CRITICAL added vuln): a would-be success
+    outcome is downgraded to human_review, consistent with the VAL honesty
+    rule — never silently accept. Best-effort read; absent block = no change.
+    """
     _gate = _deploy_gate_annotation(spec_dir)
     if _gate is not None:
         envelope["deploy_gate"] = _gate
-    return envelope
+    try:
+        from agents.dependency_review import (  # noqa: PLC0415 - lazy by design
+            read_dependency_review,
+        )
+
+        _dep = read_dependency_review(spec_dir)
+    except Exception:  # noqa: BLE001 - the dep review must never break emit
+        _dep = None
+    if _dep is not None:
+        envelope["dependency_review"] = _dep
+        if _dep.get("status") == "fail" and envelope.get("outcome") == "success":
+            envelope["outcome"] = "human_review"
+            envelope["halt_reason"] = "dependency_review: " + str(
+                _dep.get("reason") or "agent-added dependency failed the gate"
+            )
 
 
 def _attach_traceability(spec_dir: Path, verification_block: dict[str, Any]) -> None:
@@ -1322,27 +1352,11 @@ async def run_triager(
         verdicts = _load_verdicts_or_fail(spec_dir)
         if verdicts is None:
             return False
-        # RFC-0006 #75: run the VAL-3 disposable-target lane ONCE (gated — a
-        # no-op until a contract declares effectful VAL-3 commands AND a target
-        # backend is configured), recording findings/val3_outcome.json before the
-        # verification block is read. Mandatory teardown is guaranteed inside.
-        # Best-effort: never breaks triage; default keeps VAL-3 honestly not_run.
-        try:
-            from agents.disposable_target import record_val3
-            from agents.task_contract import read_tfactory_profile
-
-            _prof = read_tfactory_profile(spec_dir)
-            _src = _load_source_meta(spec_dir)
-            _vprofile = (
-                _src.get("verification") if isinstance(_src, dict) else None
-            ) or None
-            record_val3(
-                spec_dir,
-                _vprofile,
-                getattr(_prof, "access", None) if _prof else None,
-            )
-        except Exception:  # noqa: BLE001 - VAL-3 lane must never break triage
-            pass
+        # RFC-0006 #75 VAL-3 lane + #650 dependency review (6th verdict
+        # signal) — both best-effort side-effects recorded to findings/ before
+        # the verification block / completion envelope are read.
+        _record_val3_side_effect(spec_dir)
+        _run_dependency_review_side_effect(spec_dir, project_dir)
         candidates = _build_candidates(spec_dir, verdicts)
 
         if not candidates:
@@ -1448,6 +1462,47 @@ async def run_triager(
             triager_error=str(exc)[:500],
         )
         return False
+
+
+def _record_val3_side_effect(spec_dir: Path) -> None:
+    """RFC-0006 #75: run the VAL-3 disposable-target lane ONCE (gated — a no-op
+    until a contract declares effectful VAL-3 commands AND a target backend is
+    configured), recording findings/val3_outcome.json before the verification
+    block is read. Mandatory teardown is guaranteed inside. Best-effort: never
+    breaks triage; default keeps VAL-3 honestly not_run. Verbatim move out of
+    ``run_triager`` (#650)."""
+    try:
+        from agents.disposable_target import record_val3  # noqa: PLC0415 - lazy
+        from agents.task_contract import read_tfactory_profile  # noqa: PLC0415 - lazy
+
+        _prof = read_tfactory_profile(spec_dir)
+        _src = _load_source_meta(spec_dir)
+        _vprofile = (
+            _src.get("verification") if isinstance(_src, dict) else None
+        ) or None
+        record_val3(
+            spec_dir,
+            _vprofile,
+            getattr(_prof, "access", None) if _prof else None,
+        )
+    except Exception:  # noqa: BLE001 - VAL-3 lane must never break triage
+        pass
+
+
+def _run_dependency_review_side_effect(spec_dir: Path, project_dir: Path) -> None:
+    """#650: review the dependency-manifest diff of the checked-out task branch
+    (source_branch, #96) vs its base and persist the verdict block to
+    findings/dependency_review.json — the artifact the completion envelope
+    reads. A no-manifest-change task short-circuits after one git diff.
+    Best-effort: the review must never break triage."""
+    try:
+        from agents.dependency_review import (  # noqa: PLC0415 - lazy by design
+            run_dependency_review,
+        )
+
+        run_dependency_review(spec_dir, project_dir)
+    except Exception:  # noqa: BLE001 - dep review must never break triage
+        _triage_log.debug("triager: dependency review failed (degraded)", exc_info=True)
 
 
 def _load_source_meta(spec_dir: Path) -> dict:

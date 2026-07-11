@@ -107,6 +107,9 @@ class CompletionEnvelope(TypedDict, total=False):
     # RFC-0007 / RFC-0006 best-effort annotations.
     access: dict[str, Any]
     verification: dict[str, Any]
+    # #650: agent-added dependency review — the 6th verdict signal
+    # (pass/fail/advisory/skipped + findings; gating on fail).
+    dependency_review: dict[str, Any]
 
 
 def new_event_id() -> str:
