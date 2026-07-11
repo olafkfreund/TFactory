@@ -144,6 +144,16 @@ Look at the files changed in `diff.patch`:
 - If a TypeScript file is an E2E spec (name pattern `*.spec.ts`,
   `*.e2e.ts`) and there is a Playwright descriptor in the FRAMEWORK
   REGISTRY → use `(typescript, playwright, browser)`.
+- **AC describes HTTP/endpoint behaviour** (status codes, request/response
+  JSON, "returns 200", "POST /items creates...") for a Python project with a
+  detectable ASGI/WSGI entrypoint (`app.py`, `src/app/main.py`, `main.py`
+  exposing `app`, or a FastAPI/Flask import in the diff) → `(python, pytest,
+  api)` with `target_name: null`, **even with no `.tfactory.yml` target**.
+  This is the spec-ingest case (#612): the api lane self-serves the app for
+  the run — no pre-declared target is required. Still emit the matching
+  `(python, pytest, unit)` subtask(s) for the same AC when it also has
+  non-HTTP logic worth unit-testing; the api subtask is additive, not a
+  replacement.
 
 ### Step 4 — FRAMEWORK REGISTRY validation
 
@@ -209,6 +219,21 @@ One pytest subtask for the Python backend, one Playwright subtask for the TS fro
 ```
 
 A Jest/API subtask uses `"language": "typescript", "framework": "jest", "lane": "api"`.
+
+A self-served Python api-lane subtask (no `.tfactory.yml` target — #612):
+
+```json
+{
+  "id": "create-item-returns-201",
+  "lane": "api", "language": "python", "framework": "pytest",
+  "target_name": null, "intent": "create",
+  "target": "src/app/main.py::create_item",
+  "rationale": "AC#2: POST /items returns 201 with the created item",
+  "files_to_create": ["tests/api/test_create_item.py"],
+  "verification": {"type": "command",
+    "command": "pytest tests/api/test_create_item.py", "expected": "exit 0"}
+}
+```
 
 ---
 
