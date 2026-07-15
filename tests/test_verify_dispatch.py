@@ -323,11 +323,31 @@ def test_manifest_propagates_nix_sandbox_env_when_set(monkeypatch):
     assert env["TFACTORY_NIX_STORE_PVC"] == "tfactory-nix-store"
 
 
+def test_nix_in_image_flag_reaches_the_dispatched_job(monkeypatch):
+    """#623: the flag MUST travel with TFACTORY_NIX_STORE_PVC.
+
+    nix_runner_from_env() runs again *inside* the dispatched Job. If the flag
+    does not reach it, it reads False there and re-mounts the very RWO PVC the
+    flag exists to drop — the flip lands on the control plane and silently misses
+    the nested Job. That half-applied shape is exactly how AIFactory#840 broke
+    its gate lane.
+    """
+    monkeypatch.setenv(
+        "TFACTORY_NIX_RUNNER_IMAGE", "ghcr.io/x/tfactory-runner-nix:latest"
+    )
+    monkeypatch.setenv("TFACTORY_NIX_STORE_PVC", "tfactory-nix-store")
+    monkeypatch.setenv("TFACTORY_NIX_IN_IMAGE", "true")
+    ps = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
+    env = {e["name"]: e["value"] for e in ps["containers"][0]["env"]}
+    assert env.get("TFACTORY_NIX_IN_IMAGE") == "true", env
+
+
 def test_manifest_omits_nix_sandbox_env_when_unset(monkeypatch):
     for v in (
         "TFACTORY_NIX_RUNNER_IMAGE",
         "TFACTORY_WORKSPACES_PVC",
         "TFACTORY_NIX_STORE_PVC",
+        "TFACTORY_NIX_IN_IMAGE",
         "TFACTORY_SANDBOX_NAMESPACE",
     ):
         monkeypatch.delenv(v, raising=False)
