@@ -48,12 +48,29 @@ POD_SECURITY_CONTEXT: dict[str, Any] = {
 #   DAC_OVERRIDE — write the 65532-owned worktree at /work (junit/screenshots)
 #   FOWNER       — chmod/utimes on 65532-owned files (git/tar/playwright)
 #   CHOWN        — `cp -a` ownership preservation when seeding the warm store
+#   SETUID/SETGID/KILL — #623: the image ships `build-users-group = nixbld`
+#     (+32 nixbld users), so any LOCAL build makes nix setuid to a build user
+#     and reap it. Without these, the moment a derivation cannot be substituted
+#     from the binary cache, `nix develop` dies:
+#         error: setting uid: Operation not permitted
+#         error: cannot kill processes for uid '30001'
+#     and the lane reports that downstream as a resolution failure. This is not
+#     hypothetical: proven on the factory cluster against this same image with
+#     exactly the previous add-back set (AIFactory#840/#841). The warm store
+#     masks it — a Job that WINS the RWO mount race finds the closure prebuilt
+#     and never builds; one that LOSES the race gets the image's cold /nix,
+#     needs a local build, and hits this. That composition is the likeliest
+#     explanation for this issue's intermittency: the mount race supplies the
+#     "sometimes", these missing caps supply the failure.
 # For the nonroot verify-orchestration Job these add-backs are inert (a
 # non-root process gets no effective capabilities from them).
 CONTAINER_SECURITY_CONTEXT: dict[str, Any] = {
     "allowPrivilegeEscalation": False,
     "privileged": False,
-    "capabilities": {"drop": ["ALL"], "add": ["CHOWN", "DAC_OVERRIDE", "FOWNER"]},
+    "capabilities": {
+        "drop": ["ALL"],
+        "add": ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "KILL"],
+    },
 }
 
 

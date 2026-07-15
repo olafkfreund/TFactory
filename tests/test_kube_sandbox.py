@@ -154,7 +154,38 @@ def test_job_pod_and_container_are_hardened():
         assert sc["allowPrivilegeEscalation"] is False
         assert sc["privileged"] is False
         assert sc["capabilities"]["drop"] == ["ALL"]
-        assert set(sc["capabilities"]["add"]) == {"CHOWN", "DAC_OVERRIDE", "FOWNER"}
+        assert set(sc["capabilities"]["add"]) == {
+            "CHOWN",
+            "DAC_OVERRIDE",
+            "FOWNER",
+            "SETUID",
+            "SETGID",
+            "KILL",
+        }
+
+
+def test_nix_local_builds_keep_their_build_user_caps():
+    """#623: the runner image ships `build-users-group = nixbld`, so any LOCAL
+    build makes nix setuid to a build user and reap it. Without SETUID/SETGID/
+    KILL, `nix develop` dies the moment a derivation cannot be substituted:
+
+        error: setting uid: Operation not permitted
+        error: cannot kill processes for uid '30001'
+
+    Reproduced on the factory cluster with this exact image and the previous
+    add-back set, then fixed by adding these three (AIFactory#840/#841 hit the
+    same wall on the same image).
+
+    The warm store MASKS this: a Job that wins the RWO /nix mount race finds the
+    closure prebuilt and never builds; one that loses the race gets a cold /nix
+    and needs a local build. That composition is the likeliest explanation for
+    #623's intermittency — so these caps must survive any future de-pin, which
+    removes the warm store and makes local builds the normal case.
+    """
+    m = build_job_manifest("jh", "img", ["true"])
+    for c in m["spec"]["template"]["spec"]["containers"]:
+        add = set(c["securityContext"]["capabilities"]["add"])
+        assert {"SETUID", "SETGID", "KILL"} <= add, add
 
 
 def test_container_state_variants():
