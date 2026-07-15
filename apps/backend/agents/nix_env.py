@@ -21,6 +21,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import os
 import shutil
 import tempfile
 import threading
@@ -98,11 +99,40 @@ def detect_serve_command(
     return None
 
 
+def nix_in_image() -> bool:
+    """True when nix Jobs should source ``/nix`` from their image, not the PVC.
+
+    The warm ``tfactory-nix-store`` PVC is RWO ``local-path``: only ONE pod can
+    mount it at a time, so the evaluator's concurrent per-test / stability-sample
+    / mutation Jobs serialise on a single mount (#623). Its PV is also
+    nodeAffinity-pinned to whichever node first consumed it — today that is the
+    same node as ``tfactory-data``, which is luck, not design: if it ever
+    re-provisions onto the other node, every Job mounting both RWO claims becomes
+    unschedulable outright (no node satisfies both affinities). That is exactly
+    what happened to AIFactory (Factory#253, AIFactory#830).
+
+    Dropping the mount is not a correctness trade: ``build_job_manifest``'s seed
+    initContainer copies the image's own ``/nix`` into the PVC, so the image IS
+    the store the warm cache is seeded from. The cost is the closures realised
+    *during* a task — re-fetched from the binary cache per Job instead of
+    persisting. Speed for concurrency.
+
+    Requires the build-user caps (#660): a cold ``/nix`` substitutes most paths
+    but still builds the shell env locally, which needs SETUID/SETGID/KILL.
+    Proven on the factory cluster — a provisioner-generated flake, no nix-store
+    PVC, resolved from the image + cache.nixos.org and ran the lane green.
+    """
+    return os.environ.get("TFACTORY_NIX_IN_IMAGE", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
 def nix_runner_from_env() -> KubeJobSandbox | None:
     """Build a KubeJobSandbox from the deployment's TFACTORY_* env, or None when
     the Nix-lane sandbox isn't configured (so callers degrade gracefully)."""
-    import os
-
     image = os.environ.get("TFACTORY_NIX_RUNNER_IMAGE")
     if not image:
         return None
@@ -113,7 +143,12 @@ def nix_runner_from_env() -> KubeJobSandbox | None:
     # RFC-0016 #197: opt-in warm /nix/store PVC so the toolchain closure persists
     # across Nix lane Jobs instead of cold-fetching each run. Absent → no mount,
     # so nothing breaks if the PVC is not provisioned.
-    nix_store_pvc = os.environ.get("TFACTORY_NIX_STORE_PVC") or None
+    # #623: skipped entirely when nix comes from the image — the PVC is RWO, so
+    # it is also the mutex the evaluator's concurrent Jobs serialise on. See
+    # nix_in_image.
+    nix_store_pvc = (
+        None if nix_in_image() else (os.environ.get("TFACTORY_NIX_STORE_PVC") or None)
+    )
     # #623: the data root (workspaces PVC) is NOT always mounted at the control
     # plane's default /home/nonroot/.tfactory — the verify Job mounts it at /work.
     # The sandbox derives each Job's co-mount subPath via pvc_subpath(workdir,

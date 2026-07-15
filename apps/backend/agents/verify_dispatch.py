@@ -692,6 +692,13 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
         "TFACTORY_NIX_RUNNER_IMAGE",
         "TFACTORY_WORKSPACES_PVC",
         "TFACTORY_NIX_STORE_PVC",
+        # #623: MUST travel with TFACTORY_NIX_STORE_PVC. nix_runner_from_env runs
+        # again inside the dispatched Job; if the flag does not reach it, it reads
+        # False there and re-mounts the very RWO PVC the flag exists to drop —
+        # the flip lands on the control plane and silently misses the nested Job.
+        # That half-applied shape is precisely how AIFactory#840 broke its gate
+        # lane (the build path was flipped, the gate path was not).
+        "TFACTORY_NIX_IN_IMAGE",
         "TFACTORY_SANDBOX_NAMESPACE",
     ):
         _nix_val = os.environ.get(_nix_var)

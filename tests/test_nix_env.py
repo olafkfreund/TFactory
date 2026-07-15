@@ -575,3 +575,49 @@ def test_nix_runner_from_env_default_data_root(monkeypatch):
     monkeypatch.delenv("TFACTORY_DATA_ROOT", raising=False)
     sb = nix_runner_from_env()
     assert sb is not None and sb.data_root == "/home/nonroot/.tfactory"
+
+
+def _mounted_pvcs(monkeypatch) -> set[str]:
+    """The PVCs the nix Job manifest would actually mount, via nix_runner_from_env."""
+    from agents.nix_env import nix_runner_from_env
+    from tools.runners.kube_sandbox import build_job_manifest
+
+    sb = nix_runner_from_env()
+    assert sb is not None
+    m = build_job_manifest("t", sb.image, ["true"], repo_pvc=sb.repo_pvc, **sb.manifest_kw)
+    vols = m["spec"]["template"]["spec"].get("volumes", [])
+    return {
+        v["persistentVolumeClaim"]["claimName"]
+        for v in vols
+        if "persistentVolumeClaim" in v
+    }
+
+
+def test_nix_in_image_drops_the_rwo_warm_store(monkeypatch):
+    """#623: the warm PVC is RWO, so it is the mutex concurrent nix Jobs
+    serialise on. With nix in the image the Job must not mount it at all."""
+    monkeypatch.setenv("TFACTORY_NIX_RUNNER_IMAGE", "img:latest")
+    monkeypatch.setenv("TFACTORY_NIX_STORE_PVC", "tfactory-nix-store")
+    monkeypatch.setenv("TFACTORY_NIX_IN_IMAGE", "true")
+    assert "tfactory-nix-store" not in _mounted_pvcs(monkeypatch)
+
+
+def test_warm_store_kept_when_flag_off(monkeypatch):
+    """Default OFF stays warm — the de-pin must not silently drop the cache."""
+    monkeypatch.setenv("TFACTORY_NIX_RUNNER_IMAGE", "img:latest")
+    monkeypatch.setenv("TFACTORY_NIX_STORE_PVC", "tfactory-nix-store")
+    monkeypatch.delenv("TFACTORY_NIX_IN_IMAGE", raising=False)
+    assert "tfactory-nix-store" in _mounted_pvcs(monkeypatch)
+
+
+def test_nix_in_image_flag_parsing(monkeypatch):
+    from agents.nix_env import nix_in_image
+
+    monkeypatch.delenv("TFACTORY_NIX_IN_IMAGE", raising=False)
+    assert nix_in_image() is False
+    for on in ("1", "true", "TRUE", " yes ", "on"):
+        monkeypatch.setenv("TFACTORY_NIX_IN_IMAGE", on)
+        assert nix_in_image() is True, on
+    for off in ("", "0", "false", "no"):
+        monkeypatch.setenv("TFACTORY_NIX_IN_IMAGE", off)
+        assert nix_in_image() is False, off
