@@ -20,7 +20,8 @@ MODEL_ID_MAP: dict[str, str] = {
     "opus-4.7": "claude-opus-4-7",  # legacy alias — kept for users who pinned 4.7
     "opus-1m": "claude-opus-4-6",  # legacy alias — kept for users who pinned 4.6 + 1M beta
     "opus-4.5": "claude-opus-4-5-20251101",
-    "sonnet": "claude-sonnet-4-6",
+    "sonnet": "claude-sonnet-5",  # current Sonnet (near-Opus coding, 1M ctx)
+    "sonnet-4.6": "claude-sonnet-4-6",  # previous Sonnet — kept for pinning
     "haiku": "claude-haiku-4-5-20251001",
 }
 
@@ -39,49 +40,15 @@ THINKING_BUDGET_MAP: dict[str, int | None] = {
     "high": 16384,  # Deep thinking for QA review
 }
 
-# Effort level mapping for adaptive thinking models (e.g., Opus 4.6)
-# These models support CLAUDE_CODE_EFFORT_LEVEL env var for effort-based routing
-EFFORT_LEVEL_MAP: dict[str, str] = {
-    "low": "low",
-    "medium": "medium",
-    "high": "high",
-}
-
-# Models that support adaptive thinking via effort level (env var)
-# These models get both max_thinking_tokens AND effort_level
-ADAPTIVE_THINKING_MODELS: set[str] = {
-    "claude-opus-4-8",
-    "claude-opus-4-7",
-    "claude-opus-4-6",
-    "claude-sonnet-4-6",
-}
-
-# Spec runner phase-specific thinking levels
-# Heavy phases use max for deep analysis
-# Light phases use medium after compaction
-SPEC_PHASE_THINKING_LEVELS: dict[str, str] = {
-    # Heavy phases - high (discovery, spec creation, self-critique)
-    "discovery": "high",
-    "spec_writing": "high",
-    "self_critique": "high",
-    # Light phases - medium (after first invocation with compaction)
-    "requirements": "medium",
-    "research": "medium",
-    "context": "medium",
-    "planning": "medium",
-    "validation": "medium",
-    "quick_spec": "medium",
-    "historical_context": "medium",
-    "complexity_assessment": "medium",
-}
-
 # Default phase configuration (fallback, matches 'Balanced' profile)
 DEFAULT_PHASE_MODELS: dict[str, str] = {
-    "spec": "sonnet",
-    "planning": "sonnet",  # Changed from "opus" (fix #433)
-    "coding": "sonnet",
-    "qa": "sonnet",
-    "qa_fixer": "sonnet",
+    # Default to Opus 4.8 (current flagship) for all stages — highest-capability
+    # coding/agentic model. Override per-task via the contract `phase_models`.
+    "spec": "opus",
+    "planning": "opus",
+    "coding": "opus",
+    "qa": "opus",
+    "qa_fixer": "opus",
 }
 
 DEFAULT_PHASE_THINKING: dict[str, str] = {
@@ -101,12 +68,8 @@ class PhaseModelConfig(TypedDict, total=False):
     qa_fixer: str
 
 
-class PhaseThinkingConfig(TypedDict, total=False):
-    spec: str
-    planning: str
-    coding: str
-    qa: str
-    qa_fixer: str
+# Same per-phase string shape as PhaseModelConfig — aliased, not duplicated.
+PhaseThinkingConfig = PhaseModelConfig
 
 
 class TaskMetadataConfig(TypedDict, total=False):
@@ -200,27 +163,10 @@ def get_thinking_budget(thinking_level: str) -> int | None:
     return THINKING_BUDGET_MAP[thinking_level]
 
 
-def is_adaptive_model(model_id: str) -> bool:
-    """
-    Check if a model supports adaptive thinking via effort level.
-
-    Adaptive models support the CLAUDE_CODE_EFFORT_LEVEL environment variable
-    for effort-based routing in addition to max_thinking_tokens.
-
-    Args:
-        model_id: Full model ID (e.g., 'claude-opus-4-6')
-
-    Returns:
-        True if the model supports adaptive thinking
-    """
-    return model_id in ADAPTIVE_THINKING_MODELS
-
-
 # Issue #7 — SDK-native adaptive + interleaved thinking
 # The constants and helpers below are the entry point for callers that want
 # to use the Claude Agent SDK's `thinking` parameter (post-Jan-2026 SDK).
-# is_adaptive_model() above stays in use for the legacy CLAUDE_CODE_EFFORT_LEVEL
-# path; the gate here is narrower: only the latest Opus tiers (4.7, 4.8) route to
+# The gate here is narrow: only the latest Opus tiers (4.7, 4.8) route to
 # the SDK-native {"type": "adaptive"} shape — Opus 4.6 stays on the effort path.
 _OPUS_47_ID: str = "claude-opus-4-7"
 _OPUS_48_ID: str = "claude-opus-4-8"
@@ -292,26 +238,6 @@ def interleaved_thinking_betas_for(
     ):
         return [INTERLEAVED_THINKING_BETA]
     return []
-
-
-def get_thinking_kwargs_for_model(model_id: str, thinking_level: str) -> dict:
-    """
-    Get thinking-related kwargs for create_client() based on model type.
-
-    For adaptive models (Opus 4.6): returns both max_thinking_tokens and effort_level.
-    For other models (Sonnet, Haiku): returns only max_thinking_tokens.
-
-    Args:
-        model_id: Full model ID (e.g., 'claude-opus-4-6')
-        thinking_level: Thinking level string (none, low, medium, high, max)
-
-    Returns:
-        Dict with 'max_thinking_tokens' and optionally 'effort_level'
-    """
-    kwargs: dict = {"max_thinking_tokens": get_thinking_budget(thinking_level)}
-    if is_adaptive_model(model_id):
-        kwargs["effort_level"] = EFFORT_LEVEL_MAP.get(thinking_level, "medium")
-    return kwargs
 
 
 def load_task_metadata(spec_dir: Path) -> TaskMetadataConfig | None:
@@ -520,58 +446,6 @@ def get_phase_config(
     return model_id, thinking_level, thinking_budget
 
 
-def get_phase_client_thinking_kwargs(
-    spec_dir: Path,
-    phase: Phase,
-    phase_model: str,
-    cli_thinking: str | None = None,
-) -> dict:
-    """
-    Get thinking kwargs for create_client() for a specific execution phase.
-
-    Combines get_phase_thinking() and get_thinking_kwargs_for_model() to produce
-    the correct kwargs dict based on phase config and model capabilities.
-
-    Args:
-        spec_dir: Path to the spec directory
-        phase: Execution phase (spec, planning, coding, qa)
-        phase_model: Resolved full model ID for this phase
-        cli_thinking: Thinking level from CLI argument (optional)
-
-    Returns:
-        Dict with 'max_thinking_tokens' and optionally 'effort_level'
-    """
-    thinking_level = get_phase_thinking(spec_dir, phase, cli_thinking)
-    return get_thinking_kwargs_for_model(phase_model, thinking_level)
-
-
-def get_fast_mode(spec_dir: Path) -> bool:
-    """
-    Check if Fast Mode is enabled for this task.
-
-    Fast Mode provides faster Opus 4.6 output at higher cost.
-    Reads the fastMode flag from task_metadata.json.
-
-    Args:
-        spec_dir: Path to the spec directory
-
-    Returns:
-        True if Fast Mode is enabled, False otherwise
-    """
-    metadata = load_task_metadata(spec_dir)
-    if metadata:
-        enabled = bool(metadata.get("fastMode", False))
-        if enabled:
-            logger.info(
-                "[Fast Mode] ENABLED — read fastMode=true from task_metadata.json"
-            )
-        else:
-            logger.info("[Fast Mode] disabled — fastMode not set in task_metadata.json")
-        return enabled
-    logger.info("[Fast Mode] disabled — no task_metadata.json found")
-    return False
-
-
 def infer_provider_from_model(model: str) -> str:
     """
     Infer the LLM provider from the model ID.  Works for any phase.
@@ -639,10 +513,6 @@ def infer_provider_from_model(model: str) -> str:
     return env_provider or "claude"
 
 
-# Backward compatibility alias
-infer_qa_provider_from_model = infer_provider_from_model
-
-
 def strip_provider_prefix(model: str) -> str:
     """Strip a leading ``ollama:``, ``openai:``, ``openai-compatible:``, or ``studio:`` prefix.
 
@@ -661,39 +531,21 @@ def strip_provider_prefix(model: str) -> str:
 _LLM_ENDPOINTS_DB_PATH = Path.home() / ".tfactory" / "data.db"
 
 
-def _load_openai_endpoint_by_label(label: str) -> dict | None:
-    """Look up an llm_endpoint row by label.  Returns None if not found."""
+def _load_openai_endpoint(label: str | None = None) -> dict | None:
+    """Load an llm_endpoint row: by ``label`` if given, else the oldest one
+    (for single-endpoint users).  Returns None if not found."""
     import sqlite3
 
     if not _LLM_ENDPOINTS_DB_PATH.exists():
         return None
+    base_sql = "SELECT base_url, api_key, default_model FROM llm_endpoints "
+    if label is not None:
+        query, params = base_sql + "WHERE label = ? LIMIT 1", (label,)
+    else:
+        query, params = base_sql + "ORDER BY created_at ASC LIMIT 1", ()
     try:
         conn = sqlite3.connect(str(_LLM_ENDPOINTS_DB_PATH))
-        row = conn.execute(
-            "SELECT base_url, api_key, default_model FROM llm_endpoints "
-            "WHERE label = ? LIMIT 1",
-            (label,),
-        ).fetchone()
-        conn.close()
-        if row:
-            return {"base_url": row[0], "api_key": row[1], "default_model": row[2]}
-    except sqlite3.Error:
-        pass
-    return None
-
-
-def _load_first_openai_endpoint() -> dict | None:
-    """Return the oldest configured llm_endpoint — for single-endpoint users."""
-    import sqlite3
-
-    if not _LLM_ENDPOINTS_DB_PATH.exists():
-        return None
-    try:
-        conn = sqlite3.connect(str(_LLM_ENDPOINTS_DB_PATH))
-        row = conn.execute(
-            "SELECT base_url, api_key, default_model FROM llm_endpoints "
-            "ORDER BY created_at ASC LIMIT 1"
-        ).fetchone()
+        row = conn.execute(query, params).fetchone()
         conn.close()
         if row:
             return {"base_url": row[0], "api_key": row[1], "default_model": row[2]}
@@ -762,7 +614,7 @@ def get_provider_extra_kwargs(provider_name: str, model: str) -> dict:
     # 1) "<label>:<model>" — disambiguate among multiple endpoints
     if ":" in stripped:
         label_part, model_part = stripped.split(":", 1)
-        endpoint = _load_openai_endpoint_by_label(label_part.strip())
+        endpoint = _load_openai_endpoint(label_part.strip())
         if endpoint:
             return {
                 "model": model_part.strip() or endpoint["default_model"],
@@ -771,7 +623,7 @@ def get_provider_extra_kwargs(provider_name: str, model: str) -> dict:
             }
 
     # 2) Just a model name — use the first/only saved endpoint
-    endpoint = _load_first_openai_endpoint()
+    endpoint = _load_openai_endpoint()
     if endpoint:
         return {
             "model": stripped
@@ -796,55 +648,3 @@ def get_provider_extra_kwargs(provider_name: str, model: str) -> dict:
         "base_url": base_url,
         "api_key": api_key,
     }
-
-
-# Provider capabilities: which providers support agentic phases (file ops, code execution)
-PROVIDER_AGENTIC_SUPPORT = {
-    "claude",
-    "codex",
-    "gemini",
-    "ollama",
-    "openai-compatible",
-}
-
-
-def validate_phase_provider(phase: Phase, model: str) -> tuple[bool, str]:
-    """
-    Validate that the model/provider is compatible with the phase.
-
-    Agentic phases (spec, planning, coding, qa_fixer) require providers that
-    support file operations and code execution.  Providers in
-    PROVIDER_AGENTIC_SUPPORT can handle these phases.
-
-    Args:
-        phase: Execution phase (spec, planning, coding, qa, qa_fixer)
-        model: Model shorthand or full model ID
-
-    Returns:
-        Tuple of (is_valid, error_message).  error_message is empty when valid.
-    """
-    provider = infer_provider_from_model(model)
-    agentic_phases: set[str] = {"spec", "planning", "coding", "qa_fixer"}
-    if phase in agentic_phases and provider not in PROVIDER_AGENTIC_SUPPORT:
-        return False, (
-            f"Provider '{provider}' doesn't support agentic mode needed for "
-            f"{phase} phase. Supported: {sorted(PROVIDER_AGENTIC_SUPPORT)}"
-        )
-    return True, ""
-
-
-def get_spec_phase_thinking_budget(phase_name: str) -> int | None:
-    """
-    Get the thinking budget for a specific spec runner phase.
-
-    This maps granular spec phases (discovery, spec_writing, etc.) to their
-    appropriate thinking budgets based on SPEC_PHASE_THINKING_LEVELS.
-
-    Args:
-        phase_name: Name of the spec phase (e.g., 'discovery', 'spec_writing')
-
-    Returns:
-        Token budget for extended thinking, or None for no extended thinking
-    """
-    thinking_level = SPEC_PHASE_THINKING_LEVELS.get(phase_name, "medium")
-    return get_thinking_budget(thinking_level)

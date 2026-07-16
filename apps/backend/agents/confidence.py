@@ -26,6 +26,8 @@ scorecard (#240).
 
 from __future__ import annotations
 
+from typing import Any
+
 # ─── Weights ────────────────────────────────────────────────────────────
 # Sum to 1.0. Mutation is weighted highest because a SURVIVED mutant is the
 # strongest evidence an assertion is tautological; semantic/coverage are
@@ -207,6 +209,65 @@ def apply_flaky_override(verdict: dict) -> bool:
     return True
 
 
+# ─── consistent_fail reason accuracy (#629) ──────────────────────────────
+# The Evaluator's judge LLM produces `reasons` prose per test with no
+# deterministic signal telling an import/collection error apart from a
+# genuine assertion failure — so for a CONSISTENT_FAIL it sometimes guesses
+# "the subject module is not resolvable/importable", even when the test
+# actually ran and failed a real assertion. That sends a human chasing a
+# phantom import/co-mount bug. ``stability_runner.StabilityResult.failure_kind``
+# (#629) classifies the captured pytest output deterministically; this
+# applies that classification to the verdict's `reasons`, same pattern as
+# ``apply_flaky_override`` above. Never changes the verdict category — a
+# consistent_fail stays a reject/flag — only the reason text.
+
+
+def apply_consistent_fail_reason(
+    verdict: dict[str, Any], failure_info: dict[str, Any] | None
+) -> bool:
+    """Replace ``reasons`` with an accurate, classifier-derived string for a
+    ``consistent_fail`` verdict (#629).
+
+    Args:
+        verdict: One verdict dict from ``verdicts.json``.
+        failure_info: ``{"failure_kind": "import" | "assertion" | "unknown",
+        "rerun_count": int}`` derived from the test's ``StabilityResult``, or
+        ``None`` when stability wasn't computed for this test.
+
+    Returns True if ``reasons`` was replaced. No-ops (returns False) when the
+    verdict's stability signal isn't ``consistent_fail``, when there's no
+    failure_info, or when the classifier couldn't tell (``"unknown"``) — in
+    that last case the LLM's own reason is left alone rather than replaced
+    with a non-answer.
+    """
+    summary = verdict.get("signals_summary")
+    if (
+        not isinstance(summary, dict)
+        or _norm(summary.get("stability")) != "consistent_fail"
+    ):
+        return False
+    if not isinstance(failure_info, dict):
+        return False
+    kind = failure_info.get("failure_kind")
+    runs = failure_info.get("rerun_count", 3)
+    if kind == "assertion":
+        reason = (
+            f"consistent test failure across {runs} runs — the test executed "
+            "and its assertions failed (subject behaviour is wrong), not an "
+            "import/collection error"
+        )
+    elif kind == "import":
+        reason = (
+            f"consistent test failure across {runs} runs — the subject module "
+            "could not be imported/collected in the sandbox (import/collection "
+            "error)"
+        )
+    else:
+        return False
+    verdict["reasons"] = [reason]
+    return True
+
+
 def aggregate_confidence(verdicts: list[dict]) -> dict:
     """Run-level rollup over per-verdict confidences.
 
@@ -246,17 +307,25 @@ def aggregate_confidence(verdicts: list[dict]) -> dict:
     }
 
 
-def enrich_verdicts(doc: dict, flaky_by_test_id: dict | None = None) -> dict:
+def enrich_verdicts(
+    doc: dict[str, Any],
+    flaky_by_test_id: dict[str, Any] | None = None,
+    failure_kind_by_test_id: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Mutate ``doc`` in place: stamp flaky history, confidence + run rollup.
 
     For each verdict, in order:
       1. stamp ``signals_summary.flaky`` from ``flaky_by_test_id`` (#239),
       2. apply the deterministic flaky override (accept→flag for FLAKY tests),
-      3. compute ``signals_summary.confidence`` (now flaky-penalised).
+      3. fix the ``reasons`` narrative for a consistent_fail using the
+         classifier-derived ``failure_kind_by_test_id`` (#629),
+      4. compute ``signals_summary.confidence`` (now flaky-penalised).
     Then add the top-level ``confidence_summary``. Safe on an empty doc and when
-    ``flaky_by_test_id`` is None (then behaves exactly like C1). Returns ``doc``.
+    ``flaky_by_test_id`` / ``failure_kind_by_test_id`` are None (then behaves
+    exactly like C1). Returns ``doc``.
     """
     flaky_by_test_id = flaky_by_test_id or {}
+    failure_kind_by_test_id = failure_kind_by_test_id or {}
     verdicts = doc.get("verdicts")
     if not isinstance(verdicts, list):
         return doc
@@ -267,10 +336,16 @@ def enrich_verdicts(doc: dict, flaky_by_test_id: dict | None = None) -> dict:
         if not isinstance(summary, dict):
             summary = {}
             v["signals_summary"] = summary
-        flaky = flaky_by_test_id.get(v.get("test_id"))
+        test_id = v.get("test_id")
+        test_id = test_id if isinstance(test_id, str) else None
+        flaky = flaky_by_test_id.get(test_id) if test_id is not None else None
         if isinstance(flaky, dict):
             summary["flaky"] = flaky
         apply_flaky_override(v)
+        failure_info = (
+            failure_kind_by_test_id.get(test_id) if test_id is not None else None
+        )
+        apply_consistent_fail_reason(v, failure_info)
         summary["confidence"] = compute_confidence(v)
     doc["confidence_summary"] = aggregate_confidence(verdicts)
     return doc

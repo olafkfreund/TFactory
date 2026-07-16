@@ -45,12 +45,14 @@ import logging as _logging
 import os
 import shutil
 import traceback
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from agents.run_result import RunResultLike
+from agents.verdict_vote import majority_vote
 
 if TYPE_CHECKING:
     from tools.runners.docker_runner import DockerRunResult
@@ -68,6 +70,7 @@ from agents.evaluator_targets import (
 )
 from agents.evaluator_verdicts import _validate_verdicts
 from agents.nix_env import (
+    detect_serve_command,
     environment_from_contract,
     is_nix_environment,
     run_pytest_lane_via_nix,
@@ -270,7 +273,15 @@ def _maybe_nix_verify(
         return None
     try:
         nix_res = run_pytest_lane_via_nix(
-            spec_dir, project_dir, test_file, extra_env=extra_env, timeout=300
+            # Cold Nix builds (seed /nix + build python+fastapi+httpx+pytest from
+            # the flake) can exceed 5 min on first use; the warm store amortizes
+            # later runs. Give it room so the lane doesn't time out to an empty
+            # log and misgrade a passing test (#621).
+            spec_dir,
+            project_dir,
+            test_file,
+            extra_env=extra_env,
+            timeout=900,
         )
     except Exception as exc:  # noqa: BLE001 - never fail the lane on a config gap
         _eval_log.warning(
@@ -325,11 +336,34 @@ def _ensure_host_venv(project_dir: Path) -> Path:
     vdir = Path(tempfile.mkdtemp(prefix="tf-hostvenv-"))
     _venv.create(vdir, with_pip=True)
     py = str(vdir / "bin" / "python")
-    args = [py, "-m", "pip", "install", "-q", "pytest", "pytest-cov"]
+    # requests (#612): api-lane subtasks are generated as plain requests-based
+    # httpx-free tests hitting TFACTORY_TARGET_URL (see the pytest framework
+    # descriptor's api-lane context_block) — install it unconditionally so
+    # those tests import cleanly even when the SUT itself doesn't declare it.
+    args = [py, "-m", "pip", "install", "-q", "pytest", "pytest-cov", "requests"]
     req = Path(project_dir) / "requirements.txt"
     if req.exists():
         args += ["-r", str(req)]
     subprocess.run(args, capture_output=True, text=True, timeout=600)
+    # Install the SUT itself when it ships a pyproject.toml (best-effort). The
+    # bare install pulls in the project's runtime deps AND registers the package
+    # — covering src-layout repos that have no requirements.txt, so
+    # ``from <pkg> import ...`` resolves in the venv. The ``[test]``/``[dev]``
+    # passes then pull common test-only deps (e.g. httpx for FastAPI's
+    # TestClient) that live in an optional-dependencies group. Each pass is
+    # non-fatal: an undeclared extra simply fails without affecting the others,
+    # and the src PYTHONPATH added by the runner still resolves bare-source
+    # imports if every install fails (#613).
+    if (Path(project_dir) / "pyproject.toml").exists():
+        pdir = str(project_dir)
+        for target in (pdir, f"{pdir}[test]", f"{pdir}[dev]"):
+            subprocess.run(  # noqa: S603 — fixed pip argv, no untrusted input
+                [py, "-m", "pip", "install", "-q", "-e", target],
+                capture_output=True,
+                text=True,
+                timeout=600,
+                check=False,
+            )
     _HOST_VENVS[key] = vdir
     return vdir
 
@@ -354,7 +388,12 @@ def _run_pytest_on_host(
         "--junitxml=junit.xml --cov-report=xml:coverage.xml --cov=. 2>&1; "
         "echo __PYTEST_EXIT=$?"
     )
-    env = {**os.environ, **extra_env, "PYTHONPATH": str(Path(scratch).resolve())}
+    scratch_root = Path(scratch).resolve()
+    pythonpath = str(scratch_root)
+    src_dir = scratch_root / "src"
+    if src_dir.is_dir():
+        pythonpath = f"{src_dir}{os.pathsep}{pythonpath}"
+    env = {**os.environ, **extra_env, "PYTHONPATH": pythonpath}
     res = subprocess.run(
         ["sh", "-c", cmd], capture_output=True, text=True, timeout=300, env=env
     )
@@ -414,7 +453,13 @@ def _resolve_runner_fn(
                 "--cov-report=xml:/scratch/coverage.xml --cov=. 2>&1; "
                 "echo __PYTEST_EXIT=$?"
             )
-            extra_env = {"PYTHONHASHSEED": str(seed)}
+            # ``/scratch/src`` first so src-layout packages import inside the
+            # container; ``/scratch`` covers flat layouts. A missing path is
+            # simply ignored by the interpreter.
+            extra_env = {
+                "PYTHONHASHSEED": str(seed),
+                "PYTHONPATH": f"/scratch/src{os.pathsep}/scratch",
+            }
             if target_url:
                 extra_env["TFACTORY_TARGET_URL"] = target_url
                 extra_env["APP_URL"] = target_url
@@ -1480,8 +1525,91 @@ def _build_kube_or_static_bundle(
             runtime.wait_for_healthy()
             return make_bundle(make_runner(runtime.target_url))
     target_url = _browser_target_url(spec_dir, st)
+    if target_url is None:
+        # api lane, spec-ingest, no .tfactory.yml target configured (#612):
+        # self-serve the SUT instead of leaving VAL-2 permanently unreachable.
+        self_served = _maybe_self_serve_api_bundle(
+            spec_dir, project_dir, st, make_runner, make_bundle
+        )
+        if self_served is not None:
+            return self_served
     _gate_target_health(spec_dir, st, target, target_url)
     return make_bundle(make_runner(target_url))
+
+
+def _maybe_self_serve_api_bundle(
+    spec_dir: Path,
+    project_dir: Path,
+    st: dict[str, Any],
+    make_runner: Callable[[str], Any],
+    make_bundle: Callable[[Any], Any],
+) -> Any | None:
+    """Self-serve the SUT for an api-lane subtask with no configured target.
+
+    The spec-ingest case (#612): a freshly-generated app has no
+    ``.tfactory.yml`` target yet, so ``_browser_target_url`` returns None and
+    the api lane would otherwise always run with no app to hit (VAL-2 stuck
+    ``not_run``/failed). Detects the app's entrypoint (``agents.nix_env.
+    detect_serve_command``), boots it on a free host port via
+    ``LocalServeRuntime``, health-polls it, runs the bundle against it, and
+    always tears the process down.
+
+    Only engages when the lane's test process will run in the SAME
+    host/network-namespace as this self-served app — i.e. when the run is
+    NOT using the Nix k8s Job backend (that lane executes in a separate pod
+    and could never reach a ``127.0.0.1`` URL bound here). When nixjob is
+    selected, or nothing is detectable/startable, returns None so the caller
+    falls through to the existing honest no-target path unchanged. Never
+    raises into the run — self-serve is best-effort.
+    """
+    if st.get("lane") != "api":
+        return None
+    if _nix_verify_mode(spec_dir):
+        _eval_log.info(
+            "api lane self-serve skipped for %s: nixjob backend runs the test "
+            "in a separate pod that can't reach a host-local URL (follow-up)",
+            st.get("id"),
+        )
+        return None
+    try:
+        # deferred best-effort imports (file convention)
+        from tools.runners.free_port import find_free_port  # noqa: PLC0415
+        from tools.runners.local_serve_runtime import (  # noqa: PLC0415
+            LocalServeRuntime,
+            LocalServeRuntimeError,
+        )
+
+        env = environment_from_contract(spec_dir)
+        port = find_free_port()
+        serve_cmd = detect_serve_command(Path(project_dir), env, port=port)
+        if not serve_cmd:
+            _eval_log.info(
+                "api lane self-serve: no serve command detected for %s", st.get("id")
+            )
+            return None
+        serve_cmd = _host_serve_command(serve_cmd, Path(project_dir))
+        runtime = LocalServeRuntime(serve_cmd, Path(project_dir), port)
+        with runtime:
+            runtime.wait_for_healthy()
+            return make_bundle(make_runner(runtime.target_url))
+    except LocalServeRuntimeError as exc:
+        _eval_log.warning("api lane self-serve did not become healthy: %s", exc)
+        return None
+    except Exception as exc:  # noqa: BLE001 — self-serve is best-effort
+        _eval_log.warning("api lane self-serve errored (non-blocking): %s", exc)
+        return None
+
+
+def _host_serve_command(serve_cmd: str, project_dir: Path) -> str:
+    """Rewrite a bare ``python`` serve command to use the project's host venv
+    interpreter (built by ``_ensure_host_venv``), so the self-served app sees
+    the SUT's installed deps (e.g. uvicorn/fastapi) instead of falling
+    through to whatever ``python`` resolves to on PATH. Non-Python serve
+    commands (e.g. ``npm start``) are returned unchanged."""
+    if not serve_cmd.startswith("python "):
+        return serve_cmd
+    venv_py = str(_ensure_host_venv(project_dir) / "bin" / "python")
+    return venv_py + serve_cmd[len("python") :]
 
 
 def _gate_target_health(spec_dir, subtask, target, target_url) -> None:
@@ -1593,43 +1721,208 @@ def _build_all_bundles(spec_dir, project_dir, unit, browser, api, jest, go) -> l
     return bundles
 
 
-async def _run_evaluator_session(spec_dir, project_dir, bundles, verbose) -> bool:
-    """Invoke the LLM with the signal bundles, then validate verdicts.json.
+def _vote_count() -> int:
+    """Best-of-N vote count for the judge session (#649). Default 3; min 1."""
+    try:
+        n = int(os.getenv("TFACTORY_VERDICT_VOTES", "3"))
+    except ValueError:
+        n = 3
+    return max(1, n)
+
+
+async def _judge_once(
+    spec_dir: Path, project_dir: Path, prompt: str, verbose: bool
+) -> tuple[dict[str, Any] | None, str, str]:
+    """One independent judge call: session + verdicts.json validation (#649).
+
+    Returns ``(doc, "", "")`` on success, or ``(None, phase, error)`` on any
+    failure so the caller can count the call as a fail-closed deny vote
+    without writing a terminal status per call.
+    """
+    verdicts_path = spec_dir / "findings" / "verdicts.json"
+    verdicts_path.unlink(missing_ok=True)
+    try:
+        client = await _resolve_evaluator_client(spec_dir, project_dir)
+        await _invoke_session(client, prompt, spec_dir, verbose)
+    except Exception as exc:  # noqa: BLE001 — surface in status
+        _eval_log.error("evaluator session raised: %s\n%s", exc, traceback.format_exc())
+        return None, "evaluator_session_error", str(exc)[:500]
+    ok, err, _count = _validate_verdicts(verdicts_path)
+    if not ok:
+        return None, "evaluator_invalid_verdicts", err
+    try:
+        doc = json.loads(verdicts_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        return None, "evaluator_invalid_verdicts", f"verdicts.json unreadable: {exc}"
+    if not isinstance(doc, dict):
+        return None, "evaluator_invalid_verdicts", "verdicts.json root is not an object"
+    return doc, "", ""
+
+
+async def _collect_judge_docs(
+    spec_dir: Path, project_dir: Path, prompt: str, verbose: bool, n: int
+) -> tuple[list[dict[str, Any] | None], tuple[str, str] | None]:
+    """Run ``n`` independent judge calls; keep per-call docs + first failure."""
+    docs: list[dict[str, Any] | None] = []
+    first_failure: tuple[str, str] | None = None
+    for i in range(n):
+        doc, fail_phase, fail_err = await _judge_once(
+            spec_dir, project_dir, prompt, verbose
+        )
+        docs.append(doc)
+        if doc is None:
+            first_failure = first_failure or (fail_phase, fail_err)
+        elif n > 1:
+            # Per-call audit trail (verdicts.json itself is cleared per call).
+            (spec_dir / "findings" / f"verdicts.vote{i}.json").write_text(
+                json.dumps(doc, indent=2)
+            )
+    return docs, first_failure
+
+
+def _entry_for(doc: dict[str, Any] | None, test_id: str) -> dict[str, Any] | None:
+    """Find one test's verdict entry in a judge run's doc (None-tolerant)."""
+    verdicts = (doc or {}).get("verdicts")
+    if not isinstance(verdicts, list):
+        return None
+    for v in verdicts:
+        if isinstance(v, dict) and v.get("test_id") == test_id:
+            return v
+    return None
+
+
+def _voted_test_ids(docs: list[dict[str, Any] | None]) -> list[str]:
+    """Union of test_ids across judge runs, first-seen order preserved."""
+    order: list[str] = []
+    for doc in docs:
+        verdicts = (doc or {}).get("verdicts")
+        for v in verdicts if isinstance(verdicts, list) else []:
+            tid = v.get("test_id") if isinstance(v, dict) else None
+            if isinstance(tid, str) and tid and tid not in order:
+                order.append(tid)
+    return order
+
+
+async def _merge_voted_verdicts(
+    docs: list[dict[str, Any] | None],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Merge N judge runs into one verdicts doc via per-test majority vote (#649).
+
+    A run that crashed/was invalid (``None`` doc) or is simply missing a test
+    casts a fail-closed reject vote for that test. Each merged entry carries a
+    ``vote`` block (all votes, split, dissent with the dissenter's reasons);
+    the doc carries a ``verdict_vote`` split summary for calibration.
+    Returns ``(merged_doc, vote_summary)``.
+    """
+    base = next(d for d in docs if d is not None)
+
+    async def _replay(i: int) -> dict[str, Any] | None:
+        return docs[i]
+
+    order = _voted_test_ids(docs)
+    merged: list[dict[str, Any]] = []
+    splits: Counter[str] = Counter()
+    for tid in order:
+
+        def _extract(doc: dict[str, Any] | None, _tid: str = tid) -> str | None:
+            entry = _entry_for(doc, _tid)
+            value = entry.get("verdict") if entry else None
+            return value if isinstance(value, str) else None
+
+        result = await majority_vote(_replay, _extract, n=len(docs))
+        splits[result.split] += 1
+        # Prefer a majority voter's entry for the payload; fall back to any
+        # run that produced the test (a crash-driven reject majority may have
+        # no entry of its own).
+        entry: dict[str, Any] | None = None
+        for i, vote in enumerate(result.votes):
+            candidate = _entry_for(docs[i], tid)
+            if vote == result.majority and candidate is not None:
+                entry = dict(candidate)
+                break
+        if entry is None:
+            entry = dict(
+                next(e for e in (_entry_for(d, tid) for d in docs) if e is not None)
+            )
+        if entry.get("verdict") != result.majority:
+            reasons = entry.get("reasons")
+            entry["reasons"] = (list(reasons) if isinstance(reasons, list) else []) + [
+                f"majority vote {result.split}: {result.majority} overrides this "
+                f"entry's own judge call ({entry.get('verdict')}); crashed or "
+                "missing votes count as reject (fail-closed)"
+            ]
+            entry["verdict"] = result.majority
+        entry["vote"] = {
+            "votes": list(result.votes),
+            "split": result.split,
+            "dissent": [
+                {
+                    "call": i,
+                    "verdict": result.votes[i],
+                    "reasons": (_entry_for(docs[i], tid) or {}).get("reasons"),
+                }
+                for i in result.dissent
+            ],
+        }
+        merged.append(entry)
+
+    doc = dict(base)
+    doc["verdicts"] = merged
+    contested = sum(c for s, c in splits.items() if not s.endswith("-0"))
+    summary: dict[str, Any] = {
+        "calls": len(docs),
+        "failed_calls": sum(1 for d in docs if d is None),
+        "tests": len(order),
+        "splits": dict(splits),
+        "split_rate": round(contested / len(order), 2) if order else 0.0,
+    }
+    doc["verdict_vote"] = summary
+    return doc, summary
+
+
+async def _run_evaluator_session(
+    spec_dir: Path,
+    project_dir: Path,
+    bundles: list[EvaluatorSignals],
+    verbose: bool,
+) -> bool:
+    """Invoke the judge LLM best-of-N (#649) and write the voted verdicts.json.
+
+    The judge session is the one GATING LLM verdict in TFactory, so it never
+    gates on a single pass: ``TFACTORY_VERDICT_VOTES`` (default 3) independent
+    sessions run over the same prompt and each test's verdict is the majority,
+    with judge crashes counted as reject votes (fail-closed). Deterministic
+    signals are computed once, before the vote, and stay untouched.
 
     Returns True on success (status → ``evaluated`` and Triager scheduled),
-    False on a session error or invalid verdicts (status → ``evaluator_failed``).
+    False when every judge call failed (status → ``evaluator_failed``).
     """
     from prompts_pkg.prompts import get_tfactory_evaluator_prompt
 
     prompt = get_tfactory_evaluator_prompt(spec_dir, project_dir, bundles)
-    client = await _resolve_evaluator_client(spec_dir, project_dir)
-    try:
-        session_status, _response, _err = await _invoke_session(
-            client,
-            prompt,
-            spec_dir,
-            verbose,
-        )
-    except Exception as exc:  # noqa: BLE001 — surface in status
-        _eval_log.error("evaluator session raised: %s\n%s", exc, traceback.format_exc())
+    verdicts_path = spec_dir / "findings" / "verdicts.json"
+    n = _vote_count()
+    docs, first_failure = await _collect_judge_docs(
+        spec_dir, project_dir, prompt, verbose, n
+    )
+
+    if all(d is None for d in docs):
+        fail_phase, fail_err = first_failure or ("evaluator_session_error", "unknown")
         _write_status_patch(
             spec_dir,
             status="evaluator_failed",
-            phase="evaluator_session_error",
-            evaluator_error=str(exc)[:500],
+            phase=fail_phase,
+            evaluator_error=fail_err,
         )
         return False
 
-    verdicts_path = spec_dir / "findings" / "verdicts.json"
-    ok, err, count = _validate_verdicts(verdicts_path)
-    if not ok:
-        _write_status_patch(
-            spec_dir,
-            status="evaluator_failed",
-            phase="evaluator_invalid_verdicts",
-            evaluator_error=err,
-        )
-        return False
+    vote_summary: dict[str, Any] | None = None
+    if n > 1:
+        merged, vote_summary = await _merge_voted_verdicts(docs)
+        verdicts_path.write_text(json.dumps(merged, indent=2))
+        count = len(merged.get("verdicts") or [])
+    else:
+        count = len((docs[0] or {}).get("verdicts") or [])
 
     # Stamp deterministic confidence + flaky-history onto each verdict + a
     # run-level rollup (#238, #239). Best-effort: a scoring hiccup must never
@@ -1641,6 +1934,11 @@ async def _run_evaluator_session(spec_dir, project_dir, bundles, verbose) -> boo
         from agents.confidence import enrich_verdicts
 
         flaky_by_test_id = {}
+        # Deterministic import-vs-assertion classification for a
+        # consistent_fail (#629) — fixes the `reasons` narrative regardless
+        # of what the judge LLM guessed. Only populated when stability
+        # actually ran and landed on CONSISTENT_FAIL.
+        failure_kind_by_test_id = {}
         for b in bundles:
             fh = getattr(b, "flaky_history", None)
             if fh is not None:
@@ -1652,8 +1950,17 @@ async def _run_evaluator_session(spec_dir, project_dir, bundles, verbose) -> boo
                         b.test_id,
                         exc_info=True,
                     )
+            stability = getattr(b, "stability", None)
+            failure_kind = (
+                getattr(stability, "failure_kind", None) if stability else None
+            )
+            if failure_kind is not None:
+                failure_kind_by_test_id[b.test_id] = {
+                    "failure_kind": failure_kind,
+                    "rerun_count": getattr(stability, "rerun_count", 3),
+                }
         doc = json.loads(verdicts_path.read_text())
-        enrich_verdicts(doc, flaky_by_test_id)
+        enrich_verdicts(doc, flaky_by_test_id, failure_kind_by_test_id)
         # Honor the RFC-0002 contract execution scope (#247): record declared
         # coverage_target / mutation_scope / security_scope into the run output.
         try:
@@ -1667,12 +1974,16 @@ async def _run_evaluator_session(spec_dir, project_dir, bundles, verbose) -> boo
     except Exception as exc:  # noqa: BLE001 — confidence is additive metadata
         _eval_log.warning("confidence/flaky enrichment skipped: %s", exc)
 
+    # Vote splits ride on status.json so the Triager's completion envelope
+    # surfaces them (calibration hook, #649 step 5).
+    _vote_fields = {"verdict_vote": vote_summary} if vote_summary else {}
     _write_status_patch(
         spec_dir,
         status="evaluated",
         phase="evaluator_complete",
         verdicts_count=count,
         tests_evaluated=len(bundles),
+        **_vote_fields,
     )
     # Forward-chain to the Triager (Task 8, #9). Gated by ``TFACTORY_AUTO_TRIAGE``
     # env; tests pin it off to keep this layer deterministic.

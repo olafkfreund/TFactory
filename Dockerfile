@@ -35,7 +35,7 @@ RUN mkdir -p apps/web-server/static \
 # Stage 2: Runtime (Chainguard Python, dev variant for now — minimal split
 # happens in P0.5 once we know what the runtime *actually* needs)
 # ---------------------------------------------------------------------------
-FROM cgr.dev/chainguard/python:latest-dev@sha256:369768c6ee466cc726ebab82e1b590f2d5a78507d134b17912f3e5c58de950ff AS runtime
+FROM cgr.dev/chainguard/python:latest-dev@sha256:0416c4863f2d0fb0e2e58d125e03b73cf4876cb02efc7927fd4a248a04f78c24 AS runtime
 
 USER root
 
@@ -66,6 +66,13 @@ RUN apk upgrade --no-cache
 #                   (test_trivy_no_high_critical). Constraint, not =2.46-r2, so
 #                   the build stays green when Wolfi revs the package further;
 #                   drop this once the base digest ships the fix (Renovate).
+#   libexpat1     — the :latest-dev base bundles libexpat1 2.8.1-r1, which
+#                   carries CVE-2026-56131/56407/56408 (HIGH; use-after-free +
+#                   integer overflows, fixed in 2.8.2-r0). The pinned snapshot
+#                   lags so `apk upgrade` can't reach it; force a build-newer rev
+#                   to clear the P0.8 Trivy gate. Constraint (not =2.8.2-r0) so
+#                   the build stays green as Wolfi revs further; drop once the
+#                   base digest ships the fix (Renovate).
 #   bubblewrap    — OS-level bash sandbox for agent commands. Without it the
 #                   Claude Agent SDK logs "Sandbox disabled: ... bubblewrap
 #                   (bwrap) not installed" and runs commands with NO filesystem
@@ -83,6 +90,7 @@ RUN apk add --no-cache \
         git \
         gh \
         gnupg \
+        "libexpat1>2.8.1-r1" \
         nodejs \
         npm \
         socat \

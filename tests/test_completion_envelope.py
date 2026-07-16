@@ -173,11 +173,10 @@ def test_triager_envelope_carries_additive_fields(tmp_path, monkeypatch):
     assert env["specversion"] == "1.0"
     assert env["type"] == "io.factory.tfactory.completion"
     assert env["time"] == "2026-06-08T12:00:00+00:00"
-    # Legacy fields untouched (non-breaking).
+    # Core RFC fields retained (#471 cutover dropped schema_version/event/etc).
     assert env["service"] == "tfactory"
     assert env["status"] == "triaged"
     assert env["correlation_key"]
-    assert env["schema_version"] == "1.2"
 
 
 def test_triager_envelope_id_unique_per_build(tmp_path):
@@ -240,13 +239,10 @@ def test_envelope_serialized_shape_is_unchanged(tmp_path, monkeypatch):
         "task_id",
         "status",
         "phase",
-        "updated_at",
         # RFC-0001 §4 chain block
         "correlation",
-        # normalized header + #85/#198 flat fields
-        "schema_version",
-        "event",
-        "correlation_id",
+        # #471 cutover: schema_version/event/correlation_id/updated_at dropped.
+        # TFactory detail + #85/#198 flat fields.
         "project_id",
         "spec_id",
         "outcome",

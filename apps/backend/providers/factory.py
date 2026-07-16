@@ -5,16 +5,12 @@ Unified LLM Provider Factory
 Phase-aware factory that routes to the correct provider (agentic vs text-only)
 based on the execution phase.
 
-Two entry-points:
+Entry-point:
 
-1. ``get_provider(provider_name, phase, **kwargs)`` — new, phase-aware factory.
-   Automatically selects the agentic or text-only variant of a provider
-   based on whether the phase needs file operations (coding, planning, etc.)
-   or just text output (QA review).
-
-2. ``get_qa_llm_provider(provider_name, **kwargs)`` — legacy factory.
-   Always routes to the text-only provider variant.  Preserved for backward
-   compatibility with existing ``qa/loop.py`` callers.
+- ``get_provider(provider_name, phase, **kwargs)`` — phase-aware factory.
+  Automatically selects the agentic or text-only variant of a provider
+  based on whether the phase needs file operations (coding, planning, etc.)
+  or just text output (QA review).
 
 Usage::
 
@@ -192,19 +188,12 @@ def get_provider(provider_name: str, phase: str, **kwargs: Any) -> BaseLLMProvid
     return _instantiate(module_path, class_name, **kwargs)
 
 
-# ---------------------------------------------------------------------------
-# Legacy factory (backward compatibility)
-# ---------------------------------------------------------------------------
-
-
 def get_qa_llm_provider(provider_name: str, **kwargs: Any) -> BaseLLMProvider:
     """Instantiate a text-only ``BaseLLMProvider`` by name.
 
-    Legacy factory preserved for backward compatibility with ``qa/loop.py``.
-    Always routes to the text-only provider variant.
-
-    Raises ValueError with "Unknown QA LLM provider" message for backward
-    compatibility with existing tests and callers.
+    Public factory for the text-only provider variant (the agentic variant is
+    built via ``get_provider``). Raises ValueError with "Unknown QA LLM
+    provider" for backward compatibility with existing callers and tests.
 
     Args:
         provider_name: Case-insensitive provider identifier.
@@ -248,85 +237,9 @@ def list_provider_aliases() -> dict[str, str]:
     return dict(_PROVIDER_ALIASES)
 
 
-# ---------------------------------------------------------------------------
-# Tool-use fallback for text-only providers
-# ---------------------------------------------------------------------------
-
-# Preferred order for tool-capable fallback providers
-_TOOL_FALLBACK_ORDER: list[str] = ["claude", "codex", "gemini"]
-
-
-def get_tool_fallback_provider(
-    phase: str,
-    exclude: str | None = None,
-    **kwargs: Any,
-) -> BaseLLMProvider | None:
-    """Get a tool-capable fallback provider for phases that need tool use.
-
-    When a text-only provider (e.g. Ollama) is used for a phase that requires
-    tool operations (updating files, running commands), this function returns
-    a fallback provider that CAN do tool use.
-
-    Checks availability in order: Claude → Codex → Gemini.  Returns the first
-    one whose CLI is installed, skipping the ``exclude`` provider.
-
-    Args:
-        phase: Execution phase (determines agentic vs text-only routing).
-        exclude: Provider name to skip (e.g. the one that already failed).
-        **kwargs: Forwarded to the provider constructor (model, working_dir,
-            etc.).  For Claude, ``model`` defaults to ``"sonnet"``.
-
-    Returns:
-        A ``BaseLLMProvider`` instance, or ``None`` if no fallback is available.
-    """
-    import shutil
-
-    # CLI executable names for each provider
-    _CLI_NAMES: dict[str, str] = {
-        "claude": "claude",
-        "codex": "codex",
-        "gemini": "gemini",
-    }
-
-    for provider_name in _TOOL_FALLBACK_ORDER:
-        if provider_name == exclude:
-            continue
-
-        cli_name = _CLI_NAMES.get(provider_name, provider_name)
-        if shutil.which(cli_name) is None:
-            logger.debug(
-                "get_tool_fallback_provider: %s CLI not found, skipping",
-                provider_name,
-            )
-            continue
-
-        try:
-            fallback_kwargs = dict(kwargs)
-            # Set sensible defaults per provider
-            if provider_name == "claude" and "model" not in fallback_kwargs:
-                fallback_kwargs["model"] = "sonnet"
-
-            provider = get_provider(provider_name, phase=phase, **fallback_kwargs)
-            logger.info(
-                "get_tool_fallback_provider: using %s as tool fallback for %s phase",
-                provider_name,
-                phase,
-            )
-            return provider
-        except (ValueError, ImportError) as exc:
-            logger.debug(
-                "get_tool_fallback_provider: %s failed: %s", provider_name, exc
-            )
-            continue
-
-    logger.warning("get_tool_fallback_provider: no fallback available")
-    return None
-
-
 __all__ = [
     "get_provider",
     "get_qa_llm_provider",
-    "get_tool_fallback_provider",
     "list_provider_aliases",
     "list_providers",
 ]

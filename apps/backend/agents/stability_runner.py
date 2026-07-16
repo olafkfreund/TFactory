@@ -75,6 +75,71 @@ class StabilityRun:
         return self.returncode == 0
 
 
+# ─── Failure-kind classifier (#629) ─────────────────────────────────────
+# The Evaluator's judge LLM previously had to *guess* whether a
+# CONSISTENT_FAIL was an import/collection error or a genuine assertion
+# failure, from the numeric ``consistent_fail`` verdict alone. With no
+# deterministic signal to distinguish the two, it sometimes labelled a
+# real assertion failure ("assert 0.0 == 300.0") as "the subject module
+# is not resolvable/importable" — sending a human chasing a phantom
+# import/co-mount bug. This helper reads the captured pytest stdout/stderr
+# (deterministically, no LLM) to tell the two apart.
+
+_IMPORT_MARKERS = (
+    "ModuleNotFoundError",
+    "ImportError",
+    "No module named",
+    "error during collection",
+    "errors during collection",
+    "cannot import name",
+)
+
+_ASSERTION_MARKERS = (
+    "AssertionError",
+    "assert ",
+    "FAILED",
+    "E   assert",
+)
+
+# Pytest exit codes: 0 = all passed, 1 = tests failed (assertions), 2 = usage
+# error / collection error, 5 = no tests collected.
+_PYTEST_COLLECTION_ERROR_CODE = 2
+_PYTEST_TEST_FAILURE_CODE = 1
+
+
+def classify_pytest_failure(stdout: str, returncode: int) -> str:
+    """Deterministically classify *why* a pytest run failed.
+
+    Args:
+        stdout: Captured stdout (+ stderr, if the caller concatenates it) of
+            the pytest invocation. Only substring markers are checked — this
+            is intentionally a cheap heuristic, not a parser.
+        returncode: The process exit code pytest returned.
+
+    Returns:
+        - ``"import"`` — a collection/import error: the text contains one of
+          ``ModuleNotFoundError``, ``ImportError``, ``No module named``,
+          ``error during collection``, ``errors during collection``,
+          ``cannot import name``, OR the exit code is 2 (pytest's dedicated
+          collection-error/usage-error code).
+        - ``"assertion"`` — a genuine test failure: the text contains
+          ``AssertionError``, ``assert ``, ``FAILED``, or ``E   assert``,
+          AND the exit code is 1 (pytest's test-failure code).
+        - ``"unknown"`` — neither pattern matched (includes a clean pass,
+          and any failure shape this heuristic doesn't recognise).
+    """
+    text = stdout or ""
+    if returncode == _PYTEST_COLLECTION_ERROR_CODE or any(
+        marker in text for marker in _IMPORT_MARKERS
+    ):
+        return "import"
+    if returncode == _PYTEST_TEST_FAILURE_CODE and any(
+        marker in text for marker in _ASSERTION_MARKERS
+    ):
+        return "assertion"
+    return "unknown"
+
+
 @dataclass(frozen=True)
 class StabilityResult:
     """Aggregate verdict + per-run record from ``check_stability``."""
@@ -89,6 +154,25 @@ class StabilityResult:
     def is_acceptable(self) -> bool:
         """Convenience: did the test prove itself stable?"""
         return self.verdict == StabilityVerdict.STABLE
+
+    @property
+    def failure_kind(self) -> str | None:
+        """Deterministic classification of *why* a CONSISTENT_FAIL failed (#629).
+
+        Only meaningful for ``CONSISTENT_FAIL`` — a ``STABLE`` run has
+        nothing to classify, and a ``FLAKY`` run's runs disagree on outcome
+        (a mixed signal a single classification can't represent). Returns
+        ``None`` in those cases, or when there are no captured runs.
+
+        Combines every run's stdout_tail + stderr_tail (all runs share the
+        same returncode for a CONSISTENT_FAIL, so this is just widening the
+        marker search across whatever each run's truncated tail happened to
+        retain).
+        """
+        if self.verdict != StabilityVerdict.CONSISTENT_FAIL or not self.runs:
+            return None
+        combined = "\n".join(f"{r.stdout_tail}\n{r.stderr_tail}" for r in self.runs)
+        return classify_pytest_failure(combined, self.runs[0].returncode)
 
 
 # ─── Public entrypoint ──────────────────────────────────────────────────

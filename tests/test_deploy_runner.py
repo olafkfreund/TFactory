@@ -83,8 +83,8 @@ def test_required_scans_force_scanners_even_without_glob_match():
     # No .tf files, but the policy demands an IaC scan -> forced on.
     steps = plan_deploy_steps(["app/Chart.yaml"], required_scans=["iac-scan"])
     names = {s.name for s in steps}
-    assert "tfsec" in names or "checkov" in names
-    forced = [s for s in steps if s.name in ("tfsec", "checkov")]
+    assert "tfsec" in names or "trivy" in names
+    forced = [s for s in steps if s.name in ("tfsec", "trivy")]
     assert any(not s.optional for s in forced), "forced scans must be non-optional"
 
 

@@ -177,8 +177,10 @@ describe('<TFactoryTaskDetail> lanes tab', () => {
     expect(screen.getByTestId('lane-card-unit')).toHaveAttribute(
       'data-lane-state', 'success',
     );
+    // The browser lane has no result data here; LaneStatusGrid reports
+    // pending/no-work lanes as "idle" (the old "placeholder" state is gone).
     expect(screen.getByTestId('lane-card-browser')).toHaveAttribute(
-      'data-lane-state', 'placeholder',
+      'data-lane-state', 'idle',
     );
   });
 });

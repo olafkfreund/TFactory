@@ -257,7 +257,9 @@ async def clear_terminal_sessions(project: str | None = None):
     """
 
     cleared_count = 0
-    errors = []
+    errors: list[str] = []
+    failed_files = 0
+    failed_dirs = 0
 
     # Determine which directories to clear
     dirs_to_clear = []
@@ -308,7 +310,14 @@ async def clear_terminal_sessions(project: str | None = None):
             except (json.JSONDecodeError, KeyError):
                 pass
 
-    # Clear session files from each directory
+    # Clear session files from each directory.
+    #
+    # The warnings below reach the HTTP response, so they must NOT carry `str(e)`
+    # or an absolute server path (py/stack-trace-exposure): an OSError stringifies
+    # to its own path, and `sessions_dir` is an absolute on-disk location — both
+    # hand an external caller our filesystem layout. Same treatment the rest of
+    # this module already applies (#569/#570): the detail goes to the log, the
+    # caller gets a count.
     for sessions_dir in dirs_to_clear:
         try:
             # Count and remove session files
@@ -316,10 +325,19 @@ async def clear_terminal_sessions(project: str | None = None):
                 try:
                     session_file.unlink()
                     cleared_count += 1
-                except Exception as e:
-                    errors.append(f"Failed to remove {session_file.name}: {str(e)}")
-        except Exception as e:
-            errors.append(f"Failed to process {sessions_dir}: {str(e)}")
+                except Exception:
+                    logger.exception(
+                        "Failed to remove terminal session file %s", session_file
+                    )
+                    failed_files += 1
+        except Exception:
+            logger.exception("Failed to process terminal sessions dir %s", sessions_dir)
+            failed_dirs += 1
+
+    if failed_files:
+        errors.append(f"{failed_files} session file(s) could not be removed")
+    if failed_dirs:
+        errors.append(f"{failed_dirs} session director(ies) could not be processed")
 
     result = {
         "success": True,
