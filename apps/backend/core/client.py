@@ -203,7 +203,11 @@ from agents.tools_pkg import (
 )
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
 from claude_agent_sdk.types import HookMatcher
-from core.auth import get_sdk_env_vars, require_auth_token
+from core.auth import (
+    get_sdk_env_vars,
+    prefer_refreshable_credentials,
+    require_auth_token,
+)
 from prompts_pkg.project_context import (
     detect_infra_markers,
     detect_project_capabilities,
@@ -1031,13 +1035,19 @@ def create_client(
     # session shows up in the user's claude.ai/code session list and the
     # mobile app, so they can drive the same conversation from anywhere.
     #
-    # Caller is responsible for env scrubbing (CLAUDE_CODE_OAUTH_TOKEN,
-    # ANTHROPIC_AUTH_TOKEN) so the subprocess falls back to the
-    # full-scope ~/.claude/.credentials.json. See agent_service.py for
-    # that scrubbing — it must happen at subprocess spawn time, not here.
+    # The CLAUDE_CODE_OAUTH_TOKEN scrub (so the subprocess falls back to the
+    # full-scope, refreshable ~/.claude/.credentials.json) happens just below,
+    # at spawn time, via prefer_refreshable_credentials().
     if remote_control_session:
         existing_extra = dict(options_kwargs.get("extra_args") or {})
         existing_extra["remote-control"] = remote_control_session
         options_kwargs["extra_args"] = existing_extra  # type: ignore[typeddict-item]
+
+    # Scrub a static, non-refreshable CLAUDE_CODE_OAUTH_TOKEN at spawn time when
+    # a refreshable ~/.claude/.credentials.json is present, so the SDK owns auth
+    # and renews an expired access token itself instead of 401-ing. This is the
+    # scrub the comment above references — now applied to every spawn, not only
+    # remote-control.
+    prefer_refreshable_credentials()
 
     return ClaudeSDKClient(options=ClaudeAgentOptions(**options_kwargs))
