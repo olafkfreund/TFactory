@@ -249,6 +249,46 @@ def _read_app_version() -> str:
     return "0.0.0-unknown"
 
 
+class SPAStaticFiles(StaticFiles):
+    """StaticFiles for the SPA shell, mounted catch-all at ``/``.
+
+    Two concerns beyond stock StaticFiles:
+
+    1. Cache policy (SSO fix) — the SPA shell (index.html) MUST NOT be
+       heuristically cached by the browser, or users keep running the
+       previous build's JS after an upgrade (which is exactly how a fixed
+       auth bug can look unfixed). Starlette's StaticFiles sends
+       ETag/Last-Modified but no Cache-Control, which triggers browser
+       heuristic caching of the shell. So: HTML responses -> ``no-cache``
+       (store but always revalidate; cheap 304s); content-hashed assets
+       under /assets/ -> long-lived immutable cache.
+
+    2. Non-HTTP scopes (#670) — a Starlette ``Mount`` at ``/`` also matches
+       ``websocket`` scopes, and stock ``StaticFiles.__call__`` asserts
+       ``scope["type"] == "http"``. A websocket that matches no ``/ws/*``
+       route falls through to this mount and would crash the ASGI app with
+       an AssertionError on every connection attempt (flooding logs and
+       breaking live task-status streaming). Reject non-HTTP scopes cleanly
+       instead of asserting.
+    """
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            if scope["type"] == "websocket":
+                await send({"type": "websocket.close", "code": 1000})
+            return
+        await super().__call__(scope, receive, send)
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        content_type = response.headers.get("content-type", "")
+        if content_type.startswith("text/html"):
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        elif "/assets/" in (scope.get("path") or ""):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+
+
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     settings = get_settings()
@@ -537,27 +577,9 @@ def create_app() -> FastAPI:
             "provider_auth": provider_credential_health(),
         }
 
-    # Mount static files for SPA (if build directory exists).
-    #
-    # Cache policy (SSO fix) — the SPA shell (index.html) MUST NOT be
-    # heuristically cached by the browser, or users keep running the previous
-    # build's JS after an upgrade (which is exactly how a fixed auth bug can
-    # look unfixed). Starlette's StaticFiles sends ETag/Last-Modified but no
-    # Cache-Control, which triggers browser heuristic caching of the shell.
-    # So: HTML responses → `no-cache` (store but always revalidate; cheap 304s);
-    # content-hashed assets under /assets/ → long-lived immutable cache.
-    class SPAStaticFiles(StaticFiles):
-        async def get_response(self, path, scope):
-            response = await super().get_response(path, scope)
-            content_type = response.headers.get("content-type", "")
-            if content_type.startswith("text/html"):
-                response.headers["Cache-Control"] = "no-cache, must-revalidate"
-            elif "/assets/" in (scope.get("path") or ""):
-                response.headers["Cache-Control"] = (
-                    "public, max-age=31536000, immutable"
-                )
-            return response
-
+    # Mount static files for SPA (if build directory exists). See the
+    # module-level SPAStaticFiles for cache policy and the non-HTTP-scope
+    # guard (#670).
     static_dir = Path(__file__).parent.parent / "static"
     if static_dir.exists():
         app.mount(
