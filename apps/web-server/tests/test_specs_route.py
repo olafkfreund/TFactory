@@ -55,7 +55,11 @@ def known_project(monkeypatch):
 
 
 def _body(**kw):
-    base = {"project_id": "proj", "spec_id": "s1", "spec_text": "# T\n## Acceptance Criteria\n- a"}
+    base = {
+        "project_id": "proj",
+        "spec_id": "s1",
+        "spec_text": "# T\n## Acceptance Criteria\n- a",
+    }
     base.update(kw)
     return base
 
@@ -65,8 +69,13 @@ def test_ingest_happy(client, known_project, monkeypatch):
 
     def fake_create(**kwargs):
         captured.update(kwargs)
-        return {"spec_dir": "/tmp/p/ws", "source_format": "markdown", "ac_count": 1,
-                "planner_scheduled": False, "warnings": []}
+        return {
+            "spec_dir": "/tmp/p/ws",
+            "source_format": "markdown",
+            "ac_count": 1,
+            "planner_scheduled": False,
+            "warnings": [],
+        }
 
     monkeypatch.setattr(tc, "create_spec_ingest_workspace", fake_create)
     r = client.post("/api/specs/ingest", json=_body(target_paths=["src/x.py"]))
@@ -77,6 +86,50 @@ def test_ingest_happy(client, known_project, monkeypatch):
     # request fields threaded through to the seam
     assert captured["project_root"] == "/tmp/p"
     assert captured["target_paths"] == ["src/x.py"]
+
+
+def _capture_create(monkeypatch):
+    captured = {}
+
+    def fake_create(**kwargs):
+        captured.update(kwargs)
+        return {
+            "spec_dir": "/tmp/p/ws",
+            "source_format": "markdown",
+            "ac_count": 1,
+            "planner_scheduled": False,
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(tc, "create_spec_ingest_workspace", fake_create)
+    return captured
+
+
+def test_ingest_payload_tenant_stamped(client, known_project, monkeypatch):
+    """An explicit payload tenant (AIFactory stamp) reaches the seam (#683)."""
+    captured = _capture_create(monkeypatch)
+    r = client.post("/api/specs/ingest", json=_body(tenant="acme"))
+    assert r.status_code == 200
+    assert captured["tenant"] == "acme"
+
+
+def test_ingest_header_tenant_multi_tenant_on(client, known_project, monkeypatch):
+    """Multi-tenant on: X-Tenant-Id resolves the tenant when the payload
+    carries none (#683)."""
+    monkeypatch.setenv("TFACTORY_MULTI_TENANT", "true")
+    captured = _capture_create(monkeypatch)
+    r = client.post("/api/specs/ingest", json=_body(), headers={"X-Tenant-Id": "acme"})
+    assert r.status_code == 200
+    assert captured["tenant"] == "acme"
+
+
+def test_ingest_header_ignored_when_flag_off(client, known_project, monkeypatch):
+    """Multi-tenant off (default): the header is ignored, tenant='default'."""
+    monkeypatch.delenv("TFACTORY_MULTI_TENANT", raising=False)
+    captured = _capture_create(monkeypatch)
+    r = client.post("/api/specs/ingest", json=_body(), headers={"X-Tenant-Id": "acme"})
+    assert r.status_code == 200
+    assert captured["tenant"] == "default"
 
 
 def test_unknown_project_404(client, monkeypatch):
