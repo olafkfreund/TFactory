@@ -1,0 +1,36 @@
+name: "Factory: planned feature (PFactory planning)"
+description: "A larger feature routed to PFactory for real planning: plan review, signed contract, epic breakdown, then build and verification."
+title: "[feature] "
+labels: ["factory:hard"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Hard-tier issues are routed to PFactory planning first (plan, lens review, signed contract, epic and per-AC issues), then built by AIFactory and independently verified by TFactory. The Acceptance Criteria section below is MANDATORY - planning rejects issues without it, and a rejected issue is never retried (file a fresh one after fixing).
+  - type: textarea
+    id: description
+    attributes:
+      label: Feature description
+      description: What should exist when this is done, and why. Mention the modules, services, or cross-cutting concerns involved.
+      placeholder: "Add a request-audit trail: middleware records every API request to a persistent store, and a new GET /api/audit endpoint returns filtered, paginated results."
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance Criteria
+      description: "One bullet per testable outcome - concrete inputs and outputs, not aspirations. Each becomes a tracked AC in the signed contract."
+      placeholder: |
+        - AC1: every handled API request produces exactly one audit record with method, path, status, latency and client key
+        - AC2: records persist across process restarts
+        - AC3: GET /api/audit supports filtering by path prefix and status class with limit/offset pagination
+        - AC4: unit and integration tests cover each criterion; pytest green
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints and context (optional)
+      description: Anything the planner should honour - language, dependencies to avoid, performance bounds, existing patterns to follow.
+    validations:
+      required: false
