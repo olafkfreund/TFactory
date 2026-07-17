@@ -172,6 +172,26 @@ def test_format_override_respected(tmp_path):
 # ─── failure semantics ────────────────────────────────────────────────────
 
 
+def test_tenant_stamped_default(tmp_path):
+    """No tenant supplied — 'default' is stamped into both stores (#683)."""
+    _ingest(tmp_path, _MARKDOWN)
+    sd = _spec_dir(tmp_path)
+    source = json.loads((sd / "context" / "source.json").read_text())
+    status = json.loads((sd / "status.json").read_text())
+    assert source["tenant"] == "default"
+    assert status["tenant"] == "default"
+
+
+def test_tenant_stamped_explicit(tmp_path):
+    """An explicit tenant rides into source.json + status.json (#683)."""
+    _ingest(tmp_path, _MARKDOWN, tenant="acme")
+    sd = _spec_dir(tmp_path)
+    source = json.loads((sd / "context" / "source.json").read_text())
+    status = json.loads((sd / "status.json").read_text())
+    assert source["tenant"] == "acme"
+    assert status["tenant"] == "acme"
+
+
 def test_no_criteria_raises_and_leaves_no_dir(tmp_path):
     with pytest.raises(ValueError):
         _ingest(tmp_path, "# Title only\n\njust prose, no criteria\n")

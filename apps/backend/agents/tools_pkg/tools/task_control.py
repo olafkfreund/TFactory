@@ -245,6 +245,7 @@ def create_spec_ingest_workspace(
     schedule: bool = True,
     contract: dict | None = None,
     source_branch: str | None = None,
+    tenant: str = "default",
 ) -> dict[str, Any]:
     """Create a TFactory workspace from a raw acceptance-criteria spec.
 
@@ -345,6 +346,9 @@ def create_spec_ingest_workspace(
         "source_branch": source_branch,
         "created_at": _now_iso(),
         "aifactory": {"github_issue": github_issue},
+        # Tenant scoping (#683): service-local metadata, lazily backfilled —
+        # readers treat a missing value as "default".
+        "tenant": tenant or "default",
     }
     (context_dir / "source.json").write_text(json.dumps(source, indent=2))
 
@@ -355,6 +359,7 @@ def create_spec_ingest_workspace(
         "mode": "spec_ingest",
         "status": "pending",
         "phase": "created",
+        "tenant": tenant or "default",
         "lane_progress": dict.fromkeys(_MVP_LANES, "pending"),
         "created_at": _now_iso(),
         "updated_at": _now_iso(),
