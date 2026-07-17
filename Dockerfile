@@ -13,7 +13,7 @@
 # (P0.6) can still resolve the right platform manifest. The `:latest-dev`
 # tag is kept alongside the digest as a human hint and is ignored by docker
 # when a digest is present. Updates land via Renovate PRs (renovate.json).
-FROM cgr.dev/chainguard/node:latest-dev@sha256:ce3f18966af7a0ba76f96aa32d6240b437d00eeb775d92c1e7e75f457fe5a8b7 AS frontend-build
+FROM cgr.dev/chainguard/node:latest-dev@sha256:64d0788274a7eb5002e09b77570baeb4f8fa34685f8cbccbcb5a2d073b2550dd AS frontend-build
 
 USER root
 WORKDIR /build
@@ -35,7 +35,7 @@ RUN mkdir -p apps/web-server/static \
 # Stage 2: Runtime (Chainguard Python, dev variant for now — minimal split
 # happens in P0.5 once we know what the runtime *actually* needs)
 # ---------------------------------------------------------------------------
-FROM cgr.dev/chainguard/python:latest-dev@sha256:369768c6ee466cc726ebab82e1b590f2d5a78507d134b17912f3e5c58de950ff AS runtime
+FROM cgr.dev/chainguard/python:latest-dev@sha256:bee63d1fd86c4b31dd2df85bb383be142e8067486e3d469265edb850af93e8e4 AS runtime
 
 USER root
 
