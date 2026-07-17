@@ -11,7 +11,7 @@ from pathlib import Path
 from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
-from .paths import get_data_dir, get_data_file
+from .paths import get_data_dir, get_data_file, write_secret_file
 
 
 class Settings(BaseSettings):
@@ -167,8 +167,7 @@ class Settings(BaseSettings):
 
         # Save token
         token_file.parent.mkdir(parents=True, exist_ok=True)
-        token_file.write_text(token)
-        token_file.chmod(0o600)  # Owner read/write only
+        write_secret_file(token_file, token)  # 0600 from creation, no readable window
 
         print(f"\n{'=' * 60}")
         print("TFactory - First Run Setup")
@@ -197,8 +196,7 @@ class Settings(BaseSettings):
 
         # Save secret
         secret_file.parent.mkdir(parents=True, exist_ok=True)
-        secret_file.write_text(secret)
-        secret_file.chmod(0o600)  # Owner read/write only
+        write_secret_file(secret_file, secret)  # 0600 from creation, no readable window
 
         return secret
 
