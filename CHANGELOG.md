@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.7 — secrets are 0600 from creation (2026-07-17)
+
+- **Fix: profile tokens, the API token and the JWT secret are no longer world-readable mid-write (#663).** Every writer did `write_text` then `chmod` — but `write_text` creates the file at the umask default (0644) and only the *subsequent* chmod narrows it, so each secret was world-readable for the duration of the write. The one guarantee this posture rests on was not actually continuous. New `paths.write_secret_file` passes the mode to `os.open` (mirroring the existing `tfactory_secrets.broker.materialise_file` pattern) and all writers route through it: the four Claude-profile writers (#675) plus the API auth token `.token` and the JWT signing secret `.jwt_secret` (#677). The trailing chmod is retained deliberately — `O_CREAT`'s mode is ignored for an existing file, so a 0644 file from an older build or a restored backup is repaired.
+- **Decision recorded (#663): plaintext-at-0600 is accepted, deliberately.** The agent SDK needs the cleartext token in our own process, so any at-rest encryption must be reversible by us on the same host — a key stored beside the ciphertext moves the secret rather than protecting it, since whoever can read the file already runs as our uid. The reasoning and its revisit trigger now live at the write site. (`EncryptedString`/KMS works for DB credentials only because that key is external to the DB.)
+
 ## 0.9.6 — base-image CVE bump (2026-07-17)
 
 - **Fix: docker P0 Trivy gate green again (#668).** `test_p0_supply_chain::test_trivy_no_high_critical` was red on 7 fixable HIGH CVEs; the pinned chainguard base digests had gone stale so the runtime stage's `apk upgrade` could no longer reach the patched packages (chainguard pins the apk snapshot to the image build). Bumped both `latest-dev` digests to the current build — python `369768c6 -> bee63d1f`, node `ce3f1896 -> 64d07882` — so `apk upgrade` pulls the fixes. Verified green by the docker P0 acceptance trivy scan.
