@@ -744,9 +744,9 @@ class AgentService:
             # Update active profile
             data["activeProfileId"] = profile_id
 
-            # Write back with secure permissions
-            profiles_file.write_text(json.dumps(data, indent=2))
-            profiles_file.chmod(0o600)
+            # Write back with secure permissions (0600 from creation — #663)
+            from ..paths import write_secret_file
+            write_secret_file(profiles_file, json.dumps(data, indent=2))
 
             # Update env token to match active profile (if available)
             token = None
