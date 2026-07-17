@@ -552,10 +552,12 @@ def _language_from_files(files: list[str]) -> str | None:
         lang = _EXT_LANGUAGE.get(Path(f).suffix.lower())
         if lang:
             counts[lang] += 1
-    ranked = counts.most_common(2)
-    if not ranked or (len(ranked) == 2 and ranked[0][1] == ranked[1][1]):
+    if not counts:
         return None
-    return ranked[0][0]
+    (top_lang, top_n), *rest = counts.most_common()
+    if rest and rest[0][1] == top_n:
+        return None  # tie — not a reliable signal
+    return top_lang
 
 
 def _source_branch_changed_files(spec_dir: Path, project_dir: Path) -> list[str]:
@@ -576,12 +578,13 @@ def _source_branch_changed_files(spec_dir: Path, project_dir: Path) -> list[str]
     except Exception:  # noqa: BLE001 — missing/unreadable source.json is fine
         return []
 
-    def _git(*args: str) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            ["git", "-C", str(project_dir), *args],
+    def _git(*args: str) -> "subprocess.CompletedProcess[str]":
+        return subprocess.run(  # noqa: S603 - fixed git argv, no untrusted input
+            ["git", "-C", str(project_dir), *args],  # noqa: S607
             capture_output=True,
             text=True,
             timeout=30,
+            check=False,
         )
 
     try:
@@ -720,16 +723,13 @@ def _build_detected_language_block(spec_dir: Path, project_dir: Path) -> str:
         )
 
     framework = _unit_framework_for_language(registry, chosen)
-    if diff_language:
-        signal = f"the source-branch diff delivers {chosen} files"
-    elif spec_file_language:
-        signal = f"the spec's deliverable files are {chosen}"
-    elif ac_language:
-        signal = (
-            f"the acceptance criteria invoke a `{_first_ac_token(spec_text)}` command"
-        )
-    else:
-        signal = f"the project manifest ({', '.join(present_manifests)}) is {chosen}"
+    signal = _language_signal_text(
+        diff_language=diff_language,
+        spec_file_language=spec_file_language,
+        ac_token=_first_ac_token(spec_text) if ac_language else None,
+        manifest_language=chosen,
+        present_manifests=present_manifests,
+    )
     corroboration = (
         f" (manifest scan saw: {', '.join(present_manifests)})"
         if present_manifests
@@ -750,6 +750,26 @@ def _build_detected_language_block(spec_dir: Path, project_dir: Path) -> str:
         f"{header}\n"
         f"This is a **{chosen}** project — {signal}{corroboration}. "
         f"Set `language: {chosen}` on every unit subtask.{fw_clause}{py_warning}\n"
+    )
+
+
+def _language_signal_text(
+    *,
+    diff_language: str | None,
+    spec_file_language: str | None,
+    ac_token: str | None,
+    manifest_language: str | None,
+    present_manifests: list[str],
+) -> str:
+    """Describe which ranked signal picked the language (strongest-first, #696)."""
+    if diff_language:
+        return f"the source-branch diff delivers {diff_language} files"
+    if spec_file_language:
+        return f"the spec's deliverable files are {spec_file_language}"
+    if ac_token:
+        return f"the acceptance criteria invoke a `{ac_token}` command"
+    return (
+        f"the project manifest ({', '.join(present_manifests)}) is {manifest_language}"
     )
 
 
