@@ -13,10 +13,11 @@ route); no per-route dependency is needed. Errors map to HTTP codes:
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
 from ._specpath import safe_component
+from ._tenancy import resolve_tenant
 
 # Pin ``agents.planner`` into ``sys.modules`` at startup (this route module is
 # imported when the app boots). A request-time *fresh* import
@@ -65,6 +66,15 @@ class SpecIngestRequest(BaseModel):
             "When present its `tfactory` block (lanes/frameworks/ac_to_code_map) is "
             "the AUTHORITATIVE test profile; persisted to context/task_contract.json. "
             "Absent → tests are inferred from spec_text."
+        ),
+    )
+    tenant: str | None = Field(
+        default=None,
+        description=(
+            "Tenant owning this verification spec (#683). Optional, service-local "
+            "metadata — NOT part of the drift-gated task-contract schema. AIFactory "
+            "stamps it on handoff; when omitted the tenant is resolved from the "
+            "X-Tenant-Id header (multi-tenant mode) or falls back to 'default'."
         ),
     )
     git_url: str | None = Field(
@@ -202,7 +212,10 @@ async def _ensure_project_clone(
 @router.post(
     "/ingest", summary="Create a TFactory task from a raw spec (no AIFactory branch)"
 )
-async def ingest_spec(req: SpecIngestRequest) -> dict:
+async def ingest_spec(
+    req: SpecIngestRequest,
+    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
+) -> dict:
     # Imported lazily so the route module loads even in environments where the
     # backend package isn't importable until runtime path setup.
     from agents.tools_pkg.tools.task_control import create_spec_ingest_workspace
@@ -263,6 +276,7 @@ async def ingest_spec(req: SpecIngestRequest) -> dict:
             project_root=project_root,
             contract=req.contract,
             source_branch=req.source_branch,
+            tenant=resolve_tenant(x_tenant_id, req.tenant),
         )
     except FileExistsError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc

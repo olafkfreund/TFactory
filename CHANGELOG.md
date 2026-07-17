@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.10 — tenant scoping for verification data (2026-07-17)
+
+- **Verification specs/runs/verdicts are tenant-scoped (#683, PR #694).** Ingest accepts an optional service-local `tenant` field (the AIFactory stamp wins) or resolves `X-Tenant-Id` when `TFACTORY_MULTI_TENANT` is on; `tenant` is written into the spec workspace (`context/source.json` + `status.json`, default `"default"`, readers lazily backfill legacy rows) and `GET /api/tfactory/tasks` filters by tenant behind the flag. Flag off is byte-identical behavior apart from the new field. The drift-gated task-contract schema is untouched. Part of the fleet multi-tenancy program (factory-gitops#13/#14).
+
 ## 0.9.9 — VAL-3 k8s-Job provisioner + atomic secret writes (2026-07-17)
 
 - **VAL-3 disposable-target provisioner (#607).** Env-gated k8s-Job backend for disposable verify targets: `TFACTORY_VAL3_K8S_JOB=1` + `TFACTORY_VAL3_K8S_JOB_IMAGE` activate it (lazy registration at the `disposable_target()` choke point — review caught that import-time-only registration silently never activated); default OFF; Job torn down on all failure paths, no credentials in Job env/argv, `automountServiceAccountToken: false`. Prerequisite for the Factory#257 VAL-3 live proof.
