@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.9 — VAL-3 k8s-Job provisioner + atomic secret writes (2026-07-17)
+
+- **VAL-3 disposable-target provisioner (#607).** Env-gated k8s-Job backend for disposable verify targets: `TFACTORY_VAL3_K8S_JOB=1` + `TFACTORY_VAL3_K8S_JOB_IMAGE` activate it (lazy registration at the `disposable_target()` choke point — review caught that import-time-only registration silently never activated); default OFF; Job torn down on all failure paths, no credentials in Job env/argv, `automountServiceAccountToken: false`. Prerequisite for the Factory#257 VAL-3 live proof.
+- **`write_secret_file` is atomic (#688, PR #689).** `mkstemp` in-directory + `os.replace`: a concurrent reader now sees the whole old file or the whole new one, never a torn hybrid. The profile stores route through it; the flaky `TestFileLocking` CI failure is structurally dead (65/1000 torn files reproduced before, 0/1000 after).
+- **CodeQL: project-root trust boundary named and barriered (#664, PR #690).** Alerts #705-#709 were untrusted-project-path flows, not `safe_component` misses; new `trusted_project_root()` choke point + barrier. Local oracle (CodeQL 2.25.6): 21 -> 17 residual flows, 0 in the terminal-worktree service, no over-suppression.
+- **Six racy-by-design concurrency tests skipped with reasons (#691, PR #692)** pending the same atomic-write treatment; they were failing dev CI by design, not by regression.
+
 ## 0.9.8 — schema drift gate + web-server tests in CI (2026-07-17)
 
 - **The vendored task-contract-v2 schema is synced and gated (#679).** The vendored copy was badly stale — missing `execution.autonomy_tier`, `routing`, `deployment`, `environment` and the whole `$defs` block (+623 lines) — so contract validation ran against a fossil. Now a verbatim copy of the canonical hub schema, enforced by `scripts/check_schema_drift.py` (PFactory's proven gate, reused) as a blocking CI step: hard-fail on drift, soft-skip on network failure. (PR #684)

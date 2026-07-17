@@ -59,6 +59,27 @@ def safe_join(base: Path, *parts: str) -> Path:
     return Path(joined_real)
 
 
+def trusted_project_root(path: str) -> Path:
+    """Resolve a request-supplied local project root, or raise ``ValueError``.
+
+    Under the local-install trust model an authenticated client may point the
+    server at any local directory it can access (like an editor opening a
+    folder) -- the *whole path* is user-chosen by design, so containment checks
+    do not apply. This helper is the single named choke point for that trust
+    decision: it resolves the path and requires an existing directory, and the
+    custom CodeQL pack (``.github/codeql/custom-queries``) recognises it as a
+    path-injection barrier so deliberately-accepted project roots stop firing
+    ``py/path-injection-sanitized`` at every derived filesystem access.
+
+    Raises ``ValueError`` (not ``HTTPException``) so service-layer callers keep
+    their existing error contracts.
+    """
+    root = Path(path).resolve()
+    if not root.is_dir():
+        raise ValueError(f"Project path does not exist: {path}")
+    return root
+
+
 def safe_spec_dir(base: Path, spec_id: str) -> Path:
     """Return ``<base>/.tfactory/specs/<spec_id>``, rejecting path traversal.
 

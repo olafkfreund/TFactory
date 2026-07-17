@@ -1,7 +1,9 @@
 """Centralized path helpers for TFactory data directory."""
 
+import contextlib
 import os
 import shutil
+import tempfile
 from pathlib import Path
 
 AI_FACTORY_DIR = Path.home() / ".tfactory"
@@ -36,21 +38,29 @@ def get_data_file(filename: str) -> Path:
 
 
 def write_secret_file(path: Path, text: str) -> None:
-    """Write ``text`` to ``path`` as a 0600 file, leaving no readable window.
+    """Write ``text`` to ``path`` as a 0600 file, atomically and with no
+    readable window.
 
     ``Path.write_text`` creates the file at the umask default (usually 0644) and
     only a *subsequent* ``chmod`` narrows it — so a secret written that way is
-    world-readable for the duration of the write. Pass the mode to ``os.open``
-    instead, mirroring ``tfactory_secrets.broker.materialise_file``.
+    world-readable for the duration of the write. ``tempfile.mkstemp`` opens the
+    temp file 0600 from creation regardless of umask.
 
-    The trailing ``chmod`` is not redundant: ``O_CREAT``'s mode argument is
-    ignored when the file already exists, so a file previously created at 0644
-    (by an older build, or restored from a backup) is repaired here.
+    The write goes to a temp file in the same directory and is published with
+    ``os.replace`` so concurrent readers always see either the old or the new
+    complete content, never a truncated or interleaved file (TFactory #688).
+    ``os.replace`` also swaps the inode, so a file previously left at 0644 (by
+    an older build, or restored from a backup) comes out 0600.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".")
     try:
-        os.write(fd, text.encode("utf-8"))
-    finally:
-        os.close(fd)
-    os.chmod(path, 0o600)
+        try:
+            os.write(fd, text.encode("utf-8"))
+        finally:
+            os.close(fd)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
