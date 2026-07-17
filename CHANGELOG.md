@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.6 — base-image CVE bump (2026-07-17)
+
+- **Fix: docker P0 Trivy gate green again (#668).** `test_p0_supply_chain::test_trivy_no_high_critical` was red on 7 fixable HIGH CVEs; the pinned chainguard base digests had gone stale so the runtime stage's `apk upgrade` could no longer reach the patched packages (chainguard pins the apk snapshot to the image build). Bumped both `latest-dev` digests to the current build — python `369768c6 -> bee63d1f`, node `ce3f1896 -> 64d07882` — so `apk upgrade` pulls the fixes. Verified green by the docker P0 acceptance trivy scan.
+
 ## 0.9.5 — websocket fall-through no longer crashes (2026-07-17)
 
 - **Fix: WebSocket connections that match no `/ws/*` route no longer flood `AssertionError` (#670).** The terminal `SPAStaticFiles` catch-all mount at `/` matches both `http` and `websocket` scopes; a WebSocket falling through to it hit stock `StaticFiles.__call__`'s `assert scope["type"] == "http"`, raising on every such connection (breaking live task-status streaming to the cockpit). `SPAStaticFiles.__call__` now passes non-HTTP scopes through cleanly (websocket scopes get a clean close) instead of asserting; HTTP serving and cache-policy behaviour unchanged.
