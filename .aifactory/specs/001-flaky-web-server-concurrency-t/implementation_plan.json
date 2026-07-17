@@ -74,7 +74,7 @@
             "command": "python apps/web-server/tests/run_deterministic_verification.py",
             "expected": "All 6 tests passed 20 runs each with zero failures"
           },
-          "status": "pending"
+          "status": "completed"
         },
         {
           "id": "subtask-1-5",
