@@ -16,6 +16,8 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
+from ..paths import write_secret_file
+
 # --------------------------------------------------------------------------
 # Type Definitions for Validation
 # --------------------------------------------------------------------------
@@ -613,12 +615,32 @@ def load_profiles() -> dict:
 
 
 def save_profiles(data: dict) -> None:
-    """Save Claude profiles with secure file permissions."""
-    profiles_file = get_profiles_file()
-    profiles_file.parent.mkdir(parents=True, exist_ok=True)
-    profiles_file.write_text(json.dumps(data, indent=2))
-    # Set secure file permissions (owner read/write only) since profiles contain tokens
-    profiles_file.chmod(0o600)
+    """Save Claude profiles with secure file permissions.
+
+    Profiles hold ``CLAUDE_CODE_OAUTH_TOKEN`` values and are stored as plaintext
+    JSON at 0600. That is a deliberate decision (#663, CodeQL alert #711
+    ``py/clear-text-storage-sensitive-data``), not an oversight:
+
+    - The consumer of these tokens is the Claude Agent SDK, which requires the
+      cleartext value in the process environment. Any at-rest encryption must be
+      reversible by this same process, on this same host.
+    - Encrypting with a key that also lives on the host moves the secret; it does
+      not protect it. An attacker who can read this file already has our uid, and
+      with it the key and the decrypted value. That is theatre, so we do not do it.
+    - The ``EncryptedString``/KMS layer used for DB credentials is only meaningful
+      because its key is external to the database. It would buy real
+      defence-in-depth here too, but only against threats that read the data
+      volume without running as us (PVC snapshots, backups) — which is not the
+      current single-tenant deployment's model.
+
+    Revisit if tokens can outlive the pod: if the data PVC gets snapshotted or
+    backed up, or the deployment goes multi-tenant, route profiles through the
+    KMS layer (option 2 in #663) rather than widening this comment.
+
+    What is *not* acceptable at any threat model is a window where the file is
+    readable by others, hence ``write_secret_file`` rather than write-then-chmod.
+    """
+    write_secret_file(get_profiles_file(), json.dumps(data, indent=2))
 
 
 def _sync_env_token_for_active_profile(
@@ -1211,8 +1233,7 @@ async def import_claude_credentials():
     profiles_data["profiles"].append(new_profile)
     profiles_data["activeProfileId"] = profile_id
 
-    profiles_file.write_text(json.dumps(profiles_data, indent=2))
-    profiles_file.chmod(0o600)
+    write_secret_file(profiles_file, json.dumps(profiles_data, indent=2))
 
     # Also set env var for immediate use
     os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = token

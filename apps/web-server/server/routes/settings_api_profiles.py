@@ -19,6 +19,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 from ..config import get_settings
+from ..paths import write_secret_file
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -49,14 +50,11 @@ def load_api_profiles() -> dict:
 def save_api_profiles(data: dict) -> None:
     """Save API profiles.
 
-    Security: Sets file permissions to 0o600 (owner read/write only) to protect
-    sensitive API keys and tokens stored in the profiles.
+    Security: written 0600 from creation (owner read/write only) to protect the
+    API keys and tokens in the profiles. Same at-rest posture as
+    ``settings.save_profiles`` — see its docstring for the #663 decision.
     """
-    profiles_file = get_api_profiles_file()
-    profiles_file.parent.mkdir(parents=True, exist_ok=True)
-    profiles_file.write_text(json.dumps(data, indent=2))
-    # Set secure file permissions to protect API keys (owner read/write only)
-    profiles_file.chmod(0o600)
+    write_secret_file(get_api_profiles_file(), json.dumps(data, indent=2))
 
 
 @router.get("/api-profiles")
