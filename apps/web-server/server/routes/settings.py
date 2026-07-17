@@ -54,10 +54,14 @@ class AppSettings(BaseModel):
     # BUG-4.1-005: Validate theme against allowed values
     theme: ThemeType = Field("dark", description="UI theme (dark/light/system)")
     # BUG-4.1-006: Validate colorTheme against allowed values
-    colorTheme: ColorThemeType | None = Field("ocean", description="Color theme (default/dusk/lime/ocean/retro/neo/forest)")
+    colorTheme: ColorThemeType | None = Field(
+        "ocean", description="Color theme (default/dusk/lime/ocean/retro/neo/forest)"
+    )
     language: str = Field("en", description="UI language code")
     # BUG-4.1-008: uiScale with min/max validation (75-200)
-    uiScale: int | None = Field(125, ge=75, le=200, description="UI scale percentage (75-200)")
+    uiScale: int | None = Field(
+        125, ge=75, le=200, description="UI scale percentage (75-200)"
+    )
 
     @field_validator("theme", mode="before")
     @classmethod
@@ -96,7 +100,9 @@ class AppSettings(BaseModel):
         alias="default_model",
         description="Default Claude model for tasks",
     )
-    agentFramework: str | None = Field("claude-code", description="Agent framework to use")
+    agentFramework: str | None = Field(
+        "claude-code", description="Agent framework to use"
+    )
     thinkingLevel: str = Field(
         "extended",
         alias="thinking_level",
@@ -107,7 +113,9 @@ class AppSettings(BaseModel):
         alias="max_thinking_tokens",
         description="Max thinking tokens (None for unlimited)",
     )
-    selectedAgentProfile: str | None = Field(None, description="Selected agent profile ID")
+    selectedAgentProfile: str | None = Field(
+        None, description="Selected agent profile ID"
+    )
 
     # Task execution - using camelCase with snake_case aliases
     autoContinue: bool = Field(
@@ -121,8 +129,12 @@ class AppSettings(BaseModel):
         description="Automatically run QA after implementation",
     )
     # Terminal - using camelCase with snake_case aliases
-    defaultShell: str = Field("/bin/bash", alias="default_shell", description="Default shell for terminals")
-    terminalFontSize: int = Field(14, alias="terminal_font_size", description="Terminal font size")
+    defaultShell: str = Field(
+        "/bin/bash", alias="default_shell", description="Default shell for terminals"
+    )
+    terminalFontSize: int = Field(
+        14, alias="terminal_font_size", description="Terminal font size"
+    )
     autoNameTerminals: bool = Field(True, description="Auto-generate terminal names")
 
     # Developer tools
@@ -132,14 +144,19 @@ class AppSettings(BaseModel):
     customTerminalPath: str | None = Field(None, description="Custom terminal path")
 
     # Integrations - using camelCase with snake_case aliases
-    githubEnabled: bool = Field(False, alias="github_enabled", description="Enable GitHub integration")
+    githubEnabled: bool = Field(
+        False, alias="github_enabled", description="Enable GitHub integration"
+    )
 
     # Memory - using camelCase with snake_case aliases
-    graphitiEnabled: bool = Field(True, alias="graphiti_enabled", description="Enable Graphiti memory")
+    graphitiEnabled: bool = Field(
+        True, alias="graphiti_enabled", description="Enable Graphiti memory"
+    )
     memoryEnabled: bool | None = Field(None, description="Enable memory system")
     # BUG-4.1-011: Validate memoryEmbeddingProvider against allowed values
     memoryEmbeddingProvider: MemoryEmbeddingProviderType | None = Field(
-        None, description="Memory embedding provider (openai/voyage/azure_openai/ollama/google/openrouter)"
+        None,
+        description="Memory embedding provider (openai/voyage/azure_openai/ollama/google/openrouter)",
     )
 
     @field_validator("memoryEmbeddingProvider", mode="before")
@@ -148,7 +165,14 @@ class AppSettings(BaseModel):
         """Validate memoryEmbeddingProvider for backward compatibility."""
         if v is None:
             return None
-        valid_providers = ["openai", "voyage", "azure_openai", "ollama", "google", "openrouter"]
+        valid_providers = [
+            "openai",
+            "voyage",
+            "azure_openai",
+            "ollama",
+            "google",
+            "openrouter",
+        ]
         if v not in valid_providers:
             # Return None for invalid values (backward compatibility)
             return None
@@ -159,60 +183,76 @@ class AppSettings(BaseModel):
         None,
         description="Path to Magestic AI backend (apps/backend directory)",
     )
-    autoUpdateAutoBuild: bool = Field(True, description="Auto-update Magestic AI source")
+    autoUpdateAutoBuild: bool = Field(
+        True, description="Auto-update Magestic AI source"
+    )
 
     # Global API keys
-    globalClaudeOAuthToken: str | None = Field(None, description="Global Claude OAuth token")
+    globalClaudeOAuthToken: str | None = Field(
+        None, description="Global Claude OAuth token"
+    )
     globalOpenAIApiKey: str | None = Field(None, description="Global OpenAI API key")
-    globalAnthropicApiKey: str | None = Field(None, description="Global Anthropic API key")
+    globalAnthropicApiKey: str | None = Field(
+        None, description="Global Anthropic API key"
+    )
 
     # Onboarding
-    onboardingCompleted: bool | None = Field(None, description="Whether onboarding is completed")
+    onboardingCompleted: bool | None = Field(
+        None, description="Whether onboarding is completed"
+    )
 
     # Updates
     betaUpdates: bool | None = Field(False, description="Opt into beta updates")
 
     # Email Notification OAuth Credentials (app-level, not per-user)
-    emailMicrosoftClientId: str | None = Field(None, description="Microsoft OAuth Client ID for email notifications")
-    emailMicrosoftClientSecret: str | None = Field(None, description="Microsoft OAuth Client Secret for email notifications")
-    emailGoogleClientId: str | None = Field(None, description="Google OAuth Client ID for email notifications")
-    emailGoogleClientSecret: str | None = Field(None, description="Google OAuth Client Secret for email notifications")
+    emailMicrosoftClientId: str | None = Field(
+        None, description="Microsoft OAuth Client ID for email notifications"
+    )
+    emailMicrosoftClientSecret: str | None = Field(
+        None, description="Microsoft OAuth Client Secret for email notifications"
+    )
+    emailGoogleClientId: str | None = Field(
+        None, description="Google OAuth Client ID for email notifications"
+    )
+    emailGoogleClientSecret: str | None = Field(
+        None, description="Google OAuth Client Secret for email notifications"
+    )
 
     # LLM Provider Settings (for AI features: changelog, insights)
     llmProvider: Literal["ollama", "anthropic", "openai"] | None = Field(
         default="ollama",
         alias="llmProvider",
-        validation_alias=AliasChoices("llmProvider", "llm_provider")
+        validation_alias=AliasChoices("llmProvider", "llm_provider"),
     )
 
     llmOllamaBaseUrl: str | None = Field(
         default="http://localhost:11434",
         alias="llmOllamaBaseUrl",
-        validation_alias=AliasChoices("llmOllamaBaseUrl", "llm_ollama_base_url")
+        validation_alias=AliasChoices("llmOllamaBaseUrl", "llm_ollama_base_url"),
     )
 
     llmOllamaModel: str | None = Field(
         default="qwen3-30b-local:latest",
         alias="llmOllamaModel",
-        validation_alias=AliasChoices("llmOllamaModel", "llm_ollama_model")
+        validation_alias=AliasChoices("llmOllamaModel", "llm_ollama_model"),
     )
 
     llmAnthropicModel: str | None = Field(
         default="claude-sonnet-4-5-20250929",
         alias="llmAnthropicModel",
-        validation_alias=AliasChoices("llmAnthropicModel", "llm_anthropic_model")
+        validation_alias=AliasChoices("llmAnthropicModel", "llm_anthropic_model"),
     )
 
     llmOpenaiModel: str | None = Field(
         default="gpt-4o",
         alias="llmOpenaiModel",
-        validation_alias=AliasChoices("llmOpenaiModel", "llm_openai_model")
+        validation_alias=AliasChoices("llmOpenaiModel", "llm_openai_model"),
     )
 
     llmOpenaiBaseUrl: str | None = Field(
         default=None,
         alias="llmOpenaiBaseUrl",
-        validation_alias=AliasChoices("llmOpenaiBaseUrl", "llm_openai_base_url")
+        validation_alias=AliasChoices("llmOpenaiBaseUrl", "llm_openai_base_url"),
     )
 
     @field_validator("llmProvider", mode="before")
@@ -313,6 +353,7 @@ class SettingsUpdate(BaseModel):
 
 class UpdateApiKeyRequest(BaseModel):
     """Request model for updating API keys."""
+
     keyType: str = Field(..., description="Type of API key (anthropic, openai, claude)")
     keyValue: str = Field(..., description="The API key value")
     saveToEnv: bool = Field(True, description="Whether to save to .env file")
@@ -405,8 +446,7 @@ async def regenerate_api_token():
 
     # Generate new token
     new_token = secrets.token_urlsafe(32)
-    token_file.write_text(new_token)
-    token_file.chmod(0o600)
+    write_secret_file(token_file, new_token)  # 0600 from creation, no readable window
 
     # Update settings (note: requires server restart to take effect)
     return {
@@ -429,32 +469,32 @@ async def update_api_key(request: UpdateApiKeyRequest):
     if request.keyType.lower() not in valid_key_types:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid keyType. Must be one of: {', '.join(valid_key_types)}"
+            detail=f"Invalid keyType. Must be one of: {', '.join(valid_key_types)}",
         )
 
     # Validate key format (basic validation)
     if not request.keyValue or len(request.keyValue) < 20:
         raise HTTPException(
             status_code=400,
-            detail="API key appears invalid. Must be at least 20 characters."
+            detail="API key appears invalid. Must be at least 20 characters.",
         )
 
     # Additional format validation based on key type
     key_type = request.keyType.lower()
     if key_type == "anthropic" and not request.keyValue.startswith("sk-ant-"):
         raise HTTPException(
-            status_code=400,
-            detail="Anthropic API keys must start with 'sk-ant-'"
+            status_code=400, detail="Anthropic API keys must start with 'sk-ant-'"
         )
     elif key_type == "openai" and not request.keyValue.startswith("sk-"):
         raise HTTPException(
-            status_code=400,
-            detail="OpenAI API keys must start with 'sk-'"
+            status_code=400, detail="OpenAI API keys must start with 'sk-'"
         )
-    elif key_type == "claude" and not (request.keyValue.startswith("sk-ant-") or request.keyValue.startswith("sess-")):
+    elif key_type == "claude" and not (
+        request.keyValue.startswith("sk-ant-") or request.keyValue.startswith("sess-")
+    ):
         raise HTTPException(
             status_code=400,
-            detail="Claude API keys must start with 'sk-ant-' or 'sess-'"
+            detail="Claude API keys must start with 'sk-ant-' or 'sess-'",
         )
 
     try:
@@ -465,7 +505,7 @@ async def update_api_key(request: UpdateApiKeyRequest):
         key_field_map = {
             "anthropic": "globalAnthropicApiKey",
             "openai": "globalOpenAIApiKey",
-            "claude": "globalClaudeOAuthToken"
+            "claude": "globalClaudeOAuthToken",
         }
 
         field_name = key_field_map[key_type]
@@ -492,7 +532,7 @@ async def update_api_key(request: UpdateApiKeyRequest):
             env_key_map = {
                 "anthropic": "ANTHROPIC_API_KEY",
                 "openai": "OPENAI_API_KEY",
-                "claude": "CLAUDE_API_KEY"
+                "claude": "CLAUDE_API_KEY",
             }
 
             existing[env_key_map[key_type]] = request.keyValue
@@ -508,21 +548,21 @@ async def update_api_key(request: UpdateApiKeyRequest):
         return {
             "success": True,
             "message": f"{key_type.title()} API key updated successfully",
-            "savedToEnv": request.saveToEnv
+            "savedToEnv": request.saveToEnv,
         }
 
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to update API key: {str(e)}"
+            status_code=500, detail=f"Failed to update API key: {str(e)}"
         )
 
 
 # --------------------------------------------------------------------------
 # Tab State
 # --------------------------------------------------------------------------
+
 
 def get_tab_state_file() -> Path:
     """Get path to the tab state file."""
@@ -553,19 +593,16 @@ async def save_tab_state(state: dict):
         return {"success": True}
     except OSError as e:
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to save tab state: {str(e)}"
+            status_code=500, detail=f"Failed to save tab state: {str(e)}"
         )
     except (TypeError, ValueError) as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid tab state data: {str(e)}"
-        )
+        raise HTTPException(status_code=400, detail=f"Invalid tab state data: {str(e)}")
 
 
 # --------------------------------------------------------------------------
 # Claude Profiles
 # --------------------------------------------------------------------------
+
 
 def get_profiles_file() -> Path:
     """Get path to the Claude profiles file."""
@@ -660,7 +697,9 @@ def _sync_env_token_for_active_profile(
 
     if token:
         os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = token
-        logger.info("[Claude Profiles] Updated CLAUDE_CODE_OAUTH_TOKEN for active profile")
+        logger.info(
+            "[Claude Profiles] Updated CLAUDE_CODE_OAUTH_TOKEN for active profile"
+        )
     else:
         logger.warning(
             "[Claude Profiles] Active profile has no token; CLAUDE_CODE_OAUTH_TOKEN not updated"
@@ -671,15 +710,25 @@ def _sync_env_token_for_active_profile(
 # Auto-Switch Settings
 # --------------------------------------------------------------------------
 
+
 class AutoSwitchSettingsUpdate(BaseModel):
     """Model for updating auto-switch settings."""
+
     enabled: bool | None = None
-    threshold: int | None = Field(None, ge=0, le=100, description="Usage threshold percentage (0-100)")
+    threshold: int | None = Field(
+        None, ge=0, le=100, description="Usage threshold percentage (0-100)"
+    )
     proactiveSwapEnabled: bool | None = None  # Proactive monitoring toggle
     autoSwitchOnRateLimit: bool | None = None  # Reactive recovery on rate limit/errors
-    usageCheckInterval: int | None = Field(None, ge=0, description="Usage polling interval in ms (0 disables)")
-    sessionThreshold: int | None = Field(None, ge=0, le=100, description="Percent threshold for session usage")
-    weeklyThreshold: int | None = Field(None, ge=0, le=100, description="Percent threshold for weekly usage")
+    usageCheckInterval: int | None = Field(
+        None, ge=0, description="Usage polling interval in ms (0 disables)"
+    )
+    sessionThreshold: int | None = Field(
+        None, ge=0, le=100, description="Percent threshold for session usage"
+    )
+    weeklyThreshold: int | None = Field(
+        None, ge=0, le=100, description="Percent threshold for weekly usage"
+    )
 
 
 def get_auto_switch_file() -> Path:
@@ -715,14 +764,14 @@ async def get_auto_switch_settings():
 @router.patch("/auto-switch")
 async def update_auto_switch_settings(settings_update: AutoSwitchSettingsUpdate):
     """Update auto-switch settings with validation and secure storage.
-    
+
     Updates the auto-switch configuration which controls automatic profile switching
     based on usage thresholds. Settings are stored in auto-switch.json with secure
     file permissions.
-    
+
     Args:
         settings_update: Auto-switch settings update with optional enabled and threshold fields
-        
+
     Returns:
         Success response with updated settings or error details
     """
@@ -745,25 +794,25 @@ async def update_auto_switch_settings(settings_update: AutoSwitchSettingsUpdate)
                 logger.exception("Failed to parse existing auto-switch.json")
                 return {
                     "success": False,
-                    "error": "Failed to parse existing auto-switch settings"
+                    "error": "Failed to parse existing auto-switch settings",
                 }
-        
+
         # Update with new values (only non-None values from Pydantic model)
         update_dict = settings_update.model_dump(exclude_none=True)
         current.update(update_dict)
-        
+
         # Ensure parent directory exists
         auto_switch_file.parent.mkdir(parents=True, exist_ok=True)
-        
+
         # Write updated settings with pretty formatting
         auto_switch_file.write_text(json.dumps(current, indent=2))
-        
+
         # Set secure file permissions (owner read/write only)
         # Following security pattern from save_profiles() and other Phase 2/3 endpoints
         auto_switch_file.chmod(0o600)
-        
+
         return {"success": True, "data": current}
-        
+
     except Exception:
         logger.exception("Failed to update auto-switch settings")
         return {"success": False, "error": "Failed to update auto-switch settings"}
@@ -771,9 +820,16 @@ async def update_auto_switch_settings(settings_update: AutoSwitchSettingsUpdate)
 
 class RetryWithProfileRequest(BaseModel):
     """Request model for retrying with a different profile."""
-    profileId: str = Field(..., min_length=1, description="ID of the profile to switch to")
-    reason: str | None = Field(None, description="Reason for the switch (e.g., 'rate_limit', 'error')")
-    operationContext: dict | None = Field(None, description="Optional context about the failed operation")
+
+    profileId: str = Field(
+        ..., min_length=1, description="ID of the profile to switch to"
+    )
+    reason: str | None = Field(
+        None, description="Reason for the switch (e.g., 'rate_limit', 'error')"
+    )
+    operationContext: dict | None = Field(
+        None, description="Optional context about the failed operation"
+    )
 
 
 @router.post("/retry-with-profile")
@@ -823,7 +879,7 @@ async def retry_with_profile(request: RetryWithProfileRequest):
                     break
             return {
                 "success": False,
-                "error": f"Profile '{profile_name or profile_id}' is already active"
+                "error": f"Profile '{profile_name or profile_id}' is already active",
             }
 
         # Verify the target profile exists and get profile details
@@ -899,7 +955,7 @@ async def request_usage_update():
         "profileId": "local",
         "profileName": "Local Stats",
         "fetchedAt": datetime.now().isoformat(),
-        "limitType": None
+        "limitType": None,
     }
 
     if not stats_file.exists():
@@ -935,7 +991,9 @@ async def request_usage_update():
 
         # Get model usage info
         model_usage = stats.get("modelUsage", {})
-        total_output_tokens = sum(m.get("outputTokens", 0) for m in model_usage.values())
+        total_output_tokens = sum(
+            m.get("outputTokens", 0) for m in model_usage.values()
+        )
 
         return {
             "sessionPercent": session_percent,
@@ -949,7 +1007,7 @@ async def request_usage_update():
             # Extra stats for tooltip
             "todayMessages": today_messages,
             "weeklyMessages": weekly_messages,
-            "totalOutputTokens": total_output_tokens
+            "totalOutputTokens": total_output_tokens,
         }
 
     except (json.JSONDecodeError, KeyError, TypeError):
@@ -960,13 +1018,25 @@ async def request_usage_update():
 # Source Environment
 # --------------------------------------------------------------------------
 
+
 class SourceEnvUpdate(BaseModel):
     """Model for updating Magestic AI source environment configuration."""
-    claudeToken: str | None = Field(None, description="Claude Code OAuth token (CLAUDE_CODE_OAUTH_TOKEN)")
-    anthropicBaseUrl: str | None = Field(None, description="Custom Anthropic API endpoint (ANTHROPIC_BASE_URL)")
-    graphitiEnabled: bool | None = Field(None, description="Enable Graphiti memory system (GRAPHITI_ENABLED)")
-    githubToken: str | None = Field(None, description="GitHub personal access token (GITHUB_TOKEN)")
-    openaiApiKey: str | None = Field(None, description="OpenAI API key for Graphiti (OPENAI_API_KEY)")
+
+    claudeToken: str | None = Field(
+        None, description="Claude Code OAuth token (CLAUDE_CODE_OAUTH_TOKEN)"
+    )
+    anthropicBaseUrl: str | None = Field(
+        None, description="Custom Anthropic API endpoint (ANTHROPIC_BASE_URL)"
+    )
+    graphitiEnabled: bool | None = Field(
+        None, description="Enable Graphiti memory system (GRAPHITI_ENABLED)"
+    )
+    githubToken: str | None = Field(
+        None, description="GitHub personal access token (GITHUB_TOKEN)"
+    )
+    openaiApiKey: str | None = Field(
+        None, description="OpenAI API key for Graphiti (OPENAI_API_KEY)"
+    )
     debug: bool | None = Field(None, description="Enable debug mode (DEBUG)")
 
 
@@ -1034,14 +1104,13 @@ async def update_source_env(config: SourceEnvUpdate):
                     value = value.strip()
                     if not value:
                         raise HTTPException(
-                            status_code=400,
-                            detail=f"{config_key} cannot be empty"
+                            status_code=400, detail=f"{config_key} cannot be empty"
                         )
                     # Validate minimum token length for security
                     if len(value) < 10:
                         raise HTTPException(
                             status_code=400,
-                            detail=f"{config_key} must be at least 10 characters"
+                            detail=f"{config_key} must be at least 10 characters",
                         )
                     existing[env_key] = value
                 else:
@@ -1057,7 +1126,7 @@ async def update_source_env(config: SourceEnvUpdate):
                 if not value.startswith(("http://", "https://")):
                     raise HTTPException(
                         status_code=400,
-                        detail="anthropicBaseUrl must start with http:// or https://"
+                        detail="anthropicBaseUrl must start with http:// or https://",
                     )
                 existing["ANTHROPIC_BASE_URL"] = value
             else:
@@ -1097,20 +1166,18 @@ async def update_source_env(config: SourceEnvUpdate):
         return {
             "success": True,
             "message": "Source environment configuration updated successfully",
-            "updated_fields": list(config_dict.keys())
+            "updated_fields": list(config_dict.keys()),
         }
 
     except HTTPException:
         raise
     except json.JSONDecodeError as e:
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to parse existing .env file: {str(e)}"
+            status_code=500, detail=f"Failed to parse existing .env file: {str(e)}"
         )
     except Exception as e:
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to update source environment: {str(e)}"
+            status_code=500, detail=f"Failed to update source environment: {str(e)}"
         )
 
 
@@ -1123,6 +1190,7 @@ async def check_source_token():
 # --------------------------------------------------------------------------
 # CLI Tools Info
 # --------------------------------------------------------------------------
+
 
 @router.get("/auth-status")
 async def get_auth_status():
@@ -1158,7 +1226,9 @@ async def get_auth_status():
         try:
             result = subprocess.run(
                 ["bash", "-l", "-c", "which claude"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             claude_installed = result.returncode == 0
         except Exception:
@@ -1203,7 +1273,9 @@ async def import_claude_credentials():
         data = json.loads(cred_path.read_text())
         token = data.get("claudeAiOauth", {}).get("accessToken")
         if not token or not token.startswith("sk-ant-oat01-"):
-            raise HTTPException(status_code=400, detail="No valid OAuth token found in credentials file")
+            raise HTTPException(
+                status_code=400, detail="No valid OAuth token found in credentials file"
+            )
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid credentials file format")
 
@@ -1221,6 +1293,7 @@ async def import_claude_credentials():
 
     # Create an imported profile
     from datetime import datetime
+
     profile_id = f"imported-{int(time.time())}"
     new_profile = {
         "id": profile_id,
