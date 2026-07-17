@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.8 — schema drift gate + web-server tests in CI (2026-07-17)
+
+- **The vendored task-contract-v2 schema is synced and gated (#679).** The vendored copy was badly stale — missing `execution.autonomy_tier`, `routing`, `deployment`, `environment` and the whole `$defs` block (+623 lines) — so contract validation ran against a fossil. Now a verbatim copy of the canonical hub schema, enforced by `scripts/check_schema_drift.py` (PFactory's proven gate, reused) as a blocking CI step: hard-fail on drift, soft-skip on network failure. (PR #684)
+- **apps/web-server tests are collected and blocking in CI (#681).** CI previously ran only `pytest tests/`, so the web-server suite rotted to 31 failures unnoticed. The suite is triaged (fixed where behavior changed, deleted where behavior was removed — deletions listed in the PR) and wired into `ci.yml` as a blocking step, green in its own introduction run. (PR #685)
+- **auto-close workflow: don't fail pushes without closing keywords.** `grep` exits 1 on no match, which under `set -euo pipefail` killed the job before the graceful no-op path; `|| true` on the extraction pipeline. (PR #686)
+
 ## 0.9.7 — secrets are 0600 from creation (2026-07-17)
 
 - **Fix: profile tokens, the API token and the JWT secret are no longer world-readable mid-write (#663).** Every writer did `write_text` then `chmod` — but `write_text` creates the file at the umask default (0644) and only the *subsequent* chmod narrows it, so each secret was world-readable for the duration of the write. The one guarantee this posture rests on was not actually continuous. New `paths.write_secret_file` passes the mode to `os.open` (mirroring the existing `tfactory_secrets.broker.materialise_file` pattern) and all writers route through it: the four Claude-profile writers (#675) plus the API auth token `.token` and the JWT signing secret `.jwt_secret` (#677). The trailing chmod is retained deliberately — `O_CREAT`'s mode is ignored for an existing file, so a 0644 file from an older build or a restored backup is repaired.
