@@ -10,6 +10,8 @@ Supports Quick Mode for simplified prompts (~70% fewer tokens).
 import json
 import os
 import re
+import subprocess
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -512,11 +514,11 @@ def _build_framework_registry_block() -> str:
         )
 
 
-# Acceptance-criteria *command* tokens → target language. This is the PRIMARY
-# language signal (#443): a Go spec says "`go test ./...` passes", a Python one
-# says "pytest", etc. Ordered by priority; first hit wins. Manifest files only
-# corroborate (a repo can carry go.mod AND pyproject.toml — e.g. the polyglot
-# benchmark repo — so a manifest scan alone is ambiguous).
+# Acceptance-criteria *command* tokens → target language (#443): a Go spec says
+# "`go test ./...` passes", a Python one says "pytest", etc. Ordered by
+# priority; first hit wins. Manifest files only corroborate (a repo can carry
+# go.mod AND pyproject.toml — e.g. the polyglot benchmark repo — so a manifest
+# scan alone is ambiguous).
 _AC_COMMAND_LANGUAGE: tuple[tuple[str, str], ...] = (
     ("go test", "go"),
     ("go build", "go"),
@@ -527,6 +529,92 @@ _AC_COMMAND_LANGUAGE: tuple[tuple[str, str], ...] = (
     ("jest", "typescript"),
     ("vitest", "typescript"),
 )
+
+# Changed-/named-file extensions → target language (#696). The deliverable's
+# language is whatever the build actually touched — on mixed-language repos
+# (go.mod AND pyproject.toml left by earlier polyglot runs) repo markers and
+# even AC command tokens are weaker signals than the source-branch diff.
+_EXT_LANGUAGE: dict[str, str] = {
+    ".py": "python",
+    ".go": "go",
+    ".rs": "rust",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".js": "typescript",
+    ".jsx": "typescript",
+}
+
+
+def _language_from_files(files: list[str]) -> str | None:
+    """Majority language of ``files`` by extension (no code files / tie → None)."""
+    counts: Counter[str] = Counter()
+    for f in files:
+        lang = _EXT_LANGUAGE.get(Path(f).suffix.lower())
+        if lang:
+            counts[lang] += 1
+    ranked = counts.most_common(2)
+    if not ranked or (len(ranked) == 2 and ranked[0][1] == ranked[1][1]):
+        return None
+    return ranked[0][0]
+
+
+def _source_branch_changed_files(spec_dir: Path, project_dir: Path) -> list[str]:
+    """Files changed on the ingest ``source_branch`` vs the repo's default branch.
+
+    The spec-ingest path checks the build branch out (detached FETCH_HEAD) in
+    ``project_dir`` — diff HEAD against origin's default branch to see what the
+    build delivered. Best-effort: any failure returns ``[]`` and the caller
+    falls back to weaker signals. Only runs when ``context/source.json`` names
+    a ``source_branch`` (otherwise HEAD *is* the default branch — no diff).
+    """
+    try:
+        src = json.loads(
+            (spec_dir / "context" / "source.json").read_text(encoding="utf-8")
+        )
+        if not src.get("source_branch"):
+            return []
+    except Exception:  # noqa: BLE001 — missing/unreadable source.json is fine
+        return []
+
+    def _git(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["git", "-C", str(project_dir), *args],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+    try:
+        base = None
+        head_ref = _git("symbolic-ref", "refs/remotes/origin/HEAD")
+        if head_ref.returncode == 0:
+            base = head_ref.stdout.strip()
+        else:
+            for cand in ("origin/main", "origin/master"):
+                if _git("rev-parse", "--verify", "--quiet", cand).returncode == 0:
+                    base = cand
+                    break
+        if not base:
+            return []
+        diff = _git("diff", "--name-only", f"{base}...HEAD")
+        if diff.returncode != 0:
+            return []
+        return [ln.strip() for ln in diff.stdout.splitlines() if ln.strip()]
+    except Exception:  # noqa: BLE001 — never break planning on a git read
+        return []
+
+
+def _diff_patch_files(spec_dir: Path) -> list[str]:
+    """Filenames from the snapshotter's ``context/diff.patch`` (or ``[]``)."""
+    try:
+        text = (spec_dir / "context" / "diff.patch").read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001 — diff.patch is optional
+        return []
+    return re.findall(r"^\+\+\+ b/(\S+)", text, flags=re.MULTILINE)
+
+
+# Filename-looking tokens in the spec/AC text ("helpers/roman.py", "main.go").
+_SPEC_FILENAME_RE = re.compile(r"[\w./-]+\.\w+")
 
 
 def _unit_framework_for_language(registry: dict, language: str) -> str | None:
@@ -550,11 +638,17 @@ def _build_detected_language_block(spec_dir: Path, project_dir: Path) -> str:
     agent could not classify fell through to the ``(python, pytest)`` default — it
     emitted ``.py`` tests for a ``.go`` target and left ``language: None`` (#443).
 
-    This block reads two deterministic signals and states the ``(language,
-    framework)`` the agent MUST use for unit subtasks:
-      1. the spec's acceptance-criteria *commands* (PRIMARY — ``go test`` → Go);
-      2. the project's manifest files (CORROBORATING — ``go.mod`` → Go), derived
-         from each registry descriptor's ``manifest_signals``.
+    This block reads deterministic signals — ranked strongest-first (#696: on
+    mixed-language repos the deliverable's language must follow what the build
+    changed, never repo-global markers like a leftover ``go.mod``) — and states
+    the ``(language, framework)`` the agent MUST use for unit subtasks:
+      1. extensions of the files changed on the ingest source branch (diff vs
+         the default branch; falls back to the snapshotter's ``diff.patch``);
+      2. extensions of the deliverable files named in the spec/AC text;
+      3. the spec's acceptance-criteria *commands* (``go test`` → Go, #443);
+      4. the project's manifest files (LAST fallback — ``go.mod`` → Go), derived
+         from each registry descriptor's ``manifest_signals``; only trusted when
+         they name exactly one language.
 
     Best-effort: when no signal is found it tells the agent to detect the language
     via Glob rather than guessing. Never raises — degrades to guidance text.
@@ -568,20 +662,30 @@ def _build_detected_language_block(spec_dir: Path, project_dir: Path) -> str:
     except Exception:  # noqa: BLE001 — never break planning on a registry read
         registry = {}
 
-    # (1) PRIMARY: scan the frozen spec text for acceptance-criteria commands.
+    # (1) STRONGEST (#696): the files the build actually changed on the ingest
+    # source branch (or, failing that, the snapshotter's diff.patch).
+    diff_language = _language_from_files(
+        _source_branch_changed_files(spec_dir, project_dir)
+        or _diff_patch_files(spec_dir)
+    )
+
+    # (2) the deliverable files the spec/AC text names by extension.
     spec_text = ""
     for rel in ("context/aifactory_spec.md", "context/source.json"):
         try:
             spec_text += (spec_dir / rel).read_text(encoding="utf-8").lower()
         except Exception:  # noqa: BLE001 — missing/unreadable context is fine
             pass
+    spec_file_language = _language_from_files(_SPEC_FILENAME_RE.findall(spec_text))
+
+    # (3) acceptance-criteria commands (#443 — "go test" → Go).
     ac_language: str | None = None
     for token, language in _AC_COMMAND_LANGUAGE:
         if token in spec_text:
             ac_language = language
             break
 
-    # (2) CORROBORATING: which registered manifests actually exist on disk.
+    # (4) LAST fallback: which registered manifests actually exist on disk.
     manifest_to_lang: dict[str, str] = {}
     for desc in registry.values():
         for sig in desc.manifest_signals:
@@ -591,7 +695,12 @@ def _build_detected_language_block(spec_dir: Path, project_dir: Path) -> str:
     )
     manifest_langs = sorted({manifest_to_lang[f] for f in present_manifests})
 
-    chosen = ac_language or (manifest_langs[0] if len(manifest_langs) == 1 else None)
+    chosen = (
+        diff_language
+        or spec_file_language
+        or ac_language
+        or (manifest_langs[0] if len(manifest_langs) == 1 else None)
+    )
 
     if chosen is None:
         if manifest_langs:
@@ -611,11 +720,16 @@ def _build_detected_language_block(spec_dir: Path, project_dir: Path) -> str:
         )
 
     framework = _unit_framework_for_language(registry, chosen)
-    signal = (
-        f"the acceptance criteria invoke a `{_first_ac_token(spec_text)}` command"
-        if ac_language
-        else f"the project manifest ({', '.join(present_manifests)}) is {chosen}"
-    )
+    if diff_language:
+        signal = f"the source-branch diff delivers {chosen} files"
+    elif spec_file_language:
+        signal = f"the spec's deliverable files are {chosen}"
+    elif ac_language:
+        signal = (
+            f"the acceptance criteria invoke a `{_first_ac_token(spec_text)}` command"
+        )
+    else:
+        signal = f"the project manifest ({', '.join(present_manifests)}) is {chosen}"
     corroboration = (
         f" (manifest scan saw: {', '.join(present_manifests)})"
         if present_manifests

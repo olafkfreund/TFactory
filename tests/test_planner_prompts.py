@@ -24,8 +24,11 @@ import pytest
 
 # Inherited prompts_pkg imports providers + SDK; pre-mock to stay offline.
 for _m in [
-    "claude_agent_sdk", "claude_agent_sdk.types",
-    "core.client", "phase_config", "providers.factory",
+    "claude_agent_sdk",
+    "claude_agent_sdk.types",
+    "core.client",
+    "phase_config",
+    "providers.factory",
 ]:
     sys.modules.setdefault(_m, MagicMock())
 
@@ -156,6 +159,7 @@ def test_initial_raises_when_md_missing(
 ) -> None:
     """If planner.md is missing, FileNotFoundError surfaces clearly."""
     import prompts_pkg.prompts as mod
+
     monkeypatch.setattr(mod, "PROMPTS_DIR", tmp_path)  # empty dir
     with pytest.raises(FileNotFoundError, match="planner.md"):
         get_tfactory_planner_prompt(Path("/ws/x"), Path("/p"))
@@ -165,6 +169,7 @@ def test_replan_raises_when_md_missing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     import prompts_pkg.prompts as mod
+
     monkeypatch.setattr(mod, "PROMPTS_DIR", tmp_path)
     with pytest.raises(FileNotFoundError, match="planner_replan.md"):
         get_tfactory_planner_replan_prompt(Path("/ws/x"), Path("/p"))
@@ -276,17 +281,19 @@ def test_planner_prompt_catalog_block_shows_total_count(tmp_path: Path) -> None:
 
     tests = []
     for i in range(3):
-        tests.append({
-            "test_id": f"tc-{i}",
-            "test_file": f"tests/test_{i}.py",
-            "framework": "pytest",
-            "lane": "unit",
-            "language": "python",
-            "covers_acs": [f"AC#{i}"],
-            "generated_at": "2026-05-28T00:00:00Z",
-            "generated_by_task": "003",
-            "last_verdict": "accept",
-        })
+        tests.append(
+            {
+                "test_id": f"tc-{i}",
+                "test_file": f"tests/test_{i}.py",
+                "framework": "pytest",
+                "lane": "unit",
+                "language": "python",
+                "covers_acs": [f"AC#{i}"],
+                "generated_at": "2026-05-28T00:00:00Z",
+                "generated_by_task": "003",
+                "last_verdict": "accept",
+            }
+        )
     (spec_dir / "context" / "tests_catalog.json").write_text(
         json.dumps({"version": 1, "updated_at": "2026-05-28T00:00:00Z", "tests": tests})
     )
@@ -418,6 +425,115 @@ def test_full_prompt_includes_detected_language_block(tmp_path: Path) -> None:
     p = get_tfactory_planner_prompt(spec_dir, proj)
     assert "## DETECTED PROJECT LANGUAGE" in p
     assert "framework: go-test" in p
+
+
+# =============================================================================
+# #696 — lane follows the deliverable, not repo-global markers
+# =============================================================================
+
+import json  # noqa: E402
+import subprocess  # noqa: E402
+
+
+def _git_repo_with_branch_diff(
+    tmp_path: Path, base_files: dict[str, str], branch_files: dict[str, str]
+) -> Path:
+    """Build a repo whose default branch has ``base_files`` and whose checked-out
+    (detached) HEAD adds ``branch_files`` — mirroring the spec-ingest checkout."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+
+    def _git(*args: str) -> None:
+        subprocess.run(["git", "-C", str(proj), *args], check=True, capture_output=True)
+
+    _git("init", "-b", "main")
+    _git("config", "user.email", "t@t")
+    _git("config", "user.name", "t")
+    for name, text in base_files.items():
+        p = proj / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text)
+    _git("add", "-A")
+    _git("commit", "-m", "base")
+    # Simulate the clone's remote-tracking default branch.
+    _git("update-ref", "refs/remotes/origin/main", "main")
+    for name, text in branch_files.items():
+        p = proj / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text)
+    _git("add", "-A")
+    _git("commit", "-m", "build")
+    # Detached HEAD, like _checkout_source_branch's FETCH_HEAD checkout.
+    _git("checkout", "--detach")
+    return proj
+
+
+def _spec_with_source_branch(tmp_path: Path, ac_text: str) -> Path:
+    spec_dir = _spec_with_ac(tmp_path, ac_text)
+    (spec_dir / "context" / "source.json").write_text(
+        json.dumps({"mode": "spec_ingest", "source_branch": "feat/build"})
+    )
+    return spec_dir
+
+
+def test_python_diff_wins_over_go_repo_markers(tmp_path: Path) -> None:
+    """#696 repro: go.mod repo + pure-Python source-branch diff → Python lane."""
+    proj = _git_repo_with_branch_diff(
+        tmp_path,
+        base_files={"go.mod": "module hello\n", "main.go": "package main\n"},
+        branch_files={
+            "helpers/roman.py": "def roman(n): ...\n",
+            "tests/test_roman.py": "def test_roman(): ...\n",
+        },
+    )
+    spec_dir = _spec_with_source_branch(tmp_path, "Deliver the helpers politely.")
+    block = _build_detected_language_block(spec_dir, proj)
+    assert "**python** project" in block
+    assert "language: python" in block
+    assert "source-branch diff" in block
+
+
+def test_go_diff_in_python_repo_selects_go(tmp_path: Path) -> None:
+    """Polyglot ladder reverse: pyproject repo + pure-Go diff → Go lane."""
+    proj = _git_repo_with_branch_diff(
+        tmp_path,
+        base_files={"pyproject.toml": "[project]\nname='x'\n"},
+        branch_files={"greet.go": "package main\n", "greet_test.go": "package main\n"},
+    )
+    spec_dir = _spec_with_source_branch(tmp_path, "Greet the user politely.")
+    block = _build_detected_language_block(spec_dir, proj)
+    assert "**go** project" in block
+    assert "language: go" in block
+
+
+def test_spec_named_py_files_win_over_mixed_manifests(tmp_path: Path) -> None:
+    """No branch diff, mixed go.mod+pyproject repo, AC names helpers/*.py → Python."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "go.mod").write_text("module hello\n")
+    (proj / "pyproject.toml").write_text("[project]\nname='x'\n")
+    spec_dir = _spec_with_ac(
+        tmp_path,
+        "## AC\n- AC#1: helpers/roman.py converts integers.\n"
+        "- AC#2: tests/test_roman.py passes.\n",
+    )
+    block = _build_detected_language_block(spec_dir, proj)
+    assert "**python** project" in block
+    assert "language: python" in block
+
+
+def test_diff_patch_fallback_selects_language(tmp_path: Path) -> None:
+    """No git checkout, but snapshotter diff.patch is pure Python → Python lane."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "go.mod").write_text("module hello\n")
+    spec_dir = _spec_with_ac(tmp_path, "Deliver the helpers politely.")
+    (spec_dir / "context" / "diff.patch").write_text(
+        "--- a/helpers/roman.py\n+++ b/helpers/roman.py\n"
+        "--- a/tests/test_roman.py\n+++ b/tests/test_roman.py\n"
+    )
+    block = _build_detected_language_block(spec_dir, proj)
+    assert "**python** project" in block
 
 
 def test_planner_body_offers_go_in_schema_and_registry() -> None:
