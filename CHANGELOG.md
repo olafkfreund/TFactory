@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.11 — verify lane follows the deliverable language (2026-07-17)
+
+- **Fix: the verify planner no longer routes tests to the wrong language lane on mixed-language repos (#696, PR #697).** On a repo carrying `go.mod` from earlier polyglot ladder runs, a pure-Python deliverable (spec 022: `helpers/*.py`, pytest-green from AIFactory) got GO tests generated — 9/9 `consistent_fail` at compilation, VAL-0 vs target VAL-2 — because the `DETECTED PROJECT LANGUAGE` block ranked AC command tokens first and repo manifests second, and with neither decisive the Planner guessed from repo markers. The block now ranks deterministic signals strongest-first: (1) extensions of the files changed on the ingest `source_branch` (git diff of the checked-out build vs origin's default branch, falling back to the snapshotter's `diff.patch`), (2) extensions of the deliverable files named in the spec/AC text, (3) AC command tokens (`go test` -> Go, #443 preserved), (4) repo manifest markers as the last, unambiguous-only fallback. Majority-by-extension with tie -> fall through, so a mixed diff never guesses. Regression tests cover both directions: Python diff on a Go-marker repo selects the Python lane, and a Go diff on a Python repo still selects Go (the polyglot ladder is unchanged).
+
 ## 0.9.10 — tenant scoping for verification data (2026-07-17)
 
 - **Verification specs/runs/verdicts are tenant-scoped (#683, PR #694).** Ingest accepts an optional service-local `tenant` field (the AIFactory stamp wins) or resolves `X-Tenant-Id` when `TFACTORY_MULTI_TENANT` is on; `tenant` is written into the spec workspace (`context/source.json` + `status.json`, default `"default"`, readers lazily backfill legacy rows) and `GET /api/tfactory/tasks` filters by tenant behind the flag. Flag off is byte-identical behavior apart from the new field. The drift-gated task-contract schema is untouched. Part of the fleet multi-tenancy program (factory-gitops#13/#14).
