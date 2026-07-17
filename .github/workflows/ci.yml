@@ -26,6 +26,12 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Task Contract schema drift gate (#679)
+        # Vendored task-contract-v2.schema.json must stay a superset of the
+        # canonical Factory hub schema. Stdlib-only; soft-skips on network
+        # failure, fails hard on real drift.
+        run: python scripts/check_schema_drift.py
+
       - name: Install uv
         uses: astral-sh/setup-uv@v3
         with:
@@ -55,6 +61,14 @@ jobs:
           GRAPHITI_ENABLED: "false"
           APP_DISABLE_AUTH: "true"  # endpoint tests use anonymous TestClient
         run: apps/backend/.venv/bin/pytest tests/ -m "not slow" -q
+
+      - name: Pytest web-server (#681)
+        # apps/web-server/tests was never collected by CI and decayed silently
+        # (see #676/#681). Keep it green here; deps are already installed above.
+        env:
+          GRAPHITI_ENABLED: "false"
+          APP_DISABLE_AUTH: "true"
+        run: apps/backend/.venv/bin/pytest apps/web-server/tests/ -m "not slow" -q
 
   critical-fast:
     name: critical (fast PR gate)
