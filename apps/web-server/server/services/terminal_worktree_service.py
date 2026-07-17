@@ -11,7 +11,7 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
-from ..routes._specpath import safe_component
+from ..routes._specpath import safe_component, trusted_project_root
 
 
 class TerminalWorktreeService:
@@ -32,9 +32,11 @@ class TerminalWorktreeService:
         Raises:
             ValueError: If project_path is not a valid directory
         """
-        self.project_path = Path(project_path).resolve()
-        if not self.project_path.is_dir():
-            raise ValueError(f"Project path does not exist: {project_path}")
+        # `project_path` is request-supplied and accepted as-is by design
+        # (local-install trust model). Route it through the named trust
+        # boundary so the sanitizer-aware CodeQL pack clears the derived
+        # filesystem accesses on their merits (issue #664, alerts #705-#709).
+        self.project_path = trusted_project_root(project_path)
 
         self.worktrees_dir = self.project_path / ".tfactory" / "worktrees" / "terminal"
         self.config_file = self.project_path / ".tfactory" / "terminal-worktrees.json"
