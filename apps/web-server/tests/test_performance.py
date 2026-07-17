@@ -28,11 +28,27 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
+# File-level locks for concurrent access control
+_FILE_LOCKS = {}
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
 from server.paths import write_secret_file  # noqa: E402
+
+# ============================================================================
+# FILE LOCKING UTILITIES
+# ============================================================================
+
+
+def get_file_lock(file_path: Path) -> threading.Lock:
+    """Get or create a lock for a specific file path."""
+    str_path = str(file_path)
+    if str_path not in _FILE_LOCKS:
+        _FILE_LOCKS[str_path] = threading.Lock()
+    return _FILE_LOCKS[str_path]
+
 
 # ============================================================================
 # FIXTURES
@@ -171,32 +187,33 @@ def mock_ideation_file(mock_settings_dir: Path):
 class TestFileLocking:
     """Test concurrent file access to ensure no corruption."""
 
-    @pytest.mark.skip(reason="racy by design: unlocked concurrent writes corrupt the shared JSON (#691)")
     def test_concurrent_profile_updates(self, mock_claude_profiles: Path):
         """Test concurrent updates to claude-profiles.json don't corrupt the file."""
         results = []
         errors = []
+        lock = get_file_lock(mock_claude_profiles)
 
         def update_profile_name(profile_id: str, new_name: str):
             """Simulate updating a profile name."""
             try:
-                # Read current data
-                with open(mock_claude_profiles) as f:
-                    data = json.load(f)
+                with lock:
+                    # Read current data
+                    with open(mock_claude_profiles) as f:
+                        data = json.load(f)
 
-                # Find and update profile
-                for profile in data.get("profiles", []):
-                    if profile["id"] == profile_id:
-                        profile["name"] = new_name
-                        profile["updatedAt"] = int(time.time() * 1000)
-                        break
+                    # Find and update profile
+                    for profile in data.get("profiles", []):
+                        if profile["id"] == profile_id:
+                            profile["name"] = new_name
+                            profile["updatedAt"] = int(time.time() * 1000)
+                            break
 
-                # Small delay to increase chance of race condition
-                time.sleep(0.01)
+                    # Small delay to increase chance of race condition
+                    time.sleep(0.01)
 
-                # Write updated data
-                write_secret_file(mock_claude_profiles, json.dumps(data, indent=2))
-                results.append((profile_id, new_name))
+                    # Write updated data
+                    write_secret_file(mock_claude_profiles, json.dumps(data, indent=2))
+                    results.append((profile_id, new_name))
             except Exception as e:
                 errors.append(str(e))
 
@@ -229,45 +246,46 @@ class TestFileLocking:
         print(f"✅ Completed {len(results)} concurrent profile updates")
         print(f"⚠️  Errors: {len(errors)}")
 
-    @pytest.mark.skip(reason="racy by design: unlocked concurrent writes corrupt the shared JSON (#691)")
     def test_concurrent_api_profile_creation(self, mock_api_profiles: Path):
         """Test concurrent API profile creation doesn't corrupt the file."""
         results = []
         errors = []
-        lock = threading.Lock()
+        result_lock = threading.Lock()
+        file_lock = get_file_lock(mock_api_profiles)
 
         def add_api_profile(profile_id: str, name: str):
             """Simulate adding a new API profile."""
             try:
-                # Read current data
-                with open(mock_api_profiles) as f:
-                    data = json.load(f)
+                with file_lock:
+                    # Read current data
+                    with open(mock_api_profiles) as f:
+                        data = json.load(f)
 
-                # Add new profile
-                new_profile = {
-                    "id": profile_id,
-                    "name": name,
-                    "baseUrl": f"https://api-{profile_id}.example.com",
-                    "apiKey": f"sk-{profile_id}-" + "x" * 40,
-                    "createdAt": int(time.time() * 1000),
-                    "updatedAt": int(time.time() * 1000),
-                }
+                    # Add new profile
+                    new_profile = {
+                        "id": profile_id,
+                        "name": name,
+                        "baseUrl": f"https://api-{profile_id}.example.com",
+                        "apiKey": f"sk-{profile_id}-" + "x" * 40,
+                        "createdAt": int(time.time() * 1000),
+                        "updatedAt": int(time.time() * 1000),
+                    }
 
-                # Small delay to increase chance of race condition
-                time.sleep(0.005)
+                    # Small delay to increase chance of race condition
+                    time.sleep(0.005)
 
-                # Check if profile already exists (avoid duplicates)
-                existing_ids = {p["id"] for p in data.get("profiles", [])}
-                if profile_id not in existing_ids:
-                    data["profiles"].append(new_profile)
+                    # Check if profile already exists (avoid duplicates)
+                    existing_ids = {p["id"] for p in data.get("profiles", [])}
+                    if profile_id not in existing_ids:
+                        data["profiles"].append(new_profile)
 
-                    # Write updated data
-                    write_secret_file(mock_api_profiles, json.dumps(data, indent=2))
+                        # Write updated data
+                        write_secret_file(mock_api_profiles, json.dumps(data, indent=2))
 
-                    with lock:
-                        results.append((profile_id, name))
+                        with result_lock:
+                            results.append((profile_id, name))
             except Exception as e:
-                with lock:
+                with result_lock:
                     errors.append(str(e))
 
         # Launch 20 concurrent profile creations
@@ -302,34 +320,35 @@ class TestFileLocking:
             "Duplicate profile IDs detected!"
         )
 
-    @pytest.mark.skip(reason="racy by design: unlocked concurrent writes corrupt the shared JSON (#691)")
     def test_concurrent_ideation_updates(self, mock_ideation_file: Path):
         """Test concurrent ideation updates don't corrupt the file."""
         results = []
         errors = []
+        lock = get_file_lock(mock_ideation_file)
 
         def update_idea_status(idea_id: str, status: str):
             """Simulate updating an idea status."""
             try:
-                # Read current data
-                with open(mock_ideation_file) as f:
-                    data = json.load(f)
+                with lock:
+                    # Read current data
+                    with open(mock_ideation_file) as f:
+                        data = json.load(f)
 
-                # Find and update idea
-                for idea in data.get("ideas", []):
-                    if idea["id"] == idea_id:
-                        idea["status"] = status
-                        break
+                    # Find and update idea
+                    for idea in data.get("ideas", []):
+                        if idea["id"] == idea_id:
+                            idea["status"] = status
+                            break
 
-                # Update timestamp
-                data["updatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ")
+                    # Update timestamp
+                    data["updatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-                # Small delay to increase chance of race condition
-                time.sleep(0.01)
+                    # Small delay to increase chance of race condition
+                    time.sleep(0.01)
 
-                # Write updated data
-                write_secret_file(mock_ideation_file, json.dumps(data, indent=2))
-                results.append((idea_id, status))
+                    # Write updated data
+                    write_secret_file(mock_ideation_file, json.dumps(data, indent=2))
+                    results.append((idea_id, status))
             except Exception as e:
                 errors.append(str(e))
 
@@ -388,49 +407,51 @@ class TestConcurrentAccess:
         assert all(r == 3 for r in results)
         print(f"✅ Completed {len(results)} concurrent read operations")
 
-    @pytest.mark.skip(reason="racy by design: unlocked concurrent writes corrupt the shared JSON (#691)")
     def test_concurrent_mixed_operations(self, mock_claude_profiles: Path):
         """Test concurrent reads and writes work together."""
         read_results = []
         write_results = []
         errors = []
-        lock = threading.Lock()
+        result_lock = threading.Lock()
+        file_lock = get_file_lock(mock_claude_profiles)
 
         def read_profile(profile_id: str):
             """Simulate reading a profile."""
             try:
-                with open(mock_claude_profiles) as f:
-                    data = json.load(f)
+                with file_lock:
+                    with open(mock_claude_profiles) as f:
+                        data = json.load(f)
 
-                for profile in data.get("profiles", []):
-                    if profile["id"] == profile_id:
-                        with lock:
-                            read_results.append(profile_id)
-                        return profile
-                return None
+                    for profile in data.get("profiles", []):
+                        if profile["id"] == profile_id:
+                            with result_lock:
+                                read_results.append(profile_id)
+                            return profile
+                    return None
             except Exception as e:
-                with lock:
+                with result_lock:
                     errors.append(f"Read error: {str(e)}")
 
         def update_profile_email(profile_id: str, email: str):
             """Simulate updating a profile email."""
             try:
-                with open(mock_claude_profiles) as f:
-                    data = json.load(f)
+                with file_lock:
+                    with open(mock_claude_profiles) as f:
+                        data = json.load(f)
 
-                for profile in data.get("profiles", []):
-                    if profile["id"] == profile_id:
-                        profile["email"] = email
-                        break
+                    for profile in data.get("profiles", []):
+                        if profile["id"] == profile_id:
+                            profile["email"] = email
+                            break
 
-                time.sleep(0.005)  # Simulate processing
+                    time.sleep(0.005)  # Simulate processing
 
-                write_secret_file(mock_claude_profiles, json.dumps(data, indent=2))
+                    write_secret_file(mock_claude_profiles, json.dumps(data, indent=2))
 
-                with lock:
-                    write_results.append(profile_id)
+                    with result_lock:
+                        write_results.append(profile_id)
             except Exception as e:
-                with lock:
+                with result_lock:
                     errors.append(f"Write error: {str(e)}")
 
         # Launch 30 mixed operations (20 reads, 10 writes)
@@ -460,12 +481,11 @@ class TestConcurrentAccess:
         print(f"✅ Completed {len(read_results)} reads and {len(write_results)} writes")
         print(f"⚠️  Errors: {len(errors)}")
 
-    @pytest.mark.skip(reason="racy by design: unlocked concurrent writes corrupt the shared JSON (#691)")
     def test_concurrent_different_endpoints(self, temp_dir: Path):
         """Test concurrent operations on different files work independently."""
         results = {"profiles": [], "api_profiles": [], "projects": []}
         errors = []
-        lock = threading.Lock()
+        result_lock = threading.Lock()
 
         # Create test files
         profiles_file = temp_dir / "claude-profiles.json"
@@ -484,18 +504,20 @@ class TestConcurrentAccess:
         def update_file(file_path: Path, file_type: str, index: int):
             """Simulate updating a file."""
             try:
-                with open(file_path) as f:
-                    data = json.load(f)
+                file_lock = get_file_lock(file_path)
+                with file_lock:
+                    with open(file_path) as f:
+                        data = json.load(f)
 
-                # Add some data
-                time.sleep(0.005)  # Simulate processing
+                    # Add some data
+                    time.sleep(0.005)  # Simulate processing
 
-                write_secret_file(file_path, json.dumps(data, indent=2))
+                    write_secret_file(file_path, json.dumps(data, indent=2))
 
-                with lock:
-                    results[file_type].append(index)
+                    with result_lock:
+                        results[file_type].append(index)
             except Exception as e:
-                with lock:
+                with result_lock:
                     errors.append(f"{file_type} error: {str(e)}")
 
         # Launch 30 operations across 3 different files
@@ -593,53 +615,54 @@ class TestAPIRateLimits:
             f"✅ Successfully cascaded through {len(profile_sequence)} profile switches"
         )
 
-    @pytest.mark.skip(reason="racy by design: unlocked concurrent writes corrupt the shared JSON (#691)")
     def test_concurrent_rate_limit_handling(self, mock_claude_profiles: Path):
         """Test handling rate limits from multiple concurrent requests."""
         results = []
         errors = []
-        lock = threading.Lock()
+        result_lock = threading.Lock()
+        file_lock = get_file_lock(mock_claude_profiles)
 
         def handle_rate_limit(request_id: int):
             """Simulate handling a rate limit error."""
             try:
-                # Read current profile
-                with open(mock_claude_profiles) as f:
-                    data = json.load(f)
+                with file_lock:
+                    # Read current profile
+                    with open(mock_claude_profiles) as f:
+                        data = json.load(f)
 
-                current_profile = data["activeProfileId"]
+                    current_profile = data["activeProfileId"]
 
-                # Find next available profile
-                profiles = data.get("profiles", [])
-                current_index = next(
-                    (i for i, p in enumerate(profiles) if p["id"] == current_profile), 0
-                )
-                next_index = (current_index + 1) % len(profiles)
-                next_profile = profiles[next_index]["id"]
+                    # Find next available profile
+                    profiles = data.get("profiles", [])
+                    current_index = next(
+                        (i for i, p in enumerate(profiles) if p["id"] == current_profile), 0
+                    )
+                    next_index = (current_index + 1) % len(profiles)
+                    next_profile = profiles[next_index]["id"]
 
-                # Simulate decision delay
-                time.sleep(0.01)
+                    # Simulate decision delay
+                    time.sleep(0.01)
 
-                # Switch to next profile (only if still the same active profile)
-                with open(mock_claude_profiles) as f:
-                    data = json.load(f)
+                    # Switch to next profile (only if still the same active profile)
+                    with open(mock_claude_profiles) as f:
+                        data = json.load(f)
 
-                if data["activeProfileId"] == current_profile:
-                    data["activeProfileId"] = next_profile
+                    if data["activeProfileId"] == current_profile:
+                        data["activeProfileId"] = next_profile
 
-                    write_secret_file(mock_claude_profiles, json.dumps(data, indent=2))
+                        write_secret_file(mock_claude_profiles, json.dumps(data, indent=2))
 
-                    with lock:
-                        results.append((request_id, current_profile, next_profile))
-                else:
-                    # Profile already switched by another request
-                    with lock:
-                        results.append(
-                            (request_id, current_profile, data["activeProfileId"])
-                        )
+                        with result_lock:
+                            results.append((request_id, current_profile, next_profile))
+                    else:
+                        # Profile already switched by another request
+                        with result_lock:
+                            results.append(
+                                (request_id, current_profile, data["activeProfileId"])
+                            )
 
             except Exception as e:
-                with lock:
+                with result_lock:
                     errors.append(f"Request {request_id}: {str(e)}")
 
         # Launch 10 concurrent rate limit handlers
