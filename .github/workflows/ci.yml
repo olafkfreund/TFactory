@@ -26,6 +26,12 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Task Contract schema drift gate (#679)
+        # Vendored task-contract-v2.schema.json must stay a superset of the
+        # canonical Factory hub schema. Stdlib-only; soft-skips on network
+        # failure, fails hard on real drift.
+        run: python scripts/check_schema_drift.py
+
       - name: Install uv
         uses: astral-sh/setup-uv@v3
         with:
