@@ -28,7 +28,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import tomllib
 from dataclasses import dataclass, field
+from pathlib import Path
 
 # nixpkgs pin for generated flakes. A FULL commit rev (not a branch) keeps
 # generated flakes reproducible AND avoids a GitHub API call to resolve the
@@ -52,6 +55,71 @@ _PY_PKG_ALIASES = {
     "beautifulsoup4": "beautifulsoup4",
     "scikit-learn": "scikit-learn",
 }
+
+# Curated PyPI-name -> nixpkgs python3Packages attr for deps we seed into a
+# generated flake from the SUT's pyproject.toml (#615). Only vetted, stable
+# attrs — an unmapped dependency is skipped (logged), never guessed, so a bad
+# attr can't break the flake build. Extend as real repos need it.
+_PYPROJECT_DEP_MAP = {
+    "fastapi": "fastapi",
+    "uvicorn": "uvicorn",
+    "starlette": "starlette",
+    "httpx": "httpx",
+    "pydantic": "pydantic",
+    "pydantic-settings": "pydantic-settings",
+    "requests": "requests",
+    "flask": "flask",
+    "aiohttp": "aiohttp",
+    "sqlalchemy": "sqlalchemy",
+    "jinja2": "jinja2",
+    "click": "click",
+    "typer": "typer",
+    "numpy": "numpy",
+    "pandas": "pandas",
+    "pyyaml": "pyyaml",
+    "python-dateutil": "python-dateutil",
+    "pytest": "pytest",
+    "pytest-cov": "pytest-cov",
+    "pytest-asyncio": "pytest-asyncio",
+    "pytest-mock": "pytest-mock",
+    "anyio": "anyio",
+}
+
+
+def _dep_base_name(spec: str) -> str:
+    """Strip version/extras/markers from a PEP 508 dep string -> lowercase name.
+
+    ``uvicorn[standard]>=0.32`` -> ``uvicorn``; ``httpx>=0.27`` -> ``httpx``.
+    """
+    return re.split(r"[<>=!~;\[\s]", spec.strip(), maxsplit=1)[0].strip().lower()
+
+
+def _deps_from_pyproject(project_dir) -> list[str]:
+    """Mapped nixpkgs attrs for the SUT's declared deps + test extras (#615).
+
+    Reads ``<project_dir>/pyproject.toml`` ``[project].dependencies`` and any
+    ``[project.optional-dependencies]`` ``test``/``dev`` group, maps known names
+    via ``_PYPROJECT_DEP_MAP`` and drops the rest. Best-effort: a missing or
+    unparseable pyproject yields ``[]`` (the flake still ships the base toolchain).
+    """
+    pp = Path(project_dir) / "pyproject.toml"
+    if not pp.is_file():
+        return []
+    try:
+        data = tomllib.loads(pp.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return []
+    proj = data.get("project", {}) if isinstance(data, dict) else {}
+    specs = list(proj.get("dependencies", []) or [])
+    extras = proj.get("optional-dependencies", {}) or {}
+    for group in ("test", "tests", "dev"):
+        specs += list(extras.get(group, []) or [])
+    out: list[str] = []
+    for spec in specs:
+        attr = _PYPROJECT_DEP_MAP.get(_dep_base_name(str(spec)))
+        if attr and attr not in out:
+            out.append(attr)
+    return out
 
 
 class ProvisionError(RuntimeError):
@@ -174,7 +242,7 @@ def _system_pkg_attrs(m: Manifest) -> list[str]:
     return [p for p in m.system_packages if p.lower() not in _DROP_SYSTEM_PKGS]
 
 
-def generate_flake(env: dict, *, nixpkgs: str = DEFAULT_NIXPKGS) -> str:
+def generate_flake(env: dict, *, nixpkgs: str = DEFAULT_NIXPKGS, project_dir=None) -> str:
     """Render a reproducible `flake.nix` from an RFC-0005 environment manifest.
 
     Mirrors the proven PoC: a single devShell with the language toolchain, any
@@ -193,10 +261,13 @@ def generate_flake(env: dict, *, nixpkgs: str = DEFAULT_NIXPKGS) -> str:
         pkg_lines.append(f"pkgs.{_go_attr(m)}")
     else:
         py = _python_attr(m)
-        py_pkgs = [_PY_PKG_ALIASES.get(p, p) for p in _python_libs(m)]
+        py_pkgs = [_PY_PKG_ALIASES.get(p, p) for p in _python_libs(m, project_dir=project_dir)]
         if py_pkgs:
-            joined = " ".join(py_pkgs)
-            pkg_lines.append(f"(pkgs.{py}.withPackages (p: with p; [ {joined} ]))")
+            # Reference each attr as ``p."name"`` (quoted) rather than
+            # ``with p; [ name ]`` so hyphenated attrs (pytest-cov,
+            # scikit-learn) don't parse as Nix subtraction.
+            joined = " ".join(f'p."{name}"' for name in py_pkgs)
+            pkg_lines.append(f"(pkgs.{py}.withPackages (p: [ {joined} ]))")
         else:
             pkg_lines.append(f"pkgs.{py}")
     sys_attrs_with_node = list(sys_attrs)
@@ -249,15 +320,21 @@ def generate_flake(env: dict, *, nixpkgs: str = DEFAULT_NIXPKGS) -> str:
 """
 
 
-def _python_libs(m: Manifest) -> list[str]:
-    """Python libraries to put in the withPackages set. Always include pytest for
-    the verify lane; add fastapi/uvicorn/httpx when the commands imply a web app."""
+def _python_libs(m: Manifest, project_dir=None) -> list[str]:
+    """Python libraries to put in the withPackages set. Always include
+    pytest + pytest-cov for the verify lane (the runner always passes ``--cov``);
+    add fastapi/uvicorn/httpx when the commands imply a web app; and, when
+    ``project_dir`` is given, the SUT's own declared deps + test extras read from
+    its pyproject.toml (#615) so an ingested repo imports without a hand-written
+    manifest."""
     libs: list[str] = []
     hay = " ".join(m.verify_commands + m.build_commands + m.proof_verify).lower()
     if (m.language or "").lower() in ("", "python") or "pytest" in hay:
-        libs.append("pytest")
+        libs += ["pytest", "pytest-cov"]
     if "uvicorn" in hay or "fastapi" in hay or "httpx" in hay or _needs_browser(m):
         libs += ["fastapi", "uvicorn", "httpx"]
+    if project_dir is not None:
+        libs += _deps_from_pyproject(project_dir)
     # de-dup, stable order
     seen: set[str] = set()
     out: list[str] = []

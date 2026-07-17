@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.5 — websocket fall-through no longer crashes (2026-07-17)
+
+- **Fix: WebSocket connections that match no `/ws/*` route no longer flood `AssertionError` (#670).** The terminal `SPAStaticFiles` catch-all mount at `/` matches both `http` and `websocket` scopes; a WebSocket falling through to it hit stock `StaticFiles.__call__`'s `assert scope["type"] == "http"`, raising on every such connection (breaking live task-status streaming to the cockpit). `SPAStaticFiles.__call__` now passes non-HTTP scopes through cleanly (websocket scopes get a clean close) instead of asserting; HTTP serving and cache-policy behaviour unchanged.
+
+## 0.9.4 — verify-agent OAuth auto-refresh (2026-07-16)
+
+- **Fix: in-pod verify/plan agents no longer 401 on an expired OAuth token (#666).** The agents were pinned to a static `CLAUDE_CODE_OAUTH_TOKEN` sourced from a Secret; a static env token never refreshes, so once its access token expired every spawn failed with `Invalid authentication credentials` — surfaced live when an AIFactory intake build auto-handed off for verification. `create_client` now calls `prefer_refreshable_credentials()` at spawn time: when `~/.claude/.credentials.json` carries a `refreshToken`, `CLAUDE_CODE_OAUTH_TOKEN` is dropped from the env so the Claude Agent SDK owns auth and refreshes the token itself (the same file+refresh path AIFactory build Jobs already use). Runs on every spawn now, not only under remote-control; a deliberate `ANTHROPIC_AUTH_TOKEN` (CCR/proxy) is left untouched. No re-login required.
+
 ## 0.12.0 — continuous regression suite (RFC-0018) (2026-06-22)
 
 - **Regression suite & continuous verification ([RFC-0018](https://github.com/olafkfreund/Factory/blob/main/docs/rfc/0018-regression-suite-and-continuous-verification.md), epic #482).** TFactory now re-runs a project's persisted `tests-catalog.json` corpus over time and diffs against a stored baseline, turning one-shot feature verification into continuous regression detection. New `agents/regression/` subsystem (see `docs/regression-suite.md`):

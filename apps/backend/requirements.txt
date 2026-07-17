@@ -51,3 +51,10 @@ passlib>=1.7.4
 # runs from this image, so boto3 must be present here too. Upload is fail-open:
 # absent boto3 simply no-ops the emission, never the verdict.
 boto3>=1.35.0
+
+# Gen-Functional pre-flight (agents/preflight_static.check_import) imports the
+# generated pytest test with this interpreter (sys.executable), so pytest must
+# be present in the service venv — otherwise every generated test is rejected
+# "No module named 'pytest'" and the planner replan-loops (#613 / #609).
+pytest>=8.3.0
+pytest-cov>=5.0.0

@@ -12,6 +12,7 @@ from agents.confidence import (
     READINESS_HIGH,
     WEIGHTS,
     aggregate_confidence,
+    apply_consistent_fail_reason,
     compute_confidence,
     enrich_verdicts,
 )
@@ -249,3 +250,100 @@ def test_mutation_neutral_and_missing(mutation, expected_present):
     # Just assert it computes a float in range; presence affects renormalisation.
     c = compute_confidence(v)
     assert 0.0 <= c <= 1.0
+
+
+# ─── apply_consistent_fail_reason (#629) ─────────────────────────────────
+# The Evaluator's judge LLM sometimes mislabelled a consistent_fail as an
+# import/collection error when the test actually ran and failed a real
+# assertion (the demo hardcode bug: "assert 0.0 == 300.0", "6 failed").
+# These pin the deterministic reason-fix wired from stability_runner's
+# failure_kind classifier.
+
+
+def test_consistent_fail_reason_replaced_with_assertion_explanation():
+    v = _verdict(verdict="reject", stability="consistent_fail")
+    # `reasons` lives at the top level of a verdict dict (not under
+    # signals_summary), so it's set directly rather than via `_verdict()`.
+    v["reasons"] = [
+        "the subject module is not resolvable/importable in the test environment"
+    ]
+    changed = apply_consistent_fail_reason(
+        v, {"failure_kind": "assertion", "rerun_count": 3}
+    )
+    assert changed is True
+    assert v["reasons"] == [
+        "consistent test failure across 3 runs — the test executed and its "
+        "assertions failed (subject behaviour is wrong), not an "
+        "import/collection error"
+    ]
+    # The wrong "not resolvable/importable" guess must not survive.
+    assert not any("resolvable" in r or "importable" in r for r in v["reasons"])
+
+
+def test_consistent_fail_reason_replaced_with_import_explanation():
+    v = _verdict(verdict="reject", stability="consistent_fail")
+    v["reasons"] = ["some unrelated LLM guess"]
+    changed = apply_consistent_fail_reason(
+        v, {"failure_kind": "import", "rerun_count": 3}
+    )
+    assert changed is True
+    assert v["reasons"] == [
+        "consistent test failure across 3 runs — the subject module could not "
+        "be imported/collected in the sandbox (import/collection error)"
+    ]
+
+
+def test_consistent_fail_reason_noop_when_not_consistent_fail():
+    v = _verdict(verdict="reject", stability="flaky")
+    v["reasons"] = ["original reason"]
+    changed = apply_consistent_fail_reason(
+        v, {"failure_kind": "assertion", "rerun_count": 3}
+    )
+    assert changed is False
+    assert v["reasons"] == ["original reason"]
+
+
+def test_consistent_fail_reason_noop_when_no_failure_info():
+    v = _verdict(verdict="reject", stability="consistent_fail")
+    v["reasons"] = ["original reason"]
+    assert apply_consistent_fail_reason(v, None) is False
+    assert v["reasons"] == ["original reason"]
+
+
+def test_consistent_fail_reason_noop_when_kind_unknown():
+    """The classifier couldn't tell — leave the LLM's own reason alone rather
+    than replace it with a non-answer."""
+    v = _verdict(verdict="reject", stability="consistent_fail")
+    v["reasons"] = ["original reason"]
+    changed = apply_consistent_fail_reason(
+        v, {"failure_kind": "unknown", "rerun_count": 3}
+    )
+    assert changed is False
+    assert v["reasons"] == ["original reason"]
+
+
+def test_consistent_fail_reason_defaults_rerun_count():
+    v = _verdict(verdict="reject", stability="consistent_fail")
+    v["reasons"] = []
+    apply_consistent_fail_reason(v, {"failure_kind": "assertion"})
+    assert "3 runs" in v["reasons"][0]
+
+
+def test_enrich_verdicts_wires_failure_kind_end_to_end():
+    """The Evaluator's post-processing hook end-to-end: enrich_verdicts
+    fixes a consistent_fail's reason using failure_kind_by_test_id, exactly
+    the shape agents/evaluator.py builds from the signal bundles."""
+    doc = {"verdicts": [_verdict(verdict="reject", stability="consistent_fail")]}
+    doc["verdicts"][0]["reasons"] = [
+        "subject module (orders_api.main) is not resolvable/importable "
+        "in the test environment"
+    ]
+    enrich_verdicts(
+        doc,
+        failure_kind_by_test_id={"t": {"failure_kind": "assertion", "rerun_count": 3}},
+    )
+    reasons = doc["verdicts"][0]["reasons"]
+    assert any("assertions failed" in r for r in reasons)
+    assert not any("resolvable" in r for r in reasons)
+    # Verdict category is untouched — still a reject.
+    assert doc["verdicts"][0]["verdict"] == "reject"

@@ -105,12 +105,19 @@ def build_verification_block(
 
     # VAL-1 / VAL-2 from the lanes that ran.
     for level in ("VAL-1", "VAL-2"):
-        status = _level_status(by_level.get(level, []))
+        lane_verdicts = by_level.get(level, [])
+        status = _level_status(lane_verdicts)
         entry: dict[str, Any] = {"level": level, "status": status}
+        lane_name = "unit" if level == "VAL-1" else "api/integration/browser"
         if status == "not_run":
+            entry["reason"] = f"no {lane_name} lane ran in this verify"
+        elif status == "failed":
+            # A ran-but-failed level MUST carry a reason (the gate flags a gap
+            # with no explanation as its own violation, missing_reason:<level>).
+            n_fail = sum(1 for v in lane_verdicts if v not in _PASS_VERDICTS)
             entry["reason"] = (
-                f"no {'unit' if level == 'VAL-1' else 'api/integration/browser'} "
-                "lane ran in this verify"
+                f"{lane_name} lane: {n_fail}/{len(lane_verdicts)} "
+                "test verdict(s) did not pass"
             )
         levels.append(entry)
 

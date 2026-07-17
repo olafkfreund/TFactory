@@ -7,8 +7,8 @@ Covers:
 - ``build_verify_job_manifest`` produces a correct Job: the configured image, the
   ``python -m agents.verify_pipeline`` command (plain, or wrapped in ``nix
   develop`` when ``nix_develop`` is set), the worktree + warm-store mounts, the
-  ``tfactory-sandbox`` SA, no token automount, and the JOB_ID / CORRELATION_KEY /
-  FACTORY_SERVICE / PYTHONPATH env.
+  ``tfactory-sandbox`` SA with token automount (it dispatches nested lane Jobs),
+  and the JOB_ID / CORRELATION_KEY / FACTORY_SERVICE / PYTHONPATH env.
 - ``resolve_verify_image`` prefers TFACTORY_VERIFY_IMAGE, then TFACTORY_IMAGE,
   then the thin nix-runner fallback (the #466 "use the service's own image" fix
   so the orchestration Job can import the ``agents`` backend).
@@ -237,6 +237,29 @@ def test_seed_creds_injected_when_secret_configured(monkeypatch):
     } <= mounts
 
 
+def test_seed_creds_init_container_is_hardened(monkeypatch):
+    # #651: the seed-creds initContainer carries the same hardened
+    # securityContext as the lane/seed containers (no escalation, drop ALL +
+    # co-mount add-backs).
+    monkeypatch.setenv("TFACTORY_VERIFY_CLI_CREDS_SECRET", "factory-cli-creds")
+    pod = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
+    init = next(c for c in pod["initContainers"] if c["name"] == "seed-creds")
+    sc = init["securityContext"]
+    assert sc["allowPrivilegeEscalation"] is False
+    assert sc["capabilities"]["drop"] == ["ALL"]
+
+
+def test_verify_job_pod_pins_seccomp_runtime_default():
+    # #651: the verify-orchestration Job inherits the shared builder's pod
+    # hardening (seccomp RuntimeDefault) and its container the restricted
+    # securityContext.
+    pod = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
+    assert pod["securityContext"]["seccompProfile"] == {"type": "RuntimeDefault"}
+    sc = pod["containers"][0]["securityContext"]
+    assert sc["allowPrivilegeEscalation"] is False
+    assert sc["capabilities"]["drop"] == ["ALL"]
+
+
 def test_manifest_is_a_job_with_the_configured_image():
     m = build_verify_job_manifest(_cfg())
     assert m["kind"] == "Job"
@@ -283,10 +306,64 @@ def test_manifest_without_nix_develop_runs_verify_directly():
     assert "python -m agents.verify_pipeline" in cmd
 
 
-def test_manifest_uses_tfactory_sandbox_sa_no_token_automount():
+def test_manifest_propagates_nix_sandbox_env_when_set(monkeypatch):
+    # The verify pipeline running inside the Job dispatches the nested Nix lane
+    # Job via nix_runner_from_env(), which reads these off the env. They live on
+    # the Deployment but aren't inherited by the dispatched Job, so the manifest
+    # must forward them — else the Nix lane silently falls back to host.
+    monkeypatch.setenv(
+        "TFACTORY_NIX_RUNNER_IMAGE", "ghcr.io/x/tfactory-runner-nix:latest"
+    )
+    monkeypatch.setenv("TFACTORY_WORKSPACES_PVC", "tfactory-data")
+    monkeypatch.setenv("TFACTORY_NIX_STORE_PVC", "tfactory-nix-store")
+    ps = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
+    env = {e["name"]: e["value"] for e in ps["containers"][0]["env"]}
+    assert env["TFACTORY_NIX_RUNNER_IMAGE"] == "ghcr.io/x/tfactory-runner-nix:latest"
+    assert env["TFACTORY_WORKSPACES_PVC"] == "tfactory-data"
+    assert env["TFACTORY_NIX_STORE_PVC"] == "tfactory-nix-store"
+
+
+def test_nix_in_image_flag_reaches_the_dispatched_job(monkeypatch):
+    """#623: the flag MUST travel with TFACTORY_NIX_STORE_PVC.
+
+    nix_runner_from_env() runs again *inside* the dispatched Job. If the flag
+    does not reach it, it reads False there and re-mounts the very RWO PVC the
+    flag exists to drop — the flip lands on the control plane and silently misses
+    the nested Job. That half-applied shape is exactly how AIFactory#840 broke
+    its gate lane.
+    """
+    monkeypatch.setenv(
+        "TFACTORY_NIX_RUNNER_IMAGE", "ghcr.io/x/tfactory-runner-nix:latest"
+    )
+    monkeypatch.setenv("TFACTORY_NIX_STORE_PVC", "tfactory-nix-store")
+    monkeypatch.setenv("TFACTORY_NIX_IN_IMAGE", "true")
+    ps = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
+    env = {e["name"]: e["value"] for e in ps["containers"][0]["env"]}
+    assert env.get("TFACTORY_NIX_IN_IMAGE") == "true", env
+
+
+def test_manifest_omits_nix_sandbox_env_when_unset(monkeypatch):
+    for v in (
+        "TFACTORY_NIX_RUNNER_IMAGE",
+        "TFACTORY_WORKSPACES_PVC",
+        "TFACTORY_NIX_STORE_PVC",
+        "TFACTORY_NIX_IN_IMAGE",
+        "TFACTORY_SANDBOX_NAMESPACE",
+    ):
+        monkeypatch.delenv(v, raising=False)
+    ps = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
+    names = {e["name"] for e in ps["containers"][0]["env"]}
+    assert "TFACTORY_NIX_RUNNER_IMAGE" not in names
+
+
+def test_manifest_uses_tfactory_sandbox_sa_with_token_automount():
+    # The verify Job dispatches nested per-lane Jobs (Nix pytest/browser lanes via
+    # KubeJobSandbox.create_namespaced_job), so it needs the SA token mounted to
+    # authenticate to the k8s API — otherwise the nested dispatch fails and the
+    # lane silently falls back to the host runner.
     ps = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
     assert ps["serviceAccountName"] == "tfactory-sandbox"
-    assert ps["automountServiceAccountToken"] is False
+    assert ps["automountServiceAccountToken"] is True
 
 
 def test_manifest_mounts_worktree_and_warm_nix_store():
@@ -935,3 +1012,14 @@ def test_record_dispatch_succeeds_on_a_foreign_loop(tmp_path, monkeypatch):
         return done["lifecycle_state"]
 
     assert asyncio.run(_verdict()) == "done"
+
+
+def test_verify_job_sets_data_root_env():
+    """The verify Job declares TFACTORY_DATA_ROOT = its mount, so the nested Nix
+    sandbox resolves co-mount subPaths against the right PVC root — without it
+    pvc_subpath returns None, the Nix Job mounts nothing, and every AC rejects on
+    an empty /work (#623)."""
+    m = build_verify_job_manifest(_cfg())
+    env = m["spec"]["template"]["spec"]["containers"][0]["env"]
+    dr = next((e for e in env if e["name"] == "TFACTORY_DATA_ROOT"), None)
+    assert dr is not None and dr["value"] == "/work"  # VerifyJobConfig.mount default

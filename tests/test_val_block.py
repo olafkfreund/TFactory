@@ -6,7 +6,9 @@ from agents.val_block import build_verification_block
 
 
 def _v(lane: str, verdict: str, n: int = 1) -> list[dict]:
-    return [{"test_id": f"{lane}-{i}", "lane": lane, "verdict": verdict} for i in range(n)]
+    return [
+        {"test_id": f"{lane}-{i}", "lane": lane, "verdict": verdict} for i in range(n)
+    ]
 
 
 def test_unit_and_api_pass_reaches_val2_with_val3_gap() -> None:
@@ -29,6 +31,17 @@ def test_a_unit_failure_caps_the_ceiling_to_val0() -> None:
     assert block["achieved_level"] == "VAL-0"
     val1 = next(lv for lv in block["levels"] if lv["level"] == "VAL-1")
     assert val1["status"] == "failed"
+
+
+def test_a_failed_level_carries_a_reason_and_gate_flags_no_missing_reason() -> None:
+    # A ran-but-failed level must carry an explanation, else the gate stamps
+    # missing_reason:<level> as its own violation (regression guard).
+    block = build_verification_block(_v("unit", "reject", 1) + _v("unit", "flag", 3))
+    val1 = next(lv for lv in block["levels"] if lv["level"] == "VAL-1")
+    assert val1["status"] == "failed"
+    assert val1.get("reason"), "failed VAL-1 must carry a reason"
+    assert "1/4" in val1["reason"]
+    assert not any(v.startswith("missing_reason") for v in block["_gate"]["violations"])
 
 
 def test_no_verdicts_is_not_verified() -> None:

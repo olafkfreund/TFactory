@@ -555,12 +555,21 @@ def _inject_verify_seed_creds(manifest: dict[str, Any]) -> None:
         f"chmod -R g+rwX {_VERIFY_HOME}/.claude {_VERIFY_HOME}/.codex "
         f"{_VERIFY_HOME}/.gemini {_VERIFY_HOME}/.config || true"
     )
+    # Same hardened container securityContext as the lane/seed containers
+    # (#651): no escalation, drop ALL + the co-mount add-backs. busybox runs as
+    # root (required today: the emptyDir home volumes are root-owned and the
+    # copied files stay world-readable for the nonroot verify container).
+    from tools.runners.kube_sandbox import (  # noqa: PLC0415 - lazy by design
+        CONTAINER_SECURITY_CONTEXT,
+    )
+
     pod.setdefault("initContainers", []).append(
         {
             "name": "seed-creds",
             "image": "busybox:1.36",
             "command": ["sh", "-c"],
             "args": ["\n".join(lines)],
+            "securityContext": dict(CONTAINER_SECURITY_CONTEXT),
             "volumeMounts": [
                 *home_mounts,
                 {"name": "cli-creds", "mountPath": "/seed", "readOnly": True},
@@ -641,9 +650,13 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
 
     pod_spec = manifest["spec"]["template"]["spec"]
     # The verify Job (unlike a pure lane) writes its job-state row, so it gets the
-    # dedicated SA. Token automount stays False — the SA is for identity/RBAC, the
-    # store write goes over DATABASE_URL, not the k8s API.
+    # dedicated SA. It ALSO dispatches nested per-lane Jobs (the Nix pytest/browser
+    # lanes call ``create_namespaced_job`` via KubeJobSandbox), so it needs the SA
+    # token actually mounted — otherwise the nested dispatch fails to authenticate
+    # to the k8s API and the lane silently falls back to the host runner. Leaf lane
+    # Jobs keep ``automountServiceAccountToken: False`` (they need no API).
     pod_spec["serviceAccountName"] = cfg.service_account
+    pod_spec["automountServiceAccountToken"] = True
 
     env = [
         {"name": "JOB_ID", "value": cfg.job_id},
@@ -667,6 +680,37 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
     db_url = os.environ.get(cfg.database_url_env)
     if db_url:
         env.append({"name": cfg.database_url_env, "value": db_url})
+    # Propagate the Nix-lane sandbox coordinates so the verify pipeline running
+    # inside THIS Job can dispatch the nested per-task Nix Job
+    # (run_pytest_lane_via_nix -> nix_runner_from_env reads these). They live on
+    # the control-plane Deployment but are NOT inherited by the dispatched Job, so
+    # without this ``nix_runner_from_env`` returns None inside the Job and the lane
+    # silently falls back to the host runner — the RFC-0005 flake env then never
+    # runs in the kubejob path. (The mounted SA token lets the nested create Job
+    # authenticate; these tell it what image/PVCs to use.)
+    for _nix_var in (
+        "TFACTORY_NIX_RUNNER_IMAGE",
+        "TFACTORY_WORKSPACES_PVC",
+        "TFACTORY_NIX_STORE_PVC",
+        # #623: MUST travel with TFACTORY_NIX_STORE_PVC. nix_runner_from_env runs
+        # again inside the dispatched Job; if the flag does not reach it, it reads
+        # False there and re-mounts the very RWO PVC the flag exists to drop —
+        # the flip lands on the control plane and silently misses the nested Job.
+        # That half-applied shape is precisely how AIFactory#840 broke its gate
+        # lane (the build path was flipped, the gate path was not).
+        "TFACTORY_NIX_IN_IMAGE",
+        "TFACTORY_SANDBOX_NAMESPACE",
+    ):
+        _nix_val = os.environ.get(_nix_var)
+        if _nix_val:
+            env.append({"name": _nix_var, "value": _nix_val})
+    # This Job mounts the workspaces PVC (data root) at ``cfg.mount`` (/work), NOT
+    # at the control plane's /home/nonroot/.tfactory. The nested per-task Nix Job
+    # derives its co-mount subPath via pvc_subpath(path, data_root); without the
+    # right data root that returns None and the Nix Job mounts nothing — an empty
+    # /work where the SUT is unimportable, so every AC rejects (consistent_fail).
+    # Tell nix_runner_from_env where the PVC actually is inside THIS Job (#623).
+    env.append({"name": "TFACTORY_DATA_ROOT", "value": cfg.mount})
     # LLM credential (TFactory #466 env round-4): the verify pipeline's evaluator
     # calls create_client → require_auth_token. Without it the Job died
     # ``ValueError: No OAuth token found``. Inject CLAUDE_CODE_OAUTH_TOKEN via the
