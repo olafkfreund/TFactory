@@ -1,0 +1,128 @@
+=== AUTO-BUILD PROGRESS ===
+
+Project: TFactory
+Task: Fix flaky web-server concurrency tests corrupting shared JSON
+Issue: #691
+Workspace: .aifactory/specs/001-flaky-web-server-concurrency-t/
+Started: 2026-07-17
+
+Workflow Type: simple
+Rationale: Straightforward bug fix requiring locking pattern addition to existing tests
+
+Session 1 (Planner):
+- Created implementation_plan.json with 5 subtasks across 1 phase
+- Created context.json documenting the root cause and skip tests
+- Created project_index.json describing the monorepo structure
+- Created this progress file
+
+Affected Tests (6 total, currently skipped):
+TestFileLocking:
+  - test_concurrent_profile_updates (line 174)
+  - test_concurrent_api_profile_creation (line 232)
+  - test_concurrent_ideation_updates (line 305)
+
+TestConcurrentAccess:
+  - test_concurrent_mixed_operations (line 391)
+  - test_concurrent_different_endpoints (line 463)
+
+TestAPIRateLimits:
+  - test_concurrent_rate_limit_handling (line 596)
+
+Root Cause:
+Threads perform unlocked read-modify-write sequences:
+  1. open('r') -> json.load
+  2. modify data in memory
+  3. time.sleep(0.01) - intentionally increases race window
+  4. write_secret_file()
+
+Multiple threads can read the same state, then overwrite each other's changes.
+
+Fix Strategy:
+- Protect critical sections (read -> modify -> write) with threading.Lock
+- Remove @pytest.mark.skip decorators
+- Verify deterministically (20 runs each = zero failures)
+
+Implementation Plan:
+Phase 1 (5 subtasks):
+  1.1 Add locking to TestFileLocking tests (4 tests)
+  1.2 Add locking to TestConcurrentAccess tests (2 tests)
+  1.3 Add locking to TestAPIRateLimits test (1 test)
+  1.4 Create and run deterministic verification script (AC3)
+  1.5 Verify full test suite passes (AC4)
+
+Acceptance Criteria Status:
+  AC1: Re-enable 6 skipped tests - PENDING (subtask-1-1, 1-2, 1-3)
+  AC2: Use write_secret_file for writes - ALREADY MET (verified in plan)
+  AC3: Deterministic verification - PENDING (subtask-1-4)
+  AC4: Full test suite passes - PENDING (subtask-1-5)
+
+=== STARTUP COMMAND ===
+
+To continue building this spec, run:
+
+  python ./aifactory/run.py --spec 001-flaky-web-server-concurrency-t
+
+Or to run planning verification:
+
+  pytest apps/web-server/tests/test_performance.py -v
+
+=== END SESSION 1 (PLANNING COMPLETE) ===
+
+=== SESSION 2 (IMPLEMENTATION IN PROGRESS) ===
+
+Subtask 1-1: COMPLETED ✅
+- Added get_file_lock() utility function to manage threading.Lock instances
+- Updated test_concurrent_profile_updates: wrapped entire read-modify-write in lock
+- Updated test_concurrent_api_profile_creation: wrapped entire read-modify-write in lock
+- Updated test_concurrent_ideation_updates: wrapped entire read-modify-write in lock
+- Preserved test_concurrent_read_operations (no locking needed for read-only test)
+- Removed @pytest.mark.skip decorators from all tests
+- Committed changes: db56bd5
+
+Subtask 1-2: COMPLETED ✅
+- Updated test_concurrent_mixed_operations: separated file_lock and result_lock
+- Updated test_concurrent_different_endpoints: added file_lock per file in update_file
+- Both critical sections now protected by file-level locks
+- Test_concurrent_read_operations preserved as-is (read-only, no locking)
+
+Subtask 1-3: COMPLETED ✅
+- Updated test_concurrent_rate_limit_handling: wrapped critical section in file_lock
+- Separated result_lock for thread-safe results tracking
+- All profile switching operations now atomic via lock protection
+
+Subtask 1-4: IN PROGRESS 🔄
+- Created run_deterministic_verification.py script
+- Script will run all 6 re-enabled tests 20 times each
+- Verifies zero JSONDecodeError failures
+- Next: Execute script to verify deterministic passing
+
+Subtask 1-5: PENDING
+- Will run full test suite: pytest apps/web-server/tests/ -v
+- Verify no regressions
+
+Key Changes Made:
+1. Added _FILE_LOCKS dict at module level for lock management
+2. Added get_file_lock(file_path) utility function
+3. Removed all @pytest.mark.skip decorators referencing #691
+4. Wrapped all critical sections with `with lock:` statements
+5. Preserved atomic writes via existing write_secret_file() calls
+
+Files Modified:
+- apps/web-server/tests/test_performance.py (154 insertions, 131 deletions)
+
+Files Created:
+- apps/web-server/tests/run_deterministic_verification.py
+
+Acceptance Criteria Status:
+  AC1: Re-enable 6 skipped tests - ✅ COMPLETED (subtasks 1-1, 1-2, 1-3)
+  AC2: Use write_secret_file for writes - ✅ VERIFIED
+  AC3: Deterministic verification - 🔄 IN PROGRESS (subtask 1-4 script ready)
+  AC4: Full test suite passes - PENDING (subtask 1-5)
+
+=== STARTUP COMMAND ===
+
+To run deterministic verification:
+  python apps/web-server/tests/run_deterministic_verification.py
+
+To verify full test suite:
+  pytest apps/web-server/tests/ -v
