@@ -90,7 +90,7 @@
             "command": "pytest apps/web-server/tests/ -v",
             "expected": "All tests PASSED"
           },
-          "status": "pending"
+          "status": "completed"
         }
       ]
     }
