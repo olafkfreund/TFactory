@@ -364,14 +364,21 @@ def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve kno
                 )
                 res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)
 
-        if serve_command and _APP_NOT_HEALTHY_MARKER in (res.stdout or ""):
+        stdout = res.stdout or ""
+        app_unhealthy = bool(serve_command) and _APP_NOT_HEALTHY_MARKER in stdout
+        if app_unhealthy:
             _log.warning(
                 "run_pytest_lane_via_nix: SUT never became healthy for %s — the "
                 "api test ran against a down app (infra, not an AC failure). "
                 "tail=%r",
                 Path(spec_dir).name,
-                (res.stdout or "")[-300:],
+                stdout[-300:],
             )
+            # The marker is echoed BEFORE pytest, so a long pytest traceback can
+            # push it out of check_stability's 500-char stdout_tail. Re-append it
+            # at the very end so the failure_kind classifier still sees it and
+            # buckets this as an infra not_run rather than an AC failure.
+            stdout += f"\n{_APP_NOT_HEALTHY_MARKER} (SUT boot failed)\n"
 
         # Copy the small junit/coverage OFF the PVC scratch so the returned paths
         # survive the scratch cleanup below (the caller reads them after we return).
@@ -387,10 +394,10 @@ def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve kno
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 
-    code = _parse_pytest_exit(res.stdout)
+    code = _parse_pytest_exit(stdout)
     return DockerRunResult(
         returncode=code,
-        stdout=res.stdout or "",
+        stdout=stdout,
         stderr="",
         junit_xml_path=junit if junit.is_file() else None,
         coverage_xml_path=cov if cov.is_file() else None,

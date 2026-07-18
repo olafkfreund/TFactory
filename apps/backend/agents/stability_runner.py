@@ -85,6 +85,11 @@ class StabilityRun:
 # import/co-mount bug. This helper reads the captured pytest stdout/stderr
 # (deterministically, no LLM) to tell the two apart.
 
+# ponytail: mirror of nix_env._APP_NOT_HEALTHY_MARKER — a wire marker the api
+# lane's verify Job echoes when the self-served SUT never boots. Duplicated (not
+# imported) to keep this low-level module dependency-light / cycle-free.
+_APP_NOT_HEALTHY_MARKER = "__TF_APP_NOT_HEALTHY__"
+
 _IMPORT_MARKERS = (
     "ModuleNotFoundError",
     "ImportError",
@@ -117,6 +122,10 @@ def classify_pytest_failure(stdout: str, returncode: int) -> str:
         returncode: The process exit code pytest returned.
 
     Returns:
+        - ``"app_not_healthy"`` — the api lane's self-served app-under-test
+          never came up (the verify Job emitted ``__TF_APP_NOT_HEALTHY__``), so
+          the endpoint test failed against a down app. Infra, not a wrong
+          subject — takes precedence over the connection-error noise below.
         - ``"import"`` — a collection/import error: the text contains one of
           ``ModuleNotFoundError``, ``ImportError``, ``No module named``,
           ``error during collection``, ``errors during collection``,
@@ -129,6 +138,8 @@ def classify_pytest_failure(stdout: str, returncode: int) -> str:
           and any failure shape this heuristic doesn't recognise).
     """
     text = stdout or ""
+    if _APP_NOT_HEALTHY_MARKER in text:
+        return "app_not_healthy"
     if returncode == _PYTEST_COLLECTION_ERROR_CODE or any(
         marker in text for marker in _IMPORT_MARKERS
     ):

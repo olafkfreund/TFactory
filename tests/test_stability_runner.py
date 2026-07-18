@@ -61,6 +61,7 @@ def project_dir(tmp_path: Path) -> Path:
 
 def test_all_three_pass_is_stable(test_file: Path, project_dir: Path) -> None:
     calls: list[int] = []
+
     def _runner(_tf, _pd, seed):
         calls.append(seed)
         return _FakeRunResult(returncode=0, stdout="passed")
@@ -75,7 +76,8 @@ def test_all_three_pass_is_stable(test_file: Path, project_dir: Path) -> None:
 
 
 def test_all_three_fail_same_code_is_consistent(
-    test_file: Path, project_dir: Path,
+    test_file: Path,
+    project_dir: Path,
 ) -> None:
     def _runner(_tf, _pd, _seed):
         return _FakeRunResult(returncode=1, stdout="failed")
@@ -89,6 +91,7 @@ def test_all_three_fail_same_code_is_consistent(
 def test_mixed_pass_fail_is_flaky(test_file: Path, project_dir: Path) -> None:
     """Two passes + one fail → FLAKY (the most common real-world shape)."""
     sequence = iter([0, 1, 0])
+
     def _runner(_tf, _pd, _seed):
         return _FakeRunResult(returncode=next(sequence))
 
@@ -100,12 +103,14 @@ def test_mixed_pass_fail_is_flaky(test_file: Path, project_dir: Path) -> None:
 
 
 def test_two_different_non_zero_codes_is_flaky(
-    test_file: Path, project_dir: Path,
+    test_file: Path,
+    project_dir: Path,
 ) -> None:
     """Different *kinds* of failure across runs are still FLAKY,
     not CONSISTENT_FAIL — the test isn't deterministically wrong,
     it's nondeterministically wrong."""
     sequence = iter([1, 2, 1])
+
     def _runner(_tf, _pd, _seed):
         return _FakeRunResult(returncode=next(sequence))
 
@@ -117,6 +122,7 @@ def test_runner_exception_is_error(test_file: Path, project_dir: Path) -> None:
     """If the runner itself blows up, verdict is ERROR — distinct from
     test failure. The Evaluator's verdict logic treats this as
     'inconclusive' (likely a sandbox issue, not the test's fault)."""
+
     def _runner(_tf, _pd, _seed):
         raise RuntimeError("docker socket missing")
 
@@ -130,15 +136,19 @@ def test_runner_exception_is_error(test_file: Path, project_dir: Path) -> None:
 
 
 def test_runner_exception_after_partial_runs(
-    test_file: Path, project_dir: Path,
+    test_file: Path,
+    project_dir: Path,
 ) -> None:
     """If the second run blows up, the first run's record is preserved."""
-    sequence = iter([
-        _FakeRunResult(returncode=0),
-        # The next iteration raises StopIteration; we want a different
-        # exception type to confirm it's captured.
-    ])
+    sequence = iter(
+        [
+            _FakeRunResult(returncode=0),
+            # The next iteration raises StopIteration; we want a different
+            # exception type to confirm it's captured.
+        ]
+    )
     call_count = {"n": 0}
+
     def _runner(_tf, _pd, _seed):
         call_count["n"] += 1
         if call_count["n"] == 1:
@@ -157,6 +167,7 @@ def test_runner_exception_after_partial_runs(
 
 def test_rerun_count_two_allowed(test_file: Path, project_dir: Path) -> None:
     calls = []
+
     def _runner(_tf, _pd, _seed):
         calls.append(1)
         return _FakeRunResult(returncode=0)
@@ -168,9 +179,11 @@ def test_rerun_count_two_allowed(test_file: Path, project_dir: Path) -> None:
 
 
 def test_rerun_count_five_runs_five_times(
-    test_file: Path, project_dir: Path,
+    test_file: Path,
+    project_dir: Path,
 ) -> None:
     calls = []
+
     def _runner(_tf, _pd, _seed):
         calls.append(1)
         return _FakeRunResult(returncode=0)
@@ -182,13 +195,17 @@ def test_rerun_count_five_runs_five_times(
 
 def test_rerun_count_one_rejected(test_file: Path, project_dir: Path) -> None:
     """A single run can't detect flake — must be at least 2."""
-    def _runner(*a, **kw): return _FakeRunResult(returncode=0)
+
+    def _runner(*a, **kw):
+        return _FakeRunResult(returncode=0)
+
     with pytest.raises(ValueError, match="at least 2"):
         check_stability(test_file, project_dir, _runner, rerun_count=1)
 
 
 def test_custom_seed_forwarded(test_file: Path, project_dir: Path) -> None:
     seen_seeds: list[int] = []
+
     def _runner(_tf, _pd, seed):
         seen_seeds.append(seed)
         return _FakeRunResult(returncode=0)
@@ -210,6 +227,7 @@ def test_stdout_tail_truncated(test_file: Path, project_dir: Path) -> None:
     """Long stdout is truncated to ``tail_chars`` to keep verdicts.json
     a reasonable size."""
     big_stdout = "x" * 10_000 + "TAIL_MARKER"
+
     def _runner(_tf, _pd, _seed):
         return _FakeRunResult(returncode=0, stdout=big_stdout)
 
@@ -221,6 +239,7 @@ def test_stdout_tail_truncated(test_file: Path, project_dir: Path) -> None:
 
 def test_stderr_tail_truncated(test_file: Path, project_dir: Path) -> None:
     big_stderr = "e" * 5_000 + "STDERR_TAIL"
+
     def _runner(_tf, _pd, _seed):
         return _FakeRunResult(returncode=1, stderr=big_stderr)
 
@@ -232,6 +251,7 @@ def test_stderr_tail_truncated(test_file: Path, project_dir: Path) -> None:
 
 def test_empty_stdout_stderr_handled(test_file: Path, project_dir: Path) -> None:
     """Some runners may return empty strings (or None — guarded)."""
+
     def _runner(_tf, _pd, _seed):
         return _FakeRunResult(returncode=0, stdout="", stderr="")
 
@@ -314,6 +334,17 @@ def test_classify_assertion_failure() -> None:
 
 def test_classify_import_error_via_marker() -> None:
     assert classify_pytest_failure(_IMPORT_ERROR_STDOUT, 2) == "import"
+
+
+def test_classify_app_not_healthy_takes_precedence() -> None:
+    """The api lane's self-served SUT never booted (the Job echoed
+    __TF_APP_NOT_HEALTHY__): classify as infra, not a connection-error/import
+    mislabel — even at exit code 1 with assertion-ish noise around it."""
+    text = (
+        "__TF_APP_NOT_HEALTHY__ SUT did not accept a connection on "
+        "http://127.0.0.1:8200/\nE   requests.exceptions.ConnectionError\n1 failed\n"
+    )
+    assert classify_pytest_failure(text, 1) == "app_not_healthy"
 
 
 def test_classify_import_error_by_exit_code_alone() -> None:

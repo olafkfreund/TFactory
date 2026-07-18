@@ -33,6 +33,29 @@ def test_a_unit_failure_caps_the_ceiling_to_val0() -> None:
     assert val1["status"] == "failed"
 
 
+def test_api_not_run_ac_keeps_val2_not_run_not_failed() -> None:
+    # #703 follow-up: the app-under-test never booted, so its endpoint AC is
+    # not_run (infra), not a reject. VAL-2 must stay not_run (gate downgrades to
+    # VAL-1) WITHOUT recording a false AC failure that would cap the ceiling.
+    block = build_verification_block(_v("unit", "accept", 2) + _v("api", "not_run", 1))
+    assert block["achieved_level"] == "VAL-1"
+    val2 = next(lv for lv in block["levels"] if lv["level"] == "VAL-2")
+    assert val2["status"] == "not_run"
+    assert "did not execute against a running" in val2["reason"]
+    assert "VAL-2 not_run" in block["claim"]
+    # not_run is a gap, not a failure — nothing was falsely rejected.
+    assert not any("failed" in lv.get("status", "") for lv in block["levels"][:3])
+
+
+def test_api_not_run_ignored_when_other_api_acs_pass() -> None:
+    # A not_run AC alongside real passes doesn't drag VAL-2 down: it's excluded,
+    # the remaining passes stand.
+    block = build_verification_block(
+        _v("unit", "accept", 1) + _v("api", "accept", 1) + _v("api", "not_run", 1)
+    )
+    assert block["achieved_level"] == "VAL-2"
+
+
 def test_a_failed_level_carries_a_reason_and_gate_flags_no_missing_reason() -> None:
     # A ran-but-failed level must carry an explanation, else the gate stamps
     # missing_reason:<level> as its own violation (regression guard).

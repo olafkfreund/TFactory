@@ -12,6 +12,7 @@ from agents.confidence import (
     READINESS_HIGH,
     WEIGHTS,
     aggregate_confidence,
+    apply_app_not_healthy_override,
     apply_consistent_fail_reason,
     compute_confidence,
     enrich_verdicts,
@@ -224,7 +225,11 @@ def test_enrich_stamps_confidence_and_summary():
 
 
 def test_enrich_handles_missing_signals_summary():
-    doc = {"verdicts": [{"test_id": "x", "verdict": "flag", "semantic_relevance": "medium"}]}
+    doc = {
+        "verdicts": [
+            {"test_id": "x", "verdict": "flag", "semantic_relevance": "medium"}
+        ]
+    }
     enrich_verdicts(doc)
     assert "confidence" in doc["verdicts"][0]["signals_summary"]
 
@@ -347,3 +352,27 @@ def test_enrich_verdicts_wires_failure_kind_end_to_end():
     assert not any("resolvable" in r for r in reasons)
     # Verdict category is untouched — still a reject.
     assert doc["verdicts"][0]["verdict"] == "reject"
+
+
+def test_enrich_verdicts_app_not_healthy_becomes_not_run():
+    """#703 follow-up: an app-boot failure (failure_kind app_not_healthy) flips
+    the reject to not_run so the gate treats it as infra-not-run, not a false
+    AC rejection."""
+    doc = {"verdicts": [_verdict(verdict="reject", stability="consistent_fail")]}
+    enrich_verdicts(
+        doc,
+        failure_kind_by_test_id={
+            "t": {"failure_kind": "app_not_healthy", "rerun_count": 3}
+        },
+    )
+    v = doc["verdicts"][0]
+    assert v["verdict"] == "not_run"
+    assert any("never became healthy" in r for r in v["reasons"])
+
+
+def test_app_not_healthy_never_overrides_a_genuine_accept():
+    v = _verdict(verdict="accept")
+    assert (
+        apply_app_not_healthy_override(v, {"failure_kind": "app_not_healthy"}) is False
+    )
+    assert v["verdict"] == "accept"
