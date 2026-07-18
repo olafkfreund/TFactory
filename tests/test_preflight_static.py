@@ -187,6 +187,53 @@ def test_check_import_resolves_src_layout_package(tmp_path) -> None:
     assert imp.failed is False, imp.reason
 
 
+def test_check_from_import_of_real_submodule_passes(tmp_path) -> None:
+    """#712: ``from pkg import sub`` where ``sub`` is a real SUBMODULE (a file
+    on disk) that the package __init__ does not re-export.
+
+    ``importlib.import_module(pkg)`` runs only ``pkg/__init__.py`` and does NOT
+    import submodules, so ``hasattr(pkg, 'sub')`` is False even though the real
+    test run resolves the import fine. The pre-flight must probe the submodule
+    before declaring a hallucination — otherwise a perfectly correct api/unit
+    test replan-loops to the STUCK budget (the residual root cause of #707/#712,
+    not covered by the #709 absent-*module* fix)."""
+    pkg = tmp_path / "app"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")  # does NOT re-export routes
+    (pkg / "routes.py").write_text("def create_app():\n    return object()\n")
+    imp = PreflightImport(module="app", name="routes")
+    check_import(imp, project_dir=tmp_path)
+    assert imp.failed is False, imp.reason
+    assert imp.skipped is False  # a real submodule verifies, it isn't skipped
+
+
+def test_check_from_import_submodule_with_absent_dep_is_skipped(tmp_path) -> None:
+    """#712: a real submodule that imports a third-party dep absent from the
+    generation env is an environment gap (like #709), not a hallucination —
+    skip it rather than false-reject."""
+    pkg = tmp_path / "app"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    (pkg / "routes.py").write_text("import totally_absent_dep_xyz\n")
+    imp = PreflightImport(module="app", name="routes")
+    check_import(imp, project_dir=tmp_path)
+    assert imp.failed is False, imp.reason
+    assert imp.skipped is True
+
+
+def test_check_from_import_genuinely_absent_name_still_fails(tmp_path) -> None:
+    """#712 safety: a name that is neither an attribute NOR an importable
+    submodule is still a genuine hallucination and must fail — the submodule
+    probe must not weaken the guard."""
+    pkg = tmp_path / "app"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    imp = PreflightImport(module="app", name="ghost_name_xyz")
+    check_import(imp, project_dir=tmp_path)
+    assert imp.failed is True
+    assert "has no attribute" in (imp.reason or "")
+
+
 # ── preflight_check end-to-end ──────────────────────────────────────────
 
 

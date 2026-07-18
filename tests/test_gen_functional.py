@@ -337,6 +337,44 @@ async def test_first_rejection_stops_loop(
     assert rr["subtask_id"] == "s0"
 
 
+def _submodule_import_source() -> str:
+    """#712: a healthy test importing a real SUBMODULE the package __init__ does
+    not re-export (``app/__init__.py`` is empty, so ``auth`` is a submodule, not
+    an attribute). This resolves in the real test run but, before the #712 fix,
+    pre-flight false-rejected it with 'app has no attribute auth' → replan →
+    STUCK budget → nothing committed → no VAL verdict (the residual root cause of
+    #707/#712, not covered by the #709 absent-*module* fix)."""
+    return (
+        "from app import auth\n"
+        "\n"
+        "def test_auth_module_importable():\n"
+        "    assert hasattr(auth, 'login_user')\n"
+    )
+
+
+@pytest.mark.asyncio
+async def test_submodule_import_commits_instead_of_replanning(
+    spec_dir: Path, project_dir: Path, mock_sdk,
+) -> None:
+    """#712 regression: a test importing a real (non-re-exported) submodule now
+    COMMITS instead of replan-looping to budget. Guards against the pre-flight
+    submodule false-reject."""
+    _make_plan(spec_dir, subtask_count=1)
+    mock_sdk(source_for=lambda sid: _submodule_import_source())
+
+    ok = await run_gen_functional(spec_dir, project_dir)
+    assert ok is True
+
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["status"] == "generated"
+    assert status["tests_generated"] == 1
+    # The test file is committed (not deleted by a guardrail rejection), and no
+    # replan reason accumulated.
+    assert (spec_dir / "tests" / "test_s0.py").exists()
+    assert not (spec_dir / "context" / "replan_request.json").exists()
+    assert status.get("replan_reasons") in (None, [])
+
+
 # ── Session error path ─────────────────────────────────────────────────
 
 
