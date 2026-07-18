@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.13 — api-lane app-boot failure reads as not-run, not a false reject (2026-07-18)
+
+- **A genuine app-boot failure in the api lane is now classified `not_run` (infra), not a false AC rejection (#705, PR #706).** Complements 0.9.12's in-Job app boot (#703): if the SUT never comes up (the `__TF_APP_NOT_HEALTHY__` marker), the api-lane verdict flips reject/flag to `not_run` deterministically (post-vote, never touching a genuine accept), the AC shows as not-run rather than failed, and the never-overclaim gate downgrades VAL-2 to VAL-1 honestly with no fabricated acceptance-criterion failure. All in non-vendored evaluator code (stability_runner/nix_env/confidence/val_block); the vendored gate needed no change.
+
 ## 0.9.12 — api lane boots the app so endpoint ACs reach VAL-2 (2026-07-18)
 
 - **The API verification lane now boots the app-under-test inside the Nix Job (#702, PR #703).** Endpoint ACs previously capped at VAL-0: the api-lane test read `TFACTORY_TARGET_URL` at import, but on the prod Nix-Job path no app was booted and the var was never set, so the test `KeyError`d at collection and the never-overclaim gate downgraded VAL-2 to VAL-0 even for correct code. The api lane now serves the SUT in-Job (uvicorn for FastAPI, detected via `detect_serve_command`), polls readiness with a `-f`-less curl (a bare FastAPI has no `/` route), exports `TFACTORY_TARGET_URL`, runs the httpx/requests tests against it, and tears down. A boot failure surfaces `app_not_healthy` rather than a silent test failure. The unit lane (hermetic) and external-target api runs are unchanged. This is the clean-pass path the Dishonest-Coder demo (Factory#242) needed.
