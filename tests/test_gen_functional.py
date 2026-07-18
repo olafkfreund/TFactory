@@ -814,3 +814,99 @@ async def test_gen_functional_writes_v01_legacy_path_when_descriptor_none(
     # A DeprecationWarning was issued
     depr = [x for x in w if issubclass(x.category, DeprecationWarning)]
     assert depr
+
+
+# ── #707: partial-verify + replan-reason persistence ────────────────────
+
+
+@pytest.mark.asyncio
+async def test_partial_plan_verifies_committed_despite_stuck(
+    spec_dir: Path, project_dir: Path,
+) -> None:
+    """#707 (B): 1 committed test + 1 stuck subtask, none pending → the spec
+    still advances to verify the committed test instead of generated_empty."""
+    committed_rel = "tests/test_committed.py"
+    plan = {
+        "feature": "demo", "workflow_type": "feature", "services_involved": [],
+        "phases": [{
+            "phase": 1, "name": "AC#1", "type": "implementation",
+            "subtasks": [
+                {
+                    "id": "done", "description": "already generated",
+                    "status": "completed", "lane": "unit",
+                    "files_to_create": [committed_rel],
+                },
+                {
+                    "id": "stuck", "description": "gave up", "status": "stuck",
+                    "lane": "api", "replan_count": 2,
+                    "files_to_create": ["tests/test_stuck.py"],
+                },
+            ],
+            "parallel_safe": False,
+        }],
+        "final_acceptance": [], "status": "in_progress", "planStatus": "pending",
+    }
+    (spec_dir / "test_plan.json").write_text(json.dumps(plan))
+    # The committed subtask's file must actually exist on disk to count.
+    (spec_dir / committed_rel).write_text(_valid_test_source())
+
+    ok = await run_gen_functional(spec_dir, project_dir)
+    assert ok is True
+
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["status"] == "generated"
+    assert status["phase"] == "gen_functional_partial_verify"
+    assert status["tests_generated"] == 1
+
+
+@pytest.mark.asyncio
+async def test_no_committed_and_no_pending_stays_generated_empty(
+    spec_dir: Path, project_dir: Path,
+) -> None:
+    """#707 (B) negative: a completed subtask whose file was NOT committed
+    to disk does not count — still generated_empty (no false verify)."""
+    plan = {
+        "feature": "demo", "workflow_type": "feature", "services_involved": [],
+        "phases": [{
+            "phase": 1, "name": "AC#1", "type": "implementation",
+            "subtasks": [{
+                "id": "done", "description": "claims done, no file",
+                "status": "completed", "lane": "unit",
+                "files_to_create": ["tests/test_missing.py"],
+            }],
+            "parallel_safe": False,
+        }],
+        "final_acceptance": [], "status": "in_progress", "planStatus": "pending",
+    }
+    (spec_dir / "test_plan.json").write_text(json.dumps(plan))
+
+    ok = await run_gen_functional(spec_dir, project_dir)
+    assert ok is True
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["status"] == "generated_empty"
+
+
+@pytest.mark.asyncio
+async def test_rejection_persists_replan_reason(
+    spec_dir: Path, project_dir: Path, mock_sdk,
+) -> None:
+    """#707 (A): a guardrail rejection records WHY into status.json
+    (replan_reasons list) and onto the subtask (test_plan.json)."""
+    _make_plan(spec_dir, subtask_count=1)
+    mock_sdk(source_for=lambda sid: _hallucinated_import_source())
+
+    ok = await run_gen_functional(spec_dir, project_dir)
+    assert ok is False
+
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["last_rejected_reason"]
+    assert "pre-flight rejected" in status["last_rejected_reason"]
+    reasons = status["replan_reasons"]
+    assert len(reasons) == 1
+    assert reasons[0]["subtask_id"] == "s0"
+    assert "pre-flight rejected" in reasons[0]["reason"]
+
+    # The reason also rides along on the subtask record in test_plan.json.
+    plan = json.loads((spec_dir / "test_plan.json").read_text())
+    st = plan["phases"][0]["subtasks"][0]
+    assert "pre-flight rejected" in st["replan_reason"]

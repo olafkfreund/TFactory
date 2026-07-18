@@ -29,7 +29,10 @@ import logging as _logging
 import os
 import traceback
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from test_plan import ImplementationPlan, Subtask
 
 from .auth_tagging import apply_requires_auth_from_config
 from .followup_planner import run_followup_planner  # noqa: F401 — back-compat re-export
@@ -494,15 +497,41 @@ def _finalize_replan(
         for s in p.subtasks
     )
     if total_replans >= _GLOBAL_REPLAN_BUDGET:
+        # (B) #707: the plan<->generate loop is exhausted, but earlier runs may
+        # have committed real test files for subtasks that are now COMPLETED.
+        # Verify what we CAN rather than failing the whole spec with nothing —
+        # a couple of stuck subtasks must not zero out the spec's verify.
+        committed = _committed_test_subtasks_for_verify(spec_dir, plan_after)
+        base_warnings = [
+            *warnings,
+            f"global replan budget {_GLOBAL_REPLAN_BUDGET} exhausted "
+            f"(total replans={total_replans}); inspect rejected subtasks",
+        ]
+        if committed:
+            _write_status_patch(
+                spec_dir,
+                status="generated",
+                phase="planner_replan_budget_partial_verify",
+                planner_warnings=[
+                    *base_warnings,
+                    f"verifying {len(committed)} committed test(s) despite the "
+                    "exhausted budget; remaining subtasks are stuck",
+                ],
+                subtask_count=subtask_count,
+                last_replan_for=original_subtask_id,
+                last_replan_count=new_count,
+                last_replan_stuck=became_stuck,
+                total_replans=total_replans,
+            )
+            _advance_to_evaluator(spec_dir, project_dir)
+            return
         _write_status_patch(
             spec_dir,
             status="failed",
             phase="planner_replan_budget_exhausted",
-            planner_warnings=warnings
-            + [
-                f"global replan budget {_GLOBAL_REPLAN_BUDGET} exhausted "
-                f"(total replans={total_replans}); failing the run instead of "
-                "looping — inspect rejected subtasks"
+            planner_warnings=[
+                *base_warnings,
+                "failing the run instead of looping — no committed tests to verify",
             ],
             subtask_count=subtask_count,
             last_replan_for=original_subtask_id,
@@ -791,6 +820,41 @@ def _advance_to_gen_functional(spec_dir: Path, project_dir: Path) -> None:
             "could not auto-schedule gen_functional: %s — manual invocation required",
             exc,
         )
+
+
+def _committed_test_subtasks_for_verify(
+    spec_dir: Path, plan: "ImplementationPlan"
+) -> "list[Subtask]":
+    """Completed subtasks whose test file exists on disk (#707 partial verify).
+
+    Lazy-imports Gen-Functional's shared helper so the two stages agree on what
+    counts as "committed" without a top-level circular import.
+    """
+    try:
+        # lazy import avoids the planner<->gen_functional cycle
+        from agents.gen_functional import _committed_test_subtasks  # noqa: PLC0415
+
+        return _committed_test_subtasks(spec_dir, plan)
+    except Exception:  # noqa: BLE001 — never break the terminal path on this check
+        return []
+
+
+def _advance_to_evaluator(spec_dir: Path, project_dir: Path) -> None:
+    """Schedule the verify (evaluate→triage) to run on the committed tests.
+
+    Reuses Gen-Functional's ``_advance_to_evaluator`` so the kubejob/in-pod
+    dispatch behaviour is identical. Best-effort + lazy import (same shape as
+    ``_advance_to_gen_functional``).
+    """
+    try:
+        # lazy import avoids the planner<->gen_functional cycle
+        from agents.gen_functional import (  # noqa: PLC0415
+            _advance_to_evaluator as _gf_advance,
+        )
+
+        _gf_advance(spec_dir, project_dir)
+    except Exception as exc:  # noqa: BLE001 — advisory; never break the caller
+        _planner_log.warning("could not auto-schedule evaluator: %s", exc)
 
 
 # Module-level set so asyncio.create_task'd planner runs aren't GC'd while
