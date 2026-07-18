@@ -16,10 +16,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agents.evaluator import (
+    _API_SELF_SERVE_PORT,
     _build_kube_or_static_bundle,
     _host_serve_command,
     _maybe_self_serve_api_bundle,
+    _resolve_runner_fn,
 )
+from tools.runners.docker_runner import DockerRunResult
 from tools.runners.local_serve_runtime import LocalServeRuntimeError
 
 
@@ -175,6 +178,73 @@ def test_host_serve_command_rewrites_python_to_venv_python(tmp_path, monkeypatch
 
 def test_host_serve_command_leaves_non_python_command_unchanged():
     assert _host_serve_command("npm start", Path("/proj")) == "npm start"
+
+
+# ── api lane boots the SUT INSIDE the Nix Job (#612 reopened) ──────────────
+#
+# In nix mode the host self-serve (_maybe_self_serve_api_bundle) is skipped —
+# a 127.0.0.1 URL bound on the control plane can't reach the separate Job pod.
+# Instead the runner_fn detects the serve command and threads it into
+# _maybe_nix_verify so the Job boots the app in-pod and sets TFACTORY_TARGET_URL.
+
+
+def _drive_runner(tmp_path, monkeypatch, *, network, target_url):
+    """Call the api/unit runner_fn with _maybe_nix_verify captured, return kwargs."""
+    project = tmp_path / "proj"
+    project.mkdir()
+    test_file = project / "api_test.py"
+    test_file.write_text("import os\nBASE=os.environ['TFACTORY_TARGET_URL']\n")
+
+    captured = {}
+
+    def _fake_nix_verify(spec_dir, project_dir, tf, extra_env, **kw):
+        captured.update(kw)
+        return DockerRunResult(returncode=0, stdout="__PYTEST_EXIT=0", stderr="")
+
+    monkeypatch.setattr("agents.evaluator._maybe_nix_verify", _fake_nix_verify)
+    monkeypatch.setattr(
+        "agents.evaluator.detect_serve_command",
+        lambda pd, env, port=8099: f"python -m uvicorn app.main:app --port {port}",
+    )
+    monkeypatch.setattr(
+        "agents.evaluator.environment_from_contract", lambda spec_dir: {}
+    )
+
+    runner = _resolve_runner_fn(
+        tmp_path,
+        project,
+        network=network,
+        target_url=target_url,
+        subtask={"id": "s", "lane": "api" if network == "host" else "unit"},
+    )
+    res = runner(test_file, project, 424242)
+    assert res.returncode == 0  # short-circuited on the captured nix result
+    return captured
+
+
+def test_api_lane_threads_serve_command_and_target_url_into_nix_job(
+    tmp_path, monkeypatch
+):
+    captured = _drive_runner(tmp_path, monkeypatch, network="host", target_url=None)
+    # the app-boot IS invoked (serve command detected for the port the Job serves)
+    assert captured["serve_command"] == (
+        f"python -m uvicorn app.main:app --port {_API_SELF_SERVE_PORT}"
+    )
+    assert captured["serve_port"] == _API_SELF_SERVE_PORT
+
+
+def test_unit_lane_never_boots_an_app_in_the_nix_job(tmp_path, monkeypatch):
+    captured = _drive_runner(tmp_path, monkeypatch, network="none", target_url=None)
+    assert captured["serve_command"] is None
+
+
+def test_api_lane_with_external_target_does_not_self_serve(tmp_path, monkeypatch):
+    """A configured target URL means the test hits the remote app — no in-Job
+    boot (that URL is already injected as TFACTORY_TARGET_URL upstream)."""
+    captured = _drive_runner(
+        tmp_path, monkeypatch, network="host", target_url="https://staging.example"
+    )
+    assert captured["serve_command"] is None
 
 
 # ── _build_kube_or_static_bundle wiring ────────────────────────────────────
