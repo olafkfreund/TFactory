@@ -4,11 +4,11 @@ Covered:
   - extract_imports: every import form (import, from-import with single
     + multi-name, aliased, star, relative), with line numbers
   - extract_imports: syntax error in source returns (empty, error_str)
-  - check_import: stdlib happy path, hallucinated module, hallucinated
-    attribute, relative import → skipped
+  - check_import: stdlib happy path, absent module → skipped (#707),
+    hallucinated attribute → failed, relative import → skipped
   - preflight_check end-to-end:
       • valid stdlib-only test → ok=True
-      • hallucinated module → ok=False with clear reason
+      • absent module → skipped, ok stays True (#707)
       • hallucinated attribute → ok=False with "has no attribute"
       • mixed valid + invalid → ok=False, only the bad ones in .failures
       • syntax error → ok=False, no imports checked
@@ -135,10 +135,15 @@ def test_check_import_passes_for_stdlib() -> None:
     assert imp.skipped is False
 
 
-def test_check_import_fails_for_hallucinated_module() -> None:
+def test_check_import_skips_absent_module() -> None:
+    # #707: a module absent from the generation interpreter is an environment
+    # gap (third-party lib / SUT transitive dep that lives in the test-execution
+    # env, not TFactory's venv), NOT a hallucination. Skip it — the real test
+    # run resolves it — rather than false-rejecting and replan-looping to stuck.
     imp = PreflightImport(module="this_module_definitely_does_not_exist_xyz")
     check_import(imp)
-    assert imp.failed is True
+    assert imp.failed is False
+    assert imp.skipped is True
     assert "ModuleNotFoundError" in (imp.reason or "")
 
 
@@ -198,12 +203,16 @@ def test_preflight_valid_stdlib_test_passes() -> None:
     assert res.failures == []
 
 
-def test_preflight_hallucinated_module_fails() -> None:
+def test_preflight_absent_module_is_skipped_not_failed() -> None:
+    # #707: an unresolvable module is skipped (unverifiable in the gen env),
+    # so it does not sink the whole check into a replan loop. Contrast with a
+    # missing ATTRIBUTE on an importable module, which still fails (below).
     src = "from totally_fake_module import nothing\n"
     res = preflight_check(src)
-    assert res.ok is False
-    assert len(res.failures) == 1
-    assert "totally_fake_module" in res.failures[0].module
+    assert res.ok is True
+    assert res.failures == []
+    assert len(res.skipped) == 1
+    assert "totally_fake_module" in res.skipped[0].module
 
 
 def test_preflight_hallucinated_attribute_fails() -> None:
@@ -222,13 +231,38 @@ def test_preflight_mixed_valid_and_invalid_isolates_failures() -> None:
         "import not_a_real_module_xyz\n"
     )
     res = preflight_check(src)
+    # ghost_func is a genuine hallucination (importable module, missing
+    # attribute) -> fail. not_a_real_module_xyz is an absent module -> skipped
+    # (#707), not a failure.
     assert res.ok is False
     fail_names = {f.describe() for f in res.failures}
     assert any("ghost_func" in n for n in fail_names)
-    assert any("not_a_real_module_xyz" in n for n in fail_names)
+    assert not any("not_a_real_module_xyz" in n for n in fail_names)
+    assert any("not_a_real_module_xyz" in s.describe() for s in res.skipped)
     # The valid ones aren't in failures
     assert not any("import json\n" in f.describe() for f in res.failures)
     assert not any("Path" in f.describe() for f in res.failures)
+
+
+def test_preflight_api_lane_test_with_absent_dep_passes() -> None:
+    # #707 regression: a correct api-lane test imports `requests` (or the SUT's
+    # own deps) that aren't installed in TFactory's service venv, and reads
+    # TFACTORY_TARGET_URL at module level. This must NOT trigger a replan —
+    # previously it false-rejected -> stuck -> generated_empty -> verify never
+    # ran, blocking clean VAL-2 even when the endpoint code was correct.
+    src = (
+        "import os\n"
+        "import requests_absent_in_gen_env\n"
+        "\n"
+        "BASE_URL = os.environ['TFACTORY_TARGET_URL']\n"
+        "\n"
+        "def test_healthz():\n"
+        "    resp = requests_absent_in_gen_env.get(f'{BASE_URL}/healthz', timeout=10)\n"
+        "    assert resp.status_code == 200\n"
+    )
+    res = preflight_check(src)
+    assert res.ok is True, res.summary()
+    assert res.failures == []
 
 
 def test_preflight_syntax_error_returns_early() -> None:
@@ -293,6 +327,8 @@ def test_summary_reports_ok_count() -> None:
 
 
 def test_summary_reports_failure_count() -> None:
-    src = "from totally_fake import thing\nimport another_fake_xyz\n"
+    # Genuine hallucinations (importable module, missing attribute) still fail;
+    # absent modules are skipped (#707), so use missing attributes here.
+    src = "from json import ghost_one_xyz\nfrom os import ghost_two_xyz\n"
     res = preflight_check(src)
     assert "2 failed" in res.summary()
