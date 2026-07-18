@@ -334,6 +334,73 @@ def test_run_pytest_lane_via_nix_missing_marker_is_failure(tmp_path, monkeypatch
     assert res is not None and res.returncode == 1 and res.ok is False
 
 
+def test_run_pytest_lane_via_nix_api_lane_boots_sut_and_sets_target_url(
+    tmp_path, monkeypatch
+):
+    """api lane (#612): a serve_command makes the Job boot the SUT in-pod at
+    127.0.0.1:port and export TFACTORY_TARGET_URL BEFORE pytest, so the endpoint
+    test reaches the running app instead of KeyError-ing on an unset URL."""
+    spec = tmp_path / "specs" / "041"
+    spec.mkdir(parents=True)
+    _write_contract(spec, _UNIT_ENV)
+    project = tmp_path / "proj"
+    project.mkdir()
+    test_file = project / "api_test.py"
+    test_file.write_text("def test_ok(): assert True\n")
+
+    captured = {}
+
+    class _FakeSandbox:
+        def run(self, commands, *, workdir=None, timeout=300):
+            captured["script"] = (Path(workdir) / "_tf_nix_job.sh").read_text()
+            stage = Path(workdir) / ".tf_pytest"
+            stage.mkdir(parents=True, exist_ok=True)
+            (stage / "junit.xml").write_text("<testsuites/>")
+            return JobRunResult(ok=True, exit_code=0, output="__PYTEST_EXIT=0\n")
+
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: _FakeSandbox())
+    run_pytest_lane_via_nix(
+        spec,
+        project,
+        test_file,
+        serve_command="python -m uvicorn app.main:app --host 127.0.0.1 --port 8200",
+        serve_port=8200,
+    )
+    script = captured["script"]
+    assert "export TFACTORY_TARGET_URL=http://127.0.0.1:8200" in script
+    assert "export APP_URL=http://127.0.0.1:8200" in script
+    # app booted (backgrounded) + a readiness poll, both BEFORE pytest runs.
+    assert "uvicorn app.main:app" in script and "&" in script
+    assert script.index("TFACTORY_TARGET_URL") < script.index("pytest")
+    assert script.index("uvicorn") < script.index("pytest")
+
+
+def test_run_pytest_lane_via_nix_unit_lane_never_boots_an_app(tmp_path, monkeypatch):
+    """No serve_command (unit lane) -> hermetic: no app boot, no target URL."""
+    spec = tmp_path / "specs" / "027"
+    spec.mkdir(parents=True)
+    _write_contract(spec, _UNIT_ENV)
+    project = tmp_path / "proj"
+    project.mkdir()
+    test_file = project / "src_test.py"
+    test_file.write_text("def test_ok(): assert True\n")
+
+    captured = {}
+
+    class _FakeSandbox:
+        def run(self, commands, *, workdir=None, timeout=300):
+            captured["script"] = (Path(workdir) / "_tf_nix_job.sh").read_text()
+            stage = Path(workdir) / ".tf_pytest"
+            stage.mkdir(parents=True, exist_ok=True)
+            (stage / "junit.xml").write_text("<testsuites/>")
+            return JobRunResult(ok=True, exit_code=0, output="__PYTEST_EXIT=0\n")
+
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: _FakeSandbox())
+    run_pytest_lane_via_nix(spec, project, test_file)
+    assert "TFACTORY_TARGET_URL" not in captured["script"]
+    assert "uvicorn" not in captured["script"]
+
+
 # ── run_gotest_lane_via_nix (Go test-execution lane, TFactory#443) ──────────
 
 _GO_CONTRACT_ENV = {
@@ -584,7 +651,9 @@ def _mounted_pvcs(monkeypatch) -> set[str]:
 
     sb = nix_runner_from_env()
     assert sb is not None
-    m = build_job_manifest("t", sb.image, ["true"], repo_pvc=sb.repo_pvc, **sb.manifest_kw)
+    m = build_job_manifest(
+        "t", sb.image, ["true"], repo_pvc=sb.repo_pvc, **sb.manifest_kw
+    )
     vols = m["spec"]["template"]["spec"].get("volumes", [])
     return {
         v["persistentVolumeClaim"]["claimName"]

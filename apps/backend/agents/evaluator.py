@@ -183,6 +183,12 @@ _RunResultLike = RunResultLike
 
 _PYTEST_IMAGE = "tfactory-runner-pytest:latest"
 
+# Port the api lane self-serves the SUT on INSIDE the Nix Job pod (#612 reopened):
+# a spec-ingest app has no external target, so the endpoint test can only reach it
+# by booting it in the same pod at 127.0.0.1. The pod is network-isolated, so a
+# fixed port is safe (distinct from the browser lane's 8099 for clarity).
+_API_SELF_SERVE_PORT = 8200
+
 
 def _parse_marker_exit(stdout: str | None, prefix: str, default: int) -> int:
     """Recover the real exit code from an ``echo <prefix>$?`` marker line.
@@ -262,6 +268,9 @@ def _maybe_nix_verify(
     project_dir: Path,
     test_file: Path,
     extra_env: dict[str, str],
+    *,
+    serve_command: str | None = None,
+    serve_port: int | None = None,
 ) -> DockerRunResult | None:
     """Run the pytest lane via the Nix k8s Job when selected, else None.
 
@@ -282,6 +291,8 @@ def _maybe_nix_verify(
             test_file,
             extra_env=extra_env,
             timeout=900,
+            serve_command=serve_command,
+            serve_port=serve_port,
         )
     except Exception as exc:  # noqa: BLE001 - never fail the lane on a config gap
         _eval_log.warning(
@@ -490,7 +501,30 @@ def _resolve_runner_fn(
             # drift). Returns None / falls through to the legacy host/docker runner
             # on any config gap — never hard-fails the lane. Creds are env-only here
             # and get wiped by whichever fallback path runs below.
-            nix_res = _maybe_nix_verify(spec_dir, project_dir_arg, test_file, extra_env)
+            # api lane, no external target (spec-ingest self-serve, #612): the
+            # host self-serve path (_maybe_self_serve_api_bundle) can't reach the
+            # Nix Job pod, so it's skipped in nix mode and target_url is None here.
+            # Boot the SUT INSIDE the Job instead — detect its serve command so
+            # run_pytest_lane_via_nix starts it at 127.0.0.1:_API_SELF_SERVE_PORT
+            # and injects TFACTORY_TARGET_URL before pytest runs.
+            serve_command = None
+            if network == "host" and not target_url:
+                try:
+                    serve_command = detect_serve_command(
+                        Path(project_dir_arg),
+                        environment_from_contract(spec_dir),
+                        port=_API_SELF_SERVE_PORT,
+                    )
+                except Exception:  # noqa: BLE001 - detection is best-effort
+                    serve_command = None
+            nix_res = _maybe_nix_verify(
+                spec_dir,
+                project_dir_arg,
+                test_file,
+                extra_env,
+                serve_command=serve_command,
+                serve_port=_API_SELF_SERVE_PORT,
+            )
             if nix_res is not None:
                 sandbox_creds.wipe()
                 test_creds.wipe()
