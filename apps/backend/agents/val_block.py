@@ -52,11 +52,16 @@ def _level_status(verdicts: list[str]) -> str:
     """passed only if a lane ran and every verdict is a pass; else failed/not_run.
 
     Conservative: an unknown/non-pass verdict counts as a failure (not silently
-    "passed") — honesty over optimism.
+    "passed") — honesty over optimism. A ``not_run`` verdict (an AC whose lane
+    never executed — e.g. the api app-under-test never booted, #703 follow-up)
+    is excluded: it neither passes nor fails the level. A level whose only
+    verdicts are ``not_run`` is itself ``not_run``, so the gate downgrades it
+    honestly rather than recording a false AC failure.
     """
-    if not verdicts:
+    ran = [v for v in verdicts if v != "not_run"]
+    if not ran:
         return "not_run"
-    return "passed" if all(v in _PASS_VERDICTS for v in verdicts) else "failed"
+    return "passed" if all(v in _PASS_VERDICTS for v in ran) else "failed"
 
 
 def build_verification_block(
@@ -110,14 +115,25 @@ def build_verification_block(
         entry: dict[str, Any] = {"level": level, "status": status}
         lane_name = "unit" if level == "VAL-1" else "api/integration/browser"
         if status == "not_run":
-            entry["reason"] = f"no {lane_name} lane ran in this verify"
+            # Distinguish "no lane ran at all" from "the lane's tests couldn't
+            # execute against a running app" (all verdicts not_run — infra).
+            if lane_verdicts:
+                entry["reason"] = (
+                    f"{lane_name} lane did not execute against a running "
+                    "app-under-test (infra not_run, not an acceptance failure)"
+                )
+            else:
+                entry["reason"] = f"no {lane_name} lane ran in this verify"
         elif status == "failed":
             # A ran-but-failed level MUST carry a reason (the gate flags a gap
             # with no explanation as its own violation, missing_reason:<level>).
-            n_fail = sum(1 for v in lane_verdicts if v not in _PASS_VERDICTS)
+            # not_run ACs are infra, not failures — exclude them from the count.
+            n_fail = sum(
+                1 for v in lane_verdicts if v not in _PASS_VERDICTS and v != "not_run"
+            )
+            n_ran = sum(1 for v in lane_verdicts if v != "not_run")
             entry["reason"] = (
-                f"{lane_name} lane: {n_fail}/{len(lane_verdicts)} "
-                "test verdict(s) did not pass"
+                f"{lane_name} lane: {n_fail}/{n_ran} test verdict(s) did not pass"
             )
         levels.append(entry)
 

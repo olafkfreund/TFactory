@@ -268,6 +268,39 @@ def apply_consistent_fail_reason(
     return True
 
 
+def apply_app_not_healthy_override(
+    verdict: dict[str, Any], failure_info: dict[str, Any] | None
+) -> bool:
+    """Reclassify a reject/flag whose cause is an app-boot failure to ``not_run``.
+
+    A ``failure_kind == "app_not_healthy"`` means the api lane's self-served
+    app-under-test never came up in the verify Job, so the endpoint test never
+    actually executed against a running app. That's infra, not a wrong subject:
+    record it as ``not_run`` so the never-overclaim gate downgrades the level
+    honestly (VAL-2 stays not_run) instead of logging a false AC rejection.
+
+    Never touches a genuine ``accept`` (an app that's down can't pass a real
+    endpoint test, but stay defensive). Returns True if the label was changed.
+    """
+    if not isinstance(failure_info, dict):
+        return False
+    if failure_info.get("failure_kind") != "app_not_healthy":
+        return False
+    if _norm(verdict.get("verdict")) == "accept":
+        return False
+    verdict["verdict"] = "not_run"
+    reasons = verdict.get("reasons")
+    if not isinstance(reasons, list):
+        reasons = []
+        verdict["reasons"] = reasons
+    reasons.append(
+        "app-under-test never became healthy in the verify sandbox — the "
+        "endpoint lane did not execute against a running app (infra not_run, "
+        "not an acceptance failure)"
+    )
+    return True
+
+
 def aggregate_confidence(verdicts: list[dict]) -> dict:
     """Run-level rollup over per-verdict confidences.
 
@@ -346,6 +379,10 @@ def enrich_verdicts(
             failure_kind_by_test_id.get(test_id) if test_id is not None else None
         )
         apply_consistent_fail_reason(v, failure_info)
+        # Infra override (app never booted) wins over the categorical verdict:
+        # reject/flag -> not_run so the gate treats it as lane-not-run, not a
+        # false AC failure. Applied after the reason fix so its note survives.
+        apply_app_not_healthy_override(v, failure_info)
         summary["confidence"] = compute_confidence(v)
     doc["confidence_summary"] = aggregate_confidence(verdicts)
     return doc
