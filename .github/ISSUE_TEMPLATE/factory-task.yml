@@ -1,0 +1,32 @@
+name: "Factory: quick task (auto-build)"
+description: "A small, well-scoped change the factory builds directly - no planning stage. A build starts within about 30 seconds of filing."
+title: "[factory] "
+labels: ["factory:low"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The factory picks this up automatically: it builds the change on a branch, opens a pull request, and hands the result to TFactory for independent verification. Keep the scope small and self-contained. For larger work that needs real planning, use "Factory: planned feature" instead.
+  - type: textarea
+    id: description
+    attributes:
+      label: What to build
+      description: Describe the change. Name the files or modules involved if you know them.
+      placeholder: "Add a helpers/slugify.py module with a slugify(text) function that converts arbitrary text to a URL-safe slug, plus tests in tests/test_slugify.py."
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance Criteria
+      description: "One bullet per testable outcome. These become the contract the build and verification are judged against."
+      placeholder: |
+        - AC1: slugify("Hello World!") returns "hello-world"
+        - AC2: non-alphanumeric characters are stripped, whitespace becomes single hyphens
+        - AC3: unit tests cover the above and pytest is green
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: |
+        Optional labels to add after filing: `factory:medium` (replace factory:low, for slightly larger scope), `factory:parallel` (independent multi-module tasks run as a concurrent wave), `factory:workers=N` (override worker count). A failed run comments the reason here and labels the issue `factory:failed`; failed issues are never retried - file a fresh issue instead.
