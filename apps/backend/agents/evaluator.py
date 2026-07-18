@@ -75,7 +75,12 @@ from agents.nix_env import (
     is_nix_environment,
     run_pytest_lane_via_nix,
 )
-from agents.workspace_status import now_iso, read_status, write_status_patch
+from agents.workspace_status import (
+    anchor_stage_task,
+    now_iso,
+    read_status,
+    write_status_patch,
+)
 
 _eval_log = _logging.getLogger(__name__)
 
@@ -2211,6 +2216,10 @@ def schedule_evaluator(
     if os.environ.get("TFACTORY_AUTO_EVALUATE", "1") == "0":
         return None
     task = asyncio.create_task(run_evaluator(spec_dir, project_dir, mode=mode))
-    _BG_EVALUATOR_TASKS.add(task)
-    task.add_done_callback(_BG_EVALUATOR_TASKS.discard)
-    return task
+    return anchor_stage_task(
+        task,
+        _BG_EVALUATOR_TASKS,
+        spec_dir=spec_dir,
+        stage="evaluator",
+        failed_status="evaluator_failed",
+    )
