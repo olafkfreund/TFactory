@@ -263,7 +263,7 @@ def _nix_verify_mode(spec_dir: Path) -> bool:
         return False
 
 
-def _maybe_nix_verify(
+def _maybe_nix_verify(  # noqa: PLR0913 - explicit api-lane self-serve knobs
     spec_dir: Path,
     project_dir: Path,
     test_file: Path,

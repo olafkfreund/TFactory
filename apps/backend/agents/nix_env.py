@@ -199,7 +199,7 @@ _DEPLOY_NIX_TOOLS: tuple[str, ...] = ("tfsec", "trivy", "opentofu")
 _NIX_JOB_LOCK = threading.Lock()
 
 
-def run_pytest_lane_via_nix(
+def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve knobs + one linear staging flow
     spec_dir: Path,
     project_dir: Path,
     test_file: Path,
