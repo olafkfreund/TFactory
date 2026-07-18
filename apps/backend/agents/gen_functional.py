@@ -524,6 +524,28 @@ def _collect_pending_subtasks(plan) -> list:
     ]
 
 
+def _committed_test_subtasks(spec_dir: Path, plan) -> list:
+    """Subtasks Gen-Functional already committed a test file for in a prior run.
+
+    A subtask counts as committed when it's COMPLETED *and* its first
+    ``files_to_create`` path actually exists on disk. Used to decide whether a
+    re-run that finds no PENDING subtasks (all remaining ones went STUCK) should
+    still verify what exists rather than short-circuit to ``generated_empty``
+    (#707): a couple of stuck subtasks must not zero out the whole spec's verify.
+    """
+    from test_plan import SubtaskStatus
+
+    committed = []
+    for phase in plan.phases:
+        for st in phase.subtasks:
+            if st.status != SubtaskStatus.COMPLETED:
+                continue
+            files = _files_to_create(st)
+            if files and (spec_dir / files[0]).exists():
+                committed.append(st)
+    return committed
+
+
 def _reject_subtask_for_replan(
     spec_dir: Path,
     project_dir: Path,
@@ -551,7 +573,18 @@ def _reject_subtask_for_replan(
         reason=reason,
         failed_target=getattr(subtask, "target", "") or "",
     )
+    # (A) #707: persist WHY on the subtask so it travels with the plan into
+    # test_plan.json (the planner marks it stuck later; the reason rides along).
+    subtask.replan_reason = reason
     plan.save(plan_file)
+    # (A) #707: accumulate replan reasons in status.json so the failure is
+    # visible there. The reasons were previously empty in status.json, which
+    # made stuck subtasks invisible. read → append → write (write_status_patch
+    # overwrites keys, so we carry the running list ourselves).
+    replan_reasons = list(_read_status(spec_dir).get("replan_reasons") or [])
+    replan_reasons.append(
+        {"subtask_id": subtask.id, "phase": phase, "reason": reason, "at": _now_iso()}
+    )
     _write_status_patch(
         spec_dir,
         status="replan_needed",
@@ -560,8 +593,10 @@ def _reject_subtask_for_replan(
         # Persist the concrete rejection reason — #707 noted these were empty in
         # status.json, making stuck/replan loops impossible to diagnose after
         # the fact. replan_request.json is overwritten each replan; this keeps
-        # the reason on the durable status record too.
+        # the reason on the durable status record too. replan_reasons carries the
+        # running accumulated list built just above.
         last_rejected_reason=reason,
+        replan_reasons=replan_reasons,
         tests_generated=tests_generated,
     )
     _advance_to_planner_replan(spec_dir, project_dir)
@@ -765,6 +800,27 @@ async def run_gen_functional(
         plan = ImplementationPlan.load(plan_file)
         pending = _collect_pending_subtasks(plan)
         if not pending:
+            # (B) #707: no pending subtasks left, but earlier runs may have
+            # committed real test files for subtasks that are now COMPLETED
+            # (the rest went STUCK via the replan budget). Verify what we CAN
+            # instead of emitting nothing — don't let a couple of stuck
+            # subtasks zero out a spec whose other tests are ready to run.
+            committed = _committed_test_subtasks(spec_dir, plan)
+            if committed:
+                _write_status_patch(
+                    spec_dir,
+                    status="generated",
+                    phase="gen_functional_partial_verify",
+                    tests_generated=len(committed),
+                    gen_functional_warnings=[
+                        f"partial plan: verifying {len(committed)} committed "
+                        "test(s); remaining subtasks are stuck (see "
+                        "replan_reasons)"
+                    ],
+                )
+                _advance_to_evaluator(spec_dir, project_dir)
+                _advance_to_review(spec_dir, project_dir)
+                return True
             _write_status_patch(
                 spec_dir,
                 status="generated_empty",

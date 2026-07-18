@@ -36,6 +36,7 @@ class Subtask:
     target: str | None = None  # "<repo-relative path>::<symbol>"
     rationale: str | None = None  # which acceptance criterion this covers
     replan_count: int = 0  # bumped per replan; >= 2 → status=stuck
+    replan_reason: str | None = None  # WHY the last replan fired (#707 visibility)
 
     # Polyglot planner fields (Task 5, #21). Each subtask now carries
     # explicit (language, framework, target_name, intent) so the same
@@ -88,6 +89,8 @@ class Subtask:
             result["rationale"] = self.rationale
         if self.replan_count:
             result["replan_count"] = self.replan_count
+        if self.replan_reason is not None:
+            result["replan_reason"] = self.replan_reason
         # Polyglot fields (Task 5, #21) — omit when None to keep
         # backward-compat with v0.1 consumers that don't know these keys.
         if self.language is not None:
@@ -142,6 +145,7 @@ class Subtask:
             target=data.get("target"),
             rationale=data.get("rationale"),
             replan_count=int(data.get("replan_count", 0)),
+            replan_reason=data.get("replan_reason"),
             # Polyglot fields (Task 5, #21) — accept defensively so that
             # legacy v0.1 plans (no these keys) round-trip unchanged.
             language=data.get("language"),
