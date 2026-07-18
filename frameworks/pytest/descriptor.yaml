@@ -111,14 +111,15 @@ context_block: |
       and response JSON/body shape against what the AC actually specifies.
     - Do not assume a fixed request/response schema beyond what the AC states —
       assert only what the criterion actually claims.
-    - Example:
+    - Example (read the base URL INSIDE the test, never at module import — a
+      module-level os.environ[...] read raises KeyError at collection time when
+      the var is unset):
         import os
         import requests
 
-        BASE_URL = os.environ["TFACTORY_TARGET_URL"]
-
         def test_health_endpoint_returns_200():
-            resp = requests.get(f"{BASE_URL}/health", timeout=10)
+            base_url = os.environ["TFACTORY_TARGET_URL"]
+            resp = requests.get(f"{base_url}/health", timeout=10)
             assert resp.status_code == 200
 
 # Evaluator hooks — dotted-path references for per-language Evaluator primitives.

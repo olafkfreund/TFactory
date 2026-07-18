@@ -557,6 +557,11 @@ def _reject_subtask_for_replan(
         status="replan_needed",
         phase=phase,
         last_rejected_subtask=subtask.id,
+        # Persist the concrete rejection reason — #707 noted these were empty in
+        # status.json, making stuck/replan loops impossible to diagnose after
+        # the fact. replan_request.json is overwritten each replan; this keeps
+        # the reason on the durable status record too.
+        last_rejected_reason=reason,
         tests_generated=tests_generated,
     )
     _advance_to_planner_replan(spec_dir, project_dir)
