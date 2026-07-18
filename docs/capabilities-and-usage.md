@@ -79,6 +79,24 @@ requirement to the test and the VAL it earned. See the
 [Portal Gallery]({{ '/gallery/' | relative_url }}) for the Report and Acceptance
 tabs on a real run.
 
+**VAL-3 disposable target (k8s-Job backend) [Implemented, default OFF].** VAL-3
+verifies *effectful* behaviour against a real, disposable host — never
+production. The k8s-Job backend runs each effectful VAL-3 command as an
+ephemeral Kubernetes Job (create → watch → logs → delete), and is env-gated:
+
+- `TFACTORY_VAL3_K8S_JOB=1` — enable the `k8s-job` backend (lazy-registered at
+  provisioning time; with the flag unset nothing changes and VAL-3 stays an
+  honest `not_run`).
+- `TFACTORY_VAL3_K8S_JOB_IMAGE` — the runner image the Job uses (e.g. the
+  tfactory-runner-nix image); required at provision time.
+
+What a VAL-3 run produces: the plan's effectful commands execute inside the
+Job, their logs become the run's evidence, the `val_block` records VAL-3 as
+achieved (or failed) on that evidence, and the Job is torn down on every path
+— including failure. No credentials are placed in the Job env or argv, and
+`automountServiceAccountToken` is false. Proven live (Factory#257) with a real
+cross-node Job on the factory cluster, full teardown included.
+
 ### Verify execution model [Partial — in-pod default; Job-native in progress]
 Two execution paths exist for the verify pipeline:
 - **In-pod (default, live):** the Evaluator runs each lane inside the
@@ -212,7 +230,39 @@ The Planner detects the framework via `manifest_signals`, Gen-Functional injects
 `context_block`, the Executor runs the image, and the Evaluator dispatches the
 language-specific hooks.
 
-## 9. Summary — what to trust today
+## 9. Operator notes: multi-tenant mode and the schema drift gate
+
+### Multi-tenant mode [Implemented, default OFF]
+
+Verification specs, runs, and verdicts can be tenant-scoped (#683):
+
+- `TFACTORY_MULTI_TENANT` — truthy (`1`/`true`/`yes`/`on`) enables tenant
+  resolution from the `X-Tenant-Id` header (stamped by the ingress /
+  oauth2-proxy). Off (the default) everything resolves to `"default"` and
+  behaviour is unchanged apart from the new field.
+- Ingest (`POST /api/specs/ingest`) accepts an optional `tenant` field; an
+  explicit payload tenant (AIFactory stamps it on handoff) always wins over the
+  header — it is deliberate data, not an ambient value.
+
+The tenant is written into the spec workspace (`context/source.json` +
+`status.json`) and `GET /api/tfactory/tasks` filters by it when the flag is on.
+Legacy rows without a tenant are lazily backfilled to `"default"`.
+
+### Task-contract schema drift gate
+
+The vendored `apps/backend/contracts/task-contract-v2.schema.json` must stay in
+sync with the canonical Factory hub schema (`apis/task-contract.schema.json` on
+the hub's main). A blocking CI step (`scripts/check_schema_drift.py`) enforces
+this: it hard-fails when the canonical schema is not a subset of the vendored
+copy (descriptions ignored) and soft-skips only on network failure.
+
+If the gate fails: do **not** hand-edit the vendored file to appease it — sync
+it from the hub. Copy the current canonical `apis/task-contract.schema.json`
+from the Factory hub over the vendored copy, commit, and the gate goes green.
+A drift failure means the hub contract moved and TFactory was validating
+against a stale copy.
+
+## 10. Summary — what to trust today
 
 - Solid and live: spec/handoff ingest, plan + generate + run + grade + triage, unit/api/
   browser lanes for Python/TypeScript (Java partial), the 6-signal verdict, testing live

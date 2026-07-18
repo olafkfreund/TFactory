@@ -174,6 +174,10 @@ _GOTEST_STAGE = ".tf_gotest"  # staged junit/coverage the Go Nix Job writes back
 _DEPLOY_STAGE = ".tf_deploy"  # generated deploy flake dir (co-mounted in the Job)
 _NIX_MOUNT = "/work"  # where KubeJobSandbox co-mounts the worktree in the Job
 
+# Emitted by the api-lane Job script when the self-served SUT never accepts a
+# connection — so a boot failure reads as infra, not a silent endpoint-test bug.
+_APP_NOT_HEALTHY_MARKER = "__TF_APP_NOT_HEALTHY__"
+
 # The deploy-lane tools we can run hermetically inside a per-task Nix Job (#597,
 # #603): ``tfsec`` + ``trivy`` are pure Go binaries (no insecure transitive deps),
 # ``opentofu`` is the free Terraform (``tofu``) — all evaluate cleanly in the flake
@@ -195,15 +199,26 @@ _DEPLOY_NIX_TOOLS: tuple[str, ...] = ("tfsec", "trivy", "opentofu")
 _NIX_JOB_LOCK = threading.Lock()
 
 
-def run_pytest_lane_via_nix(
+def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve knobs + one linear staging flow
     spec_dir: Path,
     project_dir: Path,
     test_file: Path,
     *,
     extra_env: dict[str, str] | None = None,
     timeout: int = 900,
+    serve_command: str | None = None,
+    serve_port: int | None = None,
 ) -> DockerRunResult | None:
     """Run ONE pytest file inside the per-task Nix dev shell as a k8s Job.
+
+    When ``serve_command`` is given (the api lane with no external target, #612),
+    the Job first boots the SUT in the SAME pod at ``127.0.0.1:serve_port``,
+    waits for it to accept a connection, and exports ``TFACTORY_TARGET_URL`` /
+    ``APP_URL`` before pytest — so an endpoint test reaches the running app
+    instead of raising ``KeyError`` on an unset URL. Mirrors the browser lane's
+    in-Job serve (``build_browser_job_command``). If the app never comes up, a
+    ``_APP_NOT_HEALTHY_MARKER`` line is emitted and logged so the failure reads
+    as infra, not an AC failure.
 
     The toolchain (python + pytest + pytest-cov) comes from the materialized flake
     (declared in the contract ``environment``), not the image — so the verify env
@@ -287,6 +302,26 @@ def run_pytest_lane_via_nix(
         srcpath = (
             f'export PYTHONPATH="{mount}/src:{mount}${{PYTHONPATH:+:$PYTHONPATH}}"\n'
         )
+        # api lane self-serve (#612): boot the SUT in-Job at 127.0.0.1:port and
+        # export TFACTORY_TARGET_URL before pytest, so the endpoint test reaches
+        # the running app. Readiness = "accepts a connection" (curl WITHOUT -f):
+        # a bare FastAPI has no `/` route, so requiring a 2xx would hang a healthy
+        # app on its 404. ponytail: fixed 30s poll; raise only if slow apps show up.
+        serve_prelude = ""
+        if serve_command:
+            url = f"http://127.0.0.1:{serve_port}"
+            serve_prelude = (
+                f"export TFACTORY_TARGET_URL={url}\n"
+                f"export APP_URL={url}\n"
+                f"cd {mount}\n"
+                f"{serve_command} >/tmp/tf_app.log 2>&1 &\n"
+                f"for i in $(seq 1 30); do "
+                f"curl -sS -o /dev/null {url}/ >/dev/null 2>&1 && break; sleep 1; "
+                f"done\n"
+                f"curl -sS -o /dev/null {url}/ >/dev/null 2>&1 || "
+                f'echo "{_APP_NOT_HEALTHY_MARKER} SUT did not accept a connection '
+                f'on {url}; see /tmp/tf_app.log"\n'
+            )
         pytest_cmd = (
             f"cd {mount} && "
             f"python -m pytest tests/{name} -p no:cacheprovider -q "
@@ -295,7 +330,12 @@ def run_pytest_lane_via_nix(
             "echo __PYTEST_EXIT=$?"
         )
         (pd / _JOB_SCRIPT).write_text(
-            "#!/usr/bin/env bash\nset +e\n" + exports + srcpath + pytest_cmd + "\n",
+            "#!/usr/bin/env bash\nset +e\n"
+            + exports
+            + srcpath
+            + serve_prelude
+            + pytest_cmd
+            + "\n",
             encoding="utf-8",
         )
         job_cmd = (
@@ -323,6 +363,15 @@ def run_pytest_lane_via_nix(
                     (res.stdout or "")[-300:],
                 )
                 res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)
+
+        if serve_command and _APP_NOT_HEALTHY_MARKER in (res.stdout or ""):
+            _log.warning(
+                "run_pytest_lane_via_nix: SUT never became healthy for %s — the "
+                "api test ran against a down app (infra, not an AC failure). "
+                "tail=%r",
+                Path(spec_dir).name,
+                (res.stdout or "")[-300:],
+            )
 
         # Copy the small junit/coverage OFF the PVC scratch so the returned paths
         # survive the scratch cleanup below (the caller reads them after we return).
