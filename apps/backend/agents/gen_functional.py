@@ -37,9 +37,12 @@ import logging as _logging
 import os
 import traceback
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from agents.workspace_status import now_iso, read_status, write_status_patch
+
+if TYPE_CHECKING:
+    from test_plan import ImplementationPlan, Subtask
 
 _gen_log = _logging.getLogger(__name__)
 
@@ -524,7 +527,9 @@ def _collect_pending_subtasks(plan) -> list:
     ]
 
 
-def _committed_test_subtasks(spec_dir: Path, plan) -> list:
+def _committed_test_subtasks(
+    spec_dir: Path, plan: "ImplementationPlan"
+) -> "list[Subtask]":
     """Subtasks Gen-Functional already committed a test file for in a prior run.
 
     A subtask counts as committed when it's COMPLETED *and* its first
@@ -533,7 +538,8 @@ def _committed_test_subtasks(spec_dir: Path, plan) -> list:
     still verify what exists rather than short-circuit to ``generated_empty``
     (#707): a couple of stuck subtasks must not zero out the whole spec's verify.
     """
-    from test_plan import SubtaskStatus
+    # lazy import: test_plan pulls SDK deps, kept out of module import
+    from test_plan import SubtaskStatus  # noqa: PLC0415
 
     committed = []
     for phase in plan.phases:
