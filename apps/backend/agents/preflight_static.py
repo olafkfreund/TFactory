@@ -16,7 +16,10 @@ The check is a two-step pass:
   2. Subprocess introspection — for each extracted import, spawn
      `python -c "..."` with the target project's directory on
      PYTHONPATH and try to import the module (and, for from-imports,
-     getattr the name). A non-zero exit is a hallucination.
+     getattr the name). An importable module with a missing attribute is
+     a hallucination (fail); a module that's simply ABSENT from this
+     interpreter is an environment gap, not a hallucination — it's skipped
+     (the generation venv is not the test-execution env). See #707.
 
 Failures don't raise — they collect into a PreflightResult that the
 caller (Gen-Functional in commit 5) uses to decide between (a) write
@@ -163,15 +166,28 @@ def extract_imports(source: str) -> tuple[list[PreflightImport], str | None]:
 # ─── Subprocess introspection ───────────────────────────────────────────
 
 
+# Introspection subprocess exit codes (kept in sync with the scripts below).
+_EXIT_OK = 0
+_EXIT_IMPORT_ERROR = 1  # module raised a non-ModuleNotFound error at import
+_EXIT_MISSING_ATTR = 2  # module imports but the from-name is absent (hallucination)
+_EXIT_MODULE_ABSENT = 3  # ModuleNotFoundError — environment gap, not a hallucination
+
 # NOTE on the script templates: we use plain str.format() substitution
 # of repr'd values, then plain string concatenation (NOT f-strings) for
 # error reporting. Nested f-strings + injected repr'd strings collide on
 # quote characters and produce SyntaxError at the subprocess level.
+# Exit codes: 0 = ok, 1 = import raised (real error), 2 = module imports but
+# the from-name is missing (genuine hallucination), 3 = ModuleNotFoundError
+# (the module is simply absent from THIS interpreter — an environment gap, not
+# a hallucination; see check_import for why we skip rather than fail).
 _INTROSPECT_SCRIPT_IMPORT = """\
 import importlib, sys
 _mod = {module!r}
 try:
     importlib.import_module(_mod)
+except ModuleNotFoundError as e:
+    sys.stderr.write('ModuleNotFoundError: ' + str(e))
+    sys.exit(3)
 except Exception as e:
     sys.stderr.write(type(e).__name__ + ': ' + str(e))
     sys.exit(1)
@@ -183,6 +199,9 @@ _mod = {module!r}
 _name = {name!r}
 try:
     m = importlib.import_module(_mod)
+except ModuleNotFoundError as e:
+    sys.stderr.write('import ' + _mod + ': ModuleNotFoundError: ' + str(e))
+    sys.exit(3)
 except Exception as e:
     sys.stderr.write('import ' + _mod + ': ' + type(e).__name__ + ': ' + str(e))
     sys.exit(1)
@@ -241,6 +260,23 @@ def check_import(
     except FileNotFoundError as exc:
         imp.failed = True
         imp.reason = f"python exe not found: {exc}"
+        return imp
+
+    if proc.returncode == _EXIT_MODULE_ABSENT:
+        # ModuleNotFoundError: the module isn't present in the GENERATION
+        # interpreter (sys.executable = TFactory's service venv), which is NOT
+        # the test-execution environment (nix/docker) where the test actually
+        # runs. Third-party libs the test imports (requests/httpx) and the SUT's
+        # own transitive deps (fastapi, ...) live there, not here. Treating an
+        # absent module as a hallucination false-rejects a correct test, which
+        # replan-loops the subtask to `stuck` -> generated_empty and verify
+        # never runs (#707, same family as #609/#613). Skip: the real test run
+        # resolves it. Genuine hallucinations (importable module, missing
+        # attribute) still fail via exit code 2 below.
+        imp.skipped = True
+        imp.reason = (
+            proc.stderr or proc.stdout or "module not present in generation env"
+        ).strip()[:300]
         return imp
 
     if proc.returncode != 0:
