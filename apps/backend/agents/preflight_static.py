@@ -177,9 +177,10 @@ _EXIT_MODULE_ABSENT = 3  # ModuleNotFoundError — environment gap, not a halluc
 # error reporting. Nested f-strings + injected repr'd strings collide on
 # quote characters and produce SyntaxError at the subprocess level.
 # Exit codes: 0 = ok, 1 = import raised (real error), 2 = module imports but
-# the from-name is missing (genuine hallucination), 3 = ModuleNotFoundError
-# (the module is simply absent from THIS interpreter — an environment gap, not
-# a hallucination; see check_import for why we skip rather than fail).
+# the from-name is neither an attribute NOR an importable submodule (genuine
+# hallucination), 3 = environment gap — the module (or a from-name's submodule
+# dep) is simply absent from THIS interpreter, not a hallucination; see
+# check_import for why we skip rather than fail.
 _INTROSPECT_SCRIPT_IMPORT = """\
 import importlib, sys
 _mod = {module!r}
@@ -205,9 +206,33 @@ except ModuleNotFoundError as e:
 except Exception as e:
     sys.stderr.write('import ' + _mod + ': ' + type(e).__name__ + ': ' + str(e))
     sys.exit(1)
-if not hasattr(m, _name):
-    sys.stderr.write(_mod + ' has no attribute ' + _name)
-    sys.exit(2)
+if hasattr(m, _name):
+    sys.exit(0)
+# _name is not an attribute of the parent package, but it may still be a
+# SUBMODULE that importing the package did not bind: importlib.import_module(pkg)
+# runs only pkg/__init__.py and does NOT import submodules, so `from pkg import
+# sub` leaves `sub` absent as an attribute here even though the real test run
+# resolves it fine. Probe the submodule before declaring a hallucination (#712;
+# same env-vs-hallucination distinction as the top-level ModuleNotFoundError,
+# #707/#709).
+_target = _mod + '.' + _name
+try:
+    importlib.import_module(_target)
+    sys.exit(0)
+except ModuleNotFoundError as e:
+    if getattr(e, 'name', None) == _target:
+        # Neither an attribute nor an importable submodule: the name is
+        # genuinely absent -> hallucination. Preserve the guard's real value.
+        sys.stderr.write(_mod + ' has no attribute ' + _name)
+        sys.exit(2)
+    # The submodule exists but one of ITS deps is absent from the generation
+    # env. Unverifiable here; the test-execution env resolves it. Skip.
+    sys.stderr.write('submodule ' + _target + ' present; dep absent: ' + str(e))
+    sys.exit(3)
+except Exception as e:
+    # Submodule imports but errors in the generation env -> unverifiable here.
+    sys.stderr.write('submodule ' + _target + ': ' + type(e).__name__ + ': ' + str(e))
+    sys.exit(3)
 """
 
 
