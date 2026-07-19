@@ -91,21 +91,29 @@ def spec_dir(tmp_path: Path) -> Path:
     d.mkdir(parents=True)
     for sub in ("context", "tests", "findings", "logs", "memory"):
         (d / sub).mkdir()
-    (d / "status.json").write_text(json.dumps({
-        "task_id": "001-feat",
-        "project_id": "demo",
-        "spec_id": "001-feat",
-        "status": "evaluated",
-        "phase": "evaluator_complete",
-        "verdicts_count": 3,
-        "tests_evaluated": 3,
-    }))
+    (d / "status.json").write_text(
+        json.dumps(
+            {
+                "task_id": "001-feat",
+                "project_id": "demo",
+                "spec_id": "001-feat",
+                "status": "evaluated",
+                "phase": "evaluator_complete",
+                "verdicts_count": 3,
+                "tests_evaluated": 3,
+            }
+        )
+    )
     # Source metadata — no PR number by default; tests can override.
-    (d / "context" / "source.json").write_text(json.dumps({
-        "project_id": "demo",
-        "branch": "auto-claude/test-feat",
-        "base_ref": "main",
-    }))
+    (d / "context" / "source.json").write_text(
+        json.dumps(
+            {
+                "project_id": "demo",
+                "branch": "auto-claude/test-feat",
+                "base_ref": "main",
+            }
+        )
+    )
     return d
 
 
@@ -129,7 +137,8 @@ def _write_test_files(spec_dir: Path, count: int) -> None:
 
 @pytest.mark.asyncio
 async def test_happy_three_verdicts_mixed(
-    spec_dir: Path, project_dir: Path,
+    spec_dir: Path,
+    project_dir: Path,
 ) -> None:
     """1 accept + 1 flag + 1 reject → triaged, report emitted,
     git_writer dry-run argv recorded."""
@@ -148,9 +157,7 @@ async def test_happy_three_verdicts_mixed(
     assert status["dedup_collision_count"] == 0
 
     # Report files emitted
-    report_json = json.loads(
-        (spec_dir / "findings" / "triage_report.json").read_text()
-    )
+    report_json = json.loads((spec_dir / "findings" / "triage_report.json").read_text())
     assert report_json["summary"]["committed_count"] == 1
     assert report_json["summary"]["rejected_count"] == 1
     assert len(report_json["committed"]) == 1
@@ -178,7 +185,8 @@ async def test_happy_three_verdicts_mixed(
 
 @pytest.mark.asyncio
 async def test_pr_comment_dry_run_when_pr_number_present(
-    spec_dir: Path, project_dir: Path,
+    spec_dir: Path,
+    project_dir: Path,
 ) -> None:
     """source.json with pr_number → pr_comment runs in dry-run mode
     (default env)."""
@@ -186,12 +194,16 @@ async def test_pr_comment_dry_run_when_pr_number_present(
     (spec_dir / "findings" / "verdicts.json").write_text(json.dumps(verdicts))
     _write_test_files(spec_dir, 1)
 
-    (spec_dir / "context" / "source.json").write_text(json.dumps({
-        "project_id": "demo",
-        "branch": "auto-claude/test-feat",
-        "pr_number": 42,
-        "repo_slug": "olafkfreund/AIFactory",
-    }))
+    (spec_dir / "context" / "source.json").write_text(
+        json.dumps(
+            {
+                "project_id": "demo",
+                "branch": "auto-claude/test-feat",
+                "pr_number": 42,
+                "repo_slug": "olafkfreund/AIFactory",
+            }
+        )
+    )
 
     await run_triager(spec_dir, project_dir, mode="initial")
 
@@ -210,7 +222,8 @@ async def test_pr_comment_dry_run_when_pr_number_present(
 
 @pytest.mark.asyncio
 async def test_dedup_collision_recorded(
-    spec_dir: Path, project_dir: Path,
+    spec_dir: Path,
+    project_dir: Path,
 ) -> None:
     """Two byte-identical generated tests → one drops, collision
     reported in report + status."""
@@ -224,7 +237,7 @@ async def test_dedup_collision_recorded(
     await run_triager(spec_dir, project_dir)
 
     status = json.loads((spec_dir / "status.json").read_text())
-    assert status["committed_count"] == 1   # one dropped
+    assert status["committed_count"] == 1  # one dropped
     assert status["dedup_collision_count"] == 1
 
     report = json.loads((spec_dir / "findings" / "triage_report.json").read_text())
@@ -238,11 +251,10 @@ async def test_dedup_collision_recorded(
 
 @pytest.mark.asyncio
 async def test_empty_verdicts_is_triaged_empty(
-    spec_dir: Path, project_dir: Path,
+    spec_dir: Path,
+    project_dir: Path,
 ) -> None:
-    (spec_dir / "findings" / "verdicts.json").write_text(json.dumps(
-        _make_verdicts(0)
-    ))
+    (spec_dir / "findings" / "verdicts.json").write_text(json.dumps(_make_verdicts(0)))
 
     ok = await run_triager(spec_dir, project_dir)
     assert ok is True
@@ -258,7 +270,8 @@ async def test_empty_verdicts_is_triaged_empty(
 
 @pytest.mark.asyncio
 async def test_all_rejects_is_triaged_empty(
-    spec_dir: Path, project_dir: Path,
+    spec_dir: Path,
+    project_dir: Path,
 ) -> None:
     """All verdicts are reject → triaged_empty, but rejects recorded
     in the report."""
@@ -284,7 +297,8 @@ async def test_all_rejects_is_triaged_empty(
 
 @pytest.mark.asyncio
 async def test_missing_verdicts_is_triager_failed(
-    spec_dir: Path, project_dir: Path,
+    spec_dir: Path,
+    project_dir: Path,
 ) -> None:
     ok = await run_triager(spec_dir, project_dir)
     assert ok is False
@@ -295,7 +309,8 @@ async def test_missing_verdicts_is_triager_failed(
 
 @pytest.mark.asyncio
 async def test_malformed_verdicts_is_triager_failed(
-    spec_dir: Path, project_dir: Path,
+    spec_dir: Path,
+    project_dir: Path,
 ) -> None:
     (spec_dir / "findings" / "verdicts.json").write_text("not json {")
     ok = await run_triager(spec_dir, project_dir)
@@ -306,7 +321,9 @@ async def test_malformed_verdicts_is_triager_failed(
 
 @pytest.mark.asyncio
 async def test_hard_failure_caught(
-    spec_dir: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Force an exception inside the loop → status=triager_failed."""
     from agents import triager
@@ -321,9 +338,7 @@ async def test_hard_failure_caught(
         return real_write(sd, **fields)
 
     monkeypatch.setattr(triager, "_write_status_patch", _bomb)
-    (spec_dir / "findings" / "verdicts.json").write_text(json.dumps(
-        _make_verdicts(1)
-    ))
+    (spec_dir / "findings" / "verdicts.json").write_text(json.dumps(_make_verdicts(1)))
     _write_test_files(spec_dir, 1)
     ok = await run_triager(spec_dir, project_dir)
     assert ok is False
@@ -336,15 +351,18 @@ async def test_hard_failure_caught(
 
 @pytest.mark.asyncio
 async def test_git_writer_skipped_when_no_branch(
-    spec_dir: Path, project_dir: Path,
+    spec_dir: Path,
+    project_dir: Path,
 ) -> None:
     """Source.json without branch → git_writer skipped with reason."""
-    (spec_dir / "context" / "source.json").write_text(json.dumps({
-        "project_id": "demo",
-    }))
-    (spec_dir / "findings" / "verdicts.json").write_text(json.dumps(
-        _make_verdicts(1)
-    ))
+    (spec_dir / "context" / "source.json").write_text(
+        json.dumps(
+            {
+                "project_id": "demo",
+            }
+        )
+    )
+    (spec_dir / "findings" / "verdicts.json").write_text(json.dumps(_make_verdicts(1)))
     _write_test_files(spec_dir, 1)
 
     await run_triager(spec_dir, project_dir)
@@ -355,19 +373,60 @@ async def test_git_writer_skipped_when_no_branch(
 
 
 @pytest.mark.asyncio
+async def test_git_writer_resolves_aifactory_source_branch(
+    spec_dir: Path,
+    project_dir: Path,
+) -> None:
+    """#964: AIFactory's handoff writes the feature branch under
+    `source_branch` (not `branch`). git_writer must resolve it so the
+    accepted tests commit back to the PR branch."""
+    (spec_dir / "context" / "source.json").write_text(
+        json.dumps(
+            {
+                "project_id": "demo",
+                "source_branch": "aifactory/048-add-a-roman-to-int-helper",
+            }
+        )
+    )
+    (spec_dir / "findings" / "verdicts.json").write_text(json.dumps(_make_verdicts(1)))
+    _write_test_files(spec_dir, 1)
+
+    await run_triager(spec_dir, project_dir)
+    status = json.loads((spec_dir / "status.json").read_text())
+    gw = status["git_writer"]
+    assert gw["skipped"] is False
+    # the resolved branch is used in the dry-run checkout argv
+    assert any(
+        "aifactory/048-add-a-roman-to-int-helper" in a
+        for argv in gw["argv_log"]
+        for a in argv
+    )
+
+
+def test_correlation_issue_number_reads_aifactory_github_issue() -> None:
+    """#964: the spec_ingest handoff nests the origin issue under
+    `aifactory.github_issue`; _correlation_issue_number must read it
+    (in addition to the top-level issue_number / correlation_id)."""
+    from agents.triager import _correlation_issue_number
+
+    assert _correlation_issue_number({}, {"aifactory": {"github_issue": 382}}) == 382
+    # top-level still wins / still works
+    assert _correlation_issue_number({}, {"issue_number": 7}) == 7
+    # absent everywhere → None
+    assert _correlation_issue_number({}, {"aifactory": {}}) is None
+
+
+@pytest.mark.asyncio
 async def test_test_file_missing_skipped_gracefully(
-    spec_dir: Path, project_dir: Path,
+    spec_dir: Path,
+    project_dir: Path,
 ) -> None:
     """Verdicts reference a file that doesn't exist on disk →
     candidate gets empty source, git_writer skips it but the
     report still records the verdict."""
-    (spec_dir / "findings" / "verdicts.json").write_text(json.dumps(
-        _make_verdicts(2)
-    ))
+    (spec_dir / "findings" / "verdicts.json").write_text(json.dumps(_make_verdicts(2)))
     # Write ONLY test_0.py; test_1.py is missing
-    (spec_dir / "tests" / "test_0.py").write_text(
-        "def test_x(): assert True\n"
-    )
+    (spec_dir / "tests" / "test_0.py").write_text("def test_x(): assert True\n")
 
     ok = await run_triager(spec_dir, project_dir)
     assert ok is True
@@ -384,17 +443,23 @@ async def test_test_file_missing_skipped_gracefully(
 
 
 def test_schedule_disabled_returns_none(
-    spec_dir: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("TFACTORY_AUTO_TRIAGE", "0")
+
     async def _run():
         return schedule_triager(spec_dir, project_dir)
+
     assert asyncio.run(_run()) is None
 
 
 @pytest.mark.asyncio
 async def test_schedule_enabled_returns_task(
-    spec_dir: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("TFACTORY_AUTO_TRIAGE", "1")
     task = schedule_triager(spec_dir, project_dir)
@@ -406,9 +471,12 @@ async def test_schedule_enabled_returns_task(
 
 @pytest.mark.asyncio
 async def test_evaluator_success_path_schedules_triager(
-    spec_dir: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from agents import evaluator
+
     monkeypatch.setenv("TFACTORY_AUTO_TRIAGE", "1")
     captured: dict = {}
 
@@ -418,6 +486,7 @@ async def test_evaluator_success_path_schedules_triager(
         return None
 
     import agents.triager as tri_mod
+
     monkeypatch.setattr(tri_mod, "schedule_triager", _capture)
     evaluator._advance_to_triager(spec_dir, project_dir)
     assert captured["spec_dir"] == spec_dir
@@ -425,13 +494,16 @@ async def test_evaluator_success_path_schedules_triager(
 
 
 def test_advance_to_triager_swallows_import_errors(
-    spec_dir: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from agents import evaluator
 
     original_import = (
         __builtins__["__import__"]
-        if isinstance(__builtins__, dict) else __builtins__.__import__
+        if isinstance(__builtins__, dict)
+        else __builtins__.__import__
     )
 
     def _selective_raiser(name, *args, **kwargs):
@@ -888,7 +960,8 @@ def test_triage_report_json_includes_intent_field() -> None:
 
 @pytest.mark.asyncio
 async def test_catalog_save_called_once_after_all_decisions(
-    spec_dir: Path, project_dir: Path,
+    spec_dir: Path,
+    project_dir: Path,
 ) -> None:
     """Catalog is written exactly once after all decisions are processed.
 
@@ -902,9 +975,7 @@ async def test_catalog_save_called_once_after_all_decisions(
         test_file="tests/test_ac1_login.py",
     )
     catalog_doc = _make_catalog(entry).to_dict()
-    (spec_dir / "context" / "tests_catalog.json").write_text(
-        json.dumps(catalog_doc)
-    )
+    (spec_dir / "context" / "tests_catalog.json").write_text(json.dumps(catalog_doc))
 
     # Write 2 accepted verdicts — one matches AC#1, one doesn't
     verdicts = {
@@ -920,7 +991,11 @@ async def test_catalog_save_called_once_after_all_decisions(
                 "framework": "pytest",
                 "language": "python",
                 "reasons": ["AC#1: login expiry"],
-                "signals_summary": {"coverage_delta_pct": 2.0, "stability": "stable", "mutation": "killed"},
+                "signals_summary": {
+                    "coverage_delta_pct": 2.0,
+                    "stability": "stable",
+                    "mutation": "killed",
+                },
                 "semantic_relevance": "high",
             },
             {
@@ -931,7 +1006,11 @@ async def test_catalog_save_called_once_after_all_decisions(
                 "framework": "pytest",
                 "language": "python",
                 "reasons": ["AC#2: logout"],
-                "signals_summary": {"coverage_delta_pct": 1.0, "stability": "stable", "mutation": "killed"},
+                "signals_summary": {
+                    "coverage_delta_pct": 1.0,
+                    "stability": "stable",
+                    "mutation": "killed",
+                },
                 "semantic_relevance": "high",
             },
         ],
@@ -949,6 +1028,7 @@ async def test_catalog_save_called_once_after_all_decisions(
         return original_mutate(*args, **kwargs)
 
     import unittest.mock as mock
+
     with mock.patch.object(triager_mod, "_mutate_catalog", side_effect=_spy_mutate):
         ok = await run_triager(spec_dir, project_dir)
 
@@ -957,16 +1037,15 @@ async def test_catalog_save_called_once_after_all_decisions(
     assert len(mutate_calls) == 1
 
     # Catalog file was written back
-    updated_json = json.loads(
-        (spec_dir / "context" / "tests_catalog.json").read_text()
-    )
+    updated_json = json.loads((spec_dir / "context" / "tests_catalog.json").read_text())
     # Either the original entry was updated or a new one was added
     assert len(updated_json["tests"]) >= 1
 
 
 @pytest.mark.asyncio
 async def test_catalog_roundtrip_update_and_create(
-    spec_dir: Path, project_dir: Path,
+    spec_dir: Path,
+    project_dir: Path,
 ) -> None:
     """Round-trip: catalog with 1 entry + 2 verdicts (1 UPDATE, 1 CREATE)
     → written catalog has 2 entries, UPDATE bumped version."""
@@ -977,9 +1056,7 @@ async def test_catalog_roundtrip_update_and_create(
         generation_version=1,
     )
     catalog_doc = _make_catalog(entry).to_dict()
-    (spec_dir / "context" / "tests_catalog.json").write_text(
-        json.dumps(catalog_doc)
-    )
+    (spec_dir / "context" / "tests_catalog.json").write_text(json.dumps(catalog_doc))
 
     verdicts = {
         "evaluator_version": "test",
@@ -994,7 +1071,11 @@ async def test_catalog_roundtrip_update_and_create(
                 "framework": "pytest",
                 "language": "python",
                 "reasons": ["covers AC#1"],
-                "signals_summary": {"coverage_delta_pct": 3.0, "stability": "stable", "mutation": "killed"},
+                "signals_summary": {
+                    "coverage_delta_pct": 3.0,
+                    "stability": "stable",
+                    "mutation": "killed",
+                },
                 "semantic_relevance": "high",
             },
             {
@@ -1005,7 +1086,11 @@ async def test_catalog_roundtrip_update_and_create(
                 "framework": "pytest",
                 "language": "python",
                 "reasons": ["covers AC#2"],
-                "signals_summary": {"coverage_delta_pct": 1.5, "stability": "stable", "mutation": "killed"},
+                "signals_summary": {
+                    "coverage_delta_pct": 1.5,
+                    "stability": "stable",
+                    "mutation": "killed",
+                },
                 "semantic_relevance": "high",
             },
         ],
@@ -1021,9 +1106,7 @@ async def test_catalog_roundtrip_update_and_create(
     ok = await run_triager(spec_dir, project_dir)
     assert ok is True
 
-    updated = json.loads(
-        (spec_dir / "context" / "tests_catalog.json").read_text()
-    )
+    updated = json.loads((spec_dir / "context" / "tests_catalog.json").read_text())
     assert len(updated["tests"]) == 2
 
     # The original entry (ac1-existing) was updated: generation_version bumped
@@ -1039,7 +1122,8 @@ async def test_catalog_roundtrip_update_and_create(
 
 @pytest.mark.asyncio
 async def test_no_catalog_file_no_mutation(
-    spec_dir: Path, project_dir: Path,
+    spec_dir: Path,
+    project_dir: Path,
 ) -> None:
     """When no catalog file exists (v0.1 path), run_triager completes
     normally and no catalog file is created."""
@@ -1056,43 +1140,52 @@ async def test_no_catalog_file_no_mutation(
 
 @pytest.mark.asyncio
 async def test_ambiguous_match_logs_warning(
-    spec_dir: Path, project_dir: Path, caplog: pytest.LogCaptureFixture,
+    spec_dir: Path,
+    project_dir: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Two catalog entries prefix-match → warning emitted (bonus test)."""
     import logging
 
     entry1 = _make_entry(
-        test_id="ac1-a", test_file="tests/test_ac1_a.py",
-        covers_acs=("AC#1: login flow A",), generated_at="2026-04-01T00:00:00+00:00",
+        test_id="ac1-a",
+        test_file="tests/test_ac1_a.py",
+        covers_acs=("AC#1: login flow A",),
+        generated_at="2026-04-01T00:00:00+00:00",
     )
     entry2 = _make_entry(
-        test_id="ac1-b", test_file="tests/test_ac1_b.py",
-        covers_acs=("AC#1: login flow B",), generated_at="2026-05-01T00:00:00+00:00",
+        test_id="ac1-b",
+        test_file="tests/test_ac1_b.py",
+        covers_acs=("AC#1: login flow B",),
+        generated_at="2026-05-01T00:00:00+00:00",
     )
     catalog_doc = _make_catalog(entry1, entry2).to_dict()
-    (spec_dir / "context" / "tests_catalog.json").write_text(
-        json.dumps(catalog_doc)
-    )
+    (spec_dir / "context" / "tests_catalog.json").write_text(json.dumps(catalog_doc))
 
     verdicts = {
         "evaluator_version": "test",
         "mode": "initial",
         "generated_at": "2026-05-29T00:00:00+00:00",
-        "verdicts": [{
-            "test_id": "ac1-new",
-            "test_file": "tests/test_ac1_new.py",
-            "verdict": "accept",
-            "rationale": "AC#1: login new",  # prefix matches both entries
-            "framework": "pytest", "language": "python",
-            "reasons": ["AC#1 match"],
-            "signals_summary": {"coverage_delta_pct": 1.0, "stability": "stable", "mutation": "killed"},
-            "semantic_relevance": "high",
-        }],
+        "verdicts": [
+            {
+                "test_id": "ac1-new",
+                "test_file": "tests/test_ac1_new.py",
+                "verdict": "accept",
+                "rationale": "AC#1: login new",  # prefix matches both entries
+                "framework": "pytest",
+                "language": "python",
+                "reasons": ["AC#1 match"],
+                "signals_summary": {
+                    "coverage_delta_pct": 1.0,
+                    "stability": "stable",
+                    "mutation": "killed",
+                },
+                "semantic_relevance": "high",
+            }
+        ],
     }
     (spec_dir / "findings" / "verdicts.json").write_text(json.dumps(verdicts))
-    (spec_dir / "tests" / "test_ac1_new.py").write_text(
-        "def test_ac1(): assert True\n"
-    )
+    (spec_dir / "tests" / "test_ac1_new.py").write_text("def test_ac1(): assert True\n")
 
     with caplog.at_level(logging.WARNING, logger="agents.triager"):
         ok = await run_triager(spec_dir, project_dir)
