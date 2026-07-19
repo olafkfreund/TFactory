@@ -370,10 +370,18 @@ def write_tests_to_branch(
     # the commit is local to the ephemeral verify Job and vanishes with it; the
     # accepted tests never reach the PR. Gated by the Triager's opt-in flag.
     if push:
+        # Authenticate the push via gh's credential helper (scoped to this one
+        # command, no global git-config mutation). gh reads the token from its
+        # own env (GH_TOKEN/GITHUB_TOKEN) — the same credential the pr_comment
+        # path already uses — so no secret ever touches argv (cf. env-not-argv).
+        # Without this, `git push` over the plain https origin has no credential
+        # helper and dies non-interactively: "could not read Username".
         push_argv = (
             "git",
             "-C",
             str(request.repo_dir),
+            "-c",
+            "credential.https://github.com.helper=!gh auth git-credential",
             "push",
             "origin",
             request.branch,
