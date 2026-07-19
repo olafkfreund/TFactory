@@ -160,6 +160,84 @@ def _default_runner_fn(
     )
 
 
+def _resolve_branch(
+    request: GitWriteRequest,
+    *,
+    push: bool,
+    dry_run: bool,
+    runner: Callable[..., _SubprocessResultLike],
+    argv_log: list[tuple[str, ...]],
+) -> GitWriteResult | None:
+    """Get the clone onto ``request.branch``. Returns an error result on failure,
+    else None (having appended argvs + run them). See write_tests_to_branch."""
+    if push:
+        # #723: the verify Job's clone sits at a detached FETCH_HEAD, so fetch the
+        # branch and `checkout -B` it (create-or-reset) — the commit then lands on
+        # a named branch we can push.
+        fetch_argv = (
+            "git",
+            "-C",
+            str(request.repo_dir),
+            "fetch",
+            "--no-tags",
+            "origin",
+            request.branch,
+        )
+        argv_log.append(fetch_argv)
+        if not dry_run:
+            res = runner(list(fetch_argv), cwd=request.repo_dir)
+            if res.returncode != 0:
+                return GitWriteResult(
+                    ok=False,
+                    dry_run=False,
+                    argv_log=tuple(argv_log),
+                    error=f"fetch origin {request.branch!r} failed: "
+                    f"{(res.stderr or '').strip()[:200]}",
+                )
+        checkout_argv: tuple[str, ...] = (
+            "git",
+            "-C",
+            str(request.repo_dir),
+            "checkout",
+            "-B",
+            request.branch,
+            "FETCH_HEAD",
+        )
+    else:
+        verify_argv = (
+            "git",
+            "-C",
+            str(request.repo_dir),
+            "rev-parse",
+            "--verify",
+            request.branch,
+        )
+        argv_log.append(verify_argv)
+        if not dry_run:
+            res = runner(list(verify_argv), cwd=request.repo_dir)
+            if res.returncode != 0:
+                return GitWriteResult(
+                    ok=False,
+                    dry_run=False,
+                    argv_log=tuple(argv_log),
+                    error=f"branch {request.branch!r} not found: "
+                    f"{(res.stderr or '').strip()[:200]}",
+                )
+        checkout_argv = ("git", "-C", str(request.repo_dir), "checkout", request.branch)
+    argv_log.append(checkout_argv)
+    if not dry_run:
+        res = runner(list(checkout_argv), cwd=request.repo_dir)
+        if res.returncode != 0:
+            return GitWriteResult(
+                ok=False,
+                dry_run=False,
+                argv_log=tuple(argv_log),
+                error=f"checkout {request.branch!r} failed: "
+                f"{(res.stderr or '').strip()[:200]}",
+            )
+    return None
+
+
 # ─── Public entrypoint ──────────────────────────────────────────────────
 
 
@@ -168,6 +246,7 @@ def write_tests_to_branch(
     *,
     dry_run: bool = True,
     runner_fn: Callable[..., _SubprocessResultLike] | None = None,
+    push: bool = False,
 ) -> GitWriteResult:
     """Write + commit ``request.files`` onto ``request.branch``.
 
@@ -178,6 +257,13 @@ def write_tests_to_branch(
             no files written. Tests + CI run with dry_run=True.
         runner_fn: Subprocess seam. Default uses real subprocess.run.
             Tests inject a recorder.
+        push: SCOPED override of the no-auto-push default (#723). When True,
+            the branch is FETCHED and ``checkout -B``'d (so an ephemeral verify
+            Job whose clone sits at a detached FETCH_HEAD still resolves the
+            feature branch) and the commit is PUSHED to ``origin/<branch>`` — so
+            the accepted tests actually land on the PR. Off by default; the
+            Triager opts in only when ``TFACTORY_TRIAGER_GIT_WRITE`` is set, so
+            the "user controls when to push" rule holds everywhere else.
 
     Returns:
         GitWriteResult capturing what was (or would have been) done.
@@ -203,50 +289,13 @@ def write_tests_to_branch(
             error=str(exc),
         )
 
-    # 2. Branch existence check.
-    verify_argv = (
-        "git",
-        "-C",
-        str(request.repo_dir),
-        "rev-parse",
-        "--verify",
-        request.branch,
+    # 2-3. Resolve + checkout the target branch (fetch + `checkout -B` on the
+    # push path; verify + checkout on the local-only path). See _resolve_branch.
+    branch_err = _resolve_branch(
+        request, push=push, dry_run=dry_run, runner=runner, argv_log=argv_log
     )
-    argv_log.append(verify_argv)
-    if not dry_run:
-        res = runner(list(verify_argv), cwd=request.repo_dir)
-        if res.returncode != 0:
-            return GitWriteResult(
-                ok=False,
-                dry_run=False,
-                argv_log=tuple(argv_log),
-                error=(
-                    f"branch {request.branch!r} not found: "
-                    f"{(res.stderr or '').strip()[:200]}"
-                ),
-            )
-
-    # 3. Checkout.
-    checkout_argv = (
-        "git",
-        "-C",
-        str(request.repo_dir),
-        "checkout",
-        request.branch,
-    )
-    argv_log.append(checkout_argv)
-    if not dry_run:
-        res = runner(list(checkout_argv), cwd=request.repo_dir)
-        if res.returncode != 0:
-            return GitWriteResult(
-                ok=False,
-                dry_run=False,
-                argv_log=tuple(argv_log),
-                error=(
-                    f"checkout {request.branch!r} failed: "
-                    f"{(res.stderr or '').strip()[:200]}"
-                ),
-            )
+    if branch_err is not None:
+        return branch_err
 
     # 4. Write files. (Dry-run: skip; record paths only.)
     committed_paths: list[str] = []
@@ -317,7 +366,30 @@ def write_tests_to_branch(
                 error=f"git commit failed: {(res.stderr or '').strip()[:200]}",
             )
 
-    # 7. Capture new HEAD sha.
+    # 7. Push to origin (#723, scoped override — only when asked). Without this
+    # the commit is local to the ephemeral verify Job and vanishes with it; the
+    # accepted tests never reach the PR. Gated by the Triager's opt-in flag.
+    if push:
+        push_argv = (
+            "git",
+            "-C",
+            str(request.repo_dir),
+            "push",
+            "origin",
+            request.branch,
+        )
+        argv_log.append(push_argv)
+        if not dry_run:
+            res = runner(list(push_argv), cwd=request.repo_dir)
+            if res.returncode != 0:
+                return GitWriteResult(
+                    ok=False,
+                    dry_run=False,
+                    argv_log=tuple(argv_log),
+                    error=f"git push failed: {(res.stderr or '').strip()[:200]}",
+                )
+
+    # 8. Capture new HEAD sha.
     sha = ""
     rev_parse_argv = (
         "git",

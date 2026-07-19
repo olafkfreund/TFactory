@@ -172,8 +172,12 @@ async def test_happy_three_verdicts_mixed(
     assert gw["skipped"] is False
     assert gw["dry_run"] is True
     assert gw["ok"] is True
-    # 5 dry-run argvs: verify, checkout, add, commit, rev-parse HEAD
-    assert len(gw["argv_log"]) == 5
+    # 6 dry-run argvs on the push path (#723): fetch, checkout -B, add, commit,
+    # push, rev-parse HEAD
+    assert len(gw["argv_log"]) == 6
+    _flat = [tuple(a) for a in gw["argv_log"]]
+    assert any("fetch" in a for a in _flat)
+    assert any("push" in a for a in _flat)
 
     # pr_comment skipped (no pr_number in source.json) →
     # body written to disk
