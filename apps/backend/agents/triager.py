@@ -505,6 +505,12 @@ def _correlation_issue_number(status: dict, source: dict) -> int | None:
         if raw is None:
             raw = src.get("correlation_id")
         if raw is None:
+            # AIFactory's spec_ingest handoff nests the origin issue under
+            # `aifactory.github_issue` (task_control); read it too (#964).
+            ai = src.get("aifactory")
+            if isinstance(ai, dict):
+                raw = ai.get("github_issue")
+        if raw is None:
             continue
         try:
             return int(raw)
@@ -1111,7 +1117,10 @@ def _run_git_side_effect(project_dir, committed, flagged, source_meta) -> dict:
 
     from tools.git_writer import GitWriteRequest, write_tests_to_branch
 
-    branch = source_meta.get("branch") or ""
+    # AIFactory's handoff writes the feature branch under `source_branch`
+    # (task_control.create_spec_ingest_workspace); accept either key so the
+    # accepted tests actually commit back to the PR branch (#964).
+    branch = source_meta.get("branch") or source_meta.get("source_branch") or ""
     files_to_commit = tuple(
         (c.test_file, c.source) for c in (*committed, *flagged) if c.source
     )
