@@ -165,7 +165,18 @@ def test_push_path_fetches_checkout_b_and_pushes(tmp_path: Path) -> None:
         "aifactory/055-feat",
         "FETCH_HEAD",
     )
-    assert argvs[4] == ("git", "-C", str(repo), "push", "origin", "aifactory/055-feat")
+    # push carries the scoped gh credential helper so it authenticates
+    # non-interactively (the token stays in gh's env, never in argv).
+    assert argvs[4] == (
+        "git",
+        "-C",
+        str(repo),
+        "-c",
+        "credential.https://github.com.helper=!gh auth git-credential",
+        "push",
+        "origin",
+        "aifactory/055-feat",
+    )
 
 
 def test_dry_run_records_committed_paths(tmp_path: Path) -> None:
