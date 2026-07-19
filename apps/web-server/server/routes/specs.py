@@ -88,6 +88,21 @@ class SpecIngestRequest(BaseModel):
     )
 
 
+class PrAttachRequest(BaseModel):
+    """Attach the PR the AIFactory build opened to an already-ingested spec.
+
+    The verifying handoff is sent BEFORE AIFactory opens the PR, so source.json
+    has no `pr_number` and the triager's PR-comment side-effect skips. AIFactory
+    calls this the moment the PR opens; the triager's later pr_comment step then
+    posts the verdict — or, if verify already finished, we post it now (#964).
+    """
+
+    pr_number: int = Field(..., gt=0, description="The opened PR number")
+    repo_slug: str | None = Field(
+        default=None, description="owner/name of the PR's repo (for `gh pr comment -R`)"
+    )
+
+
 async def _clone_and_register_project(
     git_url: str, *, branch: str | None, name: str
 ) -> tuple[dict, str]:
@@ -284,3 +299,71 @@ async def ingest_spec(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     return {"task_id": req.spec_id, "project_id": req.project_id, **result}
+
+
+@router.post(
+    "/{project_id}/{spec_id}/pr",
+    summary="Attach the opened PR to an ingested spec so the verdict posts back",
+)
+async def attach_pr(project_id: str, spec_id: str, req: PrAttachRequest) -> dict:
+    """Record `pr_number`/`repo_slug` on an ingested spec's source.json (#964).
+
+    The verifying handoff is sent before the PR exists, so this back-fills the
+    PR onto source.json; the triager's later pr_comment step reads it. If verify
+    already finished (status triaged), post the stored report immediately.
+    """
+    import json
+
+    from agents.tools_pkg.tools.task_control import _spec_dir
+
+    from .projects import load_projects
+
+    # Same name-or-id resolution the ingest route uses (AIFactory sends the name).
+    projects = load_projects()
+    resolved_id = project_id
+    if project_id not in projects:
+        for pid, data in projects.items():
+            if data.get("name") == project_id:
+                resolved_id = pid
+                break
+
+    spec_dir = _spec_dir(safe_component(resolved_id), safe_component(spec_id))
+    source_path = spec_dir / "context" / "source.json"
+    if not source_path.exists():
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail=f"no ingested spec {spec_id!r} for project {project_id!r}",
+        )
+
+    source = json.loads(source_path.read_text())
+    source["pr_number"] = req.pr_number
+    if req.repo_slug:
+        source["repo_slug"] = req.repo_slug
+    source_path.write_text(json.dumps(source, indent=2))
+
+    # If verify already reached a terminal triaged state, its pr_comment step has
+    # already run (and skipped for lack of a PR number, leaving the body on disk).
+    # Post it now rather than waiting for a re-run.
+    posted = None
+    try:
+        status_path = spec_dir / "status.json"
+        st = json.loads(status_path.read_text()) if status_path.exists() else {}
+        body_path = spec_dir / "findings" / "pr_comment_body.md"
+        if st.get("status") in {"triaged", "triaged_empty"} and body_path.exists():
+            from agents.triager import _pr_comment_dry_run
+            from tools.pr_comment import PRCommentRequest, post_pr_comment
+
+            result = post_pr_comment(
+                PRCommentRequest(
+                    repo_dir=spec_dir,
+                    pr_number=req.pr_number,
+                    body=body_path.read_text(),
+                    repo_slug=req.repo_slug or None,
+                ),
+                dry_run=_pr_comment_dry_run(),
+            )
+            posted = {"ok": result.ok, "dry_run": result.dry_run}
+    except Exception as exc:  # noqa: BLE001 — best-effort; source.json is the record
+        posted = {"ok": False, "error": str(exc)[:200]}
+
+    return {"attached": True, "pr_number": req.pr_number, "posted": posted}
