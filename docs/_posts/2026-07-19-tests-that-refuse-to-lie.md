@@ -82,4 +82,10 @@ for a working assertion, mutation testing so assertions have to earn their
 keep, and a VAL ladder that can only be climbed with evidence. When the code is
 wrong, the verdict says so and the build goes back.
 
-A live walkthrough of the run across all four portals is available on request.
+## Watch it run
+
+One continuous walkthrough of all four live portals with this run's own data:
+
+<video controls preload="metadata" style="width:100%;max-width:960px;border-radius:8px" src="{{ '/assets/blog/2026-07-19/factory-walkthrough.mp4' | relative_url }}">
+  Your browser does not support embedded video. <a href="{{ '/assets/blog/2026-07-19/factory-walkthrough.mp4' | relative_url }}">Download the walkthrough</a>.
+</video>
