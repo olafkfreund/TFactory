@@ -40,6 +40,7 @@ from agents.completion_envelope import (
     CompletionEvidence,
 )
 from agents.workspace_status import (
+    anchor_stage_task,
     now_iso,
     read_status,
     truthy,
@@ -1557,6 +1558,10 @@ def schedule_triager(
     if os.environ.get("TFACTORY_AUTO_TRIAGE", "1") == "0":
         return None
     task = asyncio.create_task(run_triager(spec_dir, project_dir, mode=mode))
-    _BG_TRIAGER_TASKS.add(task)
-    task.add_done_callback(_BG_TRIAGER_TASKS.discard)
-    return task
+    return anchor_stage_task(
+        task,
+        _BG_TRIAGER_TASKS,
+        spec_dir=spec_dir,
+        stage="triager",
+        failed_status="triager_failed",
+    )

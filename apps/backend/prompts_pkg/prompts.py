@@ -12,6 +12,7 @@ import os
 import re
 import subprocess
 from collections import Counter
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -1126,6 +1127,75 @@ def get_tfactory_planner_replan_prompt(spec_dir: Path, project_dir: Path) -> str
     return context + profile_block + body
 
 
+_IMPORT_ROOT_SKIP_DIRS = frozenset(
+    {"tests", "test", "build", "dist", "docs", "doc", "scripts", "examples", "venv"}
+)
+
+
+@lru_cache(maxsize=64)
+def _resolve_import_root(project_dir_str: str) -> str | None:
+    """Resolve the ONE authoritative top-level import package for the SUT (#714).
+
+    Gen-Functional builds a prompt per subtask, so without a shared answer the
+    LLM reasons the import path afresh each time and disagrees across subtasks of
+    the SAME spec (one wrote ``from app.helpers.wordcount import ...`` from the
+    hatch ``packages=["src/app"]`` config; two wrote ``from src.app...`` to match
+    existing tests). At least one style fails at collection. The on-disk layout is
+    the authoritative truth — a src-layout installs ``src/app`` as ``app``, so the
+    importable name never carries the ``src.`` prefix.
+
+    Deterministic (``lru_cache`` per project → computed once, threaded to every
+    subtask): return the package NAME under ``src/`` (src stripped), else a
+    top-level package, else ``None`` when nothing is detectable. The value is a
+    single resolved constant for the whole spec.
+    """
+    project = Path(project_dir_str)
+
+    def _packages_in(parent: Path) -> list[str]:
+        try:
+            entries = list(parent.iterdir())
+        except OSError:
+            return []
+        return sorted(
+            p.name
+            for p in entries
+            if p.is_dir()
+            and not p.name.startswith(".")
+            and p.name not in _IMPORT_ROOT_SKIP_DIRS
+            and (p / "__init__.py").is_file()
+        )
+
+    # src-layout: src/<pkg>/__init__.py → import as <pkg> (never `src.<pkg>`).
+    src_pkgs = _packages_in(project / "src")
+    if src_pkgs:
+        return src_pkgs[0]
+
+    # flat layout: top-level <pkg>/__init__.py.
+    flat_pkgs = _packages_in(project)
+    if flat_pkgs:
+        return flat_pkgs[0]
+
+    return None
+
+
+def _import_root_block(project_dir: Path) -> str:
+    """Prompt line pinning the authoritative import root, or '' when undetectable.
+
+    Threaded into every subtask's SUBTASK CONTEXT so all tests of one spec import
+    the module under test the SAME way (#714). Silent no-op when the layout can't
+    be resolved — the LLM then falls back to its own inference (prior behaviour).
+    """
+    root = _resolve_import_root(str(project_dir))
+    if not root:
+        return ""
+    return (
+        f"- import root:       `{root}` — import the module under test as "
+        f"`from {root}... import ...` (this project installs its package as "
+        f"`{root}`; do NOT prefix imports with `src.`). Use this EXACT root in "
+        "EVERY test of this spec so all subtasks agree.\n"
+    )
+
+
 def get_tfactory_gen_functional_prompt(
     spec_dir: Path,
     project_dir: Path,
@@ -1229,6 +1299,7 @@ def get_tfactory_gen_functional_prompt(
         f"- language:          {language}\n"
         f"- framework:         {framework}\n"
         f"- intent:            {intent}\n"
+        f"{_import_root_block(project_dir)}"
         f"{write_instruction}\n"
         f"- verification:      `{verification_cmd}`\n\n"
         f"Concrete paths for this run:\n\n"

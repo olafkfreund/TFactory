@@ -485,3 +485,84 @@ def test_multiple_files_trigger_multi_file_instruction_without_flag() -> None:
     assert "write ALL of these files" in p
     assert "/ws/tests/test_a.py" in p
     assert "/ws/tests/test_b.py" in p
+
+
+# ── #714: authoritative import root threaded to every subtask ────────────
+
+
+def _wordcount_subtask(sub_id: str) -> dict:
+    return {
+        "id": sub_id, "description": "count words", "lane": "functional",
+        "target": "app/helpers/wordcount.py::word_count", "rationale": "AC",
+        "files_to_create": [f"tests/test_{sub_id}.py"],
+        "verification": {"type": "command", "run": "pytest"},
+    }
+
+
+def _make_src_layout(root: Path, pkg: str = "app") -> Path:
+    (root / "src" / pkg / "helpers").mkdir(parents=True)
+    (root / "src" / pkg / "__init__.py").write_text("")
+    (root / "src" / pkg / "helpers" / "__init__.py").write_text("")
+    (root / "src" / pkg / "helpers" / "wordcount.py").write_text(
+        "def word_count(s):\n    return len(s.split())\n"
+    )
+    return root
+
+
+def test_import_root_src_layout_strips_src(tmp_path: Path) -> None:
+    """src/app → import root `app`, and the prompt forbids the `src.` prefix."""
+    proj = _make_src_layout(tmp_path / "proj")
+    p = get_tfactory_gen_functional_prompt(
+        Path("/ws"), proj, _wordcount_subtask("a"), framework_descriptor=_PytestDesc(),
+    )
+    assert "import root:" in p
+    assert "`app`" in p
+    assert "from app... import" in p
+    assert "do NOT prefix imports with `src.`" in p
+
+
+def test_import_root_consistent_across_subtasks(tmp_path: Path) -> None:
+    """Every subtask of one spec gets the SAME import-root line (#714)."""
+    proj = _make_src_layout(tmp_path / "proj")
+    prompts = [
+        get_tfactory_gen_functional_prompt(
+            Path("/ws"), proj, _wordcount_subtask(sid),
+            framework_descriptor=_PytestDesc(),
+        )
+        for sid in ("a", "b", "c")
+    ]
+    line = "- import root:       `app`"
+    assert all(line in p for p in prompts)
+
+
+def test_import_root_flat_layout(tmp_path: Path) -> None:
+    """Flat top-level package → that package is the import root."""
+    proj = tmp_path / "flat"
+    (proj / "mypkg").mkdir(parents=True)
+    (proj / "mypkg" / "__init__.py").write_text("")
+    p = get_tfactory_gen_functional_prompt(
+        Path("/ws"), proj, _wordcount_subtask("a"), framework_descriptor=_PytestDesc(),
+    )
+    assert "`mypkg`" in p
+
+
+def test_import_root_absent_when_undetectable(tmp_path: Path) -> None:
+    """No detectable package → no import-root line (LLM falls back to inference)."""
+    proj = tmp_path / "empty"
+    proj.mkdir()
+    p = get_tfactory_gen_functional_prompt(
+        Path("/ws"), proj, _wordcount_subtask("a"), framework_descriptor=_PytestDesc(),
+    )
+    assert "import root:" not in p
+
+
+def test_resolve_import_root_skips_tests_dir(tmp_path: Path) -> None:
+    """A top-level `tests` package must not be picked as the SUT import root."""
+    from prompts_pkg.prompts import _resolve_import_root
+
+    proj = tmp_path / "p"
+    (proj / "tests").mkdir(parents=True)
+    (proj / "tests" / "__init__.py").write_text("")
+    (proj / "realpkg").mkdir()
+    (proj / "realpkg" / "__init__.py").write_text("")
+    assert _resolve_import_root(str(proj)) == "realpkg"
