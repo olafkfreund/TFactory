@@ -356,6 +356,33 @@ def test_manifest_omits_nix_sandbox_env_when_unset(monkeypatch):
     assert "TFACTORY_NIX_RUNNER_IMAGE" not in names
 
 
+def test_triager_side_effect_flags_reach_the_dispatched_job(monkeypatch):
+    # #719: the triager runs INSIDE this verify Job; the side-effect flags live
+    # only on the control-plane Deployment, so they must be forwarded or the
+    # verdict is computed but never posted (git_writer / pr_comment dry-run).
+    monkeypatch.setenv("TFACTORY_TRIAGER_GIT_WRITE", "1")
+    monkeypatch.setenv("TFACTORY_TRIAGER_PR_COMMENT", "1")
+    monkeypatch.setenv("TFACTORY_PR_STATUS", "1")
+    ps = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
+    env = {e["name"]: e["value"] for e in ps["containers"][0]["env"]}
+    assert env.get("TFACTORY_TRIAGER_GIT_WRITE") == "1", env
+    assert env.get("TFACTORY_TRIAGER_PR_COMMENT") == "1", env
+    assert env.get("TFACTORY_PR_STATUS") == "1", env
+
+
+def test_triager_flags_omitted_when_unset(monkeypatch):
+    for v in (
+        "TFACTORY_TRIAGER_GIT_WRITE",
+        "TFACTORY_TRIAGER_PR_COMMENT",
+        "TFACTORY_PR_STATUS",
+    ):
+        monkeypatch.delenv(v, raising=False)
+    ps = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
+    names = {e["name"] for e in ps["containers"][0]["env"]}
+    assert "TFACTORY_TRIAGER_GIT_WRITE" not in names
+    assert "TFACTORY_TRIAGER_PR_COMMENT" not in names
+
+
 def test_manifest_uses_tfactory_sandbox_sa_with_token_automount():
     # The verify Job dispatches nested per-lane Jobs (Nix pytest/browser lanes via
     # KubeJobSandbox.create_namespaced_job), so it needs the SA token mounted to

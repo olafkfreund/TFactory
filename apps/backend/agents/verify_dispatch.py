@@ -704,6 +704,20 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
         _nix_val = os.environ.get(_nix_var)
         if _nix_val:
             env.append({"name": _nix_var, "value": _nix_val})
+    # Forward the triager side-effect flags so the verdict actually surfaces on
+    # the PR from INSIDE this Job (#719). The evaluator+triager run in this verify
+    # Job (TFACTORY_AUTO_TRIAGE), but the Job env is a curated allowlist — the
+    # TFACTORY_TRIAGER_* flags live only on the control-plane Deployment, so
+    # without this the triager reads them unset here and git_writer / pr_comment /
+    # pr_status all fall back to dry-run: the verdict is computed but never posted.
+    for _sfx_var in (
+        "TFACTORY_TRIAGER_GIT_WRITE",
+        "TFACTORY_TRIAGER_PR_COMMENT",
+        "TFACTORY_PR_STATUS",
+    ):
+        _sfx_val = os.environ.get(_sfx_var)
+        if _sfx_val:
+            env.append({"name": _sfx_var, "value": _sfx_val})
     # This Job mounts the workspaces PVC (data root) at ``cfg.mount`` (/work), NOT
     # at the control plane's /home/nonroot/.tfactory. The nested per-task Nix Job
     # derives its co-mount subPath via pvc_subpath(path, data_root); without the
