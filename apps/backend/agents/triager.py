@@ -1139,7 +1139,13 @@ def _run_git_side_effect(project_dir, committed, flagged, source_meta) -> dict:
             f"tfactory: add {len(committed)} accepted + {len(flagged)} flagged tests"
         ),
     )
-    git_write_result = write_tests_to_branch(request, dry_run=_git_writer_dry_run())
+    # push=True (#723): when git-write is live (TFACTORY_TRIAGER_GIT_WRITE=1) the
+    # accepted tests are pushed to the PR branch, so they surface on the PR — a
+    # scoped, opt-in override of the no-auto-push default. When git-write is off
+    # this stays dry-run (the push argv is only recorded, never executed).
+    git_write_result = write_tests_to_branch(
+        request, dry_run=_git_writer_dry_run(), push=True
+    )
     return {
         "skipped": False,
         "dry_run": git_write_result.dry_run,
