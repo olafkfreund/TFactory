@@ -80,6 +80,12 @@ jobs:
           curl -sSL https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.4.3/kustomize_v5.4.3_linux_amd64.tar.gz | tar xz
           ./kustomize edit set image "${IMAGE}=${IMAGE}:${{ steps.tags.outputs.sha }}"
           rm -f kustomize
+          # #719: keep TFACTORY_IMAGE (the image the verify Job runs) in lockstep
+          # with the deployment tag. kustomize only edits the container image; the
+          # verify-Job image is a plain env value, so bump it here too — otherwise
+          # verify Jobs run stale code (a two-week-old image is how the triager
+          # verdict silently stopped surfacing on the PR).
+          sed -i -E "s#(name: TFACTORY_IMAGE, value: \"${IMAGE}:)sha-[0-9a-f]+#\\1${{ steps.tags.outputs.sha }}#" manifests.yaml
           cd "$GITHUB_WORKSPACE/gitops"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
