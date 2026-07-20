@@ -13,11 +13,15 @@ route); no per-route dependency is needed. Errors map to HTTP codes:
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
 from ._specpath import safe_component
 from ._tenancy import resolve_tenant
+
+logger = logging.getLogger(__name__)
 
 # Pin ``agents.planner`` into ``sys.modules`` at startup (this route module is
 # imported when the app boots). A request-time *fresh* import
@@ -363,7 +367,12 @@ async def attach_pr(project_id: str, spec_id: str, req: PrAttachRequest) -> dict
                 dry_run=_pr_comment_dry_run(),
             )
             posted = {"ok": result.ok, "dry_run": result.dry_run}
-    except Exception as exc:  # noqa: BLE001 — best-effort; source.json is the record
-        posted = {"ok": False, "error": str(exc)[:200]}
+    except Exception:  # noqa: BLE001 — best-effort; source.json is the record
+        logger.exception(
+            "attach_pr: failed to post pending PR comment for %s/%s",
+            project_id,
+            spec_id,
+        )
+        posted = {"ok": False, "error": "failed to post PR comment"}
 
     return {"attached": True, "pr_number": req.pr_number, "posted": posted}
