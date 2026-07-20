@@ -49,7 +49,7 @@
             "command": "grep -n 'assert_safe_mcp_url' apps/web-server/server/routes/git.py",
             "expected": "check_mcp_health"
           },
-          "status": "pending",
+          "status": "completed",
           "notes": "Modify check_mcp_health to call validator; return status='unknown' + log reason on validation failure"
         },
         {
