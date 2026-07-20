@@ -1,0 +1,140 @@
+=== AUTO-BUILD PROGRESS ===
+
+Project: MCP health check: block link-local/metadata addresses, not just non-HTTP schemes
+Workspace: .aifactory/specs/002-mcp-health-check-block-link-lo/
+Started: 2026-07-20
+
+Workflow Type: simple
+Rationale: Single-service security fix with focused scope - add address-range validation to existing MCP health check endpoint. No architectural changes, no new services.
+
+Session 1 (Planner Agent):
+- Deep codebase investigation completed
+- Created implementation_plan.json with 3 focused subtasks
+- Created project_index.json (monorepo structure, FastAPI + pytest)
+- Created context.json (file references, patterns, existing implementations)
+- Created init.sh (environment setup script)
+- This progress file
+
+Phase Summary:
+- Phase 1 - Implementation (1 phase, 3 subtasks):
+  * Subtask 1-1: Create mcp_url_validator helper module
+  * Subtask 1-2: Integrate validator into check_mcp_health endpoint
+  * Subtask 1-3: Create comprehensive test suite
+
+Services Involved:
+- web-server: FastAPI HTTP endpoint modification + new validator module
+
+Investigation Findings:
+- Current check_mcp_health (git.py:769) only validates scheme (http/https)
+- Reference implementation: apps/backend/tools/runners/net_guard.py (SSRF guard)
+- Key difference: MCP must ALLOW loopback + private ranges (unlike net_guard default)
+- Must block: link-local, cloud-metadata, IPv6 unique-local, multicast, unspecified
+
+Blocked Ranges (for MCP validator):
+- 169.254.0.0/16 (cloud-metadata)
+- fe80::/10 (link-local IPv6)
+- fc00::/7, fd00::/8 (unique-local IPv6)
+- 224.0.0.0/4 (multicast IPv4)
+- ff00::/8 (multicast IPv6)
+- 0.0.0.0/8, ::/128 (unspecified)
+
+Allowed Ranges (for MCP validator):
+- 127.0.0.0/8 (loopback IPv4) - MUST be allowed
+- ::1/128 (loopback IPv6) - MUST be allowed
+- 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 (private RFC-1918) - MUST be allowed
+
+Test Coverage (AC#6):
+- http://169.254.169.254 (metadata endpoint - BLOCK)
+- http://[fe80::1]/ (IPv6 link-local - BLOCK)
+- file:// (non-HTTP scheme - BLOCK)
+- http://localhost (loopback hostname - ALLOW)
+- http://127.0.0.1 (loopback literal - ALLOW)
+- http://10.0.0.1 (private range - ALLOW)
+- http://public-host.com (public IP - ALLOW)
+
+Parallelism Analysis:
+- Max parallel phases: 1
+- Recommended workers: 1
+- Sequential only - Subtask 1-2 depends on 1-1, Subtask 1-3 depends on 1-1
+
+Risk Assessment:
+- Risk level: LOW
+- Complexity: SIMPLE
+- Security-critical: YES (SSRF protection)
+- Test requirements: Unit tests only
+- No database changes, no external dependencies
+
+Implementation Dependencies:
+1. Subtask 1-1 must complete first (creates the validator module)
+2. Subtask 1-2 integrates the validator (depends on 1-1)
+3. Subtask 1-3 tests both (depends on 1-1 for import, but can be written in parallel)
+
+=== STARTUP COMMAND ===
+
+To continue building this spec, run:
+
+  cd /work/.aifactory/worktrees/tasks/002-mcp-health-check-block-link-lo
+  source aifactory/.venv/bin/activate && python aifactory/run.py --spec 002 --parallel 1
+
+The planner has identified the exact scope and ordered the subtasks.
+The next agent (coder) will implement Subtask 1-1, then 1-2, then 1-3.
+
+=== ACCEPTANCE CRITERIA CHECKLIST ===
+
+AC#1: Helper resolves host and checks all addresses against blocked ranges
+  - Implementation: _resolve_addresses() helper + loop over all results
+  - Test: test_all_addresses_checked (monkeypatch multiple DNS results)
+
+AC#2: Loopback explicitly allowed before reserved check
+  - Implementation: Check loopback first, return True immediately
+  - Test: test_loopback_allowed_explicit, test_ipv6_loopback_allowed
+
+AC#3: Private ranges stay allowed
+  - Implementation: Exclude RFC-1918 from blocked ranges
+  - Test: test_private_10_allowed, test_private_172_allowed, test_private_192_allowed
+
+AC#4: Unresolvable hosts treated as unsafe
+  - Implementation: Catch OSError from getaddrinfo, raise UnsafeUrlError
+  - Test: test_dns_failure_unsafe (monkeypatch getaddrinfo to raise)
+
+AC#5: check_mcp_health returns status="unknown" + logs reason
+  - Implementation: Catch UnsafeUrlError in route handler, log reason, return unknown status
+  - Test: test_endpoint_returns_unknown_for_blocked (test the full route)
+
+AC#6: Tests cover all 7 cases
+  - Literal IP tests: 169.254.169.254, [fe80::1], 127.0.0.1, 10.0.0.1
+  - Hostname tests: localhost (resolves to 127.0.0.1 or ::1), public-host.com
+  - Scheme test: file://
+
+Session 2 (Implementation Agent - Subtask 1-1):
+- Created apps/web-server/server/validators/mcp_url_validator.py
+  * UnsafeMcpUrlError exception class for validation errors
+  * _resolve_addresses() helper for hostname→IP resolution via DNS
+  * _ALWAYS_BLOCKED tuple with link-local, multicast, unspecified ranges
+  * _LOOPBACK tuple explicitly allowing 127.0.0.0/8 and ::1/128
+  * _PRIVATE tuple allowing 10/8, 172.16/12, 192.168/16 (RFC-1918)
+  * _RESERVED tuple with all reserved ranges per RFC 5735, RFC 4291
+  * is_safe_mcp_url() public function (fail-closed wrapper)
+  * assert_safe_mcp_url() main validation function with comprehensive checks
+  * Follows patterns from apps/backend/tools/runners/net_guard.py
+  * IPv4-mapped IPv6 normalization (::ffff:127.0.0.1 → 127.0.0.1)
+  * Clear error messages on validation failure (logged, not returned to client)
+- Created apps/web-server/server/validators/__init__.py
+  * Exports public API: UnsafeMcpUrlError, assert_safe_mcp_url, is_safe_mcp_url
+  * Module is importable via: from server.validators import assert_safe_mcp_url
+- Updated implementation_plan.json
+  * Marked subtask-1-1 status as "completed"
+- Committed all changes: git commit -m "aifactory: subtask-1-1 - Create mcp_url_validator..."
+
+Subtask 1-1 Status: COMPLETED ✓
+- AC#1 (resolve host + check all addresses): Implemented via _resolve_addresses() + loop
+- AC#2 (loopback explicitly allowed): Implemented with early-continue on loopback check
+- AC#3 (private ranges allowed): Implemented via _PRIVATE tuple + early-continue
+- AC#4 (unresolvable hosts unsafe): Implemented via OSError propagation (fail-closed)
+- AC#5 (status=unknown + log reason): To be implemented in git.py integration (subtask 1-2)
+- AC#6 (test coverage): To be implemented in test suite (subtask 1-3)
+
+=== END SESSION 2 ===
+
+Next: Coder Agent will implement Subtask 1-2 (integrate validator into check_mcp_health).
+Module is ready for integration.
