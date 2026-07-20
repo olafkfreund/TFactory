@@ -124,3 +124,69 @@ Implementation Details (AC#5 Verification):
 ✓ Handles both UnsafeMcpUrlError (blocked address) and OSError (DNS failure)
 ✓ Logging uses logger.warning() for consistency with existing patterns
   [x] subtask-1-2: Update check_mcp_health endpoint to use the new helper and log reasons (921e0cb)
+  [x] subtask-1-2: Update check_mcp_health endpoint to use the new helper and log reasons (8cdbeb47)
+
+Subtask 1.3: COMPLETED ✓
+- File: tests/test_mcp_health_check.py
+- Created 31 comprehensive unit and integration tests
+- Test coverage breakdown:
+  Unit Tests (21 tests):
+  ✓ test_aws_metadata_blocked - 169.254.169.254 blocked
+  ✓ test_aws_metadata_literal_ipv4 - Literal IP metadata blocked
+  ✓ test_link_local_range_blocked - Full 169.254.0.0/16 blocked
+  ✓ test_ipv6_link_local_literal_blocked - fe80::/10 blocked
+  ✓ test_ipv6_unique_local_fd_blocked - fd00::/8 blocked
+  ✓ test_ipv6_unique_local_fc_blocked - fc00::/7 blocked
+  ✓ test_file_scheme_rejected - file:// not allowed
+  ✓ test_ftp_scheme_rejected - ftp:// not allowed
+  ✓ test_missing_host_rejected - URL without host rejected
+  ✓ test_localhost_allowed - http://localhost allowed
+  ✓ test_localhost_ipv6_allowed - http://[::1] allowed (loopback before reserved check)
+  ✓ test_loopback_ipv4_127_allowed - 127.0.0.1 allowed
+  ✓ test_loopback_range_allowed - Full 127.0.0.0/8 allowed
+  ✓ test_private_10_range_allowed - 10.0.0.0/8 allowed
+  ✓ test_private_172_16_range_allowed - 172.16.0.0/12 allowed
+  ✓ test_private_192_168_range_allowed - 192.168.0.0/16 allowed
+  ✓ test_public_host_allowed - Public IPs/hostnames allowed
+  ✓ test_unresolvable_host_treated_unsafe - DNS failures raise OSError
+  ✓ test_ipv4_mapped_ipv6_metadata_blocked - IPv4-mapped IPv6 normalized correctly
+  ✓ test_dns_returns_multiple_addresses - All resolved addresses checked
+  ✓ test_dns_all_addresses_good - Multiple good addresses pass
+
+  Integration Tests (10 tests):
+  ✓ test_check_mcp_health_blocks_metadata - Endpoint returns status: unknown
+  ✓ test_check_mcp_health_blocks_ipv6_link_local - Link-local IPv6 blocked
+  ✓ test_check_mcp_health_blocks_file_scheme - File scheme rejected
+  ✓ test_check_mcp_health_allows_localhost - Localhost passes SSRF check
+  ✓ test_check_mcp_health_allows_127_0_0_1 - 127.0.0.1 passes SSRF check
+  ✓ test_check_mcp_health_allows_private_10_range - 10.x allowed
+  ✓ test_check_mcp_health_allows_public_host - Public hosts allowed
+  ✓ test_check_mcp_health_handles_unresolvable_host - DNS failure returns unknown
+  ✓ test_check_mcp_health_returns_success_shape - Correct response envelope
+  ✓ test_check_mcp_health_command_server_unsupported - Command servers unsupported
+
+- AC#6 Coverage (all test cases):
+  ✓ 169.254.169.254 - AWS metadata endpoint blocked
+  ✓ IPv6 link-local [fe80::1] - Link-local IPv6 blocked
+  ✓ file:// scheme - Non-http/https scheme rejected
+  ✓ http://localhost - Loopback hostname allowed
+  ✓ http://127.0.0.1 - Loopback IPv4 allowed
+  ✓ 10.x private range - Private network allowed
+  ✓ Public host (example.com, 8.8.8.8) - Public addresses allowed
+
+- Test Pattern:
+  ✓ Follows test_mcp_status_route.py structure and style
+  ✓ Uses pytest fixtures for setup (tmp_path, monkeypatch, FastAPI TestClient)
+  ✓ Unit tests test assert_safe_mcp_url directly
+  ✓ Integration tests test check_mcp_health endpoint behavior
+  ✓ Mocks used for network calls (socket.getaddrinfo, urllib.request.urlopen)
+  ✓ Clear docstrings for each test explaining what's tested
+
+- Verification:
+  ✓ All 31 tests PASS (31/31)
+  ✓ No console.log/print statements
+  ✓ Proper error handling with exceptions and mocks
+  ✓ Clean commit with descriptive message
+
+- Commit: be20f95 (aifactory: subtask-1-3 - Add comprehensive tests for SSRF guard covering all AC#6 cases)
+- Status: COMPLETE - All requirements met
