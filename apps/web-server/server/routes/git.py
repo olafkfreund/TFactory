@@ -2,13 +2,16 @@
 Git, Ollama, MCP, and utility routes.
 """
 
+import ipaddress
 import json
 import logging
 import re
 import shlex
 import shutil
+import socket
 import subprocess
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -21,6 +24,85 @@ from .github import run_gh_command
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+# ============================================
+# SSRF Guard for MCP URLs
+# ============================================
+
+class UnsafeMcpUrlError(ValueError):
+    """Raised when an MCP URL resolves to a blocked address range."""
+
+
+# Cloud-metadata + link-local + IPv6 unique-local. These are NEVER a
+# legitimate MCP target and are blocked unconditionally — this is the core
+# SSRF defence (e.g. AWS/GCP/Azure metadata at 169.254.169.254).
+_ALWAYS_BLOCKED_MCP: tuple[ipaddress._BaseNetwork, ...] = (
+    ipaddress.ip_network("169.254.0.0/16"),  # link-local (metadata)
+    ipaddress.ip_network("fe80::/10"),  # link-local v6
+    ipaddress.ip_network("fd00::/8"),  # unique-local v6
+    ipaddress.ip_network("fc00::/7"),  # unique-local v6 (full ULA range)
+)
+
+
+def _resolve_mcp_addresses(host: str) -> list[ipaddress._BaseAddress]:
+    """Resolve ``host`` to all IP addresses it maps to.
+
+    A literal IP is returned as-is. A hostname is resolved via DNS; every
+    returned address is checked (defends against DNS results that mix a
+    public and an internal address).
+    """
+    try:
+        return [ipaddress.ip_address(host)]
+    except ValueError:
+        pass
+
+    infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    addrs: list[ipaddress._BaseAddress] = []
+    for info in infos:
+        sockaddr = info[4]
+        addrs.append(ipaddress.ip_address(sockaddr[0]))
+    return addrs
+
+
+def assert_safe_mcp_url(url: str) -> None:
+    """Validate ``url`` for SSRF safety, raising on any blocked address.
+
+    MCP servers may legitimately run on the LAN or loopback (e.g. localhost:8000),
+    so private/loopback ranges are NOT blocked. Only cloud-metadata and link-local
+    endpoints are blocked unconditionally — these are never legitimate MCP targets.
+
+    Args:
+        url: The MCP server URL (must include an http/https scheme and host).
+
+    Raises:
+        UnsafeMcpUrlError: if the URL is malformed or resolves to a
+            blocked address.
+        OSError: if DNS resolution of the host fails (callers may treat
+            this as unsafe / fail-closed).
+    """
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https"):
+        raise UnsafeMcpUrlError(
+            f"unsafe MCP URL {url!r}: scheme must be http or https"
+        )
+
+    host = parts.hostname
+    if not host:
+        raise UnsafeMcpUrlError(f"unsafe MCP URL {url!r}: missing host")
+
+    for addr in _resolve_mcp_addresses(host):
+        # Normalise IPv4-mapped IPv6 (::ffff:127.0.0.1) to its IPv4 form so a
+        # mapped metadata address can't slip past the v4 checks.
+        if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
+            addr = addr.ipv4_mapped
+
+        for net in _ALWAYS_BLOCKED_MCP:
+            if addr.version == net.version and addr in net:
+                raise UnsafeMcpUrlError(
+                    f"unsafe MCP URL {url!r}: host {host!r} resolves to "
+                    f"blocked address {addr} (in {net})."
+                )
 
 
 # Allow-list for request-supplied values (branches, tags, versions) that flow
