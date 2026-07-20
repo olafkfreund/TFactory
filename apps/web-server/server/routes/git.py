@@ -852,24 +852,36 @@ async def check_mcp_health(server: McpServerConfig):
     """Check health of an MCP server."""
     if server.type == "http" and server.url:
         import urllib.request
-        from urllib.parse import urlparse
 
-        # SSRF guard: an MCP server URL is configured by the operator themselves
-        # and, by design, very often points at a local/LAN endpoint (most MCP
-        # servers run on localhost). Blocking private/loopback hosts would break
-        # that intended use case, so we deliberately do not. We DO restrict the
-        # scheme to http/https so a configured value cannot be coerced into a
-        # file://, gopher://, ftp:// (etc.) request.
-        parsed = urlparse(server.url)
-        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        # SSRF guard: validate the URL for safety before attempting to fetch it.
+        # An MCP server URL is configured by the operator themselves and, by design,
+        # very often points at a local/LAN endpoint (most MCP servers run on localhost).
+        # Blocking private/loopback hosts would break that intended use case, so we
+        # deliberately do not. We DO block cloud-metadata, link-local, and other
+        # reserved ranges that are never a legitimate MCP target.
+        try:
+            assert_safe_mcp_url(server.url)
+        except UnsafeMcpUrlError as e:
+            logger.warning(f"MCP URL validation failed: {e}")
             return {
                 "success": True,
                 "data": {
                     "serverId": server.id,
-                    "status": "unhealthy",
-                    "message": "Unsupported or invalid server URL",
+                    "status": "unknown",
+                    "message": "Cannot check server at this URL",
                 },
             }
+        except OSError as e:
+            logger.warning(f"DNS resolution failed for MCP URL: {e}")
+            return {
+                "success": True,
+                "data": {
+                    "serverId": server.id,
+                    "status": "unknown",
+                    "message": "Cannot resolve server address",
+                },
+            }
+
         try:
             req = urllib.request.Request(server.url, method="HEAD")
             if server.headers:
