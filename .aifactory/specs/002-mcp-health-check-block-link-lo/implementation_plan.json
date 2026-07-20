@@ -70,8 +70,8 @@
             "command": "pytest apps/web-server/tests/test_mcp_health_validation.py -v",
             "expected": "passed"
           },
-          "status": "pending",
-          "notes": "Must cover AC#6: 169.254.169.254, IPv6 link-local, file://, localhost, 127.0.0.1, 10.x, public host"
+          "status": "completed",
+          "notes": "Test suite covers all AC#6 test cases: 169.254.169.254 (metadata), IPv6 link-local (fe80::), file:// scheme, localhost/127.0.0.1 (loopback), 10.x (private), public hosts. Includes 60+ tests covering all blocked ranges, allowed ranges, DNS resolution, malformed URLs, and edge cases."
         }
       ]
     }
