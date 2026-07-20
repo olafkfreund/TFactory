@@ -1,0 +1,126 @@
+=== AUTO-BUILD PROGRESS ===
+
+Project: MCP health check: resolve the host and block metadata/link-local addresses
+GitHub Issue: #730
+Workspace: managed by orchestrator
+Started: 2026-07-20
+
+Workflow Type: simple
+Rationale: This is a straightforward security fix with no cross-service dependencies. A single phase adds an SSRF guard helper and updates one endpoint.
+
+Session 1 (Planner):
+✓ Created implementation_plan.json
+✓ Created project_index.json
+✓ Created context.json
+✓ Created init.sh
+- Phases: 1
+- Total subtasks: 3
+- Created init.sh
+
+Phase Summary:
+- phase-1-implementation: 3 subtasks (sequential), depends on nothing
+  - subtask-1-1: Create assert_safe_mcp_url helper
+  - subtask-1-2: Update check_mcp_health endpoint
+  - subtask-1-3: Add comprehensive tests
+
+Services Involved:
+- web-server: Python FastAPI backend (add SSRF guard)
+- tests: Unit test coverage
+
+Reference Patterns:
+- apps/backend/tools/runners/net_guard.py (assert_safe_target_url)
+- apps/backend/byo_llm.py (host_is_local)
+
+Parallelism Analysis:
+- Max parallel phases: 1
+- Recommended workers: 1
+- All phases sequential due to dependencies within single phase
+
+Key Requirements:
+✓ AC#1: Resolve host, block link-local/reserved/multicast/unspecified
+✓ AC#2: Loopback allowed, checked BEFORE reserved (IPv6 ::1)
+✓ AC#3: Private ranges allowed (10/8, 172.16/12, 192.168/16)
+✓ AC#4: Unresolvable hosts fail closed
+✓ AC#5: Response shape unchanged (status: unknown), reason logged
+✓ AC#6: Test cases: 169.254.169.254, IPv6 link-local, file://, localhost, 127.0.0.1, 10.x, public
+
+=== STARTUP COMMAND ===
+
+To continue building this spec, run:
+
+  cd apps/web-server && python -m pytest tests/test_mcp_health_check.py -v
+
+=== FILES CREATED ===
+
+.aifactory/specs/003-mcp-health-check-resolve-the-h/
+  ├── spec.md (original spec)
+  ├── requirements.json (user requirements)
+  ├── task_metadata.json (complexity metadata)
+  ├── project_index.json (NEW - project structure)
+  ├── context.json (NEW - investigation findings)
+  ├── implementation_plan.json (NEW - subtask plan)
+  ├── init.sh (NEW - setup script)
+  └── build-progress.txt (NEW - this file)
+
+=== END SESSION 1 ===
+
+Next session: Coder agent reads implementation_plan.json and implements subtasks 1-3
+
+=== SESSION 2 (IMPLEMENTATION) ===
+
+Subtask 1.1: COMPLETED ✓
+- File: apps/web-server/server/routes/git.py
+- Added imports: ipaddress, socket, urlsplit
+- Created UnsafeMcpUrlError exception class
+- Created _ALWAYS_BLOCKED_MCP tuple with cloud-metadata/link-local/ULA ranges
+- Created _resolve_mcp_addresses() helper function
+- Created assert_safe_mcp_url() main validation function
+- Follows pattern from apps/backend/tools/runners/net_guard.py exactly
+- Commit: 55280b0 (aifactory: subtask-1-1 - Create assert_safe_mcp_url helper)
+- Status: Ready for subtask 1.2
+
+Implementation Details:
+✓ UnsafeMcpUrlError inherits from ValueError
+✓ _ALWAYS_BLOCKED_MCP includes:
+  - 169.254.0.0/16 (AWS metadata link-local)
+  - fe80::/10 (IPv6 link-local)
+  - fd00::/8 (IPv6 unique-local)
+  - fc00::/7 (IPv6 unique-local full range)
+✓ _resolve_mcp_addresses() handles both literal IPs and DNS resolution
+✓ assert_safe_mcp_url() validates:
+  - Scheme must be http/https (no file://, gopher://, etc.)
+  - Host must be present and resolvable
+  - Address must not be in blocked ranges
+  - IPv4-mapped IPv6 addresses normalized correctly
+✓ Allows loopback and private ranges (MCP servers often run locally)
+✓ Comprehensive docstrings match pattern file quality
+  [x] subtask-1-1: Create assert_safe_mcp_url helper function with comprehensive SSRF checks (55280b06)
+
+Subtask 1.2: COMPLETED ✓
+- File: apps/web-server/server/routes/git.py
+- Updated check_mcp_health endpoint:
+  - Removed inline SSRF validation (scheme/hostname checks)
+  - Added call to assert_safe_mcp_url(server.url) at start of validation
+  - Added UnsafeMcpUrlError exception handler that:
+    * Logs reason with logger.warning()
+    * Returns status: "unknown" (not "unhealthy") - matches AC#5
+    * Message: "Cannot check server at this URL"
+  - Added OSError exception handler for DNS resolution failures:
+    * Logs reason with logger.warning()
+    * Returns status: "unknown" - fail-closed behavior
+    * Message: "Cannot resolve server address"
+  - Preserved existing healthy/unhealthy check behavior after validation
+- Response shape unchanged: status in [healthy, unhealthy, unknown]
+- Follows pattern from existing error logging in git.py
+- Commit: 921e0cb (aifactory: subtask-1-2 - Update check_mcp_health endpoint)
+- Status: Passes AC#5 verification - status:unknown shape, reasons logged
+
+Implementation Details (AC#5 Verification):
+✓ Returns status: "unknown" when URL is blocked by assert_safe_mcp_url()
+✓ Returns status: "unknown" when DNS resolution fails (OSError)
+✓ Specific reasons logged to logger (not returned to client)
+✓ Response shape: {"success": true, "data": {"serverId": ..., "status": "unknown", "message": "..."}}
+✓ Does NOT return "unhealthy" for security blocks - reserves that for actual health check failures
+✓ Handles both UnsafeMcpUrlError (blocked address) and OSError (DNS failure)
+✓ Logging uses logger.warning() for consistency with existing patterns
+  [x] subtask-1-2: Update check_mcp_health endpoint to use the new helper and log reasons (921e0cb)
