@@ -1,0 +1,160 @@
+{
+  "feature": "MCP health check: resolve the host and block metadata/link-local addresses",
+  "workflow_type": "simple",
+  "workflow_rationale": "This is a straightforward security fix to add SSRF protections to the MCP health check. No multi-service dependencies, no migration stages — just add the guard helper and update one endpoint, then test.",
+  "required_commands": ["python", "pytest"],
+  "phases": [
+    {
+      "id": "phase-1-implementation",
+      "name": "Security Fix Implementation",
+      "type": "implementation",
+      "description": "Add SSRF guard helper to validate MCP server URLs and update check_mcp_health endpoint",
+      "depends_on": [],
+      "parallel_safe": true,
+      "subtasks": [
+        {
+          "id": "subtask-1-1",
+          "description": "Create assert_safe_mcp_url helper function with comprehensive SSRF checks",
+          "service": "web-server",
+          "depends_on": [],
+          "files_to_modify": [
+            "apps/web-server/server/routes/git.py"
+          ],
+          "files_to_create": [],
+          "patterns_from": [
+            "apps/backend/tools/runners/net_guard.py"
+          ],
+          "verification": {
+            "type": "command",
+            "command": "python -c \"from apps.web_server.server.routes.git import assert_safe_mcp_url; print('OK')\"",
+            "expected": "OK"
+          },
+          "status": "completed",
+          "model": "haiku"
+        },
+        {
+          "id": "subtask-1-2",
+          "description": "Update check_mcp_health endpoint to use the new helper and log reasons",
+          "service": "web-server",
+          "depends_on": [
+            "subtask-1-1"
+          ],
+          "files_to_modify": [
+            "apps/web-server/server/routes/git.py"
+          ],
+          "files_to_create": [],
+          "patterns_from": [
+            "apps/web-server/server/routes/git.py"
+          ],
+          "verification": {
+            "type": "manual",
+            "instructions": "Verify check_mcp_health still returns status: unknown shape when URL is blocked, reason logged to logger"
+          },
+          "status": "completed",
+          "model": "haiku"
+        },
+        {
+          "id": "subtask-1-3",
+          "description": "Add comprehensive tests for SSRF guard covering all AC#6 cases",
+          "service": "tests",
+          "depends_on": [
+            "subtask-1-2"
+          ],
+          "files_to_modify": [],
+          "files_to_create": [
+            "tests/test_mcp_health_check.py"
+          ],
+          "patterns_from": [
+            "tests/test_mcp_status_route.py"
+          ],
+          "verification": {
+            "type": "command",
+            "command": "pytest tests/test_mcp_health_check.py -v",
+            "expected": "All tests pass"
+          },
+          "status": "pending",
+          "model": "haiku"
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "total_phases": 1,
+    "total_subtasks": 3,
+    "services_involved": [
+      "web-server",
+      "tests"
+    ],
+    "parallelism": {
+      "max_parallel_phases": 1,
+      "parallel_groups": [],
+      "recommended_workers": 1,
+      "speedup_estimate": "1.0x (sequential only)"
+    },
+    "startup_command": "cd apps/web-server && python -m pytest tests/test_mcp_health_check.py -v"
+  },
+  "verification_strategy": {
+    "risk_level": "low",
+    "skip_validation": false,
+    "test_creation_phase": "post_implementation",
+    "test_types_required": [
+      "unit"
+    ],
+    "security_scanning_required": false,
+    "staging_deployment_required": false,
+    "acceptance_criteria": [
+      "assert_safe_mcp_url helper correctly resolves hosts",
+      "Blocks link-local (169.254.0.0/16, fe80::/10), reserved, multicast, unspecified",
+      "Allows loopback (checked BEFORE reserved test)",
+      "Allows private ranges (10/8, 172.16/12, 192.168/16)",
+      "Fails closed on unresolvable hosts",
+      "check_mcp_health returns status: unknown shape when URL blocked",
+      "All test cases pass: 169.254.169.254, IPv6 link-local, file://, localhost, 127.0.0.1, 10.x, public host"
+    ],
+    "verification_steps": [
+      {
+        "name": "Unit Tests",
+        "command": "pytest tests/test_mcp_health_check.py -v",
+        "expected_outcome": "All tests pass",
+        "type": "test",
+        "required": true,
+        "blocking": true
+      },
+      {
+        "name": "Linting",
+        "command": "cd apps/web-server && python -m ruff check server/routes/git.py --fix",
+        "expected_outcome": "No errors",
+        "type": "lint",
+        "required": true,
+        "blocking": false
+      }
+    ],
+    "reasoning": "Low-risk security fix with straightforward unit testing requirements"
+  },
+  "qa_acceptance": {
+    "unit_tests": {
+      "required": true,
+      "commands": [
+        "pytest tests/test_mcp_health_check.py -v"
+      ],
+      "minimum_coverage": null
+    },
+    "integration_tests": {
+      "required": false,
+      "commands": []
+    },
+    "e2e_tests": {
+      "required": false,
+      "commands": []
+    },
+    "browser_verification": {
+      "required": false,
+      "pages": []
+    },
+    "database_verification": {
+      "required": false,
+      "checks": []
+    }
+  },
+  "qa_signoff": null
+}
