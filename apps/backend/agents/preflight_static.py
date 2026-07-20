@@ -236,6 +236,61 @@ except Exception as e:
 """
 
 
+# Directory names that never contain the project's own importable packages —
+# skipped when locating package roots so the scan stays cheap and cannot pick
+# a vendored copy over the checkout's own.
+_ROOT_SCAN_SKIP = frozenset(
+    {
+        ".git",
+        ".venv",
+        "venv",
+        "node_modules",
+        "__pycache__",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".tox",
+        "build",
+        "dist",
+        ".aifactory",
+        ".tfactory",
+    }
+)
+
+
+def package_roots_for(project_dir: Path, module: str) -> list[str]:
+    """Dirs to prepend to PYTHONPATH so ``module`` resolves from THIS checkout.
+
+    ``<project>`` and ``<project>/src`` cover flat and src-layout repos, but a
+    monorepo keeps its packages a level or two down -- ``apps/web-server/server``
+    in the Factory repos. Without the real root, ``import server.routes.git``
+    either fails (harmless: exit 1 is skipped) or, far worse, resolves against
+    whatever copy of that package is already on the ambient PYTHONPATH -- the
+    running service's own -- and reports a brand-new function as a hallucinated
+    attribute. That is not hypothetical: it burned an entire replan budget and
+    failed a verify run against correct code (#732).
+
+    Returns the directories CONTAINING ``module``'s top-level package, nearest
+    first, so the checkout always wins over anything inherited.
+    """
+    top = module.split(".", 1)[0]
+    if not top:
+        return []
+    roots: list[str] = []
+    # Bounded: package at <project>/<pkg>, one level down, or two (apps/<app>/<pkg>).
+    for pattern in (f"{top}", f"*/{top}", f"*/*/{top}"):
+        for hit in sorted(project_dir.glob(pattern)):
+            if not (hit / "__init__.py").is_file():
+                continue
+            if any(
+                part in _ROOT_SCAN_SKIP for part in hit.relative_to(project_dir).parts
+            ):
+                continue
+            parent = str(hit.parent)
+            if parent not in roots:
+                roots.append(parent)
+    return roots
+
+
 def check_import(
     imp: PreflightImport,
     *,
@@ -266,6 +321,13 @@ def check_import(
         src_dir = Path(project_dir) / "src"
         if src_dir.is_dir():
             roots.insert(0, str(src_dir))
+        # #732: put the dir that actually CONTAINS this module's package first,
+        # so a monorepo layout resolves from the checkout instead of falling
+        # through to an ambient copy of the same package name.
+        for found in reversed(package_roots_for(Path(project_dir), imp.module)):
+            if found in roots:
+                roots.remove(found)
+            roots.insert(0, found)
         parts = roots + ([existing] if existing else [])
         env["PYTHONPATH"] = os.pathsep.join(parts)
 

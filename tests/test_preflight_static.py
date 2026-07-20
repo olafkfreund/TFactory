@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import agents.preflight_static as ps
 import pytest
 from agents.preflight_static import (
     PreflightImport,
@@ -379,3 +380,77 @@ def test_summary_reports_failure_count() -> None:
     src = "from json import ghost_one_xyz\nfrom os import ghost_two_xyz\n"
     res = preflight_check(src)
     assert "2 failed" in res.summary()
+
+
+# ── #732: monorepo package roots ────────────────────────────────────────
+
+
+def _monorepo(tmp_path: Path) -> Path:
+    """A repo whose importable package lives at apps/web-server/server/."""
+    pkg = tmp_path / "apps" / "web-server" / "server" / "routes"
+    pkg.mkdir(parents=True)
+    (tmp_path / "apps" / "web-server" / "server" / "__init__.py").write_text("")
+    (pkg / "__init__.py").write_text("")
+    (pkg / "git.py").write_text("def assert_safe_mcp_url(url):\n    return None\n")
+    return tmp_path
+
+
+def test_package_roots_finds_a_nested_package(tmp_path: Path) -> None:
+    root = _monorepo(tmp_path)
+    assert ps.package_roots_for(root, "server.routes.git") == [
+        str(root / "apps" / "web-server")
+    ]
+
+
+def test_package_roots_empty_for_unknown_package(tmp_path: Path) -> None:
+    """Unknown package: no roots, so behaviour falls back to project/src."""
+    assert ps.package_roots_for(_monorepo(tmp_path), "nothing_here") == []
+
+
+def test_package_roots_skips_vendored_directories(tmp_path: Path) -> None:
+    """A copy under node_modules/.venv must never win over the checkout."""
+    root = _monorepo(tmp_path)
+    vendored = root / "node_modules" / "server"
+    vendored.mkdir(parents=True)
+    (vendored / "__init__.py").write_text("")
+    roots = ps.package_roots_for(root, "server.routes.git")
+    assert str(root / "node_modules") not in roots
+
+
+def test_check_import_resolves_a_nested_package_from_the_checkout(
+    tmp_path: Path,
+) -> None:
+    """The #732 regression.
+
+    Without the nested root on PYTHONPATH the module either is not found
+    (skipped, harmless) or -- the real failure -- resolves against a copy of
+    the same package already on the ambient path, reporting a brand-new
+    function as a hallucinated attribute. That exhausted a whole replan budget
+    and failed a verify run against correct code.
+    """
+    root = _monorepo(tmp_path)
+    imp = ps.PreflightImport(
+        module="server.routes.git",
+        name="assert_safe_mcp_url",
+        lineno=1,
+        is_relative=False,
+    )
+    ps.check_import(imp, project_dir=root)
+    assert imp.failed is False, imp.reason
+    assert imp.skipped is False, "the module IS resolvable — it must be checked"
+
+
+def test_check_import_still_catches_a_hallucination_in_a_nested_package(
+    tmp_path: Path,
+) -> None:
+    """Finding the right root must not blind the check it exists to perform."""
+    root = _monorepo(tmp_path)
+    imp = ps.PreflightImport(
+        module="server.routes.git",
+        name="not_a_real_function",
+        lineno=1,
+        is_relative=False,
+    )
+    ps.check_import(imp, project_dir=root)
+    assert imp.failed is True
+    assert "has no attribute" in (imp.reason or "")
