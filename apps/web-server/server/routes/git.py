@@ -196,6 +196,71 @@ async def initialize_git(request: InitGitRequest):
 ollama_router = APIRouter()
 
 
+def _is_safe_mcp_url_host(url: str) -> bool:
+    """Validate that a request-supplied MCP server URL resolves to a safe address.
+
+    MCP servers often run on localhost or the LAN, so private ranges are allowed.
+    However, cloud-metadata endpoints (169.254.169.254), link-local addresses
+    (169.254.x.x, fe80::/10), reserved ranges, multicast, and unspecified addresses
+    are blocked.
+
+    Every resolved address is checked (not just the first), and loopback is checked
+    before reserved tests to avoid IPv6 ::1 being rejected by is_reserved.
+
+    An unresolvable host is treated as unsafe (fail closed).
+    """
+    from urllib.parse import urlparse
+    import socket
+    import ipaddress
+
+    parsed = urlparse(url)
+    if not parsed.hostname:
+        return False
+
+    hostname = parsed.hostname
+    if not hostname:
+        return False
+
+    # Resolve hostname to all addresses
+    try:
+        addresses = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    except socket.gaierror:
+        # Unresolvable host is unsafe
+        logger.warning(f"MCP health check: unresolvable host '{hostname}'")
+        return False
+    except Exception:
+        logger.exception(f"MCP health check: failed to resolve hostname '{hostname}'")
+        return False
+
+    if not addresses:
+        logger.warning(f"MCP health check: no addresses resolved for '{hostname}'")
+        return False
+
+    # Check each resolved address
+    for addr_info in addresses:
+        ip_str = addr_info[4][0]
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            logger.warning(f"MCP health check: invalid IP address '{ip_str}'")
+            return False
+
+        # Loopback is allowed (must check before reserved, since IPv6 ::1 is also reserved)
+        if ip.is_loopback:
+            continue
+
+        # Private ranges (10/8, 172.16/12, 192.168/16) are allowed
+        if ip.is_private:
+            continue
+
+        # Block link-local, reserved, multicast, unspecified
+        if ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
+            logger.warning(f"MCP health check: blocked unsafe address '{ip_str}' for host '{hostname}'")
+            return False
+
+    return True
+
+
 def _safe_ollama_base_url(base_url: str | None) -> str:
     """Validate a request-supplied Ollama base URL (SSRF guard, review H2).
 
@@ -784,10 +849,23 @@ async def check_mcp_health(server: McpServerConfig):
                 "success": True,
                 "data": {
                     "serverId": server.id,
-                    "status": "unhealthy",
-                    "message": "Unsupported or invalid server URL",
+                    "status": "unknown",
+                    "message": "Cannot check command-based servers"
                 },
             }
+
+        # Resolve hostname and check against safe address ranges
+        if not _is_safe_mcp_url_host(server.url):
+            # Log was emitted by _is_safe_mcp_url_host; keep existing response shape
+            return {
+                "success": True,
+                "data": {
+                    "serverId": server.id,
+                    "status": "unknown",
+                    "message": "Cannot check command-based servers"
+                }
+            }
+
         try:
             req = urllib.request.Request(server.url, method="HEAD")
             if server.headers:
