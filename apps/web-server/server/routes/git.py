@@ -249,14 +249,15 @@ def _is_safe_mcp_url_host(url: str) -> bool:
         if ip.is_loopback:
             continue
 
-        # Private ranges (10/8, 172.16/12, 192.168/16) are allowed
-        if ip.is_private:
-            continue
-
-        # Block link-local, reserved, multicast, unspecified
+        # Block link-local, reserved, multicast, unspecified (check before is_private)
+        # Note: 169.254.x.x is both link_local AND private, so must check link_local first
         if ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
             logger.warning(f"MCP health check: blocked unsafe address '{ip_str}' for host '{hostname}'")
             return False
+
+        # Private ranges (10/8, 172.16/12, 192.168/16) are allowed
+        if ip.is_private:
+            continue
 
     return True
 
