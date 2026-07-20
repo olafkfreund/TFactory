@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from ._specpath import safe_join
+from server.validators.mcp_url_validator import assert_safe_mcp_url, UnsafeMcpUrlError
 
 # Single source of truth for the gh-CLI wrapper lives in github.py (its heaviest
 # user); re-exported here so existing `from .git import run_gh_command` resolves.
@@ -788,6 +789,22 @@ async def check_mcp_health(server: McpServerConfig):
                     "message": "Unsupported or invalid server URL",
                 },
             }
+
+        # Validate that the URL does not resolve to link-local, reserved, multicast,
+        # or unspecified address ranges. Loopback and private ranges remain allowed.
+        try:
+            assert_safe_mcp_url(server.url)
+        except (UnsafeMcpUrlError, OSError) as e:
+            logger.warning("MCP URL validation failed: %s", e)
+            return {
+                "success": True,
+                "data": {
+                    "serverId": server.id,
+                    "status": "unknown",
+                    "message": "URL validation failed"
+                }
+            }
+
         try:
             req = urllib.request.Request(server.url, method="HEAD")
             if server.headers:
