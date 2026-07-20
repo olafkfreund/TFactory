@@ -314,9 +314,9 @@ def _tool_report_result(args: dict[str, Any]) -> dict[str, Any]:
     }
     try:
         meta_path.write_text(json.dumps(meta, indent=2))
-    except OSError as exc:
-        logger.warning("mcp_copilot: could not write test_task_metadata.json: %s", exc)
-        return {"accepted": False, "error": str(exc)}
+    except OSError:
+        logger.exception("mcp_copilot: could not write test_task_metadata.json")
+        return {"accepted": False, "error": "failed to record test result"}
 
     logger.info(
         "mcp_copilot: tfactory_report_result task=%s lane=%s passed=%d failed=%d",
