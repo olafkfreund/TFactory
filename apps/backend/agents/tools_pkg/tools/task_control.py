@@ -233,6 +233,28 @@ def _checkout_source_branch(project_root: Path, branch: str) -> str | None:
         return f"source_branch checkout error: {exc}"
 
 
+def _head_sha(project_root: Path) -> str:
+    """Resolved HEAD of ``project_root``, or ``""`` if it cannot be read.
+
+    Recorded at ingest so a later stage can tell whether it is still looking at
+    the build it was handed. ``project_dir`` is one shared clone per project, and
+    the ingest checkout moves its HEAD, so another spec ingesting in between
+    silently repoints the tree every reader resolves against (#742).
+    """
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(project_root), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        return out.stdout.strip() if out.returncode == 0 else ""
+    except Exception:  # noqa: BLE001 — a SHA read must never break ingest
+        return ""
+
+
 def create_spec_ingest_workspace(
     *,
     project_id: str,
@@ -317,10 +339,15 @@ def create_spec_ingest_workspace(
     # Check out the AIFactory build branch into project_root so tests run against
     # the ACTUAL built code (#96). Best-effort: a failure is surfaced as a warning
     # and ingest proceeds (tests then run against whatever is checked out).
+    source_sha = ""
     if source_branch:
         warn = _checkout_source_branch(Path(project_root).expanduser(), source_branch)
         if warn:
             warnings.append(warn)
+        else:
+            # Pin what we actually checked out, so a later stage can tell whether
+            # the shared clone still holds this build (#742).
+            source_sha = _head_sha(Path(project_root).expanduser())
 
     # source.json: target_paths name the SUT; source_branch records which build
     # was checked out (when supplied). The Triager's PR-status side-effect skips
@@ -344,6 +371,10 @@ def create_spec_ingest_workspace(
         "source_format": spec.source_format.value,
         "target_paths": list(target_paths or []),
         "source_branch": source_branch,
+        # The commit the ingest checkout actually landed on ("" when unknown or
+        # no source_branch). Readers compare it to the shared clone's HEAD before
+        # trusting the tree (#742).
+        "source_sha": source_sha,
         "created_at": _now_iso(),
         "aifactory": {"github_issue": github_issue},
         # Tenant scoping (#683): service-local metadata, lazily backfilled —
