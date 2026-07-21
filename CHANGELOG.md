@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.9.19 — the import probe reads the checkout, not the running service (2026-07-21)
+
+- **Pre-flight resolved against TFactory's own tree when package names collided
+  (#752, PR #753).** `python -c` puts the current directory at the front of
+  `sys.path`, ahead of everything `PYTHONPATH` says. The pre-flight subprocess
+  passed no `cwd`, so it inherited the running service's working directory —
+  `apps/web-server` — which silently outranked the checkout roots #732 computes.
+
+  Invisible until TFactory verifies a repo whose package names match its own,
+  which is exactly what verifying TFactory does: both trees provide
+  `server.routes.git`. Found live on run 5, where the planner correctly targeted
+  `_is_safe_mcp_url` (the symbol the build actually created, surfaced by the
+  #737 block) and the probe rejected it as nonexistent. Same PYTHONPATH, only
+  cwd differing, in the pod:
+
+        $ PYTHONPATH=$CHECKOUT python -c "import server.routes.git as m; ..."
+        resolved to: /home/projects/MagesticAI/.../server/routes/git.py
+        has _is_safe_mcp_url: False
+
+        $ cd /tmp && PYTHONPATH=$CHECKOUT python -c "..."
+        resolved to: /home/nonroot/.tfactory/workspaces/.../server/routes/git.py
+        has _is_safe_mcp_url: True
+
+  The probe now runs from the checkout. This is the third distinct way the
+  pre-flight has read the wrong copy of a module — #732 (wrong roots), #742
+  (wrong branch), #752 (CWD outranking both) — and all three surfaced as the
+  same indistinguishable "module has no attribute X". Reporting the resolved
+  file on rejection would have made each obvious immediately; tracked in #754.
+
 ## 0.9.18 — the release can actually push its image (2026-07-21)
 
 **Correction to 0.9.17.** That entry claimed #740 had restored image signing. It
