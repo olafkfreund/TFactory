@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.9.22 — a rejected import says which file answered (2026-07-21)
+
+- **The pre-flight now reports the resolved file, and no longer calls shadowing
+  a hallucination (#754, PR #762).** Three defects landed on this path in one
+  day — #732 (wrong import roots), #742 (shared clone on another spec's branch),
+  #752 (CWD outranking PYTHONPATH, so the running service's own copy answered) —
+  and every one surfaced as the same undiagnosable line, `X has no attribute Y`,
+  while the symbol existed perfectly well in the code under test. Each cost
+  hours, and fixing one only exposed the next, because several independent
+  layers decide which copy of a module wins.
+
+  The probe already imports the module, so it already holds `__file__`. The
+  rejection reason now carries it, which would have made all three obvious on
+  sight: the path was outside the checkout.
+
+  Classification changes narrowly with it. When the answering file is a
+  *different copy of a package the checkout also provides*, the symbol's absence
+  says nothing about the code under test, so the import is skipped as a
+  resolution failure rather than rejected as a hallucination — the same
+  environment-vs-hallucination call #707 makes for a missing module. The
+  "checkout also provides it" condition is the guardrail: `from json import
+  nope` also resolves outside the checkout and genuinely is a hallucination, so
+  it must keep failing, and a regression test pins that. An over-broad version
+  of this change would have quietly gutted the guard's purpose.
+
 ## 0.9.21 — the lane venv installs the app's own dependencies (2026-07-21)
 
 - **A monorepo's dependencies now reach the test-execution venv (#759, PR
