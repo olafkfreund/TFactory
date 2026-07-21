@@ -320,6 +320,21 @@ def generate_flake(env: dict, *, nixpkgs: str = DEFAULT_NIXPKGS, project_dir=Non
 """
 
 
+def _requirements_present(project_dir: Path) -> bool:
+    """True when the checkout declares deps in a requirements.txt the lane can install.
+
+    Bounded the same way the runner's discovery is, so this answers the same
+    question the Job will ask at run time.
+    """
+    root = Path(project_dir)
+    skip = {".git", ".venv", "venv", "node_modules", "__pycache__"}
+    for pattern in ("requirements.txt", "*/requirements.txt", "*/*/requirements.txt"):
+        for hit in root.glob(pattern):
+            if not any(part in skip for part in hit.relative_to(root).parts):
+                return True
+    return False
+
+
 def _python_libs(m: Manifest, project_dir=None) -> list[str]:
     """Python libraries to put in the withPackages set. Always include
     pytest + pytest-cov for the verify lane (the runner always passes ``--cov``);
@@ -335,6 +350,14 @@ def _python_libs(m: Manifest, project_dir=None) -> list[str]:
         libs += ["fastapi", "uvicorn", "httpx"]
     if project_dir is not None:
         libs += _deps_from_pyproject(project_dir)
+        # #764: the allowlist above can never be complete, and a repo that
+        # declares its deps in requirements.txt gets nothing from it at all.
+        # Ship pip so the verify Job can install whatever the map missed — the
+        # lane installs into a writable target and prepends it to PYTHONPATH.
+        # The allowlist stays: it is the hermetic path when the deps happen to
+        # be mapped, and pip only fills the gap.
+        if _requirements_present(project_dir):
+            libs += ["pip"]
     # de-dup, stable order
     seen: set[str] = set()
     out: list[str] = []
