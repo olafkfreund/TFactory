@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.9.16 — the plan targets symbols the build actually delivered (2026-07-21)
+
+Fixes #737. Across three runs of the same issue with the same acceptance
+criteria, the coder produced three different APIs: `assert_safe_mcp_url` in a
+new `validators/` module, then the same name in `routes/git.py`, then a private
+`_is_safe_mcp_url_host` returning bool. All three satisfy the criteria —
+criteria describe behaviour, a test plan names symbols. Run 3's planner
+generated tests importing a public `assert_safe_mcp_url` raising
+`UnsafeMcpUrlError`, an API it inferred from the issue prose; the import
+pre-flight correctly rejected every subtask, the 12-replan budget drained, and
+the spec ended `planner_replan_budget_exhausted` with zero tests. That made
+verify on a real repo partly a coin flip — it worked on the demo helpers because
+`is_even(n)` has one obvious signature, and failed here because "a helper that
+validates a URL" has many.
+
+The information needed was already on hand and being discarded:
+`_checkout_source_branch` puts the build branch on disk before the planner runs,
+and `_source_branch_changed_files` already diffs it against the default branch,
+but everything except a one-word language verdict was thrown away. The planner
+prompt now carries a `SYMBOLS THE BUILD DELIVERED` block — the changed Python
+files parsed with `ast`, their symbols listed in the exact `path::symbol` syntax
+the plan must emit — in both initial and replan mode. Replan matters more, since
+that is the loop that burns the budget. Private names are included deliberately:
+hiding `_is_safe_mcp_url_host` would reproduce the bug, because the planner's
+error was reaching for a public name that did not exist; where behaviour is only
+reachable through a private helper, the block directs the planner to the public
+entry point instead. Python-only, matching the pre-flight guard that rejects
+these targets; no Python in the diff, an unreadable file, or a syntax error
+yields an empty block and byte-identical planner behaviour. The block reports
+what it read and never guesses.
+
+## 0.9.15 — pre-flight resolves nested package roots (2026-07-20)
+
+Fixes #732. The pre-flight import check put only `<project>` and `<project>/src`
+on PYTHONPATH, so a monorepo package at `apps/web-server/server` never resolved
+from the checkout. It fell through to whatever copy of that package name sat on
+the ambient PYTHONPATH — the running service's own — which predates the branch
+under test, so a brand-new function read as a hallucinated attribute. Exit 2,
+hard fail, replan, repeat, until the global replan budget was gone and the run
+failed with zero tests against correct code.
+
+The 0.9.14 hardening could not catch this: it skips exit 1 (module absent from
+the generation venv). Here the module imported fine — it was the wrong one.
+
+`package_roots_for` now finds the directories that actually contain the
+module's top-level package (bounded, skipping vendor dirs) and prepends them so
+the checkout wins. Genuine hallucinations on the same module are still caught.
+
 ## 0.9.14 — gen-functional pre-flight tolerates api-lane / SUT-dep imports (2026-07-18)
 
 - **The Gen-Functional pre-flight no longer false-rejects a correct test for a module that's merely absent from the generation venv (#707, PR #709).** The pre-flight (`agents/preflight_static.check_import`) imports every module a generated test imports against TFactory's OWN service venv (`sys.executable`) — but an api-lane test imports `requests` (not in the backend requirements) and a unit test transitively imports the SUT's own deps (fastapi, ...), so `importlib.import_module` raised `ModuleNotFoundError`, the pre-flight hard-rejected a perfectly correct test, the Planner replan-looped the subtask to `stuck`, and the spec ended `generated_empty / gen_functional_no_pending` with verify never running — the dominant reason endpoint/feature specs never reached a clean VAL-2 (same family as #609/#613, which only patched pytest into the venv). The generation venv is not the test-execution env (nix/docker), so an absent module is an environment gap, not a hallucination: the introspect subprocess now exits 3 for `ModuleNotFoundError` and `check_import` marks it `skipped` (the real test run resolves it) rather than failed. A genuine hallucination — importable module, missing attribute — still exits 2 and fails, preserving the check's value. Also: the concrete rejection reason is now persisted to `status.json` (`last_rejected_reason`), which #707 noted was empty and undiagnosable; and the pytest api-lane example now reads `TFACTORY_TARGET_URL` inside the test (matching its own prose) to prevent an import-time `KeyError` and stop the LLM copying a module-level read. Non-vendored pre-flight code only; the vendored gate/provisioner were untouched.
