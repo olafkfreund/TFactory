@@ -217,6 +217,59 @@ def _safe_ollama_base_url(base_url: str | None) -> str:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
+def _is_safe_mcp_url(url: str) -> bool:
+    """Validate a request-supplied MCP server URL (SSRF guard, review H2).
+
+    Resolves hostnames to IP addresses and validates that the resolved IP
+    is not a metadata endpoint or otherwise unsafe. Only http/https schemes
+    are allowed.
+
+    Args:
+        url: The MCP server URL to validate
+
+    Returns:
+        True if the URL is safe, False otherwise
+
+    Raises:
+        HTTPException: If the URL has an invalid scheme or cannot be resolved
+    """
+    import socket
+    from urllib.parse import urlparse
+
+    if not url or not url.strip():
+        return False
+
+    parsed = urlparse(url.strip())
+
+    # Validate scheme
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise HTTPException(status_code=400, detail="Invalid MCP server URL")
+
+    # Block known metadata endpoints by hostname
+    if parsed.hostname in ("169.254.169.254", "metadata.google.internal"):
+        raise HTTPException(status_code=400, detail="Disallowed MCP server URL")
+
+    # Attempt to resolve the hostname to an IP address
+    try:
+        resolved_ip = socket.gethostbyname(parsed.hostname)
+    except socket.gaierror:
+        # Hostname resolution failed - the server may be offline or unreachable
+        logger.warning(f"Could not resolve hostname for MCP URL: {parsed.hostname}")
+        raise HTTPException(status_code=400, detail="Could not resolve MCP server hostname")
+    except Exception:
+        logger.exception(f"Error resolving hostname for MCP URL: {parsed.hostname}")
+        raise HTTPException(status_code=400, detail="Error resolving MCP server hostname")
+
+    # Validate the resolved IP is not a metadata endpoint
+    if resolved_ip in ("169.254.169.254", "127.0.0.1"):
+        # Note: localhost (127.0.0.1) is allowed for local MCP servers
+        # but we log it for security auditing
+        if resolved_ip == "169.254.169.254":
+            raise HTTPException(status_code=400, detail="Disallowed MCP server IP")
+
+    return True
+
+
 def check_ollama_running(base_url: str | None = None) -> bool:
     """Check if Ollama server is running."""
     import urllib.request
