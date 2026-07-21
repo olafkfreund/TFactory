@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.9.16 — the plan targets symbols the build actually delivered (2026-07-21)
+
+Fixes #737. Across three runs of the same issue with the same acceptance
+criteria, the coder produced three different APIs: `assert_safe_mcp_url` in a
+new `validators/` module, then the same name in `routes/git.py`, then a private
+`_is_safe_mcp_url_host` returning bool. All three satisfy the criteria —
+criteria describe behaviour, a test plan names symbols. Run 3's planner
+generated tests importing a public `assert_safe_mcp_url` raising
+`UnsafeMcpUrlError`, an API it inferred from the issue prose; the import
+pre-flight correctly rejected every subtask, the 12-replan budget drained, and
+the spec ended `planner_replan_budget_exhausted` with zero tests. That made
+verify on a real repo partly a coin flip — it worked on the demo helpers because
+`is_even(n)` has one obvious signature, and failed here because "a helper that
+validates a URL" has many.
+
+The information needed was already on hand and being discarded:
+`_checkout_source_branch` puts the build branch on disk before the planner runs,
+and `_source_branch_changed_files` already diffs it against the default branch,
+but everything except a one-word language verdict was thrown away. The planner
+prompt now carries a `SYMBOLS THE BUILD DELIVERED` block — the changed Python
+files parsed with `ast`, their symbols listed in the exact `path::symbol` syntax
+the plan must emit — in both initial and replan mode. Replan matters more, since
+that is the loop that burns the budget. Private names are included deliberately:
+hiding `_is_safe_mcp_url_host` would reproduce the bug, because the planner's
+error was reaching for a public name that did not exist; where behaviour is only
+reachable through a private helper, the block directs the planner to the public
+entry point instead. Python-only, matching the pre-flight guard that rejects
+these targets; no Python in the diff, an unreadable file, or a syntax error
+yields an empty block and byte-identical planner behaviour. The block reports
+what it read and never guesses.
+
 ## 0.9.15 — pre-flight resolves nested package roots (2026-07-20)
 
 Fixes #732. The pre-flight import check put only `<project>` and `<project>/src`
