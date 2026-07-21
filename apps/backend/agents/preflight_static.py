@@ -291,6 +291,43 @@ def package_roots_for(project_dir: Path, module: str) -> list[str]:
     return roots
 
 
+def package_root_rel_paths(root: Path) -> list[str]:
+    """Repo-relative dirs that must be importable for this tree's packages.
+
+    The execution-time counterpart of ``package_roots_for``. That one answers
+    "where does THIS module live" for the generation probe; this one answers
+    "what does pytest need on PYTHONPATH to collect anything here", because at
+    execution time there is no single module to ask about — the runner is handed
+    a directory of tests.
+
+    Why it exists: the runners hardcoded ``<root>/src`` and ``<root>``, which
+    covers flat and src-layout repos and misses a monorepo entirely. The package
+    under test in the Factory repos is ``apps/web-server/server``, reachable from
+    neither, so collection failed before a single assertion ran and every
+    acceptance criterion came back as an import error against correct code
+    (#756). #732 fixed this for the probe; the runners kept the old behaviour.
+
+    Returns the PARENT of each top-level package, nearest first, relative to
+    ``root`` (``"."`` for a package sitting at the top). Nested packages are
+    skipped — only the outermost one needs to be on the path, and adding inner
+    ones invites shadowing.
+    """
+    rels: list[str] = []
+    # Bounded the same way as package_roots_for: top level, or one/two down.
+    for pattern in ("*/__init__.py", "*/*/__init__.py", "*/*/*/__init__.py"):
+        for hit in sorted(root.glob(pattern)):
+            pkg = hit.parent
+            rel = pkg.relative_to(root)
+            if any(part in _ROOT_SCAN_SKIP for part in rel.parts):
+                continue
+            if (pkg.parent / "__init__.py").is_file():
+                continue  # inner package; its top-level parent already counts
+            parent = str(rel.parent)
+            if parent not in rels:
+                rels.append(parent)
+    return rels
+
+
 def check_import(
     imp: PreflightImport,
     *,
