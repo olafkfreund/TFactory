@@ -90,3 +90,27 @@ Next steps:
 - Subtask 1-3: Create comprehensive test suite
 
 === END SESSION 2 ===
+  [x] subtask-1-1: Create _is_safe_mcp_url() helper function to resolve hostnames and validate IP addresses (be630be6)
+
+Session 3 (Implementation - Subtask 1-2):
+✓ Integrated _is_safe_mcp_url() into check_mcp_health route
+  - Added validation call at line 832-843 in check_mcp_health endpoint
+  - Validates MCP server URLs before connection attempt
+  - Catches HTTPException from _is_safe_mcp_url() validation
+  - Returns 'unknown' status on validation failure (AC#5 compliance)
+  - Logs validation failure reason but doesn't expose to client (security requirement)
+  - Allows connection attempt only for validated safe URLs
+✓ Updated implementation_plan.json - set subtask-1-2 status to "completed"
+✓ Committed changes: aifactory: subtask-1-2 - Integrate _is_safe_mcp_url() into check_mcp_health (448fe54)
+
+Implementation Complete for Subtask 1-2:
+- Function call: _is_safe_mcp_url(server.url) validates URL before connection
+- Error handling: HTTPException caught and logged, returns 'unknown' status
+- Security posture: No validation details exposed to client
+- Compliance: AC#5 requirement met (status shape preserved, reason logged)
+
+Next steps:
+- Subtask 1-3: Create comprehensive test suite for address validation
+
+=== END SESSION 3 ===
+  [x] subtask-1-2: Integrate _is_safe_mcp_url() into check_mcp_health route (448fe54)
