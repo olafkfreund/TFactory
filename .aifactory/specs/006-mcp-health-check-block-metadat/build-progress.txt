@@ -114,3 +114,47 @@ Next steps:
 
 === END SESSION 3 ===
   [x] subtask-1-2: Integrate _is_safe_mcp_url() into check_mcp_health route (448fe54)
+  [x] subtask-1-2: Integrate _is_safe_mcp_url() into check_mcp_health route to validate URLs before connection attempt (0c51664f)
+
+Session 4 (Implementation - Subtask 1-3):
+✓ Created comprehensive test suite for address validation (tests/test_mcp_health_check.py)
+  - 38 tests covering all acceptance criteria AC#1-6
+  - TestIsSafeMcpUrl class: 22 unit tests for _is_safe_mcp_url() helper
+    * AC#6 test cases: metadata endpoints, IPv6 link-local, file://, localhost, 127.0.0.1, 10.x, public hosts
+    * AC#1 tests: link-local and reserved range rejection
+    * AC#2 tests: loopback priority (order matters)
+    * AC#3 tests: private ranges allowed (10/8, 172.16/12, 192.168/16)
+    * AC#4 tests: unresolvable hosts treated as unsafe (fail closed)
+    * Edge case tests: scheme validation, empty URLs, ports, paths, credentials
+  - TestCheckMcpHealthEndpoint class: 7 integration tests for endpoint
+    * SSRF guard validation at endpoint level
+    * Private range acceptance verification
+  - TestEdgeCasesAndSecurity class: 6 security-focused tests
+    * Case insensitivity, URL fragments, credentials handling
+  - TestDocumentation class: 3 tests verifying documented behavior
+✓ All 38 tests pass (100% success rate)
+✓ Updated implementation_plan.json - set subtask-1-3 status to "completed"
+✓ Committed changes: aifactory: subtask-1-3 - Create comprehensive test suite for address validation (1fd5bba)
+
+Implementation Complete for Subtask 1-3:
+- Test coverage: All acceptance criteria covered
+- Test quality: Unit, integration, edge case, and security tests included
+- Code patterns: Follows conftest.py and existing test patterns
+- Verification command: pytest tests/test_mcp_health_check.py -v → 38 passed
+
+=== ALL SUBTASKS COMPLETE ===
+
+All 3 subtasks of Phase 1 now complete:
+[x] subtask-1-1: Create _is_safe_mcp_url() helper function (be630be6)
+[x] subtask-1-2: Integrate into check_mcp_health route (448fe54 + 0c51664f)
+[x] subtask-1-3: Create comprehensive test suite (1fd5bba)
+
+Project Status: READY FOR DEPLOYMENT
+- SSRF guard implementation: Complete with 3 layers (hostname check, scheme validation, IP resolution)
+- Integration: Fully integrated into check_mcp_health endpoint
+- Test coverage: Comprehensive (38 tests, all passing)
+- Security posture: AC#5 compliance (no details exposed to client)
+- Ready to merge and deploy
+
+=== END SESSION 4 ===
+  [x] subtask-1-3: Create comprehensive test suite for address validation (1fd5bba)
