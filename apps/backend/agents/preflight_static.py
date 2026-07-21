@@ -328,6 +328,33 @@ def package_root_rel_paths(root: Path) -> list[str]:
     return rels
 
 
+def requirements_files(root: Path, *, limit: int = 5) -> list[Path]:
+    """``requirements.txt`` files in this checkout, nearest first.
+
+    The host runner only ever looked at ``<project>/requirements.txt``, which a
+    monorepo does not have: this repo declares its dependencies in
+    ``apps/web-server/requirements.txt`` and ``apps/backend/requirements.txt``,
+    and the root has neither that file nor a ``pyproject.toml``. Both install
+    branches were therefore skipped, the lane venv got pytest and nothing else,
+    and every test that imported the app died at collection on a missing
+    third-party package — reported as an error against correct code (#759).
+
+    Bounded and vendor-skipped like ``package_root_rel_paths``; ``limit`` guards
+    against a repo that vendors hundreds of them.
+    """
+    found: list[Path] = []
+    for pattern in ("requirements.txt", "*/requirements.txt", "*/*/requirements.txt"):
+        for hit in sorted(root.glob(pattern)):
+            rel = hit.relative_to(root)
+            if any(part in _ROOT_SCAN_SKIP for part in rel.parts):
+                continue
+            if hit not in found:
+                found.append(hit)
+            if len(found) >= limit:
+                return found
+    return found
+
+
 def check_import(
     imp: PreflightImport,
     *,

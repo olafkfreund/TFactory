@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.9.21 — the lane venv installs the app's own dependencies (2026-07-21)
+
+- **A monorepo's dependencies now reach the test-execution venv (#759, PR
+  #760).** Run 6 produced 11 well-targeted tests with zero replan cycles and
+  flagged all 11 anyway, `ac_fidelity 0/6`, every verdict stating plainly that
+  *"consistent_fail is the shared sandbox import error, not a test defect"*. The
+  evaluator even wrote the fix into the run: install
+  `apps/web-server/requirements.txt` into the lane venv.
+
+  `_ensure_host_venv` looked for dependencies in exactly two places, both at the
+  repo root — `requirements.txt` and `pyproject.toml`. This repo has **neither**
+  at the root; it declares them in `apps/web-server/` and `apps/backend/`. Both
+  branches were skipped, the venv received only pytest, pytest-cov and requests,
+  and every test importing the app died at collection on fastapi — grading
+  correct code as an error. `requirements_files` discovers them at the same
+  bounded depth and with the same vendor-dir skips as `package_root_rel_paths`
+  (#756), each installed in its own pip call so one unresolvable pin cannot take
+  the others down with it.
+
+  Worth recording: #759 originally blamed the Nix lane's missing SUT
+  dependencies. The Nix lane never ran — with no task contract there is no
+  RFC-0005 environment manifest, `is_nix_environment` is False, and verify falls
+  through to this host runner. The Nix lane's own gap is real but separate: it
+  maps a curated 21-name allowlist and has no `requirements.txt` support at all,
+  which bites on the PFactory-planned path where it does run.
+
 ## 0.9.20 — generated tests can finally run on a monorepo (2026-07-21)
 
 - **The test-execution path now carries a monorepo's package roots (#756, PR
