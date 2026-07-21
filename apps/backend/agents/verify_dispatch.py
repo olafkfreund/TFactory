@@ -55,6 +55,7 @@ needs a real cluster or Postgres.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -810,6 +811,13 @@ async def dispatch_verify_job(  # noqa: PLR0913 - 3 domain args + injectable sea
         "namespace": namespace,
         "job_name": name,
         "node": None,
+        # #767: the reaper marks the durable row stuck but had no way to reach
+        # the workspace, so a deadline-killed Job left status.json saying
+        # "evaluating" forever — indistinguishable from still working, and with
+        # the Job GC'd 5 minutes later there was nothing left to explain it.
+        # This is the control plane's own path (the Job mounts it elsewhere via
+        # spec_subpath), which is exactly what the control-plane reaper needs.
+        "spec_dir": str(spec_dir),
     }
 
     # Record the queued row + worker_ref BEFORE applying the Job, so a reaper can
@@ -1065,6 +1073,11 @@ async def reconcile_verify_job(
         return None
 
 
+# Spec-level statuses that already represent a finished verify. A reap must
+# never clobber one — the Job's own verdict always wins over the reaper's guess.
+_SPEC_TERMINAL_STATUSES = frozenset({"triaged", "failed", "generated_empty"})
+
+
 def is_terminal_record(record: dict[str, Any] | None) -> bool:
     """True when a reconciled record has reached a terminal lifecycle state."""
     if not record:
@@ -1111,12 +1124,42 @@ async def reap_if_orphaned(
     try:
         async with _store_for(store) as (s, _owned):
             rec: dict[str, Any] | None = await s.mark_stuck(job_id, reason)
-            return rec
     except Exception:  # noqa: BLE001
         _log.warning(
             "[verify-dispatch] reap failed for job_id=%s", job_id, exc_info=True
         )
         return None
+    # Marking the row is not enough: every reader that asks "is this spec done?"
+    # reads status.json, so a reaped row with an untouched workspace still looks
+    # busy forever (#767). Observed on spec 008: row reapable, status.json stuck
+    # on `evaluating` 87 minutes after the Job was killed at its deadline and
+    # GC'd. Best-effort — a workspace we cannot write must never break the reap.
+    _mark_spec_reaped(record, reason)
+    return rec
+
+
+def _mark_spec_reaped(record: dict[str, Any], reason: str) -> None:
+    """Write a terminal status into the reaped Job's workspace, if we can find it."""
+    ref = record.get("worker_ref") or {}
+    spec_dir = ref.get("spec_dir") if isinstance(ref, dict) else None
+    if not spec_dir:
+        return  # pre-#767 row: no workspace recorded, nothing to write
+    path = Path(spec_dir) / "status.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return
+        if data.get("status") in _SPEC_TERMINAL_STATUSES:
+            return  # the Job wrote its own verdict first — never overwrite it
+        data["status"] = "failed"
+        data["phase"] = "verify_job_reaped"
+        data["reaped_reason"] = reason
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        _log.warning("[verify-dispatch] reaped spec %s: %s", spec_dir, reason)
+    except (OSError, ValueError):
+        _log.warning(
+            "[verify-dispatch] could not mark spec %s reaped", spec_dir, exc_info=True
+        )
 
 
 # ── Control-plane reconcile + reap loop (wired into the app lifespan) ──────────
