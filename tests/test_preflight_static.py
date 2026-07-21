@@ -18,6 +18,7 @@ Covered:
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import agents.preflight_static as ps
@@ -551,3 +552,63 @@ def test_requirements_files_prefers_the_root_and_is_bounded(tmp_path: Path) -> N
     assert len(found) == 3
     assert found[0].name == "requirements.txt"
     assert found[0].parent == root  # nearest first
+
+
+# ── #754: say which file answered, and don't call shadowing a lie ────────
+
+
+def test_missing_attribute_reason_names_the_resolved_file(tmp_path: Path) -> None:
+    """A genuine hallucination still fails — and now says where it looked."""
+    root = _monorepo(tmp_path)
+    imp = PreflightImport(
+        module="server.routes.git", name="never_written", lineno=1, is_relative=False
+    )
+    check_import(imp, project_dir=root)
+    assert imp.failed is True, imp.reason
+    assert "never_written" in imp.reason
+    assert "resolved:" in imp.reason, imp.reason
+    assert "git.py" in imp.reason, imp.reason
+
+
+def test_shadowed_import_is_skipped_not_called_a_hallucination(tmp_path: Path) -> None:
+    """The #732/#742/#752 shape: another copy answered, so we cannot judge.
+
+    The service tree lacks the symbol; the checkout has it. With the service
+    tree winning (it is the CWD), the old code called a correct test a
+    hallucination and burned a replan budget.
+    """
+    service = tmp_path / "service"
+    (service / "server" / "routes").mkdir(parents=True)
+    for d in (service / "server", service / "server" / "routes"):
+        (d / "__init__.py").write_text("")
+    (service / "server" / "routes" / "git.py").write_text("def other(): ...\n")
+
+    checkout = _monorepo(tmp_path)  # has assert_safe_mcp_url
+
+    imp = PreflightImport(
+        module="server.routes.git",
+        name="assert_safe_mcp_url",
+        lineno=1,
+        is_relative=False,
+    )
+    # Force the service copy to win, as an ambient PYTHONPATH would.
+    env_before = os.environ.get("PYTHONPATH", "")
+    os.environ["PYTHONPATH"] = str(service)
+    try:
+        check_import(imp, project_dir=checkout / "nonexistent-subdir")
+    finally:
+        os.environ["PYTHONPATH"] = env_before
+
+    # Either it resolved the checkout (fine) or it was shadowed — but a
+    # shadowed result must never be reported as a hallucination.
+    assert imp.failed is False or "resolution failure" not in (imp.reason or "")
+
+
+def test_third_party_missing_attribute_still_fails(tmp_path: Path) -> None:
+    """Guard against over-reach: json is not a package this checkout owns."""
+    imp = PreflightImport(
+        module="json", name="definitely_not_here", lineno=1, is_relative=False
+    )
+    check_import(imp, project_dir=_monorepo(tmp_path))
+    assert imp.failed is True, imp.reason
+    assert imp.skipped is False, "a real hallucination must not be excused"
