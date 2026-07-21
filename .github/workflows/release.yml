@@ -143,13 +143,19 @@ jobs:
         if: steps.detect.outputs.should_release == 'true'
         uses: docker/setup-buildx-action@v3
 
+      # Same credentials as deploy.yml, which pushes to this exact package
+      # every merge to main. release.yml used the default GITHUB_TOKEN and got
+      # 403 Forbidden on the blob HEAD for ghcr.io/<owner>/tfactory: the package
+      # does not grant this repo's default token write access. deploy.yml has
+      # always carried the GHCR_PAT fallback; release.yml never did, so the two
+      # lanes disagreed about whether they could push the same image (#740).
       - name: Log in to GHCR
         if: steps.detect.outputs.should_release == 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: "${{ github.repository_owner }}"
+          password: "${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}"
 
       - name: Build + push bank-pilot image (WITH_RMUX=false, amd64)
         if: steps.detect.outputs.should_release == 'true'
