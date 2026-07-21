@@ -99,9 +99,17 @@ def test_release_workflow_signs_with_cosign() -> None:
     The original test invoked `cosign verify` on `built_image`, which can
     only work post-publish (cosign queries the registry's tlog). PR-time
     CI doesn't push, so the only meaningful PR-side gate is a static check
-    of release.yml. The actual signature verification is enforced inside
-    release.yml itself (the 'Verify signature (release self-test)' step
-    fails the release if the signature doesn't verify).
+    of release.yml.
+
+    Read this test's scope narrowly: it asserts release.yml *contains* the
+    signing steps, NOT that they ever ran. #740 is what that distinction
+    costs — the arm64 image build failed first for 0.9.15 and 0.9.16, every
+    later step (dev/demo build, cosign, Syft, attestation, the signature
+    self-test) was skipped as a consequence, and two releases published
+    unsigned with no SBOM while this test stayed green throughout. The
+    release job did fail; nothing asserted the published artifact was signed.
+    Proving that needs a post-publish check against the registry, which is
+    not what this test is.
     """
     release_yml = REPO_ROOT / ".github" / "workflows" / "release.yml"
     content = release_yml.read_text()

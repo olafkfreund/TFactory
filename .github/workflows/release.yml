@@ -126,15 +126,18 @@ jobs:
             --verify-tag
 
       # ----------------------------------------------------------------------
-      # P0 supply-chain pipeline: multi-arch build → push → cosign sign +
-      # SBOM attest → self-verify. Runs only on a real release (version bump).
+      # P0 supply-chain pipeline: build → push → cosign sign + SBOM attest →
+      # self-verify. Runs only on a real release (version bump).
+      #
+      # amd64 only (#740). This built linux/amd64,linux/arm64 under QEMU, and
+      # the arm64 leg failed in the frontend build (vite, src/index.css) for
+      # 0.9.15 and 0.9.16. Because it is the FIRST image step, its failure
+      # skipped the dev/demo build, cosign signing, SBOM generation, attestation
+      # and the signature self-test — so two releases shipped unsigned with no
+      # SBOM while the release still tagged and published normally. Nothing
+      # deploys arm64 (deploy.yml is amd64-only and is what the cluster runs),
+      # so the arm64 leg was costing the supply-chain guarantee for nothing.
       # ----------------------------------------------------------------------
-
-      - name: Set up QEMU
-        if: steps.detect.outputs.should_release == 'true'
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: linux/amd64,linux/arm64
 
       - name: Set up Docker Buildx
         if: steps.detect.outputs.should_release == 'true'
@@ -148,14 +151,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build + push bank-pilot image (WITH_RMUX=false, multi-arch)
+      - name: Build + push bank-pilot image (WITH_RMUX=false, amd64)
         if: steps.detect.outputs.should_release == 'true'
         id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
           tags: |
             ghcr.io/${{ github.repository_owner }}/tfactory:v${{ steps.detect.outputs.new }}
