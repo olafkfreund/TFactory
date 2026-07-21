@@ -1,5 +1,103 @@
 # Changelog
 
+## 0.9.17 — the symbol block points at the right build, and verify refuses the wrong tree (2026-07-21)
+
+Three fixes from a live run that exposed how much of the verify path was
+resolving against the wrong code.
+
+- **The delivered-symbols block now diffs against the branch the build was cut
+  from (#737, PR #743).** 0.9.16's block rendered but listed the wrong files: it
+  inherited its base from `_source_branch_changed_files`, which asked the repo
+  which branch is its *default* (`origin/HEAD` = `main`) rather than which
+  branch the build came from (`dev`, for every repo in this fleet). Measured on
+  TFactory's own checkout: 53 files against `origin/main` versus the 5 the build
+  actually touched. The block therefore reported dev's entire lead over main as
+  "what this build changed", and the 25-file cap crowded out the one file the
+  build had written. The base is now chosen by distance — try `origin/HEAD`,
+  `origin/dev`, `origin/main`, `origin/master` and keep whichever sits fewest
+  commits behind HEAD, since the branch was cut from exactly one of them. The
+  wrong base pre-dated the block: the same helper feeds the language verdict,
+  where a majority vote over noisy input still lands on the right answer, which
+  is why nothing surfaced it until a consumer with no noise tolerance appeared.
+
+- **Verify refuses to plan against a tree that is not this spec's build (#742,
+  PR #745).** `project_dir` is one shared clone per project and spec ingest
+  moves its HEAD, so whichever spec ran last owns HEAD for every other spec on
+  the project. Observed live: while spec 005 was being verified, the clone was
+  on spec 003's branch from the previous evening — so the planner's Glob/Grep,
+  the language signal, the import pre-flight (#732) and the symbol block were
+  all describing a different build than the one under test. Same failure class
+  as #732 but at the branch level, where #732's package-root fix cannot see it.
+  Ingest now records the commit it landed on (`source.json` `source_sha`) and
+  the planner compares it to HEAD, failing with `planner_source_checkout_drift`
+  on a mismatch. Failing is deliberate: verifying an unrelated tree produces a
+  confident verdict about code nobody asked about. Re-checking-out would be
+  self-healing but can yank the tree from under a concurrent spec; per-spec
+  worktrees are the real fix and stay open in #742. No recorded SHA means no
+  evidence of drift, and plans as before.
+
+- **The release signs its images again (#740, PR #744).** The release built
+  `linux/amd64,linux/arm64` under QEMU and the arm64 leg failed in the frontend
+  build (`vite`, `src/index.css`) for 0.9.15 and 0.9.16. Being the first image
+  step, its failure skipped the dev/demo build, cosign signing, SBOM generation,
+  attestation and the signature self-test — so two releases published unsigned
+  with no SBOM while the tag and GitHub release were created normally and
+  `deploy.yml` kept shipping to the cluster from its own lane. Nothing consumes
+  arm64 (`deploy.yml` is amd64-only and is what the cluster runs), so the leg is
+  dropped along with the QEMU setup that existed only for it.
+  `test_release_workflow_signs_with_cosign`'s docstring, which claimed the
+  self-test "fails the release if the signature doesn't verify", is corrected: a
+  skipped step enforces nothing, and that claim is why a green test sat beside
+  two unsigned releases.
+
+## 0.9.16 — the plan targets symbols the build actually delivered (2026-07-21)
+
+Fixes #737. Across three runs of the same issue with the same acceptance
+criteria, the coder produced three different APIs: `assert_safe_mcp_url` in a
+new `validators/` module, then the same name in `routes/git.py`, then a private
+`_is_safe_mcp_url_host` returning bool. All three satisfy the criteria —
+criteria describe behaviour, a test plan names symbols. Run 3's planner
+generated tests importing a public `assert_safe_mcp_url` raising
+`UnsafeMcpUrlError`, an API it inferred from the issue prose; the import
+pre-flight correctly rejected every subtask, the 12-replan budget drained, and
+the spec ended `planner_replan_budget_exhausted` with zero tests. That made
+verify on a real repo partly a coin flip — it worked on the demo helpers because
+`is_even(n)` has one obvious signature, and failed here because "a helper that
+validates a URL" has many.
+
+The information needed was already on hand and being discarded:
+`_checkout_source_branch` puts the build branch on disk before the planner runs,
+and `_source_branch_changed_files` already diffs it against the default branch,
+but everything except a one-word language verdict was thrown away. The planner
+prompt now carries a `SYMBOLS THE BUILD DELIVERED` block — the changed Python
+files parsed with `ast`, their symbols listed in the exact `path::symbol` syntax
+the plan must emit — in both initial and replan mode. Replan matters more, since
+that is the loop that burns the budget. Private names are included deliberately:
+hiding `_is_safe_mcp_url_host` would reproduce the bug, because the planner's
+error was reaching for a public name that did not exist; where behaviour is only
+reachable through a private helper, the block directs the planner to the public
+entry point instead. Python-only, matching the pre-flight guard that rejects
+these targets; no Python in the diff, an unreadable file, or a syntax error
+yields an empty block and byte-identical planner behaviour. The block reports
+what it read and never guesses.
+
+## 0.9.15 — pre-flight resolves nested package roots (2026-07-20)
+
+Fixes #732. The pre-flight import check put only `<project>` and `<project>/src`
+on PYTHONPATH, so a monorepo package at `apps/web-server/server` never resolved
+from the checkout. It fell through to whatever copy of that package name sat on
+the ambient PYTHONPATH — the running service's own — which predates the branch
+under test, so a brand-new function read as a hallucinated attribute. Exit 2,
+hard fail, replan, repeat, until the global replan budget was gone and the run
+failed with zero tests against correct code.
+
+The 0.9.14 hardening could not catch this: it skips exit 1 (module absent from
+the generation venv). Here the module imported fine — it was the wrong one.
+
+`package_roots_for` now finds the directories that actually contain the
+module's top-level package (bounded, skipping vendor dirs) and prepends them so
+the checkout wins. Genuine hallucinations on the same module are still caught.
+
 ## 0.9.14 — gen-functional pre-flight tolerates api-lane / SUT-dep imports (2026-07-18)
 
 - **The Gen-Functional pre-flight no longer false-rejects a correct test for a module that's merely absent from the generation venv (#707, PR #709).** The pre-flight (`agents/preflight_static.check_import`) imports every module a generated test imports against TFactory's OWN service venv (`sys.executable`) — but an api-lane test imports `requests` (not in the backend requirements) and a unit test transitively imports the SUT's own deps (fastapi, ...), so `importlib.import_module` raised `ModuleNotFoundError`, the pre-flight hard-rejected a perfectly correct test, the Planner replan-looped the subtask to `stuck`, and the spec ended `generated_empty / gen_functional_no_pending` with verify never running — the dominant reason endpoint/feature specs never reached a clean VAL-2 (same family as #609/#613, which only patched pytest into the venv). The generation venv is not the test-execution env (nix/docker), so an absent module is an environment gap, not a hallucination: the introspect subprocess now exits 3 for `ModuleNotFoundError` and `check_import` marks it `skipped` (the real test run resolves it) rather than failed. A genuine hallucination — importable module, missing attribute — still exits 2 and fails, preserving the check's value. Also: the concrete rejection reason is now persisted to `status.json` (`last_rejected_reason`), which #707 noted was empty and undiagnosable; and the pytest api-lane example now reads `TFACTORY_TARGET_URL` inside the test (matching its own prose) to prevent an import-time `KeyError` and stop the LLM copying a module-level read. Non-vendored pre-flight code only; the vendored gate/provisioner were untouched.
