@@ -33,6 +33,7 @@ for _m in [
     sys.modules.setdefault(_m, MagicMock())
 
 from prompts_pkg.prompts import (  # noqa: E402
+    _build_changed_symbols_block,
     get_tfactory_planner_prompt,
     get_tfactory_planner_replan_prompt,
 )
@@ -542,3 +543,64 @@ def test_planner_body_offers_go_in_schema_and_registry() -> None:
     assert "go" in p and "go-test" in p
     # the framework registry block enumerates the real go-test descriptor
     assert "go-test: language=go" in p
+
+
+# ── #737: symbols the build delivered ───────────────────────────────────
+#
+# Reproduces the real failure: the coder shipped a private `_is_safe_mcp_url_host`
+# while the planner tested an invented public `assert_safe_mcp_url`, so every
+# subtask was rejected by the import pre-flight until the replan budget ran out.
+
+
+def _spec_with_build(tmp_path: Path, source: str) -> tuple[Path, Path]:
+    """A spec whose diff.patch names one changed module, with that module on disk."""
+    spec_dir = _spec_with_ac(tmp_path, "Reject unsafe MCP URLs.")
+    (spec_dir / "context" / "diff.patch").write_text(
+        "--- a/server/routes/git.py\n+++ b/server/routes/git.py\n"
+    )
+    proj = tmp_path / "proj"
+    (proj / "server" / "routes").mkdir(parents=True)
+    (proj / "server" / "routes" / "git.py").write_text(source)
+    return spec_dir, proj
+
+
+def test_symbols_block_lists_what_was_built_not_what_was_specced(
+    tmp_path: Path,
+) -> None:
+    spec_dir, proj = _spec_with_build(
+        tmp_path,
+        "def _is_safe_mcp_url_host(url: str) -> bool:\n"
+        "    return True\n\n\n"
+        "class Health:\n"
+        "    def check(self) -> None: ...\n"
+        "    def __init__(self) -> None: ...\n",
+    )
+    block = _build_changed_symbols_block(spec_dir, proj)
+
+    # The private helper that actually exists must be offered as a target.
+    assert "`server/routes/git.py::_is_safe_mcp_url_host`" in block
+    assert "`server/routes/git.py::Health`" in block
+    assert "`server/routes/git.py::Health.check`" in block
+    # Dunders are noise, never a test target.
+    assert "__init__" not in block
+    # The invented name is absent — that is the whole point.
+    assert "assert_safe_mcp_url" not in block
+    # And it reaches the planner in both modes.
+    assert "_is_safe_mcp_url_host" in get_tfactory_planner_prompt(spec_dir, proj)
+    assert "_is_safe_mcp_url_host" in get_tfactory_planner_replan_prompt(spec_dir, proj)
+
+
+def test_symbols_block_empty_when_no_python_changed(tmp_path: Path) -> None:
+    """No signal → no block, so planner behaviour is unchanged (never a lie)."""
+    spec_dir = _spec_with_ac(tmp_path, "Ship it.")
+    (spec_dir / "context" / "diff.patch").write_text(
+        "--- a/main.go\n+++ b/main.go\n"
+        "--- a/tests/test_only.py\n+++ b/tests/test_only.py\n"
+    )
+    assert _build_changed_symbols_block(spec_dir, tmp_path / "proj") == ""
+
+
+def test_symbols_block_survives_unparseable_source(tmp_path: Path) -> None:
+    """A syntax error in the build must not take the whole planner down."""
+    spec_dir, proj = _spec_with_build(tmp_path, "def broken(:\n")
+    assert _build_changed_symbols_block(spec_dir, proj) == ""
