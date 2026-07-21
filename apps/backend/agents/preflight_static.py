@@ -44,6 +44,7 @@ from __future__ import annotations
 import ast
 import logging
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -223,7 +224,11 @@ except ModuleNotFoundError as e:
     if getattr(e, 'name', None) == _target:
         # Neither an attribute nor an importable submodule: the name is
         # genuinely absent -> hallucination. Preserve the guard's real value.
-        sys.stderr.write(_mod + ' has no attribute ' + _name)
+        # Report WHICH file answered: three separate defects (#732 wrong roots,
+        # #742 wrong branch, #752 CWD outranking both) all surfaced as this one
+        # indistinguishable message, and each cost hours to tell apart.
+        _f = getattr(m, '__file__', None) or '?'
+        sys.stderr.write(_mod + ' has no attribute ' + _name + ' [resolved: ' + str(_f) + ']')
         sys.exit(2)
     # The submodule exists but one of ITS deps is absent from the generation
     # env. Unverifiable here; the test-execution env resolves it. Skip.
@@ -355,6 +360,71 @@ def requirements_files(root: Path, *, limit: int = 5) -> list[Path]:
     return found
 
 
+def _shadowed_elsewhere(
+    detail: str, module: str, project_dir: Path | None
+) -> str | None:
+    """The path that answered, when it is NOT the checkout's own copy.
+
+    A missing attribute usually means the test named something that does not
+    exist — the guard's whole purpose. But it means something entirely different
+    when the import was answered by a DIFFERENT copy of a package the checkout
+    also provides: then the symbol may exist perfectly well in the code under
+    test and the probe simply read the wrong file. Three defects landed here in
+    one day (#732 wrong roots, #742 wrong branch, #752 CWD outranking both), all
+    reported identically as a hallucination against correct code.
+
+    Returns the offending path when the checkout DOES provide this package and
+    something outside the checkout answered; ``None`` otherwise. The
+    checkout-provides test is what keeps third-party and stdlib modules honest:
+    ``from json import nope`` resolves outside the checkout too, and that really
+    is a hallucination, so it must keep failing.
+    """
+    if project_dir is None:
+        return None
+    m = re.search(r"\[resolved: ([^\]]+)\]", detail)
+    if not m:
+        return None
+    resolved = m.group(1).strip()
+    if resolved in ("", "?"):
+        return None
+    if not package_roots_for(project_dir, module):
+        return None  # not a package this checkout owns — a real missing name
+    try:
+        Path(resolved).resolve().relative_to(Path(project_dir).resolve())
+    except ValueError:
+        return resolved  # answered from outside the checkout: shadowed
+    return None
+
+
+def _classify_nonzero(
+    imp: PreflightImport,
+    proc: subprocess.CompletedProcess[str],
+    project_dir: Path | None,
+) -> PreflightImport:
+    """Turn a non-zero probe exit into failed / skipped, with the file that answered."""
+    detail = (proc.stderr or proc.stdout or "exit non-zero").strip()
+
+    if proc.returncode == _EXIT_MISSING_ATTR:
+        shadow = _shadowed_elsewhere(detail, imp.module, project_dir)
+        if shadow:
+            # Not a hallucination: a different copy of this package answered, so
+            # the symbol's absence says nothing about the code under test. Skip
+            # rather than reject — the same environment-vs-hallucination call
+            # #707 makes for a missing module.
+            imp.skipped = True
+            imp.reason = (
+                f"{imp.module}.{imp.name} not found, but the import resolved to "
+                f"{shadow}, outside {project_dir} — the checkout's own copy was "
+                "shadowed, so this is a resolution failure, not a hallucination"
+            )[:300]
+            return imp
+
+    if proc.returncode != 0:
+        imp.failed = True
+        imp.reason = detail[:300]
+    return imp
+
+
 def check_import(
     imp: PreflightImport,
     *,
@@ -442,11 +512,7 @@ def check_import(
         ).strip()[:300]
         return imp
 
-    if proc.returncode != 0:
-        imp.failed = True
-        imp.reason = (proc.stderr or proc.stdout or "exit non-zero").strip()[:300]
-
-    return imp
+    return _classify_nonzero(imp, proc, project_dir)
 
 
 # ─── Top-level entry point ──────────────────────────────────────────────
