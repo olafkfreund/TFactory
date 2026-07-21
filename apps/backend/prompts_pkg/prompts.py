@@ -7,6 +7,7 @@ Supports dynamic prompt assembly based on project type for context optimization.
 Supports Quick Mode for simplified prompts (~70% fewer tokens).
 """
 
+import ast
 import json
 import os
 import re
@@ -617,6 +618,101 @@ def _diff_patch_files(spec_dir: Path) -> list[str]:
     return re.findall(r"^\+\+\+ b/(\S+)", text, flags=re.MULTILINE)
 
 
+# Caps so a large build can't crowd the rest of the prompt out.
+_SYMBOLS_MAX_FILES = 25
+_SYMBOLS_MAX_PER_FILE = 30
+
+
+def _module_symbols(path: Path) -> list[str]:
+    """Top-level defs/classes (+ their non-dunder methods) in a Python file.
+
+    Private names are deliberately INCLUDED: #737's whole failure mode was the
+    planner testing a public ``assert_safe_mcp_url`` it invented while the coder
+    had built a private ``_is_safe_mcp_url_host``. Hiding the private name would
+    reproduce the bug. Best-effort — an unparseable file yields ``[]``.
+    """
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError, ValueError):
+        return []
+    out: list[str] = []
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            out.append(node.name)
+        elif isinstance(node, ast.ClassDef):
+            out.append(node.name)
+            out.extend(
+                f"{node.name}.{m.name}"
+                for m in node.body
+                if isinstance(m, ast.FunctionDef | ast.AsyncFunctionDef)
+                and not m.name.startswith("__")
+            )
+    return out
+
+
+def _build_changed_symbols_block(spec_dir: Path, project_dir: Path) -> str:
+    """List the symbols the build actually delivered, in the plan's target syntax.
+
+    #737: across three runs of one issue the coder produced three different APIs
+    for the same acceptance criteria (a new module, a public assert, a private
+    bool helper). The criteria describe behaviour; the plan names symbols. So a
+    run whose naming diverged from the planner's guess burned the whole replan
+    budget on imports of a function that was never written.
+
+    The build branch is already checked out in ``project_dir`` before the planner
+    runs (``_checkout_source_branch``), and ``_source_branch_changed_files``
+    already computes what it changed — that list was previously reduced to a
+    one-word language verdict and discarded. This surfaces it, so the planner
+    picks targets that demonstrably exist instead of inferring them from prose.
+
+    Python-only, matching the pre-flight guard that rejects the bad targets
+    (``preflight_static.check_import``). Returns "" when there is nothing
+    reliable to say, leaving planner behaviour exactly as it was.
+    """
+    files = _source_branch_changed_files(spec_dir, project_dir) or _diff_patch_files(
+        spec_dir
+    )
+    impl = [
+        f
+        for f in files
+        if f.endswith(".py")
+        and not Path(f).name.startswith("test_")
+        and "tests/" not in f
+    ]
+    if not impl:
+        return ""
+
+    lines: list[str] = []
+    for rel in impl[:_SYMBOLS_MAX_FILES]:
+        symbols = _module_symbols(project_dir / rel)
+        if not symbols:
+            continue
+        lines.extend(f"- `{rel}::{s}`" for s in symbols[:_SYMBOLS_MAX_PER_FILE])
+        if len(symbols) > _SYMBOLS_MAX_PER_FILE:
+            lines.append(f"- (…{len(symbols) - _SYMBOLS_MAX_PER_FILE} more in {rel})")
+    if not lines:
+        return ""
+    if len(impl) > _SYMBOLS_MAX_FILES:
+        lines.append(f"- (…{len(impl) - _SYMBOLS_MAX_FILES} more changed files)")
+
+    return (
+        "## SYMBOLS THE BUILD DELIVERED\n\n"
+        "These are the Python symbols in the files this build changed, already in "
+        "the `target` syntax you must emit:\n\n"
+        + "\n".join(lines)
+        + "\n\nThese are facts read from the checked-out build branch, not "
+        "suggestions. Pick `target` from this list wherever the deliverable is "
+        "Python.\n\n"
+        "A name that appears in the spec text but NOT here was not built under "
+        "that name — the same behaviour will have shipped as some other symbol "
+        "above. Do not plan a test that imports a name you have not seen in this "
+        "list or Read from `project_dir`: it will be rejected by the import "
+        "pre-flight and cost a replan. When the behaviour you must cover is only "
+        "reachable through a private helper, test it through the public entry "
+        "point that calls it.\n\n"
+    )
+
+
 # Filename-looking tokens in the spec/AC text ("helpers/roman.py", "main.go").
 _SPEC_FILENAME_RE = re.compile(r"[\w./-]+\.\w+")
 
@@ -884,6 +980,9 @@ def get_tfactory_planner_prompt(spec_dir: Path, project_dir: Path) -> str:
     # other non-Python) target to pytest. Sits next to the registry it references.
     language_block = _build_detected_language_block(spec_dir, project_dir)
     catalog_block = _build_tests_catalog_block(spec_dir)
+    # #737: the symbols the build actually delivered, so targets are read from
+    # the diff rather than inferred from the acceptance criteria's prose.
+    symbols_block = _build_changed_symbols_block(spec_dir, project_dir)
     # RFC-0002 declared test profile (#246) — authoritative over inference.
     profile_block = _build_contract_profile_block(spec_dir)
     # RFC-0012 house testing-standards — follow the team's own test conventions.
@@ -907,6 +1006,7 @@ def get_tfactory_planner_prompt(spec_dir: Path, project_dir: Path) -> str:
         f"{house_block}"
         f"{registry_block}\n"
         f"{language_block}\n"
+        f"{symbols_block}"
         f"{catalog_block}\n"
         "---\n\n"
     )
@@ -1124,7 +1224,11 @@ def get_tfactory_planner_replan_prompt(spec_dir: Path, project_dir: Path) -> str
     # forced equivalence lane) is preserved across the loop. Empty when no
     # contract/tier is present → replan behaviour unchanged.
     profile_block = _build_contract_profile_block(spec_dir)
-    return context + profile_block + body
+    # #737: a replan triggered by "module has no attribute X" is the planner
+    # re-guessing a name. Put the real symbols in front of it here too — this is
+    # the loop that burned the 12-replan budget, so it matters more than initial.
+    symbols_block = _build_changed_symbols_block(spec_dir, project_dir)
+    return context + profile_block + symbols_block + body
 
 
 _IMPORT_ROOT_SKIP_DIRS = frozenset(
