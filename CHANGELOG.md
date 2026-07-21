@@ -1,5 +1,115 @@
 # Changelog
 
+## 0.9.23 — the Nix verify lane installs the SUT's own dependencies (2026-07-21)
+
+- **A repo that declares its deps in requirements.txt is now installable in the
+  Nix lane (#764, PR #765 + hub Factory#308).** The lane built its Python set
+  from `_PYPROJECT_DEP_MAP`, a curated 21-entry PyPI-to-nixpkgs allowlist read
+  out of `pyproject.toml`. That list can never be complete, and a repo declaring
+  dependencies in `requirements.txt` got nothing from it at all — this repo is
+  exactly that shape (`apps/web-server/requirements.txt`,
+  `apps/backend/requirements.txt`, no root `pyproject.toml`). A real application
+  was therefore unimportable in the lane and every acceptance criterion came
+  back a collection error against correct code, the same failure #759 fixed on
+  the host runner.
+
+  Rather than growing a map that cannot be finished, the lane installs the SUT's
+  requirements at run time: `pip` ships in the generated flake when the checkout
+  declares any, and the Job runs `pip install --target /tmp/tf_sut_deps` per
+  file with that directory first on PYTHONPATH. `--target` sidesteps
+  ensurepip/venv availability in the nix interpreter, and `/tmp` is the one
+  location the Job's non-root uid can write. Each file installs separately under
+  the script's existing `set +e`, so one unresolvable pin cannot take the rest
+  down and the package roots stay the fallback.
+
+  A checkout with no `requirements.txt` gets no pip in its closure and a
+  byte-identical PYTHONPATH export, so hermetic repos are untouched — the
+  pre-existing export assertion passes unmodified, which is what proves it.
+
+  `nix_provisioner.py` is vendored from the hub, so the canonical half landed as
+  Factory#308 first and was re-vendored here byte-exact with HUB_PIN_SHA bumped
+  to `aad8d9e`. The drift gate rejected editing the vendored copy directly,
+  which is precisely its job.
+
+## 0.9.22 — a rejected import says which file answered (2026-07-21)
+
+- **The pre-flight now reports the resolved file, and no longer calls shadowing
+  a hallucination (#754, PR #762).** Three defects landed on this path in one
+  day — #732 (wrong import roots), #742 (shared clone on another spec's branch),
+  #752 (CWD outranking PYTHONPATH, so the running service's own copy answered) —
+  and every one surfaced as the same undiagnosable line, `X has no attribute Y`,
+  while the symbol existed perfectly well in the code under test. Each cost
+  hours, and fixing one only exposed the next, because several independent
+  layers decide which copy of a module wins.
+
+  The probe already imports the module, so it already holds `__file__`. The
+  rejection reason now carries it, which would have made all three obvious on
+  sight: the path was outside the checkout.
+
+  Classification changes narrowly with it. When the answering file is a
+  *different copy of a package the checkout also provides*, the symbol's absence
+  says nothing about the code under test, so the import is skipped as a
+  resolution failure rather than rejected as a hallucination — the same
+  environment-vs-hallucination call #707 makes for a missing module. The
+  "checkout also provides it" condition is the guardrail: `from json import
+  nope` also resolves outside the checkout and genuinely is a hallucination, so
+  it must keep failing, and a regression test pins that. An over-broad version
+  of this change would have quietly gutted the guard's purpose.
+
+## 0.9.21 — the lane venv installs the app's own dependencies (2026-07-21)
+
+- **A monorepo's dependencies now reach the test-execution venv (#759, PR
+  #760).** Run 6 produced 11 well-targeted tests with zero replan cycles and
+  flagged all 11 anyway, `ac_fidelity 0/6`, every verdict stating plainly that
+  *"consistent_fail is the shared sandbox import error, not a test defect"*. The
+  evaluator even wrote the fix into the run: install
+  `apps/web-server/requirements.txt` into the lane venv.
+
+  `_ensure_host_venv` looked for dependencies in exactly two places, both at the
+  repo root — `requirements.txt` and `pyproject.toml`. This repo has **neither**
+  at the root; it declares them in `apps/web-server/` and `apps/backend/`. Both
+  branches were skipped, the venv received only pytest, pytest-cov and requests,
+  and every test importing the app died at collection on fastapi — grading
+  correct code as an error. `requirements_files` discovers them at the same
+  bounded depth and with the same vendor-dir skips as `package_root_rel_paths`
+  (#756), each installed in its own pip call so one unresolvable pin cannot take
+  the others down with it.
+
+  Worth recording: #759 originally blamed the Nix lane's missing SUT
+  dependencies. The Nix lane never ran — with no task contract there is no
+  RFC-0005 environment manifest, `is_nix_environment` is False, and verify falls
+  through to this host runner. The Nix lane's own gap is real but separate: it
+  maps a curated 21-name allowlist and has no `requirements.txt` support at all,
+  which bites on the PFactory-planned path where it does run.
+
+## 0.9.20 — generated tests can finally run on a monorepo (2026-07-21)
+
+- **The test-execution path now carries a monorepo's package roots (#756, PR
+  #757).** Run 5 reached a triaged verdict on a real repo for the first time — 8
+  tests generated, evaluator ran, triager reported — and flagged all 8 with one
+  reason: *the subject module could not be imported/collected in the sandbox*.
+  The tests were sound (`mutation=killed`, `semantic=high`, `ci_parity=yes`);
+  they never got to run. The runners built PYTHONPATH as `<root>/src` +
+  `<root>`, which covers flat and src-layout repos and misses a monorepo whose
+  package sits at `apps/web-server/server`, so pytest failed at collection and
+  every acceptance criterion came back an error against correct code.
+
+  `package_root_rel_paths` is the execution-time counterpart to #732's
+  `package_roots_for`: the probe asks where THIS module lives, the runner asks
+  what pytest needs on the path to collect anything at all, since at execution
+  time it is handed a directory of tests rather than one module. Wired into the
+  Nix Job (roots discovered from the scratch the Job co-mounts, mapping 1:1 onto
+  in-Job paths) and the host runner; the historical entries stay, last, so flat
+  and src-layout repos are byte-identical. The Docker runner still hardcodes
+  `/scratch/src:/scratch` — unused on this cluster, so left alone rather than
+  changed blind.
+
+  This was the last link. Everything upstream already worked: the build lands
+  (AIFactory #984), the handoff carries the build branch (#980), the planner
+  targets symbols that exist (#737/#743), the clone is the right one (#742), and
+  the probe reads the checkout (#752). Tests were being written correctly and
+  then could not be executed.
+
 ## 0.9.19 — the import probe reads the checkout, not the running service (2026-07-21)
 
 - **Pre-flight resolved against TFactory's own tree when package names collided
