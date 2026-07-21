@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.9.15 — pre-flight resolves nested package roots (2026-07-20)
+
+Fixes #732. The pre-flight import check put only `<project>` and `<project>/src`
+on PYTHONPATH, so a monorepo package at `apps/web-server/server` never resolved
+from the checkout. It fell through to whatever copy of that package name sat on
+the ambient PYTHONPATH — the running service's own — which predates the branch
+under test, so a brand-new function read as a hallucinated attribute. Exit 2,
+hard fail, replan, repeat, until the global replan budget was gone and the run
+failed with zero tests against correct code.
+
+The 0.9.14 hardening could not catch this: it skips exit 1 (module absent from
+the generation venv). Here the module imported fine — it was the wrong one.
+
+`package_roots_for` now finds the directories that actually contain the
+module's top-level package (bounded, skipping vendor dirs) and prepends them so
+the checkout wins. Genuine hallucinations on the same module are still caught.
+
 ## 0.9.14 — gen-functional pre-flight tolerates api-lane / SUT-dep imports (2026-07-18)
 
 - **The Gen-Functional pre-flight no longer false-rejects a correct test for a module that's merely absent from the generation venv (#707, PR #709).** The pre-flight (`agents/preflight_static.check_import`) imports every module a generated test imports against TFactory's OWN service venv (`sys.executable`) — but an api-lane test imports `requests` (not in the backend requirements) and a unit test transitively imports the SUT's own deps (fastapi, ...), so `importlib.import_module` raised `ModuleNotFoundError`, the pre-flight hard-rejected a perfectly correct test, the Planner replan-looped the subtask to `stuck`, and the spec ended `generated_empty / gen_functional_no_pending` with verify never running — the dominant reason endpoint/feature specs never reached a clean VAL-2 (same family as #609/#613, which only patched pytest into the venv). The generation venv is not the test-execution env (nix/docker), so an absent module is an environment gap, not a hallucination: the introspect subprocess now exits 3 for `ModuleNotFoundError` and `check_import` marks it `skipped` (the real test run resolves it) rather than failed. A genuine hallucination — importable module, missing attribute — still exits 2 and fails, preserving the check's value. Also: the concrete rejection reason is now persisted to `status.json` (`last_rejected_reason`), which #707 noted was empty and undiagnosable; and the pytest api-lane example now reads `TFACTORY_TARGET_URL` inside the test (matching its own prose) to prevent an import-time `KeyError` and stop the LLM copying a module-level read. Non-vendored pre-flight code only; the vendored gate/provisioner were untouched.
