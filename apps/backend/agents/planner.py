@@ -607,6 +607,28 @@ def _checkout_drift(spec_dir: Path, project_dir: Path) -> str | None:
     )
 
 
+def _planner_blocked(spec_dir: Path, project_dir: Path) -> bool:
+    """True when the workspace is unusable and planning must not start.
+
+    Two conditions, kept together so ``run_planner`` bails once: the spec dir is
+    missing, or the shared clone no longer holds this spec's build (#742).
+    """
+    if not spec_dir.is_dir():
+        _planner_log.error("planner: spec_dir %s does not exist", spec_dir)
+        return True
+    drift = _checkout_drift(spec_dir, project_dir)
+    if drift:
+        _planner_log.error("planner: %s", drift)
+        _write_status_patch(
+            spec_dir,
+            status="failed",
+            phase="planner_source_checkout_drift",
+            planner_warnings=[drift],
+        )
+        return True
+    return False
+
+
 async def run_planner(
     spec_dir: Path,
     project_dir: Path,
@@ -646,19 +668,7 @@ async def run_planner(
           Write tool. This function may also write to status.json's
           ``planner_warnings`` list with truncation / soft-fail notes.
     """
-    if not spec_dir.is_dir():
-        _planner_log.error("planner: spec_dir %s does not exist", spec_dir)
-        return False
-
-    drift = _checkout_drift(spec_dir, project_dir)
-    if drift:
-        _planner_log.error("planner: %s", drift)
-        _write_status_patch(
-            spec_dir,
-            status="failed",
-            phase="planner_source_checkout_drift",
-            planner_warnings=[drift],
-        )
+    if _planner_blocked(spec_dir, project_dir):
         return False
 
     if mode == "replan":

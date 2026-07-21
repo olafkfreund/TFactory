@@ -200,12 +200,13 @@ def _format_json(data: Any) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _checkout_source_branch(project_root: Path, branch: str) -> str | None:
+def _checkout_source_branch(project_root: Path, branch: str) -> tuple[str | None, str]:
     """Fetch + check out ``branch`` in ``project_root`` so the SUT under test is
     the actual built code, not the default branch (#96 — closes the hollow-verify
     gap where TFactory tested a tree that never contained AIFactory's build).
 
-    Best-effort: returns ``None`` on success, or a short warning string on failure
+    Returns ``(warning, sha)``: warning is ``None`` on success or a short string on
+    failure, and sha is the resolved HEAD (``""`` when unknown).
     (a missing/unfetchable branch must never abort ingest — the spec still lands;
     tests just run against whatever is checked out). Resolves the SHA so a detached
     checkout is deterministic and the Triager can record it."""
@@ -221,38 +222,23 @@ def _checkout_source_branch(project_root: Path, branch: str) -> str | None:
 
     try:
         if not (project_root / ".git").exists():
-            return f"source_branch={branch!r} requested but {project_root} is not a git repo"
+            return (
+                f"source_branch={branch!r} requested but {project_root} is not a git repo",
+                "",
+            )
         fetch = _git("fetch", "--no-tags", "origin", branch)
         if fetch.returncode != 0:
-            return f"git fetch origin {branch} failed: {fetch.stderr.strip()[:200]}"
+            return f"git fetch origin {branch} failed: {fetch.stderr.strip()[:200]}", ""
         co = _git("checkout", "--force", "FETCH_HEAD")
         if co.returncode != 0:
-            return f"git checkout {branch} failed: {co.stderr.strip()[:200]}"
-        return None
+            return f"git checkout {branch} failed: {co.stderr.strip()[:200]}", ""
+        # Pin what we landed on, so a later stage can tell whether the shared
+        # clone still holds this build (#742). Same _git helper — no second
+        # subprocess call site.
+        head = _git("rev-parse", "HEAD")
+        return None, (head.stdout.strip() if head.returncode == 0 else "")
     except Exception as exc:  # noqa: BLE001 — checkout must never break ingest
-        return f"source_branch checkout error: {exc}"
-
-
-def _head_sha(project_root: Path) -> str:
-    """Resolved HEAD of ``project_root``, or ``""`` if it cannot be read.
-
-    Recorded at ingest so a later stage can tell whether it is still looking at
-    the build it was handed. ``project_dir`` is one shared clone per project, and
-    the ingest checkout moves its HEAD, so another spec ingesting in between
-    silently repoints the tree every reader resolves against (#742).
-    """
-    import subprocess
-
-    try:
-        out = subprocess.run(
-            ["git", "-C", str(project_root), "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        return out.stdout.strip() if out.returncode == 0 else ""
-    except Exception:  # noqa: BLE001 — a SHA read must never break ingest
-        return ""
+        return f"source_branch checkout error: {exc}", ""
 
 
 def create_spec_ingest_workspace(
@@ -341,13 +327,11 @@ def create_spec_ingest_workspace(
     # and ingest proceeds (tests then run against whatever is checked out).
     source_sha = ""
     if source_branch:
-        warn = _checkout_source_branch(Path(project_root).expanduser(), source_branch)
+        warn, source_sha = _checkout_source_branch(
+            Path(project_root).expanduser(), source_branch
+        )
         if warn:
             warnings.append(warn)
-        else:
-            # Pin what we actually checked out, so a later stage can tell whether
-            # the shared clone still holds this build (#742).
-            source_sha = _head_sha(Path(project_root).expanduser())
 
     # source.json: target_paths name the SUT; source_branch records which build
     # was checked out (when supplied). The Triager's PR-status side-effect skips
