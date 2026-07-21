@@ -2,13 +2,16 @@
 Git, Ollama, MCP, and utility routes.
 """
 
+import ipaddress
 import json
 import logging
 import re
 import shlex
 import shutil
+import socket
 import subprocess
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -207,7 +210,6 @@ def _safe_ollama_base_url(base_url: str | None) -> str:
     """
     if not base_url or not base_url.strip():
         return "http://localhost:11434"
-    from urllib.parse import urlparse
 
     parsed = urlparse(base_url.strip())
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
@@ -220,9 +222,16 @@ def _safe_ollama_base_url(base_url: str | None) -> str:
 def _is_safe_mcp_url(url: str) -> bool:
     """Validate a request-supplied MCP server URL (SSRF guard, review H2).
 
-    Resolves hostnames to IP addresses and validates that the resolved IP
-    is not a metadata endpoint or otherwise unsafe. Only http/https schemes
-    are allowed.
+    Resolves hostnames to ALL addresses (IPv4 and IPv6) and validates that
+    every resolved IP is not in a reserved/link-local/multicast/unspecified
+    range. Loopback (127.0.0.1, ::1) and private ranges (10/8, 172.16/12,
+    192.168/16) are allowed.
+
+    Acceptance Criteria:
+    - AC#1: Rejects link-local, reserved, multicast, unspecified; checks every address
+    - AC#2: Loopback checked before reserved test (order matters for IPv6)
+    - AC#3: Private ranges allowed
+    - AC#4: Unresolvable hosts treated as unsafe (fail closed)
 
     Args:
         url: The MCP server URL to validate
@@ -231,11 +240,9 @@ def _is_safe_mcp_url(url: str) -> bool:
         True if the URL is safe, False otherwise
 
     Raises:
-        HTTPException: If the URL has an invalid scheme or cannot be resolved
+        HTTPException: If the URL has an invalid scheme, cannot be resolved, or
+                      if any resolved address is in a disallowed range
     """
-    import socket
-    from urllib.parse import urlparse
-
     if not url or not url.strip():
         return False
 
@@ -245,27 +252,49 @@ def _is_safe_mcp_url(url: str) -> bool:
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         raise HTTPException(status_code=400, detail="Invalid MCP server URL")
 
-    # Block known metadata endpoints by hostname
+    # Block known metadata endpoints by hostname (pre-resolution check)
     if parsed.hostname in ("169.254.169.254", "metadata.google.internal"):
         raise HTTPException(status_code=400, detail="Disallowed MCP server URL")
 
-    # Attempt to resolve the hostname to an IP address
+    # Resolve hostname to ALL addresses (IPv4 and IPv6)
     try:
-        resolved_ip = socket.gethostbyname(parsed.hostname)
+        results = socket.getaddrinfo(parsed.hostname, None)
+        if not results:
+            raise HTTPException(status_code=400, detail="Could not resolve MCP server hostname")
     except socket.gaierror:
-        # Hostname resolution failed - the server may be offline or unreachable
         logger.warning(f"Could not resolve hostname for MCP URL: {parsed.hostname}")
         raise HTTPException(status_code=400, detail="Could not resolve MCP server hostname")
     except Exception:
         logger.exception(f"Error resolving hostname for MCP URL: {parsed.hostname}")
         raise HTTPException(status_code=400, detail="Error resolving MCP server hostname")
 
-    # Validate the resolved IP is not a metadata endpoint
-    if resolved_ip in ("169.254.169.254", "127.0.0.1"):
-        # Note: localhost (127.0.0.1) is allowed for local MCP servers
-        # but we log it for security auditing
-        if resolved_ip == "169.254.169.254":
-            raise HTTPException(status_code=400, detail="Disallowed MCP server IP")
+    # Check EACH resolved address - reject if ANY is unsafe
+    for family, socktype, proto, canonname, sockaddr in results:
+        try:
+            ip = ipaddress.ip_address(sockaddr[0])
+        except ValueError:
+            logger.warning(f"Invalid IP address: {sockaddr[0]}")
+            raise HTTPException(status_code=400, detail="Invalid resolved IP address")
+
+        # AC#2: Loopback checked FIRST (before reserved test)
+        # IPv6 ::1 satisfies is_reserved but should be allowed
+        if ip.is_loopback:
+            continue  # Loopback is OK, check next address
+
+        # AC#1: Reject link-local BEFORE checking private ranges
+        # (because 169.254.0.0/16 is both link-local and private in ipaddress)
+        if ip.is_link_local or ip.is_multicast or ip.is_unspecified:
+            logger.warning(f"Disallowed address range for MCP URL: {ip}")
+            raise HTTPException(status_code=400, detail="Disallowed MCP server address")
+
+        # AC#3: Private ranges allowed (10/8, 172.16/12, 192.168/16)
+        if ip.is_private:
+            continue  # Private is OK, check next address
+
+        # AC#1: Reject all other reserved ranges
+        if ip.is_reserved:
+            logger.warning(f"Disallowed address range for MCP URL: {ip}")
+            raise HTTPException(status_code=400, detail="Disallowed MCP server address")
 
     return True
 
