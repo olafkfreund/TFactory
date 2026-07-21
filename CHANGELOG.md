@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.9.21 — the lane venv installs the app's own dependencies (2026-07-21)
+
+- **A monorepo's dependencies now reach the test-execution venv (#759, PR
+  #760).** Run 6 produced 11 well-targeted tests with zero replan cycles and
+  flagged all 11 anyway, `ac_fidelity 0/6`, every verdict stating plainly that
+  *"consistent_fail is the shared sandbox import error, not a test defect"*. The
+  evaluator even wrote the fix into the run: install
+  `apps/web-server/requirements.txt` into the lane venv.
+
+  `_ensure_host_venv` looked for dependencies in exactly two places, both at the
+  repo root — `requirements.txt` and `pyproject.toml`. This repo has **neither**
+  at the root; it declares them in `apps/web-server/` and `apps/backend/`. Both
+  branches were skipped, the venv received only pytest, pytest-cov and requests,
+  and every test importing the app died at collection on fastapi — grading
+  correct code as an error. `requirements_files` discovers them at the same
+  bounded depth and with the same vendor-dir skips as `package_root_rel_paths`
+  (#756), each installed in its own pip call so one unresolvable pin cannot take
+  the others down with it.
+
+  Worth recording: #759 originally blamed the Nix lane's missing SUT
+  dependencies. The Nix lane never ran — with no task contract there is no
+  RFC-0005 environment manifest, `is_nix_environment` is False, and verify falls
+  through to this host runner. The Nix lane's own gap is real but separate: it
+  maps a curated 21-name allowlist and has no `requirements.txt` support at all,
+  which bites on the PFactory-planned path where it does run.
+
+## 0.9.20 — generated tests can finally run on a monorepo (2026-07-21)
+
+- **The test-execution path now carries a monorepo's package roots (#756, PR
+  #757).** Run 5 reached a triaged verdict on a real repo for the first time — 8
+  tests generated, evaluator ran, triager reported — and flagged all 8 with one
+  reason: *the subject module could not be imported/collected in the sandbox*.
+  The tests were sound (`mutation=killed`, `semantic=high`, `ci_parity=yes`);
+  they never got to run. The runners built PYTHONPATH as `<root>/src` +
+  `<root>`, which covers flat and src-layout repos and misses a monorepo whose
+  package sits at `apps/web-server/server`, so pytest failed at collection and
+  every acceptance criterion came back an error against correct code.
+
+  `package_root_rel_paths` is the execution-time counterpart to #732's
+  `package_roots_for`: the probe asks where THIS module lives, the runner asks
+  what pytest needs on the path to collect anything at all, since at execution
+  time it is handed a directory of tests rather than one module. Wired into the
+  Nix Job (roots discovered from the scratch the Job co-mounts, mapping 1:1 onto
+  in-Job paths) and the host runner; the historical entries stay, last, so flat
+  and src-layout repos are byte-identical. The Docker runner still hardcodes
+  `/scratch/src:/scratch` — unused on this cluster, so left alone rather than
+  changed blind.
+
+  This was the last link. Everything upstream already worked: the build lands
+  (AIFactory #984), the handoff carries the build branch (#980), the planner
+  targets symbols that exist (#737/#743), the clone is the right one (#742), and
+  the probe reads the checkout (#752). Tests were being written correctly and
+  then could not be executed.
+
 ## 0.9.19 — the import probe reads the checkout, not the running service (2026-07-21)
 
 - **Pre-flight resolved against TFactory's own tree when package names collided
