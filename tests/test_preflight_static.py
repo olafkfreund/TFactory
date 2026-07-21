@@ -454,3 +454,38 @@ def test_check_import_still_catches_a_hallucination_in_a_nested_package(
     ps.check_import(imp, project_dir=root)
     assert imp.failed is True
     assert "has no attribute" in (imp.reason or "")
+
+
+# ── #752: the probe must not resolve against the service's own tree ──────
+
+
+def test_probe_runs_from_the_checkout_not_the_service_cwd(tmp_path, monkeypatch):
+    """TFactory verifying TFactory imported the RUNNING service's module.
+
+    `python -c` puts the CWD at the front of sys.path, ahead of PYTHONPATH, so
+    inheriting the service's working directory outranked the checkout roots.
+    Both trees provide `server.routes.git`; the probe read the wrong one and
+    called a correct test a hallucination.
+    """
+    # The "service" tree: same package name, WITHOUT the built symbol.
+    service = tmp_path / "service"
+    (service / "server" / "routes").mkdir(parents=True)
+    for d in (service / "server", service / "server" / "routes"):
+        (d / "__init__.py").write_text("")
+    (service / "server" / "routes" / "git.py").write_text("def old_only(): ...\n")
+
+    # The checkout under verification: same package name, WITH the built symbol.
+    checkout = tmp_path / "checkout"
+    (checkout / "server" / "routes").mkdir(parents=True)
+    for d in (checkout / "server", checkout / "server" / "routes"):
+        (d / "__init__.py").write_text("")
+    (checkout / "server" / "routes" / "git.py").write_text(
+        "def _is_safe_mcp_url(url): return True\n"
+    )
+
+    monkeypatch.chdir(service)  # exactly what the pod does
+    res = check_import(
+        PreflightImport(module="server.routes.git", name="_is_safe_mcp_url"),
+        project_dir=checkout,
+    )
+    assert not res.failed, res.reason
