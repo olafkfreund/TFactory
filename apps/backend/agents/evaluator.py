@@ -51,6 +51,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
+from agents.preflight_static import package_root_rel_paths
 from agents.run_result import RunResultLike
 from agents.verdict_vote import majority_vote
 
@@ -409,6 +410,13 @@ def _run_pytest_on_host(
     src_dir = scratch_root / "src"
     if src_dir.is_dir():
         pythonpath = f"{src_dir}{os.pathsep}{pythonpath}"
+    # #756: a monorepo keeps its packages below both of those (e.g.
+    # apps/web-server/server), so without the real roots pytest cannot collect
+    # and every AC reports an import error against correct code.
+    for rel in package_root_rel_paths(scratch_root):
+        root = str(scratch_root if rel == "." else scratch_root / rel)
+        if root not in pythonpath.split(os.pathsep):
+            pythonpath = f"{root}{os.pathsep}{pythonpath}"
     env = {**os.environ, **extra_env, "PYTHONPATH": pythonpath}
     res = subprocess.run(
         ["sh", "-c", cmd], capture_output=True, text=True, timeout=300, env=env

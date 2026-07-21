@@ -27,6 +27,7 @@ from agents.preflight_static import (
     PreflightResult,
     check_import,
     extract_imports,
+    package_root_rel_paths,
     preflight_check,
 )
 
@@ -489,3 +490,30 @@ def test_probe_runs_from_the_checkout_not_the_service_cwd(tmp_path, monkeypatch)
         project_dir=checkout,
     )
     assert not res.failed, res.reason
+
+
+# ── #756: execution-time roots for a monorepo ───────────────────────────
+
+
+def test_package_root_rel_paths_finds_the_monorepo_root(tmp_path: Path) -> None:
+    root = _monorepo(tmp_path)  # apps/web-server/server, as the Factory repos are
+    (root / "src" / "libpkg").mkdir(parents=True)
+    (root / "src" / "libpkg" / "__init__.py").write_text("")
+    for vendor in ("node_modules", ".venv"):
+        (root / vendor / "junk").mkdir(parents=True)
+        (root / vendor / "junk" / "__init__.py").write_text("")
+
+    rels = package_root_rel_paths(root)
+    assert "apps/web-server" in rels, rels  # the root nothing used to provide
+    assert "src" in rels, rels
+    # Inner packages never become roots — only the outermost one is needed.
+    assert "apps/web-server/server" not in rels, rels
+    # Vendor dirs stay out.
+    assert not any(r.startswith(("node_modules", ".venv")) for r in rels), rels
+
+
+def test_package_root_rel_paths_is_empty_without_packages(tmp_path: Path) -> None:
+    bare = tmp_path / "bare"
+    (bare / "scripts").mkdir(parents=True)
+    (bare / "scripts" / "run.py").write_text("x = 1\n")
+    assert package_root_rel_paths(bare) == []

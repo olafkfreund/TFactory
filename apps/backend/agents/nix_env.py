@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from agents.preflight_static import package_root_rel_paths
 from agents.task_contract import read_task_contract
 from tools.runners.docker_runner import DockerRunResult
 from tools.runners.nix_provisioner import (
@@ -171,6 +172,28 @@ _PW_CONFIG = "_tf_pw.config.ts"
 _SHOTS = "shots"
 _PYTEST_STAGE = ".tf_pytest"  # staged junit/coverage the Nix Job writes back
 _GOTEST_STAGE = ".tf_gotest"  # staged junit/coverage the Go Nix Job writes back
+
+
+def _in_job_pythonpath(scratch: Path, mount: str) -> str:
+    """PYTHONPATH for the in-Job pytest run, as a colon-joined string.
+
+    `<mount>/src` + `<mount>` cover flat and src-layout repos and miss a
+    monorepo entirely, whose packages sit at e.g. `apps/web-server/server`.
+    Collection then fails before a single assertion runs and every acceptance
+    criterion reports an import error against correct code (#756).
+
+    Roots are discovered from the scratch copy the Job co-mounts, so a repo-
+    relative root maps 1:1 onto its in-Job path. The two historical entries stay,
+    last, so existing layouts behave exactly as before.
+    """
+    roots = [
+        f"{mount}/{rel}" if rel != "." else mount
+        for rel in package_root_rel_paths(scratch)
+    ]
+    roots += [p for p in (f"{mount}/src", mount) if p not in roots]
+    return ":".join(roots)
+
+
 _DEPLOY_STAGE = ".tf_deploy"  # generated deploy flake dir (co-mounted in the Job)
 _NIX_MOUNT = "/work"  # where KubeJobSandbox co-mounts the worktree in the Job
 
@@ -300,7 +323,8 @@ def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve kno
         # ``src/<pkg>/`` package fails at collection and every AC shows as an error
         # rather than its real pass/fail. Prepended to any PYTHONPATH above (#615).
         srcpath = (
-            f'export PYTHONPATH="{mount}/src:{mount}${{PYTHONPATH:+:$PYTHONPATH}}"\n'
+            f'export PYTHONPATH="{_in_job_pythonpath(scratch, mount)}'
+            f'${{PYTHONPATH:+:$PYTHONPATH}}"\n'
         )
         # api lane self-serve (#612): boot the SUT in-Job at 127.0.0.1:port and
         # export TFACTORY_TARGET_URL before pytest, so the endpoint test reaches
