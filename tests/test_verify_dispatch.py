@@ -29,6 +29,7 @@ Postgres / no cluster), injected via the ``store=`` seam.
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -1050,3 +1051,70 @@ def test_verify_job_sets_data_root_env():
     env = m["spec"]["template"]["spec"]["containers"][0]["env"]
     dr = next((e for e in env if e["name"] == "TFACTORY_DATA_ROOT"), None)
     assert dr is not None and dr["value"] == "/work"  # VerifyJobConfig.mount default
+
+
+# ─── #767: a reap must also finish the SPEC, not just the row ─────────────────
+
+
+def _spec_ws(tmp_path, status="evaluating"):
+    d = tmp_path / "specs" / "008-proof"
+    d.mkdir(parents=True)
+    (d / "status.json").write_text(
+        json.dumps({"status": status, "phase": "evaluator_initial_started"})
+    )
+    return d
+
+
+async def test_reap_marks_the_spec_failed_not_just_the_row(store, tmp_path):
+    """Spec 008's exact shape: Job killed at its deadline, workspace left busy.
+
+    Marking the durable row is invisible to every reader that asks status.json
+    whether the spec is done — which is all of them.
+    """
+    spec = _spec_ws(tmp_path)
+    await store.enqueue("j767")
+    await store.grant_slot("j767")
+    await store.update_status(
+        "j767",
+        service_status="running",
+        has_verdict=False,
+        worker_ref={"kind": "k8s-job", "job_name": "v", "spec_dir": str(spec)},
+    )
+
+    rec = await vd.reap_if_orphaned(
+        "j767", job_exists=False, job_active=False, store=store
+    )
+    assert rec is not None and rec["lifecycle_state"] == "stuck"
+
+    after = json.loads((spec / "status.json").read_text())
+    assert after["status"] == "failed", after
+    assert after["phase"] == "verify_job_reaped", after
+    assert "vanished" in after["reaped_reason"], after
+
+
+async def test_reap_never_overwrites_a_real_verdict(store, tmp_path):
+    """The Job's own verdict always wins — a late reap must not clobber it."""
+    spec = _spec_ws(tmp_path, status="triaged")
+    await store.enqueue("j767b")
+    await store.grant_slot("j767b")
+    await store.update_status(
+        "j767b",
+        service_status="running",
+        has_verdict=False,
+        worker_ref={"kind": "k8s-job", "job_name": "v", "spec_dir": str(spec)},
+    )
+
+    await vd.reap_if_orphaned("j767b", job_exists=False, job_active=False, store=store)
+
+    after = json.loads((spec / "status.json").read_text())
+    assert after["status"] == "triaged", "a reap must never overwrite a verdict"
+
+
+async def test_reap_without_a_recorded_spec_dir_is_harmless(store):
+    """Pre-#767 rows carry no spec_dir; the reap must still mark the row."""
+    await store.enqueue("j767c")
+    await store.grant_slot("j767c")
+    rec = await vd.reap_if_orphaned(
+        "j767c", job_exists=False, job_active=False, store=store
+    )
+    assert rec is not None and rec["lifecycle_state"] == "stuck"
