@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.9.24 — a reaped verify Job now finishes its spec (2026-07-21)
+
+- **A deadline-killed Job no longer strands its workspace (#767, PR #769).**
+  `reap_if_orphaned` (#464) marked the durable job-state row `stuck` and stopped
+  there, but every reader that asks whether a spec is finished reads
+  `status.json` — so a killed Job left the workspace reading `evaluating`
+  forever, indistinguishable from still working. Observed on spec
+  `008-mcp-health-nix-lane-proof`: the Job hit `activeDeadlineSeconds=3600`, was
+  removed by `ttlSecondsAfterFinished=300`, and 87 minutes later the spec still
+  read `evaluating | evaluator_initial_started | tests=12` with no Job left in
+  the cluster to finish it — and no logs left to explain it.
+
+  The reaper could not have fixed it even if asked: `worker_ref` carried
+  kind/namespace/job_name/node and no path, so nothing connected a `job_id` back
+  to a workspace. Dispatch now records the control plane's own `spec_dir` there
+  (deliberately not the existing `spec_subpath`, which is the path the *Job*
+  mounts), and the reap writes `status=failed`, `phase=verify_job_reaped` and
+  the reason that named the row.
+
+  A spec already `triaged`/`failed`/`generated_empty` is untouched — the Job's
+  own verdict always wins over the reaper's inference — and rows written before
+  this change carry no `spec_dir`, so they skip the workspace write and mark the
+  row exactly as before.
+
 ## 0.9.23 — the Nix verify lane installs the SUT's own dependencies (2026-07-21)
 
 - **A repo that declares its deps in requirements.txt is now installable in the
