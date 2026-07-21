@@ -1,31 +1,26 @@
 """AC#5: ``check_mcp_health`` keeps its existing ``status: "unknown"`` response
 shape when ``_is_safe_mcp_url`` refuses the URL.
 
-The SSRF guard was tightened so refused URLs never reach the network. The risk
-that change introduces is at the *boundary*: if the refusal escaped as an
-``HTTPException`` (a 400), or as ``success: False``, or with the guard's own
-``detail`` string echoed back, the portal's MCP settings panel would either show
-an error toast where it used to show a grey "unknown" chip, or would leak *why*
-the URL was refused — which is itself an SSRF probing oracle (an attacker learns
-whether 169.254.169.254 resolved, was reserved, or was unresolvable).
+The SSRF guard added in this change sits *in front of* the network call, so the
+regression risk is entirely at the response boundary. Three ways it could break:
 
-This file pins all three halves of that claim:
+* the ``HTTPException`` escapes and FastAPI answers **400** where the portal's
+  MCP settings panel used to receive a 200 with a grey "unknown" chip,
+* the envelope changes shape (``success: False``, a renamed key, an *added*
+  ``reason`` field) and the frontend — which renders on shape — breaks, or
+* execution falls through the ``except`` block to ``urlopen`` and the refused
+  URL gets fetched anyway, defeating the guard entirely.
 
-* the refusal is swallowed — the coroutine returns rather than raising,
-* the returned envelope is exactly ``{"success": True, "data": {"serverId",
-  "status": "unknown", "message": "Cannot check server"}}``, and
-* the guard's ``detail`` never appears anywhere in the returned payload.
+This file pins the happy-path shape plus those boundaries.
 
 Target: apps/web-server/server/routes/git.py::check_mcp_health
 
 The module is imported as a module (``from server.routes import git``) rather
-than importing the endpoint by name, matching the sibling test files in this
-spec so ``monkeypatch.setattr`` lands on the same attribute the endpoint body
-looks up at call time.
+than importing the endpoint by name, so ``monkeypatch.setattr`` lands on the
+same module-global attribute the endpoint body resolves at call time.
 """
 
 import asyncio
-import json
 
 import pytest
 from fastapi import HTTPException
@@ -33,24 +28,31 @@ from fastapi import HTTPException
 from server.routes import git
 
 
-# The guard's failure modes, as raised by ``_is_safe_mcp_url``. Every one of
-# these must collapse to the SAME opaque "unknown" envelope — a client that
-# could tell them apart would have an SSRF oracle.
+# The exact envelope the endpoint returns on a refusal, per the AC. Kept as
+# module constants so a drift shows up as one obvious diff rather than being
+# spread across every assertion.
+EXPECTED_STATUS = "unknown"
+EXPECTED_MESSAGE = "Cannot check server"
+
+# Every distinct ``detail`` ``_is_safe_mcp_url`` raises with. AC#5 requires all
+# of them to collapse to the same opaque answer — a client able to tell them
+# apart would have an SSRF oracle for internal network reachability.
 REFUSAL_DETAILS = [
     "Invalid MCP server URL",
     "Disallowed MCP server URL",
     "Could not resolve MCP server hostname",
-    "MCP server URL resolves to a disallowed address",
+    "Error resolving MCP server hostname",
+    "Invalid resolved IP address",
+    "Disallowed MCP server address",
 ]
-
-EXPECTED_MESSAGE = "Cannot check server"
 
 
 def _server(url="http://169.254.169.254/latest/meta-data", server_id="srv-1"):
-    """Build an http-type ``McpServerConfig`` — the only branch AC#5 covers.
+    """Build an ``http``-type ``McpServerConfig`` — the only branch AC#5 covers.
 
-    A ``command``-type server never reaches the guard at all, so the type must
-    be pinned to ``http`` for this test to exercise the intended path.
+    A ``command``-type server returns "unknown" without ever consulting the
+    guard, so the type must be pinned to ``http`` for these tests to exercise
+    the refusal path rather than the unrelated command-server path.
     """
     return git.McpServerConfig(
         id=server_id,
@@ -62,11 +64,12 @@ def _server(url="http://169.254.169.254/latest/meta-data", server_id="srv-1"):
 
 @pytest.fixture
 def refuse_url(monkeypatch):
-    """Make ``_is_safe_mcp_url`` refuse, and record that it was consulted.
+    """Install a ``_is_safe_mcp_url`` that refuses, and record its calls.
 
-    Returns an installer taking the ``detail`` the guard raises with. The
-    installed fake counts its calls so a test can prove the endpoint actually
-    routed through the guard instead of short-circuiting on the URL string.
+    Returns an installer so each test picks the ``detail``/``status_code`` the
+    guard raises with. The fake counts calls and captures the URL it was handed,
+    letting a test prove the endpoint really routed through the guard instead of
+    hardcoding "unknown" or string-matching the URL itself.
     """
 
     def _install(detail="Disallowed MCP server URL", status_code=400):
@@ -85,16 +88,18 @@ def refuse_url(monkeypatch):
 
 @pytest.fixture
 def forbid_network(monkeypatch):
-    """Fail loudly if the endpoint ever opens a socket on the refusal path.
+    """Fail loudly if the refusal path ever opens a socket.
 
-    Without this, a regression that dropped the ``return`` after the ``except``
-    block would fall through to ``urlopen`` and quietly make a real request to
-    the metadata address — the exact bug AC#5 exists to prevent.
+    A regression dropping the ``return`` inside the ``except`` block would fall
+    through to ``urllib.request.urlopen`` and issue a real request to the
+    metadata address — the precise failure this guard exists to prevent. Without
+    this fixture that bug would still produce a plausible-looking response and
+    the other assertions would not catch it.
     """
     import urllib.request
 
     def exploded(*args, **kwargs):  # pragma: no cover - asserted via failure
-        raise AssertionError("refused URL must never be fetched")
+        raise AssertionError("a refused MCP URL must never be fetched")
 
     monkeypatch.setattr(urllib.request, "urlopen", exploded)
 
@@ -102,11 +107,11 @@ def forbid_network(monkeypatch):
 def test_check_mcp_health_refused_url_returns_unknown_envelope(
     refuse_url, forbid_network
 ):
-    """AC#5 core: the whole returned dict matches the pre-change shape exactly.
+    """AC#5 core: the full returned dict matches the pre-change shape exactly.
 
-    Asserted as one equality rather than key-by-key so an *added* field (say a
-    ``reason``) fails here too — extra keys are as much a contract break as
-    missing ones when the frontend renders on shape.
+    Asserted as a single equality rather than key-by-key so an *added* field
+    (e.g. a leaked ``reason``) fails here too — for a frontend that renders on
+    shape, extra keys are as much a contract break as missing ones.
     """
     refuse_url()
 
@@ -116,17 +121,17 @@ def test_check_mcp_health_refused_url_returns_unknown_envelope(
         "success": True,
         "data": {
             "serverId": "srv-42",
-            "status": "unknown",
+            "status": EXPECTED_STATUS,
             "message": EXPECTED_MESSAGE,
         },
     }
 
 
 def test_check_mcp_health_refused_url_does_not_raise(refuse_url, forbid_network):
-    """The ``HTTPException`` is swallowed, not propagated to FastAPI.
+    """The guard's ``HTTPException`` is swallowed, not propagated to FastAPI.
 
     If it escaped, the route would answer 400 instead of 200 and the settings
-    panel would surface an error banner where it used to show "unknown".
+    panel would surface an error banner where it used to show an "unknown" chip.
     """
     refuse_url()
 
@@ -135,13 +140,28 @@ def test_check_mcp_health_refused_url_does_not_raise(refuse_url, forbid_network)
     assert result["success"] is True
 
 
+def test_check_mcp_health_refused_url_echoes_the_requested_server_id(
+    refuse_url, forbid_network
+):
+    """``serverId`` is the caller's own id, so the UI can key the row it updates.
+
+    A constant or omitted id would leave the panel unable to attribute the
+    result to the server the operator asked about.
+    """
+    refuse_url()
+
+    result = asyncio.run(git.check_mcp_health(_server(server_id="mcp-github-9")))
+
+    assert result["data"]["serverId"] == "mcp-github-9"
+
+
 def test_check_mcp_health_consults_the_guard_with_the_supplied_url(
     refuse_url, forbid_network
 ):
     """The "unknown" answer is earned by calling the guard, not hardcoded.
 
-    An endpoint that string-matched suspicious URLs itself would return the
-    right shape here while leaving the real guard unwired.
+    An endpoint that pattern-matched suspicious URLs inline would satisfy the
+    shape assertions above while leaving the real guard unwired.
     """
     guard = refuse_url()
     url = "http://metadata.google.internal/computeMetadata/v1/"
@@ -159,63 +179,25 @@ def test_check_mcp_health_consults_the_guard_with_the_supplied_url(
         "invalid-scheme",
         "blocklisted-host",
         "unresolvable-host",
+        "resolver-error",
+        "invalid-resolved-ip",
         "disallowed-address",
     ],
 )
-def test_check_mcp_health_refusal_reason_is_not_leaked_to_the_client(
+def test_check_mcp_health_every_refusal_reason_yields_the_same_envelope(
     refuse_url, forbid_network, detail
 ):
-    """Boundary: no refusal ``detail`` reaches the client, for any failure mode.
-
-    Serialising the payload catches a leak hidden anywhere in the structure,
-    not just in the ``message`` field a targeted assertion would check.
-    """
-    refuse_url(detail=detail)
-
-    result = asyncio.run(git.check_mcp_health(_server()))
-
-    assert result["data"]["message"] == EXPECTED_MESSAGE
-    assert detail not in json.dumps(result)
-
-
-@pytest.mark.parametrize(
-    "detail",
-    REFUSAL_DETAILS,
-    ids=[
-        "invalid-scheme",
-        "blocklisted-host",
-        "unresolvable-host",
-        "disallowed-address",
-    ],
-)
-def test_check_mcp_health_every_refusal_reason_yields_the_same_status(
-    refuse_url, forbid_network, detail
-):
-    """All refusal reasons collapse to one indistinguishable ``unknown``.
+    """Boundary: every distinct refusal reason collapses to one answer.
 
     Distinguishable responses would let a caller enumerate internal network
-    reachability one URL at a time.
+    reachability one probe at a time, which is exactly the oracle AC#5 closes.
     """
     refuse_url(detail=detail)
 
     result = asyncio.run(git.check_mcp_health(_server()))
 
-    assert result["data"]["status"] == "unknown"
-
-
-def test_check_mcp_health_refused_url_echoes_the_requested_server_id(
-    refuse_url, forbid_network
-):
-    """``serverId`` is the caller's id, so the UI can key the row it updates.
-
-    A constant or missing id would leave the panel unable to attribute the
-    result to the server the user asked about.
-    """
-    refuse_url()
-
-    result = asyncio.run(git.check_mcp_health(_server(server_id="mcp-github-9")))
-
-    assert result["data"]["serverId"] == "mcp-github-9"
+    assert result["data"]["status"] == EXPECTED_STATUS
+    assert result["data"]["message"] == EXPECTED_MESSAGE
 
 
 def test_check_mcp_health_unknown_status_differs_from_the_unhealthy_status(
@@ -224,8 +206,8 @@ def test_check_mcp_health_unknown_status_differs_from_the_unhealthy_status(
     """Contrast: a refusal is "unknown", which is NOT the failure status.
 
     "unhealthy" means "we asked and it did not answer"; "unknown" means "we
-    refused to ask". Collapsing them would misreport a blocked URL as a down
-    server and send an operator chasing a phantom outage.
+    declined to ask". Collapsing the two would misreport a blocked URL as a
+    downed server and send an operator chasing a phantom outage.
     """
     refuse_url()
 

@@ -1,21 +1,30 @@
-"""AC#6: The allowed half of the URL matrix — ``_is_safe_mcp_url`` must return
-True for ``http://localhost``, ``http://127.0.0.1``, a private 10.x address and
-a public host.
+"""AC#6 (allowed half of the matrix): ``_is_safe_mcp_url`` accepts
+``http://localhost``, ``http://127.0.0.1``, a private ``10.x`` address and a
+public host.
 
-This is the counterpart to ``test_is_safe_mcp_url_matrix_refused.py``. Where
-that file pins *why* each bad URL is refused, this one pins that the guard is
-not merely paranoid: the four legitimate destinations an operator would
-actually point an MCP server at all survive validation, each via a different
-branch of the address check:
+AC#6 names seven cases. The other tests in this spec pin the four that must be
+*refused* (``169.254.169.254``, an IPv6 link-local literal, ``file://``, and the
+unresolvable/fail-closed path). This file pins the remaining three-plus-one that
+must be *accepted*, because refusal-only coverage is satisfied by a guard that
+returns False for everything — an SSRF check that blocks the developer's own
+loopback MCP server is a broken feature, not a safe one.
 
-* ``http://localhost``   — resolves to loopback (both families); loopback branch
-* ``http://127.0.0.1``   — IPv4 loopback literal; loopback branch
-* ``http://10.0.0.5``    — RFC1918 10/8; private branch (AC#3)
-* ``http://example.com`` — globally routable address; falls through to ``return True``
+Each accept must reach ``return True`` through the branch the AC cares about:
 
-A regression that over-blocks (e.g. moving the ``is_reserved`` test above the
-loopback test, so IPv6 ``::1`` is rejected) fails here rather than silently
-breaking every local MCP server.
+    http://localhost  → resolves to 127.0.0.1 *and* ::1  → is_loopback  (AC#2)
+    http://127.0.0.1  → literal loopback                 → is_loopback  (AC#2)
+    http://10.0.0.5   → RFC1918                          → is_private   (AC#3)
+    http://example.com→ globally routable                → fall-through
+
+AC#2 is the subtle one and gets its own case here: IPv6 ``::1`` also satisfies
+``is_reserved``, so ``localhost`` — which resolves to both families — only stays
+allowed while the loopback test runs *before* the reserved test. A reordering
+regression makes ``http://localhost`` behave differently by address family; the
+dual-stack case below fails loudly when that happens.
+
+The resolver is patched at the import site (``git.socket.getaddrinfo``) rather
+than hitting DNS, so the test is hermetic — no network, and no dependence on how
+the CI host happens to resolve ``localhost``.
 
 Target: apps/web-server/server/routes/git.py::_is_safe_mcp_url
 
@@ -27,17 +36,17 @@ resolves against a public attribute path.
 import ipaddress
 import socket
 
+import pytest
+
 from server.routes import git
 
 
-LOCALHOST_URL = "http://localhost:3103/mcp"
-LOOPBACK_V4_URL = "http://127.0.0.1:3103/mcp"
-PRIVATE_10_URL = "http://10.0.0.5:8080/mcp"
-PUBLIC_URL = "http://example.com/mcp"
-
-# example.com — globally routable, neither private nor reserved under
-# ipaddress's iana-special-registry view. Asserted as a precondition below.
-PUBLIC_ADDRESS = "93.184.216.34"
+LOOPBACK_V4 = "127.0.0.1"
+LOOPBACK_V6 = "::1"
+PRIVATE_10 = "10.0.0.5"
+PRIVATE_172 = "172.16.4.9"
+PRIVATE_192 = "192.168.1.20"
+PUBLIC_V4 = "93.184.216.34"
 
 
 def _addrinfo(*addresses):
@@ -54,94 +63,119 @@ def _addrinfo(*addresses):
     return entries
 
 
-def _install_resolver(monkeypatch, *addresses):
-    """Patch getaddrinfo at the import site to return a fixed address set.
+@pytest.fixture
+def resolve_to(monkeypatch):
+    """Patch ``getaddrinfo`` at the import site to return a fixed address set.
 
-    Returns the fake, which exposes ``.calls`` so a test can assert the
-    resolver really was consulted (i.e. the URL got past the scheme/hostname
-    gate and was accepted on the *address* evidence, not by short-circuit).
+    Yields a callable ``resolve_to(*addresses)`` that returns the installed
+    fake, which exposes ``.calls`` so a test can assert the resolver was
+    actually consulted.
     """
 
-    def fake_getaddrinfo(host, port, *args, **kwargs):
-        fake_getaddrinfo.calls += 1
-        return _addrinfo(*addresses)
+    def install(*addresses):
+        def fake_getaddrinfo(host, port, *args, **kwargs):
+            fake_getaddrinfo.calls += 1
+            fake_getaddrinfo.hosts.append(host)
+            return _addrinfo(*addresses)
 
-    fake_getaddrinfo.calls = 0
-    monkeypatch.setattr(git.socket, "getaddrinfo", fake_getaddrinfo)
-    return fake_getaddrinfo
+        fake_getaddrinfo.calls = 0
+        fake_getaddrinfo.hosts = []
+        monkeypatch.setattr(git.socket, "getaddrinfo", fake_getaddrinfo)
+        return fake_getaddrinfo
 
-
-def test_is_safe_mcp_url_localhost_hostname_is_allowed(monkeypatch):
-    """AC#6: ``http://localhost`` is safe when it resolves to loopback."""
-    _install_resolver(monkeypatch, "127.0.0.1")
-
-    assert git._is_safe_mcp_url(LOCALHOST_URL) is True
+    return install
 
 
-def test_is_safe_mcp_url_loopback_literal_is_allowed(monkeypatch):
-    """AC#6: the ``127.0.0.1`` literal is safe."""
-    _install_resolver(monkeypatch, "127.0.0.1")
+@pytest.mark.parametrize(
+    "url,addresses",
+    [
+        ("http://localhost:8080/mcp", (LOOPBACK_V4, LOOPBACK_V6)),
+        ("http://127.0.0.1:8080/mcp", (LOOPBACK_V4,)),
+        ("http://10.0.0.5:8080/mcp", (PRIVATE_10,)),
+        ("http://example.com/mcp", (PUBLIC_V4,)),
+    ],
+    ids=[
+        "ac6-localhost-dual-stack",
+        "ac6-127.0.0.1-literal",
+        "ac6-private-10.x",
+        "ac6-public-host",
+    ],
+)
+def test_is_safe_mcp_url_allowed_matrix_returns_true(resolve_to, url, addresses):
+    """AC#6: every URL in the allowed half of the matrix is accepted."""
+    resolve_to(*addresses)
 
-    assert git._is_safe_mcp_url(LOOPBACK_V4_URL) is True
+    assert git._is_safe_mcp_url(url) is True
 
 
-def test_is_safe_mcp_url_private_10_slash_8_address_is_allowed(monkeypatch):
-    """AC#3/AC#6: an RFC1918 10/8 address stays allowed (LAN MCP servers)."""
-    _install_resolver(monkeypatch, "10.0.0.5")
+def test_is_safe_mcp_url_localhost_allowed_for_each_address_family(resolve_to):
+    """AC#2: ``http://localhost`` is accepted on IPv4 *and* IPv6 alone.
 
-    assert git._is_safe_mcp_url(PRIVATE_10_URL) is True
-
-
-def test_is_safe_mcp_url_public_host_is_allowed(monkeypatch):
-    """AC#6: a globally routable host is safe — the guard is not an allowlist."""
-    _install_resolver(monkeypatch, PUBLIC_ADDRESS)
-
-    assert git._is_safe_mcp_url(PUBLIC_URL) is True
-
-
-def test_is_safe_mcp_url_localhost_dual_stack_is_allowed(monkeypatch):
-    """AC#2/AC#6: localhost resolving to BOTH ``::1`` and ``127.0.0.1`` is safe.
-
-    The boundary case the loopback-ordering rule exists for: IPv6 ``::1`` also
-    satisfies ``is_reserved``, so a guard that tested reserved-ness first would
-    reject dual-stack localhost while accepting the IPv4-only form.
+    Split out from the dual-stack case above because a loopback/reserved
+    ordering regression only bites the ``::1``-resolving host: ``127.0.0.1``
+    keeps passing while ``::1`` starts raising, so ``http://localhost`` silently
+    "behaves differently by address family" exactly as the AC warns.
     """
-    _install_resolver(monkeypatch, "::1", "127.0.0.1")
+    resolve_to(LOOPBACK_V4)
+    assert git._is_safe_mcp_url("http://localhost:8080/mcp") is True
 
-    assert git._is_safe_mcp_url(LOCALHOST_URL) is True
+    resolve_to(LOOPBACK_V6)
+    assert git._is_safe_mcp_url("http://localhost:8080/mcp") is True
 
 
-def test_is_safe_mcp_url_allowed_url_consults_the_resolver(monkeypatch):
-    """A public host is accepted on resolved-address evidence, not by short-circuit.
+def test_is_safe_mcp_url_ipv6_loopback_is_allowed_despite_being_reserved(resolve_to):
+    """AC#2 mechanism: ``::1`` is reserved, and must still be allowed.
 
-    If this ever passes with zero resolver calls, acceptance stopped depending
-    on what the hostname actually resolves to — which is the whole guard.
+    This is the precondition that makes the ordering requirement real — if
+    ``::1`` were not ``is_reserved``, branch order would not matter and the
+    test above would prove nothing.
     """
-    fake = _install_resolver(monkeypatch, PUBLIC_ADDRESS)
+    assert ipaddress.ip_address(LOOPBACK_V6).is_reserved is True
 
-    git._is_safe_mcp_url(PUBLIC_URL)
+    resolve_to(LOOPBACK_V6)
 
+    assert git._is_safe_mcp_url("http://localhost/mcp") is True
+
+
+@pytest.mark.parametrize(
+    "address",
+    [PRIVATE_10, PRIVATE_172, PRIVATE_192],
+    ids=["rfc1918-10/8", "rfc1918-172.16/12", "rfc1918-192.168/16"],
+)
+def test_is_safe_mcp_url_private_ranges_are_allowed(resolve_to, address):
+    """AC#3: all three RFC1918 ranges remain allowed, not just 10/8."""
+    resolve_to(address)
+
+    assert git._is_safe_mcp_url(f"http://{address}:8080/mcp") is True
+
+
+def test_is_safe_mcp_url_allowed_host_consults_the_resolver(resolve_to):
+    """The accept rests on resolved-address evidence, not a hostname shortcut.
+
+    If a named host is ever accepted with zero resolver calls, the guard has
+    stopped checking what the name actually points at — which is the whole
+    mechanism the change introduced.
+    """
+    fake = resolve_to(PUBLIC_V4)
+
+    assert git._is_safe_mcp_url("http://example.com/mcp") is True
     assert fake.calls == 1
+    assert fake.hosts == ["example.com"]
 
 
-def test_public_address_is_neither_private_nor_reserved_precondition():
-    """Precondition: the "public" fixture address really is public.
+def test_is_safe_mcp_url_allowed_host_still_refused_with_link_local_sibling(
+    resolve_to,
+):
+    """Negative control (AC#1): an allowed *name* is not a blanket pass.
 
-    Python's ``is_private`` covers the IANA special-registry ranges (including
-    the TEST-NET blocks), so a documentation address would make the public-host
-    test vacuously pass through the private branch instead.
+    ``localhost`` answering with loopback plus ``169.254.169.254`` — the
+    DNS-rebinding shape — must still be refused. Without this, the accepts
+    above would be consistent with "the first address wins" rather than
+    "every resolved address is checked".
     """
-    ip = ipaddress.ip_address(PUBLIC_ADDRESS)
+    resolve_to(LOOPBACK_V4, "169.254.169.254")
 
-    assert (ip.is_private, ip.is_reserved, ip.is_loopback) == (False, False, False)
+    with pytest.raises(git.HTTPException) as excinfo:
+        git._is_safe_mcp_url("http://localhost:8080/mcp")
 
-
-def test_ipv6_loopback_is_also_reserved_precondition():
-    """Precondition for the dual-stack test: ``::1`` is loopback AND reserved.
-
-    This is what makes check-order observable; if it stops holding, the
-    dual-stack test no longer proves anything about ordering.
-    """
-    ip = ipaddress.ip_address("::1")
-
-    assert (ip.is_loopback, ip.is_reserved) == (True, True)
+    assert excinfo.value.status_code == 400

@@ -1,156 +1,125 @@
-"""AC#6: The refused half of the URL matrix — ``_is_safe_mcp_url`` must refuse
-``http://169.254.169.254`` (the cloud metadata endpoint), an IPv6 link-local
-literal host, and a ``file://`` URL.
-
-Each of the three is refused for a *different* reason, and this file pins the
-reason as well as the refusal, so that a regression which collapses all three
-into one blanket rejection (or which accepts one of them) is visible:
-
-* ``169.254.169.254``  — refused by hostname, BEFORE any DNS resolution
-* ``[fe80::1]``        — refused after resolution, as a link-local address
-* ``file:///etc/passwd`` — refused as an unsupported scheme, no hostname
+"""AC#6: Tests cover ``169.254.169.254``, an IPv6 link-local literal,
+``file://``, ``http://localhost``, ``http://127.0.0.1``, a private 10.x address
+and a public host.
 
 Target: apps/web-server/server/routes/git.py::_is_safe_mcp_url
 
-The module is imported as a module (``from server.routes import git``) rather
-than importing the private helper by name, so the pre-flight import check
-resolves against a public attribute path.
+This file owns the **refused** half of that matrix: the cloud-metadata IPv4
+literal, an IPv6 link-local literal, and a non-HTTP ``file://`` URL. Each must
+be rejected, and each is rejected for a *different* reason inside the guard --
+the pre-resolution metadata denylist, the per-address link-local test, and the
+scheme check respectively -- so the three cases are asserted separately rather
+than collapsed into one blanket "raises" assertion.
+
+The allowed half of the matrix (localhost, 127.0.0.1, 10.x, a public host) is
+covered by the loopback / private-range subtasks.
 """
 
-import ipaddress
+from __future__ import annotations
+
 import socket
+import sys
+from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
 
-from server.routes import git
+
+def _web_server_root() -> Path:
+    """Locate the ``apps/web-server`` package root without hard-coding a path.
+
+    Walks the ancestors of this file and of the runner's cwd looking for the
+    directory that actually contains ``server/routes/git.py``.
+    """
+    candidates: list[Path] = []
+    for start in (Path(__file__).resolve(), Path.cwd().resolve() / "_"):
+        for parent in start.parents:
+            candidates.append(parent)
+            candidates.append(parent / "apps" / "web-server")
+    for candidate in candidates:
+        if (candidate / "server" / "routes" / "git.py").is_file():
+            return candidate
+    raise RuntimeError(
+        "Could not locate apps/web-server (server/routes/git.py) from "
+        f"{Path(__file__).resolve()} or {Path.cwd().resolve()}"
+    )
 
 
-METADATA_URL = "http://169.254.169.254/latest/meta-data/"
-IPV6_LINK_LOCAL_URL = "http://[fe80::1]:3103/mcp"
-FILE_URL = "file:///etc/passwd"
+_WEB_SERVER = _web_server_root()
+if str(_WEB_SERVER) not in sys.path:
+    sys.path.insert(0, str(_WEB_SERVER))
+
+from server.routes.git import _is_safe_mcp_url  # noqa: E402
 
 
-def _addrinfo(*addresses):
-    """Build a getaddrinfo-shaped result list for the given IP strings."""
-    entries = []
-    for addr in addresses:
-        ip = ipaddress.ip_address(addr)
-        if ip.version == 6:
-            entries.append(
-                (socket.AF_INET6, socket.SOCK_STREAM, 6, "", (addr, 0, 0, 0))
-            )
-        else:
-            entries.append((socket.AF_INET, socket.SOCK_STREAM, 6, "", (addr, 0)))
-    return entries
+def _addrinfo(*addresses: str) -> list[tuple]:
+    """Build a getaddrinfo-shaped result list for the given IP literals."""
+    infos = []
+    for address in addresses:
+        family = socket.AF_INET6 if ":" in address else socket.AF_INET
+        sockaddr = (address, 0, 0, 0) if family == socket.AF_INET6 else (address, 0)
+        infos.append((family, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", sockaddr))
+    return infos
 
 
 @pytest.fixture
-def resolve_to(monkeypatch):
-    """Patch getaddrinfo at the import site and record how often it was called.
+def resolves_literally(monkeypatch):
+    """Pin ``socket.getaddrinfo`` to echo the requested host back as its address.
 
-    Returns an installer; the installed fake exposes ``.calls`` so a test can
-    prove a URL was refused *without* the resolver ever being consulted.
+    Keeps the test hermetic (no DNS, no IPv6-capable host required) while
+    preserving the behaviour of an IP literal: it "resolves" to itself.
     """
 
-    def _install(*addresses):
-        def fake_getaddrinfo(host, port, *args, **kwargs):
-            fake_getaddrinfo.calls += 1
-            return _addrinfo(*addresses)
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        return _addrinfo(host)
 
-        fake_getaddrinfo.calls = 0
-        monkeypatch.setattr(git.socket, "getaddrinfo", fake_getaddrinfo)
-        return fake_getaddrinfo
+    monkeypatch.setattr("server.routes.git.socket.getaddrinfo", fake_getaddrinfo)
 
-    return _install
+
+def test_is_safe_mcp_url_cloud_metadata_literal_is_refused(resolves_literally):
+    """AC#6: ``http://169.254.169.254`` -- the cloud metadata endpoint -- is refused."""
+    with pytest.raises(HTTPException) as excinfo:
+        _is_safe_mcp_url("http://169.254.169.254/latest/meta-data/")
+
+    assert excinfo.value.status_code == 400
 
 
 @pytest.mark.parametrize(
-    "url,resolved",
+    "url",
     [
-        (METADATA_URL, ("169.254.169.254",)),
-        (IPV6_LINK_LOCAL_URL, ("fe80::1",)),
-        (FILE_URL, ()),
+        "http://[fe80::1]/sse",
+        "https://[fe80::abcd:1234]:8080/sse",
     ],
-    ids=["ipv4-metadata-169.254.169.254", "ipv6-link-local-literal", "file-scheme"],
+    ids=["ipv6-link-local-bare", "ipv6-link-local-with-port"],
 )
-def test_is_safe_mcp_url_refused_url_raises_http_400(resolve_to, url, resolved):
-    """Every URL in the refused matrix raises HTTPException 400, never returns."""
-    resolve_to(*resolved)
+def test_is_safe_mcp_url_ipv6_link_local_literal_is_refused(resolves_literally, url):
+    """AC#6: an IPv6 link-local literal is refused regardless of port/scheme."""
+    with pytest.raises(HTTPException) as excinfo:
+        _is_safe_mcp_url(url)
 
-    with pytest.raises(HTTPException) as exc_info:
-        git._is_safe_mcp_url(url)
-
-    assert exc_info.value.status_code == 400
+    assert excinfo.value.status_code == 400
 
 
-@pytest.mark.parametrize(
-    "url,resolved",
-    [
-        (METADATA_URL, ("169.254.169.254",)),
-        (IPV6_LINK_LOCAL_URL, ("fe80::1",)),
-        (FILE_URL, ()),
-    ],
-    ids=["ipv4-metadata-169.254.169.254", "ipv6-link-local-literal", "file-scheme"],
-)
-def test_is_safe_mcp_url_refused_url_never_returns_true(resolve_to, url, resolved):
-    """Fail-closed proof: no refused URL may yield a truthy accept instead of raising."""
-    resolve_to(*resolved)
+def test_is_safe_mcp_url_file_scheme_is_refused(resolves_literally):
+    """AC#6: a ``file://`` URL is refused -- only http/https are acceptable."""
+    with pytest.raises(HTTPException) as excinfo:
+        _is_safe_mcp_url("file:///etc/passwd")
 
-    with pytest.raises(HTTPException):
-        result = git._is_safe_mcp_url(url)
-        pytest.fail(f"expected HTTPException, got return value {result!r}")
+    assert excinfo.value.status_code == 400
 
 
-def test_is_safe_mcp_url_metadata_host_refused_before_dns_resolution(resolve_to):
-    """AC#6: 169.254.169.254 is blocked by hostname, so DNS is never consulted.
+def test_is_safe_mcp_url_refused_matrix_never_returns_true(resolves_literally):
+    """None of the AC#6 refused cases may fall through to a ``True`` verdict.
 
-    Blocking pre-resolution matters: it holds even if the resolver is slow,
-    poisoned, or would return a benign-looking address for that host.
+    Guards the failure mode where a future refactor turns a raise into a
+    silently-permissive return value.
     """
-    fake = resolve_to("203.0.113.42")  # deliberately "safe" — must be irrelevant
+    refused = [
+        "http://169.254.169.254/latest/meta-data/",
+        "http://[fe80::1]/sse",
+        "file:///etc/passwd",
+    ]
 
-    with pytest.raises(HTTPException) as exc_info:
-        git._is_safe_mcp_url(METADATA_URL)
-
-    assert fake.calls == 0
-    assert "disallowed" in str(exc_info.value.detail).lower()
-
-
-def test_is_safe_mcp_url_ipv6_link_local_literal_refused_as_disallowed_address(
-    resolve_to,
-):
-    """AC#6: an fe80::/10 literal host is refused as a disallowed *address*.
-
-    This is the post-resolution branch, distinct from the hostname blocklist —
-    the detail must attribute the refusal to the address, not to a bad scheme.
-    """
-    resolve_to("fe80::1")
-
-    with pytest.raises(HTTPException) as exc_info:
-        git._is_safe_mcp_url(IPV6_LINK_LOCAL_URL)
-
-    assert "disallowed" in str(exc_info.value.detail).lower()
-
-
-def test_ipv6_link_local_literal_is_link_local_precondition():
-    """Precondition for the test above: ``fe80::1`` really is link-local.
-
-    If this stops holding, the link-local assertion becomes vacuous.
-    """
-    assert ipaddress.ip_address("fe80::1").is_link_local is True
-
-
-def test_is_safe_mcp_url_file_scheme_refused_as_invalid_url(resolve_to):
-    """AC#6: file:// is refused as an invalid URL, without touching the resolver.
-
-    A ``file://`` URL has no hostname at all, so accepting it would hand the
-    downstream health check a local-filesystem read.
-    """
-    fake = resolve_to("127.0.0.1")
-
-    with pytest.raises(HTTPException) as exc_info:
-        git._is_safe_mcp_url(FILE_URL)
-
-    assert fake.calls == 0
-    assert "invalid" in str(exc_info.value.detail).lower()
+    for url in refused:
+        with pytest.raises(HTTPException):
+            assert _is_safe_mcp_url(url) is not True

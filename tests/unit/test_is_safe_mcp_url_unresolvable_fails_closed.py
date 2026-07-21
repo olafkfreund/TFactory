@@ -1,143 +1,190 @@
-"""AC#4: An unresolvable host is treated as unsafe (fail closed).
-
-``_is_safe_mcp_url`` is an SSRF guard: it may only return ``True`` once it has
-seen every resolved address and found none of them disallowed. When DNS gives
-it nothing to inspect it has proven nothing, so it must refuse rather than pass.
-
-This file pins the *fail-closed* property specifically -- that the two
-"nothing resolved" paths through ``socket.getaddrinfo`` both terminate in an
-``HTTPException(400)`` and that neither can ever reach the ``return True`` at
-the end of the function.
-
-Both no-address modes are covered:
-  * ``socket.getaddrinfo`` raises ``socket.gaierror`` (NXDOMAIN / no such host)
-  * ``socket.getaddrinfo`` returns an empty result list (no addrinfo tuples)
+"""AC#4: an unresolvable host is treated as unsafe (fail closed).
 
 Target: apps/web-server/server/routes/git.py::_is_safe_mcp_url
 
-The module is imported as a module (``from server.routes import git``) rather
-than importing the private helper by name, so ``git.socket`` can be patched at
-the import site of the code under test and the import resolves against a
-public attribute path.
+Name resolution is the step that turns an attacker-supplied hostname into the
+address the guard actually grades. If resolution fails -- ``socket.gaierror``,
+an empty answer list, or any other resolver error -- there is no address to
+grade, so the guard must refuse (HTTPException 400) rather than fall through
+to ``return True`` or leak a bare resolver exception to the caller. These
+tests pin ``socket.getaddrinfo`` (as imported by git.py) to each failure shape
+and assert the refusal.
 """
 
+from __future__ import annotations
+
 import socket
+import sys
+from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
 
-from server.routes import git
+
+def _web_server_root() -> Path:
+    """Locate the ``apps/web-server`` package root without hard-coding a path.
+
+    Walks the ancestors of this file and of the runner's cwd looking for the
+    directory that actually contains ``server/routes/git.py``.
+    """
+    candidates: list[Path] = []
+    for start in (Path(__file__).resolve(), Path.cwd().resolve() / "_"):
+        for parent in start.parents:
+            candidates.append(parent)
+            candidates.append(parent / "apps" / "web-server")
+    for candidate in candidates:
+        if (candidate / "server" / "routes" / "git.py").is_file():
+            return candidate
+    raise RuntimeError(
+        "Could not locate apps/web-server (server/routes/git.py) from "
+        f"{Path(__file__).resolve()} or {Path.cwd().resolve()}"
+    )
 
 
-# A syntactically valid http URL whose hostname is in the reserved-for-testing
-# .invalid TLD, so the *real* resolver could never answer for it either. The
-# resolver is patched in every test regardless -- no test here touches DNS.
-UNRESOLVABLE_URL = "http://mcp-does-not-exist.invalid:9931/sse"
+_WEB_SERVER = _web_server_root()
+if str(_WEB_SERVER) not in sys.path:
+    sys.path.insert(0, str(_WEB_SERVER))
 
-GAIERROR = socket.gaierror(socket.EAI_NONAME, "Name or service not known")
+from server.routes.git import _is_safe_mcp_url  # noqa: E402
+
+# A benign hostname: it is not on the pre-resolution deny list, so the only way
+# this URL can be refused is via the resolution failure the fixture injects.
+UNRESOLVABLE_URL = "http://no-such-host.invalid:8080/sse"
 
 
 @pytest.fixture
-def spy_getaddrinfo(monkeypatch):
-    """Install a fake ``getaddrinfo`` and record the calls made to it.
+def resolution_fails(monkeypatch):
+    """Pin ``socket.getaddrinfo`` (as used by git.py) to raise a given error.
 
-    Patching ``git.socket.getaddrinfo`` mocks the dependency of the function
-    under test (name resolution), never the function under test itself. The
-    returned recorder lets a test prove resolution was actually attempted, so
-    a 400 raised by some earlier pre-resolution check cannot masquerade as a
-    fail-closed resolution outcome.
+    Returns the installer; the installer returns a mutable call-log list so a
+    test can assert the guard really attempted a resolution.
     """
-    calls: list[tuple] = []
 
-    def _install(*, result=None, raises=None):
+    def _install(error: BaseException) -> list[str]:
+        calls: list[str] = []
+
         def fake_getaddrinfo(host, port, *args, **kwargs):
-            calls.append((host, port))
-            if raises is not None:
-                raise raises
-            return result
+            calls.append(host)
+            raise error
 
-        monkeypatch.setattr(git.socket, "getaddrinfo", fake_getaddrinfo)
+        monkeypatch.setattr("server.routes.git.socket.getaddrinfo", fake_getaddrinfo)
         return calls
 
     return _install
 
 
-# Both no-address outcomes are the same acceptance criterion, so they share the
-# parametrisation rather than being copy-pasted per test.
-NO_ADDRESS_MODES = [
-    {"raises": GAIERROR},
-    {"result": []},
-]
-NO_ADDRESS_IDS = ["gaierror", "empty-addrinfo-list"]
+@pytest.fixture
+def resolution_returns_nothing(monkeypatch):
+    """Pin ``socket.getaddrinfo`` to return an empty answer list."""
+
+    def _install(empty=()) -> list[str]:
+        calls: list[str] = []
+
+        def fake_getaddrinfo(host, port, *args, **kwargs):
+            calls.append(host)
+            return list(empty)
+
+        monkeypatch.setattr("server.routes.git.socket.getaddrinfo", fake_getaddrinfo)
+        return calls
+
+    return _install
 
 
-@pytest.mark.parametrize("mode", NO_ADDRESS_MODES, ids=NO_ADDRESS_IDS)
-def test_is_safe_mcp_url_with_no_resolved_addresses_raises_http_400(spy_getaddrinfo, mode):
-    """Neither no-address mode may yield anything but a 400 refusal."""
-    spy_getaddrinfo(**mode)
+def test_is_safe_mcp_url_gaierror_raises_http_400(resolution_fails):
+    """AC#4: a DNS failure (``socket.gaierror``) is refused with HTTP 400."""
+    resolution_fails(socket.gaierror(socket.EAI_NONAME, "Name or service not known"))
 
-    with pytest.raises(HTTPException) as exc_info:
-        git._is_safe_mcp_url(UNRESOLVABLE_URL)
+    with pytest.raises(HTTPException) as excinfo:
+        _is_safe_mcp_url(UNRESOLVABLE_URL)
 
-    assert exc_info.value.status_code == 400
-
-
-@pytest.mark.parametrize("mode", NO_ADDRESS_MODES, ids=NO_ADDRESS_IDS)
-def test_is_safe_mcp_url_with_no_resolved_addresses_never_returns(spy_getaddrinfo, mode):
-    """Fail-closed proof: the function must raise, not return a verdict.
-
-    A fail-*open* regression would ``return True`` (letting an unverifiable
-    host through the SSRF guard) or ``return False`` (a soft refusal callers
-    could ignore). ``pytest.raises`` alone would not catch a bare ``return``
-    reached before the raise, so the returned value is captured and reported.
-    """
-    spy_getaddrinfo(**mode)
-
-    with pytest.raises(HTTPException):
-        returned = git._is_safe_mcp_url(UNRESOLVABLE_URL)
-        pytest.fail(f"expected HTTPException, but the guard returned {returned!r}")
+    assert excinfo.value.status_code == 400
 
 
-@pytest.mark.parametrize("mode", NO_ADDRESS_MODES, ids=NO_ADDRESS_IDS)
-def test_is_safe_mcp_url_refusal_follows_an_actual_resolution_attempt(spy_getaddrinfo, mode):
-    """The 400 comes from resolution, not from an earlier scheme/host reject.
-
-    Without this, a guard that rejected the URL before ever calling the
-    resolver would still satisfy the status-code assertions above while
-    testing nothing about AC#4.
-    """
-    calls = spy_getaddrinfo(**mode)
+def test_is_safe_mcp_url_gaierror_does_not_escape_as_socket_error(resolution_fails):
+    """AC#4: the raw resolver error is converted, not propagated to the caller."""
+    resolution_fails(socket.gaierror(socket.EAI_NONAME, "Name or service not known"))
 
     with pytest.raises(HTTPException):
-        git._is_safe_mcp_url(UNRESOLVABLE_URL)
-
-    assert [host for host, _port in calls] == ["mcp-does-not-exist.invalid"]
+        _is_safe_mcp_url(UNRESOLVABLE_URL)
 
 
-@pytest.mark.parametrize("mode", NO_ADDRESS_MODES, ids=NO_ADDRESS_IDS)
-def test_is_safe_mcp_url_refusal_detail_attributes_the_failure_to_resolution(
-    spy_getaddrinfo, mode
+def test_is_safe_mcp_url_gaierror_detail_mentions_resolution(resolution_fails):
+    """The 400 explains *why* it failed, so the caller can log a useful reason."""
+    resolution_fails(socket.gaierror(socket.EAI_NONAME, "Name or service not known"))
+
+    with pytest.raises(HTTPException) as excinfo:
+        _is_safe_mcp_url(UNRESOLVABLE_URL)
+
+    assert "resolv" in str(excinfo.value.detail).lower()
+
+
+def test_is_safe_mcp_url_attempts_to_resolve_the_url_hostname(resolution_fails):
+    """The refusal comes from resolving this URL's host, not from the deny list."""
+    calls = resolution_fails(socket.gaierror(socket.EAI_NONAME, "unknown host"))
+
+    with pytest.raises(HTTPException):
+        _is_safe_mcp_url(UNRESOLVABLE_URL)
+
+    assert calls == ["no-such-host.invalid"]
+
+
+def test_is_safe_mcp_url_empty_resolution_result_raises_http_400(
+    resolution_returns_nothing,
 ):
-    """The refusal reason names resolution, so operators can debug the log."""
-    spy_getaddrinfo(**mode)
+    """AC#4: a resolver that answers with zero addresses is also unsafe."""
+    resolution_returns_nothing()
 
-    with pytest.raises(HTTPException) as exc_info:
-        git._is_safe_mcp_url(UNRESOLVABLE_URL)
+    with pytest.raises(HTTPException) as excinfo:
+        _is_safe_mcp_url(UNRESOLVABLE_URL)
 
-    assert "resolv" in str(exc_info.value.detail).lower()
+    assert excinfo.value.status_code == 400
 
 
-def test_is_safe_mcp_url_non_gaierror_resolver_failure_also_fails_closed(spy_getaddrinfo):
-    """A resolver failure outside ``gaierror`` is still a refusal, not a leak.
+@pytest.mark.parametrize(
+    "error",
+    [
+        socket.gaierror(socket.EAI_NONAME, "Name or service not known"),
+        socket.gaierror(socket.EAI_AGAIN, "Temporary failure in name resolution"),
+        socket.timeout("resolver timed out"),
+        OSError("resolver unavailable"),
+        UnicodeError("label too long"),
+    ],
+    ids=[
+        "gaierror-noname",
+        "gaierror-again",
+        "socket-timeout",
+        "oserror",
+        "unicode-error",
+    ],
+)
+def test_is_safe_mcp_url_any_resolver_failure_fails_closed(resolution_fails, error):
+    """AC#4: every resolver failure shape ends in a 400 -- never a permissive True."""
+    resolution_fails(error)
 
-    Boundary case: ``socket.gaierror`` is not the only way resolution can blow
-    up (``OSError``/``UnicodeError`` escape for malformed or oversized names).
-    A bare ``except socket.gaierror`` would let those propagate as a 500 -- or
-    worse, be swallowed by a caller -- instead of failing closed with a 400.
+    with pytest.raises(HTTPException) as excinfo:
+        _is_safe_mcp_url(UNRESOLVABLE_URL)
+
+    assert excinfo.value.status_code == 400
+
+
+def test_is_safe_mcp_url_resolvable_host_is_still_accepted(monkeypatch):
+    """Control: the fail-closed path is specific to resolution failure.
+
+    Without this, a guard that refused *every* URL would satisfy the tests
+    above for the wrong reason.
     """
-    spy_getaddrinfo(raises=OSError("resolver unavailable"))
 
-    with pytest.raises(HTTPException) as exc_info:
-        git._is_safe_mcp_url(UNRESOLVABLE_URL)
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        return [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                ("93.184.216.34", 0),
+            )
+        ]
 
-    assert exc_info.value.status_code == 400
+    monkeypatch.setattr("server.routes.git.socket.getaddrinfo", fake_getaddrinfo)
+
+    assert _is_safe_mcp_url("http://mcp.vendor.example.com:8080/sse") is True
