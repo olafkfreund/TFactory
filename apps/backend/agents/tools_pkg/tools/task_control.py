@@ -200,12 +200,13 @@ def _format_json(data: Any) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _checkout_source_branch(project_root: Path, branch: str) -> str | None:
+def _checkout_source_branch(project_root: Path, branch: str) -> tuple[str | None, str]:
     """Fetch + check out ``branch`` in ``project_root`` so the SUT under test is
     the actual built code, not the default branch (#96 — closes the hollow-verify
     gap where TFactory tested a tree that never contained AIFactory's build).
 
-    Best-effort: returns ``None`` on success, or a short warning string on failure
+    Returns ``(warning, sha)``: warning is ``None`` on success or a short string on
+    failure, and sha is the resolved HEAD (``""`` when unknown).
     (a missing/unfetchable branch must never abort ingest — the spec still lands;
     tests just run against whatever is checked out). Resolves the SHA so a detached
     checkout is deterministic and the Triager can record it."""
@@ -221,16 +222,23 @@ def _checkout_source_branch(project_root: Path, branch: str) -> str | None:
 
     try:
         if not (project_root / ".git").exists():
-            return f"source_branch={branch!r} requested but {project_root} is not a git repo"
+            return (
+                f"source_branch={branch!r} requested but {project_root} is not a git repo",
+                "",
+            )
         fetch = _git("fetch", "--no-tags", "origin", branch)
         if fetch.returncode != 0:
-            return f"git fetch origin {branch} failed: {fetch.stderr.strip()[:200]}"
+            return f"git fetch origin {branch} failed: {fetch.stderr.strip()[:200]}", ""
         co = _git("checkout", "--force", "FETCH_HEAD")
         if co.returncode != 0:
-            return f"git checkout {branch} failed: {co.stderr.strip()[:200]}"
-        return None
+            return f"git checkout {branch} failed: {co.stderr.strip()[:200]}", ""
+        # Pin what we landed on, so a later stage can tell whether the shared
+        # clone still holds this build (#742). Same _git helper — no second
+        # subprocess call site.
+        head = _git("rev-parse", "HEAD")
+        return None, (head.stdout.strip() if head.returncode == 0 else "")
     except Exception as exc:  # noqa: BLE001 — checkout must never break ingest
-        return f"source_branch checkout error: {exc}"
+        return f"source_branch checkout error: {exc}", ""
 
 
 def create_spec_ingest_workspace(
@@ -317,8 +325,11 @@ def create_spec_ingest_workspace(
     # Check out the AIFactory build branch into project_root so tests run against
     # the ACTUAL built code (#96). Best-effort: a failure is surfaced as a warning
     # and ingest proceeds (tests then run against whatever is checked out).
+    source_sha = ""
     if source_branch:
-        warn = _checkout_source_branch(Path(project_root).expanduser(), source_branch)
+        warn, source_sha = _checkout_source_branch(
+            Path(project_root).expanduser(), source_branch
+        )
         if warn:
             warnings.append(warn)
 
@@ -344,6 +355,10 @@ def create_spec_ingest_workspace(
         "source_format": spec.source_format.value,
         "target_paths": list(target_paths or []),
         "source_branch": source_branch,
+        # The commit the ingest checkout actually landed on ("" when unknown or
+        # no source_branch). Readers compare it to the shared clone's HEAD before
+        # trusting the tree (#742).
+        "source_sha": source_sha,
         "created_at": _now_iso(),
         "aifactory": {"github_issue": github_issue},
         # Tenant scoping (#683): service-local metadata, lazily backfilled —

@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.9.17 — the symbol block points at the right build, and verify refuses the wrong tree (2026-07-21)
+
+Three fixes from a live run that exposed how much of the verify path was
+resolving against the wrong code.
+
+- **The delivered-symbols block now diffs against the branch the build was cut
+  from (#737, PR #743).** 0.9.16's block rendered but listed the wrong files: it
+  inherited its base from `_source_branch_changed_files`, which asked the repo
+  which branch is its *default* (`origin/HEAD` = `main`) rather than which
+  branch the build came from (`dev`, for every repo in this fleet). Measured on
+  TFactory's own checkout: 53 files against `origin/main` versus the 5 the build
+  actually touched. The block therefore reported dev's entire lead over main as
+  "what this build changed", and the 25-file cap crowded out the one file the
+  build had written. The base is now chosen by distance — try `origin/HEAD`,
+  `origin/dev`, `origin/main`, `origin/master` and keep whichever sits fewest
+  commits behind HEAD, since the branch was cut from exactly one of them. The
+  wrong base pre-dated the block: the same helper feeds the language verdict,
+  where a majority vote over noisy input still lands on the right answer, which
+  is why nothing surfaced it until a consumer with no noise tolerance appeared.
+
+- **Verify refuses to plan against a tree that is not this spec's build (#742,
+  PR #745).** `project_dir` is one shared clone per project and spec ingest
+  moves its HEAD, so whichever spec ran last owns HEAD for every other spec on
+  the project. Observed live: while spec 005 was being verified, the clone was
+  on spec 003's branch from the previous evening — so the planner's Glob/Grep,
+  the language signal, the import pre-flight (#732) and the symbol block were
+  all describing a different build than the one under test. Same failure class
+  as #732 but at the branch level, where #732's package-root fix cannot see it.
+  Ingest now records the commit it landed on (`source.json` `source_sha`) and
+  the planner compares it to HEAD, failing with `planner_source_checkout_drift`
+  on a mismatch. Failing is deliberate: verifying an unrelated tree produces a
+  confident verdict about code nobody asked about. Re-checking-out would be
+  self-healing but can yank the tree from under a concurrent spec; per-spec
+  worktrees are the real fix and stay open in #742. No recorded SHA means no
+  evidence of drift, and plans as before.
+
+- **The release signs its images again (#740, PR #744).** The release built
+  `linux/amd64,linux/arm64` under QEMU and the arm64 leg failed in the frontend
+  build (`vite`, `src/index.css`) for 0.9.15 and 0.9.16. Being the first image
+  step, its failure skipped the dev/demo build, cosign signing, SBOM generation,
+  attestation and the signature self-test — so two releases published unsigned
+  with no SBOM while the tag and GitHub release were created normally and
+  `deploy.yml` kept shipping to the cluster from its own lane. Nothing consumes
+  arm64 (`deploy.yml` is amd64-only and is what the cluster runs), so the leg is
+  dropped along with the QEMU setup that existed only for it.
+  `test_release_workflow_signs_with_cosign`'s docstring, which claimed the
+  self-test "fails the release if the signature doesn't verify", is corrected: a
+  skipped step enforces nothing, and that claim is why a green test sat beside
+  two unsigned releases.
+
 ## 0.9.16 — the plan targets symbols the build actually delivered (2026-07-21)
 
 Fixes #737. Across three runs of the same issue with the same acceptance

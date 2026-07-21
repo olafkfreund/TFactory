@@ -34,6 +34,7 @@ for _m in [
 
 from prompts_pkg.prompts import (  # noqa: E402
     _build_changed_symbols_block,
+    _source_branch_changed_files,
     get_tfactory_planner_prompt,
     get_tfactory_planner_replan_prompt,
 )
@@ -604,3 +605,57 @@ def test_symbols_block_survives_unparseable_source(tmp_path: Path) -> None:
     """A syntax error in the build must not take the whole planner down."""
     spec_dir, proj = _spec_with_build(tmp_path, "def broken(:\n")
     assert _build_changed_symbols_block(spec_dir, proj) == ""
+
+
+def test_base_is_the_branch_cut_from_not_the_default(tmp_path: Path) -> None:
+    """#737 follow-up: a build cut from `dev` must not report dev's lead over main.
+
+    Real topology: main, dev ahead of main, build branch off dev. Diffing against
+    origin/HEAD (main) reported every file dev had moved — on TFactory itself, 53
+    files instead of the 5 the build touched, which crowded the real target out
+    of the symbol list entirely.
+    """
+    proj = tmp_path / "repo"
+    proj.mkdir()
+
+    def _git(*args: str) -> None:
+        subprocess.run(  # noqa: S603
+            ["git", "-C", str(proj), *args],  # noqa: S607
+            check=True,
+            capture_output=True,
+        )
+
+    _git("init", "-b", "main", "--quiet")
+    _git("config", "user.email", "t@t")
+    _git("config", "user.name", "t")
+    (proj / "on_main.py").write_text("def from_main() -> None: ...\n")
+    _git("add", "-A")
+    _git("commit", "-qm", "main")
+
+    _git("checkout", "-q", "-b", "dev")
+    (proj / "on_dev.py").write_text("def from_dev() -> None: ...\n")
+    _git("add", "-A")
+    _git("commit", "-qm", "dev moves ahead")
+
+    _git("checkout", "-q", "-b", "aifactory/007-feature")
+    (proj / "built.py").write_text("def the_thing_that_was_built() -> None: ...\n")
+    _git("add", "-A")
+    _git("commit", "-qm", "the build")
+
+    # The ingest checkout is detached; origin/* are the refs the code consults.
+    for ref in ("main", "dev"):
+        _git("update-ref", f"refs/remotes/origin/{ref}", ref)
+    _git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+
+    spec_dir = tmp_path / "spec"
+    (spec_dir / "context").mkdir(parents=True)
+    (spec_dir / "context" / "source.json").write_text(
+        '{"source_branch": "aifactory/007-feature"}'
+    )
+
+    changed = _source_branch_changed_files(spec_dir, proj)
+    assert changed == ["built.py"], changed  # not on_dev.py — that is dev's lead
+
+    block = _build_changed_symbols_block(spec_dir, proj)
+    assert "the_thing_that_was_built" in block
+    assert "from_dev" not in block

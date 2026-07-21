@@ -563,13 +563,28 @@ def _language_from_files(files: list[str]) -> str | None:
 
 
 def _source_branch_changed_files(spec_dir: Path, project_dir: Path) -> list[str]:
-    """Files changed on the ingest ``source_branch`` vs the repo's default branch.
+    """Files the build changed, diffed against the branch it was actually cut from.
 
     The spec-ingest path checks the build branch out (detached FETCH_HEAD) in
-    ``project_dir`` — diff HEAD against origin's default branch to see what the
-    build delivered. Best-effort: any failure returns ``[]`` and the caller
-    falls back to weaker signals. Only runs when ``context/source.json`` names
-    a ``source_branch`` (otherwise HEAD *is* the default branch — no diff).
+    ``project_dir`` — diff HEAD against its base to see what the build delivered.
+    Best-effort: any failure returns ``[]`` and the caller falls back to weaker
+    signals. Only runs when ``context/source.json`` names a ``source_branch``
+    (otherwise HEAD *is* the default branch — no diff).
+
+    The base is chosen by distance, not by asking which branch is the repo's
+    default. This diffed against ``origin/HEAD`` until #737 exposed the flaw: a
+    repo whose builds branch from ``dev`` (as the fleet's do) reported *dev's
+    entire lead over main* as "what this build changed" — measured on TFactory
+    itself, 53 files against ``origin/main`` versus the 5 the build actually
+    touched. Nobody noticed while the only consumer was a majority-vote language
+    verdict, which is noise-tolerant; a list of symbols to test is not, and the
+    real target was crowded out of it entirely.
+
+    So: try each plausible base and keep whichever sits fewest commits behind
+    HEAD. The branch was cut from exactly one of them, and that one is nearest
+    by construction; an unrelated candidate scores far worse and loses. Ties keep
+    candidate order, and a candidate identical to HEAD scores 0 — correctly
+    yielding "this build changed nothing".
     """
     try:
         src = json.loads(
@@ -590,15 +605,22 @@ def _source_branch_changed_files(spec_dir: Path, project_dir: Path) -> list[str]
         )
 
     try:
-        base = None
+        candidates: list[str] = []
         head_ref = _git("symbolic-ref", "refs/remotes/origin/HEAD")
-        if head_ref.returncode == 0:
-            base = head_ref.stdout.strip()
-        else:
-            for cand in ("origin/main", "origin/master"):
-                if _git("rev-parse", "--verify", "--quiet", cand).returncode == 0:
-                    base = cand
-                    break
+        if head_ref.returncode == 0 and head_ref.stdout.strip():
+            candidates.append(head_ref.stdout.strip())
+        candidates += ["origin/dev", "origin/main", "origin/master"]
+
+        base, best = None, None
+        for cand in dict.fromkeys(candidates):  # de-dup, keep order
+            if _git("rev-parse", "--verify", "--quiet", cand).returncode != 0:
+                continue
+            count = _git("rev-list", "--count", f"{cand}..HEAD")
+            if count.returncode != 0 or not count.stdout.strip().isdigit():
+                continue
+            ahead = int(count.stdout.strip())
+            if best is None or ahead < best:
+                base, best = cand, ahead
         if not base:
             return []
         diff = _git("diff", "--name-only", f"{base}...HEAD")
