@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.9.18 — the release can actually push its image (2026-07-21)
+
+**Correction to 0.9.17.** That entry claimed #740 had restored image signing. It
+had not. Dropping arm64 was necessary but not sufficient: with the arm64 leg
+gone the frontend built cleanly on amd64, and the step then failed one stage
+later, pushing —
+
+    ERROR: failed to push ghcr.io/olafkfreund/tfactory:v0.9.17:
+    unexpected status from HEAD request to
+    https://ghcr.io/v2/olafkfreund/tfactory/blobs/sha256:6433...: 403 Forbidden
+
+— so 0.9.17 skipped cosign, Syft, attestation and the signature self-test
+exactly as 0.9.15 and 0.9.16 did. The arm64 failure had been masking this: it
+died before reaching the push, so the 403 could not surface. Two independent
+defects stacked in one step, and the first diagnosis stopped at the first error
+(buildx reports the first failing platform, not the only problem).
+
+- **The release pushes to GHCR with the same credentials deploy.yml uses (#740,
+  PR #747).** `deploy.yml` pushes to this exact package on every merge to main
+  and has always carried a `GHCR_PAT` fallback, with a comment explaining the
+  package needs either this repo added with Write or a classic PAT holding
+  `write:packages`. `release.yml` only ever used the default `GITHUB_TOKEN`, so
+  the two lanes disagreed about whether they could push the same image — and
+  only the lane nobody watched was wrong. The secret was already configured;
+  release.yml now uses the same login as the lane that demonstrably works.
+
+This release is the proof: the `v0.9.17` tag and GitHub release were created
+before the push failed, so the fix could not be validated by re-running that
+workflow — only by the next version bump. If 0.9.18 publishes a signed image
+with an SBOM attached, the supply-chain gap that silently swallowed three
+releases is closed.
+
 ## 0.9.17 — the symbol block points at the right build, and verify refuses the wrong tree (2026-07-21)
 
 Three fixes from a live run that exposed how much of the verify path was
