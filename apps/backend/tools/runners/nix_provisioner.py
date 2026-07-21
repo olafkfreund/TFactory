@@ -29,9 +29,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+
+import tomllib
 
 # nixpkgs pin for generated flakes. A FULL commit rev (not a branch) keeps
 # generated flakes reproducible AND avoids a GitHub API call to resolve the
@@ -242,7 +243,9 @@ def _system_pkg_attrs(m: Manifest) -> list[str]:
     return [p for p in m.system_packages if p.lower() not in _DROP_SYSTEM_PKGS]
 
 
-def generate_flake(env: dict, *, nixpkgs: str = DEFAULT_NIXPKGS, project_dir=None) -> str:
+def generate_flake(
+    env: dict, *, nixpkgs: str = DEFAULT_NIXPKGS, project_dir=None
+) -> str:
     """Render a reproducible `flake.nix` from an RFC-0005 environment manifest.
 
     Mirrors the proven PoC: a single devShell with the language toolchain, any
@@ -261,7 +264,9 @@ def generate_flake(env: dict, *, nixpkgs: str = DEFAULT_NIXPKGS, project_dir=Non
         pkg_lines.append(f"pkgs.{_go_attr(m)}")
     else:
         py = _python_attr(m)
-        py_pkgs = [_PY_PKG_ALIASES.get(p, p) for p in _python_libs(m, project_dir=project_dir)]
+        py_pkgs = [
+            _PY_PKG_ALIASES.get(p, p) for p in _python_libs(m, project_dir=project_dir)
+        ]
         if py_pkgs:
             # Reference each attr as ``p."name"`` (quoted) rather than
             # ``with p; [ name ]`` so hyphenated attrs (pytest-cov,
@@ -285,9 +290,7 @@ def generate_flake(env: dict, *, nixpkgs: str = DEFAULT_NIXPKGS, project_dir=Non
     let_lines = ""
     env_lines = ""
     if browser:
-        let_lines = (
-            "\n      fontsConf = pkgs.makeFontsConf { fontDirectories = [ pkgs.dejavu_fonts ]; };"
-        )
+        let_lines = "\n      fontsConf = pkgs.makeFontsConf { fontDirectories = [ pkgs.dejavu_fonts ]; };"
         env_lines = (
             "\n        # Nix-provided, version-matched browsers — no network "
             "download.\n"
@@ -320,6 +323,23 @@ def generate_flake(env: dict, *, nixpkgs: str = DEFAULT_NIXPKGS, project_dir=Non
 """
 
 
+def _requirements_present(project_dir) -> bool:
+    """True when the checkout declares deps in a requirements.txt the lane can install.
+
+    Bounded the same way the runner's discovery is, so this answers the same
+    question the Job will ask at run time.
+    """
+    from pathlib import Path as _P
+
+    root = _P(project_dir)
+    skip = {".git", ".venv", "venv", "node_modules", "__pycache__"}
+    for pattern in ("requirements.txt", "*/requirements.txt", "*/*/requirements.txt"):
+        for hit in root.glob(pattern):
+            if not any(part in skip for part in hit.relative_to(root).parts):
+                return True
+    return False
+
+
 def _python_libs(m: Manifest, project_dir=None) -> list[str]:
     """Python libraries to put in the withPackages set. Always include
     pytest + pytest-cov for the verify lane (the runner always passes ``--cov``);
@@ -335,6 +355,14 @@ def _python_libs(m: Manifest, project_dir=None) -> list[str]:
         libs += ["fastapi", "uvicorn", "httpx"]
     if project_dir is not None:
         libs += _deps_from_pyproject(project_dir)
+        # #764: the allowlist above can never be complete, and a repo that
+        # declares its deps in requirements.txt (this one does) gets nothing from
+        # it at all. Ship pip so the Job can install whatever the map missed —
+        # the lane installs into /tmp and prepends it to PYTHONPATH. The
+        # allowlist stays: it is the hermetic path when the deps happen to be
+        # mapped, and pip only fills the gap.
+        if _requirements_present(project_dir):
+            libs += ["pip"]
     # de-dup, stable order
     seen: set[str] = set()
     out: list[str] = []
@@ -402,7 +430,9 @@ def _test() -> None:
     assert "python313.withPackages" in flake, flake
     assert "playwright-test" in flake and "nodejs_22" in flake, flake
     assert "PLAYWRIGHT_BROWSERS_PATH" in flake, flake
-    assert "pkgs.chromium" not in flake, "bare chromium must be dropped for the pw stack"
+    assert "pkgs.chromium" not in flake, (
+        "bare chromium must be dropped for the pw stack"
+    )
     assert "fastapi" in flake and "pytest" in flake, flake  # web+test libs inferred
     # fonts: headless chromium needs them to render text in a minimal container.
     assert "dejavu_fonts" in flake and "FONTCONFIG_FILE" in flake, flake

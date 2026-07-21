@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from agents.preflight_static import package_root_rel_paths
+from agents.preflight_static import package_root_rel_paths, requirements_files
 from agents.task_contract import read_task_contract
 from tools.runners.docker_runner import DockerRunResult
 from tools.runners.nix_provisioner import (
@@ -170,6 +170,10 @@ _JOB_SCRIPT = "_tf_nix_job.sh"
 _E2E_STAGE = ".tf_e2e"  # staged generated browser specs (in the worktree)
 _PW_CONFIG = "_tf_pw.config.ts"
 _SHOTS = "shots"
+# Where the Job pip-installs the SUT's deps (#764). S108 is about host temp
+# files; this is a path INSIDE the Job container, chosen because /tmp is the one
+# location its non-root uid can write — the co-mounted /work is read-only to it.
+_DEPS_TARGET = "/tmp/tf_sut_deps"  # noqa: S108
 _PYTEST_STAGE = ".tf_pytest"  # staged junit/coverage the Nix Job writes back
 _GOTEST_STAGE = ".tf_gotest"  # staged junit/coverage the Go Nix Job writes back
 
@@ -322,9 +326,28 @@ def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve kno
         # runner does the same (evaluator._run_pytest_on_host). Without it a
         # ``src/<pkg>/`` package fails at collection and every AC shows as an error
         # rather than its real pass/fail. Prepended to any PYTHONPATH above (#615).
+        # Only prepend the pip target when there is something to install, so a
+        # repo with no requirements.txt gets a byte-identical export.
+        _reqs = requirements_files(scratch)
+        _prefix = f"{_DEPS_TARGET}:" if _reqs else ""
         srcpath = (
-            f'export PYTHONPATH="{_in_job_pythonpath(scratch, mount)}'
+            f'export PYTHONPATH="{_prefix}{_in_job_pythonpath(scratch, mount)}'
             f'${{PYTHONPATH:+:$PYTHONPATH}}"\n'
+        )
+        # #764: install the SUT's own requirements into the Job. The flake's
+        # curated PyPI->nixpkgs allowlist can never be complete, and a repo that
+        # declares its deps only in requirements.txt gets nothing from it, so a
+        # real app is unimportable and every AC comes back a collection error
+        # against correct code — the same failure #759 fixed on the host path.
+        # --target avoids ensurepip/venv questions in the nix interpreter, and
+        # /tmp is writable by the Job's non-root uid while the co-mounted /work
+        # is not. Best-effort per file (the script runs under `set +e`): one
+        # unresolvable pin must not take the rest down, and the roots on
+        # PYTHONPATH remain the fallback.
+        deps_prelude = "".join(
+            f"pip install -q --target {_DEPS_TARGET} -r "
+            f"{mount}/{req.relative_to(scratch).as_posix()} 2>&1 | tail -2\n"
+            for req in _reqs
         )
         # api lane self-serve (#612): boot the SUT in-Job at 127.0.0.1:port and
         # export TFACTORY_TARGET_URL before pytest, so the endpoint test reaches
@@ -357,6 +380,7 @@ def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve kno
             "#!/usr/bin/env bash\nset +e\n"
             + exports
             + srcpath
+            + deps_prelude
             + serve_prelude
             + pytest_cmd
             + "\n",

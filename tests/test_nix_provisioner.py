@@ -136,3 +136,34 @@ def test_deps_from_pyproject_missing_file_is_empty(tmp_path):
     from tools.runners.nix_provisioner import _deps_from_pyproject
 
     assert _deps_from_pyproject(tmp_path) == []
+
+
+# --- #764: a SUT whose deps live in requirements.txt ---
+
+
+def _repo_with_requirements(tmp_path):
+    """A monorepo declaring deps only in requirements.txt — no pyproject at all."""
+    root = tmp_path / "repo"
+    (root / "apps" / "web-server").mkdir(parents=True)
+    (root / "apps" / "web-server" / "requirements.txt").write_text("fastapi==0.136.3\n")
+    return root
+
+
+def test_flake_ships_pip_when_deps_come_from_requirements(tmp_path):
+    """The allowlist cannot map requirements.txt, so the Job needs pip to install it."""
+    from tools.runners.nix_provisioner import generate_flake
+
+    env = {"language": "python", "verify_commands": ["pytest -q"]}
+    flake = generate_flake(env, project_dir=_repo_with_requirements(tmp_path))
+    assert '"pip"' in flake, flake
+
+
+def test_flake_omits_pip_without_requirements(tmp_path):
+    """No requirements.txt: nothing to install, so keep the closure hermetic."""
+    from tools.runners.nix_provisioner import generate_flake
+
+    bare = tmp_path / "bare"
+    (bare / "pkg").mkdir(parents=True)
+    env = {"language": "python", "verify_commands": ["pytest -q"]}
+    flake = generate_flake(env, project_dir=bare)
+    assert '"pip"' not in flake, flake
