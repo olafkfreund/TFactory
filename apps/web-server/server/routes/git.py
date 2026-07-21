@@ -825,12 +825,23 @@ async def check_mcp_health(server: McpServerConfig):
         import urllib.request
         from urllib.parse import urlparse
 
-        # SSRF guard: an MCP server URL is configured by the operator themselves
-        # and, by design, very often points at a local/LAN endpoint (most MCP
-        # servers run on localhost). Blocking private/loopback hosts would break
-        # that intended use case, so we deliberately do not. We DO restrict the
-        # scheme to http/https so a configured value cannot be coerced into a
-        # file://, gopher://, ftp:// (etc.) request.
+        # SSRF guard: validate the URL using _is_safe_mcp_url() which resolves
+        # hostnames and blocks link-local, reserved, multicast, and unspecified
+        # addresses. Loopback and private ranges remain allowed.
+        try:
+            _is_safe_mcp_url(server.url)
+        except HTTPException as e:
+            # Log the reason but return unknown status (AC#5: reason not returned to client)
+            logger.warning(f"MCP health check SSRF validation failed for URL {server.url}: {e.detail}")
+            return {
+                "success": True,
+                "data": {
+                    "serverId": server.id,
+                    "status": "unknown",
+                    "message": "Cannot check server"
+                }
+            }
+
         parsed = urlparse(server.url)
         if parsed.scheme not in ("http", "https") or not parsed.hostname:
             return {

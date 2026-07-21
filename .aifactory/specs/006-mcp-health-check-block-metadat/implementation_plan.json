@@ -54,7 +54,7 @@
             },
             "expected_status": 200
           },
-          "status": "pending"
+          "status": "completed"
         },
         {
           "id": "subtask-1-3",
