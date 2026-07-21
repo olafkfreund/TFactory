@@ -29,6 +29,7 @@ from agents.preflight_static import (
     extract_imports,
     package_root_rel_paths,
     preflight_check,
+    requirements_files,
 )
 
 FIXTURE_PROJECT = Path(__file__).parent / "fixtures" / "planner_smoke" / "project_tree"
@@ -517,3 +518,36 @@ def test_package_root_rel_paths_is_empty_without_packages(tmp_path: Path) -> Non
     (bare / "scripts").mkdir(parents=True)
     (bare / "scripts" / "run.py").write_text("x = 1\n")
     assert package_root_rel_paths(bare) == []
+
+
+# ── #759: find a monorepo's requirements files ──────────────────────────
+
+
+def test_requirements_files_found_below_the_root(tmp_path: Path) -> None:
+    """This repo's exact shape: no root requirements.txt, two below it."""
+    root = _monorepo(tmp_path)
+    (root / "apps" / "web-server" / "requirements.txt").write_text("fastapi\n")
+    (root / "apps" / "backend" / "requirements.txt").parent.mkdir(parents=True)
+    (root / "apps" / "backend" / "requirements.txt").write_text("pytest\n")
+    for vendor in ("node_modules", ".venv"):
+        (root / vendor).mkdir(parents=True, exist_ok=True)
+        (root / vendor / "requirements.txt").write_text("junk\n")
+
+    found = [str(p.relative_to(root)) for p in requirements_files(root)]
+    assert "apps/web-server/requirements.txt" in found, found
+    assert "apps/backend/requirements.txt" in found, found
+    # Vendored copies must never be installed.
+    assert not any(f.startswith(("node_modules", ".venv")) for f in found), found
+
+
+def test_requirements_files_prefers_the_root_and_is_bounded(tmp_path: Path) -> None:
+    root = _monorepo(tmp_path)
+    (root / "requirements.txt").write_text("a\n")
+    for i in range(8):
+        d = root / f"svc{i}"
+        d.mkdir()
+        (d / "requirements.txt").write_text("b\n")
+    found = requirements_files(root, limit=3)
+    assert len(found) == 3
+    assert found[0].name == "requirements.txt"
+    assert found[0].parent == root  # nearest first

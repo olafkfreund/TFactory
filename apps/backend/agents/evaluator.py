@@ -51,7 +51,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from agents.preflight_static import package_root_rel_paths
+from agents.preflight_static import package_root_rel_paths, requirements_files
 from agents.run_result import RunResultLike
 from agents.verdict_vote import majority_vote
 
@@ -357,11 +357,28 @@ def _ensure_host_venv(project_dir: Path) -> Path:
     # httpx-free tests hitting TFACTORY_TARGET_URL (see the pytest framework
     # descriptor's api-lane context_block) — install it unconditionally so
     # those tests import cleanly even when the SUT itself doesn't declare it.
-    args = [py, "-m", "pip", "install", "-q", "pytest", "pytest-cov", "requests"]
-    req = Path(project_dir) / "requirements.txt"
-    if req.exists():
-        args += ["-r", str(req)]
-    subprocess.run(args, capture_output=True, text=True, timeout=600)
+    subprocess.run(  # noqa: S603 — fixed pip argv, no untrusted input
+        [py, "-m", "pip", "install", "-q", "pytest", "pytest-cov", "requests"],
+        capture_output=True,
+        text=True,
+        timeout=600,
+        check=False,
+    )
+    # #759: a monorepo declares its deps below the root — this repo has no root
+    # requirements.txt or pyproject.toml at all, only apps/web-server/ and
+    # apps/backend/ ones — so both install branches used to be skipped and the
+    # venv got pytest and nothing else. Every test that imported the app then
+    # died at collection on a missing third-party package, and the run reported
+    # an error against correct code. Installed one file at a time so a single
+    # unresolvable pin cannot take the others down with it.
+    for req in requirements_files(Path(project_dir)):
+        subprocess.run(  # noqa: S603 — fixed pip argv, no untrusted input
+            [py, "-m", "pip", "install", "-q", "-r", str(req)],
+            capture_output=True,
+            text=True,
+            timeout=600,
+            check=False,
+        )
     # Install the SUT itself when it ships a pyproject.toml (best-effort). The
     # bare install pulls in the project's runtime deps AND registers the package
     # — covering src-layout repos that have no requirements.txt, so
