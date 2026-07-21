@@ -27,6 +27,7 @@ import asyncio
 import json
 import logging as _logging
 import os
+import subprocess
 import traceback
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -556,6 +557,78 @@ def _finalize_replan(
     _advance_to_gen_functional(spec_dir, project_dir)
 
 
+def _checkout_drift(spec_dir: Path, project_dir: Path) -> str | None:
+    """Describe the mismatch if ``project_dir`` no longer holds this spec's build.
+
+    ``project_dir`` is one shared clone per project and spec ingest moves its
+    HEAD, so a spec ingesting in between silently repoints the tree that the
+    planner's Glob/Grep, the language signal, the import pre-flight (#732) and
+    the delivered-symbols block (#737) all resolve against. Observed live: while
+    spec 005 was being verified, the clone was still on spec 003's branch from
+    the previous evening, so every one of those readers was describing a
+    different build than the one under test.
+
+    Refusing to plan is the honest outcome — verifying an unrelated tree
+    produces a confident verdict about code nobody asked about, which is the
+    failure #729 made expensive to learn. Re-checking-out instead would be
+    self-healing but can yank the tree out from under a concurrently running
+    spec; per-spec worktrees are the real fix (#742) and are a larger change.
+
+    Returns ``None`` when there is nothing to check (no recorded SHA, older
+    workspace, unreadable git) — silence here must mean "no evidence of drift",
+    never "assumed fine but unverified".
+    """
+    try:
+        src = json.loads(
+            (spec_dir / "context" / "source.json").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return None
+    expected = str(src.get("source_sha") or "")
+    if not expected:
+        return None
+    try:
+        out = subprocess.run(  # noqa: S603
+            ["git", "-C", str(project_dir), "rev-parse", "HEAD"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except Exception:  # noqa: BLE001 — an unreadable git is not evidence of drift
+        return None
+    actual = out.stdout.strip() if out.returncode == 0 else ""
+    if not actual or actual == expected:
+        return None
+    return (
+        f"{project_dir} is on {actual[:12]} but this spec ingested "
+        f"{expected[:12]} ({src.get('source_branch')}) — the shared clone was "
+        "repointed by another spec; refusing to plan against a different build"
+    )
+
+
+def _planner_blocked(spec_dir: Path, project_dir: Path) -> bool:
+    """True when the workspace is unusable and planning must not start.
+
+    Two conditions, kept together so ``run_planner`` bails once: the spec dir is
+    missing, or the shared clone no longer holds this spec's build (#742).
+    """
+    if not spec_dir.is_dir():
+        _planner_log.error("planner: spec_dir %s does not exist", spec_dir)
+        return True
+    drift = _checkout_drift(spec_dir, project_dir)
+    if drift:
+        _planner_log.error("planner: %s", drift)
+        _write_status_patch(
+            spec_dir,
+            status="failed",
+            phase="planner_source_checkout_drift",
+            planner_warnings=[drift],
+        )
+        return True
+    return False
+
+
 async def run_planner(
     spec_dir: Path,
     project_dir: Path,
@@ -595,8 +668,7 @@ async def run_planner(
           Write tool. This function may also write to status.json's
           ``planner_warnings`` list with truncation / soft-fail notes.
     """
-    if not spec_dir.is_dir():
-        _planner_log.error("planner: spec_dir %s does not exist", spec_dir)
+    if _planner_blocked(spec_dir, project_dir):
         return False
 
     if mode == "replan":

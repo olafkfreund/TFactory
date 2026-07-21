@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -57,15 +58,21 @@ def spec_dir(tmp_path: Path) -> Path:
     d.mkdir(parents=True)
     for sub in ("context", "tests", "findings", "logs", "memory"):
         (d / sub).mkdir()
-    (d / "status.json").write_text(json.dumps({
-        "task_id": "001",
-        "project_id": "demo",
-        "spec_id": "001",
-        "status": "pending",
-        "phase": "created",
-    }))
+    (d / "status.json").write_text(
+        json.dumps(
+            {
+                "task_id": "001",
+                "project_id": "demo",
+                "spec_id": "001",
+                "status": "pending",
+                "phase": "created",
+            }
+        )
+    )
     # Minimum context the prompt helper references
-    (d / "context" / "aifactory_spec.md").write_text("# spec\n\n## ACs\n- AC#1: works\n")
+    (d / "context" / "aifactory_spec.md").write_text(
+        "# spec\n\n## ACs\n- AC#1: works\n"
+    )
     (d / "context" / "source.json").write_text("{}")
     return d
 
@@ -79,39 +86,41 @@ def project_dir(tmp_path: Path) -> Path:
 
 def _make_valid_plan_json(subtask_count: int = 1) -> str:
     """Build a valid ImplementationPlan JSON string with N functional subtasks."""
-    return json.dumps({
-        "feature": "demo",
-        "workflow_type": "feature",
-        "services_involved": [],
-        "phases": [
-            {
-                "phase": 1,
-                "name": "AC#1: works",
-                "type": "implementation",
-                "subtasks": [
-                    {
-                        "id": f"s{i}",
-                        "description": f"test {i}",
-                        "status": "pending",
-                        "lane": "functional",
-                        "target": f"foo.py::bar{i}",
-                        "rationale": "AC#1",
-                        "files_to_create": [f"tests/test_{i}.py"],
-                        "verification": {
-                            "type": "command",
-                            "command": f"pytest tests/test_{i}.py",
-                            "expected": "exit 0",
-                        },
-                    }
-                    for i in range(subtask_count)
-                ],
-                "parallel_safe": False,
-            },
-        ],
-        "final_acceptance": [],
-        "status": "in_progress",
-        "planStatus": "pending",
-    })
+    return json.dumps(
+        {
+            "feature": "demo",
+            "workflow_type": "feature",
+            "services_involved": [],
+            "phases": [
+                {
+                    "phase": 1,
+                    "name": "AC#1: works",
+                    "type": "implementation",
+                    "subtasks": [
+                        {
+                            "id": f"s{i}",
+                            "description": f"test {i}",
+                            "status": "pending",
+                            "lane": "functional",
+                            "target": f"foo.py::bar{i}",
+                            "rationale": "AC#1",
+                            "files_to_create": [f"tests/test_{i}.py"],
+                            "verification": {
+                                "type": "command",
+                                "command": f"pytest tests/test_{i}.py",
+                                "expected": "exit 0",
+                            },
+                        }
+                        for i in range(subtask_count)
+                    ],
+                    "parallel_safe": False,
+                },
+            ],
+            "final_acceptance": [],
+            "status": "in_progress",
+            "planStatus": "pending",
+        }
+    )
 
 
 def _make_over_budget_plan_json(subtask_count: int = 35) -> str:
@@ -122,40 +131,44 @@ def _make_over_budget_plan_json(subtask_count: int = 35) -> str:
     remaining = subtask_count
     for ph in range(3):
         n = min(per_phase, remaining)
-        phases.append({
-            "phase": ph + 1,
-            "name": f"AC#{ph + 1}",
-            "type": "implementation",
-            "subtasks": [
-                {
-                    "id": f"s{sid + i}",
-                    "description": f"test {sid + i}",
-                    "status": "pending",
-                    "lane": "functional",
-                    "target": f"foo.py::bar{sid + i}",
-                    "rationale": f"AC#{ph + 1}",
-                    "files_to_create": [f"tests/test_{sid + i}.py"],
-                    "verification": {
-                        "type": "command",
-                        "command": f"pytest tests/test_{sid + i}.py",
-                        "expected": "exit 0",
-                    },
-                }
-                for i in range(n)
-            ],
-            "parallel_safe": False,
-        })
+        phases.append(
+            {
+                "phase": ph + 1,
+                "name": f"AC#{ph + 1}",
+                "type": "implementation",
+                "subtasks": [
+                    {
+                        "id": f"s{sid + i}",
+                        "description": f"test {sid + i}",
+                        "status": "pending",
+                        "lane": "functional",
+                        "target": f"foo.py::bar{sid + i}",
+                        "rationale": f"AC#{ph + 1}",
+                        "files_to_create": [f"tests/test_{sid + i}.py"],
+                        "verification": {
+                            "type": "command",
+                            "command": f"pytest tests/test_{sid + i}.py",
+                            "expected": "exit 0",
+                        },
+                    }
+                    for i in range(n)
+                ],
+                "parallel_safe": False,
+            }
+        )
         sid += n
         remaining -= n
-    return json.dumps({
-        "feature": "demo",
-        "workflow_type": "feature",
-        "services_involved": [],
-        "phases": phases,
-        "final_acceptance": [],
-        "status": "in_progress",
-        "planStatus": "pending",
-    })
+    return json.dumps(
+        {
+            "feature": "demo",
+            "workflow_type": "feature",
+            "services_involved": [],
+            "phases": phases,
+            "final_acceptance": [],
+            "status": "in_progress",
+            "planStatus": "pending",
+        }
+    )
 
 
 @pytest.fixture
@@ -170,6 +183,7 @@ def mock_sdk(monkeypatch: pytest.MonkeyPatch):
     class _FakeAsyncCM:
         async def __aenter__(self):
             return self
+
         async def __aexit__(self, *args):
             return None
 
@@ -183,11 +197,13 @@ def mock_sdk(monkeypatch: pytest.MonkeyPatch):
             return _FakeAsyncCM()
 
         async def _invoke(client, prompt, spec_dir_arg, verbose):
-            call_log.append({
-                "prompt": prompt,
-                "spec_dir": str(spec_dir_arg),
-                "verbose": verbose,
-            })
+            call_log.append(
+                {
+                    "prompt": prompt,
+                    "spec_dir": str(spec_dir_arg),
+                    "verbose": verbose,
+                }
+            )
             try:
                 canned = next(plans_iter)
             except StopIteration:
@@ -351,15 +367,22 @@ async def test_initial_session_error_no_retry(
 # ── Replan mode (commit 5) ──────────────────────────────────────────────
 
 
-def _write_replan_request(spec_dir: Path, subtask_id: str,
-                           reason: str = "hallucinated import",
-                           failed_target: str = "foo.py::nope") -> None:
+def _write_replan_request(
+    spec_dir: Path,
+    subtask_id: str,
+    reason: str = "hallucinated import",
+    failed_target: str = "foo.py::nope",
+) -> None:
     """Drop a context/replan_request.json — what Gen-Functional writes."""
-    (spec_dir / "context" / "replan_request.json").write_text(json.dumps({
-        "subtask_id": subtask_id,
-        "reason": reason,
-        "failed_target": failed_target,
-    }))
+    (spec_dir / "context" / "replan_request.json").write_text(
+        json.dumps(
+            {
+                "subtask_id": subtask_id,
+                "reason": reason,
+                "failed_target": failed_target,
+            }
+        )
+    )
 
 
 def _make_plan_with_replan_phase(
@@ -372,48 +395,64 @@ def _make_plan_with_replan_phase(
     original plan + appended replan-N phase. The agent does NOT
     bump replan_count itself — our post-session helper does that.
     """
-    return json.dumps({
-        "feature": "demo",
-        "workflow_type": "feature",
-        "services_involved": [],
-        "phases": [
-            {
-                "phase": 1, "name": "AC#1: works", "type": "implementation",
-                "subtasks": [{
-                    "id": original_subtask_id, "description": "orig",
-                    "status": "pending", "lane": "functional",
-                    "target": "foo.py::bar", "rationale": "AC#1",
-                    "files_to_create": ["tests/test_orig.py"],
-                    "verification": {
-                        "type": "command",
-                        "command": "pytest tests/test_orig.py",
-                        "expected": "exit 0",
-                    },
-                    # Pre-existing replan_count from earlier rounds.
-                    "replan_count": original_replan_count_after,
-                }],
-                "parallel_safe": False,
-            },
-            {
-                "phase": 2, "name": replan_phase_name, "type": "implementation",
-                "subtasks": [{
-                    "id": replan_id, "description": "corrected",
-                    "status": "pending", "lane": "functional",
-                    "target": "foo.py::real_func", "rationale":
-                        f"Replan of '{original_subtask_id}': original failed",
-                    "files_to_create": ["tests/test_corrected.py"],
-                    "verification": {
-                        "type": "command",
-                        "command": "pytest tests/test_corrected.py",
-                        "expected": "exit 0",
-                    },
-                }],
-                "parallel_safe": False,
-            },
-        ],
-        "final_acceptance": [],
-        "status": "in_progress", "planStatus": "pending",
-    })
+    return json.dumps(
+        {
+            "feature": "demo",
+            "workflow_type": "feature",
+            "services_involved": [],
+            "phases": [
+                {
+                    "phase": 1,
+                    "name": "AC#1: works",
+                    "type": "implementation",
+                    "subtasks": [
+                        {
+                            "id": original_subtask_id,
+                            "description": "orig",
+                            "status": "pending",
+                            "lane": "functional",
+                            "target": "foo.py::bar",
+                            "rationale": "AC#1",
+                            "files_to_create": ["tests/test_orig.py"],
+                            "verification": {
+                                "type": "command",
+                                "command": "pytest tests/test_orig.py",
+                                "expected": "exit 0",
+                            },
+                            # Pre-existing replan_count from earlier rounds.
+                            "replan_count": original_replan_count_after,
+                        }
+                    ],
+                    "parallel_safe": False,
+                },
+                {
+                    "phase": 2,
+                    "name": replan_phase_name,
+                    "type": "implementation",
+                    "subtasks": [
+                        {
+                            "id": replan_id,
+                            "description": "corrected",
+                            "status": "pending",
+                            "lane": "functional",
+                            "target": "foo.py::real_func",
+                            "rationale": f"Replan of '{original_subtask_id}': original failed",
+                            "files_to_create": ["tests/test_corrected.py"],
+                            "verification": {
+                                "type": "command",
+                                "command": "pytest tests/test_corrected.py",
+                                "expected": "exit 0",
+                            },
+                        }
+                    ],
+                    "parallel_safe": False,
+                },
+            ],
+            "final_acceptance": [],
+            "status": "in_progress",
+            "planStatus": "pending",
+        }
+    )
 
 
 @pytest.mark.asyncio
@@ -525,27 +564,45 @@ async def test_replan_rejects_when_existing_phases_dropped(
     """If the agent emits a plan that drops earlier phases, fail clearly."""
     # Pre-seed a plan with TWO phases.
     pre = json.loads(_make_valid_plan_json(2))
-    pre["phases"].append({
-        "phase": 2, "name": "AC#2", "type": "implementation",
-        "subtasks": [], "parallel_safe": False,
-    })
+    pre["phases"].append(
+        {
+            "phase": 2,
+            "name": "AC#2",
+            "type": "implementation",
+            "subtasks": [],
+            "parallel_safe": False,
+        }
+    )
     (spec_dir / "test_plan.json").write_text(json.dumps(pre))
     _write_replan_request(spec_dir, "s0")
 
     # Mock the agent emitting a plan that LOST phase 2 (only kept phase 1 + new replan-3)
     # — a regression we explicitly defend against.
     bad = json.loads(_make_valid_plan_json(1))
-    bad["phases"].append({
-        "phase": 3, "name": "replan-1", "type": "implementation",
-        "subtasks": [{
-            "id": "s0-r1", "description": "x", "status": "pending",
-            "lane": "functional", "target": "f.py::g", "rationale": "r",
-            "files_to_create": ["tests/x.py"],
-            "verification": {"type": "command", "command": "pytest",
-                             "expected": "exit 0"},
-        }],
-        "parallel_safe": False,
-    })
+    bad["phases"].append(
+        {
+            "phase": 3,
+            "name": "replan-1",
+            "type": "implementation",
+            "subtasks": [
+                {
+                    "id": "s0-r1",
+                    "description": "x",
+                    "status": "pending",
+                    "lane": "functional",
+                    "target": "f.py::g",
+                    "rationale": "r",
+                    "files_to_create": ["tests/x.py"],
+                    "verification": {
+                        "type": "command",
+                        "command": "pytest",
+                        "expected": "exit 0",
+                    },
+                }
+            ],
+            "parallel_safe": False,
+        }
+    )
     mock_sdk(plans=[json.dumps(bad)])
 
     ok = await run_planner(spec_dir, project_dir, mode="replan")
@@ -606,14 +663,18 @@ def test_schedule_planner_disabled_returns_none(
     spec_dir: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("TFACTORY_AUTO_PLAN", "0")
+
     async def _run():
         return schedule_planner(spec_dir, project_dir)
+
     assert asyncio.run(_run()) is None
 
 
 @pytest.mark.asyncio
 async def test_schedule_planner_enabled_returns_task(
-    spec_dir: Path, project_dir: Path, mock_sdk,
+    spec_dir: Path,
+    project_dir: Path,
+    mock_sdk,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("TFACTORY_AUTO_PLAN", "1")
@@ -628,7 +689,9 @@ async def test_schedule_planner_enabled_returns_task(
 
 @pytest.mark.asyncio
 async def test_scheduled_task_is_gc_anchored_then_cleared(
-    spec_dir: Path, project_dir: Path, mock_sdk,
+    spec_dir: Path,
+    project_dir: Path,
+    mock_sdk,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("TFACTORY_AUTO_PLAN", "1")
@@ -648,23 +711,25 @@ async def test_scheduled_task_is_gc_anchored_then_cleared(
 
 def _make_polyglot_plan_json(subtasks: list[dict]) -> str:
     """Build a valid ImplementationPlan JSON with arbitrary subtask dicts."""
-    return json.dumps({
-        "feature": "demo",
-        "workflow_type": "feature",
-        "services_involved": [],
-        "phases": [
-            {
-                "phase": 1,
-                "name": "AC#1: polyglot test",
-                "type": "implementation",
-                "subtasks": subtasks,
-                "parallel_safe": False,
-            }
-        ],
-        "final_acceptance": [],
-        "status": "in_progress",
-        "planStatus": "pending",
-    })
+    return json.dumps(
+        {
+            "feature": "demo",
+            "workflow_type": "feature",
+            "services_involved": [],
+            "phases": [
+                {
+                    "phase": 1,
+                    "name": "AC#1: polyglot test",
+                    "type": "implementation",
+                    "subtasks": subtasks,
+                    "parallel_safe": False,
+                }
+            ],
+            "final_acceptance": [],
+            "status": "in_progress",
+            "planStatus": "pending",
+        }
+    )
 
 
 def _make_polyglot_subtask(
@@ -708,8 +773,12 @@ async def test_polyglot_plan_with_pytest_and_jest_subtasks(
 ) -> None:
     """A plan with (python, pytest, unit) and (typescript, jest, unit) is accepted."""
     subtasks = [
-        _make_polyglot_subtask(subtask_id="py-1", language="python", framework="pytest", lane="unit"),
-        _make_polyglot_subtask(subtask_id="ts-1", language="typescript", framework="jest", lane="unit"),
+        _make_polyglot_subtask(
+            subtask_id="py-1", language="python", framework="pytest", lane="unit"
+        ),
+        _make_polyglot_subtask(
+            subtask_id="ts-1", language="typescript", framework="jest", lane="unit"
+        ),
     ]
     mock_sdk(plans=[_make_polyglot_plan_json(subtasks)])
     ok = await run_planner(spec_dir, project_dir)
@@ -726,7 +795,10 @@ async def test_polyglot_plan_with_playwright_subtask(
     """A plan with (typescript, playwright, browser) is accepted."""
     subtasks = [
         _make_polyglot_subtask(
-            subtask_id="e2e-1", language="typescript", framework="playwright", lane="browser"
+            subtask_id="e2e-1",
+            language="typescript",
+            framework="playwright",
+            lane="browser",
         ),
     ]
     mock_sdk(plans=[_make_polyglot_plan_json(subtasks)])
@@ -760,7 +832,12 @@ async def test_validator_rejects_unknown_framework(
 ) -> None:
     """Framework not in registry triggers invalid_framework and retry."""
     subtasks = [
-        _make_polyglot_subtask(subtask_id="bad-fw", language="python", framework="my-fake-framework", lane="unit"),
+        _make_polyglot_subtask(
+            subtask_id="bad-fw",
+            language="python",
+            framework="my-fake-framework",
+            lane="unit",
+        ),
     ]
     bad_plan = _make_polyglot_plan_json(subtasks)
     valid_plan = _make_valid_plan_json(1)
@@ -781,7 +858,12 @@ async def test_validator_rejects_language_framework_mismatch(
 ) -> None:
     """playwright is typescript, not java → invalid_framework, retry."""
     subtasks = [
-        _make_polyglot_subtask(subtask_id="mismatch", language="java", framework="playwright", lane="browser"),
+        _make_polyglot_subtask(
+            subtask_id="mismatch",
+            language="java",
+            framework="playwright",
+            lane="browser",
+        ),
     ]
     bad_plan = _make_polyglot_plan_json(subtasks)
     valid_plan = _make_valid_plan_json(1)
@@ -800,7 +882,12 @@ async def test_validator_rejects_lane_not_in_framework_lanes(
 ) -> None:
     """pytest supports unit lane but NOT browser → invalid_framework, retry."""
     subtasks = [
-        _make_polyglot_subtask(subtask_id="wrong-lane", language="python", framework="pytest", lane="browser"),
+        _make_polyglot_subtask(
+            subtask_id="wrong-lane",
+            language="python",
+            framework="pytest",
+            lane="browser",
+        ),
     ]
     bad_plan = _make_polyglot_plan_json(subtasks)
     valid_plan = _make_valid_plan_json(1)
@@ -836,7 +923,9 @@ async def test_planner_invalid_framework_triggers_retry(
 ) -> None:
     """Full path: invalid plan on first try, valid on retry → status=planned."""
     subtasks = [
-        _make_polyglot_subtask(subtask_id="fw-err", language="python", framework="nonexistent", lane="unit"),
+        _make_polyglot_subtask(
+            subtask_id="fw-err", language="python", framework="nonexistent", lane="unit"
+        ),
     ]
     bad_plan = _make_polyglot_plan_json(subtasks)
     valid_plan = _make_valid_plan_json(2)
@@ -857,7 +946,12 @@ async def test_planner_invalid_framework_twice_marks_failed(
 ) -> None:
     """Both sessions emit invalid framework → status=planner_failed."""
     subtasks = [
-        _make_polyglot_subtask(subtask_id="bad1", language="python", framework="no-such-framework", lane="unit"),
+        _make_polyglot_subtask(
+            subtask_id="bad1",
+            language="python",
+            framework="no-such-framework",
+            lane="unit",
+        ),
     ]
     bad_plan = _make_polyglot_plan_json(subtasks)
 
@@ -889,6 +983,7 @@ async def test_intent_create_is_default_in_emitted_plan(
     # intent defaults to "create" so it's NOT emitted in the JSON (omit-when-default)
     # but should round-trip back via Subtask.from_dict
     from test_plan import Subtask
+
     s = Subtask.from_dict(st)
     assert s.intent == "create"
 
@@ -939,6 +1034,7 @@ async def test_intent_update_when_catalog_hit(
     plan_data = json.loads((spec_dir / "test_plan.json").read_text())
     st = plan_data["phases"][0]["subtasks"][0]
     from test_plan import Subtask
+
     s = Subtask.from_dict(st)
     assert s.intent == "update"
 
@@ -1000,7 +1096,77 @@ async def test_replan_carries_intent_field(
     final = json.loads((spec_dir / "test_plan.json").read_text())
     corrected = final["phases"][1]["subtasks"][0]
     from test_plan import Subtask
+
     s = Subtask.from_dict(corrected)
     assert s.intent == "update"
     assert s.framework == "pytest"
     assert s.language == "python"
+
+
+# ── #742: refuse to plan against a tree that is not this spec's build ────
+
+from agents import planner  # noqa: E402
+
+
+def _spec_with_sha(tmp_path: Path, sha: str) -> Path:
+    spec_dir = tmp_path / "spec"
+    (spec_dir / "context").mkdir(parents=True)
+    (spec_dir / "context" / "source.json").write_text(
+        json.dumps(
+            {
+                "source_branch": "aifactory/005-x",
+                "source_sha": sha,
+            }
+        )
+    )
+    return spec_dir
+
+
+def _repo_at(tmp_path: Path) -> tuple[Path, str]:
+    """A git repo with one commit; returns (path, head_sha)."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+
+    def _git(*args: str) -> None:
+        subprocess.run(  # noqa: S603
+            ["git", "-C", str(proj), *args],  # noqa: S607
+            check=True,
+            capture_output=True,
+        )
+
+    _git("init", "-b", "main", "--quiet")
+    _git("config", "user.email", "t@t")
+    _git("config", "user.name", "t")
+    (proj / "a.py").write_text("x = 1\n")
+    _git("add", "-A")
+    _git("commit", "-qm", "one")
+    head = subprocess.run(  # noqa: S603
+        ["git", "-C", str(proj), "rev-parse", "HEAD"],  # noqa: S607
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    return proj, head
+
+
+def test_no_drift_when_head_matches(tmp_path: Path) -> None:
+    proj, head = _repo_at(tmp_path)
+    assert planner._checkout_drift(_spec_with_sha(tmp_path, head), proj) is None
+
+
+def test_drift_detected_when_clone_moved(tmp_path: Path) -> None:
+    """The live failure: the shared clone sat on another spec's branch."""
+    proj, _ = _repo_at(tmp_path)
+    other = "0" * 40
+    drift = planner._checkout_drift(_spec_with_sha(tmp_path, other), proj)
+    assert drift is not None
+    assert "refusing to plan" in drift
+
+
+def test_missing_sha_is_not_drift(tmp_path: Path) -> None:
+    """Older workspaces have no recorded SHA — absence of evidence, not drift."""
+    proj, _ = _repo_at(tmp_path)
+    assert planner._checkout_drift(_spec_with_sha(tmp_path, ""), proj) is None
+    empty = tmp_path / "nospec"
+    (empty / "context").mkdir(parents=True)
+    assert planner._checkout_drift(empty, proj) is None
