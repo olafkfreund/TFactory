@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.9.23 — the Nix verify lane installs the SUT's own dependencies (2026-07-21)
+
+- **A repo that declares its deps in requirements.txt is now installable in the
+  Nix lane (#764, PR #765 + hub Factory#308).** The lane built its Python set
+  from `_PYPROJECT_DEP_MAP`, a curated 21-entry PyPI-to-nixpkgs allowlist read
+  out of `pyproject.toml`. That list can never be complete, and a repo declaring
+  dependencies in `requirements.txt` got nothing from it at all — this repo is
+  exactly that shape (`apps/web-server/requirements.txt`,
+  `apps/backend/requirements.txt`, no root `pyproject.toml`). A real application
+  was therefore unimportable in the lane and every acceptance criterion came
+  back a collection error against correct code, the same failure #759 fixed on
+  the host runner.
+
+  Rather than growing a map that cannot be finished, the lane installs the SUT's
+  requirements at run time: `pip` ships in the generated flake when the checkout
+  declares any, and the Job runs `pip install --target /tmp/tf_sut_deps` per
+  file with that directory first on PYTHONPATH. `--target` sidesteps
+  ensurepip/venv availability in the nix interpreter, and `/tmp` is the one
+  location the Job's non-root uid can write. Each file installs separately under
+  the script's existing `set +e`, so one unresolvable pin cannot take the rest
+  down and the package roots stay the fallback.
+
+  A checkout with no `requirements.txt` gets no pip in its closure and a
+  byte-identical PYTHONPATH export, so hermetic repos are untouched — the
+  pre-existing export assertion passes unmodified, which is what proves it.
+
+  `nix_provisioner.py` is vendored from the hub, so the canonical half landed as
+  Factory#308 first and was re-vendored here byte-exact with HUB_PIN_SHA bumped
+  to `aad8d9e`. The drift gate rejected editing the vendored copy directly,
+  which is precisely its job.
+
 ## 0.9.22 — a rejected import says which file answered (2026-07-21)
 
 - **The pre-flight now reports the resolved file, and no longer calls shadowing
