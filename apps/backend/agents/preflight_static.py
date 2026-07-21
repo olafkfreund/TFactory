@@ -338,6 +338,18 @@ def check_import(
             text=True,
             timeout=timeout_sec,
             env=env,
+            # Run from the checkout, never from wherever TFactory happens to be
+            # running. `python -c` puts the CWD at the front of sys.path, ahead
+            # of everything PYTHONPATH says, so inheriting the service's own
+            # working directory silently outranked the roots computed above.
+            #
+            # That is invisible until TFactory verifies a repo whose package
+            # names collide with its own — verifying TFactory itself, where both
+            # trees provide `server.routes.git`. The probe then imported the
+            # RUNNING SERVICE's copy, found the build's new symbol absent, and
+            # reported a correct test as a hallucination (#752). #732 fixed which
+            # roots go on PYTHONPATH; this fixes CWD outranking them.
+            cwd=str(project_dir) if project_dir is not None else None,
             check=False,
         )
     except subprocess.TimeoutExpired:
