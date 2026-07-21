@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.9.20 — generated tests can finally run on a monorepo (2026-07-21)
+
+- **The test-execution path now carries a monorepo's package roots (#756, PR
+  #757).** Run 5 reached a triaged verdict on a real repo for the first time — 8
+  tests generated, evaluator ran, triager reported — and flagged all 8 with one
+  reason: *the subject module could not be imported/collected in the sandbox*.
+  The tests were sound (`mutation=killed`, `semantic=high`, `ci_parity=yes`);
+  they never got to run. The runners built PYTHONPATH as `<root>/src` +
+  `<root>`, which covers flat and src-layout repos and misses a monorepo whose
+  package sits at `apps/web-server/server`, so pytest failed at collection and
+  every acceptance criterion came back an error against correct code.
+
+  `package_root_rel_paths` is the execution-time counterpart to #732's
+  `package_roots_for`: the probe asks where THIS module lives, the runner asks
+  what pytest needs on the path to collect anything at all, since at execution
+  time it is handed a directory of tests rather than one module. Wired into the
+  Nix Job (roots discovered from the scratch the Job co-mounts, mapping 1:1 onto
+  in-Job paths) and the host runner; the historical entries stay, last, so flat
+  and src-layout repos are byte-identical. The Docker runner still hardcodes
+  `/scratch/src:/scratch` — unused on this cluster, so left alone rather than
+  changed blind.
+
+  This was the last link. Everything upstream already worked: the build lands
+  (AIFactory #984), the handoff carries the build branch (#980), the planner
+  targets symbols that exist (#737/#743), the clone is the right one (#742), and
+  the probe reads the checkout (#752). Tests were being written correctly and
+  then could not be executed.
+
 ## 0.9.19 — the import probe reads the checkout, not the running service (2026-07-21)
 
 - **Pre-flight resolved against TFactory's own tree when package names collided
