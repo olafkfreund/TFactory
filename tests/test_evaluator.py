@@ -1118,3 +1118,67 @@ def test_nix_verify_mode_backend_force_host_overrides(tmp_path, monkeypatch):
     monkeypatch.setenv("TFACTORY_NIX_RUNNER_IMAGE", "ghcr.io/x/nix:latest")
     spec = _contract_dir(tmp_path, _NIX_ENV)
     assert _nix_verify_mode(spec) is False
+
+
+# ── #776 batched stability: 3 samples in ONE Nix Job, same verdict ────────
+
+
+def _fake_batched_runner(monkeypatch, per_run_codes):
+    """Patch run_pytest_lane_via_nix to emit a batched stdout for the given codes
+    and record how it was called."""
+    from tools.runners.docker_runner import DockerRunResult
+
+    calls: dict = {"count": 0}
+
+    def _fake(spec, project, test_file, *, extra_env=None, reruns=1, **kw):
+        calls["count"] += 1
+        calls["reruns"] = reruns
+        codes = (
+            per_run_codes[:reruns] if len(per_run_codes) >= reruns else per_run_codes
+        )
+        out = "".join(
+            f"__PYTEST_RUN={i + 1}\nrun {i + 1}\n__PYTEST_EXIT={c}\n"
+            for i, c in enumerate(codes)
+        )
+        return DockerRunResult(returncode=codes[0], stdout=out, stderr="")
+
+    monkeypatch.setattr("agents.evaluator.run_pytest_lane_via_nix", _fake)
+    return calls
+
+
+def test_nix_batched_stability_stable_from_one_job(tmp_path, monkeypatch):
+    from agents import evaluator
+    from agents.stability_runner import StabilityVerdict
+
+    calls = _fake_batched_runner(monkeypatch, [0, 0, 0])
+    tf = tmp_path / "t_test.py"
+    tf.write_text("def test_x(): assert True\n")
+    res = evaluator._nix_batched_stability(tmp_path, tmp_path, tf)
+    assert res is not None and res.verdict == StabilityVerdict.STABLE
+    assert res.rerun_count == 3
+    # The whole point: 3 samples cost ONE Job dispatch, not three.
+    assert calls["count"] == 1 and calls["reruns"] == 3
+
+
+def test_nix_batched_stability_detects_flake(tmp_path, monkeypatch):
+    from agents import evaluator
+    from agents.stability_runner import StabilityVerdict
+
+    _fake_batched_runner(monkeypatch, [0, 1, 0])
+    tf = tmp_path / "t_test.py"
+    tf.write_text("def test_x(): assert True\n")
+    res = evaluator._nix_batched_stability(tmp_path, tmp_path, tf)
+    assert res is not None and res.verdict == StabilityVerdict.FLAKY
+
+
+def test_nix_batched_stability_none_when_lane_unavailable(tmp_path, monkeypatch):
+    """run_pytest_lane_via_nix None (no runner image) -> None so the caller falls
+    back to the per-sample check_stability path."""
+    from agents import evaluator
+
+    monkeypatch.setattr(
+        "agents.evaluator.run_pytest_lane_via_nix", lambda *a, **k: None
+    )
+    tf = tmp_path / "t_test.py"
+    tf.write_text("def test_x(): assert True\n")
+    assert evaluator._nix_batched_stability(tmp_path, tmp_path, tf) is None

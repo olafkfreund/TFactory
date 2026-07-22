@@ -19,6 +19,7 @@ runtime — the lane runs as a k8s Job using the tfactory-runner-nix image).
 from __future__ import annotations
 
 import contextlib
+import itertools
 import json
 import logging
 import os
@@ -261,6 +262,26 @@ def _nix_dispatch_gate() -> contextlib.AbstractContextManager[bool]:
     return _NIX_JOB_SEM if nix_in_image() else _NIX_JOB_LOCK
 
 
+def _build_pytest_cmd(mount: str, name: str, reruns: int) -> str:
+    """The in-shell pytest command for the Job script.
+
+    ``reruns<=1`` is the byte-identical single run. ``reruns>1`` (#776) repeats the
+    SAME pytest in the ONE dev shell, each pass wrapped in a ``__PYTEST_RUN=<i>`` /
+    ``__PYTEST_EXIT=<code>`` pair so ``parse_pytest_exits`` recovers per-run codes —
+    paying the per-Job setup (re-lock, pip, ``nix develop`` entry) once, not N times.
+    """
+    one = (
+        f"python -m pytest tests/{name} -p no:cacheprovider -q "
+        f"--junitxml={mount}/{_PYTEST_STAGE}/junit.xml "
+        f"--cov-report=xml:{mount}/{_PYTEST_STAGE}/coverage.xml --cov=. 2>&1; "
+        "echo __PYTEST_EXIT=$?"
+    )
+    if reruns <= 1:
+        return f"cd {mount} && {one}"
+    loop = "".join(f"echo __PYTEST_RUN={i}\n{one}\n" for i in range(1, reruns + 1))
+    return f"cd {mount}\n{loop}"
+
+
 def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve knobs + one linear staging flow
     spec_dir: Path,
     project_dir: Path,
@@ -270,8 +291,16 @@ def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve kno
     timeout: int = 900,
     serve_command: str | None = None,
     serve_port: int | None = None,
+    reruns: int = 1,
 ) -> DockerRunResult | None:
     """Run ONE pytest file inside the per-task Nix dev shell as a k8s Job.
+
+    ``reruns`` (>1, #776) runs the SAME pytest ``reruns`` times inside the ONE
+    dev shell, emitting a ``__PYTEST_RUN=<i>`` / ``__PYTEST_EXIT=<code>`` pair per
+    pass. This is the stability batch: the ~minutes of per-Job cost (re-lock, pip
+    install the SUT, ``nix develop`` entry) is paid ONCE instead of once per
+    stability sample. ``reruns=1`` is byte-identical to the pre-#776 single run.
+    Callers that need the per-run codes parse them with ``parse_pytest_exits``.
 
     When ``serve_command`` is given (the api lane with no external target, #612),
     the Job first boots the SUT in the SAME pod at ``127.0.0.1:serve_port``,
@@ -404,13 +433,7 @@ def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve kno
                 f'echo "{_APP_NOT_HEALTHY_MARKER} SUT did not accept a connection '
                 f'on {url}; see /tmp/tf_app.log"\n'
             )
-        pytest_cmd = (
-            f"cd {mount} && "
-            f"python -m pytest tests/{name} -p no:cacheprovider -q "
-            f"--junitxml={mount}/{_PYTEST_STAGE}/junit.xml "
-            f"--cov-report=xml:{mount}/{_PYTEST_STAGE}/coverage.xml --cov=. 2>&1; "
-            "echo __PYTEST_EXIT=$?"
-        )
+        pytest_cmd = _build_pytest_cmd(mount, name, reruns)
         (pd / _JOB_SCRIPT).write_text(
             "#!/usr/bin/env bash\nset +e\n"
             + exports
@@ -647,6 +670,36 @@ def _parse_exit_marker(output: str | None, prefix: str) -> int:
 def _parse_pytest_exit(output: str | None) -> int:
     """Recover the pytest exit code from the ``__PYTEST_EXIT=<n>`` marker line."""
     return _parse_exit_marker(output, "__PYTEST_EXIT=")
+
+
+def parse_pytest_exits(output: str | None) -> list[tuple[int, str]]:
+    """Recover per-run ``(exit_code, stdout_segment)`` pairs from a batched run.
+
+    The batched job script (#776) emits, per pass, a ``__PYTEST_RUN=<i>`` line,
+    the pytest output, then ``__PYTEST_EXIT=<code>``. Split on the RUN markers and
+    read each pass's own EXIT marker plus the text up to it. A pass whose EXIT
+    marker is missing (e.g. the shell died mid-run) counts as a failure (code 1),
+    mirroring ``_parse_exit_marker`` — never a false pass. With no RUN markers
+    (the ``reruns=1`` legacy shape) returns a single pair from the last EXIT
+    marker, so a plain single run round-trips unchanged.
+    """
+    lines = (output or "").splitlines()
+    run_idxs = [i for i, ln in enumerate(lines) if ln.startswith("__PYTEST_RUN=")]
+    if not run_idxs:
+        return [(_parse_pytest_exit(output), output or "")]
+    bounds = [*run_idxs, len(lines)]
+    runs: list[tuple[int, str]] = []
+    for start, stop in itertools.pairwise(bounds):
+        code = 1
+        body: list[str] = []
+        for ln in lines[start + 1 : stop]:
+            if ln.startswith("__PYTEST_EXIT="):
+                with contextlib.suppress(ValueError):
+                    code = int(ln.split("=", 1)[1])
+            else:
+                body.append(ln)
+        runs.append((code, "\n".join(body)))
+    return runs
 
 
 def _slice_marked_segment(output: str, begin: str, end_prefix: str) -> str:

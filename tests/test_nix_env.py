@@ -14,6 +14,7 @@ from agents.nix_env import (
     environment_from_contract,
     is_nix_environment,
     materialize_flake,
+    parse_pytest_exits,
     run_browser_evidence,
     run_pytest_lane_via_nix,
 )
@@ -721,3 +722,92 @@ def test_dispatch_gate_is_strict_lock_with_shared_pvc(monkeypatch):
     """Shared warm-store PVC is RWO → keep the one-at-a-time lock (#623)."""
     monkeypatch.delenv("TFACTORY_NIX_IN_IMAGE", raising=False)
     assert _nix_dispatch_gate() is _NIX_JOB_LOCK
+
+
+# ── #776 batched stability: parse per-run codes + one-Job loop ────────────
+
+
+def test_parse_pytest_exits_recovers_each_runs_code():
+    """Flake detection depends on getting EVERY run's real exit code, in order."""
+    out = (
+        "__PYTEST_RUN=1\n1 passed\n__PYTEST_EXIT=0\n"
+        "__PYTEST_RUN=2\n1 failed\n__PYTEST_EXIT=1\n"
+        "__PYTEST_RUN=3\n1 passed\n__PYTEST_EXIT=0\n"
+    )
+    pairs = parse_pytest_exits(out)
+    assert [c for c, _ in pairs] == [0, 1, 0]  # a 0/1 mix -> the run WAS flaky
+    assert "1 failed" in pairs[1][1]
+
+
+def test_parse_pytest_exits_missing_marker_is_failure_not_pass():
+    """A run whose EXIT marker never printed (shell died mid-pass) must count as
+    a failure, never a silent pass — same rule as the single-run parser."""
+    out = "__PYTEST_RUN=1\nok\n__PYTEST_EXIT=0\n__PYTEST_RUN=2\nkilled\n"
+    assert [c for c, _ in parse_pytest_exits(out)] == [0, 1]
+
+
+def test_parse_pytest_exits_legacy_single_run_round_trips():
+    """No RUN markers (the reruns=1 shape) -> one pair from the last EXIT."""
+    assert parse_pytest_exits("2 passed\n__PYTEST_EXIT=0\n") == [
+        (0, "2 passed\n__PYTEST_EXIT=0\n")
+    ]
+    assert parse_pytest_exits("boom\n__PYTEST_EXIT=1\n")[0][0] == 1
+
+
+def _fake_sandbox_capturing_script(captured, output):
+    class _FS:
+        def run(self, commands, *, workdir=None, timeout=300):
+            captured["script"] = (Path(workdir) / "_tf_nix_job.sh").read_text()
+            stage = Path(workdir) / ".tf_pytest"
+            stage.mkdir(parents=True, exist_ok=True)
+            (stage / "junit.xml").write_text("<testsuites/>")
+            return JobRunResult(ok=True, exit_code=0, output=output)
+
+    return _FS()
+
+
+def test_reruns_gt_1_writes_one_loop_with_n_pytest_passes(tmp_path, monkeypatch):
+    """reruns=3 must run pytest 3x IN ONE Job (3 RUN markers, one dev-shell)."""
+    spec = tmp_path / "specs" / "027"
+    spec.mkdir(parents=True)
+    _write_contract(spec, _UNIT_ENV)
+    project = tmp_path / "proj"
+    project.mkdir()
+    test_file = project / "t_test.py"
+    test_file.write_text("def test_ok(): assert True\n")
+
+    cap = {}
+    monkeypatch.setattr(
+        "agents.nix_env.nix_runner_from_env",
+        lambda: _fake_sandbox_capturing_script(
+            cap,
+            "__PYTEST_RUN=1\n__PYTEST_EXIT=0\n__PYTEST_RUN=2\n__PYTEST_EXIT=0\n__PYTEST_RUN=3\n__PYTEST_EXIT=0\n",
+        ),
+    )
+    res = run_pytest_lane_via_nix(spec, project, test_file, reruns=3)
+    assert res is not None
+    assert cap["script"].count("__PYTEST_RUN=") == 3
+    assert cap["script"].count("python -m pytest") == 3
+    # Still a SINGLE dispatch (one Job), not three.
+    assert parse_pytest_exits(res.stdout) == [(0, ""), (0, ""), (0, "")]
+
+
+def test_reruns_1_is_byte_identical_single_run(tmp_path, monkeypatch):
+    """The default reruns=1 must not change the generated script at all."""
+    spec = tmp_path / "specs" / "027"
+    spec.mkdir(parents=True)
+    _write_contract(spec, _UNIT_ENV)
+    project = tmp_path / "proj"
+    project.mkdir()
+    test_file = project / "t_test.py"
+    test_file.write_text("def test_ok(): assert True\n")
+
+    cap = {}
+    monkeypatch.setattr(
+        "agents.nix_env.nix_runner_from_env",
+        lambda: _fake_sandbox_capturing_script(cap, "1 passed\n__PYTEST_EXIT=0\n"),
+    )
+    run_pytest_lane_via_nix(spec, project, test_file)  # reruns defaults to 1
+    assert "__PYTEST_RUN=" not in cap["script"]  # no loop
+    assert cap["script"].count("python -m pytest") == 1
+    assert "cd /work && python -m pytest" in cap["script"]

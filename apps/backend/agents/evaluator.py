@@ -74,7 +74,15 @@ from agents.nix_env import (
     detect_serve_command,
     environment_from_contract,
     is_nix_environment,
+    parse_pytest_exits,
     run_pytest_lane_via_nix,
+)
+from agents.stability_runner import (
+    DEFAULT_SEED,
+    RERUN_COUNT,
+    StabilityResult,
+    StabilityRun,
+    classify_stability_runs,
 )
 from agents.workspace_status import (
     anchor_stage_task,
@@ -852,19 +860,63 @@ def _coverage_delta_for_subtask(
         return None
 
 
+def _nix_batched_stability(
+    spec_dir: Path, project_dir: Path, test_file: Path
+) -> StabilityResult | None:
+    """#776: the 3x stability samples as ONE Nix Job instead of three.
+
+    Each ``check_stability`` sample is a full Nix Job whose cost (re-lock the
+    flake, pip-install the SUT, ``nix develop`` entry) dwarfs the pytest run and
+    is IDENTICAL across samples — so a single spec pays it ``rerun_count`` times
+    per subtask, serially, and blows the verify deadline. Here one Job runs pytest
+    ``rerun_count`` times in the same shell; we recover the per-run exit codes and
+    classify them with the SAME rule ``check_stability`` uses, for a byte-identical
+    verdict. Unit lane only (hermetic, ``network="none"`` → no creds/serve), which
+    is exactly where ``_build_signal_bundle`` calls this.
+
+    Returns the StabilityResult, or None when the Nix lane is unavailable at run
+    time so the caller falls back to the per-sample ``check_stability`` path.
+    """
+    res = run_pytest_lane_via_nix(
+        spec_dir,
+        project_dir,
+        test_file,
+        extra_env={"PYTHONHASHSEED": str(DEFAULT_SEED)},
+        reruns=RERUN_COUNT,
+    )
+    if res is None:
+        return None
+    runs = [
+        StabilityRun(returncode=code, stdout_tail=tail[-500:], stderr_tail="")
+        for code, tail in parse_pytest_exits(res.stdout)
+    ]
+    if not runs:
+        return None
+    return classify_stability_runs(runs, seed=DEFAULT_SEED, rerun_count=len(runs))
+
+
 def _stability_for_subtask(
     spec_dir: Path,
     project_dir: Path,
     subtask: dict,
     runner_fn,
 ):
-    """Run the 3× stability check for one test."""
+    """Run the 3× stability check for one test.
+
+    In Nix mode the three samples are batched into ONE Job (#776); every other
+    backend runs them per-sample via ``check_stability`` and ``runner_fn``.
+    """
     from agents.stability_runner import check_stability
 
     test_file = spec_dir / subtask["files_to_create"][0]
     if not test_file.exists():
         return None
     try:
+        if _nix_verify_mode(spec_dir):
+            batched = _nix_batched_stability(spec_dir, project_dir, test_file)
+            if batched is not None:
+                return batched
+            # Nix lane unavailable at run time → fall through to per-sample runs.
         return check_stability(test_file, project_dir, runner_fn)
     except Exception as exc:  # noqa: BLE001
         _eval_log.warning(
