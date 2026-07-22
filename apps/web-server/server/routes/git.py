@@ -2,13 +2,16 @@
 Git, Ollama, MCP, and utility routes.
 """
 
+import ipaddress
 import json
 import logging
 import re
 import shlex
 import shutil
+import socket
 import subprocess
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -589,6 +592,81 @@ async def install_claude_code():
 
 mcp_router = APIRouter()
 
+
+class UnsafeMcpURLError(ValueError):
+    """Raised when an MCP server URL resolves to a blocked address range."""
+
+
+# Cloud-metadata + link-local ranges. These are NEVER a legitimate MCP server
+# endpoint and are blocked unconditionally — this is the core SSRF defence
+# (e.g. AWS/GCP/Azure metadata at 169.254.169.254).
+_MCP_ALWAYS_BLOCKED: tuple[ipaddress._BaseNetwork, ...] = (
+    ipaddress.ip_network("169.254.0.0/16"),  # link-local (metadata)
+    ipaddress.ip_network("fe80::/10"),  # link-local v6
+    ipaddress.ip_network("fd00::/8"),  # unique-local v6
+    ipaddress.ip_network("fc00::/7"),  # unique-local v6 (full ULA range)
+)
+
+
+def _resolve_mcp_addresses(host: str) -> list[ipaddress._BaseAddress]:
+    """Resolve ``host`` to all IP addresses it maps to.
+
+    A literal IP is returned as-is. A hostname is resolved via DNS; every
+    returned address is checked (defends against DNS results that mix a
+    public and an internal address).
+    """
+    try:
+        return [ipaddress.ip_address(host)]
+    except ValueError:
+        pass
+
+    infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    addrs: list[ipaddress._BaseAddress] = []
+    for info in infos:
+        sockaddr = info[4]
+        addrs.append(ipaddress.ip_address(sockaddr[0]))
+    return addrs
+
+
+def _assert_safe_mcp_url(url: str) -> None:
+    """Validate ``url`` for MCP server SSRF safety, raising on blocked address.
+
+    MCP servers often legitimately run on localhost and LAN endpoints, so
+    private/loopback ranges are NOT blocked. However, cloud-metadata and
+    link-local ranges are always blocked to prevent SSRF attacks.
+
+    Args:
+        url: The target URL (must include an http/https scheme and host).
+
+    Raises:
+        UnsafeMcpURLError: if the URL is malformed or resolves to a
+            blocked address.
+        OSError: if DNS resolution of the host fails (callers may treat
+            this as unsafe / fail-closed).
+    """
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https"):
+        raise UnsafeMcpURLError(
+            f"unsafe MCP URL {url!r}: scheme must be http or https"
+        )
+
+    host = parts.hostname
+    if not host:
+        raise UnsafeMcpURLError(f"unsafe MCP URL {url!r}: missing host")
+
+    for addr in _resolve_mcp_addresses(host):
+        # Normalise IPv4-mapped IPv6 (::ffff:127.0.0.1) to its IPv4 form so a
+        # mapped metadata address can't slip past the v4 checks.
+        if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
+            addr = addr.ipv4_mapped
+
+        for net in _MCP_ALWAYS_BLOCKED:
+            if addr.version == net.version and addr in net:
+                raise UnsafeMcpURLError(
+                    f"unsafe MCP URL {url!r}: host {host!r} resolves to "
+                    f"blocked address {addr} (in {net})."
+                )
+
 # Catalog of well-known MCP servers and the system binary they require.
 # "requires_binary": None means only npx is needed.
 _MCP_CATALOG = [
@@ -770,16 +848,15 @@ async def check_mcp_health(server: McpServerConfig):
     """Check health of an MCP server."""
     if server.type == "http" and server.url:
         import urllib.request
-        from urllib.parse import urlparse
 
-        # SSRF guard: an MCP server URL is configured by the operator themselves
-        # and, by design, very often points at a local/LAN endpoint (most MCP
-        # servers run on localhost). Blocking private/loopback hosts would break
-        # that intended use case, so we deliberately do not. We DO restrict the
-        # scheme to http/https so a configured value cannot be coerced into a
-        # file://, gopher://, ftp:// (etc.) request.
-        parsed = urlparse(server.url)
-        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        # SSRF guard via _assert_safe_mcp_url: an MCP server URL is configured by
+        # the operator themselves and, by design, very often points at a local/LAN
+        # endpoint (most MCP servers run on localhost). Blocking private/loopback
+        # hosts would break that intended use case, so we deliberately do not.
+        # We DO block cloud-metadata and link-local ranges to prevent SSRF attacks.
+        try:
+            _assert_safe_mcp_url(server.url)
+        except UnsafeMcpURLError:
             return {
                 "success": True,
                 "data": {
@@ -788,6 +865,16 @@ async def check_mcp_health(server: McpServerConfig):
                     "message": "Unsupported or invalid server URL",
                 },
             }
+        except OSError:
+            return {
+                "success": True,
+                "data": {
+                    "serverId": server.id,
+                    "status": "unhealthy",
+                    "message": "Failed to resolve server hostname",
+                },
+            }
+
         try:
             req = urllib.request.Request(server.url, method="HEAD")
             if server.headers:
