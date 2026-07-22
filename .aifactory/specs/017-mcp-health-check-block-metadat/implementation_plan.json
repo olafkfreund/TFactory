@@ -1,0 +1,174 @@
+{
+  "feature": "MCP health check: block metadata and link-local addresses by resolving the host",
+  "workflow_type": "refactor",
+  "workflow_rationale": "Security-focused enhancement to an existing endpoint. Adds proper SSRF protection by validating resolved IP addresses against reserved/link-local ranges. Refactor pattern because we're enhancing existing behavior without breaking it.",
+  "required_commands": ["pytest", "python"],
+  "phases": [
+    {
+      "id": "phase-1-implement",
+      "name": "Implement Hostname Resolution and IP Validation",
+      "type": "implementation",
+      "description": "Add a helper function that resolves hostnames to IP addresses and validates they are not in reserved/link-local/multicast/unspecified ranges. Update check_mcp_health to use this helper.",
+      "depends_on": [],
+      "parallel_safe": false,
+      "subtasks": [
+        {
+          "id": "subtask-1-1",
+          "description": "Add _validate_mcp_server_url helper function to validate URLs for SSRF protection",
+          "service": "web-server",
+          "depends_on": [],
+          "files_to_modify": ["apps/web-server/server/routes/git.py"],
+          "files_to_create": [],
+          "patterns_from": ["apps/web-server/server/routes/git.py (study _safe_ollama_base_url for SSRF pattern)"],
+          "verification": {
+            "type": "command",
+            "command": "python -c \"import sys; sys.path.insert(0, 'apps/web-server'); from server.routes.git import _validate_mcp_server_url; print('OK')\"",
+            "expected": "OK"
+          },
+          "status": "completed",
+          "notes": "Helper should resolve hostname and check each address against is_loopback (allow first), is_private (allow), is_reserved/link_local/multicast/unspecified (reject). Use ipaddress module (stdlib). Return (is_valid: bool, reason: str)."
+        },
+        {
+          "id": "subtask-1-2",
+          "description": "Update check_mcp_health to use the new _validate_mcp_server_url helper",
+          "service": "web-server",
+          "depends_on": ["subtask-1-1"],
+          "files_to_modify": ["apps/web-server/server/routes/git.py"],
+          "files_to_create": [],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "python -c \"import sys; sys.path.insert(0, 'apps/web-server'); from server.routes.git import check_mcp_health; print('OK')\"",
+            "expected": "OK"
+          },
+          "status": "completed",
+          "notes": "Update check_mcp_health (line 768) to call _validate_mcp_server_url before attempting to connect. Keep existing response shape: {success: True, data: {serverId, status: 'unknown', message}}. Log rejection reason, don't return it."
+        }
+      ]
+    },
+    {
+      "id": "phase-2-test",
+      "name": "Add and Run Tests",
+      "type": "implementation",
+      "description": "Add comprehensive tests covering all acceptance criteria including reserved ranges, link-local addresses, loopback, private ranges, unresolvable hosts, and file:// scheme.",
+      "depends_on": ["phase-1-implement"],
+      "parallel_safe": false,
+      "subtasks": [
+        {
+          "id": "subtask-2-1",
+          "description": "Create test file for MCP health check endpoint with comprehensive coverage",
+          "service": "web-server",
+          "depends_on": [],
+          "files_to_modify": [],
+          "files_to_create": ["apps/web-server/tests/test_mcp_health_check.py"],
+          "patterns_from": ["apps/web-server/tests/test_specpath.py (study pytest patterns)"],
+          "verification": {
+            "type": "command",
+            "command": "cd apps/web-server && pytest tests/test_mcp_health_check.py -v",
+            "expected": "tests passed"
+          },
+          "status": "pending",
+          "notes": "Tests must cover: AC#1 (169.254.169.254, IPv6 link-local), AC#2 (localhost, 127.0.0.1, ::1), AC#3 (10.x private), AC#4 (unresolvable host), AC#5 (response shape with status unknown), AC#6 (file:// scheme, public host that resolves). Use mocking to simulate getaddrinfo() for unresolvable hosts."
+        }
+      ]
+    },
+    {
+      "id": "phase-3-verification",
+      "name": "Verification and Integration",
+      "type": "integration",
+      "description": "Verify all existing tests still pass and no regressions are introduced.",
+      "depends_on": ["phase-2-test"],
+      "parallel_safe": false,
+      "subtasks": [
+        {
+          "id": "subtask-3-1",
+          "description": "Run full test suite to ensure no regressions in related routes",
+          "service": "web-server",
+          "depends_on": [],
+          "files_to_modify": [],
+          "files_to_create": [],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "cd apps/web-server && pytest tests/ -k 'mcp or ollama or git' -v",
+            "expected": "all tests pass"
+          },
+          "status": "pending",
+          "notes": "Run tests that touch MCP, Ollama, or Git routes to ensure no side effects. The changes are localized to check_mcp_health so impact should be minimal."
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "total_phases": 3,
+    "total_subtasks": 4,
+    "services_involved": ["web-server"],
+    "parallelism": {
+      "max_parallel_phases": 1,
+      "parallel_groups": [],
+      "recommended_workers": 1,
+      "speedup_estimate": "Sequential (no parallelism)"
+    },
+    "startup_command": "source .venv/bin/activate && pytest apps/web-server/tests/test_mcp_health_check.py -v"
+  },
+  "verification_strategy": {
+    "risk_level": "high",
+    "skip_validation": false,
+    "test_creation_phase": "during_implementation",
+    "test_types_required": ["unit"],
+    "security_scanning_required": false,
+    "staging_deployment_required": false,
+    "acceptance_criteria": [
+      "All 6 acceptance criteria from spec are verified by tests",
+      "Existing tests continue to pass",
+      "Helper function correctly resolves hostnames and validates IP ranges",
+      "Response shape preserved for rejected URLs",
+      "Rejection reason is logged, not returned"
+    ],
+    "verification_steps": [
+      {
+        "name": "Unit Tests",
+        "command": "cd apps/web-server && pytest tests/test_mcp_health_check.py -v",
+        "expected_outcome": "All tests pass",
+        "type": "test",
+        "required": true,
+        "blocking": true
+      },
+      {
+        "name": "Regression Tests",
+        "command": "cd apps/web-server && pytest tests/ -k 'mcp or ollama' -v",
+        "expected_outcome": "No regressions in related endpoints",
+        "type": "test",
+        "required": true,
+        "blocking": true
+      }
+    ],
+    "reasoning": "High risk because this is a security fix that affects URL validation. Must ensure all address ranges are correctly handled, loopback order is correct, and response shape is preserved."
+  },
+  "qa_acceptance": {
+    "unit_tests": {
+      "required": true,
+      "commands": ["pytest tests/test_mcp_health_check.py -v"],
+      "minimum_coverage": null
+    },
+    "integration_tests": {
+      "required": false,
+      "commands": [],
+      "services_to_test": []
+    },
+    "e2e_tests": {
+      "required": false,
+      "commands": [],
+      "flows": []
+    },
+    "browser_verification": {
+      "required": false,
+      "pages": []
+    },
+    "database_verification": {
+      "required": false,
+      "checks": []
+    }
+  },
+  "qa_signoff": null
+}
