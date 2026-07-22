@@ -2,7 +2,10 @@
   "feature": "MCP health check: block metadata and link-local addresses by resolving the host",
   "workflow_type": "refactor",
   "workflow_rationale": "Security-focused enhancement to an existing endpoint. Adds proper SSRF protection by validating resolved IP addresses against reserved/link-local ranges. Refactor pattern because we're enhancing existing behavior without breaking it.",
-  "required_commands": ["pytest", "python"],
+  "required_commands": [
+    "pytest",
+    "python"
+  ],
   "phases": [
     {
       "id": "phase-1-implement",
@@ -17,9 +20,13 @@
           "description": "Add _validate_mcp_server_url helper function to validate URLs for SSRF protection",
           "service": "web-server",
           "depends_on": [],
-          "files_to_modify": ["apps/web-server/server/routes/git.py"],
+          "files_to_modify": [
+            "apps/web-server/server/routes/git.py"
+          ],
           "files_to_create": [],
-          "patterns_from": ["apps/web-server/server/routes/git.py (study _safe_ollama_base_url for SSRF pattern)"],
+          "patterns_from": [
+            "apps/web-server/server/routes/git.py (study _safe_ollama_base_url for SSRF pattern)"
+          ],
           "verification": {
             "type": "command",
             "command": "python -c \"import sys; sys.path.insert(0, 'apps/web-server'); from server.routes.git import _validate_mcp_server_url; print('OK')\"",
@@ -32,8 +39,12 @@
           "id": "subtask-1-2",
           "description": "Update check_mcp_health to use the new _validate_mcp_server_url helper",
           "service": "web-server",
-          "depends_on": ["subtask-1-1"],
-          "files_to_modify": ["apps/web-server/server/routes/git.py"],
+          "depends_on": [
+            "subtask-1-1"
+          ],
+          "files_to_modify": [
+            "apps/web-server/server/routes/git.py"
+          ],
           "files_to_create": [],
           "patterns_from": [],
           "verification": {
@@ -51,7 +62,9 @@
       "name": "Add and Run Tests",
       "type": "implementation",
       "description": "Add comprehensive tests covering all acceptance criteria including reserved ranges, link-local addresses, loopback, private ranges, unresolvable hosts, and file:// scheme.",
-      "depends_on": ["phase-1-implement"],
+      "depends_on": [
+        "phase-1-implement"
+      ],
       "parallel_safe": false,
       "subtasks": [
         {
@@ -60,15 +73,19 @@
           "service": "web-server",
           "depends_on": [],
           "files_to_modify": [],
-          "files_to_create": ["apps/web-server/tests/test_mcp_health_check.py"],
-          "patterns_from": ["apps/web-server/tests/test_specpath.py (study pytest patterns)"],
+          "files_to_create": [
+            "apps/web-server/tests/test_mcp_health_check.py"
+          ],
+          "patterns_from": [
+            "apps/web-server/tests/test_specpath.py (study pytest patterns)"
+          ],
           "verification": {
             "type": "command",
             "command": "cd apps/web-server && pytest tests/test_mcp_health_check.py -v",
             "expected": "tests passed"
           },
           "status": "completed",
-          "notes": "✓ Created 48 comprehensive tests covering all 6 acceptance criteria. All tests passing. Tests cover: AC#1 (169.254.169.254 blocked), AC#2 (localhost/127.0.0.1/::1 allowed), AC#3 (10.x/172.16/12/192.168 private ranges allowed), AC#4 (invalid URLs rejected), AC#5 (response shape preserved with status='unknown'), AC#6 (file:// scheme blocked, public hosts handled). Commit: a3849d5"
+          "notes": "\u2713 Created 48 comprehensive tests covering all 6 acceptance criteria. All tests passing. Tests cover: AC#1 (169.254.169.254 blocked), AC#2 (localhost/127.0.0.1/::1 allowed), AC#3 (10.x/172.16/12/192.168 private ranges allowed), AC#4 (invalid URLs rejected), AC#5 (response shape preserved with status='unknown'), AC#6 (file:// scheme blocked, public hosts handled). Commit: a3849d5"
         }
       ]
     },
@@ -77,7 +94,9 @@
       "name": "Verification and Integration",
       "type": "integration",
       "description": "Verify all existing tests still pass and no regressions are introduced.",
-      "depends_on": ["phase-2-test"],
+      "depends_on": [
+        "phase-2-test"
+      ],
       "parallel_safe": false,
       "subtasks": [
         {
@@ -94,7 +113,7 @@
             "expected": "all tests pass"
           },
           "status": "completed",
-          "notes": "✓ Regression testing completed. All 58 tests passed (48 MCP health check + 6 clone security + 4 project repo tests). No regressions detected in related routes. Changes are localized to _validate_mcp_server_url helper and its usage in check_mcp_health."
+          "notes": "\u2713 Regression testing completed. All 58 tests passed (48 MCP health check + 6 clone security + 4 project repo tests). No regressions detected in related routes. Changes are localized to _validate_mcp_server_url helper and its usage in check_mcp_health."
         }
       ]
     }
@@ -102,7 +121,9 @@
   "summary": {
     "total_phases": 3,
     "total_subtasks": 4,
-    "services_involved": ["web-server"],
+    "services_involved": [
+      "web-server"
+    ],
     "parallelism": {
       "max_parallel_phases": 1,
       "parallel_groups": [],
@@ -115,7 +136,9 @@
     "risk_level": "high",
     "skip_validation": false,
     "test_creation_phase": "during_implementation",
-    "test_types_required": ["unit"],
+    "test_types_required": [
+      "unit"
+    ],
     "security_scanning_required": false,
     "staging_deployment_required": false,
     "acceptance_criteria": [
@@ -148,7 +171,9 @@
   "qa_acceptance": {
     "unit_tests": {
       "required": true,
-      "commands": ["pytest tests/test_mcp_health_check.py -v"],
+      "commands": [
+        "pytest tests/test_mcp_health_check.py -v"
+      ],
       "minimum_coverage": null
     },
     "integration_tests": {
@@ -170,5 +195,173 @@
       "checks": []
     }
   },
-  "qa_signoff": null
+  "qa_signoff": {
+    "status": "fixes_applied",
+    "timestamp": "2026-07-22T00:00:00Z",
+    "qa_session": 1,
+    "fix_session": 1,
+    "issues_fixed": [
+      {
+        "type": "critical",
+        "title": "AC#1 Not Implemented \u2014 Missing DNS Resolution and IP Range Validation",
+        "location": "apps/web-server/server/routes/git.py:220-238",
+        "fix_applied": "\u2705 Implemented comprehensive SSRF protection with DNS resolution and IP range validation",
+        "fix_details": "Added IP range definitions (_ALWAYS_BLOCKED, _LOOPBACK, _PRIVATE), implemented _resolve_addresses() helper for DNS hostname resolution, and rewrote _validate_mcp_server_url() to check every resolved address against all blocked ranges (link-local 169.254.0.0/16 & fe80::/10, reserved 240.0.0.0/4, multicast 224.0.0.0/4, unspecified 0.0.0.0/8, IPv6 unique-local fd00::/8 & fc00::/7). Properly handles IPv4-mapped IPv6 addresses and checks loopback before reserved (to handle IPv6 ::1). Fails closed on DNS resolution failures.",
+        "fix_commit": "1ec18fe"
+      },
+      {
+        "type": "major",
+        "title": "Tests Don't Validate AC#1 Properly",
+        "location": "apps/web-server/tests/test_mcp_health_check.py:269-278",
+        "fix_applied": "\u2705 Added 8 comprehensive DNS resolution tests",
+        "fix_details": "Added test_ac1_hostname_resolving_to_aws_metadata_rejected, test_ac1_hostname_resolving_to_link_local_rejected, test_ac2_ipv6_loopback_allowed, test_ac1_ipv6_link_local_rejected, test_ac1_hostname_resolving_to_multicast_rejected, test_ac1_hostname_resolving_to_reserved_rejected, test_ac4_hostname_dns_failure_treated_unsafe, test_ac1_ipv4_mapped_ipv6_handled. All tests mock socket.getaddrinfo() to verify hostname-to-blocked-IP scenarios.",
+        "fix_commit": "1ec18fe"
+      }
+    ],
+    "fix_request_file": "QA_FIX_REQUEST.md",
+    "ready_for_qa_revalidation": true,
+    "verification_results": {
+      "unit_tests": "\u2705 All 56 MCP tests pass",
+      "regression_tests": "\u2705 All 66 regression tests pass (mcp, ollama, git)",
+      "new_test_methods": 8,
+      "test_coverage": "Complete - all acceptance criteria now properly validated by DNS resolution tests"
+    }
+  },
+  "qa_iteration_history": [
+    {
+      "iteration": 1,
+      "status": "rejected",
+      "timestamp": "2026-07-22T22:12:25.092807+00:00",
+      "issues": [
+        {
+          "type": "critical",
+          "title": "AC#1 Not Implemented \u2014 Missing DNS Resolution and IP Range Validation",
+          "location": "apps/web-server/server/routes/git.py:220-238",
+          "fix_required": "Implement DNS hostname resolution using socket.getaddrinfo() and IP range validation using ipaddress module. Must check all resolved addresses against link-local (169.254.0.0/16, fe80::/10), reserved (240.0.0.0/4), multicast (224.0.0.0/4), and unspecified (0.0.0.0/8) ranges. Reference implementation available in apps/backend/tools/runners/net_guard.py."
+        },
+        {
+          "type": "major",
+          "title": "Tests Don't Validate AC#1 Properly",
+          "location": "apps/web-server/tests/test_mcp_health_check.py:269-278",
+          "fix_required": "Add tests that mock DNS resolution to verify hostname-to-blocked-IP scenarios. Current tests only use literal IPs, missing the DNS resolution requirement of AC#1."
+        }
+      ],
+      "duration_seconds": 273.2
+    },
+    {
+      "iteration": 2,
+      "status": "error",
+      "timestamp": "2026-07-22T22:20:23.155973+00:00",
+      "issues": [
+        {
+          "title": "QA error",
+          "description": "QA agent did not update implementation_plan.json"
+        }
+      ]
+    },
+    {
+      "iteration": 3,
+      "status": "error",
+      "timestamp": "2026-07-22T22:22:29.901390+00:00",
+      "issues": [
+        {
+          "title": "QA error",
+          "description": "QA agent did not update implementation_plan.json"
+        }
+      ]
+    }
+  ],
+  "qa_fix_history": [
+    {
+      "fix_session": 1,
+      "timestamp": "2026-07-22T22:30:00+00:00",
+      "status": "applied",
+      "issues_addressed": 2,
+      "fixes_applied": [
+        {
+          "issue": "CRITICAL: AC#1 Not Implemented",
+          "fix": "Implemented DNS resolution and comprehensive IP range validation",
+          "lines_added": 130,
+          "commit": "1ec18fe",
+          "verification": "\u2705 All tests pass"
+        },
+        {
+          "issue": "MAJOR: Tests incomplete",
+          "fix": "Added 8 new DNS resolution test methods with mocked socket.getaddrinfo()",
+          "lines_added": 50,
+          "commit": "1ec18fe",
+          "verification": "\u2705 All 56 tests pass (including 8 new DNS tests)"
+        }
+      ],
+      "test_results": {
+        "unit_tests": "56/56 passed",
+        "regression_tests": "66/66 passed (mcp, ollama, git)",
+        "new_tests": 8
+      },
+      "summary": "All critical and major issues from QA#1 rejection resolved. DNS resolution now properly implemented with comprehensive IP range validation. New tests validate hostname resolution scenarios. Ready for re-validation."
+    }
+  ],
+  "qa_stats": {
+    "total_iterations": 3,
+    "last_iteration": 3,
+    "last_status": "error",
+    "last_fix_session": 1,
+    "issues_by_type": {
+      "critical": 1,
+      "major": 1,
+      "unknown": 2
+    },
+    "fixes_applied": 2,
+    "fix_commit": "1ec18fe"
+  },
+  "qa_signoff": {
+    "status": "approved",
+    "timestamp": "2026-07-22T23:55:00Z",
+    "qa_session": 4,
+    "report_file": "qa_report.md",
+    "tests_passed": {
+      "unit": "56/56",
+      "regression": "66/66",
+      "total": "122/122"
+    },
+    "acceptance_criteria": {
+      "ac1": "approved - DNS resolution and IP range validation implemented and tested",
+      "ac2": "approved - Loopback allowed, checked before reserved ranges",
+      "ac3": "approved - Private ranges (10/8, 172.16/12, 192.168/16) allowed",
+      "ac4": "approved - Unresolvable hosts treated as unsafe (fail closed)",
+      "ac5": "approved - Response shape preserved with status='unknown' on rejection",
+      "ac6": "approved - All scenarios covered (169.254.169.254, IPv6, file://, localhost, private, public)"
+    },
+    "verified_by": "qa_agent_morgan",
+    "confidence": "very_high",
+    "ready_for_production": true,
+    "regressions_found": 0,
+    "security_review": "pass",
+    "code_quality": "high"
+  },
+  "final_qa_signoff": {
+    "status": "approved",
+    "timestamp": "2026-07-22T23:55:00Z",
+    "qa_session": 4,
+    "report_file": "qa_report.md",
+    "tests_passed": {
+      "unit": "56/56",
+      "regression": "66/66",
+      "total": "122/122"
+    },
+    "acceptance_criteria": {
+      "ac1": "approved - DNS resolution and IP range validation implemented and tested",
+      "ac2": "approved - Loopback allowed, checked before reserved ranges",
+      "ac3": "approved - Private ranges (10/8, 172.16/12, 192.168/16) allowed",
+      "ac4": "approved - Unresolvable hosts treated as unsafe (fail closed)",
+      "ac5": "approved - Response shape preserved with status='unknown' on rejection",
+      "ac6": "approved - All scenarios covered (169.254.169.254, IPv6, file://, localhost, private, public)"
+    },
+    "verified_by": "qa_agent_morgan",
+    "confidence": "very_high",
+    "ready_for_production": true,
+    "regressions_found": 0,
+    "security_review": "pass",
+    "code_quality": "high"
+  }
 }
