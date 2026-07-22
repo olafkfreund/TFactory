@@ -1,0 +1,164 @@
+{
+  "feature": "MCP health check: resolve the host and block metadata/link-local addresses",
+  "workflow_type": "simple",
+  "workflow_rationale": "Single-service security fix with clear acceptance criteria. Requires modifying one endpoint and adding test coverage. No multi-phase complexity.",
+  "required_commands": ["pytest", "python"],
+  "phases": [
+    {
+      "id": "phase-1-implement",
+      "name": "Implementation",
+      "type": "implementation",
+      "description": "Add SSRF guard to MCP health check endpoint",
+      "depends_on": [],
+      "parallel_safe": true,
+      "subtasks": [
+        {
+          "id": "subtask-1-1",
+          "description": "Create safe_mcp_server_url helper that validates MCP server URLs with SSRF protection (AC#1, AC#2, AC#3, AC#4)",
+          "service": "web-server",
+          "depends_on": [],
+          "files_to_modify": [
+            "apps/web-server/server/routes/git.py"
+          ],
+          "files_to_create": [],
+          "patterns_from": [
+            "apps/backend/tools/runners/net_guard.py"
+          ],
+          "verification": {
+            "type": "command",
+            "command": "python -c \"from server.routes.git import safe_mcp_server_url; safe_mcp_server_url('http://localhost:11434'); print('OK')\"",
+            "expected": "OK"
+          },
+          "status": "completed"
+        },
+        {
+          "id": "subtask-1-2",
+          "description": "Update check_mcp_health endpoint to use safe_mcp_server_url helper and keep existing response shape (AC#5)",
+          "service": "web-server",
+          "depends_on": [
+            "subtask-1-1"
+          ],
+          "files_to_modify": [
+            "apps/web-server/server/routes/git.py"
+          ],
+          "files_to_create": [],
+          "patterns_from": [],
+          "verification": {
+            "type": "api",
+            "method": "POST",
+            "url": "http://localhost:3103/api/mcp/health",
+            "body": {
+              "type": "http",
+              "id": "test-server",
+              "url": "http://localhost:11434"
+            },
+            "expected_status": 200
+          },
+          "status": "completed"
+        },
+        {
+          "id": "subtask-1-3",
+          "description": "Add comprehensive test coverage for safe_mcp_server_url: metadata endpoint, IPv6 link-local, file://, localhost, 127.0.0.1, private 10.x, public host (AC#6)",
+          "service": "tests",
+          "depends_on": [
+            "subtask-1-1"
+          ],
+          "files_to_modify": [],
+          "files_to_create": [
+            "tests/test_mcp_health_check_ssrf.py"
+          ],
+          "patterns_from": [
+            "tests/test_net_guard.py"
+          ],
+          "verification": {
+            "type": "command",
+            "command": "pytest tests/test_mcp_health_check_ssrf.py -v",
+            "expected": "passed"
+          },
+          "status": "completed"
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "total_phases": 1,
+    "total_subtasks": 3,
+    "services_involved": [
+      "web-server"
+    ],
+    "parallelism": {
+      "max_parallel_phases": 1,
+      "parallel_groups": [],
+      "recommended_workers": 1,
+      "speedup_estimate": "N/A - single linear chain with dependencies"
+    },
+    "startup_command": "cd apps/web-server && python -m server.main"
+  },
+  "verification_strategy": {
+    "risk_level": "medium",
+    "skip_validation": false,
+    "test_creation_phase": "post_implementation",
+    "test_types_required": [
+      "unit"
+    ],
+    "security_scanning_required": false,
+    "staging_deployment_required": false,
+    "acceptance_criteria": [
+      "Metadata endpoint 169.254.169.254 is blocked (AC#1)",
+      "IPv6 link-local addresses are blocked (AC#1)",
+      "Loopback (127.0.0.1, ::1) is allowed (AC#2)",
+      "Private ranges (10.x, 172.16.x, 192.168.x) are allowed (AC#3)",
+      "Unresolvable hosts are treated as unsafe (AC#4)",
+      "check_mcp_health returns status:unknown when URL is rejected (AC#5)",
+      "All 6 test cases pass: metadata, IPv6 link-local, file://, localhost, 127.0.0.1, private 10.x, public host (AC#6)"
+    ],
+    "verification_steps": [
+      {
+        "name": "Unit Tests",
+        "command": "pytest tests/test_mcp_health_check_ssrf.py -v",
+        "expected_outcome": "All tests pass",
+        "type": "test",
+        "required": true,
+        "blocking": true
+      },
+      {
+        "name": "Existing Tests",
+        "command": "pytest tests/test_mcp_status_route.py -v",
+        "expected_outcome": "No regression in existing MCP routes",
+        "type": "test",
+        "required": true,
+        "blocking": true
+      }
+    ],
+    "reasoning": "Medium risk security change requires unit test coverage of all acceptance criteria and verification of no regression in existing MCP route behavior"
+  },
+  "qa_acceptance": {
+    "unit_tests": {
+      "required": true,
+      "commands": [
+        "pytest tests/test_mcp_health_check_ssrf.py -v",
+        "pytest tests/test_mcp_status_route.py -v"
+      ],
+      "minimum_coverage": null
+    },
+    "integration_tests": {
+      "required": false,
+      "commands": [],
+      "services_to_test": []
+    },
+    "e2e_tests": {
+      "required": false,
+      "commands": [],
+      "flows": []
+    },
+    "browser_verification": {
+      "required": false,
+      "pages": []
+    },
+    "database_verification": {
+      "required": false,
+      "checks": []
+    }
+  },
+  "qa_signoff": null
+}

@@ -1,0 +1,127 @@
+=== AUTO-BUILD PROGRESS ===
+
+Project: MCP health check: resolve the host and block metadata/link-local addresses
+Workspace: managed by orchestrator
+Started: 2026-07-22T12:35:36
+
+Workflow Type: simple
+Rationale: Single-service security fix requiring modification to one endpoint and comprehensive test coverage
+
+Session 1 (Planner):
+- Created implementation_plan.json
+- Phases: 1
+- Total subtasks: 3
+- Created context.json with patterns and insights
+- Created project_index.json with service configuration
+- Created init.sh for environment setup
+
+Phase Summary:
+- Phase 1 (Implementation): 3 subtasks, no dependencies
+  - Subtask 1-1: Create safe_mcp_server_url helper with SSRF validation
+  - Subtask 1-2: Update check_mcp_health endpoint to use helper
+  - Subtask 1-3: Add comprehensive test coverage
+
+Services Involved:
+- web-server: FastAPI backend where check_mcp_health endpoint lives
+- tests: Unit test coverage for SSRF guard
+
+Key Insights:
+- Existing net_guard module has comprehensive SSRF guard logic (link-local, metadata blocking)
+- MCP servers typically run on localhost or LAN, so loopback/private ranges must remain allowed
+- check_mcp_health must preserve existing response shape (status: unknown) when URL is rejected
+- Specific rejection reason logged internally but not exposed to client
+
+Implementation Notes:
+1. safe_mcp_server_url helper will:
+   - Resolve URL hostnames to IP addresses
+   - Block link-local (169.254.0.0/16, fe80::/10)
+   - Block cloud metadata and IPv6 unique-local
+   - Allow loopback (127.0.0.0/8, ::1)
+   - Allow private ranges (10/8, 172.16/12, 192.168/16)
+   - Treat unresolvable hosts as unsafe
+
+2. Test coverage required for all acceptance criteria:
+   - AC#1: Metadata endpoint blocked (169.254.169.254)
+   - AC#2: Loopback allowed and checked before reserved test
+   - AC#3: Private ranges allowed
+   - AC#4: Unresolvable hosts treated as unsafe
+   - AC#5: Response shape preserved (status: unknown)
+   - AC#6: All 6 test cases pass
+
+Parallelism Analysis:
+- Max parallel phases: 1
+- Recommended workers: 1
+- This is a linear dependency chain (subtask 1-1 → 1-2 → 1-3)
+
+=== STARTUP COMMAND ===
+
+To continue building this spec, run:
+
+  source .aifactory/specs/010-mcp-health-check-resolve-the-h/init.sh
+
+Then implement the subtasks in order:
+1. Create safe_mcp_server_url helper function
+2. Modify check_mcp_health endpoint to use the helper
+3. Add comprehensive test coverage
+
+=== END SESSION 1 ===
+
+Session 2 (Implementation):
+- COMPLETED subtask-1-1: Create safe_mcp_server_url helper
+  - Implemented _resolve_addresses() to resolve hostnames to IP addresses
+  - Implemented safe_mcp_server_url() to validate MCP server URLs with SSRF protection
+  - Follows pattern from apps/backend/tools/runners/net_guard.py
+  - Accepts: loopback (127.0.0.1, ::1), private ranges (10/8, 172.16/12, 192.168/16), public hosts
+  - Blocks: link-local (169.254.0.0/16, fe80::/10), reserved, multicast, unspecified
+  - Reordered checks to block link-local BEFORE checking private (since 169.254.0.0/16 is both)
+  - Checks loopback BEFORE reserved (since IPv6 ::1 is also reserved)
+  - Treats unresolvable hosts as unsafe (fail-closed)
+  - Updated check_mcp_health to use safe_mcp_server_url for SSRF validation
+  - Logs rejection reason but returns generic status: "unknown" (AC#5)
+  - Verified with all AC#6 test cases: metadata endpoint, IPv6 link-local, file://, localhost, 127.0.0.1, private 10.x, public hosts
+  - Committed to git with message describing changes
+
+IMPORTANT NOTES:
+- Do NOT commit spec files (implementation_plan.json, context.json, etc.) — they are gitignored
+- Only code changes should be committed
+- Verification must pass before marking subtasks complete
+- All acceptance criteria must be addressed in tests
+  [x] subtask-1-1: Create safe_mcp_server_url helper that validates MCP server URLs with SSRF protection (AC#1, AC#2, AC#3, AC#4) (5cb23357)
+
+Session 3 (Implementation - subtask 1-2):
+- COMPLETED subtask-1-2: Update check_mcp_health endpoint to use safe_mcp_server_url helper
+  - Endpoint already calls safe_mcp_server_url(server.url) on line 897
+  - Catches ValueError exception on line 898
+  - Logs rejection reason internally on line 900 (not exposed to client)
+  - Returns response with status: "unknown" on lines 901-908 (AC#5)
+  - Preserves existing response shape with serverId, status, and message fields
+  - Implementation is complete and correct
+  - Updated implementation_plan.json to mark subtask-1-2 as completed
+  [x] subtask-1-2: Update check_mcp_health endpoint to use safe_mcp_server_url helper and keep existing response shape (AC#5) (03f61bc9)
+
+Session 4 (Testing - subtask 1-3):
+- COMPLETED subtask-1-3: Add comprehensive test coverage for safe_mcp_server_url
+  - Created tests/test_mcp_health_check_ssrf.py with 30 comprehensive test cases
+  - Follows pattern from tests/test_net_guard.py with hermetic DNS mocking
+  - Test coverage includes:
+    * AC#1: Metadata endpoint blocking (169.254.169.254, link-local IPv6)
+    * AC#2: Loopback allowance (127.0.0.1, ::1, IPv4-mapped IPv6)
+    * AC#3: Private ranges allowance (10.x, 172.16.x, 192.168.x, IPv6 fd00::/8)
+    * AC#4: Unresolvable hosts treated as unsafe (fail-closed, DNS failures)
+    * AC#6: File scheme blocking, public hosts allowed
+  - Additional edge cases: multicast blocking, unspecified blocking, DNS rebinding attacks
+  - Real-world scenarios: Ollama on localhost, MCP on LAN, k8s service discovery
+  - All 30 tests pass with no regressions to existing test_mcp_status_route.py
+  - Added web-server path to sys.path for server.routes imports (pattern from test_git_updates_route.py)
+  - Properly handles DNS monkeypatching for hermetic testing
+  - Committed with comprehensive commit message
+  [x] subtask-1-3: Add comprehensive test coverage for safe_mcp_server_url (AC#6) (7b8178c)
+
+=== FINAL STATUS ===
+All three subtasks completed successfully:
+  [x] subtask-1-1: safe_mcp_server_url helper implementation
+  [x] subtask-1-2: check_mcp_health endpoint integration
+  [x] subtask-1-3: Comprehensive test coverage (30 tests)
+
+All acceptance criteria (AC#1-AC#6) met and verified.
+Ready for review and merge.
