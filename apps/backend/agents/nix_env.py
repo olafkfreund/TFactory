@@ -284,6 +284,40 @@ def _build_pytest_cmd(mount: str, name: str, reruns: int) -> str:
     return f"cd {mount}\n{loop}"
 
 
+def _stage_mutants(mutant_files: list[Path] | None, tests_dir: Path) -> list[str]:
+    """Copy each mutation-candidate test into the Job's ``tests/`` dir; return the
+    basenames that staged successfully (#776 Stage 1b). Best-effort per file so a
+    single unwritable candidate never takes the whole batch down.
+    """
+    names: list[str] = []
+    for mf in mutant_files or []:
+        mn = Path(mf).name
+        with contextlib.suppress(OSError):
+            shutil.copy2(mf, tests_dir / mn)
+            names.append(mn)
+    return names
+
+
+def _build_mutants_cmd(mutant_names: list[str]) -> str:
+    """#776 Stage 1b: run each staged mutant test ONCE in the same dev shell as
+    the stability batch, wrapping each in a ``__MUT_RUN=<k>`` / ``__MUT_EXIT=<code>``
+    pair so ``parse_mut_exits`` recovers per-mutant codes.
+
+    A SEPARATE exit marker (``__MUT_EXIT``, not ``__PYTEST_EXIT``) keeps
+    ``parse_pytest_exits`` — which reads the stability samples — from mistaking a
+    mutant's exit code for a stability run. Mutants only need the exit code
+    (KILLED = non-zero), so no junit/coverage. Assumes the shell already ``cd``'d
+    into the mount (the stability command does).
+    """
+    parts = [
+        f"echo __MUT_RUN={k}\n"
+        f"python -m pytest tests/{mn} -p no:cacheprovider -q 2>&1; "
+        "echo __MUT_EXIT=$?\n"
+        for k, mn in enumerate(mutant_names, start=1)
+    ]
+    return "".join(parts)
+
+
 def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve knobs + one linear staging flow
     spec_dir: Path,
     project_dir: Path,
@@ -294,6 +328,7 @@ def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve kno
     serve_command: str | None = None,
     serve_port: int | None = None,
     reruns: int = 1,
+    mutant_files: list[Path] | None = None,
 ) -> DockerRunResult | None:
     """Run ONE pytest file inside the per-task Nix dev shell as a k8s Job.
 
@@ -375,6 +410,12 @@ def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve kno
         # dir so the co-mounted Job runs THAT file.
         if Path(test_file).resolve() != staged_test.resolve():
             shutil.copy2(test_file, staged_test)
+        # #776 Stage 1b: also stage the subtask's mutation-candidate test variants
+        # into tests/ so the SAME Job that runs the stability batch also runs each
+        # mutant once — folding the ``M`` per-candidate mutation Jobs into this one.
+        # The stability run below targets ``tests/<name>`` explicitly, so these
+        # extra files are never collected by it.
+        mutant_names = _stage_mutants(mutant_files, tests_dir)
         stage = pd / _PYTEST_STAGE
         stage.mkdir(parents=True, exist_ok=True)
         # The Job runs as a non-root uid against the co-mounted scratch; make the
@@ -436,6 +477,8 @@ def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve kno
                 f'on {url}; see /tmp/tf_app.log"\n'
             )
         pytest_cmd = _build_pytest_cmd(mount, name, reruns)
+        if mutant_names:
+            pytest_cmd = pytest_cmd + "\n" + _build_mutants_cmd(mutant_names)
         (pd / _JOB_SCRIPT).write_text(
             "#!/usr/bin/env bash\nset +e\n"
             + exports
@@ -702,6 +745,32 @@ def parse_pytest_exits(output: str | None) -> list[tuple[int, str]]:
                 body.append(ln)
         runs.append((code, "\n".join(body)))
     return runs
+
+
+def parse_mut_exits(output: str | None) -> list[int]:
+    """Recover per-mutant exit codes from a batched run's ``__MUT_RUN=<k>`` /
+    ``__MUT_EXIT=<code>`` markers (#776 Stage 1b), in run order.
+
+    A mutant whose EXIT marker is missing (the shell died mid-run) counts as
+    code 1 — a failure, mirroring ``_parse_exit_marker``. The caller compares the
+    recovered count to the number of candidates and falls back to the
+    per-candidate mutation path when they don't match, so an incomplete batch
+    never yields a wrong mutation verdict. Empty list when no mutant ran.
+    """
+    lines = (output or "").splitlines()
+    run_idxs = [i for i, ln in enumerate(lines) if ln.startswith("__MUT_RUN=")]
+    if not run_idxs:
+        return []
+    bounds = [*run_idxs, len(lines)]
+    codes: list[int] = []
+    for start, stop in itertools.pairwise(bounds):
+        code = 1
+        for ln in lines[start + 1 : stop]:
+            if ln.startswith("__MUT_EXIT="):
+                with contextlib.suppress(ValueError):
+                    code = int(ln.split("=", 1)[1])
+        codes.append(code)
+    return codes
 
 
 def _slice_marked_segment(output: str, begin: str, end_prefix: str) -> str:

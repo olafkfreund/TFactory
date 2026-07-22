@@ -846,3 +846,59 @@ def test_materialize_does_not_write_lock_for_repo_owned_flake(tmp_path):
 
     materialize_flake(spec, project, env=env)
     assert not (project / "flake.lock").exists()  # we didn't clobber/invent one
+
+
+# ─── #776 Stage 1b: batched mutation markers ────────────────────────────────
+
+
+def test_parse_mut_exits_recovers_each_mutants_code():
+    from agents.nix_env import parse_mut_exits
+
+    out = (
+        "__MUT_RUN=1\nfailed\n__MUT_EXIT=1\n"
+        "__MUT_RUN=2\npassed\n__MUT_EXIT=0\n"
+        "__MUT_RUN=3\nfailed\n__MUT_EXIT=1\n"
+    )
+    assert parse_mut_exits(out) == [1, 0, 1]
+
+
+def test_parse_mut_exits_missing_marker_is_failure():
+    """A mutant whose EXIT marker never printed (shell died) counts as 1, never a
+    false 0 (which would read as SURVIVED)."""
+    from agents.nix_env import parse_mut_exits
+
+    out = "__MUT_RUN=1\n__MUT_EXIT=0\n__MUT_RUN=2\n(shell died before exit)\n"
+    assert parse_mut_exits(out) == [0, 1]
+
+
+def test_parse_mut_exits_empty_when_no_mutants():
+    from agents.nix_env import parse_mut_exits
+
+    assert parse_mut_exits("__PYTEST_RUN=1\n__PYTEST_EXIT=0\n") == []
+    assert parse_mut_exits("") == []
+
+
+def test_mut_markers_do_not_pollute_stability_parse():
+    """The stability parser (keyed on __PYTEST_RUN/__PYTEST_EXIT) must ignore the
+    trailing __MUT_* markers, so batching mutation into the same Job leaves the
+    stability codes byte-identical."""
+    from agents.nix_env import parse_mut_exits, parse_pytest_exits
+
+    out = (
+        "__PYTEST_RUN=1\n.\n__PYTEST_EXIT=0\n"
+        "__PYTEST_RUN=2\n.\n__PYTEST_EXIT=0\n"
+        "__PYTEST_RUN=3\n.\n__PYTEST_EXIT=0\n"
+        "__MUT_RUN=1\nF\n__MUT_EXIT=1\n"
+    )
+    assert [c for c, _ in parse_pytest_exits(out)] == [0, 0, 0]  # stability untouched
+    assert parse_mut_exits(out) == [1]
+
+
+def test_build_mutants_cmd_shape():
+    from agents.nix_env import _build_mutants_cmd
+
+    cmd = _build_mutants_cmd(["m__c1.py", "m__c2.py"])
+    assert "echo __MUT_RUN=1" in cmd and "echo __MUT_RUN=2" in cmd
+    assert "pytest tests/m__c1.py" in cmd and "pytest tests/m__c2.py" in cmd
+    assert cmd.count("echo __MUT_EXIT=$?") == 2
+    assert _build_mutants_cmd([]) == ""

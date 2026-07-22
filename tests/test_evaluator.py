@@ -1275,3 +1275,163 @@ def test_flaky_history_records_genuine_assertion_fail(tmp_path):
     )
     store = _history_store(spec_dir)
     assert json.loads(store.read_text())["t-1"]["outcomes"] == [False]
+
+
+# ─── #776 Stage 1b: stability + mutation batched into ONE nix Job ────────────
+
+
+def _mk_unit_subtask(spec_dir, source="def test_x():\n    assert 1 == 1\n"):
+    tests = spec_dir / "tests"
+    tests.mkdir(parents=True, exist_ok=True)
+    (tests / "test_x.py").write_text(source)
+    return {"id": "t-1", "language": "python", "files_to_create": ["tests/test_x.py"]}
+
+
+def _fake_nix_result(stdout):
+    from tools.runners.docker_runner import DockerRunResult
+
+    return DockerRunResult(returncode=0, stdout=stdout, stderr="")
+
+
+def test_mutation_from_codes_first_kill_wins():
+    from agents.evaluator import _mutation_from_codes
+    from agents.mutate_probe import MutationApplied, MutationVerdict
+
+    def _m(i):
+        return MutationApplied(operator=f"op{i}", lineno=i, before="a", after="b")
+
+    cands = [("s1", _m(1)), ("s2", _m(2)), ("s3", _m(3))]
+    # survive, kill, kill -> first KILL (index 2) wins
+    res = _mutation_from_codes(cands, [0, 1, 1])
+    assert res.verdict == MutationVerdict.KILLED
+    assert res.mutation.operator == "op2"
+
+
+def test_mutation_from_codes_all_survive_returns_first():
+    from agents.evaluator import _mutation_from_codes
+    from agents.mutate_probe import MutationApplied, MutationVerdict
+
+    m = MutationApplied(operator="op1", lineno=1, before="a", after="b")
+    res = _mutation_from_codes([("s1", m)], [0])
+    assert res.verdict == MutationVerdict.SURVIVED
+    assert res.mutation.operator == "op1"
+
+
+def test_nix_batched_signals_stability_and_mutation_in_one_job(tmp_path, monkeypatch):
+    """The batched path derives BOTH a STABLE stability and a KILLED mutation from
+    one Job's stdout, and passes the generated mutant(s) to the primitive."""
+    from agents import evaluator
+    from agents.mutate_probe import MutationVerdict
+    from agents.stability_runner import StabilityVerdict
+
+    spec_dir = tmp_path / "proj" / "specs" / "001"
+    subtask = _mk_unit_subtask(spec_dir)
+
+    captured = {}
+
+    def _fake(spec, proj, tf, *, extra_env=None, reruns=1, mutant_files=None, **kw):
+        captured["mutant_files"] = mutant_files
+        captured["reruns"] = reruns
+        return _fake_nix_result(
+            "__PYTEST_RUN=1\n.\n__PYTEST_EXIT=0\n"
+            "__PYTEST_RUN=2\n.\n__PYTEST_EXIT=0\n"
+            "__PYTEST_RUN=3\n.\n__PYTEST_EXIT=0\n"
+            "__MUT_RUN=1\nF\n__MUT_EXIT=1\n"
+        )
+
+    monkeypatch.setattr("agents.evaluator.run_pytest_lane_via_nix", _fake)
+    stability, mutation = evaluator._nix_batched_signals(spec_dir, tmp_path, subtask)
+
+    assert stability is not None and stability.verdict == StabilityVerdict.STABLE
+    assert mutation is not None and mutation.verdict == MutationVerdict.KILLED
+    # the assert-bearing test yields >=1 candidate, staged and passed to the Job
+    assert captured["mutant_files"] and len(captured["mutant_files"]) >= 1
+    assert captured["reruns"] == 3  # one Job, three stability samples
+
+
+def test_nix_batched_signals_truncated_mutation_returns_none(tmp_path, monkeypatch):
+    """Candidates existed but the Job returned NO mutant codes (truncated) -> the
+    stability is still returned but mutation is None, so the caller falls back to
+    the per-candidate path rather than trusting an incomplete batch."""
+    from agents import evaluator
+    from agents.stability_runner import StabilityVerdict
+
+    spec_dir = tmp_path / "proj" / "specs" / "001"
+    subtask = _mk_unit_subtask(spec_dir)
+
+    def _fake(spec, proj, tf, *, extra_env=None, reruns=1, mutant_files=None, **kw):
+        # stability markers only; the __MUT_* markers never printed
+        return _fake_nix_result(
+            "__PYTEST_RUN=1\n.\n__PYTEST_EXIT=0\n"
+            "__PYTEST_RUN=2\n.\n__PYTEST_EXIT=0\n"
+            "__PYTEST_RUN=3\n.\n__PYTEST_EXIT=0\n"
+        )
+
+    monkeypatch.setattr("agents.evaluator.run_pytest_lane_via_nix", _fake)
+    stability, mutation = evaluator._nix_batched_signals(spec_dir, tmp_path, subtask)
+    assert stability is not None and stability.verdict == StabilityVerdict.STABLE
+    assert mutation is None  # incomplete batch -> caller falls back
+
+
+def test_nix_batched_signals_none_when_lane_unavailable(tmp_path, monkeypatch):
+    from agents import evaluator
+
+    spec_dir = tmp_path / "proj" / "specs" / "001"
+    subtask = _mk_unit_subtask(spec_dir)
+    monkeypatch.setattr(
+        "agents.evaluator.run_pytest_lane_via_nix", lambda *a, **k: None
+    )
+    assert evaluator._nix_batched_signals(spec_dir, tmp_path, subtask) == (None, None)
+
+
+def test_build_signal_bundle_uses_batched_path_in_nix_mode(tmp_path, monkeypatch):
+    """In nix mode, _build_signal_bundle takes the batched (stability, mutation)
+    from _nix_batched_signals instead of the per-primitive calls."""
+    from agents import evaluator
+    from agents.mutate_probe import MutationResult, MutationVerdict
+    from agents.stability_runner import StabilityResult, StabilityVerdict
+
+    spec_dir = tmp_path / "proj" / "specs" / "001"
+    subtask = _mk_unit_subtask(spec_dir)
+
+    fake_stab = StabilityResult(verdict=StabilityVerdict.STABLE)
+    fake_mut = MutationResult(verdict=MutationVerdict.KILLED)
+    monkeypatch.setattr(evaluator, "_nix_verify_mode", lambda sd: True)
+    monkeypatch.setattr(
+        evaluator, "_nix_batched_signals", lambda sd, pd, st: (fake_stab, fake_mut)
+    )
+    # if the per-primitive path were taken these would blow up the test:
+    monkeypatch.setattr(
+        evaluator,
+        "_stability_for_subtask",
+        lambda *a, **k: pytest.fail("per-primitive stability should not run"),
+    )
+    bundle = evaluator._build_signal_bundle(spec_dir, tmp_path, subtask, runner_fn=None)
+    assert bundle.stability is fake_stab
+    assert bundle.mutation is fake_mut
+
+
+def test_build_signal_bundle_falls_back_when_nix_unavailable(tmp_path, monkeypatch):
+    from agents import evaluator
+    from agents.stability_runner import StabilityResult, StabilityVerdict
+
+    spec_dir = tmp_path / "proj" / "specs" / "001"
+    subtask = _mk_unit_subtask(spec_dir)
+
+    monkeypatch.setattr(evaluator, "_nix_verify_mode", lambda sd: True)
+    monkeypatch.setattr(evaluator, "_nix_batched_signals", lambda *a: (None, None))
+    called = {"stab": False, "mut": False}
+
+    def _stab(*a, **k):
+        called["stab"] = True
+        return StabilityResult(verdict=StabilityVerdict.STABLE)
+
+    def _mut(*a, **k):
+        called["mut"] = True
+        return None
+
+    monkeypatch.setattr(evaluator, "_stability_for_subtask", _stab)
+    monkeypatch.setattr(evaluator, "_mutation_for_subtask", _mut)
+    bundle = evaluator._build_signal_bundle(spec_dir, tmp_path, subtask, runner_fn=None)
+    assert called["stab"] and called["mut"]  # per-primitive fallback ran
+    assert bundle.stability.verdict == StabilityVerdict.STABLE
