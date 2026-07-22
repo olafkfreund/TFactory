@@ -66,7 +66,7 @@
             "AC5: Reason is logged to logger, not returned to client",
             "Existing behavior preserved for allowed URLs"
           ],
-          "status": "pending"
+          "status": "completed"
         },
         {
           "id": "subtask-1-3",
