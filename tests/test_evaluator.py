@@ -1182,3 +1182,96 @@ def test_nix_batched_stability_none_when_lane_unavailable(tmp_path, monkeypatch)
     tf = tmp_path / "t_test.py"
     tf.write_text("def test_x(): assert True\n")
     assert evaluator._nix_batched_stability(tmp_path, tmp_path, tf) is None
+
+
+# ─── #787: flaky-history must ignore environmental failures ──────────────────
+
+
+def _stability_result(verdict, *, returncode=0, tail=""):
+    from agents.stability_runner import StabilityResult, StabilityRun
+
+    return StabilityResult(
+        verdict=verdict,
+        runs=(StabilityRun(returncode=returncode, stdout_tail=tail),),
+    )
+
+
+def _history_store(spec_dir):
+    return spec_dir.parent.parent / "test_history.json"
+
+
+def _spec_dir(tmp_path):
+    d = tmp_path / "proj" / "specs" / "037"
+    d.mkdir(parents=True)
+    return d
+
+
+def test_flaky_history_skips_environmental_import_fail(tmp_path):
+    """#787: a no-SUT collection/import error (CONSISTENT_FAIL + failure_kind
+    'import') must NOT be recorded. Otherwise a deadline-reaped / no-SUT first
+    attempt records `false`, the next real run records `true`, and the
+    flip_rate=1.00 flags every good test."""
+    from agents import evaluator
+    from agents.stability_runner import StabilityVerdict
+
+    spec_dir = _spec_dir(tmp_path)
+    stab = _stability_result(
+        StabilityVerdict.CONSISTENT_FAIL,
+        returncode=2,
+        tail="ImportError: No module named hello_python",
+    )
+    assert stab.failure_kind == "import"
+    assert evaluator._flaky_history_for_subtask(spec_dir, {"id": "t-1"}, stab) is None
+    assert not _history_store(spec_dir).exists()  # nothing recorded
+
+
+def test_flaky_history_skips_runner_error(tmp_path):
+    """#787: the stability runner itself raising (verdict ERROR) is
+    environmental, not a reliability signal — never record it."""
+    from agents import evaluator
+    from agents.stability_runner import StabilityVerdict
+
+    spec_dir = _spec_dir(tmp_path)
+    stab = _stability_result(StabilityVerdict.ERROR)
+    assert evaluator._flaky_history_for_subtask(spec_dir, {"id": "t-1"}, stab) is None
+    assert not _history_store(spec_dir).exists()
+
+
+def test_flaky_history_records_stable_pass(tmp_path):
+    """A real STABLE run still records a True outcome (guard must not over-skip)."""
+    import json
+
+    from agents import evaluator
+    from agents.stability_runner import StabilityVerdict
+
+    spec_dir = _spec_dir(tmp_path)
+    stab = _stability_result(StabilityVerdict.STABLE, returncode=0)
+    assert (
+        evaluator._flaky_history_for_subtask(spec_dir, {"id": "t-1"}, stab) is not None
+    )
+    store = _history_store(spec_dir)
+    assert store.exists()
+    assert json.loads(store.read_text())["t-1"]["outcomes"] == [True]
+
+
+def test_flaky_history_records_genuine_assertion_fail(tmp_path):
+    """A genuine failing test (CONSISTENT_FAIL + failure_kind 'assertion') IS a
+    real reliability signal and must still record False — the #787 guard must
+    not swallow it."""
+    import json
+
+    from agents import evaluator
+    from agents.stability_runner import StabilityVerdict
+
+    spec_dir = _spec_dir(tmp_path)
+    stab = _stability_result(
+        StabilityVerdict.CONSISTENT_FAIL,
+        returncode=1,
+        tail="E   AssertionError: assert 1 == 2\nFAILED",
+    )
+    assert stab.failure_kind == "assertion"
+    assert (
+        evaluator._flaky_history_for_subtask(spec_dir, {"id": "t-1"}, stab) is not None
+    )
+    store = _history_store(spec_dir)
+    assert json.loads(store.read_text())["t-1"]["outcomes"] == [False]
