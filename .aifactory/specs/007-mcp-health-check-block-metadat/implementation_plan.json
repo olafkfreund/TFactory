@@ -204,5 +204,17 @@
       "checks": []
     }
   },
-  "qa_signoff": null
+  "qa_signoff": {
+    "status": "approved",
+    "timestamp": "2026-07-22T12:55:00Z",
+    "qa_session": 1,
+    "report_file": "qa_report.md",
+    "tests_passed": {
+      "unit": "31/31",
+      "integration": "9/9",
+      "total": "40/40"
+    },
+    "verdict": "APPROVED - All acceptance criteria verified",
+    "verified_by": "qa_agent"
+  }
 }
