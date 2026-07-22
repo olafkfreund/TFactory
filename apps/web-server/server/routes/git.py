@@ -2,13 +2,16 @@
 Git, Ollama, MCP, and utility routes.
 """
 
+import ipaddress
 import json
 import logging
 import re
 import shlex
 import shutil
+import socket
 import subprocess
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -584,6 +587,115 @@ async def install_claude_code():
 
 
 # ============================================
+# MCP URL Validation (SSRF Guard)
+# ============================================
+
+class UnsafeMcpUrlError(ValueError):
+    """Raised when an MCP server URL resolves to a blocked address range."""
+
+
+# Address ranges that are ALWAYS blocked for MCP URLs (independent of configuration).
+# These include link-local (metadata endpoints), multicast, and unspecified addresses.
+# Link-local ranges like 169.254.0.0/16 are cloud-metadata ranges that should never
+# be legitimate MCP targets. Multicast and unspecified are also never valid targets.
+_MCP_ALWAYS_BLOCKED: tuple[ipaddress._BaseNetwork, ...] = (
+    ipaddress.ip_network("169.254.0.0/16"),  # IPv4 link-local (metadata)
+    ipaddress.ip_network("fe80::/10"),  # IPv6 link-local
+    ipaddress.ip_network("224.0.0.0/4"),  # IPv4 multicast
+    ipaddress.ip_network("ff00::/8"),  # IPv6 multicast
+    ipaddress.ip_network("0.0.0.0/32"),  # IPv4 unspecified
+    ipaddress.ip_network("::/128"),  # IPv6 unspecified
+)
+
+# Loopback addresses — allowed for MCP (localhost is a legitimate MCP target).
+# Must be checked before reserved to avoid IPv6 ::1 being blocked.
+_MCP_LOOPBACK: tuple[ipaddress._BaseNetwork, ...] = (
+    ipaddress.ip_network("127.0.0.0/8"),  # IPv4 loopback
+    ipaddress.ip_network("::1/128"),  # IPv6 loopback
+)
+
+
+def _resolve_mcp_addresses(host: str) -> list[ipaddress._BaseAddress]:
+    """Resolve ``host`` to all IP addresses it maps to.
+
+    A literal IP is returned as-is. A hostname is resolved via DNS; every
+    returned address is checked (ensures all results are validated, not just
+    the first one).
+
+    Raises:
+        OSError: if DNS resolution fails (fail-closed for MCP).
+    """
+    try:
+        return [ipaddress.ip_address(host)]
+    except ValueError:
+        pass
+
+    # Resolve via DNS — may return multiple addresses
+    infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    addrs: list[ipaddress._BaseAddress] = []
+    for info in infos:
+        sockaddr = info[4]
+        addrs.append(ipaddress.ip_address(sockaddr[0]))
+    return addrs
+
+
+def _is_safe_mcp_url(url: str) -> bool:
+    """Return True if ``url`` resolves only to allowed addresses for MCP.
+
+    Blocks link-local (metadata), multicast, and unspecified ranges always.
+    Allows loopback and private ranges (legitimate for local MCP servers).
+    Returns False on malformed URLs, DNS resolution failure, or blocked address
+    (fail-closed).
+
+    Args:
+        url: The MCP server URL (must include an http/https scheme and host).
+
+    Returns:
+        True if the URL is safe to connect to; False otherwise.
+    """
+    try:
+        parts = urlsplit(url)
+        if parts.scheme not in ("http", "https"):
+            return False
+
+        host = parts.hostname
+        if not host:
+            return False
+
+        # Resolve host to all addresses it maps to
+        addrs = _resolve_mcp_addresses(host)
+        if not addrs:
+            return False
+
+        # Check every resolved address
+        for addr in addrs:
+            # Normalize IPv4-mapped IPv6 (::ffff:127.0.0.1) to its IPv4 form
+            # so a mapped metadata/link-local address can't slip past the v4 checks.
+            if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
+                addr = addr.ipv4_mapped
+
+            # Check loopback first (must be allowed before checking is_reserved,
+            # since ::1 also satisfies is_reserved and order matters).
+            loopback_allowed = any(
+                addr.version == net.version and addr in net
+                for net in _MCP_LOOPBACK
+            )
+            if loopback_allowed:
+                continue
+
+            # Check always-blocked ranges
+            for net in _MCP_ALWAYS_BLOCKED:
+                if addr.version == net.version and addr in net:
+                    return False
+
+        return True
+
+    except (OSError, ValueError):
+        # DNS resolution failure or malformed URL — fail closed
+        return False
+
+
+# ============================================
 # MCP Routes
 # ============================================
 
@@ -774,10 +886,24 @@ async def check_mcp_health(server: McpServerConfig):
 
         # SSRF guard: an MCP server URL is configured by the operator themselves
         # and, by design, very often points at a local/LAN endpoint (most MCP
-        # servers run on localhost). Blocking private/loopback hosts would break
-        # that intended use case, so we deliberately do not. We DO restrict the
-        # scheme to http/https so a configured value cannot be coerced into a
-        # file://, gopher://, ftp:// (etc.) request.
+        # servers run on localhost). We block link-local (metadata), multicast,
+        # and unspecified ranges (never legitimate targets) while allowing
+        # loopback and private ranges. We restrict the scheme to http/https
+        # so a configured value cannot be coerced into file://, gopher://, ftp://
+        # (etc.) requests.
+
+        # Check if URL is safe (resolves host and validates address ranges)
+        if not _is_safe_mcp_url(server.url):
+            logger.warning("Refusing unsafe MCP URL: %s", server.url)
+            return {
+                "success": True,
+                "data": {
+                    "serverId": server.id,
+                    "status": "unknown",
+                    "message": "Cannot check command-based servers"
+                }
+            }
+
         parsed = urlparse(server.url)
         if parsed.scheme not in ("http", "https") or not parsed.hostname:
             return {
