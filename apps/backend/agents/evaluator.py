@@ -70,10 +70,18 @@ from agents.evaluator_targets import (
     _test_credential_specs,
 )
 from agents.evaluator_verdicts import _validate_verdicts
+from agents.mutate_probe import (
+    MutationApplied,
+    MutationResult,
+    MutationVerdict,
+    mutate_source_candidates,
+)
+from agents.mutation_dispatch import is_mutation_supported, mutant_extension
 from agents.nix_env import (
     detect_serve_command,
     environment_from_contract,
     is_nix_environment,
+    parse_mut_exits,
     parse_pytest_exits,
     run_pytest_lane_via_nix,
 )
@@ -895,6 +903,111 @@ def _nix_batched_stability(
     return classify_stability_runs(runs, seed=DEFAULT_SEED, rerun_count=len(runs))
 
 
+def _mutation_from_codes(
+    candidates: list[tuple[str, MutationApplied]], codes: list[int]
+) -> MutationResult | None:
+    """Build a MutationResult from batched per-mutant exit codes (#776 Stage 1b).
+
+    Applies the SAME rule as ``run_mutate_probe``: KILLED when the mutant's
+    pytest exit code is non-zero, and the FIRST killed candidate wins outright;
+    if nothing is killed, the first candidate's SURVIVED result is returned. So
+    the verdict is byte-identical to the per-candidate path — the only difference
+    is that every candidate ran in ONE Job instead of one Job each.
+    """
+    first: MutationResult | None = None
+    for (mutated, mutation), code in zip(candidates, codes, strict=False):
+        verdict = MutationVerdict.KILLED if code != 0 else MutationVerdict.SURVIVED
+        result = MutationResult(
+            verdict=verdict, mutation=mutation, mutated_source=mutated
+        )
+        if verdict == MutationVerdict.KILLED:
+            return result
+        if first is None:
+            first = result
+    return first
+
+
+def _nix_batched_signals(
+    spec_dir: Path, project_dir: Path, subtask: dict[str, Any]
+) -> tuple[StabilityResult | None, MutationResult | None]:
+    """#776 Stage 1b: the 3x stability samples AND every mutation candidate for one
+    subtask in ONE Nix Job instead of ``1 + M`` Jobs.
+
+    The ~minutes of per-Job cost (mostly k8s pod lifecycle + the ``nix develop``
+    env build) is IDENTICAL across the stability samples and the mutants and
+    dwarfs the pytest runs (seconds each), so a single subtask paid it ``1 + M``
+    times serially and blew the verify deadline. Here one Job runs the original
+    test ``rerun_count`` times (stability) plus each mutation-candidate test once
+    (mutation); we recover the per-run exit codes and classify them with the SAME
+    rules the per-primitive path uses, for byte-identical verdicts.
+
+    Returns ``(StabilityResult | None, MutationResult | None)``:
+      - ``(None, None)`` when the Nix lane is unavailable at run time — the caller
+        falls back to the per-primitive path.
+      - ``mutation is None`` (with a real stability) only when candidates existed
+        but the batch didn't return one code per candidate (a truncated Job) — the
+        caller then computes mutation via the per-candidate path, so an incomplete
+        batch never yields a wrong mutation verdict.
+    """
+    test_file = spec_dir / subtask["files_to_create"][0]
+    if not test_file.exists():
+        return None, None
+
+    language = subtask.get("language")
+    candidates: list[tuple[str, MutationApplied]] = []
+    if is_mutation_supported(language):
+        try:
+            candidates = mutate_source_candidates(test_file.read_text())
+        except OSError:
+            candidates = []
+
+    mutant_files: list[Path] = []
+    if candidates:
+        ext = mutant_extension(language)
+        mutant_dir = spec_dir / "findings" / "mutants"
+        mutant_dir.mkdir(parents=True, exist_ok=True)
+        for k, (mutated, _mutation) in enumerate(candidates, start=1):
+            p = mutant_dir / f"{subtask['id']}__c{k}{ext}"
+            try:
+                p.write_text(mutated)
+                mutant_files.append(p)
+            except OSError:
+                pass
+
+    res = run_pytest_lane_via_nix(
+        spec_dir,
+        project_dir,
+        test_file,
+        extra_env={"PYTHONHASHSEED": str(DEFAULT_SEED)},
+        reruns=RERUN_COUNT,
+        mutant_files=mutant_files or None,
+    )
+    if res is None:
+        return None, None
+
+    runs = [
+        StabilityRun(returncode=code, stdout_tail=tail[-500:], stderr_tail="")
+        for code, tail in parse_pytest_exits(res.stdout)
+    ]
+    stability = (
+        classify_stability_runs(runs, seed=DEFAULT_SEED, rerun_count=len(runs))
+        if runs
+        else None
+    )
+
+    mutation = None
+    if candidates:
+        codes = parse_mut_exits(res.stdout)
+        if len(codes) >= len(candidates):
+            mutation = _mutation_from_codes(candidates, codes)
+        # else: truncated batch → leave None so the caller re-runs mutation
+        # per-candidate (correctness over the Job-count saving in this rare case).
+    elif is_mutation_supported(language):
+        mutation = MutationResult(verdict=MutationVerdict.NO_MUTATION)
+
+    return stability, mutation
+
+
 def _stability_for_subtask(
     spec_dir: Path,
     project_dir: Path,
@@ -1055,15 +1168,15 @@ def _ci_parity_for_subtask(spec_dir: Path, subtask: dict):
     )
 
 
-def _build_signal_bundle(
+def _assemble_signals(
     spec_dir: Path,
-    project_dir: Path,
-    subtask: dict,
-    runner_fn,
+    subtask: dict[str, Any],
+    stability: StabilityResult | None,
+    mutation: MutationResult | None,
 ) -> EvaluatorSignals:
-    """Run every available signal primitive against ``subtask`` and
-    return a bundle the prompt helper can format."""
-    stability = _stability_for_subtask(spec_dir, project_dir, subtask, runner_fn)
+    """Build the EvaluatorSignals bundle from precomputed stability + mutation,
+    filling in the cheap host-side signals (coverage/lint/flaky-history/ci-parity).
+    """
     return EvaluatorSignals(
         test_id=subtask["id"],
         test_file=spec_dir / subtask["files_to_create"][0],
@@ -1071,11 +1184,39 @@ def _build_signal_bundle(
         rationale=subtask.get("rationale") or "?",
         coverage_delta=_coverage_delta_for_subtask(spec_dir, subtask),
         stability=stability,
-        mutation=_mutation_for_subtask(spec_dir, project_dir, subtask, runner_fn),
+        mutation=mutation,
         lint_promotion=_lint_promotion_for_subtask(spec_dir, subtask),
         flaky_history=_flaky_history_for_subtask(spec_dir, subtask, stability),
         ci_parity=_ci_parity_for_subtask(spec_dir, subtask),
     )
+
+
+def _build_signal_bundle(
+    spec_dir: Path,
+    project_dir: Path,
+    subtask: dict,
+    runner_fn,
+) -> EvaluatorSignals:
+    """Run every available signal primitive against ``subtask`` and
+    return a bundle the prompt helper can format.
+
+    In Nix mode the 3x stability + every mutation candidate are batched into ONE
+    Job (#776 Stage 1b); every other backend computes them per-primitive. A Nix
+    lane that's unavailable at run time, or a truncated mutation batch, falls back
+    to the per-primitive path so the verdict is never degraded by the batching.
+    """
+    if _nix_verify_mode(spec_dir):
+        stability, mutation = _nix_batched_signals(spec_dir, project_dir, subtask)
+        if stability is not None:
+            if mutation is None:
+                mutation = _mutation_for_subtask(
+                    spec_dir, project_dir, subtask, runner_fn
+                )
+            return _assemble_signals(spec_dir, subtask, stability, mutation)
+        # Nix unavailable at run time → per-primitive path below.
+    stability = _stability_for_subtask(spec_dir, project_dir, subtask, runner_fn)
+    mutation = _mutation_for_subtask(spec_dir, project_dir, subtask, runner_fn)
+    return _assemble_signals(spec_dir, subtask, stability, mutation)
 
 
 # ─── Browser-lane signal computation (static base_url path) ─────────────
