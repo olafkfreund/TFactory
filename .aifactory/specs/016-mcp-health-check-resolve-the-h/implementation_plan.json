@@ -1,0 +1,192 @@
+{
+  "feature": "MCP health check: resolve the host and block metadata/link-local addresses",
+  "workflow_type": "simple",
+  "workflow_rationale": "Single-service security fix to web-server. No worker/frontend/database components. Clear, scoped requirements with reference implementation already available (net_guard.py). Can be completed as one phase with sequential subtasks.",
+  "required_commands": ["pytest", "python"],
+  "phases": [
+    {
+      "id": "phase-1-implement-guard",
+      "name": "Implement SSRF Guard and Update check_mcp_health",
+      "type": "implementation",
+      "description": "Add a helper function to validate MCP server URLs, blocking metadata/link-local/reserved addresses while allowing loopback and private ranges. Update check_mcp_health to use this guard.",
+      "depends_on": [],
+      "parallel_safe": false,
+      "subtasks": [
+        {
+          "id": "subtask-1-1",
+          "description": "Create _assert_safe_mcp_url helper function in git.py following net_guard.py patterns",
+          "service": "web-server",
+          "depends_on": [],
+          "files_to_modify": [
+            "apps/web-server/server/routes/git.py"
+          ],
+          "files_to_create": [],
+          "patterns_from": [
+            "apps/backend/tools/runners/net_guard.py"
+          ],
+          "verification": {
+            "type": "command",
+            "command": "python -c \"from server.routes.git import _assert_safe_mcp_url; print('Import OK')\"",
+            "expected": "Import OK"
+          },
+          "status": "completed",
+          "notes": "✅ COMPLETED - Created UnsafeMcpURLError exception, _resolve_mcp_addresses() and _assert_safe_mcp_url() helper. Blocks cloud-metadata (169.254.0.0/16) and link-local ranges (fe80::/10, fd00::/8, fc00::/7). Allows private/loopback since MCP servers often run locally. Verification: import works, tested with safe/unsafe URLs."
+        },
+        {
+          "id": "subtask-1-2",
+          "description": "Update check_mcp_health to use _assert_safe_mcp_url helper",
+          "service": "web-server",
+          "depends_on": [
+            "subtask-1-1"
+          ],
+          "files_to_modify": [
+            "apps/web-server/server/routes/git.py"
+          ],
+          "files_to_create": [],
+          "patterns_from": [
+            "apps/web-server/server/routes/git.py"
+          ],
+          "verification": {
+            "type": "command",
+            "command": "python -c \"import apps.web_server.server.routes.git as g; import inspect; src = inspect.getsource(g.check_mcp_health); assert '_assert_safe_mcp_url' in src; print('Updated OK')\"",
+            "expected": "Updated OK"
+          },
+          "status": "completed",
+          "notes": "✅ COMPLETED - Updated check_mcp_health to use _assert_safe_mcp_url(). Replaced inline scheme/hostname checks with helper call. Added exception handling for UnsafeMcpURLError and OSError. Returns unhealthy status with appropriate message for unsafe/unresolvable URLs."
+        },
+        {
+          "id": "subtask-1-3",
+          "description": "Create comprehensive tests for _assert_safe_mcp_url in test_mcp_health_check.py",
+          "service": "web-server",
+          "depends_on": [
+            "subtask-1-1"
+          ],
+          "files_to_modify": [],
+          "files_to_create": [
+            "tests/test_mcp_health_check.py"
+          ],
+          "patterns_from": [
+            "tests/test_net_guard.py"
+          ],
+          "verification": {
+            "type": "command",
+            "command": "pytest tests/test_mcp_health_check.py -v",
+            "expected": "All tests pass"
+          },
+          "status": "completed",
+          "notes": "✅ COMPLETED - Created 25 comprehensive tests for _assert_safe_mcp_url following test_net_guard.py patterns. Test coverage: (1) 169.254.169.254 blocked, (2) IPv6 link-local (fe80::/10) blocked, (3) IPv6 unique-local (fd00::/8, fc00::/7) blocked, (4) file:// rejected, (5) http://localhost allowed, (6) http://127.0.0.1 allowed, (7) private 10.x/172.16/192.168 allowed, (8) public hosts allowed, (9) DNS failure raises OSError, (10) IPv4-mapped IPv6 normalized correctly, (11) DNS-rebinding attacks detected. Updated conftest.py to add apps/web-server to sys.path when FastAPI available. All 25 tests pass."
+        },
+        {
+          "id": "subtask-1-4",
+          "description": "Verify existing test suite still passes after modifications",
+          "service": "web-server",
+          "depends_on": [
+            "subtask-1-2",
+            "subtask-1-3"
+          ],
+          "files_to_modify": [],
+          "files_to_create": [],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "pytest tests/test_mcp_status_route.py -v",
+            "expected": "All MCP status route tests pass"
+          },
+          "status": "pending",
+          "notes": "Run existing MCP tests to ensure backward compatibility. check_mcp_health changes should not break any existing API contracts."
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "total_phases": 1,
+    "total_subtasks": 4,
+    "services_involved": [
+      "web-server"
+    ],
+    "parallelism": {
+      "max_parallel_phases": 1,
+      "parallel_groups": [],
+      "recommended_workers": 1,
+      "speedup_estimate": "N/A - single service, sequential implementation"
+    },
+    "startup_command": "cd apps/backend && python -m pytest tests/test_mcp_health_check.py -v"
+  },
+  "verification_strategy": {
+    "risk_level": "medium",
+    "skip_validation": false,
+    "test_creation_phase": "implementation",
+    "test_types_required": [
+      "unit"
+    ],
+    "security_scanning_required": false,
+    "staging_deployment_required": false,
+    "acceptance_criteria": [
+      "Helper function _assert_safe_mcp_url properly resolves hostnames and validates against all blocked ranges",
+      "check_mcp_health uses the helper and returns status: 'unknown' when URL is unsafe",
+      "Loopback addresses (127.0.0.1, ::1) are allowed",
+      "Private ranges (10/8, 172.16/12, 192.168/16) are allowed",
+      "All test cases from AC#6 pass",
+      "Existing test suite (test_mcp_status_route.py) passes without modification"
+    ],
+    "verification_steps": [
+      {
+        "name": "Unit Tests for _assert_safe_mcp_url",
+        "command": "pytest tests/test_mcp_health_check.py::test_* -v",
+        "expected_outcome": "All 9+ test cases pass",
+        "type": "test",
+        "required": true,
+        "blocking": true
+      },
+      {
+        "name": "Integration Tests for check_mcp_health endpoint",
+        "command": "pytest tests/test_mcp_status_route.py -v",
+        "expected_outcome": "All existing MCP status tests pass",
+        "type": "test",
+        "required": true,
+        "blocking": true
+      },
+      {
+        "name": "Code Review: SSRF Guard Implementation",
+        "command": "python -c \"from server.routes.git import _assert_safe_mcp_url; import inspect; print(inspect.getsource(_assert_safe_mcp_url))\"",
+        "expected_outcome": "Helper checks all resolved addresses, handles IPv4-mapped IPv6, loopback checked before reserved",
+        "type": "manual",
+        "required": true,
+        "blocking": false
+      }
+    ],
+    "reasoning": "Security-critical code requires comprehensive test coverage. All blocked ranges and edge cases must be verified. Existing API must remain compatible."
+  },
+  "qa_acceptance": {
+    "unit_tests": {
+      "required": true,
+      "commands": [
+        "pytest tests/test_mcp_health_check.py -v"
+      ],
+      "minimum_coverage": null
+    },
+    "integration_tests": {
+      "required": true,
+      "commands": [
+        "pytest tests/test_mcp_status_route.py -v"
+      ],
+      "services_to_test": [
+        "web-server"
+      ]
+    },
+    "e2e_tests": {
+      "required": false,
+      "commands": [],
+      "flows": []
+    },
+    "browser_verification": {
+      "required": false,
+      "pages": []
+    },
+    "database_verification": {
+      "required": false,
+      "checks": []
+    }
+  },
+  "qa_signoff": null
+}
