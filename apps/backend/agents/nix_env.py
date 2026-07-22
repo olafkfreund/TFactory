@@ -220,10 +220,45 @@ _APP_NOT_HEALTHY_MARKER = "__TF_APP_NOT_HEALTHY__"
 # ``run_deploy_lane``'s ``tool_available`` records it as ``not_run``.
 _DEPLOY_NIX_TOOLS: tuple[str, ...] = ("tfsec", "trivy", "opentofu")
 
-# Serializes Nix-lane Job dispatch within a verify process — the /nix-store PVC
-# is RWO, so concurrent Jobs can't co-mount it (#623). run() offloads to threads
-# (#620), so a threading.Lock is the right primitive.
+# Gates Nix-lane Job dispatch within a verify process. run() offloads to threads
+# (#620), so a threading primitive is the right choice — but WHICH one depends on
+# the store regime:
+#   * shared warm-store PVC: it is RWO, so only one Job can co-mount it at a time
+#     (#623) — a strict Lock serialises them.
+#   * nix-in-image (nix_in_image()): each Job's /nix is image-local, there is NO
+#     shared mount to contend for, and that mode exists precisely to buy "speed
+#     for concurrency" (see nix_in_image.__doc__). A strict Lock here re-serialises
+#     the very fan-out (S x (3 + mutants) Jobs) in-image was meant to parallelise —
+#     the single biggest reason a real verify run drags on. Use a BoundedSemaphore
+#     so the Jobs run concurrently under a ceiling, rather than one at a time.
 _NIX_JOB_LOCK = threading.Lock()
+
+
+def _nix_job_concurrency() -> int:
+    """Max concurrent nix Jobs when the store is image-local (no shared PVC).
+
+    ponytail: fixed ceiling (env-overridable), not autoscaled — a single-node k3d
+    can't absorb an unbounded fan-out of 500 MB-image Job pods at once. Raise
+    TFACTORY_NIX_JOB_CONCURRENCY (or wire it to node count) if throughput matters.
+    """
+    try:
+        return max(1, int(os.getenv("TFACTORY_NIX_JOB_CONCURRENCY", "4")))
+    except ValueError:
+        return 4
+
+
+# Concurrency gate for the image-local regime. Sized once at import; the strict
+# _NIX_JOB_LOCK still guards the shared-PVC path.
+_NIX_JOB_SEM = threading.BoundedSemaphore(_nix_job_concurrency())
+
+
+def _nix_dispatch_gate() -> contextlib.AbstractContextManager[bool]:
+    """The right dispatch gate for the current store regime (see _NIX_JOB_LOCK).
+
+    Both a Lock and a BoundedSemaphore are ``with``-usable context managers, so
+    the call site treats them uniformly.
+    """
+    return _NIX_JOB_SEM if nix_in_image() else _NIX_JOB_LOCK
 
 
 def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve knobs + one linear staging flow
@@ -394,11 +429,10 @@ def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve kno
         # failure before the test ran, not a genuine test failure) — so a real
         # fail (e.g. a caught hardcode) is never masked.
         attempts = 2
-        # Serialize dispatch: the /nix-store PVC is RWO, so concurrent lane Jobs
-        # (across specs) can't co-mount it; the lock runs them one at a time and
-        # the warm store keeps each build fast (#623). run() offloads to a thread
-        # (#620), so a threading.Lock is the right primitive.
-        with _NIX_JOB_LOCK:
+        # Gate dispatch by store regime: a strict lock for the RWO shared PVC
+        # (co-mount contention, #623), a bounded semaphore for image-local /nix
+        # so the fan-out actually runs concurrently (see _NIX_JOB_LOCK).
+        with _nix_dispatch_gate():
             res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)
             for attempt in range(1, attempts):
                 if "__PYTEST_EXIT=" in (res.stdout or ""):

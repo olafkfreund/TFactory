@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 
 from agents.nix_env import (
+    _NIX_JOB_LOCK,
+    _nix_dispatch_gate,
     build_browser_job_command,
     collect_screenshots,
     detect_serve_command,
@@ -690,3 +692,32 @@ def test_nix_in_image_flag_parsing(monkeypatch):
     for off in ("", "0", "false", "no"):
         monkeypatch.setenv("TFACTORY_NIX_IN_IMAGE", off)
         assert nix_in_image() is False, off
+
+
+def test_dispatch_gate_is_bounded_semaphore_when_nix_in_image(monkeypatch):
+    """In-image regime has no shared PVC → gate must allow concurrency, not serialise.
+
+    The whole point of nix-in-image is "speed for concurrency": each Job's /nix is
+    image-local, so there is nothing to co-mount and nothing to serialise. If the
+    gate here were the strict lock, the S x (3 + mutants) fan-out would run one Job
+    at a time — the regression this guards.
+    """
+    import threading
+
+    monkeypatch.setenv("TFACTORY_NIX_IN_IMAGE", "true")
+    gate = _nix_dispatch_gate()
+    assert gate is not _NIX_JOB_LOCK
+    assert isinstance(gate, threading.BoundedSemaphore().__class__)
+
+    # It genuinely admits more than one holder at once (a Lock would deadlock on
+    # the second acquire). Hold two slots simultaneously without blocking.
+    assert gate.acquire(blocking=False) is True
+    assert gate.acquire(blocking=False) is True
+    gate.release()
+    gate.release()
+
+
+def test_dispatch_gate_is_strict_lock_with_shared_pvc(monkeypatch):
+    """Shared warm-store PVC is RWO → keep the one-at-a-time lock (#623)."""
+    monkeypatch.delenv("TFACTORY_NIX_IN_IMAGE", raising=False)
+    assert _nix_dispatch_gate() is _NIX_JOB_LOCK
