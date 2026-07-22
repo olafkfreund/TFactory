@@ -272,7 +272,12 @@ class TestCheckMcpHealthEndpoint:
         data = response.json()
         assert data["data"]["status"] == "unknown"
         # Reason should not be exposed to client (AC#5)
-        assert "validation" not in data["data"]["message"].lower() or "url" not in data["data"]["message"].lower()
+        # Check that specific technical details are not exposed
+        message = data["data"]["message"].lower()
+        assert "link-local" not in message
+        assert "169.254" not in message
+        assert "reserved" not in message
+        assert "multicast" not in message
 
     def test_check_mcp_health_rejects_ipv6_link_local(self, client):
         """check_mcp_health should reject IPv6 link-local (AC#6)."""
