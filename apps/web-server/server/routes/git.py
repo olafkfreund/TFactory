@@ -220,22 +220,96 @@ def _safe_ollama_base_url(base_url: str | None) -> str:
 def _validate_mcp_url_host(url: str | None) -> str:
     """Validate a request-supplied MCP server URL (SSRF guard, review H2).
 
+    Resolves the URL host and rejects any address in a link-local, reserved,
+    multicast or unspecified range. Every resolved address is checked, not
+    just the first. Loopback is allowed and checked before reserved (important
+    for IPv6 ::1). Private ranges (10/8, 172.16/12, 192.168/16) remain allowed.
+
+    Unresolvable hosts are treated as unsafe (fail closed).
+
     MCP servers may legitimately run on the LAN (e.g. localhost, host.docker.internal),
-    so private ranges aren't blocked, but the scheme must be http/https, the cloud-metadata
-    endpoint is blocked, and only ``scheme://netloc`` is returned -- dropping any
-    path/query/fragment so the appended ``/...`` can't be truncated (``#``)
-    or redirected to another resource.
+    so private ranges aren't blocked, but the scheme must be http/https, and only
+    ``scheme://netloc`` is returned -- dropping any path/query/fragment so the
+    appended ``/...`` can't be truncated (``#``) or redirected to another resource.
     """
     if not url or not url.strip():
         raise HTTPException(status_code=400, detail="Invalid MCP server URL: URL cannot be empty")
     from urllib.parse import urlparse
+    import ipaddress
+    import socket
 
     parsed = urlparse(url.strip())
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         raise HTTPException(status_code=400, detail="Invalid MCP server URL: scheme must be http/https and hostname required")
-    if parsed.hostname in ("169.254.169.254", "metadata.google.internal"):
-        raise HTTPException(status_code=400, detail="Disallowed MCP server URL")
+
+    hostname = parsed.hostname
+    if not hostname:
+        raise HTTPException(status_code=400, detail="Invalid MCP server URL: hostname is required")
+
+    # Try to parse as an IP address first (literal IPv4 or IPv6)
+    try:
+        ip_obj = ipaddress.ip_address(hostname)
+        _check_ip_address_safety(ip_obj)
+        return f"{parsed.scheme}://{parsed.netloc}"
+    except ValueError:
+        # Not a literal IP address, resolve hostname
+        pass
+    except HTTPException:
+        # IP address was parsed but failed safety check
+        raise
+
+    # Resolve hostname to IP addresses (AC#1, AC#4)
+    try:
+        addr_info = socket.getaddrinfo(hostname, parsed.port or 80, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    except socket.gaierror:
+        # Unresolvable host is treated as unsafe (fail closed, AC#4)
+        raise HTTPException(status_code=400, detail="Invalid MCP server URL: hostname cannot be resolved")
+
+    # Check ALL resolved addresses (AC#1)
+    if not addr_info:
+        raise HTTPException(status_code=400, detail="Invalid MCP server URL: hostname resolved to no addresses")
+
+    for family, socktype, proto, canonname, sockaddr in addr_info:
+        ip_str = sockaddr[0]
+        try:
+            ip_obj = ipaddress.ip_address(ip_str)
+            _check_ip_address_safety(ip_obj)
+        except HTTPException:
+            # Any resolved address failed safety check - reject the URL
+            raise
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid MCP server URL: failed to parse resolved address")
+
     return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def _check_ip_address_safety(ip_obj: 'ipaddress.IPv4Address | ipaddress.IPv6Address') -> None:
+    """Check if an IP address is safe (not in blocked ranges).
+
+    Blocks: link-local, reserved, multicast, unspecified ranges.
+    Allows: loopback (checked first, AC#2), private ranges.
+
+    Args:
+        ip_obj: IPv4Address or IPv6Address to check
+
+    Raises:
+        HTTPException if the address is in a blocked range
+    """
+    # Loopback MUST be checked first (AC#2) because IPv6 ::1 is also marked as reserved
+    if ip_obj.is_loopback:
+        return
+
+    # Check for blocked ranges (order doesn't matter for these)
+    if ip_obj.is_reserved:
+        raise HTTPException(status_code=400, detail="Invalid MCP server URL: reserved address range")
+    if ip_obj.is_link_local:
+        raise HTTPException(status_code=400, detail="Invalid MCP server URL: link-local address range")
+    if ip_obj.is_multicast:
+        raise HTTPException(status_code=400, detail="Invalid MCP server URL: multicast address range")
+    if ip_obj.is_unspecified:
+        raise HTTPException(status_code=400, detail="Invalid MCP server URL: unspecified address")
+
+    # Private ranges are allowed (AC#3)
 
 
 def check_ollama_running(base_url: str | None = None) -> bool:

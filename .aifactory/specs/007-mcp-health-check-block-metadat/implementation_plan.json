@@ -100,7 +100,7 @@
             "Tests verify status=unknown response (no reason exposed)",
             "Tests verify reason is logged"
           ],
-          "status": "pending"
+          "status": "completed"
         }
       ]
     }

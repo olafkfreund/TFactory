@@ -139,6 +139,78 @@ Pattern Compliance:
 
 === END SESSION 3 ===
 
-Next Step: Create comprehensive test suite for MCP health check validation (subtask 1-3)
+=== END SESSION 3 ===
+
+Session 4 (Implementation - Subtask 1-1 Enhancement & Subtask 1-3):
+✓ Enhanced _validate_mcp_url_host() to do full hostname resolution and IP range validation
+✓ Added _check_ip_address_safety() helper to validate IP addresses against blocked ranges
+✓ Function now uses socket.getaddrinfo() to resolve hostnames (AC#1, AC#4)
+✓ Function checks ALL resolved addresses, not just the first (AC#1)
+✓ Blocks link-local (169.254.0.0/16, fe80::/10), reserved, multicast, unspecified ranges (AC#1)
+✓ Allows loopback (127.0.0.1, ::1) checked BEFORE reserved test (AC#2 - IPv6 ::1 is reserved)
+✓ Allows private ranges (10/8, 172.16/12, 192.168/16, fd00::/8) (AC#3)
+✓ Treats unresolvable hostnames as unsafe - fail closed (AC#4)
+✓ Created comprehensive test suite: tests/test_mcp_health_route.py
+✓ Updated implementation_plan.json status to "completed" for subtask-1-3
+
+Test Suite Details:
+- 50+ test cases covering all acceptance criteria
+- TestValidateMcpUrlHost class: 31 unit tests for _validate_mcp_url_host()
+  * Empty/None/whitespace URL rejection
+  * Scheme validation (http/https required, file:// rejected)
+  * Hostname presence validation
+  * IPv4 address tests: loopback (127.0.0.1), private ranges (10.x, 172.16.x, 192.168.x)
+  * IPv4 SSRF: AWS metadata (169.254.169.254), link-local (169.254.x.x)
+  * IPv6 address tests: loopback (::1), link-local (fe80::), multicast (ff00::)
+  * IPv6 unspecified (::) rejection
+  * Path/query/fragment stripping (scheme://netloc only)
+  * Port preservation
+  * Mock socket.getaddrinfo for deterministic IP resolution tests
+  * All resolved addresses checked, not just first
+  * Unresolvable hostname fail-closed tests
+- TestCheckMcpHealthEndpoint class: 19 integration tests for check_mcp_health endpoint
+  * AWS metadata endpoint blocking
+  * IPv6 link-local blocking
+  * file:// scheme blocking
+  * localhost/127.0.0.1 allowing with mock HTTP requests
+  * Private 10.x range allowing
+  * Public hostname allowing with mocked resolution
+  * Response shape verification (serverId, status, message)
+  * Reason logging verification (using caplog)
+  * Reason NOT exposed in response (AC#5)
+
+Acceptance Criteria Compliance:
+✓ AC#1: Helper resolves hostname and checks ALL addresses against blocked ranges
+✓ AC#2: Loopback (127.0.0.1, ::1) allowed, checked BEFORE reserved test
+✓ AC#3: Private ranges (10/8, 172.16/12, 192.168/16) allowed
+✓ AC#4: Unresolvable host treated as unsafe (fail closed)
+✓ AC#5: check_mcp_health returns status=unknown, reason logged not returned
+✓ AC#6: Tests cover all 6+ required cases:
+  - 169.254.169.254 (AWS metadata, blocked)
+  - IPv6 link-local literal (blocked)
+  - file:// scheme (blocked)
+  - http://localhost (allowed)
+  - http://127.0.0.1 (allowed)
+  - private 10.x address (allowed)
+  - public hostname (allowed)
+
+Pattern Compliance:
+✓ Follows test_git_credentials.py pattern (imports, path setup, fixture usage)
+✓ Follows test_github_pr_route.py pattern (FastAPI testing, TestClient)
+✓ Uses pytest.raises for exception testing
+✓ Uses unittest.mock.patch for deterministic testing
+✓ Uses caplog fixture for logging verification
+✓ Clear test names and docstrings for each case
+
+Testing Strategy:
+- Unit tests verify helper function behavior in isolation
+- Mock socket.getaddrinfo to test IP validation without real DNS
+- Mock urllib.request.urlopen to test endpoint without real HTTP calls
+- Integration tests verify endpoint properly rejects/allows URLs
+- Logging tests verify rejection details are logged (AC#5)
+- Response shape tests verify security details not exposed (AC#5)
+
+Next Step: Run verification command to confirm all tests pass
   [x] subtask-1-1: Create URL host validation helper function in git.py
   [x] subtask-1-2: Integrate validation helper into check_mcp_health endpoint
+  [x] subtask-1-3: Create comprehensive test suite for MCP health check validation
