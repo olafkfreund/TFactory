@@ -36,8 +36,9 @@ import json
 import logging as _logging
 import os
 import traceback
+from collections.abc import Awaitable
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from agents.workspace_status import now_iso, read_status, write_status_patch
 
@@ -190,24 +191,69 @@ async def _resolve_client(spec_dir: Path, project_dir: Path):
     )
 
 
+# #792: wall-clock ceiling on ONE gen-functional agent session. A hung LLM/tool
+# session (seen: a gcd spec frozen 23 min in `generating`) otherwise strands the
+# spec until the liveness sweep flips it ~10 min later; bound it shorter than the
+# sweep deadline (APP_LIVENESS_SWEEP_DEADLINE_SECONDS, default 600s) so a stuck
+# session fails FAST into the existing `status=error` path (fail the subtask +
+# continue) instead of hanging. Generous vs a normal ~1-3 min session; tune with
+# TFACTORY_GEN_SESSION_TIMEOUT_S.
+_GEN_SESSION_TIMEOUT_S = float(os.environ.get("TFACTORY_GEN_SESSION_TIMEOUT_S", "480"))
+
+
+async def _run_bounded(
+    coro: Awaitable[tuple[str, str, dict[str, Any]]], *, timeout_s: float
+) -> tuple[str, str, dict[str, Any]] | None:
+    """Await ``coro`` with a wall-clock ceiling; return its result, or ``None``
+    on timeout (#792). Pure utility — the timeout unit tests exercise THIS,
+    immune to the SDK-session mocking that stubs ``_invoke_session`` wholesale.
+    On timeout ``asyncio.wait_for`` cancels ``coro``; the caller's
+    ``async with client`` then closes the transport (kills the agent subprocess).
+    """
+    try:
+        return await asyncio.wait_for(coro, timeout=timeout_s)
+    except TimeoutError:
+        return None
+
+
 async def _invoke_session(
     client,
     prompt: str,
     spec_dir: Path,
     verbose: bool,
 ) -> tuple[str, str, dict]:
-    """Wrap run_agent_session so tests can patch one symbol."""
+    """Wrap run_agent_session so tests can patch one symbol.
+
+    Bounded by ``_GEN_SESSION_TIMEOUT_S`` (#792): a hung session fails fast into
+    the existing ``status="error"`` path (fail the subtask + continue) instead of
+    stranding the spec at ``generating`` until the liveness sweep flips it.
+    """
     from agents.session import run_agent_session
     from task_logger import LogPhase
 
     async with client:
-        return await run_agent_session(
-            client,
-            prompt,
-            spec_dir,
-            verbose,
-            phase=LogPhase.CODING,
+        result = await _run_bounded(
+            run_agent_session(
+                client,
+                prompt,
+                spec_dir,
+                verbose,
+                phase=LogPhase.CODING,
+            ),
+            timeout_s=_GEN_SESSION_TIMEOUT_S,
         )
+        if result is None:
+            _gen_log.warning(
+                "gen_functional: session exceeded %.0fs wall-clock — treating as "
+                "error so the subtask fails fast instead of stranding (#792)",
+                _GEN_SESSION_TIMEOUT_S,
+            )
+            return (
+                "error",
+                f"gen_functional session timed out after {_GEN_SESSION_TIMEOUT_S:.0f}s",
+                {},
+            )
+        return result
 
 
 # ─── Workspace helpers ──────────────────────────────────────────────────

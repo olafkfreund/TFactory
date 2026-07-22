@@ -74,10 +74,16 @@ def spec_dir(tmp_path: Path) -> Path:
     d.mkdir(parents=True)
     for sub in ("context", "tests", "findings", "logs", "memory"):
         (d / sub).mkdir()
-    (d / "status.json").write_text(json.dumps({
-        "task_id": "001", "project_id": "demo",
-        "status": "planned", "phase": "planner_initial_complete",
-    }))
+    (d / "status.json").write_text(
+        json.dumps(
+            {
+                "task_id": "001",
+                "project_id": "demo",
+                "status": "planned",
+                "phase": "planner_initial_complete",
+            }
+        )
+    )
     return d
 
 
@@ -90,38 +96,44 @@ def _make_plan(spec_dir: Path, subtask_count: int = 1) -> None:
     """Write a test_plan.json with N pending functional subtasks targeting
     the fixture project's app.auth.login_user."""
     plan = {
-        "feature": "demo", "workflow_type": "feature",
+        "feature": "demo",
+        "workflow_type": "feature",
         "services_involved": [],
-        "phases": [{
-            "phase": 1, "name": "AC#1", "type": "implementation",
-            "subtasks": [
-                {
-                    "id": f"s{i}",
-                    "description": f"test {i}",
-                    "status": "pending",
-                    "lane": "functional",
-                    "target": "app/auth/login.py::login_user",
-                    "rationale": "AC#1",
-                    "files_to_create": [f"tests/test_s{i}.py"],
-                    "verification": {
-                        "type": "command",
-                        "run": f"pytest tests/test_s{i}.py",
-                    },
-                }
-                for i in range(subtask_count)
-            ],
-            "parallel_safe": False,
-        }],
+        "phases": [
+            {
+                "phase": 1,
+                "name": "AC#1",
+                "type": "implementation",
+                "subtasks": [
+                    {
+                        "id": f"s{i}",
+                        "description": f"test {i}",
+                        "status": "pending",
+                        "lane": "functional",
+                        "target": "app/auth/login.py::login_user",
+                        "rationale": "AC#1",
+                        "files_to_create": [f"tests/test_s{i}.py"],
+                        "verification": {
+                            "type": "command",
+                            "run": f"pytest tests/test_s{i}.py",
+                        },
+                    }
+                    for i in range(subtask_count)
+                ],
+                "parallel_safe": False,
+            }
+        ],
         "final_acceptance": [],
-        "status": "in_progress", "planStatus": "pending",
+        "status": "in_progress",
+        "planStatus": "pending",
     }
     (spec_dir / "test_plan.json").write_text(json.dumps(plan))
 
 
 def _valid_test_source() -> str:
     """A test source the guards should accept:
-       - imports a real symbol from the fixture project
-       - no flake-risk patterns
+    - imports a real symbol from the fixture project
+    - no flake-risk patterns
     """
     return (
         "from app.auth import login_user\n"
@@ -144,9 +156,7 @@ def _hallucinated_import_source() -> str:
 def _flaky_dict_source() -> str:
     """Flake-lint will reject this (dict_iteration_order, high severity)."""
     return (
-        "def test_x():\n"
-        "    d = {1: 'a', 2: 'b'}\n"
-        "    assert list(d.keys()) == [1, 2]\n"
+        "def test_x():\n    d = {1: 'a', 2: 'b'}\n    assert list(d.keys()) == [1, 2]\n"
     )
 
 
@@ -161,14 +171,19 @@ def mock_sdk(monkeypatch: pytest.MonkeyPatch):
     call_log: list[dict] = []
 
     class _FakeAsyncCM:
-        async def __aenter__(self): return self
-        async def __aexit__(self, *args): return None
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
 
     def _setup(*, source_for, status_for=None):
         """source_for: callable(subtask_id) → str | None
         status_for: callable(subtask_id) → "complete" | "error". Default complete.
         """
-        async def _resolve(*a, **kw): return _FakeAsyncCM()
+
+        async def _resolve(*a, **kw):
+            return _FakeAsyncCM()
 
         async def _invoke(client, prompt, spec_dir_arg, verbose):
             # Best-effort: extract the subtask_id from the prompt's
@@ -209,7 +224,9 @@ def mock_sdk(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.mark.asyncio
 async def test_happy_single_subtask(
-    spec_dir: Path, project_dir: Path, mock_sdk,
+    spec_dir: Path,
+    project_dir: Path,
+    mock_sdk,
 ) -> None:
     _make_plan(spec_dir, subtask_count=1)
     mock_sdk(source_for=lambda sid: _valid_test_source())
@@ -225,7 +242,9 @@ async def test_happy_single_subtask(
 
 @pytest.mark.asyncio
 async def test_happy_multi_subtask(
-    spec_dir: Path, project_dir: Path, mock_sdk,
+    spec_dir: Path,
+    project_dir: Path,
+    mock_sdk,
 ) -> None:
     _make_plan(spec_dir, subtask_count=3)
     mock_sdk(source_for=lambda sid: _valid_test_source())
@@ -241,7 +260,9 @@ async def test_happy_multi_subtask(
 
 @pytest.mark.asyncio
 async def test_happy_marks_subtasks_completed(
-    spec_dir: Path, project_dir: Path, mock_sdk,
+    spec_dir: Path,
+    project_dir: Path,
+    mock_sdk,
 ) -> None:
     _make_plan(spec_dir, subtask_count=2)
     mock_sdk(source_for=lambda sid: _valid_test_source())
@@ -258,7 +279,9 @@ async def test_happy_marks_subtasks_completed(
 
 @pytest.mark.asyncio
 async def test_agent_didnt_write_triggers_replan(
-    spec_dir: Path, project_dir: Path, mock_sdk,
+    spec_dir: Path,
+    project_dir: Path,
+    mock_sdk,
 ) -> None:
     _make_plan(spec_dir, subtask_count=1)
     mock_sdk(source_for=lambda sid: None)  # mock skips Write
@@ -281,7 +304,9 @@ async def test_agent_didnt_write_triggers_replan(
 
 @pytest.mark.asyncio
 async def test_preflight_rejection_triggers_replan(
-    spec_dir: Path, project_dir: Path, mock_sdk,
+    spec_dir: Path,
+    project_dir: Path,
+    mock_sdk,
 ) -> None:
     """Hallucinated import → real preflight check rejects → replan."""
     _make_plan(spec_dir, subtask_count=1)
@@ -302,7 +327,9 @@ async def test_preflight_rejection_triggers_replan(
 
 @pytest.mark.asyncio
 async def test_flake_lint_rejection_triggers_replan(
-    spec_dir: Path, project_dir: Path, mock_sdk,
+    spec_dir: Path,
+    project_dir: Path,
+    mock_sdk,
 ) -> None:
     """dict iteration order → flake-lint high-sev → replan."""
     _make_plan(spec_dir, subtask_count=1)
@@ -322,7 +349,9 @@ async def test_flake_lint_rejection_triggers_replan(
 
 @pytest.mark.asyncio
 async def test_first_rejection_stops_loop(
-    spec_dir: Path, project_dir: Path, mock_sdk,
+    spec_dir: Path,
+    project_dir: Path,
+    mock_sdk,
 ) -> None:
     """Three pending subtasks; first one is bad → loop stops + replan."""
     _make_plan(spec_dir, subtask_count=3)
@@ -354,7 +383,9 @@ def _submodule_import_source() -> str:
 
 @pytest.mark.asyncio
 async def test_submodule_import_commits_instead_of_replanning(
-    spec_dir: Path, project_dir: Path, mock_sdk,
+    spec_dir: Path,
+    project_dir: Path,
+    mock_sdk,
 ) -> None:
     """#712 regression: a test importing a real (non-re-exported) submodule now
     COMMITS instead of replan-looping to budget. Guards against the pre-flight
@@ -380,7 +411,9 @@ async def test_submodule_import_commits_instead_of_replanning(
 
 @pytest.mark.asyncio
 async def test_session_error_continues_to_next_subtask(
-    spec_dir: Path, project_dir: Path, mock_sdk,
+    spec_dir: Path,
+    project_dir: Path,
+    mock_sdk,
 ) -> None:
     """A session error on s0 doesn't block s1 from succeeding."""
     _make_plan(spec_dir, subtask_count=2)
@@ -402,7 +435,9 @@ async def test_session_error_continues_to_next_subtask(
 
 @pytest.mark.asyncio
 async def test_no_pending_subtasks_is_generated_empty(
-    spec_dir: Path, project_dir: Path, mock_sdk,
+    spec_dir: Path,
+    project_dir: Path,
+    mock_sdk,
 ) -> None:
     """Plan exists but all subtasks are already completed → warning, not failure."""
     _make_plan(spec_dir, subtask_count=1)
@@ -420,7 +455,8 @@ async def test_no_pending_subtasks_is_generated_empty(
 
 @pytest.mark.asyncio
 async def test_missing_plan_is_hard_failure(
-    spec_dir: Path, project_dir: Path,
+    spec_dir: Path,
+    project_dir: Path,
 ) -> None:
     ok = await run_gen_functional(spec_dir, project_dir)
     assert ok is False
@@ -431,7 +467,8 @@ async def test_missing_plan_is_hard_failure(
 
 @pytest.mark.asyncio
 async def test_missing_spec_dir_returns_false(
-    tmp_path: Path, project_dir: Path,
+    tmp_path: Path,
+    project_dir: Path,
 ) -> None:
     ghost = tmp_path / "ghost"
     ok = await run_gen_functional(ghost, project_dir)
@@ -442,18 +479,24 @@ async def test_missing_spec_dir_returns_false(
 
 
 def test_schedule_disabled_returns_none(
-    spec_dir: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("TFACTORY_AUTO_GENERATE", "0")
+
     async def _run():
         return schedule_gen_functional(spec_dir, project_dir)
+
     assert asyncio.run(_run()) is None
 
 
 @pytest.mark.asyncio
 async def test_schedule_enabled_returns_task(
-    spec_dir: Path, project_dir: Path,
-    monkeypatch: pytest.MonkeyPatch, mock_sdk,
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_sdk,
 ) -> None:
     monkeypatch.setenv("TFACTORY_AUTO_GENERATE", "1")
     _make_plan(spec_dir, subtask_count=1)
@@ -471,7 +514,8 @@ async def test_schedule_enabled_returns_task(
 
 @pytest.mark.asyncio
 async def test_full_chain_rejection_loops_back_to_planner_replan(
-    spec_dir: Path, project_dir: Path,
+    spec_dir: Path,
+    project_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """When gen_functional rejects a subtask, the planner replan task is
@@ -482,9 +526,15 @@ async def test_full_chain_rejection_loops_back_to_planner_replan(
 
     # Mock gen_functional's SDK to emit a hallucinated test that preflight rejects.
     class _FakeAsyncCM:
-        async def __aenter__(self): return self
-        async def __aexit__(self, *args): return None
-    async def _gf_resolve(*a, **kw): return _FakeAsyncCM()
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+    async def _gf_resolve(*a, **kw):
+        return _FakeAsyncCM()
+
     async def _gf_invoke(client, prompt, spec_dir_arg, verbose):
         # Find the Write path
         write_path = None
@@ -496,12 +546,16 @@ async def test_full_chain_rejection_loops_back_to_planner_replan(
             Path(write_path).parent.mkdir(parents=True, exist_ok=True)
             Path(write_path).write_text(_hallucinated_import_source())
         return "complete", "mock", {}
+
     monkeypatch.setattr("agents.gen_functional._resolve_client", _gf_resolve)
     monkeypatch.setattr("agents.gen_functional._invoke_session", _gf_invoke)
 
     # Mock the planner's SDK seams (called via the chain).
     planner_was_invoked = {"mode": None}
-    async def _pl_resolve(*a, **kw): return _FakeAsyncCM()
+
+    async def _pl_resolve(*a, **kw):
+        return _FakeAsyncCM()
+
     async def _pl_invoke(client, prompt, spec_dir_arg, verbose):
         # Record which mode the planner was invoked in.
         if "REPLAN CONTEXT" in prompt:
@@ -510,12 +564,18 @@ async def test_full_chain_rejection_loops_back_to_planner_replan(
             planner_was_invoked["mode"] = "initial"
         # Emit a no-op plan-with-replan-phase to avoid further chaining.
         current = json.loads((spec_dir_arg / "test_plan.json").read_text())
-        current["phases"].append({
-            "phase": 2, "name": "replan-1", "type": "implementation",
-            "subtasks": [], "parallel_safe": False,
-        })
+        current["phases"].append(
+            {
+                "phase": 2,
+                "name": "replan-1",
+                "type": "implementation",
+                "subtasks": [],
+                "parallel_safe": False,
+            }
+        )
         (spec_dir_arg / "test_plan.json").write_text(json.dumps(current))
         return "complete", "mock", {}
+
     monkeypatch.setattr("agents.planner._resolve_planner_client", _pl_resolve)
     monkeypatch.setattr("agents.planner._invoke_session", _pl_invoke)
 
@@ -524,6 +584,7 @@ async def test_full_chain_rejection_loops_back_to_planner_replan(
 
     # Drain the planner-replan task that gen_functional auto-scheduled.
     from agents.planner import _BG_PLANNER_TASKS
+
     if _BG_PLANNER_TASKS:
         await asyncio.gather(*list(_BG_PLANNER_TASKS), return_exceptions=True)
 
@@ -589,7 +650,9 @@ def test_resolve_framework_descriptor_raises_for_unknown_framework() -> None:
         _resolve_framework_descriptor(subtask)
 
 
-def test_resolve_framework_descriptor_lookup_error_mentions_available_frameworks() -> None:
+def test_resolve_framework_descriptor_lookup_error_mentions_available_frameworks() -> (
+    None
+):
     """LookupError message lists available frameworks for diagnosis."""
     subtask = {"id": "x", "description": "y", "framework": "no-such-one"}
     with pytest.raises(LookupError) as exc_info:
@@ -624,7 +687,9 @@ def test_runner_fn_parameterized_by_descriptor_image(
     import agents.gen_functional as gf_mod
 
     monkeypatch.setattr(
-        "agents.gen_functional.DockerRunner", None, raising=False,
+        "agents.gen_functional.DockerRunner",
+        None,
+        raising=False,
     )
     # We need to inject into the lazy import path inside _resolve_runner_fn.
     # Monkeypatch the module that will be imported at call time.
@@ -644,6 +709,7 @@ def test_runner_fn_legacy_uses_default_image_with_warning(
 ) -> None:
     """_resolve_runner_fn(None) → tfactory-runner-python:latest + DeprecationWarning."""
     import warnings
+
     captured: dict = {}
 
     class FakeDockerRunner:
@@ -680,30 +746,39 @@ def _make_plan_with_framework(spec_dir: Path, framework: str, lang: str) -> None
     """
     ext = "py" if framework == "pytest" else "spec.ts"
     plan = {
-        "feature": "demo", "workflow_type": "feature",
+        "feature": "demo",
+        "workflow_type": "feature",
         "services_involved": [],
-        "phases": [{
-            "phase": 1, "name": "AC#1", "type": "implementation",
-            "subtasks": [{
-                "id": "s0",
-                "description": f"test with {framework}",
-                "status": "pending",
-                "lane": "unit",  # always unit so gen_functional picks it up
-                "language": lang,
-                "framework": framework,
-                "target": "app/auth/login.py::login_user",
-                "rationale": "AC#1",
-                "files_to_create": [f"tests/test_s0.{ext}"],
-                "verification": {
-                    "type": "command",
-                    "run": f"pytest tests/test_s0.{ext}" if framework == "pytest"
-                    else f"npx {framework} tests/test_s0.{ext}",
-                },
-            }],
-            "parallel_safe": False,
-        }],
+        "phases": [
+            {
+                "phase": 1,
+                "name": "AC#1",
+                "type": "implementation",
+                "subtasks": [
+                    {
+                        "id": "s0",
+                        "description": f"test with {framework}",
+                        "status": "pending",
+                        "lane": "unit",  # always unit so gen_functional picks it up
+                        "language": lang,
+                        "framework": framework,
+                        "target": "app/auth/login.py::login_user",
+                        "rationale": "AC#1",
+                        "files_to_create": [f"tests/test_s0.{ext}"],
+                        "verification": {
+                            "type": "command",
+                            "run": f"pytest tests/test_s0.{ext}"
+                            if framework == "pytest"
+                            else f"npx {framework} tests/test_s0.{ext}",
+                        },
+                    }
+                ],
+                "parallel_safe": False,
+            }
+        ],
         "final_acceptance": [],
-        "status": "in_progress", "planStatus": "pending",
+        "status": "in_progress",
+        "planStatus": "pending",
     }
     (spec_dir / "test_plan.json").write_text(json.dumps(plan))
 
@@ -714,11 +789,16 @@ def _mock_sdk_capture_prompt(monkeypatch: pytest.MonkeyPatch, captured_prompts: 
     The mock writes the valid test source at the path declared in the prompt
     so the agent thinks the SDK agent completed successfully.
     """
-    class _FakeAsyncCM:
-        async def __aenter__(self): return self
-        async def __aexit__(self, *args): return None
 
-    async def _resolve(*a, **kw): return _FakeAsyncCM()
+    class _FakeAsyncCM:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+    async def _resolve(*a, **kw):
+        return _FakeAsyncCM()
 
     async def _invoke(client, prompt, spec_dir_arg, verbose):
         captured_prompts.append(prompt)
@@ -736,7 +816,9 @@ def _mock_sdk_capture_prompt(monkeypatch: pytest.MonkeyPatch, captured_prompts: 
 
 @pytest.mark.asyncio
 async def test_gen_functional_dispatches_pytest_subtask(
-    spec_dir: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """pytest subtask: descriptor resolved, FRAMEWORK CONTEXT (pytest) in prompt."""
     _make_plan_with_framework(spec_dir, "pytest", "python")
@@ -751,7 +833,9 @@ async def test_gen_functional_dispatches_pytest_subtask(
 
 @pytest.mark.asyncio
 async def test_gen_functional_dispatches_jest_subtask(
-    spec_dir: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """jest subtask: FRAMEWORK CONTEXT (jest) present in prompt sent to SDK."""
     _make_plan_with_framework(spec_dir, "jest", "typescript")
@@ -766,7 +850,9 @@ async def test_gen_functional_dispatches_jest_subtask(
 
 @pytest.mark.asyncio
 async def test_gen_functional_dispatches_playwright_subtask(
-    spec_dir: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """playwright subtask: FRAMEWORK CONTEXT (playwright) present in prompt."""
     _make_plan_with_framework(spec_dir, "playwright", "typescript")
@@ -781,7 +867,9 @@ async def test_gen_functional_dispatches_playwright_subtask(
 
 @pytest.mark.asyncio
 async def test_gen_functional_legacy_subtask_uses_default_image_with_warning(
-    spec_dir: Path, project_dir: Path, mock_sdk,
+    spec_dir: Path,
+    project_dir: Path,
+    mock_sdk,
 ) -> None:
     """v0.1 subtask (no framework): DeprecationWarning raised via prompt helper."""
     _make_plan(spec_dir, subtask_count=1)
@@ -799,7 +887,9 @@ async def test_gen_functional_legacy_subtask_uses_default_image_with_warning(
 
 @pytest.mark.asyncio
 async def test_gen_functional_unknown_framework_fails_gracefully(
-    spec_dir: Path, project_dir: Path, mock_sdk,
+    spec_dir: Path,
+    project_dir: Path,
+    mock_sdk,
 ) -> None:
     """Unknown framework in subtask → LookupError raised, status=gen_functional_failed."""
     _make_plan_with_framework(spec_dir, "my-fake-xyz", "typescript")
@@ -814,7 +904,8 @@ async def test_gen_functional_unknown_framework_fails_gracefully(
 
 @pytest.mark.asyncio
 async def test_gen_functional_writes_v01_legacy_path_when_descriptor_none(
-    spec_dir: Path, project_dir: Path,
+    spec_dir: Path,
+    project_dir: Path,
 ) -> None:
     """v0.1 subtask (no framework): SDK is called with the legacy prompt content."""
     _make_plan(spec_dir, subtask_count=1)
@@ -822,10 +913,14 @@ async def test_gen_functional_writes_v01_legacy_path_when_descriptor_none(
     import warnings
 
     class _FakeAsyncCM:
-        async def __aenter__(self): return self
-        async def __aexit__(self, *args): return None
+        async def __aenter__(self):
+            return self
 
-    async def _resolve(*a, **kw): return _FakeAsyncCM()
+        async def __aexit__(self, *args):
+            return None
+
+    async def _resolve(*a, **kw):
+        return _FakeAsyncCM()
 
     async def _invoke(client, prompt, spec_dir_arg, verbose):
         captured_prompts.append(prompt)
@@ -838,6 +933,7 @@ async def test_gen_functional_writes_v01_legacy_path_when_descriptor_none(
         return "complete", "mock", {}
 
     import pytest as pt
+
     pt.MonkeyPatch().setattr("agents.gen_functional._resolve_client", _resolve)
     pt.MonkeyPatch().setattr("agents.gen_functional._invoke_session", _invoke)
 
@@ -859,30 +955,44 @@ async def test_gen_functional_writes_v01_legacy_path_when_descriptor_none(
 
 @pytest.mark.asyncio
 async def test_partial_plan_verifies_committed_despite_stuck(
-    spec_dir: Path, project_dir: Path,
+    spec_dir: Path,
+    project_dir: Path,
 ) -> None:
     """#707 (B): 1 committed test + 1 stuck subtask, none pending → the spec
     still advances to verify the committed test instead of generated_empty."""
     committed_rel = "tests/test_committed.py"
     plan = {
-        "feature": "demo", "workflow_type": "feature", "services_involved": [],
-        "phases": [{
-            "phase": 1, "name": "AC#1", "type": "implementation",
-            "subtasks": [
-                {
-                    "id": "done", "description": "already generated",
-                    "status": "completed", "lane": "unit",
-                    "files_to_create": [committed_rel],
-                },
-                {
-                    "id": "stuck", "description": "gave up", "status": "stuck",
-                    "lane": "api", "replan_count": 2,
-                    "files_to_create": ["tests/test_stuck.py"],
-                },
-            ],
-            "parallel_safe": False,
-        }],
-        "final_acceptance": [], "status": "in_progress", "planStatus": "pending",
+        "feature": "demo",
+        "workflow_type": "feature",
+        "services_involved": [],
+        "phases": [
+            {
+                "phase": 1,
+                "name": "AC#1",
+                "type": "implementation",
+                "subtasks": [
+                    {
+                        "id": "done",
+                        "description": "already generated",
+                        "status": "completed",
+                        "lane": "unit",
+                        "files_to_create": [committed_rel],
+                    },
+                    {
+                        "id": "stuck",
+                        "description": "gave up",
+                        "status": "stuck",
+                        "lane": "api",
+                        "replan_count": 2,
+                        "files_to_create": ["tests/test_stuck.py"],
+                    },
+                ],
+                "parallel_safe": False,
+            }
+        ],
+        "final_acceptance": [],
+        "status": "in_progress",
+        "planStatus": "pending",
     }
     (spec_dir / "test_plan.json").write_text(json.dumps(plan))
     # The committed subtask's file must actually exist on disk to count.
@@ -899,22 +1009,35 @@ async def test_partial_plan_verifies_committed_despite_stuck(
 
 @pytest.mark.asyncio
 async def test_no_committed_and_no_pending_stays_generated_empty(
-    spec_dir: Path, project_dir: Path,
+    spec_dir: Path,
+    project_dir: Path,
 ) -> None:
     """#707 (B) negative: a completed subtask whose file was NOT committed
     to disk does not count — still generated_empty (no false verify)."""
     plan = {
-        "feature": "demo", "workflow_type": "feature", "services_involved": [],
-        "phases": [{
-            "phase": 1, "name": "AC#1", "type": "implementation",
-            "subtasks": [{
-                "id": "done", "description": "claims done, no file",
-                "status": "completed", "lane": "unit",
-                "files_to_create": ["tests/test_missing.py"],
-            }],
-            "parallel_safe": False,
-        }],
-        "final_acceptance": [], "status": "in_progress", "planStatus": "pending",
+        "feature": "demo",
+        "workflow_type": "feature",
+        "services_involved": [],
+        "phases": [
+            {
+                "phase": 1,
+                "name": "AC#1",
+                "type": "implementation",
+                "subtasks": [
+                    {
+                        "id": "done",
+                        "description": "claims done, no file",
+                        "status": "completed",
+                        "lane": "unit",
+                        "files_to_create": ["tests/test_missing.py"],
+                    }
+                ],
+                "parallel_safe": False,
+            }
+        ],
+        "final_acceptance": [],
+        "status": "in_progress",
+        "planStatus": "pending",
     }
     (spec_dir / "test_plan.json").write_text(json.dumps(plan))
 
@@ -926,7 +1049,9 @@ async def test_no_committed_and_no_pending_stays_generated_empty(
 
 @pytest.mark.asyncio
 async def test_rejection_persists_replan_reason(
-    spec_dir: Path, project_dir: Path, mock_sdk,
+    spec_dir: Path,
+    project_dir: Path,
+    mock_sdk,
 ) -> None:
     """#707 (A): a guardrail rejection records WHY into status.json
     (replan_reasons list) and onto the subtask (test_plan.json)."""
