@@ -167,3 +167,41 @@ def test_flake_omits_pip_without_requirements(tmp_path):
     env = {"language": "python", "verify_commands": ["pytest -q"]}
     flake = generate_flake(env, project_dir=bare)
     assert '"pip"' not in flake, flake
+
+
+# ── #778: ship a pinned flake.lock so Jobs stop re-locking nixpkgs ────────
+
+
+def test_generate_lock_pins_the_default_nixpkgs_rev():
+    """The lock must reference DEFAULT_NIXPKGS's rev — a drift here means every Job
+    silently re-locks (or nix rejects the lock). The narHash is validated on-cluster
+    (nix must ACCEPT it); this guards the rev pairing that a code change can break."""
+    import json
+
+    from tools.runners.nix_provisioner import DEFAULT_NIXPKGS, generate_lock
+
+    rev = DEFAULT_NIXPKGS.rsplit("/", 1)[-1]
+    lock = generate_lock()
+    assert lock is not None
+    doc = json.loads(lock)  # valid JSON
+    assert doc["version"] == 7
+    nixpkgs = doc["nodes"]["nixpkgs"]
+    assert nixpkgs["locked"]["rev"] == rev
+    assert nixpkgs["original"]["rev"] == rev
+    assert nixpkgs["locked"]["narHash"].startswith("sha256-")
+    # `original` must match the flake's rev-pinned github input or nix re-locks.
+    assert nixpkgs["original"] == {
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": rev,
+        "type": "github",
+    }
+
+
+def test_generate_lock_none_for_unknown_rev():
+    """Only DEFAULT_NIXPKGS has a captured narHash; any other rev must return None
+    so nix locks it itself rather than us shipping a wrong (rejected) hash."""
+    from tools.runners.nix_provisioner import generate_lock
+
+    assert generate_lock("github:NixOS/nixpkgs/" + "0" * 40) is None
+    assert generate_lock("github:NixOS/nixpkgs/main") is None

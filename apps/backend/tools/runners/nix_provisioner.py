@@ -40,6 +40,47 @@ from pathlib import Path
 # directly). Bump deliberately (Renovate can automate).
 DEFAULT_NIXPKGS = "github:NixOS/nixpkgs/567a49d1913ce81ac6e9582e3553dd90a955875f"
 
+# Pinned lock metadata for DEFAULT_NIXPKGS (#778). Captured from `nix flake lock`
+# in the runner image — NEVER hand-edit: a wrong narHash makes nix REJECT the lock
+# and re-lock (or error), so it must come from nix and stay in lockstep with
+# DEFAULT_NIXPKGS (test_nix_provisioner pins them together). Every generated flake
+# has exactly ONE input (nixpkgs at a full rev), so this ONE lock fits them all —
+# shipping it beside the flake stops each ephemeral verify Job from re-locking
+# nixpkgs on every run (a per-Job `nix flake lock` roundtrip, #778).
+_DEFAULT_NIXPKGS_NARHASH = "sha256-lrp67w8AulE9Ks53n27I45ADSzbOCn4H+CNW1Ck8B+8="
+_DEFAULT_NIXPKGS_LASTMODIFIED = 1781577229
+
+
+def generate_lock(nixpkgs: str = DEFAULT_NIXPKGS) -> str | None:
+    """The ``flake.lock`` for a generated flake, or None when the rev is unknown.
+
+    Only emitted for ``DEFAULT_NIXPKGS`` — the single rev whose narHash we captured
+    from nix. Any other ``nixpkgs`` returns None so nix resolves + locks it itself
+    (correct, just not pre-locked). The lock's ``original`` must match the flake's
+    ``inputs.nixpkgs.url`` (a rev-pinned github ref) exactly, or nix re-locks.
+    """
+    if nixpkgs != DEFAULT_NIXPKGS or not nixpkgs.startswith("github:NixOS/nixpkgs/"):
+        return None
+    rev = nixpkgs.rsplit("/", 1)[-1]
+    github_ref = {"owner": "NixOS", "repo": "nixpkgs", "rev": rev, "type": "github"}
+    lock = {
+        "nodes": {
+            "nixpkgs": {
+                "locked": {
+                    "lastModified": _DEFAULT_NIXPKGS_LASTMODIFIED,
+                    "narHash": _DEFAULT_NIXPKGS_NARHASH,
+                    **github_ref,
+                },
+                "original": dict(github_ref),
+            },
+            "root": {"inputs": {"nixpkgs": "nixpkgs"}},
+        },
+        "root": "root",
+        "version": 7,
+    }
+    return json.dumps(lock, indent=2) + "\n"
+
+
 # language -> (nix python attr | node attr). Extend as the fleet grows.
 _PY_ATTR = {
     "3.11": "python311",

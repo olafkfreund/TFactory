@@ -811,3 +811,38 @@ def test_reruns_1_is_byte_identical_single_run(tmp_path, monkeypatch):
     assert "__PYTEST_RUN=" not in cap["script"]  # no loop
     assert cap["script"].count("python -m pytest") == 1
     assert "cd /work && python -m pytest" in cap["script"]
+
+
+def test_materialize_writes_flake_lock_alongside_generated_flake(tmp_path):
+    """#778: a generated flake ships its lock so verify Jobs skip the re-lock."""
+    import json as _json
+
+    spec = tmp_path / "specs" / "027"
+    spec.mkdir(parents=True)
+    _write_contract(spec, _UNIT_ENV)
+    project = tmp_path / "proj"
+    project.mkdir()
+
+    materialize_flake(spec, project, env=_UNIT_ENV)
+    lock = project / "flake.lock"
+    assert lock.is_file(), "generated flake must ship flake.lock"
+    doc = _json.loads(lock.read_text())
+    from tools.runners.nix_provisioner import DEFAULT_NIXPKGS
+
+    assert (
+        doc["nodes"]["nixpkgs"]["locked"]["rev"] == DEFAULT_NIXPKGS.rsplit("/", 1)[-1]
+    )
+
+
+def test_materialize_does_not_write_lock_for_repo_owned_flake(tmp_path):
+    """A repo that owns its flake (manifest not generated) owns its lock too."""
+    spec = tmp_path / "specs" / "027"
+    spec.mkdir(parents=True)
+    env = {**_UNIT_ENV, "provisioning": {"method": "nix", "generated": False}}
+    _write_contract(spec, env)
+    project = tmp_path / "proj"
+    project.mkdir()
+    (project / "flake.nix").write_text("{ outputs = _: {}; }\n")  # repo-owned
+
+    materialize_flake(spec, project, env=env)
+    assert not (project / "flake.lock").exists()  # we didn't clobber/invent one
