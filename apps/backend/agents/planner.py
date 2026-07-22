@@ -35,6 +35,8 @@ from typing import TYPE_CHECKING, Literal
 if TYPE_CHECKING:
     from test_plan import ImplementationPlan, Subtask
 
+from phase_config import DEFAULT_PHASE_MODELS, get_phase_model, resolve_model_id
+
 from .auth_tagging import apply_requires_auth_from_config
 from .followup_planner import run_followup_planner  # noqa: F401 — back-compat re-export
 from .workspace_status import now_iso, read_status, write_status_patch
@@ -87,11 +89,17 @@ def _truncate_subtasks(plan, cap: int) -> int:
     return dropped
 
 
-async def _resolve_planner_client(spec_dir: Path, project_dir: Path):
+async def _resolve_planner_client(
+    spec_dir: Path, project_dir: Path, model_override: str | None = None
+):
     """Resolve the Claude Agent SDK client for the planning phase.
 
     Wraps the inherited `create_client` / `get_provider` factories so
     tests can monkey-patch this one function instead of two.
+
+    ``model_override`` forces a specific model instead of the per-phase resolution
+    — used by the #785 fallback to recover on the known-good default model when the
+    configured planning provider fails to emit a plan.
     """
     # Heavy imports deferred to runtime so test_planner_stub.py can
     # mock the SDK surface without forcing the full backend chain
@@ -105,7 +113,7 @@ async def _resolve_planner_client(spec_dir: Path, project_dir: Path):
     )
     from providers.factory import get_provider
 
-    planning_model = get_phase_model(spec_dir, "planning", None)
+    planning_model = model_override or get_phase_model(spec_dir, "planning", None)
     provider_name = infer_provider_from_model(planning_model)
     if provider_name == "claude":
         thinking_budget = get_phase_thinking_budget(spec_dir, "planning")
@@ -403,15 +411,46 @@ async def _run_session_with_retry(
         return False, None
 
     ok, err_kind, plan = _validate_emitted_plan(spec_dir)
-    if not ok:
-        _write_status_patch(
-            spec_dir,
-            status="planner_failed",
-            phase=f"{invalid_after_retry_prefix}{err_kind}_after_retry",
-            planner_error=f"after retry: {err_kind} — {str(plan or '')[:200]}",
+    if ok:
+        return True, plan
+
+    # #785: the configured per-phase planning model produced no valid plan even
+    # after a retry — e.g. a broken provider (Gemini CLI's trust gate / an invalid
+    # GEMINI_API_KEY) that emits nothing. Rather than dead-end the whole run at
+    # `planner_invalid_missing_after_retry`, make ONE final attempt on the
+    # known-good DEFAULT planning model, so a misconfigured per-phase choice can't
+    # block verification entirely. Skipped when the configured model already IS the
+    # default (nothing to fall back to).
+    fallback_model = resolve_model_id(DEFAULT_PHASE_MODELS["planning"])
+    primary_model = get_phase_model(spec_dir, "planning", None)
+    if fallback_model != primary_model:
+        _planner_log.warning(
+            "planner: %s after retry on %s; falling back to default model %s",
+            err_kind,
+            primary_model,
+            fallback_model,
         )
-        return False, None
-    return True, plan
+        client_fb = await _resolve_planner_client(
+            spec_dir, project_dir, model_override=fallback_model
+        )
+        fb_status, _fr, _fe = await _invoke_session(
+            client_fb, prompt, spec_dir, verbose
+        )
+        if fb_status != "error":
+            ok, err_kind, plan = _validate_emitted_plan(spec_dir)
+            if ok:
+                _planner_log.info(
+                    "planner: recovered on fallback model %s", fallback_model
+                )
+                return True, plan
+
+    _write_status_patch(
+        spec_dir,
+        status="planner_failed",
+        phase=f"{invalid_after_retry_prefix}{err_kind}_after_retry",
+        planner_error=f"after retry: {err_kind} — {str(plan or '')[:200]}",
+    )
+    return False, None
 
 
 def _apply_auth_and_truncate(
