@@ -791,26 +791,28 @@ async def check_mcp_health(server: McpServerConfig):
     """Check health of an MCP server."""
     if server.type == "http" and server.url:
         import urllib.request
-        from urllib.parse import urlparse
 
-        # SSRF guard: an MCP server URL is configured by the operator themselves
-        # and, by design, very often points at a local/LAN endpoint (most MCP
-        # servers run on localhost). Blocking private/loopback hosts would break
-        # that intended use case, so we deliberately do not. We DO restrict the
-        # scheme to http/https so a configured value cannot be coerced into a
-        # file://, gopher://, ftp:// (etc.) request.
-        parsed = urlparse(server.url)
-        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        # SSRF guard: validate URL host to block link-local, reserved, multicast,
+        # and unspecified ranges. Loopback and private ranges are allowed (MCP
+        # servers normally run on localhost or LAN). Invalid schemes are blocked
+        # before reaching the helper.
+        try:
+            validated_url = _validate_mcp_url_host(server.url)
+        except HTTPException as e:
+            # Validation failed (unsafe host, unresolvable, etc). Log the reason
+            # but return status: "unknown" without exposing details to the client.
+            logger.warning("MCP server URL validation failed: %s", e.detail)
             return {
                 "success": True,
                 "data": {
                     "serverId": server.id,
-                    "status": "unhealthy",
-                    "message": "Unsupported or invalid server URL",
-                },
+                    "status": "unknown",
+                    "message": "URL validation failed"
+                }
             }
+
         try:
-            req = urllib.request.Request(server.url, method="HEAD")
+            req = urllib.request.Request(validated_url, method="HEAD")
             if server.headers:
                 for key, value in server.headers.items():
                     req.add_header(key, value)
