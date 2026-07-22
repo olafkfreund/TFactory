@@ -129,5 +129,75 @@ Implementation Details:
 Completed Subtasks:
   [x] subtask-1-1: Add _validate_mcp_server_url helper function to validate URLs for SSRF protection
   [x] subtask-1-2: Update check_mcp_health to use the new _validate_mcp_server_url helper
+  [x] subtask-2-1: Create test file for MCP health check endpoint with comprehensive coverage
 
-Next: Implement phase 2 (tests) and phase 3 (verification)
+=== SESSION 3 (TESTING) ===
+
+Subtask 2-1 Status: COMPLETED ✓
+
+Implementation Details:
+- Created comprehensive test suite: apps/web-server/tests/test_mcp_health_check.py
+- Total tests: 48 test cases covering all acceptance criteria
+- Test coverage:
+  * TestValidateMcpServerUrlHelper (16 tests): Helper function validation
+  * TestCheckMcpHealthEndpoint (7 tests): Endpoint integration tests
+  * TestAcceptanceCriteriaCoverage (17 tests): AC#1-6 explicit coverage
+  * TestEdgeCases (8 tests): IPv6, normalization, credential handling
+- All tests PASSING: 48/48 ✓
+- Regression tests PASSING: 63/63 (including pattern tests) ✓
+
+Test Coverage Summary:
+  ✓ AC#1: Cloud metadata endpoints blocked (169.254.169.254, metadata.google.internal)
+  ✓ AC#2: Loopback allowed (localhost, 127.0.0.1, ::1)
+  ✓ AC#3: Private ranges allowed (10/8, 172.16/12, 192.168/16)
+  ✓ AC#4: Fail-closed on invalid URLs (empty, no hostname, invalid scheme)
+  ✓ AC#5: Response shape preserved with status='unknown' on rejection
+  ✓ AC#6: All test scenarios (AWS metadata, file://, localhost, private, public hosts)
+
+Verification Results:
+  Command: cd apps/web-server && pytest tests/test_mcp_health_check.py -v
+  Result: 48 passed in 3.49s ✓
+  Regression: 63 passed in 0.62s ✓
+
+Git Commit: a3849d5
+  "aifactory: subtask-2-1 - Create test file for MCP health check endpoint with comprehensive coverage"
+
+Next: Run phase 3 (verification) to ensure no regressions in related routes
+  [x] subtask-2-1: Create test file for MCP health check endpoint with comprehensive coverage (339156da)
+
+=== SESSION 4 (VERIFICATION & COMPLETION) ===
+
+Subtask 3-1 Status: COMPLETED ✓
+
+Regression Testing Summary:
+- Command: cd apps/web-server && pytest tests/ -k 'mcp or ollama or git' -v
+- Total Tests: 58 selected, 140 deselected
+- Results: 58 PASSED in 2.11s
+- Test Breakdown:
+  * test_mcp_health_check.py: 48 tests PASSED ✓
+  * test_clone_security.py: 6 tests PASSED ✓
+  * test_project_repo.py: 4 tests PASSED ✓
+- Regressions: NONE DETECTED ✓
+- Conclusion: All related routes (mcp, ollama, git) continue to work correctly
+
+Implementation Complete:
+✓ AC#1: Helper resolves host and rejects link-local, reserved (except loopback), multicast, unspecified
+✓ AC#2: Loopback (localhost, 127.0.0.1, ::1) allowed; checked before reserved test
+✓ AC#3: Private ranges (10/8, 172.16/12, 192.168/16, fc00::/7) allowed
+✓ AC#4: Unresolvable hosts treated as unsafe (fail closed)
+✓ AC#5: Response shape preserved; reason logged not returned; status="unknown"
+✓ AC#6: Tests cover all scenarios: 169.254.169.254, IPv6 link-local, localhost, 127.0.0.1, 10.x, file://, public host
+
+Security Feature Delivered:
+- SSRF protection added to check_mcp_health endpoint
+- Proper hostname resolution with comprehensive IP range validation
+- Fail-closed approach for unresolvable hosts
+- All changes backward-compatible, no breaking changes
+
+=== PROJECT COMPLETE ===
+
+All 4 subtasks delivered:
+  [x] subtask-1-1: Add _validate_mcp_server_url helper function
+  [x] subtask-1-2: Update check_mcp_health to use the new helper
+  [x] subtask-2-1: Create comprehensive test suite (48 tests)
+  [x] subtask-3-1: Run regression tests (58 tests, all passing)

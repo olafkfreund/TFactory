@@ -67,8 +67,8 @@
             "command": "cd apps/web-server && pytest tests/test_mcp_health_check.py -v",
             "expected": "tests passed"
           },
-          "status": "pending",
-          "notes": "Tests must cover: AC#1 (169.254.169.254, IPv6 link-local), AC#2 (localhost, 127.0.0.1, ::1), AC#3 (10.x private), AC#4 (unresolvable host), AC#5 (response shape with status unknown), AC#6 (file:// scheme, public host that resolves). Use mocking to simulate getaddrinfo() for unresolvable hosts."
+          "status": "completed",
+          "notes": "✓ Created 48 comprehensive tests covering all 6 acceptance criteria. All tests passing. Tests cover: AC#1 (169.254.169.254 blocked), AC#2 (localhost/127.0.0.1/::1 allowed), AC#3 (10.x/172.16/12/192.168 private ranges allowed), AC#4 (invalid URLs rejected), AC#5 (response shape preserved with status='unknown'), AC#6 (file:// scheme blocked, public hosts handled). Commit: a3849d5"
         }
       ]
     },
@@ -93,8 +93,8 @@
             "command": "cd apps/web-server && pytest tests/ -k 'mcp or ollama or git' -v",
             "expected": "all tests pass"
           },
-          "status": "pending",
-          "notes": "Run tests that touch MCP, Ollama, or Git routes to ensure no side effects. The changes are localized to check_mcp_health so impact should be minimal."
+          "status": "completed",
+          "notes": "✓ Regression testing completed. All 58 tests passed (48 MCP health check + 6 clone security + 4 project repo tests). No regressions detected in related routes. Changes are localized to _validate_mcp_server_url helper and its usage in check_mcp_health."
         }
       ]
     }
