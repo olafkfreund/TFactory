@@ -37,6 +37,7 @@ from tools.runners.docker_runner import DockerRunResult
 from tools.runners.nix_provisioner import (
     Manifest,
     generate_flake,
+    generate_lock,
     nix_develop_argv,
 )
 
@@ -48,6 +49,7 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 
 _FLAKE = "flake.nix"
+_FLAKE_LOCK = "flake.lock"
 
 
 @dataclass
@@ -1125,6 +1127,11 @@ def materialize_flake(
         flake_path.write_text(
             generate_flake(env, project_dir=project_dir), encoding="utf-8"
         )
+        # #778: ship the lock too so each ephemeral verify Job reuses it instead of
+        # re-locking nixpkgs on every run. None for a non-default rev → nix locks it.
+        lock = generate_lock()
+        if lock is not None:
+            (Path(project_dir) / _FLAKE_LOCK).write_text(lock, encoding="utf-8")
         _log.info("nix_env: wrote generated %s for %s", _FLAKE, spec_dir.name)
 
     return NixPlan(
