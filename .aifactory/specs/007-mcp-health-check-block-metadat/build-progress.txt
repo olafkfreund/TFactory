@@ -105,4 +105,40 @@ Pattern Compliance:
 
 === END SESSION 2 ===
 
-Next Step: Integrate helper into check_mcp_health endpoint (subtask 1-2)
+Session 3 (Implementation - Subtask 1-2):
+✓ Integrated _validate_mcp_url_host() helper into check_mcp_health endpoint
+✓ Added validation call before making HTTP request
+✓ Wrapped validation in try-except to catch HTTPException
+✓ Returns status: "unknown" when URL validation fails (security rejection)
+✓ Logs the validation failure reason using logger.warning (not exposed to client)
+✓ Uses validated_url for subsequent HTTP HEAD request
+✓ Preserves existing healthy/unhealthy response behavior for allowed URLs
+✓ Updated implementation_plan.json status to "completed" for subtask-1-2
+✓ Committed changes with message: "aifactory: subtask-1-2 - Integrate validation helper into check_mcp_health"
+
+Implementation Location: apps/web-server/server/routes/git.py (check_mcp_health endpoint, lines 789-846)
+
+Integration Details:
+- Calls _validate_mcp_url_host(server.url) after basic URL type check
+- Catches HTTPException from validation failures
+- Logs rejection reason: "MCP server URL validation failed: {e.detail}"
+- Returns response with status: "unknown" and message: "URL validation failed"
+- This satisfies AC#5: keeps status=unknown response shape, reason logged not returned
+- Existing behavior preserved: healthy/unhealthy for allowed URLs, network failures
+
+Acceptance Criteria Compliance:
+✓ AC#5: check_mcp_health returns status=unknown when URL is refused
+✓ AC#5: Reason is logged (logger.warning), not returned to client
+✓ AC#5: Existing response shape maintained (success=True, data with serverId/status/message)
+✓ Existing behavior preserved for allowed URLs (healthy/unhealthy responses)
+
+Pattern Compliance:
+✓ Follows exception handling pattern from existing codebase
+✓ Uses logger.warning for validation failures (consistent with logging approach)
+✓ Clean separation of concerns (validation logic in helper, integration in endpoint)
+
+=== END SESSION 3 ===
+
+Next Step: Create comprehensive test suite for MCP health check validation (subtask 1-3)
+  [x] subtask-1-1: Create URL host validation helper function in git.py
+  [x] subtask-1-2: Integrate validation helper into check_mcp_health endpoint
