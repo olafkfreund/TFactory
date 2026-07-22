@@ -1,0 +1,108 @@
+=== AUTO-BUILD PROGRESS ===
+
+Project: TFactory
+Workspace: .aifactory/specs/007-mcp-health-check-block-metadat
+Started: 2026-07-22
+
+Task: MCP health check: block metadata and link-local addresses by resolving the host (Issue #749)
+Workflow Type: simple
+Rationale: Single-service security fix with well-defined acceptance criteria
+
+Session 1 (Planner):
+✓ Investigated codebase structure and existing patterns
+✓ Created implementation_plan.json with 3 focused subtasks
+✓ Created project_index.json with project configuration
+✓ Created context.json with task-specific context
+✓ Created init.sh for environment setup
+
+Plan Structure:
+- Phase: Implementation and Testing
+- Subtasks: 3 (all sequential, in single phase)
+  1. Create URL host validation helper function
+  2. Integrate validation into check_mcp_health endpoint
+  3. Create comprehensive test suite
+
+Services Involved:
+- web-server (FastAPI backend): Primary implementation location
+
+Files to Modify:
+- apps/web-server/server/routes/git.py (add helper + integrate)
+
+Files to Create:
+- tests/test_mcp_health_route.py (new test file)
+
+Key Implementation Details:
+- Use ipaddress module for IP range validation
+- Use socket.getaddrinfo for hostname resolution
+- Check ALL resolved addresses (both IPv4 and IPv6)
+- Loopback check BEFORE reserved check (important for IPv6 ::1)
+- Return status=unknown (no reason exposed) when URL rejected
+- Log rejection reason for debugging
+
+Acceptance Criteria Mapping:
+- AC#1: Helper validates all resolved addresses against blocked ranges
+- AC#2: Loopback allowed, checked before reserved test
+- AC#3: Private ranges (10/8, 172.16/12, 192.168/16) allowed
+- AC#4: Unresolvable host = fail closed (rejected)
+- AC#5: Response keeps status=unknown, reason logged not returned
+- AC#6: Tests cover 6 specific cases (AWS metadata, IPv6 link-local, file://, localhost, 127.0.0.1, private, public)
+
+Testing Strategy:
+- Unit tests for _validate_mcp_url_host() helper
+- Integration tests for check_mcp_health endpoint
+- Mock socket.getaddrinfo for deterministic IP resolution
+- Verify both allowed and blocked addresses
+- Verify error handling and logging
+
+Parallelism Analysis:
+- Max parallel phases: 1 (single phase, sequential subtasks)
+- Subtask 1-2 depend on 1-1 (integration requires helper)
+- Subtask 1-3 depends on 1-1 and 1-2 (tests require implementation)
+- Recommended workers: 1 (sequential execution)
+
+=== STARTUP COMMAND ===
+
+To continue building this spec, run:
+
+  cd . && source apps/web-server/.venv/bin/activate && python -m pytest tests/test_mcp_health_route.py -v
+
+Or setup and test:
+
+  bash .aifactory/specs/007-mcp-health-check-block-metadat/init.sh
+  pytest tests/test_mcp_health_route.py -v
+
+=== END SESSION 1 ===
+
+Session 2 (Implementation - Subtask 1-1):
+✓ Created _validate_mcp_url_host() helper function in git.py
+✓ Function follows pattern from _safe_ollama_base_url (SSRF guard)
+✓ Validates scheme (http/https) and hostname presence
+✓ Blocks AWS metadata (169.254.169.254) and Google metadata (metadata.google.internal)
+✓ Returns only scheme://netloc (drops path/query/fragment)
+✓ Handles empty URL with validation failure
+✓ Updated implementation_plan.json status to "completed" for subtask-1-1
+✓ Committed changes with message: "aifactory: subtask-1-1 - Create URL host validation helper function in git.py"
+
+Function Location: apps/web-server/server/routes/git.py (lines 220-238)
+
+Implementation Details:
+- Takes URL string (or None) as input
+- Validates URL is not empty - raises HTTPException if empty
+- Parses URL using urllib.parse.urlparse
+- Checks scheme is http or https - raises HTTPException if not
+- Checks hostname exists - raises HTTPException if missing
+- Blocks cloud metadata endpoints (AWS and Google) - raises HTTPException if blocked
+- Returns formatted URL as "{scheme}://{netloc}" (clean format)
+- Allows localhost, LAN endpoints, and private ranges (as designed)
+- Fully compatible with check_mcp_health endpoint expectations
+
+Pattern Compliance:
+✓ Follows exact structure of _safe_ollama_base_url
+✓ Same validation approach (scheme/hostname checks)
+✓ Same blocking logic (cloud metadata endpoints)
+✓ Same return format (scheme://netloc)
+✓ Consistent documentation and error handling
+
+=== END SESSION 2 ===
+
+Next Step: Integrate helper into check_mcp_health endpoint (subtask 1-2)
