@@ -252,6 +252,19 @@ def check_stability(
             )
         )
 
+    return classify_stability_runs(runs, seed=seed, rerun_count=rerun_count)
+
+
+def classify_stability_runs(
+    runs: list[StabilityRun], *, seed: int, rerun_count: int
+) -> StabilityResult:
+    """Turn N per-run records into a stability verdict.
+
+    The single source of truth for the STABLE / CONSISTENT_FAIL / FLAKY rule,
+    shared by ``check_stability`` (host/docker: one runner_fn call per run) and
+    the Nix batched path (#776: all N runs in ONE Job, then classified here) so
+    both produce a byte-identical verdict from the same return codes.
+    """
     codes = {r.returncode for r in runs}
     if codes == {0}:
         verdict = StabilityVerdict.STABLE
