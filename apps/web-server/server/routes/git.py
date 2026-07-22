@@ -2,13 +2,16 @@
 Git, Ollama, MCP, and utility routes.
 """
 
+import ipaddress
 import json
 import logging
 import re
 import shlex
 import shutil
+import socket
 import subprocess
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -217,24 +220,113 @@ def _safe_ollama_base_url(base_url: str | None) -> str:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
-def _validate_mcp_server_url(server_url: str | None) -> str:
-    """Validate a request-supplied MCP server URL (SSRF guard).
+# Blocked ranges (never allowed for MCP)
+_ALWAYS_BLOCKED = (
+    ipaddress.ip_network("169.254.0.0/16"),    # link-local (AWS metadata)
+    ipaddress.ip_network("fe80::/10"),         # IPv6 link-local
+    ipaddress.ip_network("fd00::/8"),          # IPv6 unique-local
+    ipaddress.ip_network("fc00::/7"),          # IPv6 unique-local (full)
+    ipaddress.ip_network("0.0.0.0/8"),         # unspecified
+    ipaddress.ip_network("224.0.0.0/4"),       # multicast
+    ipaddress.ip_network("240.0.0.0/4"),       # reserved
+)
 
-    MCP servers may legitimately run on the LAN (e.g. localhost, k8s pods),
-    so private ranges aren't blocked, but the scheme must be http/https, the
-    cloud-metadata endpoint is blocked, and only ``scheme://netloc`` is
-    returned -- dropping any path/query/fragment so the appended request path
-    can't be truncated or redirected to another resource.
+# Loopback (allowed for MCP servers)
+_LOOPBACK = (
+    ipaddress.ip_network("127.0.0.0/8"),       # IPv4 loopback
+    ipaddress.ip_network("::1/128"),           # IPv6 loopback ::1
+)
+
+# Private ranges (allowed for MCP servers on LAN)
+_PRIVATE = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+)
+
+
+def _resolve_addresses(host: str) -> list[ipaddress._BaseAddress]:
+    """Resolve hostname to all IP addresses (DNS lookup).
+
+    Returns literal IP as-is. For hostnames, resolves via DNS and returns
+    every address (defends against DNS results mixing public and internal).
+    """
+    try:
+        # Try parsing as literal IP first
+        return [ipaddress.ip_address(host)]
+    except ValueError:
+        pass
+
+    # Hostname: resolve via DNS; every address is checked
+    infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    addrs = []
+    for info in infos:
+        sockaddr = info[4]
+        addrs.append(ipaddress.ip_address(sockaddr[0]))
+    return addrs
+
+
+def _validate_mcp_server_url(server_url: str | None) -> str:
+    """Validate MCP server URL with comprehensive SSRF protection.
+
+    Resolves the hostname and rejects any address in link-local, reserved,
+    multicast, or unspecified ranges. Loopback and private ranges are allowed
+    (MCP servers run locally). Every resolved address is checked.
     """
     if not server_url or not server_url.strip():
         raise HTTPException(status_code=400, detail="MCP server URL cannot be empty")
-    from urllib.parse import urlparse
 
-    parsed = urlparse(server_url.strip())
-    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+    parsed = urlsplit(server_url.strip())
+
+    if parsed.scheme not in ("http", "https"):
         raise HTTPException(status_code=400, detail="Invalid MCP server URL")
-    if parsed.hostname in ("169.254.169.254", "metadata.google.internal"):
-        raise HTTPException(status_code=400, detail="Disallowed MCP server URL")
+
+    host = parsed.hostname
+    if not host:
+        raise HTTPException(status_code=400, detail="Invalid MCP server URL")
+
+    # Resolve hostname to addresses (fail closed on DNS failure)
+    try:
+        addresses = _resolve_addresses(host)
+    except OSError:
+        logger.warning("Cannot resolve MCP server host: %s", host)
+        raise HTTPException(status_code=400, detail="Cannot resolve MCP server host")
+
+    # Check EVERY resolved address against blocked ranges
+    for addr in addresses:
+        # Normalize IPv4-mapped IPv6 (::ffff:127.0.0.1 → 127.0.0.1)
+        if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
+            addr = addr.ipv4_mapped
+
+        # Check against always-blocked ranges
+        for net in _ALWAYS_BLOCKED:
+            if addr.version == net.version and addr in net:
+                logger.warning(
+                    "MCP server URL blocked: host %s resolves to %s (in %s)",
+                    host, addr, net
+                )
+                raise HTTPException(status_code=400, detail="MCP server address in blocked range")
+
+        # Loopback is OK for MCP (checked before other ranges since ::1 is reserved)
+        loopback_allowed = False
+        for net in _LOOPBACK:
+            if addr.version == net.version and addr in net:
+                loopback_allowed = True
+                break
+
+        if loopback_allowed:
+            continue  # This address is loopback, which is allowed
+
+        # Private ranges are OK for MCP (LAN servers)
+        private_allowed = False
+        for net in _PRIVATE:
+            if addr.version == net.version and addr in net:
+                private_allowed = True
+                break
+
+        if private_allowed:
+            continue  # This address is private, which is allowed
+
     return f"{parsed.scheme}://{parsed.netloc}"
 
 

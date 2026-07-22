@@ -15,6 +15,7 @@ AC#6: Tests cover 169.254.169.254, IPv6 link-local, localhost, 127.0.0.1,
 
 from __future__ import annotations
 
+import socket
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -366,6 +367,82 @@ class TestAcceptanceCriteriaCoverage:
         # For this test, we verify the validation passes the URL form check.
         result = _validate_mcp_server_url("http://example.com:8000")
         assert "example.com" in result
+
+    def test_ac1_hostname_resolving_to_aws_metadata_rejected(self):
+        """AC#1: Hostname that resolves to AWS metadata must be rejected."""
+        with patch('socket.getaddrinfo') as mock_getaddrinfo:
+            # Mock: evil.com → 169.254.169.254
+            mock_getaddrinfo.return_value = [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, '', ('169.254.169.254', 80))
+            ]
+
+            with pytest.raises(HTTPException) as exc:
+                _validate_mcp_server_url("http://evil.com")
+            assert exc.value.status_code == 400
+
+    def test_ac1_hostname_resolving_to_link_local_rejected(self):
+        """AC#1: Hostname resolving to link-local range must be rejected."""
+        with patch('socket.getaddrinfo') as mock_getaddrinfo:
+            # Mock: internal.corp → 169.254.50.1 (link-local range)
+            mock_getaddrinfo.return_value = [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, '', ('169.254.50.1', 80))
+            ]
+
+            with pytest.raises(HTTPException):
+                _validate_mcp_server_url("http://internal.corp")
+
+    def test_ac2_ipv6_loopback_allowed(self):
+        """AC#2: IPv6 loopback (::1) is allowed."""
+        result = _validate_mcp_server_url("http://[::1]:8000")
+        assert "[::1]" in result or "::1" in result
+
+    def test_ac1_ipv6_link_local_rejected(self):
+        """AC#1: IPv6 link-local (fe80::/10) is rejected."""
+        with pytest.raises(HTTPException):
+            _validate_mcp_server_url("http://[fe80::1]:8000")
+
+    def test_ac1_hostname_resolving_to_multicast_rejected(self):
+        """AC#1: Hostname resolving to multicast range must be rejected."""
+        with patch('socket.getaddrinfo') as mock_getaddrinfo:
+            # Mock: mcast.local → 224.0.0.1 (multicast)
+            mock_getaddrinfo.return_value = [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, '', ('224.0.0.1', 80))
+            ]
+
+            with pytest.raises(HTTPException):
+                _validate_mcp_server_url("http://mcast.local")
+
+    def test_ac1_hostname_resolving_to_reserved_rejected(self):
+        """AC#1: Hostname resolving to reserved range must be rejected."""
+        with patch('socket.getaddrinfo') as mock_getaddrinfo:
+            # Mock: reserved.local → 240.0.0.1 (reserved range)
+            mock_getaddrinfo.return_value = [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, '', ('240.0.0.1', 80))
+            ]
+
+            with pytest.raises(HTTPException):
+                _validate_mcp_server_url("http://reserved.local")
+
+    def test_ac4_hostname_dns_failure_treated_unsafe(self):
+        """AC#4: Unresolvable hostname treated as unsafe (fail closed)."""
+        with patch('socket.getaddrinfo') as mock_getaddrinfo:
+            # Simulate DNS lookup failure
+            mock_getaddrinfo.side_effect = OSError("Name or service not known")
+
+            with pytest.raises(HTTPException) as exc:
+                _validate_mcp_server_url("http://doesnotexist.invalid")
+            assert exc.value.status_code == 400
+
+    def test_ac1_ipv4_mapped_ipv6_handled(self):
+        """IPv4-mapped IPv6 blocking works (::ffff:169.254.169.254)."""
+        # This should resolve to 169.254.169.254 via IPv4-mapped address
+        with patch('socket.getaddrinfo') as mock_getaddrinfo:
+            mock_getaddrinfo.return_value = [
+                (socket.AF_INET6, socket.SOCK_STREAM, 6, '', ('::ffff:169.254.169.254', 80, 0, 0))
+            ]
+
+            with pytest.raises(HTTPException):
+                _validate_mcp_server_url("http://[::ffff:169.254.169.254]:8000")
 
 
 # ============================================================================
