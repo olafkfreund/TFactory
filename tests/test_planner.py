@@ -322,6 +322,37 @@ async def test_initial_fails_when_retry_also_misses(
     assert "missing" in status["phase"]
 
 
+@pytest.mark.asyncio
+async def test_initial_recovers_on_default_model_when_configured_model_fails(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """#785: when a NON-default per-phase planning model (e.g. a broken Gemini CLI)
+    emits no plan even after retry, fall back to the known-good DEFAULT model,
+    which succeeds — instead of dead-ending at planner_invalid_missing_after_retry."""
+    (spec_dir / "task_metadata.json").write_text(
+        json.dumps({"isAutoProfile": True, "phaseModels": {"planning": "gemini"}})
+    )
+    # first + retry miss (broken gemini), the fallback (default opus) succeeds.
+    calls = mock_sdk(plans=[None, None, _make_valid_plan_json(1)])
+    ok = await run_planner(spec_dir, project_dir)
+    assert ok is True
+    assert len(calls) == 3  # primary + retry + fallback attempt
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["status"] == "planned"
+
+
+@pytest.mark.asyncio
+async def test_initial_no_fallback_when_configured_model_is_default(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """No wasted third session when the configured model already IS the default:
+    two misses fail directly (the fallback would just re-run the same model)."""
+    calls = mock_sdk(plans=[None, None])
+    ok = await run_planner(spec_dir, project_dir)
+    assert ok is False
+    assert len(calls) == 2  # no fallback attempt
+
+
 # ── Invalid JSON → retry ────────────────────────────────────────────────
 
 

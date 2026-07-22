@@ -181,9 +181,16 @@ class GeminiAgenticProvider(BaseLLMProvider):
         yield AssistantMessage(content=[TextBlock(text=response_text)])
 
     def _build_command(self) -> list[str]:
-        """Build the argv list for ``gemini --yolo -p <prompt>``."""
+        """Build the argv list for ``gemini --yolo --skip-trust -p <prompt>``."""
         resolved_binary = get_gemini_binary(self._gemini_path)
-        cmd: list[str] = [resolved_binary, "--yolo"]
+        # --skip-trust: the Gemini CLI's "trusted folder" gate refuses to run in a
+        # headless/automated workspace (exit 55, "not running in a trusted
+        # directory ... use --skip-trust ... for headless and automated
+        # environments"), so without it every planning/coding session produced no
+        # output and the planner reported `planner_invalid_missing` (#785). The
+        # sandbox already isolates the workspace; the trust prompt is not our
+        # security boundary.
+        cmd: list[str] = [resolved_binary, "--yolo", "--skip-trust"]
 
         if self._model:
             cmd += ["--model", self._model]
