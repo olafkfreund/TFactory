@@ -791,26 +791,26 @@ async def check_mcp_health(server: McpServerConfig):
     """Check health of an MCP server."""
     if server.type == "http" and server.url:
         import urllib.request
-        from urllib.parse import urlparse
 
-        # SSRF guard: an MCP server URL is configured by the operator themselves
-        # and, by design, very often points at a local/LAN endpoint (most MCP
-        # servers run on localhost). Blocking private/loopback hosts would break
-        # that intended use case, so we deliberately do not. We DO restrict the
-        # scheme to http/https so a configured value cannot be coerced into a
-        # file://, gopher://, ftp:// (etc.) request.
-        parsed = urlparse(server.url)
-        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        # SSRF guard: validate the MCP server URL using the helper, which resolves
+        # the hostname and rejects addresses in reserved/link-local/multicast ranges.
+        # Loopback and private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
+        # remain allowed as MCP servers typically run locally.
+        try:
+            validated_url = _validate_mcp_server_url(server.url)
+        except HTTPException as e:
+            logger.warning("MCP server URL validation rejected: %s", e.detail)
             return {
                 "success": True,
                 "data": {
                     "serverId": server.id,
-                    "status": "unhealthy",
-                    "message": "Unsupported or invalid server URL",
+                    "status": "unknown",
+                    "message": "Cannot check MCP server"
                 },
             }
+
         try:
-            req = urllib.request.Request(server.url, method="HEAD")
+            req = urllib.request.Request(validated_url, method="HEAD")
             if server.headers:
                 for key, value in server.headers.items():
                     req.add_header(key, value)
