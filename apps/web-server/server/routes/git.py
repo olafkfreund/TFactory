@@ -217,6 +217,27 @@ def _safe_ollama_base_url(base_url: str | None) -> str:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
+def _validate_mcp_server_url(server_url: str | None) -> str:
+    """Validate a request-supplied MCP server URL (SSRF guard).
+
+    MCP servers may legitimately run on the LAN (e.g. localhost, k8s pods),
+    so private ranges aren't blocked, but the scheme must be http/https, the
+    cloud-metadata endpoint is blocked, and only ``scheme://netloc`` is
+    returned -- dropping any path/query/fragment so the appended request path
+    can't be truncated or redirected to another resource.
+    """
+    if not server_url or not server_url.strip():
+        raise HTTPException(status_code=400, detail="MCP server URL cannot be empty")
+    from urllib.parse import urlparse
+
+    parsed = urlparse(server_url.strip())
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise HTTPException(status_code=400, detail="Invalid MCP server URL")
+    if parsed.hostname in ("169.254.169.254", "metadata.google.internal"):
+        raise HTTPException(status_code=400, detail="Disallowed MCP server URL")
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
 def check_ollama_running(base_url: str | None = None) -> bool:
     """Check if Ollama server is running."""
     import urllib.request
