@@ -1,0 +1,202 @@
+=== AUTO-BUILD PROGRESS ===
+
+Project: TFactory
+Task: 011-mcp-health-check-block-metadat
+Workspace: Managed by orchestrator
+Started: 2026-07-22
+
+Workflow Type: SIMPLE
+Rationale: Single-service security fix in one endpoint with complementary test coverage.
+No multi-service dependencies or complex integration phases required.
+
+Session 1 (Planner Agent):
+
+✓ Created implementation_plan.json
+  - 1 phase (Implementation & Testing)
+  - 3 subtasks (helper function, integration, tests)
+  - Parallelism: Sequential (tight dependencies)
+  - Risk level: Medium (SSRF security-critical change)
+
+✓ Created project_index.json
+  - Monorepo structure documented
+  - web-server service identified (FastAPI, port 3103)
+  - Test framework: pytest
+
+✓ Created context.json
+  - Target file: apps/web-server/server/routes/git.py
+  - Function: check_mcp_health (lines 768-823)
+  - Reference: net_guard.py for SSRF patterns
+
+✓ Created init.sh
+  - Setup script for dependencies
+  - Virtual environment initialization
+  - Test command examples
+
+Files Changed Summary:
+  Files to modify: 1
+    - apps/web-server/server/routes/git.py
+
+  Files to create: 1
+    - tests/test_mcp_health_check.py
+
+Phase Details:
+
+Phase 1: Implementation & Testing
+  Status: Pending
+  Subtask 1: Create _is_safe_mcp_url helper
+    - Resolve URL hosts
+    - Check against blocked ranges (link-local, metadata, multicast, unspecified)
+    - Allow loopback and private ranges
+    - Fail closed on DNS failures
+
+  Subtask 2: Integrate into check_mcp_health
+    - Call helper before checking URL
+    - Return status: "unknown" on rejection
+    - Log reason, don't return to client
+    - Preserve existing response shape
+
+  Subtask 3: Write comprehensive tests
+    - 169.254.169.254 (metadata)
+    - fe80::1 (IPv6 link-local)
+    - file:// scheme
+    - http://localhost (loopback)
+    - http://127.0.0.1 (loopback)
+    - http://10.0.0.1 (private)
+    - Public hostname
+
+Acceptance Criteria to Verify:
+  AC#1: Helper resolves host and rejects link-local, reserved, multicast, unspecified
+  AC#2: Loopback allowed, checked before reserved (order matters for IPv6)
+  AC#3: Private ranges (10/8, 172.16/12, 192.168/16) allowed
+  AC#4: Unresolvable hosts fail closed (treated as unsafe)
+  AC#5: Response keeps status: "unknown" format, reason logged not returned
+  AC#6: Tests cover all 6 test cases above
+
+Services Involved:
+  - backend (web-server FastAPI service)
+
+Dependencies:
+  - Python 3.7+ (for ipaddress module)
+  - pytest (for testing)
+  - FastAPI (already installed in web-server)
+
+=== STARTUP COMMAND ===
+
+To continue building this spec, run:
+
+  python run.py --spec 011 --parallel 1
+
+Or from the worktree:
+
+  cd /work/.aifactory/worktrees/tasks/011-mcp-health-check-block-metadat
+  python ../../apps/backend/run.py --spec 011
+
+=== NEXT STEPS ===
+
+The following agent (Coder) will:
+
+1. Implement _is_safe_mcp_url helper function
+   - Use ipaddress module for address range checking
+   - Use socket.getaddrinfo() for hostname resolution
+   - Reference net_guard.py patterns but customize for MCP use case
+
+2. Integrate helper into check_mcp_health endpoint
+   - Add validation before URL health check
+   - Return status: "unknown" on rejection
+   - Log rejection reason but don't expose to client
+
+3. Write comprehensive test suite
+   - Test all 6 acceptance criteria test cases
+   - Verify response shape unchanged
+   - Verify logging occurs
+   - Test DNS resolution failure handling
+
+Session 2 (Implementation - subtask-1-1):
+
+✓ COMPLETED: Create _is_safe_mcp_url helper function
+  - Added imports: ipaddress, socket, urlsplit
+  - Defined _MCP_ALWAYS_BLOCKED tuple with:
+    * IPv4 link-local (169.254.0.0/16)
+    * IPv6 link-local (fe80::/10)
+    * IPv4 multicast (224.0.0.0/4)
+    * IPv6 multicast (ff00::/8)
+    * IPv4 unspecified (0.0.0.0/32)
+    * IPv6 unspecified (::/128)
+  - Defined _MCP_LOOPBACK tuple with:
+    * IPv4 loopback (127.0.0.0/8)
+    * IPv6 loopback (::1/128)
+  - Implemented _resolve_mcp_addresses() to resolve host to all IPs
+  - Implemented _is_safe_mcp_url() to check all resolved addresses
+  - IPv4-mapped IPv6 normalization for proper validation
+  - Loopback checked before reserved (order matters for IPv6)
+  - DNS resolution failures fail closed (return False)
+
+✓ STARTED: Integrate _is_safe_mcp_url into check_mcp_health
+  - Added URL validation before health check
+  - Unsafe URLs return status: "unknown" (preserves existing shape)
+  - Rejection reason logged but not returned to client
+  - Maintains backward compatibility
+
+Files Modified:
+  - apps/web-server/server/routes/git.py:
+    * Added 4 new imports (ipaddress, socket, urlsplit)
+    * Added 155 lines of validation code
+    * Modified check_mcp_health to use _is_safe_mcp_url
+
+Code Quality:
+  ✓ Python file compiles with no syntax errors
+  ✓ Follows net_guard.py patterns but customized for MCP
+  ✓ All docstrings included
+  ✓ Fail-closed approach (unsafe = False)
+  ✓ No hardcoded timeouts or side effects
+
+✓ COMPLETED: Integrate _is_safe_mcp_url into check_mcp_health
+  - Added URL validation before health check (line 896)
+  - Unsafe URLs return status: "unknown" with message "Cannot check command-based servers"
+  - Response shape preserved (serverId, status, message)
+  - Rejection reason logged but not returned to client
+  - Maintains backward compatibility for safe URLs
+
+✓ COMPLETED: Write comprehensive test suite (34 tests)
+  - 34 unit tests covering all acceptance criteria
+  - Tests for blocked ranges:
+    * IPv4 link-local (169.254.0.0/16)
+    * IPv6 link-local (fe80::/10)
+    * IPv4 multicast (224.0.0.0/4)
+    * IPv6 multicast (ff00::/8)
+    * Unspecified (0.0.0.0, ::)
+  - Tests for allowed ranges:
+    * IPv4 loopback (127.0.0.0/8)
+    * IPv6 loopback (::1/128)
+    * Private ranges (10/8, 172.16/12, 192.168/16)
+  - Tests for edge cases:
+    * All resolved addresses checked (not just first)
+    * Loopback checked before reserved (order matters)
+    * IPv4-mapped IPv6 normalization
+    * Scheme validation (http/https allowed, file:// blocked)
+    * DNS resolution failures (fail closed)
+  - All tests passed: 34/34 ✓
+
+Commits Created:
+  1. b6c9e76 - subtask-1-1: Helper function implementation
+  2. fc93a95 - subtask-1-3: Comprehensive test suite
+
+Verification Results:
+  ✓ Python file syntax valid (py_compile)
+  ✓ Quick validation tests: 9/9 passed
+  ✓ Comprehensive test suite: 34/34 passed
+  ✓ AC#1: Blocks link-local, metadata, multicast, unspecified
+  ✓ AC#2: Allows loopback, checked before reserved
+  ✓ AC#3: Allows private ranges
+  ✓ AC#4: Fails closed on DNS errors
+  ✓ AC#5: Response shape maintained (status: unknown)
+  ✓ AC#6: All test cases covered (metadata, IPv6, file://, localhost, loopback, private, public)
+
+Task Status: COMPLETE ✓
+
+All subtasks completed and verified:
+  ✓ subtask-1-1: _is_safe_mcp_url helper function
+  ✓ subtask-1-2: Integration into check_mcp_health
+  ✓ subtask-1-3: Comprehensive test suite
+
+=== END SESSION 2 ===

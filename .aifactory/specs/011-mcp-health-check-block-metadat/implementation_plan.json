@@ -1,0 +1,173 @@
+{
+  "feature": "MCP health check: block metadata and link-local addresses",
+  "description": "Harden check_mcp_health to reject URLs resolving to link-local, metadata, multicast, and unspecified address ranges while allowing loopback and private ranges for local MCP servers",
+  "workflow_type": "simple",
+  "workflow_rationale": "Single-service security fix in one function with complementary test coverage - no multi-phase dependencies or complex integration requirements",
+  "required_commands": [
+    "python",
+    "pytest"
+  ],
+  "phases": [
+    {
+      "id": "phase-1-implementation",
+      "name": "Implementation & Testing",
+      "type": "implementation",
+      "description": "Add URL host validation helper and harden check_mcp_health endpoint with comprehensive test coverage",
+      "depends_on": [],
+      "parallel_safe": false,
+      "subtasks": [
+        {
+          "id": "subtask-1-1",
+          "description": "Create _is_safe_mcp_url helper function that resolves URL hosts and validates against blocked address ranges (link-local, metadata, multicast, unspecified) while allowing loopback and private ranges",
+          "service": "backend",
+          "depends_on": [],
+          "files_to_modify": [
+            "apps/web-server/server/routes/git.py"
+          ],
+          "files_to_create": [],
+          "patterns_from": [
+            "apps/backend/tools/runners/net_guard.py"
+          ],
+          "verification": {
+            "type": "command",
+            "command": "python -m py_compile ./apps/web-server/server/routes/git.py && echo 'OK'",
+            "expected": "OK"
+          },
+          "status": "completed"
+        },
+        {
+          "id": "subtask-1-2",
+          "description": "Integrate _is_safe_mcp_url into check_mcp_health endpoint - reject unsafe URLs with status=unknown and logged reason (not returned to client)",
+          "service": "backend",
+          "depends_on": [
+            "subtask-1-1"
+          ],
+          "files_to_modify": [
+            "apps/web-server/server/routes/git.py"
+          ],
+          "files_to_create": [],
+          "patterns_from": [
+            "apps/web-server/server/routes/git.py"
+          ],
+          "verification": {
+            "type": "api",
+            "method": "POST",
+            "url": "http://localhost:3103/api/mcp/health",
+            "body": {
+              "id": "test-server",
+              "type": "http",
+              "url": "http://localhost:5000"
+            },
+            "expected_status": 200,
+            "expected_response_contains": "status"
+          },
+          "status": "completed"
+        },
+        {
+          "id": "subtask-1-3",
+          "description": "Write comprehensive tests covering: 169.254.169.254 (metadata), IPv6 link-local literal (fe80::1), file:// scheme, http://localhost, http://127.0.0.1, private 10.x address, and public hostnames",
+          "service": "backend",
+          "depends_on": [
+            "subtask-1-2"
+          ],
+          "files_to_modify": [],
+          "files_to_create": [
+            "tests/test_mcp_health_check.py"
+          ],
+          "patterns_from": [
+            "tests/conftest.py",
+            "tests/test_health_gate.py"
+          ],
+          "verification": {
+            "type": "command",
+            "command": "python -m pytest tests/test_mcp_health_check.py -v",
+            "expected": "34 passed"
+          },
+          "status": "completed"
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "total_phases": 1,
+    "total_subtasks": 3,
+    "services_involved": [
+      "backend"
+    ],
+    "parallelism": {
+      "max_parallel_phases": 1,
+      "parallel_groups": [],
+      "recommended_workers": 1,
+      "speedup_estimate": "Sequential - single service, tight dependencies"
+    },
+    "startup_command": "python apps/backend/run.py --spec 011 --parallel 1"
+  },
+  "verification_strategy": {
+    "risk_level": "medium",
+    "skip_validation": false,
+    "test_creation_phase": "implementation",
+    "test_types_required": [
+      "unit"
+    ],
+    "security_scanning_required": false,
+    "staging_deployment_required": false,
+    "acceptance_criteria": [
+      "Link-local addresses (169.254.0.0/16, fe80::/10) are blocked",
+      "Metadata endpoints (169.254.169.254) are blocked",
+      "Multicast ranges (224.0.0.0/4, ff00::/8) are blocked",
+      "Unspecified addresses (0.0.0.0, ::) are blocked",
+      "Loopback addresses (127.0.0.0/8, ::1) are allowed",
+      "Private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) are allowed",
+      "Unresolvable hosts fail closed (treated as unsafe)",
+      "Response maintains existing status: unknown format",
+      "Rejection reason is logged, not returned to client"
+    ],
+    "verification_steps": [
+      {
+        "name": "Unit Tests",
+        "command": "python -m pytest tests/test_mcp_health_check.py -v",
+        "expected_outcome": "All 6+ test cases pass (metadata, link-local IPv4, link-local IPv6, file scheme, loopback, private, public)",
+        "type": "test",
+        "required": true,
+        "blocking": true
+      },
+      {
+        "name": "Manual Verification",
+        "command": "Manual - verify check_mcp_health response shape unchanged",
+        "expected_outcome": "Response contains serverId, status (unknown|healthy|unhealthy), and message",
+        "type": "manual",
+        "required": true,
+        "blocking": true
+      }
+    ],
+    "reasoning": "Medium risk - security-critical SSRF guard change. Existing response shape must be preserved, blocking behavior must be fail-closed, and comprehensive test coverage is mandatory."
+  },
+  "qa_acceptance": {
+    "unit_tests": {
+      "required": true,
+      "commands": [
+        "python -m pytest tests/test_mcp_health_check.py -v"
+      ],
+      "minimum_coverage": null
+    },
+    "integration_tests": {
+      "required": false,
+      "commands": [],
+      "services_to_test": []
+    },
+    "e2e_tests": {
+      "required": false,
+      "commands": [],
+      "flows": []
+    },
+    "browser_verification": {
+      "required": false,
+      "pages": []
+    },
+    "database_verification": {
+      "required": false,
+      "checks": []
+    }
+  },
+  "qa_signoff": null
+}
