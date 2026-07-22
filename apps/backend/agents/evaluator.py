@@ -943,9 +943,27 @@ def _flaky_history_for_subtask(spec_dir: Path, subtask: dict, stability):
     from agents.flaky_history import record_outcome
     from agents.stability_runner import StabilityVerdict
 
+    # #787: an ENVIRONMENTAL failure is not a test-reliability signal and must
+    # not be recorded. When the runner itself raised (ERROR), or the test never
+    # actually ran because the SUT was missing/not booted — a collection/import
+    # error, or the api-lane app never came up — recording a `false` outcome
+    # poisons the cross-run flip-rate: a deadline-reaped / no-SUT first attempt
+    # records `false`, the next real run records `true`, the resulting
+    # flip_rate=1.00 deterministically demotes every `accept` -> `flag`. Only a
+    # STABLE pass or a GENUINE test failure (assertion / flake) is a real
+    # outcome; skip the environmental ones so re-verifying a spec that first
+    # reaped does not spuriously flag good tests.
+    verdict = stability.verdict
+    if verdict == StabilityVerdict.ERROR:
+        return None
+    if verdict == StabilityVerdict.CONSISTENT_FAIL and getattr(
+        stability, "failure_kind", None
+    ) in ("import", "app_not_healthy"):
+        return None
+
     try:
         store = spec_dir.parent.parent / "test_history.json"
-        passed = stability.verdict == StabilityVerdict.STABLE
+        passed = verdict == StabilityVerdict.STABLE
         return record_outcome(store, subtask["id"], passed)
     except Exception as exc:  # noqa: BLE001
         _eval_log.warning(
