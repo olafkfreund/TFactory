@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.9.25 — the Nix runner image pre-bakes the common Python closure (2026-07-22)
+
+- **The Nix verify lane no longer cold-fetches its toolchain per test (#768, PR
+  #772).** The evaluator dispatches one nix Job per (test x stability-rerun x
+  mutation-candidate) — `S x (3 + M)` Jobs for a spec — and each re-realised the
+  identical closure (python, pytest, gcc-wrapper, stdenv) from cache.nixos.org.
+  Spec 008 (12 tests) blew the 3600s verify deadline before a single verdict;
+  the same spec on the host runner takes ~10 minutes. Realising the closure once
+  before the loop is impossible on this cluster (`TFACTORY_NIX_IN_IMAGE=true`, so
+  each Job's `/nix` is its own pod-local image store, no shared mount — the
+  warm-store PVC is RWO and was dropped for concurrency, #623). So the closure is
+  baked into the runner image instead: a warm-up flake carrying
+  `python313.withPackages [pytest pytest-cov pip]` at `DEFAULT_NIXPKGS` is
+  realised at build time with `nix develop --profile` (gcrooted so a store GC
+  cannot drop it). A per-task flake resolving to those same paths finds them
+  present and skips the fetch; the SUT's own requirements still pip-install per
+  Job (#764). Drift is guarded by `tests/docker/test_p0_nix_warmup.py` (rev +
+  package set pinned to the generator, both halves mutation-checked) and the PR
+  image build proves the bake with an `--offline` realise. This removes the
+  dominant per-Job cost; the Job-dispatch fan-out is a separate lever, measured
+  on a live re-drive before deciding whether it also needs reducing.
+
 ## 0.9.24 — a reaped verify Job now finishes its spec (2026-07-21)
 
 - **A deadline-killed Job no longer strands its workspace (#767, PR #769).**

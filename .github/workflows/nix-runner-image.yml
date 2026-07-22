@@ -72,3 +72,11 @@ jobs:
             nix --version
           docker run --rm "${{ env.IMAGE }}:latest" \
             sh -c 'nix flake --help >/dev/null && echo "flakes ok"'
+          # #768: prove the warm-up closure actually baked into the store.
+          # --offline realises the dev shell WITHOUT touching the binary cache,
+          # so it can only succeed if python + pytest + pip are already present —
+          # which is the entire point (a per-task flake reuses these paths and
+          # skips the per-Job fetch). A cold image would fail this outright.
+          docker run --rm "${{ env.IMAGE }}:latest" \
+            sh -c 'nix develop --offline path:/warmup#default \
+                     --command python -c "import pytest, pip; print(\"warm closure ok\")"'

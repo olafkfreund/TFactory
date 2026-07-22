@@ -23,4 +23,19 @@ RUN mkdir -p /etc/nix \
  && printf 'experimental-features = nix-command flakes\nfilter-syscalls = false\n' \
       >> /etc/nix/nix.conf
 
+# #768: pre-realise the common Python toolchain closure INTO the image store.
+# Under TFACTORY_NIX_IN_IMAGE every verify Job sources /nix from the image, so a
+# per-task flake that resolves to these same store paths (same nixpkgs rev + same
+# withPackages set as nix_provisioner emits) finds them present and skips the
+# per-Job cache.nixos.org fetch that made a real spec exceed the verify deadline.
+#
+# `nix develop --profile` both realises the dev shell's inputs and pins them
+# behind a profile gcroot, so the closure cannot be garbage-collected out of the
+# final image layer. `mkShell` outputs are not `nix profile install`-able, which
+# is why this is the right idiom. Kept in lockstep with
+# nix_provisioner.DEFAULT_NIXPKGS by tests/docker/test_p0_nix_warmup.py.
+COPY warmup /warmup
+RUN nix develop --profile /nix/var/nix/profiles/tf-warmup \
+      'path:/warmup#default' --command true
+
 WORKDIR /work
