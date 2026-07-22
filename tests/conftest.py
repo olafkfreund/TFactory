@@ -83,8 +83,10 @@ if "claude_code_sdk" not in sys.modules:
     sys.modules["claude_code_sdk"] = _create_sdk_mock()
     sys.modules["claude_code_sdk.types"] = MagicMock()
 
-# Add apps/backend directory to path for imports
+# Add apps/backend and apps/web-server directories to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "apps" / "backend"))
+if importlib.util.find_spec("fastapi") is not None:
+    sys.path.insert(0, str(Path(__file__).parent.parent / "apps" / "web-server"))
 
 
 # =============================================================================
