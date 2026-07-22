@@ -1,0 +1,33 @@
+{
+  "project_type": "single",
+  "project_name": "TFactory",
+  "description": "Autonomous test generation + execution platform",
+  "services": {
+    "web-server": {
+      "path": "apps/web-server",
+      "language": "python",
+      "tech_stack": ["python3.11+", "fastapi", "pydantic", "pytest"],
+      "port": 3103,
+      "dev_command": "python -m server.main",
+      "test_command": "pytest tests/ -v",
+      "primary_file": "server/main.py"
+    }
+  },
+  "infrastructure": {
+    "docker": true,
+    "database": "postgresql",
+    "cache": "redis"
+  },
+  "conventions": {
+    "linter": "ruff",
+    "formatter": "black",
+    "testing": "pytest",
+    "mocking": "unittest.mock",
+    "route_pattern": "FastAPI APIRouter with @router.{get,post,put,delete} decorators",
+    "test_pattern": "Test files in tests/ directory, matching routes under test"
+  },
+  "git": {
+    "base_branch": "dev",
+    "feature_branch_prefix": "feat/"
+  }
+}
