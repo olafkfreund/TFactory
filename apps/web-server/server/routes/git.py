@@ -2,13 +2,16 @@
 Git, Ollama, MCP, and utility routes.
 """
 
+import ipaddress
 import json
 import logging
 import re
 import shlex
 import shutil
+import socket
 import subprocess
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -38,6 +41,122 @@ def _require_safe_git_ref(value: str, label: str = "git ref") -> str:
     if not isinstance(value, str) or value.startswith("-") or not _GIT_REF_RE.fullmatch(value):
         raise HTTPException(status_code=400, detail=f"Invalid {label}")
     return value
+
+
+# ============================================
+# MCP Server URL Validation (SSRF Guard)
+# ============================================
+
+def _resolve_addresses(host: str) -> list[ipaddress._BaseAddress]:
+    """Resolve ``host`` to all IP addresses it maps to.
+
+    A literal IP is returned as-is. A hostname is resolved via DNS; every
+    returned address is checked (defends against DNS results that mix a
+    public and an internal address).
+
+    Raises OSError if DNS resolution fails.
+    """
+    try:
+        return [ipaddress.ip_address(host)]
+    except ValueError:
+        pass
+
+    infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    addrs: list[ipaddress._BaseAddress] = []
+    for info in infos:
+        sockaddr = info[4]
+        addrs.append(ipaddress.ip_address(sockaddr[0]))
+    return addrs
+
+
+def safe_mcp_server_url(url: str) -> bool:
+    """Validate MCP server URL for SSRF safety.
+
+    MCP servers often run on localhost or the LAN, so loopback and private
+    ranges are explicitly allowed. However, link-local, reserved, multicast,
+    and unspecified addresses are blocked unconditionally.
+
+    Args:
+        url: The MCP server URL (must include http/https scheme and host).
+
+    Returns:
+        True if the URL is safe.
+
+    Raises:
+        ValueError: if the URL is malformed, unresolvable, or resolves to
+            a blocked address.
+    """
+    parts = urlsplit(url)
+
+    # Scheme validation: http/https only
+    if parts.scheme not in ("http", "https"):
+        raise ValueError(
+            f"unsafe MCP server URL {url!r}: scheme must be http or https"
+        )
+
+    # Extract hostname
+    host = parts.hostname
+    if not host:
+        raise ValueError(f"unsafe MCP server URL {url!r}: missing host")
+
+    # Resolve all addresses the hostname maps to
+    try:
+        addrs = _resolve_addresses(host)
+    except OSError as e:
+        raise ValueError(
+            f"unsafe MCP server URL {url!r}: DNS resolution failed for host {host!r}"
+        ) from e
+
+    if not addrs:
+        raise ValueError(
+            f"unsafe MCP server URL {url!r}: host {host!r} resolved to no addresses"
+        )
+
+    # Check each address against blocked ranges
+    for addr in addrs:
+        # Normalise IPv4-mapped IPv6 (::ffff:127.0.0.1) to its IPv4 form so a
+        # mapped loopback/metadata address can't slip past the v4 checks.
+        if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
+            addr = addr.ipv4_mapped
+
+        # AC#2: Loopback is allowed; check it BEFORE reserved because IPv6 ::1
+        # satisfies is_reserved. Allow loopback explicitly.
+        if addr.is_loopback:
+            continue
+
+        # AC#1: Block link-local (includes APIPA 169.254/16 and IPv6 fe80::/10).
+        # Check this BEFORE is_private because 169.254.0.0/16 is both link-local
+        # and private in Python's ipaddress module.
+        if addr.is_link_local:
+            raise ValueError(
+                f"unsafe MCP server URL {url!r}: host {host!r} resolves to "
+                f"link-local address {addr}"
+            )
+
+        # AC#1: Block reserved, multicast, unspecified
+        if addr.is_reserved:
+            raise ValueError(
+                f"unsafe MCP server URL {url!r}: host {host!r} resolves to "
+                f"reserved address {addr}"
+            )
+
+        if addr.is_multicast:
+            raise ValueError(
+                f"unsafe MCP server URL {url!r}: host {host!r} resolves to "
+                f"multicast address {addr}"
+            )
+
+        if addr.is_unspecified:
+            raise ValueError(
+                f"unsafe MCP server URL {url!r}: host {host!r} resolves to "
+                f"unspecified address {addr}"
+            )
+
+        # AC#3: Private ranges are allowed (10/8, 172.16/12, 192.168/16).
+        # We allow private ranges that aren't link-local or otherwise blocked.
+        # Fall through to accept all other public addresses.
+
+    return True
 
 
 # ============================================
@@ -770,24 +889,24 @@ async def check_mcp_health(server: McpServerConfig):
     """Check health of an MCP server."""
     if server.type == "http" and server.url:
         import urllib.request
-        from urllib.parse import urlparse
 
-        # SSRF guard: an MCP server URL is configured by the operator themselves
-        # and, by design, very often points at a local/LAN endpoint (most MCP
-        # servers run on localhost). Blocking private/loopback hosts would break
-        # that intended use case, so we deliberately do not. We DO restrict the
-        # scheme to http/https so a configured value cannot be coerced into a
-        # file://, gopher://, ftp:// (etc.) request.
-        parsed = urlparse(server.url)
-        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        # SSRF guard: validate the URL resolves only to safe addresses.
+        # MCP servers often run on localhost/LAN, so loopback and private
+        # ranges are allowed. Metadata endpoints and link-local are blocked.
+        try:
+            safe_mcp_server_url(server.url)
+        except ValueError as e:
+            # AC#5: Log the specific reason, but return generic "unknown" status
+            logger.warning("MCP server URL rejected: %s", str(e))
             return {
                 "success": True,
                 "data": {
                     "serverId": server.id,
-                    "status": "unhealthy",
-                    "message": "Unsupported or invalid server URL",
-                },
+                    "status": "unknown",
+                    "message": "Cannot check server"
+                }
             }
+
         try:
             req = urllib.request.Request(server.url, method="HEAD")
             if server.headers:
