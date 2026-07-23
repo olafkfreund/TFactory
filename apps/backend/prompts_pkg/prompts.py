@@ -605,6 +605,17 @@ def _source_branch_changed_files(spec_dir: Path, project_dir: Path) -> list[str]
         )
 
     try:
+        # #751: refresh the plausible base refs before the by-distance pick.
+        # _checkout_source_branch fetches only the build branch, so this clone's
+        # origin/dev (etc.) is whatever it was at the last fetch. A build cut from
+        # a NEWER dev then merge-bases against the stale ref, attributing every
+        # commit merged into dev since to this build (7.7 KB block where 2.6 KB
+        # covered the real change). Best-effort + per-branch: a slow/missing
+        # branch fetch must never break planning, and one absent branch (no
+        # `master`) must not abort the others.
+        for _base_branch in ("dev", "main", "master"):
+            _git("fetch", "--no-tags", "--quiet", "origin", _base_branch)
+
         candidates: list[str] = []
         head_ref = _git("symbolic-ref", "refs/remotes/origin/HEAD")
         if head_ref.returncode == 0 and head_ref.stdout.strip():
