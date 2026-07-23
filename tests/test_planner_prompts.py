@@ -659,3 +659,94 @@ def test_base_is_the_branch_cut_from_not_the_default(tmp_path: Path) -> None:
     block = _build_changed_symbols_block(spec_dir, proj)
     assert "the_thing_that_was_built" in block
     assert "from_dev" not in block
+
+
+def test_stale_base_ref_is_refreshed_before_diff(tmp_path: Path) -> None:
+    """#751: a build cut from a NEWER dev than this clone last fetched must not
+    attribute dev's intervening commits to the build.
+
+    Real topology: TFactory ingest fetches only the build branch, so origin/dev
+    here can be stale. If dev moved ahead after the clone and the build was cut
+    from that newer dev, merge-base(stale origin/dev, HEAD) sits before the real
+    cut point and the diff includes files the build never touched. The base-ref
+    fetch at the top of _source_branch_changed_files closes that gap.
+    """
+    origin = tmp_path / "origin.git"
+
+    def _o(*args: str) -> None:
+        subprocess.run(  # noqa: S603
+            ["git", "-C", str(origin), *args],
+            check=True,
+            capture_output=True,  # noqa: S607
+        )
+
+    # Bare origin seeded via a scratch worktree with main + dev(D1).
+    seed = tmp_path / "seed"
+    subprocess.run(  # noqa: S603
+        ["git", "init", "-b", "main", "--quiet", str(seed)],
+        check=True,
+        capture_output=True,  # noqa: S607
+    )
+
+    def _s(*args: str) -> None:
+        subprocess.run(  # noqa: S603
+            ["git", "-C", str(seed), *args],
+            check=True,
+            capture_output=True,  # noqa: S607
+        )
+
+    _s("config", "user.email", "t@t")
+    _s("config", "user.name", "t")
+    (seed / "on_main.py").write_text("def from_main() -> None: ...\n")
+    _s("add", "-A")
+    _s("commit", "-qm", "main")
+    _s("checkout", "-q", "-b", "dev")
+    (seed / "dev_old.py").write_text("def dev_old() -> None: ...\n")
+    _s("add", "-A")
+    _s("commit", "-qm", "dev D1")
+    subprocess.run(  # noqa: S603
+        ["git", "clone", "--bare", "--quiet", str(seed), str(origin)],  # noqa: S607
+        check=True,
+        capture_output=True,
+    )
+
+    # Clone the project — its origin/dev now points at the stale D1.
+    proj = tmp_path / "repo"
+    subprocess.run(  # noqa: S603
+        ["git", "clone", "--quiet", str(origin), str(proj)],
+        check=True,
+        capture_output=True,  # noqa: S607
+    )
+
+    # Origin's dev moves ahead (D2), and the build branch is cut from that D2.
+    _s("checkout", "-q", "dev")
+    (seed / "dev_new.py").write_text("def dev_new() -> None: ...\n")
+    _s("add", "-A")
+    _s("commit", "-qm", "dev D2 (after clone)")
+    _s("checkout", "-q", "-b", "aifactory/007-feature")
+    (seed / "built.py").write_text("def the_thing_that_was_built() -> None: ...\n")
+    _s("add", "-A")
+    _s("commit", "-qm", "the build")
+    _s("push", "-q", str(origin), "dev", "aifactory/007-feature")
+
+    # Ingest fetches ONLY the build branch and checks it out detached — leaving
+    # this clone's origin/dev stale at D1 (the exact #751 condition).
+    def _p(*args: str) -> None:
+        subprocess.run(  # noqa: S603
+            ["git", "-C", str(proj), *args],
+            check=True,
+            capture_output=True,  # noqa: S607
+        )
+
+    _p("fetch", "--no-tags", "origin", "aifactory/007-feature")
+    _p("checkout", "-q", "--detach", "FETCH_HEAD")
+
+    spec_dir = tmp_path / "spec"
+    (spec_dir / "context").mkdir(parents=True)
+    (spec_dir / "context" / "source.json").write_text(
+        '{"source_branch": "aifactory/007-feature"}'
+    )
+
+    changed = _source_branch_changed_files(spec_dir, proj)
+    # Without the refresh: dev_new.py leaks in (it is D2's, not the build's).
+    assert changed == ["built.py"], changed
