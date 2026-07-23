@@ -14,10 +14,12 @@ operator installing TFactory from scratch should be able to find each required
 credential, each pipeline gate, each feature flag, and each tuning knob here —
 with its default, whether it is required, what it does, and where it is read.
 
-This reference covers the **backend service** (`apps/backend`). The web-server
-portal has its own `apps/web-server/.env.example`; the handful of `APP_*`
-portal variables are noted at the end under
-[Portal variables](#portal-variables-web-server).
+This reference covers **both** the backend service (`apps/backend`) and the
+web-server portal (`apps/web-server`). Backend variables come first; the
+portal's `APP_*` settings, SSO (OIDC), secret-encryption (KMS), and email-OAuth
+variables are grouped at the end under
+[Portal variables](#portal-variables-web-server). The portal also has its own
+`apps/web-server/.env.example`.
 
 </div>
 
@@ -121,6 +123,7 @@ provisions. They are read from the run environment.
 |---|---|---|---|---|---|
 | `TFACTORY_VAL3_LOCAL_VM` | off | No | Default OFF | Provision a local VM as the disposable target. | `agents/disposable_target.py` |
 | `TFACTORY_VAL3_K8S_JOB` | off | No | Default OFF | Provision a Kubernetes Job as the disposable target (see `agents/k8s_job_target.py`). | `agents/disposable_target.py` |
+| `TFACTORY_VAL3_K8S_JOB_IMAGE` | unset | Required when `TFACTORY_VAL3_K8S_JOB=1` | — | Runner image for the `k8s-job` disposable target (e.g. the `tfactory-runner-nix` image). | `agents/k8s_job_target.py` |
 | `TFACTORY_VAL3_CLOUD` | unset | No | Default OFF | Provision a cloud target; value names the cloud/target profile. | `agents/disposable_target.py` |
 | `TFACTORY_VAL3_TARGET_IS_PROD` | off | No | Default OFF | Assert the target is production (guardrail flag; also inferred from the contract). | `agents/disposable_target.py` |
 | `TFACTORY_TARGET_URL` | injected | No | — | The live target URL, **set by TFactory** into the test runtime (first `wait_for` URL) and read by the runner's network guard. Operators do not set this. | `tools/runners/lane_dispatch.py`, `tools/runners/net_guard.py` |
@@ -142,6 +145,7 @@ the per-task Nix Kubernetes Job (RFC-0005 / RFC-0016). See
 | `TFACTORY_NIX_STORE_PVC` | unset | No | — | PVC name holding the shared Nix store (ignored when `TFACTORY_NIX_IN_IMAGE` is set). | `agents/nix_env.py`, `agents/verify_dispatch.py` |
 | `TFACTORY_WORKSPACES_PVC` | unset | No | — | PVC name for the shared workspaces / data root mounted into the Nix Job. | `agents/nix_env.py`, `agents/verify_dispatch.py` |
 | `TFACTORY_SANDBOX_NAMESPACE` | `factory` | No | — | Kubernetes namespace the Nix/verify Jobs are created in. | `agents/nix_env.py`, `agents/verify_dispatch.py` |
+| `TFACTORY_NIX_JOB_CONCURRENCY` | `4` | No | — | Max Nix verify Jobs dispatched in parallel in the image-local regime (the fan-out is `S x (3 + M)` Jobs per spec). Clamped to a minimum of 1. | `agents/nix_env.py` |
 | `TFACTORY_DATA_ROOT` | unset | No | — | Data-root path used to derive the Nix Job's co-mount subPath. | `agents/nix_env.py` |
 | `TFACTORY_VERIFY_EXEC` | `inpod` | No | — | Verify execution mode: `kubejob` dispatches a separate verify Job; anything else runs in-pod. | `agents/verify_dispatch.py` |
 | `TFACTORY_EQUIVALENCE_LANE` | off | No | Default OFF | Enable the source-vs-port equivalence lane. Truthy to enable. | `agents/evaluator.py` |
@@ -150,6 +154,13 @@ the per-task Nix Kubernetes Job (RFC-0005 / RFC-0016). See
 | `TFACTORY_VERDICT_VOTES` | `3` | No | — | Best-of-N independent evaluation passes for the verdict. | `agents/evaluator.py` |
 | `TFACTORY_CI_PARITY` | `1` | No | Default ON | Apply CI-parity defaults in the docker runner. Set `0` to disable. | `tools/runners/docker_runner.py` |
 | `TFACTORY_CONTAINER_BIN` | `docker` | No | — | Container CLI used by the docker runner and evaluator (`docker` or `podman`). | `tools/runners/docker_runner.py`, `agents/evaluator.py` |
+
+> `DEFAULT_NIXPKGS` is a **pinned constant**, not an environment variable
+> (`tools/runners/nix_provisioner.py`, currently
+> `github:NixOS/nixpkgs/567a49d…`). Every generated per-task flake and the
+> pre-baked warm-up closure resolve against it, and it is pinned together with
+> the flake `narHash`/`lastModified` so the Nix lane realises byte-identical
+> store paths. Change it in the source, not the environment.
 
 ---
 
@@ -197,6 +208,7 @@ Secret is named.
 | `TFACTORY_CLOUD_ASSESSMENT_ROOT` | derived | No | — | Override the root path for stored cloud-assessment artifacts. | `agents/cloud/store.py` |
 | `TFACTORY_VISUAL_INSPECTION_ROOT` | derived | No | — | Override the root path for stored visual-inspection artifacts. | `agents/visual_inspection/store.py` |
 | `TFACTORY_STALL_DEADLINE_SECONDS` | `900` | No | — | Idle budget before an active stage is considered stalled (liveness). | `agents/liveness.py` |
+| `TFACTORY_GEN_SESSION_TIMEOUT_S` | `480` | No | — | Wall-clock budget (seconds) for a single Gen-Functional agent session before it is bounded and terminated (#792). | `agents/gen_functional.py` |
 | `TFACTORY_DEP_AGE_CHECK` | `1` | No | Default ON | Dependency freshness/age check in the dependency-review gate. Set `0` to disable. | `agents/dependency_review.py` |
 | `TFACTORY_EGRESS_ENABLED` | off | No | Default OFF | Allow network egress from the secrets/egress guard. Truthy to enable. | `tfactory_secrets/egress.py` |
 | `TFACTORY_BATCH_MIN_JOBS` | `2` | No | — | Minimum jobs before insight-extraction batches. | `analysis/insight_extractor.py` |
@@ -311,6 +323,7 @@ is a fallback (and is never forwarded to verify Jobs, to avoid silent billing).
 | `VOYAGE_API_KEY` | unset | No | Voyage AI embeddings key (Graphiti). | `integrations/graphiti/config.py` |
 | `VOYAGE_EMBEDDING_MODEL` | `voyage-3` | No | Voyage embedding model. | `integrations/graphiti/config.py` |
 | `GITHUB_TOKEN` | unset | No | GitHub token for GitHub Models, Copilot dispatch, and GitLab provider ops. | `phase_config.py`, `agents/copilot_dispatch.py`, `agents/verify_dispatch.py` |
+| `GH_TOKEN` | unset | No | Fallback GitHub token, read when `GITHUB_TOKEN` is unset (e.g. resolving a spec's PR context). | `apps/web-server/server/routes/specs.py` |
 | `GITHUB_MODELS_DEFAULT` | `openai/gpt-4.1` | No | Default model when using the GitHub Models provider. | `phase_config.py` |
 | `QA_LLM_PROVIDER` | unset | No | Force a specific provider for the QA/verify phase. | `phase_config.py`, `agents/verify_dispatch.py` |
 | `AUTO_BUILD_MODEL` | unset | No | Model for the auto-build CLI path (CLI `--model` overrides). | `cli/main.py` |
@@ -357,30 +370,148 @@ is a fallback (and is never forwarded to verify Jobs, to avoid silent billing).
 
 ## Portal variables (web-server)
 
-These belong to the web-server portal app (`apps/web-server`), not the
-backend, but appear in the root `.env.example` because the docker-compose
-deployment sets them on the same container. See
-`apps/web-server/.env.example` for the authoritative list.
+These belong to the web-server portal app (`apps/web-server`). The docker-compose
+deployment sets them on the same container, so they also appear in the root
+`.env.example`. The portal's pydantic `Settings` class uses `env_prefix = "APP_"`,
+so a field `FOO` is set with `APP_FOO`. See `apps/web-server/.env.example` for
+the compose-oriented list.
 
-| Variable | Default | Required | Purpose |
-|---|---|---|---|
-| `HOST_PORT` | `3102` | No | Host port the docker-compose web server is published to. |
-| `APP_API_TOKEN` | auto-generated | No | Portal API token (auto-generated on first run if unset). |
-| `APP_CORS_ORIGINS` | unset | No | Extra CORS origins (comma-separated or JSON list). |
-| `TFACTORY_DATA_DIR` | `./data` | No | Bind-mounted host dir for the container's `/home/nonroot/.tfactory`. |
+### Server, TLS, and CORS
+
+| Variable | Default | Required | On/Off | Purpose | Read in |
+|---|---|---|---|---|---|
+| `HOST_PORT` | `3102` | No | — | Host port the docker-compose web server is published to. | `docker-compose.yml` |
+| `APP_HOST` | `0.0.0.0` | No | — | Bind address for the portal. Use a loopback host with `APP_DISABLE_AUTH`. | `server/config.py` |
+| `APP_PORT` | `3103` | No | — | Portal listen port. | `server/config.py` |
+| `APP_DEBUG` | off | No | Default OFF | Portal debug mode. | `server/config.py` |
+| `APP_SSL_ENABLED` | off | No | Default OFF | Serve HTTPS; generates a self-signed cert if no cert/key path is given. | `server/config.py` |
+| `APP_SSL_CERTFILE` | generated | No | — | Path to the TLS certificate (self-signed under the data dir if unset). | `server/config.py` |
+| `APP_SSL_KEYFILE` | generated | No | — | Path to the TLS private key. | `server/config.py` |
+| `APP_CORS_ORIGINS` | localhost set | No | — | Extra CORS origins (comma-separated string or JSON list). | `server/config.py` |
+| `TFACTORY_DATA_DIR` | `./data` | No | — | Bind-mounted host dir for the container's `/home/nonroot/.tfactory`. | `docker-compose.yml` |
+
+### Authentication and sessions
+
+| Variable | Default | Required | On/Off | Purpose | Read in |
+|---|---|---|---|---|---|
+| `APP_API_TOKEN` | auto-generated | No | — | Portal API bearer token (generated + persisted to `.token` on first run if unset). | `server/config.py` |
+| `APP_DISABLE_AUTH` | off | No | Default OFF `[security]` | Inject a default admin into every request (dev only). The portal **refuses to boot** with this on a non-loopback `APP_HOST` unless `APP_ALLOW_INSECURE_AUTH` is also set. | `server/config.py` |
+| `APP_ALLOW_INSECURE_AUTH` | off | No | Default OFF `[security]` | Escape hatch that permits `APP_DISABLE_AUTH` on a non-loopback host. Not recommended. | `server/config.py` |
+| `APP_JWT_SECRET` | auto-generated | No | — | HMAC secret for portal JWTs (persisted to `.jwt_secret` so tokens survive restarts). | `server/config.py` |
+| `APP_JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | `15` | No | — | Access-token lifetime (minutes). | `server/config.py` |
+| `APP_JWT_REFRESH_TOKEN_EXPIRE_DAYS` | `7` | No | — | Refresh-token lifetime (days). | `server/config.py` |
+| `APP_JWT_ALGORITHM` | `HS256` | No | — | JWT signing algorithm. | `server/config.py` |
+
+### SSO / OIDC
+
+Single-sign-on via an external OpenID Connect provider. Off unless
+`APP_OIDC_ENABLED` is truthy.
+
+| Variable | Default | Required | On/Off | Purpose | Read in |
+|---|---|---|---|---|---|
+| `APP_OIDC_ENABLED` | off | No | Default OFF | Enable the OIDC login flow. | `server/oidc/client.py` |
+| `APP_OIDC_PROVIDER` | unset | When OIDC on | — | Provider preset name (selects issuer defaults and default scope). | `server/oidc/client.py` |
+| `APP_OIDC_ISSUER_URL` | preset | When OIDC on | — | OIDC issuer URL (overrides the preset). | `server/oidc/client.py` |
+| `APP_OIDC_CLIENT_ID` | unset | When OIDC on | — | OAuth client ID. | `server/oidc/client.py` |
+| `APP_OIDC_CLIENT_SECRET` | unset | When OIDC on | `[secret]` | OAuth client secret. | `server/oidc/client.py` |
+| `APP_OIDC_REDIRECT_URI` | derived | No | — | OAuth redirect/callback URI. | `server/oidc/client.py` |
+| `APP_OIDC_SCOPE` | preset default | No | — | OAuth scopes requested at login. | `server/oidc/client.py` |
+| `APP_OIDC_GROUP_TO_ROLE` | unset | No | — | Mapping from IdP group claims to portal roles. | `server/oidc/provisioning.py` |
+| `APP_OIDC_DEFAULT_ROLE` | `member` | No | — | Role assigned when no group mapping matches. | `server/oidc/provisioning.py` |
+| `APP_OIDC_DEFAULT_ORG_NAME` | unset | No | — | Org name new SSO users are provisioned into. | `server/oidc/provisioning.py` |
+| `APP_OIDC_DEFAULT_ORG_SLUG` | unset | No | — | Org slug for provisioned SSO users. | `server/oidc/provisioning.py` |
+| `APP_OIDC_POST_LOGIN_REDIRECT` | unset | No | — | Where to send the browser after a successful login. | `server/oidc/client.py` |
+| `APP_OIDC_POST_LOGOUT_REDIRECT` | unset | No | — | Where to send the browser after logout. | `server/oidc/client.py` |
+| `APP_OIDC_USERINFO_CACHE_TTL_S` | unset | No | — | TTL (seconds) for the cached userinfo response. | `server/oidc/userinfo_cache.py` |
+
+### Secret encryption (KMS)
+
+Envelope-encryption backend for secrets the portal stores at rest. Selected by
+`APP_KMS_BACKEND` (or the unprefixed `KMS_BACKEND`); each backend reads its own
+provider config.
+
+| Variable | Default | Required | On/Off | Purpose | Read in |
+|---|---|---|---|---|---|
+| `APP_KMS_BACKEND` / `KMS_BACKEND` | fernet | No | — | KMS backend: `fernet`, `aws`, `gcp`, `azure`, or `vault`. | `server/crypto/kms/__init__.py` |
+| `APP_KMS_FERNET_KEY` / `KMS_FERNET_KEY` | generated | For fernet backend | `[secret]` | Fernet key for the local-key backend. | `server/crypto/kms/fernet.py` |
+| `AWS_KMS_KEY_ID` | unset | For aws backend | — | KMS key ID/ARN for the AWS backend. | `server/crypto/kms/aws.py` |
+| `AWS_ENDPOINT_URL` | unset | No | — | Custom AWS endpoint (e.g. LocalStack) for the AWS KMS backend. | `server/crypto/kms/aws.py` |
+| `GCP_KMS_KEY_NAME` | unset | For gcp backend | — | Full resource name of the GCP KMS key. | `server/crypto/kms/gcp.py` |
+| `AZURE_KEYVAULT_URL` | unset | For azure backend | — | Azure Key Vault URL. | `server/crypto/kms/azure.py` |
+| `AZURE_KEYVAULT_KEY` | unset | For azure backend | — | Key name within the Azure Key Vault. | `server/crypto/kms/azure.py` |
+| `VAULT_TRANSIT_KEY` | default key | For vault backend | — | Vault Transit key name for envelope encryption. | `server/crypto/kms/vault.py` |
+| `VAULT_TRANSIT_MOUNT` | default mount | For vault backend | — | Vault Transit mount point. | `server/crypto/kms/vault.py` |
+| `VAULT_NAMESPACE` | unset | No | — | Vault namespace (Vault Enterprise). | `server/crypto/kms/vault.py` |
+
+> The Vault KMS backend reuses `VAULT_ADDR` / `VAULT_TOKEN` from the
+> [Infrastructure](#infrastructure-paths-and-auth) group for its connection.
+
+### Email OAuth (portal mailbox integration)
+
+| Variable | Default | Required | On/Off | Purpose | Read in |
+|---|---|---|---|---|---|
+| `APP_EMAIL_GOOGLE_CLIENT_ID` | unset | For Google mail | — | Google OAuth client ID for the mailbox integration. | `server/_get_email_oauth_credentials.py` |
+| `APP_EMAIL_GOOGLE_CLIENT_SECRET` | unset | For Google mail | `[secret]` | Google OAuth client secret. | `server/_get_email_oauth_credentials.py` |
+| `APP_EMAIL_MICROSOFT_CLIENT_ID` | unset | For Microsoft mail | — | Microsoft OAuth client ID. | `server/_get_email_oauth_credentials.py` |
+| `APP_EMAIL_MICROSOFT_CLIENT_SECRET` | unset | For Microsoft mail | `[secret]` | Microsoft OAuth client secret. | `server/_get_email_oauth_credentials.py` |
+| `EMAIL_OAUTH_REDIRECT_URI` | derived | No | — | Override the email OAuth redirect URI. | `server/routes/email.py` |
+
+### Portal runtime, data, and lifecycle
+
+| Variable | Default | Required | On/Off | Purpose | Read in |
+|---|---|---|---|---|---|
+| `APP_DATABASE_URL` | sqlite (derived) | No | — | Portal database URL (defaults to `sqlite+aiosqlite:///…` under the data dir). | `server/config.py` |
+| `APP_MIGRATIONS_AUTO_APPLY` | on | No | Default ON | Run `alembic upgrade head` at boot. Set `0` in K8s where a Helm Job migrates out-of-band. | `server/config.py` |
+| `APP_PROJECTS_DATA_DIR` | data dir | No | — | Directory for project metadata. | `server/config.py` |
+| `APP_PROJECTS_BACKEND` | `json` | No | — | Project persistence backend: `json` (legacy) or `db` (org-scoped rows). | `server/config.py` |
+| `APP_BACKEND_PATH` | derived | No | — | Path to `apps/backend` (auto-detected as a sibling if unset). | `server/config.py` |
+| `PROJECT_WORKSPACE_ROOT` | derived | No | — | Root for per-project workspaces the portal manages. | `server/services/project_workspace_service.py` |
+| `APP_DEFAULT_SHELL` | `/bin/bash` | No | — | Shell for portal terminals. | `server/config.py` |
+| `APP_MAX_TERMINALS` | `20` | No | — | Max concurrent portal terminals. | `server/config.py` |
+| `APP_MAX_CONCURRENT_TASKS` | `5` | No | — | Max concurrent task executions. | `server/config.py` |
+| `APP_LIVENESS_SWEEP_ENABLED` | off | No | Default OFF | Periodic watchdog that flags a silent in-flight stage as `stalled` (#95). | `server/config.py` |
+| `APP_LIVENESS_SWEEP_INTERVAL_SECONDS` | `300` | No | — | How often the liveness sweep runs. | `server/config.py` |
+| `APP_LIVENESS_SWEEP_DEADLINE_SECONDS` | `600` | No | — | Idle budget before the sweep marks a stage stalled. | `server/config.py` |
+| `APP_INLINE_ORPHAN_RECONCILE_ENABLED` | on | No | Default ON | One-shot boot reconcile: fail specs stranded at `planning`/`generating` by a control-plane roll (#774). Set `0` under `--reload` dev servers. | `server/config.py` |
+| `APP_WORKTREE_GC_ENABLED` | on | No | Default ON | One-shot boot GC of per-spec git worktrees for terminal specs, reclaiming PVC disk (#742/#781). | `server/config.py` |
+| `APP_COMPLETION_RELAY_ENABLED` | off | No | Default OFF `[write]` | Drain the durable completion-event outbox to CFactory (#281). Enqueue also needs `TFACTORY_COMPLETION_OUTBOX`. | `server/config.py` |
+| `APP_COMPLETION_RELAY_INTERVAL_SECONDS` | `30` | No | — | How often the completion relay drains the outbox. | `server/config.py` |
+| `APP_INBOUND_HANDBACK_ENABLED` | off | No | Default OFF | Accept AIFactory's inbound completion webhook to close the fail→handback→re-test loop (#182). | `server/config.py` |
+| `APP_INBOUND_HANDBACK_SECRET` | unset | When inbound handback on | `[secret]` | Shared secret validated against the `X-TFactory-Handback-Token` header. | `server/config.py` |
+| `CFACTORY_SEARCH_URL` | in-cluster default | No | — | CFactory cockpit base URL the portal proxies its cross-portal search to. Empty disables federated search. | `server/config.py` |
+| `CFACTORY_READ_KEY` | unset | No | `[secret]` | Read-scoped cockpit key for the federated-search proxy. | `server/config.py` |
+
+### Portal integrations and access
+
+| Variable | Default | Required | On/Off | Purpose | Read in |
+|---|---|---|---|---|---|
+| `APP_SKILLS_PATH` | `.claude/skills` | No | — | Directory of Claude skills the portal exposes. | `server/services/skills_service.py` |
+| `TFACTORY_SKILLS_DIR` | derived | No | — | Override the skills directory (tests inject a tmp dir); falls back to the resolved default. | `server/routes/tfactory_skills.py` |
+| `METRICS_SCRAPE_TOKEN` | unset | No | `[secret]` | Bearer token required to scrape `/metrics`. Empty leaves the endpoint open (behind auth). | `server/observability/metrics.py` |
+| `COPILOT_MCP_TFACTORY_TOKEN` | unset | For Copilot MCP | `[secret]` | Bearer token the GitHub Copilot MCP endpoint requires. | `server/routes/mcp_copilot.py` |
+| `TFACTORY_MCP_REMOTE_ENABLED` | off | No | Default OFF | Enable the remote MCP server transport. | `server/mcp_remote/__init__.py` |
+| `TFACTORY_MCP_LOOPBACK_URL` | built-in default | No | — | Loopback base URL the remote MCP tools call back into. | `server/mcp_remote/tools.py` |
+| `TFACTORY_MULTI_TENANT` | off | No | Default OFF | Enable multi-tenant mode; honours the `X-Tenant-Id` header. | `server/routes/_tenancy.py` |
+| `TFACTORY_RMUX_ENABLED` | off | No | Default OFF | Enable the rmux (remote-mux) integration. | `server/rmux/integration.py` |
+| `TFACTORY_TEST_AGENT_CMD` | unset | No | — | Override the agent command the portal spawns (test harness only). | `server/services/agent_service.py` |
 
 ---
 
 ## Completeness
 
-This reference was produced by grepping the entire `apps/backend` tree for
-every environment read (`os.environ`, `os.getenv`, `getenv(`, plus dict-style
-`env.get(...)` and indirection through `_ENV_*` constants), then reconciling.
+This reference was produced by grepping the entire `apps/backend` **and**
+`apps/web-server` trees for every environment read (`os.environ`, `os.getenv`,
+`getenv(`, plus pydantic `Settings` fields under `env_prefix = "APP_"` and
+indirection through `_ENV_*` constants), then reconciling every distinct name
+against a documented row.
 
-- **Distinct variable names found:** 155
-- **Documented above:** 153
-- **Intentionally excluded (incidental):** 2
-- **Unaccounted:** 0
+- **Backend (`apps/backend`):** every environment read is documented; 0
+  unaccounted.
+- **Web-server portal (`apps/web-server`):** the `APP_*` `Settings` fields plus
+  the OIDC, KMS, email-OAuth, metrics, MCP-remote, multi-tenant, rmux, and
+  skills variables are documented under
+  [Portal variables](#portal-variables-web-server).
+- **Intentionally excluded (incidental):** listed below.
 
 ### Intentionally excluded (incidental)
 
@@ -388,12 +519,14 @@ every environment read (`os.environ`, `os.getenv`, `getenv(`, plus dict-style
 |---|---|
 | `PORT` | Not TFactory config. Appears only in `analysis/analyzers/port_detector.py` as a comment describing the pattern the analyzer scans for in the **target** application under test. |
 | `PYTHONPATH` | Not read as configuration. TFactory only **sets** it when building subprocess/verify-Job environments (`agents/evaluator.py`, `agents/verify_dispatch.py`). |
+| `SHELL` | System-provided. Fallback for the portal terminal shell when `APP_DEFAULT_SHELL` is unset (`server/pty/session.py`). |
+| `XDG_RUNTIME_DIR` | System-provided. Locates the rmux socket dir when the rmux integration is enabled (`server/rmux/wrapper.py`). |
 
 The following variables appear in `.env.example` for the test/e2e harness or
 the web-server app and are **not** read by the backend service code; they are
 listed here for completeness and are safe to ignore for a production install:
 `TFACTORY_E2E_STATE_DIR`, `TFACTORY_AIFACTORY_BRANCH`, `TFACTORY_AIFACTORY_PR`,
-`TFACTORY_DOCKER_IMAGE_PYTHON` (test/e2e harness), and `APP_PORT` (web-server).
+and `TFACTORY_DOCKER_IMAGE_PYTHON` (test/e2e harness).
 
 Two names that showed up in the raw grep but are **not** real variables:
 `VAR` and `VAR_NAME` — both are placeholder strings inside docstrings/error

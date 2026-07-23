@@ -13,13 +13,21 @@ sandbox, evaluates quality with a five-signal verdict, grades each acceptance
 criterion against a test that actually ran, commits the suite to the feature
 branch, and posts a triage report to the PR — autonomously.
 
-> **Where we are (June 2026, v0.9.x).** The planner auto-runs on ingest, and the
+> **Where we are (July 2026, v0.9.x).** The planner auto-runs on ingest, and the
 > AIFactory handoff carries the signed Task Contract plus the deployed URL — so
 > TFactory tests the *declared* acceptance criteria against the *real*
-> deployment. The browser lane now runs in a reproducible per-task Nix toolchain
-> inside an ephemeral Kubernetes Job (RFC-0005 Tier A), captures screenshots and
-> video recordings, and surfaces them as visible evidence in the portal and in
-> the CFactory cockpit. An acceptance-criteria fidelity ledger reports an honest
+> deployment. The verify lane runs in a reproducible per-task **Nix** toolchain
+> inside an ephemeral Kubernetes Job (RFC-0005 Tier A): the runner image now
+> pre-bakes the common Python closure so Jobs stop cold-fetching their toolchain,
+> and the SUT's own `requirements.txt` dependencies install per Job. Each spec's
+> build checkout is isolated in its **own git worktree** (#742) so concurrent
+> verifies can't corrupt a shared clone, a reaped or stalled Job now drives its
+> spec to a terminal verdict instead of stranding it, and the MCP health check
+> blocks cloud-metadata / link-local addresses (**SSRF guard**). Verdicts are
+> **mutation-checked** — a guard that survives its own mutation is not trusted —
+> and the new **deploy dry-run lane** (VAL-2) runs `kubectl apply
+> --dry-run=server` against the detected manifests so a deployment is validated
+> before it is trusted. An acceptance-criteria fidelity ledger reports an honest
 > "verified X/Y" per criterion, and authenticated targets — including ones gated
 > by TOTP two-factor auth — can be tested against a disposable identity provider
 > with zero production credentials.
@@ -153,6 +161,22 @@ and grades it `verified` only when at least one of those tests actually passed �
 reporting an honest "verified X/Y", never a blanket "done". For interactive UI
 criteria, the linked evidence is the screenshot of the rendered page and a
 recording of the test driving it.
+
+## Verification Assurance Levels (VAL)
+
+Not every verdict is worth the same trust, and the report says so. Each run
+carries a **VAL** that records how hard reality pushed back (RFC-0006):
+
+- **VAL-0 / VAL-1** — tests ran against the code in an isolated sandbox
+  (unit / api / integration), verdict mutation-checked.
+- **VAL-2** — the deployment itself was validated: the deploy dry-run lane runs
+  `kubectl apply --dry-run=server` against the detected manifests (#603) before
+  the change is trusted.
+- **VAL-3** — tests ran against a real, disposable deploy target (a local VM, a
+  Kubernetes Job, or a cloud target) that is provisioned and then torn down.
+
+The VAL travels with the verdict into the PR triage report and the CFactory
+cockpit, so a green check always states the assurance it was earned at.
 
 ## Authenticated and MFA-gated targets
 
