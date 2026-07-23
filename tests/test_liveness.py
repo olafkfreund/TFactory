@@ -151,6 +151,26 @@ def test_mark_stalled_flips_and_preserves_prior(tmp_path: Path) -> None:
     assert after["stall_idle_seconds"] == 2000
 
 
+@pytest.mark.parametrize("prior", ["planning", "generating"])
+def test_mark_stalled_takes_inline_stages_terminal_failed(tmp_path: Path, prior) -> None:
+    """An inline stage (planning/generating) runs in the control-plane process,
+    so a stall is unrecoverable — it goes terminal `failed`, not `stalled`, so it
+    leaves the cockpit's LIVE AGENTS instead of lingering as a fake live agent."""
+    _write_status(
+        tmp_path, status=prior, phase="x",
+        updated_at=_iso(_NOW - timedelta(seconds=2000)),
+    )
+    v = evaluate_liveness(tmp_path, now=_NOW, deadline_seconds=_DEADLINE)
+    assert mark_stalled(tmp_path, v, now=_NOW) is True
+
+    after = json.loads((tmp_path / "status.json").read_text())
+    assert after["status"] == "failed"
+    assert after["failed_from"] == prior
+    assert after["phase"] == "watchdog_failed_inline"
+    assert "#774" in after["failed_reason"]
+    assert after["stall_idle_seconds"] == 2000
+
+
 def test_mark_stalled_noop_when_not_stalled(tmp_path: Path) -> None:
     _write_status(tmp_path, status="evaluating", updated_at=_iso(_NOW))
     v = evaluate_liveness(tmp_path, now=_NOW, deadline_seconds=_DEADLINE)

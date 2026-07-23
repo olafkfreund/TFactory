@@ -883,7 +883,19 @@ async def run_gen_functional(
             return True
 
         tests_generated = 0
-        for subtask in pending:
+        total = len(pending)
+        for idx, subtask in enumerate(pending, start=1):
+            # Heartbeat before each subtask: a multi-subtask generation can run
+            # many minutes, and `_generate_one_subtask` writes no status of its
+            # own, so without this the spec's `updated_at` freezes for the whole
+            # loop and the #95 liveness watchdog false-stalls a healthy run. One
+            # patch per subtask keeps `updated_at` fresh so a stall verdict means
+            # the process is genuinely gone, not just busy (#742/#774).
+            _write_status_patch(
+                spec_dir,
+                status="generating",
+                phase=f"gen_functional_subtask_{idx}_of_{total}",
+            )
             outcome = await _generate_one_subtask(
                 spec_dir,
                 project_dir,
