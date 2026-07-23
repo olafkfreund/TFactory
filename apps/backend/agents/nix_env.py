@@ -881,7 +881,11 @@ def run_deploy_lane_via_nix(  # noqa: PLR0913 - explicit keyword-only deploy-lan
     # only the KubeJobSandbox carries with_manifest_kw; other ExecutionSandbox
     # impls fall through unchanged.
     _with_kw = getattr(sandbox, "with_manifest_kw", None)
-    if deploy_sa and _with_kw is not None and any(s.tool == "kubectl" for s in runnable):
+    if (
+        deploy_sa
+        and _with_kw is not None
+        and any(s.tool == "kubectl" for s in runnable)
+    ):
         sandbox = _with_kw(service_account=deploy_sa, network_none=False)
 
     pd = Path(project_dir)
