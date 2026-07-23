@@ -143,6 +143,32 @@ async def lifespan(app: FastAPI):
     init_skills_service()
     logger.info("SkillsService initialized")
 
+    # Inline-orphan startup reconcile (#774): the planner/gen_functional stages
+    # run in THIS process, not a Job, so a roll mid-generation strands a spec at
+    # `planning`/`generating` with nothing for the #767 reaper to see. On boot,
+    # once this pod holds the (RWO) workspaces volume the prior holder is gone,
+    # so any spec still in an inline stage is orphaned — fail it loudly. ON by
+    # default; disable with APP_INLINE_ORPHAN_RECONCILE_ENABLED=0.
+    if settings.INLINE_ORPHAN_RECONCILE_ENABLED:
+        try:
+            backend_path = Path(__file__).resolve().parents[2] / "backend"
+            if str(backend_path) not in sys.path:
+                sys.path.insert(0, str(backend_path))
+            from agents.liveness_sweep import reconcile_inline_orphans
+
+            failed = await asyncio.to_thread(reconcile_inline_orphans)
+            if failed:
+                logger.warning(
+                    "#774 startup reconcile: failed %d spec(s) stranded in an "
+                    "inline stage by a control-plane restart: %s",
+                    len(failed),
+                    [f"{d.name}({prior})" for d, prior in failed],
+                )
+            else:
+                logger.info("#774 startup reconcile: no stranded inline specs")
+        except Exception:  # noqa: BLE001 — a reconcile error must not block boot
+            logger.exception("#774 startup reconcile failed (continuing)")
+
     # Liveness watchdog driver (#95): periodically flag silent stages as
     # `stalled`. OFF by default; opt in with APP_LIVENESS_SWEEP_ENABLED.
     app.state.liveness_sweep_task = None
