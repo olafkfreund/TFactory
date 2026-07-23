@@ -158,6 +158,19 @@ USER nonroot
 RUN mkdir -p /home/nonroot/.npm-global \
  && npm config set prefix /home/nonroot/.npm-global
 
+# Bake the provider coder CLIs into the image (#791) so the control-plane boot
+# never npm-installs them. The install-clis init container did this at pod start
+# and, on a slow/hung npm registry, ran 8+ min and stalled the whole rollout —
+# stranding in-flight specs. .npm-global/bin is already on PATH (below). Versions
+# are pinned here now (Renovate tracks the Dockerfile); a bump is an image
+# rebuild + canary, same as any other dependency.
+RUN npm install -g \
+        @anthropic-ai/claude-code@2.1.215 \
+        @openai/codex@0.144.6 \
+        @google/gemini-cli@0.51.0 \
+ && npm cache clean --force \
+ && ln -sf /home/nonroot/.npm-global/bin/gemini /home/nonroot/.npm-global/bin/antigravity
+
 # Single Python venv shared by web-server and backend scripts (matches
 # agent_service.py's sys.executable expectations)
 RUN python3 -m venv /home/projects/MagesticAI/.venv
