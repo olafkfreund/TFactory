@@ -171,3 +171,17 @@ def test_dispatch_deploy_lane_returns_steps_and_verification():
     assert result.runner_used == "deploy"
     assert result.deploy_result is not None
     assert result.deploy_result.verification["achieved_level"] == "VAL-2"
+
+
+def test_kubectl_step_targets_detected_manifests_not_dot():
+    """kubectl apply --dry-run=server points at the DETECTED k8s files, not `-f .`
+    (which reads only the worktree root and errors on nested manifests, #603)."""
+    from tools.runners.deploy_runner import plan_deploy_steps
+
+    steps = plan_deploy_steps(["k8s/base/deploy.yaml", "k8s/base/svc.yaml"])
+    kubectl = next(s for s in steps if s.name == "kubectl-apply-dry-run")
+    assert kubectl.argv == (
+        "kubectl", "apply", "--dry-run=server",
+        "-f", "k8s/base/deploy.yaml", "-f", "k8s/base/svc.yaml",
+    )
+    assert "." not in kubectl.argv  # never the bare-root read
