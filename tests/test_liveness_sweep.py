@@ -159,3 +159,43 @@ def test_reconcile_skips_missing_or_corrupt_status(tmp_path: Path) -> None:
     (bad / "status.json").write_text("{not json")  # corrupt → skipped, not raised
 
     assert reconcile_inline_orphans(tmp_path, now=_NOW) == []
+
+
+# ── gc_terminal_worktrees (#742) ────────────────────────────────────────────
+
+
+def _spec_with_worktree(root, project, spec, status):
+    d = _spec(root, project, spec, status=status, updated_at=_iso(_NOW))
+    wt = d / ".worktree"
+    wt.mkdir(parents=True)
+    (wt / "built.py").write_text("x = 1")
+    return d, wt
+
+
+def test_gc_removes_terminal_worktrees(tmp_path: Path) -> None:
+    from agents.liveness_sweep import gc_terminal_worktrees
+
+    triaged, wt_t = _spec_with_worktree(tmp_path, "p1", "s-triaged", "triaged")
+    failed, wt_f = _spec_with_worktree(tmp_path, "p1", "s-failed", "failed")
+
+    reclaimed = gc_terminal_worktrees(tmp_path)
+
+    assert set(reclaimed) == {triaged, failed}
+    assert not wt_t.exists() and not wt_f.exists()
+    # The spec dirs + status.json survive — only the worktree is reclaimed.
+    assert (triaged / "status.json").exists()
+
+
+def test_gc_keeps_active_and_worktreeless(tmp_path: Path) -> None:
+    """A worktree of a still-active spec must NOT be GC'd (its verify may still
+    run); a terminal spec with no worktree is a no-op."""
+    from agents.liveness_sweep import gc_terminal_worktrees
+
+    _, wt_gen = _spec_with_worktree(tmp_path, "p1", "s-gen", "generating")
+    _, wt_eval = _spec_with_worktree(tmp_path, "p1", "s-eval", "evaluating")
+    _spec(tmp_path, "p1", "s-done-nowt", status="triaged", updated_at=_iso(_NOW))
+
+    reclaimed = gc_terminal_worktrees(tmp_path)
+
+    assert reclaimed == []
+    assert wt_gen.exists() and wt_eval.exists()

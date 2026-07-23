@@ -169,6 +169,25 @@ async def lifespan(app: FastAPI):
         except Exception:  # noqa: BLE001 — a reconcile error must not block boot
             logger.exception("#774 startup reconcile failed (continuing)")
 
+    # Worktree GC (#742): reclaim the per-spec git worktree of terminal specs so
+    # they don't accumulate on the workspaces PVC (#781). ON by default; disable
+    # with APP_WORKTREE_GC_ENABLED=0.
+    if settings.WORKTREE_GC_ENABLED:
+        try:
+            backend_path = Path(__file__).resolve().parents[2] / "backend"
+            if str(backend_path) not in sys.path:
+                sys.path.insert(0, str(backend_path))
+            from agents.liveness_sweep import gc_terminal_worktrees
+
+            reclaimed = await asyncio.to_thread(gc_terminal_worktrees)
+            if reclaimed:
+                logger.info(
+                    "#742 worktree GC: reclaimed %d terminal-spec worktree(s)",
+                    len(reclaimed),
+                )
+        except Exception:  # noqa: BLE001 — a GC error must not block boot
+            logger.exception("#742 worktree GC failed (continuing)")
+
     # Liveness watchdog driver (#95): periodically flag silent stages as
     # `stalled`. OFF by default; opt in with APP_LIVENESS_SWEEP_ENABLED.
     app.state.liveness_sweep_task = None
