@@ -273,11 +273,21 @@ def plan_deploy_steps(
         )
 
     if _matches(files, _K8S_GLOBS) or _matches(files, _HELM_GLOBS):
+        # Point kubectl at the DETECTED manifest files, not `-f .`: the worktree
+        # root holds no manifests when they live under k8s/ (kubectl -f . reads
+        # only root-level files → "error reading [.]"), and `-f . -R` would sweep
+        # in unrelated yaml (mkdocs.yml, CI workflows) that fail server-dry-run.
+        k8s_files = [f for f in files if _matches([f], _K8S_GLOBS)]
+        fargs: tuple[str, ...] = ()
+        for f in k8s_files:
+            fargs += ("-f", f)
+        if not fargs:  # helm-only match → fall back to the root (template output)
+            fargs = ("-f", ".")
         steps.append(
             DeployStep(
                 name="kubectl-apply-dry-run",
                 level="VAL-2",
-                argv=("kubectl", "apply", "--dry-run=server", "-f", "."),
+                argv=("kubectl", "apply", "--dry-run=server", *fargs),
                 tool="kubectl",
                 kind="dry-run",
             )
