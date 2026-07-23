@@ -61,3 +61,26 @@ def test_rerun_creates_lane_progress_when_absent(tmp_path, monkeypatch):
     rerun_pipeline("proj", "002-y", lane="browser", root=tmp_path)
     status = json.loads((sd / "status.json").read_text())
     assert status["lane_progress"]["browser"] == "pending"
+
+
+def test_rerun_sut_dir_prefers_worktree(tmp_path):
+    """A rerun resolves to the spec's own #742 worktree when present, not the
+    shared project clone whose HEAD another spec may now own."""
+    from agents.handback.rerun import _rerun_sut_dir
+
+    sd = spec_dir_for("proj", "001-x", tmp_path)
+    (sd / ".worktree").mkdir(parents=True)
+    assert _rerun_sut_dir(sd, "proj", tmp_path) == sd / ".worktree"
+
+
+def test_rerun_sut_dir_falls_back_to_shared_clone(tmp_path):
+    """No worktree (target-mode / GC'd / lost to a roll) → the shared project
+    clone from projects.json — no worse than pre-#742."""
+    from agents.handback.rerun import _rerun_sut_dir
+
+    (tmp_path / "projects.json").write_text(
+        json.dumps({"projects": [{"id": "proj", "root_path": str(tmp_path / "clone")}]})
+    )
+    sd = spec_dir_for("proj", "001-x", tmp_path)
+    sd.mkdir(parents=True)  # no .worktree
+    assert _rerun_sut_dir(sd, "proj", tmp_path) == tmp_path / "clone"

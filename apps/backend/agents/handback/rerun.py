@@ -55,6 +55,22 @@ def _project_root(project_id: str, root: Path | None = None) -> Path:
     return Path(".")
 
 
+def _rerun_sut_dir(spec_dir: Path, project_id: str, root: Path | None = None) -> Path:
+    """The SUT directory a rerun should verify against.
+
+    The original ingest materialized this spec's build as its OWN git worktree at
+    ``<spec_dir>/.worktree`` (#742). A rerun must resolve to THAT worktree, not
+    the shared project clone (``root_path``) whose HEAD another spec may now own —
+    otherwise the rerun re-introduces the exact cross-spec leak worktrees fixed.
+    Falls back to the shared clone when the worktree is absent (target-mode
+    ingest, or a worktree GC'd / lost to a pod roll) — no worse than before #742.
+    """
+    worktree = spec_dir / ".worktree"
+    if worktree.is_dir():
+        return worktree
+    return _project_root(project_id, root)
+
+
 def rerun_pipeline(
     project_id: str,
     spec_id: str,
@@ -93,7 +109,7 @@ def rerun_pipeline(
 
         task = schedule_planner(
             spec_dir=spec_dir,
-            project_dir=_project_root(project_id, root),
+            project_dir=_rerun_sut_dir(spec_dir, project_id, root),
             mode="initial",
         )
         planner_scheduled = task is not None
