@@ -107,3 +107,55 @@ def test_main_reports_and_exits_zero(
     assert rc == 0
     assert "STALLED" in out
     assert "flagged 1 stalled" in out
+
+
+# ── reconcile_inline_orphans (#774) ─────────────────────────────────────────
+
+
+def test_reconcile_fails_inline_stranded_specs(tmp_path: Path) -> None:
+    from agents.liveness_sweep import reconcile_inline_orphans
+
+    gen = _spec(tmp_path, "p1", "s-gen", status="generating", updated_at=_iso(_NOW))
+    plan = _spec(tmp_path, "p1", "s-plan", status="planning", updated_at=_iso(_NOW))
+
+    failed = reconcile_inline_orphans(tmp_path, now=_NOW)
+
+    assert {d for d, _ in failed} == {gen, plan}
+    for d, prior in failed:
+        st = json.loads((d / "status.json").read_text())
+        assert st["status"] == "failed"
+        assert st["orphaned_from"] == prior
+        assert st["phase"] == "control_plane_restart"
+        assert "#774" in st["failed_reason"]
+
+
+def test_reconcile_leaves_job_backed_and_settled_untouched(tmp_path: Path) -> None:
+    """The critical safety property: a control-plane roll does NOT kill a live
+    verify Job. evaluating/triaging/reviewing run in (or are reaped as) Jobs and
+    must survive; terminal + not-yet-started statuses are none of our business."""
+    from agents.liveness_sweep import reconcile_inline_orphans
+
+    untouched = {
+        "evaluating": _spec(tmp_path, "p1", "s-eval", status="evaluating"),
+        "triaging": _spec(tmp_path, "p1", "s-tri", status="triaging"),
+        "reviewing": _spec(tmp_path, "p1", "s-rev", status="reviewing"),
+        "generated": _spec(tmp_path, "p1", "s-done", status="generated"),
+        "pending": _spec(tmp_path, "p1", "s-pend", status="pending"),
+        "triaged": _spec(tmp_path, "p1", "s-fin", status="triaged"),
+    }
+
+    failed = reconcile_inline_orphans(tmp_path, now=_NOW)
+
+    assert failed == []
+    for status, d in untouched.items():
+        assert json.loads((d / "status.json").read_text())["status"] == status
+
+
+def test_reconcile_skips_missing_or_corrupt_status(tmp_path: Path) -> None:
+    from agents.liveness_sweep import reconcile_inline_orphans
+
+    _spec(tmp_path, "p1", "s-nostatus")  # dir, no status.json
+    bad = _spec(tmp_path, "p1", "s-bad", status="generating", updated_at=_iso(_NOW))
+    (bad / "status.json").write_text("{not json")  # corrupt → skipped, not raised
+
+    assert reconcile_inline_orphans(tmp_path, now=_NOW) == []

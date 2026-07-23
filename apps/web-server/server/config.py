@@ -102,6 +102,14 @@ class Settings(BaseSettings):
     LIVENESS_SWEEP_INTERVAL_SECONDS: int = 300  # how often to sweep
     LIVENESS_SWEEP_DEADLINE_SECONDS: float = 600  # idle budget before stalled
 
+    # Inline-orphan startup reconcile (#774) — one-shot at boot: fail any spec
+    # stranded at `planning`/`generating` by a control-plane roll (those inline
+    # stages have no Job for the #767 reaper to see). Safe under the RWO
+    # workspaces PVC (a fresh pod only mounts after the dead one released it).
+    # ON by default; set APP_INLINE_ORPHAN_RECONCILE_ENABLED=0 to disable (e.g.
+    # a dev server started with --reload, where subprocesses outlive the reload).
+    INLINE_ORPHAN_RECONCILE_ENABLED: bool = True
+
     # Completion-event outbox relay (#281) — drains the durable outbox so
     # RFC-0001 completion events reach CFactory at-least-once, surviving crashes
     # and transient sink outages. OFF by default; opt in with
