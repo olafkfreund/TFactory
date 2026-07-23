@@ -606,7 +606,7 @@ def _source_branch_changed_files(spec_dir: Path, project_dir: Path) -> list[str]
 
     try:
         # #751: refresh the plausible base refs before the by-distance pick.
-        # _checkout_source_branch fetches only the build branch, so this clone's
+        # _add_spec_worktree fetches only the build branch (#742), so this clone's
         # origin/dev (etc.) is whatever it was at the last fetch. A build cut from
         # a NEWER dev then merge-bases against the stale ref, attributing every
         # commit merged into dev since to this build (7.7 KB block where 2.6 KB
@@ -692,8 +692,9 @@ def _build_changed_symbols_block(spec_dir: Path, project_dir: Path) -> str:
     run whose naming diverged from the planner's guess burned the whole replan
     budget on imports of a function that was never written.
 
-    The build branch is already checked out in ``project_dir`` before the planner
-    runs (``_checkout_source_branch``), and ``_source_branch_changed_files``
+    The build branch is already checked out in ``project_dir`` (this spec's own
+    worktree, #742) before the planner runs (``_add_spec_worktree``), and
+    ``_source_branch_changed_files``
     already computes what it changed — that list was previously reduced to a
     one-word language verdict and discarded. This surfaces it, so the planner
     picks targets that demonstrably exist instead of inferring them from prose.

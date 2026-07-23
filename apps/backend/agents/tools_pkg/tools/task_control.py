@@ -41,6 +41,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -200,62 +202,97 @@ def _format_json(data: Any) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _checkout_source_branch(project_root: Path, branch: str) -> tuple[str | None, str]:
-    """Fetch + check out ``branch`` in ``project_root`` so the SUT under test is
-    the actual built code, not the default branch (#96 — closes the hollow-verify
-    gap where TFactory tested a tree that never contained AIFactory's build).
+def _add_spec_worktree(
+    base_clone: Path, worktree: Path, branch: str, spec_id: str
+) -> tuple[str | None, str]:
+    """Materialize ``branch`` as this spec's OWN git worktree at ``worktree`` off
+    the shared ``base_clone`` — so concurrent specs each get an independent HEAD
+    instead of racing the one shared clone's checkout (#742).
 
-    Returns ``(warning, sha)``: warning is ``None`` on success or a short string on
-    failure, and sha is the resolved HEAD (``""`` when unknown). A non-``None``
-    warning is now terminal at the caller: when a build branch was named but could
-    not be checked out (or the checkout raced a concurrent ingest, #742), the spec
-    is failed loudly rather than verified against whatever HEAD happens to be —
-    silently testing the wrong tree is worse than not testing (#96). Resolves the
-    SHA so a detached checkout is deterministic and the Triager can record it."""
-    import subprocess
+    Replaces the old in-place ``git checkout --force FETCH_HEAD``, which moved the
+    single shared clone's HEAD for every spec on the project — whichever spec ran
+    last owned HEAD for all the others, so a stage could plan/generate/verify a
+    different build than the one under test. The worktree shares the base clone's
+    object store (cheap: only the working tree is duplicated) but has its own HEAD
+    that no other spec can touch.
 
-    def _git(*args: str) -> subprocess.CompletedProcess:
+    The build branch is fetched into a PER-SPEC ref (``refs/tfactory/specs/<id>``)
+    and the worktree is added from that ref — never from the shared ``FETCH_HEAD``,
+    which a concurrent ingest's fetch would repoint. That makes the checkout
+    race-free by construction, not merely race-detected.
+
+    Returns ``(warning, sha)``: warning ``None`` on success or a short string on
+    failure. A non-``None`` warning is terminal at the caller — a named build
+    branch that can't be materialized fails the spec loudly rather than verifying
+    whatever tree happens to be present (#96). sha is the worktree HEAD."""
+
+    # Run git hermetically: an explicit cwd (immune to a caller leaving the
+    # process in a since-deleted directory) and a stripped env so an ambient
+    # GIT_DIR / GIT_WORK_TREE can't hijack our ``-C`` and point worktree ops at
+    # the wrong repo. Credential/askpass env is preserved so a private-repo fetch
+    # still authenticates.
+    _git_env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
+    }
+
+    def _git(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess:
         return subprocess.run(
-            ["git", "-C", str(project_root), *args],
+            ["git", "-C", str(cwd or base_clone), *args],
             capture_output=True,
             text=True,
             timeout=120,
+            cwd=str(cwd or base_clone),
+            env=_git_env,
         )
 
     try:
-        if not (project_root / ".git").exists():
+        if not (base_clone / ".git").exists():
             return (
-                f"source_branch={branch!r} requested but {project_root} is not a git repo",
+                f"source_branch={branch!r} requested but {base_clone} is not a git repo",
                 "",
             )
-        fetch = _git("fetch", "--no-tags", "origin", branch)
-        if fetch.returncode != 0:
-            return f"git fetch origin {branch} failed: {fetch.stderr.strip()[:200]}", ""
-        co = _git("checkout", "--force", "FETCH_HEAD")
-        if co.returncode != 0:
-            return f"git checkout {branch} failed: {co.stderr.strip()[:200]}", ""
-        # Pin what we landed on, so a later stage can tell whether the shared
-        # clone still holds this build (#742). Same _git helper — no second
-        # subprocess call site.
-        head = _git("rev-parse", "HEAD")
-        fetched = _git("rev-parse", "FETCH_HEAD")
-        head_sha = head.stdout.strip()
-        fetched_sha = fetched.stdout.strip()
-        # The shared clone is one HEAD for every spec on this project (#742); a
-        # concurrent ingest can repoint it between our checkout and this rev-parse.
-        # If HEAD no longer matches the branch we just fetched (or either rev-parse
-        # failed), our tree is not the build under test — refuse it rather than
-        # pinning a wrong sha.
-        if head.returncode != 0 or fetched.returncode != 0 or head_sha != fetched_sha:
+        # Fetch the build branch into a ref scoped to THIS spec, so no two specs
+        # share FETCH_HEAD. --force overwrites a prior ref on a rerun/retry, then
+        # resolve it to the pinned sha the worktree will be added from.
+        spec_ref = f"refs/tfactory/specs/{spec_id}"
+        fetch = _git("fetch", "--no-tags", "--force", "origin", f"{branch}:{spec_ref}")
+        rp = _git("rev-parse", spec_ref) if fetch.returncode == 0 else fetch
+        if fetch.returncode != 0 or rp.returncode != 0:
+            err = (fetch if fetch.returncode != 0 else rp).stderr.strip()[:200]
+            return f"git fetch/resolve of {branch} failed: {err}", ""
+        target_sha = rp.stdout.strip()
+
+        # Reap worktree registry entries whose dirs are gone (crash leaks), then
+        # clear any stale worktree already at this path (rerun / retry).
+        _git("worktree", "prune")
+        if worktree.exists():
+            _git("worktree", "remove", "--force", str(worktree))
+            if worktree.exists():
+                shutil.rmtree(worktree, ignore_errors=True)
+        worktree.parent.mkdir(parents=True, exist_ok=True)
+
+        add = _git("worktree", "add", "--detach", "--force", str(worktree), spec_ref)
+        if add.returncode != 0:
             return (
-                f"source_branch={branch!r} checkout not verified: HEAD "
-                f"{head_sha[:12] or '?'} != FETCH_HEAD {fetched_sha[:12] or '?'} "
-                f"(concurrent checkout or rev-parse failure, #742)",
+                f"git worktree add for {branch} failed: {add.stderr.strip()[:200]}",
+                "",
+            )
+
+        head = _git("rev-parse", "HEAD", cwd=worktree)
+        head_sha = head.stdout.strip()
+        # The worktree must sit exactly on the commit we pinned; anything else
+        # means the add didn't land what we fetched — refuse it.
+        if head.returncode != 0 or head_sha != target_sha:
+            return (
+                f"source_branch={branch!r} worktree not verified: HEAD "
+                f"{head_sha[:12] or '?'} != fetched {target_sha[:12] or '?'} (#742)",
                 "",
             )
         return None, head_sha
-    except Exception as exc:  # noqa: BLE001 — checkout must never break ingest
-        return f"source_branch checkout error: {exc}", ""
+    except Exception as exc:  # noqa: BLE001 — worktree setup must never break ingest
+        return f"source_branch worktree error: {exc}", ""
 
 
 def create_spec_ingest_workspace(
@@ -339,24 +376,32 @@ def create_spec_ingest_workspace(
                 json.dumps({"isAutoProfile": True, "phaseModels": pm}, indent=2)
             )
 
-    # Check out the AIFactory build branch into project_root so tests run against
-    # the ACTUAL built code (#96). Best-effort: a failure is surfaced as a warning
-    # and ingest proceeds (tests then run against whatever is checked out).
+    # Materialize the AIFactory build branch as this spec's OWN git worktree, so
+    # tests run against the ACTUAL built code (#96) AND concurrent specs can't
+    # clobber each other's checkout (#742). The SUT dir the whole pipeline is
+    # threaded with becomes the worktree, not the shared clone.
     source_sha = ""
     checkout_failed_reason: str | None = None
+    sut_dir = Path(project_root).expanduser()  # target-mode: the shared clone
+    worktree_path: Path | None = None
     if source_branch:
-        warn, source_sha = _checkout_source_branch(
-            Path(project_root).expanduser(), source_branch
+        worktree_path = spec_dir / ".worktree"
+        warn, source_sha = _add_spec_worktree(
+            Path(project_root).expanduser(), worktree_path, source_branch, spec_id
         )
         if warn:
-            # A named build branch that won't check out means we cannot prove the
-            # tree under test is AIFactory's build. Verifying the wrong code
+            # A named build branch that won't materialize means we cannot prove
+            # the tree under test is AIFactory's build. Verifying the wrong code
             # silently is worse than not verifying (#742/#96) — fail the spec
-            # loudly and skip the planner instead of proceeding on whatever HEAD
-            # the shared clone holds. Only the AIFactory handoff passes a
-            # source_branch; target-mode ingests never reach here.
+            # loudly and skip the planner instead of proceeding on whatever tree
+            # is present. Only the AIFactory handoff passes a source_branch;
+            # target-mode ingests never reach here.
             warnings.append(warn)
             checkout_failed_reason = warn
+        else:
+            # From here the pipeline resolves the SUT to this spec's private
+            # worktree — no other spec shares its HEAD.
+            sut_dir = worktree_path
 
     # source.json: target_paths name the SUT; source_branch records which build
     # was checked out (when supplied). The Triager's PR-status side-effect skips
@@ -381,9 +426,15 @@ def create_spec_ingest_workspace(
         "target_paths": list(target_paths or []),
         "source_branch": source_branch,
         # The commit the ingest checkout actually landed on ("" when unknown or
-        # no source_branch). Readers compare it to the shared clone's HEAD before
+        # no source_branch). Readers compare it to the worktree HEAD before
         # trusting the tree (#742).
         "source_sha": source_sha,
+        # This spec's private git worktree (#742) — the SUT dir every stage
+        # resolves to. Null in target-mode / on a failed checkout, where readers
+        # fall back to the shared clone's root_path.
+        "worktree": (
+            str(worktree_path) if worktree_path and not checkout_failed_reason else None
+        ),
         "created_at": _now_iso(),
         "aifactory": {"github_issue": github_issue},
         # Tenant scoping (#683): service-local metadata, lazily backfilled —
@@ -415,7 +466,7 @@ def create_spec_ingest_workspace(
 
             task = schedule_planner(
                 spec_dir=spec_dir,
-                project_dir=Path(project_root).expanduser(),
+                project_dir=sut_dir,
                 mode="initial",
             )
             planner_scheduled = task is not None
