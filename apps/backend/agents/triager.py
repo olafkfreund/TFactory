@@ -375,6 +375,49 @@ def _read_status(spec_dir: Path) -> dict:
 _TERMINAL_STATUSES = frozenset({"triaged", "triaged_empty", "triager_failed"})
 
 
+def _triaged_empty_warnings(
+    final_status: str,
+    committed_count: int,
+    flagged_count: int,
+    rejected_count: int,
+    ac_summary: object,
+) -> list[str]:
+    """Loud diagnostics for a hollow verdict (#729).
+
+    A ``triaged_empty`` that came from rejecting 100% of the generated tests is
+    almost never N independent judgements — it is a systematic failure (the wrong
+    build tree checked out, see #742; a collection/import error; a harness
+    mismatch). Left as a bare ``triaged_empty`` it reads as a clean "nothing to
+    do" and nobody notices. Same for an all-unverified AC fidelity. Return the
+    warnings to persist on status.json so the cockpit/report surface them.
+    """
+    warnings: list[str] = []
+    if (
+        final_status == "triaged_empty"
+        and rejected_count > 0
+        and committed_count == 0
+        and flagged_count == 0
+    ):
+        warnings.append(
+            f"triaged_empty from a 100% rejection: all {rejected_count} generated "
+            "tests were rejected and none committed. This is almost always a "
+            "systematic failure (wrong build tree checked out — #742 — a "
+            "collection/import error, or a harness mismatch), not independent "
+            "judgements. Inspect the rejected candidates' evaluation output before "
+            "trusting this verdict."
+        )
+    if (
+        isinstance(ac_summary, dict)
+        and ac_summary.get("total")
+        and not ac_summary.get("verified")
+    ):
+        warnings.append(
+            f"0/{ac_summary.get('total')} acceptance criteria verified — no "
+            "committed test exercises any acceptance criterion."
+        )
+    return warnings
+
+
 def _write_status_patch(spec_dir: Path, **fields: object) -> None:
     # Shared core: merge + persist + emit the "triager" stage event (#95).
     write_status_patch(spec_dir, "triager", **fields)
@@ -1454,21 +1497,30 @@ async def run_triager(
         # 7. Record summaries in status.json.
         committed_count = len(committed)
         flagged_count = len(flagged)
+        rejected_count = len(rejects)
         final_status = (
             "triaged" if (committed_count or flagged_count) else "triaged_empty"
         )
+        # #729: a silent triaged_empty from a systematic 100% rejection reads as a
+        # clean run. Surface the real signal instead.
+        triager_warnings = _triaged_empty_warnings(
+            final_status, committed_count, flagged_count, rejected_count, ac_summary
+        )
+        for _w in triager_warnings:
+            _triage_log.warning("triager: %s", _w)
         _write_status_patch(
             spec_dir,
             status=final_status,
             phase="triager_complete",
             committed_count=committed_count,
-            rejected_count=len(rejects),
+            rejected_count=rejected_count,
             flagged_count=flagged_count,
             ac_fidelity=ac_summary,
             dedup_collision_count=len(dedup_result.collisions),
             git_writer=git_result_summary,
             pr_comment=pr_comment_summary,
             pr_status=pr_status_summary,
+            triager_warnings=triager_warnings,
         )
         return True
 
