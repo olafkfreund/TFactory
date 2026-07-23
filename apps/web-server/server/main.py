@@ -41,6 +41,7 @@ from .routes import (
     mcp,
     notifications,
     organizations,
+    portal_tests,
     projects,
     provider_runtimes,
     regression,
@@ -56,7 +57,6 @@ from .routes import (
     terminal,
     test_target_credentials,
     visual_inspection,
-    portal_tests,
 )
 from .routes import cli_accounts as cli_accounts_routes
 from .routes import llm_endpoints as llm_endpoints_routes
