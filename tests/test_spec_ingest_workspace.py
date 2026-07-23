@@ -73,9 +73,11 @@ def _git(cwd, *args):
     )
 
 
-def test_source_branch_recorded_and_warns_when_not_git(tmp_path):
-    """source_branch is recorded in source.json; a non-git project_root surfaces a
-    warning but never aborts ingest (#96)."""
+def test_unresolvable_source_branch_fails_spec_loudly(tmp_path):
+    """A named build branch that can't be checked out fails the spec loudly rather
+    than proceeding on whatever tree is checked out — silently verifying the wrong
+    code is worse than not verifying (#742/#96). source_branch is still recorded
+    for provenance, and the planner is not scheduled."""
     result = _ingest(
         tmp_path,
         _MARKDOWN,
@@ -84,9 +86,16 @@ def test_source_branch_recorded_and_warns_when_not_git(tmp_path):
         source_branch="aifactory/123",
     )
     assert result["source_format"] == "markdown"
+    assert result["status"] == "failed"
+    assert result["planner_scheduled"] is False
     assert any(
         "source_branch" in w or "not a git repo" in w for w in result["warnings"]
     )
+    status = json.loads((_spec_dir(tmp_path) / "status.json").read_text())
+    assert status["status"] == "failed"
+    assert status["phase"] == "source_checkout_failed"
+    assert status["source_checkout_error"]
+    # source_branch is still recorded even on failure (provenance / re-drive).
     source = json.loads((_spec_dir(tmp_path) / "context" / "source.json").read_text())
     assert source["source_branch"] == "aifactory/123"
 
