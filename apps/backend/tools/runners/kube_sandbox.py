@@ -216,7 +216,7 @@ def build_job_manifest(
             {
                 "name": "seed-nix-store",
                 "image": image,
-                "imagePullPolicy": "IfNotPresent",  # #777: same image as the lane — reuse the node cache
+                "imagePullPolicy": "IfNotPresent",  # #777: reuse the node cache
                 "command": [
                     "sh",
                     "-c",
