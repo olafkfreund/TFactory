@@ -166,6 +166,12 @@ def build_job_manifest(
     container: dict[str, Any] = {
         "name": "lane",
         "image": image,
+        # #777: the runner image (535 MB) is already on any warm node — the k8s
+        # default of Always for a `:latest`/mutable tag re-pulled it (~11.5s) on
+        # EVERY Job. IfNotPresent makes the node cache authoritative; when the
+        # image is dispatched by its immutable `:sha-<short>` tag this is also
+        # always-correct (a new build gets a new tag, so no staleness).
+        "imagePullPolicy": "IfNotPresent",
         "command": ["bash", "-c", command],
         "resources": {
             "requests": {"cpu": cpus, "memory": memory},
@@ -210,6 +216,7 @@ def build_job_manifest(
             {
                 "name": "seed-nix-store",
                 "image": image,
+                "imagePullPolicy": "IfNotPresent",  # #777: same image as the lane — reuse the node cache
                 "command": [
                     "sh",
                     "-c",

@@ -188,6 +188,23 @@ def test_nix_local_builds_keep_their_build_user_caps():
         assert {"SETUID", "SETGID", "KILL"} <= add, add
 
 
+def test_image_pull_policy_reuses_node_cache():
+    # #777: the 535 MB runner image is already on any warm node — a default of
+    # Always re-pulled it on every Job (~11.5s). IfNotPresent must be pinned on
+    # the lane AND the seed-nix init container so the node cache is authoritative.
+    m = build_job_manifest(
+        "jp",
+        "img",
+        ["true"],
+        repo_pvc="tfactory-data",
+        repo_subpath="ws/p",
+        nix_store_pvc="tfactory-nix-store",
+    )
+    pod = m["spec"]["template"]["spec"]
+    for c in [*pod["containers"], *pod.get("initContainers", [])]:
+        assert c["imagePullPolicy"] == "IfNotPresent"
+
+
 def test_container_state_variants():
     from types import SimpleNamespace as NS
 
