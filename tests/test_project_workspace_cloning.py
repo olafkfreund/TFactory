@@ -274,3 +274,48 @@ async def test_clone_or_update_raises_on_missing_git(tmp_path):
                 root=tmp_path,
             )
     assert "git executable not found" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# #806 — concurrent first-ingest of the same project serializes (git config lock)
+# ---------------------------------------------------------------------------
+
+
+async def test_concurrent_clone_same_slug_is_serialized(tmp_path):
+    """Two concurrent clone_or_update for the SAME slug must not run their git
+    ops at the same time — else they collide on `.git/config` and 500 one (#806).
+    The per-workspace lock serializes them; the second sees the clone present and
+    takes the idempotent fetch path."""
+    import server.services.project_workspace_service as pws
+
+    pws._clone_locks.clear()
+    active = {"n": 0, "max": 0}
+
+    async def fake_run_git(args, *, cwd, timeout, extra_env=None):
+        active["n"] += 1
+        active["max"] = max(active["max"], active["n"])
+        await asyncio.sleep(0.02)
+        if args and args[0] == "clone":
+            (Path(args[-1]) / ".git").mkdir(parents=True, exist_ok=True)
+        active["n"] -= 1
+        return ""
+
+    with patch.object(pws, "_run_git", side_effect=fake_run_git):
+        url = "https://github.com/owner/repo.git"
+        results = await asyncio.gather(
+            pws.clone_or_update(url, root=tmp_path),
+            pws.clone_or_update(url, root=tmp_path),
+        )
+
+    assert active["max"] == 1  # never two concurrent git ops on the same clone
+    assert results[0] == results[1] == tmp_path / "owner-repo"
+
+
+async def test_clone_lock_is_per_workspace(tmp_path):
+    import server.services.project_workspace_service as pws
+
+    pws._clone_locks.clear()
+    a = pws._clone_lock_for(tmp_path / "p1")
+    b = pws._clone_lock_for(tmp_path / "p1")
+    c = pws._clone_lock_for(tmp_path / "p2")
+    assert a is b and a is not c  # same path → same lock; different path → distinct
