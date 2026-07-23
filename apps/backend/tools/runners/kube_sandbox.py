@@ -140,6 +140,7 @@ def build_job_manifest(
     repo_ro: bool = False,
     network_none: bool = False,
     nix_store_pvc: str | None = None,
+    service_account: str | None = None,
 ) -> dict:
     """Pure builder for the per-task Job manifest. No cluster access.
 
@@ -181,11 +182,19 @@ def build_job_manifest(
     }
     pod_spec: dict[str, Any] = {
         "restartPolicy": "Never",
-        "automountServiceAccountToken": False,  # the lane needs no k8s API
+        # Verify lanes need no k8s API, so the token is NOT mounted by default.
+        # The deploy lane's `kubectl apply --dry-run=server` (VAL-2, #603) is the
+        # one exception: pass a scoped service_account and it gets that SA's token
+        # so kubectl can auth in-cluster (RBAC is a namespaced get/list/create
+        # Role — create authorizes dryRun=All; a real apply is still blocked by
+        # deploy_runner.assert_dry_run).
+        "automountServiceAccountToken": bool(service_account),
         "imagePullSecrets": [{"name": image_pull_secret}],
         "securityContext": dict(POD_SECURITY_CONTEXT),
         "containers": [container],
     }
+    if service_account:
+        pod_spec["serviceAccountName"] = service_account
     volumes: list[dict[str, Any]] = []
     mounts: list[dict[str, Any]] = []
     if repo_pvc:
@@ -280,6 +289,19 @@ class KubeJobSandbox:
         self.repo_pvc = repo_pvc
         self.data_root = data_root
         self.manifest_kw = manifest_kw
+
+    def with_manifest_kw(self, **overrides: object) -> KubeJobSandbox:
+        """A shallow copy with extra build_job_manifest kwargs merged in — used by
+        the deploy lane to give ONE Job a service_account + API network for the
+        kubectl server-dry-run (#603) without mutating the shared sandbox."""
+        clone = KubeJobSandbox(
+            self.image,
+            namespace=self.namespace,
+            repo_pvc=self.repo_pvc,
+            data_root=self.data_root,
+            **{**self.manifest_kw, **overrides},
+        )
+        return clone
 
     async def _run_async(
         self, commands: list[str], timeout: int, workdir: str | None

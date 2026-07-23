@@ -215,13 +215,25 @@ _APP_NOT_HEALTHY_MARKER = "__TF_APP_NOT_HEALTHY__"
 # config`` = multi-framework misconfig gate (``--skip-check-update`` = embedded
 # rego checks), ``opentofu`` = the ``tofu init``/``validate``/``plan`` rung
 # (init -backend=false installs any declared providers via the Job's network).
+# config`` = multi-framework misconfig gate (``--skip-check-update`` = embedded
+# rego checks), ``opentofu`` = the ``tofu init``/``validate``/``plan`` rung
+# (init -backend=false installs any declared providers via the Job's network).
 # ``checkov`` was dropped (#603): in the pinned nixpkgs it pulls
 # ``python3.13-ecdsa`` marked insecure (CVE-2024-23342), so ``pkgs.checkov`` refuses
 # to evaluate and aborts the whole ``nix develop`` (proven live 2026-06-30). Unfree
-# ``terraform`` and ``kubectl apply --dry-run=server`` (live cluster API + RBAC)
-# stay an honest ``not_run``. A tool absent from this set is never a silent pass —
-# ``run_deploy_lane``'s ``tool_available`` records it as ``not_run``.
-_DEPLOY_NIX_TOOLS: tuple[str, ...] = ("tfsec", "trivy", "opentofu")
+# ``terraform`` stays an honest ``not_run``. ``kubectl`` (for the VAL-2
+# ``apply --dry-run=server`` rung, #603) is included but GATED at dispatch on the
+# deploy dry-run SA being configured (:func:`run_deploy_lane_via_nix`): without
+# the SA + RBAC it is dropped so the step stays an honest ``not_run`` rather than
+# a dry-run that fails for want of cluster auth. A tool absent from the runnable
+# set is never a silent pass — ``run_deploy_lane``'s ``tool_available`` records
+# it as ``not_run``.
+_DEPLOY_NIX_TOOLS: tuple[str, ...] = ("tfsec", "trivy", "opentofu", "kubectl")
+
+# Env naming the ServiceAccount that grants the deploy Job in-cluster RBAC for
+# ``kubectl apply --dry-run=server`` (#603). Unset → the kubectl rung stays an
+# honest not_run (no SA is attached and kubectl is dropped from the runnable set).
+_DEPLOY_DRYRUN_SA_ENV = "TFACTORY_DEPLOY_DRYRUN_SA"
 
 # Gates Nix-lane Job dispatch within a verify process. run() offloads to threads
 # (#620), so a threading primitive is the right choice — but WHICH one depends on
@@ -849,12 +861,28 @@ def run_deploy_lane_via_nix(  # noqa: PLR0913 - explicit keyword-only deploy-lan
         return None
 
     available = set(_DEPLOY_NIX_TOOLS)
+    # kubectl apply --dry-run=server needs the cluster API + a scoped SA token.
+    # Without the SA configured (RBAC not deployed) keep the hermetic posture and
+    # drop kubectl so the rung stays an honest not_run — never a dry-run that
+    # fails for lack of cluster auth.
+    deploy_sa = os.environ.get(_DEPLOY_DRYRUN_SA_ENV)
+    if not deploy_sa:
+        available.discard("kubectl")
     planned = plan_deploy_steps(files, required_scans=required_scans)
     runnable = [s for s in planned if s.tool in available]
     if not runnable:
         # No deploy step is runnable in a hermetic Job; let the caller fall back
         # to the local runner (which produces the identical honest not_run block).
         return None
+
+    # When a kubectl server-dry-run will run, give THIS deploy Job the scoped SA
+    # token + API network (verify lanes stay token-less). The other scanners
+    # (tfsec/trivy/tofu) are unaffected — they don't touch the cluster. getattr:
+    # only the KubeJobSandbox carries with_manifest_kw; other ExecutionSandbox
+    # impls fall through unchanged.
+    _with_kw = getattr(sandbox, "with_manifest_kw", None)
+    if deploy_sa and _with_kw is not None and any(s.tool == "kubectl" for s in runnable):
+        sandbox = _with_kw(service_account=deploy_sa, network_none=False)
 
     pd = Path(project_dir)
     mount = _NIX_MOUNT
