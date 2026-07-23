@@ -206,10 +206,12 @@ def _checkout_source_branch(project_root: Path, branch: str) -> tuple[str | None
     gap where TFactory tested a tree that never contained AIFactory's build).
 
     Returns ``(warning, sha)``: warning is ``None`` on success or a short string on
-    failure, and sha is the resolved HEAD (``""`` when unknown).
-    (a missing/unfetchable branch must never abort ingest — the spec still lands;
-    tests just run against whatever is checked out). Resolves the SHA so a detached
-    checkout is deterministic and the Triager can record it."""
+    failure, and sha is the resolved HEAD (``""`` when unknown). A non-``None``
+    warning is now terminal at the caller: when a build branch was named but could
+    not be checked out (or the checkout raced a concurrent ingest, #742), the spec
+    is failed loudly rather than verified against whatever HEAD happens to be —
+    silently testing the wrong tree is worse than not testing (#96). Resolves the
+    SHA so a detached checkout is deterministic and the Triager can record it."""
     import subprocess
 
     def _git(*args: str) -> subprocess.CompletedProcess:
@@ -236,7 +238,22 @@ def _checkout_source_branch(project_root: Path, branch: str) -> tuple[str | None
         # clone still holds this build (#742). Same _git helper — no second
         # subprocess call site.
         head = _git("rev-parse", "HEAD")
-        return None, (head.stdout.strip() if head.returncode == 0 else "")
+        fetched = _git("rev-parse", "FETCH_HEAD")
+        head_sha = head.stdout.strip()
+        fetched_sha = fetched.stdout.strip()
+        # The shared clone is one HEAD for every spec on this project (#742); a
+        # concurrent ingest can repoint it between our checkout and this rev-parse.
+        # If HEAD no longer matches the branch we just fetched (or either rev-parse
+        # failed), our tree is not the build under test — refuse it rather than
+        # pinning a wrong sha.
+        if head.returncode != 0 or fetched.returncode != 0 or head_sha != fetched_sha:
+            return (
+                f"source_branch={branch!r} checkout not verified: HEAD "
+                f"{head_sha[:12] or '?'} != FETCH_HEAD {fetched_sha[:12] or '?'} "
+                f"(concurrent checkout or rev-parse failure, #742)",
+                "",
+            )
+        return None, head_sha
     except Exception as exc:  # noqa: BLE001 — checkout must never break ingest
         return f"source_branch checkout error: {exc}", ""
 
@@ -326,12 +343,20 @@ def create_spec_ingest_workspace(
     # the ACTUAL built code (#96). Best-effort: a failure is surfaced as a warning
     # and ingest proceeds (tests then run against whatever is checked out).
     source_sha = ""
+    checkout_failed_reason: str | None = None
     if source_branch:
         warn, source_sha = _checkout_source_branch(
             Path(project_root).expanduser(), source_branch
         )
         if warn:
+            # A named build branch that won't check out means we cannot prove the
+            # tree under test is AIFactory's build. Verifying the wrong code
+            # silently is worse than not verifying (#742/#96) — fail the spec
+            # loudly and skip the planner instead of proceeding on whatever HEAD
+            # the shared clone holds. Only the AIFactory handoff passes a
+            # source_branch; target-mode ingests never reach here.
             warnings.append(warn)
+            checkout_failed_reason = warn
 
     # source.json: target_paths name the SUT; source_branch records which build
     # was checked out (when supplied). The Triager's PR-status side-effect skips
@@ -372,17 +397,19 @@ def create_spec_ingest_workspace(
         "project_id": project_id,
         "spec_id": spec_id,
         "mode": "spec_ingest",
-        "status": "pending",
-        "phase": "created",
+        "status": "failed" if checkout_failed_reason else "pending",
+        "phase": "source_checkout_failed" if checkout_failed_reason else "created",
         "tenant": tenant or "default",
         "lane_progress": dict.fromkeys(_MVP_LANES, "pending"),
         "created_at": _now_iso(),
         "updated_at": _now_iso(),
     }
+    if checkout_failed_reason:
+        status["source_checkout_error"] = checkout_failed_reason
     _status_file(project_id, spec_id, root).write_text(json.dumps(status, indent=2))
 
     planner_scheduled = False
-    if schedule:
+    if schedule and not checkout_failed_reason:
         try:
             from agents.planner import schedule_planner
 
@@ -409,6 +436,7 @@ def create_spec_ingest_workspace(
         "spec_dir": str(spec_dir),
         "source_format": spec.source_format.value,
         "ac_count": len(spec.criteria),
+        "status": "failed" if checkout_failed_reason else "pending",
         "planner_scheduled": planner_scheduled,
         "warnings": warnings,
     }
