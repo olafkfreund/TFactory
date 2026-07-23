@@ -110,6 +110,11 @@ class Settings(BaseSettings):
     # a dev server started with --reload, where subprocesses outlive the reload).
     INLINE_ORPHAN_RECONCILE_ENABLED: bool = True
 
+    # Worktree GC (#742) — one-shot at boot: remove the per-spec git worktree of
+    # terminal specs to reclaim disk on the workspaces PVC (#781). ON by default;
+    # set APP_WORKTREE_GC_ENABLED=0 to disable.
+    WORKTREE_GC_ENABLED: bool = True
+
     # Completion-event outbox relay (#281) — drains the durable outbox so
     # RFC-0001 completion events reach CFactory at-least-once, surviving crashes
     # and transient sink outages. OFF by default; opt in with

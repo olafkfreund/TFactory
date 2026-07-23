@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 from collections.abc import Iterator
 from datetime import datetime, timezone
@@ -29,10 +30,31 @@ from agents.workspace_status import now_iso
 
 __all__ = [
     "default_workspace_root",
+    "gc_terminal_worktrees",
     "iter_spec_dirs",
     "reconcile_inline_orphans",
     "sweep",
 ]
+
+# Statuses at which a spec is DONE — no further verify will run, so its per-spec
+# git worktree (#742) can be reclaimed. Union of the triager + verify-dispatch
+# terminal sets plus the loud-fail states. Conservative on purpose: a status
+# missed here just leaves a worktree lingering (wasted disk, never wrong); GC'ing
+# a still-needed one would only degrade a later rerun to the shared-clone
+# fallback, which is already handled.
+_GC_TERMINAL_STATUSES = frozenset(
+    {
+        "triaged",
+        "triaged_empty",
+        "triager_failed",
+        "failed",
+        "generated_empty",
+        "gen_functional_failed",
+        "reviewed",
+        "review_failed",
+        "source_checkout_failed",
+    }
+)
 
 # Inline stages that run in the control-plane process itself (not a k8s Job),
 # so a pod roll/OOM/drain mid-run leaves no Job and no worker_ref for the #767
@@ -136,6 +158,42 @@ def reconcile_inline_orphans(
             continue
         reconciled.append((spec_dir, str(prior)))
     return reconciled
+
+
+def gc_terminal_worktrees(
+    workspace_root: Path | None = None,
+) -> list[Path]:
+    """Reclaim the per-spec git worktree (#742) of terminal specs.
+
+    Each spec's build is materialized as its own worktree at ``<spec_dir>/
+    .worktree``; the working tree is duplicated (objects live in the shared base
+    clone), so on a small workspaces PVC (#781) they accumulate. Once a spec is
+    terminal (:data:`_GC_TERMINAL_STATUSES`) no verify will touch it again, so the
+    worktree is safe to remove.
+
+    Best-effort and fail-safe: ``rmtree`` only ever removes the worktree's own
+    working tree (never the base clone's objects); an unreadable / non-terminal /
+    worktree-less spec is skipped, never raised on. The base clone's now-stale
+    worktree registry entry is cleaned by the next ingest's ``git worktree
+    prune``. Returns the spec dirs whose worktree was removed."""
+    root = workspace_root or default_workspace_root()
+    removed: list[Path] = []
+    for spec_dir in iter_spec_dirs(root):
+        worktree = spec_dir / ".worktree"
+        if not worktree.is_dir():
+            continue
+        try:
+            status = json.loads((spec_dir / "status.json").read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        if not isinstance(status, dict):
+            continue
+        if status.get("status") not in _GC_TERMINAL_STATUSES:
+            continue
+        shutil.rmtree(worktree, ignore_errors=True)
+        if not worktree.exists():
+            removed.append(spec_dir)
+    return removed
 
 
 def main(argv: list[str] | None = None) -> int:
