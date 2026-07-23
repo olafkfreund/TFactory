@@ -5,7 +5,7 @@ nav_order: 1
 ---
 
 <section class="hero">
-  <span class="hero__eyebrow">v0.9 · five-lane pipeline · reproducible Nix execution · visible screenshot + recording evidence · acceptance-criteria fidelity · MFA-authenticated testing · runs on any LLM</span>
+  <span class="hero__eyebrow">v0.9 · five-lane pipeline · reproducible Nix execution · mutation-checked, deployment-validated verdicts (VAL) · visible screenshot + recording evidence · acceptance-criteria fidelity · MFA-authenticated testing · runs on any LLM</span>
   <h1 class="hero__title">Autonomous tests, AI-graded.</h1>
   <p class="hero__subtitle">
     Hand TFactory a finished feature on a branch — from AIFactory, Claude Code,
@@ -48,6 +48,10 @@ nav_order: 1
     <p>Coverage delta, a 3x stability re-run, a mutate-and-check probe, flake-lint promotion, and LLM semantic relevance. Tests that survive a mutation do not ship.</p>
   </li>
   <li class="feature-row__card reveal" style="--reveal-delay: 240ms">
+    <h3>Deployment-validated (VAL)</h3>
+    <p>Each verdict carries a Verification Assurance Level. VAL-2 validates the deployment itself — <code>kubectl apply --dry-run=server</code> against the detected manifests — before it is trusted; VAL-3 runs against a real, disposable deploy target.</p>
+  </li>
+  <li class="feature-row__card reveal" style="--reveal-delay: 320ms">
     <h3>Dry-run by default</h3>
     <p>Per the no-auto-push policy, the git writer and PR commenter record their commands without executing. Operators opt in explicitly.</p>
   </li>
@@ -186,6 +190,10 @@ Full walkthrough in the [repo README](https://github.com/olafkfreund/TFactory/bl
     <p>The live build log: closed tasks and commits.</p>
   </li>
   <li class="feature-row__card reveal" style="--reveal-delay: 490ms">
+    <h3><a href="{{ '/environment-reference/' | relative_url }}">Environment reference</a></h3>
+    <p>Every environment variable the backend and portal read — default, purpose, and where it is read.</p>
+  </li>
+  <li class="feature-row__card reveal" style="--reveal-delay: 560ms">
     <h3><a href="https://github.com/olafkfreund/TFactory/blob/main/CHANGELOG.md">Changelog</a></h3>
     <p>Release notes and history.</p>
   </li>
