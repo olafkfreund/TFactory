@@ -259,6 +259,39 @@ async def test_happy_multi_subtask(
 
 
 @pytest.mark.asyncio
+async def test_heartbeat_bumps_status_each_subtask(
+    spec_dir: Path,
+    project_dir: Path,
+    mock_sdk,
+    monkeypatch,
+) -> None:
+    """Each subtask emits a heartbeat status patch so a long multi-subtask run
+    keeps its updated_at fresh and the #95 watchdog can't false-stall a healthy
+    generation (#742/#774)."""
+    _make_plan(spec_dir, subtask_count=3)
+    mock_sdk(source_for=lambda sid: _valid_test_source())
+
+    import agents.gen_functional as gf
+
+    phases: list = []
+    orig = gf._write_status_patch
+
+    def _spy(sd, **fields):
+        phases.append(fields.get("phase"))
+        return orig(sd, **fields)
+
+    monkeypatch.setattr(gf, "_write_status_patch", _spy)
+
+    assert await run_gen_functional(spec_dir, project_dir) is True
+    heartbeats = [p for p in phases if p and p.startswith("gen_functional_subtask_")]
+    assert heartbeats == [
+        "gen_functional_subtask_1_of_3",
+        "gen_functional_subtask_2_of_3",
+        "gen_functional_subtask_3_of_3",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_happy_marks_subtasks_completed(
     spec_dir: Path,
     project_dir: Path,

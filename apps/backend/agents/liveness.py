@@ -48,6 +48,11 @@ ACTIVE_STATUSES = frozenset(
     {"planning", "generating", "evaluating", "triaging", "reviewing"}
 )
 
+# The subset of active statuses whose stages run IN the control-plane process
+# (not a k8s Job). A stall here is unrecoverable — the owning process is gone —
+# so mark_stalled takes these terminal (`failed`) rather than `stalled`.
+_INLINE_STALL_STATUSES = frozenset({"planning", "generating"})
+
 # Which agent owns each active status — used to label the emitted stage event.
 _STATUS_TO_STAGE = {
     "planning": "planner",
@@ -154,12 +159,19 @@ def evaluate_liveness(
 
 
 def mark_stalled(spec_dir: Path, verdict: StallVerdict, *, now: datetime) -> bool:
-    """Flip the task to ``status='stalled'`` (best-effort). Returns success.
+    """Flip a stalled task out of its active status (best-effort). Returns success.
 
     Re-reads ``status.json`` and only flips if it is *still* in an active
     status — so a stage that finished between ``evaluate_liveness`` and here is
-    never clobbered. Preserves the prior status as ``stalled_from`` and emits a
-    #95 stage event so a watcher learns immediately.
+    never clobbered. Emits a #95 stage event so a watcher learns immediately.
+
+    Inline stages (:data:`_INLINE_STALL_STATUSES` — planning/generating) run in
+    the control-plane process, not a k8s Job: a stall there means the owning
+    process is gone (a roll/OOM/drain) with nothing to resume it, so the spec
+    goes **terminal ``failed``** rather than sitting in a ``stalled`` limbo that
+    the cockpit surfaces as a live agent (the #742/#774 contract). Job-backed
+    stages (evaluating/triaging/reviewing) can genuinely recover, so they stay
+    ``stalled`` for a watcher/reaper to act on.
     """
     if not verdict.stalled:
         return False
@@ -173,10 +185,20 @@ def mark_stalled(spec_dir: Path, verdict: StallVerdict, *, now: datetime) -> boo
         return False
 
     prior = status.get("status")
-    status["stalled_from"] = prior
-    status["status"] = "stalled"
-    status["phase"] = "watchdog_stalled"
-    status["stall_idle_seconds"] = round(verdict.idle_seconds or 0.0)
+    idle = round(verdict.idle_seconds or 0.0)
+    if prior in _INLINE_STALL_STATUSES:
+        status["status"] = "failed"
+        status["failed_from"] = prior
+        status["phase"] = "watchdog_failed_inline"
+        status["failed_reason"] = (
+            f"control-plane {prior} stage went idle {idle}s past the deadline; the "
+            "in-process session is gone with no Job to reconcile (#774)"
+        )
+    else:
+        status["status"] = "stalled"
+        status["stalled_from"] = prior
+        status["phase"] = "watchdog_stalled"
+    status["stall_idle_seconds"] = idle
     status["updated_at"] = _now_iso(now)
     try:
         status_path.write_text(json.dumps(status, indent=2))

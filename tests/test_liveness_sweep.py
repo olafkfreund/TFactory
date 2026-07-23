@@ -68,7 +68,9 @@ def test_sweep_flips_stalled_and_leaves_others(tmp_path: Path) -> None:
     assert by_dir[fresh].stalled is False
     assert by_dir[settled].stalled is False  # terminal → never flipped
 
-    assert json.loads((stale / "status.json").read_text())["status"] == "stalled"
+    # An inline `generating` stall is taken terminal `failed` (not `stalled`), so
+    # it leaves the cockpit's LIVE AGENTS rather than lingering (#742/#774).
+    assert json.loads((stale / "status.json").read_text())["status"] == "failed"
     assert json.loads((fresh / "status.json").read_text())["status"] == "triaging"
     assert json.loads((settled / "status.json").read_text())["status"] == "triaged"
 
