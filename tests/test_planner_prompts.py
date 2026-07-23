@@ -465,7 +465,7 @@ def _git_repo_with_branch_diff(
         p.write_text(text)
     _git("add", "-A")
     _git("commit", "-m", "build")
-    # Detached HEAD, like _checkout_source_branch's FETCH_HEAD checkout.
+    # Detached HEAD, like _add_spec_worktree's detached worktree checkout.
     _git("checkout", "--detach")
     return proj
 
