@@ -902,3 +902,46 @@ def test_build_mutants_cmd_shape():
     assert "pytest tests/m__c1.py" in cmd and "pytest tests/m__c2.py" in cmd
     assert cmd.count("echo __MUT_EXIT=$?") == 2
     assert _build_mutants_cmd([]) == ""
+
+
+def test_deploy_lane_kubectl_gated_on_dryrun_sa(tmp_path, monkeypatch):
+    """kubectl apply --dry-run=server (VAL-2) only runs when the deploy dry-run SA
+    is configured (#603); without it kubectl is dropped (honest not_run) and no SA
+    is attached, with it the deploy Job gets the scoped SA + API network."""
+    from agents.nix_env import run_deploy_lane_via_nix
+
+    project = tmp_path / "proj"
+    (project / "k8s" / "base").mkdir(parents=True)
+    (project / "k8s" / "base" / "deploy.yaml").write_text(
+        "apiVersion: apps/v1\nkind: Deployment\n"
+    )
+    files = ["k8s/base/deploy.yaml"]
+
+    calls = {"with_kw": None}
+
+    class _FakeSandbox:
+        def with_manifest_kw(self, **kw):
+            calls["with_kw"] = kw
+            return self
+
+        def run(self, commands, *, workdir=None, timeout=600):
+            out = "".join(
+                f"__DEPLOY_STEP_{i}_BEGIN\nok\n__DEPLOY_STEP_{i}_EXIT=0\n"
+                for i in range(6)
+            )
+            return JobRunResult(ok=True, exit_code=0, output=out)
+
+    # No SA configured → kubectl dropped, sandbox NOT augmented with an SA.
+    monkeypatch.delenv("TFACTORY_DEPLOY_DRYRUN_SA", raising=False)
+    res = run_deploy_lane_via_nix(project, files=files, sandbox=_FakeSandbox())
+    assert calls["with_kw"] is None
+
+    # SA configured → deploy Job gets the SA + API network for the dry-run.
+    calls["with_kw"] = None
+    monkeypatch.setenv("TFACTORY_DEPLOY_DRYRUN_SA", "tfactory-deploy-dryrun")
+    run_deploy_lane_via_nix(project, files=files, sandbox=_FakeSandbox())
+    assert calls["with_kw"] == {
+        "service_account": "tfactory-deploy-dryrun",
+        "network_none": False,
+    }
+    _ = res  # first-call result unused beyond the SA assertion

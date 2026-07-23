@@ -249,3 +249,35 @@ def test_describe_pod_summarizes_phase_and_containers():
     assert "phase=Running" in d
     assert "init/seed-nix-store=running" in d
     assert "lane=waiting(PodInitializing)" in d
+
+
+# ── deploy dry-run service account (#603) ───────────────────────────────────
+
+
+def test_service_account_opt_in_mounts_token():
+    """The deploy lane's kubectl --dry-run=server needs a scoped SA token; passing
+    service_account sets it AND flips automount on (verify lanes never do)."""
+    m = build_job_manifest(
+        "jsa", "img", ["kubectl apply --dry-run=server -f ."],
+        service_account="tfactory-deploy-dryrun",
+    )
+    spec = m["spec"]["template"]["spec"]
+    assert spec["serviceAccountName"] == "tfactory-deploy-dryrun"
+    assert spec["automountServiceAccountToken"] is True
+
+
+def test_no_service_account_keeps_token_unmounted():
+    m = build_job_manifest("jns", "img", ["true"])
+    spec = m["spec"]["template"]["spec"]
+    assert spec["automountServiceAccountToken"] is False
+    assert "serviceAccountName" not in spec
+
+
+def test_with_manifest_kw_merges_without_mutating_original():
+    base = KubeJobSandbox("img", namespace="factory", network_none=True)
+    deploy = base.with_manifest_kw(service_account="sa-x", network_none=False)
+    assert deploy.manifest_kw["service_account"] == "sa-x"
+    assert deploy.manifest_kw["network_none"] is False
+    # original untouched
+    assert "service_account" not in base.manifest_kw
+    assert base.manifest_kw["network_none"] is True
