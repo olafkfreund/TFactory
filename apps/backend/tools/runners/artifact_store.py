@@ -185,7 +185,12 @@ class ArtifactStore:
         ``artifacts[]``. References, not blobs: only the URI ever goes back into
         Postgres / the contract."""
         key = ref.key()
-        extra = {"ContentType": content_type} if content_type else {}
+        # Tag every object with its role so MinIO lifecycle rules (which filter by
+        # tag role=<role>) actually match — untagged uploads left retention inert
+        # (Factory#329, pairs with factory-gitops#67). URL-encoded querystring form.
+        extra = {"Tagging": f"role={ref.role}"}
+        if content_type:
+            extra["ContentType"] = content_type
         self._client().put_object(  # type: ignore[attr-defined]
             Bucket=self.config.bucket, Key=key, Body=_as_bytes(data), **extra
         )
@@ -268,9 +273,24 @@ def _selftest() -> None:
     store = ArtifactStore(StoreConfig.from_env({}))
     _require(store.config.bucket == DEFAULT_BUCKET, "store builds without S3")
 
+    # Uploads carry role as an object tag so MinIO lifecycle rules match (Factory#329).
+    class _FakeS3:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def put_object(self, **kwargs: object) -> None:
+            self.calls.append(kwargs)
+
+    fake = _FakeS3()
+    store._s3 = fake  # pre-seed the lazy client so no boto3/endpoint is needed
+    store.put_artifact(ArtifactRef("tfactory", "j1", "evidence", 7), b"proof")
+    store.put_artifact(ArtifactRef("tfactory", "j1", "log", 7), "line")
+    _require(fake.calls[0]["Tagging"] == "role=evidence", f"evidence tag: {fake.calls[0]}")
+    _require(fake.calls[1]["Tagging"] == "role=log", f"log tag: {fake.calls[1]}")
+
     sys.stdout.write(
         "artifact_store self-test: PASS — key layout, uri, null/int corr, nested path, "
-        "validation, env config, bytes coercion, lazy transport\n"
+        "validation, env config, bytes coercion, lazy transport, role tagging\n"
     )
 
 
