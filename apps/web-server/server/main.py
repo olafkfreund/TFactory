@@ -57,6 +57,7 @@ from .routes import (
     terminal,
     test_target_credentials,
     visual_inspection,
+    well_known,
 )
 from .routes import cli_accounts as cli_accounts_routes
 from .routes import llm_endpoints as llm_endpoints_routes
@@ -404,6 +405,13 @@ def create_app() -> FastAPI:
     # Patch httpx clients to forward the correlation ID on outbound
     # calls. Idempotent.
     install_httpx_propagation()
+
+    # Public capability manifest (RFC-0019 §3.4) — the entry point a discovering
+    # agent hits before it holds a token, so it is unauthenticated by design. It
+    # sits outside the /api prefix TokenAuthMiddleware guards, like the SPA
+    # routes and /openapi.json. Mounted here, well ahead of the SPA catch-all at
+    # "/", or StaticFiles would answer discovery with the app shell.
+    app.include_router(well_known.router)
 
     # Auth routes (prefix defined in router: /api/auth)
     app.include_router(auth_routes.router)
