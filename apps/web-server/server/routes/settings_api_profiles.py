@@ -16,7 +16,7 @@ import logging
 from pathlib import Path
 
 from fastapi import APIRouter
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 from ..config import get_settings
 from ..paths import write_secret_file
@@ -118,9 +118,7 @@ class ApiProfileUpdate(BaseModel):
         description="Profile name (1-100 characters)",
     )
     baseUrl: str | None = Field(None, min_length=1, description="API endpoint URL")
-    apiKey: str | None = Field(
-        None, min_length=20, description="API key (minimum 20 characters)"
-    )
+    apiKey: str | None = Field(None, min_length=20, description="API key (minimum 20 characters)", repr=False)
     models: ApiProfileModels | None = Field(None, description="Optional model mappings")
 
 
@@ -343,7 +341,7 @@ async def set_active_api_profile(request: dict):
 
 class TestConnectionRequest(BaseModel):
     baseUrl: str
-    apiKey: str
+    apiKey: SecretStr
 
 
 @router.post("/api-profiles/test")
@@ -354,7 +352,7 @@ async def test_api_connection(request: TestConnectionRequest):
     try:
         req = urllib.request.Request(
             f"{request.baseUrl}/models",
-            headers={"Authorization": f"Bearer {request.apiKey}"},
+            headers={"Authorization": f"Bearer {request.apiKey.get_secret_value()}"},
         )
         urllib.request.urlopen(req, timeout=10)
         return {"success": True, "data": {"connected": True}}
@@ -372,7 +370,7 @@ async def discover_api_models(request: TestConnectionRequest):
     try:
         req = urllib.request.Request(
             f"{request.baseUrl}/models",
-            headers={"Authorization": f"Bearer {request.apiKey}"},
+            headers={"Authorization": f"Bearer {request.apiKey.get_secret_value()}"},
         )
         response = urllib.request.urlopen(req, timeout=10)
         data = json_module.loads(response.read().decode())
