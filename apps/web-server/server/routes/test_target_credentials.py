@@ -18,7 +18,7 @@ import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 from sqlalchemy import delete as sql_delete
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -49,14 +49,7 @@ class CreateTestCredentialRequest(BaseModel):
     username: str | None = Field(
         default=None, description="Plaintext username/identifier (not a secret on its own)."
     )
-    secret: str = Field(
-        ...,
-        min_length=1,
-        description=(
-            "The secret material (password / API token / TOTP seed). Never "
-            "logged, encrypted at rest, cannot be retrieved after creation."
-        ),
-    )
+    secret: SecretStr = Field(..., min_length=1, description="The secret material (password / API token / TOTP seed). Never logged, encrypted at rest, cannot be retrieved after creation.")
     extra: dict | None = Field(
         default=None, description="Optional kind-specific fields, e.g. {'otp_period': 30}. Encrypted."
     )
@@ -134,7 +127,7 @@ async def create_test_credential(
 
         ex = body.extra or {}
         ok = is_valid_totp_secret(
-            body.secret,
+            body.secret.get_secret_value(),
             digits=int(ex.get("totp_digits", ex.get("digits", 6))),
             alg=str(ex.get("totp_algorithm", ex.get("alg", "sha1"))),
             period=int(ex.get("totp_period", ex.get("otp_period", ex.get("period", 30)))),
@@ -153,7 +146,7 @@ async def create_test_credential(
         name=body.name,
         kind=body.kind,
         username=body.username,
-        secret=body.secret,
+        secret=body.secret.get_secret_value(),
         extra=json.dumps(body.extra) if body.extra is not None else None,
         created_by=current_user.id,
     )

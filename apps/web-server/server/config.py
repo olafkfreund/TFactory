@@ -8,7 +8,7 @@ import os
 import secrets
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
 
 from .paths import get_data_dir, get_data_file, write_secret_file
@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     SSL_KEYFILE: str = ""  # Path to SSL private key
 
     # Authentication
-    API_TOKEN: str = ""  # Will generate default if not set
+    API_TOKEN: str = Field(default="", repr=False)  # Will generate default if not set
 
     # Federated search (#149). The cockpit (CFactory) aggregates every portal's
     # work and exposes a ranked /api/search; this portal proxies to it so its ⌘K
@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     ALLOW_INSECURE_AUTH: bool = False
 
     # JWT Configuration
-    JWT_SECRET: str = ""  # Auto-generated if not set
+    JWT_SECRET: str = Field(default="", repr=False)  # Auto-generated if not set
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     JWT_ALGORITHM: str = "HS256"
@@ -130,7 +130,7 @@ class Settings(BaseSettings):
     # the endpoint validates a shared secret in the X-TFactory-Handback-Token
     # header against INBOUND_HANDBACK_SECRET.
     INBOUND_HANDBACK_ENABLED: bool = False
-    INBOUND_HANDBACK_SECRET: str = ""
+    INBOUND_HANDBACK_SECRET: str = Field(default="", repr=False)
 
     class Config:
         env_file = ".env"

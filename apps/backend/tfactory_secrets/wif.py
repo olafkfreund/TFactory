@@ -46,7 +46,16 @@ def _read_oidc_token(config) -> str:
     """Read the OIDC token from ``config.token`` or ``config.token_file``."""
     token = getattr(config, "token", None)
     if token:
-        return token
+        # ``OperatorWifEntry.token`` is a SecretStr since Factory#377. The
+        # hasattr keeps this function's duck-typed contract, and matters because
+        # the getattr above is exactly what a type checker cannot see through:
+        # without it a SecretStr would reach WebIdentityToken below and STS
+        # would be handed the string "**********" with nothing flagging it.
+        return (
+            token.get_secret_value()
+            if hasattr(token, "get_secret_value")
+            else str(token)
+        )
     token_file = getattr(config, "token_file", None)
     if token_file:
         p = Path(token_file).expanduser()
