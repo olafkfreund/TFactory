@@ -90,6 +90,17 @@ class SpecIngestRequest(BaseModel):
             "(no manual pre-registration). Ignored when the project is already known."
         ),
     )
+    repo: str | None = Field(
+        default=None,
+        description=(
+            "The task contract's repo reference, optionally provider-qualified "
+            "(RFC-0020 3.5): 'owner/repo' | 'gitlab:group/project' | "
+            "'azure_devops:org/project/repo'. Recorded on the spec so the Triager's "
+            "verdict goes to the right host — the PR-comment step is gh-CLI-driven "
+            "and is skipped, with the report written to disk, off GitHub. Absent "
+            "means GitHub, which is what it always meant."
+        ),
+    )
 
 
 class PrAttachRequest(BaseModel):
@@ -296,6 +307,7 @@ async def ingest_spec(
             contract=req.contract,
             source_branch=req.source_branch,
             tenant=resolve_tenant(x_tenant_id, req.tenant),
+            repo_ref=req.repo,
         )
     except FileExistsError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
