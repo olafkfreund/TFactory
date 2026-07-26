@@ -46,6 +46,7 @@ from agents.workspace_status import (
     truthy,
     write_status_patch,
 )
+from repo_ref import is_github
 
 _triage_log = _logging.getLogger(__name__)
 
@@ -1204,6 +1205,27 @@ def _run_pr_side_effect(project_dir, findings_dir, source_meta, report_md) -> di
     """Post the report to the PR (dry-run by default), or write the body to disk
     when there's no PR number. Returns a summary dict for status.json."""
     pr_number = int(source_meta.get("pr_number") or 0)
+    # RFC-0020 3.5 (Factory#366): this step is gh-CLI-driven (`gh pr comment`),
+    # so it only works on GitHub. A GitLab or Azure DevOps tenant's verdict is
+    # written to disk instead — the SAME fallback a missing PR number already
+    # takes, which is why this costs no new failure path.
+    #
+    # Written rather than dropped, and dropped rather than attempted: the verify
+    # has already run and the report is worth reading, but throwing a GitLab
+    # project at `gh` either errors after the fact or, worse, comments on a
+    # same-named GitHub repo that happens to exist.
+    provider = source_meta.get("provider") or "github"
+    if pr_number > 0 and report_md and not is_github(provider):
+        (findings_dir / "pr_comment_body.md").write_text(report_md)
+        return {
+            "skipped": True,
+            "reason": (
+                f"provider {provider!r} is not GitHub; the PR comment is gh-CLI-driven. "
+                "The report is on disk — post it on the merge request."
+            ),
+            "provider": provider,
+            "body_written_to": str(findings_dir / "pr_comment_body.md"),
+        }
     if pr_number > 0 and report_md:
         from tools.pr_comment import PRCommentRequest, post_pr_comment
 

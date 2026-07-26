@@ -47,6 +47,7 @@ from pathlib import Path
 from typing import Any
 
 from agents.workspace_status import now_iso as _now_iso
+from repo_ref import project_of, provider_of
 
 try:
     from claude_agent_sdk import tool
@@ -308,6 +309,7 @@ def create_spec_ingest_workspace(
     contract: dict | None = None,
     source_branch: str | None = None,
     tenant: str = "default",
+    repo_ref: str | None = None,
 ) -> dict[str, Any]:
     """Create a TFactory workspace from a raw acceptance-criteria spec.
 
@@ -440,6 +442,14 @@ def create_spec_ingest_workspace(
         # Tenant scoping (#683): service-local metadata, lazily backfilled —
         # readers treat a missing value as "default".
         "tenant": tenant or "default",
+        # RFC-0020 3.5 (Factory#366): which git HOST this work is on, and the
+        # bare project path. The Triager's PR-comment side-effect is gh-CLI-driven,
+        # so it reads `provider` to decide whether it may run at all — a GitLab
+        # tenant's verdict is written to disk instead of thrown at `gh`. A missing
+        # value reads as github, which is what every spec written before this
+        # phase meant.
+        "provider": provider_of(repo_ref),
+        "repo_slug": project_of(repo_ref) or None,
     }
     (context_dir / "source.json").write_text(json.dumps(source, indent=2))
 
