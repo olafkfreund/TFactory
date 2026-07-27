@@ -45,6 +45,9 @@ permissions:
 env:
   RUFF_VERSION: "0.15.17"
   MYPY_VERSION: "1.20.1"
+  # The primary package. apps/web-server is passed alongside it at the call
+  # site (Factory#384) rather than folded in here, so PACKAGE_DIR keeps its
+  # single-directory meaning for every other step that reads it.
   PACKAGE_DIR: "apps/backend"
 
 jobs:
@@ -81,7 +84,7 @@ jobs:
         # mypy --strict is now part of the ratchet and BLOCKING as a
         # no-regression gate (#449): a changed file may not gain mypy errors vs
         # the PR base, and new files must be clean.
-        run: python scripts/ratchet_lint.py --base "${{ steps.base.outputs.ref }}" --package "${PACKAGE_DIR}"
+        run: python scripts/ratchet_lint.py --base "${{ steps.base.outputs.ref }}" --package "${PACKAGE_DIR}" --package apps/web-server
 
   format-check:
     name: ruff format --check (apps/backend)
