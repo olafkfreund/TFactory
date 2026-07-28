@@ -72,6 +72,17 @@ VENDORED_SKIP = frozenset(
     }
 )
 
+# Whole vendored trees, skipped for the same reason. Kept separate from
+# VENDORED_SKIP because these are prefixes, not exact paths: the factory-github
+# provider layer is a mirror of the hub's shared/factory-github/ and is policed
+# by factory-github-drift.yml, so its file list is the hub's to change, not ours.
+VENDORED_SKIP_DIRS = ("apps/backend/runners/github/",)
+
+
+def is_vendored(path: str) -> bool:
+    """True for byte-exact vendored copies the drift gates own, not the ratchet."""
+    return path in VENDORED_SKIP or path.startswith(VENDORED_SKIP_DIRS)
+
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, capture_output=True, text=True, check=False)
@@ -113,7 +124,7 @@ def changed_python_files(base: str, packages: list[str]) -> list[str]:
             path.suffix == ".py"
             and any(pkg in path.parents or pkg == path.parent for pkg in pkgs)
             and path.exists()
-            and str(path) not in VENDORED_SKIP  # byte-exact vendored copies
+            and not is_vendored(str(path))  # byte-exact vendored copies
         ):
             out.append(str(path))
     return out
