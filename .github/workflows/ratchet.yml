@@ -68,8 +68,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install "ruff==${RUFF_VERSION}" "mypy==${MYPY_VERSION}"
-          # Backend deps so mypy can resolve imports on changed files.
-          pip install -r apps/backend/requirements.txt -r tests/requirements-test.txt || true
+          # Backend AND web-server deps so mypy can resolve imports on changed
+          # files. web-server was missing, so every changed route reported
+          # `Cannot find implementation or library stub for module named
+          # "fastapi"` -- harmless for an existing file whose base count
+          # already included it, but it made any NEW route unmergeable,
+          # since a new file's base is 0 and the ratchet blocks any gain.
+          pip install -r apps/backend/requirements.txt -r apps/web-server/requirements.txt -r tests/requirements-test.txt || true
 
       - name: Determine base ref
         id: base

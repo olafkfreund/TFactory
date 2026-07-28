@@ -30,6 +30,7 @@ from .routes import (
     capabilities,
     cloud,
     context,
+    coverage,
     email,
     execution,
     files,
@@ -412,6 +413,9 @@ def create_app() -> FastAPI:
     # routes and /openapi.json. Mounted here, well ahead of the SPA catch-all at
     # "/", or StaticFiles would answer discovery with the app shell.
     app.include_router(well_known.router)
+    # Per-commit coverage for CI (#851): the endpoint pr-review-tests.yml
+    # has been calling since epic #277, which was never implemented.
+    app.include_router(coverage.router)
 
     # Auth routes (prefix defined in router: /api/auth)
     app.include_router(auth_routes.router)
