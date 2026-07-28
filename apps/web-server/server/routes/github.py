@@ -651,9 +651,12 @@ def _get_project_provider(projectId: str):
         kwargs = {}
         if project_path:
             kwargs["_project_dir"] = project_path
-        # Pass token if present
+        # Pass token if present. The key is `token`, not `_token`: the factory
+        # selects the REST provider on the PRESENCE of `token`, and the gh-CLI
+        # GitHubProvider has no `_token` field — so `_token` both failed to
+        # select the REST provider and raised TypeError (#829).
         if token:
-            kwargs["_token"] = token
+            kwargs["token"] = token
         return get_provider(ProviderType.GITHUB, repo=repo_name, **kwargs)
 
 
