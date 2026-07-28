@@ -184,6 +184,27 @@ def regressions(base: str, path: str) -> list[str]:
     return out
 
 
+def _is_test_file(path: str) -> bool:
+    """Does *path* name a test file, by the same shape ruff per-file-ignores use?
+
+    Kept deliberately in step with the ruff config (`**/test_*.py`,
+    `**/*_test.py`, `**/tests/**`) so one tool cannot treat a file as a test
+    while the other holds it to the production bar. Ported from the hub
+    canonical (Factory#403).
+    """
+    norm = path.replace("\\", "/")
+    name = norm.rsplit("/", 1)[-1]
+    return (
+        "/tests/" in f"/{norm}"
+        or "/test/" in f"/{norm}"
+        or name.startswith("test_")
+        or name.endswith("_test.py")
+    )
+
+
+_MYPY_TEST_RELAX = ["--allow-untyped-defs", "--allow-incomplete-defs"]
+
+
 def mypy_errors(path: str, package: str, mypy_config: str) -> int:
     """Number of mypy --strict errors attributed to *path*.
 
@@ -202,6 +223,7 @@ def mypy_errors(path: str, package: str, mypy_config: str) -> int:
     # The package dir is the import base, mirroring the app's runtime sys.path.
     for var in ("MYPYPATH", "PYTHONPATH"):
         env[var] = "."
+    relax = _MYPY_TEST_RELAX if _is_test_file(path) else []
     config = os.path.relpath(Path(mypy_config).resolve(), pkg)
     res = subprocess.run(
         [
@@ -210,6 +232,7 @@ def mypy_errors(path: str, package: str, mypy_config: str) -> int:
             config,
             "--explicit-package-bases",
             "--namespace-packages",
+            *relax,
             rel,
         ],
         capture_output=True,
