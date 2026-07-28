@@ -27,9 +27,12 @@ jobs:
         run: |
           RESULT=$(curl -s \
             -H "Authorization: Bearer ${{ secrets.TFACTORY_TOKEN }}" \
-            "${{ vars.TFACTORY_URL }}/api/coverage?pr=${{ github.event.pull_request.number }}&repo=${{ github.repository }}" \
+            "${{ vars.TFACTORY_URL }}/api/coverage?repo=${{ github.repository }}&sha=${{ github.event.pull_request.head.sha }}&pr=${{ github.event.pull_request.number }}" \
             || echo '{}')
           PCT=$(echo "$RESULT" | jq -r '.coverage_pct // "N/A"')
+          # #851: the endpoint states WHY there is no figure. Echo it, so a
+          # missing run is distinguishable from a missing endpoint at a glance.
+          echo "coverage lookup: $(echo "$RESULT" | jq -r '.reason // "ok"')"
           REPORT=$(echo "$RESULT" | jq -r '.report_url // ""')
           echo "pct=$PCT" >> "$GITHUB_OUTPUT"
           echo "report=$REPORT" >> "$GITHUB_OUTPUT"

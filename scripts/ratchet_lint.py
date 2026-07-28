@@ -196,8 +196,19 @@ def mypy_errors(path: str, package: str, mypy_config: str) -> int:
     rel = os.path.relpath(Path(path).resolve(), pkg)
     env = dict(os.environ)
     # The package dir is the import base, mirroring the app's runtime sys.path.
+    # Sibling app packages are appended because the web server imports the
+    # backend at runtime (`sys.path.insert` of apps/backend in the route
+    # modules); without them mypy cannot resolve `agents.*` from a web-server
+    # file and reports import-not-found, which is unfixable from the file
+    # itself and blocks any NEW file, whose base count is 0.
+    siblings = [
+        os.path.relpath(p, pkg)
+        for p in sorted(pkg.parent.iterdir())
+        if p.is_dir() and p != pkg and not p.name.startswith(".")
+    ]
+    search = os.pathsep.join([".", *siblings])
     for var in ("MYPYPATH", "PYTHONPATH"):
-        env[var] = "."
+        env[var] = search
     relax = MYPY_TEST_RELAX if is_test_file(path) else []
     config = os.path.relpath(Path(mypy_config).resolve(), pkg)
     res = subprocess.run(
