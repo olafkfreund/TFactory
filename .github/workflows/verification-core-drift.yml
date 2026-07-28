@@ -25,6 +25,10 @@ on:
     paths:
       - "apps/backend/agents/verification_gate.py"
       - "apps/backend/tools/runners/nix_provisioner.py"
+      # Newly gated by Factory#400. Without this the gate is REGISTERED for
+      # this module but never TRIGGERED by it: a PR editing the vendored
+      # copy would skip the blocking check entirely.
+      - "apps/backend/tools/runners/artifact_store.py"
       - ".github/workflows/verification-core-drift.yml"
   push:
     branches: [dev, main]
