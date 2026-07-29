@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
 
 _AC_PREFIX = re.compile(r"^\s*(AC#?\s*\d+)\s*[:\-]\s*(.*)$", re.IGNORECASE)
 
@@ -67,14 +68,18 @@ def _unrepresented_sections(spec_markdown: str | None) -> list[str]:
     try:
         from spec_sources import unrepresented_sections  # noqa: PLC0415 - lazy
 
-        return unrepresented_sections(spec_markdown)
+        sections: list[str] = unrepresented_sections(spec_markdown)
+        return sections
     except Exception:  # noqa: BLE001 - the caveat must never break the ledger
         return []
 
 
 def build_ac_ledger(
-    test_plan: dict, verdicts: list[dict], *, spec_markdown: str | None = None
-) -> dict:
+    test_plan: dict[str, Any],
+    verdicts: list[dict[str, Any]],
+    *,
+    spec_markdown: str | None = None,
+) -> dict[str, Any]:
     """Per-AC coverage ledger from the plan phases + the evaluator verdicts.
 
     ``spec_markdown`` is the ingested spec (``context/aifactory_spec.md``). It

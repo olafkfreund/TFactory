@@ -27,6 +27,7 @@ Pure + dependency-light (regex + string handling only).
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -183,7 +184,7 @@ def _is_ac_heading(heading: str) -> bool:
     return any(w in heading.lower() for w in _AC_HEADING_WORDS)
 
 
-def _outside_fences(lines: list[str] | tuple[str, ...]):
+def _outside_fences(lines: Iterable[str]) -> Iterator[str]:
     """Yield only the lines that are NOT inside a fenced code block.
 
     The canonical spec carries the verbatim source inside a fence, so the AC
