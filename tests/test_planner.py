@@ -187,11 +187,15 @@ def mock_sdk(monkeypatch: pytest.MonkeyPatch):
         async def __aexit__(self, *args):
             return None
 
-    def _setup(*, plans=None, statuses=None):
+    def _setup(*, plans=None, statuses=None, errors=None):
         plans = list(plans) if plans is not None else [None]
         statuses = list(statuses) if statuses is not None else ["complete"] * len(plans)
+        # `errors` is the error_info dict run_agent_session returns alongside a
+        # status=error — the classified, sanitised cause (#854).
+        errors = list(errors) if errors is not None else []
         plans_iter = iter(plans)
         statuses_iter = iter(statuses)
+        errors_iter = iter(errors)
 
         async def _resolve(*a, **kw):
             return _FakeAsyncCM()
@@ -212,9 +216,13 @@ def mock_sdk(monkeypatch: pytest.MonkeyPatch):
                 status = next(statuses_iter)
             except StopIteration:
                 status = "complete"
+            try:
+                error_info = next(errors_iter)
+            except StopIteration:
+                error_info = {}
             if canned is not None:
                 (spec_dir_arg / "test_plan.json").write_text(canned)
-            return status, "mock response", {}
+            return status, "mock response", error_info
 
         monkeypatch.setattr("agents.planner._resolve_planner_client", _resolve)
         monkeypatch.setattr("agents.planner._invoke_session", _invoke)
@@ -393,6 +401,112 @@ async def test_initial_session_error_no_retry(
     status = json.loads((spec_dir / "status.json").read_text())
     assert status["status"] == "planner_failed"
     assert status["phase"] == "planner_session_error"
+
+
+# ── The record must carry the real cause (#854) ─────────────────────────
+
+_AUTH_FAILURE = {
+    "type": "authentication",
+    "message": "Failed to authenticate: OAuth session expired and could not be refreshed",
+    "exception_type": "RuntimeError",
+}
+
+
+@pytest.mark.asyncio
+async def test_session_error_records_the_cause_the_sdk_reported(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """#854: `run_agent_session` already classifies and sanitises the failure.
+    Writing a fixed "returned status=error" throws that away, and the task API
+    then surfaces no cause at all."""
+    mock_sdk(plans=[None], statuses=["error"], errors=[_AUTH_FAILURE])
+    assert await run_planner(spec_dir, project_dir) is False
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert "OAuth session expired" in status["planner_error"], (
+        f"the SDK's message was dropped: {status['planner_error']!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_session_error_names_the_failure_class(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """An auth failure and an invalid plan need different people; say which."""
+    mock_sdk(plans=[None], statuses=["error"], errors=[_AUTH_FAILURE])
+    await run_planner(spec_dir, project_dir)
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert "authentication" in status["planner_error"]
+
+
+@pytest.mark.asyncio
+async def test_authentication_failure_is_not_retried(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """A revoked or expired credential is not transient. Retrying doubles the
+    cost and the delay to reach the same verdict."""
+    calls = mock_sdk(plans=[None], statuses=["error"], errors=[_AUTH_FAILURE])
+    await run_planner(spec_dir, project_dir)
+    assert len(calls) == 1, (
+        f"ran {len(calls)} planner sessions against a dead credential"
+    )
+
+
+@pytest.mark.asyncio
+async def test_session_error_without_detail_still_says_something(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """No error_info at all is the one case where a generic line is honest."""
+    mock_sdk(plans=[None], statuses=["error"])
+    await run_planner(spec_dir, project_dir)
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["planner_error"].strip(), "planner_error is blank"
+
+
+@pytest.mark.asyncio
+async def test_invalid_after_retry_never_ends_in_an_empty_tail(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """The specific defect in #854: `"after retry: missing — "`.
+
+    A populated field carrying nothing is worse than no field — it reads as
+    "there was no further detail" rather than "the detail was lost".
+    """
+    mock_sdk(plans=[None, None])
+    assert await run_planner(spec_dir, project_dir) is False
+    status = json.loads((spec_dir / "status.json").read_text())
+    error = status["planner_error"]
+    assert not error.rstrip().endswith("—"), (
+        f"planner_error trails off into nothing: {error!r}"
+    )
+    _, sep, tail = error.partition("—")
+    assert not sep or tail.strip(), (
+        f"planner_error promises a detail and then supplies none: {error!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_invalid_after_retry_explains_what_missing_means(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """"missing" names a file that was never written, not a malformed plan."""
+    mock_sdk(plans=[None, None])
+    await run_planner(spec_dir, project_dir)
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert "test_plan.json" in status["planner_error"], (
+        f"'missing' is unexplained: {status['planner_error']!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_invalid_after_retry_keeps_a_real_detail(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """When the session DID produce a detail (bad JSON), it must survive."""
+    mock_sdk(plans=["{not json", "{still not json"])
+    await run_planner(spec_dir, project_dir)
+    status = json.loads((spec_dir / "status.json").read_text())
+    _, _, tail = status["planner_error"].partition("—")
+    assert tail.strip(), f"the parse error was dropped: {status['planner_error']!r}"
 
 
 # ── Replan mode (commit 5) ──────────────────────────────────────────────

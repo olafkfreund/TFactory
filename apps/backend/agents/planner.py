@@ -357,6 +357,31 @@ def _check_existing_phases_preserved(
     return True, ""
 
 
+def _session_error_text(error_info: object, when: str) -> str:
+    """Describe why a planner session failed, using what the SDK reported.
+
+    ``run_agent_session`` already classifies (``authentication``, ``rate_limit``,
+    ...) and sanitises the failure. Recording a fixed "returned status=error"
+    threw that away, so a dead credential and a broken provider produced the
+    same characterless record and the task API surfaced no cause at all (#854).
+    """
+    info = error_info if isinstance(error_info, dict) else {}
+    kind = str(info.get("type") or "").strip()
+    detail = str(info.get("message") or "").strip()[:300]
+    if not detail:
+        # Genuinely nothing to add — say that, rather than implying a detail.
+        return f"{when} session failed with no detail reported by the SDK"
+    return f"{when} session failed ({kind or 'unclassified'}): {detail}"
+
+
+# What an error_kind means when the session left nothing behind to quote. Only
+# `missing` can reach here empty — the others carry the parse/validation text —
+# but the fallback keeps any future kind from trailing off into nothing.
+_ERR_KIND_MEANING = {
+    "missing": "the session ended without writing test_plan.json",
+}
+
+
 async def _run_session_with_retry(
     spec_dir: Path,
     project_dir: Path,
@@ -377,15 +402,18 @@ async def _run_session_with_retry(
     ``planner_failed`` status patch, so the caller just returns ``False``.
     """
     client = await _resolve_planner_client(spec_dir, project_dir)
-    session_status, _response, _error = await _invoke_session(
+    session_status, _response, error_info = await _invoke_session(
         client, prompt, spec_dir, verbose
     )
     if session_status == "error":
+        # No retry, deliberately. The dominant cause here is a dead credential
+        # (#854), which is not transient: a second full session costs the same
+        # tokens and the same minutes to reach the same verdict.
         _write_status_patch(
             spec_dir,
             status="planner_failed",
             phase=session_error_phase,
-            planner_error="run_agent_session returned status=error",
+            planner_error=_session_error_text(error_info, "first"),
         )
         return False, None
 
@@ -398,7 +426,7 @@ async def _run_session_with_retry(
     )
     retry_prompt = _build_retry_prompt(prompt, err_kind, str(plan or "")[:300])
     client_retry = await _resolve_planner_client(spec_dir, project_dir)
-    retry_status, _r, _re = await _invoke_session(
+    retry_status, _r, retry_error = await _invoke_session(
         client_retry, retry_prompt, spec_dir, verbose
     )
     if retry_status == "error":
@@ -406,7 +434,7 @@ async def _run_session_with_retry(
             spec_dir,
             status="planner_failed",
             phase=session_error_phase,
-            planner_error="retry session returned status=error",
+            planner_error=_session_error_text(retry_error, "retry"),
         )
         return False, None
 
@@ -444,11 +472,19 @@ async def _run_session_with_retry(
                 )
                 return True, plan
 
+    # `plan` here holds the validation detail (a parse error, a schema
+    # complaint), or nothing at all when the file was never written. The old
+    # unconditional f-string emitted "after retry: missing — " in that case: a
+    # field that exists, is populated, and carries nothing, which reads as
+    # "there was no further detail" rather than "the detail was lost" (#854).
+    detail = str(plan or "").strip()[:200] or _ERR_KIND_MEANING.get(
+        err_kind, "no detail reported by the session"
+    )
     _write_status_patch(
         spec_dir,
         status="planner_failed",
         phase=f"{invalid_after_retry_prefix}{err_kind}_after_retry",
-        planner_error=f"after retry: {err_kind} — {str(plan or '')[:200]}",
+        planner_error=f"after retry: {err_kind} — {detail}",
     )
     return False, None
 

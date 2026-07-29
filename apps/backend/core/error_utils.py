@@ -108,6 +108,13 @@ def is_authentication_error(error: Exception) -> bool:
             "http 401",
             "does not have access to claude",
             "please login again",
+            # #854: the message the SDK actually emitted when both fleet
+            # credentials were dead — "Failed to authenticate: OAuth session
+            # expired and could not be refreshed" — matched none of the above,
+            # so a revoked credential was classified as a generic error and
+            # retried like a transient one.
+            "failed to authenticate",
+            "session expired",
         ]
     )
 
@@ -163,7 +170,18 @@ async def safe_receive_messages(
     except GeneratorExit:
         return
     except Exception as e:
-        # If the generator itself raises (e.g., transport error), log and stop
-        # gracefully so callers can process whatever was collected so far.
+        # An authentication failure is not a stream glitch to be absorbed: the
+        # credential is dead, nothing was produced, and every subsequent call
+        # fails identically. Swallowing it here handed the caller a clean
+        # end-of-stream, which the planner read as "the agent emitted no plan"
+        # — so it retried a full session against a credential that could not
+        # work, then recorded `planner_invalid_missing_after_retry`, pointing
+        # the reader at plan validity when the truth was a revoked token
+        # (#854). Re-raise so the caller classifies and reports the real cause.
+        if is_authentication_error(e):
+            logger.error(f"[{caller}] authentication failed, not retryable: {e}")
+            raise
+        # Any other mid-stream failure keeps the original behaviour: log and
+        # stop gracefully so callers can process whatever was collected so far.
         logger.error(f"[{caller}] SDK response stream terminated unexpectedly: {e}")
         return
