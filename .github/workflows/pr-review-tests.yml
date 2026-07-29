@@ -32,10 +32,16 @@ jobs:
           PCT=$(echo "$RESULT" | jq -r '.coverage_pct // "N/A"')
           # #851: the endpoint states WHY there is no figure. Echo it, so a
           # missing run is distinguishable from a missing endpoint at a glance.
-          echo "coverage lookup: $(echo "$RESULT" | jq -r '.reason // "ok"')"
+          # #853: it is not enough to echo it into the job log — the reason is
+          # the only honest thing we can put in the commit status and the PR
+          # comment, so carry it out of this step. Single-line + bounded, since
+          # GITHUB_OUTPUT is line-oriented and a status description caps at 140.
+          REASON=$(echo "$RESULT" | jq -r '.reason // ""' | tr -d '\n\r' | cut -c1-120)
+          echo "coverage lookup: ${REASON:-ok}"
           REPORT=$(echo "$RESULT" | jq -r '.report_url // ""')
           echo "pct=$PCT" >> "$GITHUB_OUTPUT"
           echo "report=$REPORT" >> "$GITHUB_OUTPUT"
+          echo "reason=$REASON" >> "$GITHUB_OUTPUT"
 
       - name: Find existing coverage comment
         id: find_comment
@@ -54,47 +60,67 @@ jobs:
           body: |
             ### TFactory coverage
 
-            **Coverage:** ${{ steps.coverage.outputs.pct }}%
+            **Coverage:** ${{ steps.coverage.outputs.pct == 'N/A' && 'not recorded for this commit' || format('{0}%', steps.coverage.outputs.pct) }}
 
-            ${{ steps.coverage.outputs.report != '' && format('[Full report]({0})', steps.coverage.outputs.report) || '_Report not yet available — the TFactory pipeline may still be running._' }}
+            ${{ steps.coverage.outputs.report != '' && format('[Full report]({0})', steps.coverage.outputs.report) || format('_{0}_', steps.coverage.outputs.reason != '' && steps.coverage.outputs.reason || 'No coverage report for this commit.') }}
 
             > _Updated by the [TFactory coverage workflow](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})._
 
       - name: Set commit status
+        # Every value the script reads is passed through `env:` rather than
+        # interpolated into the shell body: `reason` is server-supplied text,
+        # and `${{ }}` splices it in before bash ever sees a quote.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PCT: ${{ steps.coverage.outputs.pct }}
+          REASON: ${{ steps.coverage.outputs.reason }}
+          TFACTORY_URL: ${{ vars.TFACTORY_URL }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          PCT="${{ steps.coverage.outputs.pct }}"
-
+          # ALWAYS post a terminal state (#853).
+          #
+          # This step has now been wrong in both directions. It first posted
+          # `pending`, which is a permanent stall by construction: the workflow
+          # triggers only on pull_request [opened, synchronize], so nothing ever
+          # re-runs to resolve it, and merges got forced with --admin (#846).
+          # The fix for that was to post nothing at all — which is the same
+          # stall wearing a different hat, because GitHub reports a commit
+          # carrying zero statuses as combined state `pending`, and silence
+          # cannot overwrite a stale `pending` left by an earlier run.
+          #
+          # The mapping was the bug, not the data. The endpoint (#852) reports
+          # honestly: 200 with `coverage_pct: null` plus a reason. "I have
+          # nothing to report" is a finished answer, so it belongs in a
+          # terminal state with the reason in the description — not in
+          # `pending`, which claims a run is still in flight.
+          #
+          # `success` is the only terminal non-red state the commit status API
+          # offers (there is no `neutral`), and red is wrong here: a PR that
+          # will never have a regression run — a dependabot bump, a docs-only
+          # change — has not broken anything. Only a coverage DROP deserves to
+          # block, and this step does not compute one; it publishes whatever
+          # figure the regression run recorded.
           if [ "$PCT" = "N/A" ]; then
-            # POST NOTHING. This used to post state=pending, which is a
-            # permanent stall by construction: this workflow only triggers on
-            # pull_request [opened, synchronize], so nothing ever re-runs to
-            # resolve it. Every PR therefore carried a check that never
-            # completed, and any automation asking "are all checks done?"
-            # answered no forever (#846). Four merges were forced through with
-            # --admin in one day because of it, which is how a branch
-            # protection rule stops being a rule.
-            #
-            # `success` would be worse than pending, not better: a green tick
-            # for a measurement that never happened is a false green, and the
-            # commit status API has no `neutral` (only error/failure/pending/
-            # success). With no data, the honest move is to make no claim.
-            #
-            # The PR comment posted above already says the report is
-            # unavailable, so nothing is lost by staying silent here.
-            if [ -z "${{ vars.TFACTORY_URL }}" ]; then
-              echo "::warning::TFACTORY_URL is not set, so coverage can never be fetched and this check will never report. Set it with: gh variable set TFACTORY_URL --repo ${{ github.repository }}"
-            else
-              echo "::notice::Coverage not available for this PR yet; no commit status posted."
+            if [ -z "$TFACTORY_URL" ]; then
+              echo "::warning::TFACTORY_URL is not set, so coverage can never be fetched. Set it with: gh variable set TFACTORY_URL --repo ${REPO}"
             fi
-            exit 0
+            DESCRIPTION="No coverage for this commit: ${REASON:-TFactory reported no coverage and gave no reason}"
+          else
+            DESCRIPTION="Coverage: ${PCT}%"
+          fi
+          # GitHub truncates a status description at 140 characters. Do it here
+          # so the text that gets published is the text we chose.
+          DESCRIPTION=$(printf '%s' "$DESCRIPTION" | cut -c1-140)
+
+          ARGS=(-f state="success" -f description="$DESCRIPTION" -f context="tfactory/coverage")
+          # An unset TFACTORY_URL is the reason coverage is missing in the first
+          # place; do not post an empty target_url alongside it.
+          if [ -n "$TFACTORY_URL" ]; then
+            ARGS+=(-f target_url="$TFACTORY_URL")
           fi
 
-          gh api "/repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }}" \
+          gh api "/repos/${REPO}/statuses/${HEAD_SHA}" \
             -X POST \
             -H "Content-Type: application/json" \
-            -f state="success" \
-            -f description="Coverage: ${PCT}%" \
-            -f context="tfactory/coverage" \
-            -f target_url="${{ vars.TFACTORY_URL }}"
+            "${ARGS[@]}"
