@@ -34,8 +34,10 @@ WORKFLOW = (
 # everything else from the environment, so the substitution list stays short.
 _CONTEXT = {
     "secrets.GITHUB_TOKEN": "fake-token",
+    "secrets.TFACTORY_TOKEN": "fake-token",
     "github.repository": "olafkfreund/TFactory",
     "github.event.pull_request.head.sha": "d34db33f",
+    "github.event.pull_request.number": "820",
     "vars.TFACTORY_URL": "https://tfactory.example",
 }
 
@@ -222,6 +224,99 @@ def test_reason_is_exported_by_the_fetch_step() -> None:
         "the fetch step logs .reason but never writes it to GITHUB_OUTPUT, so "
         "the commit status cannot state why coverage is missing"
     )
+
+
+# ── the fetch step, executed against canned endpoint responses ───────────
+
+
+def _run_fetch_step(tmp_path: Path, *, body: str, code: str) -> dict[str, str]:
+    """Execute the 'Fetch coverage from TFactory' step against a canned reply."""
+    step = _step("Fetch coverage from TFactory")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(parents=True)
+    fake_curl = bin_dir / "curl"
+    # Mimics `curl -s -w '\n%{http_code}'`: body, newline, status code.
+    fake_curl.write_text(
+        "#!/usr/bin/env bash\nprintf '%s\\n%s' \"$FAKE_BODY\" \"$FAKE_CODE\"\n"
+    )
+    fake_curl.chmod(0o755)
+
+    outputs = tmp_path / "github_output"
+    outputs.touch()
+    env = dict(os.environ)
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    env["GITHUB_OUTPUT"] = str(outputs)
+    env["FAKE_BODY"] = body
+    env["FAKE_CODE"] = code
+    for key, value in (step.get("env") or {}).items():
+        env[key] = _expand(str(value), _CONTEXT)
+
+    result = subprocess.run(  # noqa: S603 — fixed argv, the script is our own workflow
+        [shutil.which("bash") or "/bin/bash", "-e"],
+        input=_expand(step["run"], _CONTEXT),
+        text=True,
+        capture_output=True,
+        env=env,
+        cwd=tmp_path,
+        check=False,
+    )
+    assert result.returncode == 0, (
+        f"the fetch step exited {result.returncode}\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    return dict(
+        line.partition("=")[::2]  # type: ignore[arg-type]
+        for line in outputs.read_text().splitlines()
+        if "=" in line
+    )
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="the step needs jq")
+def test_fetch_publishes_the_endpoints_reason(tmp_path: Path) -> None:
+    out = _run_fetch_step(
+        tmp_path,
+        body='{"coverage_pct": null, "reason": "no run recorded coverage for d34db33f"}',
+        code="200",
+    )
+    assert out["pct"] == "N/A"
+    assert out["reason"] == "no run recorded coverage for d34db33f"
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="the step needs jq")
+def test_fetch_names_the_http_code_when_there_is_no_reason(tmp_path: Path) -> None:
+    """The live failure: the endpoint was never reached, so there was no
+    `.reason` to report — and the status could only say "gave no reason",
+    which tells nobody anything. #852 built the endpoint to explain missing
+    coverage, so a missing explanation means we did not reach it."""
+    out = _run_fetch_step(
+        tmp_path, body='{"error": "Missing Authorization header"}', code="401"
+    )
+    assert out["pct"] == "N/A"
+    assert "401" in out["reason"], (
+        f"an unreachable endpoint is indistinguishable from no data: {out['reason']!r}"
+    )
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="the step needs jq")
+def test_fetch_survives_a_non_json_body(tmp_path: Path) -> None:
+    """A proxy's HTML error page must not crash the step or masquerade as data."""
+    out = _run_fetch_step(tmp_path, body="<html>502 Bad Gateway</html>", code="502")
+    assert out["pct"] == "N/A"
+    assert "502" in out["reason"]
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="the step needs jq")
+def test_fetch_keeps_a_real_coverage_figure(tmp_path: Path) -> None:
+    out = _run_fetch_step(
+        tmp_path,
+        body='{"coverage_pct": 81.5, "report_url": "https://example/report"}',
+        code="200",
+    )
+    assert out["pct"] == "81.5"
+    assert out["report"] == "https://example/report"
+    # A real figure needs no excuse attached to it.
+    assert out["reason"] == ""
 
 
 def test_pr_comment_does_not_render_a_percentage_it_does_not_have() -> None:

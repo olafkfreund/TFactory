@@ -25,20 +25,34 @@ jobs:
       - name: Fetch coverage from TFactory
         id: coverage
         run: |
-          RESULT=$(curl -s \
+          RESPONSE=$(curl -s -w '\n%{http_code}' \
             -H "Authorization: Bearer ${{ secrets.TFACTORY_TOKEN }}" \
-            "${{ vars.TFACTORY_URL }}/api/coverage?repo=${{ github.repository }}&sha=${{ github.event.pull_request.head.sha }}&pr=${{ github.event.pull_request.number }}" \
-            || echo '{}')
-          PCT=$(echo "$RESULT" | jq -r '.coverage_pct // "N/A"')
+            "${{ vars.TFACTORY_URL }}/api/coverage?repo=${{ github.repository }}&sha=${{ github.event.pull_request.head.sha }}&pr=${{ github.event.pull_request.number }}") \
+            || RESPONSE=$'\n000'
+          HTTP_CODE=$(printf '%s' "$RESPONSE" | tail -n1)
+          RESULT=$(printf '%s' "$RESPONSE" | sed '$d')
+          # A non-JSON body — an HTML error page, an empty 401 — must not slide
+          # through jq as "no coverage"; fall back explicitly instead.
+          PCT=$(printf '%s' "$RESULT" | jq -r '.coverage_pct // "N/A"' 2>/dev/null || echo "N/A")
           # #851: the endpoint states WHY there is no figure. Echo it, so a
           # missing run is distinguishable from a missing endpoint at a glance.
           # #853: it is not enough to echo it into the job log — the reason is
           # the only honest thing we can put in the commit status and the PR
           # comment, so carry it out of this step. Single-line + bounded, since
           # GITHUB_OUTPUT is line-oriented and a status description caps at 140.
-          REASON=$(echo "$RESULT" | jq -r '.reason // ""' | tr -d '\n\r' | cut -c1-120)
-          echo "coverage lookup: ${REASON:-ok}"
-          REPORT=$(echo "$RESULT" | jq -r '.report_url // ""')
+          REASON=$(printf '%s' "$RESULT" | jq -r '.reason // ""' 2>/dev/null || echo "")
+          # An absent reason is itself a finding. #852 built the endpoint to
+          # explain missing coverage, so nothing to report means we did not
+          # reach that endpoint: a 401, a 404 from an undeployed route, a proxy
+          # error page. The first live run of this workflow hit exactly that
+          # and could only say "gave no reason", which is unactionable. Name
+          # the HTTP code instead.
+          if [ -z "$REASON" ] && [ "$PCT" = "N/A" ]; then
+            REASON="TFactory answered HTTP ${HTTP_CODE} with no coverage figure and no reason"
+          fi
+          REASON=$(printf '%s' "$REASON" | tr -d '\n\r' | cut -c1-120)
+          echo "coverage lookup: HTTP ${HTTP_CODE}; ${REASON:-ok}"
+          REPORT=$(printf '%s' "$RESULT" | jq -r '.report_url // ""' 2>/dev/null || echo "")
           echo "pct=$PCT" >> "$GITHUB_OUTPUT"
           echo "report=$REPORT" >> "$GITHUB_OUTPUT"
           echo "reason=$REASON" >> "$GITHUB_OUTPUT"
