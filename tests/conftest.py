@@ -8,16 +8,53 @@ Provides common test fixtures for the Auto-Build Framework test suite.
 
 import importlib.util
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Generator
+from collections.abc import Generator, MutableMapping
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+
+# =============================================================================
+# HOOK GIT-ENV SCRUB (#859)
+# =============================================================================
+# This suite is run FROM a git hook (the pre-commit hook runs pytest). Git
+# exports repo-location variables (GIT_INDEX_FILE, GIT_DIR, ...) to hook
+# processes, and every subprocess here inherits them. Any test that shells out
+# to git in a scratch repo then operates on the REAL repository's git dir and
+# index instead of the scratch one: the test fails, and worse, a nested
+# `git add`/`git commit` mutates the index of the commit in progress (this
+# once staged a 2,135-file deletion mid-commit). Scrub the variables once at
+# import time so every test — and any production code a test drives — sees a
+# clean git environment regardless of who invoked pytest.
+
+HOOK_GIT_ENV_VARS = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_PREFIX",
+    "GIT_QUARANTINE_PATH",
+    # `git -c key=val commit` exports the -c config to hook children via this
+    # variable; a scratch repo would inherit e.g. an ambient core.hooksPath.
+    "GIT_CONFIG_PARAMETERS",
+)
+
+
+def scrub_hook_git_env(environ: MutableMapping[str, str] = os.environ) -> None:
+    """Remove git repo-location variables a hook process inherits."""
+    for var in HOOK_GIT_ENV_VARS:
+        environ.pop(var, None)
+
+
+scrub_hook_git_env()
 
 # =============================================================================
 # SKIP WEB-SERVER TESTS WHEN THEIR DEPS LIVE IN A DIFFERENT VENV
@@ -1356,6 +1393,7 @@ except ImportError:
 # one) when it guards a core invariant worth blocking a merge on.
 CRITICAL_MODULES = frozenset(
     {
+        "test_hook_git_env",  # hook-inherited GIT_* scrub boundary (#859)
         "test_qa_loop",  # restored qa_loop module + CLI import guard (#226/#227)
         "test_handback_rerun",  # shared pipeline-rerun core (#182 auto-loop)
         "test_handback_webhook",  # inbound AIFactory completion webhook (#182)
