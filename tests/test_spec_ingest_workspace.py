@@ -227,6 +227,22 @@ def test_markdown_format(tmp_path):
     assert result["ac_count"] == 2
 
 
+def test_ingested_spec_body_is_on_disk_verbatim(tmp_path):
+    """#855: the body was discarded at ingest and unrecoverable from the workspace."""
+    text = (
+        "## Slug rules\n\n"
+        "- truncate to 200 characters BEFORE slugging, never after\n\n"
+        "## Acceptance Criteria\n\n"
+        "- AC#1: GET /healthz returns 200\n"
+    )
+    _ingest(tmp_path, text, spec_id="body-spec")
+    ctx = _spec_dir(tmp_path, "body-spec") / "context"
+    on_disk = (ctx / "aifactory_spec.md").read_text() + (
+        ctx / "source.json"
+    ).read_text()
+    assert "BEFORE slugging" in on_disk
+
+
 def test_ears_format(tmp_path):
     result = _ingest(tmp_path, _EARS)
     assert result["source_format"] == "ears"

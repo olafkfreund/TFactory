@@ -79,10 +79,11 @@ def test_parse_meta_block_malformed_degrades() -> None:
 
 def test_oracle_round_trip_from_issue_body() -> None:
     oracle = build_oracle(issue_body=ISSUE_BODY)
-    # criteria
+    # criteria — ingestion strips a source's own "AC#N:" marker, since the id is
+    # carried separately and re-rendering both read "**AC#1:** AC#1: ..." (#855).
     assert oracle.acceptance_criteria == (
-        "AC#1: a networked service requires auth",
-        "AC#2: rejected requests return 401",
+        "a networked service requires auth",
+        "rejected requests return 401",
     )
     # citations
     assert oracle.citations == (
@@ -118,7 +119,7 @@ def test_oracle_prefers_requirements_metadata() -> None:
     oracle = build_oracle(requirements=req, issue_body=ISSUE_BODY)
     assert oracle.plan_id == "req-1"
     assert oracle.horizon == "later"
-    assert oracle.acceptance_criteria == ("AC#1: from requirements",)
+    assert oracle.acceptance_criteria == ("from requirements",)  # see #855 above
 
 
 def test_explicit_criteria_override() -> None:

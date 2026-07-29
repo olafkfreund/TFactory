@@ -15,12 +15,19 @@ list and get a triaged test report.
 Pipeline seam: :func:`write_spec_markdown` drops a normalised spec at
 ``context/aifactory_spec.md`` so the existing Planner path is unchanged.
 
+The normalised spec carries the source text verbatim alongside the derived
+criteria (#855). Deriving an AC list is lossy — a spec's rules, endpoints and
+out-of-scope notes are not acceptance criteria — and dropping the rest meant
+the Planner never saw it and the run could report every AC verified while the
+code missed what the spec asked for.
+
 Pure + dependency-light (regex + string handling only).
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -54,6 +61,9 @@ class NormalizedSpec:
     description: str
     criteria: tuple[AcceptanceCriterion, ...]
     source_format: SpecFormat
+    #: The source text exactly as it was handed to :func:`ingest`. Derived ACs
+    #: are a lossy summary of it (#855), so the original rides along.
+    body: str = ""
 
     def to_markdown(self) -> str:
         """Render the canonical ``aifactory_spec.md`` shape.
@@ -61,6 +71,11 @@ class NormalizedSpec:
         The Planner extracts ``AC#N`` markers from this section (see
         ``prompts/planner.md``), so the heading + ``AC#N:`` prefixes are
         the contract.
+
+        The verbatim source follows the AC list (#855). Only the AC list used
+        to survive ingestion, so any behaviour the requester stated but did not
+        restate as a criterion was discarded before the Planner ever saw it —
+        and a run could then report every AC verified while missing the spec.
         """
         lines = [f"# {self.title}", ""]
         if self.description:
@@ -72,6 +87,22 @@ class NormalizedSpec:
         lines.append(
             f"> Ingested from a {self.source_format.value} source by TFactory."
         )
+        body = self.body.strip("\n")
+        if body.strip():
+            fence = _fence_for(body)
+            lines += [
+                "",
+                VERBATIM_HEADING,
+                "",
+                "The acceptance criteria above are DERIVED from the text below "
+                "and do not necessarily cover all of it. Behaviour stated here "
+                "but absent from the list above is still in scope and must "
+                "still be verified.",
+                "",
+                fence + "markdown",
+                body,
+                fence,
+            ]
         return "\n".join(lines) + "\n"
 
 
@@ -106,25 +137,121 @@ def detect_format(text: str, *, filename: str | None = None) -> SpecFormat:
 
 
 def _number(criteria: list[str]) -> list[AcceptanceCriterion]:
-    """Assign stable ``AC#N`` ids to non-empty criterion strings."""
+    """Assign stable ``AC#N`` ids to non-empty criterion strings.
+
+    A source that already numbered its criteria has that prefix stripped —
+    the id is rendered separately, and keeping both read "**AC#1:** AC#1: ..."
+    """
     return [
-        AcceptanceCriterion(id=f"AC#{i}", text=t.strip())
+        AcceptanceCriterion(id=f"AC#{i}", text=_AC_LEAD.sub("", t).strip())
         for i, t in enumerate((c for c in criteria if c.strip()), start=1)
     ]
 
 
 def _first_h1(text: str, default: str) -> str:
-    for ln in text.splitlines():
-        s = ln.strip()
-        if s.startswith("# "):
-            return s[2:].strip()
-    return default
+    """The document title: its ``# H1``, else its first non-AC heading.
+
+    Specs written as a section list (no H1) used to fall through to
+    "Untitled spec" (#855) — the first heading is a better answer than none.
+    """
+    fallback = ""
+    for ln in _outside_fences(text.splitlines()):
+        m = _HEADING.match(ln)
+        if not m:
+            continue
+        heading = m.group(1).strip()
+        if ln.lstrip().startswith("# "):
+            return heading
+        if not fallback and not _is_ac_heading(heading):
+            fallback = heading
+    return fallback or default
 
 
 _BULLET = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(.*\S)\s*$")
 _HEADING = re.compile(r"^\s*#{1,6}\s+(.*\S)\s*$")
 _AC_INLINE = re.compile(r"\bAC\s*#?\s*\d+\s*[:.\-]\s*(.*\S)", re.IGNORECASE)
 _AC_HEADING_WORDS = ("acceptance criteria", "acceptance", "requirements")
+# A criterion that already announces its own id — "AC#1: ...", "**AC#1:** ..."
+# — must not be rendered as "**AC#1:** AC#1: ..." (#855).
+_AC_LEAD = re.compile(r"^\s*(?:\*\*)?\s*AC\s*#?\s*\d+\s*[:.\-]\s*(?:\*\*)?\s*", re.I)
+_FENCE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
+
+#: Heading under which :meth:`NormalizedSpec.to_markdown` carries the source.
+VERBATIM_HEADING = "## Spec source (verbatim, as ingested)"
+
+
+def _is_ac_heading(heading: str) -> bool:
+    return any(w in heading.lower() for w in _AC_HEADING_WORDS)
+
+
+def _outside_fences(lines: Iterable[str]) -> Iterator[str]:
+    """Yield only the lines that are NOT inside a fenced code block.
+
+    The canonical spec carries the verbatim source inside a fence, so the AC
+    parser has to look past it or it would re-collect the source's own bullets.
+    Closing follows CommonMark: same fence character, at least as long.
+    """
+    fence = ""
+    for ln in lines:
+        m = _FENCE.match(ln)
+        if fence:
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
+                fence = ""
+            continue
+        if m:
+            fence = m.group(1)
+            continue
+        yield ln
+
+
+def _fence_for(text: str) -> str:
+    """A backtick fence longer than any run of backticks inside ``text``."""
+    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    return "`" * max(3, longest + 1)
+
+
+def verbatim_body(spec_markdown: str) -> str:
+    """The source text carried by :meth:`NormalizedSpec.to_markdown`, or ``""``."""
+    _, sep, rest = spec_markdown.partition(VERBATIM_HEADING)
+    if not sep:
+        return ""
+    lines = rest.splitlines()
+    for i, ln in enumerate(lines):
+        m = _FENCE.match(ln)
+        if not m:
+            continue
+        opening = m.group(1)
+        out: list[str] = []
+        for body_line in lines[i + 1 :]:
+            close = _FENCE.match(body_line)
+            if (
+                close
+                and close.group(1)[0] == opening[0]
+                and len(close.group(1)) >= len(opening)
+            ):
+                return "\n".join(out)
+            out.append(body_line)
+        return "\n".join(out)
+    return ""
+
+
+def unrepresented_sections(spec_markdown: str) -> list[str]:
+    """Headings of the ingested spec body that were NOT turned into criteria.
+
+    Only the acceptance-criteria section becomes ACs, so every other section of
+    what the requester wrote goes unverified unless someone restated it as a
+    criterion. Naming them is what stops a green run from reading as "the spec
+    is satisfied" (#855). Empty when the spec carries no verbatim body.
+    """
+    out: list[str] = []
+    for ln in _outside_fences(verbatim_body(spec_markdown).splitlines()):
+        m = _HEADING.match(ln)
+        if not m:
+            continue
+        heading = m.group(1).strip()
+        if not _is_ac_heading(heading) and heading not in out:
+            out.append(heading)
+    return out
 
 
 # ── markdown ───────────────────────────────────────────────────────────
@@ -138,7 +265,7 @@ def parse_markdown(text: str, *, title: str | None = None) -> NormalizedSpec:
          "Acceptance" / "Requirements" heading.
       2. Any ``AC#N: ...`` inline lines anywhere in the doc.
     """
-    lines = text.splitlines()
+    lines = list(_outside_fences(text.splitlines()))
     title = title or _first_h1(text, "Untitled spec")
 
     # 1) collect bullets under an acceptance heading
@@ -172,6 +299,7 @@ def parse_markdown(text: str, *, title: str | None = None) -> NormalizedSpec:
         description="",
         criteria=tuple(acs),
         source_format=SpecFormat.MARKDOWN,
+        body=text,
     )
 
 
@@ -221,6 +349,7 @@ def parse_gherkin(text: str, *, title: str | None = None) -> NormalizedSpec:
         description=" ".join(description_parts).strip(),
         criteria=tuple(acs),
         source_format=SpecFormat.GHERKIN,
+        body=text,
     )
 
 
@@ -257,6 +386,7 @@ def parse_ears(text: str, *, title: str | None = None) -> NormalizedSpec:
         description="",
         criteria=tuple(acs),
         source_format=SpecFormat.EARS,
+        body=text,
     )
 
 

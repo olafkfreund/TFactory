@@ -14,14 +14,18 @@ subtask id). Each AC is graded:
   - unverified    — every test rejected, or no test at all.
 
 The honest headline is "verified X / Y acceptance criteria"; uncovered ACs are
-named, never hidden. Pure + unit-tested; the triager writes it to findings and the
-completion envelope.
+named, never hidden. What it does NOT measure is the spec — only the criteria
+derived from it — so the sections of the spec body that were never criteria are
+named too, and the summary key says ``all_acs_verified``, not ``all_verified``
+(#855). Pure + unit-tested; the triager writes it to findings and the completion
+envelope.
 """
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
 
 _AC_PREFIX = re.compile(r"^\s*(AC#?\s*\d+)\s*[:\-]\s*(.*)$", re.IGNORECASE)
 
@@ -53,8 +57,36 @@ def _find_verdict(vby: dict, subtask_id: str) -> dict | None:
     return None
 
 
-def build_ac_ledger(test_plan: dict, verdicts: list[dict]) -> dict:
-    """Per-AC coverage ledger from the plan phases + the evaluator verdicts."""
+def _unrepresented_sections(spec_markdown: str | None) -> list[str]:
+    """Spec-body sections that never became acceptance criteria (#855).
+
+    Best-effort: no spec text, or an older spec written before the body was
+    carried through ingestion, yields an empty list — silence, not a claim.
+    """
+    if not spec_markdown:
+        return []
+    try:
+        from spec_sources import unrepresented_sections  # noqa: PLC0415 - lazy
+
+        sections: list[str] = unrepresented_sections(spec_markdown)
+        return sections
+    except Exception:  # noqa: BLE001 - the caveat must never break the ledger
+        return []
+
+
+def build_ac_ledger(
+    test_plan: dict[str, Any],
+    verdicts: list[dict[str, Any]],
+    *,
+    spec_markdown: str | None = None,
+) -> dict[str, Any]:
+    """Per-AC coverage ledger from the plan phases + the evaluator verdicts.
+
+    ``spec_markdown`` is the ingested spec (``context/aifactory_spec.md``). It
+    is what lets the summary say which parts of the spec this run did NOT look
+    at: the ledger only ever measures the acceptance criteria, and reporting
+    that as though it measured the spec is the failure this argument fixes.
+    """
     vby = {v.get("test_id"): v for v in (verdicts or []) if v.get("test_id")}
     acs: list[dict] = []
     counts = {"verified": 0, "flagged_only": 0, "unverified": 0}
@@ -84,7 +116,13 @@ def build_ac_ledger(test_plan: dict, verdicts: list[dict]) -> dict:
             **counts,
             "total": total,
             "verified_fraction": f"{counts['verified']}/{total}",
-            "all_verified": total > 0 and counts["verified"] == total,
+            # Named for what it measures. The old name, ``all_verified``, read
+            # as "the spec is satisfied" and meant "every AC we kept has a
+            # passing test" — so a requirement nobody restated as an AC made a
+            # run green by being absent (#855).
+            "scope": "acceptance_criteria",
+            "all_acs_verified": total > 0 and counts["verified"] == total,
+            "spec_sections_unverified": _unrepresented_sections(spec_markdown),
         },
     }
 
@@ -120,11 +158,21 @@ def render_markdown(ledger: dict) -> str:
         f"Verified {s.get('verified_fraction', '0/0')} acceptance criteria "
         f"(flagged-only: {s.get('flagged_only', 0)}, unverified: {s.get('unverified', 0)}).",
         "",
+        "Scope: the acceptance criteria listed below, NOT the full spec text.",
+        "",
     ]
-    if not s.get("all_verified", False) and s.get("total", 0):
+    if not s.get("all_acs_verified", False) and s.get("total", 0):
         lines.append(
             "NOTE: not every acceptance criterion is verified by an accepted test "
             "- see UNVERIFIED / flagged-only below. This run is not a full pass.\n"
+        )
+    unrepresented = s.get("spec_sections_unverified") or []
+    if unrepresented:
+        lines.append(
+            f"NOTE: {len(unrepresented)} sections of the spec body were not "
+            "represented as acceptance criteria and were not verified: "
+            + ", ".join(unrepresented)
+            + ". A green result above says nothing about them.\n"
         )
     for ac in ledger.get("acceptance", []):
         lines.append(f"## {ac['ac_id']} [{ac['status'].upper()}]")

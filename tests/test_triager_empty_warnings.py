@@ -25,7 +25,7 @@ def test_hundred_percent_rejection_warns() -> None:
         committed_count=0,
         flagged_count=0,
         rejected_count=14,
-        ac_summary={"verified": 0, "total": 6, "all_verified": False},
+        ac_summary={"verified": 0, "total": 6, "all_acs_verified": False},
     )
     assert any("100% rejection" in w and "14" in w for w in warns)
     assert any("acceptance criteria verified" in w for w in warns)
@@ -38,7 +38,7 @@ def test_partial_success_is_silent() -> None:
         committed_count=5,
         flagged_count=1,
         rejected_count=9,
-        ac_summary={"verified": 6, "total": 6, "all_verified": True},
+        ac_summary={"verified": 6, "total": 6, "all_acs_verified": True},
     )
     assert warns == []
 
@@ -51,7 +51,7 @@ def test_empty_with_no_candidates_is_not_flagged_as_systematic() -> None:
         committed_count=0,
         flagged_count=0,
         rejected_count=0,
-        ac_summary={"verified": 3, "total": 3, "all_verified": True},
+        ac_summary={"verified": 3, "total": 3, "all_acs_verified": True},
     )
     assert warns == []
 
@@ -63,6 +63,6 @@ def test_partial_ac_fidelity_is_not_loud() -> None:
         committed_count=2,
         flagged_count=0,
         rejected_count=1,
-        ac_summary={"verified": 2, "total": 6, "all_verified": False},
+        ac_summary={"verified": 2, "total": 6, "all_acs_verified": False},
     )
     assert warns == []
