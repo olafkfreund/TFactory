@@ -1137,8 +1137,15 @@ def _write_ac_fidelity(spec_dir, committed, flagged, rejects) -> dict:
                 for c in rejects
             ]
         )
+        # The ingested spec, so the report can name the parts of it that were
+        # never acceptance criteria and so were never verified (#855).
+        try:
+            spec_markdown = (spec_dir / "context" / "aifactory_spec.md").read_text()
+        except OSError:
+            spec_markdown = None
         ledger = attach_screenshots(
-            build_ac_ledger(plan, verdicts), spec_dir / "findings"
+            build_ac_ledger(plan, verdicts, spec_markdown=spec_markdown),
+            spec_dir / "findings",
         )
         fd = spec_dir / "findings"
         fd.mkdir(parents=True, exist_ok=True)
