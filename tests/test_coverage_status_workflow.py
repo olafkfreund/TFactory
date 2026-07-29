@@ -38,6 +38,11 @@ _CONTEXT = {
     "github.repository": "olafkfreund/TFactory",
     "github.event.pull_request.head.sha": "d34db33f",
     "github.event.pull_request.number": "820",
+    # The steps read these instead of the PR event directly, so that the same
+    # job works under workflow_dispatch, where there IS no pull_request
+    # context. The resolve step produces them from either trigger.
+    "steps.pr.outputs.sha": "d34db33f",
+    "steps.pr.outputs.number": "820",
     "vars.TFACTORY_URL": "https://tfactory.example",
 }
 
