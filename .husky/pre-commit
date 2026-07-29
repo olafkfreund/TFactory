@@ -125,8 +125,14 @@ if git diff --cached --name-only | grep -q "^apps/backend/.*\.py$"; then
     echo "Warning: ruff not found, skipping Python linting. Install with: uv pip install ruff"
   fi
 
-  # Run pytest (skip slow/integration tests and Windows-incompatible tests for pre-commit speed)
-  echo "Running Python tests..."
+  # Run the curated critical fast lane (#859). The full "not slow" suite takes
+  # 65s+ locally and contains environment-dependent tests (test_e2e_smoke_script
+  # needs an in-checkout .venv and fails in every git worktree), which made the
+  # hook fail for reasons unrelated to the commit and trained everyone to use
+  # --no-verify. The critical lane (tests/conftest.py CRITICAL_MODULES) is the
+  # hermetic ~15s subset built to be the required PR gate; CI still runs the
+  # full backend suite on every PR (ci.yml backend-lint-test).
+  echo "Running Python tests (critical lane)..."
   cd apps/backend
   # Tests to skip:
   #   graphiti: external deps
@@ -163,15 +169,15 @@ if git diff --cached --name-only | grep -q "^apps/backend/.*\.py$"; then
   if [ -d ".venv" ]; then
     # Use venv if it exists
     if [ -f ".venv/bin/pytest" ]; then
-      PYTHONPATH=. .venv/bin/pytest ../../tests/ -v --tb=short -x -m "not slow and not integration" $IGNORE_TESTS
+      PYTHONPATH=. .venv/bin/pytest ../../tests/ -v --tb=short -x -m critical $IGNORE_TESTS
     elif [ -f ".venv/Scripts/pytest.exe" ]; then
       # Windows
-      PYTHONPATH=. .venv/Scripts/pytest.exe ../../tests/ -v --tb=short -x -m "not slow and not integration" $IGNORE_TESTS
+      PYTHONPATH=. .venv/Scripts/pytest.exe ../../tests/ -v --tb=short -x -m critical $IGNORE_TESTS
     else
-      PYTHONPATH=. python -m pytest ../../tests/ -v --tb=short -x -m "not slow and not integration" $IGNORE_TESTS
+      PYTHONPATH=. python -m pytest ../../tests/ -v --tb=short -x -m critical $IGNORE_TESTS
     fi
   else
-    PYTHONPATH=. python -m pytest ../../tests/ -v --tb=short -x -m "not slow and not integration" $IGNORE_TESTS
+    PYTHONPATH=. python -m pytest ../../tests/ -v --tb=short -x -m critical $IGNORE_TESTS
   fi
   if [ $? -ne 0 ]; then
     echo "Python tests failed. Please fix failing tests before committing."

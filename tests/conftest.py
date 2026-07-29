@@ -1393,6 +1393,7 @@ except ImportError:
 # one) when it guards a core invariant worth blocking a merge on.
 CRITICAL_MODULES = frozenset(
     {
+        "test_hook_git_env",  # hook-inherited GIT_* scrub boundary (#859)
         "test_qa_loop",  # restored qa_loop module + CLI import guard (#226/#227)
         "test_handback_rerun",  # shared pipeline-rerun core (#182 auto-loop)
         "test_handback_webhook",  # inbound AIFactory completion webhook (#182)
