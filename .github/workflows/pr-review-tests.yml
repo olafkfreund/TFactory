@@ -8,9 +8,21 @@ name: TFactory coverage summary on PR
 on:
   pull_request:
     types: [opened, synchronize]
+  # Re-run the coverage check without pushing a commit. The credential this
+  # step depends on lives outside the repo, so it can go stale while the code
+  # is unchanged -- exactly what happened with TFACTORY_TOKEN (#861), which
+  # sat invalid from a cluster rebuild until someone tested it by hand. Without
+  # a manual trigger the only way to retest a credential fix is an empty commit
+  # on someone else's PR.
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "Pull request number to summarise coverage for"
+        required: true
+        type: string
 
 concurrency:
-  group: pr-review-tests-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+  group: pr-review-tests-${{ github.event.pull_request.number || inputs.pr }}-${{ github.event.pull_request.head.sha || github.run_id }}
   cancel-in-progress: true
 
 permissions:
@@ -22,12 +34,38 @@ jobs:
   coverage-comment:
     runs-on: ubuntu-latest
     steps:
+      - name: Resolve the pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # workflow_dispatch has NO github.event.pull_request context. Without
+          # this the steps below would interpolate to empty strings and the job
+          # would run to a green finish having summarised nothing -- reporting
+          # success without checking, which is the defect this workflow exists
+          # to stop doing.
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            NUM="${{ inputs.pr }}"
+            SHA=$(gh pr view "$NUM" --repo "${{ github.repository }}" --json headRefOid -q .headRefOid)
+          else
+            NUM="${{ github.event.pull_request.number }}"
+            SHA="${{ github.event.pull_request.head.sha }}"
+          fi
+          if [ -z "$NUM" ] || [ -z "$SHA" ]; then
+            echo "could not resolve a pull request number and head sha" >&2
+            exit 1
+          fi
+          echo "number=$NUM" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Resolved PR #$NUM at $SHA"
+
       - name: Fetch coverage from TFactory
         id: coverage
         run: |
           RESPONSE=$(curl -s -w '\n%{http_code}' \
             -H "Authorization: Bearer ${{ secrets.TFACTORY_TOKEN }}" \
-            "${{ vars.TFACTORY_URL }}/api/coverage?repo=${{ github.repository }}&sha=${{ github.event.pull_request.head.sha }}&pr=${{ github.event.pull_request.number }}") \
+            "${{ vars.TFACTORY_URL }}/api/coverage?repo=${{ github.repository }}&sha=${{ steps.pr.outputs.sha }}&pr=${{ steps.pr.outputs.number }}") \
             || RESPONSE=$'\n000'
           HTTP_CODE=$(printf '%s' "$RESPONSE" | tail -n1)
           RESULT=$(printf '%s' "$RESPONSE" | sed '$d')
@@ -61,7 +99,7 @@ jobs:
         id: find_comment
         uses: peter-evans/find-comment@v3
         with:
-          issue-number: ${{ github.event.pull_request.number }}
+          issue-number: ${{ steps.pr.outputs.number }}
           comment-author: github-actions[bot]
           body-includes: "### TFactory coverage"
 
@@ -69,7 +107,7 @@ jobs:
         uses: peter-evans/create-or-update-comment@v4
         with:
           comment-id: ${{ steps.find_comment.outputs.comment-id }}
-          issue-number: ${{ github.event.pull_request.number }}
+          issue-number: ${{ steps.pr.outputs.number }}
           edit-mode: replace
           body: |
             ### TFactory coverage
@@ -90,7 +128,7 @@ jobs:
           REASON: ${{ steps.coverage.outputs.reason }}
           TFACTORY_URL: ${{ vars.TFACTORY_URL }}
           REPO: ${{ github.repository }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_SHA: ${{ steps.pr.outputs.sha }}
         run: |
           # ALWAYS post a terminal state (#853).
           #
