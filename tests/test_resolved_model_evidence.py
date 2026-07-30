@@ -21,30 +21,39 @@ identical in a suite that only ever checks the happy path.
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
+import pytest
 from agents.session import requested_model, run_agent_session
 from providers.types import AssistantMessage as ShimAssistantMessage
 from providers.types import TextBlock
 from task_logger import LogPhase
 from usage import model_from_model_usage, record_in_status, usage_from_obj
 
-# ── the real SDK shapes ────────────────────────────────────────────────────
+# ── stand-ins for the SDK messages ─────────────────────────────────────────
 #
-# The session loop dispatches on ``type(msg).__name__``, never isinstance — so
-# these class NAMES are load-bearing and must match the SDK's exactly. The
-# original tests' fake was named ResultMessage but carried a ``.model`` the real
-# type does not have, which is how an always-empty field stayed green (#869).
+# These CANNOT import claude_agent_sdk: tests/conftest.py replaces it in
+# sys.modules with a MagicMock for every test in this suite, and a MagicMock
+# answers `hasattr(msg, "model")` truthfully-for-anything. That is the
+# structural reason nothing here could notice the real ResultMessage has no
+# `.model` (#869). So the shapes are hand-rolled — and pinned to the real ones
+# by test_stand_ins_match_the_real_sdk_types below, which reads the installed
+# package in a subprocess where the mock is not in force.
+#
+# The session loop dispatches on ``type(msg).__name__``, never isinstance, so
+# these class NAMES are load-bearing.
 
 
 class ResultMessage:
     """The SDK's ResultMessage as it ACTUALLY is: no ``.model`` attribute.
 
-    Deliberately not given one — see ``claude_agent_sdk.types.ResultMessage``.
-    The per-model breakdown is under ``model_usage``, keyed by model id with
-    camelCase token counts (passed through verbatim from the CLI).
+    Deliberately not given one. The per-model breakdown lives in
+    ``model_usage``, keyed by model id with camelCase token counts (passed
+    through verbatim from the CLI).
     """
 
     def __init__(
@@ -53,9 +62,12 @@ class ResultMessage:
         *,
         total_cost_usd: float | None = None,
     ) -> None:
-        served_in = sum(v.get("inputTokens", 0) for v in model_usage.values())
-        served_out = sum(v.get("outputTokens", 0) for v in model_usage.values())
-        self.usage = {"input_tokens": served_in, "output_tokens": served_out}
+        self.usage = {
+            "input_tokens": sum(v.get("inputTokens", 0) for v in model_usage.values()),
+            "output_tokens": sum(
+                v.get("outputTokens", 0) for v in model_usage.values()
+            ),
+        }
         self.model_usage = model_usage
         self.session_id = "sess-869"
         if total_cost_usd is not None:
@@ -68,6 +80,41 @@ class AssistantMessage:
     def __init__(self, text: str, model: str) -> None:
         self.content = [TextBlock(text=text)]
         self.model = model
+
+
+def test_stand_ins_match_the_real_sdk_types() -> None:
+    """Pin the three SDK facts the reader in ``usage.py`` depends on.
+
+    Read from the installed package in a clean interpreter, because this
+    suite's own view of the SDK is a MagicMock. If a future SDK release moves
+    any of these, this goes red and names what to update — instead of
+    ``usage.model`` quietly going blank again.
+    """
+    probe = (
+        "import json;"
+        "from claude_agent_sdk.types import AssistantMessage as A, ResultMessage as R;"
+        "print(json.dumps({'result': sorted(R.__annotations__),"
+        " 'assistant': sorted(A.__annotations__)}))"
+    )
+    done = subprocess.run(  # noqa: S603 - fixed argv, no shell, no user input
+        [sys.executable, "-c", probe], capture_output=True, text=True, check=False
+    )
+    if done.returncode != 0:
+        pytest.skip("claude_agent_sdk is not importable in this interpreter")
+    shapes = json.loads(done.stdout)
+
+    assert "model" not in shapes["result"], (
+        "ResultMessage grew a .model field — usage.py can now read it directly "
+        "instead of deriving one from model_usage"
+    )
+    assert "model_usage" in shapes["result"], (
+        "ResultMessage.model_usage is gone — usage.model_from_model_usage reads "
+        "it as the token-weighted source of the model that actually ran (#869)"
+    )
+    assert "model" in shapes["assistant"], (
+        "AssistantMessage.model is gone — agents.session reads it per turn as "
+        "the primary resolved-model evidence (#869)"
+    )
 
 
 class _Client:

@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -256,10 +257,13 @@ def _provider_for(model: str) -> str:
         return ""
 
 
-def _workers_from_status(status: dict) -> dict[str, dict]:
+def _workers_from_status(status: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Re-index the persisted ``usage.workers`` list by ``worker_id``."""
-    acc = status.get("usage") if isinstance(status.get("usage"), dict) else {}
-    records = acc.get("workers") if isinstance(acc.get("workers"), list) else []
+    block = status.get("usage")
+    acc: dict[str, Any] = block if isinstance(block, dict) else {}
+    records = acc.get("workers")
+    if not isinstance(records, list):
+        return {}
     return {
         str(r["worker_id"]): dict(r)
         for r in records
@@ -268,7 +272,7 @@ def _workers_from_status(status: dict) -> dict[str, dict]:
 
 
 def _fold_worker(
-    workers: dict[str, dict],
+    workers: dict[str, dict[str, Any]],
     *,
     phase: str,
     usage: RunUsage,
@@ -282,7 +286,7 @@ def _fold_worker(
     is only ever overwritten by another observed id — a later session that
     could not observe one must not blank out evidence an earlier one captured.
     """
-    record = workers.get(phase)
+    record: dict[str, Any] | None = workers.get(phase)
     if record is None:
         record = {
             "worker_id": phase,
