@@ -258,12 +258,18 @@ def apply_consistent_fail_reason(
         )
     elif kind == "import":
         reason = (
-            f"consistent test failure across {runs} runs — the subject module "
-            "could not be imported/collected in the sandbox (import/collection "
+            f"consistent test failure across {runs} runs — the test never "
+            "executed: collection failed in the sandbox (import/collection "
             "error)"
         )
     else:
         return False
+    # #892: name the actual exception when we captured it. "import/collection
+    # error" alone sent every diagnosis to a pod exec to find out WHICH module
+    # was missing; the module name turns that into a one-line read.
+    detail = failure_info.get("failure_detail")
+    if isinstance(detail, str) and detail.strip():
+        reason += f" — {detail.strip()}"
     verdict["reasons"] = [reason]
     return True
 

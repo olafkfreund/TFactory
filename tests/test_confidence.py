@@ -293,8 +293,43 @@ def test_consistent_fail_reason_replaced_with_import_explanation():
     )
     assert changed is True
     assert v["reasons"] == [
-        "consistent test failure across 3 runs — the subject module could not "
-        "be imported/collected in the sandbox (import/collection error)"
+        "consistent test failure across 3 runs — the test never executed: "
+        "collection failed in the sandbox (import/collection error)"
+    ]
+
+
+def test_consistent_fail_import_reason_names_the_missing_module():
+    """#892: the reason must carry the underlying exception, not just its bucket.
+
+    "import/collection error" alone sent every diagnosis to a pod exec to find
+    out WHICH module was missing.
+    """
+    v = _verdict(verdict="reject", stability="consistent_fail")
+    changed = apply_consistent_fail_reason(
+        v,
+        {
+            "failure_kind": "import",
+            "rerun_count": 3,
+            "failure_detail": "ModuleNotFoundError: No module named 'requests'",
+        },
+    )
+    assert changed is True
+    assert v["reasons"] == [
+        "consistent test failure across 3 runs — the test never executed: "
+        "collection failed in the sandbox (import/collection error) — "
+        "ModuleNotFoundError: No module named 'requests'"
+    ]
+
+
+def test_consistent_fail_reason_omits_detail_when_none_was_captured():
+    """A truncated tail yields no detail — keep the generic wording, invent nothing."""
+    v = _verdict(verdict="reject", stability="consistent_fail")
+    apply_consistent_fail_reason(
+        v, {"failure_kind": "import", "rerun_count": 3, "failure_detail": None}
+    )
+    assert v["reasons"] == [
+        "consistent test failure across 3 runs — the test never executed: "
+        "collection failed in the sandbox (import/collection error)"
     ]
 
 
