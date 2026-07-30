@@ -198,6 +198,13 @@ def publish_as_tfactory_spec(portal_key: str, report_dir: Path, run_id: str) -> 
         shutil.copytree(
             shots, spec_dir / "findings" / "screenshots", dirs_exist_ok=True
         )
+    # The screencast is evidence too. Without this the Playwright recording died
+    # with the Job pod (report_dir is the pod's ephemeral CWD) and the task
+    # detail's Evidence tab showed screenshots only — `artefacts.videos` reads
+    # findings/videos/, which nothing was writing.
+    videos = report_dir / "video"
+    if videos.is_dir():
+        shutil.copytree(videos, spec_dir / "findings" / "videos", dirs_exist_ok=True)
     # NB: no findings/verdicts.json — portal-ui is a report+evidence run, not a
     # per-test accept/flag verdict set; the Verdicts tab stays cleanly disabled.
     return spec_dir
