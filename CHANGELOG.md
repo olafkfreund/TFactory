@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased
+
+- **A verify run now records which model actually ran (#869).** `status.json`'s
+  `usage.model` had existed for exactly this and came back empty on a confirmed
+  Claude run — cost_usd was $7.76, priced off a Claude-only table, so the model
+  was known well enough to bill and still did not survive into the field that
+  names it. Root cause: the Claude Agent SDK's `ResultMessage` has no `.model`
+  attribute, and the normaliser read `getattr(obj, "model", "")`. The unit tests
+  stayed green because their fake ResultMessage had one.
+
+  `usage` now carries a per-phase `workers` list in the same shape AIFactory's
+  `token_usage.json` uses, so CFactory renders both services' attribution
+  identically. Each record separates `requested_model` (what the seam asked for)
+  from `model` (what actually served the tokens, taken only from the provider's
+  own answer — `AssistantMessage.model` per turn, else `ResultMessage.model_usage`
+  weighted by tokens served). `model` is never back-filled from the request: a
+  fallback reported as the request is how a benchmark table credits a model that
+  never executed, and an empty field honestly reads as UNKNOWN.
+
+  The Ollama and OpenAI-compatible adapters report no token counts at all, so
+  they previously wrote nothing and the non-Claude cells had no evidence
+  whatsoever. They now pass up the id the server echoed — which diverges from the
+  request more often than the Claude path does (tag resolution, gateway
+  substitution) — and the record is written on model evidence alone, tokens or
+  not. `routing.actual` in the v2 contract stays unwritten on purpose: that
+  contract is the signed input whose digest feeds the approval content-hash.
+
+  Documented in `docs/model-attribution.md`, along with the finding that there is
+  no `testing` phase to control — verification runs on the `coding` key, and a
+  contract carrying `phase_models.testing` is silently dropped by task_control's
+  whitelist. Also pins the three SDK field facts the reader depends on: this
+  suite's `conftest.py` replaces `claude_agent_sdk` with a MagicMock, which
+  reports every attribute as present, so no test here could have observed the
+  missing `.model`.
+
 ## 0.9.25 — the Nix runner image pre-bakes the common Python closure (2026-07-22)
 
 - **The Nix verify lane no longer cold-fetches its toolchain per test (#768, PR
