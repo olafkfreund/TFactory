@@ -55,7 +55,7 @@ from pathlib import Path
 # runs as a script, so the sibling import resolves without packaging.
 from ratchet_helpers import MYPY_TEST_RELAX, is_test_file, write_temp
 
-# Strict shared baseline vendored from the Factory hub (standards/PINNED_SHA).
+# Strict shared baseline vendored from the Factory hub (standards/.hub-sha).
 RUFF_CONFIG = "standards/ruff.toml"
 MYPY_CONFIG_DEFAULT = "standards/mypy.ini"
 PACKAGE_DEFAULT = "apps/backend"
