@@ -1,23 +1,39 @@
-name: TFactory coverage summary on PR
+name: TFactory coverage gate on PR
 
-# Trigger: any PR opened or updated.
-# Fetches the TFactory coverage summary for the PR and posts it as a
-# PR comment + commit status check.
-# Part of epic #277 (C4).
+# Measures line coverage on the PR head AND on the PR base, compares them, and
+# publishes `tfactory/coverage` as a real pass/fail.
+#
+# It used to ask the cluster for a figure instead of measuring one (epic #277).
+# Nothing ever recorded a figure, so every PR got the same honest, useless
+# answer -- "no coverage for this commit" -- published as `success`. Three
+# defects had to be cleared before that became visible (#853 terminal state,
+# #857 error-vs-absence, #861 a stale token), and clearing them only proved the
+# gate had never gated: a truthful "I did not check" is not a gate (#861).
+#
+# So it measures. Both sides run in this one job with the same interpreter, the
+# same installed dependencies and the same flags, differing only in the tree --
+# which makes the two numbers comparable by construction. A stored baseline
+# would be cheaper and is what the old design reached for, but a baseline
+# produced by an unknown command, by a service that may be down, is how this
+# gate rotted unnoticed for months.
+#
+# The measured figure is also POSTed to TFactory, so /api/coverage finally has
+# per-commit data to serve. That record is best-effort: the gate's verdict comes
+# from what it measured here, never from what the cluster does or does not hold.
 
 on:
   pull_request:
     types: [opened, synchronize]
-  # Re-run the coverage check without pushing a commit. The credential this
-  # step depends on lives outside the repo, so it can go stale while the code
-  # is unchanged -- exactly what happened with TFACTORY_TOKEN (#861), which
-  # sat invalid from a cluster rebuild until someone tested it by hand. Without
-  # a manual trigger the only way to retest a credential fix is an empty commit
-  # on someone else's PR.
+  # Re-run the coverage check without pushing a commit. The gate depends on
+  # things that live outside the repo, so it can go stale while the code is
+  # unchanged -- exactly what happened with TFACTORY_TOKEN (#861), which sat
+  # invalid from a cluster rebuild until someone tested it by hand. Without a
+  # manual trigger the only way to retest is an empty commit on someone else's
+  # PR.
   workflow_dispatch:
     inputs:
       pr:
-        description: "Pull request number to summarise coverage for"
+        description: "Pull request number to gate coverage for"
         required: true
         type: string
 
@@ -33,6 +49,8 @@ permissions:
 jobs:
   coverage-comment:
     runs-on: ubuntu-latest
+    # Two full suite runs at ~2.5 minutes each, plus dependency install.
+    timeout-minutes: 45
     steps:
       - name: Resolve the pull request
         id: pr
@@ -41,69 +59,108 @@ jobs:
         run: |
           # workflow_dispatch has NO github.event.pull_request context. Without
           # this the steps below would interpolate to empty strings and the job
-          # would run to a green finish having summarised nothing -- reporting
+          # would run to a green finish having measured nothing -- reporting
           # success without checking, which is the defect this workflow exists
           # to stop doing.
           set -euo pipefail
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             NUM="${{ inputs.pr }}"
-            SHA=$(gh pr view "$NUM" --repo "${{ github.repository }}" --json headRefOid -q .headRefOid)
+            read -r SHA BASE < <(gh pr view "$NUM" --repo "${{ github.repository }}" \
+              --json headRefOid,baseRefOid -q '.headRefOid + " " + .baseRefOid')
           else
             NUM="${{ github.event.pull_request.number }}"
             SHA="${{ github.event.pull_request.head.sha }}"
+            BASE="${{ github.event.pull_request.base.sha }}"
           fi
-          if [ -z "$NUM" ] || [ -z "$SHA" ]; then
-            echo "could not resolve a pull request number and head sha" >&2
+          if [ -z "$NUM" ] || [ -z "$SHA" ] || [ -z "$BASE" ]; then
+            echo "could not resolve a pull request number, head sha and base sha" >&2
             exit 1
           fi
           echo "number=$NUM" >> "$GITHUB_OUTPUT"
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-          echo "Resolved PR #$NUM at $SHA"
+          echo "base_sha=$BASE" >> "$GITHUB_OUTPUT"
+          echo "Resolved PR #$NUM at $SHA (base $BASE)"
 
-      - name: Fetch coverage from TFactory
-        id: coverage
+      - uses: actions/checkout@v4
+        with:
+          # The PR head itself, not the merge commit: the base side is checked
+          # out from this same clone, so both measurements come from one
+          # history. Full depth because the base commit must be present.
+          ref: ${{ steps.pr.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      - name: Create venv + install deps
+        working-directory: apps/backend
+        # ONE dependency set for both measurements. Installing separately per
+        # side would let a resolver difference show up as a coverage change.
         run: |
-          RESPONSE=$(curl -s -w '\n%{http_code}' \
-            -H "Authorization: Bearer ${{ secrets.TFACTORY_TOKEN }}" \
-            "${{ vars.TFACTORY_URL }}/api/coverage?repo=${{ github.repository }}&sha=${{ steps.pr.outputs.sha }}&pr=${{ steps.pr.outputs.number }}") \
-            || RESPONSE=$'\n000'
-          HTTP_CODE=$(printf '%s' "$RESPONSE" | tail -n1)
-          RESULT=$(printf '%s' "$RESPONSE" | sed '$d')
-          # A non-JSON body — an HTML error page, an empty 401 — must not slide
-          # through jq as "no coverage"; fall back explicitly instead.
-          PCT=$(printf '%s' "$RESULT" | jq -r '.coverage_pct // "N/A"' 2>/dev/null || echo "N/A")
-          # #851: the endpoint states WHY there is no figure. Echo it, so a
-          # missing run is distinguishable from a missing endpoint at a glance.
-          # #853: it is not enough to echo it into the job log — the reason is
-          # the only honest thing we can put in the commit status and the PR
-          # comment, so carry it out of this step. Single-line + bounded, since
-          # GITHUB_OUTPUT is line-oriented and a status description caps at 140.
-          REASON=$(printf '%s' "$RESULT" | jq -r '.reason // ""' 2>/dev/null || echo "")
-          # An absent reason is itself a finding. #852 built the endpoint to
-          # explain missing coverage, so nothing to report means we did not
-          # reach that endpoint: a 401, a 404 from an undeployed route, a proxy
-          # error page. The first live run of this workflow hit exactly that
-          # and could only say "gave no reason", which is unactionable. Name
-          # the HTTP code instead.
-          if [ -z "$REASON" ] && [ "$PCT" = "N/A" ]; then
-            REASON="TFactory answered HTTP ${HTTP_CODE} with no coverage figure and no reason"
+          uv venv
+          uv pip install -r requirements.txt
+          uv pip install -r ../web-server/requirements.txt
+          uv pip install -r ../../tests/requirements-test.txt
+
+      - name: Measure coverage on head and base
+        id: coverage
+        # continue-on-error so a DROP still reaches the status step below; the
+        # job is failed explicitly at the end. Without it a red gate would skip
+        # straight past the status post and leave the commit at `pending`,
+        # which is the #853 stall wearing yet another hat.
+        continue-on-error: true
+        run: |
+          apps/backend/.venv/bin/python scripts/coverage_gate.py \
+            --base "${{ steps.pr.outputs.base_sha }}"
+
+      - name: Record the figure in TFactory
+        # Best-effort by design. The verdict is already decided above from a
+        # local measurement; this only fills the ledger /api/coverage serves.
+        # It must never turn a measured verdict into a green tick, so it cannot
+        # fail the job -- but it also must not fail silently, hence the warning.
+        if: steps.coverage.outputs.head_pct != ''
+        env:
+          TFACTORY_URL: ${{ vars.TFACTORY_URL }}
+          TFACTORY_TOKEN: ${{ secrets.TFACTORY_TOKEN }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ steps.pr.outputs.sha }}
+          PCT: ${{ steps.coverage.outputs.head_pct }}
+          RUN_ID: ci-${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          if [ -z "${TFACTORY_URL}" ]; then
+            echo "::warning::TFACTORY_URL is not set; the measured figure was not recorded."
+            exit 0
           fi
-          REASON=$(printf '%s' "$REASON" | tr -d '\n\r' | cut -c1-120)
-          echo "coverage lookup: HTTP ${HTTP_CODE}; ${REASON:-ok}"
-          REPORT=$(printf '%s' "$RESULT" | jq -r '.report_url // ""' 2>/dev/null || echo "")
-          echo "pct=$PCT" >> "$GITHUB_OUTPUT"
-          echo "report=$REPORT" >> "$GITHUB_OUTPUT"
-          echo "reason=$REASON" >> "$GITHUB_OUTPUT"
+          CODE=$(curl -s -o /tmp/record.json -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer ${TFACTORY_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{\"repo\":\"${REPO}\",\"sha\":\"${HEAD_SHA}\",\"coverage_pct\":${PCT},\"run_id\":\"${RUN_ID}\"}" \
+            "${TFACTORY_URL}/api/coverage") || CODE=000
+          if [ "${CODE}" = "201" ]; then
+            echo "recorded ${PCT}% for ${HEAD_SHA} in TFactory"
+          else
+            echo "::warning::TFactory did not record the figure (HTTP ${CODE}): $(head -c 300 /tmp/record.json)"
+          fi
 
       - name: Find existing coverage comment
-        id: find_comment
+        if: always()
         uses: peter-evans/find-comment@v3
+        id: find_comment
         with:
           issue-number: ${{ steps.pr.outputs.number }}
           comment-author: github-actions[bot]
           body-includes: "### TFactory coverage"
 
       - name: Post or update coverage comment
+        if: always()
         uses: peter-evans/create-or-update-comment@v4
         with:
           comment-id: ${{ steps.find_comment.outputs.comment-id }}
@@ -112,67 +169,64 @@ jobs:
           body: |
             ### TFactory coverage
 
-            **Coverage:** ${{ steps.coverage.outputs.pct == 'N/A' && 'not recorded for this commit' || format('{0}%', steps.coverage.outputs.pct) }}
+            ${{ steps.coverage.outputs.head_pct != '' && format('**{0}%** on this PR vs **{1}%** on its base (`{2}` pts).', steps.coverage.outputs.head_pct, steps.coverage.outputs.base_pct, steps.coverage.outputs.delta) || '**Not measured.** The gate could not produce a comparison; see the run log.' }}
 
-            ${{ steps.coverage.outputs.report != '' && format('[Full report]({0})', steps.coverage.outputs.report) || format('_{0}_', steps.coverage.outputs.reason != '' && steps.coverage.outputs.reason || 'No coverage report for this commit.') }}
+            **${{ steps.coverage.outcome == 'success' && 'PASS' || 'FAIL' }}** - ${{ steps.coverage.outputs.description || 'Coverage gate did not complete.' }}
 
-            > _Updated by the [TFactory coverage workflow](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})._
+            > _Measured by the [TFactory coverage gate](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}) on both the PR head and its base._
 
       - name: Set commit status
-        # Every value the script reads is passed through `env:` rather than
-        # interpolated into the shell body: `reason` is server-supplied text,
-        # and `${{ }}` splices it in before bash ever sees a quote.
+        # ALWAYS post a terminal state (#853).
+        #
+        # This step has now been wrong in three ways. It first posted
+        # `pending`, a permanent stall by construction, so merges were forced
+        # with --admin (#846). Posting nothing was the same stall in a
+        # different hat: GitHub reports a commit carrying zero statuses as
+        # combined state `pending`, and silence cannot overwrite a stale one.
+        # Then it posted `success` unconditionally, which is terminal, honest
+        # about having no figure, and still not a gate (#861).
+        #
+        # Now there is always a figure, because this job measures one. `success`
+        # means measured and not dropped; `failure` means either a measured drop
+        # or a measurement that did not complete. A gate that cannot measure
+        # must not report success -- that conflation is the whole bug.
+        if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PCT: ${{ steps.coverage.outputs.pct }}
-          REASON: ${{ steps.coverage.outputs.reason }}
+          PASSED: ${{ steps.coverage.outputs.passed }}
+          DESCRIPTION: ${{ steps.coverage.outputs.description }}
           TFACTORY_URL: ${{ vars.TFACTORY_URL }}
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ steps.pr.outputs.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          # ALWAYS post a terminal state (#853).
-          #
-          # This step has now been wrong in both directions. It first posted
-          # `pending`, which is a permanent stall by construction: the workflow
-          # triggers only on pull_request [opened, synchronize], so nothing ever
-          # re-runs to resolve it, and merges got forced with --admin (#846).
-          # The fix for that was to post nothing at all — which is the same
-          # stall wearing a different hat, because GitHub reports a commit
-          # carrying zero statuses as combined state `pending`, and silence
-          # cannot overwrite a stale `pending` left by an earlier run.
-          #
-          # The mapping was the bug, not the data. The endpoint (#852) reports
-          # honestly: 200 with `coverage_pct: null` plus a reason. "I have
-          # nothing to report" is a finished answer, so it belongs in a
-          # terminal state with the reason in the description — not in
-          # `pending`, which claims a run is still in flight.
-          #
-          # `success` is the only terminal non-red state the commit status API
-          # offers (there is no `neutral`), and red is wrong here: a PR that
-          # will never have a regression run — a dependabot bump, a docs-only
-          # change — has not broken anything. Only a coverage DROP deserves to
-          # block, and this step does not compute one; it publishes whatever
-          # figure the regression run recorded.
-          if [ "$PCT" = "N/A" ]; then
-            if [ -z "$TFACTORY_URL" ]; then
-              echo "::warning::TFACTORY_URL is not set, so coverage can never be fetched. Set it with: gh variable set TFACTORY_URL --repo ${REPO}"
-            fi
-            DESCRIPTION="No coverage for this commit: ${REASON:-TFactory reported no coverage and gave no reason}"
+          set -uo pipefail
+          if [ "${PASSED}" = "true" ]; then
+            STATE="success"
           else
-            DESCRIPTION="Coverage: ${PCT}%"
+            STATE="failure"
           fi
+          # An empty description means the job died before the gate produced
+          # one (a runner failure, a cancelled install). Say that, rather than
+          # posting a blank red nobody can act on.
+          TEXT="${DESCRIPTION:-Coverage gate did not complete; see the workflow run}"
           # GitHub truncates a status description at 140 characters. Do it here
           # so the text that gets published is the text we chose.
-          DESCRIPTION=$(printf '%s' "$DESCRIPTION" | cut -c1-140)
-
-          ARGS=(-f state="success" -f description="$DESCRIPTION" -f context="tfactory/coverage")
-          # An unset TFACTORY_URL is the reason coverage is missing in the first
-          # place; do not post an empty target_url alongside it.
-          if [ -n "$TFACTORY_URL" ]; then
-            ARGS+=(-f target_url="$TFACTORY_URL")
-          fi
+          TEXT=$(printf '%s' "$TEXT" | tr -d '\n\r' | cut -c1-140)
 
           gh api "/repos/${REPO}/statuses/${HEAD_SHA}" \
             -X POST \
             -H "Content-Type: application/json" \
-            "${ARGS[@]}"
+            -f state="$STATE" \
+            -f description="$TEXT" \
+            -f context="tfactory/coverage" \
+            -f target_url="$RUN_URL"
+
+      - name: Fail the job when coverage regressed
+        # The status above is what blocks the merge; this makes the workflow
+        # itself red too, so the drop is visible in the checks list and not
+        # only in a commit status.
+        if: steps.coverage.outcome != 'success'
+        run: |
+          echo "coverage gate failed: ${{ steps.coverage.outputs.description }}"
+          exit 1

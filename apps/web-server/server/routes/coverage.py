@@ -1,9 +1,16 @@
-"""Per-commit coverage lookup for CI (#851).
+"""Per-commit coverage lookup + record for CI (#851, #861).
 
 ``.github/workflows/pr-review-tests.yml`` has been calling ``/api/coverage``
 since epic #277 and the endpoint was never written -- every request 404'd, the
 workflow resolved ``PCT=N/A``, and (until #848) hung a commit status at
 ``pending`` forever. This is the missing server half.
+
+``POST`` is the other half of the same hole (#861): the GET was built to serve a
+figure and, for months, no producer existed, so it truthfully answered "nothing
+recorded" for every commit ever asked about. The regression orchestrator records
+a point only when a run produces a project coverage figure, and TFactory's own
+repo has no regression corpus -- so the CI job that measures coverage for the
+gate records it here, and the GET finally has something to return.
 
 Keyed on COMMIT, not on pull request. ``coverage_trend.json`` already records a
 ``commit`` per regression run, and the calling workflow already knows
@@ -23,10 +30,12 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query, status
+from pydantic import BaseModel, Field
 
 # apps/backend carries the regression store helpers.
 _BACKEND_DIR = Path(__file__).resolve().parents[3] / "backend"
@@ -34,8 +43,10 @@ if str(_BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(_BACKEND_DIR))
 
 from agents.regression.coverage_trend import (  # noqa: E402
+    CoveragePoint,
     coverage_trend_path,
     load_trend,
+    record_coverage,
 )
 from agents.regression.store import regression_dir  # noqa: E402
 
@@ -161,4 +172,57 @@ async def get_coverage(
             f"no regression run has recorded coverage for {sha[:8]} "
             f"({label}); checked project(s): {', '.join(candidates)}"
         ),
+    }
+
+
+class CoverageReport(BaseModel):
+    """A measured project-coverage figure for one commit."""
+
+    repo: str = Field(min_length=3, description="owner/name of the repository")
+    # A commit, not free text: this value is matched against stored commits and
+    # echoed back into messages, so constrain it to what a SHA can be.
+    sha: str = Field(pattern=r"^[0-9a-fA-F]{7,64}$", description="commit measured")
+    coverage_pct: float = Field(ge=0.0, le=100.0, description="line coverage percent")
+    run_id: str | None = Field(
+        default=None, max_length=120, description="producer of the figure"
+    )
+    ran_at: str | None = Field(
+        default=None, max_length=64, description="ISO-8601 measurement time"
+    )
+
+
+@router.post("/api/coverage", status_code=status.HTTP_201_CREATED)
+async def record_commit_coverage(report: CoverageReport) -> dict[str, Any]:
+    """Record a coverage figure against a commit, so the GET above can serve it.
+
+    Unlike the GET, an unresolvable repo here is a **404**, not a 200 with a
+    reason. The GET's null-plus-reason exists so a caller can tell "no data" from
+    "no endpoint"; a write has no such ambiguity to preserve, and accepting a
+    figure into nowhere would be the silent fallback (Factory#431) all over
+    again -- the producer would look like it recorded something it did not.
+    """
+    candidates = _projects_for_repo(report.repo)
+    if not candidates:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"no TFactory project has a checkout of {report.repo}",
+        )
+    project_id = candidates[0]
+    point = CoveragePoint(
+        # Provenance stays readable in the ledger: a CI measurement and a
+        # regression run are both project coverage, but they are not the same
+        # producer and a trend reader should be able to tell them apart.
+        run_id=report.run_id or f"ci-{report.sha[:8]}",
+        ran_at=report.ran_at or datetime.now(UTC).isoformat(timespec="seconds"),
+        coverage_pct=report.coverage_pct,
+        commit=report.sha,
+    )
+    reg_dir = regression_dir(_workspace_root(), project_id)
+    record_coverage(coverage_trend_path(reg_dir), point)
+    return {
+        "recorded": True,
+        "project_id": project_id,
+        "commit": report.sha,
+        "coverage_pct": report.coverage_pct,
+        "run_id": point.run_id,
     }
