@@ -439,6 +439,123 @@ async def test_submodule_import_commits_instead_of_replanning(
     assert status.get("replan_reasons") in (None, [])
 
 
+# ── Criterion-literal drift (#888) ─────────────────────────────────────
+#
+# The generator rewrote a signed acceptance criterion to match the
+# implementation and reported the rewrite as verified. These two tests pin both
+# directions through the real orchestration: the rewrite is rejected and routed
+# to a human, and the faithful version commits untouched.
+
+_AC3_DESCRIPTION = (
+    "Verify POST /api/line-total with unit_price 10.00, quantity 1, "
+    "vat_rate 0.175 returns 200 with net 10.00, vat 1.75, total 11.76."
+)
+
+
+def _set_description(spec_dir: Path, description: str) -> None:
+    plan = json.loads((spec_dir / "test_plan.json").read_text())
+    plan["phases"][0]["subtasks"][0]["description"] = description
+    (spec_dir / "test_plan.json").write_text(json.dumps(plan))
+
+
+def _rewritten_criterion_source() -> str:
+    """11.76 only in comments; the assertion carries the implementation's 11.75.
+
+    Shaped after the live #888 generation, but importing the fixture project so
+    the pre-flight guard passes and the criterion check is what decides.
+    """
+    return (
+        "# AC#3: ... net 10.00, vat 1.75, total 11.76.\n"
+        "# 11.76 is a typo in the spec; the implementation follows AC2 -> 11.75.\n"
+        "from app.auth import login_user\n"
+        "\n"
+        "def test_line_total_total_is_11_75():\n"
+        '    """AC#3 (corrected per AC2): total is 11.75."""\n'
+        "    assert login_user is not None\n"
+        "    assert 10.00 + 1.75 == 11.75\n"
+        "    assert 0.175 and 200 and 1\n"
+    )
+
+
+def _faithful_criterion_source() -> str:
+    """The same test asserting the criterion AS WRITTEN — it may fail; fine."""
+    return (
+        "# AC#3: ... net 10.00, vat 1.75, total 11.76.\n"
+        "# NOTE: this contradicts AC2 (10.00 + 1.75 = 11.75). Asserting AC3 as\n"
+        "# signed so the contradiction reaches a human.\n"
+        "from app.auth import login_user\n"
+        "\n"
+        "def test_line_total_total_is_11_76():\n"
+        "    assert login_user is not None\n"
+        "    assert (10.00, 1.75, 0.175, 200, 1) and 11.76\n"
+    )
+
+
+@pytest.mark.asyncio
+async def test_criterion_literal_drift_is_rejected(
+    spec_dir: Path,
+    project_dir: Path,
+    mock_sdk,
+) -> None:
+    """#888: a test that never asserts the criterion's value is not a verifier."""
+    _make_plan(spec_dir, subtask_count=1)
+    _set_description(spec_dir, _AC3_DESCRIPTION)
+    mock_sdk(source_for=lambda sid: _rewritten_criterion_source())
+
+    ok = await run_gen_functional(spec_dir, project_dir)
+    assert ok is False
+
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["status"] == "replan_needed"
+    assert status["phase"] == "gen_functional_criterion_literal_rejected"
+    assert "11.76" in status["last_rejected_reason"]
+    # The rewritten file does not survive, and a human-reachable replan is filed.
+    assert not (spec_dir / "tests" / "test_s0.py").exists()
+    rr = json.loads((spec_dir / "context" / "replan_request.json").read_text())
+    assert "11.76" in rr["reason"]
+
+
+@pytest.mark.asyncio
+async def test_criterion_asserted_as_written_commits(
+    spec_dir: Path,
+    project_dir: Path,
+    mock_sdk,
+) -> None:
+    """The mirror half: assert the criterion as signed and generation is clean."""
+    _make_plan(spec_dir, subtask_count=1)
+    _set_description(spec_dir, _AC3_DESCRIPTION)
+    mock_sdk(source_for=lambda sid: _faithful_criterion_source())
+
+    ok = await run_gen_functional(spec_dir, project_dir)
+    assert ok is True
+
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["status"] == "generated"
+    assert status["tests_generated"] == 1
+    assert (spec_dir / "tests" / "test_s0.py").exists()
+    assert not (spec_dir / "context" / "replan_request.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_criterion_literal_check_is_what_rejects(
+    spec_dir: Path,
+    project_dir: Path,
+    mock_sdk,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mutation check on the wiring: with the check opted out, the SAME rewritten
+    source sails through. So the rejection above is this check doing the work,
+    not some other guard incidentally tripping."""
+    monkeypatch.setenv("TFACTORY_CRITERION_LITERAL_CHECK", "0")
+    _make_plan(spec_dir, subtask_count=1)
+    _set_description(spec_dir, _AC3_DESCRIPTION)
+    mock_sdk(source_for=lambda sid: _rewritten_criterion_source())
+
+    assert await run_gen_functional(spec_dir, project_dir) is True
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["status"] == "generated"
+
+
 # ── Session error path ─────────────────────────────────────────────────
 
 
