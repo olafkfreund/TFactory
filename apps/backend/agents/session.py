@@ -354,6 +354,22 @@ def _extract_tool_input_display(inp: dict | None) -> str | None:
     return None
 
 
+def requested_model(client: Any) -> str:
+    """The model id a client was CONSTRUCTED with — i.e. what was asked for.
+
+    Every seam resolves a model (``get_phase_model`` / the contract's routed
+    ``test_gen``) and hands it to exactly one of two things: ``create_client``,
+    which parks it on ``ClaudeSDKClient.options.model``, or a provider adapter,
+    which parks it on ``self._model``. Reading it back off the client keeps the
+    resolution in one place instead of threading a second copy through all
+    eight ``run_agent_session`` call sites.
+
+    Deliberately NOT used as the resolved model — see :mod:`usage` (#869).
+    """
+    options_model = getattr(getattr(client, "options", None), "model", None)
+    return str(options_model or getattr(client, "_model", "") or "")
+
+
 @dataclass
 class _StreamState:
     """Mutable accumulator threaded through the per-message handlers.
@@ -372,6 +388,10 @@ class _StreamState:
     cache_write_total: int = 0
     last_session_id: str | None = None
     session_usage: Any = None
+    # The model that ACTUALLY produced this session's turns, as reported by the
+    # provider itself (#869). Distinct from the model the seam requested: a run
+    # that falls back must be recorded as the model that ran, never the ask.
+    observed_model: str = ""
 
 
 def _handle_assistant_message(
@@ -382,6 +402,12 @@ def _handle_assistant_message(
     verbose: bool,
 ) -> None:
     """Render an AssistantMessage: stream text blocks and announce tool calls."""
+    # The SDK's AssistantMessage carries the id of the model that served the
+    # turn; the local provider shim carries whatever the endpoint echoed back.
+    # Last writer wins, so a mid-session fallback is the id that gets recorded.
+    served = str(getattr(msg, "model", "") or "")
+    if served:
+        state.observed_model = served
     for block in msg.content:
         block_type = type(block).__name__
 
@@ -646,11 +672,22 @@ async def run_agent_session(
                 state.last_session_id or "?",
             )
 
-        # Fold this session's token usage into the spec's running total (#224).
-        # Best-effort and additive: accumulates across the task's many sessions
-        # and handback retries; the completion event reads the sum back.
-        if state.session_usage is not None:
-            record_in_status(spec_dir, state.session_usage)
+        # Fold this session's token usage into the spec's running total (#224)
+        # plus the per-phase resolved-model record (#869). Best-effort and
+        # additive: accumulates across the task's many sessions and handback
+        # retries; the completion event reads the sum back.
+        #
+        # Called even when session_usage is None: the providers that report no
+        # token counts (Ollama, OpenAI-compatible) DO report which model served
+        # the turn, and a verify with no model evidence is an unfillable
+        # scorecard cell. record_in_status no-ops when there is nothing at all.
+        record_in_status(
+            spec_dir,
+            state.session_usage,
+            phase=str(getattr(phase, "value", phase) or ""),
+            requested_model=requested_model(client),
+            resolved_model=state.observed_model,
+        )
 
         print("\n" + "-" * 70 + "\n")
 
