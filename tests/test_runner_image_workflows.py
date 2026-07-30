@@ -88,6 +88,11 @@ def _workflows() -> dict[str, tuple[str, dict]]:
 
 
 _PUSH_ENABLED = re.compile(r"^\s*push:\s*(true|\"?\$\{\{)", re.MULTILINE)
+# The login-action input, matched as a pattern rather than a substring: a bare
+# `"ghcr.io" in text` reads to CodeQL as incomplete URL sanitization
+# (py/incomplete-url-substring-sanitization), and it is also the weaker
+# assertion -- this one says the workflow authenticates to *that* registry.
+_GHCR_LOGIN = re.compile(r"registry:\s*ghcr\.io")
 
 
 def test_every_runner_image_directory_is_built_and_pushed_by_ci():
@@ -112,7 +117,7 @@ def test_every_runner_image_directory_is_built_and_pushed_by_ci():
     for runner, wfs in owners.items():
         for wf_name in wfs:
             text = workflows[wf_name][0]
-            assert "ghcr.io" in text and _PUSH_ENABLED.search(text), (
+            assert _GHCR_LOGIN.search(text) and _PUSH_ENABLED.search(text), (
                 f"{wf_name} builds tfactory-runner-{runner} but never pushes it "
                 "to GHCR, so the tag the cluster pulls is unaffected."
             )
