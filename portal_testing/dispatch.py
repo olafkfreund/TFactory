@@ -21,6 +21,13 @@ from typing import Any
 # The portals the capability knows about (kept in sync with config.PORTALS).
 PORTAL_KEYS = ("pfactory", "aifactory", "tfactory", "cfactory")
 
+# Fallback only. The cluster pins PORTAL_UI_IMAGE to an immutable
+# `:sha-<short>` tag (factory-gitops, bumped by portal-ui-runner-image.yml), so
+# what runs is identifiable by commit. `:latest` stays for ad-hoc local runs and
+# is what this default resolves when the env var is unset -- but it must not be
+# what the lane relies on: nothing built this image for five weeks and a stale
+# `:latest` is indistinguishable from a current one, so the Job kept running the
+# June harness that 502'd the portal it was testing (#886).
 DEFAULT_IMAGE = "ghcr.io/olafkfreund/tfactory-runner-portal-ui:latest"
 DEFAULT_NAMESPACE = "factory"
 # Secret holding the enrolled MFA test user (provisioned by keycloak_provision).

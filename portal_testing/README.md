@@ -24,6 +24,30 @@ nix develop --command python -m portal_testing.run all     # pfactory|aifactory|
 python -m portal_testing.github_flow olafkfreund/<repo>    # findings -> tracking issues
 ```
 
+## The runner image (and how it stops going stale)
+
+In-cluster the Job runs `docker/tfactory-runner-portal-ui/Dockerfile`, which
+vendors this directory (`COPY portal_testing/ /app/portal_testing/`). So a change
+here only reaches the cluster once that image is rebuilt.
+
+`.github/workflows/portal-ui-runner-image.yml` does that on any push to `main`
+touching `portal_testing/**` or `docker/tfactory-runner-portal-ui/**`. It runs
+this directory's own test suite *inside the built image* before publishing, so an
+image carrying a stale harness cannot reach the registry, then bumps the Job's
+pin.
+
+Nothing built it for the first five weeks of its life (#886). `:latest` sat on a
+27 June build while #875/#876/#877 were merged and green, so the lane in the
+cluster kept joining the `tfactory` Service and 502ing the portal it was testing.
+Hence the pin below: a floating tag cannot be told apart from a current one.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PORTAL_UI_IMAGE` | `ghcr.io/olafkfreund/tfactory-runner-portal-ui:latest` | Runner image for the dispatched Job. The cluster sets this to an immutable `:sha-<short>` tag (`factory-gitops` `apps/tfactory/manifests`, bumped by the workflow above) so the running code is identifiable by commit. Unset = the floating `:latest` default, which is fine for a local one-off and wrong for the lane. |
+| `PORTAL_UI_MFA_SECRET` | `portal-ui-test-user` | Secret holding `TEST_USER` / `TEST_PASSWORD` / `TEST_TOTP_SECRET`, injected via `secretKeyRef` (never argv). |
+| `TFACTORY_NAMESPACE` | `factory` | Namespace the Job is created in. |
+| `TFACTORY_DATA_PVC` | `tfactory-data` | PVC co-mounted at `~/.tfactory` so the published run lands in the Visual Inspection store. The live Deployment mounts `tfactory-data-rwx`; see #875. |
+
 ## Proven
 Live against all four Factory portals (4/4 MFA login). Reports + screenshots +
 screencasts in the companion `tfactory-testing` repo.

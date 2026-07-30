@@ -17,15 +17,27 @@
 
 name: Build runner images
 
+# The negations matter (#886). `docker/tfactory-runner-*/**` matches the nix and
+# portal-ui directories too, but neither is in the matrix below — nix has
+# nix-runner-image.yml and portal-ui has portal-ui-runner-image.yml, because both
+# need a shape this matrix cannot express. So a change to either fired this
+# workflow, built nine unrelated images, went green, and built nothing that
+# changed. A trigger that runs and cannot possibly do the work is worse than no
+# trigger: it looks like coverage. tests/test_runner_image_workflows.py holds the
+# matrix and these filters to the set of directories that actually exist.
 on:
   push:
     branches: [main]
     paths:
       - 'docker/tfactory-runner-*/**'
+      - '!docker/tfactory-runner-nix/**'
+      - '!docker/tfactory-runner-portal-ui/**'
       - '.github/workflows/runner-images.yml'
   pull_request:
     paths:
       - 'docker/tfactory-runner-*/**'
+      - '!docker/tfactory-runner-nix/**'
+      - '!docker/tfactory-runner-portal-ui/**'
       - '.github/workflows/runner-images.yml'
 
 # Cancel superseded runs on the same ref (matches ci.yml convention)
