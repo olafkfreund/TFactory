@@ -23,11 +23,10 @@ _BACKEND = Path(__file__).parent.parent / "apps" / "backend"
 if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
 
-# conftest.py pre-mocks claude_agent_sdk for tests that don't need the
-# real SDK. These tests DO — without the real `@tool` decorator the tools
-# list ends up populated with MagicMocks instead of SdkMcpTool dataclasses.
-# Drop the mock + the cached task_control module so the import re-binds
-# to the real SDK. (Same trick test_mcp_task_control.py uses.)
+# Another test module may have left a MagicMock in sys.modules. These tests
+# need a real `@tool` decorator — under a MagicMock the tools list ends up
+# populated with MagicMocks instead of SdkMcpTool dataclasses. Drop it plus
+# the cached task_control module so the import re-binds to the actual SDK.
 if isinstance(sys.modules.get("claude_agent_sdk"), MagicMock):
     sys.modules.pop("claude_agent_sdk", None)
     sys.modules.pop("claude_agent_sdk.types", None)

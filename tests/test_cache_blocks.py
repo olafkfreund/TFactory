@@ -14,13 +14,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# SDK pre-mock — must precede any import of backend modules
-# ---------------------------------------------------------------------------
-if "claude_agent_sdk" not in sys.modules:
-    _sdk_mock = MagicMock()
-    sys.modules["claude_agent_sdk"] = _sdk_mock
-    sys.modules["claude_agent_sdk.types"] = MagicMock()
+# The SDK stand-in belongs to tests/conftest.py, which installs one only when
+# claude_agent_sdk is genuinely absent (#882). A module-local MagicMock here
+# won that race on an INSTALLED SDK and leaked a permissive fake into
+# core.client's module-level bindings for the rest of the session.
 
 # ---------------------------------------------------------------------------
 # Add backend to sys.path
