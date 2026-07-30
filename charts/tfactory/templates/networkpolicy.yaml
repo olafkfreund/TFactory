@@ -6,9 +6,21 @@ metadata:
   labels:
     {{- include "tfactory.labels" . | nindent 4 }}
 spec:
+  # RELEASE-scoped, not selectorLabels-scoped, and deliberately so.
+  #
+  # selectorLabels is what the Service selects, so it is exactly what a
+  # non-serving pod must NOT carry (#885). But it was also the only thing putting
+  # the regression CronJob pod inside this policy, and a pod selected by NO
+  # NetworkPolicy is UNRESTRICTED — so narrowing the Job's labels without widening
+  # this selector would have quietly given it unrestricted egress.
+  #
+  # `instance` covers every pod of this release: the web pods (which carry it) and
+  # the job pods (which keep it). Monotonic — nothing that was covered becomes
+  # uncovered, at any point during an upgrade. The narrowing belongs on the
+  # Service selector, not here.
   podSelector:
     matchLabels:
-      {{- include "tfactory.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
   policyTypes:
     - Ingress
     - Egress

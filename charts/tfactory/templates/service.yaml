@@ -15,5 +15,24 @@ spec:
       port: {{ .Values.service.port }}
       targetPort: {{ .Values.service.targetPort }}
       protocol: TCP
+  # `component: server` narrows this to the SERVING pods, and is load-bearing.
+  #
+  # Without it the selector is just {name, instance}, which every pod of the
+  # release satisfies — a Service selector is a SUBSET match, so extra labels on a
+  # pod never exclude it. That silently made two different non-serving pods
+  # endpoints of this Service, where they listen on nothing and answer their share
+  # of real portal traffic with connection refused:
+  #
+  #   - the bundled Postgres StatefulSet (postgres.bundled=true). It carries
+  #     {name, instance, component: postgres}; `component: postgres` correctly
+  #     narrows the tfactory-postgres Service but does nothing here. Long-lived,
+  #     so this was a PERMANENT ~50% failure rate, not a bounded window.
+  #   - the nightly regression CronJob (fixed alongside this).
+  #
+  # Fixing only the pods leaves the next non-serving pod to rediscover it, which
+  # is how #885 (the portal-ui Job) already happened once. The Deployment's own
+  # `spec.selector` is deliberately NOT narrowed — it is immutable, and narrowing
+  # it would make `helm upgrade` fail on every existing install.
   selector:
     {{- include "tfactory.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: server
