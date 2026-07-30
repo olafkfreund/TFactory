@@ -10,10 +10,30 @@
 # Stage 1: Build the React frontend
 # ---------------------------------------------------------------------------
 # Digest is the OCI image-index (manifest-list) sha256 so multi-arch buildx
-# (P0.6) can still resolve the right platform manifest. The `:latest-dev`
-# tag is kept alongside the digest as a human hint and is ignored by docker
-# when a digest is present. Updates land via Renovate PRs (renovate.json).
-FROM cgr.dev/chainguard/node:latest-dev@sha256:64d0788274a7eb5002e09b77570baeb4f8fa34685f8cbccbcb5a2d073b2550dd AS frontend-build
+# (P0.6) can still resolve the right platform manifest. The version tag is
+# kept alongside the digest as a human hint and is ignored by docker when a
+# digest is present.
+#
+# Why not cgr.dev/chainguard/node (AIFactory#1091): this stage was pinned to
+# `node:latest-dev@sha256:...`, which cannot work. Chainguard rebuilds
+# `latest-*` continuously and garbage-collects superseded digests, so the pin
+# 404s within days and `load metadata` fails before the build starts. The
+# usual answer -- pin a versioned tag by digest -- is not available: the
+# public Chainguard catalog publishes only `latest`, `latest-dev`,
+# `latest-slim`, `next` and `next-dev` for node; `node:24-dev` and `node:24`
+# both 404, because versioned tags are a paid Production-tier feature under a
+# customer-specific org path. Docker Official Images do retain superseded
+# digests for versioned tags (node:24.0.0-bookworm-slim from May 2025 still
+# resolves), so a pin here survives while staying reproducible.
+#
+# node >= 24.0.0 and npm >= 10 are required by the root package.json
+# `engines`. Keep a glibc variant: an Alpine/musl image would need the
+# `-musl` Rollup native binaries rather than `-gnu`.
+# Nothing from this stage ships -- only apps/web-server/static is copied into
+# the runtime stage -- so the base's CVE posture is not part of the attack
+# surface. The runtime stage stays on Chainguard, where it does matter.
+# Digest bumps land via Dependabot PRs (.github/dependabot.yml).
+FROM docker.io/node:24-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d AS frontend-build
 
 USER root
 WORKDIR /build
@@ -46,7 +66,7 @@ USER root
 # digest bump — the between-bumps guard (cf. the binutils constraint below).
 # When the snapshot itself lags (the repo has no newer rev yet), bump the base
 # digest above to a Chainguard rebuild that ships the fix — that's what cleared
-# CVE-2026-45447 (libcrypto3/libssl3 3.6.2-r5 → 3.6.3-r1). Renovate automates
+# CVE-2026-45447 (libcrypto3/libssl3 3.6.2-r5 → 3.6.3-r1). Dependabot automates
 # the digest bumps; this RUN covers the window in between.
 RUN apk upgrade --no-cache
 
@@ -65,14 +85,14 @@ RUN apk upgrade --no-cache
 #                   2.46-r2). Force a build-newer rev to clear the P0.8 Trivy gate
 #                   (test_trivy_no_high_critical). Constraint, not =2.46-r2, so
 #                   the build stays green when Wolfi revs the package further;
-#                   drop this once the base digest ships the fix (Renovate).
+#                   drop this once the base digest ships the fix (Dependabot).
 #   libexpat1     — the :latest-dev base bundles libexpat1 2.8.1-r1, which
 #                   carries CVE-2026-56131/56407/56408 (HIGH; use-after-free +
 #                   integer overflows, fixed in 2.8.2-r0). The pinned snapshot
 #                   lags so `apk upgrade` can't reach it; force a build-newer rev
 #                   to clear the P0.8 Trivy gate. Constraint (not =2.8.2-r0) so
 #                   the build stays green as Wolfi revs further; drop once the
-#                   base digest ships the fix (Renovate).
+#                   base digest ships the fix (Dependabot).
 #   bubblewrap    — OS-level bash sandbox for agent commands. Without it the
 #                   Claude Agent SDK logs "Sandbox disabled: ... bubblewrap
 #                   (bwrap) not installed" and runs commands with NO filesystem
@@ -162,7 +182,7 @@ RUN mkdir -p /home/nonroot/.npm-global \
 # never npm-installs them. The install-clis init container did this at pod start
 # and, on a slow/hung npm registry, ran 8+ min and stalled the whole rollout —
 # stranding in-flight specs. .npm-global/bin is already on PATH (below). Versions
-# are pinned here now (Renovate tracks the Dockerfile); a bump is an image
+# are pinned here now (Dependabot tracks the Dockerfile); a bump is an image
 # rebuild + canary, same as any other dependency.
 #
 # `install.cjs` is NOT redundant with the npm postinstall (Factory#383). The
