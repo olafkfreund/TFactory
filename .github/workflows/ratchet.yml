@@ -4,7 +4,7 @@ name: ratchet (code-quality)
 #
 # This is a RATCHET gate (coding-standards.md section 4.6): the shared strict
 # baseline (standards/ruff.toml, vendored from the Factory hub at the SHA in
-# standards/PINNED_SHA) runs ONLY on the Python files a PR changes. For every
+# standards/.hub-sha) runs ONLY on the Python files a PR changes. For every
 # changed backend Python file the ruff violation count at HEAD may not exceed the
 # count on the PR base - untouched legacy hotspots are allowed until touched, so
 # the gate is green at adoption and tightens monotonically. A whole-repo strict
@@ -116,7 +116,7 @@ jobs:
           path: tfactory
       - name: Read pinned hub SHA
         id: pin
-        run: echo "sha=$(tr -d '[:space:]' < tfactory/standards/PINNED_SHA)" >> "$GITHUB_OUTPUT"
+        run: echo "sha=$(tr -d '[:space:]' < tfactory/standards/.hub-sha)" >> "$GITHUB_OUTPUT"
       # No continue-on-error: an unreachable hub is a gate that cannot run, and
       # per standards rule 4.7 that must fail rather than pass. This step used
       # to be `continue-on-error: true` with the diff below guarded on
@@ -140,8 +140,18 @@ jobs:
           for f in ruff.toml mypy.ini .editorconfig; do
             if ! diff <(strip "tfactory/standards/$f") <(strip "factory-hub/standards/$f"); then
               echo "DRIFT: tfactory/standards/$f diverged from the pinned hub baseline (standards/$f)."
-              echo "Re-vendor from the hub and bump standards/PINNED_SHA, or justify a tighten-only override."
+              echo "Re-vendor from the hub and bump standards/.hub-sha, or justify a tighten-only override."
               exit 1
             fi
           done
-          echo "No drift: vendored configs match the pinned hub baseline."
+          # coding-standards.md is compared BYTE-EXACT and carries no provenance
+          # header: strip() drops every line starting with '#', which in Markdown
+          # is every heading - 58 of this file's 198 lines - so a body-only
+          # compare would be blind to section titles drifting. Hub standards
+          # rule 5.1. Same comparison AIFactory's gate makes.
+          if ! diff "tfactory/standards/coding-standards.md" "factory-hub/standards/coding-standards.md"; then
+            echo "DRIFT: tfactory/standards/coding-standards.md diverged from the pinned hub baseline."
+            echo "The standard is vendored, not editable here. Change it in the hub, then re-vendor and bump standards/.hub-sha."
+            exit 1
+          fi
+          echo "No drift: vendored files match the pinned hub baseline."
