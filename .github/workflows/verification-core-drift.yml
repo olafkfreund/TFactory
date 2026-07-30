@@ -32,6 +32,9 @@ on:
       # Newly gated by Factory#403/#411. Without this the gate is
       # REGISTERED for this module but never TRIGGERED by it.
       - "scripts/ratchet_helpers.py"
+      # Newly gated by Factory#483. TFactory now vendors the hub's job-dispatch
+      # canonical instead of restating its rules by hand in three builders.
+      - "apps/backend/tools/runners/job_dispatch.py"
       - ".github/workflows/verification-core-drift.yml"
   push:
     branches: [dev, main]
@@ -47,10 +50,12 @@ env:
   # Pinned Factory hub commit carrying the canonical verification-core modules.
   # Bump deliberately when re-vendoring (see header).
   #
-  # NOTE (#892): this points at the HEAD of Factory PR #481 (the canonical fix
-  # this re-vendors), not at a commit on the hub's main. Factory squash-merges,
-  # so once #481 lands, re-point this at the resulting main SHA.
-  HUB_PIN_SHA: "51ab091b3b6416e30e345066b73b5d97db8f6a1e"
+  # NOTE (Factory#483): this points at the HEAD of Factory PR #485 (the canonical
+  # change this re-vendors), NOT at a commit on the hub's main. Factory
+  # squash-merges, so this SHA does not survive the merge — re-point it at the
+  # resulting main commit before merging this PR, or the gate checks out a SHA
+  # that only exists on the closed PR branch.
+  HUB_PIN_SHA: "467940ede9ab485ebf6a400de7aa7446d876ddcc"
 
 jobs:
   drift:
