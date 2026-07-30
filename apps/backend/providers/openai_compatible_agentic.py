@@ -221,6 +221,13 @@ class OpenAICompatibleAgenticProvider(OpenAICompatibleHeadersMixin, BaseLLMProvi
                 )
                 return
 
+            # The id the SERVER says it served (#869). OpenAI-compatible
+            # endpoints echo it, and a gateway that substituted or fell back
+            # echoes the substitute — which is exactly the divergence from
+            # ``self._model`` that resolved-model evidence has to capture.
+            # Blank when the endpoint omits it; never defaulted to the request.
+            served_model = str(response_data.get("model") or "")
+
             message = (
                 choices[0].get("message", {}) if isinstance(choices[0], dict) else {}
             )
@@ -260,7 +267,7 @@ class OpenAICompatibleAgenticProvider(OpenAICompatibleHeadersMixin, BaseLLMProvi
                         ToolUseBlock(name=tool_name, input=tool_args)
                     )
 
-                yield AssistantMessage(content=assistant_blocks)
+                yield AssistantMessage(content=assistant_blocks, model=served_model)
 
                 # Execute tools and collect results
                 tool_result_blocks: list[Any] = []
@@ -321,7 +328,7 @@ class OpenAICompatibleAgenticProvider(OpenAICompatibleHeadersMixin, BaseLLMProvi
                 # No tool calls — final response
                 if not assistant_blocks:
                     assistant_blocks.append(TextBlock(text="(no output from server)"))
-                yield AssistantMessage(content=assistant_blocks)
+                yield AssistantMessage(content=assistant_blocks, model=served_model)
                 return
 
         logger.warning(

@@ -72,9 +72,17 @@ class AssistantMessage:
     Required by: ``reviewer.py``, ``fixer.py``
     Inspected via: ``type(msg).__name__ == "AssistantMessage"``
     Accessed via: ``msg.content`` (list of TextBlock / ToolUseBlock)
+
+    ``model`` mirrors the Claude Agent SDK's ``AssistantMessage.model``: the id
+    the ENDPOINT reported for the turn it just served, which is the only honest
+    evidence of what actually ran when a server substitutes or falls back
+    (#869). Optional and defaulted so existing constructors are unaffected;
+    left empty by adapters whose transport never reports one (the CLI-driven
+    codex / gemini / copilot shims), where blank correctly reads as "unknown".
     """
 
     content: list
+    model: str = ""
 
 
 @dataclass
