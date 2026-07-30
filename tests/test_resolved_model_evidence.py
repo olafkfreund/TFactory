@@ -1,7 +1,8 @@
 """A verify run must record which model ACTUALLY ran — #869.
 
-`docs/dev/validation-scorecard.md` (Factory#295) will only accept a benchmark
-cell backed by the model that executed, "not what was requested". TFactory had
+The Factory hub's `docs/dev/validation-scorecard.md` (Factory#295) will only
+accept a benchmark cell backed by the model that executed, "not what was
+requested" — the doc lives in the hub, not here. TFactory had
 a `usage.model` field for exactly that and it came back EMPTY on a confirmed
 Claude run, because the Claude Agent SDK's `ResultMessage` has no `.model`
 attribute at all — and the existing unit tests used a fake that did, so the
