@@ -193,6 +193,48 @@ def test_lists_anti_patterns(subtask_dataclass: Subtask) -> None:
     assert "Anti-patterns" in p or "anti-pattern" in p.lower()
 
 
+# ── #888: the criterion is the reference, never the implementation ──────
+#
+# The generator justified an expected value from what the code returned and
+# called the criterion a typo. Both prompt bodies must forbid that in words and
+# name the check that enforces it — the legacy body too, since it is still
+# reachable whenever the framework registry is unavailable.
+
+
+class _PytestDescriptor:
+    name = "pytest"
+    context_block = "FRAMEWORK BLOCK"
+    multi_artifact = False
+
+
+def _both_prompt_bodies(subtask: Subtask) -> list[str]:
+    """Both bodies, whitespace-collapsed so line wrapping can't hide a phrase."""
+    legacy = get_tfactory_gen_functional_prompt(Path("/ws"), Path("/p"), subtask)
+    generic = get_tfactory_gen_functional_prompt(
+        Path("/ws"), Path("/p"), subtask,
+        framework_descriptor=_PytestDescriptor(),
+    )
+    return [" ".join(body.lower().split()) for body in (legacy, generic)]
+
+
+def test_forbids_deriving_expected_values_from_the_implementation(
+    subtask_dataclass: Subtask,
+) -> None:
+    for body in _both_prompt_bodies(subtask_dataclass):
+        assert "never derive an expected value from the implementation" in body
+        # The correct outcome for a wrong criterion is a FAILING test, not a
+        # corrected one.
+        assert "as written" in body
+        assert "typo" in body  # named explicitly as the thing not to write
+
+
+def test_documents_the_criterion_literal_check(subtask_dataclass: Subtask) -> None:
+    for body in _both_prompt_bodies(subtask_dataclass):
+        assert "criterion-literal check" in body
+        # The hole the check closes: prose does not count as an assertion.
+        assert "comments and docstrings do not count" in body
+
+
 # ── Size sanity ────────────────────────────────────────────────────────
 
 
