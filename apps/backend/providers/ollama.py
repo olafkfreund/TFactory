@@ -201,7 +201,12 @@ class OllamaProvider(OllamaHTTPMixin, BaseLLMProvider):
             len(response_text),
         )
 
-        yield AssistantMessage(content=[TextBlock(text=response_text)])
+        # model= is the id the SERVER reported serving, not the one asked
+        # for (#869); blank when the endpoint omits it.
+        yield AssistantMessage(
+            content=[TextBlock(text=response_text)],
+            model=str(response_data.get("model") or ""),
+        )
 
     # ------------------------------------------------------------------
     # Internal helpers

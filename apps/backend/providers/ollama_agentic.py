@@ -256,6 +256,13 @@ class OllamaAgenticProvider(OllamaHTTPMixin, BaseLLMProvider):
                 )
                 return
 
+            # The id Ollama says it served (#869). It echoes the model it
+            # actually loaded, which is not always the string that was asked
+            # for (tag resolution, a differently-named local pull). Blank when
+            # absent; never defaulted to self._model — a request is not
+            # evidence of what ran.
+            served_model = str(response_data.get("model") or "")
+
             # Parse response
             message = response_data.get("message", {})
             content_text = (message.get("content") or "").strip()
@@ -302,7 +309,7 @@ class OllamaAgenticProvider(OllamaHTTPMixin, BaseLLMProvider):
                     )
 
                 # Yield the assistant message with text + tool use blocks
-                yield AssistantMessage(content=assistant_blocks)
+                yield AssistantMessage(content=assistant_blocks, model=served_model)
 
                 # Execute tools and collect results
                 tool_result_blocks: list[Any] = []
@@ -401,7 +408,7 @@ class OllamaAgenticProvider(OllamaHTTPMixin, BaseLLMProvider):
                 # No tool calls — final response
                 if not assistant_blocks:
                     assistant_blocks.append(TextBlock(text="(no output from Ollama)"))
-                yield AssistantMessage(content=assistant_blocks)
+                yield AssistantMessage(content=assistant_blocks, model=served_model)
                 return
 
         # Max turns reached
