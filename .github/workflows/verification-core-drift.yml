@@ -50,7 +50,7 @@ env:
   # NOTE (#892): this points at the HEAD of Factory PR #481 (the canonical fix
   # this re-vendors), not at a commit on the hub's main. Factory squash-merges,
   # so once #481 lands, re-point this at the resulting main SHA.
-  HUB_PIN_SHA: "510fc02084827c818cfd32a7c9b217fd2da78205"
+  HUB_PIN_SHA: "dabe53fa91ce77ba323bfcd741cff6d2a0dfc3a8"
 
 jobs:
   drift:

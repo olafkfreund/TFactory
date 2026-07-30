@@ -496,7 +496,7 @@ def _test() -> None:
     # EVERY python verify env, including one whose SUT never declares it (a plain
     # manifest with no project_dir at all). Without it `import requests` fails at
     # collection and every HTTP acceptance criterion is unverifiable.
-    assert 'p."requests"' in f2, f2
+    assert 'p."requests"' in f2, f2  # noqa: S101
 
     # 3. system packages pass through (minus browser drops).
     env_sys = {
