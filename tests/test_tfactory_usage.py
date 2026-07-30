@@ -22,11 +22,23 @@ from usage import (
 
 
 class _FakeResultMessage:
-    """Stand-in for the Claude Agent SDK ResultMessage seen in session.py."""
+    """Stand-in for the Claude Agent SDK ResultMessage seen in session.py.
 
-    def __init__(self, input_tokens, output_tokens, *, model="", total_cost_usd=None):
+    It used to set ``self.model``, a field the real ``ResultMessage`` has never
+    had. That single invented attribute is what kept #869 green for months: the
+    suite asserted a shape that does not exist, and could not notice, because
+    conftest replaced the SDK with a MagicMock for every test (#882). The model
+    id comes from ``model_usage``, which is what the real type carries.
+    """
+
+    def __init__(
+        self, input_tokens, output_tokens, *, model="", total_cost_usd=None
+    ) -> None:
         self.usage = {"input_tokens": input_tokens, "output_tokens": output_tokens}
-        self.model = model
+        if model:
+            self.model_usage = {
+                model: {"inputTokens": input_tokens, "outputTokens": output_tokens}
+            }
         if total_cost_usd is not None:
             self.total_cost_usd = total_cost_usd
 

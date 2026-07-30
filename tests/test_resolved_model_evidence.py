@@ -37,13 +37,18 @@ from usage import model_from_model_usage, record_in_status, usage_from_obj
 
 # ── stand-ins for the SDK messages ─────────────────────────────────────────
 #
-# These CANNOT import claude_agent_sdk: tests/conftest.py replaces it in
-# sys.modules with a MagicMock for every test in this suite, and a MagicMock
-# answers `hasattr(msg, "model")` truthfully-for-anything. That is the
-# structural reason nothing here could notice the real ResultMessage has no
-# `.model` (#869). So the shapes are hand-rolled — and pinned to the real ones
-# by test_stand_ins_match_the_real_sdk_types below, which reads the installed
-# package in a subprocess where the mock is not in force.
+# Hand-rolled rather than imported, because the real ResultMessage takes six
+# required fields that say nothing about what is under test here. They are
+# pinned to the real shapes two ways: test_stand_ins_match_the_real_sdk_types
+# below reads the installed package in a clean subprocess, and
+# tests/test_sdk_shape_contract.py asserts the same facts against the module
+# the suite itself imports.
+#
+# Historically these could not import claude_agent_sdk at all: conftest replaced
+# it with a MagicMock for every test, and a MagicMock answers
+# `hasattr(msg, "model")` truthfully-for-anything — the structural reason
+# nothing could notice the real ResultMessage has no `.model` (#869). The mock
+# is now conditional on the package being genuinely absent (#882).
 #
 # The session loop dispatches on ``type(msg).__name__``, never isinstance, so
 # these class NAMES are load-bearing.
@@ -86,9 +91,9 @@ class AssistantMessage:
 def test_stand_ins_match_the_real_sdk_types() -> None:
     """Pin the three SDK facts the reader in ``usage.py`` depends on.
 
-    Read from the installed package in a clean interpreter, because this
-    suite's own view of the SDK is a MagicMock. If a future SDK release moves
-    any of these, this goes red and names what to update — instead of
+    Read from the INSTALLED package in a clean interpreter, so the answer holds
+    no matter what the suite has in ``sys.modules``. If a future SDK release
+    moves any of these, this goes red and names what to update — instead of
     ``usage.model`` quietly going blank again.
     """
     probe = (
