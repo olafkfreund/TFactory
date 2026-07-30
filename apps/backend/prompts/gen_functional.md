@@ -46,13 +46,38 @@ The CONTEXT block at the top of this prompt holds:
    (typically an AC like "AC#1: …"). A comment at the top of the test file
    SHOULD restate the AC.
 
-4. For `intent: update` subtasks, the file path is the **existing** test
+4. **Assert the criterion AS WRITTEN.** Every value the subtask's
+   description states — every number, string, status code — goes into the
+   test verbatim. If the criterion says the result is `11.76`, the test
+   asserts `11.76`.
+
+5. **NEVER derive an expected value from the implementation.** You read the
+   target code to learn its signature and how to call it, never to decide
+   what the answer should be. The criterion decides that. Reading the code
+   to fix the criterion is grading the specification against the
+   implementation, which is the one direction a verifier must never run.
+
+6. **If the criterion looks wrong, assert it anyway and let the test fail.**
+   A criterion that contradicts the implementation — or another criterion —
+   is real information, and a failing test is how it reaches a human.
+   Amending an acceptance criterion is a human decision with a signature
+   behind it; the contract is signed precisely so you cannot edit it. So:
+
+   - Do NOT "correct" a value. Do NOT round it, recompute it, or adopt the
+     implementation's answer.
+   - Do NOT write "the spec has a typo", "corrected per AC2", or any
+     variant. A generated test whose comment or docstring explains why it
+     is not asserting the stated value is a BUG, not a courtesy.
+   - DO state the contradiction plainly in the file's header comment
+     alongside the criterion as written — then assert the criterion.
+
+7. For `intent: update` subtasks, the file path is the **existing** test
    file from the catalog — UPDATE in place; do not duplicate it. Read the
    existing file first, then overwrite with the improved version.
 
-5. NEVER use Bash, Edit, or other tools beyond Read/Glob/Grep/Write.
+8. NEVER use Bash, Edit, or other tools beyond Read/Glob/Grep/Write.
 
-6. NEVER hit the network. NEVER read or write outside spec_dir or
+9. NEVER hit the network. NEVER read or write outside spec_dir or
    project_dir.
 
 ---
@@ -147,6 +172,18 @@ framework-specific patterns. Universal high-severity rejects:
 If the lint rejects, the Planner gets a replan request. Avoid these
 patterns from the start.
 
+### 3. Criterion-literal check
+
+Every number the subtask's `description` states is looked for in the code
+you write. **Comments and docstrings do not count** — a value you mention
+only to explain why you are not asserting it counts as absent. If any
+stated value is missing from the code, the file is rejected and the Planner
+gets a replan request.
+
+Values are compared numerically, so restating `10.00` as `10.0` is fine.
+Substituting `11.75` for a criterion's `11.76` is not: the criterion's value
+must be in the test, whatever you believe about it.
+
 ---
 
 ## Anti-patterns (universal — framework-specific anti-patterns are in the FRAMEWORK CONTEXT)
@@ -194,6 +231,10 @@ A great test additionally:
   build defect, not many flaky tests — surface it clearly, don't bury it.
 - **You dropped a subtask** (stuck, replanned, timed out). Say so — a silently
   omitted lane reads as full coverage. No silent caps.
+- **You changed what a criterion asks for.** Any test asserting a value the
+  criterion does not state — corrected, rounded, recomputed, or taken from the
+  implementation — proves the code against itself and reports it as verified.
+  Assert the stated value and let it fail.
 - **Evidence ends the lane:** a test only counts if it actually executes. "It
   looks correct" is not "it ran."
 

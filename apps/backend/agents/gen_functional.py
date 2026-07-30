@@ -43,6 +43,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from agents.workspace_status import now_iso, read_status, write_status_patch
 
 if TYPE_CHECKING:
+    from agents.criterion_literals import LiteralDriftResult
     from test_plan import ImplementationPlan, Subtask
 
 _gen_log = _logging.getLogger(__name__)
@@ -655,6 +656,105 @@ def _reject_subtask_for_replan(
     return False
 
 
+def _criterion_text(subtask: object) -> str:
+    """The criterion this subtask claims, as the Planner carried it.
+
+    ``description`` is the planner's restatement of the acceptance criterion and
+    is where the worked-example values live. ``rationale`` (the raw "AC#N: ..."
+    line) is the fallback for plans that put the values only there — union'ing
+    both would widen the literal set for no gain on the common shape.
+    """
+    description = (getattr(subtask, "description", None) or "").strip()
+    if not description:
+        return (getattr(subtask, "rationale", None) or "").strip()
+    return description
+
+
+def _criterion_literal_check(
+    subtask: object, source: str
+) -> "LiteralDriftResult | None":
+    """Run the #888 criterion-literal check, or ``None`` when it is off.
+
+    Best-effort by construction: the check is pure and unit-tested, but an
+    unexpected error must not fail a healthy suite — it degrades to "no
+    finding", exactly like the assertion-drift guard.
+    """
+    from agents.criterion_literals import (  # noqa: PLC0415 - lazy by design
+        check_criterion_literals,
+        enabled,
+    )
+
+    if not enabled():
+        return None
+    text = _criterion_text(subtask)
+    if not text:
+        return None
+    try:
+        return check_criterion_literals(
+            text, source, language=getattr(subtask, "language", None)
+        )
+    except Exception as exc:  # noqa: BLE001 — never block a healthy suite
+        _gen_log.warning("criterion-literal check errored (%s); skipping", exc)
+        return None
+
+
+def _source_guardrail_rejection(
+    subtask: object, source: str, project_dir: Path
+) -> tuple[str, str] | None:
+    """First guardrail to reject the generated source: ``(reason, phase)``.
+
+    ``None`` means every guardrail passed and the file may be committed. Three
+    guards run in cost order:
+
+      1. Pre-flight static check — Python only (AST + subprocess introspection).
+      2. Flake-risk lint — Python only (AST).
+      3. Criterion-literal drift (#888) — every language; a test that never
+         asserts a value its criterion states verified nothing about it.
+
+    The pre-flight and flake guards parse Python ASTs, so they only apply to
+    Python sources; for TS/JS (Playwright / Jest) and other languages they would
+    false-reject valid tests. ``language=None`` is the v0.1 legacy Python path,
+    so it counts as Python.
+    """
+    from agents.flake_risk_lint import flake_risk_lint
+    from agents.preflight_static import preflight_check
+
+    is_python = (getattr(subtask, "language", None) or "python") == "python"
+
+    pre = preflight_check(source, project_dir=project_dir) if is_python else None
+    if pre is not None and not pre.ok:
+        reasons = (
+            ", ".join(f"{f.describe()} — {f.reason[:80]}" for f in pre.failures)
+            or pre.summary()
+        )
+        return f"pre-flight rejected: {reasons}", "gen_functional_preflight_rejected"
+
+    flake = flake_risk_lint(source) if is_python else None
+    if flake is not None and not flake.ok:
+        reasons = (
+            "; ".join(
+                f"L{h.lineno} {h.pattern}: {h.detail[:60]}" for h in flake.rejected
+            )
+            or flake.summary()
+        )
+        return f"flake-lint rejected: {reasons}", "gen_functional_flake_rejected"
+
+    # #888: a generator that disagrees with a criterion must not quietly assert
+    # its own value instead. If a number the criterion states is absent from the
+    # test's CODE (comments and docstrings excluded) the criterion was
+    # reinterpreted, not tested — route it to a human.
+    drift = _criterion_literal_check(subtask, source)
+    if drift is not None and not drift.ok:
+        return (
+            "criterion-literal drift: the criterion states "
+            f"{', '.join(drift.missing)} but the generated test never asserts "
+            "it. Assert the criterion AS WRITTEN and let the test fail; never "
+            "substitute the implementation's value (#888).",
+            "gen_functional_criterion_literal_rejected",
+        )
+    return None
+
+
 async def _generate_one_subtask(
     spec_dir: Path,
     project_dir: Path,
@@ -672,8 +772,6 @@ async def _generate_one_subtask(
       ``"rejected"``  — a guardrail rejected and a Planner replan was scheduled;
                         the caller must stop the loop (return False)
     """
-    from agents.flake_risk_lint import flake_risk_lint
-    from agents.preflight_static import preflight_check
     from prompts_pkg.prompts import get_tfactory_gen_functional_prompt
 
     files = _files_to_create(subtask)
@@ -722,21 +820,9 @@ async def _generate_one_subtask(
         )
         return "rejected"
 
-    source = test_path.read_text()
-
-    # The pre-flight + flake-lint guards parse Python ASTs, so they only apply
-    # to Python sources. For TS/JS (Playwright / Jest) and other languages they
-    # would false-reject valid tests — skip them. language=None is the v0.1
-    # legacy Python path, so treat it as Python.
-    is_python = (subtask.language or "python") == "python"
-
-    # Pre-flight static check (commit 2) — Python only.
-    pre = preflight_check(source, project_dir=project_dir) if is_python else None
-    if pre is not None and not pre.ok:
-        reasons = (
-            ", ".join(f"{f.describe()} — {f.reason[:80]}" for f in pre.failures)
-            or pre.summary()
-        )
+    rejection = _source_guardrail_rejection(subtask, test_path.read_text(), project_dir)
+    if rejection is not None:
+        reason, phase = rejection
         _reject_subtask_for_replan(
             spec_dir,
             project_dir,
@@ -744,30 +830,8 @@ async def _generate_one_subtask(
             plan_file,
             subtask,
             test_path=test_path,
-            reason=f"pre-flight rejected: {reasons}",
-            phase="gen_functional_preflight_rejected",
-            tests_generated=tests_generated,
-        )
-        return "rejected"
-
-    # Flake-risk lint (commit 3) — Python only (AST-based).
-    flake = flake_risk_lint(source) if is_python else None
-    if flake is not None and not flake.ok:
-        reasons = (
-            "; ".join(
-                f"L{h.lineno} {h.pattern}: {h.detail[:60]}" for h in flake.rejected
-            )
-            or flake.summary()
-        )
-        _reject_subtask_for_replan(
-            spec_dir,
-            project_dir,
-            plan,
-            plan_file,
-            subtask,
-            test_path=test_path,
-            reason=f"flake-lint rejected: {reasons}",
-            phase="gen_functional_flake_rejected",
+            reason=reason,
+            phase=phase,
             tests_generated=tests_generated,
         )
         return "rejected"
