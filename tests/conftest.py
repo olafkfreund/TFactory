@@ -20,6 +20,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from tests import sdk_stub
+
 # =============================================================================
 # HOOK GIT-ENV SCRUB (#859)
 # =============================================================================
@@ -97,8 +99,8 @@ def pytest_ignore_collect(collection_path, config):
 # =============================================================================
 # PRE-MOCK EXTERNAL SDK MODULES - Must happen BEFORE adding tfactory to path
 # =============================================================================
-# These SDK modules may not be installed, so we mock them before any imports
-# that might trigger loading code that depends on them.
+# These SDK modules may not be installed, so we stand in for them before any
+# imports that might trigger loading code that depends on them.
 
 
 def _create_sdk_mock():
@@ -110,12 +112,27 @@ def _create_sdk_mock():
     return mock
 
 
-# Pre-mock claude_agent_sdk if not installed
-if "claude_agent_sdk" not in sys.modules:
-    sys.modules["claude_agent_sdk"] = _create_sdk_mock()
-    sys.modules["claude_agent_sdk.types"] = MagicMock()
+# claude_agent_sdk: stand in ONLY when the package is genuinely absent (#882).
+#
+# The old guard was `"claude_agent_sdk" not in sys.modules`, which is true at
+# conftest import time whether or not the package is installed — so the whole
+# suite ran against a MagicMock even in CI and the service venv, where
+# claude-agent-sdk IS installed (apps/backend/requirements.txt). A MagicMock
+# reports every attribute as present, which made it impossible for any test to
+# observe an SDK message's actual shape. That is how #869 hid: usage.py read a
+# `.model` off ResultMessage that the real type has never had, got "" on every
+# production run, and CI stayed green against a fake that invented the field.
+#
+# Installed  -> the real module; tests meet the real dataclasses.
+# Absent     -> tests/sdk_stub.py, an explicit fake with exactly the real
+#               attributes, so a typo raises AttributeError instead of passing.
+if not sdk_stub.SDK_INSTALLED:
+    sdk_stub.install()
 
-# Pre-mock claude_code_sdk if not installed
+# claude_code_sdk is the SDK's former name. Nothing under apps/ imports it and
+# it is in no requirements file, so it is absent everywhere and no production
+# reader depends on its shape; a MagicMock stays adequate for the handful of
+# legacy tests that name it.
 if "claude_code_sdk" not in sys.modules:
     sys.modules["claude_code_sdk"] = _create_sdk_mock()
     sys.modules["claude_code_sdk.types"] = MagicMock()
@@ -1440,6 +1457,7 @@ CRITICAL_MODULES = frozenset(
         "test_cloud_remediation",  # cloud remediation plan (#133/#150)
         "test_cloud_issues",  # findings → GitHub issues (#133/#152)
         "test_cloud_store",  # multi-assessment portal store + downloads (#133/#152)
+        "test_sdk_shape_contract",  # SDK message fields the readers rely on (#882)
     }
 )
 

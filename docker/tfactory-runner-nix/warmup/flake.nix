@@ -1,7 +1,7 @@
 {
   # Warm-up flake (#768). Realised ONCE at image build time so its closure —
-  # python + pytest + pytest-cov + pip and their build deps (stdenv, gcc-wrapper)
-  # — lands in the image's /nix/store. Under TFACTORY_NIX_IN_IMAGE every verify
+  # python + pytest + pytest-cov + requests + pip and their build deps (stdenv,
+  # gcc-wrapper) — lands in the image's /nix/store. Under TFACTORY_NIX_IN_IMAGE every verify
   # Job sources /nix from the image, so a per-task flake that resolves to these
   # same paths finds them already present and skips the cache.nixos.org fetch
   # that made a real spec exceed the verify deadline (S x (3 + mutants) Jobs each
@@ -22,7 +22,7 @@
     {
       devShells.${system}.default = pkgs.mkShell {
         packages = [
-          (pkgs.python313.withPackages (p: [ p."pytest" p."pytest-cov" p."pip" ]))
+          (pkgs.python313.withPackages (p: [ p."pytest" p."pytest-cov" p."requests" p."pip" ]))
         ];
       };
     };

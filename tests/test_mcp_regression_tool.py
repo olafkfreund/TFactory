@@ -9,22 +9,24 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from tests.sdk_stub import SDK_INSTALLED
+
 _BACKEND = Path(__file__).parent.parent / "apps" / "backend"
 if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
 
-# conftest.py pre-mocks claude_agent_sdk for offline collection; this tool needs
-# the real ``@tool`` decorator. Drop the mock so the module re-imports against
-# the actual SDK (mirrors tests/test_tfactory_mcp_tools.py).
+# Another test module may have left a MagicMock in sys.modules; this tool needs
+# the real ``@tool`` decorator, so drop it and re-import against the actual SDK
+# (mirrors tests/test_tfactory_mcp_tools.py).
 if isinstance(sys.modules.get("claude_agent_sdk"), MagicMock):
     sys.modules.pop("claude_agent_sdk", None)
     sys.modules.pop("claude_agent_sdk.types", None)
     sys.modules.pop("agents.tools_pkg.tools.regression", None)
     sys.modules.pop("agents.tools_pkg.tools.task_control", None)
 
-try:
-    import claude_agent_sdk  # noqa: F401 — availability probe
-except ImportError:
+# Importable is not the same as installed: tests/conftest.py stands in for an
+# absent SDK (#882) and that stand-in has no real ``@tool``.
+if not SDK_INSTALLED:
     pytest.skip("claude_agent_sdk not installed", allow_module_level=True)
 
 import agents.tools_pkg.tools.regression as mod  # noqa: E402

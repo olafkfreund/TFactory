@@ -1558,10 +1558,17 @@ def _format_evaluator_per_test_block(bundle) -> str:
                 "(NOT an import/collection error)"
             )
         elif failure_kind == "import":
+            # #892: "the subject module" was a guess of its own — a missing
+            # HARNESS dep (requests, in the api lane) fails collection just the
+            # same, with the subject perfectly importable. State what pytest
+            # actually reported and let the exception line say which module.
             stability_line += (
-                " — the subject module could not be imported/collected "
-                "in the sandbox (import/collection error)"
+                " — the test never executed: collection failed in the sandbox "
+                "(import/collection error)"
             )
+            detail = _format_signal_value(stability, "failure_detail", default=None)
+            if isinstance(detail, str) and detail.strip():
+                stability_line += f" — {detail.strip()}"
     else:
         stability_line = "stability: not computed"
 
