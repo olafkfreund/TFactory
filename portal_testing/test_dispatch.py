@@ -154,3 +154,22 @@ def test_no_delay_keeps_plain_command():
     c = m["spec"]["template"]["spec"]["containers"][0]
     assert c["command"] == ["python", "-m", "portal_testing.run"]
     assert c["args"][0] == "tfactory"
+
+
+def test_job_pods_do_not_join_the_tfactory_service():
+    """Regression for the portal-ui lane taking its own target offline.
+
+    The `tfactory` Service selects `app=tfactory`. A Job pod carrying that label
+    becomes a Service endpoint; it listens on nothing, so kube-proxy hands it a
+    share of real requests and Cloudflare returns 502 for the duration of the
+    test run. Observed: zero origin refusals for three hours, then refusals in
+    exactly the two minutes a portal-ui Job was running.
+    """
+    from portal_testing.dispatch import build_portal_ui_job_manifest
+
+    m = build_portal_ui_job_manifest("tfactory", "r1")
+    pod_labels = m["spec"]["template"]["metadata"]["labels"]
+    assert pod_labels.get("app") != "tfactory", (
+        "portal-ui Job pods must not match the tfactory Service selector"
+    )
+    assert pod_labels["lane"] == "portal-ui"

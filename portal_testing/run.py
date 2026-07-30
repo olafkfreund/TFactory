@@ -41,6 +41,7 @@ def run_portal(key: str) -> Path:
     shots_dir = out_dir / "screenshots"
     video_dir = out_dir / "video"
     video_dir.mkdir(parents=True, exist_ok=True)
+    shots_dir.mkdir(parents=True, exist_ok=True)
     log.info("[%s] %s", key, portal.url)
 
     with sync_playwright() as pw:
@@ -64,7 +65,16 @@ def run_portal(key: str) -> Path:
         try:
             page.goto(portal.url, wait_until="domcontentloaded")
             page.wait_for_timeout(2500)
-            login_info = ensure_logged_in(page, portal, auth)
+            # The auth stages are the whole point of the MFA evidence set, but
+            # the crawler only starts shooting after login — so capture the
+            # Keycloak form and the TOTP challenge here. `00-` prefixed so they
+            # sort ahead of the crawl in the Evidence tab's gallery.
+            def _auth_shot(label: str) -> str:
+                name = f"00-{label}.png"
+                page.screenshot(path=str(shots_dir / name))
+                return name
+
+            login_info = ensure_logged_in(page, portal, auth, shot=_auth_shot)
             page.wait_for_timeout(1500)
 
             crawler = PortalCrawler(page, shots_dir, console_errors)

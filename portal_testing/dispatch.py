@@ -100,7 +100,15 @@ def build_portal_ui_job_manifest(
             "backoffLimit": 0,
             "ttlSecondsAfterFinished": 3600,
             "template": {
-                "metadata": {"labels": {"app": "tfactory", "lane": "portal-ui"}},
+                # NOT app=tfactory: that is the `tfactory` Service's selector, so
+                # the Job's pod joined the Service and, listening on nothing,
+                # answered its share of real portal traffic with connection
+                # refused -- Cloudflare served 502s for as long as the test ran.
+                # The browser test took the portal it was testing offline and
+                # then reported it broken.
+                "metadata": {
+                    "labels": {"app": "tfactory-portal-ui", "lane": "portal-ui"}
+                },
                 "spec": {
                     "restartPolicy": "Never",
                     "imagePullSecrets": [{"name": "ghcr-pull"}],
