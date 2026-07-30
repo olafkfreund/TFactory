@@ -1,13 +1,18 @@
-"""The tfactory/coverage commit status must always reach a terminal state — #853.
+"""The tfactory/coverage commit status must be terminal AND must be a gate.
 
-`pending` means "still working". Nothing re-runs `pr-review-tests.yml` (it fires
-only on pull_request opened/synchronize), so a PR that will never have a
-regression run — a dependabot bump, a docs-only change — carried a check that
-could not complete, and merges were forced through with `--admin`.
+Two defects, one step.
 
-Posting *nothing* is the same stall wearing a different hat: GitHub reports a
-commit with zero statuses as combined state `pending`, and a stale `pending`
-left by an earlier run is never overwritten by silence.
+`pending` means "still working". Nothing re-ran `pr-review-tests.yml`, so a PR
+that would never have a figure carried a check that could not complete, and
+merges were forced through with `--admin` (#853). Posting *nothing* is the same
+stall wearing a different hat: GitHub reports a commit with zero statuses as
+combined state `pending`, and a stale `pending` is never overwritten by silence.
+
+Fixing that made the status terminal and honest -- and left it `success` for
+every pull request regardless of what its coverage did, because the figure it
+published came from a regression run that never happened (#861). A terminal,
+truthful "I did not check" is not a gate. So the step now reports the verdict of
+a measurement taken in the same job, and a drop comes out `failure`.
 
 Rather than assert on the YAML text, these tests EXECUTE the step's shell script
 with a fake `gh` on PATH and inspect what it would post.
@@ -36,6 +41,8 @@ _CONTEXT = {
     "secrets.GITHUB_TOKEN": "fake-token",
     "secrets.TFACTORY_TOKEN": "fake-token",
     "github.repository": "olafkfreund/TFactory",
+    "github.server_url": "https://github.com",
+    "github.run_id": "12345",
     "github.event.pull_request.head.sha": "d34db33f",
     "github.event.pull_request.number": "820",
     # The steps read these instead of the PR event directly, so that the same
@@ -43,15 +50,20 @@ _CONTEXT = {
     # context. The resolve step produces them from either trigger.
     "steps.pr.outputs.sha": "d34db33f",
     "steps.pr.outputs.number": "820",
+    "steps.pr.outputs.base_sha": "ba5eba5e",
     "vars.TFACTORY_URL": "https://tfactory.example",
 }
 
+_JOB = "coverage-comment"
+
+
+def _workflow() -> dict:
+    return yaml.safe_load(WORKFLOW.read_text())
+
 
 def _step(name: str) -> dict:
-    """Return the named step of the coverage-comment job."""
-    workflow = yaml.safe_load(WORKFLOW.read_text())
-    steps = workflow["jobs"]["coverage-comment"]["steps"]
-    for step in steps:
+    """Return the named step of the coverage job."""
+    for step in _workflow()["jobs"][_JOB]["steps"]:
         if step.get("name") == name:
             return step
     raise AssertionError(f"no step named {name!r} in {WORKFLOW}")
@@ -69,7 +81,7 @@ def _expand(text: str, context: dict[str, str]) -> str:
 
 
 def _run_status_step(
-    tmp_path: Path, *, pct: str, reason: str = "", tfactory_url: str | None = None
+    tmp_path: Path, *, passed: str, description: str = ""
 ) -> list[list[str]]:
     """Execute the 'Set commit status' step; return the argv of each `gh` call."""
     step = _step("Set commit status")
@@ -86,25 +98,17 @@ def _run_status_step(
     fake_gh.chmod(0o755)
 
     context = dict(_CONTEXT)
-    if tfactory_url is not None:
-        context["vars.TFACTORY_URL"] = tfactory_url
-    # Supplied both ways on purpose: the step may read the fetch results through
-    # ${{ }} interpolation or through its `env:` block. The test asserts on what
-    # gets posted, not on which of the two the step happens to use.
-    context["steps.coverage.outputs.pct"] = pct
-    context["steps.coverage.outputs.reason"] = reason
+    context["steps.coverage.outputs.passed"] = passed
+    context["steps.coverage.outputs.description"] = description
 
     env = dict(os.environ)
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
     env["GH_CALLS"] = str(calls_file)
     env["GITHUB_OUTPUT"] = str(tmp_path / "github_output")
-    # The step reads the coverage result from its own `env:` block. Resolve the
+    # The step reads the gate result from its own `env:` block. Resolve the
     # ${{ }} in those values and export them, so the shell body stays testable.
     for key, value in (step.get("env") or {}).items():
         env[key] = _expand(str(value), context)
-    # Both are step outputs in the real run; the test drives them directly.
-    env["PCT"] = pct
-    env["REASON"] = reason
 
     script = _expand(step["run"], context)
     # GitHub runs `run:` blocks as `bash -e {0}`.
@@ -146,198 +150,141 @@ def _posted(calls: list[list[str]]) -> dict[str, str]:
     return fields
 
 
-# ── the bug: an honest "no data" must not stall the PR ───────────────────
+# ── the gate: a drop must be red ─────────────────────────────────────────
 
 
-def test_no_coverage_still_posts_a_terminal_status(tmp_path: Path) -> None:
-    """#853: a PR that will never have a regression run must still get a status.
-
-    Silence is not neutral here — a commit with no statuses reads as `pending`,
-    and a stale `pending` from before this fix is never cleared.
-    """
-    calls = _run_status_step(
-        tmp_path,
-        pct="N/A",
-        reason="no regression run has recorded coverage for d34db33f",
+def test_a_drop_posts_failure(tmp_path: Path) -> None:
+    """#861: the half that cannot be satisfied by making the gate permissive."""
+    fields = _posted(
+        _run_status_step(
+            tmp_path,
+            passed="false",
+            description="Coverage dropped 3.50 pts: 81.50% -> 78.00%",
+        )
     )
-    assert calls, "no commit status was posted when coverage was unavailable"
-    fields = _posted(calls)
-    assert fields["state"] == "success", (
-        f"expected a terminal state, got {fields['state']!r} — `pending` and "
-        "silence both leave the PR unmergeable"
+    assert fields["state"] == "failure", (
+        f"a measured coverage drop posted {fields['state']!r}; every TFactory PR "
+        "passed for months exactly because this was hard-coded to success"
     )
-    assert fields["context"] == "tfactory/coverage"
+    assert "dropped 3.50 pts" in fields["description"]
 
 
-def test_no_coverage_description_carries_the_endpoints_reason(
-    tmp_path: Path,
-) -> None:
-    """The endpoint states WHY there is no figure (#852); publish that, not a
-    bare 'not yet available' that implies a run is still in flight."""
-    reason = "no TFactory project has a checkout of olafkfreund/TFactory"
-    fields = _posted(_run_status_step(tmp_path, pct="N/A", reason=reason))
-    assert reason in fields["description"], (
-        f"the reason was dropped from the status description: {fields['description']!r}"
+def test_no_drop_posts_success_with_a_real_percentage(tmp_path: Path) -> None:
+    fields = _posted(
+        _run_status_step(
+            tmp_path, passed="true", description="Coverage 81.50% (unchanged vs base 81.50%)"
+        )
     )
-
-
-def test_missing_reason_says_so_rather_than_claiming_a_run_is_pending(
-    tmp_path: Path,
-) -> None:
-    """An unreachable endpoint yields `{}` — no pct AND no reason. The status
-    must still be terminal and must not imply work is in progress."""
-    fields = _posted(_run_status_step(tmp_path, pct="N/A", reason=""))
     assert fields["state"] == "success"
+    assert "81.50%" in fields["description"]
+
+
+def test_a_gate_that_could_not_measure_is_not_a_pass(tmp_path: Path) -> None:
+    """An unmeasurable run must not be reported as clean. Conflating "no result"
+    with "no problem" is the whole of #861."""
+    fields = _posted(_run_status_step(tmp_path, passed="", description=""))
+    assert fields["state"] == "failure"
     assert fields["description"].strip(), "posted an empty description"
-    assert "not yet" not in fields["description"].lower(), (
-        "an unreachable endpoint is not a run in flight"
-    )
+    assert "did not complete" in fields["description"]
+
+
+# ── the earlier defect: the status must always be terminal ───────────────
 
 
 def test_status_is_never_pending(tmp_path: Path) -> None:
-    """The regression guard for the original defect, across every input."""
-    for pct, reason in (("N/A", "no run"), ("N/A", ""), ("81.5", ""), ("0", "")):
-        calls = _run_status_step(tmp_path / f"case-{pct}-{len(reason)}", pct=pct,
-                                 reason=reason)
+    """The regression guard for #853, across every input."""
+    cases = (
+        ("true", "Coverage 81.50% (unchanged vs base 81.50%)"),
+        ("false", "Coverage dropped 3.50 pts: 81.50% -> 78.00%"),
+        ("false", "Coverage gate failed: base checkout failed"),
+        ("", ""),
+    )
+    for i, (passed, description) in enumerate(cases):
+        calls = _run_status_step(
+            tmp_path / f"case-{i}", passed=passed, description=description
+        )
+        assert calls, f"no commit status was posted for {passed!r}/{description!r}"
         for argv in calls:
             assert "state=pending" not in " ".join(argv), (
-                f"posted a pending status for pct={pct!r}: {argv}"
+                f"posted a pending status for passed={passed!r}: {argv}"
             )
 
 
-def test_unset_tfactory_url_warns_but_still_reports(tmp_path: Path) -> None:
-    """A missing TFACTORY_URL is a CI-config fault, not the PR's fault: warn
-    loudly in the log, but do not leave the PR wedged behind a stuck check."""
-    calls = _run_status_step(tmp_path, pct="N/A", reason="", tfactory_url="")
-    assert calls, "no status posted when TFACTORY_URL is unset"
-    assert _posted(calls)["state"] == "success"
+def test_the_status_step_runs_even_when_the_gate_failed() -> None:
+    """`continue-on-error` on the measure step is what keeps a red gate from
+    skipping the status post and leaving the commit at `pending` (#853)."""
+    assert _step("Measure coverage on head and base")["continue-on-error"] is True
+    assert _step("Set commit status")["if"] == "always()"
 
 
-# ── the measured path must be unchanged ──────────────────────────────────
-
-
-def test_real_coverage_still_reports_the_percentage(tmp_path: Path) -> None:
-    fields = _posted(_run_status_step(tmp_path, pct="81.5"))
-    assert fields["state"] == "success"
-    assert "81.5" in fields["description"]
-
-
-def test_reason_is_exported_by_the_fetch_step() -> None:
-    """The status step can only publish the reason if the fetch step emits it."""
-    run = _step("Fetch coverage from TFactory")["run"]
-    assert "reason=" in run, (
-        "the fetch step logs .reason but never writes it to GITHUB_OUTPUT, so "
-        "the commit status cannot state why coverage is missing"
-    )
-
-
-# ── the fetch step, executed against canned endpoint responses ───────────
-
-
-def _run_fetch_step(tmp_path: Path, *, body: str, code: str) -> dict[str, str]:
-    """Execute the 'Fetch coverage from TFactory' step against a canned reply."""
-    step = _step("Fetch coverage from TFactory")
-
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir(parents=True)
-    fake_curl = bin_dir / "curl"
-    # Mimics `curl -s -w '\n%{http_code}'`: body, newline, status code.
-    fake_curl.write_text(
-        "#!/usr/bin/env bash\nprintf '%s\\n%s' \"$FAKE_BODY\" \"$FAKE_CODE\"\n"
-    )
-    fake_curl.chmod(0o755)
-
-    outputs = tmp_path / "github_output"
-    outputs.touch()
-    env = dict(os.environ)
-    env["PATH"] = f"{bin_dir}:{env['PATH']}"
-    env["GITHUB_OUTPUT"] = str(outputs)
-    env["FAKE_BODY"] = body
-    env["FAKE_CODE"] = code
-    for key, value in (step.get("env") or {}).items():
-        env[key] = _expand(str(value), _CONTEXT)
-
-    result = subprocess.run(  # noqa: S603 — fixed argv, the script is our own workflow
-        [shutil.which("bash") or "/bin/bash", "-e"],
-        input=_expand(step["run"], _CONTEXT),
-        text=True,
-        capture_output=True,
-        env=env,
-        cwd=tmp_path,
-        check=False,
-    )
-    assert result.returncode == 0, (
-        f"the fetch step exited {result.returncode}\n"
-        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-    )
-    return dict(
-        line.partition("=")[::2]  # type: ignore[arg-type]
-        for line in outputs.read_text().splitlines()
-        if "=" in line
-    )
-
-
-@pytest.mark.skipif(shutil.which("jq") is None, reason="the step needs jq")
-def test_fetch_publishes_the_endpoints_reason(tmp_path: Path) -> None:
-    out = _run_fetch_step(
-        tmp_path,
-        body='{"coverage_pct": null, "reason": "no run recorded coverage for d34db33f"}',
-        code="200",
-    )
-    assert out["pct"] == "N/A"
-    assert out["reason"] == "no run recorded coverage for d34db33f"
-
-
-@pytest.mark.skipif(shutil.which("jq") is None, reason="the step needs jq")
-def test_fetch_names_the_http_code_when_there_is_no_reason(tmp_path: Path) -> None:
-    """The live failure: the endpoint was never reached, so there was no
-    `.reason` to report — and the status could only say "gave no reason",
-    which tells nobody anything. #852 built the endpoint to explain missing
-    coverage, so a missing explanation means we did not reach it."""
-    out = _run_fetch_step(
-        tmp_path, body='{"error": "Missing Authorization header"}', code="401"
-    )
-    assert out["pct"] == "N/A"
-    assert "401" in out["reason"], (
-        f"an unreachable endpoint is indistinguishable from no data: {out['reason']!r}"
-    )
-
-
-@pytest.mark.skipif(shutil.which("jq") is None, reason="the step needs jq")
-def test_fetch_survives_a_non_json_body(tmp_path: Path) -> None:
-    """A proxy's HTML error page must not crash the step or masquerade as data."""
-    out = _run_fetch_step(tmp_path, body="<html>502 Bad Gateway</html>", code="502")
-    assert out["pct"] == "N/A"
-    assert "502" in out["reason"]
-
-
-@pytest.mark.skipif(shutil.which("jq") is None, reason="the step needs jq")
-def test_fetch_keeps_a_real_coverage_figure(tmp_path: Path) -> None:
-    out = _run_fetch_step(
-        tmp_path,
-        body='{"coverage_pct": 81.5, "report_url": "https://example/report"}',
-        code="200",
-    )
-    assert out["pct"] == "81.5"
-    assert out["report"] == "https://example/report"
-    # A real figure needs no excuse attached to it.
-    assert out["reason"] == ""
-
-
-def test_pr_comment_does_not_render_a_percentage_it_does_not_have() -> None:
-    """The same defect one line over: the comment printed `N/A%` whenever the
-    figure was missing, and blamed a pipeline that "may still be running"."""
-    body = _step("Post or update coverage comment")["with"]["body"]
-    assert "outputs.pct }}%" not in body, (
-        "the comment appends '%' to the raw output, rendering 'N/A%' when there "
-        "is no coverage"
-    )
-    assert "may still be running" not in body, (
-        "a PR that will never trigger a regression run has no pipeline running"
-    )
+def test_a_red_gate_also_fails_the_job() -> None:
+    """continue-on-error must not leave the workflow itself green."""
+    step = _step("Fail the job when coverage regressed")
+    assert "steps.coverage.outcome != 'success'" in step["if"]
+    assert "exit 1" in step["run"]
 
 
 @pytest.mark.parametrize("field", ["state", "context", "description"])
 def test_posted_status_is_well_formed(tmp_path: Path, field: str) -> None:
-    fields = _posted(_run_status_step(tmp_path, pct="N/A", reason="nothing recorded"))
+    fields = _posted(
+        _run_status_step(tmp_path, passed="true", description="Coverage 81.50%")
+    )
     assert fields.get(field), f"missing -f {field} in the posted status"
+    assert fields["context"] == "tfactory/coverage"
+
+
+# ── the gate measures; it does not ask ───────────────────────────────────
+
+
+def test_the_gate_measures_both_sides_itself() -> None:
+    """The old step read a figure from the cluster that nothing ever wrote. The
+    verdict must come from a measurement taken here, against the PR base."""
+    run = _step("Measure coverage on head and base")["run"]
+    assert "scripts/coverage_gate.py" in run
+    assert "steps.pr.outputs.base_sha" in run, (
+        "the gate must compare against the base commit; without it there is "
+        "nothing to drop from"
+    )
+
+
+def test_the_base_commit_is_resolved_for_both_triggers() -> None:
+    """workflow_dispatch carries no pull_request context, so a dispatched run
+    would compare against an empty base and pass by construction."""
+    run = _step("Resolve the pull request")["run"]
+    assert "baseRefOid" in run, "no base sha is resolved on workflow_dispatch"
+    assert 'if [ -z "$NUM" ] || [ -z "$SHA" ] || [ -z "$BASE" ]' in run, (
+        "an unresolved base must abort, not silently gate against nothing"
+    )
+
+
+def test_the_checkout_has_the_history_the_base_needs() -> None:
+    """A shallow clone cannot produce a worktree at the base commit."""
+    for step in _workflow()["jobs"][_JOB]["steps"]:
+        if str(step.get("uses", "")).startswith("actions/checkout"):
+            assert step["with"]["fetch-depth"] == 0
+            return
+    raise AssertionError("the job does not check the repository out")
+
+
+def test_recording_the_figure_cannot_decide_the_verdict() -> None:
+    """The POST to TFactory fills the ledger /api/coverage serves. If a cluster
+    outage could turn a measured drop green, the gate would depend on exactly
+    the state whose absence hid this bug for months."""
+    step = _step("Record the figure in TFactory")
+    body = step["run"]
+    assert "::warning::" in body, "a failed record must be reported, not swallowed"
+    assert "exit 1" not in body, "recording must not be able to fail the job"
+    # It runs before the status step, so it must not be able to abort the job.
+    assert "set -e\n" not in body and "set -euo" not in body
+
+
+def test_the_pr_comment_reports_both_sides() -> None:
+    body = _step("Post or update coverage comment")["with"]["body"]
+    assert "head_pct" in body and "base_pct" in body
+    assert "outputs.pct }}%" not in body, (
+        "the comment appends '%' to a raw output, rendering 'N/A%' when there "
+        "is no figure"
+    )
+    assert "may still be running" not in body, (
+        "a PR whose gate did not complete has no pipeline running"
+    )
