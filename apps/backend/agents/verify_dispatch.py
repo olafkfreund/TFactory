@@ -26,10 +26,17 @@ Reused seams (no new infra):
   - The durable Postgres ``job-state`` row (#465/#468) — the Job writes its own
     terminal row; the control plane **reconciles by polling Postgres** so a
     missed completion event never strands a job (concurrency-conventions.md §3).
-  - The shared job-dispatch contract constants (hub ``scripts/job_dispatch.py``):
-    Job naming ``factory-<service>-<job_id_short>`` and the reconcile-by-poll
-    + terminal-state semantics, restated here (TFactory does not vendor the hub
-    builder; it reuses its own kube_sandbox builder which predates it).
+  - The shared job-dispatch contract (hub ``scripts/job_dispatch.py``, vendored
+    byte-exact at ``tools/runners/job_dispatch.py``): Job naming
+    ``factory-<service>-<job_id_short>``, the DNS-1123 shortener, the shell
+    quoter, and the reconcile-by-poll + terminal-state semantics are IMPORTED
+    from it (Factory#483). They used to be restated here under a comment naming
+    that file, which is a fork with a citation — nothing compared the copy to
+    its source, and the pod-label rule from the same contract went on to break
+    three services independently. This module still builds its own manifest (it
+    wraps kube_sandbox, seeds credentials and forwards provider env, none of
+    which the hub builder models); only the rules that must agree fleet-wide
+    come from the shared file.
 
 Reaper: ``reap_if_orphaned`` marks a vanished / deadline-exceeded Job ``stuck``
 in the durable store so a no-verdict verify surfaces instead of stranding (#464).
@@ -58,26 +65,31 @@ import asyncio
 import json
 import logging
 import os
-import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from tools.runners import job_dispatch
+
 _log = logging.getLogger(__name__)
 
 # ── Dispatch/reconcile contract (hub apis/concurrency-conventions.md §3) ──────
+#
+# Factory#483: these are RE-EXPORTED from the vendored hub canonical, not
+# restated. Every name below used to be a hand-copy sitting under a comment that
+# named its source, which is precisely what nothing can check: a drift gate needs
+# a vendored file to compare, and there was none. The gate now has one.
 SERVICE = "tfactory"
 KIND = "verify"
-# Job named factory-tfactory-<job_id_short> (hub job_dispatch.JOB_NAME_PREFIX).
-JOB_NAME_PREFIX = "factory"
-_DNS_LABEL_MAX = 63
+JOB_NAME_PREFIX = job_dispatch.JOB_NAME_PREFIX
+_DNS_LABEL_MAX = job_dispatch._DNS_LABEL_MAX
 # Canonical terminal lifecycle states a reconciler treats as done with the row.
-TERMINAL_STATES = ("done", "failed", "stuck")
+TERMINAL_STATES = job_dispatch.TERMINAL_STATES
 # The control plane reconciles by polling the durable job-state table, so a
 # missed completion event never strands a job; reporting is idempotent.
-RECONCILE_BY = "postgres-poll"
+RECONCILE_BY = job_dispatch.RECONCILE_BY
 
 _INPOD = "inpod"
 _KUBEJOB = "kubejob"
@@ -409,14 +421,18 @@ def verify_exec_mode() -> str:
 
 
 def _short(job_id: str) -> str:
-    """k8s-safe short suffix from a job_id (DNS-1123, <=20 chars)."""
-    s = re.sub(r"[^a-z0-9-]", "-", job_id.lower()).strip("-")
-    return (s[-20:] or "job").strip("-") or "job"
+    """k8s-safe short suffix from a job_id (DNS-1123, <=20 chars).
+
+    The hub canonical's shortener (Factory#483). This was a byte-identical
+    hand-copy; keeping the local name keeps every call site unchanged while the
+    behaviour now comes from the file the drift gate compares.
+    """
+    return job_dispatch._short(job_id)
 
 
 def verify_job_name(job_id: str) -> str:
     """Job name ``factory-tfactory-<job_id_short>`` (DNS-1123 safe)."""
-    return f"{JOB_NAME_PREFIX}-{SERVICE}-{_short(job_id)}"
+    return job_dispatch.job_name(SERVICE, job_id)
 
 
 def _verify_command(
@@ -750,7 +766,8 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
 
 
 def _shq(s: str) -> str:
-    return "'" + s.replace("'", "'\\''") + "'"
+    """POSIX single-quote a command (Factory#483: the hub canonical's quoter)."""
+    return job_dispatch._shq(s)
 
 
 # ── Dispatch (opt-in) ────────────────────────────────────────────────────────
