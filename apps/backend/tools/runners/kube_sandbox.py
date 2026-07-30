@@ -13,6 +13,13 @@ that holds the RWO workspaces PVC (true on the single-node k3d cluster).
 
 `build_job_manifest()` is pure (no cluster / no client) and unit-tested; the
 async lifecycle (create -> watch -> logs -> delete) uses `kubernetes_asyncio`.
+
+Pod labels come from the vendored hub canonical (`job_dispatch.task_pod_labels`),
+not from literals here — Factory#483. This builder predates the hub module and
+restated its rules by hand, which is how the pod-label defect arrived three times
+independently across the fleet. The hardening below is still TFactory's own and
+deliberately diverges (see POD_SECURITY_CONTEXT); only the rules that must agree
+fleet-wide are taken from the shared file.
 """
 
 from __future__ import annotations
@@ -23,6 +30,8 @@ import logging
 import uuid
 from dataclasses import dataclass
 from typing import Any
+
+from .job_dispatch import task_pod_labels
 
 logger = logging.getLogger(__name__)
 
@@ -254,7 +263,20 @@ def build_job_manifest(
             "backoffLimit": 0,
             "activeDeadlineSeconds": timeout,
             "template": {
-                "metadata": {"labels": {"app": "tfactory-sandbox", "job-name": name}},
+                # Factory#483: `app: tfactory-sandbox` is unchanged and load-bearing
+                # — networkpolicy-jobs.yaml selects exactly that value — but it is
+                # now CONSTRUCTED by the shared helper rather than spelled out, so
+                # it cannot drift into the service's own name the way the portal-UI
+                # builder's did (TFactory#885). The helper also supplies the two
+                # factory.io/* labels this builder never had: factory.io/kind=task
+                # is the fleet-wide per-task NetworkPolicy selector (#812) and
+                # factory.io/service is what makes the `app` rule checkable at all.
+                "metadata": {
+                    "labels": {
+                        **task_pod_labels("tfactory", role="sandbox"),
+                        "job-name": name,
+                    }
+                },
                 "spec": pod_spec,
             },
         },

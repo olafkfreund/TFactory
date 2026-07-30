@@ -48,6 +48,8 @@ from agents.verify_dispatch import (
 )
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
+from tools.runners import job_dispatch
+from tools.runners.job_dispatch import assert_job_policy
 
 _WEB_SERVER = Path(__file__).parent.parent / "apps" / "web-server"
 if str(_WEB_SERVER) not in sys.path:
@@ -453,6 +455,32 @@ def test_manifest_labels_durable_coordinates():
     labels = build_verify_job_manifest(_cfg())["metadata"]["labels"]
     assert labels["factory.io/kind"] == "verify"
     assert "factory.io/job-id" in labels
+
+
+# ─── the shared job-dispatch contract (Factory#483) ───────────────────────────
+
+
+def test_verify_job_obeys_the_shared_job_policy():
+    # This module builds its OWN manifest - it seeds credentials through an
+    # initContainer, forwards a 23-var provider allowlist, and needs a service
+    # account token, none of which the hub builder models. That is exactly why it
+    # used to hand-copy the rules instead of calling them. assert_job_policy is
+    # the hub's own checker, vendored byte-exact, so the rules now arrive here by
+    # re-vendor rather than by hand-edit.
+    assert_job_policy(build_verify_job_manifest(_cfg()))
+
+
+def test_verify_naming_helpers_come_from_the_vendored_canonical():
+    # These were byte-identical hand-copies under a comment naming their source.
+    # Behaviour must be unchanged; provenance must not be.
+    assert vd.JOB_NAME_PREFIX == job_dispatch.JOB_NAME_PREFIX
+    assert vd.TERMINAL_STATES == job_dispatch.TERMINAL_STATES
+    assert vd.RECONCILE_BY == job_dispatch.RECONCILE_BY
+    assert verify_job_name("proj:042-Go_Hello") == job_dispatch.job_name(
+        "tfactory", "proj:042-Go_Hello"
+    )
+    assert vd._shq("a'b") == job_dispatch._shq("a'b")
+    assert vd._short("proj:042-Go_Hello") == job_dispatch._short("proj:042-Go_Hello")
 
 
 # ─── dispatch_verify_job (fall back vs record) ────────────────────────────────

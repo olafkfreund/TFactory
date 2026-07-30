@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
+from tools.runners.job_dispatch import assert_job_policy
 from tools.runners.kube_sandbox import (
     JobRunResult,
     KubeJobSandbox,
@@ -281,3 +282,52 @@ def test_with_manifest_kw_merges_without_mutating_original():
     # original untouched
     assert "service_account" not in base.manifest_kw
     assert base.manifest_kw["network_none"] is True
+
+
+# ── The shared job-dispatch contract (Factory#483) ────────────────────────────
+#
+# This builder predates the hub's scripts/job_dispatch.py and restated its rules
+# by hand. assert_job_policy is the hub's own checker, vendored byte-exact, so
+# these are not TFactory's opinion of the rules - they are the rules, and a
+# change to them lands here through a re-vendor rather than through a hand-edit.
+
+
+def test_lane_job_obeys_the_shared_job_policy():
+    m = build_job_manifest(
+        "j1",
+        "img",
+        ["true"],
+        repo_pvc="tfactory-data",
+        repo_subpath="ws/p",
+        nix_store_pvc="tfactory-nix-store",
+    )
+    assert_job_policy(m)
+
+
+def test_lane_pod_is_not_selectable_as_a_tfactory_service_backend():
+    # The `tfactory` Service selects exactly {"app": "tfactory"} and a Service
+    # selector is a SUBSET match, so a Job pod carrying that label joins it as an
+    # endpoint, listens on nothing, and answers real traffic with connection
+    # refused. That is TFactory#885 (the portal-ui lane took the portal offline
+    # and then reported it broken), AIFactory#1107, and Factory#458 - three
+    # independent arrivals of one defect.
+    m = build_job_manifest("j1", "img", ["true"])
+    pod_labels = m["spec"]["template"]["metadata"]["labels"]
+    assert pod_labels["app"] != "tfactory"
+    # Unchanged and load-bearing: charts/tfactory/templates/networkpolicy-jobs.yaml
+    # selects exactly this value, so the shared helper must keep producing it.
+    assert pod_labels["app"] == "tfactory-sandbox"
+    assert pod_labels["factory.io/service"] == "tfactory"
+    # #812: the per-task NetworkPolicy selector. This builder never set it.
+    assert pod_labels["factory.io/kind"] == "task"
+    # The Job OBJECT keeps app=tfactory-sandbox: a Job is never a Service endpoint
+    # and never a `kubectl exec` target, so label queries on it stay useful.
+    assert m["metadata"]["labels"]["app"] == "tfactory-sandbox"
+
+
+def test_job_name_stays_a_valid_dns_label():
+    # kube_sandbox names Jobs tfsbx-<uuid10>, not factory-<service>-<short>. The
+    # PREFIX is deliberately per-service (see the hub docstring); DNS-1123
+    # VALIDITY is not, and assert_job_policy checks that for whatever scheme a
+    # consumer picks.
+    assert_job_policy(build_job_manifest("j1", "img", ["true"]))
