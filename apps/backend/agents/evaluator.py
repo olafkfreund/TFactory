@@ -2233,6 +2233,9 @@ async def _run_evaluator_session(
                 failure_kind_by_test_id[b.test_id] = {
                     "failure_kind": failure_kind,
                     "rerun_count": getattr(stability, "rerun_count", 3),
+                    # The underlying exception line (#892) — so the reason names
+                    # the missing module instead of just its bucket.
+                    "failure_detail": getattr(stability, "failure_detail", None),
                 }
         doc = json.loads(verdicts_path.read_text())
         enrich_verdicts(doc, flaky_by_test_id, failure_kind_by_test_id)

@@ -90,6 +90,51 @@ def test_python_flake_always_includes_pytest_and_cov_hyphen_safe():
     assert flake.count("{") == flake.count("}"), flake
 
 
+def test_python_flake_always_ships_the_api_lane_http_client(tmp_path):
+    """TFactory#892: `requests` is HARNESS surface — it cannot wait on the SUT.
+
+    The pytest descriptor tells Gen-Functional to drive the api lane with
+    `requests`. A SUT that doesn't happen to depend on it produced an env where
+    every api test died at `import requests` (i.e. at collection), so every
+    HTTP-level acceptance criterion came back unverifiable against correct code.
+    """
+    from tools.runners.nix_provisioner import generate_flake
+
+    env = {
+        "language": "python",
+        "toolchain": {"python": "3.13"},
+        "verify_commands": ["pytest -q"],
+        "provisioning": {"method": "nix", "generated": True},
+    }
+    # (a) bare manifest, no project at all.
+    assert 'p."requests"' in generate_flake(env), "harness client missing"
+    # (b) a real SUT whose pyproject declares fastapi/httpx but NOT requests —
+    #     the exact aifactory-demo shape that reproduced #892.
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\n"
+        'name = "aifactory-demo"\n'
+        'dependencies = ["fastapi>=0.115", "uvicorn[standard]>=0.32"]\n'
+        "[project.optional-dependencies]\n"
+        'test = ["pytest>=8", "httpx>=0.27", "pytest-cov>=5"]\n'
+    )
+    assert 'p."requests"' in generate_flake(env, project_dir=tmp_path)
+
+
+def test_go_flake_gets_no_python_harness_libs():
+    """The harness libs are python-lane only — a go env must stay python-free."""
+    from tools.runners.nix_provisioner import generate_flake
+
+    flake = generate_flake(
+        {
+            "language": "go",
+            "toolchain": {"go": "1.22"},
+            "verify_commands": ["go test ./..."],
+            "provisioning": {"method": "nix", "generated": True},
+        }
+    )
+    assert "requests" not in flake and "pytest" not in flake, flake
+
+
 def test_deps_from_pyproject_maps_declared_deps_and_test_extras(tmp_path):
     from tools.runners.nix_provisioner import _deps_from_pyproject
 

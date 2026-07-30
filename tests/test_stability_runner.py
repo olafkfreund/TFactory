@@ -29,6 +29,7 @@ from agents.stability_runner import (
     StabilityVerdict,
     check_stability,
     classify_pytest_failure,
+    error_detail,
 )
 
 # ── Fake DockerRunResult ───────────────────────────────────────────────
@@ -459,3 +460,61 @@ def test_failure_kind_checks_stderr_too(
 
     result = check_stability(test_file, project_dir, _runner)
     assert result.failure_kind == "import"
+
+
+# ── error_detail / StabilityResult.failure_detail (#892) ────────────────
+
+# The verbatim pytest output an api-lane test produced in TFactory#892: the
+# generated test imports `requests`, the generated nix env didn't ship it, so
+# collection died and all six api tests were rejected with a reason that named
+# only the bucket ("import/collection error") and never the cause.
+_MISSING_HARNESS_DEP_STDOUT = """
+==================================== ERRORS ====================================
+________________ ERROR collecting tests/test_line_total_api.py _________________
+ImportError while importing test module 'tests/test_line_total_api.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+tests/test_line_total_api.py:5: in <module>
+    import requests
+E   ModuleNotFoundError: No module named 'requests'
+=========================== short test summary info ============================
+ERROR tests/test_line_total_api.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+"""
+
+
+def test_error_detail_lifts_the_module_name_out_of_pytest_output() -> None:
+    detail = error_detail(_MISSING_HARNESS_DEP_STDOUT)
+    assert detail == "ModuleNotFoundError: No module named 'requests'"
+    # ...stripped of pytest's `E   ` gutter rather than quoting it.
+    assert not detail.startswith("E ")
+
+
+def test_error_detail_is_none_when_no_exception_line_survived() -> None:
+    """A truncated tail must yield None so callers keep their generic wording."""
+    assert error_detail("") is None
+    assert error_detail(_CLEAN_SUCCESS_STDOUT) is None
+    assert error_detail("=== 1 error during collection ===") is None
+
+
+def test_failure_detail_names_the_cause_for_a_consistent_fail(
+    test_file: Path,
+    project_dir: Path,
+) -> None:
+    def _runner(_tf, _pd, _seed):
+        return _FakeRunResult(returncode=2, stdout=_MISSING_HARNESS_DEP_STDOUT)
+
+    result = check_stability(test_file, project_dir, _runner)
+    assert result.verdict == StabilityVerdict.CONSISTENT_FAIL
+    assert result.failure_kind == "import"
+    assert result.failure_detail == "ModuleNotFoundError: No module named 'requests'"
+
+
+def test_failure_detail_none_when_not_a_consistent_fail(
+    test_file: Path,
+    project_dir: Path,
+) -> None:
+    def _runner(_tf, _pd, _seed):
+        return _FakeRunResult(returncode=0, stdout=_CLEAN_SUCCESS_STDOUT)
+
+    assert check_stability(test_file, project_dir, _runner).failure_detail is None

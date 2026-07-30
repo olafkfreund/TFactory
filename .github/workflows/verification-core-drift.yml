@@ -46,7 +46,11 @@ permissions:
 env:
   # Pinned Factory hub commit carrying the canonical verification-core modules.
   # Bump deliberately when re-vendoring (see header).
-  HUB_PIN_SHA: "1c58319d0657dd86b6c4536edfa85abb4bd8e2b1"
+  #
+  # NOTE (#892): this points at the HEAD of Factory PR #481 (the canonical fix
+  # this re-vendors), not at a commit on the hub's main. Factory squash-merges,
+  # so once #481 lands, re-point this at the resulting main SHA.
+  HUB_PIN_SHA: "510fc02084827c818cfd32a7c9b217fd2da78205"
 
 jobs:
   drift:

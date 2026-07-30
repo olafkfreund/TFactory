@@ -151,6 +151,37 @@ def classify_pytest_failure(stdout: str, returncode: int) -> str:
     return "unknown"
 
 
+# The exception classes worth quoting verbatim in a verdict's reason. #892: the
+# reason said "import/collection error" and stopped there, so every diagnosis
+# started with a pod exec to find out WHICH module was missing — the difference
+# between a five-minute fix and an issue. pytest already prints the answer; this
+# lifts the one line that carries it.
+_DETAIL_PREFIXES = (
+    "E   ModuleNotFoundError:",
+    "E   ImportError:",
+    "ModuleNotFoundError:",
+    "ImportError:",
+)
+
+
+def error_detail(stdout: str) -> str | None:
+    """The first underlying exception line in a pytest run, or None.
+
+    Deterministic and cheap: scans for the first line starting with one of
+    ``_DETAIL_PREFIXES`` and returns it stripped of pytest's ``E   `` gutter.
+    Returns None when the captured text holds no such line (e.g. the tail was
+    truncated past it) — callers then keep their generic wording rather than
+    inventing a cause.
+    """
+    for raw in (stdout or "").splitlines():
+        line = raw.strip()
+        for prefix in _DETAIL_PREFIXES:
+            if line.startswith(prefix):
+                detail = line.removeprefix("E   ").strip()
+                return detail[:200]
+    return None
+
+
 @dataclass(frozen=True)
 class StabilityResult:
     """Aggregate verdict + per-run record from ``check_stability``."""
@@ -182,8 +213,28 @@ class StabilityResult:
         """
         if self.verdict != StabilityVerdict.CONSISTENT_FAIL or not self.runs:
             return None
-        combined = "\n".join(f"{r.stdout_tail}\n{r.stderr_tail}" for r in self.runs)
-        return classify_pytest_failure(combined, self.runs[0].returncode)
+        return classify_pytest_failure(self._combined_output, self.runs[0].returncode)
+
+    @property
+    def failure_detail(self) -> str | None:
+        """The underlying exception line behind a CONSISTENT_FAIL, or None (#892).
+
+        ``failure_kind`` says *which bucket*; this says *what actually broke*, so
+        the verdict's reason can name the missing module instead of leaving a
+        human to go and find it.
+        """
+        if self.verdict != StabilityVerdict.CONSISTENT_FAIL or not self.runs:
+            return None
+        return error_detail(self._combined_output)
+
+    @property
+    def _combined_output(self) -> str:
+        """Every run's captured stdout+stderr tails, concatenated.
+
+        All runs of a CONSISTENT_FAIL share a returncode, so this just widens the
+        search across whatever each run's truncated tail happened to retain.
+        """
+        return "\n".join(f"{r.stdout_tail}\n{r.stderr_tail}" for r in self.runs)
 
 
 # ─── Public entrypoint ──────────────────────────────────────────────────
