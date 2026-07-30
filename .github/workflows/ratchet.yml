@@ -117,19 +117,23 @@ jobs:
       - name: Read pinned hub SHA
         id: pin
         run: echo "sha=$(tr -d '[:space:]' < tfactory/standards/PINNED_SHA)" >> "$GITHUB_OUTPUT"
+      # No continue-on-error: an unreachable hub is a gate that cannot run, and
+      # per standards rule 4.7 that must fail rather than pass. This step used
+      # to be `continue-on-error: true` with the diff below guarded on
+      # `steps.hub.outcome == 'success'`, so a private repo, an expired token,
+      # a renamed hub or a garbage-collected pin would skip the diff and report
+      # SUCCESS from a blocking gate. If Factory becomes private, add a read
+      # token here - do not restore the soft-skip. Factory#434; same removal
+      # AIFactory#1092 / #1095 made in that repo's two drift gates.
       - name: Check out hub standards at the pinned SHA
         uses: actions/checkout@v4
         with:
           repository: olafkfreund/Factory
           ref: ${{ steps.pin.outputs.sha }}
           path: factory-hub
-          # If Factory is private, a token with read access is needed here.
-        continue-on-error: true
-        id: hub
       - name: Diff vendored configs against the pinned hub baseline
-        if: steps.hub.outcome == 'success'
         run: |
-          set -e
+          set -euo pipefail
           # Vendored copies may carry a header above the body; compare the rule
           # body only by stripping leading comment / blank lines from both sides.
           strip() { grep -vE '^[[:space:]]*([#;]|$)' "$1"; }
@@ -141,6 +145,3 @@ jobs:
             fi
           done
           echo "No drift: vendored configs match the pinned hub baseline."
-      - name: Hub unavailable (private repo / no token)
-        if: steps.hub.outcome != 'success'
-        run: echo "Hub checkout unavailable; skipping drift diff (configure a read token to enforce)."
