@@ -56,7 +56,10 @@ def test_startup_hook_bugs_are_not_swallowed() -> None:
     ImportError is deliberately absent: an absent apps/backend is by design in
     dev/test, and re-raising it would turn every non-pod boot into a crash.
     """
-    assert main._STARTUP_BUGS == (NameError, AttributeError)
+    assert [exc.__name__ for exc in main._STARTUP_BUGS] == [
+        "NameError",
+        "AttributeError",
+    ]
 
 
 def test_add_backend_to_path_is_importable_and_idempotent() -> None:
