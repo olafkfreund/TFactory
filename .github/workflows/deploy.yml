@@ -146,8 +146,7 @@ jobs:
               # to look identical under `|| exit 0`: either the pin is already at
               # this sha (fine), or the edit matched nothing (a broken bump that
               # reported success).
-              if grep -q "${IMAGE}:${SHA}" "${GITOPS_PATH}/manifests.yaml" 2>/dev/null || \
-                 grep -rq "${IMAGE}:${SHA}" "${GITOPS_PATH}/" 2>/dev/null; then
+              if grep -rq "newTag: ${SHA}\|${IMAGE}:${SHA}" "${GITOPS_PATH}/" 2>/dev/null; then
                 echo "gitops already pinned to ${SHA}; nothing to do."
                 pushed="already"
                 break
@@ -177,7 +176,13 @@ jobs:
           cd "$GITHUB_WORKSPACE"
           rm -rf gitops-verify
           git clone --quiet --depth 1 "https://x:${GITOPS_PAT}@github.com/${GITOPS_REPO}.git" gitops-verify
-          if grep -rq "${IMAGE}:${SHA}" "gitops-verify/${GITOPS_PATH}/"; then
+          # TFactory only passed this by luck: its extra `sed` writes the joined
+          # `image:tag` form into manifests.yaml, so the grep matched even though
+          # `kustomize edit set image` writes `name:`/`newTag:` on SEPARATE lines.
+          # The sibling services had no such sed and the check failed a deploy
+          # that had worked. Accept either shape here too, so this does not
+          # depend on that coincidence.
+          if grep -rq "newTag: ${SHA}\|${IMAGE}:${SHA}" "gitops-verify/${GITOPS_PATH}/"; then
             echo "verified: ${GITOPS_REPO} pins ${IMAGE}:${SHA}"
           else
             echo "::error::pushed, but ${GITOPS_REPO} does not pin ${IMAGE}:${SHA}."
