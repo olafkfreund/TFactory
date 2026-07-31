@@ -82,6 +82,30 @@ from .websockets import terminal as terminal_ws
 # importing this module is a pure operation.
 logger = logging.getLogger(__name__)
 
+# Errors that mean the code is wrong, not that the environment is (#918). A
+# startup hook may legitimately fail to import its backend module in dev/test,
+# or fail transiently against the DB — those are worth continuing through. A
+# NameError or AttributeError means the block has never once executed, and
+# continuing through it is how #774 and #742 stayed dead in a "healthy" pod for
+# an entire image generation. ImportError stays out: absent-backend is by design.
+_STARTUP_BUGS = (NameError, AttributeError)
+
+
+def _add_backend_to_path() -> None:
+    """Put apps/backend on ``sys.path`` so ``agents.*`` is importable.
+
+    One helper rather than the three hand-copies this replaced (#918). Two of
+    those copies had inlined the body but not its ``import sys``, so every
+    ``sys.path`` reference inside ``lifespan`` raised ``NameError`` — swallowed
+    by the surrounding handler, which is why #774 and #742 had never once run in
+    a deployed image while the pod reported healthy.
+    """
+    import sys  # noqa: PLC0415 - kept local, as the three call sites had it
+
+    backend_path = Path(__file__).resolve().parents[2] / "backend"
+    if str(backend_path) not in sys.path:
+        sys.path.insert(0, str(backend_path))
+
 
 def _import_verify_dispatch():
     """Import the backend ``agents.verify_dispatch`` module, or None on failure.
@@ -92,11 +116,7 @@ def _import_verify_dispatch():
     Returns None when the module can't be imported (dev/test) so the lifespan
     degrades gracefully to the in-pod default.
     """
-    import sys
-
-    backend_path = Path(__file__).resolve().parents[2] / "backend"
-    if str(backend_path) not in sys.path:
-        sys.path.insert(0, str(backend_path))
+    _add_backend_to_path()
     try:
         from agents import verify_dispatch  # noqa: PLC0415 - lazy by design
 
@@ -153,9 +173,7 @@ async def lifespan(app: FastAPI):
     # default; disable with APP_INLINE_ORPHAN_RECONCILE_ENABLED=0.
     if settings.INLINE_ORPHAN_RECONCILE_ENABLED:
         try:
-            backend_path = Path(__file__).resolve().parents[2] / "backend"
-            if str(backend_path) not in sys.path:
-                sys.path.insert(0, str(backend_path))
+            _add_backend_to_path()
             from agents.liveness_sweep import reconcile_inline_orphans
 
             failed = await asyncio.to_thread(reconcile_inline_orphans)
@@ -168,6 +186,9 @@ async def lifespan(app: FastAPI):
                 )
             else:
                 logger.info("#774 startup reconcile: no stranded inline specs")
+        except _STARTUP_BUGS:
+            logger.exception("#774 startup reconcile is broken — refusing to boot")
+            raise
         except Exception:  # noqa: BLE001 — a reconcile error must not block boot
             logger.exception("#774 startup reconcile failed (continuing)")
 
@@ -176,9 +197,7 @@ async def lifespan(app: FastAPI):
     # with APP_WORKTREE_GC_ENABLED=0.
     if settings.WORKTREE_GC_ENABLED:
         try:
-            backend_path = Path(__file__).resolve().parents[2] / "backend"
-            if str(backend_path) not in sys.path:
-                sys.path.insert(0, str(backend_path))
+            _add_backend_to_path()
             from agents.liveness_sweep import gc_terminal_worktrees
 
             reclaimed = await asyncio.to_thread(gc_terminal_worktrees)
@@ -187,6 +206,9 @@ async def lifespan(app: FastAPI):
                     "#742 worktree GC: reclaimed %d terminal-spec worktree(s)",
                     len(reclaimed),
                 )
+        except _STARTUP_BUGS:
+            logger.exception("#742 worktree GC is broken — refusing to boot")
+            raise
         except Exception:  # noqa: BLE001 — a GC error must not block boot
             logger.exception("#742 worktree GC failed (continuing)")
 
