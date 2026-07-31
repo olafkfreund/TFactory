@@ -25,6 +25,8 @@ _REPO = Path(__file__).resolve().parents[3]
 # Resolved, not bare: S607 rejects a partial executable path, and a hook test
 # that shells out deserves the same care as the thing it is testing.
 _GIT = shutil.which("git") or "/usr/bin/git"
+# Files under .husky/ that are documentation or config, not hooks.
+_NOT_A_HOOK = (".md", ".json", ".yml", ".yaml")
 
 
 def _husky_entries() -> list[tuple[str, str]]:
@@ -55,8 +57,7 @@ def test_every_husky_hook_is_executable_in_the_index() -> None:
     not_executable = [
         path
         for mode, path in entries
-        if not Path(path).name.endswith((".md", ".json", ".yml", ".yaml"))
-        and mode != "100755"
+        if not path.endswith(_NOT_A_HOOK) and mode != "100755"
     ]
     assert not not_executable, (
         "git silently SKIPS a hook that is not executable, printing only a "
@@ -68,8 +69,9 @@ def test_every_husky_hook_is_executable_in_the_index() -> None:
 def test_commit_msg_accepts_the_conventions_this_repo_actually_uses() -> None:
     """The type list must cover real history, or enabling the hook blocks releases.
 
-    `release:` (27x in the last 400 commits) was absent from the pattern. A hook that never runs drifts out of step
-    with the convention it exists to enforce, and only bites when switched on.
+    `release:` (27x in the last 400 commits) was absent from the pattern.
+    A hook that never runs drifts out of step with the convention it exists
+    to enforce, and only bites at the moment someone switches it on.
     """
     hook = _REPO / ".husky" / "commit-msg"
     pattern_line = next(
