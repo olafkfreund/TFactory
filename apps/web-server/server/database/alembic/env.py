@@ -8,6 +8,7 @@ so migrations work with the same asyncpg driver our runtime uses.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import sys
 from logging.config import fileConfig
@@ -37,12 +38,28 @@ _env_url = os.environ.get("DATABASE_URL")
 if _env_url:
     config.set_main_option("sqlalchemy.url", _env_url)
 
-if config.config_file_name is not None:
+if config.config_file_name is not None and not logging.getLogger().handlers:
+    # Only configure logging when nothing else has: alembic is a guest in this
+    # process, and the root logger belongs to whoever booted it.
+    #
     # disable_existing_loggers=False — fileConfig defaults to True, which
     # silences every logger that existed when this module imports. That's
     # fine for `alembic upgrade` invoked as its own process, but env.py is
     # also imported when migrations run inside the long-running web-server
     # (or under pytest), where killing app/caplog loggers is a real bug.
+    #
+    # That flag alone was not enough (#923). It stops existing loggers being
+    # DISABLED; it does not stop fileConfig reconfiguring the ROOT logger,
+    # which alembic.ini pins to `level = WARN` with its own console handler.
+    # App loggers own no handler (setup_logging configures the root), so from
+    # the first in-process `alembic upgrade` every app INFO record propagated
+    # to a WARN root and was dropped -- for the life of the process, not just
+    # during the migration. Only ERROR survived, so a pod whose startup hooks
+    # ran perfectly logged identically to one whose hooks never executed.
+    #
+    # The handler check keeps standalone `alembic upgrade` on the CLI working
+    # (nothing has configured logging there, so alembic.ini still applies) and
+    # leaves the app's configuration alone in-process, where it is the truth.
     fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
