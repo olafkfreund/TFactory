@@ -49,7 +49,7 @@ def test_in_process_migration_leaves_app_logging_intact(
 
     # noqa: PLC0415 deliberate — importing engine before DATABASE_URL is set
     # would snapshot the wrong URL into the module-level settings.
-    from server.database.engine import _alembic_upgrade_head_sync  # noqa: PLC0415
+    from server.database.engine import _alembic_upgrade_head_sync
 
     _alembic_upgrade_head_sync()
 
