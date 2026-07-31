@@ -17,16 +17,22 @@ one checkout, and a test can assert it. Same class as AIFactory#1087.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[3]
+# Resolved, not bare: S607 rejects a partial executable path, and a hook test
+# that shells out deserves the same care as the thing it is testing.
+_GIT = shutil.which("git") or "/usr/bin/git"
 
 
 def _husky_entries() -> list[tuple[str, str]]:
     """Return (mode, path) for every tracked file under .husky/."""
-    out = subprocess.run(
-        ["git", "ls-files", "-s", "--", ".husky/"],
+    # S603: argv is a fixed literal list with a resolved binary; nothing here
+    # comes from input. Reading the INDEX mode is only possible via git.
+    out = subprocess.run(  # noqa: S603
+        [_GIT, "ls-files", "-s", "--", ".husky/"],
         cwd=_REPO,
         capture_output=True,
         text=True,
@@ -62,8 +68,7 @@ def test_every_husky_hook_is_executable_in_the_index() -> None:
 def test_commit_msg_accepts_the_conventions_this_repo_actually_uses() -> None:
     """The type list must cover real history, or enabling the hook blocks releases.
 
-    `release:` is used on every dev->main promotion (27 of the last 400 commits)
-    and was absent from the pattern. A hook that never runs drifts out of step
+    `release:` (27x in the last 400 commits) was absent from the pattern. A hook that never runs drifts out of step
     with the convention it exists to enforce, and only bites when switched on.
     """
     hook = _REPO / ".husky" / "commit-msg"
