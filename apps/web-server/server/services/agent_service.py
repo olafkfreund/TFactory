@@ -7,6 +7,7 @@ enabling task execution with real-time streaming of logs and progress.
 
 import asyncio
 import json
+import logging
 import os
 import re
 import shutil
@@ -42,7 +43,18 @@ class TaskPhase(str, Enum):
 
 
 def phase_to_status(phase: TaskPhase) -> str:
-    """Map execution phase to task status for kanban column placement."""
+    """Map execution phase to task status for kanban column placement.
+
+    The mapping below covers every TaskPhase member, so the fallback should
+    never fire for well-formed input. If it ever does (a future phase added
+    without updating this mapping, or a caller bypassing the TaskPhase type),
+    that's an unmapped phase silently becoming "in_progress" - which asserts
+    the task is actively being worked on when we actually don't know that.
+    The frontend's TaskStatus union is a closed 5-value enum with no
+    "unknown" column, so inventing a new status would make the task
+    disappear from the kanban board entirely; logging is the safe fix
+    (Factory#431).
+    """
     mapping = {
         TaskPhase.SPEC_CREATION: "in_progress",
         TaskPhase.PLANNING: "in_progress",
@@ -53,6 +65,11 @@ def phase_to_status(phase: TaskPhase) -> str:
         TaskPhase.COMPLETED: "human_review",
         TaskPhase.FAILED: "human_review",
     }
+    if phase not in mapping:
+        logging.getLogger(__name__).warning(
+            "phase_to_status: unmapped phase %r, defaulting to 'in_progress'",
+            phase,
+        )
     return mapping.get(phase, "in_progress")
 
 
