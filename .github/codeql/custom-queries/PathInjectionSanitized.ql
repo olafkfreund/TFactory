@@ -44,8 +44,8 @@ class SpecPathSanitizer extends PathInjection::Sanitizer {
     or
     exists(DataFlow::CallCfgNode call, string name |
       name in [
-          "safe_component", "safe_spec_dir", "safe_join", "get_next_spec_id",
-          "trusted_project_root"
+          "safe_component", "safe_spec_dir", "safe_join", "safe_slug",
+          "get_next_spec_id", "trusted_project_root"
         ] and
       (
         call.getFunction().asExpr().(Name).getId() = name or
