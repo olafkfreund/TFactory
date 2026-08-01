@@ -13,9 +13,12 @@ These models represent the complete evolution of a file from multiple sources:
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -163,8 +166,11 @@ class TaskFileView:
     # Drift tracking - how many commits happened in main since branch
     commits_behind_main: int = 0
 
-    # Lifecycle status
-    status: Literal["active", "merged", "abandoned"] = "active"
+    # Lifecycle status. "unknown" means the persisted record didn't carry a
+    # recognizable status (corrupt/legacy data) - it must NOT be treated as
+    # "active", since that would silently tell callers a task is still in
+    # flight when we actually have no idea (Factory#431).
+    status: Literal["active", "merged", "abandoned", "unknown"] = "active"
     merged_at: datetime | None = None
 
     def to_dict(self) -> dict:
@@ -182,6 +188,20 @@ class TaskFileView:
 
     @classmethod
     def from_dict(cls, data: dict) -> TaskFileView:
+        status = data.get("status")
+        if status is None:
+            # The persisted record has no status - we don't know if this task
+            # is still active, merged, or abandoned. Defaulting to "active"
+            # would silently tell callers (get_active_tasks, drift tracking)
+            # that it's still in flight, which is a fact we don't have
+            # (Factory#431). "unknown" excludes it from active-task handling
+            # instead of asserting progress that may not exist.
+            logger.warning(
+                "TaskFileView record for task_id=%s is missing 'status'; "
+                "treating as 'unknown' instead of defaulting to 'active'",
+                data.get("task_id", "<missing>"),
+            )
+            status = "unknown"
         return cls(
             task_id=data["task_id"],
             branch_point=BranchPoint.from_dict(data["branch_point"]),
@@ -192,7 +212,7 @@ class TaskFileView:
             if data.get("task_intent")
             else TaskIntent("", ""),
             commits_behind_main=data.get("commits_behind_main", 0),
-            status=data.get("status", "active"),
+            status=status,
             merged_at=datetime.fromisoformat(data["merged_at"])
             if data.get("merged_at")
             else None,
