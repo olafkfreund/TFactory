@@ -23,6 +23,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.sdk_stub import SDK_INSTALLED
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _BACKEND = _REPO_ROOT / "apps" / "backend"
 
@@ -94,7 +96,18 @@ def _read_jsonrpc(proc: subprocess.Popen, timeout: float = 5.0) -> dict:
         )
     line = proc.stdout.readline()
     if not line:
-        raise EOFError("MCP server closed stdout before responding")
+        # Quote the server's own diagnostic rather than a bare EOF — a dead
+        # subprocess should name its cause (#903).
+        stderr_data = b""
+        if proc.stderr is not None:
+            try:
+                stderr_data = proc.stderr.read1(8192) or b""
+            except Exception:
+                pass
+        raise EOFError(
+            "MCP server closed stdout before responding. stderr: "
+            f"{stderr_data.decode('utf-8', 'replace')!r}"
+        )
     return json.loads(line.decode("utf-8"))
 
 
@@ -123,6 +136,16 @@ def mcp_subprocess(tmp_path: Path):
             proc.kill()
 
 
+@pytest.mark.skipif(
+    not SDK_INSTALLED,
+    reason=(
+        "claude_agent_sdk not installed in this venv — the seven tools are "
+        "declared with the SDK's @tool decorator, so a server spawned without "
+        "the package has nothing to list. tests/conftest.py's stand-in cannot "
+        "help here: this is a fresh subprocess with no conftest in force "
+        "(#903). Install with 'npm run install:backend' to exercise this lane."
+    ),
+)
 class TestStdioJsonRpc:
     def test_initialize_and_list_seven_tools(self, mcp_subprocess: subprocess.Popen) -> None:
         # Step 1 — initialize
