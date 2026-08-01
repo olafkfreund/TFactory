@@ -20,7 +20,6 @@ from __future__ import annotations
 import hmac
 import json
 import os
-import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -31,6 +30,7 @@ from pydantic import BaseModel
 
 from ..config import get_settings
 from ..rate_limit import FixedWindowLimiter
+from ._specpath import is_safe_slug
 
 # Throttle re-fires per task so a leaked secret / misbehaving caller can't drive
 # unbounded pipeline runs (#242). Generous — a healthy loop fires a handful of
@@ -43,8 +43,6 @@ if str(_BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(_BACKEND_DIR))
 
 router = APIRouter()
-
-_SPEC_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 # Statuses that mean a run is already in flight — don't double-fire the pipeline.
 _ACTIVE_STATUSES = frozenset(
@@ -100,9 +98,7 @@ def _resolve_ids(payload: AIFactoryCompletePayload) -> tuple[str, str]:
             detail="provide tfactory_task_id or project_id + spec_id",
         )
     for part in (project_id, spec_id):
-        # ``_SPEC_ID_RE`` admits ``.``/``..`` as a full match — reject them so a
-        # single-level traversal can't escape the specs root (security review L1).
-        if not part or not _SPEC_ID_RE.match(part) or part in (".", ".."):
+        if not is_safe_slug(part):
             raise HTTPException(
                 status_code=http_status.HTTP_400_BAD_REQUEST,
                 detail=f"invalid id component: {part!r}",

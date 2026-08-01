@@ -15,14 +15,15 @@ the point when this module is loaded.
 
 from __future__ import annotations
 
-import re
 import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Response, status as http_status
+from fastapi import APIRouter, HTTPException, Response
+from fastapi import status as http_status
 
+from ._specpath import safe_slug
 
 router = APIRouter()
 
@@ -57,16 +58,9 @@ def _resolve_frameworks_dir() -> Path | None:
 # ─── Validation ───────────────────────────────────────────────────────────────
 
 
-_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
-
-
-def _validate_name(name: str) -> None:
+def _validate_name(name: str) -> str:
     """Reject path-traversal attempts in the ``{name}`` path parameter."""
-    if not name or not _NAME_RE.match(name):
-        raise HTTPException(
-            status_code=http_status.HTTP_400_BAD_REQUEST,
-            detail=f"invalid framework name: {name!r}",
-        )
+    return safe_slug(name, f"invalid framework name: {name!r}")
 
 
 # ─── Serialisation ────────────────────────────────────────────────────────────

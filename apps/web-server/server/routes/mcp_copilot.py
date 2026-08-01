@@ -56,6 +56,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi import status as http_status
 from fastapi.responses import JSONResponse
 
+from ._specpath import is_safe_slug
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["MCP Copilot"])
@@ -65,7 +67,6 @@ router = APIRouter(tags=["MCP Copilot"])
 # ---------------------------------------------------------------------------
 
 _BEARER_RE = re.compile(r"^Bearer\s+(.+)$", re.IGNORECASE)
-_SPEC_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 def _check_auth(request: Request) -> None:
@@ -99,7 +100,7 @@ def _workspace_root() -> Path:
 
 def _find_spec_dir(task_id: str) -> Path | None:
     """Locate the spec_dir for *task_id* across all projects."""
-    if not task_id or not _SPEC_ID_RE.match(task_id):
+    if not is_safe_slug(task_id):
         return None
     workspaces = _workspace_root() / "workspaces"
     if not workspaces.exists():
