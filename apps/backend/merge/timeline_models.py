@@ -188,7 +188,9 @@ class TaskFileView:
 
     @classmethod
     def from_dict(cls, data: dict) -> TaskFileView:
-        status = data.get("status")
+        status: Literal["active", "merged", "abandoned", "unknown"] | None = data.get(
+            "status"
+        )
         if status is None:
             # The persisted record has no status - we don't know if this task
             # is still active, merged, or abandoned. Defaulting to "active"

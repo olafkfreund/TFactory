@@ -7,6 +7,7 @@ enabling task execution with real-time streaming of logs and progress.
 
 import asyncio
 import json
+import logging
 import os
 import re
 import shutil
@@ -65,7 +66,6 @@ def phase_to_status(phase: TaskPhase) -> str:
         TaskPhase.FAILED: "human_review",
     }
     if phase not in mapping:
-        import logging
         logging.getLogger(__name__).warning(
             "phase_to_status: unmapped phase %r, defaulting to 'in_progress'",
             phase,
