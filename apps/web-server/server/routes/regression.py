@@ -10,13 +10,12 @@ over ``<workspace_root>/<project_id>``.
 
 from __future__ import annotations
 
-import re
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, status
 
 # Make apps/backend importable for the regression read-model.
 _BACKEND = Path(__file__).resolve().parents[3] / "backend"
@@ -32,26 +31,18 @@ from agents.regression import (  # noqa: E402  (after sys.path insert)
 from agents.regression.cli import now_run_id  # noqa: E402
 
 from ..services.project_workspace_service import workspace_root  # noqa: E402
+from ._specpath import safe_slug  # noqa: E402
 
 router = APIRouter(prefix="/api/projects", tags=["Regression"])
-
-# project_id is interpolated into a filesystem path — constrain it to a safe
-# slug so a crafted id can't traverse out of the workspace root.
-_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
-
-
-def _require_valid_id(project_id: str) -> None:
-    if not _ID_RE.match(project_id):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="invalid project_id",
-        )
 
 
 @router.get("/{project_id}/regression")
 def get_regression_summary(project_id: str) -> dict[str, Any]:
     """Return the regression read-model for *project_id* (empty-but-valid if none)."""
-    _require_valid_id(project_id)
+    # project_id is interpolated into a filesystem path. ``safe_slug`` returns the
+    # validated component and is what must be used downstream — a bare charset
+    # check admits ``..``, which is the whole of #866.
+    project_id = safe_slug(project_id, "invalid project_id")
     reg = regression_dir(workspace_root(), project_id)
     return project_regression_summary(reg)
 
@@ -66,7 +57,7 @@ def trigger_regression_run(
     nightly CronJob, RFC-0018 #488 part 2). The run re-executes the project's
     persisted corpus on the Nix-Job substrate at ``<workspace_root>/<project>``.
     """
-    _require_valid_id(project_id)
+    project_id = safe_slug(project_id, "invalid project_id")
     ws = workspace_root()
     config = ProjectScheduleConfig(
         project_id=project_id,
