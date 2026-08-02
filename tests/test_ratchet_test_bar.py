@@ -45,6 +45,25 @@ _ASSERTION = "x = 1\nassert x == 2\n"
 
 
 @pytest.fixture(autouse=True)
+def _at_repo_root() -> Iterator[None]:
+    """Run these cases from the repo root, because the ratchet always is.
+
+    ``ruff_counts`` passes ``--config standards/ruff.toml`` and a repo-relative
+    ``--stdin-filename``, and BOTH resolve against the current directory. CI
+    invokes the ratchet from the root so that is correct there — but pytest run
+    from ``apps/backend`` reads a different config and turns
+    ``apps/backend/...`` into ``apps/backend/apps/backend/...``. That silently
+    emptied the verdict and the assertion with teeth went green-on-nothing.
+    """
+    original = Path.cwd()
+    os.chdir(Path(__file__).resolve().parents[1])
+    try:
+        yield
+    finally:
+        os.chdir(original)
+
+
+@pytest.fixture(autouse=True)
 def ruff_on_path() -> Iterator[None]:
     """Make bare ``ruff`` resolvable, the way the ratchet itself needs it.
 
