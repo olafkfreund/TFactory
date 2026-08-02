@@ -44,7 +44,6 @@ import argparse
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 from collections import Counter
@@ -53,7 +52,10 @@ from pathlib import Path
 # Canonical shared ratchet rules, vendored byte-exact from the Factory hub
 # and byte-exact drift-gated (Factory#403). scripts/ is sys.path[0] when this
 # runs as a script, so the sibling import resolves without packaging.
-from ratchet_helpers import MYPY_TEST_RELAX, is_test_file, write_temp
+# write_temp is deliberately NOT imported: mypy runs on the file in place here
+# (see mypy_errors) and ruff is fed stdin, so nothing in this fork needs a temp
+# copy any more.
+from ratchet_helpers import MYPY_TEST_RELAX, is_test_file, ruff_stdin_argv
 
 # Strict shared baseline vendored from the Factory hub (standards/.hub-sha).
 RUFF_CONFIG = "standards/ruff.toml"
@@ -89,8 +91,8 @@ def is_vendored(path: str) -> bool:
     return path in VENDORED_SKIP or path.startswith(VENDORED_SKIP_DIRS)
 
 
-def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, capture_output=True, text=True, check=False)
+def _run(cmd: list[str], stdin: str | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(cmd, capture_output=True, text=True, check=False, input=stdin)
 
 
 def owning_package(path: str, packages: list[str]) -> str:
@@ -138,22 +140,25 @@ def changed_python_files(base: str, packages: list[str]) -> list[str]:
 
 
 def ruff_counts(source: str, filename: str) -> Counter[str]:
-    """Per-rule ruff violation counts for *source* checked as *filename*."""
-    tmpdir, tmp = write_temp(source, filename)
+    """Per-rule ruff violation counts for *source* checked as *filename*.
+
+    Fed on stdin under the file's REAL path so ruff's per-file-ignores see the
+    same path ``ruff check`` would (Factory#510). The temp copy this used to
+    write could not: ruff relativises a path against the project root before
+    matching the globs, and a path OUTSIDE that root falls back to the BASENAME
+    only. ``**/test_*.py`` and ``**/*_test.py`` therefore matched a copy but
+    ``**/tests/**`` never could, so a helper under ``tests/`` named neither way
+    was held to the production assert bar the real tree exempts it from.
+    """
+    res = _run(ruff_stdin_argv(RUFF_CONFIG, filename), stdin=source)
+    if not res.stdout.strip():
+        return Counter()
     try:
-        res = _run(
-            ["ruff", "check", "--config", RUFF_CONFIG, "--output-format", "json", tmp]
-        )
-        if not res.stdout.strip():
-            return Counter()
-        try:
-            items = json.loads(res.stdout)
-        except json.JSONDecodeError:
-            sys.stderr.write(res.stdout + res.stderr)
-            sys.exit(2)
-        return Counter(item["code"] for item in items)
-    finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
+        items = json.loads(res.stdout)
+    except json.JSONDecodeError:
+        sys.stderr.write(res.stdout + res.stderr)
+        sys.exit(2)
+    return Counter(item["code"] for item in items)
 
 
 def file_at_base(base: str, path: str) -> str | None:
