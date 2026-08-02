@@ -34,3 +34,15 @@ psycopg2-binary>=2.9.0
 # acceptance job's venv (which only installs requirements-test.txt),
 # so declare it explicitly.
 PyYAML>=6.0
+
+# tests/test_ratchet_test_bar.py shells out to ruff to prove the lint ratchet
+# and `ruff check` agree about which files are tests (Factory#510). Declared
+# here rather than per-job because four jobs run off this file and only two of
+# them installed ruff at all — the other two went red.
+#
+# PINNED, and the two `uv pip install ruff` lines in ci.yml are removed with it:
+# those ran AFTER this file and, being unpinned, would have resolved to latest
+# and silently overridden the pin. ratchet.yml's RUFF_VERSION is the bar the
+# gate measures against; a test job measuring it with a different ruff is the
+# two-tools-disagreeing shape this whole line of work is about.
+ruff==0.15.17

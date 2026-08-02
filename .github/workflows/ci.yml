@@ -44,7 +44,6 @@ jobs:
           uv pip install -r requirements.txt
           uv pip install -r ../web-server/requirements.txt
           uv pip install -r ../../tests/requirements-test.txt
-          uv pip install ruff
 
       - name: Agent CLI import guard (#226 / #227)
         # A missing top-level agent module (e.g. qa_loop, spec_commands) must
@@ -99,7 +98,6 @@ jobs:
           uv pip install -r requirements.txt
           uv pip install -r ../web-server/requirements.txt
           uv pip install -r ../../tests/requirements-test.txt
-          uv pip install ruff
 
       - name: Ruff lint
         run: apps/backend/.venv/bin/ruff check apps/backend tests
