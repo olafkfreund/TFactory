@@ -49,6 +49,7 @@ concurrency:
 permissions:
   contents: read
   packages: write
+  id-token: write        # cosign keyless via GitHub OIDC (Factory#524)
 
 env:
   IMAGE: "ghcr.io/${{ github.repository_owner }}/tfactory-runner-portal-ui"
@@ -153,6 +154,7 @@ jobs:
           password: "${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}"
 
       - name: Push tfactory-runner-portal-ui to GHCR
+        id: push
         if: "${{ github.event_name == 'push' }}"
         uses: docker/build-push-action@v6
         with:
@@ -165,6 +167,33 @@ jobs:
             ${{ env.IMAGE }}:latest
           cache-from: type=gha,scope=runner-portal-ui
           cache-to: type=gha,mode=max,scope=runner-portal-ui
+
+      # ---------------------------------------------------------------------
+      # Sign what this workflow publishes (Factory#524), before the pin below
+      # moves the lane onto it: an unsigned image the cluster is already pinned
+      # to is the state this issue exists to remove.
+      #
+      # Sign by DIGEST — cosign signatures are digest-keyed, so one signature
+      # covers :sha-<short> and :latest.
+      # ---------------------------------------------------------------------
+      - name: Install cosign
+        if: "${{ github.event_name == 'push' }}"
+        uses: sigstore/cosign-installer@v3.7.0
+
+      - name: Sign image (cosign keyless via Sigstore + GitHub OIDC)
+        if: "${{ github.event_name == 'push' }}"
+        run: cosign sign --yes "${IMAGE}@${{ steps.push.outputs.digest }}"
+
+      # Assert the EXACT identity the admission rule will pin, anchored at both
+      # ends — not a repo prefix. A self-test looser than the gate it models
+      # passes on signatures the gate rejects (Factory#522).
+      - name: Verify signature (self-test)
+        if: "${{ github.event_name == 'push' }}"
+        run: |
+          cosign verify \
+            --certificate-identity-regexp "^https://github\.com/${{ github.repository }}/\.github/workflows/portal-ui-runner-image\.yml@refs/heads/main$" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "${IMAGE}@${{ steps.push.outputs.digest }}"
 
       # Move the Job's pin to the image just published. Without this the lane
       # keeps resolving a floating tag and #886 recurs the moment someone builds
