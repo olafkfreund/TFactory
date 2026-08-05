@@ -151,6 +151,15 @@ def ruff_counts(source: str, filename: str) -> Counter[str]:
     was held to the production assert bar the real tree exempts it from.
     """
     res = _run(ruff_stdin_argv(RUFF_CONFIG, filename), stdin=source)
+    # ruff exits 0 clean, 1 with violations, and >=2 on its OWN failure: binary
+    # missing, config parse error, bad argv. Those write nothing to stdout, so
+    # without this the empty-stdout branch below reads "ruff is broken" as "no
+    # violations" and the ratchet passes green on an unrunnable linter. Same
+    # shape as Factory#430, where one message covered both "bad signature" and
+    # "could not reach the verifier".
+    if res.returncode not in (0, 1):
+        sys.stderr.write(res.stdout + res.stderr)
+        sys.exit(2)
     if not res.stdout.strip():
         return Counter()
     try:
