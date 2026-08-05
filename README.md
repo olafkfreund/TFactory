@@ -170,7 +170,7 @@ carries a **VAL** that records how hard reality pushed back (RFC-0006):
 - **VAL-0 / VAL-1** — tests ran against the code in an isolated sandbox
   (unit / api / integration), verdict mutation-checked.
 - **VAL-2** — the deployment itself was validated: the deploy dry-run lane runs
-  `kubectl apply --dry-run=server` against the detected manifests (#603) before
+  `kubectl create --dry-run=server` against the detected manifests (#603) before
   the change is trusted.
 - **VAL-3** — tests ran against a real, disposable deploy target (a local VM, a
   Kubernetes Job, or a cloud target) that is provisioned and then torn down.

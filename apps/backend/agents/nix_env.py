@@ -231,7 +231,7 @@ _APP_NOT_HEALTHY_MARKER = "__TF_APP_NOT_HEALTHY__"
 _DEPLOY_NIX_TOOLS: tuple[str, ...] = ("tfsec", "trivy", "opentofu", "kubectl")
 
 # Env naming the ServiceAccount that grants the deploy Job in-cluster RBAC for
-# ``kubectl apply --dry-run=server`` (#603). Unset → the kubectl rung stays an
+# ``kubectl create --dry-run=server`` (#603). Unset → the kubectl rung stays an
 # honest not_run (no SA is attached and kubectl is dropped from the runnable set).
 _DEPLOY_DRYRUN_SA_ENV = "TFACTORY_DEPLOY_DRYRUN_SA"
 
@@ -861,7 +861,7 @@ def run_deploy_lane_via_nix(  # noqa: PLR0913 - explicit keyword-only deploy-lan
         return None
 
     available = set(_DEPLOY_NIX_TOOLS)
-    # kubectl apply --dry-run=server needs the cluster API + a scoped SA token.
+    # kubectl create --dry-run=server needs the cluster API + a scoped SA token.
     # Without the SA configured (RBAC not deployed) keep the hermetic posture and
     # drop kubectl so the rung stays an honest not_run — never a dry-run that
     # fails for lack of cluster auth.

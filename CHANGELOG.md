@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- **The deploy dry-run now reads nothing, and the production guard no longer has
+  a filename-shaped hole (Factory#569).** The VAL-2 k8s rung ran
+  `kubectl apply --dry-run=server`. Measured against the live cluster, `apply`
+  GETs every object first to compute its merge patch, so it needed `get` on every
+  kind in the descriptor — including `secrets`. That is why the
+  `tfactory-deploy-dryrun` ServiceAccount could read every Secret in the
+  `factory` namespace: `factory-secrets`, the `factory-db-*` DATABASE_URLs,
+  `minio-creds`, the oauth2-proxy client secrets. It is the one credential handed
+  to a Job that executes model-generated content (the descriptors, and
+  `tofu init`/`plan`, which runs provider code).
+
+  The rung now runs `kubectl create --dry-run=server`, which POSTs with
+  `dryRun=All` and needs `create` alone — verified 6/6 green on a Secret,
+  ConfigMap, Deployment, Service, Job and Ingress under an identity holding no
+  read verb at all. The matching Role narrowing ships in factory-gitops and drops
+  `get`/`list` from every rule. No verdict is lost: on a name that already exists
+  both spellings already failed (`apply` 403s for want of `patch`, `create`
+  returns `AlreadyExists`).
+
+  Two bypasses closed in `assert_dry_run`, which this change makes the only thing
+  separating a dry-run from a real write: `plan`/`template`/`validate` were in the
+  dry-run set as bare subcommands, so `kubectl create -f plan` — a file named
+  `plan` — was accepted; and `startswith("--dry-run")` accepted `--dry-run=none`,
+  kubectl's "actually do it" value. Both are now exact flag matches, and `create`,
+  `delete`, `replace` and `patch` were added to the effectful set.
+
 - **The runner images are now signed (Factory#524).** The cosign work in
   Factory#430 covered `deploy.yml`, `release.yml` and `build-nix.yml` — the
   images that run first-party application code. It did not cover the runner

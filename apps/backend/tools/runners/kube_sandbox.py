@@ -192,11 +192,14 @@ def build_job_manifest(
     pod_spec: dict[str, Any] = {
         "restartPolicy": "Never",
         # Verify lanes need no k8s API, so the token is NOT mounted by default.
-        # The deploy lane's `kubectl apply --dry-run=server` (VAL-2, #603) is the
+        # The deploy lane's `kubectl create --dry-run=server` (VAL-2, #603) is the
         # one exception: pass a scoped service_account and it gets that SA's token
-        # so kubectl can auth in-cluster (RBAC is a namespaced get/list/create
-        # Role — create authorizes dryRun=All; a real apply is still blocked by
-        # deploy_runner.assert_dry_run).
+        # so kubectl can auth in-cluster. Factory#569: that Role is now `create`
+        # ONLY — no get, no list. `create` is the verb dryRun=All authorizes, and
+        # it is the ONLY verb the rung exercises, so this token can read nothing
+        # in the namespace (it used to be able to get/list every Secret in
+        # `factory`, and this Job is the one place generated content executes). A
+        # real write is still blocked by deploy_runner.assert_dry_run.
         "automountServiceAccountToken": bool(service_account),
         "imagePullSecrets": [{"name": image_pull_secret}],
         "securityContext": dict(POD_SECURITY_CONTEXT),
