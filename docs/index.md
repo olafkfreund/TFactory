@@ -49,7 +49,7 @@ nav_order: 1
   </li>
   <li class="feature-row__card reveal" style="--reveal-delay: 240ms">
     <h3>Deployment-validated (VAL)</h3>
-    <p>Each verdict carries a Verification Assurance Level. VAL-2 validates the deployment itself — <code>kubectl apply --dry-run=server</code> against the detected manifests — before it is trusted; VAL-3 runs against a real, disposable deploy target.</p>
+    <p>Each verdict carries a Verification Assurance Level. VAL-2 validates the deployment itself — <code>kubectl create --dry-run=server</code> against the detected manifests — before it is trusted; VAL-3 runs against a real, disposable deploy target.</p>
   </li>
   <li class="feature-row__card reveal" style="--reveal-delay: 320ms">
     <h3>Dry-run by default</h3>
