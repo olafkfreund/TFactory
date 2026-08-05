@@ -33,6 +33,54 @@ def test_assert_dry_run_allows_plan_and_dry_run_flags():
     assert_dry_run(("terraform", "validate"))
 
 
+def test_assert_dry_run_allows_the_real_lane_spellings():
+    """Every argv the lane actually assembles must still pass the guard.
+
+    This is the other half of the #953 review fix: `plan`/`template`/`validate`
+    were removed from the dry-run set, so pin the real commands rather than
+    trusting that removal was safe. They pass because they carry no effectful
+    token at all -- not because a subcommand name waved them through.
+    """
+    for argv in (
+        ("tofu", "init", "-backend=false", "-input=false", "-no-color"),
+        ("tofu", "validate", "-no-color"),
+        ("tofu", "plan", "-input=false", "-lock=false", "-no-color"),
+        ("helm", "template", "."),
+        ("kubectl", "create", "--dry-run=server", "-f", "k8s/deploy.yaml"),
+        ("tfsec", ".", "--no-color", "--soft-fail"),
+        ("trivy", "config", ".", "--skip-check-update", "--quiet"),
+        ("prowler", "--list-checks"),
+    ):
+        assert_dry_run(argv)  # must not raise
+
+
+def test_assert_dry_run_rejects_a_filename_that_looks_like_a_subcommand():
+    """#953 review: `plan`/`template`/`validate` were bare SUBCOMMANDS in the
+    dry-run set, so any token equal to one satisfied the check. A file named
+    `plan` -- entirely plausible in a planning pipeline -- turned a real
+    `kubectl create` into an accepted step. The set now holds FLAGS only."""
+    for argv in (
+        ("kubectl", "create", "-f", "plan"),
+        ("kubectl", "create", "-f", "template"),
+        ("kubectl", "create", "-f", "validate"),
+        ("kubectl", "apply", "-f", "plan"),
+        ("terraform", "apply", "plan"),
+    ):
+        with pytest.raises(ProductionApplyError):
+            assert_dry_run(argv)
+
+
+def test_assert_dry_run_rejects_dry_run_none():
+    """`--dry-run=none` is kubectl's "actually do it" value. The old
+    startswith("--dry-run") match accepted it, and =false, as dry-runs."""
+    for argv in (
+        ("kubectl", "create", "--dry-run=none", "-f", "k8s/"),
+        ("kubectl", "apply", "--dry-run=false", "-f", "k8s/"),
+    ):
+        with pytest.raises(ProductionApplyError):
+            assert_dry_run(argv)
+
+
 def test_assert_dry_run_rejects_real_applies():
     for argv in (
         ("terraform", "apply", "-auto-approve"),
@@ -63,7 +111,7 @@ def test_plan_never_assembles_a_production_apply():
         assert_dry_run(s.argv)  # would raise if any apply slipped in
     names = {s.name for s in steps}
     assert "terraform-plan" in names
-    assert "kubectl-apply-dry-run" in names
+    assert "kubectl-create-dry-run" in names
 
 
 # ── step planning ───────────────────────────────────────────────────────
@@ -84,7 +132,7 @@ def test_helm_chart_plans_template_and_dry_run():
     steps = plan_deploy_steps(["deploy/charts/app/Chart.yaml"])
     names = {s.name for s in steps}
     assert "helm-template-kubeconform" in names
-    assert "kubectl-apply-dry-run" in names
+    assert "kubectl-create-dry-run" in names
 
 
 def test_required_scans_force_scanners_even_without_glob_match():
@@ -187,7 +235,7 @@ def test_kubectl_step_targets_detected_manifests_not_dot():
     from tools.runners.deploy_runner import plan_deploy_steps
 
     steps = plan_deploy_steps(["k8s/base/deploy.yaml", "k8s/base/svc.yaml"])
-    kubectl = next(s for s in steps if s.name == "kubectl-apply-dry-run")
+    kubectl = next(s for s in steps if s.name == "kubectl-create-dry-run")
     # `create`, not `apply` (Factory#569): apply GETs each object to build the
     # merge patch, which forces `get secrets` onto the deploy SA's Role. create
     # POSTs with dryRun=All and needs `create` alone -- the SA reads nothing.

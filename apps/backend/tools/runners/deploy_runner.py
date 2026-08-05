@@ -74,15 +74,31 @@ _EFFECTFUL_TOKENS: frozenset[str] = frozenset(
         "patch",  # kubectl patch
     }
 )
-# Flags that make an otherwise-effectful verb safe (dry-run / plan only).
+# Flags that make an otherwise-effectful verb safe. A dry-run indicator is a
+# FLAG, and it is matched EXACTLY. Two holes were closed here (TFactory#953
+# review) once `create` became effectful above and this guard became the only
+# thing standing between a generated descriptor and a real write:
+#
+#   * `plan`/`template`/`validate` used to live in this set. They are bare
+#     SUBCOMMANDS, not flags, so ANY token equal to one of them satisfied the
+#     check -- `kubectl create -f plan` (a file named `plan`, entirely plausible
+#     in a planning pipeline) was accepted and would really write. They were also
+#     DEAD: every step that carries them (`tofu plan`, `helm template`,
+#     `tofu validate`) contains no effectful token, so they never rescued a
+#     command that would otherwise be rejected. Deleting them closes the bypass
+#     and loses nothing -- test_assert_dry_run_allows_the_real_lane_spellings
+#     pins every argv the lane actually assembles.
+#   * The old `t.startswith("--dry-run")` fallback accepted `--dry-run=none`,
+#     which is kubectl's "actually do it" value, and `--dry-run=false`. Exact
+#     matching is the point.
+#
+# Fails CLOSED: an unlisted spelling (e.g. kubectl's deprecated `--dry-run=true`)
+# raises rather than being waved through. No assembled step uses one.
 _DRY_RUN_FLAGS: frozenset[str] = frozenset(
     {
         "--dry-run",
         "--dry-run=server",
         "--dry-run=client",
-        "plan",
-        "template",
-        "validate",
     }
 )
 
@@ -95,22 +111,22 @@ def assert_dry_run(argv: Iterable[str]) -> None:
     """Refuse any argv that would effectfully apply (RFC-0013 prod guard).
 
     A command is allowed only when it carries no effectful verb, OR when a
-    dry-run/plan flag is also present (so ``kubectl create --dry-run=server`` and
-    ``terraform plan`` pass, while ``terraform apply`` / ``helm upgrade`` are
-    rejected). Defence-in-depth: every step is checked before it is run.
+    dry-run FLAG is also present (so ``kubectl create --dry-run=server`` passes,
+    while ``terraform apply`` / ``helm upgrade`` / a bare ``kubectl create`` are
+    rejected). ``terraform plan`` and ``helm template`` pass on the first arm --
+    they carry no effectful verb at all, which is why the dry-run set holds only
+    flags. Defence-in-depth: every step is checked before it is run.
     """
     tokens = list(argv)
     token_set = set(tokens)
-    has_dry_flag = bool(token_set & _DRY_RUN_FLAGS) or any(
-        t.startswith("--dry-run") for t in tokens
-    )
+    has_dry_flag = bool(token_set & _DRY_RUN_FLAGS)
     if has_dry_flag:
         return
     effectful = token_set & _EFFECTFUL_TOKENS
     if effectful:
         raise ProductionApplyError(
             f"refusing to run an effectful deploy step {sorted(effectful)} without a "
-            f"dry-run/plan flag — production deploys are never autonomous (RFC-0013): "
+            f"dry-run flag — production deploys are never autonomous (RFC-0013): "
             f"{' '.join(tokens)}"
         )
 
@@ -303,7 +319,7 @@ def plan_deploy_steps(
             fargs = ("-f", ".")
         steps.append(
             DeployStep(
-                name="kubectl-apply-dry-run",
+                name="kubectl-create-dry-run",
                 level="VAL-2",
                 argv=("kubectl", "create", "--dry-run=server", *fargs),
                 tool="kubectl",
