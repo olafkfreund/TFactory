@@ -123,6 +123,70 @@ def test_every_runner_image_directory_is_built_and_pushed_by_ci():
             )
 
 
+def _publishers() -> dict[str, str]:
+    """Workflow name -> text, for every workflow that pushes a runner image."""
+    dirs = _runner_dirs()
+    return {
+        wf_name: text
+        for wf_name, (text, doc) in _workflows().items()
+        if (_builds(text, doc) & dirs)
+        and _GHCR_LOGIN.search(text)
+        and _PUSH_ENABLED.search(text)
+    }
+
+
+def _pinned_identity(wf_name: str) -> str:
+    """The anchored cosign subject a workflow's own signatures carry.
+
+    GitHub mints the signing certificate with
+    `https://github.com/<owner>/<repo>/.github/workflows/<file>@<ref>` as the
+    SAN, so the identity is a property of the workflow file, not a choice.
+    """
+    escaped = wf_name.replace(".", "\\.")
+    return (
+        r"^https://github\.com/${{ github.repository }}"
+        rf"/\.github/workflows/{escaped}"
+        r"@refs/heads/main$"
+    )
+
+
+def test_every_published_runner_image_is_signed_with_a_pinned_identity():
+    """Factory#524: the sandbox images were the unsigned half of the fleet.
+
+    `verify-factory-image-signatures` pins each service image to the exact
+    publishing workflow on refs/heads/main. The runner images — the sandbox in
+    which *generated* code is built and executed — were signed by nothing, so
+    the Kyverno rule that will cover them has nothing to verify against.
+
+    Three assertions, each of which has failed silently somewhere before:
+      - `id-token: write`, without which keyless signing cannot mint a cert;
+      - a `cosign sign` on the published digest;
+      - a self-test pinned to the SAME anchored identity the gate uses. A
+        prefix-only self-test passes on signatures the gate rejects, which is
+        exactly the hole Factory#522 found in the policy.
+    """
+    publishers = _publishers()
+    assert publishers, "premise changed: no workflow publishes a runner image"
+
+    for wf_name, text in sorted(publishers.items()):
+        assert re.search(r"^\s*id-token:\s*write", text, re.MULTILINE), (
+            f"{wf_name} publishes a runner image but does not request "
+            "`id-token: write`; cosign keyless signing cannot mint a "
+            "certificate without it."
+        )
+        assert "cosign sign --yes" in text, (
+            f"{wf_name} publishes a runner image without signing it. The "
+            "admission policy cannot verify what was never signed (Factory#524)."
+        )
+        assert _pinned_identity(wf_name) in text, (
+            f"{wf_name}'s cosign self-test must assert the anchored identity\n"
+            f"  {_pinned_identity(wf_name)}\n"
+            "and nothing looser. A self-test weaker than the admission rule it "
+            "models reports success on a signature the gate would deny "
+            "(Factory#522)."
+        )
+
+
 def test_portal_ui_workflow_triggers_on_the_code_baked_into_the_image():
     """The Dockerfile is not the only input — it COPYs portal_testing/.
 

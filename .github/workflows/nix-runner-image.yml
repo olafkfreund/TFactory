@@ -27,6 +27,7 @@ concurrency:
 permissions:
   contents: read
   packages: write
+  id-token: write        # cosign keyless via GitHub OIDC (Factory#524)
 
 env:
   IMAGE: "ghcr.io/${{ github.repository_owner }}/tfactory-runner-nix"
@@ -51,7 +52,8 @@ jobs:
           password: "${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}"
 
       # On PRs: build + load + smoke only (no push). On push to main: push.
-      - uses: docker/build-push-action@v6
+      - id: build
+        uses: docker/build-push-action@v6
         with:
           context: docker/tfactory-runner-nix
           file: docker/tfactory-runner-nix/Dockerfile
@@ -63,6 +65,38 @@ jobs:
             ${{ env.IMAGE }}:latest
           cache-from: type=gha,scope=nix-runner
           cache-to: type=gha,mode=max,scope=nix-runner
+
+      # ----------------------------------------------------------------------
+      # Sign what this workflow publishes (Factory#524).
+      #
+      # The admission policy verified the four service images and nothing else,
+      # so the one image that is the sandbox for GENERATED code was the one
+      # image with no signature on it at all. Same keyless flow as deploy.yml,
+      # and by DIGEST for the same reason: cosign signatures are digest-keyed,
+      # so this single signature covers :sha-<short> AND :latest.
+      #
+      # Push-only. On a pull_request the image is loaded, never pushed, and a
+      # fork PR has no id-token to sign with.
+      # ----------------------------------------------------------------------
+      - name: Install cosign
+        if: "${{ github.event_name == 'push' }}"
+        uses: sigstore/cosign-installer@v3.7.0
+
+      - name: Sign image (cosign keyless via Sigstore + GitHub OIDC)
+        if: "${{ github.event_name == 'push' }}"
+        run: cosign sign --yes "${IMAGE}@${{ steps.build.outputs.digest }}"
+
+      # Assert the EXACT identity the admission rule will pin, anchored at both
+      # ends — not a repo prefix. A self-test looser than the gate it models
+      # passes on signatures the gate rejects, which is the failure Factory#522
+      # found in the policy itself.
+      - name: Verify signature (self-test)
+        if: "${{ github.event_name == 'push' }}"
+        run: |
+          cosign verify \
+            --certificate-identity-regexp "^https://github\.com/${{ github.repository }}/\.github/workflows/nix-runner-image\.yml@refs/heads/main$" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "${IMAGE}@${{ steps.build.outputs.digest }}"
 
       # Smoke (PR only — image is loaded locally): nix + flakes work.
       - name: Nix smoke
