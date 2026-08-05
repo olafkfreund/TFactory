@@ -28,6 +28,7 @@ from tools.runners.lane_dispatch import (
 def test_assert_dry_run_allows_plan_and_dry_run_flags():
     assert_dry_run(("terraform", "plan", "-input=false"))
     assert_dry_run(("kubectl", "apply", "--dry-run=server", "-f", "."))
+    assert_dry_run(("kubectl", "create", "--dry-run=server", "-f", "."))
     assert_dry_run(("helm", "template", "."))
     assert_dry_run(("terraform", "validate"))
 
@@ -40,6 +41,13 @@ def test_assert_dry_run_rejects_real_applies():
         ("helm", "install", "rel", "."),
         ("kubectl", "rollout", "restart", "deploy/x"),
         ("argocd", "app", "sync", "x"),
+        # Factory#569: the k8s rung runs `kubectl create --dry-run=server`, so a
+        # create WITHOUT the flag has to be refused -- otherwise dropping the
+        # flag turns the lane into a real write. Same for its sibling verbs.
+        ("kubectl", "create", "-f", "k8s/"),
+        ("kubectl", "delete", "-f", "k8s/"),
+        ("kubectl", "replace", "-f", "k8s/"),
+        ("kubectl", "patch", "deploy/x", "-p", "{}"),
     ):
         with pytest.raises(ProductionApplyError):
             assert_dry_run(argv)
@@ -174,14 +182,18 @@ def test_dispatch_deploy_lane_returns_steps_and_verification():
 
 
 def test_kubectl_step_targets_detected_manifests_not_dot():
-    """kubectl apply --dry-run=server points at the DETECTED k8s files, not `-f .`
+    """kubectl create --dry-run=server points at the DETECTED k8s files, not `-f .`
     (which reads only the worktree root and errors on nested manifests, #603)."""
     from tools.runners.deploy_runner import plan_deploy_steps
 
     steps = plan_deploy_steps(["k8s/base/deploy.yaml", "k8s/base/svc.yaml"])
     kubectl = next(s for s in steps if s.name == "kubectl-apply-dry-run")
+    # `create`, not `apply` (Factory#569): apply GETs each object to build the
+    # merge patch, which forces `get secrets` onto the deploy SA's Role. create
+    # POSTs with dryRun=All and needs `create` alone -- the SA reads nothing.
     assert kubectl.argv == (
-        "kubectl", "apply", "--dry-run=server",
+        "kubectl", "create", "--dry-run=server",
         "-f", "k8s/base/deploy.yaml", "-f", "k8s/base/svc.yaml",
     )
+    assert "apply" not in kubectl.argv  # apply would re-require namespace-wide get
     assert "." not in kubectl.argv  # never the bare-root read
