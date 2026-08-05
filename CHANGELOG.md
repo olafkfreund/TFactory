@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+- **The runner images are now signed (Factory#524).** The cosign work in
+  Factory#430 covered `deploy.yml`, `release.yml` and `build-nix.yml` — the
+  images that run first-party application code. It did not cover the runner
+  images, which are the sandbox in which *generated* code is built and executed:
+  `tfactory-runner-nix` (`AIFACTORY_SANDBOX_IMAGE`, `TFACTORY_VAL3_K8S_JOB_IMAGE`,
+  `TFACTORY_NIX_RUNNER_IMAGE`), `tfactory-runner-portal-ui`, and the nine
+  framework runners. All of them shipped unsigned, on a floating `:latest` for
+  two of the three pins, and the admission policy's `ghcr.io/olafkfreund/tfactory:*`
+  glob does not select them — the literal `:` after the service name stops it —
+  so they were not even reported. The signature control was pointed at the
+  images we already trust most.
+
+  `nix-runner-image.yml`, `portal-ui-runner-image.yml` and `runner-images.yml`
+  now sign the published digest with the same keyless GitHub OIDC flow
+  `deploy.yml` uses, and self-verify. Signing is by digest, so one signature
+  covers both the immutable tag and `:latest`. Signing runs on push to main
+  only: a pull_request build is loaded, never pushed, and a fork PR has no
+  `id-token` to sign with.
+
+  The self-test asserts the **exact** identity the admission rule will pin,
+  anchored at both ends
+  (`^https://github\.com/olafkfreund/TFactory/\.github/workflows/<file>\.yml@refs/heads/main$`),
+  rather than the repo prefix `deploy.yml` used. A prefix accepts any workflow in
+  the repo on any ref, so a self-test built on one reports success on signatures
+  the gate would deny — the same hole Factory#522 found in the policy. The
+  Kyverno rule covering `ghcr.io/olafkfreund/tfactory-runner-*` is deliberately
+  a separate, later change: added before signing landed it would only produce
+  Audit noise and block the Enforce flip.
+
+  `tests/test_runner_image_workflows.py` holds the invariant — every workflow
+  that pushes a runner image must request `id-token: write`, sign, and
+  self-verify against its own anchored identity — so the next runner image
+  cannot be published unsigned by omission. Mutation-checked against all three
+  failure modes.
+
 - **A verify run now records which model actually ran (#869).** `status.json`'s
   `usage.model` had existed for exactly this and came back empty on a confirmed
   Claude run — cost_usd was $7.76, priced off a Claude-only table, so the model

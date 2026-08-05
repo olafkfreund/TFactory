@@ -48,6 +48,7 @@ concurrency:
 permissions:
   contents: read
   packages: write   # publish runner images to GHCR (push to main only)
+  id-token: write   # cosign keyless via GitHub OIDC (Factory#524)
 
 jobs:
   build:
@@ -233,6 +234,7 @@ jobs:
       # Re-run the build to push: every layer is already in the GHA cache from
       # the build step above, so this is effectively just a registry upload.
       - name: Push tfactory-runner-${{ matrix.runner }} to GHCR
+        id: push
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: docker/build-push-action@v5
         with:
@@ -244,3 +246,39 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/tfactory-runner-${{ matrix.runner }}:latest
           cache-from: type=gha,scope=runner-${{ matrix.runner }}
           cache-to: type=gha,mode=max,scope=runner-${{ matrix.runner }}
+
+      # ---------------------------------------------------------------------
+      # Sign what this workflow publishes (Factory#524).
+      #
+      # These nine images are where generated test code is executed. The
+      # admission policy covered only the four service images, so the sandbox
+      # images were both unsigned and unselected by any rule — not even an
+      # Audit warning. Same keyless flow as deploy.yml.
+      #
+      # Sign by DIGEST: cosign signatures are digest-keyed, so one signature
+      # covers both :<sha> and :latest for this runner.
+      # ---------------------------------------------------------------------
+      - name: Install cosign
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: sigstore/cosign-installer@v3.7.0
+
+      - name: Sign tfactory-runner-${{ matrix.runner }}
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          IMAGE: "ghcr.io/${{ github.repository_owner }}/tfactory-runner-${{ matrix.runner }}"
+          DIGEST: "${{ steps.push.outputs.digest }}"
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+      # Assert the EXACT identity the admission rule will pin, anchored at both
+      # ends — not a repo prefix. A self-test looser than the gate it models
+      # passes on signatures the gate rejects (Factory#522).
+      - name: Verify signature (self-test) — ${{ matrix.runner }}
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          IMAGE: "ghcr.io/${{ github.repository_owner }}/tfactory-runner-${{ matrix.runner }}"
+          DIGEST: "${{ steps.push.outputs.digest }}"
+        run: |
+          cosign verify \
+            --certificate-identity-regexp "^https://github\.com/${{ github.repository }}/\.github/workflows/runner-images\.yml@refs/heads/main$" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "${IMAGE}@${DIGEST}"
