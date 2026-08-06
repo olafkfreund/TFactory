@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- **The schema-drift gate no longer soft-skips on a TLS certificate failure
+  (#940).** `scripts/check_schema_drift.py` treated *any* `urlopen` failure as a
+  transient outage — warn, exit 0. That is defensible for a GitHub blip; it is
+  not for a certificate failure, which is deterministic, recurs every run, and
+  behind a TLS-inspecting proxy leaves the gate permanently green without ever
+  once comparing the vendored Task Contract schema against the hub. A silent
+  skip is indistinguishable from a pass (Factory#433). A new `is_transient()`
+  unwraps `URLError.reason` recursively and defaults to "not transient" — only a
+  read timeout or a DNS failure may soft-skip; TLS errors, HTTP 4xx/5xx and
+  malformed JSON now fail the step with an explicit message. The surviving
+  soft-skip is loud (banner, `::warning` annotation, job-summary note) so a gate
+  that has stopped running is visible rather than quietly green. The regression
+  test drives a real `urlopen` against a local self-signed HTTPS server, because
+  the trap is where the error lands: `urlopen` raises `URLError` with the cert
+  error on `.reason` and `__context__` but **not** `__cause__`, and the raised
+  object is not an `ssl.SSLError` — so a mock, or an `except ssl.SSLError`,
+  encodes the same wrong assumption and changes nothing. Ported from PFactory's
+  fix for the identical defect (PFactory#440, PR #442).
+
 - **The runner images are now signed (Factory#524).** The cosign work in
   Factory#430 covered `deploy.yml`, `release.yml` and `build-nix.yml` — the
   images that run first-party application code. It did not cover the runner
