@@ -46,10 +46,13 @@ concurrency:
   group: "portal-ui-runner-image-${{ github.ref }}"
   cancel-in-progress: true
 
+# Workflow-level floor only. `permissions:` takes no expression, so a single
+# job spanning both triggers granted `id-token: write` (and `packages: write`)
+# to pull_request runs as well as to the push that signs (#948). The build/
+# publish split below is the narrowing: both elevated capabilities are declared
+# on the push-only `publish` job.
 permissions:
   contents: read
-  packages: write
-  id-token: write        # cosign keyless via GitHub OIDC (Factory#524)
 
 env:
   IMAGE: "ghcr.io/${{ github.repository_owner }}/tfactory-runner-portal-ui"
@@ -57,12 +60,14 @@ env:
   GITOPS_PATH: apps/tfactory/manifests
 
 jobs:
+  # --------------------------------------------------------------------------
+  # Runs on BOTH triggers: build, load, smoke, gate. Nothing here pushes, so it
+  # needs no registry credentials and no OIDC token.
+  # --------------------------------------------------------------------------
   build:
     runs-on: ubuntu-latest
-    # `secrets` is not allowed in a step-level `if:` — hoist to job env, same as
-    # deploy.yml.
-    env:
-      GITOPS_PAT: "${{ secrets.GITOPS_PAT }}"
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -141,9 +146,37 @@ jobs:
             sh -c 'pip install --quiet --no-cache-dir pytest pyyaml \
                    && python -m pytest /app/portal_testing -q'
 
-      # Publish — push to main only, and only past the gate above.
+  # --------------------------------------------------------------------------
+  # Publish — push to main only, and only past the gate in `build` above, which
+  # `needs:` enforces exactly as the step ordering in the single job did.
+  #
+  # Split out purely so the two elevated capabilities are declared on a job that
+  # a pull_request run cannot reach (#948). The push step here re-runs the build
+  # straight off the GHA cache, which is what it already did as a second
+  # build-push-action call in the old single job -- so this is a registry upload
+  # plus a cache pull, not a second build.
+  # --------------------------------------------------------------------------
+  publish:
+    needs: build
+    if: "${{ github.event_name == 'push' }}"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write      # push to GHCR
+      id-token: write      # cosign keyless via GitHub OIDC (Factory#524)
+    # `secrets` is not allowed in a step-level `if:` — hoist to job env, same as
+    # deploy.yml.
+    env:
+      GITOPS_PAT: "${{ secrets.GITOPS_PAT }}"
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: tags
+        run: echo "sha=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
       - name: Log in to GHCR
-        if: "${{ github.event_name == 'push' }}"
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -155,7 +188,6 @@ jobs:
 
       - name: Push tfactory-runner-portal-ui to GHCR
         id: push
-        if: "${{ github.event_name == 'push' }}"
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -175,20 +207,22 @@ jobs:
       #
       # Sign by DIGEST — cosign signatures are digest-keyed, so one signature
       # covers :sha-<short> and :latest.
+      #
+      # The certificate SAN is derived from the workflow FILE, not the job, so
+      # moving these steps into `publish` leaves the signed identity
+      # byte-identical: .../portal-ui-runner-image.yml@refs/heads/main, which is
+      # what `verify-tfactory-runner-signature` pins.
       # ---------------------------------------------------------------------
       - name: Install cosign
-        if: "${{ github.event_name == 'push' }}"
         uses: sigstore/cosign-installer@v3.7.0
 
       - name: Sign image (cosign keyless via Sigstore + GitHub OIDC)
-        if: "${{ github.event_name == 'push' }}"
         run: cosign sign --yes "${IMAGE}@${{ steps.push.outputs.digest }}"
 
-      # Assert the EXACT identity the admission rule will pin, anchored at both
+      # Assert the EXACT identity the admission rule pins, anchored at both
       # ends — not a repo prefix. A self-test looser than the gate it models
       # passes on signatures the gate rejects (Factory#522).
       - name: Verify signature (self-test)
-        if: "${{ github.event_name == 'push' }}"
         run: |
           cosign verify \
             --certificate-identity-regexp "^https://github\.com/${{ github.repository }}/\.github/workflows/portal-ui-runner-image\.yml@refs/heads/main$" \
@@ -201,7 +235,7 @@ jobs:
       # plain env value in the flat manifests, so `kustomize edit set image`
       # cannot reach it.
       - name: Pin PORTAL_UI_IMAGE in factory-gitops
-        if: "${{ github.event_name == 'push' && env.GITOPS_PAT != '' }}"
+        if: "${{ env.GITOPS_PAT != '' }}"
         run: |
           set -euo pipefail
           git clone --depth 1 "https://x:${GITOPS_PAT}@github.com/${GITOPS_REPO}.git" gitops
