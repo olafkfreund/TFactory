@@ -31,6 +31,17 @@ sys.modules["check_schema_drift"] = csd
 _spec.loader.exec_module(csd)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_step_summary(monkeypatch):
+    """A test's fake skip warning must never reach the real CI job summary.
+
+    ``_warn_skipped`` appends to ``$GITHUB_STEP_SUMMARY`` when it is set, which
+    it is on every Actions runner: without this, the tests below would print
+    "SCHEMA DRIFT CHECK SKIPPED" into the summary of a job whose gate ran fine.
+    """
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+
+
 # -- check_drift: directional subset (canonical is a subset of vendored) -------
 
 
