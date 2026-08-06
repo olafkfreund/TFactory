@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+- **`id-token: write` no longer exists on the pull_request path of the
+  runner-image workflows (#948).** Signing the runner images (Factory#524)
+  required the OIDC token capability, and `permissions:` takes no expression.
+  All three publishing workflows were a single job spanning both `push` and
+  `pull_request`, so although every `cosign` step was guarded with
+  `if: github.event_name == 'push'`, the *capability* was granted to PR runs
+  too — runs that build a PR-controlled Dockerfile. A step-level guard cannot
+  fix this; permissions are granted per job, so only a job boundary can.
+
+  Each workflow is now `build` + `publish`. `publish` is push-only and is the
+  sole holder of `packages: write` and `id-token: write`; `build` runs on the
+  PR path with `contents: read` and nothing else — it also drops the
+  `packages: write` that PR runs had before Factory#524, and (for
+  `nix-runner-image.yml`) the GHCR login it never needed, since the base image
+  is public and nothing is pushed.
+
+  Not a live hole, which is why it was filed rather than folded into the
+  signing change: a PR-minted certificate carries
+  `...@refs/pull/N/merge`, and both the self-tests and the live
+  `verify-tfactory-runner-signature` rule anchor `...@refs/heads/main$`, so the
+  signature it could mint is rejected by the control it would be forging. The
+  residual was any *other* consumer trusting `repo:olafkfreund/TFactory`
+  without pinning the ref.
+
+  Nothing about the signatures changed. The cosign certificate SAN is derived
+  from the workflow **file**, not the job, so all eleven images still sign as
+  `.../.github/workflows/<file>.yml@refs/heads/main` — no workflow was renamed,
+  and the admission rule's three-way alternation still matches. In
+  `runner-images.yml` the nine-runner list now appears in two `strategy.matrix`
+  blocks (a matrix job cannot fan out into another matrix job leg-by-leg);
+  `tests/test_runner_image_workflows.py` holds them equal so one cannot drift
+  into building an image that is never published or signed. The cost of that
+  shape is that `publish` needs the whole `build` matrix, so one failing smoke
+  now blocks publication of all nine rather than just its own — deliberate, and
+  loud rather than silent.
+
+  `tests/test_runner_image_workflows.py::test_pull_request_runs_are_not_granted_id_token_write`
+  computes each job's effective permissions and asserts no `pull_request`-
+  reachable job in any workflow gets `id-token: write`. Mutation-checked by
+  reverting each of the three workflows to its pre-fix state, by granting the
+  capability at job level, and via the inheritance path (a job with no
+  `permissions:` block of its own under a workflow-level grant).
+
 - **The runner images are now signed (Factory#524).** The cosign work in
   Factory#430 covered `deploy.yml`, `release.yml` and `build-nix.yml` — the
   images that run first-party application code. It did not cover the runner

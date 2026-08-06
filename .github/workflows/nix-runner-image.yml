@@ -24,17 +24,86 @@ concurrency:
   group: nix-runner-image-${{ github.ref }}
   cancel-in-progress: true
 
+# Workflow-level floor only. `permissions:` takes no expression, so a single
+# job spanning both triggers hands every capability it needs on push to the
+# pull_request run as well — which is how `id-token: write` came to be granted
+# to PR builds that execute PR-controlled Dockerfile instructions (#948). The
+# split below IS the narrowing: the token capability is declared on the
+# push-only `publish` job and exists nowhere else.
 permissions:
   contents: read
-  packages: write
-  id-token: write        # cosign keyless via GitHub OIDC (Factory#524)
 
 env:
   IMAGE: "ghcr.io/${{ github.repository_owner }}/tfactory-runner-nix"
 
 jobs:
+  # --------------------------------------------------------------------------
+  # pull_request path: build + load + smoke. No registry credentials, no OIDC.
+  # --------------------------------------------------------------------------
   build:
+    if: "${{ github.event_name == 'pull_request' }}"
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: tags
+        run: echo "sha=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      # No `docker/login-action` here. The base image is public (nixos/nix on
+      # Docker Hub) and nothing is pushed, so this path needs no GHCR
+      # credentials at all — `packages: write` was granted to PR runs before
+      # #948 too, and is dropped with the same change.
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/tfactory-runner-nix
+          file: docker/tfactory-runner-nix/Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.tags.outputs.sha }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=gha,scope=nix-runner
+          cache-to: type=gha,mode=max,scope=nix-runner
+
+      # Smoke (image is loaded locally): nix + flakes work.
+      - name: Nix smoke
+        run: |
+          docker run --rm "${{ env.IMAGE }}:latest" \
+            nix --version
+          docker run --rm "${{ env.IMAGE }}:latest" \
+            sh -c 'nix flake --help >/dev/null && echo "flakes ok"'
+          # #768: prove the warm-up closure actually baked into the store.
+          # --offline realises the dev shell WITHOUT touching the binary cache,
+          # so it can only succeed if python + pytest + pip are already present —
+          # which is the entire point (a per-task flake reuses these paths and
+          # skips the per-Job fetch). A cold image would fail this outright.
+          docker run --rm "${{ env.IMAGE }}:latest" \
+            sh -c 'nix develop --offline path:/warmup#default \
+                     --command python -c "import pytest, pip; print(\"warm closure ok\")"'
+
+  # --------------------------------------------------------------------------
+  # push-to-main path: build + push + sign + self-verify.
+  #
+  # Mutually exclusive with `build` above rather than `needs:`-chained, because
+  # the two paths share no work: the PR path loads and smokes and never pushes,
+  # this path pushes and never loads. Chaining would add a second full build of
+  # a multi-GB image to every push for no gate the PR run did not already
+  # provide. Each event therefore does exactly the work it did before #948 --
+  # only the permission boundary moved.
+  # --------------------------------------------------------------------------
+  publish:
+    if: "${{ github.event_name == 'push' }}"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write      # push to GHCR
+      id-token: write      # cosign keyless via GitHub OIDC (Factory#524)
     steps:
       - uses: actions/checkout@v4
 
@@ -51,15 +120,13 @@ jobs:
           username: "${{ github.repository_owner }}"
           password: "${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}"
 
-      # On PRs: build + load + smoke only (no push). On push to main: push.
       - id: build
         uses: docker/build-push-action@v6
         with:
           context: docker/tfactory-runner-nix
           file: docker/tfactory-runner-nix/Dockerfile
           platforms: linux/amd64
-          push: "${{ github.event_name == 'push' }}"
-          load: "${{ github.event_name == 'pull_request' }}"
+          push: true
           tags: |
             ${{ env.IMAGE }}:${{ steps.tags.outputs.sha }}
             ${{ env.IMAGE }}:latest
@@ -75,42 +142,24 @@ jobs:
       # and by DIGEST for the same reason: cosign signatures are digest-keyed,
       # so this single signature covers :sha-<short> AND :latest.
       #
-      # Push-only. On a pull_request the image is loaded, never pushed, and a
-      # fork PR has no id-token to sign with.
+      # The certificate SAN is derived from the workflow FILE, not the job, so
+      # splitting the job leaves the signed identity byte-identical:
+      # .../.github/workflows/nix-runner-image.yml@refs/heads/main -- which is
+      # what `verify-tfactory-runner-signature` pins.
       # ----------------------------------------------------------------------
       - name: Install cosign
-        if: "${{ github.event_name == 'push' }}"
         uses: sigstore/cosign-installer@v3.7.0
 
       - name: Sign image (cosign keyless via Sigstore + GitHub OIDC)
-        if: "${{ github.event_name == 'push' }}"
         run: cosign sign --yes "${IMAGE}@${{ steps.build.outputs.digest }}"
 
-      # Assert the EXACT identity the admission rule will pin, anchored at both
+      # Assert the EXACT identity the admission rule pins, anchored at both
       # ends — not a repo prefix. A self-test looser than the gate it models
       # passes on signatures the gate rejects, which is the failure Factory#522
       # found in the policy itself.
       - name: Verify signature (self-test)
-        if: "${{ github.event_name == 'push' }}"
         run: |
           cosign verify \
             --certificate-identity-regexp "^https://github\.com/${{ github.repository }}/\.github/workflows/nix-runner-image\.yml@refs/heads/main$" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             "${IMAGE}@${{ steps.build.outputs.digest }}"
-
-      # Smoke (PR only — image is loaded locally): nix + flakes work.
-      - name: Nix smoke
-        if: "${{ github.event_name == 'pull_request' }}"
-        run: |
-          docker run --rm "${{ env.IMAGE }}:latest" \
-            nix --version
-          docker run --rm "${{ env.IMAGE }}:latest" \
-            sh -c 'nix flake --help >/dev/null && echo "flakes ok"'
-          # #768: prove the warm-up closure actually baked into the store.
-          # --offline realises the dev shell WITHOUT touching the binary cache,
-          # so it can only succeed if python + pytest + pip are already present —
-          # which is the entire point (a per-task flake reuses these paths and
-          # skips the per-Job fetch). A cold image would fail this outright.
-          docker run --rm "${{ env.IMAGE }}:latest" \
-            sh -c 'nix develop --offline path:/warmup#default \
-                     --command python -c "import pytest, pip; print(\"warm closure ok\")"'
