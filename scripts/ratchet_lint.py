@@ -246,6 +246,15 @@ def mypy_errors(path: str, package: str, mypy_config: str) -> int:
         match = _MYPY_ERROR_RE.match(line)
         if match is not None and Path(match.group("path")) == Path(rel):
             count += 1
+    # The same defect #951 fixed for ruff, in the other half of the gate. mypy
+    # exits 0 clean, 1 with errors, and 2 both for its OWN failure (missing
+    # config, bad argv) and for a blocking error. A blocking error still NAMES a
+    # file, so it lands in `count`; mypy failing to run names nothing. Zero
+    # errors out of a failed run is "did not run", not "clean", and returning it
+    # makes the base-vs-head comparison pass green having measured nothing.
+    if res.returncode not in (0, 1) and count == 0:
+        sys.stderr.write(res.stdout + res.stderr)
+        sys.exit(2)
     return count
 
 
