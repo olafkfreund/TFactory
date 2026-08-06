@@ -254,7 +254,16 @@ The vendored `apps/backend/contracts/task-contract-v2.schema.json` must stay in
 sync with the canonical Factory hub schema (`apis/task-contract.schema.json` on
 the hub's main). A blocking CI step (`scripts/check_schema_drift.py`) enforces
 this: it hard-fails when the canonical schema is not a subset of the vendored
-copy (descriptions ignored) and soft-skips only on network failure.
+copy (descriptions ignored).
+
+Only a **transient** fetch failure — a read timeout or a DNS failure, which may
+genuinely differ next run — soft-skips, and it says so loudly: a banner, a
+GitHub `::warning` annotation on the checks page and a job-summary note, so a
+gate that has quietly stopped running is visible. A **deterministic** fetch
+failure — a TLS/certificate error (a TLS-inspecting proxy, a missing CA bundle),
+a 404 on the pinned ref, malformed JSON — fails the step. It recurs on every
+run, so skipping it would leave this gate permanently green while never once
+running, and a silent skip is indistinguishable from a pass (#940, Factory#433).
 
 If the gate fails: do **not** hand-edit the vendored file to appease it — sync
 it from the hub. Copy the current canonical `apis/task-contract.schema.json`
