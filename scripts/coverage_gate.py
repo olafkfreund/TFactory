@@ -152,7 +152,9 @@ def measure(tree: Path, out_xml: Path, config: Path, label: str) -> Measurement:
             cmd, cwd=tree, env=env, timeout=MEASURE_TIMEOUT_S, check=False
         )
     except subprocess.TimeoutExpired as exc:
-        raise GateError(f"{label} measurement timed out after {MEASURE_TIMEOUT_S}s") from exc
+        raise GateError(
+            f"{label} measurement timed out after {MEASURE_TIMEOUT_S}s"
+        ) from exc
     if proc.returncode not in MEASURABLE_EXITS:
         raise GateError(
             f"{label} suite exited {proc.returncode} (not a test failure -- "
@@ -191,7 +193,17 @@ def base_worktree(repo_root: Path, ref: str) -> Iterator[Path]:
     holder = Path(tempfile.mkdtemp(prefix="coverage-gate-base-"))
     tree = holder / "tree"
     add = subprocess.run(  # noqa: S603 - fixed argv
-        [_GIT, "-C", str(repo_root), "worktree", "add", "--detach", "-q", str(tree), ref],
+        [
+            _GIT,
+            "-C",
+            str(repo_root),
+            "worktree",
+            "add",
+            "--detach",
+            "-q",
+            str(tree),
+            ref,
+        ],
         capture_output=True,
         text=True,
         check=False,
@@ -222,7 +234,10 @@ def verdict(head: Measurement, base: Measurement, tolerance: float) -> tuple[boo
             f"Coverage dropped {abs(delta):.2f} pts: {base.pct:.2f}% -> {head.pct:.2f}%"
         )
     if delta > tolerance:
-        return True, f"Coverage {head.pct:.2f}% (up {delta:.2f} pts from {base.pct:.2f}%)"
+        return (
+            True,
+            f"Coverage {head.pct:.2f}% (up {delta:.2f} pts from {base.pct:.2f}%)",
+        )
     return True, f"Coverage {head.pct:.2f}% (unchanged vs base {base.pct:.2f}%)"
 
 
@@ -272,7 +287,9 @@ def run_gate(repo_root: Path, base_ref: str, tolerance: float) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base", required=True, help="base commit/ref to compare against")
+    parser.add_argument(
+        "--base", required=True, help="base commit/ref to compare against"
+    )
     parser.add_argument(
         "--repo-root",
         type=Path,
@@ -293,7 +310,9 @@ def main(argv: list[str] | None = None) -> int:
         # Exit 2, distinct from a real drop: the workflow reports "could not
         # measure" rather than "coverage dropped", and neither is a pass.
         print(f"coverage gate could not measure: {exc}", file=sys.stderr)
-        emit_outputs({"passed": "false", "description": f"Coverage gate failed: {exc}"[:140]})
+        emit_outputs(
+            {"passed": "false", "description": f"Coverage gate failed: {exc}"[:140]}
+        )
         return 2
 
 

@@ -38,6 +38,14 @@ Usage:
 Exit code 0 if no changed file regressed; 1 otherwise.
 """
 
+# T201 (no print) targets SERVICE code, where stdout is not an output channel.
+# This is a CI command-line tool whose entire product is what it prints: the
+# gated file list, the per-rule regression lines and the verdict all go to the
+# CI log, and the workflow has no other way to show them. Scoped to the one
+# rule: the code-less blanket form is what PGH004 forbids, and it would hide the
+# next real finding in this file. Same carve-out PFactory's fork already carries.
+# ruff: noqa: T201
+
 from __future__ import annotations
 
 import argparse
@@ -55,7 +63,12 @@ from pathlib import Path
 # write_temp is deliberately NOT imported: mypy runs on the file in place here
 # (see mypy_errors) and ruff is fed stdin, so nothing in this fork needs a temp
 # copy any more.
-from ratchet_helpers import MYPY_TEST_RELAX, is_test_file, require_tool_ran, ruff_stdin_argv
+from ratchet_helpers import (
+    MYPY_TEST_RELAX,
+    is_test_file,
+    require_tool_ran,
+    ruff_stdin_argv,
+)
 
 # Strict shared baseline vendored from the Factory hub (standards/.hub-sha).
 RUFF_CONFIG = "standards/ruff.toml"
@@ -73,6 +86,11 @@ _MYPY_ERROR_RE = re.compile(r"^(?P<path>.+?):\d+: error:")
 # format/lint). Paths are relative to the repo root.
 VENDORED_SKIP = frozenset(
     {
+        # In scope since Factory#597 widened the ratchet to scripts/, and the one
+        # file in that directory that must NOT be held to the local bar. root
+        # ruff.toml already excludes it from the format gate; this ratchet reads
+        # standards/ruff.toml directly, so it needs the exclusion stated here too.
+        "scripts/ratchet_helpers.py",
         "apps/backend/agents/verification_gate.py",
         "apps/backend/tools/runners/nix_provisioner.py",
         "apps/backend/tools/runners/artifact_store.py",
@@ -92,7 +110,13 @@ def is_vendored(path: str) -> bool:
 
 
 def _run(cmd: list[str], stdin: str | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, capture_output=True, text=True, check=False, input=stdin)
+    # S603: every argv reaching here is assembled in this file from repo-relative
+    # config paths and `git`/`ruff` literals — no shell, and no caller-supplied
+    # string ever becomes a command word. This is a CI developer tool, not a
+    # request-handling surface.
+    return subprocess.run(  # noqa: S603
+        cmd, capture_output=True, text=True, check=False, input=stdin
+    )
 
 
 def owning_package(path: str, packages: list[str]) -> str:
@@ -109,7 +133,8 @@ def owning_package(path: str, packages: list[str]) -> str:
     """
     target = Path(path)
     matches = [
-        pkg for pkg in packages
+        pkg
+        for pkg in packages
         if Path(pkg) in target.parents or Path(pkg) == target.parent
     ]
     return max(matches, key=len) if matches else packages[0]
@@ -135,8 +160,6 @@ def changed_python_files(base: str, packages: list[str]) -> list[str]:
         ):
             out.append(str(path))
     return out
-
-
 
 
 def ruff_counts(source: str, filename: str) -> Counter[str]:
@@ -190,10 +213,6 @@ def regressions(base: str, path: str) -> list[str]:
     return out
 
 
-
-
-
-
 def mypy_errors(path: str, package: str, mypy_config: str) -> int:
     """Number of mypy --strict errors attributed to *path*.
 
@@ -225,8 +244,12 @@ def mypy_errors(path: str, package: str, mypy_config: str) -> int:
         env[var] = search
     relax = MYPY_TEST_RELAX if is_test_file(path) else []
     config = os.path.relpath(Path(mypy_config).resolve(), pkg)
-    res = subprocess.run(
-        [
+    # S603/S607 as for `_run` above, plus: `mypy` is deliberately a bare name so
+    # the CI step's PATH (which puts the PINNED mypy first) decides which binary
+    # runs. Hardcoding an absolute path here would defeat that pinning, which is
+    # the property this gate depends on.
+    res = subprocess.run(  # noqa: S603
+        [  # noqa: S607
             "mypy",
             "--config-file",
             config,
@@ -302,9 +325,7 @@ def main() -> int:
     packages = args.packages or [PACKAGE_DEFAULT]
     files = changed_python_files(args.base, packages)
     if not files:
-        print(
-            f"ratchet: no changed Python files under {packages}; nothing to gate."
-        )
+        print(f"ratchet: no changed Python files under {packages}; nothing to gate.")
         return 0
 
     print("ratchet: gating changed files:\n  " + "\n  ".join(files))
