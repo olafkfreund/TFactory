@@ -190,7 +190,7 @@ def test_every_published_runner_image_is_signed_with_a_pinned_identity():
 # A job whose `if:` requires the push event cannot run on a pull_request. This
 # is the idiom all three publishing workflows use; anything else is treated as
 # PR-reachable, which is the conservative direction for a permission guard.
-_PUSH_ONLY_IF = re.compile(r"github\.event_name\s*==\s*'push'")
+_PUSH_ONLY_IF = re.compile(r"""github\.event_name\s*==\s*['"]push['"]""")
 
 
 def _grants_id_token(perms: object) -> bool:

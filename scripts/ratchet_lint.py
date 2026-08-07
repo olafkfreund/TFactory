@@ -163,7 +163,10 @@ def ruff_counts(source: str, filename: str) -> Counter[str]:
         items = json.loads(res.stdout)
     except json.JSONDecodeError:
         sys.stderr.write(res.stdout + res.stderr)
-        sys.exit(2)
+        # Exit with the tool's own code, not a constant: an interrupted run
+        # (130) or a signal death reads differently from a config error, and
+        # that distinction is the whole point of this guard.
+        sys.exit(res.returncode)
     return Counter(item["code"] for item in items)
 
 
