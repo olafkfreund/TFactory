@@ -99,13 +99,17 @@ def main() -> int:
         "--docker", action="store_true", help="run inside a DockerRunner container"
     )
     ap.add_argument(
-        "--kube", action="store_true", help="run as an in-cluster k8s Job (KubeJobSandbox)"
+        "--kube",
+        action="store_true",
+        help="run as an in-cluster k8s Job (KubeJobSandbox)",
     )
     args = ap.parse_args()
 
     if args.kube:
         image = os.getenv("TFACTORY_EQUIVALENCE_IMAGE", "python:3.12-slim")
-        runner = el._kube_oracle_runner(image, os.getenv("TFACTORY_NAMESPACE", "factory"))
+        runner = el._kube_oracle_runner(
+            image, os.getenv("TFACTORY_NAMESPACE", "factory")
+        )
         print(f"[mode] k8s Job (KubeJobSandbox), image={image}")
     elif args.docker:
         image = os.getenv("TFACTORY_EQUIVALENCE_IMAGE", "tfactory-runner-pytest:latest")

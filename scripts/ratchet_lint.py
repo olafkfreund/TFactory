@@ -63,7 +63,12 @@ from pathlib import Path
 # write_temp is deliberately NOT imported: mypy runs on the file in place here
 # (see mypy_errors) and ruff is fed stdin, so nothing in this fork needs a temp
 # copy any more.
-from ratchet_helpers import MYPY_TEST_RELAX, is_test_file, require_tool_ran, ruff_stdin_argv
+from ratchet_helpers import (
+    MYPY_TEST_RELAX,
+    is_test_file,
+    require_tool_ran,
+    ruff_stdin_argv,
+)
 
 # Strict shared baseline vendored from the Factory hub (standards/.hub-sha).
 RUFF_CONFIG = "standards/ruff.toml"
@@ -128,7 +133,8 @@ def owning_package(path: str, packages: list[str]) -> str:
     """
     target = Path(path)
     matches = [
-        pkg for pkg in packages
+        pkg
+        for pkg in packages
         if Path(pkg) in target.parents or Path(pkg) == target.parent
     ]
     return max(matches, key=len) if matches else packages[0]
@@ -154,8 +160,6 @@ def changed_python_files(base: str, packages: list[str]) -> list[str]:
         ):
             out.append(str(path))
     return out
-
-
 
 
 def ruff_counts(source: str, filename: str) -> Counter[str]:
@@ -207,10 +211,6 @@ def regressions(base: str, path: str) -> list[str]:
                 f"{path}: {code} +{head_n - base_n} (base {base_n} -> head {head_n})"
             )
     return out
-
-
-
-
 
 
 def mypy_errors(path: str, package: str, mypy_config: str) -> int:
@@ -325,9 +325,7 @@ def main() -> int:
     packages = args.packages or [PACKAGE_DEFAULT]
     files = changed_python_files(args.base, packages)
     if not files:
-        print(
-            f"ratchet: no changed Python files under {packages}; nothing to gate."
-        )
+        print(f"ratchet: no changed Python files under {packages}; nothing to gate.")
         return 0
 
     print("ratchet: gating changed files:\n  " + "\n  ".join(files))
