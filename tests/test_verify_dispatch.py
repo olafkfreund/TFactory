@@ -1146,3 +1146,83 @@ async def test_reap_without_a_recorded_spec_dir_is_harmless(store):
         "j767c", job_exists=False, job_active=False, store=store
     )
     assert rec is not None and rec["lifecycle_state"] == "stuck"
+
+
+# ── Factory#638: the trace crosses the verify Job boundary ──────────────────── #
+#
+# The verify Job was the second boundary a trace stopped at. This builder does
+# not go through the hub's ``build_job_manifest`` — it wraps ``kube_sandbox`` and
+# assembles its own env — so it inherited none of ``trace_env()`` for free.
+#
+# These assert the DISPATCHER's half only. The Job's half (that the Job opens a
+# span whose parent is this traceparent) is tests/test_job_tracing.py, and
+# neither half is worth anything alone: env without an emitter is correct-looking
+# configuration on a Job that produces nothing, which reads as coverage while the
+# trace still stops at the seam.
+
+_DISPATCHER_TP = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+_FAKE_ENDPOINT = "http://observe:5080/api/default"
+
+
+def _job_env(monkeypatch) -> dict:
+    ps = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
+    return {e["name"]: e for e in ps["containers"][0]["env"]}
+
+
+def test_verify_job_carries_the_dispatchers_traceparent(monkeypatch):
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", _FAKE_ENDPOINT)
+    monkeypatch.setattr(job_dispatch, "current_traceparent", lambda: _DISPATCHER_TP)
+
+    env = _job_env(monkeypatch)
+
+    assert env["TRACEPARENT"]["value"] == _DISPATCHER_TP
+    assert env["OTEL_EXPORTER_OTLP_ENDPOINT"]["value"] == _FAKE_ENDPOINT
+    # <service>-job, so the collector can tell a Job's spans from its
+    # dispatcher's — and so trace-silence-check's `LIKE '%-job'` join assertion
+    # picks them up without job-side names joining EXPECTED_SERVICES.
+    assert env["OTEL_SERVICE_NAME"]["value"] == "tfactory-job"
+
+
+def test_the_collector_credential_crosses_as_a_reference_never_a_value(monkeypatch):
+    # observe-otlp-auth-sync rotates this Secret hourly (Factory#606). A literal
+    # would both freeze it and write a Basic credential into an object every
+    # namespace reader can `kubectl get -o yaml`.
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", _FAKE_ENDPOINT)
+    monkeypatch.setenv(
+        "OTEL_EXPORTER_OTLP_HEADERS", "Authorization=Basic NOT-A-REAL-VALUE"
+    )
+
+    entry = _job_env(monkeypatch)["OTEL_EXPORTER_OTLP_HEADERS"]
+
+    assert "value" not in entry, entry
+    assert entry["valueFrom"]["secretKeyRef"]["name"] == job_dispatch.OTLP_AUTH_SECRET
+    # optional: a cluster with no Secret dispatches Jobs that do not export,
+    # rather than Jobs stuck in CreateContainerConfigError. A verify that cannot
+    # trace must still be able to run.
+    assert entry["valueFrom"]["secretKeyRef"]["optional"] is True
+
+
+def test_no_collector_means_no_trace_env_at_all(monkeypatch):
+    # Off-cluster and in every test run there is no collector, and a Job carrying
+    # OTLP config pointed at nothing spends its exporter's retry budget for no
+    # spans.
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+
+    names = set(_job_env(monkeypatch))
+
+    assert not (
+        names & {"TRACEPARENT", "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_SERVICE_NAME"}
+    )
+
+
+def test_no_active_span_means_no_traceparent(monkeypatch):
+    # There is then no trace to join, and an unparented job span is volume with
+    # no question attached — it is exactly what trace-silence-check reports as an
+    # orphaned job-side span.
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", _FAKE_ENDPOINT)
+    monkeypatch.setattr(job_dispatch, "current_traceparent", lambda: None)
+
+    env = _job_env(monkeypatch)
+
+    assert "TRACEPARENT" not in env
+    assert env["OTEL_EXPORTER_OTLP_ENDPOINT"]["value"] == _FAKE_ENDPOINT
