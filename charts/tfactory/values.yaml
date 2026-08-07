@@ -8,8 +8,10 @@
 #   securityContext — PSS-restricted defaults; do not relax without review
 #   service         — ClusterIP by default; Ingress controls public exposure
 #   ingress         — disabled by default; operators wire their controller
-#   serviceAccount  — dedicated SA, no automount of API token
-#   podDisruptionBudget — minAvailable: 1
+#   serviceAccount  — dedicated SA; the API token IS mounted, because the
+#                     Kubernetes verify lane creates Jobs (Factory#550)
+#   podDisruptionBudget — OFF; minAvailable: 1 at replicaCount 1 blocks node
+#                     drains outright (Factory#550)
 #   hpa             — disabled by default (single replica)
 #   networkPolicy   — default-deny + explicit 443 egress
 #   migrations      — Alembic Job mode (autoApply=false in prod)
@@ -103,10 +105,22 @@ serviceAccount:
   create: true
   name: ""
   annotations: {}
-  # API token automount is OFF: pods that don't talk to the K8s API
-  # don't need it, and dropping it shrinks the blast radius of a
-  # container compromise.
-  automountServiceAccountToken: false
+  # Factory#550. This WAS `false`, with a comment about pods that don't talk to
+  # the K8s API. TFactory does talk to it: tools/runners/kube_sandbox.py calls
+  # `kubernetes_asyncio.config.load_incluster_config()` to create every Nix-lane
+  # verify Job, and core/mcp_credentials.py reads the token file directly. With
+  # the token withheld, verification does not run.
+  #
+  # The chart already contradicted itself — templates/deployment.yaml renders
+  # `automountServiceAccountToken: {{ .Values.rbac.jobSandbox.enabled }}`, and
+  # the pod-level field wins over the ServiceAccount's — so the declared `false`
+  # was inert here and merely misdescribed the product. It is now honest, and
+  # Factory#504's chart-vs-gitops gate compares the VALUE against
+  # factory-gitops apps/tfactory/manifests, so the two cannot part again.
+  #
+  # Set this false only alongside `rbac.jobSandbox.enabled: false`, i.e. an
+  # install that does not use the Kubernetes verify lane.
+  automountServiceAccountToken: true
 
 rbac:
   create: false  # the app doesn't read the K8s API in v1.0
@@ -119,8 +133,24 @@ rbac:
     # Pullable thin Nix base; toolchains come from the per-task flake, not here.
     nixRunnerImage: "ghcr.io/olafkfreund/tfactory-runner-nix:latest"
 
+# Factory#550. OFF by default, and that is a decision rather than an oversight.
+# `replicaCount` is pinned to 1 above, and `minAvailable: 1` over a single
+# replica allows ZERO disruptions: `kubectl drain` on the node hosting the pod
+# retries "Cannot evict pod as it would violate the pod's disruption budget"
+# forever. Measured on the reference cluster, where the same drain succeeds the
+# moment the PDB is removed. That is not availability protection, it is a node
+# you cannot take out of service.
+#
+# There is no PDB shape that both protects and drains at one replica:
+# `minAvailable: 50%` rounds UP to 1, and `maxUnavailable: 1` permits every
+# eviction and so protects nothing.
+#
+# Turn it on when you actually run more than one replica -- raise replicaCount
+# (or autoscaling.minReplicas) above minAvailable first. The template refuses to
+# render an unevictable PDB, so a mistake here fails `helm install` rather than
+# stranding a node.
 podDisruptionBudget:
-  enabled: true
+  enabled: false
   minAvailable: 1
 
 autoscaling:
