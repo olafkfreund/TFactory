@@ -295,6 +295,8 @@ class TestsCatalog:
             Insertion order is preserved; lookup routines respect it.
     """
 
+    __test__ = False  # not a pytest test class despite the Test* name
+
     version: int
     updated_at: str
     tests: tuple[CatalogEntry, ...]

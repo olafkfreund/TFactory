@@ -21,6 +21,8 @@ router = APIRouter()
 # ============================================
 
 class TestConnectionRequest(BaseModel):
+    __test__ = False  # not a pytest test class despite the Test* name
+
     dbPath: str | None = None
     database: str | None = None
 
@@ -48,6 +50,8 @@ class ProjectEnvUpdate(BaseModel):
 
 
 class TestGraphitiRequest(BaseModel):
+    __test__ = False  # not a pytest test class despite the Test* name
+
     embeddingProvider: str
     embeddingModel: str | None = None
     openaiApiKey: SecretStr | None = None
