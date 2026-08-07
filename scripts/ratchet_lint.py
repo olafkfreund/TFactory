@@ -55,7 +55,7 @@ from pathlib import Path
 # write_temp is deliberately NOT imported: mypy runs on the file in place here
 # (see mypy_errors) and ruff is fed stdin, so nothing in this fork needs a temp
 # copy any more.
-from ratchet_helpers import MYPY_TEST_RELAX, is_test_file, ruff_stdin_argv
+from ratchet_helpers import MYPY_TEST_RELAX, is_test_file, require_tool_ran, ruff_stdin_argv
 
 # Strict shared baseline vendored from the Factory hub (standards/.hub-sha).
 RUFF_CONFIG = "standards/ruff.toml"
@@ -151,22 +151,22 @@ def ruff_counts(source: str, filename: str) -> Counter[str]:
     was held to the production assert bar the real tree exempts it from.
     """
     res = _run(ruff_stdin_argv(RUFF_CONFIG, filename), stdin=source)
-    # ruff exits 0 clean, 1 with violations, and >=2 on its OWN failure: binary
-    # missing, config parse error, bad argv. Those write nothing to stdout, so
-    # without this the empty-stdout branch below reads "ruff is broken" as "no
-    # violations" and the ratchet passes green on an unrunnable linter. Same
-    # shape as Factory#430, where one message covered both "bad signature" and
-    # "could not reach the verifier".
-    if res.returncode not in (0, 1):
-        sys.stderr.write(res.stdout + res.stderr)
-        sys.exit(2)
+    # The shared "did the tool actually run" rule (Factory#590). This used to be
+    # four lines restated here, and in the mypy counter below, and in both halves
+    # of the four sibling ratchets -- nine copies of one rule, which is why fixing
+    # it once cost five PRs (PFactory#455, TFactory#951). It now lives in the
+    # drift-gated canonical, so the next correction reaches every consumer.
+    require_tool_ran("ruff", res)
     if not res.stdout.strip():
         return Counter()
     try:
         items = json.loads(res.stdout)
     except json.JSONDecodeError:
         sys.stderr.write(res.stdout + res.stderr)
-        sys.exit(2)
+        # Exit with the tool's own code, not a constant: an interrupted run
+        # (130) or a signal death reads differently from a config error, and
+        # that distinction is the whole point of this guard.
+        sys.exit(res.returncode)
     return Counter(item["code"] for item in items)
 
 
@@ -246,6 +246,10 @@ def mypy_errors(path: str, package: str, mypy_config: str) -> int:
         match = _MYPY_ERROR_RE.match(line)
         if match is not None and Path(match.group("path")) == Path(rel):
             count += 1
+    # Same shared rule as the ruff counter, with `measured` passed: mypy's exit 2
+    # also covers a BLOCKING error, which still names a file and so belongs in the
+    # count rather than aborting the run.
+    require_tool_ran("mypy", res, measured=count)
     return count
 
 

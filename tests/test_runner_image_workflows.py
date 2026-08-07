@@ -187,6 +187,69 @@ def test_every_published_runner_image_is_signed_with_a_pinned_identity():
         )
 
 
+# A job whose `if:` requires the push event cannot run on a pull_request. This
+# is the idiom all three publishing workflows use; anything else is treated as
+# PR-reachable, which is the conservative direction for a permission guard.
+_PUSH_ONLY_IF = re.compile(r"""github\.event_name\s*==\s*['"]push['"]""")
+
+
+def _grants_id_token(perms: object) -> bool:
+    """Does this `permissions:` block hand out `id-token: write`?"""
+    if perms is None:
+        # No block at all -> the repo default GITHUB_TOKEN permissions, which
+        # never include id-token. Keyless signing is opt-in by construction.
+        return False
+    if isinstance(perms, str):
+        return perms == "write-all"
+    return isinstance(perms, dict) and perms.get("id-token") == "write"
+
+
+def test_pull_request_runs_are_not_granted_id_token_write():
+    """#948: the OIDC capability must not exist on the PR path.
+
+    `permissions:` takes no expression, so a workflow that triggers on both
+    `push` and `pull_request` with a single job grants that job's capabilities
+    to BOTH. All three runner-image workflows did exactly that: every `cosign`
+    step was `if: github.event_name == 'push'`, but `id-token: write` was not,
+    so a pull_request build -- which executes PR-controlled Dockerfile
+    instructions -- could mint a GitHub OIDC token for this repository.
+
+    It was not exploitable through the signing control itself: a PR-minted
+    certificate carries `...@refs/pull/N/merge`, and both the self-tests above
+    and the live `verify-tfactory-runner-signature` rule anchor
+    `...@refs/heads/main$`. The residual was every OTHER consumer that trusts
+    `repo:olafkfreund/TFactory` without pinning the ref. Defence in depth is
+    not worth relying on the absence of such a consumer.
+
+    A step-level `if:` cannot fix this -- only a job boundary can, because
+    permissions are granted per job. So this asserts the boundary, not the
+    guards on the steps.
+    """
+    checked = 0
+    for wf_name, (_text, doc) in sorted(_workflows().items()):
+        on = doc[True] if True in doc else doc.get("on")
+        if not isinstance(on, dict) or "pull_request" not in on:
+            continue  # push-only workflow (deploy.yml, release.yml): not at risk
+
+        for job_name, job in (doc.get("jobs") or {}).items():
+            if _PUSH_ONLY_IF.search(str(job.get("if", ""))):
+                continue  # unreachable from a pull_request
+            checked += 1
+            # A job-level block replaces the workflow-level one outright.
+            perms = job.get("permissions", doc.get("permissions"))
+            assert not _grants_id_token(perms), (
+                f"{wf_name}: job `{job_name}` can run on `pull_request` and is "
+                "granted `id-token: write`. `permissions:` takes no expression, "
+                "so guarding the cosign STEPS with "
+                "`if: github.event_name == 'push'` does not withhold the token "
+                "capability from the PR run -- only a push-only job does (#948)."
+            )
+
+    assert checked, (
+        "premise changed: no pull_request-reachable job found in any workflow"
+    )
+
+
 def test_portal_ui_workflow_triggers_on_the_code_baked_into_the_image():
     """The Dockerfile is not the only input — it COPYs portal_testing/.
 
@@ -237,6 +300,22 @@ def test_runner_images_matrix_does_not_claim_images_it_cannot_build():
     text, doc = _workflows()["runner-images.yml"]
     on = doc[True] if True in doc else doc["on"]
     matrix = set(_builds(text, doc))
+
+    # #948 split build and publish into two jobs, so the runner list now appears
+    # in two `strategy.matrix` blocks (a matrix job cannot fan out into another
+    # matrix job leg-by-leg). Held equal here: a runner added to `build` alone
+    # would build on every PR and never be published or signed, which is #886
+    # wearing yet another hat.
+    matrices = {
+        job_name: ((job.get("strategy") or {}).get("matrix") or {}).get("runner")
+        for job_name, job in doc["jobs"].items()
+    }
+    matrices = {name: m for name, m in matrices.items() if m}
+    assert len(matrices) == 2, f"expected build+publish matrices, got {matrices}"
+    assert len(set(map(tuple, matrices.values()))) == 1, (
+        f"runner-images.yml matrices have drifted apart: {matrices}. Every "
+        "runner built must also be published and signed."
+    )
 
     for event in ("push", "pull_request"):
         patterns = on[event]["paths"]

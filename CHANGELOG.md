@@ -2,6 +2,66 @@
 
 ## Unreleased
 
+- **The schema-drift gate no longer soft-skips on a TLS certificate failure
+  (#940).** `scripts/check_schema_drift.py` treated *any* `urlopen` failure as a
+  transient outage — warn, exit 0. That is defensible for a GitHub blip; it is
+  not for a certificate failure, which is deterministic, recurs every run, and
+  behind a TLS-inspecting proxy leaves the gate permanently green without ever
+  once comparing the vendored Task Contract schema against the hub. A silent
+  skip is indistinguishable from a pass (Factory#433). A new `is_transient()`
+  unwraps `URLError.reason` recursively and defaults to "not transient" — only a
+  read timeout or a DNS failure may soft-skip; TLS errors, HTTP 4xx/5xx and
+  malformed JSON now fail the step with an explicit message. The surviving
+  soft-skip is loud (banner, `::warning` annotation, job-summary note) so a gate
+  that has stopped running is visible rather than quietly green. The regression
+  test drives a real `urlopen` against a local self-signed HTTPS server, because
+  the trap is where the error lands: `urlopen` raises `URLError` with the cert
+  error on `.reason` and `__context__` but **not** `__cause__`, and the raised
+  object is not an `ssl.SSLError` — so a mock, or an `except ssl.SSLError`,
+  encodes the same wrong assumption and changes nothing. Ported from PFactory's
+  fix for the identical defect (PFactory#440, PR #442).
+- **`id-token: write` no longer exists on the pull_request path of the
+  runner-image workflows (#948).** Signing the runner images (Factory#524)
+  required the OIDC token capability, and `permissions:` takes no expression.
+  All three publishing workflows were a single job spanning both `push` and
+  `pull_request`, so although every `cosign` step was guarded with
+  `if: github.event_name == 'push'`, the *capability* was granted to PR runs
+  too — runs that build a PR-controlled Dockerfile. A step-level guard cannot
+  fix this; permissions are granted per job, so only a job boundary can.
+
+  Each workflow is now `build` + `publish`. `publish` is push-only and is the
+  sole holder of `packages: write` and `id-token: write`; `build` runs on the
+  PR path with `contents: read` and nothing else — it also drops the
+  `packages: write` that PR runs had before Factory#524, and (for
+  `nix-runner-image.yml`) the GHCR login it never needed, since the base image
+  is public and nothing is pushed.
+
+  Not a live hole, which is why it was filed rather than folded into the
+  signing change: a PR-minted certificate carries
+  `...@refs/pull/N/merge`, and both the self-tests and the live
+  `verify-tfactory-runner-signature` rule anchor `...@refs/heads/main$`, so the
+  signature it could mint is rejected by the control it would be forging. The
+  residual was any *other* consumer trusting `repo:olafkfreund/TFactory`
+  without pinning the ref.
+
+  Nothing about the signatures changed. The cosign certificate SAN is derived
+  from the workflow **file**, not the job, so all eleven images still sign as
+  `.../.github/workflows/<file>.yml@refs/heads/main` — no workflow was renamed,
+  and the admission rule's three-way alternation still matches. In
+  `runner-images.yml` the nine-runner list now appears in two `strategy.matrix`
+  blocks (a matrix job cannot fan out into another matrix job leg-by-leg);
+  `tests/test_runner_image_workflows.py` holds them equal so one cannot drift
+  into building an image that is never published or signed. The cost of that
+  shape is that `publish` needs the whole `build` matrix, so one failing smoke
+  now blocks publication of all nine rather than just its own — deliberate, and
+  loud rather than silent.
+
+  `tests/test_runner_image_workflows.py::test_pull_request_runs_are_not_granted_id_token_write`
+  computes each job's effective permissions and asserts no `pull_request`-
+  reachable job in any workflow gets `id-token: write`. Mutation-checked by
+  reverting each of the three workflows to its pre-fix state, by granting the
+  capability at job level, and via the inheritance path (a job with no
+  `permissions:` block of its own under a workflow-level grant).
 - **The deploy dry-run now reads nothing, and the production guard no longer has
   a filename-shaped hole (Factory#569).** The VAL-2 k8s rung ran
   `kubectl apply --dry-run=server`. Measured against the live cluster, `apply`
