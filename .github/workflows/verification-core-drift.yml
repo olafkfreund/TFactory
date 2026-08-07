@@ -62,7 +62,7 @@ env:
   # squash-merges, so this SHA does not survive the merge — re-point it at the
   # resulting main commit before merging this PR, or the gate checks out a SHA
   # that only exists on the closed PR branch.
-  HUB_PIN_SHA: "23ae047253e39dc3531050852eb38b1f35519525"
+  HUB_PIN_SHA: "3591e9de2fc0a177e9da8010d9edebce64da3d5d"
 
 jobs:
   drift:
