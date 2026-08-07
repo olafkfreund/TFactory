@@ -57,12 +57,7 @@ env:
   # Pinned Factory hub commit carrying the canonical verification-core modules.
   # Bump deliberately when re-vendoring (see header).
   #
-  # NOTE (Factory#483): this points at the HEAD of Factory PR #485 (the canonical
-  # change this re-vendors), NOT at a commit on the hub's main. Factory
-  # squash-merges, so this SHA does not survive the merge — re-point it at the
-  # resulting main commit before merging this PR, or the gate checks out a SHA
-  # that only exists on the closed PR branch.
-  HUB_PIN_SHA: "3591e9de2fc0a177e9da8010d9edebce64da3d5d"
+  HUB_PIN_SHA: "61a50a15c379b345819bc3bef2500c78166c3194"
 
 jobs:
   drift:
