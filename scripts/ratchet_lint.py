@@ -26,7 +26,9 @@ that file, at the PR base and at HEAD; fail if HEAD has more. mypy is invoked
 from inside the package dir (`apps/backend`) with the file path relative to it
 and `--explicit-package-bases --namespace-packages`, so first-party imports
 resolve as they do at runtime (PYTHONPATH=apps/backend) instead of being
-double-named via the stray `apps/backend/__init__.py`. The base count is taken
+double-named via the stray `apps/backend/__init__.py`. The target Python version
+comes from the interpreter the gate runs under, not from the shared baseline's
+floor of 3.11 (issue #968 - see `interpreter_target`). The base count is taken
 by swapping the file's content to its base version in place (HEAD content is
 restored afterwards, always). Errors mypy reports in OTHER files (imported
 modules) are not attributed to the changed file and so never gate it.
@@ -213,6 +215,37 @@ def regressions(base: str, path: str) -> list[str]:
     return out
 
 
+def interpreter_target() -> str:
+    """The ``--python-version`` this gate must target: the venv it checks against.
+
+    The shared ``standards/mypy.ini`` declares ``python_version = 3.11``. That is
+    correct for the hub baseline - it is the fleet FLOOR (coding-standards.md
+    section 1, "Python (3.11+)"), the hub's own ratchet still builds 3.11, and
+    raising it centrally would raise the floor for every repo and stop mypy
+    flagging 3.12-only syntax in the ones that still execute on 3.11. It is wrong
+    as THIS gate's target: the venv whose site-packages mypy reads is 3.12
+    (ratchet.yml, ci.yml), ``graphiti-core`` pulls numpy in, and numpy's stubs
+    there use PEP 695 ``type`` statements. Told to target 3.11 mypy refuses to
+    parse them, exits 2 having checked nothing, and every file that reaches numpy
+    transitively is ungated - hard-failed by ``require_tool_ran`` if it reported
+    nothing, or silently under-counted if it happened to emit one unrelated error
+    of its own, which satisfies that guard's ``measured`` arm (issue #968).
+
+    Derived from the running interpreter rather than written as ``3.12``, because
+    a literal is exactly how ``3.11`` went stale: the venv moves and the target
+    does not. ``mypy`` comes from that same venv (the workflow puts it first on
+    PATH and runs this script with its python), so its version is this process's.
+
+    Not a loosening under the tighten-only rule: every strict flag in the shared
+    baseline still applies, unchanged. Only the syntax/stdlib level moves, and it
+    moves to the one actually in use - which is what mypy would default to on its
+    own were the baseline not naming a version.
+
+    Ported from PFactory#472 (PFactory#467), which found the same defect first.
+    """
+    return f"{sys.version_info.major}.{sys.version_info.minor}"
+
+
 def mypy_errors(path: str, package: str, mypy_config: str) -> int:
     """Number of mypy --strict errors attributed to *path*.
 
@@ -253,6 +286,10 @@ def mypy_errors(path: str, package: str, mypy_config: str) -> int:
             "mypy",
             "--config-file",
             config,
+            # After --config-file so it WINS over the baseline's 3.11 floor; see
+            # interpreter_target (issue #968).
+            "--python-version",
+            interpreter_target(),
             "--explicit-package-bases",
             "--namespace-packages",
             *relax,

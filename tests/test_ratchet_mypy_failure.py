@@ -96,3 +96,43 @@ def test_errors_in_other_files_are_not_this_file_s(monkeypatch):
     # honest - an error surfaced in an imported module belongs to that module.
     _stub(monkeypatch, _Res(1, stdout="agents/other.py:3: error: nope  [misc]\n"))
     assert _errors() == 0
+
+
+# --------------------------------------------------------------------------- #
+# mypy target version: the venv being checked, not the fleet floor (issue #968) #
+# --------------------------------------------------------------------------- #
+
+
+def test_mypy_targets_the_interpreter_it_runs_under_not_the_baseline_floor(monkeypatch):
+    """The gate must declare the Python it is actually checking against.
+
+    Issue #968 (PFactory#467, fixed there in PFactory#472): standards/mypy.ini
+    pins `python_version = 3.11` - the fleet FLOOR, right for a baseline every
+    repo inherits. This repo's venv is 3.12, `graphiti-core` pulls numpy in, and
+    numpy's stubs there use PEP 695 `type` statements. Told to target 3.11, mypy
+    refuses to parse them and exits 2 having checked nothing, so every file that
+    reaches numpy transitively was either hard-failed by `require_tool_ran` or -
+    if it emitted one unrelated error of its own, satisfying that guard's
+    `measured` arm - silently gated at an undercount.
+
+    Asserted against `sys.version_info` rather than a literal `3.12`: a literal
+    is precisely how 3.11 went stale, and a test written that way would go stale
+    with it instead of catching the next bump.
+    """
+    seen = {}
+
+    def _record(argv, **_kwargs):
+        seen["argv"] = argv
+        return _Res(0, stdout="Success: no issues found in 1 source file\n")
+
+    monkeypatch.setattr(ratchet_lint.subprocess, "run", _record)
+    assert _errors() == 0
+
+    argv = seen["argv"]
+    expected = f"{sys.version_info.major}.{sys.version_info.minor}"
+    assert argv[argv.index("--python-version") + 1] == expected
+    # The CLI flag has to WIN over the config file, so both must be present:
+    # dropping --config-file loses the strict bar, dropping the version override
+    # puts the 3.11 floor back and the numpy stubs stop parsing.
+    assert "--config-file" in argv
+    assert argv.index("--config-file") < argv.index("--python-version")
