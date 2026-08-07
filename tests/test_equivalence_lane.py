@@ -7,6 +7,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
+
 _BACKEND = Path(__file__).parent.parent / "apps" / "backend"
 if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
@@ -19,6 +21,7 @@ from agents.lang_rust import cargo_mutants as cm  # noqa: E402
 class _Result:
     stdout: str
     returncode: int = 0
+    stderr: str = ""
 
 
 def _runner(stdout):
@@ -135,6 +138,97 @@ def test_run_equivalence_lane_critical_divergence_fails(tmp_path: Path):
     assert res["passed"] is False  # critical vector diverged, even above threshold
     assert "CRITICAL" in res["claim"]
     assert any(v["verdict"] == "reject" for v in res["verdicts"])
+
+
+# ── a dead harness is not an empty corpus (TFactory#959) ────────────────
+
+
+def _dead_runner(rc: int = 2):
+    """A harness that never ran: nothing on stdout, non-zero exit."""
+    return lambda *a, **k: _Result(
+        stdout="", returncode=rc, stderr="python: can't open file 'harness.py'"
+    )
+
+
+def test_dead_harness_is_not_a_golden_corpus(tmp_path: Path):
+    with pytest.raises(el.HarnessDidNotRunError, match="oracle harness exited 2"):
+        el.capture_oracle(tmp_path, _MANIFEST, _dead_runner())
+    with pytest.raises(el.HarnessDidNotRunError, match="candidate harness exited 2"):
+        el.run_candidate(tmp_path, _MANIFEST, _dead_runner())
+
+
+def test_runner_without_a_status_fails_closed(tmp_path: Path):
+    """A runner that cannot report an exit code cannot show its harness ran."""
+    statusless = lambda *a, **k: type("R", (), {"stdout": ""})()  # noqa: E731
+    with pytest.raises(el.HarnessDidNotRunError, match="no exit status"):
+        el.capture_oracle(tmp_path, _MANIFEST, statusless)
+
+
+def test_harness_that_emitted_results_but_exited_nonzero_is_kept(tmp_path: Path):
+    """Results on stdout prove it ran, whatever status a wrapper propagated."""
+    canned = json.dumps([{"id": "1", "module": "pay/refund.py", "output": 100}])
+    golden = el.capture_oracle(
+        tmp_path, _MANIFEST, lambda *a, **k: _Result(stdout=canned, returncode=3)
+    )
+    assert golden[0]["output"] == 100
+
+
+def test_lane_names_the_dead_harness_not_the_manifest(tmp_path: Path):
+    contract = {"tfactory": {"equivalence": {"manifest": _MANIFEST}}}
+    res = el.run_equivalence_lane(
+        contract,
+        oracle_root=tmp_path / "o",
+        candidate_root=tmp_path / "c",
+        oracle_runner=_dead_runner(),
+        candidate_runner=_dead_runner(),
+        findings_dir=tmp_path / "findings",
+    )
+    assert res["passed"] is False
+    assert len(res["verdicts"]) == 1
+    verdict = res["verdicts"][0]
+    assert verdict["lane"] == "equivalence" and verdict["verdict"] == "reject"
+    assert "did not run" in verdict["reason"]
+    assert "NOT MEASURED" in res["claim"] and "oracle harness" in res["claim"]
+    # The old verdict blamed the manifest for a failure that was not there.
+    assert "UNPROVEN" not in res["claim"] and "corpus coverage" not in res["claim"]
+    # No stable, meaningless digest of [].
+    assert not (tmp_path / "findings" / "golden_corpus.json").exists()
+    report = json.loads((tmp_path / "findings" / "equivalence_report.json").read_text())
+    assert report["measured"] is False
+
+
+def test_lane_rejects_a_dead_harness_even_when_nothing_is_declared(tmp_path: Path):
+    """The path with no second line of defence: `declared - covered` is empty."""
+    contract = {"tfactory": {"equivalence": {"manifest": {"input_vectors": []}}}}
+    res = el.run_equivalence_lane(
+        contract,
+        oracle_root=tmp_path / "o",
+        candidate_root=tmp_path / "c",
+        oracle_runner=_dead_runner(),
+        candidate_runner=_dead_runner(),
+    )
+    assert res["passed"] is False
+    assert [v["verdict"] for v in res["verdicts"]] == ["reject"]
+    assert "NOT MEASURED" in res["claim"]
+
+
+def test_empty_corpus_from_a_live_harness_is_a_measurement(tmp_path: Path):
+    """Exit 0 with `[]` RAN. It must not raise, and must not pass either."""
+    alive = lambda *a, **k: _Result(stdout="[]\n", returncode=0)  # noqa: E731
+    assert el.capture_oracle(tmp_path, _MANIFEST, alive) == []
+    res = el.run_equivalence_lane(
+        {"tfactory": {"equivalence": {"manifest": {"input_vectors": []}}}},
+        oracle_root=tmp_path / "o",
+        candidate_root=tmp_path / "c",
+        oracle_runner=alive,
+        candidate_runner=alive,
+        findings_dir=tmp_path / "findings",
+    )
+    assert res["passed"] is False  # 0/0 is not parity
+    assert "NOT MEASURED" not in res["claim"]
+    assert "0/0 golden vectors" in res["claim"]
+    # It measured, so the (empty) corpus is a real artefact and gets written.
+    assert (tmp_path / "findings" / "golden_corpus.json").is_file()
 
 
 # ── cargo-mutants ───────────────────────────────────────────────────────

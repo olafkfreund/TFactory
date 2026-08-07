@@ -77,13 +77,15 @@ _MANIFEST = {
 def _subprocess_runner(harness: Path, root: Path, stdin: str):
     (Path(root) / "vectors.json").write_text(stdin)
     (Path(root) / "h.py").write_text(el.generate_python_oracle_harness())
-    r = subprocess.run(
+    # CompletedProcess already IS the runner protocol (.stdout + .returncode).
+    # The old shim exposed only .stdout, modelling the broken contract the lane
+    # was fixed for in TFactory#959.
+    return subprocess.run(
         [sys.executable, "h.py", "vectors.json"],
         cwd=root,
         capture_output=True,
         text=True,
     )
-    return type("R", (), {"stdout": r.stdout})()
 
 
 def _make_module(root: Path, body: str) -> Path:

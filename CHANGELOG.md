@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+- **The equivalence lane no longer reads a dead harness's empty stdout as a
+  golden corpus (#959).** `agents/equivalence_lane.py` took the runner's
+  `.stdout` and ignored its exit status, so a harness that never ran — missing
+  interpreter, import error, unresolvable Nix env, a `parity_harness` the target
+  does not expose — parsed to `[]`, and that empty list became the corpus the
+  candidate was compared against. Same defect class as the ratchet's
+  `ruff_counts()` (Factory#590, found in PFactory#455): a control reporting
+  success while measuring nothing, surviving here in application code rather
+  than a CI gate. `_require_harness_ran` reuses the shape of
+  `scripts/ratchet_helpers.require_tool_ran` minus a tier this harness does not
+  have — ruff and mypy exit 1 for "ran and found something", while the parity
+  protocol reports divergence *in its stdout JSON* and still exits 0, so 0 is
+  the only exit that means "ran". That helper's `measured` qualifier maps to
+  "results were parsed": a target-supplied `parity_harness` may exit non-zero
+  having still emitted a full corpus, and results on stdout prove it ran, so
+  only "no results AND not a clean exit" is fatal. One case ruff and mypy never
+  face: `runner_fn` is injected and duck-typed, so a runner carrying no
+  `.returncode` at all cannot show its harness ran and fails closed too. The
+  **verdict now names the failed measurement**: the old partial mitigation
+  (`declared - covered` as `uncovered_modules`) failed on the *manifest's*
+  declarations, so a dead oracle read as "modules X UNPROVEN (no corpus
+  coverage)" — a sentence about the manifest and the candidate for a failure in
+  neither, the Factory#430 shape, and a wrong explanation costs more than none.
+  The lane returns a single `reject` verdict naming the dead harness, which also
+  covers the two paths that had no second line of defence at all (a manifest
+  declaring nothing; the non-Python oracle), and writes no `golden_corpus.json`
+  for an unmeasured run so `[]` cannot mint a stable, meaningless digest. An
+  empty corpus from a *working* harness is unchanged — it is a measurement, it
+  does not raise, its corpus is written, and 0/0 still does not pass.
+  `scripts/demo_equivalence.py` now returns the `CompletedProcess` itself rather
+  than a shim exposing only `.stdout`; as the reference implementation of the
+  runner protocol it was modelling the broken contract.
+
 - **The schema-drift gate no longer soft-skips on a TLS certificate failure
   (#940).** `scripts/check_schema_drift.py` treated *any* `urlopen` failure as a
   transient outage — warn, exit 0. That is defensible for a GitHub blip; it is
