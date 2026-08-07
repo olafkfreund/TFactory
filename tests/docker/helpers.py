@@ -25,11 +25,18 @@ def docker_available() -> bool:
     """True iff the `docker` CLI is on PATH and the daemon answers."""
     if shutil.which("docker") is None:
         return False
-    result = subprocess.run(
-        ["docker", "version", "--format", "{{.Server.Version}}"],
-        capture_output=True,
-        timeout=5,
-    )
+    # A daemon that never answers has not answered, so this is False, not an
+    # exception — same shape as _docker_available() in tests/test_docker_runner.py.
+    # 20s rather than 5s: this one waits on the daemon, and a daemon under load
+    # (a big concurrent build, a cold containerd) can take seconds to reply.
+    try:
+        result = subprocess.run(
+            ["docker", "version", "--format", "{{.Server.Version}}"],
+            capture_output=True,
+            timeout=20,
+        )
+    except subprocess.TimeoutExpired:
+        return False
     return result.returncode == 0
 
 
