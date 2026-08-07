@@ -621,6 +621,8 @@ TargetSpec = Annotated[
 class TestData(BaseModel):
     """Commands for seeding / resetting the test database."""
 
+    __test__ = False  # not a pytest test class despite the Test* name
+
     fixtures_dir: str | None = None
     seed_command: str | None = None
     reset_command: str | None = None
@@ -798,6 +800,8 @@ class TestCredentialEntry(BaseModel):
     the ``as_secret`` env var; an optional ``username_ref`` resolves the
     plaintext username into ``as_username``.
     """
+
+    __test__ = False  # not a pytest test class despite the Test* name
 
     ref: str
     as_secret: str

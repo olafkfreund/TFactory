@@ -340,6 +340,8 @@ async def set_active_api_profile(request: dict):
 
 
 class TestConnectionRequest(BaseModel):
+    __test__ = False  # not a pytest test class despite the Test* name
+
     baseUrl: str
     apiKey: SecretStr
 
