@@ -27,9 +27,12 @@ jobs:
           python-version: "3.12"
 
       - name: Task Contract schema drift gate (#679)
-        # Vendored task-contract-v2.schema.json must stay a superset of the
-        # canonical Factory hub schema. Stdlib-only; soft-skips on network
-        # failure, fails hard on real drift.
+        # Fail if the vendored Task Contract schema drifts from the canonical
+        # copy in the Factory hub. Soft-skips ONLY on a transient fetch failure
+        # (timeout/DNS), loudly, so a GitHub outage can't red the build. A
+        # deterministic fetch failure — TLS/certificate error, 404, malformed
+        # JSON — fails the step: it recurs every run, so skipping it would leave
+        # this gate permanently green without ever running (#940, Factory#433).
         run: python scripts/check_schema_drift.py
 
       - name: Install uv
