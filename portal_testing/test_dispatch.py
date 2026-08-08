@@ -109,6 +109,95 @@ def test_publish_as_tfactory_spec(tmp_path, monkeypatch):
     assert not (spec_dir / "findings" / "verdicts.json").exists()
 
 
+# ─── #895: the Screencast link must name where the recording landed ─────
+
+
+def _run_with_recording(tmp_path):
+    report_dir = tmp_path / "tfactory"
+    (report_dir / "video").mkdir(parents=True)
+    (report_dir / "video" / "tfactory.webm").write_bytes(b"\x1a\x45\xdf\xa3")
+    (report_dir / "report.md").write_text(
+        "# T\nlogged in: **True**\n"
+        "- **Screencast:** [`video/tfactory.webm`](video/tfactory.webm)\n\n"
+        "## Coverage\n\n| N | D | Dl | S | F |\n|-|-|-|-|-|\n| 1 | 0 | 0 | 1 | 0 |\n\n"
+        "## Findings\n\n- None\n\n## Walkthrough\n"
+    )
+    return report_dir
+
+
+def test_published_report_links_the_recording_where_it_landed(tmp_path, monkeypatch):
+    """The link and the file must agree in the published tree.
+
+    report.py writes it relative to the run dir (`video/x.webm`); publishing
+    moves the recording to findings/videos/. Nothing rewrote the link, so the
+    published report pointed at a path that does not exist there (#895).
+    """
+    from portal_testing.visual_inspection_adapter import publish_as_tfactory_spec
+
+    monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    spec_dir = publish_as_tfactory_spec(
+        "tfactory", _run_with_recording(tmp_path), "vrun-vid"
+    )
+    published = (spec_dir / "report.md").read_text()
+    assert "findings/videos/tfactory.webm" in published
+    assert "(video/tfactory.webm)" not in published
+    # The link resolves inside the published tree — that is the whole point.
+    assert (spec_dir / "findings" / "videos" / "tfactory.webm").is_file()
+
+
+def test_triage_report_drops_the_screencast_link(tmp_path, monkeypatch):
+    """The rendered Report tab resolves no relative path, so a link there 404s —
+    same reason the screenshot images are stripped. The Evidence tab plays the
+    recording from findings/videos/."""
+    from portal_testing.visual_inspection_adapter import publish_as_tfactory_spec
+
+    monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    spec_dir = publish_as_tfactory_spec(
+        "tfactory", _run_with_recording(tmp_path), "vrun-vid2"
+    )
+    assert "Screencast:" not in (spec_dir / "findings" / "triage_report.md").read_text()
+
+
+def test_visual_inspection_copy_drops_the_screencast_link(tmp_path):
+    """The Visual Reports copy carries no recording at all, so its Screencast
+    link was doubly broken."""
+    from portal_testing.visual_inspection_adapter import build_run_dir
+
+    run_dir = build_run_dir(
+        "tfactory", _run_with_recording(tmp_path), "r", dest_parent=tmp_path / "vi"
+    )
+    report = (run_dir / "report.md").read_text()
+    assert "Screencast:" not in report
+    assert "tfactory.webm" not in report
+
+
+def test_a_lost_recording_drops_the_link_rather_than_inventing_one(
+    tmp_path, monkeypatch
+):
+    """The report claims a screencast but the recording never made it.
+
+    A link is only worth publishing when it names a file that is there. If the
+    recording was lost, the honest published report has no Screencast line —
+    not a plausible-looking path to a file that does not exist.
+    """
+    from portal_testing.visual_inspection_adapter import publish_as_tfactory_spec
+
+    monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    report_dir = tmp_path / "p"
+    report_dir.mkdir()
+    (report_dir / "report.md").write_text(
+        "# P\nlogged in: **True**\n"
+        "- **Screencast:** [`video/pfactory.webm`](video/pfactory.webm)\n\n"
+        "## Coverage\n\n| N | D | Dl | S | F |\n|-|-|-|-|-|\n| 1 | 0 | 0 | 1 | 0 |\n\n"
+        "## Findings\n\n- None\n\n## Walkthrough\n"
+    )
+    spec_dir = publish_as_tfactory_spec("pfactory", report_dir, "vrun-novid")
+    published = (spec_dir / "report.md").read_text()
+    assert "Screencast" not in published
+    assert ".webm" not in published
+    assert not (spec_dir / "findings" / "videos").exists()
+
+
 def test_adapter_counts_interaction_failures(tmp_path):
     import json
 
@@ -154,6 +243,189 @@ def test_no_delay_keeps_plain_command():
     c = m["spec"]["template"]["spec"]["containers"][0]
     assert c["command"] == ["python", "-m", "portal_testing.run"]
     assert c["args"][0] == "tfactory"
+
+
+# ─── #875: the Job must co-mount the claim the control plane reads ──────
+
+
+class _FakeMount:
+    def __init__(self, name, mount_path):
+        self.name = name
+        self.mount_path = mount_path
+
+
+class _FakeContainer:
+    def __init__(self, volume_mounts):
+        self.volume_mounts = volume_mounts
+
+
+class _FakeClaim:
+    def __init__(self, claim_name):
+        self.claim_name = claim_name
+
+
+class _FakeVolume:
+    def __init__(self, name, claim_name=None):
+        self.name = name
+        self.persistent_volume_claim = _FakeClaim(claim_name) if claim_name else None
+
+
+class _FakeSpec:
+    def __init__(self, containers, volumes):
+        self.containers = containers
+        self.volumes = volumes
+
+
+class _FakePod:
+    def __init__(self, spec):
+        self.spec = spec
+
+
+def _pod(mount_path="/home/nonroot/.tfactory", claim="tfactory-data-rwx"):
+    return _FakePod(
+        _FakeSpec(
+            containers=[_FakeContainer([_FakeMount("data", mount_path)])],
+            volumes=[_FakeVolume("tmp"), _FakeVolume("data", claim)],
+        )
+    )
+
+
+def test_claim_for_mount_path_follows_the_control_plane():
+    """The claim is read off the pod, not guessed.
+
+    #875: the default named an orphan PVC (`tfactory-data`, RWO/local-path)
+    while the deployment mounted `tfactory-data-rwx`. The harness ran, publish
+    reported success, and the run was invisible — written to a volume nothing
+    reads, with no error to notice.
+    """
+    from portal_testing.dispatch import _claim_for_mount_path
+
+    assert (
+        _claim_for_mount_path(_pod(), "/home/nonroot/.tfactory") == "tfactory-data-rwx"
+    )
+
+
+def test_claim_for_mount_path_ignores_a_different_mount():
+    """A volume mounted somewhere else is not the data claim."""
+    from portal_testing.dispatch import _claim_for_mount_path
+
+    assert (
+        _claim_for_mount_path(_pod(mount_path="/tmp"), "/home/nonroot/.tfactory")
+        is None
+    )
+
+
+def test_claim_for_mount_path_ignores_a_non_pvc_volume():
+    """An emptyDir at the data path yields no claim (fall back, don't invent one)."""
+    from portal_testing.dispatch import _claim_for_mount_path
+
+    assert _claim_for_mount_path(_pod(claim=None), "/home/nonroot/.tfactory") is None
+
+
+def test_resolve_data_pvc_prefers_the_env_override(monkeypatch):
+    from portal_testing import dispatch
+
+    monkeypatch.setenv("TFACTORY_DATA_PVC", "some-other-claim")
+    assert dispatch.resolve_data_pvc() == "some-other-claim"
+
+
+def test_resolve_data_pvc_falls_back_off_cluster(monkeypatch):
+    """Outside a pod there is nothing to read; the constant must still be the
+    claim the deployment mounts, not the orphan."""
+    from portal_testing import dispatch
+
+    monkeypatch.delenv("TFACTORY_DATA_PVC", raising=False)
+    assert dispatch.resolve_data_pvc() == "tfactory-data-rwx"
+    assert dispatch.DEFAULT_DATA_PVC == "tfactory-data-rwx"
+
+
+def test_default_job_mounts_the_resolved_claim(monkeypatch):
+    from portal_testing import dispatch
+
+    monkeypatch.delenv("TFACTORY_DATA_PVC", raising=False)
+    m = dispatch.build_portal_ui_job_manifest("tfactory", "r1")
+    vol = m["spec"]["template"]["spec"]["volumes"][0]
+    assert vol["persistentVolumeClaim"]["claimName"] == "tfactory-data-rwx"
+
+
+# ─── #908: the manifest obeys the rules the hub owns ────────────────────
+
+
+def test_manifest_satisfies_the_hub_job_policy():
+    """The canonical's own gate, run against what this builder produces.
+
+    `assert_job_policy` is the half of the contract a consumer that builds its
+    own manifest still has to honour, and the canonical asks that consumer's
+    tests to call it. Before #908 this manifest failed it outright: no
+    factory.io/service, no factory.io/kind.
+    """
+    from portal_testing.dispatch import assert_job_policy, build_portal_ui_job_manifest
+
+    assert_job_policy(build_portal_ui_job_manifest("tfactory", "r908"))
+
+
+def test_pod_labels_come_from_the_hub_not_a_literal():
+    """factory.io/kind=task is what the per-task NetworkPolicy selects.
+
+    Portal-UI Job pods carried neither it nor factory.io/service, so they
+    matched no policy at all: default-allow egress and nothing default-denying
+    ingress, for the whole run.
+    """
+    from portal_testing.dispatch import build_portal_ui_job_manifest
+
+    labels = build_portal_ui_job_manifest("cfactory", "r1")["spec"]["template"][
+        "metadata"
+    ]["labels"]
+    assert labels["factory.io/kind"] == "task"
+    assert labels["factory.io/service"] == "tfactory"
+    assert labels["app"] == "tfactory-portal-ui"
+
+
+@pytest.mark.parametrize(
+    "run_id", ["run_id with junk!!", "UPPER_CASE", "trailing---", "e2e/2026-08-08"]
+)
+def test_job_name_is_a_valid_dns_label(run_id):
+    """A run_id with any non-DNS character used to yield a name the API server
+    rejects outright, so the create failed at dispatch time."""
+    import re
+
+    from portal_testing.dispatch import portal_ui_job_name
+
+    name = portal_ui_job_name("tfactory", run_id)
+    assert len(name) <= 63
+    assert re.fullmatch(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?", name), name
+
+
+def test_job_carries_a_kill_deadline():
+    """A hung Playwright or Keycloak login had no k8s-enforced deadline:
+    ttlSecondsAfterFinished only starts once a Job finishes, which a hung one
+    never does."""
+    from portal_testing.dispatch import build_portal_ui_job_manifest
+
+    m = build_portal_ui_job_manifest("tfactory", "r1")
+    assert m["spec"]["activeDeadlineSeconds"] > 0
+
+
+def test_pod_is_hardened_and_holds_no_api_token():
+    """The least-hardened of the three builders had no securityContext at all
+    and inherited the namespace default for the service-account token."""
+    from portal_testing.dispatch import build_portal_ui_job_manifest
+
+    spec = build_portal_ui_job_manifest("tfactory", "r1")["spec"]["template"]["spec"]
+    assert spec["automountServiceAccountToken"] is False
+    sc = spec["containers"][0]["securityContext"]
+    assert sc["allowPrivilegeEscalation"] is False
+    assert sc["capabilities"]["drop"] == ["ALL"]
+
+
+def test_the_canonical_is_the_vendored_file_not_a_copy():
+    """One engine, no drift: these helpers must BE the hub's, loaded from the
+    vendored file, never re-implemented here."""
+    from portal_testing import dispatch
+
+    assert dispatch._HUB_CANONICAL.name == "job_dispatch.py"
+    assert dispatch._HUB_CANONICAL.is_file()
+    assert dispatch.task_pod_labels.__module__ == "portal_testing._job_dispatch"
 
 
 def test_job_pods_do_not_join_the_tfactory_service():

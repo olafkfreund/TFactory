@@ -26,6 +26,7 @@ from agents.coverage_delta import (
     compute_delta,
     compute_delta_from_paths,
     parse_coverage_xml,
+    union_coverage_pct,
 )
 
 # ── Helpers ────────────────────────────────────────────────────────────
@@ -243,3 +244,77 @@ def test_compute_from_paths_missing_baseline(tmp_path: Path) -> None:
     ap.write_text(after_xml)
     with pytest.raises(FileNotFoundError):
         compute_delta_from_paths(tmp_path / "missing.xml", ap)
+
+
+# ── union_coverage_pct: the honest run-level aggregate (#865) ──────────
+
+
+def _snap(tmp_path: Path, name: str, classes) -> CoverageSnapshot:
+    covered = sum(1 for _f, lines in classes for _n, h in lines if h)
+    total = sum(len(lines) for _f, lines in classes)
+    p = tmp_path / f"{name}.xml"
+    p.write_text(_cobertura(covered / total, classes))
+    return parse_coverage_xml(p)
+
+
+def test_union_is_the_project_figure_and_the_mean_is_not(tmp_path: Path) -> None:
+    """Two tests over disjoint halves of one file cover ALL of it.
+
+    Each report says 50%, so the mean says 50% — the average blast radius of
+    one test, which is not project coverage by any reading (#865). The union
+    says 100%, which is what the two tests together actually achieved.
+    """
+    a = _snap(tmp_path, "a", [("app.py", [(1, 1), (2, 1), (3, 0), (4, 0)])])
+    b = _snap(tmp_path, "b", [("app.py", [(1, 0), (2, 0), (3, 1), (4, 1)])])
+
+    mean = (a.line_rate + b.line_rate) / 2 * 100.0
+    assert mean == pytest.approx(50.0)
+    assert union_coverage_pct([a, b]) == 100.0
+
+
+def test_union_counts_files_only_one_report_measured(tmp_path: Path) -> None:
+    """A ``--cov=.`` report omits files its run never imported.
+
+    So the denominator has to be unioned as well: taking it from either report
+    alone would count lines the other report proved exist as if they did not.
+    """
+    a = _snap(tmp_path, "a", [("app.py", [(1, 1), (2, 1)])])
+    b = _snap(tmp_path, "b", [("app.py", [(1, 1), (2, 1)]), ("other.py", [(1, 0)])])
+    # 2 covered of 3 measured, not 2 of 2.
+    assert union_coverage_pct([a, b]) == 66.67
+
+
+def test_union_of_nothing_is_none_not_zero() -> None:
+    """No reports means no figure. Zero would be a claim we cannot make."""
+    assert union_coverage_pct([]) is None
+    assert union_coverage_pct([CoverageSnapshot()]) is None
+
+
+def test_union_refuses_a_snapshot_with_no_measured_lines() -> None:
+    """The JaCoCo adapter surfaces covered lines but keeps no denominator.
+
+    Dividing by whatever ``total_lines`` happens to say would invent a figure
+    out of a report that cannot support one; None is the honest answer.
+    """
+    jacoco_shaped = CoverageSnapshot(
+        covered_lines={"A.java": frozenset({1, 2})},
+        line_rate=0.5,
+        total_lines=4,
+    )
+    assert union_coverage_pct([jacoco_shaped]) is None
+
+
+def test_union_refuses_a_mixed_run_it_cannot_reconcile(tmp_path: Path) -> None:
+    """One denominator-less snapshot poisons the whole run, and must say so.
+
+    A polyglot corpus could pair a Cobertura report with a JaCoCo one. Ignoring
+    the JaCoCo half would divide its covered lines by the Python denominator and
+    report over 100%, or -- worse, once rounded down -- a number that merely
+    looks plausible. There is no honest figure here, so there is no figure.
+    """
+    python_side = _snap(tmp_path, "py", [("app.py", [(1, 1), (2, 0)])])
+    java_side = CoverageSnapshot(
+        covered_lines={"A.java": frozenset({1, 2, 3})}, line_rate=0.75, total_lines=4
+    )
+    assert union_coverage_pct([python_side]) == 50.0
+    assert union_coverage_pct([python_side, java_side]) is None

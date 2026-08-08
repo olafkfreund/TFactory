@@ -537,6 +537,71 @@ async def test_criterion_asserted_as_written_commits(
 
 
 @pytest.mark.asyncio
+async def test_criterion_authority_rejects_the_specimen(
+    spec_dir: Path,
+    project_dir: Path,
+    mock_sdk,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#995: prose that grades the spec is rejected on its own, values aside.
+
+    The literal check is opted out here precisely so the values cannot be what
+    rejects. What is left is the comment — "11.76 is a typo in the spec; the
+    implementation follows AC2" — a generator announcing it decided the
+    specification was wrong. That test has redefined its own oracle, and the
+    literal check cannot see it whenever the asserted value happens to agree.
+    """
+    monkeypatch.setenv("TFACTORY_CRITERION_LITERAL_CHECK", "0")
+    _make_plan(spec_dir, subtask_count=1)
+    _set_description(spec_dir, _AC3_DESCRIPTION)
+    mock_sdk(source_for=lambda sid: _rewritten_criterion_source())
+
+    assert await run_gen_functional(spec_dir, project_dir) is False
+
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["status"] == "replan_needed"
+    assert status["phase"] == "gen_functional_criterion_authority_rejected"
+    assert "spec" in status["last_rejected_reason"]
+    # The file does not survive and a human-reachable replan is filed.
+    assert not (spec_dir / "tests" / "test_s0.py").exists()
+    assert (spec_dir / "context" / "replan_request.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_criterion_authority_check_is_what_rejects(
+    spec_dir: Path,
+    project_dir: Path,
+    mock_sdk,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mutation check on the wiring: opt BOTH checks out and the same source
+    sails through, so the rejection above is the authority check doing the work."""
+    monkeypatch.setenv("TFACTORY_CRITERION_LITERAL_CHECK", "0")
+    monkeypatch.setenv("TFACTORY_CRITERION_AUTHORITY_CHECK", "0")
+    _make_plan(spec_dir, subtask_count=1)
+    _set_description(spec_dir, _AC3_DESCRIPTION)
+    mock_sdk(source_for=lambda sid: _rewritten_criterion_source())
+
+    assert await run_gen_functional(spec_dir, project_dir) is True
+    assert json.loads((spec_dir / "status.json").read_text())["status"] == "generated"
+
+
+@pytest.mark.asyncio
+async def test_faithful_source_passes_the_authority_check(
+    spec_dir: Path,
+    project_dir: Path,
+    mock_sdk,
+) -> None:
+    """The mirror half: an honest test's prose is not a claim, and it commits."""
+    _make_plan(spec_dir, subtask_count=1)
+    _set_description(spec_dir, _AC3_DESCRIPTION)
+    mock_sdk(source_for=lambda sid: _faithful_criterion_source())
+
+    assert await run_gen_functional(spec_dir, project_dir) is True
+    assert (spec_dir / "tests" / "test_s0.py").exists()
+
+
+@pytest.mark.asyncio
 async def test_criterion_literal_check_is_what_rejects(
     spec_dir: Path,
     project_dir: Path,
@@ -545,8 +610,17 @@ async def test_criterion_literal_check_is_what_rejects(
 ) -> None:
     """Mutation check on the wiring: with the check opted out, the SAME rewritten
     source sails through. So the rejection above is this check doing the work,
-    not some other guard incidentally tripping."""
+    not some other guard incidentally tripping.
+
+    The #995 authority check is opted out too, because it independently rejects
+    this same source — its comment reads "11.76 is a typo in the spec", which is
+    the specimen #995 exists for. Leaving it on would make this test pass or
+    fail for the other guard's reasons, which is the very confusion it is here
+    to rule out. `test_criterion_authority_rejects_the_specimen` covers that
+    direction.
+    """
     monkeypatch.setenv("TFACTORY_CRITERION_LITERAL_CHECK", "0")
+    monkeypatch.setenv("TFACTORY_CRITERION_AUTHORITY_CHECK", "0")
     _make_plan(spec_dir, subtask_count=1)
     _set_description(spec_dir, _AC3_DESCRIPTION)
     mock_sdk(source_for=lambda sid: _rewritten_criterion_source())

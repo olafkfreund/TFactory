@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import json
 import logging
+import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from agents.coverage_delta import parse_coverage, union_coverage_pct
 from agents.flaky_history import FlakyClass, load_history
 
 from .corpus import load_corpus
@@ -40,6 +42,9 @@ from .runner import RegressionRunner, run_corpus
 from .store import load_baseline, save_run
 
 logger = logging.getLogger(__name__)
+
+# Reading HEAD is a local rev-parse; a hung git must not stall a whole run.
+_GIT_TIMEOUT_S = 5
 
 
 @dataclass(frozen=True)
@@ -123,7 +128,7 @@ def run_regression(
         project_id=request.project_id,
         ran_at=request.ran_at,
         results=tuple(outcomes),
-        commit=request.commit,
+        commit=request.commit or _head_sha(request.repo_root),
         target_url=request.target_url,
         baseline_run_id=baseline.run_id if baseline else None,
         coverage_pct=_aggregate_coverage(outcomes),
@@ -176,15 +181,54 @@ def _apply_quarantine(reg_dir: Path, outcomes: list[TestOutcome]) -> list[TestOu
 
 
 def _aggregate_coverage(outcomes: list[TestOutcome]) -> float | None:
-    """Project coverage for the run: mean of per-test coverage, or None.
+    """Project coverage for the run: the UNION of what every test covered.
 
-    None when no outcome carries a coverage figure (e.g. browser-only runs or
-    until per-test coverage is populated), in which case no trend is recorded.
+    Each corpus entry runs in its own Job with ``--cov=.``, so its report is
+    project-wide coverage achieved by that ONE test. The mean of those is not
+    project coverage by any reading: for N narrow tests it converges on the
+    average blast radius of one test, which would sit in the trend and in
+    ``/api/coverage`` looking exactly like a coverage percentage (#865,
+    Factory#431). The union of the covered-line sets is the honest figure.
+
+    None when no outcome carried a readable report — and then no trend point is
+    recorded, because a figure we cannot compute must not be invented.
     """
-    pcts = [o.coverage_pct for o in outcomes if o.coverage_pct is not None]
-    if not pcts:
+    snapshots = []
+    for outcome in outcomes:
+        if not outcome.coverage_report_path:
+            continue
+        try:
+            snapshots.append(parse_coverage(Path(outcome.coverage_report_path)))
+        except (OSError, ValueError) as exc:  # CoverageParseError is a ValueError
+            logger.warning(
+                "regression: skipping unreadable coverage report for test_id=%s: %s",
+                outcome.test_id,
+                exc,
+            )
+    return union_coverage_pct(snapshots)
+
+
+def _head_sha(repo_root: Path) -> str | None:
+    """HEAD of the project worktree — the commit this run measured, or None.
+
+    Every automated caller (HTTP trigger, nightly CronJob, MCP tool without an
+    explicit SHA) left ``commit`` unset, and ``/api/coverage`` skips trend
+    points that carry no commit — so a point recorded today could never be
+    matched back to a SHA (#865). Resolving it here covers every surface at
+    once; an explicit ``request.commit`` still wins.
+    """
+    try:
+        res = subprocess.run(  # noqa: S603 - fixed argv, path from our own store
+            ["git", "-C", str(repo_root), "rev-parse", "HEAD"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            timeout=_GIT_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
         return None
-    return round(sum(pcts) / len(pcts), 2)
+    sha = res.stdout.strip()
+    return sha if res.returncode == 0 and sha else None
 
 
 def _coverage_drift_and_record(reg_dir: Path, run: RegressionRun) -> DriftResult | None:

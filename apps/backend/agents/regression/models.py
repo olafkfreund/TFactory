@@ -58,8 +58,16 @@ class TestOutcome:
     framework: str
     status: TestStatus
     duration_ms: int | None = None
+    # This test's OWN project-wide line rate (its Job ran ``--cov=.``). An
+    # honest per-test signal; it is NOT what the run reports as project
+    # coverage — see ``orchestrator._aggregate_coverage`` (#865).
     coverage_pct: float | None = None
     evidence_uri: str | None = None
+    # In-run only: where this test's coverage report landed, so the orchestrator
+    # can union the covered-line sets across the run. Deliberately absent from
+    # ``to_dict`` — it points at a per-run temp dir, and a persisted path that
+    # no longer resolves is worse than no path at all.
+    coverage_report_path: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {

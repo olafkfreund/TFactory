@@ -211,7 +211,16 @@ _SDK_PASSTHROUGH_ENV: tuple[str, ...] = (
     "OPENAI_COMPATIBLE_MAX_TOKENS",
     "GEMINI_API_KEY",
     "GOOGLE_API_KEY",
+    # #871 — the gemini/antigravity CLI refuses to run in an "untrusted"
+    # workspace and exits BEFORE any API call. providers/gemini_agentic.py spawns
+    # that CLI as a subprocess, which inherits the Job container's env, so the
+    # key alone is not enough: without this the Gemini verify leg stalls with no
+    # request ever leaving the pod. Same fix AIFactory made on 2026-06-13.
+    "GEMINI_CLI_TRUST_WORKSPACE",
     "OLLAMA_API_KEY",
+    "OLLAMA_BASE_URL",  # #870 — self-hosted ollama address; without it the Job
+    # falls back to the provider's http://localhost:11434 default, where nothing
+    # listens inside the Job pod.
     "OLLAMA_CLOUD_BASE_URL",
     "GITHUB_TOKEN",
     "GITHUB_MODELS_DEFAULT",
@@ -752,6 +761,25 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
     if oauth_env is not None:
         env.append(oauth_env)
     env.extend(_provider_env_entries())
+    # Trace context + OTLP config, so the verify Job's spans are children of the
+    # span that dispatched it instead of a trace ending here (Factory#638). This
+    # builder does not go through the hub's ``build_job_manifest`` — it wraps
+    # ``kube_sandbox`` and assembles its own env — so it inherits none of
+    # ``trace_env`` for free and has to ask for it explicitly.
+    #
+    # This line is HALF of the fix and is worthless on its own: it lands correct-
+    # looking trace configuration, and a Job with nothing to open a span with
+    # still ends the trace here while LOOKING instrumented. The other half is
+    # ``agents.verify_pipeline`` calling ``job_tracing.init_agent_tracing()`` at
+    # entry; the two must ship together. Factory#607's mutation is the proof that
+    # configuration is not coverage — a FABRICATED traceparent still lands a
+    # healthy-looking ``<service>-job`` span, under a trace nobody is watching.
+    #
+    # Adds nothing at all when this pod has no OTEL_EXPORTER_OTLP_ENDPOINT (dev,
+    # tests, off-cluster), and no TRACEPARENT when there is no active span — an
+    # unparented job span is volume with no question attached. The collector
+    # credential crosses as a ``secretKeyRef``, never a literal.
+    env.extend(job_dispatch.trace_env(SERVICE))
     container = pod_spec["containers"][0]
     container["env"] = env
 

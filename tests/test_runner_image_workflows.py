@@ -187,6 +187,40 @@ def test_every_published_runner_image_is_signed_with_a_pinned_identity():
         )
 
 
+_SOURCE_LABEL = (
+    "org.opencontainers.image.source=https://github.com/${{ github.repository }}"
+)
+
+
+def test_every_published_runner_image_is_labelled_with_its_source_repo():
+    """#952: GHCR links a package to a repo via `org.opencontainers.image.source`.
+
+    Without it the package is linked to nothing, so it inherits neither the
+    repository's visibility nor its package permissions, and its GHCR page
+    offers no path back to the code and workflow that built it.
+    `tfactory-runner-nix` and `tfactory-runner-portal-ui` were the two of eleven
+    whose Dockerfiles omitted it, and they were the two that diverged from their
+    nine siblings.
+
+    Asserted on the WORKFLOW rather than on the Dockerfiles, which is the point.
+    Nine authors remembered the LABEL line and two did not, and nothing --- not
+    CI, not the workflow log, not the image --- made the omission visible; it
+    showed up only in package metadata. A `labels:` on the push step cannot be
+    forgotten by the author of the next runner image.
+    """
+    publishers = _publishers()
+    assert publishers, "premise changed: no workflow publishes a runner image"
+
+    for wf_name, text in sorted(publishers.items()):
+        assert _SOURCE_LABEL in text, (
+            f"{wf_name} publishes a runner image without setting\n"
+            f"  labels: {_SOURCE_LABEL}\n"
+            "on its push step. The GHCR package will be linked to no "
+            "repository, and so will inherit neither this repo's visibility "
+            "nor its package permissions (#952, Factory#563)."
+        )
+
+
 # A job whose `if:` requires the push event cannot run on a pull_request. This
 # is the idiom all three publishing workflows use; anything else is treated as
 # PR-reachable, which is the conservative direction for a permission guard.
@@ -248,6 +282,56 @@ def test_pull_request_runs_are_not_granted_id_token_write():
     assert checked, (
         "premise changed: no pull_request-reachable job found in any workflow"
     )
+
+
+# cosign is the only thing in this repo that consumes a GitHub OIDC token. If a
+# job acquires a legitimate second use (a cloud `configure-*-credentials`, say),
+# widen this deliberately -- do not delete the assertion.
+_SIGNS = re.compile(r"cosign\s+(sign|attest)")
+
+
+def test_only_jobs_that_sign_are_granted_id_token_write():
+    """#957: `id-token: write` must be declared per job, never inherited.
+
+    `deploy.yml` declared it at workflow level, so `seam-check` -- which checks
+    out a public repo and makes outbound HTTP calls -- was handed the OIDC token
+    too. That token is the signing identity: `cosign sign` uses it to mint a
+    Sigstore certificate whose subject is this repository, and since Factory#522
+    a signature is what admits an image to the cluster. So a job that can mint it
+    can sign something the admission gate will then trust.
+
+    Sibling of `test_pull_request_runs_are_not_granted_id_token_write`, which
+    guards the *event* boundary (no PR-reachable job may hold the capability).
+    This one guards the *job* boundary on every trigger, including push-only
+    workflows like `deploy.yml` and `release.yml` that the other test skips by
+    design.
+
+    Deliberately narrower than "no job inherits a capability no step uses" --
+    that is a much harder property and would need a model of what every action
+    consumes. This asserts only the capability that is a signing identity.
+    """
+    checked = 0
+    for wf_name, (_text, doc) in sorted(_workflows().items()):
+        for job_name, job in (doc.get("jobs") or {}).items():
+            # A job-level block replaces the workflow-level one outright.
+            perms = job.get("permissions", doc.get("permissions"))
+            if not _grants_id_token(perms):
+                continue
+            checked += 1
+            steps = " ".join(
+                f"{step.get('run', '')} {step.get('uses', '')}"
+                for step in (job.get("steps") or [])
+            )
+            assert _SIGNS.search(steps), (
+                f"{wf_name}: job `{job_name}` is granted `id-token: write` but "
+                "runs no `cosign sign`/`attest` step. That capability mints a "
+                "GitHub OIDC token, which is the identity images are signed "
+                "with and the gate admits on -- declare it on the signing job "
+                "only, not at workflow level where every job inherits it "
+                "(#957, Factory#522)."
+            )
+
+    assert checked, "premise changed: no job requests `id-token: write` at all"
 
 
 def test_portal_ui_workflow_triggers_on_the_code_baked_into_the_image():
@@ -341,3 +425,93 @@ def test_the_job_pin_env_var_is_the_one_ci_bumps():
     assert "name: PORTAL_UI_IMAGE, value:" in text
     # The pin must be an immutable tag, not a floating one.
     assert 'echo "sha=sha-$(git rev-parse --short HEAD)"' in text
+
+
+# ---------------------------------------------------------------------------
+# #890: what the cluster resolves must be tellable apart from something stale.
+# ---------------------------------------------------------------------------
+
+_CHART_VALUES = _ROOT / "charts" / "tfactory" / "values.yaml"
+# `ghcr.io/<owner>/tfactory-runner-<name>` followed by whatever pins it.
+_RUNNER_PIN = re.compile(
+    r"ghcr\.io/[a-z0-9-]+/tfactory-runner-[a-z0-9-]+(?P<pin>[^\"'\s]*)"
+)
+
+
+def test_chart_pins_every_runner_image_by_digest():
+    """A floating tag is worse under an Enforce signature gate, not merely untidy.
+
+    `rbac.jobSandbox.nixRunnerImage` resolved `:latest`, and it feeds
+    TFACTORY_NIX_RUNNER_IMAGE in both the Deployment and the regression CronJob
+    -- the Nix lane, which is the DEFAULT verify execution path. The image
+    content happened to be current, but that is luck, not a property anyone can
+    check.
+
+    Since Factory#522 the Kyverno gate is at Enforce, so a tag can be repointed
+    at something unsigned between one admission check and the next; a digest
+    cannot move at all. Twice this month the fleet was bitten by a floating
+    reference that looked fine (a garbage-collected Chainguard `latest-dev`, and
+    #886's five-week-stale `:latest`), and in both cases every artefact except
+    the outcome looked like a working control.
+
+    The tag is not banned -- `:sha-<short>@sha256:...` is the wanted shape. The
+    digest is what resolves; the tag rides along as readable provenance and
+    keeps factory-gitops' `fleet-match` able to see the image at all, since its
+    `carries()` only recognises `sha-<short>` (factory-gitops#89).
+    """
+    text = _CHART_VALUES.read_text()
+    pins = [m.group("pin") for m in _RUNNER_PIN.finditer(text)]
+    assert pins, f"premise changed: {_CHART_VALUES} pins no runner image"
+    for pin in pins:
+        assert "@sha256:" in pin, (
+            f"charts/tfactory/values.yaml pins a runner image as `{pin}`, which "
+            "resolves whatever that tag points at today. Pin "
+            "`:sha-<short>@sha256:<digest>` so the reference cannot move under "
+            "an Enforce signature gate (#890, Factory#522)."
+        )
+
+
+def test_runner_images_are_tagged_sha_short_not_a_raw_commit_sha():
+    """A tag the drift tooling cannot parse is invisible by construction.
+
+    The nine matrix images were tagged with the raw 40-char `github.sha`.
+    `fleet-match`'s `carries()` only recognises `sha-<short>`, so no amount of
+    drift checking would ever have seen them (factory-gitops#89). Nothing in the
+    cluster pins them by tag yet, which is exactly why this is cheap to hold now.
+    """
+    for wf_name, text in sorted(_publishers().items()):
+        assert "${{ github.sha }}" not in text, (
+            f"{wf_name} tags an image with the raw 40-char `github.sha`. Use "
+            '`sha-$(git rev-parse --short HEAD)`, the shape every other fleet '
+            "image publishes and the only one `fleet-match` can parse (#890)."
+        )
+        assert 'echo "sha=sha-$(git rev-parse --short HEAD)"' in text, (
+            f"{wf_name} publishes a runner image without deriving a "
+            "`sha-<short>` tag, so what it pushes cannot be told apart from a "
+            "stale rebuild (#890)."
+        )
+
+
+def test_the_nix_lane_pin_env_vars_are_the_ones_ci_bumps():
+    """Two halves of one mechanism in two repos, as with PORTAL_UI_IMAGE.
+
+    The chart and factory-gitops name TFACTORY_NIX_RUNNER_IMAGE and
+    TFACTORY_VAL3_K8S_JOB_IMAGE; nix-runner-image.yml must bump those same
+    names. A rename on either side leaves the lane silently back on the floating
+    `:latest` it was pinned away from -- and, unlike a broken build, that
+    failure reports success.
+    """
+    text = _workflows()["nix-runner-image.yml"][0]
+    for var in ("TFACTORY_NIX_RUNNER_IMAGE", "TFACTORY_VAL3_K8S_JOB_IMAGE"):
+        assert var in text, (
+            f"nix-runner-image.yml does not bump {var}, so the cluster keeps "
+            "resolving whatever it was pinned to before (#890)."
+        )
+    # And it must pin the digest it just published and verified, not a bare tag.
+    assert "@${{ steps.build.outputs.digest }}" in text, (
+        "nix-runner-image.yml must pin the digest it published, not only a tag "
+        "(#890)."
+    )
+    assert "TFACTORY_NIX_RUNNER_IMAGE" in (
+        _ROOT / "charts" / "tfactory" / "templates" / "deployment.yaml"
+    ).read_text(), "premise changed: the chart no longer sets this env var"

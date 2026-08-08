@@ -138,3 +138,92 @@ async def test_resolve_client_routes_ollama_via_runtime(
     # Ambiguous model + ollama runtime -> ollama provider, routed model passed.
     assert captured["provider"] == "ollama"
     assert captured["model"] == "qwen3:14b"
+
+
+# ── #870: ollama-cloud is NOT the local provider ───────────────────────────
+#
+# The cloud runtime is an OpenAI-compatible endpoint (https://ollama.com, key
+# from OPENAI_COMPATIBLE_API_KEY / OLLAMA_API_KEY — see
+# providers/ollama_cloud_check.py). Mapping it onto the local agentic ``ollama``
+# provider sent a cloud-routed contract to http://localhost:11434 with no
+# credentials.
+
+
+def test_ollama_cloud_runtime_routes_to_openai_compatible() -> None:
+    assert (
+        _apply_runtime_override("claude", "qwen3:14b", "ollama-cloud")
+        == "openai-compatible"
+    )
+
+
+def test_local_ollama_runtime_still_routes_to_the_local_provider() -> None:
+    assert _apply_runtime_override("claude", "qwen3:14b", "ollama") == "ollama"
+
+
+@pytest.mark.asyncio
+async def test_resolve_client_routes_ollama_cloud_to_openai_compatible(
+    spec_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_get_provider(provider_name, **kwargs):
+        captured["provider"] = provider_name
+        captured["model"] = kwargs.get("model")
+        captured["base_url"] = kwargs.get("base_url")
+        return object()
+
+    monkeypatch.setattr("providers.factory.get_provider", _fake_get_provider)
+    monkeypatch.setenv("OPENAI_COMPATIBLE_BASE_URL", "https://ollama.com")
+    monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "test-key")
+    _write_contract(
+        spec_dir,
+        {
+            "contract_version": "2",
+            "execution": {
+                "phase_models": {"test_gen": "qwen3:14b"},
+                "runtime": "ollama-cloud",
+            },
+        },
+    )
+
+    await _resolve_client(spec_dir, spec_dir)
+
+    assert captured["provider"] == "openai-compatible"
+    assert captured["base_url"] == "https://ollama.com"
+
+
+@pytest.mark.asyncio
+async def test_resolve_client_gives_local_ollama_the_configured_base_url(
+    spec_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#870: the deployment's OLLAMA_BASE_URL must reach the provider.
+
+    The provider class defaults to http://localhost:11434 and reads no env of
+    its own; inside a pod nothing listens there.
+    """
+    captured: dict[str, object] = {}
+
+    def _fake_get_provider(provider_name, **kwargs):
+        captured["provider"] = provider_name
+        captured["base_url"] = kwargs.get("base_url")
+        return object()
+
+    monkeypatch.setattr("providers.factory.get_provider", _fake_get_provider)
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama.example:11434")
+    _write_contract(
+        spec_dir,
+        {
+            "contract_version": "2",
+            "execution": {
+                "phase_models": {"test_gen": "qwen3:14b"},
+                "runtime": "ollama",
+            },
+        },
+    )
+
+    await _resolve_client(spec_dir, spec_dir)
+
+    assert captured["provider"] == "ollama"
+    assert captured["base_url"] == "http://ollama.example:11434"
