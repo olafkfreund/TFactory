@@ -7,6 +7,7 @@ Helper functions for git operations, plan management, and file syncing.
 
 import json
 import logging
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -137,7 +138,10 @@ def _find_main_repo(project_dir: Path, stale_gitdir: Path) -> Path | None:
     parts = stale_gitdir.parts
     if ".git" not in parts:
         return None
-    repo_name = parts[len(parts) - 1 - parts[::-1].index(".git") - 1]
+    dot_git_at = len(parts) - 1 - parts[::-1].index(".git")
+    if dot_git_at == 0:
+        return None  # a bare ".git/..." pointer names no repo directory
+    repo_name = parts[dot_git_at - 1]
     for ancestor in project_dir.parents:
         for candidate in (ancestor, ancestor / repo_name):
             if (candidate / ".git").is_dir():
@@ -192,6 +196,13 @@ def repair_linked_worktree(project_dir: Path) -> None:
             stale,
         )
         return
+    # Strip ambient git env, as _add_spec_worktree does: an inherited GIT_DIR /
+    # GIT_WORK_TREE would hijack our ``-C`` and repair the wrong repository.
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
+    }
     try:
         proc = subprocess.run(
             ["git", "-C", str(main_repo), "worktree", "repair", str(project_dir)],
@@ -199,6 +210,7 @@ def repair_linked_worktree(project_dir: Path) -> None:
             text=True,
             timeout=60,
             check=False,
+            env=env,
         )
     except (OSError, subprocess.SubprocessError) as exc:  # pragma: no cover
         logger.warning("[worktree-repair] git worktree repair failed: %s (#868)", exc)
