@@ -302,3 +302,19 @@ def test_union_refuses_a_snapshot_with_no_measured_lines() -> None:
         total_lines=4,
     )
     assert union_coverage_pct([jacoco_shaped]) is None
+
+
+def test_union_refuses_a_mixed_run_it_cannot_reconcile(tmp_path: Path) -> None:
+    """One denominator-less snapshot poisons the whole run, and must say so.
+
+    A polyglot corpus could pair a Cobertura report with a JaCoCo one. Ignoring
+    the JaCoCo half would divide its covered lines by the Python denominator and
+    report over 100%, or -- worse, once rounded down -- a number that merely
+    looks plausible. There is no honest figure here, so there is no figure.
+    """
+    python_side = _snap(tmp_path, "py", [("app.py", [(1, 1), (2, 0)])])
+    java_side = CoverageSnapshot(
+        covered_lines={"A.java": frozenset({1, 2, 3})}, line_rate=0.75, total_lines=4
+    )
+    assert union_coverage_pct([python_side]) == 50.0
+    assert union_coverage_pct([python_side, java_side]) is None
