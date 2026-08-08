@@ -752,6 +752,25 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
     if oauth_env is not None:
         env.append(oauth_env)
     env.extend(_provider_env_entries())
+    # Trace context + OTLP config, so the verify Job's spans are children of the
+    # span that dispatched it instead of a trace ending here (Factory#638). This
+    # builder does not go through the hub's ``build_job_manifest`` — it wraps
+    # ``kube_sandbox`` and assembles its own env — so it inherits none of
+    # ``trace_env`` for free and has to ask for it explicitly.
+    #
+    # This line is HALF of the fix and is worthless on its own: it lands correct-
+    # looking trace configuration, and a Job with nothing to open a span with
+    # still ends the trace here while LOOKING instrumented. The other half is
+    # ``agents.verify_pipeline`` calling ``job_tracing.init_agent_tracing()`` at
+    # entry; the two must ship together. Factory#607's mutation is the proof that
+    # configuration is not coverage — a FABRICATED traceparent still lands a
+    # healthy-looking ``<service>-job`` span, under a trace nobody is watching.
+    #
+    # Adds nothing at all when this pod has no OTEL_EXPORTER_OTLP_ENDPOINT (dev,
+    # tests, off-cluster), and no TRACEPARENT when there is no active span — an
+    # unparented job span is volume with no question attached. The collector
+    # credential crosses as a ``secretKeyRef``, never a literal.
+    env.extend(job_dispatch.trace_env(SERVICE))
     container = pod_spec["containers"][0]
     container["env"] = env
 
