@@ -10,7 +10,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Literal, TypedDict
+from typing import Any, Literal, TypedDict
 
 logger = logging.getLogger(__name__)
 
@@ -554,7 +554,7 @@ def _load_openai_endpoint(label: str | None = None) -> dict | None:
     return None
 
 
-def _ollama_extra_kwargs() -> dict:
+def _ollama_extra_kwargs() -> dict[str, Any]:
     """``base_url`` for the self-hosted Ollama, from ``OLLAMA_BASE_URL`` (#870).
 
     The provider class defaults to ``http://localhost:11434`` and reads no
