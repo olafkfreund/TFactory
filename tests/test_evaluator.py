@@ -650,6 +650,11 @@ def test_advance_kubejob_dispatches_job_and_skips_inpod(
 ) -> None:
     from agents import gen_functional
 
+    # The autouse _disable_chains fixture pins TFACTORY_AUTO_EVALUATE=0; this
+    # test is about the *dispatch*, so re-enable it explicitly (#897 — before
+    # that fix the kubejob branch ran regardless of this flag, which is exactly
+    # the defect: this test used to pass with auto-evaluate pinned off).
+    monkeypatch.setenv("TFACTORY_AUTO_EVALUATE", "1")
     monkeypatch.setenv("TFACTORY_VERIFY_EXEC", "kubejob")
     monkeypatch.setenv("JOB_ID", "proj:042")
 
@@ -721,6 +726,7 @@ def test_advance_kubejob_falls_back_to_inpod_when_dispatch_returns_none(
     # verify.
     from agents import gen_functional
 
+    monkeypatch.setenv("TFACTORY_AUTO_EVALUATE", "1")  # see note in the test above
     monkeypatch.setenv("TFACTORY_VERIFY_EXEC", "kubejob")
 
     import agents.evaluator as eval_mod
@@ -740,6 +746,58 @@ def test_advance_kubejob_falls_back_to_inpod_when_dispatch_returns_none(
 
     gen_functional._advance_to_evaluator(spec_dir, project_dir)
     assert called.get("inpod") is True
+
+
+# ── #897 — TFACTORY_AUTO_EVALUATE gates BOTH execution modes ──────────────────
+#
+# The gate used to live only inside the in-pod schedule_evaluator, so with the
+# production TFACTORY_VERIFY_EXEC=kubejob setting it governed nothing: the
+# kubejob branch ran first and applied a real verify Job regardless.
+
+
+def test_auto_evaluate_off_blocks_kubejob_dispatch(
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agents import gen_functional
+
+    monkeypatch.setenv("TFACTORY_VERIFY_EXEC", "kubejob")
+    monkeypatch.setenv("TFACTORY_AUTO_EVALUATE", "0")
+
+    import agents.evaluator as eval_mod
+    import agents.verify_dispatch as vd_mod
+
+    async def _no_dispatch(**kwargs):  # pragma: no cover - must not be reached
+        raise AssertionError("kubejob dispatch must not run when auto-evaluate is off")
+
+    def _no_inpod(*a, **k):  # pragma: no cover - must not be reached
+        raise AssertionError("in-pod evaluator must not run when auto-evaluate is off")
+
+    monkeypatch.setattr(vd_mod, "dispatch_verify_job", _no_dispatch)
+    monkeypatch.setattr(eval_mod, "schedule_evaluator", _no_inpod)
+
+    gen_functional._advance_to_evaluator(spec_dir, project_dir)
+
+
+def test_auto_evaluate_off_blocks_inpod_path(
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agents import gen_functional
+
+    monkeypatch.delenv("TFACTORY_VERIFY_EXEC", raising=False)
+    monkeypatch.setenv("TFACTORY_AUTO_EVALUATE", "0")
+
+    import agents.evaluator as eval_mod
+
+    def _no_inpod(*a, **k):  # pragma: no cover - must not be reached
+        raise AssertionError("in-pod evaluator must not run when auto-evaluate is off")
+
+    monkeypatch.setattr(eval_mod, "schedule_evaluator", _no_inpod)
+
+    gen_functional._advance_to_evaluator(spec_dir, project_dir)
 
 
 # ── Task 10 (#26) — Coverage adapter (null vs zero) ────────────────────
