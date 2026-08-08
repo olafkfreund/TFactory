@@ -137,11 +137,22 @@ jobs:
       # reads frameworks/portal-ui/descriptor.yaml from the repo root, which the
       # runtime image has no reason to ship. pytest+pyyaml are installed in the
       # throwaway container, never into the published image.
+      #
+      # apps/backend/tools is mounted for the same reason (#908): dispatch.py
+      # builds its Job manifest from the vendored hub canonical
+      # `tools.runners.job_dispatch` rather than from literals, and
+      # test_dispatch.py runs the canonical's own `assert_job_policy` against
+      # the result. The published image must NOT ship apps/backend — it vendors
+      # portal_testing/ alone, and at runtime only runs portal_testing.run,
+      # which never imports dispatch.py. Mounting it keeps the image
+      # self-contained AND keeps the #885 regressions executing against the
+      # bytes that will run in the cluster, which is the whole point of this gate.
       # ---------------------------------------------------------------------
       - name: Gate — the vendored harness in the image is THIS commit's
         run: |
           docker run --rm \
             -v "${PWD}/frameworks:/app/frameworks:ro" \
+            -v "${PWD}/apps/backend/tools:/app/apps/backend/tools:ro" \
             "${IMAGE}:latest" \
             sh -c 'pip install --quiet --no-cache-dir pytest pyyaml \
                    && python -m pytest /app/portal_testing -q'

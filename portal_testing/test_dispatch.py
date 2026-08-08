@@ -259,6 +259,86 @@ def test_default_job_mounts_the_resolved_claim(monkeypatch):
     assert vol["persistentVolumeClaim"]["claimName"] == "tfactory-data-rwx"
 
 
+# ─── #908: the manifest obeys the rules the hub owns ────────────────────
+
+
+def test_manifest_satisfies_the_hub_job_policy():
+    """The canonical's own gate, run against what this builder produces.
+
+    `assert_job_policy` is the half of the contract a consumer that builds its
+    own manifest still has to honour, and the canonical asks that consumer's
+    tests to call it. Before #908 this manifest failed it outright: no
+    factory.io/service, no factory.io/kind.
+    """
+    from portal_testing.dispatch import assert_job_policy, build_portal_ui_job_manifest
+
+    assert_job_policy(build_portal_ui_job_manifest("tfactory", "r908"))
+
+
+def test_pod_labels_come_from_the_hub_not_a_literal():
+    """factory.io/kind=task is what the per-task NetworkPolicy selects.
+
+    Portal-UI Job pods carried neither it nor factory.io/service, so they
+    matched no policy at all: default-allow egress and nothing default-denying
+    ingress, for the whole run.
+    """
+    from portal_testing.dispatch import build_portal_ui_job_manifest
+
+    labels = build_portal_ui_job_manifest("cfactory", "r1")["spec"]["template"][
+        "metadata"
+    ]["labels"]
+    assert labels["factory.io/kind"] == "task"
+    assert labels["factory.io/service"] == "tfactory"
+    assert labels["app"] == "tfactory-portal-ui"
+
+
+@pytest.mark.parametrize(
+    "run_id", ["run_id with junk!!", "UPPER_CASE", "trailing---", "e2e/2026-08-08"]
+)
+def test_job_name_is_a_valid_dns_label(run_id):
+    """A run_id with any non-DNS character used to yield a name the API server
+    rejects outright, so the create failed at dispatch time."""
+    import re
+
+    from portal_testing.dispatch import portal_ui_job_name
+
+    name = portal_ui_job_name("tfactory", run_id)
+    assert len(name) <= 63
+    assert re.fullmatch(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?", name), name
+
+
+def test_job_carries_a_kill_deadline():
+    """A hung Playwright or Keycloak login had no k8s-enforced deadline:
+    ttlSecondsAfterFinished only starts once a Job finishes, which a hung one
+    never does."""
+    from portal_testing.dispatch import build_portal_ui_job_manifest
+
+    m = build_portal_ui_job_manifest("tfactory", "r1")
+    assert m["spec"]["activeDeadlineSeconds"] > 0
+
+
+def test_pod_is_hardened_and_holds_no_api_token():
+    """The least-hardened of the three builders had no securityContext at all
+    and inherited the namespace default for the service-account token."""
+    from portal_testing.dispatch import build_portal_ui_job_manifest
+
+    spec = build_portal_ui_job_manifest("tfactory", "r1")["spec"]["template"]["spec"]
+    assert spec["automountServiceAccountToken"] is False
+    sc = spec["containers"][0]["securityContext"]
+    assert sc["allowPrivilegeEscalation"] is False
+    assert sc["capabilities"]["drop"] == ["ALL"]
+
+
+def test_the_canonical_is_the_vendored_file_not_a_copy():
+    """One engine, no drift: these helpers must BE the hub's, loaded from the
+    vendored file, never re-implemented here."""
+    from portal_testing import dispatch
+
+    assert dispatch._HUB_CANONICAL.name == "job_dispatch.py"
+    assert dispatch._HUB_CANONICAL.is_file()
+    assert dispatch.task_pod_labels.__module__ == "portal_testing._job_dispatch"
+
+
 def test_job_pods_do_not_join_the_tfactory_service():
     """Regression for the portal-ui lane taking its own target offline.
 
