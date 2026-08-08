@@ -783,6 +783,27 @@ def _apply_gate_annotations(spec_dir: Path, envelope: CompletionEnvelope) -> Non
                 _dep.get("reason") or "agent-added dependency failed the gate"
             )
 
+    # #896: contradictory acceptance criteria travel into the envelope so a
+    # human sees the contradiction NAMED, rather than inferring it from a stuck
+    # subtask. Nothing the coder can do fixes this — the spec must change — so
+    # it routes to human_review exactly as a failed dependency review does.
+    try:
+        from agents.criterion_conflict import (  # noqa: PLC0415 - lazy by design
+            read_criterion_conflicts,
+        )
+
+        _conflict = read_criterion_conflicts(spec_dir)
+    except Exception:  # noqa: BLE001 - must never break emit
+        _conflict = None
+    if _conflict is not None:
+        envelope["criterion_conflict"] = _conflict
+        if _conflict.get("gating") and envelope.get("outcome") == "success":
+            envelope["outcome"] = "human_review"
+            envelope["halt_reason"] = "criterion_conflict: " + str(
+                _conflict.get("reason")
+                or "acceptance criteria are mutually unsatisfiable"
+            )
+
 
 def _attach_traceability(spec_dir: Path, verification_block: dict[str, Any]) -> None:
     """Attach the RFC-0015 §4 D2 traceability matrix to ``verification_block``.
@@ -807,7 +828,17 @@ def _attach_traceability(spec_dir: Path, verification_block: dict[str, Any]) -> 
         plan = json.loads(plan_path.read_text())
         vdoc = json.loads(verdicts_path.read_text())
         verdicts = vdoc.get("verdicts") if isinstance(vdoc, dict) else None
-        ledger = build_ac_ledger(plan, verdicts or [])
+        # Same conflicts the fidelity ledger used (#896) — read back from the
+        # finding rather than re-detected, so the matrix and the ledger can
+        # never disagree about which criteria are unverifiable.
+        from agents.criterion_conflict import (  # noqa: PLC0415 - lazy by design
+            read_criterion_conflicts,
+        )
+
+        _conflict = read_criterion_conflicts(spec_dir) or {}
+        ledger = build_ac_ledger(
+            plan, verdicts or [], conflicts=_conflict.get("conflicts") or None
+        )
         trace = build_traceability(ledger, verification_block)
         if trace:
             verification_block["traceability"] = trace
@@ -1102,6 +1133,42 @@ def _render_and_write_report(
     return report, report_md
 
 
+def _detect_criterion_conflicts(spec_dir, plan) -> list[dict]:
+    """Detect + persist contradictory acceptance criteria (#896). Never raises.
+
+    Reads the criteria from the same place the ledger does — the plan phases
+    named ``AC#N: <text>`` — so detection does not depend on the generator
+    having flagged the contradiction during a (stochastic) generation step.
+    Returns the finding records, or ``[]``.
+    """
+    try:
+        from agents.ac_fidelity import _split_ac  # noqa: PLC0415 - lazy by design
+        from agents.criterion_conflict import (  # noqa: PLC0415 - lazy by design
+            detect_criterion_conflicts,
+            write_criterion_conflicts,
+        )
+
+        criteria: list[tuple[str, str]] = []
+        for ph in plan.get("phases", []) or []:
+            name = ph.get("name") or ""
+            if name.lower().startswith("replan"):
+                continue
+            criteria.append(_split_ac(name, ph.get("phase")))
+        conflicts = [c.to_dict() for c in detect_criterion_conflicts(criteria)]
+        if conflicts:
+            write_criterion_conflicts(spec_dir, conflicts)
+            _triage_log.error(
+                "criterion conflict: %d unsatisfiable acceptance-criterion "
+                "pair(s) — the specification must be corrected: %s",
+                len(conflicts),
+                "; ".join(c["contradiction"] for c in conflicts),
+            )
+        return conflicts
+    except Exception as exc:  # noqa: BLE001 - detection must never break triage
+        _triage_log.warning("criterion conflict detection failed: %s", exc)
+        return []
+
+
 def _write_ac_fidelity(spec_dir, committed, flagged, rejects) -> dict:
     """Build + write the per-AC fidelity ledger (findings/ac_fidelity.{json,md}).
 
@@ -1143,8 +1210,15 @@ def _write_ac_fidelity(spec_dir, committed, flagged, rejects) -> dict:
             spec_markdown = (spec_dir / "context" / "aifactory_spec.md").read_text()
         except OSError:
             spec_markdown = None
+        # #896: a criterion that contradicts another cannot be satisfied by any
+        # test. Detect it, write it as a first-class finding, and grade those
+        # ACs UNVERIFIABLE rather than folding them into `unverified`, where
+        # they read identically to "the generator failed".
+        conflicts = _detect_criterion_conflicts(spec_dir, plan)
         ledger = attach_screenshots(
-            build_ac_ledger(plan, verdicts, spec_markdown=spec_markdown),
+            build_ac_ledger(
+                plan, verdicts, spec_markdown=spec_markdown, conflicts=conflicts
+            ),
             spec_dir / "findings",
         )
         fd = spec_dir / "findings"
