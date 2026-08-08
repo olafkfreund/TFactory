@@ -66,7 +66,7 @@ def _workspace(tmp_path: Path, project_id: str, remote: str) -> Path:
     return ws
 
 
-def _record_coverage(tmp_path: Path, project_id: str, commit: str, pct: float) -> None:
+def _record_coverage(project_id: str, commit: str, pct: float) -> None:
     # Resolve the regression dir the way the route does, not by re-deriving it.
     # This helper used to write to `<root>/<pid>/regression` while `_workspace`
     # created `<root>/workspaces/<pid>` -- the reader/writer split of #865,
@@ -109,7 +109,7 @@ def test_known_commit_returns_the_figure(
 ) -> None:
     monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path))
     _workspace(tmp_path, "proj-a", "https://github.com/olafkfreund/TFactory.git")
-    _record_coverage(tmp_path, "proj-a", "abc1234", 81.5)
+    _record_coverage("proj-a", "abc1234", 81.5)
 
     result = _call(repo="olafkfreund/TFactory", sha="abc1234def5678", pr=848)
     assert result["coverage_pct"] == 81.5
@@ -123,7 +123,7 @@ def test_ssh_remote_matches_the_same_repo(
     """A checkout cloned over SSH must match a caller passing owner/name."""
     monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path))
     _workspace(tmp_path, "proj-ssh", "git@github.com:olafkfreund/TFactory.git")
-    _record_coverage(tmp_path, "proj-ssh", "abc1234", 77.0)
+    _record_coverage("proj-ssh", "abc1234", 77.0)
     assert _call(repo="olafkfreund/TFactory", sha="abc1234")["coverage_pct"] == 77.0
 
 
@@ -132,7 +132,7 @@ def test_commit_without_coverage_is_explained(
 ) -> None:
     monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path))
     _workspace(tmp_path, "proj-a", "https://github.com/olafkfreund/TFactory.git")
-    _record_coverage(tmp_path, "proj-a", "abc1234", 81.5)
+    _record_coverage("proj-a", "abc1234", 81.5)
 
     result = _call(repo="olafkfreund/TFactory", sha="9999999999", pr=849)
     assert result["coverage_pct"] is None
@@ -185,7 +185,7 @@ def test_migration_never_clobbers_a_current_ledger(
     """A stale ledger at the old path must not overwrite live history."""
     monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path))
     _workspace(tmp_path, "proj-a", "https://github.com/olafkfreund/TFactory.git")
-    _record_coverage(tmp_path, "proj-a", "newnew1", 90.0)
+    _record_coverage("proj-a", "newnew1", 90.0)
     stale = regression_dir(tmp_path, "proj-a")
     stale.mkdir(parents=True, exist_ok=True)
     coverage_trend_path(stale).write_text(
@@ -200,7 +200,7 @@ def test_project_id_bypasses_repo_resolution(
 ) -> None:
     """The escape hatch works without any git checkout at all."""
     monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path))
-    _record_coverage(tmp_path, "proj-direct", "abc1234", 64.25)
+    _record_coverage("proj-direct", "abc1234", 64.25)
     result = _call(repo="ignored/entirely", sha="abc1234", project_id="proj-direct")
     assert result["coverage_pct"] == 64.25
 

@@ -52,7 +52,7 @@ from agents.regression.coverage_trend import (  # noqa: E402
 )
 from agents.regression.store import regression_dir  # noqa: E402
 
-from ..services.project_workspace_service import workspace_root  # noqa: E402
+from server.services.project_workspace_service import workspace_root  # noqa: E402
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
