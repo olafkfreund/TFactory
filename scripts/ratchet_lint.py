@@ -51,7 +51,6 @@ Exit code 0 if no changed file regressed; 1 otherwise.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import subprocess
@@ -69,6 +68,7 @@ from ratchet_helpers import (
     MYPY_TEST_RELAX,
     is_test_file,
     require_tool_ran,
+    ruff_findings,
     ruff_stdin_argv,
 )
 
@@ -176,23 +176,15 @@ def ruff_counts(source: str, filename: str) -> Counter[str]:
     was held to the production assert bar the real tree exempts it from.
     """
     res = _run(ruff_stdin_argv(RUFF_CONFIG, filename), stdin=source)
-    # The shared "did the tool actually run" rule (Factory#590). This used to be
-    # four lines restated here, and in the mypy counter below, and in both halves
-    # of the four sibling ratchets -- nine copies of one rule, which is why fixing
-    # it once cost five PRs (PFactory#455, TFactory#951). It now lives in the
-    # drift-gated canonical, so the next correction reaches every consumer.
-    require_tool_ran("ruff", res)
-    if not res.stdout.strip():
-        return Counter()
-    try:
-        items = json.loads(res.stdout)
-    except json.JSONDecodeError:
-        sys.stderr.write(res.stdout + res.stderr)
-        # Exit with the tool's own code, not a constant: an interrupted run
-        # (130) or a signal death reads differently from a config error, and
-        # that distinction is the whole point of this guard.
-        sys.exit(res.returncode)
-    return Counter(item["code"] for item in items)
+    # The shared "is this run a measurement" rule, both halves (Factory#590 for
+    # the exit code, Factory#648 for the output). This used to be an exit-code
+    # check plus a `return Counter()` for empty stdout plus a bare
+    # `except json.JSONDecodeError`, restated here and in the four sibling
+    # ratchets. The empty-stdout branch was the one with teeth: the pinned ruff
+    # prints `[]` for a clean run -- including for empty stdin -- so empty
+    # stdout was always ruff writing no report, counted as zero violations.
+    # Both verdicts now live in the drift-gated canonical.
+    return ruff_findings(res)
 
 
 def file_at_base(base: str, path: str) -> str | None:
