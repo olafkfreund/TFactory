@@ -2283,7 +2283,9 @@ def _record_equivalence_not_measured(
 ) -> None:
     """Leave the not-measured record in findings, or say why we could not."""
     try:
-        from agents.equivalence_lane import record_not_measured
+        from agents.equivalence_lane import (  # noqa: PLC0415 - lazy by design
+            record_not_measured,
+        )
 
         record_not_measured(spec_dir, reason, verdict=verdict)
     except Exception:  # noqa: BLE001 - recording must never fail the verify
