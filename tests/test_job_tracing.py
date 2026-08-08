@@ -16,8 +16,11 @@ than a plausible-looking one.
 
 from __future__ import annotations
 
+from contextlib import suppress
+
 import pytest
 from opentelemetry import trace
+from opentelemetry.context import detach
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -31,10 +34,18 @@ SAMPLE_TP = f"00-{TRACE_ID_HEX}-{PARENT_SPAN_HEX}-01"
 
 @pytest.fixture(autouse=True)
 def _reset_module_state(monkeypatch):
-    """Undo the module's global latch between tests.
+    """Undo the module's global latch between tests, and leave nothing behind.
 
     ``init_agent_tracing`` is idempotent by design (a single attach token), which
     means one test's initialisation would otherwise silently satisfy the next.
+
+    The detach on teardown is the load-bearing half. ``attach`` mutates a
+    process-global contextvar that resetting this module's own globals does not
+    touch. A dispatched Job never has to detach — it exits — but a pytest session
+    does not exit, so an attached span leaks into every later test in the run.
+    AIFactory's copy of these tests had exactly that leak, hidden by collection
+    order until Factory#638 renamed the file and four unrelated "there is no
+    active span" assertions went red.
     """
     monkeypatch.setattr(job_tracing, "_initialized", False)
     monkeypatch.setattr(job_tracing, "_attach_token", None)
@@ -50,6 +61,11 @@ def _reset_module_state(monkeypatch):
         "CORRELATION_KEY",
     ):
         monkeypatch.delenv(var, raising=False)
+    yield
+    token = job_tracing._attach_token
+    if token is not None:
+        with suppress(Exception):
+            detach(token)
 
 
 @pytest.fixture
@@ -141,12 +157,17 @@ def test_fabricated_traceparent_lands_nothing_in_the_dispatchers_trace(
     assert f"{finished[0].context.trace_id:032x}" != TRACE_ID_HEX
 
 
-def test_no_otlp_endpoint_installs_no_exporter(monkeypatch, spans):
+def test_no_otlp_endpoint_installs_no_exporter(monkeypatch):
     """Mutation 3. Off-cluster the process joins the trace and exports nothing.
 
-    The span still exists in-process so log lines carry the run's trace_id; what
-    is absent is any exporter, so no retry budget is spent on a collector that
-    is not there.
+    The span still exists in-process so log lines carry the run's trace_id (the
+    tests above cover that); what is absent is any exporter, so no retry budget
+    is spent on a collector that is not there.
+
+    A recording stand-in rather than a real provider, deliberately: installing
+    the real exporter here would construct an OTLP client aimed at a host that
+    does not resolve in a unit-test run, which is a background thread and a
+    retry budget inside an assertion that has nothing to do with either.
     """
     monkeypatch.setenv("TRACEPARENT", SAMPLE_TP)
 
@@ -166,12 +187,6 @@ def test_no_otlp_endpoint_installs_no_exporter(monkeypatch, spans):
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://observe:5080/api/default")
     job_tracing._install_exporter(provider)
     assert len(provider.processors) == 1
-
-    # The Job still joins the trace either way, so its logs carry the run's
-    # trace_id; what is absent off-cluster is only the export.
-    job_tracing.init_agent_tracing()
-    _finish()
-    assert len(spans.get_finished_spans()) == 1
 
 
 def test_service_name_defaults_to_the_dispatchers_job_name(monkeypatch):
