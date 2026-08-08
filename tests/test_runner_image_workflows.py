@@ -187,6 +187,40 @@ def test_every_published_runner_image_is_signed_with_a_pinned_identity():
         )
 
 
+_SOURCE_LABEL = (
+    "org.opencontainers.image.source=https://github.com/${{ github.repository }}"
+)
+
+
+def test_every_published_runner_image_is_labelled_with_its_source_repo():
+    """#952: GHCR links a package to a repo via `org.opencontainers.image.source`.
+
+    Without it the package is linked to nothing, so it inherits neither the
+    repository's visibility nor its package permissions, and its GHCR page
+    offers no path back to the code and workflow that built it.
+    `tfactory-runner-nix` and `tfactory-runner-portal-ui` were the two of eleven
+    whose Dockerfiles omitted it, and they were the two that diverged from their
+    nine siblings.
+
+    Asserted on the WORKFLOW rather than on the Dockerfiles, which is the point.
+    Nine authors remembered the LABEL line and two did not, and nothing --- not
+    CI, not the workflow log, not the image --- made the omission visible; it
+    showed up only in package metadata. A `labels:` on the push step cannot be
+    forgotten by the author of the next runner image.
+    """
+    publishers = _publishers()
+    assert publishers, "premise changed: no workflow publishes a runner image"
+
+    for wf_name, text in sorted(publishers.items()):
+        assert _SOURCE_LABEL in text, (
+            f"{wf_name} publishes a runner image without setting\n"
+            f"  labels: {_SOURCE_LABEL}\n"
+            "on its push step. The GHCR package will be linked to no "
+            "repository, and so will inherit neither this repo's visibility "
+            "nor its package permissions (#952, Factory#563)."
+        )
+
+
 # A job whose `if:` requires the push event cannot run on a pull_request. This
 # is the idiom all three publishing workflows use; anything else is treated as
 # PR-reachable, which is the conservative direction for a permission guard.
