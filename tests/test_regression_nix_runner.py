@@ -46,6 +46,64 @@ def test_outcome_from_result_pass_and_fail():
     assert fail.test_id == "t" and fail.lane == "unit" and fail.framework == "pytest"
 
 
+# ── the coverage report is not dropped (#865) ───────────────────────────
+def _cobertura(path: Path, covered: int, total: int) -> Path:
+    lines = "".join(
+        f'<line number="{n}" hits="{1 if n <= covered else 0}"/>'
+        for n in range(1, total + 1)
+    )
+    path.write_text(
+        f'<?xml version="1.0" ?><coverage line-rate="{covered / total}">'
+        f'<packages><package><classes><class filename="app.py" name="app">'
+        f"<lines>{lines}</lines></class></classes></package></packages></coverage>",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_outcome_carries_the_coverage_report(tmp_path):
+    """The Job writes a coverage.xml and the runner used to throw it away.
+
+    `run_pytest_lane_via_nix` copies the report off the PVC scratch precisely so
+    the caller can read it; the regression lane was the only consumer ignoring
+    it, which left the coverage ledger permanently empty (#865).
+    """
+    xml = _cobertura(tmp_path / "coverage.xml", covered=17, total=20)
+    out = outcome_from_run_result(
+        _entry(), DockerRunResult(returncode=0, coverage_xml_path=xml)
+    )
+    assert out.coverage_report_path == str(xml)
+    # The per-test float is this test's OWN project-wide reach — honest as such.
+    assert out.coverage_pct == 85.0
+
+
+def test_outcome_without_a_report_claims_no_coverage(tmp_path):
+    out = outcome_from_run_result(_entry(), DockerRunResult(returncode=0))
+    assert out.coverage_pct is None
+    assert out.coverage_report_path is None
+
+
+def test_unreadable_report_is_none_not_zero(tmp_path):
+    """A corrupt report must not become 0.0% — that is a figure, and false."""
+    bad = tmp_path / "coverage.xml"
+    bad.write_text("not xml at all", encoding="utf-8")
+    out = outcome_from_run_result(
+        _entry(), DockerRunResult(returncode=0, coverage_xml_path=bad)
+    )
+    assert out.coverage_pct is None
+
+
+def test_report_path_is_not_persisted(tmp_path):
+    """It points at a per-run temp dir; a stored path that no longer resolves
+    would be worse than no path at all."""
+    xml = _cobertura(tmp_path / "coverage.xml", covered=1, total=2)
+    out = outcome_from_run_result(
+        _entry(), DockerRunResult(returncode=0, coverage_xml_path=xml)
+    )
+    assert "coverage_report_path" not in out.to_dict()
+    assert out.to_dict()["coverage_pct"] == 50.0
+
+
 # ── runner conforms to protocol ─────────────────────────────────────────
 def test_nix_runner_is_a_regression_runner(tmp_path):
     runner = NixJobRunner(spec_dir=tmp_path, project_dir=tmp_path)
