@@ -617,6 +617,28 @@ def test_manifest_forwards_non_claude_provider_env(monkeypatch):
     assert env["QA_LLM_PROVIDER"] == "openai"
 
 
+def test_manifest_forwards_gemini_workspace_trust(monkeypatch):
+    # #871: the gemini/antigravity CLI exits before any API call in an
+    # "untrusted" workspace. providers/gemini_agentic.py spawns that CLI as a
+    # subprocess of the Job, so the API key alone is not enough — the trust flag
+    # has to reach the Job's env or the Gemini verify leg stalls silently.
+    _clear_oauth_env(monkeypatch)
+    monkeypatch.setenv("GEMINI_API_KEY", "gem-789")
+    monkeypatch.setenv("GEMINI_CLI_TRUST_WORKSPACE", "true")
+    env = {
+        e["name"]: e.get("value") for e in _env_of(build_verify_job_manifest(_cfg()))
+    }
+    assert env["GEMINI_CLI_TRUST_WORKSPACE"] == "true"
+
+
+def test_gemini_workspace_trust_absent_when_unset(monkeypatch):
+    # Forwarded only when set on the pod — no invented default.
+    _clear_oauth_env(monkeypatch)
+    monkeypatch.delenv("GEMINI_CLI_TRUST_WORKSPACE", raising=False)
+    env = {e["name"] for e in _env_of(build_verify_job_manifest(_cfg()))}
+    assert "GEMINI_CLI_TRUST_WORKSPACE" not in env
+
+
 def test_manifest_provider_secrets_via_secret_ref(monkeypatch):
     # With an env-Secret configured, provider SECRETS (keys/tokens) source via
     # secretKeyRef (no literal in the manifest); non-secret config stays a value.
