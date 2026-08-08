@@ -218,6 +218,9 @@ _SDK_PASSTHROUGH_ENV: tuple[str, ...] = (
     # request ever leaving the pod. Same fix AIFactory made on 2026-06-13.
     "GEMINI_CLI_TRUST_WORKSPACE",
     "OLLAMA_API_KEY",
+    "OLLAMA_BASE_URL",  # #870 — self-hosted ollama address; without it the Job
+    # falls back to the provider's http://localhost:11434 default, where nothing
+    # listens inside the Job pod.
     "OLLAMA_CLOUD_BASE_URL",
     "GITHUB_TOKEN",
     "GITHUB_MODELS_DEFAULT",

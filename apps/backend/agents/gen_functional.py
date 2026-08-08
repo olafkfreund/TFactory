@@ -76,11 +76,17 @@ def _write_status_patch(spec_dir: Path, **fields: object) -> None:
 # fan-out runtimes (claude-subagents, dynamic-workflow, antigravity) have no
 # TFactory provider and are intentionally absent, so they never override the
 # provider inferred from the model string.
+#
+# ``ollama-cloud`` is deliberately NOT the local agentic provider (#870): the
+# cloud runtime is an OpenAI-compatible endpoint at https://ollama.com with an
+# API key (see providers/ollama_cloud_check.py), while the ``ollama`` provider is
+# the self-hosted HTTP server. Mapping cloud onto ``ollama`` sent a contract
+# routed to the cloud runtime at http://localhost:11434 with no credentials.
 _RUNTIME_TO_PROVIDER: dict[str, str] = {
     "claude": "claude",
     "codex": "codex",
     "ollama": "ollama",
-    "ollama-cloud": "ollama",
+    "ollama-cloud": "openai-compatible",
 }
 
 
