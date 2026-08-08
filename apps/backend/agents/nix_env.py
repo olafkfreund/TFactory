@@ -26,6 +26,7 @@ import os
 import shutil
 import tempfile
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -330,6 +331,51 @@ def _build_mutants_cmd(mutant_names: list[str]) -> str:
     return "".join(parts)
 
 
+# Where the junit/coverage copies live. They are copied OFF the PVC scratch so
+# the caller can read them after this function returns (the scratch is gone by
+# then) — a deliberate contract with no matching "and then the caller drops
+# them", so one directory accumulated per dispatched test for the life of the
+# pod (#997). The regression lane makes it worse in proportion to corpus size.
+# Collecting them under one root lets each call drop what earlier runs left.
+_JUNIT_ARTIFACTS_ROOT = Path(tempfile.gettempdir()) / "tf-nixjunit"
+# ponytail: age-based, because no call site owns the lifetime today. Well past
+# any lane timeout (900s) plus its aggregation, so a run in flight never loses
+# its files. If a caller ever does own the lifetime, pass the dir in and delete
+# this.
+_JUNIT_ARTIFACTS_MAX_AGE_S = 6 * 3600
+
+
+def _sweep_stale_junit_artifacts(max_age_s: float = _JUNIT_ARTIFACTS_MAX_AGE_S) -> int:
+    """Drop artifact dirs older than *max_age_s*. Returns how many were removed.
+
+    Only touches directories under our own root, and only ones whose mtime is
+    past the cutoff — a dir a concurrent call is still filling is younger than
+    the cutoff by construction, so this can never pull files out from under a
+    live run.
+    """
+    if not _JUNIT_ARTIFACTS_ROOT.is_dir():
+        return 0
+    cutoff = time.time() - max_age_s
+    removed = 0
+    for entry in _JUNIT_ARTIFACTS_ROOT.iterdir():
+        try:
+            if entry.is_dir() and entry.stat().st_mtime < cutoff:
+                shutil.rmtree(entry, ignore_errors=True)
+                removed += 1
+        except OSError:  # raced with another sweep; it is gone either way
+            continue
+    if removed:
+        _log.info("run_pytest_lane_via_nix: swept %d stale artifact dir(s)", removed)
+    return removed
+
+
+def _new_junit_artifacts_dir() -> Path:
+    """A fresh dir for one run's junit/coverage, sweeping stale ones on the way in."""
+    _sweep_stale_junit_artifacts()
+    _JUNIT_ARTIFACTS_ROOT.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix="run-", dir=_JUNIT_ARTIFACTS_ROOT))
+
+
 def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve knobs + one linear staging flow
     spec_dir: Path,
     project_dir: Path,
@@ -544,7 +590,7 @@ def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve kno
 
         # Copy the small junit/coverage OFF the PVC scratch so the returned paths
         # survive the scratch cleanup below (the caller reads them after we return).
-        out_dir = Path(tempfile.mkdtemp(prefix="tf-nixjunit-"))
+        out_dir = _new_junit_artifacts_dir()
         junit = out_dir / "junit.xml"
         cov = out_dir / "coverage.xml"
         for produced, dest in (

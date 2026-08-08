@@ -230,7 +230,9 @@ def run_candidate(
     return parsed
 
 
-def _unmeasured(reason: str, findings_dir: Path | None) -> dict[str, Any]:
+def _unmeasured(
+    reason: str, findings_dir: Path | None, *, verdict: str = "reject"
+) -> dict[str, Any]:
     """The lane could not measure. Report THAT, and reject.
 
     Before TFactory#959 a dead harness surfaced as ``modules X UNPROVEN (no
@@ -241,6 +243,9 @@ def _unmeasured(reason: str, findings_dir: Path | None) -> dict[str, Any]:
 
     No ``golden_corpus.json`` is written: hashing ``[]`` mints a stable,
     meaningless digest that later runs would compare against.
+
+    ``verdict`` is ``reject`` for a lane that tried and could not measure, and
+    ``not_run`` for one that was never enabled — see :func:`record_not_measured`.
     """
     claim = f"Equivalence NOT MEASURED — {reason}. Fix the harness, then re-run."
     if findings_dir is not None:
@@ -252,7 +257,7 @@ def _unmeasured(reason: str, findings_dir: Path | None) -> dict[str, Any]:
         )
     return {
         "verdicts": [
-            {"lane": "equivalence", "verdict": "reject", "reason": reason},
+            {"lane": "equivalence", "verdict": verdict, "reason": reason},
         ],
         "parity_ratio": 0.0,
         "claim": claim,
@@ -355,6 +360,32 @@ def merge_verdicts(spec_dir: Path, new_verdicts: list[dict[str, Any]]) -> None:
             pass
     doc.setdefault("verdicts", []).extend(new_verdicts)
     path.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+
+
+def record_not_measured(
+    spec_dir: Path, reason: str, *, verdict: str = "reject"
+) -> dict[str, Any]:
+    """Record in FINDINGS that a declared equivalence lane did not measure.
+
+    A lane that never ran used to leave one WARNING line in the evaluator log
+    and nothing else: no ``equivalence_report.json``, no ``equivalence``
+    verdict. ``val_block`` still reported VAL-2 as ``not_run`` so nothing was
+    overclaimed — but "the lane was never enabled" and "the lane tried and could
+    not run" were indistinguishable in the findings, and the findings are what a
+    human reads (#972, Factory#430). A log line is not a record.
+
+    ``verdict`` says which of the two happened:
+
+    - ``reject`` — declared and enabled, tried, could not run (no Docker daemon,
+      the Job could not be created, the image is missing). Fail-closed, matching
+      the dead-harness path in :func:`_unmeasured`.
+    - ``not_run`` — declared but the lane is switched off. An operator choice,
+      not a failure: it neither passes nor fails VAL-2, and val_block already
+      understands ``not_run`` exactly that way.
+    """
+    result = _unmeasured(reason, Path(spec_dir) / "findings", verdict=verdict)
+    merge_verdicts(spec_dir, result["verdicts"])
+    return result
 
 
 def _docker_oracle_runner(image: str = "tfactory-runner-pytest:latest") -> RunnerFn:

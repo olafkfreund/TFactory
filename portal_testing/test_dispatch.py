@@ -109,6 +109,95 @@ def test_publish_as_tfactory_spec(tmp_path, monkeypatch):
     assert not (spec_dir / "findings" / "verdicts.json").exists()
 
 
+# ─── #895: the Screencast link must name where the recording landed ─────
+
+
+def _run_with_recording(tmp_path):
+    report_dir = tmp_path / "tfactory"
+    (report_dir / "video").mkdir(parents=True)
+    (report_dir / "video" / "tfactory.webm").write_bytes(b"\x1a\x45\xdf\xa3")
+    (report_dir / "report.md").write_text(
+        "# T\nlogged in: **True**\n"
+        "- **Screencast:** [`video/tfactory.webm`](video/tfactory.webm)\n\n"
+        "## Coverage\n\n| N | D | Dl | S | F |\n|-|-|-|-|-|\n| 1 | 0 | 0 | 1 | 0 |\n\n"
+        "## Findings\n\n- None\n\n## Walkthrough\n"
+    )
+    return report_dir
+
+
+def test_published_report_links_the_recording_where_it_landed(tmp_path, monkeypatch):
+    """The link and the file must agree in the published tree.
+
+    report.py writes it relative to the run dir (`video/x.webm`); publishing
+    moves the recording to findings/videos/. Nothing rewrote the link, so the
+    published report pointed at a path that does not exist there (#895).
+    """
+    from portal_testing.visual_inspection_adapter import publish_as_tfactory_spec
+
+    monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    spec_dir = publish_as_tfactory_spec(
+        "tfactory", _run_with_recording(tmp_path), "vrun-vid"
+    )
+    published = (spec_dir / "report.md").read_text()
+    assert "findings/videos/tfactory.webm" in published
+    assert "(video/tfactory.webm)" not in published
+    # The link resolves inside the published tree — that is the whole point.
+    assert (spec_dir / "findings" / "videos" / "tfactory.webm").is_file()
+
+
+def test_triage_report_drops_the_screencast_link(tmp_path, monkeypatch):
+    """The rendered Report tab resolves no relative path, so a link there 404s —
+    same reason the screenshot images are stripped. The Evidence tab plays the
+    recording from findings/videos/."""
+    from portal_testing.visual_inspection_adapter import publish_as_tfactory_spec
+
+    monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    spec_dir = publish_as_tfactory_spec(
+        "tfactory", _run_with_recording(tmp_path), "vrun-vid2"
+    )
+    assert "Screencast:" not in (spec_dir / "findings" / "triage_report.md").read_text()
+
+
+def test_visual_inspection_copy_drops_the_screencast_link(tmp_path):
+    """The Visual Reports copy carries no recording at all, so its Screencast
+    link was doubly broken."""
+    from portal_testing.visual_inspection_adapter import build_run_dir
+
+    run_dir = build_run_dir(
+        "tfactory", _run_with_recording(tmp_path), "r", dest_parent=tmp_path / "vi"
+    )
+    report = (run_dir / "report.md").read_text()
+    assert "Screencast:" not in report
+    assert "tfactory.webm" not in report
+
+
+def test_a_lost_recording_drops_the_link_rather_than_inventing_one(
+    tmp_path, monkeypatch
+):
+    """The report claims a screencast but the recording never made it.
+
+    A link is only worth publishing when it names a file that is there. If the
+    recording was lost, the honest published report has no Screencast line —
+    not a plausible-looking path to a file that does not exist.
+    """
+    from portal_testing.visual_inspection_adapter import publish_as_tfactory_spec
+
+    monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    report_dir = tmp_path / "p"
+    report_dir.mkdir()
+    (report_dir / "report.md").write_text(
+        "# P\nlogged in: **True**\n"
+        "- **Screencast:** [`video/pfactory.webm`](video/pfactory.webm)\n\n"
+        "## Coverage\n\n| N | D | Dl | S | F |\n|-|-|-|-|-|\n| 1 | 0 | 0 | 1 | 0 |\n\n"
+        "## Findings\n\n- None\n\n## Walkthrough\n"
+    )
+    spec_dir = publish_as_tfactory_spec("pfactory", report_dir, "vrun-novid")
+    published = (spec_dir / "report.md").read_text()
+    assert "Screencast" not in published
+    assert ".webm" not in published
+    assert not (spec_dir / "findings" / "videos").exists()
+
+
 def test_adapter_counts_interaction_failures(tmp_path):
     import json
 

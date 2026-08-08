@@ -16,6 +16,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.status import HTTP_404_NOT_FOUND
 
 from . import env_bootstrap  # noqa: F401  — loads .env into os.environ first
 from .auth import TokenAuthMiddleware
@@ -319,10 +321,32 @@ def _read_app_version() -> str:
     return "0.0.0-unknown"
 
 
+# Prefixes under the catch-all mount that must keep a real 404 instead of the
+# SPA shell. ``/api`` + ``/ws`` stay machine-readable for clients; the asset and
+# schema paths must fail loudly, because a deploy that answers a missing hashed
+# bundle with HTML is a much harder thing to see than a 404.
+_NO_SPA_FALLBACK = ("/api", "/ws", "/assets", "/openapi.json", "/docs", "/redoc")
+
+
+def _wants_spa_shell(path: str) -> bool:
+    """True when a 404 under the catch-all mount should serve ``index.html``.
+
+    The SPA owns its client-side routes (``/login``, ``/console/<project>/<spec>``),
+    and before #878 the server handed none of them to the app: a direct GET
+    returned FastAPI's JSON 404, so a task link could not be shared, bookmarked,
+    or reloaded, and anything driving the portal by URL had to fake client-side
+    navigation. A path is treated as a client route when it is not one of the
+    server-owned prefixes and its last segment carries no file extension.
+    """
+    if any(path == p or path.startswith(f"{p}/") for p in _NO_SPA_FALLBACK):
+        return False
+    return "." not in path.rsplit("/", 1)[-1]
+
+
 class SPAStaticFiles(StaticFiles):
     """StaticFiles for the SPA shell, mounted catch-all at ``/``.
 
-    Two concerns beyond stock StaticFiles:
+    Three concerns beyond stock StaticFiles:
 
     1. Cache policy (SSO fix) — the SPA shell (index.html) MUST NOT be
        heuristically cached by the browser, or users keep running the
@@ -340,6 +364,11 @@ class SPAStaticFiles(StaticFiles):
        an AssertionError on every connection attempt (flooding logs and
        breaking live task-status streaming). Reject non-HTTP scopes cleanly
        instead of asserting.
+
+    3. History fallback (#878) — a client-side route has no file on disk, so
+       stock StaticFiles 404s it. Serve the shell instead for anything
+       :func:`_wants_spa_shell` recognises as a client route, and let React
+       Router take it from there.
     """
 
     async def __call__(self, scope, receive, send):
@@ -350,7 +379,14 @@ class SPAStaticFiles(StaticFiles):
         await super().__call__(scope, receive, send)
 
     async def get_response(self, path, scope):
-        response = await super().get_response(path, scope)
+        try:
+            response = await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code != HTTP_404_NOT_FOUND or not _wants_spa_shell(
+                scope.get("path") or ""
+            ):
+                raise
+            response = await super().get_response("index.html", scope)
         content_type = response.headers.get("content-type", "")
         if content_type.startswith("text/html"):
             response.headers["Cache-Control"] = "no-cache, must-revalidate"
