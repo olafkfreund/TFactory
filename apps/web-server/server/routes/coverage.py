@@ -27,7 +27,9 @@ The caller can now tell "TFactory has no coverage for this commit yet" from
 
 from __future__ import annotations
 
+import logging
 import os
+import shutil
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -53,6 +55,7 @@ from agents.regression.store import regression_dir  # noqa: E402
 from ..services.project_workspace_service import workspace_root  # noqa: E402
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # A git remote may be https://host/owner/name(.git) or git@host:owner/name(.git).
 # Only the trailing owner/name matters for matching a `repo` query.
@@ -82,6 +85,39 @@ def _projects_root() -> Path:
     if env_val and not os.environ.get("PROJECT_WORKSPACE_ROOT"):
         return Path(env_val).expanduser() / "workspaces"
     return workspace_root()
+
+
+def _legacy_root() -> Path:
+    """Where this module used to resolve the regression dir, pre-#865."""
+    env_val = os.environ.get("TFACTORY_WORKSPACE_ROOT")
+    return Path(env_val).expanduser() if env_val else Path.home() / ".tfactory"
+
+
+def _regression_dir(project_id: str) -> Path:
+    """The project's regression dir, carrying a pre-#865 ledger across once.
+
+    Correcting the root above would otherwise strand every point already
+    recorded at the old one -- which is not hypothetical: the CI producer from
+    #861 has been writing there since it landed, and #861's gate compares each
+    PR against that history. So the first call that finds a ledger at the old
+    path and none at the new one moves it, and the shim is inert from then on.
+
+    Remove once no deployment can still be carrying a pre-#865 trend.
+    """
+    reg = regression_dir(_projects_root(), project_id)
+    legacy = coverage_trend_path(regression_dir(_legacy_root(), project_id))
+    current = coverage_trend_path(reg)
+    if legacy != current and legacy.is_file() and not current.is_file():
+        try:
+            reg.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(legacy), str(current))
+            logger.info("coverage: migrated trend ledger %s -> %s", legacy, current)
+        except OSError:
+            # A concurrent request won the move, or the ledger is unreadable.
+            # Either way the caller reads whatever is at the current path; it
+            # must not fail a coverage lookup over a housekeeping step.
+            logger.warning("coverage: could not migrate %s", legacy, exc_info=True)
+    return reg
 
 
 def _normalise_repo(value: str) -> str:
@@ -132,7 +168,7 @@ def _projects_for_repo(repo: str) -> list[str]:
 
 
 def _coverage_for_commit(project_id: str, sha: str) -> dict[str, Any] | None:
-    reg_dir = regression_dir(_projects_root(), project_id)
+    reg_dir = _regression_dir(project_id)
     trend_file = coverage_trend_path(reg_dir)
     if not trend_file.is_file():
         return None
@@ -236,7 +272,7 @@ async def record_commit_coverage(report: CoverageReport) -> dict[str, Any]:
         coverage_pct=report.coverage_pct,
         commit=report.sha,
     )
-    reg_dir = regression_dir(_projects_root(), project_id)
+    reg_dir = _regression_dir(project_id)
     record_coverage(coverage_trend_path(reg_dir), point)
     return {
         "recorded": True,

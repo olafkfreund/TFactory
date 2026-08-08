@@ -141,6 +141,60 @@ def test_commit_without_coverage_is_explained(
     assert "proj-a" in result["reason"]
 
 
+def test_a_pre_865_ledger_is_carried_across_not_stranded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Correcting the root must not orphan the history already recorded at it.
+
+    The CI producer (#861) has been writing to the old path since it landed and
+    the coverage gate compares each PR against that trend, so a cutover that
+    silently starts from an empty ledger would read as "coverage collapsed".
+    """
+    monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path))
+    _workspace(tmp_path, "proj-a", "https://github.com/olafkfreund/TFactory.git")
+    # Write it where the pre-#865 code put it: one directory above.
+    legacy = regression_dir(tmp_path, "proj-a")
+    legacy.mkdir(parents=True, exist_ok=True)
+    coverage_trend_path(legacy).write_text(
+        json.dumps(
+            {
+                "points": [
+                    {
+                        "run_id": "ci-old",
+                        "ran_at": "2026-07-30T17:49:14+00:00",
+                        "coverage_pct": 50.12,
+                        "commit": "814e0529c315",
+                    }
+                ]
+            }
+        )
+    )
+
+    assert _call(repo="olafkfreund/TFactory", sha="814e0529c315")["coverage_pct"] == (
+        50.12
+    )
+    # ...and it now lives at the current path, so the shim is inert next time.
+    current = coverage_trend_path(regression_dir(cov._projects_root(), "proj-a"))
+    assert current.is_file()
+    assert not coverage_trend_path(legacy).exists()
+
+
+def test_migration_never_clobbers_a_current_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stale ledger at the old path must not overwrite live history."""
+    monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path))
+    _workspace(tmp_path, "proj-a", "https://github.com/olafkfreund/TFactory.git")
+    _record_coverage(tmp_path, "proj-a", "newnew1", 90.0)
+    stale = regression_dir(tmp_path, "proj-a")
+    stale.mkdir(parents=True, exist_ok=True)
+    coverage_trend_path(stale).write_text(
+        json.dumps({"points": [{"run_id": "x", "ran_at": "t", "coverage_pct": 1.0}]})
+    )
+
+    assert _call(repo="olafkfreund/TFactory", sha="newnew1")["coverage_pct"] == 90.0
+
+
 def test_project_id_bypasses_repo_resolution(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
