@@ -38,7 +38,9 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import asdict, dataclass, field
+from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +70,7 @@ class CriterionConflict:
     values: dict[str, list[str]] = field(default_factory=dict)
     detected_by: str = "criterion-literal skeleton match"
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -83,13 +85,14 @@ def _skeleton(text: str) -> str:
     return " ".join(_NUMBER.sub(" ", text or "").lower().split())
 
 
-def _literals(text: str) -> dict:
+def _literals(text: str) -> dict[Decimal, str]:
     """``{Decimal value: token as written}`` for the criterion's numeric values."""
     from agents.criterion_literals import (  # noqa: PLC0415 - lazy by design
         criterion_literals,
     )
 
-    return criterion_literals(text or "")
+    literals: dict[Decimal, str] = criterion_literals(text or "")
+    return literals
 
 
 def detect_criterion_conflicts(
@@ -101,13 +104,14 @@ def detect_criterion_conflicts(
     differ. Pure; never raises. Each unordered pair is reported once, from the
     earlier criterion's point of view.
     """
-    prepared: list[tuple[str, str, dict]] = []
+    prepared: list[tuple[str, str, dict[Decimal, str]]] = []
     for ac_id, text in criteria or []:
         if not ac_id or not (text or "").strip():
             continue
         try:
             literals = _literals(text)
-        except Exception:  # noqa: BLE001 - detection must never break a run
+        except Exception as exc:  # noqa: BLE001 - detection must never break a run
+            logger.debug("criterion literal extraction failed for %s: %s", ac_id, exc)
             continue
         if not literals:
             continue  # nothing signed to contradict
@@ -137,7 +141,9 @@ def detect_criterion_conflicts(
     return conflicts
 
 
-def conflicted_ac_ids(conflicts) -> set[str]:
+def conflicted_ac_ids(
+    conflicts: list[CriterionConflict] | list[dict[str, Any]] | None,
+) -> set[str]:
     """Every ac_id named on either side of any conflict. Accepts dicts or objects."""
     ids: set[str] = set()
     for c in conflicts or []:
@@ -151,18 +157,21 @@ def conflicted_ac_ids(conflicts) -> set[str]:
     return ids
 
 
-def write_criterion_conflicts(spec_dir: Path | str, conflicts) -> dict | None:
+def write_criterion_conflicts(
+    spec_dir: Path | str,
+    conflicts: list[CriterionConflict] | list[dict[str, Any]] | None,
+) -> dict[str, Any] | None:
     """Persist ``findings/criterion_conflict.json``. Best-effort; never raises.
 
     Writes nothing when there are no conflicts — an empty findings file would
     assert "we checked and it is clean" on runs where detection never ran.
     """
-    records = [
+    records: list[dict[str, Any]] = [
         c.to_dict() if isinstance(c, CriterionConflict) else c for c in conflicts or []
     ]
     if not records:
         return None
-    block = {
+    block: dict[str, Any] = {
         "status": "fail",
         "gating": True,
         "reason": (
@@ -181,7 +190,7 @@ def write_criterion_conflicts(spec_dir: Path | str, conflicts) -> dict | None:
     return block
 
 
-def read_criterion_conflicts(spec_dir: Path | str) -> dict | None:
+def read_criterion_conflicts(spec_dir: Path | str) -> dict[str, Any] | None:
     """Read back the finding, or None when absent/unreadable."""
     try:
         path = Path(spec_dir) / "findings" / _FINDINGS_FILE

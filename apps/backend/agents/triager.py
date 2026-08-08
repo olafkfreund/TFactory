@@ -1133,7 +1133,9 @@ def _render_and_write_report(
     return report, report_md
 
 
-def _detect_criterion_conflicts(spec_dir, plan) -> list[dict]:
+def _detect_criterion_conflicts(
+    spec_dir: Path, plan: dict[str, Any]
+) -> list[dict[str, Any]]:
     """Detect + persist contradictory acceptance criteria (#896). Never raises.
 
     Reads the criteria from the same place the ledger does — the plan phases
