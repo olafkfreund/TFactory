@@ -95,9 +95,17 @@ def build_verification_block(
     levels: list[dict[str, Any]] = []
 
     # VAL-0 (static): the generated suite executed at all — the toolchain was
-    # present and the code was static-sound enough to import/run. Proven whenever
-    # any verdict was produced; otherwise nothing ran.
-    any_ran = bool(verdicts)
+    # present and the code was static-sound enough to import/run. Proven when a
+    # verdict from something that ACTUALLY RAN was produced; otherwise nothing ran.
+    #
+    # `bool(verdicts)` was enough until a lane could record a `not_run` verdict
+    # for a lane that never executed (#972). A run whose only verdicts are
+    # not_run executed nothing, so claiming VAL-0 from their mere presence
+    # overclaims on exactly the evidence that says the opposite.
+    any_ran = any(
+        isinstance(v, dict) and str(v.get("verdict") or "").lower() != "not_run"
+        for v in verdicts
+    )
     levels.append(
         {
             "level": "VAL-0",
