@@ -104,6 +104,12 @@ jobs:
       contents: read
       packages: write      # push to GHCR
       id-token: write      # cosign keyless via GitHub OIDC (Factory#524)
+    # `secrets` is not allowed in a step-level `if:` -- hoist to job env, same as
+    # deploy.yml and portal-ui-runner-image.yml.
+    env:
+      GITOPS_PAT: "${{ secrets.GITOPS_PAT }}"
+      GITOPS_REPO: olafkfreund/factory-gitops
+      GITOPS_PATH: apps/tfactory/manifests
     steps:
       - uses: actions/checkout@v4
 
@@ -171,3 +177,53 @@ jobs:
             --certificate-identity-regexp "^https://github\.com/${{ github.repository }}/\.github/workflows/nix-runner-image\.yml@refs/heads/main$" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             "${IMAGE}@${{ steps.build.outputs.digest }}"
+
+      # ----------------------------------------------------------------------
+      # Move the cluster's pins to the image just published and just verified
+      # (#890). Until now nothing bumped them: both env values sat on `:latest`,
+      # so the Nix lane -- the DEFAULT verify execution path -- resolved a
+      # floating tag. The content happened to be current, but that was luck, not
+      # a property anyone could check, and "which code produced this verdict" is
+      # not a cosmetic question for the lane that produces verdicts.
+      #
+      # Pinned `:sha-<short>@sha256:<digest>`. The digest is what resolves and
+      # cannot move -- which matters more since the signature gate went to
+      # Enforce (Factory#522), because a tag can be repointed at something
+      # unsigned between one admission check and the next. The tag rides along
+      # as inert provenance so the commit stays readable and `fleet-match`'s
+      # `carries()` -- which only recognises `sha-<short>` -- can still see it.
+      #
+      # Ordered AFTER the signature self-test on purpose: pinning the cluster to
+      # an image whose signature has not been checked is the state #890 and
+      # Factory#524 exist to remove.
+      # ----------------------------------------------------------------------
+      - name: Pin the nix runner in factory-gitops
+        if: "${{ env.GITOPS_PAT != '' }}"
+        env:
+          PIN: "${{ env.IMAGE }}:${{ steps.tags.outputs.sha }}@${{ steps.build.outputs.digest }}"
+        run: |
+          set -euo pipefail
+          git clone --quiet --depth 1 "https://x:${GITOPS_PAT}@github.com/${GITOPS_REPO}.git" gitops
+          cd "gitops/${GITOPS_PATH}"
+
+          # Both Job images the Nix lane dispatches. Match the whole existing
+          # value -- tag, or tag@digest, or bare `latest` -- and replace it.
+          for var in TFACTORY_VAL3_K8S_JOB_IMAGE TFACTORY_NIX_RUNNER_IMAGE; do
+            sed -i -E "s#(name: ${var}, value: \")[^\"]+#\\1${PIN}#" manifests.yaml
+            # Fail loudly rather than push a no-op. A sed that silently matches
+            # nothing is how TFACTORY_IMAGE sat two weeks stale (#719) while
+            # every artefact except the outcome looked like a working control.
+            # The image is published and verified by this point, so failing here
+            # breaks the run, not the artefact.
+            grep -qF "name: ${var}, value: \"${PIN}\"" manifests.yaml || {
+              echo "::error::${var} pin not found in ${GITOPS_REPO}/${GITOPS_PATH}/manifests.yaml." >&2
+              echo "Add: - { name: ${var}, value: \"${PIN}\" }" >&2
+              exit 1
+            }
+          done
+
+          cd ..
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -qam "cd(tfactory): nix runner ${{ steps.tags.outputs.sha }} [skip ci]" || exit 0
+          git push --quiet

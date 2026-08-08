@@ -92,8 +92,11 @@ jobs:
           file: docker/tfactory-runner-${{ matrix.runner }}/Dockerfile
           push: false
           load: true
+          # `:latest` only. This job pushes nothing -- it loads into the local
+          # daemon for the smoke steps below, and every one of them runs
+          # `tfactory-runner-<x>:latest`. The second tag here was a raw 40-char
+          # `github.sha` that was written and never read (#890).
           tags: |
-            tfactory-runner-${{ matrix.runner }}:${{ github.sha }}
             tfactory-runner-${{ matrix.runner }}:latest
           # GHA cache: reuse layer cache across runs scoped per framework image.
           # mode=max: cache all layers, not just the final stage.
@@ -267,6 +270,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # `sha-<short>`, matching every other image the fleet publishes. These
+      # nine used to be tagged with the raw 40-char `github.sha`, which
+      # factory-gitops' `fleet-match` cannot parse — its `carries()` only
+      # recognises `sha-<short>` — so the nine were invisible to the drift
+      # tooling by construction (#890, factory-gitops#89). Nothing in the
+      # cluster pins them by tag yet, which is exactly why this is cheap now
+      # and awkward later.
+      - id: tags
+        run: echo "sha=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -295,7 +308,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
           tags: |
-            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:${{ steps.tags.outputs.sha }}
             ${{ env.IMAGE }}:latest
           cache-from: type=gha,scope=runner-${{ matrix.runner }}
           cache-to: type=gha,mode=max,scope=runner-${{ matrix.runner }}
