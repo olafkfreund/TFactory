@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from agents.deploy_lane import _discover_deploy_files, maybe_run_deploy_lane
 from tools.runners.deploy_runner import StepResult
 
@@ -244,6 +245,55 @@ def test_maybe_run_deploy_lane_prefers_nix_when_configured(
     proof = json.loads((spec_dir / _PROOF).read_text())
     assert proof["achieved_level"] == "VAL-2"
     assert len(sandbox.calls) == 1
+
+
+def test_medium_risk_triggers_deploy_lane(tmp_path: Path) -> None:
+    """risk_class=medium now triggers the dry-run lane (issue #252)."""
+    spec_dir = tmp_path / "spec"
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    (project_dir / "main.tf").write_text('resource "null_resource" "x" {}')
+    _write_contract(spec_dir, {"risk_class": "medium"})
+
+    result = maybe_run_deploy_lane(
+        spec_dir, project_dir, run_fn=_ok, tool_available=lambda _t: True
+    )
+
+    assert result is not None
+    assert result["achieved_level"] == "VAL-2"
+    assert (spec_dir / _PROOF).exists()
+
+
+def test_low_risk_is_still_noop_after_medium_change(tmp_path: Path) -> None:
+    """low risk must still produce no dispatch after the medium-trigger change."""
+    spec_dir = tmp_path / "spec"
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    (project_dir / "main.tf").write_text('resource "null_resource" "x" {}')
+    _write_contract(
+        spec_dir, {"risk_class": "low", "production_classification": "internal"}
+    )
+
+    result = maybe_run_deploy_lane(
+        spec_dir, project_dir, run_fn=_ok, tool_available=lambda _t: True
+    )
+
+    assert result is None
+    assert not (spec_dir / _PROOF).exists()
+
+
+def test_medium_risk_dry_run_still_code_guarded_in_runner() -> None:
+    """Widening the trigger cannot cause an effectful apply — the production guard
+    (assert_dry_run / ProductionApplyError) lives in deploy_runner, not here.
+
+    Passes an effectful command (terraform apply — no dry-run flag) to assert_dry_run
+    and confirms it raises ProductionApplyError regardless of which risk_class
+    triggered the lane.
+    """
+    from tools.runners.deploy_runner import ProductionApplyError, assert_dry_run
+
+    with pytest.raises(ProductionApplyError, match="effectful"):
+        assert_dry_run(("terraform", "apply"))
 
 
 def test_discover_deploy_files_matches_iac(tmp_path: Path) -> None:
