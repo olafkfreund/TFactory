@@ -131,6 +131,7 @@ def test_certificate_failure_fails_the_gate(tmp_path):
         rc = csd.main(["--canonical", f"https://localhost:{srv.server_address[1]}/x.json"])
     finally:
         srv.shutdown()
+        srv.server_close()
     assert rc == 1
 
 
@@ -185,6 +186,7 @@ def test_successful_fetch_still_runs_the_comparison(tmp_path, capsys):
         assert "__canonical_only__" in capsys.readouterr().out
     finally:
         srv.shutdown()
+        srv.server_close()
 
 
 # -- the live vendored schema is in sync with the canonical hub copy -----------

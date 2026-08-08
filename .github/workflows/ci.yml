@@ -27,9 +27,12 @@ jobs:
           python-version: "3.12"
 
       - name: Task Contract schema drift gate (#679)
-        # Vendored task-contract-v2.schema.json must stay a superset of the
-        # canonical Factory hub schema. Stdlib-only; soft-skips on network
-        # failure, fails hard on real drift.
+        # Fail if the vendored Task Contract schema drifts from the canonical
+        # copy in the Factory hub. Soft-skips ONLY on a transient fetch failure
+        # (timeout/DNS), loudly, so a GitHub outage can't red the build. A
+        # deterministic fetch failure — TLS/certificate error, 404, malformed
+        # JSON — fails the step: it recurs every run, so skipping it would leave
+        # this gate permanently green without ever running (#940, Factory#433).
         run: python scripts/check_schema_drift.py
 
       - name: Install uv
@@ -53,7 +56,21 @@ jobs:
         run: .venv/bin/python -c "import qa_loop, cli.main, cli.qa_commands, cli.build_commands"
 
       - name: Ruff lint
-        run: apps/backend/.venv/bin/ruff check apps/backend tests
+        # `scripts` joins the full check here rather than staying on the ratchet
+        # alone (#973). The ratchet is a base-vs-head gate BY DESIGN -- it holds
+        # the line at the point of change, which is how lint gets adopted on a
+        # large tree without a big-bang cleanup -- and the corollary is that a
+        # file nobody touches is never evaluated. Six violations sat in
+        # scripts/demo/ on a clean checkout for exactly that reason: nominally
+        # in scope, effectively ungated.
+        #
+        # The fix is NOT to make the ratchet read unchanged files. That would
+        # turn it into this check and destroy the reason it exists. It is to
+        # graduate a package to a full check once its backlog reaches zero,
+        # which is what apps/backend and tests already do here. scripts hit zero
+        # in #973, so it graduates too, and the ratchet goes on doing the job
+        # only it can do (mypy --strict no-regression on changed files).
+        run: apps/backend/.venv/bin/ruff check apps/backend tests scripts
 
       - name: Pytest (skip slow)
         env:
@@ -100,7 +117,9 @@ jobs:
           uv pip install -r ../../tests/requirements-test.txt
 
       - name: Ruff lint
-        run: apps/backend/.venv/bin/ruff check apps/backend tests
+        # Same three packages as the backend job above; see the note there for
+        # why `scripts` is checked in full and not left to the ratchet (#973).
+        run: apps/backend/.venv/bin/ruff check apps/backend tests scripts
 
       - name: Pytest (critical lane only)
         env:

@@ -451,6 +451,8 @@ class TestTargetCredential(Base):
     validated at the API layer, keeping the column forward-compatible.
     """
 
+    __test__ = False  # not a pytest test class despite the Test* name
+
     __tablename__ = "test_target_credentials"
 
     id: Mapped[str] = mapped_column(

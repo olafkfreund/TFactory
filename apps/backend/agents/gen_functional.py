@@ -76,11 +76,17 @@ def _write_status_patch(spec_dir: Path, **fields: object) -> None:
 # fan-out runtimes (claude-subagents, dynamic-workflow, antigravity) have no
 # TFactory provider and are intentionally absent, so they never override the
 # provider inferred from the model string.
+#
+# ``ollama-cloud`` is deliberately NOT the local agentic provider (#870): the
+# cloud runtime is an OpenAI-compatible endpoint at https://ollama.com with an
+# API key (see providers/ollama_cloud_check.py), while the ``ollama`` provider is
+# the self-hosted HTTP server. Mapping cloud onto ``ollama`` sent a contract
+# routed to the cloud runtime at http://localhost:11434 with no credentials.
 _RUNTIME_TO_PROVIDER: dict[str, str] = {
     "claude": "claude",
     "codex": "codex",
     "ollama": "ollama",
-    "ollama-cloud": "ollama",
+    "ollama-cloud": "openai-compatible",
 }
 
 
@@ -445,7 +451,20 @@ def _advance_to_evaluator(spec_dir: Path, project_dir: Path) -> None:
 
     Lazy import — same defensive shape as _advance_to_planner_replan.
     Gated by ``TFACTORY_AUTO_EVALUATE`` (default ON; tests pin off).
+
+    The gate is checked HERE, before either execution mode (#897). It used to
+    live only inside the in-pod ``schedule_evaluator``, so with the production
+    ``TFACTORY_VERIFY_EXEC=kubejob`` setting the kubejob branch ran first and the
+    flag governed nothing: a hands-on ``run_gen_functional`` in the pod with
+    ``TFACTORY_AUTO_EVALUATE=0`` still applied a real verify Job (409-colliding
+    with the live one). One flag, both modes — and both callers, since
+    ``planner._advance_to_evaluator`` delegates here.
     """
+    if os.environ.get("TFACTORY_AUTO_EVALUATE", "1") == "0":
+        _gen_log.info(
+            "auto-evaluate disabled (TFACTORY_AUTO_EVALUATE=0); not advancing to verify"
+        )
+        return
     if _dispatch_verify_as_job_if_enabled(spec_dir, project_dir):
         return
     try:

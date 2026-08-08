@@ -26,10 +26,16 @@ concurrency:
   group: "deploy-${{ github.ref }}"
   cancel-in-progress: true
 
+# Workflow-level floor only — the least any job here needs. The two elevated
+# capabilities are declared on `deploy` alone, because they are the two that
+# matter: `id-token: write` mints the GitHub OIDC token cosign signs with, and
+# a signature is now what admits an image to the cluster (the Kyverno
+# `verify-factory-image-signatures` policy went to Enforce in Factory#522). A
+# job that can mint that token can sign as this repository's identity, so it
+# must be a job that has a reason to. `seam-check` signs nothing and pushes
+# nothing (#957).
 permissions:
   contents: read
-  packages: write
-  id-token: write        # cosign keyless via GitHub OIDC (Factory#430)
 
 env:
   IMAGE: "ghcr.io/${{ github.repository_owner }}/tfactory"
@@ -39,6 +45,12 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # A job-level block REPLACES the workflow-level one rather than merging with
+    # it, so `contents: read` has to be restated here.
+    permissions:
+      contents: read
+      packages: write        # push the image to GHCR
+      id-token: write        # cosign keyless via GitHub OIDC (Factory#430)
     # Hoist the PAT to job env: the `secrets` context is NOT allowed in a
     # step-level `if:` (only env/with/run), so gate the gitops bump on
     # `env.GITOPS_PAT` instead.
@@ -208,6 +220,9 @@ jobs:
   seam-check:
     needs: deploy
     runs-on: ubuntu-latest
+    # Inherits the workflow floor (`contents: read`) deliberately. It checks out
+    # a public repo and makes outbound HTTP calls with a fleet token of its own;
+    # it has no use for GHCR or for a signing identity (#957).
     steps:
       - name: Checkout Factory seam harness
         uses: actions/checkout@v4

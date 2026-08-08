@@ -47,19 +47,57 @@ def _catalog(repo_root: Path, *ids: str) -> None:
     )
 
 
-class _CovRunner:
-    """Passes every test, reporting a fixed per-test coverage_pct."""
+def write_cobertura(path: Path, covered: int, total: int) -> Path:
+    """Write a valid Cobertura report covering *covered* of *total* lines.
 
-    def __init__(self, coverage_pct: float | None):
+    A report, not a float. Handing the orchestrator a ready-made percentage is
+    what let #865 hide: every test in this file passed while the production
+    runner recorded no coverage at all, because nothing here ever exercised the
+    path that turns a coverage report into a number.
+    """
+    lines = "".join(
+        f'<line number="{n}" hits="{1 if n <= covered else 0}"/>'
+        for n in range(1, total + 1)
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f'<?xml version="1.0" ?><coverage line-rate="{covered / total}">'
+        f"<packages><package><classes>"
+        f'<class filename="app.py" name="app"><lines>{lines}</lines></class>'
+        f"</classes></package></packages></coverage>",
+        encoding="utf-8",
+    )
+    return path
+
+
+class _CovRunner:
+    """Passes every test, each producing a real coverage report on disk.
+
+    Every test's report covers the SAME lines, so the union equals the per-test
+    figure — which is what makes the trend/drift arithmetic below readable. The
+    disjoint case (where the union and the mean diverge) is proved in
+    ``test_regression_coverage_e2e.py``.
+    """
+
+    def __init__(self, coverage_pct: float | None, tmp_path: Path):
         self._cov = coverage_pct
+        self._tmp = tmp_path
+        self._n = 0
 
     def run(self, entry: CorpusEntry) -> TestOutcome:
+        report = None
+        if self._cov is not None:
+            self._n += 1
+            report = write_cobertura(
+                self._tmp / "cov" / f"{self._n}.xml", int(self._cov), 100
+            )
         return TestOutcome(
             entry.test_id,
             entry.lane,
             entry.framework,
             TestStatus.PASSED,
             coverage_pct=self._cov,
+            coverage_report_path=str(report) if report else None,
         )
 
 
@@ -77,8 +115,8 @@ def _req(tmp_path, reg, run_id) -> RegressionRequest:
 def test_coverage_recorded_and_reported(tmp_path):
     _catalog(tmp_path, "a", "b")
     reg = regression_dir(tmp_path, "demo")
-    run, _diff = run_regression(_req(tmp_path, reg, "r1"), _CovRunner(80.0))
-    assert run.coverage_pct == 80.0  # mean of per-test coverage
+    run, _diff = run_regression(_req(tmp_path, reg, "r1"), _CovRunner(80.0, tmp_path))
+    assert run.coverage_pct == 80.0  # union of per-test covered lines
     # recorded to the trend ledger
     trend = load_trend(coverage_trend_path(reg))
     assert [p.run_id for p in trend] == ["r1"]
@@ -90,8 +128,8 @@ def test_coverage_recorded_and_reported(tmp_path):
 def test_coverage_drop_flagged_in_report(tmp_path):
     _catalog(tmp_path, "a")
     reg = regression_dir(tmp_path, "demo")
-    run_regression(_req(tmp_path, reg, "r1"), _CovRunner(85.0))
-    run_regression(_req(tmp_path, reg, "r2"), _CovRunner(80.0))  # -5 pts
+    run_regression(_req(tmp_path, reg, "r1"), _CovRunner(85.0, tmp_path))
+    run_regression(_req(tmp_path, reg, "r2"), _CovRunner(80.0, tmp_path))  # -5 pts
     report = json.loads((reg / "r2-report.json").read_text())
     assert report["drift"]["dropped"] is True
     assert report["drift"]["delta"] == -5.0
@@ -104,7 +142,7 @@ def test_coverage_drop_flagged_in_report(tmp_path):
 def test_no_coverage_means_no_trend_no_drift(tmp_path):
     _catalog(tmp_path, "a")
     reg = regression_dir(tmp_path, "demo")
-    run, _diff = run_regression(_req(tmp_path, reg, "r1"), _CovRunner(None))
+    run, _diff = run_regression(_req(tmp_path, reg, "r1"), _CovRunner(None, tmp_path))
     assert run.coverage_pct is None
     assert load_trend(coverage_trend_path(reg)) == []
     report = json.loads((reg / "r1-report.json").read_text())

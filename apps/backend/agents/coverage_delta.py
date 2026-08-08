@@ -37,6 +37,7 @@ Schema reference: Cobertura XML
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -61,6 +62,13 @@ class CoverageSnapshot:
     covered_lines: dict[str, frozenset[int]] = field(default_factory=dict)
     line_rate: float = 0.0
     total_lines: int = 0
+    # Every line the report MEASURED, covered or not — the denominator, per
+    # file. Needed to union several reports honestly: two ``--cov=.`` runs of
+    # the same tree do not list the same files (an unimported module is absent
+    # from a report entirely), so ``total_lines`` alone cannot be reconciled
+    # across them. Empty for formats whose parser does not surface uncovered
+    # line numbers (JaCoCo), which is why ``union_coverage_pct`` refuses those.
+    measured_lines: dict[str, frozenset[int]] = field(default_factory=dict)
 
     @property
     def total_covered(self) -> int:
@@ -125,6 +133,7 @@ def parse_coverage_xml(path: Path) -> CoverageSnapshot:
 
     line_rate = float(root.attrib.get("line-rate", "0") or "0")
     covered_lines: dict[str, set[int]] = {}
+    measured_lines: dict[str, set[int]] = {}
     total_lines = 0
 
     # Cobertura nests: coverage > packages > package > classes > class > lines
@@ -133,6 +142,7 @@ def parse_coverage_xml(path: Path) -> CoverageSnapshot:
         if not filename:
             continue
         file_lines = covered_lines.setdefault(filename, set())
+        all_lines = measured_lines.setdefault(filename, set())
         for line_el in class_el.iter("line"):
             try:
                 number = int(line_el.attrib["number"])
@@ -142,6 +152,7 @@ def parse_coverage_xml(path: Path) -> CoverageSnapshot:
                 # whole parse; coverage.py occasionally emits stragglers.
                 continue
             total_lines += 1
+            all_lines.add(number)
             if hits >= 1:
                 file_lines.add(number)
 
@@ -149,6 +160,7 @@ def parse_coverage_xml(path: Path) -> CoverageSnapshot:
         covered_lines={k: frozenset(v) for k, v in covered_lines.items()},
         line_rate=line_rate,
         total_lines=total_lines,
+        measured_lines={k: frozenset(v) for k, v in measured_lines.items()},
     )
 
 
@@ -192,6 +204,39 @@ def compute_delta(
         baseline_total_covered=baseline.total_covered,
         after_total_covered=after.total_covered,
     )
+
+
+def _flatten(by_file: dict[str, frozenset[int]]) -> set[tuple[str, int]]:
+    return {(name, line) for name, lines in by_file.items() for line in lines}
+
+
+def union_coverage_pct(snapshots: Iterable[CoverageSnapshot]) -> float | None:
+    """Line coverage of the UNION of *snapshots*, as a percentage, or None.
+
+    Each snapshot in a regression run is one test's report from its own
+    ``--cov=.`` pass over the same tree. The run's project coverage is the union
+    of what those passes reached, over the union of what they measured — the
+    denominators must be unioned too, because a ``--cov=.`` report omits files
+    the run never imported, so no single report's line count covers the project.
+
+    The MEAN of per-snapshot ``line_rate`` values is NOT project coverage: for N
+    narrow tests it converges on the average blast radius of one test, a number
+    that reads exactly like a coverage percentage and is not one (#865, part of
+    the Factory#431 silent-fallback family).
+
+    Returns None rather than a guess when nothing was measured, or when a
+    snapshot reports lines covered that it never claims to have measured — the
+    JaCoCo adapter, whose parser keeps no uncovered line numbers, lands here and
+    gets an honest "no figure" rather than an inflated one.
+    """
+    covered: set[tuple[str, int]] = set()
+    measurable: set[tuple[str, int]] = set()
+    for snap in snapshots:
+        covered |= _flatten(snap.covered_lines)
+        measurable |= _flatten(snap.measured_lines)
+    if not measurable or not covered <= measurable:
+        return None
+    return round(len(covered) / len(measurable) * 100.0, 2)
 
 
 def _jacoco_to_snapshot(path: Path) -> CoverageSnapshot:
