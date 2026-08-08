@@ -8,7 +8,12 @@ Requires Docker + the tfactory-runner-pytest image (the Executor sandbox).
   TF_MODEL=<model-string> python full-pipeline.py <label>
 """
 
-import asyncio, json, os, shutil, sys, time
+import asyncio
+import json
+import os
+import shutil
+import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path("apps/backend").resolve()))
@@ -22,9 +27,9 @@ for var in (
 ):
     os.environ[var] = "1"
 
-from workspaces import snapshot_aifactory_spec  # type: ignore
-from agents.tools_pkg.tools import task_control as TC
 from agents.planner import schedule_planner
+from agents.tools_pkg.tools import task_control as TC
+from workspaces import snapshot_aifactory_spec  # type: ignore
 
 MODEL = os.environ["TF_MODEL"]
 LABEL = sys.argv[1] if len(sys.argv) > 1 else "provider"
