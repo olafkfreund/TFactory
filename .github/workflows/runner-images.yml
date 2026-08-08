@@ -288,6 +288,12 @@ jobs:
           context: docker/tfactory-runner-${{ matrix.runner }}
           file: docker/tfactory-runner-${{ matrix.runner }}/Dockerfile
           push: true
+          # See nix-runner-image.yml. All nine of these Dockerfiles happen to
+          # carry the label already, but "happens to" is the property #952 is
+          # about: setting it on the workflow means a tenth runner added to the
+          # matrix is linked whether or not its author remembers (#952).
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
           tags: |
             ${{ env.IMAGE }}:${{ github.sha }}
             ${{ env.IMAGE }}:latest

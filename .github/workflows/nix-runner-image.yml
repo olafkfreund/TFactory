@@ -127,6 +127,14 @@ jobs:
           file: docker/tfactory-runner-nix/Dockerfile
           platforms: linux/amd64
           push: true
+          # GHCR links a package to a repository via this OCI label, and an
+          # unlinked package inherits none of the repository's visibility or
+          # permissions. Set HERE rather than in the Dockerfile (#952): nine of
+          # eleven runner Dockerfiles carried it, this one did not, and nothing
+          # in CI, the logs or the image made the omission visible. On the
+          # workflow it cannot be forgotten by the next Dockerfile author.
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
           tags: |
             ${{ env.IMAGE }}:${{ steps.tags.outputs.sha }}
             ${{ env.IMAGE }}:latest

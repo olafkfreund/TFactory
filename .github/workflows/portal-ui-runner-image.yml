@@ -194,6 +194,12 @@ jobs:
           file: docker/tfactory-runner-portal-ui/Dockerfile
           platforms: linux/amd64
           push: true
+          # See nix-runner-image.yml: GHCR links a package to its repository via
+          # this OCI label, and this image is the other one that was missing it
+          # (#952). Declared on the workflow so a new runner image cannot repeat
+          # the omission silently.
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
           tags: |
             ${{ env.IMAGE }}:${{ steps.tags.outputs.sha }}
             ${{ env.IMAGE }}:latest
