@@ -1432,6 +1432,12 @@ async def run_triager(
                   → triager_failed    (any hard error)
     """
     del verbose
+    # git_writer commits the accepted tests back through ``project_dir``; if the
+    # linked worktree's absolute gitdir pointer names another mount root, every
+    # git command there fails (#868). Repair toward this process's view first.
+    from agents.utils import repair_linked_worktree  # noqa: PLC0415 - lazy by design
+
+    repair_linked_worktree(project_dir)
     try:
         _write_status_patch(
             spec_dir,

@@ -2331,6 +2331,13 @@ async def run_evaluator(
                   → evaluated_empty     (no tests to evaluate)
                   → evaluator_failed    (validation / session error)
     """
+    # The spec tree is a linked worktree whose gitdir pointer is absolute, so it
+    # is wrong for anyone who mounted the workspace at a different root (#868).
+    # Repair toward THIS process's view before any stage runs git. Idempotent and
+    # a no-op when the pointer already resolves.
+    from agents.utils import repair_linked_worktree  # noqa: PLC0415 - lazy by design
+
+    repair_linked_worktree(project_dir)
     try:
         _write_status_patch(
             spec_dir,
