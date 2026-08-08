@@ -43,6 +43,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from agents.workspace_status import now_iso, read_status, write_status_patch
 
 if TYPE_CHECKING:
+    from agents.criterion_authority import AuthorityResult
     from agents.criterion_literals import LiteralDriftResult
     from test_plan import ImplementationPlan, Subtask
 
@@ -717,7 +718,9 @@ def _criterion_literal_check(
         return None
 
 
-def _criterion_authority_check(subtask: object, source: str):
+def _criterion_authority_check(
+    subtask: object, source: str
+) -> "AuthorityResult | None":
     """Run the #995 spec-authority check, or ``None`` when it is off.
 
     Best-effort like its sibling: pure and unit-tested, but an unexpected error
