@@ -14,9 +14,13 @@ available.
 
 from __future__ import annotations
 
+import logging
 import os
 import shlex
+from pathlib import Path
 from typing import Any
+
+_log = logging.getLogger(__name__)
 
 # The portals the capability knows about (kept in sync with config.PORTALS).
 PORTAL_KEYS = ("pfactory", "aifactory", "tfactory", "cfactory")
@@ -34,10 +38,84 @@ DEFAULT_NAMESPACE = "factory"
 DEFAULT_MFA_SECRET = "portal-ui-test-user"
 _MFA_ENV = ("TEST_USER", "TEST_PASSWORD", "TEST_TOTP_SECRET")
 # The control-plane data PVC carries the Visual Inspection store at
-# ~/.tfactory/visual-inspections. Co-mounting it (single-node) lets the Job's
-# publish surface in the portal's Visual Reports tab.
-DEFAULT_DATA_PVC = "tfactory-data"
+# ~/.tfactory/visual-inspections and the workspaces/*/specs/* the task list
+# globs. The Job MUST co-mount the same claim the control plane mounts, or the
+# harness runs, `publish()` and `publish_as_tfactory_spec()` both report
+# success, and the run is invisible in both the Visual Reports tab and the task
+# list -- written to a volume nothing reads, with no error to notice (#875).
+# This constant is only the last resort: `resolve_data_pvc` asks the running
+# control-plane pod first, so the Job follows the deployment instead of a
+# guess that drifts the moment the claim is renamed.
+DEFAULT_DATA_PVC = "tfactory-data-rwx"
 _HOME = "/home/nonroot"
+_DATA_MOUNT_PATH = f"{_HOME}/.tfactory"
+
+
+def _claim_for_mount_path(pod: Any, mount_path: str) -> str | None:
+    """The claimName of the volume a pod mounts at ``mount_path`` (pure).
+
+    Takes the k8s pod object (or any object with the same attribute shape) so it
+    is testable without a cluster.
+    """
+    spec = getattr(pod, "spec", None)
+    if spec is None:
+        return None
+    names = {
+        m.name
+        for c in (spec.containers or [])
+        for m in (c.volume_mounts or [])
+        if m.mount_path == mount_path
+    }
+    for vol in spec.volumes or []:
+        pvc = getattr(vol, "persistent_volume_claim", None)
+        if vol.name in names and pvc is not None:
+            return pvc.claim_name
+    return None
+
+
+def resolve_data_pvc() -> str:
+    """The data claim the portal-ui Job should co-mount.
+
+    Order: explicit ``TFACTORY_DATA_PVC`` env override, then the claim the
+    running control-plane pod itself mounts at ``~/.tfactory``, then
+    :data:`DEFAULT_DATA_PVC`. Reading it off the live pod is what keeps the two
+    from drifting: the Job lands its evidence on whatever volume the reader is
+    actually holding, in any environment, without this module having to know the
+    claim's name. Best-effort -- outside a pod, or without ``pods get`` on the
+    service account, it falls back to the constant.
+    """
+    override = os.environ.get("TFACTORY_DATA_PVC")
+    if override:
+        return override
+    try:
+        from kubernetes import client, config  # type: ignore
+
+        config.load_incluster_config()
+        pod_name = os.environ["HOSTNAME"]
+        namespace = (
+            Path("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+            .read_text()
+            .strip()
+        )
+        pod = client.CoreV1Api().read_namespaced_pod(pod_name, namespace)
+        claim = _claim_for_mount_path(pod, _DATA_MOUNT_PATH)
+        if claim:
+            return claim
+        _log.warning(
+            "portal-ui dispatch: control-plane pod %s mounts no PVC at %s; "
+            "falling back to %s",
+            pod_name,
+            _DATA_MOUNT_PATH,
+            DEFAULT_DATA_PVC,
+        )
+    except Exception as exc:  # noqa: BLE001 - not in a pod / no RBAC / no client
+        _log.info(
+            "portal-ui dispatch: cannot read the control-plane pod (%s); "
+            "using default data PVC %s",
+            exc,
+            DEFAULT_DATA_PVC,
+        )
+    return DEFAULT_DATA_PVC
 
 
 def portal_ui_job_name(portal_key: str, run_id: str) -> str:
@@ -75,7 +153,7 @@ def build_portal_ui_job_manifest(
     mfa_secret = mfa_secret or os.environ.get(
         "PORTAL_UI_MFA_SECRET", DEFAULT_MFA_SECRET
     )
-    data_pvc = data_pvc or os.environ.get("TFACTORY_DATA_PVC", DEFAULT_DATA_PVC)
+    data_pvc = data_pvc or resolve_data_pvc()
     name = portal_ui_job_name(portal_key, run_id)
 
     env: list[dict[str, Any]] = [
@@ -141,7 +219,7 @@ def build_portal_ui_job_manifest(
                                 "limits": {"memory": "3Gi"},
                             },
                             "volumeMounts": [
-                                {"name": "data", "mountPath": f"{_HOME}/.tfactory"}
+                                {"name": "data", "mountPath": _DATA_MOUNT_PATH}
                             ],
                         }
                     ],
