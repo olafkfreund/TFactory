@@ -117,6 +117,24 @@ def sync_plan_to_source(spec_dir: Path, source_spec_dir: Path | None) -> bool:
         return False
 
 
+def _broken_worktree_gitdir(project_dir: Path) -> Path | None:
+    """Return the stale gitdir iff ``project_dir`` is a linked worktree whose
+    ``gitdir:`` pointer does not resolve from here; ``None`` when there is
+    nothing to repair (a normal clone, a non-repo, or a healthy worktree).
+    """
+    dot_git = project_dir / ".git"
+    if not dot_git.is_file():
+        return None  # a normal clone, or not a repo at all
+    try:
+        pointer = dot_git.read_text().strip()
+    except OSError:
+        return None
+    if not pointer.startswith("gitdir:"):
+        return None
+    stale = Path(pointer.split(":", 1)[1].strip())
+    return None if (stale / "gitdir").is_file() else stale
+
+
 def _find_main_repo(project_dir: Path, stale_gitdir: Path) -> Path | None:
     """Locate the main repo that owns the linked worktree at ``project_dir``.
 
@@ -173,18 +191,9 @@ def repair_linked_worktree(project_dir: Path) -> None:
     broken. Best-effort: a failure is logged and the caller continues, because a
     pointer repair must never be why a verify reports a different verdict.
     """
-    dot_git = project_dir / ".git"
-    if not dot_git.is_file():
-        return  # a normal clone, or not a repo at all -- nothing to repair
-    try:
-        pointer = dot_git.read_text().strip()
-    except OSError:
+    stale = _broken_worktree_gitdir(project_dir)
+    if stale is None:
         return
-    if not pointer.startswith("gitdir:"):
-        return
-    stale = Path(pointer.split(":", 1)[1].strip())
-    if (stale / "gitdir").is_file():
-        return  # the pointer already resolves from here
 
     main_repo = _find_main_repo(project_dir, stale)
     if main_repo is None:
@@ -204,8 +213,8 @@ def repair_linked_worktree(project_dir: Path) -> None:
         if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
     }
     try:
-        proc = subprocess.run(
-            ["git", "-C", str(main_repo), "worktree", "repair", str(project_dir)],
+        proc = subprocess.run(  # noqa: S603 - fixed git argv
+            ["git", "-C", str(main_repo), "worktree", "repair", str(project_dir)],  # noqa: S607 - git from PATH
             capture_output=True,
             text=True,
             timeout=60,
