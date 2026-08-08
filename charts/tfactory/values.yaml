@@ -131,7 +131,21 @@ rbac:
   jobSandbox:
     enabled: true
     # Pullable thin Nix base; toolchains come from the per-task flake, not here.
-    nixRunnerImage: "ghcr.io/olafkfreund/tfactory-runner-nix:latest"
+    #
+    # Pinned `:sha-<short>@sha256:<digest>`, not `:latest` (#890). Both halves
+    # earn their place:
+    #   - the DIGEST is what is actually resolved, and it cannot move. Under the
+    #     Kyverno signature gate at Enforce (Factory#522) a floating tag is worse
+    #     than it used to be, because the tag can be repointed at something
+    #     unsigned between one admission check and the next.
+    #   - the TAG is inert provenance, kept so "which commit produced this
+    #     verdict" is readable here, and so factory-gitops' `fleet-match` drift
+    #     tooling — whose `carries()` only recognises `sha-<short>` — can still
+    #     see it. A bare digest would be immutable and illegible, which is the
+    #     other half of #890 (the raw 40-char tags nothing can parse).
+    #
+    # nix-runner-image.yml rewrites this on every publish; it is not hand-managed.
+    nixRunnerImage: "ghcr.io/olafkfreund/tfactory-runner-nix:sha-6b3f373@sha256:2828a3e38e340d891a608441a82d2ef7bbbf7ca0259830057a05430d16489511"
 
 # Factory#550. OFF by default, and that is a decision rather than an oversight.
 # `replicaCount` is pinned to 1 above, and `minAvailable: 1` over a single
