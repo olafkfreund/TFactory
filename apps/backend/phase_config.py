@@ -569,6 +569,14 @@ def get_provider_extra_kwargs(provider_name: str, model: str) -> dict:
        (``OPENAI_COMPATIBLE_BASE_URL`` / ``OPENAI_COMPATIBLE_API_KEY`` /
        ``OPENAI_API_KEY``) for power users without the UI.
 
+    For ``ollama`` the provider's ``base_url`` defaults to
+    ``http://localhost:11434`` inside the provider class, and the provider reads
+    no environment of its own. In a pod nothing listens on localhost, so every
+    ollama-routed phase (planner / gen-functional / evaluator / QA) silently
+    talked to nowhere (#870). Resolve ``OLLAMA_BASE_URL`` here — the one seam all
+    five call sites already go through — so the deployment's address reaches the
+    provider without patching the vendored provider class.
+
     Args:
         provider_name: Canonical provider name from ``infer_provider_from_model``.
         model: The original (possibly prefixed) model string.
@@ -576,6 +584,10 @@ def get_provider_extra_kwargs(provider_name: str, model: str) -> dict:
     Returns:
         Dict of extra kwargs to spread into the ``get_provider`` call.
     """
+    if provider_name == "ollama":
+        base_url = os.environ.get("OLLAMA_BASE_URL", "").strip()
+        return {"base_url": base_url} if base_url else {}
+
     if provider_name != "openai-compatible":
         return {}
 

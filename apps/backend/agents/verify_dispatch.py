@@ -212,6 +212,9 @@ _SDK_PASSTHROUGH_ENV: tuple[str, ...] = (
     "GEMINI_API_KEY",
     "GOOGLE_API_KEY",
     "OLLAMA_API_KEY",
+    "OLLAMA_BASE_URL",  # #870 — self-hosted ollama address; without it the Job
+    # falls back to the provider's http://localhost:11434 default, where nothing
+    # listens inside the Job pod.
     "OLLAMA_CLOUD_BASE_URL",
     "GITHUB_TOKEN",
     "GITHUB_MODELS_DEFAULT",
