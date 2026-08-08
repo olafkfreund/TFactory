@@ -156,6 +156,109 @@ def test_no_delay_keeps_plain_command():
     assert c["args"][0] == "tfactory"
 
 
+# ─── #875: the Job must co-mount the claim the control plane reads ──────
+
+
+class _FakeMount:
+    def __init__(self, name, mount_path):
+        self.name = name
+        self.mount_path = mount_path
+
+
+class _FakeContainer:
+    def __init__(self, volume_mounts):
+        self.volume_mounts = volume_mounts
+
+
+class _FakeClaim:
+    def __init__(self, claim_name):
+        self.claim_name = claim_name
+
+
+class _FakeVolume:
+    def __init__(self, name, claim_name=None):
+        self.name = name
+        self.persistent_volume_claim = _FakeClaim(claim_name) if claim_name else None
+
+
+class _FakeSpec:
+    def __init__(self, containers, volumes):
+        self.containers = containers
+        self.volumes = volumes
+
+
+class _FakePod:
+    def __init__(self, spec):
+        self.spec = spec
+
+
+def _pod(mount_path="/home/nonroot/.tfactory", claim="tfactory-data-rwx"):
+    return _FakePod(
+        _FakeSpec(
+            containers=[_FakeContainer([_FakeMount("data", mount_path)])],
+            volumes=[_FakeVolume("tmp"), _FakeVolume("data", claim)],
+        )
+    )
+
+
+def test_claim_for_mount_path_follows_the_control_plane():
+    """The claim is read off the pod, not guessed.
+
+    #875: the default named an orphan PVC (`tfactory-data`, RWO/local-path)
+    while the deployment mounted `tfactory-data-rwx`. The harness ran, publish
+    reported success, and the run was invisible — written to a volume nothing
+    reads, with no error to notice.
+    """
+    from portal_testing.dispatch import _claim_for_mount_path
+
+    assert (
+        _claim_for_mount_path(_pod(), "/home/nonroot/.tfactory") == "tfactory-data-rwx"
+    )
+
+
+def test_claim_for_mount_path_ignores_a_different_mount():
+    """A volume mounted somewhere else is not the data claim."""
+    from portal_testing.dispatch import _claim_for_mount_path
+
+    assert (
+        _claim_for_mount_path(_pod(mount_path="/tmp"), "/home/nonroot/.tfactory")
+        is None
+    )
+
+
+def test_claim_for_mount_path_ignores_a_non_pvc_volume():
+    """An emptyDir at the data path yields no claim (fall back, don't invent one)."""
+    from portal_testing.dispatch import _claim_for_mount_path
+
+    assert _claim_for_mount_path(_pod(claim=None), "/home/nonroot/.tfactory") is None
+
+
+def test_resolve_data_pvc_prefers_the_env_override(monkeypatch):
+    from portal_testing import dispatch
+
+    monkeypatch.setenv("TFACTORY_DATA_PVC", "some-other-claim")
+    assert dispatch.resolve_data_pvc() == "some-other-claim"
+
+
+def test_resolve_data_pvc_falls_back_off_cluster(monkeypatch):
+    """Outside a pod there is nothing to read; the constant must still be the
+    claim the deployment mounts, not the orphan."""
+    from portal_testing import dispatch
+
+    monkeypatch.delenv("TFACTORY_DATA_PVC", raising=False)
+    assert dispatch.resolve_data_pvc() == "tfactory-data-rwx"
+    assert dispatch.DEFAULT_DATA_PVC == "tfactory-data-rwx"
+
+
+def test_default_job_mounts_the_resolved_claim(monkeypatch):
+    from portal_testing import dispatch
+
+    monkeypatch.delenv("TFACTORY_DATA_PVC", raising=False)
+    m = dispatch.build_portal_ui_job_manifest("tfactory", "r1")
+    vol = m["spec"]["template"]["spec"]["volumes"][0]
+    assert vol["persistentVolumeClaim"]["claimName"] == "tfactory-data-rwx"
+
+
 def test_job_pods_do_not_join_the_tfactory_service():
     """Regression for the portal-ui lane taking its own target offline.
 
