@@ -67,7 +67,12 @@ def _workspace(tmp_path: Path, project_id: str, remote: str) -> Path:
 
 
 def _record_coverage(tmp_path: Path, project_id: str, commit: str, pct: float) -> None:
-    reg = regression_dir(tmp_path, project_id)
+    # Resolve the regression dir the way the route does, not by re-deriving it.
+    # This helper used to write to `<root>/<pid>/regression` while `_workspace`
+    # created `<root>/workspaces/<pid>` -- the reader/writer split of #865,
+    # baked into the suite, so the tests were green on a layout production does
+    # not use. Deriving it from the route is what stops that recurring.
+    reg = regression_dir(cov._projects_root(), project_id)
     reg.mkdir(parents=True, exist_ok=True)
     coverage_trend_path(reg).write_text(
         json.dumps(

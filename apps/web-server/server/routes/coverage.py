@@ -50,6 +50,8 @@ from agents.regression.coverage_trend import (  # noqa: E402
 )
 from agents.regression.store import regression_dir  # noqa: E402
 
+from ..services.project_workspace_service import workspace_root  # noqa: E402
+
 router = APIRouter()
 
 # A git remote may be https://host/owner/name(.git) or git@host:owner/name(.git).
@@ -60,9 +62,26 @@ _GIT_REMOTE_TIMEOUT_S = 5
 _REPO_PATH_PARTS = 2
 
 
-def _workspace_root() -> Path:
+def _projects_root() -> Path:
+    """The directory holding one subdirectory per project id.
+
+    This MUST resolve to the same place the regression route writes under
+    (``project_workspace_service.workspace_root``). It did not: this module
+    read ``regression_dir(<root>, pid)`` where ``<root>`` was ``~/.tfactory``,
+    one directory ABOVE the ``<root>/workspaces/`` it scanned to discover the
+    very ids it then looked up — and in K8s the writer is at
+    ``PROJECT_WORKSPACE_ROOT`` (a PVC) which this never consulted at all. So
+    the GET read a tree nothing writes to (#865).
+
+    ``PROJECT_WORKSPACE_ROOT`` is the writer's own knob and therefore wins.
+    ``TFACTORY_WORKSPACE_ROOT`` stays honoured as ``<root>/workspaces`` — the
+    way ``badges.py`` and ``liveness_sweep`` read it — for installs that set
+    only that one.
+    """
     env_val = os.environ.get("TFACTORY_WORKSPACE_ROOT")
-    return Path(env_val).expanduser() if env_val else Path.home() / ".tfactory"
+    if env_val and not os.environ.get("PROJECT_WORKSPACE_ROOT"):
+        return Path(env_val).expanduser() / "workspaces"
+    return workspace_root()
 
 
 def _normalise_repo(value: str) -> str:
@@ -102,7 +121,7 @@ def _remote_of(path: Path) -> str:
 def _projects_for_repo(repo: str) -> list[str]:
     """Project ids whose checkout points at *repo*."""
     wanted = _normalise_repo(repo)
-    root = _workspace_root() / "workspaces"
+    root = _projects_root()
     if not root.is_dir():
         return []
     return [
@@ -113,7 +132,7 @@ def _projects_for_repo(repo: str) -> list[str]:
 
 
 def _coverage_for_commit(project_id: str, sha: str) -> dict[str, Any] | None:
-    reg_dir = regression_dir(_workspace_root(), project_id)
+    reg_dir = regression_dir(_projects_root(), project_id)
     trend_file = coverage_trend_path(reg_dir)
     if not trend_file.is_file():
         return None
@@ -217,7 +236,7 @@ async def record_commit_coverage(report: CoverageReport) -> dict[str, Any]:
         coverage_pct=report.coverage_pct,
         commit=report.sha,
     )
-    reg_dir = regression_dir(_workspace_root(), project_id)
+    reg_dir = regression_dir(_projects_root(), project_id)
     record_coverage(coverage_trend_path(reg_dir), point)
     return {
         "recorded": True,
