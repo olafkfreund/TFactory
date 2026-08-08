@@ -717,6 +717,28 @@ def _criterion_literal_check(
         return None
 
 
+def _criterion_authority_check(subtask: object, source: str):
+    """Run the #995 spec-authority check, or ``None`` when it is off.
+
+    Best-effort like its sibling: pure and unit-tested, but an unexpected error
+    must not fail a healthy suite.
+    """
+    from agents.criterion_authority import (  # noqa: PLC0415 - lazy by design
+        check_criterion_authority,
+        enabled,
+    )
+
+    if not enabled():
+        return None
+    try:
+        return check_criterion_authority(
+            source, language=getattr(subtask, "language", None)
+        )
+    except Exception as exc:  # noqa: BLE001 — never block a healthy suite
+        _gen_log.warning("criterion-authority check errored (%s); skipping", exc)
+        return None
+
+
 def _source_guardrail_rejection(
     subtask: object, source: str, project_dir: Path
 ) -> tuple[str, str] | None:
@@ -770,6 +792,21 @@ def _source_guardrail_rejection(
             "it. Assert the criterion AS WRITTEN and let the test fail; never "
             "substitute the implementation's value (#888).",
             "gen_functional_criterion_literal_rejected",
+        )
+
+    # #995: the literal check compares VALUES, so it cannot see a test that
+    # asserts the criterion correctly while its prose announces the author
+    # decided the spec was wrong. That test has redefined its own oracle — the
+    # generator reasoned its way to grading the specification against the
+    # implementation, which is the one direction verification must never run.
+    authority = _criterion_authority_check(subtask, source)
+    if authority is not None and not authority.ok:
+        return (
+            "criterion authority: the generated test's prose passes judgement on "
+            f"the specification — {authority.describe()}. A test does not get to "
+            "decide the criterion is wrong; assert it AS WRITTEN and let the test "
+            "fail, or raise the conflict for a human (#995).",
+            "gen_functional_criterion_authority_rejected",
         )
     return None
 
