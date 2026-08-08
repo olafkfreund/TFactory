@@ -211,6 +211,12 @@ _SDK_PASSTHROUGH_ENV: tuple[str, ...] = (
     "OPENAI_COMPATIBLE_MAX_TOKENS",
     "GEMINI_API_KEY",
     "GOOGLE_API_KEY",
+    # #871 — the gemini/antigravity CLI refuses to run in an "untrusted"
+    # workspace and exits BEFORE any API call. providers/gemini_agentic.py spawns
+    # that CLI as a subprocess, which inherits the Job container's env, so the
+    # key alone is not enough: without this the Gemini verify leg stalls with no
+    # request ever leaving the pod. Same fix AIFactory made on 2026-06-13.
+    "GEMINI_CLI_TRUST_WORKSPACE",
     "OLLAMA_API_KEY",
     "OLLAMA_CLOUD_BASE_URL",
     "GITHUB_TOKEN",
