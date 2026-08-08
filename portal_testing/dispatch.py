@@ -10,6 +10,23 @@ the portal's Visual Reports tab.
 ``build_portal_ui_job_manifest`` is pure (returns a manifest dict) and unit
 tested; ``dispatch_portal_ui`` submits it via the in-cluster client when
 available.
+
+The manifest's fleet-wide rules come from the vendored hub canonical
+``tools.runners.job_dispatch`` (Factory#483/#638), not from literals here
+(#908). Pod labels, Job-name sanitisation, and trace propagation are things
+every factory Job must get right, and a comment saying so is not a mechanism —
+before this the pod labels were correct *by comment*, the Job name was an
+unsanitised f-string, and the Job carried none of the trace context the hub
+adds. ``assert_job_policy`` checks the half a self-built manifest still owns,
+and ``test_dispatch.py`` calls it, which is what the canonical asks consumers
+to do.
+
+The published runner image deliberately does NOT ship ``apps/backend``: it
+vendors ``portal_testing/`` alone, and at runtime only ever runs
+``portal_testing.run``, which never imports this module. The in-image test gate
+mounts ``apps/backend/tools`` read-only for the duration, exactly as it already
+mounts ``frameworks/``, so the #885 regressions keep executing against the
+bytes that will run in the cluster.
 """
 
 from __future__ import annotations
@@ -17,10 +34,75 @@ from __future__ import annotations
 import logging
 import os
 import shlex
+import sys
 from pathlib import Path
 from typing import Any
 
 _log = logging.getLogger(__name__)
+
+_HUB_CANONICAL = (
+    Path(__file__).resolve().parents[1]
+    / "apps"
+    / "backend"
+    / "tools"
+    / "runners"
+    / "job_dispatch.py"
+)
+
+
+def _load_hub_canonical() -> Any:
+    """Load the vendored hub Job canonical as a standalone module.
+
+    Not ``from tools.runners.job_dispatch import ...``: ``tools/__init__.py``
+    imports the backend's ToolExecutor, which pulls in ``providers`` and most of
+    apps/backend. That resolves in the control plane and cannot in the harness
+    image, which vendors ``portal_testing/`` alone — the packaging problem that
+    left this builder governed by a comment (#908).
+
+    ``job_dispatch.py`` imports nothing but the stdlib; it is written to be
+    vendored. Loading it by path gets the canonical itself without dragging the
+    package in, in both environments. Same file, one engine, no fork.
+
+    Raises if it is missing. Falling back to literals is the exact drift this
+    replaces — a Job built from a stale copy of the rules is worse than one that
+    refuses to be built.
+    """
+    import importlib.util  # noqa: PLC0415 - only needed here
+
+    spec = importlib.util.spec_from_file_location(
+        "portal_testing._job_dispatch", _HUB_CANONICAL
+    )
+    if spec is None or spec.loader is None:  # pragma: no cover - defensive
+        raise ImportError(f"cannot load the hub Job canonical at {_HUB_CANONICAL}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_hub = _load_hub_canonical()
+_short = _hub._short
+assert_job_policy = _hub.assert_job_policy
+job_labels = _hub.job_labels
+task_pod_labels = _hub.task_pod_labels
+trace_env = _hub.trace_env
+
+__all__ = [
+    "DEFAULT_DATA_PVC",
+    "assert_job_policy",
+    "build_portal_ui_job_manifest",
+    "dispatch_all_portals",
+    "dispatch_portal_ui",
+    "portal_ui_job_name",
+    "resolve_data_pvc",
+]
+
+# This lane's identity in the hub's vocabulary. `role` distinguishes dispatchers
+# within one service: the nix lanes are `sandbox`, these are `portal-ui`. It is
+# NOT the same axis as `factory.io/kind`, which stays "task" for every
+# dispatcher because that is the label the per-task NetworkPolicy selects.
+_SERVICE = "tfactory"
+_ROLE = "portal-ui"
 
 # The portals the capability knows about (kept in sync with config.PORTALS).
 PORTAL_KEYS = ("pfactory", "aifactory", "tfactory", "cfactory")
@@ -119,7 +201,15 @@ def resolve_data_pvc() -> str:
 
 
 def portal_ui_job_name(portal_key: str, run_id: str) -> str:
-    return f"portal-ui-{portal_key}-{run_id}".lower()[:63].rstrip("-")
+    """A DNS-1123 Job name for one portal's run.
+
+    The run_id goes through the hub's ``_short`` rather than straight into an
+    f-string: a run_id carrying ``_`` or any other non-DNS character yielded a
+    name the API server rejects outright, and a 63-char truncation could leave a
+    trailing ``-``. ``assert_job_policy`` fails a manifest for exactly that, and
+    its error message names ``_short`` as the fix.
+    """
+    return f"portal-ui-{portal_key}-{_short(run_id)}".lower()[:63].strip("-")
 
 
 def build_portal_ui_job_manifest(
@@ -173,30 +263,57 @@ def build_portal_ui_job_manifest(
         command = ["python", "-m", "portal_testing.run"]
         args = run_args
 
+    # Trace context, so a dispatched run continues the caller's trace instead of
+    # it ending at the control plane (Factory#607/#638). Ambient by design: adds
+    # nothing when this process is not exporting, which is every test run.
+    env.extend(trace_env(_SERVICE))
+
     return {
         "apiVersion": "batch/v1",
         "kind": "Job",
         "metadata": {
             "name": name,
             "namespace": namespace,
-            "labels": {"app": "tfactory", "lane": "portal-ui", "portal": portal_key},
+            # Job-OBJECT labels from the hub: `app` deliberately IS the service
+            # here, because a Job object is never a Service endpoint.
+            "labels": {
+                **job_labels(_SERVICE, run_id),
+                "lane": "portal-ui",
+                "portal": portal_key,
+            },
         },
         "spec": {
             "backoffLimit": 0,
             "ttlSecondsAfterFinished": 3600,
+            # A hung Playwright or Keycloak login had no k8s-enforced kill
+            # deadline: ttlSecondsAfterFinished only starts once a Job finishes,
+            # which a hung one never does. 45min is far past a real run (minutes)
+            # including the staggered startup delay.
+            "activeDeadlineSeconds": 2700,
             "template": {
-                # NOT app=tfactory: that is the `tfactory` Service's selector, so
-                # the Job's pod joined the Service and, listening on nothing,
-                # answered its share of real portal traffic with connection
-                # refused -- Cloudflare served 502s for as long as the test ran.
-                # The browser test took the portal it was testing offline and
-                # then reported it broken.
+                # From task_pod_labels, NOT literals. `app` must not be
+                # `tfactory`: that is the Service's selector, so the Job's pod
+                # joined the Service and, listening on nothing, answered its
+                # share of real portal traffic with connection refused --
+                # Cloudflare served 502s for as long as the test ran (#885).
+                # That was right by comment; it is now right by construction.
+                # It also gains factory.io/service and factory.io/kind=task --
+                # the label the per-task NetworkPolicy selects, which these pods
+                # never carried, so they ran under no policy at all.
                 "metadata": {
-                    "labels": {"app": "tfactory-portal-ui", "lane": "portal-ui"}
+                    "labels": {
+                        **task_pod_labels(_SERVICE, role=_ROLE),
+                        "lane": "portal-ui",
+                        "portal": portal_key,
+                    }
                 },
                 "spec": {
                     "restartPolicy": "Never",
                     "imagePullSecrets": [{"name": "ghcr-pull"}],
+                    # The harness talks to public portals and a co-mounted PVC.
+                    # It has no reason to hold a kube API token.
+                    "automountServiceAccountToken": False,
+                    "securityContext": {"seccompProfile": {"type": "RuntimeDefault"}},
                     "volumes": [
                         {
                             "name": "data",
@@ -210,6 +327,17 @@ def build_portal_ui_job_manifest(
                             "command": command,
                             "args": args,
                             "env": env,
+                            # Chromium runs with --no-sandbox (see run.py), so
+                            # it needs no added capabilities and must not be able
+                            # to gain any. runAsNonRoot is deliberately NOT set:
+                            # the MS Playwright base runs as root and its baked
+                            # /ms-playwright + $HOME layout assume it, so pinning
+                            # a uid here changes the harness's runtime, which
+                            # this issue has no evidence for.
+                            "securityContext": {
+                                "allowPrivilegeEscalation": False,
+                                "capabilities": {"drop": ["ALL"]},
+                            },
                             # Headless Chromium is CPU-bound; without a request
                             # the pod gets throttled and click actionability
                             # checks time out (clicks that pass locally fail
