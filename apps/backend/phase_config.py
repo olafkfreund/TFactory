@@ -554,6 +554,17 @@ def _load_openai_endpoint(label: str | None = None) -> dict | None:
     return None
 
 
+def _ollama_extra_kwargs() -> dict:
+    """``base_url`` for the self-hosted Ollama, from ``OLLAMA_BASE_URL`` (#870).
+
+    The provider class defaults to ``http://localhost:11434`` and reads no
+    environment of its own, so inside a pod every ollama-routed phase talked to
+    a port nothing listens on. Unset leaves the provider default alone.
+    """
+    base_url = os.environ.get("OLLAMA_BASE_URL", "").strip()
+    return {"base_url": base_url} if base_url else {}
+
+
 def get_provider_extra_kwargs(provider_name: str, model: str) -> dict:
     """Return additional kwargs to pass to ``get_provider`` for non-trivial providers.
 
@@ -584,12 +595,11 @@ def get_provider_extra_kwargs(provider_name: str, model: str) -> dict:
     Returns:
         Dict of extra kwargs to spread into the ``get_provider`` call.
     """
-    if provider_name == "ollama":
-        base_url = os.environ.get("OLLAMA_BASE_URL", "").strip()
-        return {"base_url": base_url} if base_url else {}
-
     if provider_name != "openai-compatible":
-        return {}
+        # Folded into the existing guard rather than added as its own early
+        # return: the ratchet blocks a net-new PLR0911 on this file, and this
+        # keeps the function's return count exactly where it was.
+        return _ollama_extra_kwargs() if provider_name == "ollama" else {}
 
     stripped = strip_provider_prefix(model).strip()
 
