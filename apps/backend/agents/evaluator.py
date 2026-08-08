@@ -2278,29 +2278,68 @@ def _equivalence_lane_enabled() -> bool:
     )
 
 
+def _record_equivalence_not_measured(
+    spec_dir: Path, reason: str, *, verdict: str
+) -> None:
+    """Leave the not-measured record in findings, or say why we could not."""
+    try:
+        from agents.equivalence_lane import record_not_measured
+
+        record_not_measured(spec_dir, reason, verdict=verdict)
+    except Exception:  # noqa: BLE001 - recording must never fail the verify
+        _eval_log.exception(
+            "equivalence lane: could not record the not-measured finding (%s)", reason
+        )
+
+
 def _maybe_run_equivalence_lane(spec_dir: Path, project_dir: Path) -> None:
     """Run the RFC-0010 equivalence lane when enabled + the contract declares one.
 
-    Reads the signed contract from ``context/task_contract.json``; no-op when the
-    flag is off, the contract is absent, or it carries no ``tfactory.equivalence``
-    block. Best-effort — a failure here never fails the verify.
+    Reads the signed contract from ``context/task_contract.json``; a true no-op
+    when the contract is absent or carries no ``tfactory.equivalence`` block —
+    nothing was declared, so there is nothing to report.
+
+    Once a contract DOES declare the lane, every exit from here leaves a record
+    in ``findings/`` (#972). Best-effort still means the verify does not fail on
+    an infrastructure problem, but "best-effort" must not mean "silent": a
+    skipped lane that leaves only a log line makes the findings file — the
+    artifact a human reads — identical whether the lane passed or never ran.
     """
-    if not _equivalence_lane_enabled():
+    contract_path = Path(spec_dir) / "context" / "task_contract.json"
+    if not contract_path.is_file():
         return
     try:
-        contract_path = Path(spec_dir) / "context" / "task_contract.json"
-        if not contract_path.is_file():
-            return
         contract = json.loads(contract_path.read_text())
-        if not ((contract.get("tfactory") or {}).get("equivalence")):
-            return
+    except (OSError, ValueError) as exc:
+        # Unreadable contract: we cannot know whether a lane was declared, so
+        # there is nothing honest to record against it. Log and leave.
+        _eval_log.warning("equivalence lane: unreadable task_contract.json: %s", exc)
+        return
+    if not ((contract.get("tfactory") or {}).get("equivalence")):
+        return
+
+    if not _equivalence_lane_enabled():
+        # Declared by the contract, switched off by the operator. Not a failure
+        # — but it must not read as a lane that ran and passed.
+        reason = "equivalence lane is disabled (TFACTORY_EQUIVALENCE_LANE is not set)"
+        _eval_log.info("equivalence lane: %s", reason)
+        _record_equivalence_not_measured(spec_dir, reason, verdict="not_run")
+        return
+
+    try:
         from agents.equivalence_lane import run_from_spec
 
         result = run_from_spec(spec_dir, project_dir, contract)
         if result is not None:
             _eval_log.info("equivalence lane: %s", result.get("claim"))
     except Exception as exc:  # noqa: BLE001 - equivalence is best-effort
-        _eval_log.warning("equivalence lane skipped: %s", exc)
+        # Declared, enabled, tried, could not run: no Docker daemon, the Job
+        # could not be created, the image is missing. Fail closed, the same call
+        # the dead-harness path makes (#959).
+        _eval_log.warning("equivalence lane could not run: %s", exc)
+        _record_equivalence_not_measured(
+            spec_dir, f"the lane could not run: {exc}", verdict="reject"
+        )
 
 
 async def run_evaluator(
