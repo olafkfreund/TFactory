@@ -39,10 +39,10 @@ import argparse
 import asyncio
 import logging
 import os
-import subprocess
 import sys
 from pathlib import Path
 
+from agents.utils import repair_linked_worktree
 from tools.runners.job_tracing import init_agent_tracing
 
 _log = logging.getLogger(__name__)
@@ -200,65 +200,6 @@ def _read_traceability(spec_dir: Path) -> list[dict[str, object]] | None:
         return trace if isinstance(trace, list) and trace else None
     except (OSError, ValueError):
         return None
-
-
-def repair_linked_worktree(project_dir: Path) -> None:
-    """Re-point a relocated linked git worktree at its real gitdir (#868).
-
-    The spec tree is a *linked* worktree created on the control plane
-    (``task_control._add_spec_worktree``), so its ``.git`` is a FILE holding an
-    ABSOLUTE ``gitdir:`` path under ``/home/nonroot/.tfactory/...``. The verify
-    Job mounts the same PVC at ``/work``, so that absolute path does not exist
-    here and every git command against the tree dies with
-    ``fatal: not a git repository: (null)`` — which is why ``git_writer`` could
-    never commit the generated tests back.
-
-    ``git worktree repair`` is exactly this repair and is idempotent, but it must
-    run FROM THE MAIN REPO: git cannot discover the repository from the broken
-    linked tree. The main repo is the nearest ancestor whose ``.git`` is a real
-    directory (no layout hardcoded), and repairing from there rewrites BOTH
-    pointer files — the main repo's ``.git/worktrees/<name>/gitdir`` and the
-    linked tree's ``.git``.
-
-    No-op unless ``project_dir`` really is a linked worktree. Best-effort by
-    design: a repair failure is logged and the pipeline continues, because a
-    broken pointer must never be why a verify reports a different verdict.
-    """
-    if not (project_dir / ".git").is_file():
-        return  # a normal clone (or not a repo at all) — nothing to repair
-    main_repo = next((p for p in project_dir.parents if (p / ".git").is_dir()), None)
-    if main_repo is None:
-        _log.warning(
-            "[verify-pipeline] %s is a linked worktree but no main repo found "
-            "above it; git commands against it will fail (#868)",
-            project_dir,
-        )
-        return
-    try:
-        proc = subprocess.run(
-            ["git", "-C", str(main_repo), "worktree", "repair", str(project_dir)],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:  # pragma: no cover - defensive
-        _log.warning("[verify-pipeline] git worktree repair failed: %s (#868)", exc)
-        return
-    if proc.returncode != 0:
-        _log.warning(
-            "[verify-pipeline] git worktree repair of %s from %s failed: %s (#868)",
-            project_dir,
-            main_repo,
-            (proc.stderr or proc.stdout).strip()[:200],
-        )
-        return
-    _log.info(
-        "[verify-pipeline] repaired linked worktree %s against %s (#868)%s",
-        project_dir,
-        main_repo,
-        f": {proc.stdout.strip()[:200]}" if proc.stdout.strip() else "",
-    )
 
 
 def main(argv: list[str] | None = None) -> int:

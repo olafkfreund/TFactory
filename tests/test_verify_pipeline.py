@@ -15,8 +15,6 @@ LLM / docker / cluster) and verify:
 from __future__ import annotations
 
 import json
-import shutil
-import subprocess
 from pathlib import Path
 
 from agents import verify_pipeline as vp
@@ -168,98 +166,3 @@ def test_main_exits_zero_on_success(monkeypatch, tmp_path):
     )
     assert rc == 0
     assert recorded == {"job_id": "jX", "final_status": "triaged"}
-
-
-# ---------------------------------------------------------------------------
-# #868 — a linked worktree carries an ABSOLUTE gitdir, so the control-plane
-# tree is not a repository once the Job mounts the same PVC at a different path.
-# ---------------------------------------------------------------------------
-
-
-def _git(*args: str, cwd: Path) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=False
-    )
-
-
-def _relocated_linked_worktree(tmp_path: Path) -> Path:
-    """Build a real repo + linked worktree, then MOVE the whole tree.
-
-    This is the control-plane -> ``/work`` remount in miniature: the worktree's
-    ``.git`` file still names the pre-move absolute gitdir. Returns the linked
-    worktree's path at its new location.
-    """
-    src = tmp_path / "control-plane"
-    base = src / "workspaces" / "proj"
-    base.mkdir(parents=True)
-    _git("init", "-q", ".", cwd=base)
-    _git("config", "user.email", "t@example.com", cwd=base)
-    _git("config", "user.name", "t", cwd=base)
-    (base / "app.py").write_text("print('the file contents under test')\n")
-    _git("add", "app.py", cwd=base)
-    _git("commit", "-qm", "init", cwd=base)
-
-    wt = base / "specs" / "007-spec" / ".worktree"
-    assert (
-        _git(
-            "worktree", "add", "--detach", "--force", str(wt), "HEAD", cwd=base
-        ).returncode
-        == 0
-    )
-    assert (wt / ".git").read_text().startswith("gitdir: " + str(src))
-
-    dst = tmp_path / "work"
-    shutil.move(str(src), str(dst))
-    return dst / "workspaces" / "proj" / "specs" / "007-spec" / ".worktree"
-
-
-def test_relocated_linked_worktree_is_repaired(tmp_path):
-    wt = _relocated_linked_worktree(tmp_path)
-
-    # Before: exactly the failure #868 reported from the live Job.
-    broken = _git("rev-parse", "HEAD", cwd=wt)
-    assert broken.returncode != 0
-    assert "not a git repository" in broken.stderr
-
-    vp.repair_linked_worktree(wt)
-
-    # After: git works AND can read a tracked file's CONTENTS through the repo.
-    fixed = _git("rev-parse", "HEAD", cwd=wt)
-    assert fixed.returncode == 0, fixed.stderr
-    show = _git("show", "HEAD:app.py", cwd=wt)
-    assert show.returncode == 0, show.stderr
-    assert show.stdout == "print('the file contents under test')\n"
-
-    # Idempotent: a second repair is a no-op, not a failure.
-    vp.repair_linked_worktree(wt)
-    assert _git("rev-parse", "HEAD", cwd=wt).returncode == 0
-
-
-def test_main_repairs_the_worktree_before_the_pipeline_runs(monkeypatch, tmp_path):
-    """The repair must land at Job entry — before any stage touches git."""
-    wt = _relocated_linked_worktree(tmp_path)
-    seen: dict[str, object] = {}
-
-    async def fake_pipeline(spec_dir, project_dir, *, mode="initial"):
-        # Stand in for git_writer / dependency_review / planner / agents.utils:
-        # they all just run git against project_dir.
-        seen["fetch_like"] = _git("rev-parse", "HEAD", cwd=project_dir)
-        return True, "triaged"
-
-    monkeypatch.setattr(vp, "run_verify_pipeline", fake_pipeline)
-    rc = vp.main(["--spec", str(wt.parent), "--project", str(wt)])
-    assert rc == 0
-    proc = seen["fetch_like"]
-    assert proc.returncode == 0, proc.stderr
-
-
-def test_repair_is_a_noop_outside_a_linked_worktree(tmp_path):
-    """A plain directory and a normal clone must be left untouched."""
-    vp.repair_linked_worktree(tmp_path)  # no .git at all
-
-    clone = tmp_path / "clone"
-    clone.mkdir()
-    _git("init", "-q", ".", cwd=clone)
-    assert (clone / ".git").is_dir()
-    vp.repair_linked_worktree(clone)
-    assert (clone / ".git").is_dir()
