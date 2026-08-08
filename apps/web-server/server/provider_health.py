@@ -18,6 +18,7 @@ cached and run off the request path. ``configured`` keeps its original meaning;
 from __future__ import annotations
 
 import os
+from typing import Any
 
 # Provider -> the env vars that, if any is set+non-empty, mean the credential is
 # configured for that provider. Mirrors the factory secret set.
@@ -29,7 +30,7 @@ _PROVIDER_ENVS: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 
-def provider_credential_health(env: dict[str, str] | None = None) -> dict:
+def provider_credential_health(env: dict[str, str] | None = None) -> dict[str, Any]:
     """Return providers + ``any_configured`` + ``any_invalid`` (#109, #858).
 
     ``env`` is injectable for tests; defaults to ``os.environ``. ``configured``
@@ -49,7 +50,7 @@ def provider_credential_health(env: dict[str, str] | None = None) -> dict:
     network blip cannot manufacture an outage alert.
     """
     source = os.environ if env is None else env
-    providers: list[dict] = [
+    providers: list[dict[str, Any]] = [
         {
             "name": name,
             "configured": any(bool((source.get(e) or "").strip()) for e in envs),

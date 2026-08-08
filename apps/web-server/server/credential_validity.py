@@ -59,13 +59,17 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
 
 Validity = Literal["valid", "invalid", "unknown"]
+# `_probe` reports what the API said; `_classify` turns that into a Validity.
+# Separate types so "rejected" can never leak out as a public verdict.
+_ProbeOutcome = Literal["valid", "rejected", "unknown"]
 
 # One cheap authenticated call. GET /v1/models is a real authenticated endpoint
 # that consumes no model tokens and no quota; `limit=1` keeps the body tiny.
@@ -74,6 +78,8 @@ _ANTHROPIC_VERSION = "2023-06-01"
 # OAuth tokens authenticate via `Authorization: Bearer` plus this beta header
 # (NOT `x-api-key`). Harmless on the endpoints that don't require it.
 _OAUTH_BETA = "oauth-2025-04-20"
+_HTTP_OK = 200
+_REJECTED_STATUSES = (401, 403)
 
 _TTL_ENV = "APP_CREDENTIAL_CHECK_TTL_SECONDS"
 _DEFAULT_TTL_S = 300.0
@@ -87,12 +93,28 @@ _CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
 # runtime would never use would report on the wrong artefact.
 _TOKEN_ENV_VARS = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN")
 
-# ponytail: module-level cache + single-flight lock, not a cache class. There is
-# exactly one credential and one process; per-key eviction would be scaffolding.
+
+# ponytail: one mutable holder, not a cache class. There is exactly one
+# credential and one process; per-key eviction would be scaffolding. Attributes
+# rather than module globals so nothing needs a `global` statement.
+@dataclass
+class _Cache:
+    validity: Validity = "unknown"
+    detail: str = "not checked yet"
+    checked_at: str | None = None
+    monotonic: float | None = None
+    running: bool = False
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "validity": self.validity,
+            "detail": self.detail,
+            "checked_at": self.checked_at,
+        }
+
+
 _lock = threading.Lock()
-_state: dict = {"validity": "unknown", "detail": "not checked yet", "checked_at": None}
-_checked_at_monotonic: float | None = None
-_probe_running = False
+_cache = _Cache()
 
 
 def _ttl_s() -> float:
@@ -115,7 +137,7 @@ def _enabled() -> bool:
     return (os.environ.get(_ENABLED_ENV, "1") or "1").strip() != "0"
 
 
-def _read_credentials_file() -> dict:
+def _read_credentials_file() -> dict[str, Any]:
     """The ``claudeAiOauth`` block from the SDK's credentials file, or ``{}``."""
     try:
         data = json.loads(_CREDENTIALS_PATH.read_text())
@@ -125,7 +147,7 @@ def _read_credentials_file() -> dict:
     return oauth if isinstance(oauth, dict) else {}
 
 
-def _has_live_refresh_path(creds: dict) -> bool:
+def _has_live_refresh_path(creds: dict[str, Any]) -> bool:
     """True when the SDK can renew an expired access token by itself.
 
     A ``refreshToken`` alone is not enough: the 2026-08-07 outage had one, and it
@@ -145,7 +167,7 @@ def _has_live_refresh_path(creds: dict) -> bool:
         return True
 
 
-def _resolve_token() -> tuple[str | None, str, dict]:
+def _resolve_token() -> tuple[str | None, str, dict[str, Any]]:
     """Return ``(token, source, credentials_block)`` for the token the SDK uses.
 
     Resolution mirrors ``core.auth`` INCLUDING ``prefer_refreshable_credentials``:
@@ -167,7 +189,7 @@ def _resolve_token() -> tuple[str | None, str, dict]:
     return None, "none", creds
 
 
-def _probe(token: str) -> tuple[Validity, str]:
+def _probe(token: str) -> tuple[_ProbeOutcome, str]:
     """One authenticated request. Returns ``(validity, detail)``; never raises.
 
     HTTP 200 is the only positive. 401/403 mean the token was REJECTED — the
@@ -185,13 +207,13 @@ def _probe(token: str) -> tuple[Validity, str]:
     )
     try:
         with urllib.request.urlopen(request, timeout=_timeout_s()) as response:  # noqa: S310
-            if response.status == 200:
+            if response.status == _HTTP_OK:
                 return "valid", "authenticated against /v1/models"
             return "unknown", f"unexpected status {response.status}"
     except urllib.error.HTTPError as exc:
-        if exc.code in (401, 403):
+        if exc.code in _REJECTED_STATUSES:
             # The message is the API's own and carries no credential value.
-            return "rejected", f"HTTP {exc.code} from /v1/models"  # type: ignore[return-value]
+            return "rejected", f"HTTP {exc.code} from /v1/models"
         return "unknown", f"HTTP {exc.code} from /v1/models"
     except Exception as exc:  # noqa: BLE001 - a probe must never break health
         return "unknown", f"could not reach the API ({type(exc).__name__})"
@@ -230,22 +252,17 @@ def _classify() -> tuple[Validity, str]:
 
 def _refresh() -> None:
     """Run one classification and publish it. Called on a worker thread."""
-    global _probe_running
     try:
         validity, detail = _classify()
     except Exception as exc:  # noqa: BLE001 - never let the probe thread die loud
         validity, detail = "unknown", f"probe error ({type(exc).__name__})"
     with _lock:
-        previous = _state["validity"]
-        _state.update(
-            {
-                "validity": validity,
-                "detail": detail,
-                "checked_at": datetime.now(UTC).isoformat(),
-            }
-        )
-        globals()["_checked_at_monotonic"] = time.monotonic()
-        _probe_running = False
+        previous = _cache.validity
+        _cache.validity = validity
+        _cache.detail = detail
+        _cache.checked_at = datetime.now(UTC).isoformat()
+        _cache.monotonic = time.monotonic()
+        _cache.running = False
     # Loud on TRANSITION, not once per request — a line every 5s is a line
     # nobody reads, which is how the 2026-08-07 failure stayed invisible.
     if validity != previous:
@@ -255,21 +272,20 @@ def _refresh() -> None:
 
 def _maybe_schedule_refresh() -> None:
     """Kick a background probe when the cached verdict is stale. Single-flight."""
-    global _probe_running
     with _lock:
-        if _probe_running:
+        if _cache.running:
             return
         fresh = (
-            _checked_at_monotonic is not None
-            and (time.monotonic() - _checked_at_monotonic) < _ttl_s()
+            _cache.monotonic is not None
+            and (time.monotonic() - _cache.monotonic) < _ttl_s()
         )
         if fresh:
             return
-        _probe_running = True
+        _cache.running = True
     threading.Thread(target=_refresh, name="credential-validity", daemon=True).start()
 
 
-def credential_validity(*, block: bool = False) -> dict:
+def credential_validity(*, block: bool = False) -> dict[str, Any]:
     """Return ``{validity, detail, checked_at}`` for the Claude credential.
 
     Reads the cache and schedules a background refresh when stale, so the caller
@@ -287,18 +303,17 @@ def credential_validity(*, block: bool = False) -> dict:
     else:
         _maybe_schedule_refresh()
     with _lock:
-        return dict(_state)
+        return _cache.snapshot()
 
 
 def reset_cache() -> None:
     """Drop the cached verdict. Test hook."""
-    global _probe_running
     with _lock:
-        _state.update(
-            {"validity": "unknown", "detail": "not checked yet", "checked_at": None}
-        )
-        globals()["_checked_at_monotonic"] = None
-        _probe_running = False
+        _cache.validity = "unknown"
+        _cache.detail = "not checked yet"
+        _cache.checked_at = None
+        _cache.monotonic = None
+        _cache.running = False
 
 
 if __name__ == "__main__":  # pragma: no cover - operator one-shot
