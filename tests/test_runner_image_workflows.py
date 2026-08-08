@@ -250,6 +250,56 @@ def test_pull_request_runs_are_not_granted_id_token_write():
     )
 
 
+# cosign is the only thing in this repo that consumes a GitHub OIDC token. If a
+# job acquires a legitimate second use (a cloud `configure-*-credentials`, say),
+# widen this deliberately -- do not delete the assertion.
+_SIGNS = re.compile(r"cosign\s+(sign|attest)")
+
+
+def test_only_jobs_that_sign_are_granted_id_token_write():
+    """#957: `id-token: write` must be declared per job, never inherited.
+
+    `deploy.yml` declared it at workflow level, so `seam-check` -- which checks
+    out a public repo and makes outbound HTTP calls -- was handed the OIDC token
+    too. That token is the signing identity: `cosign sign` uses it to mint a
+    Sigstore certificate whose subject is this repository, and since Factory#522
+    a signature is what admits an image to the cluster. So a job that can mint it
+    can sign something the admission gate will then trust.
+
+    Sibling of `test_pull_request_runs_are_not_granted_id_token_write`, which
+    guards the *event* boundary (no PR-reachable job may hold the capability).
+    This one guards the *job* boundary on every trigger, including push-only
+    workflows like `deploy.yml` and `release.yml` that the other test skips by
+    design.
+
+    Deliberately narrower than "no job inherits a capability no step uses" --
+    that is a much harder property and would need a model of what every action
+    consumes. This asserts only the capability that is a signing identity.
+    """
+    checked = 0
+    for wf_name, (_text, doc) in sorted(_workflows().items()):
+        for job_name, job in (doc.get("jobs") or {}).items():
+            # A job-level block replaces the workflow-level one outright.
+            perms = job.get("permissions", doc.get("permissions"))
+            if not _grants_id_token(perms):
+                continue
+            checked += 1
+            steps = " ".join(
+                f"{step.get('run', '')} {step.get('uses', '')}"
+                for step in (job.get("steps") or [])
+            )
+            assert _SIGNS.search(steps), (
+                f"{wf_name}: job `{job_name}` is granted `id-token: write` but "
+                "runs no `cosign sign`/`attest` step. That capability mints a "
+                "GitHub OIDC token, which is the identity images are signed "
+                "with and the gate admits on -- declare it on the signing job "
+                "only, not at workflow level where every job inherits it "
+                "(#957, Factory#522)."
+            )
+
+    assert checked, "premise changed: no job requests `id-token: write` at all"
+
+
 def test_portal_ui_workflow_triggers_on_the_code_baked_into_the_image():
     """The Dockerfile is not the only input — it COPYs portal_testing/.
 
