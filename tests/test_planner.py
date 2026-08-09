@@ -1315,3 +1315,46 @@ def test_missing_sha_is_not_drift(tmp_path: Path) -> None:
     empty = tmp_path / "nospec"
     (empty / "context").mkdir(parents=True)
     assert planner._checkout_drift(empty, proj) is None
+
+
+def test_replan_budget_partial_verify_records_tests_generated(
+    spec_dir: Path, project_dir: Path, monkeypatch
+) -> None:
+    """#1023: the count must be written, as gen_functional's twin path does.
+
+    Without it the field keeps whatever the last generate pass left — 0 when
+    that pass had nothing pending — so a run that hands real tests to the
+    evaluator reports `tests_generated: 0` at `triaged`, and anything gating on
+    `tests_generated > 0` reads a successful verify as empty.
+    """
+    import json as _json
+
+    from agents import planner
+    from test_plan import ImplementationPlan, SubtaskStatus
+
+    plan = ImplementationPlan.from_dict(_json.loads(_make_valid_plan_json(2)))
+    done, target = plan.phases[0].subtasks[0], plan.phases[0].subtasks[1]
+
+    # One subtask with a real committed test file — this is what partial-verify
+    # is meant to salvage.
+    done.status = SubtaskStatus.COMPLETED
+    done.files_to_create = ["tests/test_committed.py"]
+    (spec_dir / "tests").mkdir(exist_ok=True)
+    (spec_dir / "tests" / "test_committed.py").write_text("def test_x():\n    pass\n")
+
+    # A different subtask carries the exhausted budget and is the replan target,
+    # so bumping it to stuck cannot disturb the committed one.
+    target.replan_count = planner._GLOBAL_REPLAN_BUDGET + 1
+
+    # The branch chains forward into the evaluator; stub it so the test asserts
+    # the status patch rather than driving a whole verify.
+    monkeypatch.setattr(planner, "_advance_to_evaluator", lambda *a, **k: None)
+
+    planner._finalize_replan(
+        spec_dir, project_dir, plan, {"subtask_id": target.id, "reason": "budget"}
+    )
+
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["phase"] == "planner_replan_budget_partial_verify", status
+    assert status["status"] == "generated"
+    assert status["tests_generated"] == 1, status
