@@ -1280,3 +1280,138 @@ def test_no_active_span_means_no_traceparent(monkeypatch):
 
     assert "TRACEPARENT" not in env
     assert env["OTEL_EXPORTER_OTLP_ENDPOINT"]["value"] == _FAKE_ENDPOINT
+
+
+async def test_a_succeeded_job_does_not_fail_the_spec(store, tmp_path):
+    """#1014: a Job that exited 0 handed off — it must not fail the run.
+
+    Observed live: a run was marked `failed` at 18:28:37 because the generate
+    Job finished without a verdict row, a successor Job started at 18:28:39, and
+    the spec reached `triaged` normally at 18:42. The row is per-Job; the spec
+    is per-run, and only a Job that DIED speaks for it.
+    """
+    spec = _spec_ws(tmp_path, status="generated")
+    await store.enqueue("j1014")
+    await store.grant_slot("j1014")
+    await store.update_status(
+        "j1014",
+        service_status="running",
+        has_verdict=False,
+        worker_ref={"kind": "k8s-job", "job_name": "v", "spec_dir": str(spec)},
+    )
+
+    rec = await vd.reap_if_orphaned(
+        "j1014",
+        job_exists=True,
+        job_active=False,
+        job_succeeded=True,
+        store=store,
+    )
+
+    # The row still closes — a successful Job that wrote no verdict row would
+    # otherwise strand it forever, which is what #767 was about.
+    assert rec is not None and rec["lifecycle_state"] == "stuck"
+    # But the spec is untouched, so the successor's run is not declared dead.
+    after = json.loads((spec / "status.json").read_text())
+    assert after["status"] == "generated", after
+    assert "phase" not in after or after["phase"] != "verify_job_reaped", after
+    assert "reaped_reason" not in after, after
+
+
+async def test_a_deadline_killed_job_still_fails_the_spec(store, tmp_path):
+    """#767 must keep working: a Job that DIED still reaps its spec.
+
+    The #1014 fix narrows the reaper, so this pins the direction it must not
+    narrow — otherwise a genuinely stranded spec sits busy forever again.
+    """
+    spec = _spec_ws(tmp_path, status="evaluating")
+    await store.enqueue("j1014b")
+    await store.grant_slot("j1014b")
+    await store.update_status(
+        "j1014b",
+        service_status="running",
+        has_verdict=False,
+        worker_ref={"kind": "k8s-job", "job_name": "v", "spec_dir": str(spec)},
+    )
+
+    rec = await vd.reap_if_orphaned(
+        "j1014b",
+        job_exists=True,
+        job_active=False,
+        job_succeeded=False,
+        store=store,
+    )
+
+    assert rec is not None and rec["lifecycle_state"] == "stuck"
+    after = json.loads((spec / "status.json").read_text())
+    assert after["status"] == "failed", after
+    assert after["phase"] == "verify_job_reaped", after
+    assert "deadline/backoff" in after["reaped_reason"], after
+
+
+async def test_probe_reads_succeeded_off_the_real_k8s_status(monkeypatch):
+    """The k8s status carries it; the probe used to throw it away.
+
+    Drives the real in-cluster branch (probe_fn=None) rather than an injected
+    double — an injected probe cannot catch the probe forgetting to read
+    `status.succeeded`, which is the actual defect behind #1014.
+    """
+
+    class _Status:
+        active = 0
+        succeeded = 1
+
+    class _Job:
+        status = _Status()
+
+    class _Batch:
+        async def read_namespaced_job(self, _name, _ns):
+            return _Job()
+
+    class _Api:
+        async def close(self):
+            return None
+
+    async def _fake_batch():
+        return _Api(), _Batch()
+
+    monkeypatch.setattr(vd, "_k8s_batch", _fake_batch)
+
+    exists, active, succeeded = await vd._probe_job("factory", "v")
+    assert (exists, active, succeeded) == (True, False, True)
+
+
+async def test_probe_reports_a_deadline_killed_job_as_not_succeeded(monkeypatch):
+    """The other side of the same read: failed Job must not look successful."""
+
+    class _Status:
+        active = 0
+        succeeded = 0
+
+    class _Job:
+        status = _Status()
+
+    class _Batch:
+        async def read_namespaced_job(self, _name, _ns):
+            return _Job()
+
+    class _Api:
+        async def close(self):
+            return None
+
+    async def _fake_batch():
+        return _Api(), _Batch()
+
+    monkeypatch.setattr(vd, "_k8s_batch", _fake_batch)
+
+    assert await vd._probe_job("factory", "v") == (True, False, False)
+
+
+async def test_a_legacy_two_tuple_probe_is_read_as_succeeded_unknown():
+    """An older probe must not be read as claiming success."""
+
+    async def _legacy(_ns, _name):
+        return True, False
+
+    exists, active, succeeded = await vd._probe_job("factory", "v", probe_fn=_legacy)
+    assert (exists, active, succeeded) == (True, False, False)
