@@ -18,10 +18,13 @@ point of the RFC — a VAL-2 result must never look like "done".
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
 from agents.verification_gate import normalize_verification
+
+_log = logging.getLogger(__name__)
 
 __all__ = [
     "DEFAULT_TARGET_LEVEL",
@@ -86,9 +89,22 @@ def build_verification_block(
     for v in verdicts:
         if not isinstance(v, dict):
             continue
-        lane = str(v.get("lane") or "unit").lower()
+        # A verdict with no lane is UNATTRIBUTED, not unit (#1018). This used to
+        # default to "unit", and because nothing ever wrote the field, every
+        # verdict — api, browser, integration — was graded as unit: VAL-2 saw
+        # none and reported "no api/integration/browser lane ran", capping every
+        # run at VAL-0. The evaluator now stamps the lane from the plan, so a
+        # missing one means the verdict matched no planned subtask; counting
+        # that as unit would re-create the same silent inflation on the one
+        # input we know least about.
+        lane = str(v.get("lane") or "").lower()
         level = _LANE_LEVEL.get(lane)
         if level is None:
+            if not lane:
+                _log.warning(
+                    "verdict %r has no lane; excluded from VAL grouping",
+                    str(v.get("test_id") or "?"),
+                )
             continue
         by_level.setdefault(level, []).append(str(v.get("verdict") or "").lower())
 
