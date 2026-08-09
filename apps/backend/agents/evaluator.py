@@ -688,7 +688,7 @@ def _completed_functional_subtasks(plan: dict) -> list[dict]:
     )
 
 
-def _lane_by_test_id(plan: dict) -> dict[str, str]:
+def _lane_by_test_id(plan: dict[str, Any]) -> dict[str, str]:
     """Map every planned subtask id to its lane, from test_plan.json.
 
     The plan is the authoritative source of a test's lane: the planner assigned
@@ -709,7 +709,7 @@ def _lane_by_test_id(plan: dict) -> dict[str, str]:
     return out
 
 
-def _stamp_verdict_lanes(spec_dir: Path, doc: dict) -> tuple[int, int]:
+def _stamp_verdict_lanes(spec_dir: Path, doc: dict[str, Any]) -> tuple[int, int]:
     """Stamp each verdict's ``lane`` from the plan. Returns (stamped, unmatched).
 
     ``val_block`` groups verdicts into VAL levels by ``verdict["lane"]``, and a
@@ -749,6 +749,29 @@ def _stamp_verdict_lanes(spec_dir: Path, doc: dict) -> tuple[int, int]:
             unmatched,
         )
     return stamped, unmatched
+
+
+def _apply_lane_attribution(spec_dir: Path, verdicts_path: Path) -> None:
+    """Read verdicts.json, stamp lanes from the plan, write it back.
+
+    Deliberately NOT folded into the confidence/flaky enrichment block that
+    precedes its call site: that one is best-effort on purpose because its
+    output is additive metadata, whereas the lane is what ``val_block`` groups
+    VAL levels by — swallowing a failure there would silently downgrade the run
+    to VAL-0, which is the very bug this fixes (#1018).
+    """
+    try:
+        doc = json.loads(verdicts_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        _eval_log.error("[evaluator] lane attribution failed: %s", exc)
+        return
+    stamped, unmatched = _stamp_verdict_lanes(spec_dir, doc)
+    if stamped:
+        with contextlib.suppress(OSError):
+            verdicts_path.write_text(json.dumps(doc, indent=2))
+    _eval_log.info(
+        "[evaluator] lane attribution: stamped=%d unmatched=%d", stamped, unmatched
+    )
 
 
 def _framework_coverage_strategy(subtask: dict) -> str | None:
@@ -2315,20 +2338,7 @@ async def _run_evaluator_session(
     except Exception as exc:  # noqa: BLE001 — confidence is additive metadata
         _eval_log.warning("confidence/flaky enrichment skipped: %s", exc)
 
-    # Lane attribution (#1018). Deliberately NOT inside the enrichment block
-    # above: that one is best-effort because confidence and flaky history are
-    # additive metadata, but the lane is what val_block groups VAL levels by, so
-    # losing it silently downgrades the whole run to VAL-0. Own step, own log.
-    try:
-        doc = json.loads(verdicts_path.read_text())
-        stamped, unmatched = _stamp_verdict_lanes(spec_dir, doc)
-        if stamped:
-            verdicts_path.write_text(json.dumps(doc, indent=2))
-        _eval_log.info(
-            "[evaluator] lane attribution: stamped=%d unmatched=%d", stamped, unmatched
-        )
-    except (OSError, json.JSONDecodeError) as exc:
-        _eval_log.error("[evaluator] lane attribution failed: %s", exc)
+    _apply_lane_attribution(spec_dir, verdicts_path)
 
     # Vote splits ride on status.json so the Triager's completion envelope
     # surfaces them (calibration hook, #649 step 5).
