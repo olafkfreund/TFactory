@@ -89,3 +89,34 @@ def test_val3_always_carries_a_reason_and_never_overclaims() -> None:
     assert val3["status"] == "not_run" and "#75" in val3["reason"]
     # the gate never lets achieved_level reach VAL-3 without a passed VAL-3
     assert block["achieved_level"] != "VAL-3"
+
+
+def test_a_verdict_with_no_lane_is_unattributed_not_unit():
+    """#1018: a missing lane must not be graded as unit.
+
+    The old `or "unit"` default is what let every api/browser/integration
+    verdict be counted as unit while VAL-2 saw none. The evaluator now stamps
+    the lane from the plan, so a verdict without one matched no planned
+    subtask — the input we know least about, and the last thing that should be
+    silently attributed to a lane.
+    """
+    from agents.val_block import build_verification_block
+
+    block = build_verification_block(
+        [{"test_id": "orphan", "verdict": "accept"}], target_level="VAL-1"
+    )
+    by_lvl = {lvl["level"]: lvl for lvl in block["levels"]}
+    assert by_lvl["VAL-1"]["status"] == "not_run", block
+    assert by_lvl["VAL-1"]["reason"] == "no unit lane ran in this verify"
+
+
+def test_an_explicit_unit_lane_still_grades_val1():
+    """The fix must not stop a real unit verdict from grading."""
+    from agents.val_block import build_verification_block
+
+    block = build_verification_block(
+        [{"test_id": "real", "verdict": "accept", "lane": "unit"}],
+        target_level="VAL-1",
+    )
+    by_lvl = {lvl["level"]: lvl for lvl in block["levels"]}
+    assert by_lvl["VAL-1"]["status"] == "passed", block

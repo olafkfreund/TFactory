@@ -18,10 +18,13 @@ point of the RFC — a VAL-2 result must never look like "done".
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
 from agents.verification_gate import normalize_verification
+
+_log = logging.getLogger(__name__)
 
 __all__ = [
     "DEFAULT_TARGET_LEVEL",
@@ -46,6 +49,29 @@ _LANE_LEVEL = {
     "equivalence": "VAL-2",
 }
 _PASS_VERDICTS = {"accept", "flag"}  # flag = accepted-with-note (still ran+passed)
+
+
+def _level_for_verdict(v: dict[str, Any]) -> str | None:
+    """The VAL level a verdict's lane proves, or None if it grades no level.
+
+    A verdict with no lane is UNATTRIBUTED, not unit (#1018). This used to
+    default to ``"unit"``, and because nothing ever wrote the field, every
+    verdict — api, browser, integration — was graded as unit: VAL-2 saw none
+    and reported "no api/integration/browser lane ran", capping every run at
+    VAL-0. The evaluator now stamps the lane from the plan, so a missing one
+    means the verdict matched no planned subtask; counting that as unit would
+    re-create the same silent inflation on the input we know least about.
+
+    A lane that is present but maps to no level (``mutation``) is a deliberate
+    omission and is not worth logging; a missing lane is a data gap and is.
+    """
+    lane = str(v.get("lane") or "").lower()
+    if not lane:
+        _log.warning(
+            "verdict %r has no lane; excluded from VAL grouping",
+            str(v.get("test_id") or "?"),
+        )
+    return _LANE_LEVEL.get(lane)
 
 
 def _level_status(verdicts: list[str]) -> str:
@@ -86,8 +112,7 @@ def build_verification_block(
     for v in verdicts:
         if not isinstance(v, dict):
             continue
-        lane = str(v.get("lane") or "unit").lower()
-        level = _LANE_LEVEL.get(lane)
+        level = _level_for_verdict(v)
         if level is None:
             continue
         by_level.setdefault(level, []).append(str(v.get("verdict") or "").lower())

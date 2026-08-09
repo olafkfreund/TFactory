@@ -1493,3 +1493,74 @@ def test_build_signal_bundle_falls_back_when_nix_unavailable(tmp_path, monkeypat
     bundle = evaluator._build_signal_bundle(spec_dir, tmp_path, subtask, runner_fn=None)
     assert called["stab"] and called["mut"]  # per-primitive fallback ran
     assert bundle.stability.verdict == StabilityVerdict.STABLE
+
+
+def test_verdict_lanes_are_stamped_from_the_plan(tmp_path):
+    """#1018: val_block groups VAL levels by verdict['lane'].
+
+    Nothing ever wrote that field, and val_block defaults a missing lane to
+    "unit", so api/browser/integration verdicts were all counted as unit. VAL-2
+    then saw zero verdicts and reported "no api/integration/browser lane ran",
+    capping every run at VAL-0 regardless of what executed.
+    """
+    import json
+
+    from agents.evaluator import _stamp_verdict_lanes
+
+    (tmp_path / "test_plan.json").write_text(
+        json.dumps(
+            {
+                "phases": [
+                    {"phase": 1, "subtasks": [{"id": "echo-api", "lane": "api"}]},
+                    {"phase": 2, "subtasks": [{"id": "guard-unit", "lane": "unit"}]},
+                ]
+            }
+        )
+    )
+    doc = {"verdicts": [{"test_id": "echo-api"}, {"test_id": "guard-unit"}]}
+    stamped, unmatched = _stamp_verdict_lanes(tmp_path, doc)
+
+    assert (stamped, unmatched) == (2, 0)
+    assert doc["verdicts"][0]["lane"] == "api"
+    assert doc["verdicts"][1]["lane"] == "unit"
+
+
+def test_the_stamped_lanes_reach_val2(tmp_path):
+    """The point of the stamp: an api verdict must land in VAL-2, not VAL-1.
+
+    Asserting only that the field is set would pass even if val_block still
+    binned it as unit, so this drives the real grouping function.
+    """
+    import json
+
+    from agents.evaluator import _stamp_verdict_lanes
+    from agents.val_block import build_verification_block
+
+    (tmp_path / "test_plan.json").write_text(
+        json.dumps({"phases": [{"subtasks": [{"id": "echo-api", "lane": "api"}]}]})
+    )
+    doc = {"verdicts": [{"test_id": "echo-api", "verdict": "accept"}]}
+
+    unstamped = build_verification_block(list(doc["verdicts"]), target_level="VAL-2")
+    by_lvl = {lvl["level"]: lvl for lvl in unstamped["levels"]}
+    assert by_lvl["VAL-2"]["status"] == "not_run", "precondition: the bug"
+
+    _stamp_verdict_lanes(tmp_path, doc)
+    fixed = build_verification_block(doc["verdicts"], target_level="VAL-2")
+    by_lvl = {lvl["level"]: lvl for lvl in fixed["levels"]}
+    assert by_lvl["VAL-2"]["status"] == "passed", fixed
+
+
+def test_an_unplanned_verdict_is_left_unattributed(tmp_path):
+    """Never guess a lane. An unmatched verdict must not inflate the unit lane
+    — that silent default is the defect this fixes."""
+    import json
+
+    from agents.evaluator import _stamp_verdict_lanes
+
+    (tmp_path / "test_plan.json").write_text(json.dumps({"phases": []}))
+    doc = {"verdicts": [{"test_id": "ghost"}]}
+    stamped, unmatched = _stamp_verdict_lanes(tmp_path, doc)
+
+    assert (stamped, unmatched) == (0, 1)
+    assert "lane" not in doc["verdicts"][0]
