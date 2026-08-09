@@ -580,8 +580,17 @@ def _resolve_runner_fn(
             # result shape; secrets still wiped.)
             if _host_runner_mode():
                 try:
-                    return _run_pytest_on_host(
-                        scratch, test_file, extra_env, project_dir_arg
+                    # #1024: this is the branch k3d actually takes, and it also
+                    # builds its paths inside `scratch`, which the `finally`
+                    # below deletes before the caller sees them. Same dangling
+                    # result as the DockerRunner branch, different construction
+                    # site — persist here too.
+                    return _with_durable_artifacts(
+                        spec_dir,
+                        test_file,
+                        _run_pytest_on_host(
+                            scratch, test_file, extra_env, project_dir_arg
+                        ),
                     )
                 finally:
                     sandbox_creds.wipe()
@@ -599,14 +608,21 @@ def _resolve_runner_fn(
                 sandbox_creds.wipe()  # erase materialised secret files
                 test_creds.wipe()
             code = _parse_marker_exit(res.stdout, "__PYTEST_EXIT=", res.returncode)
-            junit = scratch / "junit.xml"
-            cov = scratch / "coverage.xml"
+            # #1024: these MUST outlive the scratch dir. The `finally` below
+            # deletes it before the returned value ever reaches the caller, so
+            # the paths were true at construction (`cov.exists()` passed) and
+            # dangling by the time anyone read them — which is why no consumer
+            # ever used coverage_xml_path and coverage reached the verdict as a
+            # judge-authored guess. Copy them somewhere durable and point at
+            # that instead.
+            junit = _persist_run_artifact(spec_dir, test_file, scratch / "junit.xml")
+            cov = _persist_run_artifact(spec_dir, test_file, scratch / "coverage.xml")
             return DockerRunResult(
                 returncode=code,
                 stdout=res.stdout,
                 stderr=res.stderr,
-                junit_xml_path=junit if junit.exists() else None,
-                coverage_xml_path=cov if cov.exists() else None,
+                junit_xml_path=junit,
+                coverage_xml_path=cov,
                 argv=res.argv,
             )
         finally:
@@ -751,6 +767,92 @@ def _stamp_verdict_lanes(spec_dir: Path, doc: dict[str, Any]) -> tuple[int, int]
     return stamped, unmatched
 
 
+def _is_test_path(path: str) -> bool:
+    """Whether a coverage entry is test code rather than the SUT."""
+    p = path.replace("\\", "/").lower()
+    parts = p.split("/")
+    return (
+        "tests" in parts
+        or "test" in parts
+        or parts[-1].startswith("test_")
+        or parts[-1].endswith("_test.py")
+        or "conftest.py" in parts[-1]
+    )
+
+
+def _measured_coverage(spec_dir: Path, test_id: str) -> tuple[int | None, float | None]:
+    """(covered SUT lines, delta pct) for one test, measured from its coverage.xml.
+
+    Returns ``(None, None)`` when no coverage report was captured — "not
+    measured", which the confidence scorer drops, as opposed to a numeric zero
+    which it scores as "exercises none" (#1024).
+
+    Test files are excluded from the count. A pytest run with ``--cov=.``
+    reports the test module itself, and every test covers its own lines, so
+    including them would make the signal 1.0 for everything and measure
+    nothing.
+
+    ``delta_pct`` is only returned when a baseline snapshot exists, because a
+    delta without one is not a delta. Nothing writes ``baseline_coverage.xml``
+    today, so it is ``None`` in practice — deliberately left as the honest gap
+    rather than reported against an implied-empty baseline, which would inflate
+    every test's apparent contribution.
+    """
+    after = spec_dir / "findings" / "runs" / test_id / "coverage.xml"
+    if not after.is_file():
+        return None, None
+    try:
+        from agents.coverage_delta import parse_coverage_xml  # noqa: PLC0415
+
+        snap = parse_coverage_xml(after)
+    except Exception as exc:  # noqa: BLE001 — a signal must never fail the run
+        _eval_log.warning("[evaluator] coverage parse failed for %s: %s", test_id, exc)
+        return None, None
+    covered = sum(
+        len(lines)
+        for path, lines in (snap.covered_lines or {}).items()
+        if not _is_test_path(path)
+    )
+    delta_pct: float | None = None
+    baseline = spec_dir / "findings" / "baseline_coverage.xml"
+    if baseline.is_file():
+        with contextlib.suppress(Exception):
+            from agents.coverage_delta import compute_delta  # noqa: PLC0415
+
+            delta_pct = compute_delta(parse_coverage_xml(baseline), snap).delta_pct
+    return covered, delta_pct
+
+
+def _stamp_verdict_coverage(spec_dir: Path, doc: dict[str, Any]) -> tuple[int, int]:
+    """Overwrite each verdict's coverage signals with the measured ones.
+
+    Returns ``(measured, unmeasured)``. The judge is asked for
+    ``coverage_delta_pct`` in the prompt and cannot observe it, so it wrote a
+    plausible ``0`` on every verdict — and ``confidence._coverage_subscore``
+    scores ``0`` as "exercises none" while ``None`` is dropped, so every test
+    was penalised for a check that never ran (#1024). Measured values replace
+    the guess; where nothing was measured the keys are set to ``None`` so the
+    scorer drops them instead of reading a fabricated zero.
+    """
+    measured = unmeasured = 0
+    for v in doc.get("verdicts") or []:
+        if not isinstance(v, dict):
+            continue
+        summary = v.get("signals_summary")
+        if not isinstance(summary, dict):
+            continue
+        covered, delta_pct = _measured_coverage(
+            spec_dir, str(v.get("test_id") or "").strip()
+        )
+        summary["coverage_new_lines"] = covered
+        summary["coverage_delta_pct"] = delta_pct
+        if covered is None:
+            unmeasured += 1
+        else:
+            measured += 1
+    return measured, unmeasured
+
+
 def _apply_lane_attribution(spec_dir: Path, verdicts_path: Path) -> None:
     """Read verdicts.json, stamp lanes from the plan, write it back.
 
@@ -766,11 +868,16 @@ def _apply_lane_attribution(spec_dir: Path, verdicts_path: Path) -> None:
         _eval_log.error("[evaluator] lane attribution failed: %s", exc)
         return
     stamped, unmatched = _stamp_verdict_lanes(spec_dir, doc)
-    if stamped:
-        with contextlib.suppress(OSError):
-            verdicts_path.write_text(json.dumps(doc, indent=2))
+    measured, unmeasured = _stamp_verdict_coverage(spec_dir, doc)
+    with contextlib.suppress(OSError):
+        verdicts_path.write_text(json.dumps(doc, indent=2))
     _eval_log.info(
-        "[evaluator] lane attribution: stamped=%d unmatched=%d", stamped, unmatched
+        "[evaluator] deterministic stamps: lane stamped=%d unmatched=%d; "
+        "coverage measured=%d unmeasured=%d",
+        stamped,
+        unmatched,
+        measured,
+        unmeasured,
     )
 
 
@@ -1277,6 +1384,83 @@ def _assemble_signals(
     )
 
 
+def _persist_run_artifact(
+    spec_dir: Path, test_file: Path, src: Path | None
+) -> Path | None:
+    """Copy a run artifact out of the runner's scratch dir before it is deleted.
+
+    Returns the durable path, or None when the runner produced no such file.
+
+    The scratch dir is removed in the runner's ``finally``, which executes
+    before the constructed result reaches its caller — so a path into it is
+    already dead on arrival (#1024). Keyed by test-file stem because that is
+    what ``_run`` knows; ``_capturing_coverage`` re-files it under the
+    subtask id that ``_coverage_delta_for_subtask`` looks up.
+    """
+    if src is None or not Path(src).is_file():
+        return None
+    src = Path(src)
+    dest_dir = spec_dir / "findings" / "_run_artifacts" / Path(test_file).stem
+    try:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / src.name
+        shutil.copyfile(src, dest)
+    except OSError as exc:
+        _eval_log.warning("[evaluator] could not persist %s: %s", src.name, exc)
+        return None
+    return dest
+
+
+def _with_durable_artifacts(spec_dir: Path, test_file: Path, res: Any) -> Any:
+    """Re-point a run result's artifact paths outside the doomed scratch dir.
+
+    Both runner branches build ``junit_xml_path`` / ``coverage_xml_path`` inside
+    the scratch directory that the caller's ``finally`` deletes, so the paths
+    are dead before any consumer reads them (#1024). Copy the files somewhere
+    durable and swap the paths for the copies.
+    """
+    junit = _persist_run_artifact(
+        spec_dir, test_file, getattr(res, "junit_xml_path", None)
+    )
+    cov = _persist_run_artifact(
+        spec_dir, test_file, getattr(res, "coverage_xml_path", None)
+    )
+    with contextlib.suppress(AttributeError, TypeError):
+        res.junit_xml_path = junit
+        res.coverage_xml_path = cov
+    return res
+
+
+def _capturing_coverage(spec_dir: Path, subtask: dict[str, Any], runner_fn: Any) -> Any:
+    """Wrap ``runner_fn`` so each run's coverage.xml is kept for this subtask.
+
+    The lanes already ask pytest for ``--cov-report=xml:coverage.xml`` and the
+    result carries ``coverage_xml_path``, but it pointed into the runner's
+    scratch dir and nothing copied it out. `_coverage_delta_for_subtask` looks
+    for ``findings/runs/<test_id>/coverage.xml``, found nothing, and returned
+    "not computed" — so the only coverage number reaching the verdict was the
+    one the judge invented, uniformly ``0`` (#1024).
+
+    Copies rather than moves: the scratch dir belongs to the runner, and a
+    stability check runs the same test several times. The last run wins, which
+    is the right one — same test, same code, so the snapshots agree, and a
+    mutation run (which deliberately breaks the SUT) is not what we want to
+    record. Never raises: coverage is a signal, not a gate.
+    """
+    dest_dir = spec_dir / "findings" / "runs" / str(subtask.get("id") or "unknown")
+
+    def _run(*args: Any, **kwargs: Any) -> Any:
+        res = runner_fn(*args, **kwargs)
+        src = getattr(res, "coverage_xml_path", None)
+        if src is not None:
+            with contextlib.suppress(OSError):
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(src, dest_dir / "coverage.xml")
+        return res
+
+    return _run
+
+
 def _build_signal_bundle(
     spec_dir: Path,
     project_dir: Path,
@@ -1291,6 +1475,12 @@ def _build_signal_bundle(
     lane that's unavailable at run time, or a truncated mutation batch, falls back
     to the per-primitive path so the verdict is never degraded by the batching.
     """
+    # #1024: every pytest lane writes a coverage.xml and nothing kept it, so
+    # `_coverage_delta_for_subtask` never found its `after` snapshot and coverage
+    # reached the verdict as a judge-authored guess. Persist it at the runner
+    # seam — the only place the path is still in scope, and the one both the
+    # stability and mutation paths go through.
+    runner_fn = _capturing_coverage(spec_dir, subtask, runner_fn)
     if _nix_verify_mode(spec_dir):
         stability, mutation = _nix_batched_signals(spec_dir, project_dir, subtask)
         if stability is not None:
