@@ -51,6 +51,50 @@ _LANE_LEVEL = {
 _PASS_VERDICTS = {"accept", "flag"}  # flag = accepted-with-note (still ran+passed)
 
 
+def _qualify_claim_with_flags(
+    block: dict[str, Any], verdicts: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Name the flag count in the claim when flags carried a level to passed.
+
+    ``_PASS_VERDICTS`` counts ``flag`` (accepted-with-note) as a pass, so a
+    level can report ``passed`` while some of its tests were demoted for human
+    review — typically by the deterministic flaky-history rule in
+    ``agents.confidence``. The same run's ``findings/ac_fidelity.md`` counts a
+    criterion covered only by flags as NOT verified, so the two artifacts could
+    be read to opposite conclusions from one run: "Verified to VAL-2" against
+    "Verified 2/6 acceptance criteria" (#1022).
+
+    The AC ledger is not available here — the triager writes
+    ``findings/ac_fidelity.json`` well after ``verification.json`` — so this
+    states what this function can see for itself: how many of the graded
+    verdicts were flags. That is enough for a reader to know the level did not
+    pass cleanly, and it cannot contradict the ledger because it counts
+    verdicts rather than criteria.
+
+    Only ever appends; ``achieved_level``, the level statuses and the gate's
+    violations are untouched, so this cannot mask an overclaim.
+    """
+    flagged = sum(
+        1
+        for v in verdicts
+        if isinstance(v, dict) and str(v.get("verdict") or "").lower() == "flag"
+    )
+    if not flagged:
+        return block
+    graded = sum(
+        1
+        for v in verdicts
+        if isinstance(v, dict)
+        and str(v.get("verdict") or "").lower() not in ("", "not_run")
+    )
+    claim = str(block.get("claim") or "")
+    block["claim"] = (
+        f"{claim} {flagged} of {graded} graded verdict(s) are flag "
+        "(accepted-with-note, not a clean pass) — see findings/ac_fidelity.md."
+    ).strip()
+    return block
+
+
 def _level_for_verdict(v: dict[str, Any]) -> str | None:
     """The VAL level a verdict's lane proves, or None if it grades no level.
 
@@ -214,7 +258,7 @@ def build_verification_block(
         "achieved_level": effective_target,
         "levels": levels,
     }
-    return normalize_verification(block)
+    return _qualify_claim_with_flags(normalize_verification(block), verdicts)
 
 
 def read_verification_block(

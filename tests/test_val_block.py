@@ -120,3 +120,36 @@ def test_an_explicit_unit_lane_still_grades_val1():
     )
     by_lvl = {lvl["level"]: lvl for lvl in block["levels"]}
     assert by_lvl["VAL-1"]["status"] == "passed", block
+
+
+def test_a_flag_carried_pass_says_so_in_the_claim():
+    """#1022: 'Verified to VAL-2' must not read as a clean pass when flags carried it.
+
+    `flag` counts as a pass for VAL grading, while ac_fidelity counts a
+    criterion covered only by flags as NOT verified. Without this the two
+    artifacts from one run can be read to opposite conclusions.
+    """
+    from agents.val_block import build_verification_block
+
+    block = build_verification_block(
+        [
+            {"test_id": "a", "verdict": "flag", "lane": "api"},
+            {"test_id": "b", "verdict": "accept", "lane": "api"},
+        ],
+        target_level="VAL-2",
+    )
+    assert "Verified to VAL-2" in block["claim"], block["claim"]
+    assert "1 of 2 graded verdict(s) are flag" in block["claim"], block["claim"]
+    # The qualifier must not change the grade itself.
+    assert block["achieved_level"] == "VAL-2"
+    assert block["_gate"]["violations"] == []
+
+
+def test_an_all_accept_run_gets_no_flag_qualifier():
+    """No flags, no noise — the claim stays exactly as the gate wrote it."""
+    from agents.val_block import build_verification_block
+
+    block = build_verification_block(
+        [{"test_id": "a", "verdict": "accept", "lane": "unit"}], target_level="VAL-1"
+    )
+    assert "flag" not in block["claim"], block["claim"]
