@@ -345,6 +345,38 @@ def test_nix_in_image_flag_reaches_the_dispatched_job(monkeypatch):
     assert env.get("TFACTORY_NIX_IN_IMAGE") == "true", env
 
 
+def test_bash_sandbox_flag_reaches_the_dispatched_job(monkeypatch):
+    """#1012: the agent's bwrap sandbox defaults ON inside the Job.
+
+    core.client enables the OS-level bash sandbox unless AIFACTORY_BASH_SANDBOX
+    says otherwise. The control-plane Deployment sets it false (k3d), but the
+    dispatched Job builds a curated env, so without forwarding it the agent
+    re-enables bwrap inside a pod whose own seccompProfile (RuntimeDefault,
+    kube_sandbox #651) forbids unshare(CLONE_NEWUSER). Every agent Bash call
+    then fails and no test process starts, while the run still reaches
+    ``triaged`` with all five lanes ``pending`` — a verify that verified
+    nothing and does not look like a failure.
+    """
+    monkeypatch.setenv("AIFACTORY_BASH_SANDBOX", "false")
+    ps = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
+    env = {e["name"]: e["value"] for e in ps["containers"][0]["env"]}
+    assert env.get("AIFACTORY_BASH_SANDBOX") == "false", env
+
+
+def test_bash_sandbox_flag_is_not_invented_when_unset(monkeypatch):
+    """Forward the operator's choice; never manufacture one.
+
+    On a cluster that can run bwrap the flag is unset and the sandbox should
+    stay on. Emitting a default here would silently disable the agent sandbox
+    everywhere the verify Job runs, which is the opposite failure and a worse
+    one.
+    """
+    monkeypatch.delenv("AIFACTORY_BASH_SANDBOX", raising=False)
+    ps = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
+    env = {e["name"]: e["value"] for e in ps["containers"][0]["env"]}
+    assert "AIFACTORY_BASH_SANDBOX" not in env, env
+
+
 def test_manifest_omits_nix_sandbox_env_when_unset(monkeypatch):
     for v in (
         "TFACTORY_NIX_RUNNER_IMAGE",
