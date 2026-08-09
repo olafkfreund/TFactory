@@ -744,6 +744,26 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
         _sfx_val = os.environ.get(_sfx_var)
         if _sfx_val:
             env.append({"name": _sfx_var, "value": _sfx_val})
+    # Same allowlist trap as the two blocks above, third instance (#1012). The
+    # agent's OS-level bash sandbox (bubblewrap) defaults ON in core.client, and
+    # the control-plane Deployment sets AIFACTORY_BASH_SANDBOX=false because this
+    # is k3d. That value does NOT reach the dispatched Job, so the agent inside
+    # re-enables bwrap, and this pod's own hardening then denies it: the pod
+    # carries seccompProfile RuntimeDefault (kube_sandbox.POD_SECURITY_CONTEXT,
+    # #651), which blocks unshare(CLONE_NEWUSER) — so every agent Bash call dies
+    # with "bwrap: No permissions to create a new namespace", no test process
+    # ever starts, and the run still reaches `triaged` with all five lanes
+    # `pending`. Proven on the factory cluster by holding the pod spec fixed and
+    # varying one field: RuntimeDefault + caps dropped -> EPERM; Unconfined +
+    # caps dropped -> OK; RuntimeDefault + caps KEPT -> EPERM. Seccomp is the
+    # cause and capabilities are irrelevant, so relaxing caps would fix nothing.
+    # Propagating the operator's existing choice keeps this Job strictly more
+    # confined than the control plane it inherits from (it additionally has
+    # RuntimeDefault seccomp, dropped caps, a per-task NetworkPolicy and an
+    # ephemeral filesystem), so nothing is weakened to make lanes runnable.
+    _bash_sandbox = os.environ.get("AIFACTORY_BASH_SANDBOX")
+    if _bash_sandbox:
+        env.append({"name": "AIFACTORY_BASH_SANDBOX", "value": _bash_sandbox})
     # This Job mounts the workspaces PVC (data root) at ``cfg.mount`` (/work), NOT
     # at the control plane's /home/nonroot/.tfactory. The nested per-task Nix Job
     # derives its co-mount subPath via pvc_subpath(path, data_root); without the
