@@ -688,6 +688,69 @@ def _completed_functional_subtasks(plan: dict) -> list[dict]:
     )
 
 
+def _lane_by_test_id(plan: dict) -> dict[str, str]:
+    """Map every planned subtask id to its lane, from test_plan.json.
+
+    The plan is the authoritative source of a test's lane: the planner assigned
+    it, gen-functional generated against it, and the evaluator dispatched the
+    matching runner from it. The judge LLM is never asked for it.
+    """
+    out: dict[str, str] = {}
+    for phase in plan.get("phases") or []:
+        if not isinstance(phase, dict):
+            continue
+        for st in phase.get("subtasks") or []:
+            if not isinstance(st, dict):
+                continue
+            tid = str(st.get("id") or "").strip()
+            lane = str(st.get("lane") or "").strip().lower()
+            if tid and lane:
+                out[tid] = lane
+    return out
+
+
+def _stamp_verdict_lanes(spec_dir: Path, doc: dict) -> tuple[int, int]:
+    """Stamp each verdict's ``lane`` from the plan. Returns (stamped, unmatched).
+
+    ``val_block`` groups verdicts into VAL levels by ``verdict["lane"]``, and a
+    verdict with no lane silently reads as ``unit`` (its ``or "unit"`` default).
+    Nothing ever wrote that field, so every verdict — api, browser, integration
+    — was counted as unit: VAL-2 saw no verdicts at all and reported "no
+    api/integration/browser lane ran in this verify", which capped every run at
+    VAL-0 no matter what actually ran (#1018).
+
+    The tell was in the VAL text itself: a 7-verdict run whose plan had 2 unit
+    subtasks still reported "unit lane: 1/7 test verdict(s) did not pass".
+
+    A verdict whose test_id is not in the plan is left WITHOUT a lane rather
+    than defaulted, so it stays visibly unattributed instead of silently
+    inflating the unit lane — the same failure this fixes.
+    """
+    try:
+        plan = json.loads((spec_dir / "test_plan.json").read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        _eval_log.warning("[evaluator] lane stamp skipped, plan unreadable: %s", exc)
+        return 0, 0
+    lanes = _lane_by_test_id(plan)
+    stamped = unmatched = 0
+    for v in doc.get("verdicts") or []:
+        if not isinstance(v, dict):
+            continue
+        lane = lanes.get(str(v.get("test_id") or "").strip())
+        if lane:
+            v["lane"] = lane
+            stamped += 1
+        else:
+            unmatched += 1
+    if unmatched:
+        _eval_log.warning(
+            "[evaluator] %d verdict(s) have no matching plan subtask; left "
+            "unattributed rather than defaulted to unit",
+            unmatched,
+        )
+    return stamped, unmatched
+
+
 def _framework_coverage_strategy(subtask: dict) -> str | None:
     """Look up the framework descriptor's coverage_strategy for a subtask.
 
@@ -2251,6 +2314,21 @@ async def _run_evaluator_session(
         verdicts_path.write_text(json.dumps(doc, indent=2))
     except Exception as exc:  # noqa: BLE001 — confidence is additive metadata
         _eval_log.warning("confidence/flaky enrichment skipped: %s", exc)
+
+    # Lane attribution (#1018). Deliberately NOT inside the enrichment block
+    # above: that one is best-effort because confidence and flaky history are
+    # additive metadata, but the lane is what val_block groups VAL levels by, so
+    # losing it silently downgrades the whole run to VAL-0. Own step, own log.
+    try:
+        doc = json.loads(verdicts_path.read_text())
+        stamped, unmatched = _stamp_verdict_lanes(spec_dir, doc)
+        if stamped:
+            verdicts_path.write_text(json.dumps(doc, indent=2))
+        _eval_log.info(
+            "[evaluator] lane attribution: stamped=%d unmatched=%d", stamped, unmatched
+        )
+    except (OSError, json.JSONDecodeError) as exc:
+        _eval_log.error("[evaluator] lane attribution failed: %s", exc)
 
     # Vote splits ride on status.json so the Triager's completion envelope
     # surfaces them (calibration hook, #649 step 5).
