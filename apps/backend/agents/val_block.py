@@ -51,6 +51,29 @@ _LANE_LEVEL = {
 _PASS_VERDICTS = {"accept", "flag"}  # flag = accepted-with-note (still ran+passed)
 
 
+def _level_for_verdict(v: dict[str, Any]) -> str | None:
+    """The VAL level a verdict's lane proves, or None if it grades no level.
+
+    A verdict with no lane is UNATTRIBUTED, not unit (#1018). This used to
+    default to ``"unit"``, and because nothing ever wrote the field, every
+    verdict — api, browser, integration — was graded as unit: VAL-2 saw none
+    and reported "no api/integration/browser lane ran", capping every run at
+    VAL-0. The evaluator now stamps the lane from the plan, so a missing one
+    means the verdict matched no planned subtask; counting that as unit would
+    re-create the same silent inflation on the input we know least about.
+
+    A lane that is present but maps to no level (``mutation``) is a deliberate
+    omission and is not worth logging; a missing lane is a data gap and is.
+    """
+    lane = str(v.get("lane") or "").lower()
+    if not lane:
+        _log.warning(
+            "verdict %r has no lane; excluded from VAL grouping",
+            str(v.get("test_id") or "?"),
+        )
+    return _LANE_LEVEL.get(lane)
+
+
 def _level_status(verdicts: list[str]) -> str:
     """passed only if a lane ran and every verdict is a pass; else failed/not_run.
 
@@ -89,22 +112,8 @@ def build_verification_block(
     for v in verdicts:
         if not isinstance(v, dict):
             continue
-        # A verdict with no lane is UNATTRIBUTED, not unit (#1018). This used to
-        # default to "unit", and because nothing ever wrote the field, every
-        # verdict — api, browser, integration — was graded as unit: VAL-2 saw
-        # none and reported "no api/integration/browser lane ran", capping every
-        # run at VAL-0. The evaluator now stamps the lane from the plan, so a
-        # missing one means the verdict matched no planned subtask; counting
-        # that as unit would re-create the same silent inflation on the one
-        # input we know least about.
-        lane = str(v.get("lane") or "").lower()
-        level = _LANE_LEVEL.get(lane)
+        level = _level_for_verdict(v)
         if level is None:
-            if not lane:
-                _log.warning(
-                    "verdict %r has no lane; excluded from VAL grouping",
-                    str(v.get("test_id") or "?"),
-                )
             continue
         by_level.setdefault(level, []).append(str(v.get("verdict") or "").lower())
 
