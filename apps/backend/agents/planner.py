@@ -593,6 +593,15 @@ def _finalize_replan(
                     f"verifying {len(committed)} committed test(s) despite the "
                     "exhausted budget; remaining subtasks are stuck",
                 ],
+                # #1023: record the count, like the equivalent partial-verify
+                # path in gen_functional does. Without it the field keeps
+                # whatever the last generate pass left — 0 when that pass had
+                # nothing pending — so a run that hands real tests to the
+                # evaluator reports `tests_generated: 0` at `triaged`, and
+                # anything gating on `tests_generated > 0` reads a successful
+                # verify as empty. The number is already known here; it is in
+                # the warning text directly above.
+                tests_generated=len(committed),
                 subtask_count=subtask_count,
                 last_replan_for=original_subtask_id,
                 last_replan_count=new_count,
