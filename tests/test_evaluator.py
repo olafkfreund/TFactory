@@ -1564,3 +1564,281 @@ def test_an_unplanned_verdict_is_left_unattributed(tmp_path):
 
     assert (stamped, unmatched) == (0, 1)
     assert "lane" not in doc["verdicts"][0]
+
+
+_COBERTURA = """<?xml version="1.0" ?>
+<coverage line-rate="0.75" lines-covered="3" lines-valid="4">
+  <packages><package name="."><classes>
+    <class filename="src/app/request_id.py">
+      <lines>
+        <line number="10" hits="1"/>
+        <line number="11" hits="1"/>
+        <line number="12" hits="0"/>
+      </lines>
+    </class>
+    <class filename="tests/unit/test_request_id.py">
+      <lines>
+        <line number="1" hits="1"/>
+        <line number="2" hits="1"/>
+        <line number="3" hits="1"/>
+      </lines>
+    </class>
+  </classes></package></packages>
+</coverage>
+"""
+
+
+def _write_cov(spec_dir, test_id: str) -> None:
+    d = spec_dir / "findings" / "runs" / test_id
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "coverage.xml").write_text(_COBERTURA)
+
+
+def test_coverage_is_measured_from_the_lane_report(tmp_path):
+    """#1024: the number must come from coverage.xml, not from the judge."""
+    from agents.evaluator import _stamp_verdict_coverage
+
+    _write_cov(tmp_path, "t1")
+    # The judge's fabricated zero, exactly as it appeared in live verdicts.
+    doc = {
+        "verdicts": [
+            {
+                "test_id": "t1",
+                "signals_summary": {"coverage_delta_pct": 0, "coverage_new_lines": 0},
+            }
+        ]
+    }
+
+    measured, unmeasured = _stamp_verdict_coverage(tmp_path, doc)
+
+    assert (measured, unmeasured) == (1, 0)
+    s = doc["verdicts"][0]["signals_summary"]
+    # 2 covered SUT lines; the 3 covered lines of the test file do not count.
+    assert s["coverage_new_lines"] == 2, s
+    # No baseline snapshot exists, so a delta cannot be computed — and must not
+    # be reported as a number.
+    assert s["coverage_delta_pct"] is None, s
+
+
+def test_test_file_lines_are_not_counted_as_coverage(tmp_path):
+    """Every test covers its own lines; counting them measures nothing.
+
+    Without the exclusion this report yields 5 instead of 2, and every test
+    would score a perfect coverage subscore regardless of what it exercised.
+    """
+    from agents.evaluator import _measured_coverage
+
+    _write_cov(tmp_path, "t1")
+    covered, _ = _measured_coverage(tmp_path, "t1")
+    assert covered == 2
+
+
+def test_unmeasured_coverage_is_null_not_zero(tmp_path):
+    """A missing report must read as 'not measured', never as a measured zero.
+
+    confidence._coverage_subscore scores 0 as 'exercises none' but DROPS None,
+    so a fabricated zero silently penalises every verdict.
+    """
+    from agents.evaluator import _stamp_verdict_coverage
+
+    doc = {
+        "verdicts": [
+            {
+                "test_id": "absent",
+                "signals_summary": {"coverage_delta_pct": 0, "coverage_new_lines": 0},
+            }
+        ]
+    }
+
+    measured, unmeasured = _stamp_verdict_coverage(tmp_path, doc)
+
+    assert (measured, unmeasured) == (0, 1)
+    s = doc["verdicts"][0]["signals_summary"]
+    assert s["coverage_delta_pct"] is None, s
+    assert s["coverage_new_lines"] is None, s
+
+
+def test_the_measured_value_reaches_the_confidence_scorer(tmp_path):
+    """Drive the real scorer: a measured zero and a null must differ."""
+    from agents.confidence import _coverage_subscore
+
+    assert _coverage_subscore({"coverage_new_lines": 2}) == 1.0
+    assert _coverage_subscore({"coverage_new_lines": 0}) == 0.0
+    assert (
+        _coverage_subscore({"coverage_new_lines": None, "coverage_delta_pct": None})
+        is None
+    )
+
+
+def test_the_runner_seam_persists_the_lane_coverage_report(tmp_path):
+    """#1024: the lane's coverage.xml must be copied where the reader looks.
+
+    It was written into the runner's scratch dir and dropped, so
+    _coverage_delta_for_subtask never found its `after` snapshot.
+    """
+    from types import SimpleNamespace
+
+    from agents.evaluator import _capturing_coverage
+
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    src = scratch / "coverage.xml"
+    src.write_text(_COBERTURA)
+
+    wrapped = _capturing_coverage(
+        tmp_path, {"id": "t1"}, lambda *a, **k: SimpleNamespace(coverage_xml_path=src)
+    )
+    wrapped(tmp_path / "tests" / "test_x.py", tmp_path, 0)
+
+    dest = tmp_path / "findings" / "runs" / "t1" / "coverage.xml"
+    assert dest.is_file(), "coverage report was not persisted"
+    assert dest.read_text() == _COBERTURA
+    assert src.is_file(), "copied, not moved — the scratch dir is the runner's"
+
+
+def test_a_runner_with_no_coverage_report_is_not_an_error(tmp_path):
+    """A lane that produced none (browser) must pass through untouched."""
+    from types import SimpleNamespace
+
+    from agents.evaluator import _capturing_coverage
+
+    sentinel = SimpleNamespace(coverage_xml_path=None, ok=True)
+    wrapped = _capturing_coverage(tmp_path, {"id": "t1"}, lambda *a, **k: sentinel)
+    assert wrapped(tmp_path, tmp_path, 0) is sentinel
+    assert not (tmp_path / "findings" / "runs" / "t1").exists()
+
+
+def test_persisted_artifact_outlives_the_scratch_dir(tmp_path):
+    """#1024: the returned path must survive the runner's `finally` cleanup.
+
+    The runner built its result with `cov if cov.exists() else None` and then
+    deleted the scratch dir in a `finally` that runs BEFORE the value reaches
+    the caller. The path was therefore true at construction and dangling by the
+    time any consumer read it — which is why coverage_xml_path had exactly one
+    reader in the tree and the verdict's coverage was a judge-authored guess.
+    """
+    import shutil as _shutil
+
+    from agents.evaluator import _persist_run_artifact
+
+    scratch = tmp_path / "tf-pytest-xyz"
+    scratch.mkdir()
+    (scratch / "coverage.xml").write_text(_COBERTURA)
+    test_file = tmp_path / "tests" / "unit" / "test_thing.py"
+
+    kept = _persist_run_artifact(tmp_path, test_file, scratch / "coverage.xml")
+    # Exactly what the runner does next.
+    _shutil.rmtree(scratch, ignore_errors=True)
+
+    assert kept is not None
+    assert kept.is_file(), "artifact did not survive scratch cleanup"
+    assert scratch not in kept.parents, "still inside the doomed scratch dir"
+    assert kept.read_text() == _COBERTURA
+
+
+def test_a_missing_artifact_yields_none_not_a_dangling_path(tmp_path):
+    """No file → None. Never a path the caller will find deleted."""
+    from agents.evaluator import _persist_run_artifact
+
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    assert (
+        _persist_run_artifact(
+            tmp_path, tmp_path / "tests" / "t.py", scratch / "nope.xml"
+        )
+        is None
+    )
+
+
+def test_host_runner_result_paths_survive_the_caller_cleanup(tmp_path, monkeypatch):
+    """#1024 at the call site, not just in the helper.
+
+    Drives the real `_resolve_runner_fn._run` on the host branch — the one k3d
+    takes — with the pytest invocation stubbed. `_run` deletes its scratch dir
+    in a `finally`, so a result still pointing there is dead on arrival. Asserts
+    the returned paths are readable AFTER the call, which is the only property
+    a consumer cares about.
+    """
+    from agents import evaluator as E
+
+    spec_dir = tmp_path / "spec"
+    (spec_dir / "tests").mkdir(parents=True)
+    project_dir = tmp_path / "proj"
+    (project_dir / "src").mkdir(parents=True)
+    test_file = spec_dir / "tests" / "test_thing.py"
+    test_file.write_text("def test_ok():\n    assert True\n")
+
+    monkeypatch.setattr(E, "_nix_verify_mode", lambda *a, **k: False)
+    monkeypatch.setattr(E, "_host_runner_mode", lambda *a, **k: True)
+    monkeypatch.setattr(E, "_stage_sut_into_scratch", lambda *a, **k: None)
+
+    def _fake_host_run(scratch, tf, extra_env, project_dir_arg):
+        # Exactly what the real one does: write into the caller's scratch dir
+        # and hand back paths into it.
+        from tools.runners.docker_runner import DockerRunResult
+
+        (Path(scratch) / "coverage.xml").write_text(_COBERTURA)
+        (Path(scratch) / "junit.xml").write_text("<testsuite/>")
+        return DockerRunResult(
+            returncode=0,
+            stdout="__PYTEST_EXIT=0",
+            stderr="",
+            junit_xml_path=Path(scratch) / "junit.xml",
+            coverage_xml_path=Path(scratch) / "coverage.xml",
+            argv=["pytest"],
+        )
+
+    monkeypatch.setattr(E, "_run_pytest_on_host", _fake_host_run)
+
+    res = E._resolve_runner_fn(spec_dir, project_dir)(test_file, project_dir, 0)
+
+    assert res.coverage_xml_path is not None, "coverage path was dropped"
+    assert res.coverage_xml_path.is_file(), (
+        "coverage path does not survive the runner's scratch cleanup"
+    )
+    assert res.junit_xml_path is not None and res.junit_xml_path.is_file()
+    assert res.coverage_xml_path.read_text() == _COBERTURA
+
+
+def test_docker_runner_result_paths_survive_the_caller_cleanup(tmp_path, monkeypatch):
+    """Same #1024 property on the DockerRunner branch.
+
+    Reachable wherever a container runtime exists, and it builds its paths in
+    the same doomed scratch dir.
+    """
+    from agents import evaluator as E
+    from tools.runners.docker_runner import DockerRunResult
+
+    spec_dir = tmp_path / "spec"
+    (spec_dir / "tests").mkdir(parents=True)
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    test_file = spec_dir / "tests" / "test_thing.py"
+    test_file.write_text("def test_ok():\n    assert True\n")
+
+    monkeypatch.setattr(E, "_nix_verify_mode", lambda *a, **k: False)
+    monkeypatch.setattr(E, "_host_runner_mode", lambda *a, **k: False)
+    monkeypatch.setattr(E, "_stage_sut_into_scratch", lambda *a, **k: None)
+
+    class _FakeRunner:
+        def __init__(self, *a, **k):
+            pass
+
+        def run(self, *, scratch_path, **kwargs):
+            (Path(scratch_path) / "coverage.xml").write_text(_COBERTURA)
+            (Path(scratch_path) / "junit.xml").write_text("<testsuite/>")
+            return DockerRunResult(
+                returncode=0, stdout="__PYTEST_EXIT=0", stderr="", argv=["pytest"]
+            )
+
+    import tools.runners.docker_runner as _dr
+
+    monkeypatch.setattr(_dr, "DockerRunner", _FakeRunner)
+
+    res = E._resolve_runner_fn(spec_dir, project_dir)(test_file, project_dir, 0)
+
+    assert res.coverage_xml_path is not None, "coverage path was dropped"
+    assert res.coverage_xml_path.is_file(), (
+        "coverage path does not survive the runner's scratch cleanup"
+    )
+    assert res.coverage_xml_path.read_text() == _COBERTURA
