@@ -1155,6 +1155,7 @@ async def reap_if_orphaned(
     *,
     job_exists: bool,
     job_active: bool,
+    job_succeeded: bool = False,
     store: Any = None,
 ) -> dict[str, Any] | None:
     """Reaper: mark a vanished / deadline-exceeded verify Job ``stuck`` (#464).
@@ -1179,13 +1180,28 @@ async def reap_if_orphaned(
     if job_exists and job_active:
         return None  # still running — nothing to reap
 
-    reason = (
-        "verify Job vanished without writing a terminal job-state row "
-        "(orphaned dispatch)"
-        if not job_exists
-        else "verify Job finished (deadline/backoff) with no verdict — "
-        "lanes pending, no verdict (#464)"
-    )
+    if not job_exists:
+        reason = (
+            "verify Job vanished without writing a terminal job-state row "
+            "(orphaned dispatch)"
+        )
+    elif job_succeeded:
+        # #1014: a Job that exited 0 finished its stage — typically generation,
+        # which then dispatches the evaluate Job. Its row is still active only
+        # because the successor has not written one yet, so closing the row is
+        # right but calling the SPEC failed is not: observed live, a run was
+        # marked failed at 18:28:37, a successor Job started at 18:28:39, and it
+        # reached `triaged` normally at 18:42. Note a "is a successor live?"
+        # check would not have helped — the successor did not exist yet.
+        reason = (
+            "verify Job completed with no verdict row (stage handoff); the row "
+            "is closed but the spec is left alone — a successor may own it"
+        )
+    else:
+        reason = (
+            "verify Job finished (deadline/backoff) with no verdict — "
+            "lanes pending, no verdict (#464)"
+        )
     try:
         async with _store_for(store) as (s, _owned):
             rec: dict[str, Any] | None = await s.mark_stuck(job_id, reason)
@@ -1199,7 +1215,11 @@ async def reap_if_orphaned(
     # busy forever (#767). Observed on spec 008: row reapable, status.json stuck
     # on `evaluating` 87 minutes after the Job was killed at its deadline and
     # GC'd. Best-effort — a workspace we cannot write must never break the reap.
-    _mark_spec_reaped(record, reason)
+    # #1014: only a Job that DIED speaks for the spec. One that exited 0 has
+    # handed off, so writing `failed` into the shared status.json would fail a
+    # run that is still going — the row is per-Job, the spec is per-run.
+    if not job_succeeded:
+        _mark_spec_reaped(record, reason)
     return rec
 
 
@@ -1244,16 +1264,28 @@ def _is_k8s_job_ref(record: dict[str, Any]) -> bool:
 
 async def _probe_job(
     namespace: str, job_name: str, *, probe_fn: Any = None
-) -> tuple[bool, bool]:
-    """Return ``(job_exists, job_active)`` for the named Job. Fail-safe.
+) -> tuple[bool, bool, bool]:
+    """Return ``(job_exists, job_active, job_succeeded)``. Fail-safe.
+
+    ``job_succeeded`` matters because ``active=False`` alone conflates two
+    opposite outcomes: a Job killed at its deadline, and a Job that finished its
+    stage cleanly and dispatched the next one. Reaping treated both as death and
+    failed live runs (#1014).
 
     Defaults to a lazy in-cluster ``read_namespaced_job`` probe; injectable for
-    tests. On any probe error the Job is reported ``(exists=True, active=True)``
-    so a transient API blip never makes the reaper reap a live verify.
+    tests. A ``probe_fn`` may return the 2-tuple this used to have — it is read
+    as "succeeded unknown", which preserves the old behaviour for existing
+    callers rather than silently claiming success.
+
+    On any probe error the Job is reported active so a transient API blip never
+    reaps a live verify.
     """
     if probe_fn is not None:
-        result: tuple[bool, bool] = await probe_fn(namespace, job_name)
-        return result
+        result = await probe_fn(namespace, job_name)
+        if len(result) == 2:  # legacy 2-tuple probe
+            return result[0], result[1], False
+        exists, active, succeeded = result
+        return exists, active, succeeded
     try:
         api, batch = await _k8s_batch()
         try:
@@ -1267,10 +1299,11 @@ async def _probe_job(
             job_name,
             exc_info=True,
         )
-        return True, True
+        return True, True, False
     st = getattr(job, "status", None)
     active = bool(getattr(st, "active", 0)) if st is not None else False
-    return True, active
+    succeeded = bool(getattr(st, "succeeded", 0)) if st is not None else False
+    return True, active, succeeded
 
 
 async def reconcile_and_reap_once(*, store: Any = None, probe_fn: Any = None) -> int:
@@ -1297,11 +1330,15 @@ async def reconcile_and_reap_once(*, store: Any = None, probe_fn: Any = None) ->
                 # Reconcile first: a terminal row the Job already wrote wins.
                 if is_terminal_record(await reconcile_verify_job(job_id, store=s)):
                     continue
-                exists, active = await _probe_job(
+                exists, active, succeeded = await _probe_job(
                     namespace, job_name, probe_fn=probe_fn
                 )
                 reaped_rec = await reap_if_orphaned(
-                    job_id, job_exists=exists, job_active=active, store=s
+                    job_id,
+                    job_exists=exists,
+                    job_active=active,
+                    job_succeeded=succeeded,
+                    store=s,
                 )
                 if reaped_rec is not None:
                     reaped += 1
