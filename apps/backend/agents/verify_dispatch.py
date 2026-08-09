@@ -1142,6 +1142,9 @@ async def reconcile_verify_job(
 # never clobber one — the Job's own verdict always wins over the reaper's guess.
 _SPEC_TERMINAL_STATUSES = frozenset({"triaged", "failed", "generated_empty"})
 
+# A probe_fn predating #1014 returns (exists, active) with no success flag.
+_LEGACY_PROBE_ARITY = 2
+
 
 def is_terminal_record(record: dict[str, Any] | None) -> bool:
     """True when a reconciled record has reached a terminal lifecycle state."""
@@ -1282,7 +1285,7 @@ async def _probe_job(
     """
     if probe_fn is not None:
         result = await probe_fn(namespace, job_name)
-        if len(result) == 2:  # legacy 2-tuple probe
+        if len(result) == _LEGACY_PROBE_ARITY:
             return result[0], result[1], False
         exists, active, succeeded = result
         return exists, active, succeeded
