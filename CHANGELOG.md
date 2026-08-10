@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+- **A generated test whose prose claims it corrected the spec is rejected
+  (#995).** A coding agent that finds the behaviour disagrees with an acceptance
+  criterion sometimes resolves the conflict by adjusting the test and noting that
+  the criterion was wrong. The suite goes green, and the green measures the
+  test's agreement with the code rather than with the requirement.
+- **A contradictory acceptance criterion is reported `UNVERIFIABLE` (#896).**
+  Neither pass nor fail is honest when the question is incoherent, and inventing
+  one destroys the information that the criterion needs fixing.
+- **Verdict lanes are stamped from the test plan, and an unattributed verdict is
+  excluded rather than defaulted (#1018).** `val_block` grouped verdicts by lane
+  and treated a missing lane as `unit`. Nothing ever wrote that field, so API,
+  browser and integration verdicts were all graded as unit, VAL-2 saw none, and
+  every run capped at VAL-0. The ceiling was structural, not earned.
+- **The VAL claim names the flag count so it cannot read as a clean pass
+  (#1022).** `_PASS_VERDICTS` counted a flag as a pass while the AC-fidelity
+  report counted flagged-only as unverified. Two honest components disagreeing
+  produced a dishonest headline.
+- **A Job that exited 0 handed off; it did not die (#1014).** The reaper inferred
+  death from `active == 0`, which conflates "succeeded" with "was killed" - so a
+  Job that finished its stage and dispatched the next had its whole spec marked
+  failed. This was the mechanism behind the false FAILURE anomalies on the board.
+- **Coverage is measured from the lane's own report (#1024).** Both runner
+  branches built the JUnit and coverage paths inside a scratch directory and
+  removed it in a `finally` that runs before the result reaches the caller, so
+  the files existed at construction and never again. They are now persisted
+  before the scratch dies and re-filed under the subtask id.
+- **`tests_generated` is recorded on the replan-budget partial-verify path
+  (#1023).**
+- **The sandbox flag is forwarded into the dispatched Job (#1012).** The verify
+  Job builds a curated environment allowlist and the flag lived only on the
+  control-plane deployment, so the agent inside re-enabled its sandbox and the
+  pod's own seccomp profile denied it - every agent shell call failed. Third
+  instance of that allowlist trap.
+- **The deploy lane also runs for medium `risk_class` (#608).** An
+  intermediate-risk change still warrants a dry-run proof before merge; the lane
+  was previously `not_run` for it. Widening the trigger cannot make an apply
+  effectful - the production guard (`assert_dry_run` / `ProductionApplyError`)
+  lives in `deploy_runner`, not in the trigger.
+- **A skipped equivalence lane is recorded in findings, not only in the log
+  (#972),** and **project coverage is the union of covered lines, not the mean of
+  per-file percentages (#865).**
+- **Runner images are signed, pinned by digest, published with parseable tags and
+  labelled with their source repo**, and the signing job declares its identity
+  token at the job rather than the whole workflow (#957).
+- **Trace context is carried into the verify Job and emitted from inside it
+  (Factory#638),** so a verification is work in the trace rather than a gap
+  between two spans.
+
+
 - **The equivalence lane no longer reads a dead harness's empty stdout as a
   golden corpus (#959).** `agents/equivalence_lane.py` took the runner's
   `.stdout` and ignored its exit status, so a harness that never ran — missing
