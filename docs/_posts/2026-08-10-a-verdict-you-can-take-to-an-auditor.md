@@ -2,7 +2,7 @@
 layout: post
 title: "A verdict you can take to an auditor"
 subtitle: "Three weeks on verification: rejecting a generated test that claims it corrected the spec, calling a contradictory acceptance criterion UNVERIFIABLE instead of passing it, real assurance levels after a defaulting bug graded every lane as unit, and a deploy dry-run that proves the change would apply."
-date: 2026-08-10 09:00:00
+date: 2026-08-10 09:00:00 +0000
 author: DataSeek Team
 ---
 
