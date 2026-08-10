@@ -7,7 +7,7 @@
   criterion sometimes resolves the conflict by adjusting the test and noting that
   the criterion was wrong. The suite goes green, and the green measures the
   test's agreement with the code rather than with the requirement.
-- **A contradictory acceptance criterion is reported UNVERIFIABLE (#896).**
+- **A contradictory acceptance criterion is reported `UNVERIFIABLE` (#896).**
   Neither pass nor fail is honest when the question is incoherent, and inventing
   one destroys the information that the criterion needs fixing.
 - **Verdict lanes are stamped from the test plan, and an unattributed verdict is
