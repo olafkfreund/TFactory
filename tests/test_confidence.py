@@ -12,6 +12,8 @@ from agents.confidence import (
     READINESS_HIGH,
     WEIGHTS,
     aggregate_confidence,
+    apply_app_not_healthy_override,
+    apply_consistent_fail_reason,
     compute_confidence,
     enrich_verdicts,
 )
@@ -223,7 +225,11 @@ def test_enrich_stamps_confidence_and_summary():
 
 
 def test_enrich_handles_missing_signals_summary():
-    doc = {"verdicts": [{"test_id": "x", "verdict": "flag", "semantic_relevance": "medium"}]}
+    doc = {
+        "verdicts": [
+            {"test_id": "x", "verdict": "flag", "semantic_relevance": "medium"}
+        ]
+    }
     enrich_verdicts(doc)
     assert "confidence" in doc["verdicts"][0]["signals_summary"]
 
@@ -249,3 +255,159 @@ def test_mutation_neutral_and_missing(mutation, expected_present):
     # Just assert it computes a float in range; presence affects renormalisation.
     c = compute_confidence(v)
     assert 0.0 <= c <= 1.0
+
+
+# ─── apply_consistent_fail_reason (#629) ─────────────────────────────────
+# The Evaluator's judge LLM sometimes mislabelled a consistent_fail as an
+# import/collection error when the test actually ran and failed a real
+# assertion (the demo hardcode bug: "assert 0.0 == 300.0", "6 failed").
+# These pin the deterministic reason-fix wired from stability_runner's
+# failure_kind classifier.
+
+
+def test_consistent_fail_reason_replaced_with_assertion_explanation():
+    v = _verdict(verdict="reject", stability="consistent_fail")
+    # `reasons` lives at the top level of a verdict dict (not under
+    # signals_summary), so it's set directly rather than via `_verdict()`.
+    v["reasons"] = [
+        "the subject module is not resolvable/importable in the test environment"
+    ]
+    changed = apply_consistent_fail_reason(
+        v, {"failure_kind": "assertion", "rerun_count": 3}
+    )
+    assert changed is True
+    assert v["reasons"] == [
+        "consistent test failure across 3 runs — the test executed and its "
+        "assertions failed (subject behaviour is wrong), not an "
+        "import/collection error"
+    ]
+    # The wrong "not resolvable/importable" guess must not survive.
+    assert not any("resolvable" in r or "importable" in r for r in v["reasons"])
+
+
+def test_consistent_fail_reason_replaced_with_import_explanation():
+    v = _verdict(verdict="reject", stability="consistent_fail")
+    v["reasons"] = ["some unrelated LLM guess"]
+    changed = apply_consistent_fail_reason(
+        v, {"failure_kind": "import", "rerun_count": 3}
+    )
+    assert changed is True
+    assert v["reasons"] == [
+        "consistent test failure across 3 runs — the test never executed: "
+        "collection failed in the sandbox (import/collection error)"
+    ]
+
+
+def test_consistent_fail_import_reason_names_the_missing_module():
+    """#892: the reason must carry the underlying exception, not just its bucket.
+
+    "import/collection error" alone sent every diagnosis to a pod exec to find
+    out WHICH module was missing.
+    """
+    v = _verdict(verdict="reject", stability="consistent_fail")
+    changed = apply_consistent_fail_reason(
+        v,
+        {
+            "failure_kind": "import",
+            "rerun_count": 3,
+            "failure_detail": "ModuleNotFoundError: No module named 'requests'",
+        },
+    )
+    assert changed is True
+    assert v["reasons"] == [
+        "consistent test failure across 3 runs — the test never executed: "
+        "collection failed in the sandbox (import/collection error) — "
+        "ModuleNotFoundError: No module named 'requests'"
+    ]
+
+
+def test_consistent_fail_reason_omits_detail_when_none_was_captured():
+    """A truncated tail yields no detail — keep the generic wording, invent nothing."""
+    v = _verdict(verdict="reject", stability="consistent_fail")
+    apply_consistent_fail_reason(
+        v, {"failure_kind": "import", "rerun_count": 3, "failure_detail": None}
+    )
+    assert v["reasons"] == [
+        "consistent test failure across 3 runs — the test never executed: "
+        "collection failed in the sandbox (import/collection error)"
+    ]
+
+
+def test_consistent_fail_reason_noop_when_not_consistent_fail():
+    v = _verdict(verdict="reject", stability="flaky")
+    v["reasons"] = ["original reason"]
+    changed = apply_consistent_fail_reason(
+        v, {"failure_kind": "assertion", "rerun_count": 3}
+    )
+    assert changed is False
+    assert v["reasons"] == ["original reason"]
+
+
+def test_consistent_fail_reason_noop_when_no_failure_info():
+    v = _verdict(verdict="reject", stability="consistent_fail")
+    v["reasons"] = ["original reason"]
+    assert apply_consistent_fail_reason(v, None) is False
+    assert v["reasons"] == ["original reason"]
+
+
+def test_consistent_fail_reason_noop_when_kind_unknown():
+    """The classifier couldn't tell — leave the LLM's own reason alone rather
+    than replace it with a non-answer."""
+    v = _verdict(verdict="reject", stability="consistent_fail")
+    v["reasons"] = ["original reason"]
+    changed = apply_consistent_fail_reason(
+        v, {"failure_kind": "unknown", "rerun_count": 3}
+    )
+    assert changed is False
+    assert v["reasons"] == ["original reason"]
+
+
+def test_consistent_fail_reason_defaults_rerun_count():
+    v = _verdict(verdict="reject", stability="consistent_fail")
+    v["reasons"] = []
+    apply_consistent_fail_reason(v, {"failure_kind": "assertion"})
+    assert "3 runs" in v["reasons"][0]
+
+
+def test_enrich_verdicts_wires_failure_kind_end_to_end():
+    """The Evaluator's post-processing hook end-to-end: enrich_verdicts
+    fixes a consistent_fail's reason using failure_kind_by_test_id, exactly
+    the shape agents/evaluator.py builds from the signal bundles."""
+    doc = {"verdicts": [_verdict(verdict="reject", stability="consistent_fail")]}
+    doc["verdicts"][0]["reasons"] = [
+        "subject module (orders_api.main) is not resolvable/importable "
+        "in the test environment"
+    ]
+    enrich_verdicts(
+        doc,
+        failure_kind_by_test_id={"t": {"failure_kind": "assertion", "rerun_count": 3}},
+    )
+    reasons = doc["verdicts"][0]["reasons"]
+    assert any("assertions failed" in r for r in reasons)
+    assert not any("resolvable" in r for r in reasons)
+    # Verdict category is untouched — still a reject.
+    assert doc["verdicts"][0]["verdict"] == "reject"
+
+
+def test_enrich_verdicts_app_not_healthy_becomes_not_run():
+    """#703 follow-up: an app-boot failure (failure_kind app_not_healthy) flips
+    the reject to not_run so the gate treats it as infra-not-run, not a false
+    AC rejection."""
+    doc = {"verdicts": [_verdict(verdict="reject", stability="consistent_fail")]}
+    enrich_verdicts(
+        doc,
+        failure_kind_by_test_id={
+            "t": {"failure_kind": "app_not_healthy", "rerun_count": 3}
+        },
+    )
+    v = doc["verdicts"][0]
+    assert v["verdict"] == "not_run"
+    assert any("never became healthy" in r for r in v["reasons"])
+
+
+def test_app_not_healthy_never_overrides_a_genuine_accept():
+    v = _verdict(verdict="accept")
+    assert (
+        apply_app_not_healthy_override(v, {"failure_kind": "app_not_healthy"}) is False
+    )
+    assert v["verdict"] == "accept"

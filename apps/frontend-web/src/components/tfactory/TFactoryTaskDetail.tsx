@@ -595,10 +595,13 @@ function EvidenceGallery({
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             {videos.map((file) => (
               <figure key={file} className="rounded-lg border border-border bg-card p-2">
+                {/* Evidence screencasts are silent screen recordings with no
+                    caption track; `muted` satisfies jsx-a11y/media-has-caption. */}
                 <video
                   data-testid={`evidence-video-${file}`}
                   src={videoUrl(specId, file)}
                   controls
+                  muted
                   className="w-full rounded"
                 />
                 <figcaption className="mt-1 truncate text-xs text-muted-foreground" title={file}>

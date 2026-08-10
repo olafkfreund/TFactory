@@ -56,6 +56,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi import status as http_status
 from fastapi.responses import JSONResponse
 
+from ._specpath import is_safe_slug
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["MCP Copilot"])
@@ -65,7 +67,6 @@ router = APIRouter(tags=["MCP Copilot"])
 # ---------------------------------------------------------------------------
 
 _BEARER_RE = re.compile(r"^Bearer\s+(.+)$", re.IGNORECASE)
-_SPEC_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 def _check_auth(request: Request) -> None:
@@ -99,7 +100,7 @@ def _workspace_root() -> Path:
 
 def _find_spec_dir(task_id: str) -> Path | None:
     """Locate the spec_dir for *task_id* across all projects."""
-    if not task_id or not _SPEC_ID_RE.match(task_id):
+    if not is_safe_slug(task_id):
         return None
     workspaces = _workspace_root() / "workspaces"
     if not workspaces.exists():
@@ -314,9 +315,9 @@ def _tool_report_result(args: dict[str, Any]) -> dict[str, Any]:
     }
     try:
         meta_path.write_text(json.dumps(meta, indent=2))
-    except OSError as exc:
-        logger.warning("mcp_copilot: could not write test_task_metadata.json: %s", exc)
-        return {"accepted": False, "error": str(exc)}
+    except OSError:
+        logger.exception("mcp_copilot: could not write test_task_metadata.json")
+        return {"accepted": False, "error": "failed to record test result"}
 
     logger.info(
         "mcp_copilot: tfactory_report_result task=%s lane=%s passed=%d failed=%d",

@@ -4,7 +4,7 @@ name: ratchet (code-quality)
 #
 # This is a RATCHET gate (coding-standards.md section 4.6): the shared strict
 # baseline (standards/ruff.toml, vendored from the Factory hub at the SHA in
-# standards/PINNED_SHA) runs ONLY on the Python files a PR changes. For every
+# standards/.hub-sha) runs ONLY on the Python files a PR changes. For every
 # changed backend Python file the ruff violation count at HEAD may not exceed the
 # count on the PR base - untouched legacy hotspots are allowed until touched, so
 # the gate is green at adoption and tightens monotonically. A whole-repo strict
@@ -27,6 +27,22 @@ name: ratchet (code-quality)
 # base), so the largely-untyped legacy backlog does not make adoption PRs red,
 # but net-new type errors on touched files are caught. New files must be clean.
 #
+# SCOPE: apps/backend, apps/web-server and scripts/.
+#
+# scripts/ was added in Factory#597 for one reason: scripts/ratchet_lint.py IS
+# this gate, and it sat outside every ruff and mypy scope this repo has — the
+# file that counts findings on each changed backend file was the one file no run
+# looked at. Measured before the change: 11 ungated ruff findings in the ratchet
+# (8 T201, 2 S603, 1 S607), all FIXED in that PR rather than grandfathered, plus
+# `ruff format` drift in it and six other scripts, swept in the same PR because
+# the format gate below is whole-tree and cannot grandfather anything.
+#
+# scripts/ratchet_helpers.py is deliberately NOT held to this bar: it is the
+# byte-exact Factory hub canonical, owned by the verification-core drift gate.
+# root ruff.toml excludes it from the format gate and the ratchet's VENDORED_SKIP
+# excludes it from the check gate (the two read different configs). Reformatting
+# it to satisfy a LOCAL rule is what breaks the next re-vendor (Factory#403).
+#
 # Adopts: Factory#154 / issues #449, #452.
 
 on:
@@ -45,6 +61,9 @@ permissions:
 env:
   RUFF_VERSION: "0.15.17"
   MYPY_VERSION: "1.20.1"
+  # The primary package. apps/web-server is passed alongside it at the call
+  # site (Factory#384) rather than folded in here, so PACKAGE_DIR keeps its
+  # single-directory meaning for every other step that reads it.
   PACKAGE_DIR: "apps/backend"
 
 jobs:
@@ -65,8 +84,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install "ruff==${RUFF_VERSION}" "mypy==${MYPY_VERSION}"
-          # Backend deps so mypy can resolve imports on changed files.
-          pip install -r apps/backend/requirements.txt -r tests/requirements-test.txt || true
+          # Backend AND web-server deps so mypy can resolve imports on changed
+          # files. web-server was missing, so every changed route reported
+          # `Cannot find implementation or library stub for module named
+          # "fastapi"` -- harmless for an existing file whose base count
+          # already included it, but it made any NEW route unmergeable,
+          # since a new file's base is 0 and the ratchet blocks any gain.
+          pip install -r apps/backend/requirements.txt -r apps/web-server/requirements.txt -r tests/requirements-test.txt || true
 
       - name: Determine base ref
         id: base
@@ -81,10 +105,10 @@ jobs:
         # mypy --strict is now part of the ratchet and BLOCKING as a
         # no-regression gate (#449): a changed file may not gain mypy errors vs
         # the PR base, and new files must be clean.
-        run: python scripts/ratchet_lint.py --base "${{ steps.base.outputs.ref }}" --package "${PACKAGE_DIR}"
+        run: python scripts/ratchet_lint.py --base "${{ steps.base.outputs.ref }}" --package "${PACKAGE_DIR}" --package apps/web-server --package scripts
 
   format-check:
-    name: ruff format --check (apps/backend)
+    name: ruff format --check (apps/backend + scripts)
     runs-on: ubuntu-latest
     # Formatting is auto-applied, never reviewed (standards section 3.6).
     # Pinned to the SAME ruff version the tree was formatted with so the check
@@ -96,8 +120,8 @@ jobs:
           python-version: "3.12"
       - name: Install ruff (pinned)
         run: pip install "ruff==${RUFF_VERSION}"
-      - name: Ruff format check (apps/backend)
-        run: ruff format --check apps/backend
+      - name: Ruff format check (apps/backend + scripts)
+        run: ruff format --check apps/backend scripts
 
   config-drift:
     name: shared-baseline drift gate
@@ -108,31 +132,42 @@ jobs:
           path: tfactory
       - name: Read pinned hub SHA
         id: pin
-        run: echo "sha=$(tr -d '[:space:]' < tfactory/standards/PINNED_SHA)" >> "$GITHUB_OUTPUT"
+        run: echo "sha=$(tr -d '[:space:]' < tfactory/standards/.hub-sha)" >> "$GITHUB_OUTPUT"
+      # No continue-on-error: an unreachable hub is a gate that cannot run, and
+      # per standards rule 4.7 that must fail rather than pass. This step used
+      # to be `continue-on-error: true` with the diff below guarded on
+      # `steps.hub.outcome == 'success'`, so a private repo, an expired token,
+      # a renamed hub or a garbage-collected pin would skip the diff and report
+      # SUCCESS from a blocking gate. If Factory becomes private, add a read
+      # token here - do not restore the soft-skip. Factory#434; same removal
+      # AIFactory#1092 / #1095 made in that repo's two drift gates.
       - name: Check out hub standards at the pinned SHA
         uses: actions/checkout@v4
         with:
           repository: olafkfreund/Factory
           ref: ${{ steps.pin.outputs.sha }}
           path: factory-hub
-          # If Factory is private, a token with read access is needed here.
-        continue-on-error: true
-        id: hub
       - name: Diff vendored configs against the pinned hub baseline
-        if: steps.hub.outcome == 'success'
         run: |
-          set -e
+          set -euo pipefail
           # Vendored copies may carry a header above the body; compare the rule
           # body only by stripping leading comment / blank lines from both sides.
           strip() { grep -vE '^[[:space:]]*([#;]|$)' "$1"; }
           for f in ruff.toml mypy.ini .editorconfig; do
             if ! diff <(strip "tfactory/standards/$f") <(strip "factory-hub/standards/$f"); then
               echo "DRIFT: tfactory/standards/$f diverged from the pinned hub baseline (standards/$f)."
-              echo "Re-vendor from the hub and bump standards/PINNED_SHA, or justify a tighten-only override."
+              echo "Re-vendor from the hub and bump standards/.hub-sha, or justify a tighten-only override."
               exit 1
             fi
           done
-          echo "No drift: vendored configs match the pinned hub baseline."
-      - name: Hub unavailable (private repo / no token)
-        if: steps.hub.outcome != 'success'
-        run: echo "Hub checkout unavailable; skipping drift diff (configure a read token to enforce)."
+          # coding-standards.md is compared BYTE-EXACT and carries no provenance
+          # header: strip() drops every line starting with '#', which in Markdown
+          # is every heading - 58 of this file's 198 lines - so a body-only
+          # compare would be blind to section titles drifting. Hub standards
+          # rule 5.1. Same comparison AIFactory's gate makes.
+          if ! diff "tfactory/standards/coding-standards.md" "factory-hub/standards/coding-standards.md"; then
+            echo "DRIFT: tfactory/standards/coding-standards.md diverged from the pinned hub baseline."
+            echo "The standard is vendored, not editable here. Change it in the hub, then re-vendor and bump standards/.hub-sha."
+            exit 1
+          fi
+          echo "No drift: vendored files match the pinned hub baseline."

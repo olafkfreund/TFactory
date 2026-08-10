@@ -27,6 +27,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from ._specpath import safe_slug
+
 # Evidence artifact content-type map (mirrors agents.evidence.layout)
 _EVIDENCE_CONTENT_TYPES: dict[str, str] = {
     ".png": "image/png",
@@ -43,6 +45,7 @@ import json as _json_mod
 
 from fastapi import (
     APIRouter,
+    Header,
     HTTPException,
     Response,
     WebSocket,
@@ -52,6 +55,8 @@ from fastapi import (
     status as http_status,
 )
 from pydantic import BaseModel
+
+from ._tenancy import DEFAULT_TENANT, multi_tenant_enabled, resolve_tenant
 
 router = APIRouter()
 
@@ -70,20 +75,14 @@ def _resolve_workspace_root() -> Path:
     return Path.home() / ".tfactory"
 
 
-_SPEC_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
-_TEST_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 # Artifact names: allow subdirectory prefix (e.g. "screenshots/0001.png")
 # but forbid path traversal sequences (.., absolute paths, null bytes).
 _ARTIFACT_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
 
 
-def _validate_spec_id(spec_id: str) -> None:
+def _validate_spec_id(spec_id: str) -> str:
     """Reject path-traversal attempts in the spec_id path parameter."""
-    if not spec_id or not _SPEC_ID_RE.match(spec_id):
-        raise HTTPException(
-            status_code=http_status.HTTP_400_BAD_REQUEST,
-            detail=f"invalid spec_id: {spec_id!r}",
-        )
+    return safe_slug(spec_id, f"invalid spec_id: {spec_id!r}")
 
 
 def _find_spec_dir(root: Path, spec_id: str) -> Path | None:
@@ -152,6 +151,9 @@ def _summary_row(status_path: Path) -> dict[str, Any]:
         "title": status_doc.get("title"),
         "status": status_doc.get("status"),
         "phase": status_doc.get("phase"),
+        # Tenant scoping (#683): rows written before tenant stamping lazily
+        # backfill to "default" at read time.
+        "tenant": status_doc.get("tenant") or DEFAULT_TENANT,
         "updated_at": updated_at,
         "source": {"aifactory": aifactory_src}
         if isinstance(aifactory_src, dict)
@@ -218,13 +220,16 @@ def _artefact_meta(spec_dir: Path) -> dict[str, dict]:
 
 
 @router.get("")
-def list_tasks() -> dict:
+def list_tasks(
+    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
+) -> dict:
     """List all TFactory tasks across all projects.
 
     Response shape:
         {
           "tasks": [
-            {"task_id", "project_id", "spec_id", "status", "phase", "updated_at"},
+            {"task_id", "project_id", "spec_id", "status", "phase", "tenant",
+             "updated_at"},
             ...
           ],
           "count": N
@@ -232,6 +237,10 @@ def list_tasks() -> dict:
 
     Sorted by ``updated_at`` descending (most recent first). Empty list
     if the workspace root doesn't exist yet.
+
+    Tenant scoping (#683): when ``TFACTORY_MULTI_TENANT`` is on, only rows
+    belonging to the request's tenant (``X-Tenant-Id`` header, fallback
+    "default") are returned; off = unchanged (all rows).
     """
     root = _resolve_workspace_root()
     workspaces = root / "workspaces"
@@ -239,6 +248,12 @@ def list_tasks() -> dict:
     if workspaces.exists():
         for status_path in workspaces.glob("*/specs/*/status.json"):
             rows.append(_summary_row(status_path))
+    if multi_tenant_enabled():
+        # Direct (non-HTTP) callers pass no header; Header default may be a
+        # sentinel object in stubbed-fastapi unit tests — treat both as absent.
+        header = x_tenant_id if isinstance(x_tenant_id, str) else None
+        tenant = resolve_tenant(header)
+        rows = [r for r in rows if r.get("tenant", DEFAULT_TENANT) == tenant]
     rows.sort(key=lambda r: r.get("updated_at", ""), reverse=True)
     return {"tasks": rows, "count": len(rows)}
 
@@ -556,13 +571,9 @@ def get_catalog(spec_id: str) -> Response:
 # ─── Evidence artifact endpoint (Task 16 / #32) ────────────────────────────
 
 
-def _validate_test_id(test_id: str) -> None:
+def _validate_test_id(test_id: str) -> str:
     """Reject path-traversal attempts in the test_id path parameter."""
-    if not test_id or not _TEST_ID_RE.match(test_id):
-        raise HTTPException(
-            status_code=http_status.HTTP_400_BAD_REQUEST,
-            detail=f"invalid test_id: {test_id!r}",
-        )
+    return safe_slug(test_id, f"invalid test_id: {test_id!r}")
 
 
 def _validate_artifact(artifact: str) -> None:

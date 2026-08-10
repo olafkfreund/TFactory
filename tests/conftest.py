@@ -8,16 +8,55 @@ Provides common test fixtures for the Auto-Build Framework test suite.
 
 import importlib.util
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Generator
+from collections.abc import Generator, MutableMapping
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+
+from tests import sdk_stub
+
+# =============================================================================
+# HOOK GIT-ENV SCRUB (#859)
+# =============================================================================
+# This suite is run FROM a git hook (the pre-commit hook runs pytest). Git
+# exports repo-location variables (GIT_INDEX_FILE, GIT_DIR, ...) to hook
+# processes, and every subprocess here inherits them. Any test that shells out
+# to git in a scratch repo then operates on the REAL repository's git dir and
+# index instead of the scratch one: the test fails, and worse, a nested
+# `git add`/`git commit` mutates the index of the commit in progress (this
+# once staged a 2,135-file deletion mid-commit). Scrub the variables once at
+# import time so every test — and any production code a test drives — sees a
+# clean git environment regardless of who invoked pytest.
+
+HOOK_GIT_ENV_VARS = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_PREFIX",
+    "GIT_QUARANTINE_PATH",
+    # `git -c key=val commit` exports the -c config to hook children via this
+    # variable; a scratch repo would inherit e.g. an ambient core.hooksPath.
+    "GIT_CONFIG_PARAMETERS",
+)
+
+
+def scrub_hook_git_env(environ: MutableMapping[str, str] = os.environ) -> None:
+    """Remove git repo-location variables a hook process inherits."""
+    for var in HOOK_GIT_ENV_VARS:
+        environ.pop(var, None)
+
+
+scrub_hook_git_env()
 
 # =============================================================================
 # SKIP WEB-SERVER TESTS WHEN THEIR DEPS LIVE IN A DIFFERENT VENV
@@ -60,8 +99,8 @@ def pytest_ignore_collect(collection_path, config):
 # =============================================================================
 # PRE-MOCK EXTERNAL SDK MODULES - Must happen BEFORE adding tfactory to path
 # =============================================================================
-# These SDK modules may not be installed, so we mock them before any imports
-# that might trigger loading code that depends on them.
+# These SDK modules may not be installed, so we stand in for them before any
+# imports that might trigger loading code that depends on them.
 
 
 def _create_sdk_mock():
@@ -73,18 +112,42 @@ def _create_sdk_mock():
     return mock
 
 
-# Pre-mock claude_agent_sdk if not installed
-if "claude_agent_sdk" not in sys.modules:
-    sys.modules["claude_agent_sdk"] = _create_sdk_mock()
-    sys.modules["claude_agent_sdk.types"] = MagicMock()
+# claude_agent_sdk: stand in ONLY when the package is genuinely absent (#882).
+#
+# The old guard was `"claude_agent_sdk" not in sys.modules`, which is true at
+# conftest import time whether or not the package is installed — so the whole
+# suite ran against a MagicMock even in CI and the service venv, where
+# claude-agent-sdk IS installed (apps/backend/requirements.txt). A MagicMock
+# reports every attribute as present, which made it impossible for any test to
+# observe an SDK message's actual shape. That is how #869 hid: usage.py read a
+# `.model` off ResultMessage that the real type has never had, got "" on every
+# production run, and CI stayed green against a fake that invented the field.
+#
+# Installed  -> the real module; tests meet the real dataclasses.
+# Absent     -> tests/sdk_stub.py, an explicit fake with exactly the real
+#               attributes, so a typo raises AttributeError instead of passing.
+if not sdk_stub.SDK_INSTALLED:
+    sdk_stub.install()
 
-# Pre-mock claude_code_sdk if not installed
+# claude_code_sdk is the SDK's former name. Nothing under apps/ imports it and
+# it is in no requirements file, so it is absent everywhere and no production
+# reader depends on its shape; a MagicMock stays adequate for the handful of
+# legacy tests that name it.
 if "claude_code_sdk" not in sys.modules:
     sys.modules["claude_code_sdk"] = _create_sdk_mock()
     sys.modules["claude_code_sdk.types"] = MagicMock()
 
 # Add apps/backend directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "apps" / "backend"))
+
+# Same for scripts/, so the lint ratchet is importable under test
+# (tests/test_ratchet_test_bar.py). It is a script directory, not a package, so
+# there is nothing to install - this is the sibling-import arrangement it
+# already gets when CI runs it as `python scripts/ratchet_lint.py`.
+#
+# APPENDED, not inserted: a script directory has no business shadowing a real
+# first-party module for the rest of the suite.
+sys.path.append(str(Path(__file__).parent.parent / "scripts"))
 
 
 # =============================================================================
@@ -280,6 +343,21 @@ def pytest_runtest_setup(item):
                     importlib.reload(sys.modules[review_module])
                 except Exception:
                     pass
+
+
+# =============================================================================
+# EVALUATOR JUDGE VOTE DEFAULT (#649)
+# =============================================================================
+# The evaluator judge session defaults to best-of-3 majority voting in
+# production. The legacy evaluator tests were written against the single-pass
+# contract (one session call, one verdicts.json); pin votes=1 suite-wide so
+# they keep testing what they always tested. The vote path has its own tests
+# (tests/test_verdict_vote.py), which opt in by re-setting this env.
+
+
+@pytest.fixture(autouse=True)
+def _single_judge_vote(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TFACTORY_VERDICT_VOTES", "1")
 
 
 # =============================================================================
@@ -1341,6 +1419,7 @@ except ImportError:
 # one) when it guards a core invariant worth blocking a merge on.
 CRITICAL_MODULES = frozenset(
     {
+        "test_hook_git_env",  # hook-inherited GIT_* scrub boundary (#859)
         "test_qa_loop",  # restored qa_loop module + CLI import guard (#226/#227)
         "test_handback_rerun",  # shared pipeline-rerun core (#182 auto-loop)
         "test_handback_webhook",  # inbound AIFactory completion webhook (#182)
@@ -1387,6 +1466,7 @@ CRITICAL_MODULES = frozenset(
         "test_cloud_remediation",  # cloud remediation plan (#133/#150)
         "test_cloud_issues",  # findings → GitHub issues (#133/#152)
         "test_cloud_store",  # multi-assessment portal store + downloads (#133/#152)
+        "test_sdk_shape_contract",  # SDK message fields the readers rely on (#882)
     }
 )
 

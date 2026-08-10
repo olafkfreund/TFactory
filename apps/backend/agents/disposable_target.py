@@ -16,6 +16,8 @@ disposable target genuinely ran.
 
 Backends, in preference order (RFC-0006 §VAL-3 / RFC-0007 access):
   - ``local-vm`` — a throwaway QEMU/libvirt VM, when the host can run one;
+  - ``k8s-job`` — an ephemeral Kubernetes Job per command, when
+    ``TFACTORY_VAL3_K8S_JOB=1`` (see :mod:`agents.k8s_job_target`);
   - ``sandbox-cloud`` — a cost-guarded cloud sandbox with mandatory auto-teardown,
     when ``TFACTORY_VAL3_CLOUD`` is configured with credentials;
   - else ``None`` → VAL-3 not_run.
@@ -31,7 +33,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -85,7 +87,7 @@ def should_provision_val3(
     profile: dict[str, Any] | None,
     access: dict[str, Any] | None,
     *,
-    env: dict[str, str] | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> tuple[bool, str]:
     """Decide whether to provision a VAL-3 disposable target — and why/why-not.
 
@@ -110,7 +112,7 @@ def should_provision_val3(
     if backend is None:
         return (
             False,
-            "no disposable-target backend available (local VM / sandbox cloud)",
+            "no disposable-target backend available (local VM / k8s Job / sandbox cloud)",
         )
 
     # RFC-0007: a credentialed lane that couldn't be curated/reached stays not_run.
@@ -121,16 +123,20 @@ def should_provision_val3(
     return True, f"effectful VAL-3 commands + {backend} target + access provisioned"
 
 
-def select_backend(*, env: dict[str, str] | None = None) -> str | None:
+def select_backend(*, env: Mapping[str, str] | None = None) -> str | None:
     """Pick the VAL-3 backend from the environment, preferring a local VM.
 
     ``local-vm`` when ``TFACTORY_VAL3_LOCAL_VM=1`` (host can run QEMU/libvirt);
+    ``k8s-job`` when ``TFACTORY_VAL3_K8S_JOB=1`` (ephemeral k8s Job per command,
+    configured via ``TFACTORY_VAL3_K8S_JOB_IMAGE``);
     ``sandbox-cloud`` when ``TFACTORY_VAL3_CLOUD`` names a configured, credentialed
     cost-guarded cloud sandbox; else ``None`` (no target → VAL-3 not_run).
     """
     env = os.environ if env is None else env
     if _truthy(env.get("TFACTORY_VAL3_LOCAL_VM")):
         return "local-vm"
+    if _truthy(env.get("TFACTORY_VAL3_K8S_JOB")):
+        return "k8s-job"
     if (env.get("TFACTORY_VAL3_CLOUD") or "").strip():
         return "sandbox-cloud"
     return None
@@ -154,7 +160,7 @@ def register_provisioner(
 def disposable_target(
     spec: dict[str, Any] | None,
     *,
-    env: dict[str, str] | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> Iterator[DisposableTarget | None]:
     """Yield a provisioned disposable target, or ``None`` when the gate is closed.
 
@@ -166,6 +172,13 @@ def disposable_target(
     """
     env = os.environ if env is None else env
     backend = select_backend(env=env)
+    if backend == "k8s-job" and backend not in _PROVISIONERS:
+        # Lazy activation: nothing in the verify path imports agents.k8s_job_target
+        # at startup, so register here — the env flip alone is enough to enable
+        # the backend. Import is deferred to avoid a module-level import cycle.
+        from agents.k8s_job_target import auto_register  # noqa: PLC0415
+
+        auto_register(env)
     provisioner = _PROVISIONERS.get(backend) if backend else None
     target: DisposableTarget | None = None
     if provisioner is not None:
@@ -191,7 +204,7 @@ def attempt_val3(
     access: dict[str, Any] | None,
     *,
     spec: dict[str, Any] | None = None,
-    env: dict[str, str] | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> Val3Outcome:
     """Gate → provision → run VAL-3 commands → guaranteed teardown → outcome.
 
@@ -234,7 +247,7 @@ def record_val3(
     profile: dict[str, Any] | None,
     access: dict[str, Any] | None,
     *,
-    env: dict[str, str] | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> Val3Outcome:
     """Run VAL-3 once (gated) and persist the outcome to findings/val3_outcome.json.
 

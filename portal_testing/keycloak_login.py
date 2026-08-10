@@ -10,6 +10,7 @@ is fully automated, never faked (the real second factor is computed).
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 import pyotp
 from playwright.sync_api import Page
@@ -69,14 +70,27 @@ def _wait_for(page: Page, selector: str, timeout: int = 12000) -> bool:
         return False
 
 
-def ensure_logged_in(page: Page, portal: config.Portal, auth: config.Auth) -> dict:
+def ensure_logged_in(
+    page: Page,
+    portal: config.Portal,
+    auth: config.Auth,
+    shot: Callable[[str], str] | None = None,
+) -> dict:
     """Drive the portal -> "Sign in with SSO" -> Keycloak user/pass -> TOTP MFA.
 
     Uses explicit waits (the SSO redirect to Keycloak takes a few seconds), so
     interaction never races the redirect. Returns a dict for the report: whether
     MFA was presented and whether login succeeded.
+
+    ``shot(label)``, when given, captures the two auth stages that are otherwise
+    invisible in the evidence set: the Keycloak credential form and the TOTP
+    challenge. Both are captured BEFORE any value is typed, so no username,
+    password or one-time code is ever written to a durable screenshot.
     """
-    info: dict = {"mfa_presented": False, "logged_in": False, "notes": []}
+    info: dict = {"mfa_presented": False, "logged_in": False, "notes": [], "shots": []}
+    # ponytail: empty-form captures only. A "credentials entered" frame would
+    # bake TEST_USER into a committed PNG; the screencast already shows the flow.
+    _shot = shot or (lambda _label: "")
 
     # The portal's own /login page has a "Sign in with SSO" button that starts
     # the Keycloak redirect. Click it (unless we somehow already landed on KC).
@@ -95,19 +109,26 @@ def ensure_logged_in(page: Page, portal: config.Portal, auth: config.Auth) -> di
         _wait_for(page, _USER_SEL, timeout=15000)  # wait for the Keycloak form
 
     if not page.locator(_USER_SEL).count():
-        if not on_keycloak(page):
-            info["notes"].append(
-                "no Keycloak form — session may already be authenticated"
-            )
-            info["logged_in"] = True
-        else:
+        # Never infer a session from the absence of a form. `run.py` builds a
+        # fresh context with no storage_state, so it cannot arrive already
+        # authenticated -- reaching here means the login was never presented
+        # (portal down, Cloudflare interstitial, blank render). Reporting
+        # logged_in=True here graded a 502'd portal as "attention" instead of
+        # "fail" and crawled the error page's nav links as if authenticated.
+        if on_keycloak(page):
             info["notes"].append("on Keycloak but no username field found")
+        else:
+            info["notes"].append(
+                f"never reached the Keycloak form (url={page.url!r}) — portal "
+                "unreachable, erroring, or fronted by an interstitial"
+            )
         return info
 
     if not auth.username or not auth.password:
         info["notes"].append("TEST_USER/TEST_PASSWORD not set — cannot complete login")
         return info
 
+    info["shots"] += [s for s in [_shot("keycloak-login")] if s]
     page.locator(_USER_SEL).first.fill(auth.username)
     page.locator(_PASS_SEL).first.fill(auth.password)
     _click_first(page, _SUBMIT_SEL)
@@ -118,6 +139,7 @@ def ensure_logged_in(page: Page, portal: config.Portal, auth: config.Auth) -> di
 
     if page.locator(_OTP_SEL).count():
         info["mfa_presented"] = True
+        info["shots"] += [s for s in [_shot("mfa-otp-challenge")] if s]
         if not auth.totp_secret:
             info["notes"].append("OTP required but TEST_TOTP_SECRET not set")
             return info

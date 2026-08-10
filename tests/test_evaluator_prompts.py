@@ -166,6 +166,29 @@ def test_block_formats_stability(dataclass_bundle) -> None:
     assert "3 runs" in block
 
 
+def test_block_names_the_collection_error_the_judge_is_reasoning_from() -> None:
+    """#892: the judge was told "the subject module could not be imported".
+
+    That was a guess of its own — a missing HARNESS dep (``requests``, in the api
+    lane) fails collection with the subject perfectly importable. The block must
+    state what pytest reported and name the module.
+    """
+    stdout = "E   ModuleNotFoundError: No module named 'requests'\n"
+    bundle = {
+        "test_id": "line-total-happy-path",
+        "stability": StabilityResult(
+            verdict=StabilityVerdict.CONSISTENT_FAIL,
+            runs=tuple(
+                StabilityRun(returncode=2, stdout_tail=stdout) for _ in range(3)
+            ),
+        ),
+    }
+    block = _format_evaluator_per_test_block(bundle)
+    assert "the test never executed: collection failed in the sandbox" in block
+    assert "ModuleNotFoundError: No module named 'requests'" in block
+    assert "subject module" not in block
+
+
 def test_block_formats_mutation(dataclass_bundle) -> None:
     block = _format_evaluator_per_test_block(dataclass_bundle)
     assert "mutation: killed" in block

@@ -8,9 +8,22 @@
 # break the drift gate. Excluded from format/lint here for the same reason the
 # Factory hub excludes its shared/factory-github vendored mirror.
 extend-exclude = [
+    # Byte-exact mirror of the Factory hub canonical scripts/ratchet_helpers.py,
+    # kept identical by the verification-core drift gate. The hub formats at 100;
+    # letting the local formatter touch it would silently break byte-exactness
+    # and the next re-vendor (Factory#403).
+    "scripts/ratchet_helpers.py",
     "apps/backend/agents/verification_gate.py",
     "apps/backend/tools/runners/nix_provisioner.py",
     "apps/backend/tools/runners/artifact_store.py",
+    "apps/backend/tools/runners/job_dispatch.py",
+    # Factory#638: the far half of job_dispatch.trace_env — the bootstrap the
+    # dispatched Job calls to join the run's trace and emit. Same canonical, same
+    # gate, same reason to keep the local 88-column formatter off it.
+    "apps/backend/tools/runners/job_tracing.py",
+    # Same deal for the factory-github provider layer: a byte-exact mirror of
+    # the hub's shared/factory-github/, policed by factory-github-drift.yml.
+    "apps/backend/runners/github/",
 ]
 
 [lint]

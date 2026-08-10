@@ -24,16 +24,92 @@ concurrency:
   group: nix-runner-image-${{ github.ref }}
   cancel-in-progress: true
 
+# Workflow-level floor only. `permissions:` takes no expression, so a single
+# job spanning both triggers hands every capability it needs on push to the
+# pull_request run as well — which is how `id-token: write` came to be granted
+# to PR builds that execute PR-controlled Dockerfile instructions (#948). The
+# split below IS the narrowing: the token capability is declared on the
+# push-only `publish` job and exists nowhere else.
 permissions:
   contents: read
-  packages: write
 
 env:
   IMAGE: "ghcr.io/${{ github.repository_owner }}/tfactory-runner-nix"
 
 jobs:
+  # --------------------------------------------------------------------------
+  # pull_request path: build + load + smoke. No registry credentials, no OIDC.
+  # --------------------------------------------------------------------------
   build:
+    if: "${{ github.event_name == 'pull_request' }}"
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: tags
+        run: echo "sha=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      # No `docker/login-action` here. The base image is public (nixos/nix on
+      # Docker Hub) and nothing is pushed, so this path needs no GHCR
+      # credentials at all — `packages: write` was granted to PR runs before
+      # #948 too, and is dropped with the same change.
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/tfactory-runner-nix
+          file: docker/tfactory-runner-nix/Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.tags.outputs.sha }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=gha,scope=nix-runner
+          cache-to: type=gha,mode=max,scope=nix-runner
+
+      # Smoke (image is loaded locally): nix + flakes work.
+      - name: Nix smoke
+        run: |
+          docker run --rm "${{ env.IMAGE }}:latest" \
+            nix --version
+          docker run --rm "${{ env.IMAGE }}:latest" \
+            sh -c 'nix flake --help >/dev/null && echo "flakes ok"'
+          # #768: prove the warm-up closure actually baked into the store.
+          # --offline realises the dev shell WITHOUT touching the binary cache,
+          # so it can only succeed if python + pytest + pip are already present —
+          # which is the entire point (a per-task flake reuses these paths and
+          # skips the per-Job fetch). A cold image would fail this outright.
+          docker run --rm "${{ env.IMAGE }}:latest" \
+            sh -c 'nix develop --offline path:/warmup#default \
+                     --command python -c "import pytest, pip; print(\"warm closure ok\")"'
+
+  # --------------------------------------------------------------------------
+  # push-to-main path: build + push + sign + self-verify.
+  #
+  # Mutually exclusive with `build` above rather than `needs:`-chained, because
+  # the two paths share no work: the PR path loads and smokes and never pushes,
+  # this path pushes and never loads. Chaining would add a second full build of
+  # a multi-GB image to every push for no gate the PR run did not already
+  # provide. Each event therefore does exactly the work it did before #948 --
+  # only the permission boundary moved.
+  # --------------------------------------------------------------------------
+  publish:
+    if: "${{ github.event_name == 'push' }}"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write      # push to GHCR
+      id-token: write      # cosign keyless via GitHub OIDC (Factory#524)
+    # `secrets` is not allowed in a step-level `if:` -- hoist to job env, same as
+    # deploy.yml and portal-ui-runner-image.yml.
+    env:
+      GITOPS_PAT: "${{ secrets.GITOPS_PAT }}"
+      GITOPS_REPO: olafkfreund/factory-gitops
+      GITOPS_PATH: apps/tfactory/manifests
     steps:
       - uses: actions/checkout@v4
 
@@ -50,25 +126,104 @@ jobs:
           username: "${{ github.repository_owner }}"
           password: "${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}"
 
-      # On PRs: build + load + smoke only (no push). On push to main: push.
-      - uses: docker/build-push-action@v6
+      - id: build
+        uses: docker/build-push-action@v6
         with:
           context: docker/tfactory-runner-nix
           file: docker/tfactory-runner-nix/Dockerfile
           platforms: linux/amd64
-          push: "${{ github.event_name == 'push' }}"
-          load: "${{ github.event_name == 'pull_request' }}"
+          push: true
+          # GHCR links a package to a repository via this OCI label, and an
+          # unlinked package inherits none of the repository's visibility or
+          # permissions. Set HERE rather than in the Dockerfile (#952): nine of
+          # eleven runner Dockerfiles carried it, this one did not, and nothing
+          # in CI, the logs or the image made the omission visible. On the
+          # workflow it cannot be forgotten by the next Dockerfile author.
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
           tags: |
             ${{ env.IMAGE }}:${{ steps.tags.outputs.sha }}
             ${{ env.IMAGE }}:latest
           cache-from: type=gha,scope=nix-runner
           cache-to: type=gha,mode=max,scope=nix-runner
 
-      # Smoke (PR only — image is loaded locally): nix + flakes work.
-      - name: Nix smoke
-        if: "${{ github.event_name == 'pull_request' }}"
+      # ----------------------------------------------------------------------
+      # Sign what this workflow publishes (Factory#524).
+      #
+      # The admission policy verified the four service images and nothing else,
+      # so the one image that is the sandbox for GENERATED code was the one
+      # image with no signature on it at all. Same keyless flow as deploy.yml,
+      # and by DIGEST for the same reason: cosign signatures are digest-keyed,
+      # so this single signature covers :sha-<short> AND :latest.
+      #
+      # The certificate SAN is derived from the workflow FILE, not the job, so
+      # splitting the job leaves the signed identity byte-identical:
+      # .../.github/workflows/nix-runner-image.yml@refs/heads/main -- which is
+      # what `verify-tfactory-runner-signature` pins.
+      # ----------------------------------------------------------------------
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3.7.0
+
+      - name: Sign image (cosign keyless via Sigstore + GitHub OIDC)
+        run: cosign sign --yes "${IMAGE}@${{ steps.build.outputs.digest }}"
+
+      # Assert the EXACT identity the admission rule pins, anchored at both
+      # ends — not a repo prefix. A self-test looser than the gate it models
+      # passes on signatures the gate rejects, which is the failure Factory#522
+      # found in the policy itself.
+      - name: Verify signature (self-test)
         run: |
-          docker run --rm "${{ env.IMAGE }}:latest" \
-            nix --version
-          docker run --rm "${{ env.IMAGE }}:latest" \
-            sh -c 'nix flake --help >/dev/null && echo "flakes ok"'
+          cosign verify \
+            --certificate-identity-regexp "^https://github\.com/${{ github.repository }}/\.github/workflows/nix-runner-image\.yml@refs/heads/main$" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "${IMAGE}@${{ steps.build.outputs.digest }}"
+
+      # ----------------------------------------------------------------------
+      # Move the cluster's pins to the image just published and just verified
+      # (#890). Until now nothing bumped them: both env values sat on `:latest`,
+      # so the Nix lane -- the DEFAULT verify execution path -- resolved a
+      # floating tag. The content happened to be current, but that was luck, not
+      # a property anyone could check, and "which code produced this verdict" is
+      # not a cosmetic question for the lane that produces verdicts.
+      #
+      # Pinned `:sha-<short>@sha256:<digest>`. The digest is what resolves and
+      # cannot move -- which matters more since the signature gate went to
+      # Enforce (Factory#522), because a tag can be repointed at something
+      # unsigned between one admission check and the next. The tag rides along
+      # as inert provenance so the commit stays readable and `fleet-match`'s
+      # `carries()` -- which only recognises `sha-<short>` -- can still see it.
+      #
+      # Ordered AFTER the signature self-test on purpose: pinning the cluster to
+      # an image whose signature has not been checked is the state #890 and
+      # Factory#524 exist to remove.
+      # ----------------------------------------------------------------------
+      - name: Pin the nix runner in factory-gitops
+        if: "${{ env.GITOPS_PAT != '' }}"
+        env:
+          PIN: "${{ env.IMAGE }}:${{ steps.tags.outputs.sha }}@${{ steps.build.outputs.digest }}"
+        run: |
+          set -euo pipefail
+          git clone --quiet --depth 1 "https://x:${GITOPS_PAT}@github.com/${GITOPS_REPO}.git" gitops
+          cd "gitops/${GITOPS_PATH}"
+
+          # Both Job images the Nix lane dispatches. Match the whole existing
+          # value -- tag, or tag@digest, or bare `latest` -- and replace it.
+          for var in TFACTORY_VAL3_K8S_JOB_IMAGE TFACTORY_NIX_RUNNER_IMAGE; do
+            sed -i -E "s#(name: ${var}, value: \")[^\"]+#\\1${PIN}#" manifests.yaml
+            # Fail loudly rather than push a no-op. A sed that silently matches
+            # nothing is how TFACTORY_IMAGE sat two weeks stale (#719) while
+            # every artefact except the outcome looked like a working control.
+            # The image is published and verified by this point, so failing here
+            # breaks the run, not the artefact.
+            grep -qF "name: ${var}, value: \"${PIN}\"" manifests.yaml || {
+              echo "::error::${var} pin not found in ${GITOPS_REPO}/${GITOPS_PATH}/manifests.yaml." >&2
+              echo "Add: - { name: ${var}, value: \"${PIN}\" }" >&2
+              exit 1
+            }
+          done
+
+          cd ..
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -qam "cd(tfactory): nix runner ${{ steps.tags.outputs.sha }} [skip ci]" || exit 0
+          git push --quiet

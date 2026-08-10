@@ -53,7 +53,7 @@ def mock_claude_profiles(mock_settings_dir: Path) -> Path:
                 "email": "work@example.com",
                 "token": "sess-" + "x" * 40,
                 "createdAt": 1704067200000,
-                "updatedAt": 1704067200000
+                "updatedAt": 1704067200000,
             },
             {
                 "id": "profile-2",
@@ -61,9 +61,9 @@ def mock_claude_profiles(mock_settings_dir: Path) -> Path:
                 "email": "personal@example.com",
                 "token": "sk-ant-" + "y" * 40,
                 "createdAt": 1704067200000,
-                "updatedAt": 1704067200000
-            }
-        ]
+                "updatedAt": 1704067200000,
+            },
+        ],
     }
     profiles_file.write_text(json.dumps(profiles_data, indent=2))
     return profiles_file
@@ -82,7 +82,7 @@ def mock_api_profiles(mock_settings_dir: Path) -> Path:
                 "baseUrl": "https://api.anthropic.com",
                 "apiKey": "sk-ant-" + "a" * 40,
                 "createdAt": 1704067200000,
-                "updatedAt": 1704067200000
+                "updatedAt": 1704067200000,
             },
             {
                 "id": "api-profile-2",
@@ -91,12 +91,12 @@ def mock_api_profiles(mock_settings_dir: Path) -> Path:
                 "apiKey": "sk-custom-" + "b" * 40,
                 "models": {
                     "default": "claude-3-5-sonnet-20241022",
-                    "haiku": "claude-3-5-haiku-20241022"
+                    "haiku": "claude-3-5-haiku-20241022",
                 },
                 "createdAt": 1704067200000,
-                "updatedAt": 1704067200000
-            }
-        ]
+                "updatedAt": 1704067200000,
+            },
+        ],
     }
     profiles_file.write_text(json.dumps(profiles_data, indent=2))
     return profiles_file
@@ -118,7 +118,7 @@ def mock_projects(mock_settings_dir: Path, temp_dir: Path) -> Path:
                 "path": str(project_path),
                 "createdAt": 1704067200000,
                 "updatedAt": 1704067200000,
-                "settings": {}
+                "settings": {},
             }
         ]
     }
@@ -144,7 +144,7 @@ def mock_ideation(mock_settings_dir: Path, temp_dir: Path) -> Path:
                 "status": "new",
                 "dismissed": False,
                 "archived": False,
-                "createdAt": 1704067200000
+                "createdAt": 1704067200000,
             },
             {
                 "id": "idea-2",
@@ -153,7 +153,7 @@ def mock_ideation(mock_settings_dir: Path, temp_dir: Path) -> Path:
                 "status": "accepted",
                 "dismissed": False,
                 "archived": False,
-                "createdAt": 1704067200000
+                "createdAt": 1704067200000,
             },
             {
                 "id": "idea-3",
@@ -162,10 +162,10 @@ def mock_ideation(mock_settings_dir: Path, temp_dir: Path) -> Path:
                 "status": "new",
                 "dismissed": False,
                 "archived": False,
-                "createdAt": 1704067200000
-            }
+                "createdAt": 1704067200000,
+            },
         ],
-        "updatedAt": 1704067200000
+        "updatedAt": 1704067200000,
     }
     ideation_file.write_text(json.dumps(ideation_data, indent=2))
     return ideation_file
@@ -187,17 +187,17 @@ def mock_roadmap(mock_settings_dir: Path, temp_dir: Path) -> Path:
                 "title": "Test Feature 1",
                 "description": "First test feature",
                 "status": "planned",
-                "createdAt": 1704067200000
+                "createdAt": 1704067200000,
             },
             {
                 "id": "feature-2",
                 "title": "Test Feature 2",
                 "description": "Second test feature",
                 "status": "in_progress",
-                "createdAt": 1704067200000
-            }
+                "createdAt": 1704067200000,
+            },
         ],
-        "updatedAt": 1704067200000
+        "updatedAt": 1704067200000,
     }
     roadmap_file.write_text(json.dumps(roadmap_data, indent=2))
     return roadmap_file
@@ -207,14 +207,9 @@ def mock_roadmap(mock_settings_dir: Path, temp_dir: Path) -> Path:
 # Phase 2: Critical Priority - Settings & Core Config Tests
 # =============================================================================
 
+
 class TestPhase2CriticalPrioritySettings:
     """Test critical settings and configuration endpoints."""
-
-    def test_update_api_key_validation(self, mock_settings_dir):
-        """Test 2.1: update_api_key validates API key format."""
-        # Test file would use mocked settings path
-        # Validation: API key type, format, length
-        assert True  # Placeholder - would test actual endpoint
 
     def test_set_active_profile_exists(self, mock_claude_profiles):
         """Test 2.2: set_active_profile validates profile exists."""
@@ -262,6 +257,7 @@ class TestPhase2CriticalPrioritySettings:
 # Phase 3: Important Priority - Profile Management Tests
 # =============================================================================
 
+
 class TestPhase3ProfileManagement:
     """Test Claude profile management endpoints."""
 
@@ -298,6 +294,7 @@ class TestPhase3ProfileManagement:
 # Phase 4: Important Priority - API Profile Management Tests
 # =============================================================================
 
+
 class TestPhase4ApiProfileManagement:
     """Test API profile management endpoints."""
 
@@ -321,6 +318,7 @@ class TestPhase4ApiProfileManagement:
 # =============================================================================
 # Phase 5: Important Priority - Ideation File Operations Tests
 # =============================================================================
+
 
 class TestPhase5IdeationFileOperations:
     """Test ideation file operation endpoints."""
@@ -351,6 +349,7 @@ class TestPhase5IdeationFileOperations:
 # Phase 9: Context Management Tests
 # =============================================================================
 
+
 class TestPhase9ContextManagement:
     """Test context management endpoints."""
 
@@ -364,6 +363,7 @@ class TestPhase9ContextManagement:
 # =============================================================================
 # Phase 11: Low Priority - Bulk Operations Tests
 # =============================================================================
+
 
 class TestPhase11BulkOperations:
     """Test bulk operation endpoints."""
@@ -386,6 +386,7 @@ class TestPhase11BulkOperations:
 # =============================================================================
 # Phase 12: Low Priority - Media & Session Management Tests
 # =============================================================================
+
 
 class TestPhase12MediaAndSessionManagement:
     """Test media and session management endpoints."""
@@ -415,6 +416,7 @@ class TestPhase12MediaAndSessionManagement:
 # Phase 13: Low Priority - Project & Environment Tests
 # =============================================================================
 
+
 class TestPhase13ProjectAndEnvironment:
     """Test project discovery and environment endpoints."""
 
@@ -441,6 +443,7 @@ class TestPhase13ProjectAndEnvironment:
 # Security Tests
 # =============================================================================
 
+
 class TestSecurityFeatures:
     """Test security features across all file-based endpoints."""
 
@@ -464,6 +467,7 @@ class TestSecurityFeatures:
 # =============================================================================
 # Integration Tests
 # =============================================================================
+
 
 class TestEndToEndWorkflows:
     """Test complete workflows using multiple endpoints."""
@@ -498,6 +502,7 @@ class TestEndToEndWorkflows:
 # =============================================================================
 # Summary
 # =============================================================================
+
 
 def test_summary():
     """

@@ -7,10 +7,15 @@ Supports dynamic prompt assembly based on project type for context optimization.
 Supports Quick Mode for simplified prompts (~70% fewer tokens).
 """
 
+import ast
 import json
 import os
 import re
+import subprocess
+from collections import Counter
+from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 from .project_context import (
     detect_project_capabilities,
@@ -511,11 +516,11 @@ def _build_framework_registry_block() -> str:
         )
 
 
-# Acceptance-criteria *command* tokens → target language. This is the PRIMARY
-# language signal (#443): a Go spec says "`go test ./...` passes", a Python one
-# says "pytest", etc. Ordered by priority; first hit wins. Manifest files only
-# corroborate (a repo can carry go.mod AND pyproject.toml — e.g. the polyglot
-# benchmark repo — so a manifest scan alone is ambiguous).
+# Acceptance-criteria *command* tokens → target language (#443): a Go spec says
+# "`go test ./...` passes", a Python one says "pytest", etc. Ordered by
+# priority; first hit wins. Manifest files only corroborate (a repo can carry
+# go.mod AND pyproject.toml — e.g. the polyglot benchmark repo — so a manifest
+# scan alone is ambiguous).
 _AC_COMMAND_LANGUAGE: tuple[tuple[str, str], ...] = (
     ("go test", "go"),
     ("go build", "go"),
@@ -526,6 +531,224 @@ _AC_COMMAND_LANGUAGE: tuple[tuple[str, str], ...] = (
     ("jest", "typescript"),
     ("vitest", "typescript"),
 )
+
+# Changed-/named-file extensions → target language (#696). The deliverable's
+# language is whatever the build actually touched — on mixed-language repos
+# (go.mod AND pyproject.toml left by earlier polyglot runs) repo markers and
+# even AC command tokens are weaker signals than the source-branch diff.
+_EXT_LANGUAGE: dict[str, str] = {
+    ".py": "python",
+    ".go": "go",
+    ".rs": "rust",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".js": "typescript",
+    ".jsx": "typescript",
+}
+
+
+def _language_from_files(files: list[str]) -> str | None:
+    """Majority language of ``files`` by extension (no code files / tie → None)."""
+    counts: Counter[str] = Counter()
+    for f in files:
+        lang = _EXT_LANGUAGE.get(Path(f).suffix.lower())
+        if lang:
+            counts[lang] += 1
+    if not counts:
+        return None
+    (top_lang, top_n), *rest = counts.most_common()
+    if rest and rest[0][1] == top_n:
+        return None  # tie — not a reliable signal
+    return top_lang
+
+
+def _source_branch_changed_files(spec_dir: Path, project_dir: Path) -> list[str]:
+    """Files the build changed, diffed against the branch it was actually cut from.
+
+    The spec-ingest path checks the build branch out (detached FETCH_HEAD) in
+    ``project_dir`` — diff HEAD against its base to see what the build delivered.
+    Best-effort: any failure returns ``[]`` and the caller falls back to weaker
+    signals. Only runs when ``context/source.json`` names a ``source_branch``
+    (otherwise HEAD *is* the default branch — no diff).
+
+    The base is chosen by distance, not by asking which branch is the repo's
+    default. This diffed against ``origin/HEAD`` until #737 exposed the flaw: a
+    repo whose builds branch from ``dev`` (as the fleet's do) reported *dev's
+    entire lead over main* as "what this build changed" — measured on TFactory
+    itself, 53 files against ``origin/main`` versus the 5 the build actually
+    touched. Nobody noticed while the only consumer was a majority-vote language
+    verdict, which is noise-tolerant; a list of symbols to test is not, and the
+    real target was crowded out of it entirely.
+
+    So: try each plausible base and keep whichever sits fewest commits behind
+    HEAD. The branch was cut from exactly one of them, and that one is nearest
+    by construction; an unrelated candidate scores far worse and loses. Ties keep
+    candidate order, and a candidate identical to HEAD scores 0 — correctly
+    yielding "this build changed nothing".
+    """
+    try:
+        src = json.loads(
+            (spec_dir / "context" / "source.json").read_text(encoding="utf-8")
+        )
+        if not src.get("source_branch"):
+            return []
+    except Exception:  # noqa: BLE001 — missing/unreadable source.json is fine
+        return []
+
+    def _git(*args: str) -> "subprocess.CompletedProcess[str]":
+        return subprocess.run(  # noqa: S603 - fixed git argv, no untrusted input
+            ["git", "-C", str(project_dir), *args],  # noqa: S607
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+    try:
+        # #751: refresh the plausible base refs before the by-distance pick.
+        # _add_spec_worktree fetches only the build branch (#742), so this clone's
+        # origin/dev (etc.) is whatever it was at the last fetch. A build cut from
+        # a NEWER dev then merge-bases against the stale ref, attributing every
+        # commit merged into dev since to this build (7.7 KB block where 2.6 KB
+        # covered the real change). Best-effort + per-branch: a slow/missing
+        # branch fetch must never break planning, and one absent branch (no
+        # `master`) must not abort the others.
+        for _base_branch in ("dev", "main", "master"):
+            _git("fetch", "--no-tags", "--quiet", "origin", _base_branch)
+
+        candidates: list[str] = []
+        head_ref = _git("symbolic-ref", "refs/remotes/origin/HEAD")
+        if head_ref.returncode == 0 and head_ref.stdout.strip():
+            candidates.append(head_ref.stdout.strip())
+        candidates += ["origin/dev", "origin/main", "origin/master"]
+
+        base, best = None, None
+        for cand in dict.fromkeys(candidates):  # de-dup, keep order
+            if _git("rev-parse", "--verify", "--quiet", cand).returncode != 0:
+                continue
+            count = _git("rev-list", "--count", f"{cand}..HEAD")
+            if count.returncode != 0 or not count.stdout.strip().isdigit():
+                continue
+            ahead = int(count.stdout.strip())
+            if best is None or ahead < best:
+                base, best = cand, ahead
+        if not base:
+            return []
+        diff = _git("diff", "--name-only", f"{base}...HEAD")
+        if diff.returncode != 0:
+            return []
+        return [ln.strip() for ln in diff.stdout.splitlines() if ln.strip()]
+    except Exception:  # noqa: BLE001 — never break planning on a git read
+        return []
+
+
+def _diff_patch_files(spec_dir: Path) -> list[str]:
+    """Filenames from the snapshotter's ``context/diff.patch`` (or ``[]``)."""
+    try:
+        text = (spec_dir / "context" / "diff.patch").read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001 — diff.patch is optional
+        return []
+    return re.findall(r"^\+\+\+ b/(\S+)", text, flags=re.MULTILINE)
+
+
+# Caps so a large build can't crowd the rest of the prompt out.
+_SYMBOLS_MAX_FILES = 25
+_SYMBOLS_MAX_PER_FILE = 30
+
+
+def _module_symbols(path: Path) -> list[str]:
+    """Top-level defs/classes (+ their non-dunder methods) in a Python file.
+
+    Private names are deliberately INCLUDED: #737's whole failure mode was the
+    planner testing a public ``assert_safe_mcp_url`` it invented while the coder
+    had built a private ``_is_safe_mcp_url_host``. Hiding the private name would
+    reproduce the bug. Best-effort — an unparseable file yields ``[]``.
+    """
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError, ValueError):
+        return []
+    out: list[str] = []
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            out.append(node.name)
+        elif isinstance(node, ast.ClassDef):
+            out.append(node.name)
+            out.extend(
+                f"{node.name}.{m.name}"
+                for m in node.body
+                if isinstance(m, ast.FunctionDef | ast.AsyncFunctionDef)
+                and not m.name.startswith("__")
+            )
+    return out
+
+
+def _build_changed_symbols_block(spec_dir: Path, project_dir: Path) -> str:
+    """List the symbols the build actually delivered, in the plan's target syntax.
+
+    #737: across three runs of one issue the coder produced three different APIs
+    for the same acceptance criteria (a new module, a public assert, a private
+    bool helper). The criteria describe behaviour; the plan names symbols. So a
+    run whose naming diverged from the planner's guess burned the whole replan
+    budget on imports of a function that was never written.
+
+    The build branch is already checked out in ``project_dir`` (this spec's own
+    worktree, #742) before the planner runs (``_add_spec_worktree``), and
+    ``_source_branch_changed_files``
+    already computes what it changed — that list was previously reduced to a
+    one-word language verdict and discarded. This surfaces it, so the planner
+    picks targets that demonstrably exist instead of inferring them from prose.
+
+    Python-only, matching the pre-flight guard that rejects the bad targets
+    (``preflight_static.check_import``). Returns "" when there is nothing
+    reliable to say, leaving planner behaviour exactly as it was.
+    """
+    files = _source_branch_changed_files(spec_dir, project_dir) or _diff_patch_files(
+        spec_dir
+    )
+    impl = [
+        f
+        for f in files
+        if f.endswith(".py")
+        and not Path(f).name.startswith("test_")
+        and "tests/" not in f
+    ]
+    if not impl:
+        return ""
+
+    lines: list[str] = []
+    for rel in impl[:_SYMBOLS_MAX_FILES]:
+        symbols = _module_symbols(project_dir / rel)
+        if not symbols:
+            continue
+        lines.extend(f"- `{rel}::{s}`" for s in symbols[:_SYMBOLS_MAX_PER_FILE])
+        if len(symbols) > _SYMBOLS_MAX_PER_FILE:
+            lines.append(f"- (…{len(symbols) - _SYMBOLS_MAX_PER_FILE} more in {rel})")
+    if not lines:
+        return ""
+    if len(impl) > _SYMBOLS_MAX_FILES:
+        lines.append(f"- (…{len(impl) - _SYMBOLS_MAX_FILES} more changed files)")
+
+    return (
+        "## SYMBOLS THE BUILD DELIVERED\n\n"
+        "These are the Python symbols in the files this build changed, already in "
+        "the `target` syntax you must emit:\n\n"
+        + "\n".join(lines)
+        + "\n\nThese are facts read from the checked-out build branch, not "
+        "suggestions. Pick `target` from this list wherever the deliverable is "
+        "Python.\n\n"
+        "A name that appears in the spec text but NOT here was not built under "
+        "that name — the same behaviour will have shipped as some other symbol "
+        "above. Do not plan a test that imports a name you have not seen in this "
+        "list or Read from `project_dir`: it will be rejected by the import "
+        "pre-flight and cost a replan. When the behaviour you must cover is only "
+        "reachable through a private helper, test it through the public entry "
+        "point that calls it.\n\n"
+    )
+
+
+# Filename-looking tokens in the spec/AC text ("helpers/roman.py", "main.go").
+_SPEC_FILENAME_RE = re.compile(r"[\w./-]+\.\w+")
 
 
 def _unit_framework_for_language(registry: dict, language: str) -> str | None:
@@ -549,11 +772,17 @@ def _build_detected_language_block(spec_dir: Path, project_dir: Path) -> str:
     agent could not classify fell through to the ``(python, pytest)`` default — it
     emitted ``.py`` tests for a ``.go`` target and left ``language: None`` (#443).
 
-    This block reads two deterministic signals and states the ``(language,
-    framework)`` the agent MUST use for unit subtasks:
-      1. the spec's acceptance-criteria *commands* (PRIMARY — ``go test`` → Go);
-      2. the project's manifest files (CORROBORATING — ``go.mod`` → Go), derived
-         from each registry descriptor's ``manifest_signals``.
+    This block reads deterministic signals — ranked strongest-first (#696: on
+    mixed-language repos the deliverable's language must follow what the build
+    changed, never repo-global markers like a leftover ``go.mod``) — and states
+    the ``(language, framework)`` the agent MUST use for unit subtasks:
+      1. extensions of the files changed on the ingest source branch (diff vs
+         the default branch; falls back to the snapshotter's ``diff.patch``);
+      2. extensions of the deliverable files named in the spec/AC text;
+      3. the spec's acceptance-criteria *commands* (``go test`` → Go, #443);
+      4. the project's manifest files (LAST fallback — ``go.mod`` → Go), derived
+         from each registry descriptor's ``manifest_signals``; only trusted when
+         they name exactly one language.
 
     Best-effort: when no signal is found it tells the agent to detect the language
     via Glob rather than guessing. Never raises — degrades to guidance text.
@@ -567,20 +796,30 @@ def _build_detected_language_block(spec_dir: Path, project_dir: Path) -> str:
     except Exception:  # noqa: BLE001 — never break planning on a registry read
         registry = {}
 
-    # (1) PRIMARY: scan the frozen spec text for acceptance-criteria commands.
+    # (1) STRONGEST (#696): the files the build actually changed on the ingest
+    # source branch (or, failing that, the snapshotter's diff.patch).
+    diff_language = _language_from_files(
+        _source_branch_changed_files(spec_dir, project_dir)
+        or _diff_patch_files(spec_dir)
+    )
+
+    # (2) the deliverable files the spec/AC text names by extension.
     spec_text = ""
     for rel in ("context/aifactory_spec.md", "context/source.json"):
         try:
             spec_text += (spec_dir / rel).read_text(encoding="utf-8").lower()
         except Exception:  # noqa: BLE001 — missing/unreadable context is fine
             pass
+    spec_file_language = _language_from_files(_SPEC_FILENAME_RE.findall(spec_text))
+
+    # (3) acceptance-criteria commands (#443 — "go test" → Go).
     ac_language: str | None = None
     for token, language in _AC_COMMAND_LANGUAGE:
         if token in spec_text:
             ac_language = language
             break
 
-    # (2) CORROBORATING: which registered manifests actually exist on disk.
+    # (4) LAST fallback: which registered manifests actually exist on disk.
     manifest_to_lang: dict[str, str] = {}
     for desc in registry.values():
         for sig in desc.manifest_signals:
@@ -590,7 +829,12 @@ def _build_detected_language_block(spec_dir: Path, project_dir: Path) -> str:
     )
     manifest_langs = sorted({manifest_to_lang[f] for f in present_manifests})
 
-    chosen = ac_language or (manifest_langs[0] if len(manifest_langs) == 1 else None)
+    chosen = (
+        diff_language
+        or spec_file_language
+        or ac_language
+        or (manifest_langs[0] if len(manifest_langs) == 1 else None)
+    )
 
     if chosen is None:
         if manifest_langs:
@@ -610,10 +854,12 @@ def _build_detected_language_block(spec_dir: Path, project_dir: Path) -> str:
         )
 
     framework = _unit_framework_for_language(registry, chosen)
-    signal = (
-        f"the acceptance criteria invoke a `{_first_ac_token(spec_text)}` command"
-        if ac_language
-        else f"the project manifest ({', '.join(present_manifests)}) is {chosen}"
+    signal = _language_signal_text(
+        diff_language=diff_language,
+        spec_file_language=spec_file_language,
+        ac_token=_first_ac_token(spec_text) if ac_language else None,
+        manifest_language=chosen,
+        present_manifests=present_manifests,
     )
     corroboration = (
         f" (manifest scan saw: {', '.join(present_manifests)})"
@@ -635,6 +881,26 @@ def _build_detected_language_block(spec_dir: Path, project_dir: Path) -> str:
         f"{header}\n"
         f"This is a **{chosen}** project — {signal}{corroboration}. "
         f"Set `language: {chosen}` on every unit subtask.{fw_clause}{py_warning}\n"
+    )
+
+
+def _language_signal_text(
+    *,
+    diff_language: str | None,
+    spec_file_language: str | None,
+    ac_token: str | None,
+    manifest_language: str | None,
+    present_manifests: list[str],
+) -> str:
+    """Describe which ranked signal picked the language (strongest-first, #696)."""
+    if diff_language:
+        return f"the source-branch diff delivers {diff_language} files"
+    if spec_file_language:
+        return f"the spec's deliverable files are {spec_file_language}"
+    if ac_token:
+        return f"the acceptance criteria invoke a `{ac_token}` command"
+    return (
+        f"the project manifest ({', '.join(present_manifests)}) is {manifest_language}"
     )
 
 
@@ -748,6 +1014,9 @@ def get_tfactory_planner_prompt(spec_dir: Path, project_dir: Path) -> str:
     # other non-Python) target to pytest. Sits next to the registry it references.
     language_block = _build_detected_language_block(spec_dir, project_dir)
     catalog_block = _build_tests_catalog_block(spec_dir)
+    # #737: the symbols the build actually delivered, so targets are read from
+    # the diff rather than inferred from the acceptance criteria's prose.
+    symbols_block = _build_changed_symbols_block(spec_dir, project_dir)
     # RFC-0002 declared test profile (#246) — authoritative over inference.
     profile_block = _build_contract_profile_block(spec_dir)
     # RFC-0012 house testing-standards — follow the team's own test conventions.
@@ -771,6 +1040,7 @@ def get_tfactory_planner_prompt(spec_dir: Path, project_dir: Path) -> str:
         f"{house_block}"
         f"{registry_block}\n"
         f"{language_block}\n"
+        f"{symbols_block}"
         f"{catalog_block}\n"
         "---\n\n"
     )
@@ -988,7 +1258,80 @@ def get_tfactory_planner_replan_prompt(spec_dir: Path, project_dir: Path) -> str
     # forced equivalence lane) is preserved across the loop. Empty when no
     # contract/tier is present → replan behaviour unchanged.
     profile_block = _build_contract_profile_block(spec_dir)
-    return context + profile_block + body
+    # #737: a replan triggered by "module has no attribute X" is the planner
+    # re-guessing a name. Put the real symbols in front of it here too — this is
+    # the loop that burned the 12-replan budget, so it matters more than initial.
+    symbols_block = _build_changed_symbols_block(spec_dir, project_dir)
+    return context + profile_block + symbols_block + body
+
+
+_IMPORT_ROOT_SKIP_DIRS = frozenset(
+    {"tests", "test", "build", "dist", "docs", "doc", "scripts", "examples", "venv"}
+)
+
+
+@lru_cache(maxsize=64)
+def _resolve_import_root(project_dir_str: str) -> str | None:
+    """Resolve the ONE authoritative top-level import package for the SUT (#714).
+
+    Gen-Functional builds a prompt per subtask, so without a shared answer the
+    LLM reasons the import path afresh each time and disagrees across subtasks of
+    the SAME spec (one wrote ``from app.helpers.wordcount import ...`` from the
+    hatch ``packages=["src/app"]`` config; two wrote ``from src.app...`` to match
+    existing tests). At least one style fails at collection. The on-disk layout is
+    the authoritative truth — a src-layout installs ``src/app`` as ``app``, so the
+    importable name never carries the ``src.`` prefix.
+
+    Deterministic (``lru_cache`` per project → computed once, threaded to every
+    subtask): return the package NAME under ``src/`` (src stripped), else a
+    top-level package, else ``None`` when nothing is detectable. The value is a
+    single resolved constant for the whole spec.
+    """
+    project = Path(project_dir_str)
+
+    def _packages_in(parent: Path) -> list[str]:
+        try:
+            entries = list(parent.iterdir())
+        except OSError:
+            return []
+        return sorted(
+            p.name
+            for p in entries
+            if p.is_dir()
+            and not p.name.startswith(".")
+            and p.name not in _IMPORT_ROOT_SKIP_DIRS
+            and (p / "__init__.py").is_file()
+        )
+
+    # src-layout: src/<pkg>/__init__.py → import as <pkg> (never `src.<pkg>`).
+    src_pkgs = _packages_in(project / "src")
+    if src_pkgs:
+        return src_pkgs[0]
+
+    # flat layout: top-level <pkg>/__init__.py.
+    flat_pkgs = _packages_in(project)
+    if flat_pkgs:
+        return flat_pkgs[0]
+
+    return None
+
+
+def _import_root_block(project_dir: Path) -> str:
+    """Prompt line pinning the authoritative import root, or '' when undetectable.
+
+    Threaded into every subtask's SUBTASK CONTEXT so all tests of one spec import
+    the module under test the SAME way (#714). Silent no-op when the layout can't
+    be resolved — the LLM then falls back to its own inference (prior behaviour).
+    """
+    root = _resolve_import_root(str(project_dir))
+    if not root:
+        return ""
+    return (
+        f"- import root:       `{root}` — import the module under test as "
+        f"`from {root}... import ...` (this project installs its package as "
+        f"`{root}`; do NOT prefix imports with `src.`). Use this EXACT root in "
+        "EVERY test of this spec so all subtasks agree.\n"
+    )
 
 
 def get_tfactory_gen_functional_prompt(
@@ -1094,6 +1437,7 @@ def get_tfactory_gen_functional_prompt(
         f"- language:          {language}\n"
         f"- framework:         {framework}\n"
         f"- intent:            {intent}\n"
+        f"{_import_root_block(project_dir)}"
         f"{write_instruction}\n"
         f"- verification:      `{verification_cmd}`\n\n"
         f"Concrete paths for this run:\n\n"
@@ -1146,7 +1490,7 @@ def get_tfactory_gen_functional_prompt(
 # ─── Task 7 (#8) — Evaluator helper ──────────────────────────────────────
 
 
-def _format_signal_value(obj, *keys, default="?"):
+def _format_signal_value(obj: Any, *keys: str, default: Any = "?") -> Any:
     """Duck-typed accessor: try each key/attr in order; return the first
     non-None value. Lets the helper accept dataclass-shaped OR dict-shaped
     signal inputs (commit 5 will pass dataclasses; future callers may
@@ -1203,6 +1547,28 @@ def _format_evaluator_per_test_block(bundle) -> str:
         verdict_str = getattr(verdict, "value", verdict)
         rerun_count = _format_signal_value(stability, "rerun_count", default="?")
         stability_line = f"stability: {verdict_str} ({rerun_count} runs)"
+        # Deterministic failure-kind classifier (#629) — tells a
+        # consistent_fail apart from a real assertion failure vs. an
+        # import/collection error, so the LLM doesn't have to guess (and
+        # the guess doesn't get quoted as fact in the PR comment).
+        failure_kind = _format_signal_value(stability, "failure_kind", default=None)
+        if failure_kind == "assertion":
+            stability_line += (
+                " — the test executed; its assertions failed "
+                "(NOT an import/collection error)"
+            )
+        elif failure_kind == "import":
+            # #892: "the subject module" was a guess of its own — a missing
+            # HARNESS dep (requests, in the api lane) fails collection just the
+            # same, with the subject perfectly importable. State what pytest
+            # actually reported and let the exception line say which module.
+            stability_line += (
+                " — the test never executed: collection failed in the sandbox "
+                "(import/collection error)"
+            )
+            detail = _format_signal_value(stability, "failure_detail", default=None)
+            if isinstance(detail, str) and detail.strip():
+                stability_line += f" — {detail.strip()}"
     else:
         stability_line = "stability: not computed"
 

@@ -26,6 +26,15 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Task Contract schema drift gate (#679)
+        # Fail if the vendored Task Contract schema drifts from the canonical
+        # copy in the Factory hub. Soft-skips ONLY on a transient fetch failure
+        # (timeout/DNS), loudly, so a GitHub outage can't red the build. A
+        # deterministic fetch failure — TLS/certificate error, 404, malformed
+        # JSON — fails the step: it recurs every run, so skipping it would leave
+        # this gate permanently green without ever running (#940, Factory#433).
+        run: python scripts/check_schema_drift.py
+
       - name: Install uv
         uses: astral-sh/setup-uv@v3
         with:
@@ -38,7 +47,6 @@ jobs:
           uv pip install -r requirements.txt
           uv pip install -r ../web-server/requirements.txt
           uv pip install -r ../../tests/requirements-test.txt
-          uv pip install ruff
 
       - name: Agent CLI import guard (#226 / #227)
         # A missing top-level agent module (e.g. qa_loop, spec_commands) must
@@ -48,13 +56,35 @@ jobs:
         run: .venv/bin/python -c "import qa_loop, cli.main, cli.qa_commands, cli.build_commands"
 
       - name: Ruff lint
-        run: apps/backend/.venv/bin/ruff check apps/backend tests
+        # `scripts` joins the full check here rather than staying on the ratchet
+        # alone (#973). The ratchet is a base-vs-head gate BY DESIGN -- it holds
+        # the line at the point of change, which is how lint gets adopted on a
+        # large tree without a big-bang cleanup -- and the corollary is that a
+        # file nobody touches is never evaluated. Six violations sat in
+        # scripts/demo/ on a clean checkout for exactly that reason: nominally
+        # in scope, effectively ungated.
+        #
+        # The fix is NOT to make the ratchet read unchanged files. That would
+        # turn it into this check and destroy the reason it exists. It is to
+        # graduate a package to a full check once its backlog reaches zero,
+        # which is what apps/backend and tests already do here. scripts hit zero
+        # in #973, so it graduates too, and the ratchet goes on doing the job
+        # only it can do (mypy --strict no-regression on changed files).
+        run: apps/backend/.venv/bin/ruff check apps/backend tests scripts
 
       - name: Pytest (skip slow)
         env:
           GRAPHITI_ENABLED: "false"
           APP_DISABLE_AUTH: "true"  # endpoint tests use anonymous TestClient
         run: apps/backend/.venv/bin/pytest tests/ -m "not slow" -q
+
+      - name: Pytest web-server (#681)
+        # apps/web-server/tests was never collected by CI and decayed silently
+        # (see #676/#681). Keep it green here; deps are already installed above.
+        env:
+          GRAPHITI_ENABLED: "false"
+          APP_DISABLE_AUTH: "true"
+        run: apps/backend/.venv/bin/pytest apps/web-server/tests/ -m "not slow" -q
 
   critical-fast:
     name: critical (fast PR gate)
@@ -85,10 +115,11 @@ jobs:
           uv pip install -r requirements.txt
           uv pip install -r ../web-server/requirements.txt
           uv pip install -r ../../tests/requirements-test.txt
-          uv pip install ruff
 
       - name: Ruff lint
-        run: apps/backend/.venv/bin/ruff check apps/backend tests
+        # Same three packages as the backend job above; see the note there for
+        # why `scripts` is checked in full and not left to the ratchet (#973).
+        run: apps/backend/.venv/bin/ruff check apps/backend tests scripts
 
       - name: Pytest (critical lane only)
         env:
@@ -495,7 +526,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version-file: .nvmrc
           cache: "npm"
           cache-dependency-path: package-lock.json
 
@@ -504,6 +535,54 @@ jobs:
 
       - name: Type-check frontend
         run: npm -w apps/frontend-web run typecheck
+
+  frontend-test:
+    name: frontend (vitest)
+    runs-on: ubuntu-latest
+    # Blocking vitest gate (Factory hub #261): runs the apps/frontend-web
+    # component/unit suite so the tests can no longer silently rot.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+
+      - name: Install workspace deps
+        run: npm ci --include=dev
+
+      - name: Run frontend tests
+        run: npm -w apps/frontend-web run test
+
+  frontend-lint:
+    name: frontend (eslint, blocking)
+    runs-on: ubuntu-latest
+    # Blocking ESLint gate (Factory hub #261): ESLint 9 flat config
+    # (typescript-eslint strictTypeChecked + react-hooks + jsx-a11y),
+    # mirroring AIFactory. Tuned green at adoption via a warning baseline
+    # (eslint . --max-warnings <baseline> in apps/frontend-web/package.json)
+    # so net-new ERRORS and net-new WARNINGS over the baseline both fail
+    # the build. Ratchet plan: see eslint.config.js TODOs.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+
+      - name: Install workspace deps (incl. dev)
+        # --include=dev is explicit so the gate never silently skips the
+        # lint toolchain if the runner inherits NODE_ENV=production.
+        run: npm ci --include=dev
+
+      - name: ESLint (strictTypeChecked + react-hooks + jsx-a11y; warning baseline)
+        run: npm -w apps/frontend-web run lint
 
   docker-acceptance:
     name: docker (P0 acceptance)
@@ -557,9 +636,3 @@ jobs:
           CI: "true"
         run: apps/backend/.venv/bin/pytest tests/docker/ -m docker -v
 
-      # NOTE: `npm -w apps/frontend-web run lint` invokes eslint which is
-      # not declared as a devDependency. To enable the lint step, add
-      # eslint + plugins to apps/frontend-web/package.json devDependencies
-      # and uncomment:
-      # - name: Lint frontend
-      #   run: npm -w apps/frontend-web run lint

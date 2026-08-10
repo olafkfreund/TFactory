@@ -27,6 +27,7 @@ Usage::
     )
 """
 
+import html
 import json
 import logging
 import uuid
@@ -355,12 +356,12 @@ class NotificationService:
 
         body_html = f"""
         <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-            <h2 style="color: #0ea5e9;">{_html_escape(title)}</h2>
-            <p>{_html_escape(message)}</p>
+            <h2 style="color: #0ea5e9;">{html.escape(title)}</h2>
+            <p>{html.escape(message)}</p>
             <hr style="border: none; border-top: 1px solid #204660; margin: 16px 0;" />
             <p style="color: #6b7280; font-size: 13px;">
-                Task: {_html_escape(task_id)}<br/>
-                Project: {_html_escape(project_id)}<br/>
+                Task: {html.escape(task_id)}<br/>
+                Project: {html.escape(project_id)}<br/>
                 Time: {now_str}
             </p>
             <p style="color: #9ca3af; font-size: 12px;">Sent by TFactory</p>
@@ -391,11 +392,6 @@ class NotificationService:
             self._store[user_id] = self._store[user_id][
                 : self.MAX_NOTIFICATIONS_PER_USER
             ]
-
-
-def _html_escape(s: str) -> str:
-    """Minimal HTML escaping for notification email content."""
-    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 # ---------------------------------------------------------------------------

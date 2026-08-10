@@ -1,5 +1,5 @@
-blank_issues_enabled: false
+blank_issues_enabled: true
 contact_links:
-  - name: 💡 Feature Request
-    url: https://github.com/olafkfreund/TFactory/discussions
-    about: Suggest new features in GitHub Discussions
+  - name: Factory cockpit (live runs)
+    url: https://cfactory.freundcloud.org.uk
+    about: Watch factory builds, verifications and verdicts live.

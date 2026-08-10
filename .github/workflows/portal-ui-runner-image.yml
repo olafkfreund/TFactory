@@ -1,0 +1,277 @@
+# portal-ui-runner-image.yml — build + push the portal-ui browser runner (#886).
+#
+# Nothing built this image. `docker/tfactory-runner-portal-ui/Dockerfile` vendors
+# the `portal_testing/` harness (`COPY portal_testing/ /app/portal_testing/`), the
+# lane runs it as a k8s Job from
+# `ghcr.io/<owner>/tfactory-runner-portal-ui:latest`, and that tag was a
+# hand-run `docker build` from 2026-06-27. So every fix to the harness was dead on
+# arrival in the cluster: #875/#876/#877 were merged and the Job kept running the
+# June code that joined the `tfactory` Service and 502'd the portal it was
+# testing. A merged fix that never ships is indistinguishable from no fix.
+#
+# Separate workflow rather than a matrix entry in runner-images.yml on purpose:
+#   - the build context is the REPO ROOT (the image vendors the harness), not
+#     `docker/tfactory-runner-<name>/` like every image in that matrix;
+#   - the trigger has to include `portal_testing/**`, which is not a Dockerfile
+#     path, so a matrix entry would still miss the code changes that matter.
+# Same shape as nix-runner-image.yml, which exists for the same reason (an image
+# the cluster must actually be able to pull, not a build-only smoke).
+#
+# Tags: ghcr.io/<owner>/tfactory-runner-portal-ui:{sha-<short>,latest}
+#   sha-<short>  immutable, and what the Job is pinned to (PORTAL_UI_IMAGE in
+#                factory-gitops, bumped by the last step below). A stale
+#                `:latest` is indistinguishable from a current one — that is
+#                precisely how #886 went unnoticed for five weeks — so what
+#                actually runs is named by commit.
+#   latest       kept for ad-hoc/manual runs and as dispatch.py's fallback
+#                default when PORTAL_UI_IMAGE is unset. It is no longer what the
+#                cluster resolves, so it cannot rot silently into the lane again.
+
+name: Build + push portal-ui runner image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'portal_testing/**'
+      - 'docker/tfactory-runner-portal-ui/**'
+      - '.github/workflows/portal-ui-runner-image.yml'
+  pull_request:
+    paths:
+      - 'portal_testing/**'
+      - 'docker/tfactory-runner-portal-ui/**'
+      - '.github/workflows/portal-ui-runner-image.yml'
+
+concurrency:
+  group: "portal-ui-runner-image-${{ github.ref }}"
+  cancel-in-progress: true
+
+# Workflow-level floor only. `permissions:` takes no expression, so a single
+# job spanning both triggers granted `id-token: write` (and `packages: write`)
+# to pull_request runs as well as to the push that signs (#948). The build/
+# publish split below is the narrowing: both elevated capabilities are declared
+# on the push-only `publish` job.
+permissions:
+  contents: read
+
+env:
+  IMAGE: "ghcr.io/${{ github.repository_owner }}/tfactory-runner-portal-ui"
+  GITOPS_REPO: olafkfreund/factory-gitops
+  GITOPS_PATH: apps/tfactory/manifests
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Runs on BOTH triggers: build, load, smoke, gate. Nothing here pushes, so it
+  # needs no registry credentials and no OIDC token.
+  # --------------------------------------------------------------------------
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: tags
+        run: echo "sha=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Build and LOAD (never push here). The smoke below is a publication gate:
+      # a broken image, or an image carrying a stale harness, must not reach the
+      # registry. Same build-then-smoke-then-push order as runner-images.yml;
+      # the push step re-runs the build straight off the GHA cache, so it is
+      # effectively just a registry upload.
+      #
+      # context: . — the repo root, because the Dockerfile COPYs portal_testing/.
+      - name: Build tfactory-runner-portal-ui
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/tfactory-runner-portal-ui/Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.tags.outputs.sha }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=gha,scope=runner-portal-ui
+          cache-to: type=gha,mode=max,scope=runner-portal-ui
+
+      # The baked browsers must be findable at runtime. PLAYWRIGHT_BROWSERS_PATH
+      # points at /ms-playwright; if that ever drifts from the base image the
+      # harness fails in-cluster with "Executable doesn't exist" after the Job
+      # has already been dispatched. Resolve the path, do not launch: GitHub
+      # runners run docker as root, where the chromium sandbox needs
+      # --no-sandbox, and the harness deliberately does not pass it (it runs
+      # nonroot in the cluster). Launching is proven by the live run, not here.
+      - name: Smoke — deps present and browsers resolvable
+        run: |
+          docker run --rm --network=none "${IMAGE}:latest" python -c '
+          import pathlib
+          from importlib.metadata import version
+          from playwright.sync_api import sync_playwright
+          p = sync_playwright().start()
+          exe = pathlib.Path(p.chromium.executable_path)
+          assert exe.is_file(), f"baked chromium missing at {exe}"
+          print("playwright", version("playwright"), "pyotp", version("pyotp"))
+          print("chromium", exe)
+          p.stop()
+          '
+
+      # ---------------------------------------------------------------------
+      # The honesty gate (#886): does this image actually carry the harness on
+      # this commit, or a five-week-old copy?
+      #
+      # Run the harness's OWN test suite against the vendored copy inside the
+      # image. That is not a proxy for "the fixes are in there" — it is the
+      # three mutation-checked regressions from #885 executing against the
+      # bytes that will run in the cluster:
+      #   - test_job_pods_do_not_join_the_tfactory_service   (the 502)
+      #   - test_missing_login_form_is_a_failure_not_an_assumed_session
+      #   - test_published_spec_carries_the_screencast_not_just_screenshots
+      # It also closes a second half of the same gap: `portal_testing/` is
+      # outside pytest.ini's `testpaths = tests`, so nothing in CI ran these
+      # tests at all.
+      #
+      # frameworks/ is mounted rather than baked: test_descriptor_registered
+      # reads frameworks/portal-ui/descriptor.yaml from the repo root, which the
+      # runtime image has no reason to ship. pytest+pyyaml are installed in the
+      # throwaway container, never into the published image.
+      #
+      # apps/backend/tools is mounted for the same reason (#908): dispatch.py
+      # builds its Job manifest from the vendored hub canonical
+      # `tools.runners.job_dispatch` rather than from literals, and
+      # test_dispatch.py runs the canonical's own `assert_job_policy` against
+      # the result. The published image must NOT ship apps/backend — it vendors
+      # portal_testing/ alone, and at runtime only runs portal_testing.run,
+      # which never imports dispatch.py. Mounting it keeps the image
+      # self-contained AND keeps the #885 regressions executing against the
+      # bytes that will run in the cluster, which is the whole point of this gate.
+      # ---------------------------------------------------------------------
+      - name: Gate — the vendored harness in the image is THIS commit's
+        run: |
+          docker run --rm \
+            -v "${PWD}/frameworks:/app/frameworks:ro" \
+            -v "${PWD}/apps/backend/tools:/app/apps/backend/tools:ro" \
+            "${IMAGE}:latest" \
+            sh -c 'pip install --quiet --no-cache-dir pytest pyyaml \
+                   && python -m pytest /app/portal_testing -q'
+
+  # --------------------------------------------------------------------------
+  # Publish — push to main only, and only past the gate in `build` above, which
+  # `needs:` enforces exactly as the step ordering in the single job did.
+  #
+  # Split out purely so the two elevated capabilities are declared on a job that
+  # a pull_request run cannot reach (#948). The push step here re-runs the build
+  # straight off the GHA cache, which is what it already did as a second
+  # build-push-action call in the old single job -- so this is a registry upload
+  # plus a cache pull, not a second build.
+  # --------------------------------------------------------------------------
+  publish:
+    needs: build
+    if: "${{ github.event_name == 'push' }}"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write      # push to GHCR
+      id-token: write      # cosign keyless via GitHub OIDC (Factory#524)
+    # `secrets` is not allowed in a step-level `if:` — hoist to job env, same as
+    # deploy.yml.
+    env:
+      GITOPS_PAT: "${{ secrets.GITOPS_PAT }}"
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: tags
+        run: echo "sha=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: "${{ github.repository_owner }}"
+          # The runner-image packages are user-owned and not linked to this repo,
+          # so GITHUB_TOKEN can 403 on push; prefer the write:packages PAT that
+          # deploy.yml already uses. Never inline a token.
+          password: "${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}"
+
+      - name: Push tfactory-runner-portal-ui to GHCR
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/tfactory-runner-portal-ui/Dockerfile
+          platforms: linux/amd64
+          push: true
+          # See nix-runner-image.yml: GHCR links a package to its repository via
+          # this OCI label, and this image is the other one that was missing it
+          # (#952). Declared on the workflow so a new runner image cannot repeat
+          # the omission silently.
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.tags.outputs.sha }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=gha,scope=runner-portal-ui
+          cache-to: type=gha,mode=max,scope=runner-portal-ui
+
+      # ---------------------------------------------------------------------
+      # Sign what this workflow publishes (Factory#524), before the pin below
+      # moves the lane onto it: an unsigned image the cluster is already pinned
+      # to is the state this issue exists to remove.
+      #
+      # Sign by DIGEST — cosign signatures are digest-keyed, so one signature
+      # covers :sha-<short> and :latest.
+      #
+      # The certificate SAN is derived from the workflow FILE, not the job, so
+      # moving these steps into `publish` leaves the signed identity
+      # byte-identical: .../portal-ui-runner-image.yml@refs/heads/main, which is
+      # what `verify-tfactory-runner-signature` pins.
+      # ---------------------------------------------------------------------
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3.7.0
+
+      - name: Sign image (cosign keyless via Sigstore + GitHub OIDC)
+        run: cosign sign --yes "${IMAGE}@${{ steps.push.outputs.digest }}"
+
+      # Assert the EXACT identity the admission rule pins, anchored at both
+      # ends — not a repo prefix. A self-test looser than the gate it models
+      # passes on signatures the gate rejects (Factory#522).
+      - name: Verify signature (self-test)
+        run: |
+          cosign verify \
+            --certificate-identity-regexp "^https://github\.com/${{ github.repository }}/\.github/workflows/portal-ui-runner-image\.yml@refs/heads/main$" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "${IMAGE}@${{ steps.push.outputs.digest }}"
+
+      # Move the Job's pin to the image just published. Without this the lane
+      # keeps resolving a floating tag and #886 recurs the moment someone builds
+      # by hand again. Same mechanism deploy.yml uses for TFACTORY_IMAGE: a
+      # plain env value in the flat manifests, so `kustomize edit set image`
+      # cannot reach it.
+      - name: Pin PORTAL_UI_IMAGE in factory-gitops
+        if: "${{ env.GITOPS_PAT != '' }}"
+        run: |
+          set -euo pipefail
+          git clone --depth 1 "https://x:${GITOPS_PAT}@github.com/${GITOPS_REPO}.git" gitops
+          cd "gitops/${GITOPS_PATH}"
+          sed -i -E \
+            "s#(name: PORTAL_UI_IMAGE, value: \"${IMAGE}:)[A-Za-z0-9._-]+#\\1${{ steps.tags.outputs.sha }}#" \
+            manifests.yaml
+          # Fail loudly rather than push a no-op. A sed that silently matches
+          # nothing is how TFACTORY_IMAGE sat two weeks stale (#719) while every
+          # artefact except the outcome looked like a working control. The image
+          # is already published at this point, so this failing breaks the run,
+          # not the artefact.
+          grep -qF "name: PORTAL_UI_IMAGE, value: \"${IMAGE}:${{ steps.tags.outputs.sha }}\"" manifests.yaml || {
+            echo "::error::PORTAL_UI_IMAGE pin not found in ${GITOPS_REPO}/${GITOPS_PATH}/manifests.yaml." >&2
+            echo "Add: - { name: PORTAL_UI_IMAGE, value: \"${IMAGE}:${{ steps.tags.outputs.sha }}\" }" >&2
+            exit 1
+          }
+          cd ..
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "cd(tfactory): portal-ui runner ${{ steps.tags.outputs.sha }} [skip ci]" || exit 0
+          git push

@@ -29,14 +29,15 @@ Frequency: not in CI. Run on demand, by hand, when the above conditions hold.
 | `gh` on PATH + logged in | scenario 7 reads PR comments via `gh pr view` | `gh auth status` |
 | `docker` on PATH + daemon running | the Executor runs pytest inside a container; scenario 9 stops it on purpose | `docker info` |
 | `git` on PATH | scenario 4 reads `git log` on the AIFactory branch | — |
-| `python3` + the backend venv | the script uses `apps/backend/.venv/bin/python` for state writes + helpers | `apps/backend/.venv/bin/python --version` |
+| `python3` + the backend venv | a real run imports `apps.backend.*` through `apps/backend/.venv/bin/python`. A dry run only writes the JSON state file, so it falls back to `python3` on PATH when the venv is absent. Override either with `TFACTORY_PYTHON_BIN`. | `apps/backend/.venv/bin/python --version` |
 | **`ANTHROPIC_API_KEY`** in env | every agent calls Claude | `echo $ANTHROPIC_API_KEY \| head -c 7` |
 | `TFACTORY_AIFACTORY_ROOT` set | the local AIFactory project checkout the pipeline operates on | the dir must be a git repo with a feature branch |
 | `TFACTORY_AIFACTORY_BRANCH` set | the feature branch name | `git -C $TFACTORY_AIFACTORY_ROOT branch --show-current` |
 | `TFACTORY_AIFACTORY_PR` set (scenario 7 only) | open PR number to comment on | `gh pr list` in the AIFactory repo |
 
-The script's `--dry-run` mode does NOT require the env vars — useful for
-trying the runner before you assemble all the real machinery.
+The script's `--dry-run` mode does NOT require the env vars, and does not
+require the backend venv either — useful for trying the runner on a fresh
+clone, before you assemble any of the real machinery.
 
 ## Quick start
 

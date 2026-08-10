@@ -1,6 +1,6 @@
 {
   "name": "tfactory",
-  "version": "0.9.3",
+  "version": "0.9.25",
   "description": "TFactory - Web-based AI task management and agent orchestration platform powered by Claude AI",
   "license": "MIT OR GPL-3.0-only",
   "author": "DataSeek Team",
@@ -50,5 +50,9 @@
     "jsdom": "^27.4.0",
     "playwright": "^1.60.0",
     "typescript": "^5.0.0"
+  },
+  "overrides": {
+    "@babel/core": "^7.29.6",
+    "esbuild": "^0.28.1"
   }
 }

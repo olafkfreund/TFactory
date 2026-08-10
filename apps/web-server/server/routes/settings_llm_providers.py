@@ -15,7 +15,7 @@ import logging
 from pathlib import Path
 
 from fastapi import APIRouter, Body, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -330,7 +330,7 @@ class OpenAICompatTestRequest(BaseModel):
     """Request model for testing an OpenAI-compatible server connection."""
 
     baseUrl: str = Field(..., description="Base URL of the OpenAI-compatible server")
-    apiKey: str | None = Field(None, description="Optional API key for authentication")
+    apiKey: SecretStr | None = Field(None, description="Optional API key for authentication")
 
 
 @router.post("/openai-compat/test")
@@ -346,7 +346,7 @@ async def test_openai_compat_connection(request: OpenAICompatTestRequest):
 
         headers: dict[str, str] = {}
         if request.apiKey:
-            headers["Authorization"] = f"Bearer {request.apiKey}"
+            headers["Authorization"] = f"Bearer {request.apiKey.get_secret_value()}"
 
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.get(f"{request.baseUrl}/v1/models", headers=headers)

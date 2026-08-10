@@ -26,10 +26,17 @@ Reused seams (no new infra):
   - The durable Postgres ``job-state`` row (#465/#468) — the Job writes its own
     terminal row; the control plane **reconciles by polling Postgres** so a
     missed completion event never strands a job (concurrency-conventions.md §3).
-  - The shared job-dispatch contract constants (hub ``scripts/job_dispatch.py``):
-    Job naming ``factory-<service>-<job_id_short>`` and the reconcile-by-poll
-    + terminal-state semantics, restated here (TFactory does not vendor the hub
-    builder; it reuses its own kube_sandbox builder which predates it).
+  - The shared job-dispatch contract (hub ``scripts/job_dispatch.py``, vendored
+    byte-exact at ``tools/runners/job_dispatch.py``): Job naming
+    ``factory-<service>-<job_id_short>``, the DNS-1123 shortener, the shell
+    quoter, and the reconcile-by-poll + terminal-state semantics are IMPORTED
+    from it (Factory#483). They used to be restated here under a comment naming
+    that file, which is a fork with a citation — nothing compared the copy to
+    its source, and the pod-label rule from the same contract went on to break
+    three services independently. This module still builds its own manifest (it
+    wraps kube_sandbox, seeds credentials and forwards provider env, none of
+    which the hub builder models); only the rules that must agree fleet-wide
+    come from the shared file.
 
 Reaper: ``reap_if_orphaned`` marks a vanished / deadline-exceeded Job ``stuck``
 in the durable store so a no-verdict verify surfaces instead of stranding (#464).
@@ -55,28 +62,34 @@ needs a real cluster or Postgres.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
-import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from tools.runners import job_dispatch
+
 _log = logging.getLogger(__name__)
 
 # ── Dispatch/reconcile contract (hub apis/concurrency-conventions.md §3) ──────
+#
+# Factory#483: these are RE-EXPORTED from the vendored hub canonical, not
+# restated. Every name below used to be a hand-copy sitting under a comment that
+# named its source, which is precisely what nothing can check: a drift gate needs
+# a vendored file to compare, and there was none. The gate now has one.
 SERVICE = "tfactory"
 KIND = "verify"
-# Job named factory-tfactory-<job_id_short> (hub job_dispatch.JOB_NAME_PREFIX).
-JOB_NAME_PREFIX = "factory"
-_DNS_LABEL_MAX = 63
+JOB_NAME_PREFIX = job_dispatch.JOB_NAME_PREFIX
+_DNS_LABEL_MAX = job_dispatch._DNS_LABEL_MAX
 # Canonical terminal lifecycle states a reconciler treats as done with the row.
-TERMINAL_STATES = ("done", "failed", "stuck")
+TERMINAL_STATES = job_dispatch.TERMINAL_STATES
 # The control plane reconciles by polling the durable job-state table, so a
 # missed completion event never strands a job; reporting is idempotent.
-RECONCILE_BY = "postgres-poll"
+RECONCILE_BY = job_dispatch.RECONCILE_BY
 
 _INPOD = "inpod"
 _KUBEJOB = "kubejob"
@@ -198,7 +211,16 @@ _SDK_PASSTHROUGH_ENV: tuple[str, ...] = (
     "OPENAI_COMPATIBLE_MAX_TOKENS",
     "GEMINI_API_KEY",
     "GOOGLE_API_KEY",
+    # #871 — the gemini/antigravity CLI refuses to run in an "untrusted"
+    # workspace and exits BEFORE any API call. providers/gemini_agentic.py spawns
+    # that CLI as a subprocess, which inherits the Job container's env, so the
+    # key alone is not enough: without this the Gemini verify leg stalls with no
+    # request ever leaving the pod. Same fix AIFactory made on 2026-06-13.
+    "GEMINI_CLI_TRUST_WORKSPACE",
     "OLLAMA_API_KEY",
+    "OLLAMA_BASE_URL",  # #870 — self-hosted ollama address; without it the Job
+    # falls back to the provider's http://localhost:11434 default, where nothing
+    # listens inside the Job pod.
     "OLLAMA_CLOUD_BASE_URL",
     "GITHUB_TOKEN",
     "GITHUB_MODELS_DEFAULT",
@@ -408,14 +430,18 @@ def verify_exec_mode() -> str:
 
 
 def _short(job_id: str) -> str:
-    """k8s-safe short suffix from a job_id (DNS-1123, <=20 chars)."""
-    s = re.sub(r"[^a-z0-9-]", "-", job_id.lower()).strip("-")
-    return (s[-20:] or "job").strip("-") or "job"
+    """k8s-safe short suffix from a job_id (DNS-1123, <=20 chars).
+
+    The hub canonical's shortener (Factory#483). This was a byte-identical
+    hand-copy; keeping the local name keeps every call site unchanged while the
+    behaviour now comes from the file the drift gate compares.
+    """
+    return job_dispatch._short(job_id)
 
 
 def verify_job_name(job_id: str) -> str:
     """Job name ``factory-tfactory-<job_id_short>`` (DNS-1123 safe)."""
-    return f"{JOB_NAME_PREFIX}-{SERVICE}-{_short(job_id)}"
+    return job_dispatch.job_name(SERVICE, job_id)
 
 
 def _verify_command(
@@ -555,12 +581,21 @@ def _inject_verify_seed_creds(manifest: dict[str, Any]) -> None:
         f"chmod -R g+rwX {_VERIFY_HOME}/.claude {_VERIFY_HOME}/.codex "
         f"{_VERIFY_HOME}/.gemini {_VERIFY_HOME}/.config || true"
     )
+    # Same hardened container securityContext as the lane/seed containers
+    # (#651): no escalation, drop ALL + the co-mount add-backs. busybox runs as
+    # root (required today: the emptyDir home volumes are root-owned and the
+    # copied files stay world-readable for the nonroot verify container).
+    from tools.runners.kube_sandbox import (  # noqa: PLC0415 - lazy by design
+        CONTAINER_SECURITY_CONTEXT,
+    )
+
     pod.setdefault("initContainers", []).append(
         {
             "name": "seed-creds",
             "image": "busybox:1.36",
             "command": ["sh", "-c"],
             "args": ["\n".join(lines)],
+            "securityContext": dict(CONTAINER_SECURITY_CONTEXT),
             "volumeMounts": [
                 *home_mounts,
                 {"name": "cli-creds", "mountPath": "/seed", "readOnly": True},
@@ -641,9 +676,13 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
 
     pod_spec = manifest["spec"]["template"]["spec"]
     # The verify Job (unlike a pure lane) writes its job-state row, so it gets the
-    # dedicated SA. Token automount stays False — the SA is for identity/RBAC, the
-    # store write goes over DATABASE_URL, not the k8s API.
+    # dedicated SA. It ALSO dispatches nested per-lane Jobs (the Nix pytest/browser
+    # lanes call ``create_namespaced_job`` via KubeJobSandbox), so it needs the SA
+    # token actually mounted — otherwise the nested dispatch fails to authenticate
+    # to the k8s API and the lane silently falls back to the host runner. Leaf lane
+    # Jobs keep ``automountServiceAccountToken: False`` (they need no API).
     pod_spec["serviceAccountName"] = cfg.service_account
+    pod_spec["automountServiceAccountToken"] = True
 
     env = [
         {"name": "JOB_ID", "value": cfg.job_id},
@@ -667,6 +706,71 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
     db_url = os.environ.get(cfg.database_url_env)
     if db_url:
         env.append({"name": cfg.database_url_env, "value": db_url})
+    # Propagate the Nix-lane sandbox coordinates so the verify pipeline running
+    # inside THIS Job can dispatch the nested per-task Nix Job
+    # (run_pytest_lane_via_nix -> nix_runner_from_env reads these). They live on
+    # the control-plane Deployment but are NOT inherited by the dispatched Job, so
+    # without this ``nix_runner_from_env`` returns None inside the Job and the lane
+    # silently falls back to the host runner — the RFC-0005 flake env then never
+    # runs in the kubejob path. (The mounted SA token lets the nested create Job
+    # authenticate; these tell it what image/PVCs to use.)
+    for _nix_var in (
+        "TFACTORY_NIX_RUNNER_IMAGE",
+        "TFACTORY_WORKSPACES_PVC",
+        "TFACTORY_NIX_STORE_PVC",
+        # #623: MUST travel with TFACTORY_NIX_STORE_PVC. nix_runner_from_env runs
+        # again inside the dispatched Job; if the flag does not reach it, it reads
+        # False there and re-mounts the very RWO PVC the flag exists to drop —
+        # the flip lands on the control plane and silently misses the nested Job.
+        # That half-applied shape is precisely how AIFactory#840 broke its gate
+        # lane (the build path was flipped, the gate path was not).
+        "TFACTORY_NIX_IN_IMAGE",
+        "TFACTORY_SANDBOX_NAMESPACE",
+    ):
+        _nix_val = os.environ.get(_nix_var)
+        if _nix_val:
+            env.append({"name": _nix_var, "value": _nix_val})
+    # Forward the triager side-effect flags so the verdict actually surfaces on
+    # the PR from INSIDE this Job (#719). The evaluator+triager run in this verify
+    # Job (TFACTORY_AUTO_TRIAGE), but the Job env is a curated allowlist — the
+    # TFACTORY_TRIAGER_* flags live only on the control-plane Deployment, so
+    # without this the triager reads them unset here and git_writer / pr_comment /
+    # pr_status all fall back to dry-run: the verdict is computed but never posted.
+    for _sfx_var in (
+        "TFACTORY_TRIAGER_GIT_WRITE",
+        "TFACTORY_TRIAGER_PR_COMMENT",
+        "TFACTORY_PR_STATUS",
+    ):
+        _sfx_val = os.environ.get(_sfx_var)
+        if _sfx_val:
+            env.append({"name": _sfx_var, "value": _sfx_val})
+    # Same allowlist trap as the two blocks above, third instance (#1012). The
+    # agent's OS-level bash sandbox (bubblewrap) defaults ON in core.client, and
+    # the control-plane Deployment sets AIFACTORY_BASH_SANDBOX=false because this
+    # is k3d. That value does NOT reach the dispatched Job, so the agent inside
+    # re-enables bwrap, and this pod's own hardening then denies it: the pod
+    # carries seccompProfile RuntimeDefault (kube_sandbox.POD_SECURITY_CONTEXT,
+    # #651), which blocks unshare(CLONE_NEWUSER) — so every agent Bash call dies
+    # with "bwrap: No permissions to create a new namespace", no test process
+    # ever starts, and the run still reaches `triaged` with all five lanes
+    # `pending`. Proven on the factory cluster by holding the pod spec fixed and
+    # varying one field: RuntimeDefault + caps dropped -> EPERM; Unconfined +
+    # caps dropped -> OK; RuntimeDefault + caps KEPT -> EPERM. Seccomp is the
+    # cause and capabilities are irrelevant, so relaxing caps would fix nothing.
+    # Propagating the operator's existing choice keeps this Job strictly more
+    # confined than the control plane it inherits from (it additionally has
+    # RuntimeDefault seccomp, dropped caps, a per-task NetworkPolicy and an
+    # ephemeral filesystem), so nothing is weakened to make lanes runnable.
+    _bash_sandbox = os.environ.get("AIFACTORY_BASH_SANDBOX")
+    if _bash_sandbox:
+        env.append({"name": "AIFACTORY_BASH_SANDBOX", "value": _bash_sandbox})
+    # This Job mounts the workspaces PVC (data root) at ``cfg.mount`` (/work), NOT
+    # at the control plane's /home/nonroot/.tfactory. The nested per-task Nix Job
+    # derives its co-mount subPath via pvc_subpath(path, data_root); without the
+    # right data root that returns None and the Nix Job mounts nothing — an empty
+    # /work where the SUT is unimportable, so every AC rejects (consistent_fail).
+    # Tell nix_runner_from_env where the PVC actually is inside THIS Job (#623).
+    env.append({"name": "TFACTORY_DATA_ROOT", "value": cfg.mount})
     # LLM credential (TFactory #466 env round-4): the verify pipeline's evaluator
     # calls create_client → require_auth_token. Without it the Job died
     # ``ValueError: No OAuth token found``. Inject CLAUDE_CODE_OAUTH_TOKEN via the
@@ -677,6 +781,25 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
     if oauth_env is not None:
         env.append(oauth_env)
     env.extend(_provider_env_entries())
+    # Trace context + OTLP config, so the verify Job's spans are children of the
+    # span that dispatched it instead of a trace ending here (Factory#638). This
+    # builder does not go through the hub's ``build_job_manifest`` — it wraps
+    # ``kube_sandbox`` and assembles its own env — so it inherits none of
+    # ``trace_env`` for free and has to ask for it explicitly.
+    #
+    # This line is HALF of the fix and is worthless on its own: it lands correct-
+    # looking trace configuration, and a Job with nothing to open a span with
+    # still ends the trace here while LOOKING instrumented. The other half is
+    # ``agents.verify_pipeline`` calling ``job_tracing.init_agent_tracing()`` at
+    # entry; the two must ship together. Factory#607's mutation is the proof that
+    # configuration is not coverage — a FABRICATED traceparent still lands a
+    # healthy-looking ``<service>-job`` span, under a trace nobody is watching.
+    #
+    # Adds nothing at all when this pod has no OTEL_EXPORTER_OTLP_ENDPOINT (dev,
+    # tests, off-cluster), and no TRACEPARENT when there is no active span — an
+    # unparented job span is volume with no question attached. The collector
+    # credential crosses as a ``secretKeyRef``, never a literal.
+    env.extend(job_dispatch.trace_env(SERVICE))
     container = pod_spec["containers"][0]
     container["env"] = env
 
@@ -691,7 +814,8 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
 
 
 def _shq(s: str) -> str:
-    return "'" + s.replace("'", "'\\''") + "'"
+    """POSIX single-quote a command (Factory#483: the hub canonical's quoter)."""
+    return job_dispatch._shq(s)
 
 
 # ── Dispatch (opt-in) ────────────────────────────────────────────────────────
@@ -752,6 +876,13 @@ async def dispatch_verify_job(  # noqa: PLR0913 - 3 domain args + injectable sea
         "namespace": namespace,
         "job_name": name,
         "node": None,
+        # #767: the reaper marks the durable row stuck but had no way to reach
+        # the workspace, so a deadline-killed Job left status.json saying
+        # "evaluating" forever — indistinguishable from still working, and with
+        # the Job GC'd 5 minutes later there was nothing left to explain it.
+        # This is the control plane's own path (the Job mounts it elsewhere via
+        # spec_subpath), which is exactly what the control-plane reaper needs.
+        "spec_dir": str(spec_dir),
     }
 
     # Record the queued row + worker_ref BEFORE applying the Job, so a reaper can
@@ -1007,6 +1138,14 @@ async def reconcile_verify_job(
         return None
 
 
+# Spec-level statuses that already represent a finished verify. A reap must
+# never clobber one — the Job's own verdict always wins over the reaper's guess.
+_SPEC_TERMINAL_STATUSES = frozenset({"triaged", "failed", "generated_empty"})
+
+# A probe_fn predating #1014 returns (exists, active) with no success flag.
+_LEGACY_PROBE_ARITY = 2
+
+
 def is_terminal_record(record: dict[str, Any] | None) -> bool:
     """True when a reconciled record has reached a terminal lifecycle state."""
     if not record:
@@ -1019,6 +1158,7 @@ async def reap_if_orphaned(
     *,
     job_exists: bool,
     job_active: bool,
+    job_succeeded: bool = False,
     store: Any = None,
 ) -> dict[str, Any] | None:
     """Reaper: mark a vanished / deadline-exceeded verify Job ``stuck`` (#464).
@@ -1043,22 +1183,71 @@ async def reap_if_orphaned(
     if job_exists and job_active:
         return None  # still running — nothing to reap
 
-    reason = (
-        "verify Job vanished without writing a terminal job-state row "
-        "(orphaned dispatch)"
-        if not job_exists
-        else "verify Job finished (deadline/backoff) with no verdict — "
-        "lanes pending, no verdict (#464)"
-    )
+    if not job_exists:
+        reason = (
+            "verify Job vanished without writing a terminal job-state row "
+            "(orphaned dispatch)"
+        )
+    elif job_succeeded:
+        # #1014: a Job that exited 0 finished its stage — typically generation,
+        # which then dispatches the evaluate Job. Its row is still active only
+        # because the successor has not written one yet, so closing the row is
+        # right but calling the SPEC failed is not: observed live, a run was
+        # marked failed at 18:28:37, a successor Job started at 18:28:39, and it
+        # reached `triaged` normally at 18:42. Note a "is a successor live?"
+        # check would not have helped — the successor did not exist yet.
+        reason = (
+            "verify Job completed with no verdict row (stage handoff); the row "
+            "is closed but the spec is left alone — a successor may own it"
+        )
+    else:
+        reason = (
+            "verify Job finished (deadline/backoff) with no verdict — "
+            "lanes pending, no verdict (#464)"
+        )
     try:
         async with _store_for(store) as (s, _owned):
             rec: dict[str, Any] | None = await s.mark_stuck(job_id, reason)
-            return rec
     except Exception:  # noqa: BLE001
         _log.warning(
             "[verify-dispatch] reap failed for job_id=%s", job_id, exc_info=True
         )
         return None
+    # Marking the row is not enough: every reader that asks "is this spec done?"
+    # reads status.json, so a reaped row with an untouched workspace still looks
+    # busy forever (#767). Observed on spec 008: row reapable, status.json stuck
+    # on `evaluating` 87 minutes after the Job was killed at its deadline and
+    # GC'd. Best-effort — a workspace we cannot write must never break the reap.
+    # #1014: only a Job that DIED speaks for the spec. One that exited 0 has
+    # handed off, so writing `failed` into the shared status.json would fail a
+    # run that is still going — the row is per-Job, the spec is per-run.
+    if not job_succeeded:
+        _mark_spec_reaped(record, reason)
+    return rec
+
+
+def _mark_spec_reaped(record: dict[str, Any], reason: str) -> None:
+    """Write a terminal status into the reaped Job's workspace, if we can find it."""
+    ref = record.get("worker_ref") or {}
+    spec_dir = ref.get("spec_dir") if isinstance(ref, dict) else None
+    if not spec_dir:
+        return  # pre-#767 row: no workspace recorded, nothing to write
+    path = Path(spec_dir) / "status.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return
+        if data.get("status") in _SPEC_TERMINAL_STATUSES:
+            return  # the Job wrote its own verdict first — never overwrite it
+        data["status"] = "failed"
+        data["phase"] = "verify_job_reaped"
+        data["reaped_reason"] = reason
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        _log.warning("[verify-dispatch] reaped spec %s: %s", spec_dir, reason)
+    except (OSError, ValueError):
+        _log.warning(
+            "[verify-dispatch] could not mark spec %s reaped", spec_dir, exc_info=True
+        )
 
 
 # ── Control-plane reconcile + reap loop (wired into the app lifespan) ──────────
@@ -1078,16 +1267,28 @@ def _is_k8s_job_ref(record: dict[str, Any]) -> bool:
 
 async def _probe_job(
     namespace: str, job_name: str, *, probe_fn: Any = None
-) -> tuple[bool, bool]:
-    """Return ``(job_exists, job_active)`` for the named Job. Fail-safe.
+) -> tuple[bool, bool, bool]:
+    """Return ``(job_exists, job_active, job_succeeded)``. Fail-safe.
+
+    ``job_succeeded`` matters because ``active=False`` alone conflates two
+    opposite outcomes: a Job killed at its deadline, and a Job that finished its
+    stage cleanly and dispatched the next one. Reaping treated both as death and
+    failed live runs (#1014).
 
     Defaults to a lazy in-cluster ``read_namespaced_job`` probe; injectable for
-    tests. On any probe error the Job is reported ``(exists=True, active=True)``
-    so a transient API blip never makes the reaper reap a live verify.
+    tests. A ``probe_fn`` may return the 2-tuple this used to have — it is read
+    as "succeeded unknown", which preserves the old behaviour for existing
+    callers rather than silently claiming success.
+
+    On any probe error the Job is reported active so a transient API blip never
+    reaps a live verify.
     """
     if probe_fn is not None:
-        result: tuple[bool, bool] = await probe_fn(namespace, job_name)
-        return result
+        result = await probe_fn(namespace, job_name)
+        if len(result) == _LEGACY_PROBE_ARITY:
+            return result[0], result[1], False
+        exists, active, succeeded = result
+        return exists, active, succeeded
     try:
         api, batch = await _k8s_batch()
         try:
@@ -1101,10 +1302,11 @@ async def _probe_job(
             job_name,
             exc_info=True,
         )
-        return True, True
+        return True, True, False
     st = getattr(job, "status", None)
     active = bool(getattr(st, "active", 0)) if st is not None else False
-    return True, active
+    succeeded = bool(getattr(st, "succeeded", 0)) if st is not None else False
+    return True, active, succeeded
 
 
 async def reconcile_and_reap_once(*, store: Any = None, probe_fn: Any = None) -> int:
@@ -1131,11 +1333,15 @@ async def reconcile_and_reap_once(*, store: Any = None, probe_fn: Any = None) ->
                 # Reconcile first: a terminal row the Job already wrote wins.
                 if is_terminal_record(await reconcile_verify_job(job_id, store=s)):
                     continue
-                exists, active = await _probe_job(
+                exists, active, succeeded = await _probe_job(
                     namespace, job_name, probe_fn=probe_fn
                 )
                 reaped_rec = await reap_if_orphaned(
-                    job_id, job_exists=exists, job_active=active, store=s
+                    job_id,
+                    job_exists=exists,
+                    job_active=active,
+                    job_succeeded=succeeded,
+                    store=s,
                 )
                 if reaped_rec is not None:
                     reaped += 1

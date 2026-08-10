@@ -107,6 +107,13 @@ class CompletionEnvelope(TypedDict, total=False):
     # RFC-0007 / RFC-0006 best-effort annotations.
     access: dict[str, Any]
     verification: dict[str, Any]
+    # #650: agent-added dependency review — the 6th verdict signal
+    # (pass/fail/advisory/skipped + findings; gating on fail).
+    dependency_review: dict[str, Any]
+    # #896: acceptance criteria that contradict each other, so no test could
+    # satisfy them. A defect in the SPEC, not the run — routes to human_review
+    # with the contradiction named rather than surfacing as a stuck subtask.
+    criterion_conflict: dict[str, Any]
 
 
 def new_event_id() -> str:

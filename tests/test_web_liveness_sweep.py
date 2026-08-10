@@ -52,7 +52,9 @@ def test_run_one_sweep_flags_stalled(
 
     assert by_dir[stale].stalled is True
     assert by_dir[fresh].stalled is False
-    assert json.loads((stale / "status.json").read_text())["status"] == "stalled"
+    # Inline `generating` stall → terminal `failed` (leaves the cockpit's LIVE
+    # AGENTS instead of a `stalled` limbo, #742/#774).
+    assert json.loads((stale / "status.json").read_text())["status"] == "failed"
     assert json.loads((fresh / "status.json").read_text())["status"] == "triaged"
 
 

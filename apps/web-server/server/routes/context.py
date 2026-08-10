@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path as FilePath
 
 from fastapi import APIRouter, Path, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, SecretStr
 
 logger = logging.getLogger(__name__)
 
@@ -21,37 +21,41 @@ router = APIRouter()
 # ============================================
 
 class TestConnectionRequest(BaseModel):
+    __test__ = False  # not a pytest test class despite the Test* name
+
     dbPath: str | None = None
     database: str | None = None
 
 
 class ValidateApiKeyRequest(BaseModel):
     provider: str
-    apiKey: str
+    apiKey: SecretStr
 
 
 class ProjectEnvUpdate(BaseModel):
     """Model for updating project environment configuration."""
-    githubToken: str | None = None
+    githubToken: str | None = Field(default=None, repr=False)
     githubRepo: str | None = None
     gitProvider: str | None = None
-    gitToken: str | None = None
+    gitToken: str | None = Field(default=None, repr=False)
     gitRepo: str | None = None
     gitBaseUrl: str | None = None
     gitOrg: str | None = None
     gitProject: str | None = None
     graphitiEnabled: bool | None = None
     enableFancyUi: bool | None = None
-    claudeToken: str | None = None
+    claudeToken: str | None = Field(default=None, repr=False)
     # Graphiti Provider Config (nested object from frontend)
     graphitiProviderConfig: dict | None = None
 
 
 class TestGraphitiRequest(BaseModel):
+    __test__ = False  # not a pytest test class despite the Test* name
+
     embeddingProvider: str
     embeddingModel: str | None = None
-    openaiApiKey: str | None = None
-    voyageApiKey: str | None = None
+    openaiApiKey: SecretStr | None = None
+    voyageApiKey: SecretStr | None = None
     ollamaBaseUrl: str | None = None
     database: str | None = None
     dbPath: str | None = None

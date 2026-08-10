@@ -2,13 +2,16 @@
 Git, Ollama, MCP, and utility routes.
 """
 
+import ipaddress
 import json
 import logging
 import re
 import shlex
 import shutil
+import socket
 import subprocess
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -766,18 +769,62 @@ class McpServerConfig(BaseModel):
 
 
 @mcp_router.post("/health")
+def _is_safe_mcp_url_host(url: str) -> bool:
+    """SSRF guard for a request-supplied MCP server URL (companion to
+    ``_safe_ollama_base_url``).
+
+    MCP servers commonly run on localhost/LAN, so loopback and private ranges are
+    allowed by design — but EVERY resolved address is checked and cloud-metadata /
+    link-local (``169.254.0.0/16``, ``fe80::/10``), reserved, multicast and
+    unspecified addresses are blocked, so a configured value cannot be pointed at
+    the instance-metadata service or a link-local target. Loopback is tested
+    BEFORE the reserved test so IPv6 ``::1`` (which ``is_reserved`` also matches)
+    is not wrongly rejected. An unresolvable host fails closed.
+
+    ponytail: check-then-connect — urllib re-resolves the host, so a DNS-rebinding
+    attacker who controls the name could still differ between check and request;
+    pin the resolved IP if that vector matters.
+    """
+    hostname = urlparse(url).hostname
+    if not hostname:
+        return False
+    try:
+        addresses = socket.getaddrinfo(
+            hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM
+        )
+    except (socket.gaierror, UnicodeError, OSError):
+        logger.warning("MCP health check: cannot resolve host %r (blocked)", hostname)
+        return False
+    if not addresses:
+        return False
+    for info in addresses:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return False
+        if ip.is_loopback:
+            continue  # local MCP server — allowed (before the reserved test for ::1)
+        if ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
+            logger.warning(
+                "MCP health check: blocked unsafe address %s for host %r", ip, hostname
+            )
+            return False
+        # private (10/8, 172.16/12, 192.168/16) and public both fall through = allowed
+    return True
+
+
 async def check_mcp_health(server: McpServerConfig):
     """Check health of an MCP server."""
     if server.type == "http" and server.url:
         import urllib.request
-        from urllib.parse import urlparse
 
         # SSRF guard: an MCP server URL is configured by the operator themselves
         # and, by design, very often points at a local/LAN endpoint (most MCP
-        # servers run on localhost). Blocking private/loopback hosts would break
-        # that intended use case, so we deliberately do not. We DO restrict the
-        # scheme to http/https so a configured value cannot be coerced into a
-        # file://, gopher://, ftp:// (etc.) request.
+        # servers run on localhost). We restrict the scheme to http/https so a
+        # configured value cannot be coerced into a file://, gopher://, ftp://
+        # (etc.) request, AND (SSRF hardening) resolve the host and block
+        # cloud-metadata / link-local / reserved addresses — loopback + private
+        # stay allowed for the intended LAN use case (_is_safe_mcp_url_host).
         parsed = urlparse(server.url)
         if parsed.scheme not in ("http", "https") or not parsed.hostname:
             return {
@@ -786,6 +833,15 @@ async def check_mcp_health(server: McpServerConfig):
                     "serverId": server.id,
                     "status": "unhealthy",
                     "message": "Unsupported or invalid server URL",
+                },
+            }
+        if not _is_safe_mcp_url_host(server.url):
+            return {
+                "success": True,
+                "data": {
+                    "serverId": server.id,
+                    "status": "unhealthy",
+                    "message": "Server URL resolves to a blocked address",
                 },
             }
         try:

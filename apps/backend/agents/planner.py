@@ -27,9 +27,15 @@ import asyncio
 import json
 import logging as _logging
 import os
+import subprocess
 import traceback
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from test_plan import ImplementationPlan, Subtask
+
+from phase_config import DEFAULT_PHASE_MODELS, get_phase_model, resolve_model_id
 
 from .auth_tagging import apply_requires_auth_from_config
 from .followup_planner import run_followup_planner  # noqa: F401 — back-compat re-export
@@ -83,11 +89,17 @@ def _truncate_subtasks(plan, cap: int) -> int:
     return dropped
 
 
-async def _resolve_planner_client(spec_dir: Path, project_dir: Path):
+async def _resolve_planner_client(
+    spec_dir: Path, project_dir: Path, model_override: str | None = None
+):
     """Resolve the Claude Agent SDK client for the planning phase.
 
     Wraps the inherited `create_client` / `get_provider` factories so
     tests can monkey-patch this one function instead of two.
+
+    ``model_override`` forces a specific model instead of the per-phase resolution
+    — used by the #785 fallback to recover on the known-good default model when the
+    configured planning provider fails to emit a plan.
     """
     # Heavy imports deferred to runtime so test_planner_stub.py can
     # mock the SDK surface without forcing the full backend chain
@@ -101,7 +113,7 @@ async def _resolve_planner_client(spec_dir: Path, project_dir: Path):
     )
     from providers.factory import get_provider
 
-    planning_model = get_phase_model(spec_dir, "planning", None)
+    planning_model = model_override or get_phase_model(spec_dir, "planning", None)
     provider_name = infer_provider_from_model(planning_model)
     if provider_name == "claude":
         thinking_budget = get_phase_thinking_budget(spec_dir, "planning")
@@ -345,6 +357,31 @@ def _check_existing_phases_preserved(
     return True, ""
 
 
+def _session_error_text(error_info: object, when: str) -> str:
+    """Describe why a planner session failed, using what the SDK reported.
+
+    ``run_agent_session`` already classifies (``authentication``, ``rate_limit``,
+    ...) and sanitises the failure. Recording a fixed "returned status=error"
+    threw that away, so a dead credential and a broken provider produced the
+    same characterless record and the task API surfaced no cause at all (#854).
+    """
+    info = error_info if isinstance(error_info, dict) else {}
+    kind = str(info.get("type") or "").strip()
+    detail = str(info.get("message") or "").strip()[:300]
+    if not detail:
+        # Genuinely nothing to add — say that, rather than implying a detail.
+        return f"{when} session failed with no detail reported by the SDK"
+    return f"{when} session failed ({kind or 'unclassified'}): {detail}"
+
+
+# What an error_kind means when the session left nothing behind to quote. Only
+# `missing` can reach here empty — the others carry the parse/validation text —
+# but the fallback keeps any future kind from trailing off into nothing.
+_ERR_KIND_MEANING = {
+    "missing": "the session ended without writing test_plan.json",
+}
+
+
 async def _run_session_with_retry(
     spec_dir: Path,
     project_dir: Path,
@@ -365,15 +402,18 @@ async def _run_session_with_retry(
     ``planner_failed`` status patch, so the caller just returns ``False``.
     """
     client = await _resolve_planner_client(spec_dir, project_dir)
-    session_status, _response, _error = await _invoke_session(
+    session_status, _response, error_info = await _invoke_session(
         client, prompt, spec_dir, verbose
     )
     if session_status == "error":
+        # No retry, deliberately. The dominant cause here is a dead credential
+        # (#854), which is not transient: a second full session costs the same
+        # tokens and the same minutes to reach the same verdict.
         _write_status_patch(
             spec_dir,
             status="planner_failed",
             phase=session_error_phase,
-            planner_error="run_agent_session returned status=error",
+            planner_error=_session_error_text(error_info, "first"),
         )
         return False, None
 
@@ -386,7 +426,7 @@ async def _run_session_with_retry(
     )
     retry_prompt = _build_retry_prompt(prompt, err_kind, str(plan or "")[:300])
     client_retry = await _resolve_planner_client(spec_dir, project_dir)
-    retry_status, _r, _re = await _invoke_session(
+    retry_status, _r, retry_error = await _invoke_session(
         client_retry, retry_prompt, spec_dir, verbose
     )
     if retry_status == "error":
@@ -394,20 +434,59 @@ async def _run_session_with_retry(
             spec_dir,
             status="planner_failed",
             phase=session_error_phase,
-            planner_error="retry session returned status=error",
+            planner_error=_session_error_text(retry_error, "retry"),
         )
         return False, None
 
     ok, err_kind, plan = _validate_emitted_plan(spec_dir)
-    if not ok:
-        _write_status_patch(
-            spec_dir,
-            status="planner_failed",
-            phase=f"{invalid_after_retry_prefix}{err_kind}_after_retry",
-            planner_error=f"after retry: {err_kind} — {str(plan or '')[:200]}",
+    if ok:
+        return True, plan
+
+    # #785: the configured per-phase planning model produced no valid plan even
+    # after a retry — e.g. a broken provider (Gemini CLI's trust gate / an invalid
+    # GEMINI_API_KEY) that emits nothing. Rather than dead-end the whole run at
+    # `planner_invalid_missing_after_retry`, make ONE final attempt on the
+    # known-good DEFAULT planning model, so a misconfigured per-phase choice can't
+    # block verification entirely. Skipped when the configured model already IS the
+    # default (nothing to fall back to).
+    fallback_model = resolve_model_id(DEFAULT_PHASE_MODELS["planning"])
+    primary_model = get_phase_model(spec_dir, "planning", None)
+    if fallback_model != primary_model:
+        _planner_log.warning(
+            "planner: %s after retry on %s; falling back to default model %s",
+            err_kind,
+            primary_model,
+            fallback_model,
         )
-        return False, None
-    return True, plan
+        client_fb = await _resolve_planner_client(
+            spec_dir, project_dir, model_override=fallback_model
+        )
+        fb_status, _fr, _fe = await _invoke_session(
+            client_fb, prompt, spec_dir, verbose
+        )
+        if fb_status != "error":
+            ok, err_kind, plan = _validate_emitted_plan(spec_dir)
+            if ok:
+                _planner_log.info(
+                    "planner: recovered on fallback model %s", fallback_model
+                )
+                return True, plan
+
+    # `plan` here holds the validation detail (a parse error, a schema
+    # complaint), or nothing at all when the file was never written. The old
+    # unconditional f-string emitted "after retry: missing — " in that case: a
+    # field that exists, is populated, and carries nothing, which reads as
+    # "there was no further detail" rather than "the detail was lost" (#854).
+    detail = str(plan or "").strip()[:200] or _ERR_KIND_MEANING.get(
+        err_kind, "no detail reported by the session"
+    )
+    _write_status_patch(
+        spec_dir,
+        status="planner_failed",
+        phase=f"{invalid_after_retry_prefix}{err_kind}_after_retry",
+        planner_error=f"after retry: {err_kind} — {detail}",
+    )
+    return False, None
 
 
 def _apply_auth_and_truncate(
@@ -494,15 +573,50 @@ def _finalize_replan(
         for s in p.subtasks
     )
     if total_replans >= _GLOBAL_REPLAN_BUDGET:
+        # (B) #707: the plan<->generate loop is exhausted, but earlier runs may
+        # have committed real test files for subtasks that are now COMPLETED.
+        # Verify what we CAN rather than failing the whole spec with nothing —
+        # a couple of stuck subtasks must not zero out the spec's verify.
+        committed = _committed_test_subtasks_for_verify(spec_dir, plan_after)
+        base_warnings = [
+            *warnings,
+            f"global replan budget {_GLOBAL_REPLAN_BUDGET} exhausted "
+            f"(total replans={total_replans}); inspect rejected subtasks",
+        ]
+        if committed:
+            _write_status_patch(
+                spec_dir,
+                status="generated",
+                phase="planner_replan_budget_partial_verify",
+                planner_warnings=[
+                    *base_warnings,
+                    f"verifying {len(committed)} committed test(s) despite the "
+                    "exhausted budget; remaining subtasks are stuck",
+                ],
+                # #1023: record the count, like the equivalent partial-verify
+                # path in gen_functional does. Without it the field keeps
+                # whatever the last generate pass left — 0 when that pass had
+                # nothing pending — so a run that hands real tests to the
+                # evaluator reports `tests_generated: 0` at `triaged`, and
+                # anything gating on `tests_generated > 0` reads a successful
+                # verify as empty. The number is already known here; it is in
+                # the warning text directly above.
+                tests_generated=len(committed),
+                subtask_count=subtask_count,
+                last_replan_for=original_subtask_id,
+                last_replan_count=new_count,
+                last_replan_stuck=became_stuck,
+                total_replans=total_replans,
+            )
+            _advance_to_evaluator(spec_dir, project_dir)
+            return
         _write_status_patch(
             spec_dir,
             status="failed",
             phase="planner_replan_budget_exhausted",
-            planner_warnings=warnings
-            + [
-                f"global replan budget {_GLOBAL_REPLAN_BUDGET} exhausted "
-                f"(total replans={total_replans}); failing the run instead of "
-                "looping — inspect rejected subtasks"
+            planner_warnings=[
+                *base_warnings,
+                "failing the run instead of looping — no committed tests to verify",
             ],
             subtask_count=subtask_count,
             last_replan_for=original_subtask_id,
@@ -525,6 +639,78 @@ def _finalize_replan(
     # Replan succeeded — schedule Gen-Functional to pick up the new replan-N
     # subtask (it'll skip already-generated ones from prior phases).
     _advance_to_gen_functional(spec_dir, project_dir)
+
+
+def _checkout_drift(spec_dir: Path, project_dir: Path) -> str | None:
+    """Describe the mismatch if ``project_dir`` no longer holds this spec's build.
+
+    ``project_dir`` is one shared clone per project and spec ingest moves its
+    HEAD, so a spec ingesting in between silently repoints the tree that the
+    planner's Glob/Grep, the language signal, the import pre-flight (#732) and
+    the delivered-symbols block (#737) all resolve against. Observed live: while
+    spec 005 was being verified, the clone was still on spec 003's branch from
+    the previous evening, so every one of those readers was describing a
+    different build than the one under test.
+
+    Refusing to plan is the honest outcome — verifying an unrelated tree
+    produces a confident verdict about code nobody asked about, which is the
+    failure #729 made expensive to learn. Re-checking-out instead would be
+    self-healing but can yank the tree out from under a concurrently running
+    spec; per-spec worktrees are the real fix (#742) and are a larger change.
+
+    Returns ``None`` when there is nothing to check (no recorded SHA, older
+    workspace, unreadable git) — silence here must mean "no evidence of drift",
+    never "assumed fine but unverified".
+    """
+    try:
+        src = json.loads(
+            (spec_dir / "context" / "source.json").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return None
+    expected = str(src.get("source_sha") or "")
+    if not expected:
+        return None
+    try:
+        out = subprocess.run(  # noqa: S603
+            ["git", "-C", str(project_dir), "rev-parse", "HEAD"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except Exception:  # noqa: BLE001 — an unreadable git is not evidence of drift
+        return None
+    actual = out.stdout.strip() if out.returncode == 0 else ""
+    if not actual or actual == expected:
+        return None
+    return (
+        f"{project_dir} is on {actual[:12]} but this spec ingested "
+        f"{expected[:12]} ({src.get('source_branch')}) — the shared clone was "
+        "repointed by another spec; refusing to plan against a different build"
+    )
+
+
+def _planner_blocked(spec_dir: Path, project_dir: Path) -> bool:
+    """True when the workspace is unusable and planning must not start.
+
+    Two conditions, kept together so ``run_planner`` bails once: the spec dir is
+    missing, or the shared clone no longer holds this spec's build (#742).
+    """
+    if not spec_dir.is_dir():
+        _planner_log.error("planner: spec_dir %s does not exist", spec_dir)
+        return True
+    drift = _checkout_drift(spec_dir, project_dir)
+    if drift:
+        _planner_log.error("planner: %s", drift)
+        _write_status_patch(
+            spec_dir,
+            status="failed",
+            phase="planner_source_checkout_drift",
+            planner_warnings=[drift],
+        )
+        return True
+    return False
 
 
 async def run_planner(
@@ -566,8 +752,7 @@ async def run_planner(
           Write tool. This function may also write to status.json's
           ``planner_warnings`` list with truncation / soft-fail notes.
     """
-    if not spec_dir.is_dir():
-        _planner_log.error("planner: spec_dir %s does not exist", spec_dir)
+    if _planner_blocked(spec_dir, project_dir):
         return False
 
     if mode == "replan":
@@ -791,6 +976,41 @@ def _advance_to_gen_functional(spec_dir: Path, project_dir: Path) -> None:
             "could not auto-schedule gen_functional: %s — manual invocation required",
             exc,
         )
+
+
+def _committed_test_subtasks_for_verify(
+    spec_dir: Path, plan: "ImplementationPlan"
+) -> "list[Subtask]":
+    """Completed subtasks whose test file exists on disk (#707 partial verify).
+
+    Lazy-imports Gen-Functional's shared helper so the two stages agree on what
+    counts as "committed" without a top-level circular import.
+    """
+    try:
+        # lazy import avoids the planner<->gen_functional cycle
+        from agents.gen_functional import _committed_test_subtasks  # noqa: PLC0415
+
+        return _committed_test_subtasks(spec_dir, plan)
+    except Exception:  # noqa: BLE001 — never break the terminal path on this check
+        return []
+
+
+def _advance_to_evaluator(spec_dir: Path, project_dir: Path) -> None:
+    """Schedule the verify (evaluate→triage) to run on the committed tests.
+
+    Reuses Gen-Functional's ``_advance_to_evaluator`` so the kubejob/in-pod
+    dispatch behaviour is identical. Best-effort + lazy import (same shape as
+    ``_advance_to_gen_functional``).
+    """
+    try:
+        # lazy import avoids the planner<->gen_functional cycle
+        from agents.gen_functional import (  # noqa: PLC0415
+            _advance_to_evaluator as _gf_advance,
+        )
+
+        _gf_advance(spec_dir, project_dir)
+    except Exception as exc:  # noqa: BLE001 — advisory; never break the caller
+        _planner_log.warning("could not auto-schedule evaluator: %s", exc)
 
 
 # Module-level set so asyncio.create_task'd planner runs aren't GC'd while

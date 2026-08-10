@@ -650,6 +650,11 @@ def test_advance_kubejob_dispatches_job_and_skips_inpod(
 ) -> None:
     from agents import gen_functional
 
+    # The autouse _disable_chains fixture pins TFACTORY_AUTO_EVALUATE=0; this
+    # test is about the *dispatch*, so re-enable it explicitly (#897 — before
+    # that fix the kubejob branch ran regardless of this flag, which is exactly
+    # the defect: this test used to pass with auto-evaluate pinned off).
+    monkeypatch.setenv("TFACTORY_AUTO_EVALUATE", "1")
     monkeypatch.setenv("TFACTORY_VERIFY_EXEC", "kubejob")
     monkeypatch.setenv("JOB_ID", "proj:042")
 
@@ -721,6 +726,7 @@ def test_advance_kubejob_falls_back_to_inpod_when_dispatch_returns_none(
     # verify.
     from agents import gen_functional
 
+    monkeypatch.setenv("TFACTORY_AUTO_EVALUATE", "1")  # see note in the test above
     monkeypatch.setenv("TFACTORY_VERIFY_EXEC", "kubejob")
 
     import agents.evaluator as eval_mod
@@ -740,6 +746,58 @@ def test_advance_kubejob_falls_back_to_inpod_when_dispatch_returns_none(
 
     gen_functional._advance_to_evaluator(spec_dir, project_dir)
     assert called.get("inpod") is True
+
+
+# ── #897 — TFACTORY_AUTO_EVALUATE gates BOTH execution modes ──────────────────
+#
+# The gate used to live only inside the in-pod schedule_evaluator, so with the
+# production TFACTORY_VERIFY_EXEC=kubejob setting it governed nothing: the
+# kubejob branch ran first and applied a real verify Job regardless.
+
+
+def test_auto_evaluate_off_blocks_kubejob_dispatch(
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agents import gen_functional
+
+    monkeypatch.setenv("TFACTORY_VERIFY_EXEC", "kubejob")
+    monkeypatch.setenv("TFACTORY_AUTO_EVALUATE", "0")
+
+    import agents.evaluator as eval_mod
+    import agents.verify_dispatch as vd_mod
+
+    async def _no_dispatch(**kwargs):  # pragma: no cover - must not be reached
+        raise AssertionError("kubejob dispatch must not run when auto-evaluate is off")
+
+    def _no_inpod(*a, **k):  # pragma: no cover - must not be reached
+        raise AssertionError("in-pod evaluator must not run when auto-evaluate is off")
+
+    monkeypatch.setattr(vd_mod, "dispatch_verify_job", _no_dispatch)
+    monkeypatch.setattr(eval_mod, "schedule_evaluator", _no_inpod)
+
+    gen_functional._advance_to_evaluator(spec_dir, project_dir)
+
+
+def test_auto_evaluate_off_blocks_inpod_path(
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agents import gen_functional
+
+    monkeypatch.delenv("TFACTORY_VERIFY_EXEC", raising=False)
+    monkeypatch.setenv("TFACTORY_AUTO_EVALUATE", "0")
+
+    import agents.evaluator as eval_mod
+
+    def _no_inpod(*a, **k):  # pragma: no cover - must not be reached
+        raise AssertionError("in-pod evaluator must not run when auto-evaluate is off")
+
+    monkeypatch.setattr(eval_mod, "schedule_evaluator", _no_inpod)
+
+    gen_functional._advance_to_evaluator(spec_dir, project_dir)
 
 
 # ── Task 10 (#26) — Coverage adapter (null vs zero) ────────────────────
@@ -1118,3 +1176,669 @@ def test_nix_verify_mode_backend_force_host_overrides(tmp_path, monkeypatch):
     monkeypatch.setenv("TFACTORY_NIX_RUNNER_IMAGE", "ghcr.io/x/nix:latest")
     spec = _contract_dir(tmp_path, _NIX_ENV)
     assert _nix_verify_mode(spec) is False
+
+
+# ── #776 batched stability: 3 samples in ONE Nix Job, same verdict ────────
+
+
+def _fake_batched_runner(monkeypatch, per_run_codes):
+    """Patch run_pytest_lane_via_nix to emit a batched stdout for the given codes
+    and record how it was called."""
+    from tools.runners.docker_runner import DockerRunResult
+
+    calls: dict = {"count": 0}
+
+    def _fake(spec, project, test_file, *, extra_env=None, reruns=1, **kw):
+        calls["count"] += 1
+        calls["reruns"] = reruns
+        codes = (
+            per_run_codes[:reruns] if len(per_run_codes) >= reruns else per_run_codes
+        )
+        out = "".join(
+            f"__PYTEST_RUN={i + 1}\nrun {i + 1}\n__PYTEST_EXIT={c}\n"
+            for i, c in enumerate(codes)
+        )
+        return DockerRunResult(returncode=codes[0], stdout=out, stderr="")
+
+    monkeypatch.setattr("agents.evaluator.run_pytest_lane_via_nix", _fake)
+    return calls
+
+
+def test_nix_batched_stability_stable_from_one_job(tmp_path, monkeypatch):
+    from agents import evaluator
+    from agents.stability_runner import StabilityVerdict
+
+    calls = _fake_batched_runner(monkeypatch, [0, 0, 0])
+    tf = tmp_path / "t_test.py"
+    tf.write_text("def test_x(): assert True\n")
+    res = evaluator._nix_batched_stability(tmp_path, tmp_path, tf)
+    assert res is not None and res.verdict == StabilityVerdict.STABLE
+    assert res.rerun_count == 3
+    # The whole point: 3 samples cost ONE Job dispatch, not three.
+    assert calls["count"] == 1 and calls["reruns"] == 3
+
+
+def test_nix_batched_stability_detects_flake(tmp_path, monkeypatch):
+    from agents import evaluator
+    from agents.stability_runner import StabilityVerdict
+
+    _fake_batched_runner(monkeypatch, [0, 1, 0])
+    tf = tmp_path / "t_test.py"
+    tf.write_text("def test_x(): assert True\n")
+    res = evaluator._nix_batched_stability(tmp_path, tmp_path, tf)
+    assert res is not None and res.verdict == StabilityVerdict.FLAKY
+
+
+def test_nix_batched_stability_none_when_lane_unavailable(tmp_path, monkeypatch):
+    """run_pytest_lane_via_nix None (no runner image) -> None so the caller falls
+    back to the per-sample check_stability path."""
+    from agents import evaluator
+
+    monkeypatch.setattr(
+        "agents.evaluator.run_pytest_lane_via_nix", lambda *a, **k: None
+    )
+    tf = tmp_path / "t_test.py"
+    tf.write_text("def test_x(): assert True\n")
+    assert evaluator._nix_batched_stability(tmp_path, tmp_path, tf) is None
+
+
+# ─── #787: flaky-history must ignore environmental failures ──────────────────
+
+
+def _stability_result(verdict, *, returncode=0, tail=""):
+    from agents.stability_runner import StabilityResult, StabilityRun
+
+    return StabilityResult(
+        verdict=verdict,
+        runs=(StabilityRun(returncode=returncode, stdout_tail=tail),),
+    )
+
+
+def _history_store(spec_dir):
+    return spec_dir.parent.parent / "test_history.json"
+
+
+def _spec_dir(tmp_path):
+    d = tmp_path / "proj" / "specs" / "037"
+    d.mkdir(parents=True)
+    return d
+
+
+def test_flaky_history_skips_environmental_import_fail(tmp_path):
+    """#787: a no-SUT collection/import error (CONSISTENT_FAIL + failure_kind
+    'import') must NOT be recorded. Otherwise a deadline-reaped / no-SUT first
+    attempt records `false`, the next real run records `true`, and the
+    flip_rate=1.00 flags every good test."""
+    from agents import evaluator
+    from agents.stability_runner import StabilityVerdict
+
+    spec_dir = _spec_dir(tmp_path)
+    stab = _stability_result(
+        StabilityVerdict.CONSISTENT_FAIL,
+        returncode=2,
+        tail="ImportError: No module named hello_python",
+    )
+    assert stab.failure_kind == "import"
+    assert evaluator._flaky_history_for_subtask(spec_dir, {"id": "t-1"}, stab) is None
+    assert not _history_store(spec_dir).exists()  # nothing recorded
+
+
+def test_flaky_history_skips_runner_error(tmp_path):
+    """#787: the stability runner itself raising (verdict ERROR) is
+    environmental, not a reliability signal — never record it."""
+    from agents import evaluator
+    from agents.stability_runner import StabilityVerdict
+
+    spec_dir = _spec_dir(tmp_path)
+    stab = _stability_result(StabilityVerdict.ERROR)
+    assert evaluator._flaky_history_for_subtask(spec_dir, {"id": "t-1"}, stab) is None
+    assert not _history_store(spec_dir).exists()
+
+
+def test_flaky_history_records_stable_pass(tmp_path):
+    """A real STABLE run still records a True outcome (guard must not over-skip)."""
+    import json
+
+    from agents import evaluator
+    from agents.stability_runner import StabilityVerdict
+
+    spec_dir = _spec_dir(tmp_path)
+    stab = _stability_result(StabilityVerdict.STABLE, returncode=0)
+    assert (
+        evaluator._flaky_history_for_subtask(spec_dir, {"id": "t-1"}, stab) is not None
+    )
+    store = _history_store(spec_dir)
+    assert store.exists()
+    assert json.loads(store.read_text())["t-1"]["outcomes"] == [True]
+
+
+def test_flaky_history_records_genuine_assertion_fail(tmp_path):
+    """A genuine failing test (CONSISTENT_FAIL + failure_kind 'assertion') IS a
+    real reliability signal and must still record False — the #787 guard must
+    not swallow it."""
+    import json
+
+    from agents import evaluator
+    from agents.stability_runner import StabilityVerdict
+
+    spec_dir = _spec_dir(tmp_path)
+    stab = _stability_result(
+        StabilityVerdict.CONSISTENT_FAIL,
+        returncode=1,
+        tail="E   AssertionError: assert 1 == 2\nFAILED",
+    )
+    assert stab.failure_kind == "assertion"
+    assert (
+        evaluator._flaky_history_for_subtask(spec_dir, {"id": "t-1"}, stab) is not None
+    )
+    store = _history_store(spec_dir)
+    assert json.loads(store.read_text())["t-1"]["outcomes"] == [False]
+
+
+# ─── #776 Stage 1b: stability + mutation batched into ONE nix Job ────────────
+
+
+def _mk_unit_subtask(spec_dir, source="def test_x():\n    assert 1 == 1\n"):
+    tests = spec_dir / "tests"
+    tests.mkdir(parents=True, exist_ok=True)
+    (tests / "test_x.py").write_text(source)
+    return {"id": "t-1", "language": "python", "files_to_create": ["tests/test_x.py"]}
+
+
+def _fake_nix_result(stdout):
+    from tools.runners.docker_runner import DockerRunResult
+
+    return DockerRunResult(returncode=0, stdout=stdout, stderr="")
+
+
+def test_mutation_from_codes_first_kill_wins():
+    from agents.evaluator import _mutation_from_codes
+    from agents.mutate_probe import MutationApplied, MutationVerdict
+
+    def _m(i):
+        return MutationApplied(operator=f"op{i}", lineno=i, before="a", after="b")
+
+    cands = [("s1", _m(1)), ("s2", _m(2)), ("s3", _m(3))]
+    # survive, kill, kill -> first KILL (index 2) wins
+    res = _mutation_from_codes(cands, [0, 1, 1])
+    assert res.verdict == MutationVerdict.KILLED
+    assert res.mutation.operator == "op2"
+
+
+def test_mutation_from_codes_all_survive_returns_first():
+    from agents.evaluator import _mutation_from_codes
+    from agents.mutate_probe import MutationApplied, MutationVerdict
+
+    m = MutationApplied(operator="op1", lineno=1, before="a", after="b")
+    res = _mutation_from_codes([("s1", m)], [0])
+    assert res.verdict == MutationVerdict.SURVIVED
+    assert res.mutation.operator == "op1"
+
+
+def test_nix_batched_signals_stability_and_mutation_in_one_job(tmp_path, monkeypatch):
+    """The batched path derives BOTH a STABLE stability and a KILLED mutation from
+    one Job's stdout, and passes the generated mutant(s) to the primitive."""
+    from agents import evaluator
+    from agents.mutate_probe import MutationVerdict
+    from agents.stability_runner import StabilityVerdict
+
+    spec_dir = tmp_path / "proj" / "specs" / "001"
+    subtask = _mk_unit_subtask(spec_dir)
+
+    captured = {}
+
+    def _fake(spec, proj, tf, *, extra_env=None, reruns=1, mutant_files=None, **kw):
+        captured["mutant_files"] = mutant_files
+        captured["reruns"] = reruns
+        return _fake_nix_result(
+            "__PYTEST_RUN=1\n.\n__PYTEST_EXIT=0\n"
+            "__PYTEST_RUN=2\n.\n__PYTEST_EXIT=0\n"
+            "__PYTEST_RUN=3\n.\n__PYTEST_EXIT=0\n"
+            "__MUT_RUN=1\nF\n__MUT_EXIT=1\n"
+        )
+
+    monkeypatch.setattr("agents.evaluator.run_pytest_lane_via_nix", _fake)
+    stability, mutation = evaluator._nix_batched_signals(spec_dir, tmp_path, subtask)
+
+    assert stability is not None and stability.verdict == StabilityVerdict.STABLE
+    assert mutation is not None and mutation.verdict == MutationVerdict.KILLED
+    # the assert-bearing test yields >=1 candidate, staged and passed to the Job
+    assert captured["mutant_files"] and len(captured["mutant_files"]) >= 1
+    assert captured["reruns"] == 3  # one Job, three stability samples
+
+
+def test_nix_batched_signals_truncated_mutation_returns_none(tmp_path, monkeypatch):
+    """Candidates existed but the Job returned NO mutant codes (truncated) -> the
+    stability is still returned but mutation is None, so the caller falls back to
+    the per-candidate path rather than trusting an incomplete batch."""
+    from agents import evaluator
+    from agents.stability_runner import StabilityVerdict
+
+    spec_dir = tmp_path / "proj" / "specs" / "001"
+    subtask = _mk_unit_subtask(spec_dir)
+
+    def _fake(spec, proj, tf, *, extra_env=None, reruns=1, mutant_files=None, **kw):
+        # stability markers only; the __MUT_* markers never printed
+        return _fake_nix_result(
+            "__PYTEST_RUN=1\n.\n__PYTEST_EXIT=0\n"
+            "__PYTEST_RUN=2\n.\n__PYTEST_EXIT=0\n"
+            "__PYTEST_RUN=3\n.\n__PYTEST_EXIT=0\n"
+        )
+
+    monkeypatch.setattr("agents.evaluator.run_pytest_lane_via_nix", _fake)
+    stability, mutation = evaluator._nix_batched_signals(spec_dir, tmp_path, subtask)
+    assert stability is not None and stability.verdict == StabilityVerdict.STABLE
+    assert mutation is None  # incomplete batch -> caller falls back
+
+
+def test_nix_batched_signals_none_when_lane_unavailable(tmp_path, monkeypatch):
+    from agents import evaluator
+
+    spec_dir = tmp_path / "proj" / "specs" / "001"
+    subtask = _mk_unit_subtask(spec_dir)
+    monkeypatch.setattr(
+        "agents.evaluator.run_pytest_lane_via_nix", lambda *a, **k: None
+    )
+    assert evaluator._nix_batched_signals(spec_dir, tmp_path, subtask) == (None, None)
+
+
+def test_build_signal_bundle_uses_batched_path_in_nix_mode(tmp_path, monkeypatch):
+    """In nix mode, _build_signal_bundle takes the batched (stability, mutation)
+    from _nix_batched_signals instead of the per-primitive calls."""
+    from agents import evaluator
+    from agents.mutate_probe import MutationResult, MutationVerdict
+    from agents.stability_runner import StabilityResult, StabilityVerdict
+
+    spec_dir = tmp_path / "proj" / "specs" / "001"
+    subtask = _mk_unit_subtask(spec_dir)
+
+    fake_stab = StabilityResult(verdict=StabilityVerdict.STABLE)
+    fake_mut = MutationResult(verdict=MutationVerdict.KILLED)
+    monkeypatch.setattr(evaluator, "_nix_verify_mode", lambda sd: True)
+    monkeypatch.setattr(
+        evaluator, "_nix_batched_signals", lambda sd, pd, st: (fake_stab, fake_mut)
+    )
+    # if the per-primitive path were taken these would blow up the test:
+    monkeypatch.setattr(
+        evaluator,
+        "_stability_for_subtask",
+        lambda *a, **k: pytest.fail("per-primitive stability should not run"),
+    )
+    bundle = evaluator._build_signal_bundle(spec_dir, tmp_path, subtask, runner_fn=None)
+    assert bundle.stability is fake_stab
+    assert bundle.mutation is fake_mut
+
+
+def test_build_signal_bundle_falls_back_when_nix_unavailable(tmp_path, monkeypatch):
+    from agents import evaluator
+    from agents.stability_runner import StabilityResult, StabilityVerdict
+
+    spec_dir = tmp_path / "proj" / "specs" / "001"
+    subtask = _mk_unit_subtask(spec_dir)
+
+    monkeypatch.setattr(evaluator, "_nix_verify_mode", lambda sd: True)
+    monkeypatch.setattr(evaluator, "_nix_batched_signals", lambda *a: (None, None))
+    called = {"stab": False, "mut": False}
+
+    def _stab(*a, **k):
+        called["stab"] = True
+        return StabilityResult(verdict=StabilityVerdict.STABLE)
+
+    def _mut(*a, **k):
+        called["mut"] = True
+        return None
+
+    monkeypatch.setattr(evaluator, "_stability_for_subtask", _stab)
+    monkeypatch.setattr(evaluator, "_mutation_for_subtask", _mut)
+    bundle = evaluator._build_signal_bundle(spec_dir, tmp_path, subtask, runner_fn=None)
+    assert called["stab"] and called["mut"]  # per-primitive fallback ran
+    assert bundle.stability.verdict == StabilityVerdict.STABLE
+
+
+def test_verdict_lanes_are_stamped_from_the_plan(tmp_path):
+    """#1018: val_block groups VAL levels by verdict['lane'].
+
+    Nothing ever wrote that field, and val_block defaults a missing lane to
+    "unit", so api/browser/integration verdicts were all counted as unit. VAL-2
+    then saw zero verdicts and reported "no api/integration/browser lane ran",
+    capping every run at VAL-0 regardless of what executed.
+    """
+    import json
+
+    from agents.evaluator import _stamp_verdict_lanes
+
+    (tmp_path / "test_plan.json").write_text(
+        json.dumps(
+            {
+                "phases": [
+                    {"phase": 1, "subtasks": [{"id": "echo-api", "lane": "api"}]},
+                    {"phase": 2, "subtasks": [{"id": "guard-unit", "lane": "unit"}]},
+                ]
+            }
+        )
+    )
+    doc = {"verdicts": [{"test_id": "echo-api"}, {"test_id": "guard-unit"}]}
+    stamped, unmatched = _stamp_verdict_lanes(tmp_path, doc)
+
+    assert (stamped, unmatched) == (2, 0)
+    assert doc["verdicts"][0]["lane"] == "api"
+    assert doc["verdicts"][1]["lane"] == "unit"
+
+
+def test_the_stamped_lanes_reach_val2(tmp_path):
+    """The point of the stamp: an api verdict must land in VAL-2, not VAL-1.
+
+    Asserting only that the field is set would pass even if val_block still
+    binned it as unit, so this drives the real grouping function.
+    """
+    import json
+
+    from agents.evaluator import _stamp_verdict_lanes
+    from agents.val_block import build_verification_block
+
+    (tmp_path / "test_plan.json").write_text(
+        json.dumps({"phases": [{"subtasks": [{"id": "echo-api", "lane": "api"}]}]})
+    )
+    doc = {"verdicts": [{"test_id": "echo-api", "verdict": "accept"}]}
+
+    unstamped = build_verification_block(list(doc["verdicts"]), target_level="VAL-2")
+    by_lvl = {lvl["level"]: lvl for lvl in unstamped["levels"]}
+    assert by_lvl["VAL-2"]["status"] == "not_run", "precondition: the bug"
+
+    _stamp_verdict_lanes(tmp_path, doc)
+    fixed = build_verification_block(doc["verdicts"], target_level="VAL-2")
+    by_lvl = {lvl["level"]: lvl for lvl in fixed["levels"]}
+    assert by_lvl["VAL-2"]["status"] == "passed", fixed
+
+
+def test_an_unplanned_verdict_is_left_unattributed(tmp_path):
+    """Never guess a lane. An unmatched verdict must not inflate the unit lane
+    — that silent default is the defect this fixes."""
+    import json
+
+    from agents.evaluator import _stamp_verdict_lanes
+
+    (tmp_path / "test_plan.json").write_text(json.dumps({"phases": []}))
+    doc = {"verdicts": [{"test_id": "ghost"}]}
+    stamped, unmatched = _stamp_verdict_lanes(tmp_path, doc)
+
+    assert (stamped, unmatched) == (0, 1)
+    assert "lane" not in doc["verdicts"][0]
+
+
+_COBERTURA = """<?xml version="1.0" ?>
+<coverage line-rate="0.75" lines-covered="3" lines-valid="4">
+  <packages><package name="."><classes>
+    <class filename="src/app/request_id.py">
+      <lines>
+        <line number="10" hits="1"/>
+        <line number="11" hits="1"/>
+        <line number="12" hits="0"/>
+      </lines>
+    </class>
+    <class filename="tests/unit/test_request_id.py">
+      <lines>
+        <line number="1" hits="1"/>
+        <line number="2" hits="1"/>
+        <line number="3" hits="1"/>
+      </lines>
+    </class>
+  </classes></package></packages>
+</coverage>
+"""
+
+
+def _write_cov(spec_dir, test_id: str) -> None:
+    d = spec_dir / "findings" / "runs" / test_id
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "coverage.xml").write_text(_COBERTURA)
+
+
+def test_coverage_is_measured_from_the_lane_report(tmp_path):
+    """#1024: the number must come from coverage.xml, not from the judge."""
+    from agents.evaluator import _stamp_verdict_coverage
+
+    _write_cov(tmp_path, "t1")
+    # The judge's fabricated zero, exactly as it appeared in live verdicts.
+    doc = {
+        "verdicts": [
+            {
+                "test_id": "t1",
+                "signals_summary": {"coverage_delta_pct": 0, "coverage_new_lines": 0},
+            }
+        ]
+    }
+
+    measured, unmeasured = _stamp_verdict_coverage(tmp_path, doc)
+
+    assert (measured, unmeasured) == (1, 0)
+    s = doc["verdicts"][0]["signals_summary"]
+    # 2 covered SUT lines; the 3 covered lines of the test file do not count.
+    assert s["coverage_new_lines"] == 2, s
+    # No baseline snapshot exists, so a delta cannot be computed — and must not
+    # be reported as a number.
+    assert s["coverage_delta_pct"] is None, s
+
+
+def test_test_file_lines_are_not_counted_as_coverage(tmp_path):
+    """Every test covers its own lines; counting them measures nothing.
+
+    Without the exclusion this report yields 5 instead of 2, and every test
+    would score a perfect coverage subscore regardless of what it exercised.
+    """
+    from agents.evaluator import _measured_coverage
+
+    _write_cov(tmp_path, "t1")
+    covered, _ = _measured_coverage(tmp_path, "t1")
+    assert covered == 2
+
+
+def test_unmeasured_coverage_is_null_not_zero(tmp_path):
+    """A missing report must read as 'not measured', never as a measured zero.
+
+    confidence._coverage_subscore scores 0 as 'exercises none' but DROPS None,
+    so a fabricated zero silently penalises every verdict.
+    """
+    from agents.evaluator import _stamp_verdict_coverage
+
+    doc = {
+        "verdicts": [
+            {
+                "test_id": "absent",
+                "signals_summary": {"coverage_delta_pct": 0, "coverage_new_lines": 0},
+            }
+        ]
+    }
+
+    measured, unmeasured = _stamp_verdict_coverage(tmp_path, doc)
+
+    assert (measured, unmeasured) == (0, 1)
+    s = doc["verdicts"][0]["signals_summary"]
+    assert s["coverage_delta_pct"] is None, s
+    assert s["coverage_new_lines"] is None, s
+
+
+def test_the_measured_value_reaches_the_confidence_scorer(tmp_path):
+    """Drive the real scorer: a measured zero and a null must differ."""
+    from agents.confidence import _coverage_subscore
+
+    assert _coverage_subscore({"coverage_new_lines": 2}) == 1.0
+    assert _coverage_subscore({"coverage_new_lines": 0}) == 0.0
+    assert (
+        _coverage_subscore({"coverage_new_lines": None, "coverage_delta_pct": None})
+        is None
+    )
+
+
+def test_the_runner_seam_persists_the_lane_coverage_report(tmp_path):
+    """#1024: the lane's coverage.xml must be copied where the reader looks.
+
+    It was written into the runner's scratch dir and dropped, so
+    _coverage_delta_for_subtask never found its `after` snapshot.
+    """
+    from types import SimpleNamespace
+
+    from agents.evaluator import _capturing_coverage
+
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    src = scratch / "coverage.xml"
+    src.write_text(_COBERTURA)
+
+    wrapped = _capturing_coverage(
+        tmp_path, {"id": "t1"}, lambda *a, **k: SimpleNamespace(coverage_xml_path=src)
+    )
+    wrapped(tmp_path / "tests" / "test_x.py", tmp_path, 0)
+
+    dest = tmp_path / "findings" / "runs" / "t1" / "coverage.xml"
+    assert dest.is_file(), "coverage report was not persisted"
+    assert dest.read_text() == _COBERTURA
+    assert src.is_file(), "copied, not moved — the scratch dir is the runner's"
+
+
+def test_a_runner_with_no_coverage_report_is_not_an_error(tmp_path):
+    """A lane that produced none (browser) must pass through untouched."""
+    from types import SimpleNamespace
+
+    from agents.evaluator import _capturing_coverage
+
+    sentinel = SimpleNamespace(coverage_xml_path=None, ok=True)
+    wrapped = _capturing_coverage(tmp_path, {"id": "t1"}, lambda *a, **k: sentinel)
+    assert wrapped(tmp_path, tmp_path, 0) is sentinel
+    assert not (tmp_path / "findings" / "runs" / "t1").exists()
+
+
+def test_persisted_artifact_outlives_the_scratch_dir(tmp_path):
+    """#1024: the returned path must survive the runner's `finally` cleanup.
+
+    The runner built its result with `cov if cov.exists() else None` and then
+    deleted the scratch dir in a `finally` that runs BEFORE the value reaches
+    the caller. The path was therefore true at construction and dangling by the
+    time any consumer read it — which is why coverage_xml_path had exactly one
+    reader in the tree and the verdict's coverage was a judge-authored guess.
+    """
+    import shutil as _shutil
+
+    from agents.evaluator import _persist_run_artifact
+
+    scratch = tmp_path / "tf-pytest-xyz"
+    scratch.mkdir()
+    (scratch / "coverage.xml").write_text(_COBERTURA)
+    test_file = tmp_path / "tests" / "unit" / "test_thing.py"
+
+    kept = _persist_run_artifact(tmp_path, test_file, scratch / "coverage.xml")
+    # Exactly what the runner does next.
+    _shutil.rmtree(scratch, ignore_errors=True)
+
+    assert kept is not None
+    assert kept.is_file(), "artifact did not survive scratch cleanup"
+    assert scratch not in kept.parents, "still inside the doomed scratch dir"
+    assert kept.read_text() == _COBERTURA
+
+
+def test_a_missing_artifact_yields_none_not_a_dangling_path(tmp_path):
+    """No file → None. Never a path the caller will find deleted."""
+    from agents.evaluator import _persist_run_artifact
+
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    assert (
+        _persist_run_artifact(
+            tmp_path, tmp_path / "tests" / "t.py", scratch / "nope.xml"
+        )
+        is None
+    )
+
+
+def test_host_runner_result_paths_survive_the_caller_cleanup(tmp_path, monkeypatch):
+    """#1024 at the call site, not just in the helper.
+
+    Drives the real `_resolve_runner_fn._run` on the host branch — the one k3d
+    takes — with the pytest invocation stubbed. `_run` deletes its scratch dir
+    in a `finally`, so a result still pointing there is dead on arrival. Asserts
+    the returned paths are readable AFTER the call, which is the only property
+    a consumer cares about.
+    """
+    from agents import evaluator as E
+
+    spec_dir = tmp_path / "spec"
+    (spec_dir / "tests").mkdir(parents=True)
+    project_dir = tmp_path / "proj"
+    (project_dir / "src").mkdir(parents=True)
+    test_file = spec_dir / "tests" / "test_thing.py"
+    test_file.write_text("def test_ok():\n    assert True\n")
+
+    monkeypatch.setattr(E, "_nix_verify_mode", lambda *a, **k: False)
+    monkeypatch.setattr(E, "_host_runner_mode", lambda *a, **k: True)
+    monkeypatch.setattr(E, "_stage_sut_into_scratch", lambda *a, **k: None)
+
+    def _fake_host_run(scratch, tf, extra_env, project_dir_arg):
+        # Exactly what the real one does: write into the caller's scratch dir
+        # and hand back paths into it.
+        from tools.runners.docker_runner import DockerRunResult
+
+        (Path(scratch) / "coverage.xml").write_text(_COBERTURA)
+        (Path(scratch) / "junit.xml").write_text("<testsuite/>")
+        return DockerRunResult(
+            returncode=0,
+            stdout="__PYTEST_EXIT=0",
+            stderr="",
+            junit_xml_path=Path(scratch) / "junit.xml",
+            coverage_xml_path=Path(scratch) / "coverage.xml",
+            argv=["pytest"],
+        )
+
+    monkeypatch.setattr(E, "_run_pytest_on_host", _fake_host_run)
+
+    res = E._resolve_runner_fn(spec_dir, project_dir)(test_file, project_dir, 0)
+
+    assert res.coverage_xml_path is not None, "coverage path was dropped"
+    assert res.coverage_xml_path.is_file(), (
+        "coverage path does not survive the runner's scratch cleanup"
+    )
+    assert res.junit_xml_path is not None and res.junit_xml_path.is_file()
+    assert res.coverage_xml_path.read_text() == _COBERTURA
+
+
+def test_docker_runner_result_paths_survive_the_caller_cleanup(tmp_path, monkeypatch):
+    """Same #1024 property on the DockerRunner branch.
+
+    Reachable wherever a container runtime exists, and it builds its paths in
+    the same doomed scratch dir.
+    """
+    from agents import evaluator as E
+    from tools.runners.docker_runner import DockerRunResult
+
+    spec_dir = tmp_path / "spec"
+    (spec_dir / "tests").mkdir(parents=True)
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    test_file = spec_dir / "tests" / "test_thing.py"
+    test_file.write_text("def test_ok():\n    assert True\n")
+
+    monkeypatch.setattr(E, "_nix_verify_mode", lambda *a, **k: False)
+    monkeypatch.setattr(E, "_host_runner_mode", lambda *a, **k: False)
+    monkeypatch.setattr(E, "_stage_sut_into_scratch", lambda *a, **k: None)
+
+    class _FakeRunner:
+        def __init__(self, *a, **k):
+            pass
+
+        def run(self, *, scratch_path, **kwargs):
+            (Path(scratch_path) / "coverage.xml").write_text(_COBERTURA)
+            (Path(scratch_path) / "junit.xml").write_text("<testsuite/>")
+            return DockerRunResult(
+                returncode=0, stdout="__PYTEST_EXIT=0", stderr="", argv=["pytest"]
+            )
+
+    import tools.runners.docker_runner as _dr
+
+    monkeypatch.setattr(_dr, "DockerRunner", _FakeRunner)
+
+    res = E._resolve_runner_fn(spec_dir, project_dir)(test_file, project_dir, 0)
+
+    assert res.coverage_xml_path is not None, "coverage path was dropped"
+    assert res.coverage_xml_path.is_file(), (
+        "coverage path does not survive the runner's scratch cleanup"
+    )
+    assert res.coverage_xml_path.read_text() == _COBERTURA

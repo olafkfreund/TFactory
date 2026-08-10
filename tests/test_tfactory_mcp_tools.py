@@ -27,17 +27,19 @@ from unittest.mock import MagicMock
 
 import pytest
 
-# conftest.py pre-mocks claude_agent_sdk for fast offline test collection;
-# these tests need the real ``@tool`` decorator. Drop the mock so the
+from tests.sdk_stub import SDK_INSTALLED
+
+# Another test module may have left a MagicMock in sys.modules; drop it so
 # tools_pkg re-imports against the actual SDK.
 if isinstance(sys.modules.get("claude_agent_sdk"), MagicMock):
     sys.modules.pop("claude_agent_sdk", None)
     sys.modules.pop("claude_agent_sdk.types", None)
     sys.modules.pop("agents.tools_pkg.tools.task_control", None)
 
-try:
-    import claude_agent_sdk  # noqa: F401 — used only to detect availability
-except ImportError:
+# `import claude_agent_sdk` would also succeed against the test stand-in
+# tests/conftest.py installs when the package is absent (#882), and that
+# stand-in has no real ``@tool``. Ask whether the PACKAGE is installed.
+if not SDK_INSTALLED:
     pytest.skip(
         "claude_agent_sdk not installed in this venv — install with "
         "'npm run install:backend' to exercise the MCP server tools.",

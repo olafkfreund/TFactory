@@ -36,10 +36,16 @@ import json
 import logging as _logging
 import os
 import traceback
+from collections.abc import Awaitable
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from agents.workspace_status import now_iso, read_status, write_status_patch
+
+if TYPE_CHECKING:
+    from agents.criterion_authority import AuthorityResult
+    from agents.criterion_literals import LiteralDriftResult
+    from test_plan import ImplementationPlan, Subtask
 
 _gen_log = _logging.getLogger(__name__)
 
@@ -71,11 +77,17 @@ def _write_status_patch(spec_dir: Path, **fields: object) -> None:
 # fan-out runtimes (claude-subagents, dynamic-workflow, antigravity) have no
 # TFactory provider and are intentionally absent, so they never override the
 # provider inferred from the model string.
+#
+# ``ollama-cloud`` is deliberately NOT the local agentic provider (#870): the
+# cloud runtime is an OpenAI-compatible endpoint at https://ollama.com with an
+# API key (see providers/ollama_cloud_check.py), while the ``ollama`` provider is
+# the self-hosted HTTP server. Mapping cloud onto ``ollama`` sent a contract
+# routed to the cloud runtime at http://localhost:11434 with no credentials.
 _RUNTIME_TO_PROVIDER: dict[str, str] = {
     "claude": "claude",
     "codex": "codex",
     "ollama": "ollama",
-    "ollama-cloud": "ollama",
+    "ollama-cloud": "openai-compatible",
 }
 
 
@@ -187,24 +199,69 @@ async def _resolve_client(spec_dir: Path, project_dir: Path):
     )
 
 
+# #792: wall-clock ceiling on ONE gen-functional agent session. A hung LLM/tool
+# session (seen: a gcd spec frozen 23 min in `generating`) otherwise strands the
+# spec until the liveness sweep flips it ~10 min later; bound it shorter than the
+# sweep deadline (APP_LIVENESS_SWEEP_DEADLINE_SECONDS, default 600s) so a stuck
+# session fails FAST into the existing `status=error` path (fail the subtask +
+# continue) instead of hanging. Generous vs a normal ~1-3 min session; tune with
+# TFACTORY_GEN_SESSION_TIMEOUT_S.
+_GEN_SESSION_TIMEOUT_S = float(os.environ.get("TFACTORY_GEN_SESSION_TIMEOUT_S", "480"))
+
+
+async def _run_bounded(
+    coro: Awaitable[tuple[str, str, dict[str, Any]]], *, timeout_s: float
+) -> tuple[str, str, dict[str, Any]] | None:
+    """Await ``coro`` with a wall-clock ceiling; return its result, or ``None``
+    on timeout (#792). Pure utility — the timeout unit tests exercise THIS,
+    immune to the SDK-session mocking that stubs ``_invoke_session`` wholesale.
+    On timeout ``asyncio.wait_for`` cancels ``coro``; the caller's
+    ``async with client`` then closes the transport (kills the agent subprocess).
+    """
+    try:
+        return await asyncio.wait_for(coro, timeout=timeout_s)
+    except TimeoutError:
+        return None
+
+
 async def _invoke_session(
     client,
     prompt: str,
     spec_dir: Path,
     verbose: bool,
 ) -> tuple[str, str, dict]:
-    """Wrap run_agent_session so tests can patch one symbol."""
+    """Wrap run_agent_session so tests can patch one symbol.
+
+    Bounded by ``_GEN_SESSION_TIMEOUT_S`` (#792): a hung session fails fast into
+    the existing ``status="error"`` path (fail the subtask + continue) instead of
+    stranding the spec at ``generating`` until the liveness sweep flips it.
+    """
     from agents.session import run_agent_session
     from task_logger import LogPhase
 
     async with client:
-        return await run_agent_session(
-            client,
-            prompt,
-            spec_dir,
-            verbose,
-            phase=LogPhase.CODING,
+        result = await _run_bounded(
+            run_agent_session(
+                client,
+                prompt,
+                spec_dir,
+                verbose,
+                phase=LogPhase.CODING,
+            ),
+            timeout_s=_GEN_SESSION_TIMEOUT_S,
         )
+        if result is None:
+            _gen_log.warning(
+                "gen_functional: session exceeded %.0fs wall-clock — treating as "
+                "error so the subtask fails fast instead of stranding (#792)",
+                _GEN_SESSION_TIMEOUT_S,
+            )
+            return (
+                "error",
+                f"gen_functional session timed out after {_GEN_SESSION_TIMEOUT_S:.0f}s",
+                {},
+            )
+        return result
 
 
 # ─── Workspace helpers ──────────────────────────────────────────────────
@@ -395,7 +452,20 @@ def _advance_to_evaluator(spec_dir: Path, project_dir: Path) -> None:
 
     Lazy import — same defensive shape as _advance_to_planner_replan.
     Gated by ``TFACTORY_AUTO_EVALUATE`` (default ON; tests pin off).
+
+    The gate is checked HERE, before either execution mode (#897). It used to
+    live only inside the in-pod ``schedule_evaluator``, so with the production
+    ``TFACTORY_VERIFY_EXEC=kubejob`` setting the kubejob branch ran first and the
+    flag governed nothing: a hands-on ``run_gen_functional`` in the pod with
+    ``TFACTORY_AUTO_EVALUATE=0`` still applied a real verify Job (409-colliding
+    with the live one). One flag, both modes — and both callers, since
+    ``planner._advance_to_evaluator`` delegates here.
     """
+    if os.environ.get("TFACTORY_AUTO_EVALUATE", "1") == "0":
+        _gen_log.info(
+            "auto-evaluate disabled (TFACTORY_AUTO_EVALUATE=0); not advancing to verify"
+        )
+        return
     if _dispatch_verify_as_job_if_enabled(spec_dir, project_dir):
         return
     try:
@@ -524,6 +594,31 @@ def _collect_pending_subtasks(plan) -> list:
     ]
 
 
+def _committed_test_subtasks(
+    spec_dir: Path, plan: "ImplementationPlan"
+) -> "list[Subtask]":
+    """Subtasks Gen-Functional already committed a test file for in a prior run.
+
+    A subtask counts as committed when it's COMPLETED *and* its first
+    ``files_to_create`` path actually exists on disk. Used to decide whether a
+    re-run that finds no PENDING subtasks (all remaining ones went STUCK) should
+    still verify what exists rather than short-circuit to ``generated_empty``
+    (#707): a couple of stuck subtasks must not zero out the whole spec's verify.
+    """
+    # lazy import: test_plan pulls SDK deps, kept out of module import
+    from test_plan import SubtaskStatus  # noqa: PLC0415
+
+    committed = []
+    for phase in plan.phases:
+        for st in phase.subtasks:
+            if st.status != SubtaskStatus.COMPLETED:
+                continue
+            files = _files_to_create(st)
+            if files and (spec_dir / files[0]).exists():
+                committed.append(st)
+    return committed
+
+
 def _reject_subtask_for_replan(
     spec_dir: Path,
     project_dir: Path,
@@ -551,16 +646,172 @@ def _reject_subtask_for_replan(
         reason=reason,
         failed_target=getattr(subtask, "target", "") or "",
     )
+    # (A) #707: persist WHY on the subtask so it travels with the plan into
+    # test_plan.json (the planner marks it stuck later; the reason rides along).
+    subtask.replan_reason = reason
     plan.save(plan_file)
+    # (A) #707: accumulate replan reasons in status.json so the failure is
+    # visible there. The reasons were previously empty in status.json, which
+    # made stuck subtasks invisible. read → append → write (write_status_patch
+    # overwrites keys, so we carry the running list ourselves).
+    replan_reasons = list(_read_status(spec_dir).get("replan_reasons") or [])
+    replan_reasons.append(
+        {"subtask_id": subtask.id, "phase": phase, "reason": reason, "at": _now_iso()}
+    )
     _write_status_patch(
         spec_dir,
         status="replan_needed",
         phase=phase,
         last_rejected_subtask=subtask.id,
+        # Persist the concrete rejection reason — #707 noted these were empty in
+        # status.json, making stuck/replan loops impossible to diagnose after
+        # the fact. replan_request.json is overwritten each replan; this keeps
+        # the reason on the durable status record too. replan_reasons carries the
+        # running accumulated list built just above.
+        last_rejected_reason=reason,
+        replan_reasons=replan_reasons,
         tests_generated=tests_generated,
     )
     _advance_to_planner_replan(spec_dir, project_dir)
     return False
+
+
+def _criterion_text(subtask: object) -> str:
+    """The criterion this subtask claims, as the Planner carried it.
+
+    ``description`` is the planner's restatement of the acceptance criterion and
+    is where the worked-example values live. ``rationale`` (the raw "AC#N: ..."
+    line) is the fallback for plans that put the values only there — union'ing
+    both would widen the literal set for no gain on the common shape.
+    """
+    description = (getattr(subtask, "description", None) or "").strip()
+    if not description:
+        return (getattr(subtask, "rationale", None) or "").strip()
+    return description
+
+
+def _criterion_literal_check(
+    subtask: object, source: str
+) -> "LiteralDriftResult | None":
+    """Run the #888 criterion-literal check, or ``None`` when it is off.
+
+    Best-effort by construction: the check is pure and unit-tested, but an
+    unexpected error must not fail a healthy suite — it degrades to "no
+    finding", exactly like the assertion-drift guard.
+    """
+    from agents.criterion_literals import (  # noqa: PLC0415 - lazy by design
+        check_criterion_literals,
+        enabled,
+    )
+
+    if not enabled():
+        return None
+    text = _criterion_text(subtask)
+    if not text:
+        return None
+    try:
+        return check_criterion_literals(
+            text, source, language=getattr(subtask, "language", None)
+        )
+    except Exception as exc:  # noqa: BLE001 — never block a healthy suite
+        _gen_log.warning("criterion-literal check errored (%s); skipping", exc)
+        return None
+
+
+def _criterion_authority_check(
+    subtask: object, source: str
+) -> "AuthorityResult | None":
+    """Run the #995 spec-authority check, or ``None`` when it is off.
+
+    Best-effort like its sibling: pure and unit-tested, but an unexpected error
+    must not fail a healthy suite.
+    """
+    from agents.criterion_authority import (  # noqa: PLC0415 - lazy by design
+        check_criterion_authority,
+        enabled,
+    )
+
+    if not enabled():
+        return None
+    try:
+        return check_criterion_authority(
+            source, language=getattr(subtask, "language", None)
+        )
+    except Exception as exc:  # noqa: BLE001 — never block a healthy suite
+        _gen_log.warning("criterion-authority check errored (%s); skipping", exc)
+        return None
+
+
+def _source_guardrail_rejection(
+    subtask: object, source: str, project_dir: Path
+) -> tuple[str, str] | None:
+    """First guardrail to reject the generated source: ``(reason, phase)``.
+
+    ``None`` means every guardrail passed and the file may be committed. Three
+    guards run in cost order:
+
+      1. Pre-flight static check — Python only (AST + subprocess introspection).
+      2. Flake-risk lint — Python only (AST).
+      3. Criterion-literal drift (#888) — every language; a test that never
+         asserts a value its criterion states verified nothing about it.
+
+    The pre-flight and flake guards parse Python ASTs, so they only apply to
+    Python sources; for TS/JS (Playwright / Jest) and other languages they would
+    false-reject valid tests. ``language=None`` is the v0.1 legacy Python path,
+    so it counts as Python.
+    """
+    from agents.flake_risk_lint import flake_risk_lint
+    from agents.preflight_static import preflight_check
+
+    is_python = (getattr(subtask, "language", None) or "python") == "python"
+
+    pre = preflight_check(source, project_dir=project_dir) if is_python else None
+    if pre is not None and not pre.ok:
+        reasons = (
+            ", ".join(f"{f.describe()} — {f.reason[:80]}" for f in pre.failures)
+            or pre.summary()
+        )
+        return f"pre-flight rejected: {reasons}", "gen_functional_preflight_rejected"
+
+    flake = flake_risk_lint(source) if is_python else None
+    if flake is not None and not flake.ok:
+        reasons = (
+            "; ".join(
+                f"L{h.lineno} {h.pattern}: {h.detail[:60]}" for h in flake.rejected
+            )
+            or flake.summary()
+        )
+        return f"flake-lint rejected: {reasons}", "gen_functional_flake_rejected"
+
+    # #888: a generator that disagrees with a criterion must not quietly assert
+    # its own value instead. If a number the criterion states is absent from the
+    # test's CODE (comments and docstrings excluded) the criterion was
+    # reinterpreted, not tested — route it to a human.
+    drift = _criterion_literal_check(subtask, source)
+    if drift is not None and not drift.ok:
+        return (
+            "criterion-literal drift: the criterion states "
+            f"{', '.join(drift.missing)} but the generated test never asserts "
+            "it. Assert the criterion AS WRITTEN and let the test fail; never "
+            "substitute the implementation's value (#888).",
+            "gen_functional_criterion_literal_rejected",
+        )
+
+    # #995: the literal check compares VALUES, so it cannot see a test that
+    # asserts the criterion correctly while its prose announces the author
+    # decided the spec was wrong. That test has redefined its own oracle — the
+    # generator reasoned its way to grading the specification against the
+    # implementation, which is the one direction verification must never run.
+    authority = _criterion_authority_check(subtask, source)
+    if authority is not None and not authority.ok:
+        return (
+            "criterion authority: the generated test's prose passes judgement on "
+            f"the specification — {authority.describe()}. A test does not get to "
+            "decide the criterion is wrong; assert it AS WRITTEN and let the test "
+            "fail, or raise the conflict for a human (#995).",
+            "gen_functional_criterion_authority_rejected",
+        )
+    return None
 
 
 async def _generate_one_subtask(
@@ -580,8 +831,6 @@ async def _generate_one_subtask(
       ``"rejected"``  — a guardrail rejected and a Planner replan was scheduled;
                         the caller must stop the loop (return False)
     """
-    from agents.flake_risk_lint import flake_risk_lint
-    from agents.preflight_static import preflight_check
     from prompts_pkg.prompts import get_tfactory_gen_functional_prompt
 
     files = _files_to_create(subtask)
@@ -630,21 +879,9 @@ async def _generate_one_subtask(
         )
         return "rejected"
 
-    source = test_path.read_text()
-
-    # The pre-flight + flake-lint guards parse Python ASTs, so they only apply
-    # to Python sources. For TS/JS (Playwright / Jest) and other languages they
-    # would false-reject valid tests — skip them. language=None is the v0.1
-    # legacy Python path, so treat it as Python.
-    is_python = (subtask.language or "python") == "python"
-
-    # Pre-flight static check (commit 2) — Python only.
-    pre = preflight_check(source, project_dir=project_dir) if is_python else None
-    if pre is not None and not pre.ok:
-        reasons = (
-            ", ".join(f"{f.describe()} — {f.reason[:80]}" for f in pre.failures)
-            or pre.summary()
-        )
+    rejection = _source_guardrail_rejection(subtask, test_path.read_text(), project_dir)
+    if rejection is not None:
+        reason, phase = rejection
         _reject_subtask_for_replan(
             spec_dir,
             project_dir,
@@ -652,30 +889,8 @@ async def _generate_one_subtask(
             plan_file,
             subtask,
             test_path=test_path,
-            reason=f"pre-flight rejected: {reasons}",
-            phase="gen_functional_preflight_rejected",
-            tests_generated=tests_generated,
-        )
-        return "rejected"
-
-    # Flake-risk lint (commit 3) — Python only (AST-based).
-    flake = flake_risk_lint(source) if is_python else None
-    if flake is not None and not flake.ok:
-        reasons = (
-            "; ".join(
-                f"L{h.lineno} {h.pattern}: {h.detail[:60]}" for h in flake.rejected
-            )
-            or flake.summary()
-        )
-        _reject_subtask_for_replan(
-            spec_dir,
-            project_dir,
-            plan,
-            plan_file,
-            subtask,
-            test_path=test_path,
-            reason=f"flake-lint rejected: {reasons}",
-            phase="gen_functional_flake_rejected",
+            reason=reason,
+            phase=phase,
             tests_generated=tests_generated,
         )
         return "rejected"
@@ -760,6 +975,27 @@ async def run_gen_functional(
         plan = ImplementationPlan.load(plan_file)
         pending = _collect_pending_subtasks(plan)
         if not pending:
+            # (B) #707: no pending subtasks left, but earlier runs may have
+            # committed real test files for subtasks that are now COMPLETED
+            # (the rest went STUCK via the replan budget). Verify what we CAN
+            # instead of emitting nothing — don't let a couple of stuck
+            # subtasks zero out a spec whose other tests are ready to run.
+            committed = _committed_test_subtasks(spec_dir, plan)
+            if committed:
+                _write_status_patch(
+                    spec_dir,
+                    status="generated",
+                    phase="gen_functional_partial_verify",
+                    tests_generated=len(committed),
+                    gen_functional_warnings=[
+                        f"partial plan: verifying {len(committed)} committed "
+                        "test(s); remaining subtasks are stuck (see "
+                        "replan_reasons)"
+                    ],
+                )
+                _advance_to_evaluator(spec_dir, project_dir)
+                _advance_to_review(spec_dir, project_dir)
+                return True
             _write_status_patch(
                 spec_dir,
                 status="generated_empty",
@@ -770,7 +1006,19 @@ async def run_gen_functional(
             return True
 
         tests_generated = 0
-        for subtask in pending:
+        total = len(pending)
+        for idx, subtask in enumerate(pending, start=1):
+            # Heartbeat before each subtask: a multi-subtask generation can run
+            # many minutes, and `_generate_one_subtask` writes no status of its
+            # own, so without this the spec's `updated_at` freezes for the whole
+            # loop and the #95 liveness watchdog false-stalls a healthy run. One
+            # patch per subtask keeps `updated_at` fresh so a stall verdict means
+            # the process is genuinely gone, not just busy (#742/#774).
+            _write_status_patch(
+                spec_dir,
+                status="generating",
+                phase=f"gen_functional_subtask_{idx}_of_{total}",
+            )
             outcome = await _generate_one_subtask(
                 spec_dir,
                 project_dir,

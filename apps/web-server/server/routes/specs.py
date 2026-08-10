@@ -13,10 +13,15 @@ route); no per-route dependency is needed. Errors map to HTTP codes:
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, status
+import logging
+
+from fastapi import APIRouter, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
 from ._specpath import safe_component
+from ._tenancy import resolve_tenant
+
+logger = logging.getLogger(__name__)
 
 # Pin ``agents.planner`` into ``sys.modules`` at startup (this route module is
 # imported when the app boots). A request-time *fresh* import
@@ -67,6 +72,15 @@ class SpecIngestRequest(BaseModel):
             "Absent → tests are inferred from spec_text."
         ),
     )
+    tenant: str | None = Field(
+        default=None,
+        description=(
+            "Tenant owning this verification spec (#683). Optional, service-local "
+            "metadata — NOT part of the drift-gated task-contract schema. AIFactory "
+            "stamps it on handoff; when omitted the tenant is resolved from the "
+            "X-Tenant-Id header (multi-tenant mode) or falls back to 'default'."
+        ),
+    )
     git_url: str | None = Field(
         default=None,
         description=(
@@ -75,6 +89,32 @@ class SpecIngestRequest(BaseModel):
             "an AIFactory build for a not-yet-known project can still hand off "
             "(no manual pre-registration). Ignored when the project is already known."
         ),
+    )
+    repo: str | None = Field(
+        default=None,
+        description=(
+            "The task contract's repo reference, optionally provider-qualified "
+            "(RFC-0020 3.5): 'owner/repo' | 'gitlab:group/project' | "
+            "'azure_devops:org/project/repo'. Recorded on the spec so the Triager's "
+            "verdict goes to the right host — the PR-comment step is gh-CLI-driven "
+            "and is skipped, with the report written to disk, off GitHub. Absent "
+            "means GitHub, which is what it always meant."
+        ),
+    )
+
+
+class PrAttachRequest(BaseModel):
+    """Attach the PR the AIFactory build opened to an already-ingested spec.
+
+    The verifying handoff is sent BEFORE AIFactory opens the PR, so source.json
+    has no `pr_number` and the triager's PR-comment side-effect skips. AIFactory
+    calls this the moment the PR opens; the triager's later pr_comment step then
+    posts the verdict — or, if verify already finished, we post it now (#964).
+    """
+
+    pr_number: int = Field(..., gt=0, description="The opened PR number")
+    repo_slug: str | None = Field(
+        default=None, description="owner/name of the PR's repo (for `gh pr comment -R`)"
     )
 
 
@@ -202,7 +242,10 @@ async def _ensure_project_clone(
 @router.post(
     "/ingest", summary="Create a TFactory task from a raw spec (no AIFactory branch)"
 )
-async def ingest_spec(req: SpecIngestRequest) -> dict:
+async def ingest_spec(
+    req: SpecIngestRequest,
+    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
+) -> dict:
     # Imported lazily so the route module loads even in environments where the
     # backend package isn't importable until runtime path setup.
     from agents.tools_pkg.tools.task_control import create_spec_ingest_workspace
@@ -263,6 +306,8 @@ async def ingest_spec(req: SpecIngestRequest) -> dict:
             project_root=project_root,
             contract=req.contract,
             source_branch=req.source_branch,
+            tenant=resolve_tenant(x_tenant_id, req.tenant),
+            repo_ref=req.repo,
         )
     except FileExistsError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -270,3 +315,76 @@ async def ingest_spec(req: SpecIngestRequest) -> dict:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     return {"task_id": req.spec_id, "project_id": req.project_id, **result}
+
+
+@router.post(
+    "/{project_id}/{spec_id}/pr",
+    summary="Attach the opened PR to an ingested spec so the verdict posts back",
+)
+async def attach_pr(project_id: str, spec_id: str, req: PrAttachRequest) -> dict:
+    """Record `pr_number`/`repo_slug` on an ingested spec's source.json (#964).
+
+    The verifying handoff is sent before the PR exists, so this back-fills the
+    PR onto source.json; the triager's later pr_comment step reads it. If verify
+    already finished (status triaged), post the stored report immediately.
+    """
+    import json
+
+    from agents.tools_pkg.tools.task_control import _spec_dir
+
+    from .projects import load_projects
+
+    # Same name-or-id resolution the ingest route uses (AIFactory sends the name).
+    projects = load_projects()
+    resolved_id = project_id
+    if project_id not in projects:
+        for pid, data in projects.items():
+            if data.get("name") == project_id:
+                resolved_id = pid
+                break
+
+    spec_dir = _spec_dir(safe_component(resolved_id), safe_component(spec_id))
+    source_path = spec_dir / "context" / "source.json"
+    if not source_path.exists():
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail=f"no ingested spec {spec_id!r} for project {project_id!r}",
+        )
+
+    source = json.loads(source_path.read_text())
+    source["pr_number"] = req.pr_number
+    if req.repo_slug:
+        source["repo_slug"] = req.repo_slug
+    source_path.write_text(json.dumps(source, indent=2))
+
+    # If verify already reached a terminal triaged state, its pr_comment step has
+    # already run (and skipped for lack of a PR number, leaving the body on disk).
+    # Post it now rather than waiting for a re-run.
+    posted = None
+    try:
+        status_path = spec_dir / "status.json"
+        st = json.loads(status_path.read_text()) if status_path.exists() else {}
+        body_path = spec_dir / "findings" / "pr_comment_body.md"
+        if st.get("status") in {"triaged", "triaged_empty"} and body_path.exists():
+            from agents.triager import _pr_comment_dry_run
+            from tools.pr_comment import PRCommentRequest, post_pr_comment
+
+            result = post_pr_comment(
+                PRCommentRequest(
+                    repo_dir=spec_dir,
+                    pr_number=req.pr_number,
+                    body=body_path.read_text(),
+                    repo_slug=req.repo_slug or None,
+                ),
+                dry_run=_pr_comment_dry_run(),
+            )
+            posted = {"ok": result.ok, "dry_run": result.dry_run}
+    except Exception:  # noqa: BLE001 — best-effort; source.json is the record
+        logger.exception(
+            "attach_pr: failed to post pending PR comment for %s/%s",
+            project_id,
+            spec_id,
+        )
+        posted = {"ok": False, "error": "failed to post PR comment"}
+
+    return {"attached": True, "pr_number": req.pr_number, "posted": posted}

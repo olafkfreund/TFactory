@@ -242,6 +242,50 @@ def test_dry_run_skips_env_var_checks(state_dir: Path) -> None:
     assert "skipping env" in proc.stdout
 
 
+def test_dry_run_survives_absent_backend_venv(
+    state_dir: Path, tmp_path: Path
+) -> None:
+    """A dry run must not need ``apps/backend/.venv`` (#883).
+
+    Pointed at an interpreter that does not exist, ``--dry-run`` falls back to
+    ``python3`` on PATH — a dry run only uses Python for the stdlib JSON state
+    file. Forcing the path here means this exercises the fallback on CI too,
+    where the real backend venv is present.
+    """
+    proc = _run(
+        "--dry-run", "--scenario", "1",
+        env_extra={
+            "TFACTORY_E2E_STATE_DIR": str(state_dir),
+            "TFACTORY_PYTHON_BIN": str(tmp_path / "no-such-venv" / "bin" / "python"),
+        },
+    )
+    assert proc.returncode == 0, (
+        f"dry run should not require the backend venv\nstdout:\n{proc.stdout}\n"
+        f"stderr:\n{proc.stderr}"
+    )
+    assert "backend venv absent" in proc.stdout, proc.stdout
+    # It really ran: the state file exists and names the scenario.
+    doc = json.loads((state_dir / "e2e-state.json").read_text())
+    assert doc["scenarios"]["scenario_1_workspace_creation"]["outcome"] == "pass"
+
+
+def test_real_run_still_requires_backend_venv(
+    state_dir: Path, tmp_path: Path
+) -> None:
+    """The fallback is dry-run only — a real run imports ``apps.backend.*``
+    and must still fail loudly when the backend venv is missing (#883)."""
+    proc = _run(
+        "--scenario", "1",
+        env_extra={
+            "TFACTORY_E2E_STATE_DIR": str(state_dir),
+            "TFACTORY_PYTHON_BIN": str(tmp_path / "no-such-venv" / "bin" / "python"),
+        },
+    )
+    assert proc.returncode == 2
+    combined = proc.stdout + proc.stderr
+    assert "python venv not found at" in combined, combined
+
+
 def test_no_color_disables_ansi(state_dir: Path) -> None:
     """NO_COLOR=1 (or non-TTY stdout) → no ANSI escape sequences."""
     proc = _run("--list", env_extra={"TFACTORY_E2E_STATE_DIR": str(state_dir)})

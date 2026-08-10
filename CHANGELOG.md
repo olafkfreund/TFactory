@@ -1,5 +1,559 @@
 # Changelog
 
+## Unreleased
+
+- **The equivalence lane no longer reads a dead harness's empty stdout as a
+  golden corpus (#959).** `agents/equivalence_lane.py` took the runner's
+  `.stdout` and ignored its exit status, so a harness that never ran — missing
+  interpreter, import error, unresolvable Nix env, a `parity_harness` the target
+  does not expose — parsed to `[]`, and that empty list became the corpus the
+  candidate was compared against. Same defect class as the ratchet's
+  `ruff_counts()` (Factory#590, found in PFactory#455): a control reporting
+  success while measuring nothing, surviving here in application code rather
+  than a CI gate. `_require_harness_ran` reuses the shape of
+  `scripts/ratchet_helpers.require_tool_ran` minus a tier this harness does not
+  have — ruff and mypy exit 1 for "ran and found something", while the parity
+  protocol reports divergence *in its stdout JSON* and still exits 0, so 0 is
+  the only exit that means "ran". That helper's `measured` qualifier maps to
+  "results were parsed": a target-supplied `parity_harness` may exit non-zero
+  having still emitted a full corpus, and results on stdout prove it ran, so
+  only "no results AND not a clean exit" is fatal. One case ruff and mypy never
+  face: `runner_fn` is injected and duck-typed, so a runner carrying no
+  `.returncode` at all cannot show its harness ran and fails closed too. The
+  **verdict now names the failed measurement**: the old partial mitigation
+  (`declared - covered` as `uncovered_modules`) failed on the *manifest's*
+  declarations, so a dead oracle read as "modules X UNPROVEN (no corpus
+  coverage)" — a sentence about the manifest and the candidate for a failure in
+  neither, the Factory#430 shape, and a wrong explanation costs more than none.
+  The lane returns a single `reject` verdict naming the dead harness, which also
+  covers the two paths that had no second line of defence at all (a manifest
+  declaring nothing; the non-Python oracle), and writes no `golden_corpus.json`
+  for an unmeasured run so `[]` cannot mint a stable, meaningless digest. An
+  empty corpus from a *working* harness is unchanged — it is a measurement, it
+  does not raise, its corpus is written, and 0/0 still does not pass.
+  `scripts/demo_equivalence.py` now returns the `CompletedProcess` itself rather
+  than a shim exposing only `.stdout`; as the reference implementation of the
+  runner protocol it was modelling the broken contract.
+
+- **The schema-drift gate no longer soft-skips on a TLS certificate failure
+  (#940).** `scripts/check_schema_drift.py` treated *any* `urlopen` failure as a
+  transient outage — warn, exit 0. That is defensible for a GitHub blip; it is
+  not for a certificate failure, which is deterministic, recurs every run, and
+  behind a TLS-inspecting proxy leaves the gate permanently green without ever
+  once comparing the vendored Task Contract schema against the hub. A silent
+  skip is indistinguishable from a pass (Factory#433). A new `is_transient()`
+  unwraps `URLError.reason` recursively and defaults to "not transient" — only a
+  read timeout or a DNS failure may soft-skip; TLS errors, HTTP 4xx/5xx and
+  malformed JSON now fail the step with an explicit message. The surviving
+  soft-skip is loud (banner, `::warning` annotation, job-summary note) so a gate
+  that has stopped running is visible rather than quietly green. The regression
+  test drives a real `urlopen` against a local self-signed HTTPS server, because
+  the trap is where the error lands: `urlopen` raises `URLError` with the cert
+  error on `.reason` and `__context__` but **not** `__cause__`, and the raised
+  object is not an `ssl.SSLError` — so a mock, or an `except ssl.SSLError`,
+  encodes the same wrong assumption and changes nothing. Ported from PFactory's
+  fix for the identical defect (PFactory#440, PR #442).
+- **`id-token: write` no longer exists on the pull_request path of the
+  runner-image workflows (#948).** Signing the runner images (Factory#524)
+  required the OIDC token capability, and `permissions:` takes no expression.
+  All three publishing workflows were a single job spanning both `push` and
+  `pull_request`, so although every `cosign` step was guarded with
+  `if: github.event_name == 'push'`, the *capability* was granted to PR runs
+  too — runs that build a PR-controlled Dockerfile. A step-level guard cannot
+  fix this; permissions are granted per job, so only a job boundary can.
+
+  Each workflow is now `build` + `publish`. `publish` is push-only and is the
+  sole holder of `packages: write` and `id-token: write`; `build` runs on the
+  PR path with `contents: read` and nothing else — it also drops the
+  `packages: write` that PR runs had before Factory#524, and (for
+  `nix-runner-image.yml`) the GHCR login it never needed, since the base image
+  is public and nothing is pushed.
+
+  Not a live hole, which is why it was filed rather than folded into the
+  signing change: a PR-minted certificate carries
+  `...@refs/pull/N/merge`, and both the self-tests and the live
+  `verify-tfactory-runner-signature` rule anchor `...@refs/heads/main$`, so the
+  signature it could mint is rejected by the control it would be forging. The
+  residual was any *other* consumer trusting `repo:olafkfreund/TFactory`
+  without pinning the ref.
+
+  Nothing about the signatures changed. The cosign certificate SAN is derived
+  from the workflow **file**, not the job, so all eleven images still sign as
+  `.../.github/workflows/<file>.yml@refs/heads/main` — no workflow was renamed,
+  and the admission rule's three-way alternation still matches. In
+  `runner-images.yml` the nine-runner list now appears in two `strategy.matrix`
+  blocks (a matrix job cannot fan out into another matrix job leg-by-leg);
+  `tests/test_runner_image_workflows.py` holds them equal so one cannot drift
+  into building an image that is never published or signed. The cost of that
+  shape is that `publish` needs the whole `build` matrix, so one failing smoke
+  now blocks publication of all nine rather than just its own — deliberate, and
+  loud rather than silent.
+
+  `tests/test_runner_image_workflows.py::test_pull_request_runs_are_not_granted_id_token_write`
+  computes each job's effective permissions and asserts no `pull_request`-
+  reachable job in any workflow gets `id-token: write`. Mutation-checked by
+  reverting each of the three workflows to its pre-fix state, by granting the
+  capability at job level, and via the inheritance path (a job with no
+  `permissions:` block of its own under a workflow-level grant).
+- **The deploy dry-run now reads nothing, and the production guard no longer has
+  a filename-shaped hole (Factory#569).** The VAL-2 k8s rung ran
+  `kubectl apply --dry-run=server`. Measured against the live cluster, `apply`
+  GETs every object first to compute its merge patch, so it needed `get` on every
+  kind in the descriptor — including `secrets`. That is why the
+  `tfactory-deploy-dryrun` ServiceAccount could read every Secret in the
+  `factory` namespace: `factory-secrets`, the `factory-db-*` DATABASE_URLs,
+  `minio-creds`, the oauth2-proxy client secrets. It is the one credential handed
+  to a Job that executes model-generated content (the descriptors, and
+  `tofu init`/`plan`, which runs provider code).
+
+  The rung now runs `kubectl create --dry-run=server`, which POSTs with
+  `dryRun=All` and needs `create` alone — verified 6/6 green on a Secret,
+  ConfigMap, Deployment, Service, Job and Ingress under an identity holding no
+  read verb at all. The matching Role narrowing ships in factory-gitops and drops
+  `get`/`list` from every rule. No verdict is lost: on a name that already exists
+  both spellings already failed (`apply` 403s for want of `patch`, `create`
+  returns `AlreadyExists`).
+
+  Two bypasses closed in `assert_dry_run`, which this change makes the only thing
+  separating a dry-run from a real write: `plan`/`template`/`validate` were in the
+  dry-run set as bare subcommands, so `kubectl create -f plan` — a file named
+  `plan` — was accepted; and `startswith("--dry-run")` accepted `--dry-run=none`,
+  kubectl's "actually do it" value. Both are now exact flag matches, and `create`,
+  `delete`, `replace` and `patch` were added to the effectful set.
+
+- **The runner images are now signed (Factory#524).** The cosign work in
+  Factory#430 covered `deploy.yml`, `release.yml` and `build-nix.yml` — the
+  images that run first-party application code. It did not cover the runner
+  images, which are the sandbox in which *generated* code is built and executed:
+  `tfactory-runner-nix` (`AIFACTORY_SANDBOX_IMAGE`, `TFACTORY_VAL3_K8S_JOB_IMAGE`,
+  `TFACTORY_NIX_RUNNER_IMAGE`), `tfactory-runner-portal-ui`, and the nine
+  framework runners. All of them shipped unsigned, on a floating `:latest` for
+  two of the three pins, and the admission policy's `ghcr.io/olafkfreund/tfactory:*`
+  glob does not select them — the literal `:` after the service name stops it —
+  so they were not even reported. The signature control was pointed at the
+  images we already trust most.
+
+  `nix-runner-image.yml`, `portal-ui-runner-image.yml` and `runner-images.yml`
+  now sign the published digest with the same keyless GitHub OIDC flow
+  `deploy.yml` uses, and self-verify. Signing is by digest, so one signature
+  covers both the immutable tag and `:latest`. Signing runs on push to main
+  only: a pull_request build is loaded, never pushed, and a fork PR has no
+  `id-token` to sign with.
+
+  The self-test asserts the **exact** identity the admission rule will pin,
+  anchored at both ends
+  (`^https://github\.com/olafkfreund/TFactory/\.github/workflows/<file>\.yml@refs/heads/main$`),
+  rather than the repo prefix `deploy.yml` used. A prefix accepts any workflow in
+  the repo on any ref, so a self-test built on one reports success on signatures
+  the gate would deny — the same hole Factory#522 found in the policy. The
+  Kyverno rule covering `ghcr.io/olafkfreund/tfactory-runner-*` is deliberately
+  a separate, later change: added before signing landed it would only produce
+  Audit noise and block the Enforce flip.
+
+  `tests/test_runner_image_workflows.py` holds the invariant — every workflow
+  that pushes a runner image must request `id-token: write`, sign, and
+  self-verify against its own anchored identity — so the next runner image
+  cannot be published unsigned by omission. Mutation-checked against all three
+  failure modes.
+
+- **A verify run now records which model actually ran (#869).** `status.json`'s
+  `usage.model` had existed for exactly this and came back empty on a confirmed
+  Claude run — cost_usd was $7.76, priced off a Claude-only table, so the model
+  was known well enough to bill and still did not survive into the field that
+  names it. Root cause: the Claude Agent SDK's `ResultMessage` has no `.model`
+  attribute, and the normaliser read `getattr(obj, "model", "")`. The unit tests
+  stayed green because their fake ResultMessage had one.
+
+  `usage` now carries a per-phase `workers` list in the same shape AIFactory's
+  `token_usage.json` uses, so CFactory renders both services' attribution
+  identically. Each record separates `requested_model` (what the seam asked for)
+  from `model` (what actually served the tokens, taken only from the provider's
+  own answer — `AssistantMessage.model` per turn, else `ResultMessage.model_usage`
+  weighted by tokens served). `model` is never back-filled from the request: a
+  fallback reported as the request is how a benchmark table credits a model that
+  never executed, and an empty field honestly reads as UNKNOWN.
+
+  The Ollama and OpenAI-compatible adapters report no token counts at all, so
+  they previously wrote nothing and the non-Claude cells had no evidence
+  whatsoever. They now pass up the id the server echoed — which diverges from the
+  request more often than the Claude path does (tag resolution, gateway
+  substitution) — and the record is written on model evidence alone, tokens or
+  not. `routing.actual` in the v2 contract stays unwritten on purpose: that
+  contract is the signed input whose digest feeds the approval content-hash.
+
+  Documented in `docs/model-attribution.md`, along with the finding that there is
+  no `testing` phase to control — verification runs on the `coding` key, and a
+  contract carrying `phase_models.testing` is silently dropped by task_control's
+  whitelist. Also pins the three SDK field facts the reader depends on: this
+  suite's `conftest.py` replaces `claude_agent_sdk` with a MagicMock, which
+  reports every attribute as present, so no test here could have observed the
+  missing `.model`.
+
+## 0.9.25 — the Nix runner image pre-bakes the common Python closure (2026-07-22)
+
+- **The Nix verify lane no longer cold-fetches its toolchain per test (#768, PR
+  #772).** The evaluator dispatches one nix Job per (test x stability-rerun x
+  mutation-candidate) — `S x (3 + M)` Jobs for a spec — and each re-realised the
+  identical closure (python, pytest, gcc-wrapper, stdenv) from cache.nixos.org.
+  Spec 008 (12 tests) blew the 3600s verify deadline before a single verdict;
+  the same spec on the host runner takes ~10 minutes. Realising the closure once
+  before the loop is impossible on this cluster (`TFACTORY_NIX_IN_IMAGE=true`, so
+  each Job's `/nix` is its own pod-local image store, no shared mount — the
+  warm-store PVC is RWO and was dropped for concurrency, #623). So the closure is
+  baked into the runner image instead: a warm-up flake carrying
+  `python313.withPackages [pytest pytest-cov pip]` at `DEFAULT_NIXPKGS` is
+  realised at build time with `nix develop --profile` (gcrooted so a store GC
+  cannot drop it). A per-task flake resolving to those same paths finds them
+  present and skips the fetch; the SUT's own requirements still pip-install per
+  Job (#764). Drift is guarded by `tests/docker/test_p0_nix_warmup.py` (rev +
+  package set pinned to the generator, both halves mutation-checked) and the PR
+  image build proves the bake with an `--offline` realise. This removes the
+  dominant per-Job cost; the Job-dispatch fan-out is a separate lever, measured
+  on a live re-drive before deciding whether it also needs reducing.
+
+## 0.9.24 — a reaped verify Job now finishes its spec (2026-07-21)
+
+- **A deadline-killed Job no longer strands its workspace (#767, PR #769).**
+  `reap_if_orphaned` (#464) marked the durable job-state row `stuck` and stopped
+  there, but every reader that asks whether a spec is finished reads
+  `status.json` — so a killed Job left the workspace reading `evaluating`
+  forever, indistinguishable from still working. Observed on spec
+  `008-mcp-health-nix-lane-proof`: the Job hit `activeDeadlineSeconds=3600`, was
+  removed by `ttlSecondsAfterFinished=300`, and 87 minutes later the spec still
+  read `evaluating | evaluator_initial_started | tests=12` with no Job left in
+  the cluster to finish it — and no logs left to explain it.
+
+  The reaper could not have fixed it even if asked: `worker_ref` carried
+  kind/namespace/job_name/node and no path, so nothing connected a `job_id` back
+  to a workspace. Dispatch now records the control plane's own `spec_dir` there
+  (deliberately not the existing `spec_subpath`, which is the path the *Job*
+  mounts), and the reap writes `status=failed`, `phase=verify_job_reaped` and
+  the reason that named the row.
+
+  A spec already `triaged`/`failed`/`generated_empty` is untouched — the Job's
+  own verdict always wins over the reaper's inference — and rows written before
+  this change carry no `spec_dir`, so they skip the workspace write and mark the
+  row exactly as before.
+
+## 0.9.23 — the Nix verify lane installs the SUT's own dependencies (2026-07-21)
+
+- **A repo that declares its deps in requirements.txt is now installable in the
+  Nix lane (#764, PR #765 + hub Factory#308).** The lane built its Python set
+  from `_PYPROJECT_DEP_MAP`, a curated 21-entry PyPI-to-nixpkgs allowlist read
+  out of `pyproject.toml`. That list can never be complete, and a repo declaring
+  dependencies in `requirements.txt` got nothing from it at all — this repo is
+  exactly that shape (`apps/web-server/requirements.txt`,
+  `apps/backend/requirements.txt`, no root `pyproject.toml`). A real application
+  was therefore unimportable in the lane and every acceptance criterion came
+  back a collection error against correct code, the same failure #759 fixed on
+  the host runner.
+
+  Rather than growing a map that cannot be finished, the lane installs the SUT's
+  requirements at run time: `pip` ships in the generated flake when the checkout
+  declares any, and the Job runs `pip install --target /tmp/tf_sut_deps` per
+  file with that directory first on PYTHONPATH. `--target` sidesteps
+  ensurepip/venv availability in the nix interpreter, and `/tmp` is the one
+  location the Job's non-root uid can write. Each file installs separately under
+  the script's existing `set +e`, so one unresolvable pin cannot take the rest
+  down and the package roots stay the fallback.
+
+  A checkout with no `requirements.txt` gets no pip in its closure and a
+  byte-identical PYTHONPATH export, so hermetic repos are untouched — the
+  pre-existing export assertion passes unmodified, which is what proves it.
+
+  `nix_provisioner.py` is vendored from the hub, so the canonical half landed as
+  Factory#308 first and was re-vendored here byte-exact with HUB_PIN_SHA bumped
+  to `aad8d9e`. The drift gate rejected editing the vendored copy directly,
+  which is precisely its job.
+
+## 0.9.22 — a rejected import says which file answered (2026-07-21)
+
+- **The pre-flight now reports the resolved file, and no longer calls shadowing
+  a hallucination (#754, PR #762).** Three defects landed on this path in one
+  day — #732 (wrong import roots), #742 (shared clone on another spec's branch),
+  #752 (CWD outranking PYTHONPATH, so the running service's own copy answered) —
+  and every one surfaced as the same undiagnosable line, `X has no attribute Y`,
+  while the symbol existed perfectly well in the code under test. Each cost
+  hours, and fixing one only exposed the next, because several independent
+  layers decide which copy of a module wins.
+
+  The probe already imports the module, so it already holds `__file__`. The
+  rejection reason now carries it, which would have made all three obvious on
+  sight: the path was outside the checkout.
+
+  Classification changes narrowly with it. When the answering file is a
+  *different copy of a package the checkout also provides*, the symbol's absence
+  says nothing about the code under test, so the import is skipped as a
+  resolution failure rather than rejected as a hallucination — the same
+  environment-vs-hallucination call #707 makes for a missing module. The
+  "checkout also provides it" condition is the guardrail: `from json import
+  nope` also resolves outside the checkout and genuinely is a hallucination, so
+  it must keep failing, and a regression test pins that. An over-broad version
+  of this change would have quietly gutted the guard's purpose.
+
+## 0.9.21 — the lane venv installs the app's own dependencies (2026-07-21)
+
+- **A monorepo's dependencies now reach the test-execution venv (#759, PR
+  #760).** Run 6 produced 11 well-targeted tests with zero replan cycles and
+  flagged all 11 anyway, `ac_fidelity 0/6`, every verdict stating plainly that
+  *"consistent_fail is the shared sandbox import error, not a test defect"*. The
+  evaluator even wrote the fix into the run: install
+  `apps/web-server/requirements.txt` into the lane venv.
+
+  `_ensure_host_venv` looked for dependencies in exactly two places, both at the
+  repo root — `requirements.txt` and `pyproject.toml`. This repo has **neither**
+  at the root; it declares them in `apps/web-server/` and `apps/backend/`. Both
+  branches were skipped, the venv received only pytest, pytest-cov and requests,
+  and every test importing the app died at collection on fastapi — grading
+  correct code as an error. `requirements_files` discovers them at the same
+  bounded depth and with the same vendor-dir skips as `package_root_rel_paths`
+  (#756), each installed in its own pip call so one unresolvable pin cannot take
+  the others down with it.
+
+  Worth recording: #759 originally blamed the Nix lane's missing SUT
+  dependencies. The Nix lane never ran — with no task contract there is no
+  RFC-0005 environment manifest, `is_nix_environment` is False, and verify falls
+  through to this host runner. The Nix lane's own gap is real but separate: it
+  maps a curated 21-name allowlist and has no `requirements.txt` support at all,
+  which bites on the PFactory-planned path where it does run.
+
+## 0.9.20 — generated tests can finally run on a monorepo (2026-07-21)
+
+- **The test-execution path now carries a monorepo's package roots (#756, PR
+  #757).** Run 5 reached a triaged verdict on a real repo for the first time — 8
+  tests generated, evaluator ran, triager reported — and flagged all 8 with one
+  reason: *the subject module could not be imported/collected in the sandbox*.
+  The tests were sound (`mutation=killed`, `semantic=high`, `ci_parity=yes`);
+  they never got to run. The runners built PYTHONPATH as `<root>/src` +
+  `<root>`, which covers flat and src-layout repos and misses a monorepo whose
+  package sits at `apps/web-server/server`, so pytest failed at collection and
+  every acceptance criterion came back an error against correct code.
+
+  `package_root_rel_paths` is the execution-time counterpart to #732's
+  `package_roots_for`: the probe asks where THIS module lives, the runner asks
+  what pytest needs on the path to collect anything at all, since at execution
+  time it is handed a directory of tests rather than one module. Wired into the
+  Nix Job (roots discovered from the scratch the Job co-mounts, mapping 1:1 onto
+  in-Job paths) and the host runner; the historical entries stay, last, so flat
+  and src-layout repos are byte-identical. The Docker runner still hardcodes
+  `/scratch/src:/scratch` — unused on this cluster, so left alone rather than
+  changed blind.
+
+  This was the last link. Everything upstream already worked: the build lands
+  (AIFactory #984), the handoff carries the build branch (#980), the planner
+  targets symbols that exist (#737/#743), the clone is the right one (#742), and
+  the probe reads the checkout (#752). Tests were being written correctly and
+  then could not be executed.
+
+## 0.9.19 — the import probe reads the checkout, not the running service (2026-07-21)
+
+- **Pre-flight resolved against TFactory's own tree when package names collided
+  (#752, PR #753).** `python -c` puts the current directory at the front of
+  `sys.path`, ahead of everything `PYTHONPATH` says. The pre-flight subprocess
+  passed no `cwd`, so it inherited the running service's working directory —
+  `apps/web-server` — which silently outranked the checkout roots #732 computes.
+
+  Invisible until TFactory verifies a repo whose package names match its own,
+  which is exactly what verifying TFactory does: both trees provide
+  `server.routes.git`. Found live on run 5, where the planner correctly targeted
+  `_is_safe_mcp_url` (the symbol the build actually created, surfaced by the
+  #737 block) and the probe rejected it as nonexistent. Same PYTHONPATH, only
+  cwd differing, in the pod:
+
+        $ PYTHONPATH=$CHECKOUT python -c "import server.routes.git as m; ..."
+        resolved to: /home/projects/MagesticAI/.../server/routes/git.py
+        has _is_safe_mcp_url: False
+
+        $ cd /tmp && PYTHONPATH=$CHECKOUT python -c "..."
+        resolved to: /home/nonroot/.tfactory/workspaces/.../server/routes/git.py
+        has _is_safe_mcp_url: True
+
+  The probe now runs from the checkout. This is the third distinct way the
+  pre-flight has read the wrong copy of a module — #732 (wrong roots), #742
+  (wrong branch), #752 (CWD outranking both) — and all three surfaced as the
+  same indistinguishable "module has no attribute X". Reporting the resolved
+  file on rejection would have made each obvious immediately; tracked in #754.
+
+## 0.9.18 — the release can actually push its image (2026-07-21)
+
+**Correction to 0.9.17.** That entry claimed #740 had restored image signing. It
+had not. Dropping arm64 was necessary but not sufficient: with the arm64 leg
+gone the frontend built cleanly on amd64, and the step then failed one stage
+later, pushing —
+
+    ERROR: failed to push ghcr.io/olafkfreund/tfactory:v0.9.17:
+    unexpected status from HEAD request to
+    https://ghcr.io/v2/olafkfreund/tfactory/blobs/sha256:6433...: 403 Forbidden
+
+— so 0.9.17 skipped cosign, Syft, attestation and the signature self-test
+exactly as 0.9.15 and 0.9.16 did. The arm64 failure had been masking this: it
+died before reaching the push, so the 403 could not surface. Two independent
+defects stacked in one step, and the first diagnosis stopped at the first error
+(buildx reports the first failing platform, not the only problem).
+
+- **The release pushes to GHCR with the same credentials deploy.yml uses (#740,
+  PR #747).** `deploy.yml` pushes to this exact package on every merge to main
+  and has always carried a `GHCR_PAT` fallback, with a comment explaining the
+  package needs either this repo added with Write or a classic PAT holding
+  `write:packages`. `release.yml` only ever used the default `GITHUB_TOKEN`, so
+  the two lanes disagreed about whether they could push the same image — and
+  only the lane nobody watched was wrong. The secret was already configured;
+  release.yml now uses the same login as the lane that demonstrably works.
+
+This release is the proof: the `v0.9.17` tag and GitHub release were created
+before the push failed, so the fix could not be validated by re-running that
+workflow — only by the next version bump. If 0.9.18 publishes a signed image
+with an SBOM attached, the supply-chain gap that silently swallowed three
+releases is closed.
+
+## 0.9.17 — the symbol block points at the right build, and verify refuses the wrong tree (2026-07-21)
+
+Three fixes from a live run that exposed how much of the verify path was
+resolving against the wrong code.
+
+- **The delivered-symbols block now diffs against the branch the build was cut
+  from (#737, PR #743).** 0.9.16's block rendered but listed the wrong files: it
+  inherited its base from `_source_branch_changed_files`, which asked the repo
+  which branch is its *default* (`origin/HEAD` = `main`) rather than which
+  branch the build came from (`dev`, for every repo in this fleet). Measured on
+  TFactory's own checkout: 53 files against `origin/main` versus the 5 the build
+  actually touched. The block therefore reported dev's entire lead over main as
+  "what this build changed", and the 25-file cap crowded out the one file the
+  build had written. The base is now chosen by distance — try `origin/HEAD`,
+  `origin/dev`, `origin/main`, `origin/master` and keep whichever sits fewest
+  commits behind HEAD, since the branch was cut from exactly one of them. The
+  wrong base pre-dated the block: the same helper feeds the language verdict,
+  where a majority vote over noisy input still lands on the right answer, which
+  is why nothing surfaced it until a consumer with no noise tolerance appeared.
+
+- **Verify refuses to plan against a tree that is not this spec's build (#742,
+  PR #745).** `project_dir` is one shared clone per project and spec ingest
+  moves its HEAD, so whichever spec ran last owns HEAD for every other spec on
+  the project. Observed live: while spec 005 was being verified, the clone was
+  on spec 003's branch from the previous evening — so the planner's Glob/Grep,
+  the language signal, the import pre-flight (#732) and the symbol block were
+  all describing a different build than the one under test. Same failure class
+  as #732 but at the branch level, where #732's package-root fix cannot see it.
+  Ingest now records the commit it landed on (`source.json` `source_sha`) and
+  the planner compares it to HEAD, failing with `planner_source_checkout_drift`
+  on a mismatch. Failing is deliberate: verifying an unrelated tree produces a
+  confident verdict about code nobody asked about. Re-checking-out would be
+  self-healing but can yank the tree from under a concurrent spec; per-spec
+  worktrees are the real fix and stay open in #742. No recorded SHA means no
+  evidence of drift, and plans as before.
+
+- **The release signs its images again (#740, PR #744).** The release built
+  `linux/amd64,linux/arm64` under QEMU and the arm64 leg failed in the frontend
+  build (`vite`, `src/index.css`) for 0.9.15 and 0.9.16. Being the first image
+  step, its failure skipped the dev/demo build, cosign signing, SBOM generation,
+  attestation and the signature self-test — so two releases published unsigned
+  with no SBOM while the tag and GitHub release were created normally and
+  `deploy.yml` kept shipping to the cluster from its own lane. Nothing consumes
+  arm64 (`deploy.yml` is amd64-only and is what the cluster runs), so the leg is
+  dropped along with the QEMU setup that existed only for it.
+  `test_release_workflow_signs_with_cosign`'s docstring, which claimed the
+  self-test "fails the release if the signature doesn't verify", is corrected: a
+  skipped step enforces nothing, and that claim is why a green test sat beside
+  two unsigned releases.
+
+## 0.9.16 — the plan targets symbols the build actually delivered (2026-07-21)
+
+Fixes #737. Across three runs of the same issue with the same acceptance
+criteria, the coder produced three different APIs: `assert_safe_mcp_url` in a
+new `validators/` module, then the same name in `routes/git.py`, then a private
+`_is_safe_mcp_url_host` returning bool. All three satisfy the criteria —
+criteria describe behaviour, a test plan names symbols. Run 3's planner
+generated tests importing a public `assert_safe_mcp_url` raising
+`UnsafeMcpUrlError`, an API it inferred from the issue prose; the import
+pre-flight correctly rejected every subtask, the 12-replan budget drained, and
+the spec ended `planner_replan_budget_exhausted` with zero tests. That made
+verify on a real repo partly a coin flip — it worked on the demo helpers because
+`is_even(n)` has one obvious signature, and failed here because "a helper that
+validates a URL" has many.
+
+The information needed was already on hand and being discarded:
+`_checkout_source_branch` puts the build branch on disk before the planner runs,
+and `_source_branch_changed_files` already diffs it against the default branch,
+but everything except a one-word language verdict was thrown away. The planner
+prompt now carries a `SYMBOLS THE BUILD DELIVERED` block — the changed Python
+files parsed with `ast`, their symbols listed in the exact `path::symbol` syntax
+the plan must emit — in both initial and replan mode. Replan matters more, since
+that is the loop that burns the budget. Private names are included deliberately:
+hiding `_is_safe_mcp_url_host` would reproduce the bug, because the planner's
+error was reaching for a public name that did not exist; where behaviour is only
+reachable through a private helper, the block directs the planner to the public
+entry point instead. Python-only, matching the pre-flight guard that rejects
+these targets; no Python in the diff, an unreadable file, or a syntax error
+yields an empty block and byte-identical planner behaviour. The block reports
+what it read and never guesses.
+
+## 0.9.15 — pre-flight resolves nested package roots (2026-07-20)
+
+Fixes #732. The pre-flight import check put only `<project>` and `<project>/src`
+on PYTHONPATH, so a monorepo package at `apps/web-server/server` never resolved
+from the checkout. It fell through to whatever copy of that package name sat on
+the ambient PYTHONPATH — the running service's own — which predates the branch
+under test, so a brand-new function read as a hallucinated attribute. Exit 2,
+hard fail, replan, repeat, until the global replan budget was gone and the run
+failed with zero tests against correct code.
+
+The 0.9.14 hardening could not catch this: it skips exit 1 (module absent from
+the generation venv). Here the module imported fine — it was the wrong one.
+
+`package_roots_for` now finds the directories that actually contain the
+module's top-level package (bounded, skipping vendor dirs) and prepends them so
+the checkout wins. Genuine hallucinations on the same module are still caught.
+
+## 0.9.14 — gen-functional pre-flight tolerates api-lane / SUT-dep imports (2026-07-18)
+
+- **The Gen-Functional pre-flight no longer false-rejects a correct test for a module that's merely absent from the generation venv (#707, PR #709).** The pre-flight (`agents/preflight_static.check_import`) imports every module a generated test imports against TFactory's OWN service venv (`sys.executable`) — but an api-lane test imports `requests` (not in the backend requirements) and a unit test transitively imports the SUT's own deps (fastapi, ...), so `importlib.import_module` raised `ModuleNotFoundError`, the pre-flight hard-rejected a perfectly correct test, the Planner replan-looped the subtask to `stuck`, and the spec ended `generated_empty / gen_functional_no_pending` with verify never running — the dominant reason endpoint/feature specs never reached a clean VAL-2 (same family as #609/#613, which only patched pytest into the venv). The generation venv is not the test-execution env (nix/docker), so an absent module is an environment gap, not a hallucination: the introspect subprocess now exits 3 for `ModuleNotFoundError` and `check_import` marks it `skipped` (the real test run resolves it) rather than failed. A genuine hallucination — importable module, missing attribute — still exits 2 and fails, preserving the check's value. Also: the concrete rejection reason is now persisted to `status.json` (`last_rejected_reason`), which #707 noted was empty and undiagnosable; and the pytest api-lane example now reads `TFACTORY_TARGET_URL` inside the test (matching its own prose) to prevent an import-time `KeyError` and stop the LLM copying a module-level read. Non-vendored pre-flight code only; the vendored gate/provisioner were untouched.
+
+## 0.9.13 — api-lane app-boot failure reads as not-run, not a false reject (2026-07-18)
+
+- **A genuine app-boot failure in the api lane is now classified `not_run` (infra), not a false AC rejection (#705, PR #706).** Complements 0.9.12's in-Job app boot (#703): if the SUT never comes up (the `__TF_APP_NOT_HEALTHY__` marker), the api-lane verdict flips reject/flag to `not_run` deterministically (post-vote, never touching a genuine accept), the AC shows as not-run rather than failed, and the never-overclaim gate downgrades VAL-2 to VAL-1 honestly with no fabricated acceptance-criterion failure. All in non-vendored evaluator code (stability_runner/nix_env/confidence/val_block); the vendored gate needed no change.
+
+## 0.9.12 — api lane boots the app so endpoint ACs reach VAL-2 (2026-07-18)
+
+- **The API verification lane now boots the app-under-test inside the Nix Job (#702, PR #703).** Endpoint ACs previously capped at VAL-0: the api-lane test read `TFACTORY_TARGET_URL` at import, but on the prod Nix-Job path no app was booted and the var was never set, so the test `KeyError`d at collection and the never-overclaim gate downgraded VAL-2 to VAL-0 even for correct code. The api lane now serves the SUT in-Job (uvicorn for FastAPI, detected via `detect_serve_command`), polls readiness with a `-f`-less curl (a bare FastAPI has no `/` route), exports `TFACTORY_TARGET_URL`, runs the httpx/requests tests against it, and tears down. A boot failure surfaces `app_not_healthy` rather than a silent test failure. The unit lane (hermetic) and external-target api runs are unchanged. This is the clean-pass path the Dishonest-Coder demo (Factory#242) needed.
+
+## 0.9.11 — verify lane follows the deliverable language (2026-07-17)
+
+- **Fix: the verify planner no longer routes tests to the wrong language lane on mixed-language repos (#696, PR #697).** On a repo carrying `go.mod` from earlier polyglot ladder runs, a pure-Python deliverable (spec 022: `helpers/*.py`, pytest-green from AIFactory) got GO tests generated — 9/9 `consistent_fail` at compilation, VAL-0 vs target VAL-2 — because the `DETECTED PROJECT LANGUAGE` block ranked AC command tokens first and repo manifests second, and with neither decisive the Planner guessed from repo markers. The block now ranks deterministic signals strongest-first: (1) extensions of the files changed on the ingest `source_branch` (git diff of the checked-out build vs origin's default branch, falling back to the snapshotter's `diff.patch`), (2) extensions of the deliverable files named in the spec/AC text, (3) AC command tokens (`go test` -> Go, #443 preserved), (4) repo manifest markers as the last, unambiguous-only fallback. Majority-by-extension with tie -> fall through, so a mixed diff never guesses. Regression tests cover both directions: Python diff on a Go-marker repo selects the Python lane, and a Go diff on a Python repo still selects Go (the polyglot ladder is unchanged).
+
+## 0.9.10 — tenant scoping for verification data (2026-07-17)
+
+- **Verification specs/runs/verdicts are tenant-scoped (#683, PR #694).** Ingest accepts an optional service-local `tenant` field (the AIFactory stamp wins) or resolves `X-Tenant-Id` when `TFACTORY_MULTI_TENANT` is on; `tenant` is written into the spec workspace (`context/source.json` + `status.json`, default `"default"`, readers lazily backfill legacy rows) and `GET /api/tfactory/tasks` filters by tenant behind the flag. Flag off is byte-identical behavior apart from the new field. The drift-gated task-contract schema is untouched. Part of the fleet multi-tenancy program (factory-gitops#13/#14).
+
+## 0.9.9 — VAL-3 k8s-Job provisioner + atomic secret writes (2026-07-17)
+
+- **VAL-3 disposable-target provisioner (#607).** Env-gated k8s-Job backend for disposable verify targets: `TFACTORY_VAL3_K8S_JOB=1` + `TFACTORY_VAL3_K8S_JOB_IMAGE` activate it (lazy registration at the `disposable_target()` choke point — review caught that import-time-only registration silently never activated); default OFF; Job torn down on all failure paths, no credentials in Job env/argv, `automountServiceAccountToken: false`. Prerequisite for the Factory#257 VAL-3 live proof.
+- **`write_secret_file` is atomic (#688, PR #689).** `mkstemp` in-directory + `os.replace`: a concurrent reader now sees the whole old file or the whole new one, never a torn hybrid. The profile stores route through it; the flaky `TestFileLocking` CI failure is structurally dead (65/1000 torn files reproduced before, 0/1000 after).
+- **CodeQL: project-root trust boundary named and barriered (#664, PR #690).** Alerts #705-#709 were untrusted-project-path flows, not `safe_component` misses; new `trusted_project_root()` choke point + barrier. Local oracle (CodeQL 2.25.6): 21 -> 17 residual flows, 0 in the terminal-worktree service, no over-suppression.
+- **Six racy-by-design concurrency tests skipped with reasons (#691, PR #692)** pending the same atomic-write treatment; they were failing dev CI by design, not by regression.
+
+## 0.9.8 — schema drift gate + web-server tests in CI (2026-07-17)
+
+- **The vendored task-contract-v2 schema is synced and gated (#679).** The vendored copy was badly stale — missing `execution.autonomy_tier`, `routing`, `deployment`, `environment` and the whole `$defs` block (+623 lines) — so contract validation ran against a fossil. Now a verbatim copy of the canonical hub schema, enforced by `scripts/check_schema_drift.py` (PFactory's proven gate, reused) as a blocking CI step: hard-fail on drift, soft-skip on network failure. (PR #684)
+- **apps/web-server tests are collected and blocking in CI (#681).** CI previously ran only `pytest tests/`, so the web-server suite rotted to 31 failures unnoticed. The suite is triaged (fixed where behavior changed, deleted where behavior was removed — deletions listed in the PR) and wired into `ci.yml` as a blocking step, green in its own introduction run. (PR #685)
+- **auto-close workflow: don't fail pushes without closing keywords.** `grep` exits 1 on no match, which under `set -euo pipefail` killed the job before the graceful no-op path; `|| true` on the extraction pipeline. (PR #686)
+
+## 0.9.7 — secrets are 0600 from creation (2026-07-17)
+
+- **Fix: profile tokens, the API token and the JWT secret are no longer world-readable mid-write (#663).** Every writer did `write_text` then `chmod` — but `write_text` creates the file at the umask default (0644) and only the *subsequent* chmod narrows it, so each secret was world-readable for the duration of the write. The one guarantee this posture rests on was not actually continuous. New `paths.write_secret_file` passes the mode to `os.open` (mirroring the existing `tfactory_secrets.broker.materialise_file` pattern) and all writers route through it: the four Claude-profile writers (#675) plus the API auth token `.token` and the JWT signing secret `.jwt_secret` (#677). The trailing chmod is retained deliberately — `O_CREAT`'s mode is ignored for an existing file, so a 0644 file from an older build or a restored backup is repaired.
+- **Decision recorded (#663): plaintext-at-0600 is accepted, deliberately.** The agent SDK needs the cleartext token in our own process, so any at-rest encryption must be reversible by us on the same host — a key stored beside the ciphertext moves the secret rather than protecting it, since whoever can read the file already runs as our uid. The reasoning and its revisit trigger now live at the write site. (`EncryptedString`/KMS works for DB credentials only because that key is external to the DB.)
+
+## 0.9.6 — base-image CVE bump (2026-07-17)
+
+- **Fix: docker P0 Trivy gate green again (#668).** `test_p0_supply_chain::test_trivy_no_high_critical` was red on 7 fixable HIGH CVEs; the pinned chainguard base digests had gone stale so the runtime stage's `apk upgrade` could no longer reach the patched packages (chainguard pins the apk snapshot to the image build). Bumped both `latest-dev` digests to the current build — python `369768c6 -> bee63d1f`, node `ce3f1896 -> 64d07882` — so `apk upgrade` pulls the fixes. Verified green by the docker P0 acceptance trivy scan.
+
+## 0.9.5 — websocket fall-through no longer crashes (2026-07-17)
+
+- **Fix: WebSocket connections that match no `/ws/*` route no longer flood `AssertionError` (#670).** The terminal `SPAStaticFiles` catch-all mount at `/` matches both `http` and `websocket` scopes; a WebSocket falling through to it hit stock `StaticFiles.__call__`'s `assert scope["type"] == "http"`, raising on every such connection (breaking live task-status streaming to the cockpit). `SPAStaticFiles.__call__` now passes non-HTTP scopes through cleanly (websocket scopes get a clean close) instead of asserting; HTTP serving and cache-policy behaviour unchanged.
+
+## 0.9.4 — verify-agent OAuth auto-refresh (2026-07-16)
+
+- **Fix: in-pod verify/plan agents no longer 401 on an expired OAuth token (#666).** The agents were pinned to a static `CLAUDE_CODE_OAUTH_TOKEN` sourced from a Secret; a static env token never refreshes, so once its access token expired every spawn failed with `Invalid authentication credentials` — surfaced live when an AIFactory intake build auto-handed off for verification. `create_client` now calls `prefer_refreshable_credentials()` at spawn time: when `~/.claude/.credentials.json` carries a `refreshToken`, `CLAUDE_CODE_OAUTH_TOKEN` is dropped from the env so the Claude Agent SDK owns auth and refreshes the token itself (the same file+refresh path AIFactory build Jobs already use). Runs on every spawn now, not only under remote-control; a deliberate `ANTHROPIC_AUTH_TOKEN` (CCR/proxy) is left untouched. No re-login required.
+
 ## 0.12.0 — continuous regression suite (RFC-0018) (2026-06-22)
 
 - **Regression suite & continuous verification ([RFC-0018](https://github.com/olafkfreund/Factory/blob/main/docs/rfc/0018-regression-suite-and-continuous-verification.md), epic #482).** TFactory now re-runs a project's persisted `tests-catalog.json` corpus over time and diffs against a stored baseline, turning one-shot feature verification into continuous regression detection. New `agents/regression/` subsystem (see `docs/regression-suite.md`):

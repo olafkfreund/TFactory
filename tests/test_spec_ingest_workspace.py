@@ -73,9 +73,11 @@ def _git(cwd, *args):
     )
 
 
-def test_source_branch_recorded_and_warns_when_not_git(tmp_path):
-    """source_branch is recorded in source.json; a non-git project_root surfaces a
-    warning but never aborts ingest (#96)."""
+def test_unresolvable_source_branch_fails_spec_loudly(tmp_path):
+    """A named build branch that can't be checked out fails the spec loudly rather
+    than proceeding on whatever tree is checked out — silently verifying the wrong
+    code is worse than not verifying (#742/#96). source_branch is still recorded
+    for provenance, and the planner is not scheduled."""
     result = _ingest(
         tmp_path,
         _MARKDOWN,
@@ -84,19 +86,24 @@ def test_source_branch_recorded_and_warns_when_not_git(tmp_path):
         source_branch="aifactory/123",
     )
     assert result["source_format"] == "markdown"
+    assert result["status"] == "failed"
+    assert result["planner_scheduled"] is False
     assert any(
         "source_branch" in w or "not a git repo" in w for w in result["warnings"]
     )
+    status = json.loads((_spec_dir(tmp_path) / "status.json").read_text())
+    assert status["status"] == "failed"
+    assert status["phase"] == "source_checkout_failed"
+    assert status["source_checkout_error"]
+    # source_branch is still recorded even on failure (provenance / re-drive).
     source = json.loads((_spec_dir(tmp_path) / "context" / "source.json").read_text())
     assert source["source_branch"] == "aifactory/123"
 
 
-def test_source_branch_checks_out_built_code(tmp_path):
-    """The build branch is fetched + checked out into project_root, so the SUT is
-    the ACTUAL built code — the fix for the hollow-verify gap (#96)."""
-    import subprocess
-
-    origin = tmp_path / "origin"
+def _origin_with_build(tmp_path, *, name="origin"):
+    """Build a bare-ish origin with a base branch plus a build branch that adds
+    built.rs. Returns (origin_path, base_branch)."""
+    origin = tmp_path / name
     origin.mkdir()
     _git(origin, "init", "-q")
     _git(origin, "config", "user.email", "t@t")
@@ -112,11 +119,21 @@ def test_source_branch_checks_out_built_code(tmp_path):
     _git(origin, "add", ".")
     _git(origin, "commit", "-qm", "build")
     _git(origin, "checkout", "-q", base_branch)
+    return origin, base_branch
 
-    # project_root = a clone of origin, on the base branch (NO built.rs yet).
+
+def test_source_branch_materializes_worktree_not_shared_clone(tmp_path):
+    """The build branch is materialized as the spec's OWN git worktree (#742), so
+    the SUT is the actual built code (#96) WITHOUT touching the shared clone —
+    concurrent specs can't clobber each other's HEAD."""
+    import json as _json
+    import subprocess
+
+    origin, _ = _origin_with_build(tmp_path)
+    # project_root = a shared clone of origin, on the base branch (NO built.rs).
     proj = tmp_path / "proj-clone"
     subprocess.run(["git", "clone", "-q", str(origin), str(proj)], capture_output=True)
-    assert not (proj / "built.rs").exists()  # base branch lacks the build
+    assert not (proj / "built.rs").exists()
 
     _ingest(
         tmp_path,
@@ -126,9 +143,62 @@ def test_source_branch_checks_out_built_code(tmp_path):
         source_branch="aifactory/999",
     )
 
-    # After ingest the build branch is checked out — the built code is present.
-    assert (proj / "built.rs").exists()
-    assert "Hello" in (proj / "built.rs").read_text()
+    sd = _spec_dir(tmp_path)
+    source = _json.loads((sd / "context" / "source.json").read_text())
+    status = _json.loads((sd / "status.json").read_text())
+    assert source["worktree"] is not None, (
+        f"worktree not created: {status.get('source_checkout_error')}"
+    )
+    worktree = Path(source["worktree"])
+    # The spec's worktree holds the build...
+    assert worktree == sd / ".worktree"
+    assert (worktree / "built.rs").exists()
+    assert "Hello" in (worktree / "built.rs").read_text()
+    assert source["source_sha"]
+    # ...and the shared clone's working tree is UNTOUCHED (still on base branch).
+    assert not (proj / "built.rs").exists()
+
+
+def test_concurrent_specs_get_independent_worktrees(tmp_path):
+    """Two specs off the SAME shared clone get independent worktrees — the core
+    #742 property. Under the old in-place checkout, the second ingest moved the
+    shared HEAD and the first spec's tree changed under it."""
+    import subprocess
+
+    origin, base_branch = _origin_with_build(tmp_path)
+    # A second build branch with different content.
+    _git(origin, "checkout", "-q", "aifactory/999")
+    _git(origin, "checkout", "-qb", "aifactory/998")
+    (origin / "built.rs").write_text('fn greet() -> &str { "Goodbye" }')
+    _git(origin, "add", ".")
+    _git(origin, "commit", "-qm", "build2")
+    _git(origin, "checkout", "-q", base_branch)
+
+    proj = tmp_path / "proj-clone"
+    subprocess.run(["git", "clone", "-q", str(origin), str(proj)], capture_output=True)
+
+    _ingest(
+        tmp_path,
+        _MARKDOWN,
+        spec_id="spec-a",
+        target_paths=["built.rs"],
+        project_root=str(proj),
+        source_branch="aifactory/999",
+    )
+    _ingest(
+        tmp_path,
+        _MARKDOWN,
+        spec_id="spec-b",
+        target_paths=["built.rs"],
+        project_root=str(proj),
+        source_branch="aifactory/998",
+    )
+
+    wt_a = _spec_dir(tmp_path, "spec-a") / ".worktree" / "built.rs"
+    wt_b = _spec_dir(tmp_path, "spec-b") / ".worktree" / "built.rs"
+    # spec-a still sees its own build after spec-b was ingested — no clobber.
+    assert "Hello" in wt_a.read_text()
+    assert "Goodbye" in wt_b.read_text()
 
 
 def test_gherkin_creates_workspace(tmp_path):
@@ -157,6 +227,22 @@ def test_markdown_format(tmp_path):
     assert result["ac_count"] == 2
 
 
+def test_ingested_spec_body_is_on_disk_verbatim(tmp_path):
+    """#855: the body was discarded at ingest and unrecoverable from the workspace."""
+    text = (
+        "## Slug rules\n\n"
+        "- truncate to 200 characters BEFORE slugging, never after\n\n"
+        "## Acceptance Criteria\n\n"
+        "- AC#1: GET /healthz returns 200\n"
+    )
+    _ingest(tmp_path, text, spec_id="body-spec")
+    ctx = _spec_dir(tmp_path, "body-spec") / "context"
+    on_disk = (ctx / "aifactory_spec.md").read_text() + (
+        ctx / "source.json"
+    ).read_text()
+    assert "BEFORE slugging" in on_disk
+
+
 def test_ears_format(tmp_path):
     result = _ingest(tmp_path, _EARS)
     assert result["source_format"] == "ears"
@@ -170,6 +256,26 @@ def test_format_override_respected(tmp_path):
 
 
 # ─── failure semantics ────────────────────────────────────────────────────
+
+
+def test_tenant_stamped_default(tmp_path):
+    """No tenant supplied — 'default' is stamped into both stores (#683)."""
+    _ingest(tmp_path, _MARKDOWN)
+    sd = _spec_dir(tmp_path)
+    source = json.loads((sd / "context" / "source.json").read_text())
+    status = json.loads((sd / "status.json").read_text())
+    assert source["tenant"] == "default"
+    assert status["tenant"] == "default"
+
+
+def test_tenant_stamped_explicit(tmp_path):
+    """An explicit tenant rides into source.json + status.json (#683)."""
+    _ingest(tmp_path, _MARKDOWN, tenant="acme")
+    sd = _spec_dir(tmp_path)
+    source = json.loads((sd / "context" / "source.json").read_text())
+    status = json.loads((sd / "status.json").read_text())
+    assert source["tenant"] == "acme"
+    assert status["tenant"] == "acme"
 
 
 def test_no_criteria_raises_and_leaves_no_dir(tmp_path):

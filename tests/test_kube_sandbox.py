@@ -2,7 +2,44 @@
 
 from __future__ import annotations
 
-from tools.runners.kube_sandbox import build_job_manifest, pvc_subpath
+import asyncio
+
+from tools.runners.job_dispatch import assert_job_policy
+from tools.runners.kube_sandbox import (
+    JobRunResult,
+    KubeJobSandbox,
+    build_job_manifest,
+    pvc_subpath,
+)
+
+
+def _sandbox_with_fake_run() -> KubeJobSandbox:
+    sb = KubeJobSandbox("img", namespace="factory")
+
+    async def _fake(commands, timeout, workdir):
+        return JobRunResult(ok=True, exit_code=0, output="hi")
+
+    sb._run_async = _fake  # type: ignore[method-assign]
+    return sb
+
+
+def test_run_works_without_a_running_loop():
+    res = _sandbox_with_fake_run().run(["echo hi"])
+    assert res.ok and res.exit_code == 0 and res.output == "hi"
+
+
+def test_run_works_inside_a_running_event_loop():
+    # The async verify evaluator calls sandbox.run() from within a running loop.
+    # asyncio.run() would raise "cannot be called from a running event loop" there
+    # (which the caller swallowed into a silent host fallback), so run() must
+    # offload to a dedicated thread. Regression guard for the Nix-lane dispatch.
+    sb = _sandbox_with_fake_run()
+
+    async def caller():
+        return sb.run(["echo hi"])
+
+    res = asyncio.run(caller())
+    assert res.ok and res.output == "hi"
 
 
 def test_toolchain_only_job_has_no_volume():
@@ -18,8 +55,11 @@ def test_toolchain_only_job_has_no_volume():
 
 def test_repo_comount_rw_for_browser_lane():
     m = build_job_manifest(
-        "j2", "img", ["nix develop /work#default -c playwright test"],
-        repo_pvc="tf-workspaces", repo_subpath="workspaces/proj",
+        "j2",
+        "img",
+        ["nix develop /work#default -c playwright test"],
+        repo_pvc="tf-workspaces",
+        repo_subpath="workspaces/proj",
     )
     c = m["spec"]["template"]["spec"]["containers"][0]
     assert c["workingDir"] == "/work"
@@ -81,7 +121,9 @@ def test_warm_nix_store_mounted_with_seed_init():
     )
     t = m["spec"]["template"]["spec"]
     vols = {v["name"]: v for v in t["volumes"]}
-    assert vols["nix-store"]["persistentVolumeClaim"]["claimName"] == "tfactory-nix-store"
+    assert (
+        vols["nix-store"]["persistentVolumeClaim"]["claimName"] == "tfactory-nix-store"
+    )
     assert "repo" in vols
     mounts = {vm["name"]: vm for vm in t["containers"][0]["volumeMounts"]}
     assert mounts["nix-store"]["mountPath"] == "/nix"
@@ -89,3 +131,203 @@ def test_warm_nix_store_mounted_with_seed_init():
     assert init["name"] == "seed-nix-store"
     assert init["volumeMounts"][0]["mountPath"] == "/warm"
     assert "/warm/store" in init["command"][-1]
+
+
+def test_job_pod_and_container_are_hardened():
+    # #651 (Factory#274 compensating controls): seccomp RuntimeDefault pinned on
+    # the pod; no privilege escalation + drop ALL on every container. The root
+    # nix user keeps only the co-mount add-backs (uid-65532 worktree writes +
+    # warm-store seeding); runAsNonRoot is deliberately NOT set — the nix-runner
+    # image builds as root by design.
+    m = build_job_manifest(
+        "jh",
+        "img",
+        ["true"],
+        repo_pvc="tfactory-data",
+        repo_subpath="ws/p",
+        nix_store_pvc="tfactory-nix-store",
+    )
+    pod = m["spec"]["template"]["spec"]
+    assert pod["securityContext"] == {"seccompProfile": {"type": "RuntimeDefault"}}
+    assert "runAsNonRoot" not in pod["securityContext"]
+    for c in [*pod["containers"], *pod.get("initContainers", [])]:
+        sc = c["securityContext"]
+        assert sc["allowPrivilegeEscalation"] is False
+        assert sc["privileged"] is False
+        assert sc["capabilities"]["drop"] == ["ALL"]
+        assert set(sc["capabilities"]["add"]) == {
+            "CHOWN",
+            "DAC_OVERRIDE",
+            "FOWNER",
+            "SETUID",
+            "SETGID",
+            "KILL",
+        }
+
+
+def test_nix_local_builds_keep_their_build_user_caps():
+    """#623: the runner image ships `build-users-group = nixbld`, so any LOCAL
+    build makes nix setuid to a build user and reap it. Without SETUID/SETGID/
+    KILL, `nix develop` dies the moment a derivation cannot be substituted:
+
+        error: setting uid: Operation not permitted
+        error: cannot kill processes for uid '30001'
+
+    Reproduced on the factory cluster with this exact image and the previous
+    add-back set, then fixed by adding these three (AIFactory#840/#841 hit the
+    same wall on the same image).
+
+    The warm store MASKS this: a Job that wins the RWO /nix mount race finds the
+    closure prebuilt and never builds; one that loses the race gets a cold /nix
+    and needs a local build. That composition is the likeliest explanation for
+    #623's intermittency — so these caps must survive any future de-pin, which
+    removes the warm store and makes local builds the normal case.
+    """
+    m = build_job_manifest("jh", "img", ["true"])
+    for c in m["spec"]["template"]["spec"]["containers"]:
+        add = set(c["securityContext"]["capabilities"]["add"])
+        assert {"SETUID", "SETGID", "KILL"} <= add, add
+
+
+def test_image_pull_policy_reuses_node_cache():
+    # #777: the 535 MB runner image is already on any warm node — a default of
+    # Always re-pulled it on every Job (~11.5s). IfNotPresent must be pinned on
+    # the lane AND the seed-nix init container so the node cache is authoritative.
+    m = build_job_manifest(
+        "jp",
+        "img",
+        ["true"],
+        repo_pvc="tfactory-data",
+        repo_subpath="ws/p",
+        nix_store_pvc="tfactory-nix-store",
+    )
+    pod = m["spec"]["template"]["spec"]
+    for c in [*pod["containers"], *pod.get("initContainers", [])]:
+        assert c["imagePullPolicy"] == "IfNotPresent"
+
+
+def test_container_state_variants():
+    from types import SimpleNamespace as NS
+
+    from tools.runners.kube_sandbox import _container_state
+
+    assert (
+        _container_state(NS(state=NS(waiting=NS(reason="PodInitializing"))))
+        == "waiting(PodInitializing)"
+    )
+    assert _container_state(NS(state=NS(waiting=None, running=object()))) == "running"
+    assert (
+        _container_state(
+            NS(
+                state=NS(
+                    waiting=None,
+                    running=None,
+                    terminated=NS(exit_code=1, reason="Error"),
+                )
+            )
+        )
+        == "terminated(exit=1,Error)"
+    )
+
+
+def test_describe_pod_summarizes_phase_and_containers():
+    from types import SimpleNamespace as NS
+
+    from tools.runners.kube_sandbox import _describe_pod
+
+    pod = NS(
+        status=NS(
+            phase="Running",
+            init_container_statuses=[
+                NS(name="seed-nix-store", state=NS(waiting=None, running=object()))
+            ],
+            container_statuses=[
+                NS(name="lane", state=NS(waiting=NS(reason="PodInitializing")))
+            ],
+        )
+    )
+    d = _describe_pod(pod)
+    assert "phase=Running" in d
+    assert "init/seed-nix-store=running" in d
+    assert "lane=waiting(PodInitializing)" in d
+
+
+# ── deploy dry-run service account (#603) ───────────────────────────────────
+
+
+def test_service_account_opt_in_mounts_token():
+    """The deploy lane's kubectl --dry-run=server needs a scoped SA token; passing
+    service_account sets it AND flips automount on (verify lanes never do)."""
+    m = build_job_manifest(
+        "jsa", "img", ["kubectl apply --dry-run=server -f ."],
+        service_account="tfactory-deploy-dryrun",
+    )
+    spec = m["spec"]["template"]["spec"]
+    assert spec["serviceAccountName"] == "tfactory-deploy-dryrun"
+    assert spec["automountServiceAccountToken"] is True
+
+
+def test_no_service_account_keeps_token_unmounted():
+    m = build_job_manifest("jns", "img", ["true"])
+    spec = m["spec"]["template"]["spec"]
+    assert spec["automountServiceAccountToken"] is False
+    assert "serviceAccountName" not in spec
+
+
+def test_with_manifest_kw_merges_without_mutating_original():
+    base = KubeJobSandbox("img", namespace="factory", network_none=True)
+    deploy = base.with_manifest_kw(service_account="sa-x", network_none=False)
+    assert deploy.manifest_kw["service_account"] == "sa-x"
+    assert deploy.manifest_kw["network_none"] is False
+    # original untouched
+    assert "service_account" not in base.manifest_kw
+    assert base.manifest_kw["network_none"] is True
+
+
+# ── The shared job-dispatch contract (Factory#483) ────────────────────────────
+#
+# This builder predates the hub's scripts/job_dispatch.py and restated its rules
+# by hand. assert_job_policy is the hub's own checker, vendored byte-exact, so
+# these are not TFactory's opinion of the rules - they are the rules, and a
+# change to them lands here through a re-vendor rather than through a hand-edit.
+
+
+def test_lane_job_obeys_the_shared_job_policy():
+    m = build_job_manifest(
+        "j1",
+        "img",
+        ["true"],
+        repo_pvc="tfactory-data",
+        repo_subpath="ws/p",
+        nix_store_pvc="tfactory-nix-store",
+    )
+    assert_job_policy(m)
+
+
+def test_lane_pod_is_not_selectable_as_a_tfactory_service_backend():
+    # The `tfactory` Service selects exactly {"app": "tfactory"} and a Service
+    # selector is a SUBSET match, so a Job pod carrying that label joins it as an
+    # endpoint, listens on nothing, and answers real traffic with connection
+    # refused. That is TFactory#885 (the portal-ui lane took the portal offline
+    # and then reported it broken), AIFactory#1107, and Factory#458 - three
+    # independent arrivals of one defect.
+    m = build_job_manifest("j1", "img", ["true"])
+    pod_labels = m["spec"]["template"]["metadata"]["labels"]
+    assert pod_labels["app"] != "tfactory"
+    # Unchanged and load-bearing: charts/tfactory/templates/networkpolicy-jobs.yaml
+    # selects exactly this value, so the shared helper must keep producing it.
+    assert pod_labels["app"] == "tfactory-sandbox"
+    assert pod_labels["factory.io/service"] == "tfactory"
+    # #812: the per-task NetworkPolicy selector. This builder never set it.
+    assert pod_labels["factory.io/kind"] == "task"
+    # The Job OBJECT keeps app=tfactory-sandbox: a Job is never a Service endpoint
+    # and never a `kubectl exec` target, so label queries on it stay useful.
+    assert m["metadata"]["labels"]["app"] == "tfactory-sandbox"
+
+
+def test_job_name_stays_a_valid_dns_label():
+    # kube_sandbox names Jobs tfsbx-<uuid10>, not factory-<service>-<short>. The
+    # PREFIX is deliberately per-service (see the hub docstring); DNS-1123
+    # VALIDITY is not, and assert_job_policy checks that for whatever scheme a
+    # consumer picks.
+    assert_job_policy(build_job_manifest("j1", "img", ["true"]))

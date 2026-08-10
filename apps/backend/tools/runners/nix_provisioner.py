@@ -28,7 +28,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import tomllib
 from dataclasses import dataclass, field
+from pathlib import Path
 
 # nixpkgs pin for generated flakes. A FULL commit rev (not a branch) keeps
 # generated flakes reproducible AND avoids a GitHub API call to resolve the
@@ -36,6 +39,47 @@ from dataclasses import dataclass, field
 # (proven 2026-06-17: a branch ref 403'd; the pinned rev fetches the tarball
 # directly). Bump deliberately (Renovate can automate).
 DEFAULT_NIXPKGS = "github:NixOS/nixpkgs/567a49d1913ce81ac6e9582e3553dd90a955875f"
+
+# Pinned lock metadata for DEFAULT_NIXPKGS (#778). Captured from `nix flake lock`
+# in the runner image — NEVER hand-edit: a wrong narHash makes nix REJECT the lock
+# and re-lock (or error), so it must come from nix and stay in lockstep with
+# DEFAULT_NIXPKGS (test_nix_provisioner pins them together). Every generated flake
+# has exactly ONE input (nixpkgs at a full rev), so this ONE lock fits them all —
+# shipping it beside the flake stops each ephemeral verify Job from re-locking
+# nixpkgs on every run (a per-Job `nix flake lock` roundtrip, #778).
+_DEFAULT_NIXPKGS_NARHASH = "sha256-lrp67w8AulE9Ks53n27I45ADSzbOCn4H+CNW1Ck8B+8="
+_DEFAULT_NIXPKGS_LASTMODIFIED = 1781577229
+
+
+def generate_lock(nixpkgs: str = DEFAULT_NIXPKGS) -> str | None:
+    """The ``flake.lock`` for a generated flake, or None when the rev is unknown.
+
+    Only emitted for ``DEFAULT_NIXPKGS`` — the single rev whose narHash we captured
+    from nix. Any other ``nixpkgs`` returns None so nix resolves + locks it itself
+    (correct, just not pre-locked). The lock's ``original`` must match the flake's
+    ``inputs.nixpkgs.url`` (a rev-pinned github ref) exactly, or nix re-locks.
+    """
+    if nixpkgs != DEFAULT_NIXPKGS or not nixpkgs.startswith("github:NixOS/nixpkgs/"):
+        return None
+    rev = nixpkgs.rsplit("/", 1)[-1]
+    github_ref = {"owner": "NixOS", "repo": "nixpkgs", "rev": rev, "type": "github"}
+    lock = {
+        "nodes": {
+            "nixpkgs": {
+                "locked": {
+                    "lastModified": _DEFAULT_NIXPKGS_LASTMODIFIED,
+                    "narHash": _DEFAULT_NIXPKGS_NARHASH,
+                    **github_ref,
+                },
+                "original": dict(github_ref),
+            },
+            "root": {"inputs": {"nixpkgs": "nixpkgs"}},
+        },
+        "root": "root",
+        "version": 7,
+    }
+    return json.dumps(lock, indent=2) + "\n"
+
 
 # language -> (nix python attr | node attr). Extend as the fleet grows.
 _PY_ATTR = {
@@ -52,6 +96,71 @@ _PY_PKG_ALIASES = {
     "beautifulsoup4": "beautifulsoup4",
     "scikit-learn": "scikit-learn",
 }
+
+# Curated PyPI-name -> nixpkgs python3Packages attr for deps we seed into a
+# generated flake from the SUT's pyproject.toml (#615). Only vetted, stable
+# attrs — an unmapped dependency is skipped (logged), never guessed, so a bad
+# attr can't break the flake build. Extend as real repos need it.
+_PYPROJECT_DEP_MAP = {
+    "fastapi": "fastapi",
+    "uvicorn": "uvicorn",
+    "starlette": "starlette",
+    "httpx": "httpx",
+    "pydantic": "pydantic",
+    "pydantic-settings": "pydantic-settings",
+    "requests": "requests",
+    "flask": "flask",
+    "aiohttp": "aiohttp",
+    "sqlalchemy": "sqlalchemy",
+    "jinja2": "jinja2",
+    "click": "click",
+    "typer": "typer",
+    "numpy": "numpy",
+    "pandas": "pandas",
+    "pyyaml": "pyyaml",
+    "python-dateutil": "python-dateutil",
+    "pytest": "pytest",
+    "pytest-cov": "pytest-cov",
+    "pytest-asyncio": "pytest-asyncio",
+    "pytest-mock": "pytest-mock",
+    "anyio": "anyio",
+}
+
+
+def _dep_base_name(spec: str) -> str:
+    """Strip version/extras/markers from a PEP 508 dep string -> lowercase name.
+
+    ``uvicorn[standard]>=0.32`` -> ``uvicorn``; ``httpx>=0.27`` -> ``httpx``.
+    """
+    return re.split(r"[<>=!~;\[\s]", spec.strip(), maxsplit=1)[0].strip().lower()
+
+
+def _deps_from_pyproject(project_dir) -> list[str]:
+    """Mapped nixpkgs attrs for the SUT's declared deps + test extras (#615).
+
+    Reads ``<project_dir>/pyproject.toml`` ``[project].dependencies`` and any
+    ``[project.optional-dependencies]`` ``test``/``dev`` group, maps known names
+    via ``_PYPROJECT_DEP_MAP`` and drops the rest. Best-effort: a missing or
+    unparseable pyproject yields ``[]`` (the flake still ships the base toolchain).
+    """
+    pp = Path(project_dir) / "pyproject.toml"
+    if not pp.is_file():
+        return []
+    try:
+        data = tomllib.loads(pp.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return []
+    proj = data.get("project", {}) if isinstance(data, dict) else {}
+    specs = list(proj.get("dependencies", []) or [])
+    extras = proj.get("optional-dependencies", {}) or {}
+    for group in ("test", "tests", "dev"):
+        specs += list(extras.get(group, []) or [])
+    out: list[str] = []
+    for spec in specs:
+        attr = _PYPROJECT_DEP_MAP.get(_dep_base_name(str(spec)))
+        if attr and attr not in out:
+            out.append(attr)
+    return out
 
 
 class ProvisionError(RuntimeError):
@@ -174,7 +283,7 @@ def _system_pkg_attrs(m: Manifest) -> list[str]:
     return [p for p in m.system_packages if p.lower() not in _DROP_SYSTEM_PKGS]
 
 
-def generate_flake(env: dict, *, nixpkgs: str = DEFAULT_NIXPKGS) -> str:
+def generate_flake(env: dict, *, nixpkgs: str = DEFAULT_NIXPKGS, project_dir=None) -> str:
     """Render a reproducible `flake.nix` from an RFC-0005 environment manifest.
 
     Mirrors the proven PoC: a single devShell with the language toolchain, any
@@ -193,10 +302,13 @@ def generate_flake(env: dict, *, nixpkgs: str = DEFAULT_NIXPKGS) -> str:
         pkg_lines.append(f"pkgs.{_go_attr(m)}")
     else:
         py = _python_attr(m)
-        py_pkgs = [_PY_PKG_ALIASES.get(p, p) for p in _python_libs(m)]
+        py_pkgs = [_PY_PKG_ALIASES.get(p, p) for p in _python_libs(m, project_dir=project_dir)]
         if py_pkgs:
-            joined = " ".join(py_pkgs)
-            pkg_lines.append(f"(pkgs.{py}.withPackages (p: with p; [ {joined} ]))")
+            # Reference each attr as ``p."name"`` (quoted) rather than
+            # ``with p; [ name ]`` so hyphenated attrs (pytest-cov,
+            # scikit-learn) don't parse as Nix subtraction.
+            joined = " ".join(f'p."{name}"' for name in py_pkgs)
+            pkg_lines.append(f"(pkgs.{py}.withPackages (p: [ {joined} ]))")
         else:
             pkg_lines.append(f"pkgs.{py}")
     sys_attrs_with_node = list(sys_attrs)
@@ -249,15 +361,53 @@ def generate_flake(env: dict, *, nixpkgs: str = DEFAULT_NIXPKGS) -> str:
 """
 
 
-def _python_libs(m: Manifest) -> list[str]:
-    """Python libraries to put in the withPackages set. Always include pytest for
-    the verify lane; add fastapi/uvicorn/httpx when the commands imply a web app."""
+def _requirements_present(project_dir: Path) -> bool:
+    """True when the checkout declares deps in a requirements.txt the lane can install.
+
+    Bounded the same way the runner's discovery is, so this answers the same
+    question the Job will ask at run time.
+    """
+    root = Path(project_dir)
+    skip = {".git", ".venv", "venv", "node_modules", "__pycache__"}
+    for pattern in ("requirements.txt", "*/requirements.txt", "*/*/requirements.txt"):
+        for hit in root.glob(pattern):
+            if not any(part in skip for part in hit.relative_to(root).parts):
+                return True
+    return False
+
+
+def _python_libs(m: Manifest, project_dir=None) -> list[str]:
+    """Python libraries to put in the withPackages set. Always include the verify
+    lane's own harness — pytest + pytest-cov (the runner always passes ``--cov``)
+    and ``requests`` (the api lane's HTTP client, TFactory#892); add
+    fastapi/uvicorn/httpx when the commands imply a web app; and, when
+    ``project_dir`` is given, the SUT's own declared deps + test extras read from
+    its pyproject.toml (#615) so an ingested repo imports without a hand-written
+    manifest."""
     libs: list[str] = []
     hay = " ".join(m.verify_commands + m.build_commands + m.proof_verify).lower()
     if (m.language or "").lower() in ("", "python") or "pytest" in hay:
-        libs.append("pytest")
+        # `requests` is HARNESS surface, not app surface, so it rides with pytest
+        # rather than waiting on the SUT to declare it. TFactory's pytest
+        # descriptor instructs Gen-Functional to drive the api lane with
+        # `requests` ("already installed" — true of the legacy docker runner
+        # image, false of a generated flake). A SUT that doesn't happen to depend
+        # on requests therefore produced an env where EVERY api test died at
+        # `import requests`, i.e. at collection, and every HTTP-level acceptance
+        # criterion came back unverifiable against correct code (TFactory#892).
+        libs += ["pytest", "pytest-cov", "requests"]
     if "uvicorn" in hay or "fastapi" in hay or "httpx" in hay or _needs_browser(m):
         libs += ["fastapi", "uvicorn", "httpx"]
+    if project_dir is not None:
+        libs += _deps_from_pyproject(project_dir)
+        # #764: the allowlist above can never be complete, and a repo that
+        # declares its deps in requirements.txt gets nothing from it at all.
+        # Ship pip so the verify Job can install whatever the map missed — the
+        # lane installs into a writable target and prepends it to PYTHONPATH.
+        # The allowlist stays: it is the hermetic path when the deps happen to
+        # be mapped, and pip only fills the gap.
+        if _requirements_present(project_dir):
+            libs += ["pip"]
     # de-dup, stable order
     seen: set[str] = set()
     out: list[str] = []
@@ -342,6 +492,11 @@ def _test() -> None:
     assert "python312" in f2, f2
     assert "playwright" not in f2 and "PLAYWRIGHT_BROWSERS_PATH" not in f2, f2
     assert "pytest" in f2, f2
+    # TFactory#892: the api lane's HTTP client is harness surface — it must be in
+    # EVERY python verify env, including one whose SUT never declares it (a plain
+    # manifest with no project_dir at all). Without it `import requests` fails at
+    # collection and every HTTP acceptance criterion is unverifiable.
+    assert 'p."requests"' in f2, f2  # noqa: S101
 
     # 3. system packages pass through (minus browser drops).
     env_sys = {
@@ -365,6 +520,7 @@ def _test() -> None:
     assert "pkgs.gotestsum" in fg and "pkgs.gocover-cobertura" in fg, fg  # noqa: S101
     assert "withPackages" not in fg and "python" not in fg, fg  # noqa: S101
     assert "pytest" not in fg, fg  # noqa: S101 — no python libs inferred for a go env
+    assert "requests" not in fg, fg  # noqa: S101 — harness libs are python-lane only
     # unknown/unset go version degrades to bare `pkgs.go` (no system pkgs here,
     # so `pkgs.go` is the sole package line — no false match on gocover etc.).
     fg2 = generate_flake({"language": "go", "verify_commands": ["go test ./..."]})

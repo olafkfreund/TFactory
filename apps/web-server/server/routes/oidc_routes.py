@@ -26,7 +26,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 from jose import JWTError, jwt
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, SecretStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -83,6 +83,14 @@ def _post_login_redirect(request: Request) -> str:
 # ---------------------------------------------------------------------------
 
 
+@router.get("/enabled", summary="Whether OIDC SSO is available on this deployment")
+async def oidc_enabled() -> dict:
+    """Cheap probe (#149) so the login page can decide whether to auto-initiate a
+    silent SSO handoff. Avoids bouncing users to a 404 on installs without OIDC.
+    """
+    return {"enabled": is_oidc_enabled()}
+
+
 @router.get("/login", summary="Begin OIDC Authorization Code + PKCE flow")
 async def oidc_login(request: Request):
     """Redirect the browser to the IdP authorization endpoint.
@@ -110,7 +118,15 @@ async def oidc_login(request: Request):
     # NOT auto-generate a nonce; we must pass one explicitly. Stored
     # in the session by authlib for the callback round-trip.
     nonce = _secrets.token_urlsafe(32)
-    return await oauth.oidc.authorize_redirect(request, redirect_uri, nonce=nonce)
+    # Silent SSO handoff (#149): switching between portals that share the one
+    # Keycloak realm should not re-prompt. The frontend probes with ?prompt=none;
+    # we forward it so Keycloak returns error=login_required (handled gracefully
+    # at the callback) instead of showing its own login page when there is no
+    # session. Only "none" is forwarded — never a caller-chosen arbitrary prompt.
+    extra: dict[str, str] = {}
+    if request.query_params.get("prompt") == "none":
+        extra["prompt"] = "none"
+    return await oauth.oidc.authorize_redirect(request, redirect_uri, nonce=nonce, **extra)
 
 
 @router.get(
@@ -132,6 +148,20 @@ async def oidc_callback(request: Request, db: AsyncSession = Depends(get_db)):
             status_code=status.HTTP_404_NOT_FOUND,
             detail="OIDC SSO is not configured on this deployment",
         )
+
+    # Silent-probe fallback (#149): a ?prompt=none login with no live Keycloak
+    # session comes back with error=login_required (and no code). That is the
+    # expected "not signed in yet" outcome — route to the manual login page
+    # instead of surfacing a 400. Also covers a user-declined/consent error.
+    if request.query_params.get("error"):
+        logger.info(
+            "OIDC callback returned error=%s — routing home",
+            str(request.query_params.get("error"))[:64],
+        )
+        # Redirect to the SPA root, NOT "/login": /login is a client-side React
+        # route and this portal's web-server 404s a server request for it. The
+        # SPA at "/" renders the login form client-side when unauthenticated.
+        return RedirectResponse(url="/")
 
     oauth = get_oauth_client()
     try:
@@ -212,11 +242,11 @@ async def oidc_callback(request: Request, db: AsyncSession = Depends(get_db)):
 
 
 class RefreshRequest(BaseModel):
-    refresh_token: str
+    refresh_token: SecretStr
 
 
 class RefreshResponse(BaseModel):
-    access_token: str
+    access_token: str = Field(repr=False)
 
 
 async def _fetch_userinfo_from_idp(sub: str) -> dict | None:
@@ -343,7 +373,7 @@ async def oidc_refresh(body: RefreshRequest, db: AsyncSession = Depends(get_db))
     settings = get_settings()
     try:
         payload = jwt.decode(
-            body.refresh_token,
+            body.refresh_token.get_secret_value(),
             settings.JWT_SECRET,
             algorithms=[settings.JWT_ALGORITHM],
         )
@@ -372,7 +402,7 @@ async def oidc_refresh(body: RefreshRequest, db: AsyncSession = Depends(get_db))
         # IdP validation. We use the "is the IdP up + has the sub
         # not been explicitly invalidated" minimum here; richer
         # per-user validation lands in P3.4.x extensions.
-        ok = await _validate_against_idp(body.refresh_token)
+        ok = await _validate_against_idp(body.refresh_token.get_secret_value())
         if not ok:
             # Revocation: delete session, clear cache, 401.
             invalidate(session.oidc_sub)
@@ -399,7 +429,7 @@ async def oidc_refresh(body: RefreshRequest, db: AsyncSession = Depends(get_db))
 
 
 class LogoutRequest(BaseModel):
-    refresh_token: str | None = None
+    refresh_token: SecretStr | None = None
 
 
 @router.post("/logout", summary="Logout: delete session + redirect to IdP end-session")
@@ -426,7 +456,8 @@ async def oidc_logout(
             detail="OIDC SSO is not configured on this deployment",
         )
 
-    refresh_token = (body.refresh_token if body else None) or request.cookies.get(
+    supplied = body.refresh_token.get_secret_value() if body and body.refresh_token else None
+    refresh_token = supplied or request.cookies.get(
         "refresh_token"
     )
 

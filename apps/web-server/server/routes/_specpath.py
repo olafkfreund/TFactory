@@ -18,9 +18,46 @@ isn't already a bare component, so a traversal attempt fails loudly with HTTP
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 from fastapi import HTTPException
+
+# The slug charset shared by every request-supplied id in this app (project_id,
+# spec_id, test_id, framework/template name). Kept here rather than re-declared
+# per route: it was copy-pasted into seven modules, and each copy carried the
+# same hole (#866).
+_SLUG_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def is_safe_slug(value: str) -> bool:
+    """True when *value* is a slug that is also a real single path component.
+
+    The charset alone does not guard. ``.`` and ``..`` are both full matches and
+    both traverse once interpolated into a path -- ``<root>/..`` is the parent
+    of the root -- so they are excluded explicitly. Multi-segment traversal is
+    already impossible without ``/``, which the charset omits.
+
+    This is a predicate, not a raiser, because the callers do not share a
+    failure mode: most answer HTTP 400 (:func:`safe_slug`), the badge endpoint
+    answers a grey "no data" image, and the MCP lookup answers ``None``.
+    """
+    return value not in (".", "..") and bool(_SLUG_RE.match(value))
+
+
+def safe_slug(value: str, detail: str) -> str:
+    """Return *value* when :func:`is_safe_slug`, else HTTP 400 with *detail*.
+
+    Returns the validated slug rather than ``None`` so callers assign it back
+    and the value that reaches the filesystem is the checked one. The custom
+    CodeQL pack (``.github/codeql/custom-queries``) registers this function as a
+    path-injection barrier, so that assignment is also what clears the taint --
+    no ``os.path.basename`` round-trip is needed, the charset already excludes
+    every separator.
+    """
+    if not is_safe_slug(value):
+        raise HTTPException(status_code=400, detail=detail)
+    return value
 
 
 def safe_component(name: str) -> str:
@@ -57,6 +94,27 @@ def safe_join(base: Path, *parts: str) -> Path:
     if joined_real != base_real and not joined_real.startswith(base_real + os.sep):
         raise HTTPException(status_code=400, detail="Invalid path")
     return Path(joined_real)
+
+
+def trusted_project_root(path: str) -> Path:
+    """Resolve a request-supplied local project root, or raise ``ValueError``.
+
+    Under the local-install trust model an authenticated client may point the
+    server at any local directory it can access (like an editor opening a
+    folder) -- the *whole path* is user-chosen by design, so containment checks
+    do not apply. This helper is the single named choke point for that trust
+    decision: it resolves the path and requires an existing directory, and the
+    custom CodeQL pack (``.github/codeql/custom-queries``) recognises it as a
+    path-injection barrier so deliberately-accepted project roots stop firing
+    ``py/path-injection-sanitized`` at every derived filesystem access.
+
+    Raises ``ValueError`` (not ``HTTPException``) so service-layer callers keep
+    their existing error contracts.
+    """
+    root = Path(path).resolve()
+    if not root.is_dir():
+        raise ValueError(f"Project path does not exist: {path}")
+    return root
 
 
 def safe_spec_dir(base: Path, spec_id: str) -> Path:

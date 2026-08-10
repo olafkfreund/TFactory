@@ -17,7 +17,13 @@ is by-design local-install paths).
    sanitizer-covered alerts on `main`.
 
 ## Remaining residual (by-design)
-`projects.py` register/scan, `files.py` absolute browsers, `terminal_worktree`
-base, `git.py` cwd — these intentionally accept an arbitrary local path
-(local-install trust model). Decide per-endpoint: recognise the existing access
-guard as a barrier, confine to an allowed root, or accept.
+`projects.py` register/scan, `files.py` absolute browsers, `git.py` cwd —
+these intentionally accept an arbitrary local path (local-install trust
+model). Decide per-endpoint: recognise the existing access guard as a barrier,
+confine to an allowed root, or accept.
+
+`terminal_worktree` base: DECIDED (issue #664, alerts #705-#709). The five
+alerts were flows of the request-supplied project root — not `safe_component`
+flows, which the pack already barriered. The accept decision now has a named
+choke point, `routes/_specpath.trusted_project_root`, which the pack
+recognises as a barrier, so those sinks clear on their merits.

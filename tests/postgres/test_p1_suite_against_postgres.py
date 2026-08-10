@@ -18,6 +18,14 @@ def test_full_pytest_suite_passes_against_postgres(test_postgres_url: str) -> No
     Run as a subprocess so the inner pytest gets a fresh module state with
     DATABASE_URL pointing at Postgres. Excludes -m postgres/-m slow to keep
     runtime under ~30s.
+
+    Also excludes -m docker: this gate answers exactly one question, "does the
+    app work on Postgres?", so a test that cannot answer it can only add false
+    negatives. The docker-marked tests assert on Dockerfile and workflow text
+    and never open a connection — they return the same result on Postgres as
+    on SQLite — but a failure in one surfaces here as a Postgres failure. That
+    is how a hung `docker buildx` reddened this gate (#962). They still run in
+    the backend lane, which can interpret their result.
     """
     venv_python = REPO_ROOT / "apps" / "backend" / ".venv" / "bin" / "python3"
     if not venv_python.exists():
@@ -31,7 +39,7 @@ def test_full_pytest_suite_passes_against_postgres(test_postgres_url: str) -> No
     result = subprocess.run(
         [
             str(venv_python), "-m", "pytest",
-            "tests/", "-m", "not slow and not postgres",
+            "tests/", "-m", "not slow and not postgres and not docker",
             "-q", "--tb=short",
         ],
         cwd=REPO_ROOT,

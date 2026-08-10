@@ -27,8 +27,20 @@ spec:
       backoffLimit: 0
       template:
         metadata:
+          # NOT selectorLabels: those are the `tfactory` Service's selector, so a
+          # pod carrying them joins the Service and answers real portal traffic
+          # with connection refused for the whole nightly run (#885 was the same
+          # defect from the portal-ui Job; this is the one the same PR missed).
+          #
+          # `instance` is kept because that is what the chart's NetworkPolicy
+          # selects — dropping it would leave this pod matched by NO policy, and a
+          # pod no policy selects is UNRESTRICTED, which trades a traffic bug for a
+          # weaker egress posture.
           labels:
-            {{- include "tfactory.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/name: {{ include "tfactory.name" . }}-regression
+            app.kubernetes.io/instance: {{ .Release.Name }}
+            app.kubernetes.io/component: regression-cron
+            app.kubernetes.io/part-of: tfactory
         spec:
           restartPolicy: Never
           serviceAccountName: {{ include "tfactory.serviceAccountName" . }}

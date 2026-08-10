@@ -13,12 +13,29 @@ persisted on disk in the spec's ``status.json`` under a ``usage`` key. Each
 session folds its final (cumulative) ``ResultMessage`` usage in via
 :func:`record_in_status`; the completion event reads the sum back via
 :func:`usage_block_from_status`. Additive and optional — zeros when no LLM ran.
+
+Resolved-model evidence (#869)
+------------------------------
+The ``usage`` block also carries a ``workers`` list — the same shape AIFactory's
+``token_usage.json`` uses (``worker_id`` / ``phase`` / ``provider`` / ``model``
+/ tokens / cost), so CFactory renders both services' attribution identically.
+TFactory's "worker" is an execution *phase* (``planning`` / ``coding`` / ``qa``);
+verification runs on the ``coding`` key — there is no ``testing`` phase (see
+``docs/model-attribution.md``).
+
+Each record separates two DIFFERENT facts:
+
+* ``requested_model`` — what the seam asked for (config / contract).
+* ``model`` — what actually *served the tokens*, observed from the provider's
+  own response. A session that fell back reports the model that ran, not the
+  one that was asked for. Empty (never guessed) when the provider does not say.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -101,6 +118,32 @@ def _as_int(value: object) -> int:
         return 0
 
 
+def model_from_model_usage(model_usage: object) -> str:
+    """The model id that actually SERVED the most tokens in a session.
+
+    The Claude Agent SDK's ``ResultMessage`` has no ``.model`` attribute at all
+    (see ``claude_agent_sdk.types``) — which is why ``usage.model`` came back
+    empty on real Claude runs while the unit tests, using a fake that *did*
+    have one, stayed green (#869). What it does carry is ``model_usage``: a
+    ``{model_id: {inputTokens, outputTokens, ...}}`` breakdown of what really
+    ran. A session that fell back mid-flight lists BOTH ids, so picking the id
+    with the most tokens names the model that did the work rather than the one
+    that was requested.
+
+    Returns ``""`` when there is nothing to read — never a guess.
+    """
+    if not isinstance(model_usage, dict) or not model_usage:
+        return ""
+
+    def _served(record: object) -> int:
+        if not isinstance(record, dict):
+            return 0
+        return _as_int(record.get("inputTokens")) + _as_int(record.get("outputTokens"))
+
+    # Tie-break on the id so the choice is deterministic across runs.
+    return str(max(model_usage, key=lambda k: (_served(model_usage[k]), str(k))))
+
+
 def usage_from_obj(obj: object) -> RunUsage | None:
     """Tolerantly normalize a provider response into a :class:`RunUsage`.
 
@@ -129,7 +172,9 @@ def usage_from_obj(obj: object) -> RunUsage | None:
         out_tok = _as_int(data.get("output_tokens") or data.get("completion_tokens"))
         if in_tok == 0 and out_tok == 0:
             return None
-        model = str(obj.get("model") or data.get("model") or "")
+        model = str(obj.get("model") or data.get("model") or "") or (
+            model_from_model_usage(obj.get("model_usage") or obj.get("modelUsage"))
+        )
         cost = obj.get("total_cost_usd", data.get("cost_usd", obj.get("cost_usd")))
         cost_usd = (
             float(cost)
@@ -142,7 +187,11 @@ def usage_from_obj(obj: object) -> RunUsage | None:
 
     # object exposing a ``.usage`` (SDK ResultMessage dict / Anthropic Message).
     usage = getattr(obj, "usage", None)
-    model = str(getattr(obj, "model", "") or "")
+    # ResultMessage has no ``.model``; its per-model breakdown is the observed
+    # evidence of what ran (#869).
+    model = str(getattr(obj, "model", "") or "") or model_from_model_usage(
+        getattr(obj, "model_usage", None)
+    )
     if isinstance(usage, dict):
         in_tok = _as_int(usage.get("input_tokens"))
         out_tok = _as_int(usage.get("output_tokens"))
@@ -190,18 +239,131 @@ def _usage_from_status(status: dict) -> RunUsage:
     )
 
 
-def record_in_status(spec_dir: Path | str, usage: RunUsage | None) -> None:
+def _provider_for(model: str) -> str:
+    """Provider name for a model id, or ``""`` when it cannot be inferred.
+
+    Deliberately reuses ``phase_config.infer_provider_from_model`` (the same
+    pure function the execution seams use to pick a provider) rather than
+    re-deriving the mapping here. Lazily imported and best-effort: bookkeeping
+    must never break a run.
+    """
+    if not model:
+        return ""
+    try:
+        from phase_config import infer_provider_from_model  # noqa: PLC0415
+
+        return str(infer_provider_from_model(model) or "")
+    except Exception:  # noqa: BLE001 - attribution is best-effort
+        return ""
+
+
+def _workers_from_status(status: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Re-index the persisted ``usage.workers`` list by ``worker_id``."""
+    block = status.get("usage")
+    acc: dict[str, Any] = block if isinstance(block, dict) else {}
+    records = acc.get("workers")
+    if not isinstance(records, list):
+        return {}
+    return {
+        str(r["worker_id"]): dict(r)
+        for r in records
+        if isinstance(r, dict) and r.get("worker_id")
+    }
+
+
+def _fold_worker(
+    workers: dict[str, dict[str, Any]],
+    *,
+    phase: str,
+    usage: RunUsage,
+    requested_model: str,
+    resolved_model: str,
+) -> None:
+    """Fold one session into its phase's record (in place, additive).
+
+    Mirrors AIFactory's ``token_usage.json`` ``workers`` map so both services
+    hand CFactory the same attribution shape. ``model`` is the OBSERVED id and
+    is only ever overwritten by another observed id — a later session that
+    could not observe one must not blank out evidence an earlier one captured.
+    """
+    record: dict[str, Any] | None = workers.get(phase)
+    if record is None:
+        record = {
+            "worker_id": phase,
+            "phase": phase,
+            "provider": "",
+            "requested_model": "",
+            "model": "",
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "cost_usd": 0.0,
+        }
+        workers[phase] = record
+    if requested_model:
+        record["requested_model"] = requested_model
+    if resolved_model:
+        record["model"] = resolved_model
+    # Provider comes from the REQUESTED id, because that is the string the seam
+    # routes on: an `ollama:` / `studio:` prefix picks the adapter, and the id
+    # the server echoes back has usually lost the prefix ("qwen3:14b").
+    provider = _provider_for(str(record["requested_model"] or record["model"]))
+    if provider:
+        record["provider"] = provider
+    record["input_tokens"] = _as_int(record["input_tokens"]) + usage.input_tokens
+    record["output_tokens"] = _as_int(record["output_tokens"]) + usage.output_tokens
+    record["total_tokens"] = record["input_tokens"] + record["output_tokens"]
+    record["cost_usd"] = round(float(record["cost_usd"] or 0.0) + usage.cost_usd, 6)
+
+
+def record_in_status(
+    spec_dir: Path | str,
+    usage: RunUsage | None,
+    *,
+    phase: str | None = None,
+    requested_model: str | None = None,
+    resolved_model: str | None = None,
+) -> None:
     """Fold one session's usage into the spec's persisted running total.
+
+    ``phase`` (e.g. ``"coding"`` — the key verification runs under) opts the
+    session into the per-phase ``usage.workers`` breakdown (#869), recording
+    ``requested_model`` alongside the ``resolved_model`` that actually served
+    the tokens. Omit it and the block is byte-identical to before.
 
     Best-effort: a missing/corrupt ``status.json`` starts the total from zero,
     and any write error is swallowed so token bookkeeping can never break a run.
     """
-    if usage is None or (usage.input_tokens == 0 and usage.output_tokens == 0):
+    usage = usage or RunUsage()
+    # The provider's own answer; else the id the usage payload named. NEVER the
+    # requested model — a request is not evidence that anything ran.
+    observed = resolved_model or usage.model or ""
+    has_tokens = bool(usage.input_tokens or usage.output_tokens)
+    # A provider that reports no token counts at all (Ollama, the
+    # OpenAI-compatible endpoints) still tells us WHICH model served the turn,
+    # and that is the whole point of the record: without this, exactly the runs
+    # the scorecard has least evidence for are the ones that write nothing.
+    has_model_evidence = bool(phase) and bool(observed or requested_model)
+    if not has_tokens and not has_model_evidence:
         return
     status = _read_status(spec_dir)
     running = _usage_from_status(status)
     running.add(usage)
-    status["usage"] = running.as_event_block()
+    if observed and not running.model:
+        running.model = observed
+    block = running.as_event_block()
+    workers = _workers_from_status(status)
+    if phase:
+        _fold_worker(
+            workers,
+            phase=phase,
+            usage=usage,
+            requested_model=requested_model or "",
+            resolved_model=observed,
+        )
+    if workers:
+        block["workers"] = [workers[k] for k in sorted(workers)]
+    status["usage"] = block
     try:
         _status_path(spec_dir).write_text(json.dumps(status, indent=2))
     except OSError:
@@ -209,5 +371,15 @@ def record_in_status(spec_dir: Path | str, usage: RunUsage | None) -> None:
 
 
 def usage_block_from_status(spec_dir: Path | str) -> dict:
-    """The RFC-0001 ``usage`` block for the completion event (zeros when none)."""
-    return _usage_from_status(_read_status(spec_dir)).as_event_block()
+    """The RFC-0001 ``usage`` block for the completion event (zeros when none).
+
+    Carries the per-phase ``workers`` breakdown through to the event when one
+    was recorded; the key is omitted entirely otherwise, so a run that observed
+    no model is visibly blank rather than plausibly defaulted (#869).
+    """
+    status = _read_status(spec_dir)
+    block = _usage_from_status(status).as_event_block()
+    workers = _workers_from_status(status)
+    if workers:
+        block["workers"] = [workers[k] for k in sorted(workers)]
+    return block

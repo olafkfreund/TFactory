@@ -14,12 +14,13 @@ injects a minimal stub before importing this module.
 from __future__ import annotations
 
 import json as _json
-import re
 import sys
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Response, status as http_status
+from fastapi import APIRouter, HTTPException, Response
+from fastapi import status as http_status
 
+from ._specpath import safe_slug
 
 router = APIRouter()
 
@@ -40,16 +41,9 @@ def _resolve_repo_root() -> Path:
 # ─── Validation ───────────────────────────────────────────────────────────────
 
 
-_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
-
-
-def _validate_segment(value: str, field: str) -> None:
+def _validate_segment(value: str, field: str) -> str:
     """Reject path-traversal attempts in URL path/query segments."""
-    if not value or not _NAME_RE.match(value):
-        raise HTTPException(
-            status_code=http_status.HTTP_400_BAD_REQUEST,
-            detail=f"invalid {field}: {value!r}",
-        )
+    return safe_slug(value, f"invalid {field}: {value!r}")
 
 
 # ─── Backend import ───────────────────────────────────────────────────────────

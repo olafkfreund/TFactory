@@ -6,12 +6,15 @@ import json
 from pathlib import Path
 
 from agents.nix_env import (
+    _NIX_JOB_LOCK,
+    _nix_dispatch_gate,
     build_browser_job_command,
     collect_screenshots,
     detect_serve_command,
     environment_from_contract,
     is_nix_environment,
     materialize_flake,
+    parse_pytest_exits,
     run_browser_evidence,
     run_pytest_lane_via_nix,
 )
@@ -225,6 +228,96 @@ def test_run_pytest_lane_via_nix_result_shape(tmp_path, monkeypatch):
     assert not script.exists()  # cleaned up after the run
 
 
+def test_run_pytest_lane_via_nix_exports_src_pythonpath(tmp_path, monkeypatch):
+    """The Job script puts <work>/src on PYTHONPATH so a src-layout package
+    imports inside the hermetic Nix Job (#615)."""
+    spec = tmp_path / "specs" / "027"
+    spec.mkdir(parents=True)
+    _write_contract(spec, _UNIT_ENV)
+    project = tmp_path / "proj"
+    project.mkdir()
+    test_file = project / "src_test.py"
+    test_file.write_text("def test_ok(): assert True\n")
+
+    captured = {}
+
+    class _FakeSandbox:
+        def run(self, commands, *, workdir=None, timeout=300):
+            # The job script still exists during run (cleaned up afterwards).
+            captured["script"] = (Path(workdir) / "_tf_nix_job.sh").read_text()
+            stage = Path(workdir) / ".tf_pytest"
+            stage.mkdir(parents=True, exist_ok=True)
+            (stage / "junit.xml").write_text("<testsuites/>")
+            return JobRunResult(ok=True, exit_code=0, output="__PYTEST_EXIT=0\n")
+
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: _FakeSandbox())
+    run_pytest_lane_via_nix(spec, project, test_file)
+    assert 'export PYTHONPATH="/work/src:/work' in captured["script"]
+    # exported before the pytest invocation so the test process inherits it
+    assert captured["script"].index("PYTHONPATH") < captured["script"].index("pytest")
+
+
+def test_run_pytest_lane_via_nix_retries_on_missing_marker(tmp_path, monkeypatch):
+    """A Nix build that produces no __PYTEST_EXIT marker (transient build failure)
+    is retried once; the recovered result is used (#623)."""
+    spec = tmp_path / "specs" / "027"
+    spec.mkdir(parents=True)
+    _write_contract(spec, _UNIT_ENV)
+    project = tmp_path / "proj"
+    project.mkdir()
+    test_file = project / "src_test.py"
+    test_file.write_text("def test_ok(): assert True\n")
+
+    calls = {"n": 0}
+
+    class _FlakySandbox:
+        def run(self, commands, *, workdir=None, timeout=300):
+            calls["n"] += 1
+            stage = Path(workdir) / ".tf_pytest"
+            stage.mkdir(parents=True, exist_ok=True)
+            if calls["n"] == 1:  # transient build failure — no marker
+                return JobRunResult(
+                    ok=False, exit_code=1, output="[kube-sandbox] empty lane log"
+                )
+            (stage / "junit.xml").write_text("<testsuites/>")
+            return JobRunResult(
+                ok=True, exit_code=0, output="1 passed\n__PYTEST_EXIT=0\n"
+            )
+
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: _FlakySandbox())
+    res = run_pytest_lane_via_nix(spec, project, test_file)
+    assert calls["n"] == 2  # retried once
+    assert res is not None and res.returncode == 0
+
+
+def test_run_pytest_lane_via_nix_no_retry_on_real_result(tmp_path, monkeypatch):
+    """A real pytest result (marker present) is NOT retried, even on failure —
+    a caught bug (e.g. the hardcode) must never be masked by a retry (#623)."""
+    spec = tmp_path / "specs" / "027"
+    spec.mkdir(parents=True)
+    _write_contract(spec, _UNIT_ENV)
+    project = tmp_path / "proj"
+    project.mkdir()
+    test_file = project / "src_test.py"
+    test_file.write_text("def test_ok(): assert True\n")
+
+    calls = {"n": 0}
+
+    class _FailSandbox:
+        def run(self, commands, *, workdir=None, timeout=300):
+            calls["n"] += 1
+            stage = Path(workdir) / ".tf_pytest"
+            stage.mkdir(parents=True, exist_ok=True)
+            return JobRunResult(
+                ok=False, exit_code=1, output="1 failed\n__PYTEST_EXIT=1\n"
+            )
+
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: _FailSandbox())
+    res = run_pytest_lane_via_nix(spec, project, test_file)
+    assert calls["n"] == 1  # real failure -> no retry
+    assert res is not None and res.returncode == 1
+
+
 def test_run_pytest_lane_via_nix_missing_marker_is_failure(tmp_path, monkeypatch):
     spec = tmp_path / "specs" / "027"
     spec.mkdir(parents=True)
@@ -236,14 +329,79 @@ def test_run_pytest_lane_via_nix_missing_marker_is_failure(tmp_path, monkeypatch
 
     class _FakeSandbox:
         def run(self, commands, *, workdir=None, timeout=300):
-            return JobRunResult(
-                ok=False, exit_code=1, output="boom (no marker line)\n"
-            )
+            return JobRunResult(ok=False, exit_code=1, output="boom (no marker line)\n")
 
     monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: _FakeSandbox())
     res = run_pytest_lane_via_nix(spec, project, test_file)
     # No __PYTEST_EXIT marker -> treated as failure (never a false pass).
     assert res is not None and res.returncode == 1 and res.ok is False
+
+
+def test_run_pytest_lane_via_nix_api_lane_boots_sut_and_sets_target_url(
+    tmp_path, monkeypatch
+):
+    """api lane (#612): a serve_command makes the Job boot the SUT in-pod at
+    127.0.0.1:port and export TFACTORY_TARGET_URL BEFORE pytest, so the endpoint
+    test reaches the running app instead of KeyError-ing on an unset URL."""
+    spec = tmp_path / "specs" / "041"
+    spec.mkdir(parents=True)
+    _write_contract(spec, _UNIT_ENV)
+    project = tmp_path / "proj"
+    project.mkdir()
+    test_file = project / "api_test.py"
+    test_file.write_text("def test_ok(): assert True\n")
+
+    captured = {}
+
+    class _FakeSandbox:
+        def run(self, commands, *, workdir=None, timeout=300):
+            captured["script"] = (Path(workdir) / "_tf_nix_job.sh").read_text()
+            stage = Path(workdir) / ".tf_pytest"
+            stage.mkdir(parents=True, exist_ok=True)
+            (stage / "junit.xml").write_text("<testsuites/>")
+            return JobRunResult(ok=True, exit_code=0, output="__PYTEST_EXIT=0\n")
+
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: _FakeSandbox())
+    run_pytest_lane_via_nix(
+        spec,
+        project,
+        test_file,
+        serve_command="python -m uvicorn app.main:app --host 127.0.0.1 --port 8200",
+        serve_port=8200,
+    )
+    script = captured["script"]
+    assert "export TFACTORY_TARGET_URL=http://127.0.0.1:8200" in script
+    assert "export APP_URL=http://127.0.0.1:8200" in script
+    # app booted (backgrounded) + a readiness poll, both BEFORE pytest runs.
+    assert "uvicorn app.main:app" in script and "&" in script
+    assert script.index("TFACTORY_TARGET_URL") < script.index("pytest")
+    assert script.index("uvicorn") < script.index("pytest")
+
+
+def test_run_pytest_lane_via_nix_unit_lane_never_boots_an_app(tmp_path, monkeypatch):
+    """No serve_command (unit lane) -> hermetic: no app boot, no target URL."""
+    spec = tmp_path / "specs" / "027"
+    spec.mkdir(parents=True)
+    _write_contract(spec, _UNIT_ENV)
+    project = tmp_path / "proj"
+    project.mkdir()
+    test_file = project / "src_test.py"
+    test_file.write_text("def test_ok(): assert True\n")
+
+    captured = {}
+
+    class _FakeSandbox:
+        def run(self, commands, *, workdir=None, timeout=300):
+            captured["script"] = (Path(workdir) / "_tf_nix_job.sh").read_text()
+            stage = Path(workdir) / ".tf_pytest"
+            stage.mkdir(parents=True, exist_ok=True)
+            (stage / "junit.xml").write_text("<testsuites/>")
+            return JobRunResult(ok=True, exit_code=0, output="__PYTEST_EXIT=0\n")
+
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: _FakeSandbox())
+    run_pytest_lane_via_nix(spec, project, test_file)
+    assert "TFACTORY_TARGET_URL" not in captured["script"]
+    assert "uvicorn" not in captured["script"]
 
 
 # ── run_gotest_lane_via_nix (Go test-execution lane, TFactory#443) ──────────
@@ -398,3 +556,392 @@ def test_repo_owned_flake_respected_when_not_generated(tmp_path):
     assert plan is not None and plan.generated is False
     # not overwritten
     assert (project / "flake.nix").read_text() == "# repo-owned, hand-written\n"
+
+
+def test_run_pytest_lane_via_nix_holds_nix_lock_during_dispatch(tmp_path, monkeypatch):
+    """The Nix Job dispatch runs under the process-wide _NIX_JOB_LOCK so
+    concurrent lane Jobs don't contend on the RWO /nix-store (#623)."""
+    from agents.nix_env import _NIX_JOB_LOCK
+
+    spec = tmp_path / "specs" / "027"
+    spec.mkdir(parents=True)
+    _write_contract(spec, _UNIT_ENV)
+    project = tmp_path / "proj"
+    project.mkdir()
+    test_file = project / "src_test.py"
+    test_file.write_text("def test_ok(): assert True\n")
+
+    seen = {}
+
+    class _LockSensingSandbox:
+        def run(self, commands, *, workdir=None, timeout=300):
+            # The lock must be held while a dispatch is in flight.
+            seen["locked"] = _NIX_JOB_LOCK.locked()
+            stage = Path(workdir) / ".tf_pytest"
+            stage.mkdir(parents=True, exist_ok=True)
+            (stage / "junit.xml").write_text("<testsuites/>")
+            return JobRunResult(ok=True, exit_code=0, output="__PYTEST_EXIT=0\n")
+
+    monkeypatch.setattr(
+        "agents.nix_env.nix_runner_from_env", lambda: _LockSensingSandbox()
+    )
+    run_pytest_lane_via_nix(spec, project, test_file)
+    assert seen.get("locked") is True  # dispatch happened under the lock
+    assert not _NIX_JOB_LOCK.locked()  # and released afterwards
+
+
+def test_run_pytest_lane_via_nix_isolates_shared_checkout(tmp_path, monkeypatch):
+    """The lane runs against a per-run scratch COPY, never mutating the shared
+    project checkout, and cleans the scratch up afterwards (#623)."""
+    spec = tmp_path / "specs" / "027"
+    spec.mkdir(parents=True)
+    _write_contract(spec, _UNIT_ENV)
+    project = tmp_path / "proj"
+    (project / "src").mkdir(parents=True)
+    (project / "src" / "pkg.py").write_text("x = 1\n")
+    test_file = project / "src_test.py"
+    test_file.write_text("def test_ok(): assert True\n")
+
+    captured = {}
+
+    class _FakeSandbox:
+        def run(self, commands, *, workdir=None, timeout=300):
+            captured["is_scratch"] = Path(workdir).resolve() != project.resolve()
+            stage = Path(workdir) / ".tf_pytest"
+            stage.mkdir(parents=True, exist_ok=True)
+            (stage / "junit.xml").write_text("<testsuites/>")
+            return JobRunResult(ok=True, exit_code=0, output="__PYTEST_EXIT=0\n")
+
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: _FakeSandbox())
+    res = run_pytest_lane_via_nix(spec, project, test_file)
+    assert res is not None and res.returncode == 0
+    assert captured["is_scratch"] is True  # ran against a scratch, not the checkout
+    # the shared checkout is never written to
+    assert not (project / "flake.nix").exists()
+    assert not (project / "_tf_nix_job.sh").exists()
+    assert not (project / "tests").exists()
+    # no scratch sibling is left behind
+    assert not list(project.parent.glob("_nixrun-*"))
+    # junit survives the scratch cleanup (copied off it)
+    assert res.junit_xml_path is not None and res.junit_xml_path.is_file()
+
+
+def test_nix_runner_from_env_honors_data_root(monkeypatch):
+    """nix_runner_from_env passes TFACTORY_DATA_ROOT to the sandbox so pvc_subpath
+    resolves co-mounts when the PVC is mounted at a non-default path (#623)."""
+    from agents.nix_env import nix_runner_from_env
+
+    monkeypatch.setenv("TFACTORY_NIX_RUNNER_IMAGE", "img:latest")
+    monkeypatch.setenv("TFACTORY_DATA_ROOT", "/work")
+    sb = nix_runner_from_env()
+    assert sb is not None and sb.data_root == "/work"
+
+
+def test_nix_runner_from_env_default_data_root(monkeypatch):
+    """Absent TFACTORY_DATA_ROOT, the sandbox keeps its control-plane default."""
+    from agents.nix_env import nix_runner_from_env
+
+    monkeypatch.setenv("TFACTORY_NIX_RUNNER_IMAGE", "img:latest")
+    monkeypatch.delenv("TFACTORY_DATA_ROOT", raising=False)
+    sb = nix_runner_from_env()
+    assert sb is not None and sb.data_root == "/home/nonroot/.tfactory"
+
+
+def _mounted_pvcs(monkeypatch) -> set[str]:
+    """The PVCs the nix Job manifest would actually mount, via nix_runner_from_env."""
+    from agents.nix_env import nix_runner_from_env
+    from tools.runners.kube_sandbox import build_job_manifest
+
+    sb = nix_runner_from_env()
+    assert sb is not None
+    m = build_job_manifest(
+        "t", sb.image, ["true"], repo_pvc=sb.repo_pvc, **sb.manifest_kw
+    )
+    vols = m["spec"]["template"]["spec"].get("volumes", [])
+    return {
+        v["persistentVolumeClaim"]["claimName"]
+        for v in vols
+        if "persistentVolumeClaim" in v
+    }
+
+
+def test_nix_in_image_drops_the_rwo_warm_store(monkeypatch):
+    """#623: the warm PVC is RWO, so it is the mutex concurrent nix Jobs
+    serialise on. With nix in the image the Job must not mount it at all."""
+    monkeypatch.setenv("TFACTORY_NIX_RUNNER_IMAGE", "img:latest")
+    monkeypatch.setenv("TFACTORY_NIX_STORE_PVC", "tfactory-nix-store")
+    monkeypatch.setenv("TFACTORY_NIX_IN_IMAGE", "true")
+    assert "tfactory-nix-store" not in _mounted_pvcs(monkeypatch)
+
+
+def test_warm_store_kept_when_flag_off(monkeypatch):
+    """Default OFF stays warm — the de-pin must not silently drop the cache."""
+    monkeypatch.setenv("TFACTORY_NIX_RUNNER_IMAGE", "img:latest")
+    monkeypatch.setenv("TFACTORY_NIX_STORE_PVC", "tfactory-nix-store")
+    monkeypatch.delenv("TFACTORY_NIX_IN_IMAGE", raising=False)
+    assert "tfactory-nix-store" in _mounted_pvcs(monkeypatch)
+
+
+def test_nix_in_image_flag_parsing(monkeypatch):
+    from agents.nix_env import nix_in_image
+
+    monkeypatch.delenv("TFACTORY_NIX_IN_IMAGE", raising=False)
+    assert nix_in_image() is False
+    for on in ("1", "true", "TRUE", " yes ", "on"):
+        monkeypatch.setenv("TFACTORY_NIX_IN_IMAGE", on)
+        assert nix_in_image() is True, on
+    for off in ("", "0", "false", "no"):
+        monkeypatch.setenv("TFACTORY_NIX_IN_IMAGE", off)
+        assert nix_in_image() is False, off
+
+
+def test_dispatch_gate_is_bounded_semaphore_when_nix_in_image(monkeypatch):
+    """In-image regime has no shared PVC → gate must allow concurrency, not serialise.
+
+    The whole point of nix-in-image is "speed for concurrency": each Job's /nix is
+    image-local, so there is nothing to co-mount and nothing to serialise. If the
+    gate here were the strict lock, the S x (3 + mutants) fan-out would run one Job
+    at a time — the regression this guards.
+    """
+    import threading
+
+    monkeypatch.setenv("TFACTORY_NIX_IN_IMAGE", "true")
+    gate = _nix_dispatch_gate()
+    assert gate is not _NIX_JOB_LOCK
+    assert isinstance(gate, threading.BoundedSemaphore().__class__)
+
+    # It genuinely admits more than one holder at once (a Lock would deadlock on
+    # the second acquire). Hold two slots simultaneously without blocking.
+    assert gate.acquire(blocking=False) is True
+    assert gate.acquire(blocking=False) is True
+    gate.release()
+    gate.release()
+
+
+def test_dispatch_gate_is_strict_lock_with_shared_pvc(monkeypatch):
+    """Shared warm-store PVC is RWO → keep the one-at-a-time lock (#623)."""
+    monkeypatch.delenv("TFACTORY_NIX_IN_IMAGE", raising=False)
+    assert _nix_dispatch_gate() is _NIX_JOB_LOCK
+
+
+# ── #776 batched stability: parse per-run codes + one-Job loop ────────────
+
+
+def test_parse_pytest_exits_recovers_each_runs_code():
+    """Flake detection depends on getting EVERY run's real exit code, in order."""
+    out = (
+        "__PYTEST_RUN=1\n1 passed\n__PYTEST_EXIT=0\n"
+        "__PYTEST_RUN=2\n1 failed\n__PYTEST_EXIT=1\n"
+        "__PYTEST_RUN=3\n1 passed\n__PYTEST_EXIT=0\n"
+    )
+    pairs = parse_pytest_exits(out)
+    assert [c for c, _ in pairs] == [0, 1, 0]  # a 0/1 mix -> the run WAS flaky
+    assert "1 failed" in pairs[1][1]
+
+
+def test_parse_pytest_exits_missing_marker_is_failure_not_pass():
+    """A run whose EXIT marker never printed (shell died mid-pass) must count as
+    a failure, never a silent pass — same rule as the single-run parser."""
+    out = "__PYTEST_RUN=1\nok\n__PYTEST_EXIT=0\n__PYTEST_RUN=2\nkilled\n"
+    assert [c for c, _ in parse_pytest_exits(out)] == [0, 1]
+
+
+def test_parse_pytest_exits_legacy_single_run_round_trips():
+    """No RUN markers (the reruns=1 shape) -> one pair from the last EXIT."""
+    assert parse_pytest_exits("2 passed\n__PYTEST_EXIT=0\n") == [
+        (0, "2 passed\n__PYTEST_EXIT=0\n")
+    ]
+    assert parse_pytest_exits("boom\n__PYTEST_EXIT=1\n")[0][0] == 1
+
+
+def _fake_sandbox_capturing_script(captured, output):
+    class _FS:
+        def run(self, commands, *, workdir=None, timeout=300):
+            captured["script"] = (Path(workdir) / "_tf_nix_job.sh").read_text()
+            stage = Path(workdir) / ".tf_pytest"
+            stage.mkdir(parents=True, exist_ok=True)
+            (stage / "junit.xml").write_text("<testsuites/>")
+            return JobRunResult(ok=True, exit_code=0, output=output)
+
+    return _FS()
+
+
+def test_reruns_gt_1_writes_one_loop_with_n_pytest_passes(tmp_path, monkeypatch):
+    """reruns=3 must run pytest 3x IN ONE Job (3 RUN markers, one dev-shell)."""
+    spec = tmp_path / "specs" / "027"
+    spec.mkdir(parents=True)
+    _write_contract(spec, _UNIT_ENV)
+    project = tmp_path / "proj"
+    project.mkdir()
+    test_file = project / "t_test.py"
+    test_file.write_text("def test_ok(): assert True\n")
+
+    cap = {}
+    monkeypatch.setattr(
+        "agents.nix_env.nix_runner_from_env",
+        lambda: _fake_sandbox_capturing_script(
+            cap,
+            "__PYTEST_RUN=1\n__PYTEST_EXIT=0\n__PYTEST_RUN=2\n__PYTEST_EXIT=0\n__PYTEST_RUN=3\n__PYTEST_EXIT=0\n",
+        ),
+    )
+    res = run_pytest_lane_via_nix(spec, project, test_file, reruns=3)
+    assert res is not None
+    assert cap["script"].count("__PYTEST_RUN=") == 3
+    assert cap["script"].count("python -m pytest") == 3
+    # Still a SINGLE dispatch (one Job), not three.
+    assert parse_pytest_exits(res.stdout) == [(0, ""), (0, ""), (0, "")]
+
+
+def test_reruns_1_is_byte_identical_single_run(tmp_path, monkeypatch):
+    """The default reruns=1 must not change the generated script at all."""
+    spec = tmp_path / "specs" / "027"
+    spec.mkdir(parents=True)
+    _write_contract(spec, _UNIT_ENV)
+    project = tmp_path / "proj"
+    project.mkdir()
+    test_file = project / "t_test.py"
+    test_file.write_text("def test_ok(): assert True\n")
+
+    cap = {}
+    monkeypatch.setattr(
+        "agents.nix_env.nix_runner_from_env",
+        lambda: _fake_sandbox_capturing_script(cap, "1 passed\n__PYTEST_EXIT=0\n"),
+    )
+    run_pytest_lane_via_nix(spec, project, test_file)  # reruns defaults to 1
+    assert "__PYTEST_RUN=" not in cap["script"]  # no loop
+    assert cap["script"].count("python -m pytest") == 1
+    assert "cd /work && python -m pytest" in cap["script"]
+
+
+def test_materialize_writes_flake_lock_alongside_generated_flake(tmp_path):
+    """#778: a generated flake ships its lock so verify Jobs skip the re-lock."""
+    import json as _json
+
+    spec = tmp_path / "specs" / "027"
+    spec.mkdir(parents=True)
+    _write_contract(spec, _UNIT_ENV)
+    project = tmp_path / "proj"
+    project.mkdir()
+
+    materialize_flake(spec, project, env=_UNIT_ENV)
+    lock = project / "flake.lock"
+    assert lock.is_file(), "generated flake must ship flake.lock"
+    doc = _json.loads(lock.read_text())
+    from tools.runners.nix_provisioner import DEFAULT_NIXPKGS
+
+    assert (
+        doc["nodes"]["nixpkgs"]["locked"]["rev"] == DEFAULT_NIXPKGS.rsplit("/", 1)[-1]
+    )
+
+
+def test_materialize_does_not_write_lock_for_repo_owned_flake(tmp_path):
+    """A repo that owns its flake (manifest not generated) owns its lock too."""
+    spec = tmp_path / "specs" / "027"
+    spec.mkdir(parents=True)
+    env = {**_UNIT_ENV, "provisioning": {"method": "nix", "generated": False}}
+    _write_contract(spec, env)
+    project = tmp_path / "proj"
+    project.mkdir()
+    (project / "flake.nix").write_text("{ outputs = _: {}; }\n")  # repo-owned
+
+    materialize_flake(spec, project, env=env)
+    assert not (project / "flake.lock").exists()  # we didn't clobber/invent one
+
+
+# ─── #776 Stage 1b: batched mutation markers ────────────────────────────────
+
+
+def test_parse_mut_exits_recovers_each_mutants_code():
+    from agents.nix_env import parse_mut_exits
+
+    out = (
+        "__MUT_RUN=1\nfailed\n__MUT_EXIT=1\n"
+        "__MUT_RUN=2\npassed\n__MUT_EXIT=0\n"
+        "__MUT_RUN=3\nfailed\n__MUT_EXIT=1\n"
+    )
+    assert parse_mut_exits(out) == [1, 0, 1]
+
+
+def test_parse_mut_exits_missing_marker_is_failure():
+    """A mutant whose EXIT marker never printed (shell died) counts as 1, never a
+    false 0 (which would read as SURVIVED)."""
+    from agents.nix_env import parse_mut_exits
+
+    out = "__MUT_RUN=1\n__MUT_EXIT=0\n__MUT_RUN=2\n(shell died before exit)\n"
+    assert parse_mut_exits(out) == [0, 1]
+
+
+def test_parse_mut_exits_empty_when_no_mutants():
+    from agents.nix_env import parse_mut_exits
+
+    assert parse_mut_exits("__PYTEST_RUN=1\n__PYTEST_EXIT=0\n") == []
+    assert parse_mut_exits("") == []
+
+
+def test_mut_markers_do_not_pollute_stability_parse():
+    """The stability parser (keyed on __PYTEST_RUN/__PYTEST_EXIT) must ignore the
+    trailing __MUT_* markers, so batching mutation into the same Job leaves the
+    stability codes byte-identical."""
+    from agents.nix_env import parse_mut_exits, parse_pytest_exits
+
+    out = (
+        "__PYTEST_RUN=1\n.\n__PYTEST_EXIT=0\n"
+        "__PYTEST_RUN=2\n.\n__PYTEST_EXIT=0\n"
+        "__PYTEST_RUN=3\n.\n__PYTEST_EXIT=0\n"
+        "__MUT_RUN=1\nF\n__MUT_EXIT=1\n"
+    )
+    assert [c for c, _ in parse_pytest_exits(out)] == [0, 0, 0]  # stability untouched
+    assert parse_mut_exits(out) == [1]
+
+
+def test_build_mutants_cmd_shape():
+    from agents.nix_env import _build_mutants_cmd
+
+    cmd = _build_mutants_cmd(["m__c1.py", "m__c2.py"])
+    assert "echo __MUT_RUN=1" in cmd and "echo __MUT_RUN=2" in cmd
+    assert "pytest tests/m__c1.py" in cmd and "pytest tests/m__c2.py" in cmd
+    assert cmd.count("echo __MUT_EXIT=$?") == 2
+    assert _build_mutants_cmd([]) == ""
+
+
+def test_deploy_lane_kubectl_gated_on_dryrun_sa(tmp_path, monkeypatch):
+    """kubectl apply --dry-run=server (VAL-2) only runs when the deploy dry-run SA
+    is configured (#603); without it kubectl is dropped (honest not_run) and no SA
+    is attached, with it the deploy Job gets the scoped SA + API network."""
+    from agents.nix_env import run_deploy_lane_via_nix
+
+    project = tmp_path / "proj"
+    (project / "k8s" / "base").mkdir(parents=True)
+    (project / "k8s" / "base" / "deploy.yaml").write_text(
+        "apiVersion: apps/v1\nkind: Deployment\n"
+    )
+    files = ["k8s/base/deploy.yaml"]
+
+    calls = {"with_kw": None}
+
+    class _FakeSandbox:
+        def with_manifest_kw(self, **kw):
+            calls["with_kw"] = kw
+            return self
+
+        def run(self, commands, *, workdir=None, timeout=600):
+            out = "".join(
+                f"__DEPLOY_STEP_{i}_BEGIN\nok\n__DEPLOY_STEP_{i}_EXIT=0\n"
+                for i in range(6)
+            )
+            return JobRunResult(ok=True, exit_code=0, output=out)
+
+    # No SA configured → kubectl dropped, sandbox NOT augmented with an SA.
+    monkeypatch.delenv("TFACTORY_DEPLOY_DRYRUN_SA", raising=False)
+    res = run_deploy_lane_via_nix(project, files=files, sandbox=_FakeSandbox())
+    assert calls["with_kw"] is None
+
+    # SA configured → deploy Job gets the SA + API network for the dry-run.
+    calls["with_kw"] = None
+    monkeypatch.setenv("TFACTORY_DEPLOY_DRYRUN_SA", "tfactory-deploy-dryrun")
+    run_deploy_lane_via_nix(project, files=files, sandbox=_FakeSandbox())
+    assert calls["with_kw"] == {
+        "service_account": "tfactory-deploy-dryrun",
+        "network_none": False,
+    }
+    _ = res  # first-call result unused beyond the SA assertion

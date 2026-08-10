@@ -160,6 +160,13 @@ preflight() {
 
     if [[ -x "$PYTHON_BIN" ]]; then
         log_dim "  ✓ python venv: $PYTHON_BIN"
+    elif [[ "$DRY_RUN" -eq 1 ]] && command -v python3 >/dev/null 2>&1; then
+        # A dry run never imports apps.backend.* — the only thing it asks an
+        # interpreter to do is read/write the JSON state file with the stdlib,
+        # so any python3 will do (#883). A real run still needs the backend
+        # venv, which is why this fallback is behind the dry-run flag.
+        PYTHON_BIN="$(command -v python3)"
+        log_dim "  ✓ python (dry-run, backend venv absent): $PYTHON_BIN"
     else
         log_fail "  ✗ python venv not found at $PYTHON_BIN — run 'uv pip install -r apps/backend/requirements.txt'"
         fail=1

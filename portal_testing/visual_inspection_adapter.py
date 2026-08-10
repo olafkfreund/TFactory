@@ -70,6 +70,43 @@ def _strip_image_links(md: str) -> str:
     return re.sub(r"!\[[^\]]*\]\([^)]*\)", "", md)
 
 
+_SCREENCAST_LINE = re.compile(r"^- \*\*Screencast:\*\* .*$", re.MULTILINE)
+_VIDEO_SUFFIXES = (".webm", ".mp4")
+
+
+def _retarget_screencast(md: str, target: str | None) -> str:
+    """Point the report's ``Screencast:`` link at where the recording really is.
+
+    ``report.py`` writes the link relative to the RUN dir, where the recording
+    sits at ``video/<portal>.webm``. Publishing moves it to ``findings/videos/``
+    and nothing rewrote the link, so the published report pointed at a path that
+    does not exist in the published tree — the link and the file disagreed, and
+    it 404'd for anyone who clicked it (#895).
+
+    ``target=None`` drops the line instead, for the copies that carry no
+    recording at all. That is the same call this module already makes for the
+    screenshot image links: a link that cannot resolve is worse than no link,
+    because it reads as evidence that exists and cannot be fetched.
+    """
+    if target is None:
+        return _SCREENCAST_LINE.sub("", md)
+    return _SCREENCAST_LINE.sub(
+        lambda _m: f"- **Screencast:** [`{target}`]({target})", md
+    )
+
+
+def _published_video_rel(videos_dir: Path) -> str | None:
+    """The published, tree-relative path of the recording, or None if there is
+    no recording. Matches ``meta["videos"]["path"]`` in the tasks API, which is
+    what the Evidence tab serves from."""
+    if not videos_dir.is_dir():
+        return None
+    names = sorted(
+        p.name for p in videos_dir.iterdir() if p.suffix.lower() in _VIDEO_SUFFIXES
+    )
+    return f"findings/videos/{names[0]}" if names else None
+
+
 def build_run_dir(
     portal_key: str, report_dir: Path, run_id: str, dest_parent: Path
 ) -> Path:
@@ -92,7 +129,14 @@ def build_run_dir(
 
     run_dir = dest_parent / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "report.md").write_text(report_md, encoding="utf-8")
+    # No recording is copied here and the Visual Reports renderer rewrites only
+    # ``screenshots/`` URLs, so a Screencast link in this copy can resolve to
+    # nothing at all. Drop it rather than publish a link that 404s (#895); the
+    # recording is reachable on the task-detail Evidence tab, which serves it
+    # from findings/videos/.
+    (run_dir / "report.md").write_text(
+        _retarget_screencast(report_md, None), encoding="utf-8"
+    )
     shots = report_dir / "screenshots"
     if shots.is_dir():
         shutil.copytree(shots, run_dir / "screenshots", dirs_exist_ok=True)
@@ -185,19 +229,35 @@ def publish_as_tfactory_spec(portal_key: str, report_dir: Path, run_id: str) -> 
     (spec_dir / "context" / "source.json").write_text(
         json.dumps({"aifactory": {"github_issue": None}}, indent=2), encoding="utf-8"
     )
-    # The task-detail "Report" tab renders findings/triage_report.md; its inline
-    # image links would 404 (the page serves screenshots from the artefact
-    # endpoint, not relative paths), so strip them — the screenshots show in the
-    # detail's gallery from findings/screenshots/ instead.
-    (spec_dir / "findings" / "triage_report.md").write_text(
-        _strip_image_links(report_md), encoding="utf-8"
-    )
-    (spec_dir / "report.md").write_text(report_md, encoding="utf-8")
     shots = report_dir / "screenshots"
     if shots.is_dir():
         shutil.copytree(
             shots, spec_dir / "findings" / "screenshots", dirs_exist_ok=True
         )
+    # The screencast is evidence too. Without this the Playwright recording died
+    # with the Job pod (report_dir is the pod's ephemeral CWD) and the task
+    # detail's Evidence tab showed screenshots only — `artefacts.videos` reads
+    # findings/videos/, which nothing was writing.
+    videos = report_dir / "video"
+    if videos.is_dir():
+        shutil.copytree(videos, spec_dir / "findings" / "videos", dirs_exist_ok=True)
+    # Copied FIRST so the reports below can name where the recording actually
+    # landed, rather than the run-dir path it no longer occupies (#895).
+    video_rel = _published_video_rel(spec_dir / "findings" / "videos")
+    # The task-detail "Report" tab renders findings/triage_report.md; its inline
+    # image links would 404 (the page serves screenshots from the artefact
+    # endpoint, not relative paths), so strip them — the screenshots show in the
+    # detail's gallery from findings/screenshots/ instead. The Screencast link
+    # goes for the same reason: the tab resolves no relative path, and the
+    # Evidence tab plays the recording from findings/videos/ anyway.
+    (spec_dir / "findings" / "triage_report.md").write_text(
+        _strip_image_links(_retarget_screencast(report_md, None)), encoding="utf-8"
+    )
+    # The published tree's own report keeps the link, pointing at the path the
+    # recording really occupies here.
+    (spec_dir / "report.md").write_text(
+        _retarget_screencast(report_md, video_rel), encoding="utf-8"
+    )
     # NB: no findings/verdicts.json — portal-ui is a report+evidence run, not a
     # per-test accept/flag verdict set; the Verdicts tab stays cleanly disabled.
     return spec_dir

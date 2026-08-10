@@ -10,10 +10,30 @@
 # Stage 1: Build the React frontend
 # ---------------------------------------------------------------------------
 # Digest is the OCI image-index (manifest-list) sha256 so multi-arch buildx
-# (P0.6) can still resolve the right platform manifest. The `:latest-dev`
-# tag is kept alongside the digest as a human hint and is ignored by docker
-# when a digest is present. Updates land via Renovate PRs (renovate.json).
-FROM cgr.dev/chainguard/node:latest-dev@sha256:ce3f18966af7a0ba76f96aa32d6240b437d00eeb775d92c1e7e75f457fe5a8b7 AS frontend-build
+# (P0.6) can still resolve the right platform manifest. The version tag is
+# kept alongside the digest as a human hint and is ignored by docker when a
+# digest is present.
+#
+# Why not cgr.dev/chainguard/node (AIFactory#1091): this stage was pinned to
+# `node:latest-dev@sha256:...`, which cannot work. Chainguard rebuilds
+# `latest-*` continuously and garbage-collects superseded digests, so the pin
+# 404s within days and `load metadata` fails before the build starts. The
+# usual answer -- pin a versioned tag by digest -- is not available: the
+# public Chainguard catalog publishes only `latest`, `latest-dev`,
+# `latest-slim`, `next` and `next-dev` for node; `node:24-dev` and `node:24`
+# both 404, because versioned tags are a paid Production-tier feature under a
+# customer-specific org path. Docker Official Images do retain superseded
+# digests for versioned tags (node:24.0.0-bookworm-slim from May 2025 still
+# resolves), so a pin here survives while staying reproducible.
+#
+# node >= 24.0.0 and npm >= 10 are required by the root package.json
+# `engines`. Keep a glibc variant: an Alpine/musl image would need the
+# `-musl` Rollup native binaries rather than `-gnu`.
+# Nothing from this stage ships -- only apps/web-server/static is copied into
+# the runtime stage -- so the base's CVE posture is not part of the attack
+# surface. The runtime stage stays on Chainguard, where it does matter.
+# Digest bumps land via Dependabot PRs (.github/dependabot.yml).
+FROM docker.io/node:26-bookworm-slim@sha256:9e6f9357d371591e32ab6f2d8a26d63bdd0d17c29eee3f4f3e7e454d9634bf73 AS frontend-build
 
 USER root
 WORKDIR /build
@@ -35,7 +55,7 @@ RUN mkdir -p apps/web-server/static \
 # Stage 2: Runtime (Chainguard Python, dev variant for now — minimal split
 # happens in P0.5 once we know what the runtime *actually* needs)
 # ---------------------------------------------------------------------------
-FROM cgr.dev/chainguard/python:latest-dev@sha256:369768c6ee466cc726ebab82e1b590f2d5a78507d134b17912f3e5c58de950ff AS runtime
+FROM cgr.dev/chainguard/python:latest-dev@sha256:534fb1a1b9ad4d9d149ab669ca4218be76c84990e2f3379c7f703d224647666b AS runtime
 
 USER root
 
@@ -46,7 +66,7 @@ USER root
 # digest bump — the between-bumps guard (cf. the binutils constraint below).
 # When the snapshot itself lags (the repo has no newer rev yet), bump the base
 # digest above to a Chainguard rebuild that ships the fix — that's what cleared
-# CVE-2026-45447 (libcrypto3/libssl3 3.6.2-r5 → 3.6.3-r1). Renovate automates
+# CVE-2026-45447 (libcrypto3/libssl3 3.6.2-r5 → 3.6.3-r1). Dependabot automates
 # the digest bumps; this RUN covers the window in between.
 RUN apk upgrade --no-cache
 
@@ -65,7 +85,14 @@ RUN apk upgrade --no-cache
 #                   2.46-r2). Force a build-newer rev to clear the P0.8 Trivy gate
 #                   (test_trivy_no_high_critical). Constraint, not =2.46-r2, so
 #                   the build stays green when Wolfi revs the package further;
-#                   drop this once the base digest ships the fix (Renovate).
+#                   drop this once the base digest ships the fix (Dependabot).
+#   libexpat1     — the :latest-dev base bundles libexpat1 2.8.1-r1, which
+#                   carries CVE-2026-56131/56407/56408 (HIGH; use-after-free +
+#                   integer overflows, fixed in 2.8.2-r0). The pinned snapshot
+#                   lags so `apk upgrade` can't reach it; force a build-newer rev
+#                   to clear the P0.8 Trivy gate. Constraint (not =2.8.2-r0) so
+#                   the build stays green as Wolfi revs further; drop once the
+#                   base digest ships the fix (Dependabot).
 #   bubblewrap    — OS-level bash sandbox for agent commands. Without it the
 #                   Claude Agent SDK logs "Sandbox disabled: ... bubblewrap
 #                   (bwrap) not installed" and runs commands with NO filesystem
@@ -83,6 +110,7 @@ RUN apk add --no-cache \
         git \
         gh \
         gnupg \
+        "libexpat1>2.8.1-r1" \
         nodejs \
         npm \
         socat \
@@ -149,6 +177,33 @@ USER nonroot
 # Configure npm global install dir under the nonroot home
 RUN mkdir -p /home/nonroot/.npm-global \
  && npm config set prefix /home/nonroot/.npm-global
+
+# Bake the provider coder CLIs into the image (#791) so the control-plane boot
+# never npm-installs them. The install-clis init container did this at pod start
+# and, on a slow/hung npm registry, ran 8+ min and stalled the whole rollout —
+# stranding in-flight specs. .npm-global/bin is already on PATH (below). Versions
+# are pinned here now (Dependabot tracks the Dockerfile); a bump is an image
+# rebuild + canary, same as any other dependency.
+#
+# `install.cjs` is NOT redundant with the npm postinstall (Factory#383). The
+# postinstall downloads the 275 MB platform-native binary correctly, but leaves
+# `bin/claude.exe` as the 11-line stub that ships in the package — a script whose
+# whole body prints "native binary not installed" and exits 1. So `claude` on
+# PATH was broken in every control-plane pod while the binary underneath it ran
+# fine, and the stub's own error blames --ignore-scripts / --omit=optional,
+# neither of which is used here. Re-running install.cjs completes the swap.
+#
+# `claude --version` is the point of the fix, not decoration: this shipped broken
+# because nothing asserted the CLI works. Full path, since PATH is set for the
+# runtime user rather than for RUN.
+RUN npm install -g \
+        @anthropic-ai/claude-code@2.1.224 \
+        @openai/codex@0.147.0 \
+        @google/gemini-cli@0.54.4 \
+ && node /home/nonroot/.npm-global/lib/node_modules/@anthropic-ai/claude-code/install.cjs \
+ && /home/nonroot/.npm-global/bin/claude --version \
+ && npm cache clean --force \
+ && ln -sf /home/nonroot/.npm-global/bin/gemini /home/nonroot/.npm-global/bin/antigravity
 
 # Single Python venv shared by web-server and backend scripts (matches
 # agent_service.py's sys.executable expectations)

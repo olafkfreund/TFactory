@@ -29,6 +29,7 @@ def test_helm_lint_strict_passes(helm_available, chart_dir) -> None:
     this is the basic well-formedness gate for the chart.
     """
     import subprocess
+
     result = subprocess.run(
         ["helm", "lint", "--strict", str(chart_dir)],
         capture_output=True,
@@ -57,8 +58,10 @@ def test_helm_template_renders(helm_template) -> None:
         "Service",
         "ConfigMap",
         "ServiceAccount",
-        "PodDisruptionBudget",
     }
+    # PodDisruptionBudget is deliberately NOT here — Factory#550. It used to be,
+    # which is how the chart came to ship a PDB that cannot be drained past.
+    # test_pdb_off_by_default_and_refuses_to_strand_a_node owns it now.
     rendered_kinds = set()
     for line in helm_template.splitlines():
         if line.startswith("kind:"):
@@ -74,6 +77,7 @@ def test_helm_template_renders(helm_template) -> None:
 def test_kubeconform_passes(kubeconform_available, helm_template) -> None:
     """Every rendered manifest conforms to the current K8s OpenAPI schema."""
     import subprocess
+
     result = subprocess.run(
         ["kubeconform", "-summary", "-strict"],
         input=helm_template,
@@ -101,10 +105,14 @@ def test_network_policy_present_and_strict(helm_template) -> None:
       - Ingress restricts to the ingress-controller namespace by default.
     """
     import yaml
+
     docs = [d for d in yaml.safe_load_all(helm_template) if d]
     netpols = [d for d in docs if d.get("kind") == "NetworkPolicy"]
-    assert len(netpols) == 1, f"expected 1 NetworkPolicy, got {len(netpols)}"
-    np = netpols[0]
+    # Two policies: the control-plane one (selectorLabels) + the per-task Job
+    # pods one (#651 — Job pods carry app=tfactory-sandbox, not selectorLabels,
+    # so the control-plane policy never matched them).
+    assert len(netpols) == 2, f"expected 2 NetworkPolicies, got {len(netpols)}"
+    np = next(d for d in netpols if not d["metadata"]["name"].endswith("-job-pods"))
     policy_types = set(np["spec"]["policyTypes"])
     assert policy_types == {"Ingress", "Egress"}, (
         f"NetworkPolicy must declare both types for default-deny; got {policy_types}"
@@ -113,17 +121,55 @@ def test_network_policy_present_and_strict(helm_template) -> None:
     # Egress must include a 443/tcp rule.
     egress_rules = np["spec"].get("egress", [])
     has_443 = any(
-        any(p.get("port") == 443 and p.get("protocol") == "TCP" for p in rule.get("ports", []))
+        any(
+            p.get("port") == 443 and p.get("protocol") == "TCP"
+            for p in rule.get("ports", [])
+        )
         for rule in egress_rules
     )
     assert has_443, "NetworkPolicy egress must allow 443/tcp"
 
     # Egress must include DNS (port 53).
     has_dns = any(
-        any(p.get("port") == 53 for p in rule.get("ports", []))
-        for rule in egress_rules
+        any(p.get("port") == 53 for p in rule.get("ports", [])) for rule in egress_rules
     )
     assert has_dns, "NetworkPolicy egress must allow DNS (port 53)"
+
+
+@pytest.mark.helm
+def test_job_pods_network_policy_default_deny_ingress(helm_template) -> None:
+    """#651: the per-task Job pods get their own NetworkPolicy.
+
+    Asserts:
+      - It selects the Job pod label (app=tfactory-sandbox).
+      - Ingress is default-deny (declared type, no rules).
+      - Egress allows DNS, public 443 (substituters/git/LLM APIs), the kube
+        API server port, and same-namespace pods (Postgres/MinIO/TFactory API).
+    """
+    import yaml
+
+    docs = [d for d in yaml.safe_load_all(helm_template) if d]
+    np = next(
+        d
+        for d in docs
+        if d.get("kind") == "NetworkPolicy"
+        and d["metadata"]["name"].endswith("-job-pods")
+    )
+    assert np["spec"]["podSelector"]["matchLabels"] == {"app": "tfactory-sandbox"}
+    assert set(np["spec"]["policyTypes"]) == {"Ingress", "Egress"}
+    assert not np["spec"].get("ingress"), "job-pods ingress must be default-deny"
+
+    egress = np["spec"]["egress"]
+    ports = [p for rule in egress for p in rule.get("ports", [])]
+    assert any(p.get("port") == 53 for p in ports), "DNS egress missing"
+    assert any(p.get("port") == 443 and p.get("protocol") == "TCP" for p in ports), (
+        "443/tcp egress (substituters/git/LLM) missing"
+    )
+    assert any(p.get("port") == 6443 for p in ports), "kube API egress missing"
+    # Same-namespace egress: an empty podSelector rule.
+    assert any(
+        any(to == {"podSelector": {}} for to in rule.get("to", [])) for rule in egress
+    ), "same-namespace egress (Postgres/MinIO/API) missing"
 
 
 @pytest.mark.helm
@@ -139,6 +185,7 @@ def test_pss_restricted_security_contexts(helm_template) -> None:
     statically validates the rendered manifests would pass it.
     """
     import yaml
+
     docs = [d for d in yaml.safe_load_all(helm_template) if d]
     deploys = [d for d in docs if d.get("kind") == "Deployment"]
     assert len(deploys) == 1
@@ -152,7 +199,9 @@ def test_pss_restricted_security_contexts(helm_template) -> None:
     assert pod_sc.get("runAsUser", 0) >= 1000, "pod must run as uid >= 1000"
     assert pod_sc.get("fsGroup", 0) >= 1000, "pod must use fsGroup >= 1000"
     seccomp = pod_sc.get("seccompProfile", {})
-    assert seccomp.get("type") == "RuntimeDefault", "seccompProfile must be RuntimeDefault"
+    assert seccomp.get("type") == "RuntimeDefault", (
+        "seccompProfile must be RuntimeDefault"
+    )
 
     # Container-level checks (single container by design).
     containers = pod_spec["containers"]
@@ -182,7 +231,10 @@ def test_pss_restricted_security_contexts(helm_template) -> None:
     ),
 )
 def test_install_kind_with_bundled_postgres_succeeds(
-    helm_available, kind_available, kubectl_available, chart_dir,
+    helm_available,
+    kind_available,
+    kubectl_available,
+    chart_dir,
 ) -> None:
     """End-to-end: helm install on kind with postgres.bundled=true.
 
@@ -220,35 +272,64 @@ def test_install_kind_with_bundled_postgres_succeeds(
 
         # 3. Load the image into kind so the cluster can pull it
         # without a registry.
-        _run(["kind", "load", "docker-image", image_tag, "--name", cluster_name], timeout=180)
+        _run(
+            ["kind", "load", "docker-image", image_tag, "--name", cluster_name],
+            timeout=180,
+        )
 
         # 4. helm install. We set postgres.bundled=true and override
         # the image. Migrations.autoApply=true is the POC default —
         # production uses a separate Job, but the test exercises the
         # autoApply path because it's the bundled-mode happy path.
-        _run([
-            "helm", "install", "tfactory", str(chart_dir),
-            "--namespace", "default",
-            "--set", "postgres.bundled=true",
-            "--set", f"image.repository={image_tag.split(':')[0]}",
-            "--set", f"image.tag={image_tag.split(':')[1]}",
-            "--set", "image.pullPolicy=Never",
-            "--set", "migrations.autoApply=true",
-            "--wait", "--timeout=5m",
-        ], timeout=360, env=kubectl_env)
+        _run(
+            [
+                "helm",
+                "install",
+                "tfactory",
+                str(chart_dir),
+                "--namespace",
+                "default",
+                "--set",
+                "postgres.bundled=true",
+                "--set",
+                f"image.repository={image_tag.split(':')[0]}",
+                "--set",
+                f"image.tag={image_tag.split(':')[1]}",
+                "--set",
+                "image.pullPolicy=Never",
+                "--set",
+                "migrations.autoApply=true",
+                "--wait",
+                "--timeout=5m",
+            ],
+            timeout=360,
+            env=kubectl_env,
+        )
 
         # 5. Verify Postgres + app are ready.
         ss = _run(
-            ["kubectl", "get", "statefulset",
-             "-l", "app.kubernetes.io/component=postgres",
-             "-o", "jsonpath={.items[0].status.readyReplicas}"],
+            [
+                "kubectl",
+                "get",
+                "statefulset",
+                "-l",
+                "app.kubernetes.io/component=postgres",
+                "-o",
+                "jsonpath={.items[0].status.readyReplicas}",
+            ],
             env=kubectl_env,
         )
         assert ss.stdout.strip() == "1", f"Postgres not ready: {ss.stdout!r}"
 
         dep = _run(
-            ["kubectl", "get", "deployment", "tfactory",
-             "-o", "jsonpath={.status.readyReplicas}"],
+            [
+                "kubectl",
+                "get",
+                "deployment",
+                "tfactory",
+                "-o",
+                "jsonpath={.status.readyReplicas}",
+            ],
             env=kubectl_env,
         )
         assert dep.stdout.strip() == "1", f"app deployment not ready: {dep.stdout!r}"
@@ -259,7 +340,8 @@ def test_install_kind_with_bundled_postgres_succeeds(
         # is the minimal runtime image. Easier: port-forward + curl.
         pf = subprocess.Popen(
             ["kubectl", "port-forward", "svc/tfactory", "18181:80"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             env=kubectl_env,
         )
         try:
@@ -278,7 +360,8 @@ def test_install_kind_with_bundled_postgres_succeeds(
         # Best-effort cleanup.
         _run(
             ["kind", "delete", "cluster", "--name", cluster_name],
-            timeout=120, check=False,
+            timeout=120,
+            check=False,
         )
         _run(["docker", "rmi", image_tag], timeout=30, check=False)
 
@@ -301,10 +384,16 @@ def test_custom_ca_bundle_is_trusted_by_pod(helm_available, chart_dir) -> None:
 
     result = subprocess.run(
         [
-            "helm", "template", "tfactory", str(chart_dir),
-            "--set", "global.customCABundle.secretName=corp-root-ca",
+            "helm",
+            "template",
+            "tfactory",
+            str(chart_dir),
+            "--set",
+            "global.customCABundle.secretName=corp-root-ca",
         ],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     assert result.returncode == 0, f"helm template failed: {result.stderr[-500:]}"
     docs = [d for d in yaml.safe_load_all(result.stdout) if d]
@@ -336,3 +425,76 @@ def test_custom_ca_bundle_is_trusted_by_pod(helm_available, chart_dir) -> None:
     assert "SSL_CERT_FILE" in cm_data
     assert cm_data["SSL_CERT_FILE"].startswith("/etc/ssl/custom-ca/")
     assert "REQUESTS_CA_BUNDLE" in cm_data
+
+
+@pytest.mark.helm
+def test_pdb_off_by_default_and_refuses_to_strand_a_node(helm_available, chart_dir) -> None:
+    """Factory#550. The chart shipped `podDisruptionBudget.enabled: true` with
+    `minAvailable: 1` against `replicaCount: 1`. That combination allows ZERO
+    disruptions, so `kubectl drain` on the node hosting the pod never completes
+    -- measured on the reference cluster, where the drain retried "Cannot evict
+    pod as it would violate the pod's disruption budget" until timeout and
+    succeeded the instant the PDB was deleted.
+
+    Three assertions, because only the middle one has teeth: the default renders
+    no PDB, enabling it at the shipped replica count FAILS the render, and it
+    renders once there are actually two replicas to protect.
+    """
+    import subprocess
+
+    def render(*sets: str) -> subprocess.CompletedProcess[str]:
+        argv = ["helm", "template", "tfactory", str(chart_dir)]
+        for s in sets:
+            argv += ["--set", s]
+        return subprocess.run(argv, capture_output=True, text=True, timeout=30)
+
+    default = render()
+    assert default.returncode == 0, default.stderr[-1500:]
+    assert "kind: PodDisruptionBudget" not in default.stdout, (
+        "the chart must not ship a PDB at replicaCount 1 -- it would block node drains"
+    )
+
+    stranding = render("podDisruptionBudget.enabled=true")
+    assert stranding.returncode != 0, (
+        "enabling the PDB at the default single replica must FAIL the render, "
+        "not quietly produce an undrainable node"
+    )
+    assert "must be less than the replica floor" in stranding.stderr
+
+    # Autoscaling floor, not replicaCount, is what counts when the HPA owns replicas.
+    hpa_floor = render(
+        "podDisruptionBudget.enabled=true", "autoscaling.enabled=true", "replicaCount=5"
+    )
+    assert hpa_floor.returncode != 0, (
+        "replicaCount is irrelevant when autoscaling owns the replica count; "
+        "the guard must read autoscaling.minReplicas (1)"
+    )
+
+    ok = render("podDisruptionBudget.enabled=true", "replicaCount=2")
+    assert ok.returncode == 0, ok.stderr[-1500:]
+    assert "kind: PodDisruptionBudget" in ok.stdout
+
+
+@pytest.mark.helm
+def test_sa_token_is_mounted_because_the_verify_lane_needs_it(helm_template) -> None:
+    """Factory#550. `serviceAccount.automountServiceAccountToken` was `false`
+    with a comment claiming this pod does not talk to the K8s API. It does:
+    tools/runners/kube_sandbox.py calls `load_incluster_config()` for every
+    Nix-lane verify Job. The chart also contradicted itself -- the Deployment
+    renders the pod-level field from `rbac.jobSandbox.enabled` (true), and the
+    pod-level field wins -- so the declared value described nothing real.
+
+    Both places must now say the same thing, and it must be the true thing.
+    """
+    import yaml
+
+    docs = [d for d in yaml.safe_load_all(helm_template) if d]
+    sa = next(d for d in docs if d["kind"] == "ServiceAccount")
+    dep = next(d for d in docs if d["kind"] == "Deployment")
+    pod_spec = dep["spec"]["template"]["spec"]
+
+    assert sa["automountServiceAccountToken"] is True
+    assert pod_spec["automountServiceAccountToken"] is True, (
+        "pod-level automount overrides the ServiceAccount; the two must agree "
+        "or the chart documents a control it does not apply"
+    )

@@ -80,6 +80,7 @@ if "fastapi" not in sys.modules:
     _status.HTTP_500_INTERNAL_SERVER_ERROR = 500
 
     _fastapi.APIRouter = _APIRouter
+    _fastapi.Header = lambda default=None, **kwargs: default
     _fastapi.HTTPException = _HTTPException
     _fastapi.Response = _Response
     _fastapi.WebSocket = _WebSocket
@@ -270,6 +271,48 @@ def test_list_tasks_sorted_newest_first(workspace_root: Path) -> None:
     # Newest first
     assert result["tasks"][0]["spec_id"] == "newer"
     assert result["tasks"][1]["spec_id"] == "older"
+
+
+def test_list_tasks_tenant_filter_flag_on(
+    workspace_root: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Multi-tenant on: only the request tenant's rows come back (#683)."""
+    monkeypatch.setenv("TFACTORY_MULTI_TENANT", "true")
+    _make_task(
+        workspace_root, project_id="demo", spec_id="acme-1",
+        extra_status={"tenant": "acme"},
+    )
+    _make_task(
+        workspace_root, project_id="demo", spec_id="other-1",
+        extra_status={"tenant": "other"},
+    )
+    # Legacy row without a tenant field — lazily backfills to "default".
+    _make_task(workspace_root, project_id="demo", spec_id="legacy-1")
+
+    result = list_tasks(x_tenant_id="acme")
+    assert result["count"] == 1
+    assert result["tasks"][0]["spec_id"] == "acme-1"
+    assert result["tasks"][0]["tenant"] == "acme"
+
+    # No header resolves to "default" — sees only unstamped/default rows.
+    result = list_tasks()
+    assert [r["spec_id"] for r in result["tasks"]] == ["legacy-1"]
+
+
+def test_list_tasks_tenant_flag_off_unchanged(
+    workspace_root: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Multi-tenant off (default): all rows regardless of tenant (#683)."""
+    monkeypatch.delenv("TFACTORY_MULTI_TENANT", raising=False)
+    _make_task(
+        workspace_root, project_id="demo", spec_id="acme-1",
+        extra_status={"tenant": "acme"},
+    )
+    _make_task(workspace_root, project_id="demo", spec_id="legacy-1")
+    result = list_tasks(x_tenant_id="acme")
+    assert result["count"] == 2
+    tenants = {r["tenant"] for r in result["tasks"]}
+    assert tenants == {"acme", "default"}
 
 
 def test_list_tasks_across_multiple_projects(workspace_root: Path) -> None:

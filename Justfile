@@ -61,10 +61,19 @@ screenshots:
     npm -w apps/frontend-web run capture-screenshots
 
 # ----- test -----
+#
+# The backend pytest recipes run under `nix develop -c` so they get the flake
+# devShell's LD_LIBRARY_PATH (stdenv.cc.cc.lib → libstdc++). The async-DB tests
+# import SQLAlchemy's greenlet C-extension, which dlopen's libstdc++.so.6 at
+# runtime; on NixOS there's no global one, so running the venv pytest OUTSIDE
+# the devShell fails with `libstdc++.so.6: cannot open shared object file` and
+# every async test errors at setup. `nix develop -c` makes the recipe work
+# regardless of whether you're inside direnv. (CI runs pytest directly on an
+# ubuntu runner where libstdc++ is present, so ci.yml is unaffected.)
 
 # Backend unit tests (skip slow)
 test-backend:
-    apps/backend/.venv/bin/pytest tests/ -m "not slow"
+    nix develop -c apps/backend/.venv/bin/pytest tests/ -m "not slow"
 
 # Frontend typecheck
 test-frontend:
@@ -72,7 +81,7 @@ test-frontend:
 
 # Postgres acceptance tests (needs Docker)
 test-postgres:
-    apps/backend/.venv/bin/pytest tests/postgres/ -m postgres -v
+    nix develop -c apps/backend/.venv/bin/pytest tests/postgres/ -m postgres -v
 
 # Everything CI runs (slow!)
 test-all: test-backend test-frontend test-postgres

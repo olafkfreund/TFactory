@@ -18,10 +18,13 @@ point of the RFC — a VAL-2 result must never look like "done".
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
 from agents.verification_gate import normalize_verification
+
+_log = logging.getLogger(__name__)
 
 __all__ = [
     "DEFAULT_TARGET_LEVEL",
@@ -48,15 +51,87 @@ _LANE_LEVEL = {
 _PASS_VERDICTS = {"accept", "flag"}  # flag = accepted-with-note (still ran+passed)
 
 
+def _qualify_claim_with_flags(
+    block: dict[str, Any], verdicts: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Name the flag count in the claim when flags carried a level to passed.
+
+    ``_PASS_VERDICTS`` counts ``flag`` (accepted-with-note) as a pass, so a
+    level can report ``passed`` while some of its tests were demoted for human
+    review — typically by the deterministic flaky-history rule in
+    ``agents.confidence``. The same run's ``findings/ac_fidelity.md`` counts a
+    criterion covered only by flags as NOT verified, so the two artifacts could
+    be read to opposite conclusions from one run: "Verified to VAL-2" against
+    "Verified 2/6 acceptance criteria" (#1022).
+
+    The AC ledger is not available here — the triager writes
+    ``findings/ac_fidelity.json`` well after ``verification.json`` — so this
+    states what this function can see for itself: how many of the graded
+    verdicts were flags. That is enough for a reader to know the level did not
+    pass cleanly, and it cannot contradict the ledger because it counts
+    verdicts rather than criteria.
+
+    Only ever appends; ``achieved_level``, the level statuses and the gate's
+    violations are untouched, so this cannot mask an overclaim.
+    """
+    flagged = sum(
+        1
+        for v in verdicts
+        if isinstance(v, dict) and str(v.get("verdict") or "").lower() == "flag"
+    )
+    if not flagged:
+        return block
+    graded = sum(
+        1
+        for v in verdicts
+        if isinstance(v, dict)
+        and str(v.get("verdict") or "").lower() not in ("", "not_run")
+    )
+    claim = str(block.get("claim") or "")
+    block["claim"] = (
+        f"{claim} {flagged} of {graded} graded verdict(s) are flag "
+        "(accepted-with-note, not a clean pass) — see findings/ac_fidelity.md."
+    ).strip()
+    return block
+
+
+def _level_for_verdict(v: dict[str, Any]) -> str | None:
+    """The VAL level a verdict's lane proves, or None if it grades no level.
+
+    A verdict with no lane is UNATTRIBUTED, not unit (#1018). This used to
+    default to ``"unit"``, and because nothing ever wrote the field, every
+    verdict — api, browser, integration — was graded as unit: VAL-2 saw none
+    and reported "no api/integration/browser lane ran", capping every run at
+    VAL-0. The evaluator now stamps the lane from the plan, so a missing one
+    means the verdict matched no planned subtask; counting that as unit would
+    re-create the same silent inflation on the input we know least about.
+
+    A lane that is present but maps to no level (``mutation``) is a deliberate
+    omission and is not worth logging; a missing lane is a data gap and is.
+    """
+    lane = str(v.get("lane") or "").lower()
+    if not lane:
+        _log.warning(
+            "verdict %r has no lane; excluded from VAL grouping",
+            str(v.get("test_id") or "?"),
+        )
+    return _LANE_LEVEL.get(lane)
+
+
 def _level_status(verdicts: list[str]) -> str:
     """passed only if a lane ran and every verdict is a pass; else failed/not_run.
 
     Conservative: an unknown/non-pass verdict counts as a failure (not silently
-    "passed") — honesty over optimism.
+    "passed") — honesty over optimism. A ``not_run`` verdict (an AC whose lane
+    never executed — e.g. the api app-under-test never booted, #703 follow-up)
+    is excluded: it neither passes nor fails the level. A level whose only
+    verdicts are ``not_run`` is itself ``not_run``, so the gate downgrades it
+    honestly rather than recording a false AC failure.
     """
-    if not verdicts:
+    ran = [v for v in verdicts if v != "not_run"]
+    if not ran:
         return "not_run"
-    return "passed" if all(v in _PASS_VERDICTS for v in verdicts) else "failed"
+    return "passed" if all(v in _PASS_VERDICTS for v in ran) else "failed"
 
 
 def build_verification_block(
@@ -81,8 +156,7 @@ def build_verification_block(
     for v in verdicts:
         if not isinstance(v, dict):
             continue
-        lane = str(v.get("lane") or "unit").lower()
-        level = _LANE_LEVEL.get(lane)
+        level = _level_for_verdict(v)
         if level is None:
             continue
         by_level.setdefault(level, []).append(str(v.get("verdict") or "").lower())
@@ -90,9 +164,17 @@ def build_verification_block(
     levels: list[dict[str, Any]] = []
 
     # VAL-0 (static): the generated suite executed at all — the toolchain was
-    # present and the code was static-sound enough to import/run. Proven whenever
-    # any verdict was produced; otherwise nothing ran.
-    any_ran = bool(verdicts)
+    # present and the code was static-sound enough to import/run. Proven when a
+    # verdict from something that ACTUALLY RAN was produced; otherwise nothing ran.
+    #
+    # `bool(verdicts)` was enough until a lane could record a `not_run` verdict
+    # for a lane that never executed (#972). A run whose only verdicts are
+    # not_run executed nothing, so claiming VAL-0 from their mere presence
+    # overclaims on exactly the evidence that says the opposite.
+    any_ran = any(
+        isinstance(v, dict) and str(v.get("verdict") or "").lower() != "not_run"
+        for v in verdicts
+    )
     levels.append(
         {
             "level": "VAL-0",
@@ -105,12 +187,30 @@ def build_verification_block(
 
     # VAL-1 / VAL-2 from the lanes that ran.
     for level in ("VAL-1", "VAL-2"):
-        status = _level_status(by_level.get(level, []))
+        lane_verdicts = by_level.get(level, [])
+        status = _level_status(lane_verdicts)
         entry: dict[str, Any] = {"level": level, "status": status}
+        lane_name = "unit" if level == "VAL-1" else "api/integration/browser"
         if status == "not_run":
+            # Distinguish "no lane ran at all" from "the lane's tests couldn't
+            # execute against a running app" (all verdicts not_run — infra).
+            if lane_verdicts:
+                entry["reason"] = (
+                    f"{lane_name} lane did not execute against a running "
+                    "app-under-test (infra not_run, not an acceptance failure)"
+                )
+            else:
+                entry["reason"] = f"no {lane_name} lane ran in this verify"
+        elif status == "failed":
+            # A ran-but-failed level MUST carry a reason (the gate flags a gap
+            # with no explanation as its own violation, missing_reason:<level>).
+            # not_run ACs are infra, not failures — exclude them from the count.
+            n_fail = sum(
+                1 for v in lane_verdicts if v not in _PASS_VERDICTS and v != "not_run"
+            )
+            n_ran = sum(1 for v in lane_verdicts if v != "not_run")
             entry["reason"] = (
-                f"no {'unit' if level == 'VAL-1' else 'api/integration/browser'} "
-                "lane ran in this verify"
+                f"{lane_name} lane: {n_fail}/{n_ran} test verdict(s) did not pass"
             )
         levels.append(entry)
 
@@ -158,7 +258,7 @@ def build_verification_block(
         "achieved_level": effective_target,
         "levels": levels,
     }
-    return normalize_verification(block)
+    return _qualify_claim_with_flags(normalize_verification(block), verdicts)
 
 
 def read_verification_block(

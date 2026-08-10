@@ -20,6 +20,16 @@ Read the build's source under the project directory (use Glob/Grep/Read). Review
 4. **Performance** — obvious N+1s, needless work in hot paths (only if evident).
 5. **Interface** — API/contract shape, backward-compatibility.
 
+## Minimal code is correct, not incomplete (ponytail-aware)
+
+The build agent is instructed to write the minimum code that fully satisfies the
+spec. A small, simple, or one-line solution is CORRECT — do not raise a
+maintainability finding merely because code is minimal, lacks abstraction, or
+omits speculative flexibility ("this should be a class/interface/config for
+later"). Missing behaviour or a real safety gap is a finding; missing
+gold-plating is not. The bar is the spec's acceptance criteria plus the safety
+axes (correctness, security), never added structure for its own sake.
+
 ## Red flags — STOP, do not pass silently
 
 - A finding you can't point to a specific file+line for is not a finding — cite it

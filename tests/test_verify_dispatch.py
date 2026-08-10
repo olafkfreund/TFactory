@@ -7,8 +7,8 @@ Covers:
 - ``build_verify_job_manifest`` produces a correct Job: the configured image, the
   ``python -m agents.verify_pipeline`` command (plain, or wrapped in ``nix
   develop`` when ``nix_develop`` is set), the worktree + warm-store mounts, the
-  ``tfactory-sandbox`` SA, no token automount, and the JOB_ID / CORRELATION_KEY /
-  FACTORY_SERVICE / PYTHONPATH env.
+  ``tfactory-sandbox`` SA with token automount (it dispatches nested lane Jobs),
+  and the JOB_ID / CORRELATION_KEY / FACTORY_SERVICE / PYTHONPATH env.
 - ``resolve_verify_image`` prefers TFACTORY_VERIFY_IMAGE, then TFACTORY_IMAGE,
   then the thin nix-runner fallback (the #466 "use the service's own image" fix
   so the orchestration Job can import the ``agents`` backend).
@@ -29,6 +29,7 @@ Postgres / no cluster), injected via the ``store=`` seam.
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -47,6 +48,8 @@ from agents.verify_dispatch import (
 )
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
+from tools.runners import job_dispatch
+from tools.runners.job_dispatch import assert_job_policy
 
 _WEB_SERVER = Path(__file__).parent.parent / "apps" / "web-server"
 if str(_WEB_SERVER) not in sys.path:
@@ -237,6 +240,29 @@ def test_seed_creds_injected_when_secret_configured(monkeypatch):
     } <= mounts
 
 
+def test_seed_creds_init_container_is_hardened(monkeypatch):
+    # #651: the seed-creds initContainer carries the same hardened
+    # securityContext as the lane/seed containers (no escalation, drop ALL +
+    # co-mount add-backs).
+    monkeypatch.setenv("TFACTORY_VERIFY_CLI_CREDS_SECRET", "factory-cli-creds")
+    pod = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
+    init = next(c for c in pod["initContainers"] if c["name"] == "seed-creds")
+    sc = init["securityContext"]
+    assert sc["allowPrivilegeEscalation"] is False
+    assert sc["capabilities"]["drop"] == ["ALL"]
+
+
+def test_verify_job_pod_pins_seccomp_runtime_default():
+    # #651: the verify-orchestration Job inherits the shared builder's pod
+    # hardening (seccomp RuntimeDefault) and its container the restricted
+    # securityContext.
+    pod = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
+    assert pod["securityContext"]["seccompProfile"] == {"type": "RuntimeDefault"}
+    sc = pod["containers"][0]["securityContext"]
+    assert sc["allowPrivilegeEscalation"] is False
+    assert sc["capabilities"]["drop"] == ["ALL"]
+
+
 def test_manifest_is_a_job_with_the_configured_image():
     m = build_verify_job_manifest(_cfg())
     assert m["kind"] == "Job"
@@ -283,10 +309,123 @@ def test_manifest_without_nix_develop_runs_verify_directly():
     assert "python -m agents.verify_pipeline" in cmd
 
 
-def test_manifest_uses_tfactory_sandbox_sa_no_token_automount():
+def test_manifest_propagates_nix_sandbox_env_when_set(monkeypatch):
+    # The verify pipeline running inside the Job dispatches the nested Nix lane
+    # Job via nix_runner_from_env(), which reads these off the env. They live on
+    # the Deployment but aren't inherited by the dispatched Job, so the manifest
+    # must forward them — else the Nix lane silently falls back to host.
+    monkeypatch.setenv(
+        "TFACTORY_NIX_RUNNER_IMAGE", "ghcr.io/x/tfactory-runner-nix:latest"
+    )
+    monkeypatch.setenv("TFACTORY_WORKSPACES_PVC", "tfactory-data")
+    monkeypatch.setenv("TFACTORY_NIX_STORE_PVC", "tfactory-nix-store")
+    ps = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
+    env = {e["name"]: e["value"] for e in ps["containers"][0]["env"]}
+    assert env["TFACTORY_NIX_RUNNER_IMAGE"] == "ghcr.io/x/tfactory-runner-nix:latest"
+    assert env["TFACTORY_WORKSPACES_PVC"] == "tfactory-data"
+    assert env["TFACTORY_NIX_STORE_PVC"] == "tfactory-nix-store"
+
+
+def test_nix_in_image_flag_reaches_the_dispatched_job(monkeypatch):
+    """#623: the flag MUST travel with TFACTORY_NIX_STORE_PVC.
+
+    nix_runner_from_env() runs again *inside* the dispatched Job. If the flag
+    does not reach it, it reads False there and re-mounts the very RWO PVC the
+    flag exists to drop — the flip lands on the control plane and silently misses
+    the nested Job. That half-applied shape is exactly how AIFactory#840 broke
+    its gate lane.
+    """
+    monkeypatch.setenv(
+        "TFACTORY_NIX_RUNNER_IMAGE", "ghcr.io/x/tfactory-runner-nix:latest"
+    )
+    monkeypatch.setenv("TFACTORY_NIX_STORE_PVC", "tfactory-nix-store")
+    monkeypatch.setenv("TFACTORY_NIX_IN_IMAGE", "true")
+    ps = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
+    env = {e["name"]: e["value"] for e in ps["containers"][0]["env"]}
+    assert env.get("TFACTORY_NIX_IN_IMAGE") == "true", env
+
+
+def test_bash_sandbox_flag_reaches_the_dispatched_job(monkeypatch):
+    """#1012: the agent's bwrap sandbox defaults ON inside the Job.
+
+    core.client enables the OS-level bash sandbox unless AIFACTORY_BASH_SANDBOX
+    says otherwise. The control-plane Deployment sets it false (k3d), but the
+    dispatched Job builds a curated env, so without forwarding it the agent
+    re-enables bwrap inside a pod whose own seccompProfile (RuntimeDefault,
+    kube_sandbox #651) forbids unshare(CLONE_NEWUSER). Every agent Bash call
+    then fails and no test process starts, while the run still reaches
+    ``triaged`` with all five lanes ``pending`` — a verify that verified
+    nothing and does not look like a failure.
+    """
+    monkeypatch.setenv("AIFACTORY_BASH_SANDBOX", "false")
+    ps = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
+    env = {e["name"]: e["value"] for e in ps["containers"][0]["env"]}
+    assert env.get("AIFACTORY_BASH_SANDBOX") == "false", env
+
+
+def test_bash_sandbox_flag_is_not_invented_when_unset(monkeypatch):
+    """Forward the operator's choice; never manufacture one.
+
+    On a cluster that can run bwrap the flag is unset and the sandbox should
+    stay on. Emitting a default here would silently disable the agent sandbox
+    everywhere the verify Job runs, which is the opposite failure and a worse
+    one.
+    """
+    monkeypatch.delenv("AIFACTORY_BASH_SANDBOX", raising=False)
+    ps = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
+    env = {e["name"]: e["value"] for e in ps["containers"][0]["env"]}
+    assert "AIFACTORY_BASH_SANDBOX" not in env, env
+
+
+def test_manifest_omits_nix_sandbox_env_when_unset(monkeypatch):
+    for v in (
+        "TFACTORY_NIX_RUNNER_IMAGE",
+        "TFACTORY_WORKSPACES_PVC",
+        "TFACTORY_NIX_STORE_PVC",
+        "TFACTORY_NIX_IN_IMAGE",
+        "TFACTORY_SANDBOX_NAMESPACE",
+    ):
+        monkeypatch.delenv(v, raising=False)
+    ps = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
+    names = {e["name"] for e in ps["containers"][0]["env"]}
+    assert "TFACTORY_NIX_RUNNER_IMAGE" not in names
+
+
+def test_triager_side_effect_flags_reach_the_dispatched_job(monkeypatch):
+    # #719: the triager runs INSIDE this verify Job; the side-effect flags live
+    # only on the control-plane Deployment, so they must be forwarded or the
+    # verdict is computed but never posted (git_writer / pr_comment dry-run).
+    monkeypatch.setenv("TFACTORY_TRIAGER_GIT_WRITE", "1")
+    monkeypatch.setenv("TFACTORY_TRIAGER_PR_COMMENT", "1")
+    monkeypatch.setenv("TFACTORY_PR_STATUS", "1")
+    ps = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
+    env = {e["name"]: e["value"] for e in ps["containers"][0]["env"]}
+    assert env.get("TFACTORY_TRIAGER_GIT_WRITE") == "1", env
+    assert env.get("TFACTORY_TRIAGER_PR_COMMENT") == "1", env
+    assert env.get("TFACTORY_PR_STATUS") == "1", env
+
+
+def test_triager_flags_omitted_when_unset(monkeypatch):
+    for v in (
+        "TFACTORY_TRIAGER_GIT_WRITE",
+        "TFACTORY_TRIAGER_PR_COMMENT",
+        "TFACTORY_PR_STATUS",
+    ):
+        monkeypatch.delenv(v, raising=False)
+    ps = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
+    names = {e["name"] for e in ps["containers"][0]["env"]}
+    assert "TFACTORY_TRIAGER_GIT_WRITE" not in names
+    assert "TFACTORY_TRIAGER_PR_COMMENT" not in names
+
+
+def test_manifest_uses_tfactory_sandbox_sa_with_token_automount():
+    # The verify Job dispatches nested per-lane Jobs (Nix pytest/browser lanes via
+    # KubeJobSandbox.create_namespaced_job), so it needs the SA token mounted to
+    # authenticate to the k8s API — otherwise the nested dispatch fails and the
+    # lane silently falls back to the host runner.
     ps = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
     assert ps["serviceAccountName"] == "tfactory-sandbox"
-    assert ps["automountServiceAccountToken"] is False
+    assert ps["automountServiceAccountToken"] is True
 
 
 def test_manifest_mounts_worktree_and_warm_nix_store():
@@ -348,6 +487,32 @@ def test_manifest_labels_durable_coordinates():
     labels = build_verify_job_manifest(_cfg())["metadata"]["labels"]
     assert labels["factory.io/kind"] == "verify"
     assert "factory.io/job-id" in labels
+
+
+# ─── the shared job-dispatch contract (Factory#483) ───────────────────────────
+
+
+def test_verify_job_obeys_the_shared_job_policy():
+    # This module builds its OWN manifest - it seeds credentials through an
+    # initContainer, forwards a 23-var provider allowlist, and needs a service
+    # account token, none of which the hub builder models. That is exactly why it
+    # used to hand-copy the rules instead of calling them. assert_job_policy is
+    # the hub's own checker, vendored byte-exact, so the rules now arrive here by
+    # re-vendor rather than by hand-edit.
+    assert_job_policy(build_verify_job_manifest(_cfg()))
+
+
+def test_verify_naming_helpers_come_from_the_vendored_canonical():
+    # These were byte-identical hand-copies under a comment naming their source.
+    # Behaviour must be unchanged; provenance must not be.
+    assert vd.JOB_NAME_PREFIX == job_dispatch.JOB_NAME_PREFIX
+    assert vd.TERMINAL_STATES == job_dispatch.TERMINAL_STATES
+    assert vd.RECONCILE_BY == job_dispatch.RECONCILE_BY
+    assert verify_job_name("proj:042-Go_Hello") == job_dispatch.job_name(
+        "tfactory", "proj:042-Go_Hello"
+    )
+    assert vd._shq("a'b") == job_dispatch._shq("a'b")
+    assert vd._short("proj:042-Go_Hello") == job_dispatch._short("proj:042-Go_Hello")
 
 
 # ─── dispatch_verify_job (fall back vs record) ────────────────────────────────
@@ -482,6 +647,28 @@ def test_manifest_forwards_non_claude_provider_env(monkeypatch):
     assert env["GITHUB_TOKEN"] == "ghp_zzz"
     assert env["GITHUB_MODELS_DEFAULT"] == "openai/gpt-4.1"
     assert env["QA_LLM_PROVIDER"] == "openai"
+
+
+def test_manifest_forwards_gemini_workspace_trust(monkeypatch):
+    # #871: the gemini/antigravity CLI exits before any API call in an
+    # "untrusted" workspace. providers/gemini_agentic.py spawns that CLI as a
+    # subprocess of the Job, so the API key alone is not enough — the trust flag
+    # has to reach the Job's env or the Gemini verify leg stalls silently.
+    _clear_oauth_env(monkeypatch)
+    monkeypatch.setenv("GEMINI_API_KEY", "gem-789")
+    monkeypatch.setenv("GEMINI_CLI_TRUST_WORKSPACE", "true")
+    env = {
+        e["name"]: e.get("value") for e in _env_of(build_verify_job_manifest(_cfg()))
+    }
+    assert env["GEMINI_CLI_TRUST_WORKSPACE"] == "true"
+
+
+def test_gemini_workspace_trust_absent_when_unset(monkeypatch):
+    # Forwarded only when set on the pod — no invented default.
+    _clear_oauth_env(monkeypatch)
+    monkeypatch.delenv("GEMINI_CLI_TRUST_WORKSPACE", raising=False)
+    env = {e["name"] for e in _env_of(build_verify_job_manifest(_cfg()))}
+    assert "GEMINI_CLI_TRUST_WORKSPACE" not in env
 
 
 def test_manifest_provider_secrets_via_secret_ref(monkeypatch):
@@ -935,3 +1122,296 @@ def test_record_dispatch_succeeds_on_a_foreign_loop(tmp_path, monkeypatch):
         return done["lifecycle_state"]
 
     assert asyncio.run(_verdict()) == "done"
+
+
+def test_verify_job_sets_data_root_env():
+    """The verify Job declares TFACTORY_DATA_ROOT = its mount, so the nested Nix
+    sandbox resolves co-mount subPaths against the right PVC root — without it
+    pvc_subpath returns None, the Nix Job mounts nothing, and every AC rejects on
+    an empty /work (#623)."""
+    m = build_verify_job_manifest(_cfg())
+    env = m["spec"]["template"]["spec"]["containers"][0]["env"]
+    dr = next((e for e in env if e["name"] == "TFACTORY_DATA_ROOT"), None)
+    assert dr is not None and dr["value"] == "/work"  # VerifyJobConfig.mount default
+
+
+# ─── #767: a reap must also finish the SPEC, not just the row ─────────────────
+
+
+def _spec_ws(tmp_path, status="evaluating"):
+    d = tmp_path / "specs" / "008-proof"
+    d.mkdir(parents=True)
+    (d / "status.json").write_text(
+        json.dumps({"status": status, "phase": "evaluator_initial_started"})
+    )
+    return d
+
+
+async def test_reap_marks_the_spec_failed_not_just_the_row(store, tmp_path):
+    """Spec 008's exact shape: Job killed at its deadline, workspace left busy.
+
+    Marking the durable row is invisible to every reader that asks status.json
+    whether the spec is done — which is all of them.
+    """
+    spec = _spec_ws(tmp_path)
+    await store.enqueue("j767")
+    await store.grant_slot("j767")
+    await store.update_status(
+        "j767",
+        service_status="running",
+        has_verdict=False,
+        worker_ref={"kind": "k8s-job", "job_name": "v", "spec_dir": str(spec)},
+    )
+
+    rec = await vd.reap_if_orphaned(
+        "j767", job_exists=False, job_active=False, store=store
+    )
+    assert rec is not None and rec["lifecycle_state"] == "stuck"
+
+    after = json.loads((spec / "status.json").read_text())
+    assert after["status"] == "failed", after
+    assert after["phase"] == "verify_job_reaped", after
+    assert "vanished" in after["reaped_reason"], after
+
+
+async def test_reap_never_overwrites_a_real_verdict(store, tmp_path):
+    """The Job's own verdict always wins — a late reap must not clobber it."""
+    spec = _spec_ws(tmp_path, status="triaged")
+    await store.enqueue("j767b")
+    await store.grant_slot("j767b")
+    await store.update_status(
+        "j767b",
+        service_status="running",
+        has_verdict=False,
+        worker_ref={"kind": "k8s-job", "job_name": "v", "spec_dir": str(spec)},
+    )
+
+    await vd.reap_if_orphaned("j767b", job_exists=False, job_active=False, store=store)
+
+    after = json.loads((spec / "status.json").read_text())
+    assert after["status"] == "triaged", "a reap must never overwrite a verdict"
+
+
+async def test_reap_without_a_recorded_spec_dir_is_harmless(store):
+    """Pre-#767 rows carry no spec_dir; the reap must still mark the row."""
+    await store.enqueue("j767c")
+    await store.grant_slot("j767c")
+    rec = await vd.reap_if_orphaned(
+        "j767c", job_exists=False, job_active=False, store=store
+    )
+    assert rec is not None and rec["lifecycle_state"] == "stuck"
+
+
+# ── Factory#638: the trace crosses the verify Job boundary ──────────────────── #
+#
+# The verify Job was the second boundary a trace stopped at. This builder does
+# not go through the hub's ``build_job_manifest`` — it wraps ``kube_sandbox`` and
+# assembles its own env — so it inherited none of ``trace_env()`` for free.
+#
+# These assert the DISPATCHER's half only. The Job's half (that the Job opens a
+# span whose parent is this traceparent) is tests/test_job_tracing.py, and
+# neither half is worth anything alone: env without an emitter is correct-looking
+# configuration on a Job that produces nothing, which reads as coverage while the
+# trace still stops at the seam.
+
+_DISPATCHER_TP = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+_FAKE_ENDPOINT = "http://observe:5080/api/default"
+
+
+def _job_env(monkeypatch) -> dict:
+    ps = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
+    return {e["name"]: e for e in ps["containers"][0]["env"]}
+
+
+def test_verify_job_carries_the_dispatchers_traceparent(monkeypatch):
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", _FAKE_ENDPOINT)
+    monkeypatch.setattr(job_dispatch, "current_traceparent", lambda: _DISPATCHER_TP)
+
+    env = _job_env(monkeypatch)
+
+    assert env["TRACEPARENT"]["value"] == _DISPATCHER_TP
+    assert env["OTEL_EXPORTER_OTLP_ENDPOINT"]["value"] == _FAKE_ENDPOINT
+    # <service>-job, so the collector can tell a Job's spans from its
+    # dispatcher's — and so trace-silence-check's `LIKE '%-job'` join assertion
+    # picks them up without job-side names joining EXPECTED_SERVICES.
+    assert env["OTEL_SERVICE_NAME"]["value"] == "tfactory-job"
+
+
+def test_the_collector_credential_crosses_as_a_reference_never_a_value(monkeypatch):
+    # observe-otlp-auth-sync rotates this Secret hourly (Factory#606). A literal
+    # would both freeze it and write a Basic credential into an object every
+    # namespace reader can `kubectl get -o yaml`.
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", _FAKE_ENDPOINT)
+    monkeypatch.setenv(
+        "OTEL_EXPORTER_OTLP_HEADERS", "Authorization=Basic NOT-A-REAL-VALUE"
+    )
+
+    entry = _job_env(monkeypatch)["OTEL_EXPORTER_OTLP_HEADERS"]
+
+    assert "value" not in entry, entry
+    assert entry["valueFrom"]["secretKeyRef"]["name"] == job_dispatch.OTLP_AUTH_SECRET
+    # optional: a cluster with no Secret dispatches Jobs that do not export,
+    # rather than Jobs stuck in CreateContainerConfigError. A verify that cannot
+    # trace must still be able to run.
+    assert entry["valueFrom"]["secretKeyRef"]["optional"] is True
+
+
+def test_no_collector_means_no_trace_env_at_all(monkeypatch):
+    # Off-cluster and in every test run there is no collector, and a Job carrying
+    # OTLP config pointed at nothing spends its exporter's retry budget for no
+    # spans.
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+
+    names = set(_job_env(monkeypatch))
+
+    assert not (
+        names & {"TRACEPARENT", "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_SERVICE_NAME"}
+    )
+
+
+def test_no_active_span_means_no_traceparent(monkeypatch):
+    # There is then no trace to join, and an unparented job span is volume with
+    # no question attached — it is exactly what trace-silence-check reports as an
+    # orphaned job-side span.
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", _FAKE_ENDPOINT)
+    monkeypatch.setattr(job_dispatch, "current_traceparent", lambda: None)
+
+    env = _job_env(monkeypatch)
+
+    assert "TRACEPARENT" not in env
+    assert env["OTEL_EXPORTER_OTLP_ENDPOINT"]["value"] == _FAKE_ENDPOINT
+
+
+async def test_a_succeeded_job_does_not_fail_the_spec(store, tmp_path):
+    """#1014: a Job that exited 0 handed off — it must not fail the run.
+
+    Observed live: a run was marked `failed` at 18:28:37 because the generate
+    Job finished without a verdict row, a successor Job started at 18:28:39, and
+    the spec reached `triaged` normally at 18:42. The row is per-Job; the spec
+    is per-run, and only a Job that DIED speaks for it.
+    """
+    spec = _spec_ws(tmp_path, status="generated")
+    await store.enqueue("j1014")
+    await store.grant_slot("j1014")
+    await store.update_status(
+        "j1014",
+        service_status="running",
+        has_verdict=False,
+        worker_ref={"kind": "k8s-job", "job_name": "v", "spec_dir": str(spec)},
+    )
+
+    rec = await vd.reap_if_orphaned(
+        "j1014",
+        job_exists=True,
+        job_active=False,
+        job_succeeded=True,
+        store=store,
+    )
+
+    # The row still closes — a successful Job that wrote no verdict row would
+    # otherwise strand it forever, which is what #767 was about.
+    assert rec is not None and rec["lifecycle_state"] == "stuck"
+    # But the spec is untouched, so the successor's run is not declared dead.
+    after = json.loads((spec / "status.json").read_text())
+    assert after["status"] == "generated", after
+    assert "phase" not in after or after["phase"] != "verify_job_reaped", after
+    assert "reaped_reason" not in after, after
+
+
+async def test_a_deadline_killed_job_still_fails_the_spec(store, tmp_path):
+    """#767 must keep working: a Job that DIED still reaps its spec.
+
+    The #1014 fix narrows the reaper, so this pins the direction it must not
+    narrow — otherwise a genuinely stranded spec sits busy forever again.
+    """
+    spec = _spec_ws(tmp_path, status="evaluating")
+    await store.enqueue("j1014b")
+    await store.grant_slot("j1014b")
+    await store.update_status(
+        "j1014b",
+        service_status="running",
+        has_verdict=False,
+        worker_ref={"kind": "k8s-job", "job_name": "v", "spec_dir": str(spec)},
+    )
+
+    rec = await vd.reap_if_orphaned(
+        "j1014b",
+        job_exists=True,
+        job_active=False,
+        job_succeeded=False,
+        store=store,
+    )
+
+    assert rec is not None and rec["lifecycle_state"] == "stuck"
+    after = json.loads((spec / "status.json").read_text())
+    assert after["status"] == "failed", after
+    assert after["phase"] == "verify_job_reaped", after
+    assert "deadline/backoff" in after["reaped_reason"], after
+
+
+async def test_probe_reads_succeeded_off_the_real_k8s_status(monkeypatch):
+    """The k8s status carries it; the probe used to throw it away.
+
+    Drives the real in-cluster branch (probe_fn=None) rather than an injected
+    double — an injected probe cannot catch the probe forgetting to read
+    `status.succeeded`, which is the actual defect behind #1014.
+    """
+
+    class _Status:
+        active = 0
+        succeeded = 1
+
+    class _Job:
+        status = _Status()
+
+    class _Batch:
+        async def read_namespaced_job(self, _name, _ns):
+            return _Job()
+
+    class _Api:
+        async def close(self):
+            return None
+
+    async def _fake_batch():
+        return _Api(), _Batch()
+
+    monkeypatch.setattr(vd, "_k8s_batch", _fake_batch)
+
+    exists, active, succeeded = await vd._probe_job("factory", "v")
+    assert (exists, active, succeeded) == (True, False, True)
+
+
+async def test_probe_reports_a_deadline_killed_job_as_not_succeeded(monkeypatch):
+    """The other side of the same read: failed Job must not look successful."""
+
+    class _Status:
+        active = 0
+        succeeded = 0
+
+    class _Job:
+        status = _Status()
+
+    class _Batch:
+        async def read_namespaced_job(self, _name, _ns):
+            return _Job()
+
+    class _Api:
+        async def close(self):
+            return None
+
+    async def _fake_batch():
+        return _Api(), _Batch()
+
+    monkeypatch.setattr(vd, "_k8s_batch", _fake_batch)
+
+    assert await vd._probe_job("factory", "v") == (True, False, False)
+
+
+async def test_a_legacy_two_tuple_probe_is_read_as_succeeded_unknown():
+    """An older probe must not be read as claiming success."""
+
+    async def _legacy(_ns, _name):
+        return True, False
+
+    exists, active, succeeded = await vd._probe_job("factory", "v", probe_fn=_legacy)
+    assert (exists, active, succeeded) == (True, False, False)

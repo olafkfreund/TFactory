@@ -14,16 +14,28 @@ on:
     branches: [main]
     paths-ignore:
       - 'docs/**'
-      - '**/*.md'
+      # Root-level markdown only (README, CHANGELOG). NOT '**/*.md': agent
+      # prompts (apps/backend/prompts/*.md) and the skills catalogue
+      # (skills/**/*.md) are baked into the runtime image, so a change to one
+      # of them must ship. '*' does not cross '/' here, so nested markdown
+      # still triggers a deploy. See Factory#454.
+      - '*.md'
   workflow_dispatch: {}
 
 concurrency:
   group: "deploy-${{ github.ref }}"
   cancel-in-progress: true
 
+# Workflow-level floor only — the least any job here needs. The two elevated
+# capabilities are declared on `deploy` alone, because they are the two that
+# matter: `id-token: write` mints the GitHub OIDC token cosign signs with, and
+# a signature is now what admits an image to the cluster (the Kyverno
+# `verify-factory-image-signatures` policy went to Enforce in Factory#522). A
+# job that can mint that token can sign as this repository's identity, so it
+# must be a job that has a reason to. `seam-check` signs nothing and pushes
+# nothing (#957).
 permissions:
   contents: read
-  packages: write
 
 env:
   IMAGE: "ghcr.io/${{ github.repository_owner }}/tfactory"
@@ -33,6 +45,12 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # A job-level block REPLACES the workflow-level one rather than merging with
+    # it, so `contents: read` has to be restated here.
+    permissions:
+      contents: read
+      packages: write        # push the image to GHCR
+      id-token: write        # cosign keyless via GitHub OIDC (Factory#430)
     # Hoist the PAT to job env: the `secrets` context is NOT allowed in a
     # step-level `if:` (only env/with/run), so gate the gitops bump on
     # `env.GITOPS_PAT` instead.
@@ -59,7 +77,8 @@ jobs:
           username: "${{ github.repository_owner }}"
           password: "${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}"
 
-      - uses: docker/build-push-action@v6
+      - id: build
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
@@ -71,30 +90,139 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # ----------------------------------------------------------------------
+      # Sign the image THIS workflow ships (Factory#430).
+      #
+      # release.yml already signed :vX.Y.Z, but nothing in the cluster runs a
+      # semver tag — ArgoCD is pinned to the :sha-<short> tag produced right
+      # above, and so is TFACTORY_IMAGE (the image verify Jobs run). So the
+      # Kyverno verify-factory-image-signatures policy reported
+      # `fail: unverified image` for 100% of running Pods while looking, on
+      # every artefact except the outcome, like a working control.
+      #
+      # Sign by DIGEST, not tag: cosign signatures are digest-keyed, so this one
+      # signature covers both :sha-<short> and :latest.
+      # ----------------------------------------------------------------------
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3.7.0
+
+      - name: Sign image (cosign keyless via Sigstore + GitHub OIDC)
+        run: cosign sign --yes "${IMAGE}@${{ steps.build.outputs.digest }}"
+
+      # Not decoration: without it a broken signing step fails open and we are
+      # back to an unverifiable image that looks shipped. This is the same
+      # assertion Kyverno makes at admission, run at build time.
+      - name: Verify signature (self-test)
+        run: |
+          cosign verify \
+            --certificate-identity-regexp "^https://github\.com/${{ github.repository_owner }}/TFactory/" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "${IMAGE}@${{ steps.build.outputs.digest }}"
+
       - name: Bump factory-gitops (if GITOPS_PAT set)
         if: "${{ env.GITOPS_PAT != '' }}"
         run: |
-          set -e
-          git clone --depth 1 "https://x:${GITOPS_PAT}@github.com/${GITOPS_REPO}.git" gitops
-          cd "gitops/${GITOPS_PATH}"
-          curl -sSL https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.4.3/kustomize_v5.4.3_linux_amd64.tar.gz | tar xz
-          ./kustomize edit set image "${IMAGE}=${IMAGE}:${{ steps.tags.outputs.sha }}"
-          rm -f kustomize
-          cd "$GITHUB_WORKSPACE/gitops"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -am "cd(tfactory): ${{ steps.tags.outputs.sha }} [skip ci]" || exit 0
-          git push
+          set -euo pipefail
+          SHA="${{ steps.tags.outputs.sha }}"
+
+          # Factory#527: every service bumps this same repo, so two deploys in
+          # flight together used to race -- clone, edit, push, and the loser got
+          # `! [rejected] main -> main (fetch first)`. Its image pin silently
+          # stayed on the previous sha while its own build, release PR and issue
+          # all reported success. Retry the WHOLE cycle rather than rebasing: the
+          # clone is shallow (rebase is awkward) and the edit is idempotent, so
+          # re-doing it from a fresh clone is both simpler and more obviously
+          # correct.
+          pushed=""
+          for attempt in 1 2 3 4 5; do
+            rm -rf gitops
+            git clone --quiet --depth 1 "https://x:${GITOPS_PAT}@github.com/${GITOPS_REPO}.git" gitops
+            cd "gitops/${GITOPS_PATH}"
+            if [ ! -x ./kustomize ]; then
+              curl -sSL https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.4.3/kustomize_v5.4.3_linux_amd64.tar.gz | tar xz
+            fi
+            ./kustomize edit set image "${IMAGE}=${IMAGE}:${SHA}"
+            rm -f kustomize
+            # #719: keep TFACTORY_IMAGE (the image the verify Job runs) in lockstep
+            # with the deployment tag. kustomize only edits the container image; the
+            # verify-Job image is a plain env value, so bump it here too — otherwise
+            # verify Jobs run stale code (a two-week-old image is how the triager
+            # verdict silently stopped surfacing on the PR).
+            sed -i -E "s#(name: TFACTORY_IMAGE, value: \"${IMAGE}:)sha-[0-9a-f]+#\\1${SHA}#" manifests.yaml
+            cd "$GITHUB_WORKSPACE/gitops"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+            if git diff --quiet; then
+              # Nothing to commit. Distinguish the two reasons, because they used
+              # to look identical under `|| exit 0`: either the pin is already at
+              # this sha (fine), or the edit matched nothing (a broken bump that
+              # reported success).
+              if grep -rq "newTag: ${SHA}\|${IMAGE}:${SHA}" "${GITOPS_PATH}/" 2>/dev/null; then
+                echo "gitops already pinned to ${SHA}; nothing to do."
+                pushed="already"
+                break
+              fi
+              echo "::error::the image edit changed nothing AND the pin is not ${SHA}."
+              echo "::error::The sed/kustomize pattern no longer matches this manifest."
+              exit 1
+            fi
+
+            git commit --quiet -am "cd(tfactory): ${SHA} [skip ci]"
+            if git push --quiet; then
+              pushed="yes"
+              break
+            fi
+            echo "push rejected (attempt ${attempt}/5) - another service bumped first; retrying"
+            cd "$GITHUB_WORKSPACE"
+            sleep $(( attempt * 3 ))
+          done
+
+          if [ -z "$pushed" ]; then
+            echo "::error::could not push the image bump after 5 attempts (Factory#527)."
+            exit 1
+          fi
+
+          # A deploy that cannot prove the pin moved must not report success
+          # (Factory#433). Re-read it from the remote rather than trusting the push.
+          cd "$GITHUB_WORKSPACE"
+          rm -rf gitops-verify
+          git clone --quiet --depth 1 "https://x:${GITOPS_PAT}@github.com/${GITOPS_REPO}.git" gitops-verify
+          # TFactory only passed this by luck: its extra `sed` writes the joined
+          # `image:tag` form into manifests.yaml, so the grep matched even though
+          # `kustomize edit set image` writes `name:`/`newTag:` on SEPARATE lines.
+          # The sibling services had no such sed and the check failed a deploy
+          # that had worked. Accept either shape here too, so this does not
+          # depend on that coincidence.
+          if grep -rq "newTag: ${SHA}\|${IMAGE}:${SHA}" "gitops-verify/${GITOPS_PATH}/"; then
+            echo "verified: ${GITOPS_REPO} pins ${IMAGE}:${SHA}"
+          else
+            echo "::error::pushed, but ${GITOPS_REPO} does not pin ${IMAGE}:${SHA}."
+            echo "::error::Something overwrote it between the push and this read."
+            exit 1
+          fi
 
   # Post-deploy PARR seam smoke check (Factory#44). Steps-based on purpose: a
   # cross-repo reusable-workflow `uses:` call fails the deploy at startup, so we
-  # check out the Factory harness and run it directly. Soft gate — continue-on-error
-  # plus `|| true` mean a probe failure can never break or roll back the deploy;
-  # self-skips when FACTORY_TOKEN is unset. TODO: tighten to a required gate once stable.
+  # check out the Factory harness and run it directly.
+  #
+  # SOFT ABOUT SEAMS, HARD ABOUT ITSELF (Factory#471). `continue-on-error` used
+  # to sit on the job, which meant it swallowed everything - including the guard
+  # step that exits when FACTORY_TOKEN is missing. So a rotated or deleted secret
+  # produced a green post-deploy check that had probed nothing at all, which is
+  # indistinguishable from a healthy fleet.
+  #
+  # It now sits on the probe step alone. A regressed seam still shows up as a
+  # failed-but-ignored step and cannot break or roll back a deploy that has
+  # already happened - that intent is unchanged. A missing token is a different
+  # animal: it is never transient, no re-run fixes it, and it means the check did
+  # not run. That fails the job (standards/coding-standards.md rule 4.7).
   seam-check:
     needs: deploy
     runs-on: ubuntu-latest
-    continue-on-error: true
+    # Inherits the workflow floor (`contents: read`) deliberately. It checks out
+    # a public repo and makes outbound HTTP calls with a fleet token of its own;
+    # it has no use for GHCR or for a signing identity (#957).
     steps:
       - name: Checkout Factory seam harness
         uses: actions/checkout@v4
@@ -104,16 +232,40 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Require the fleet token (fail closed, rule 4.7)
+        # Deliberately NOT continue-on-error, and deliberately its own step. This
+        # is the "should have run and could not" case: deploy.yml only ever runs
+        # on push to main in this repo, where secrets are always available, so an
+        # empty token is misconfiguration - never the by-design fork-PR case
+        # where GitHub withholds secrets and no amount of fixing would help.
+        env:
+          FACTORY_TOKEN: ${{ secrets.FACTORY_TOKEN }}
+        run: |
+          if [ -z "${FACTORY_TOKEN}" ]; then
+            echo "::error::FACTORY_TOKEN is not set; the post-deploy seam check did not run."
+            echo "Set it with: gh secret set FACTORY_TOKEN --repo ${{ github.repository }}"
+            echo "Failing rather than skipping (Factory#471): a green check that"
+            echo "probed nothing looks exactly like a healthy fleet."
+            exit 1
+          fi
+
       - name: PARR seam smoke regression
+        # Soft: a regressed seam shows as failed-but-ignored and does not break a
+        # deploy that already shipped. The exit code stays real so the failure is
+        # visible - Factory#416 was a probe that crashed before its first request
+        # on every deploy and still reported green.
+        continue-on-error: true
         env:
           FACTORY_TOKEN: ${{ secrets.FACTORY_TOKEN }}
           PFACTORY_API: ${{ vars.PFACTORY_API }}
           AIFACTORY_API: ${{ vars.AIFACTORY_API }}
           TFACTORY_API: ${{ vars.TFACTORY_API }}
           CFACTORY_API: ${{ vars.CFACTORY_API }}
-        run: |
-          if [ -z "${FACTORY_TOKEN}" ]; then
-            echo "FACTORY_TOKEN not set — skipping seam smoke gate."
-            exit 0
-          fi
-          python3 scripts/parr_regression.py --smoke || true
+          # CFactory is behind oauth2-proxy, which rejects an opaque token
+          # with a 302 to Keycloak. These let the probe mint a short-lived
+          # service-account JWT instead (Factory#420/#423). Absent them the
+          # cockpit seam reports SKIP, not a false pass.
+          PARR_OIDC_TOKEN_URL: ${{ vars.PARR_OIDC_TOKEN_URL }}
+          CFACTORY_OIDC_CLIENT_ID: ${{ vars.CFACTORY_OIDC_CLIENT_ID }}
+          CFACTORY_OIDC_CLIENT_SECRET: ${{ secrets.CFACTORY_OIDC_CLIENT_SECRET }}
+        run: python3 scripts/parr_regression.py --smoke

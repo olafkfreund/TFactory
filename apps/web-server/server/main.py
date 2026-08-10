@@ -16,6 +16,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.status import HTTP_404_NOT_FOUND
 
 from . import env_bootstrap  # noqa: F401  — loads .env into os.environ first
 from .auth import TokenAuthMiddleware
@@ -30,6 +32,7 @@ from .routes import (
     capabilities,
     cloud,
     context,
+    coverage,
     email,
     execution,
     files,
@@ -41,9 +44,11 @@ from .routes import (
     mcp,
     notifications,
     organizations,
+    portal_tests,
     projects,
     provider_runtimes,
     regression,
+    search,
     skills,
     specs,
     tasks,
@@ -55,7 +60,7 @@ from .routes import (
     terminal,
     test_target_credentials,
     visual_inspection,
-    portal_tests,
+    well_known,
 )
 from .routes import cli_accounts as cli_accounts_routes
 from .routes import llm_endpoints as llm_endpoints_routes
@@ -79,6 +84,30 @@ from .websockets import terminal as terminal_ws
 # importing this module is a pure operation.
 logger = logging.getLogger(__name__)
 
+# Errors that mean the code is wrong, not that the environment is (#918). A
+# startup hook may legitimately fail to import its backend module in dev/test,
+# or fail transiently against the DB — those are worth continuing through. A
+# NameError or AttributeError means the block has never once executed, and
+# continuing through it is how #774 and #742 stayed dead in a "healthy" pod for
+# an entire image generation. ImportError stays out: absent-backend is by design.
+_STARTUP_BUGS = (NameError, AttributeError)
+
+
+def _add_backend_to_path() -> None:
+    """Put apps/backend on ``sys.path`` so ``agents.*`` is importable.
+
+    One helper rather than the three hand-copies this replaced (#918). Two of
+    those copies had inlined the body but not its ``import sys``, so every
+    ``sys.path`` reference inside ``lifespan`` raised ``NameError`` — swallowed
+    by the surrounding handler, which is why #774 and #742 had never once run in
+    a deployed image while the pod reported healthy.
+    """
+    import sys  # noqa: PLC0415 - kept local, as the three call sites had it
+
+    backend_path = Path(__file__).resolve().parents[2] / "backend"
+    if str(backend_path) not in sys.path:
+        sys.path.insert(0, str(backend_path))
+
 
 def _import_verify_dispatch():
     """Import the backend ``agents.verify_dispatch`` module, or None on failure.
@@ -89,11 +118,7 @@ def _import_verify_dispatch():
     Returns None when the module can't be imported (dev/test) so the lifespan
     degrades gracefully to the in-pod default.
     """
-    import sys
-
-    backend_path = Path(__file__).resolve().parents[2] / "backend"
-    if str(backend_path) not in sys.path:
-        sys.path.insert(0, str(backend_path))
+    _add_backend_to_path()
     try:
         from agents import verify_dispatch  # noqa: PLC0415 - lazy by design
 
@@ -141,6 +166,53 @@ async def lifespan(app: FastAPI):
     # Initialize skills service singleton once at startup
     init_skills_service()
     logger.info("SkillsService initialized")
+
+    # Inline-orphan startup reconcile (#774): the planner/gen_functional stages
+    # run in THIS process, not a Job, so a roll mid-generation strands a spec at
+    # `planning`/`generating` with nothing for the #767 reaper to see. On boot,
+    # once this pod holds the (RWO) workspaces volume the prior holder is gone,
+    # so any spec still in an inline stage is orphaned — fail it loudly. ON by
+    # default; disable with APP_INLINE_ORPHAN_RECONCILE_ENABLED=0.
+    if settings.INLINE_ORPHAN_RECONCILE_ENABLED:
+        try:
+            _add_backend_to_path()
+            from agents.liveness_sweep import reconcile_inline_orphans
+
+            failed = await asyncio.to_thread(reconcile_inline_orphans)
+            if failed:
+                logger.warning(
+                    "#774 startup reconcile: failed %d spec(s) stranded in an "
+                    "inline stage by a control-plane restart: %s",
+                    len(failed),
+                    [f"{d.name}({prior})" for d, prior in failed],
+                )
+            else:
+                logger.info("#774 startup reconcile: no stranded inline specs")
+        except _STARTUP_BUGS:
+            logger.exception("#774 startup reconcile is broken — refusing to boot")
+            raise
+        except Exception:  # noqa: BLE001 — a reconcile error must not block boot
+            logger.exception("#774 startup reconcile failed (continuing)")
+
+    # Worktree GC (#742): reclaim the per-spec git worktree of terminal specs so
+    # they don't accumulate on the workspaces PVC (#781). ON by default; disable
+    # with APP_WORKTREE_GC_ENABLED=0.
+    if settings.WORKTREE_GC_ENABLED:
+        try:
+            _add_backend_to_path()
+            from agents.liveness_sweep import gc_terminal_worktrees
+
+            reclaimed = await asyncio.to_thread(gc_terminal_worktrees)
+            if reclaimed:
+                logger.info(
+                    "#742 worktree GC: reclaimed %d terminal-spec worktree(s)",
+                    len(reclaimed),
+                )
+        except _STARTUP_BUGS:
+            logger.exception("#742 worktree GC is broken — refusing to boot")
+            raise
+        except Exception:  # noqa: BLE001 — a GC error must not block boot
+            logger.exception("#742 worktree GC failed (continuing)")
 
     # Liveness watchdog driver (#95): periodically flag silent stages as
     # `stalled`. OFF by default; opt in with APP_LIVENESS_SWEEP_ENABLED.
@@ -249,6 +321,80 @@ def _read_app_version() -> str:
     return "0.0.0-unknown"
 
 
+# Prefixes under the catch-all mount that must keep a real 404 instead of the
+# SPA shell. ``/api`` + ``/ws`` stay machine-readable for clients; the asset and
+# schema paths must fail loudly, because a deploy that answers a missing hashed
+# bundle with HTML is a much harder thing to see than a 404.
+_NO_SPA_FALLBACK = ("/api", "/ws", "/assets", "/openapi.json", "/docs", "/redoc")
+
+
+def _wants_spa_shell(path: str) -> bool:
+    """True when a 404 under the catch-all mount should serve ``index.html``.
+
+    The SPA owns its client-side routes (``/login``, ``/console/<project>/<spec>``),
+    and before #878 the server handed none of them to the app: a direct GET
+    returned FastAPI's JSON 404, so a task link could not be shared, bookmarked,
+    or reloaded, and anything driving the portal by URL had to fake client-side
+    navigation. A path is treated as a client route when it is not one of the
+    server-owned prefixes and its last segment carries no file extension.
+    """
+    if any(path == p or path.startswith(f"{p}/") for p in _NO_SPA_FALLBACK):
+        return False
+    return "." not in path.rsplit("/", 1)[-1]
+
+
+class SPAStaticFiles(StaticFiles):
+    """StaticFiles for the SPA shell, mounted catch-all at ``/``.
+
+    Three concerns beyond stock StaticFiles:
+
+    1. Cache policy (SSO fix) — the SPA shell (index.html) MUST NOT be
+       heuristically cached by the browser, or users keep running the
+       previous build's JS after an upgrade (which is exactly how a fixed
+       auth bug can look unfixed). Starlette's StaticFiles sends
+       ETag/Last-Modified but no Cache-Control, which triggers browser
+       heuristic caching of the shell. So: HTML responses -> ``no-cache``
+       (store but always revalidate; cheap 304s); content-hashed assets
+       under /assets/ -> long-lived immutable cache.
+
+    2. Non-HTTP scopes (#670) — a Starlette ``Mount`` at ``/`` also matches
+       ``websocket`` scopes, and stock ``StaticFiles.__call__`` asserts
+       ``scope["type"] == "http"``. A websocket that matches no ``/ws/*``
+       route falls through to this mount and would crash the ASGI app with
+       an AssertionError on every connection attempt (flooding logs and
+       breaking live task-status streaming). Reject non-HTTP scopes cleanly
+       instead of asserting.
+
+    3. History fallback (#878) — a client-side route has no file on disk, so
+       stock StaticFiles 404s it. Serve the shell instead for anything
+       :func:`_wants_spa_shell` recognises as a client route, and let React
+       Router take it from there.
+    """
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            if scope["type"] == "websocket":
+                await send({"type": "websocket.close", "code": 1000})
+            return
+        await super().__call__(scope, receive, send)
+
+    async def get_response(self, path, scope):
+        try:
+            response = await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code != HTTP_404_NOT_FOUND or not _wants_spa_shell(
+                scope.get("path") or ""
+            ):
+                raise
+            response = await super().get_response("index.html", scope)
+        content_type = response.headers.get("content-type", "")
+        if content_type.startswith("text/html"):
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        elif "/assets/" in (scope.get("path") or ""):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+
+
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     settings = get_settings()
@@ -318,6 +464,16 @@ def create_app() -> FastAPI:
     # Patch httpx clients to forward the correlation ID on outbound
     # calls. Idempotent.
     install_httpx_propagation()
+
+    # Public capability manifest (RFC-0019 §3.4) — the entry point a discovering
+    # agent hits before it holds a token, so it is unauthenticated by design. It
+    # sits outside the /api prefix TokenAuthMiddleware guards, like the SPA
+    # routes and /openapi.json. Mounted here, well ahead of the SPA catch-all at
+    # "/", or StaticFiles would answer discovery with the app shell.
+    app.include_router(well_known.router)
+    # Per-commit coverage for CI (#851): the endpoint pr-review-tests.yml
+    # has been calling since epic #277, which was never implemented.
+    app.include_router(coverage.router)
 
     # Auth routes (prefix defined in router: /api/auth)
     app.include_router(auth_routes.router)
@@ -447,6 +603,7 @@ def create_app() -> FastAPI:
     # consults this on load to know whether to render the Live Agent
     # Console tab.  The router already declares its own prefix.
     app.include_router(capabilities.router, tags=["Capabilities"])
+    app.include_router(search.router, tags=["Search"])
     app.include_router(mcp.router)
 
     # Remote HTTP+SSE MCP server (Epic #50 / Issue #83) — opt-in via
@@ -524,6 +681,19 @@ def create_app() -> FastAPI:
 
     install_metrics(app)
 
+    # Factory#516 — OTLP distributed tracing. Also after the routers, so
+    # FastAPI instrumentation sees the full route table. A no-op unless
+    # OTEL_EXPORTER_OTLP_ENDPOINT is set, which it is only in-cluster, so
+    # tests and local runs pay nothing. When it IS set, init_tracing()
+    # proves the endpoint and credential with one empty export before it
+    # claims to be enabled — see observability/tracing.py.
+    # Deferred like install_metrics above, and for the same reason:
+    # create_app() is the only caller and the module pulls the OTel SDK,
+    # which must not be an import-time cost of `import server.main`.
+    from .observability import init_tracing  # noqa: PLC0415
+
+    init_tracing(app)
+
     # Health check endpoint (no auth required)
     @app.get("/api/health")
     async def health_check():
@@ -537,27 +707,9 @@ def create_app() -> FastAPI:
             "provider_auth": provider_credential_health(),
         }
 
-    # Mount static files for SPA (if build directory exists).
-    #
-    # Cache policy (SSO fix) — the SPA shell (index.html) MUST NOT be
-    # heuristically cached by the browser, or users keep running the previous
-    # build's JS after an upgrade (which is exactly how a fixed auth bug can
-    # look unfixed). Starlette's StaticFiles sends ETag/Last-Modified but no
-    # Cache-Control, which triggers browser heuristic caching of the shell.
-    # So: HTML responses → `no-cache` (store but always revalidate; cheap 304s);
-    # content-hashed assets under /assets/ → long-lived immutable cache.
-    class SPAStaticFiles(StaticFiles):
-        async def get_response(self, path, scope):
-            response = await super().get_response(path, scope)
-            content_type = response.headers.get("content-type", "")
-            if content_type.startswith("text/html"):
-                response.headers["Cache-Control"] = "no-cache, must-revalidate"
-            elif "/assets/" in (scope.get("path") or ""):
-                response.headers["Cache-Control"] = (
-                    "public, max-age=31536000, immutable"
-                )
-            return response
-
+    # Mount static files for SPA (if build directory exists). See the
+    # module-level SPAStaticFiles for cache policy and the non-HTTP-scope
+    # guard (#670).
     static_dir = Path(__file__).parent.parent / "static"
     if static_dir.exists():
         app.mount(

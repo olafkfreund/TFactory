@@ -43,7 +43,17 @@ app.kubernetes.io/part-of: tfactory
 {{- end }}
 
 {{/*
-Selector labels — also used by Service + NetworkPolicy.
+Selector labels — the SERVING identity. The Service selector and the Deployment's
+own selector, and nothing a non-serving pod may carry.
+
+NEVER put these on a Job or CronJob pod template. A Service selector is a SUBSET
+match, so a Job pod carrying them joins the `tfactory` Service as an endpoint;
+it listens on nothing, so kube-proxy hands it a share of real portal traffic and
+answers with connection refused. This repo has already paid for that lesson once:
+the portal-ui browser-test Job carried `app: tfactory`, Cloudflare served 502s for
+the length of every test run, and the browser test took the portal it was testing
+offline and then reported it broken (#885). Adding a `component` label does NOT
+help — extra labels never exclude a pod from a selector.
 */}}
 {{- define "tfactory.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "tfactory.name" . }}

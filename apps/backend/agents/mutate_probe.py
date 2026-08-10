@@ -23,9 +23,9 @@ Mutation operators (one per probe; we pick the cheapest applicable):
   ``False`` → ``True``
   numeric literal → ``literal + 1`` (1 → 2, 0 → 1, -3 → -2)
 
-The probe applies ONE mutation (the first applicable one found by
-AST walk) — same logic mutation testing tools like mutmut and
-cosmic-ray use, but only one mutant per test (cheap, deterministic).
+The probe applies ONE mutation per candidate (the first applicable one
+found by AST walk) — same logic mutation testing tools like mutmut and
+cosmic-ray use, but only one mutant per candidate (cheap, deterministic).
 
 The Evaluator commit-5 wiring will:
   1. For each generated test that passed the Executor's first run
@@ -35,6 +35,18 @@ The Evaluator commit-5 wiring will:
   3. Call the runner_fn with the mutated path.
   4. KILLED (runner exits non-zero) → keep test. SURVIVED (runner
      exits 0) → reject. ERROR / no mutation applicable → inconclusive.
+
+#630: a generated test FILE can hold several ``test_*`` functions for the
+same acceptance criterion — e.g. one weak status-only test alongside a
+stronger value-asserting one. A single file-wide "first applicable node"
+mutation can land inside the weak function and survive there while the
+strong function (untouched, and still green) masks that survival at the
+whole-file exit code. ``run_mutate_probe`` now builds ONE mutation
+candidate per ``test_*`` function (``mutate_source_candidates``) and takes
+the strongest signal across all of them — KILLED if ANY function's
+mutation is caught, so a real value-asserting sibling is never masked by a
+weaker one. A file with a single test function reduces to exactly the
+original single-mutation behaviour.
 """
 
 from __future__ import annotations
@@ -221,6 +233,66 @@ def mutate_source(source: str) -> tuple[str | None, MutationApplied | None]:
     return mutated, mutator.mutation
 
 
+def _safe_unparse(tree: ast.AST) -> str | None:
+    """``ast.unparse`` that swallows the (rare) unparse failure to ``None``."""
+    try:
+        return ast.unparse(tree)
+    except Exception:  # noqa: BLE001 — defensive; unparse can fail on weird ASTs
+        return None
+
+
+def _test_function_defs(
+    tree: ast.Module,
+) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
+    """Module-level ``test_*`` function defs, in source order.
+
+    Only top-level defs — the shape Gen-Functional writes (flat test
+    files, no wrapping classes). A file with a single test function
+    yields a single-element list.
+    """
+    return [
+        node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name.startswith("test_")
+    ]
+
+
+def mutate_source_candidates(source: str) -> list[tuple[str, MutationApplied]]:
+    """One mutation candidate per ``test_*`` function, in source order (#630).
+
+    Each candidate mutates ONLY the first applicable node found INSIDE
+    that one function (same Compare-preferred-over-Constant rule as
+    ``mutate_source``), leaving every sibling test function byte-for-byte
+    untouched. This is what lets ``run_mutate_probe`` give a strong
+    value-asserting test its own shot at catching a mutant, instead of
+    the file's single mutation landing arbitrarily in whichever function
+    happens to contain the first mutable node.
+
+    Returns ``[]`` on a syntax error or when no function has anything
+    mutable — same "give up cleanly" contract as ``mutate_source``.
+    """
+    try:
+        base_tree = ast.parse(source)
+    except SyntaxError:
+        return []
+
+    names = [fn.name for fn in _test_function_defs(base_tree)]
+    candidates: list[tuple[str, MutationApplied]] = []
+    for name in names:
+        tree = ast.parse(source)  # fresh tree so mutations don't accumulate
+        target = next(fn for fn in _test_function_defs(tree) if fn.name == name)
+        mutator = _AssertMutator()
+        mutator.visit(target)
+        if mutator.mutation is None:
+            continue
+        mutated = _safe_unparse(tree)
+        if mutated is None:
+            continue
+        candidates.append((mutated, mutator.mutation))
+    return candidates
+
+
 # ─── Public entrypoint ──────────────────────────────────────────────────
 
 
@@ -234,6 +306,16 @@ def run_mutate_probe(
     tail_chars: int = 500,
 ) -> MutationResult:
     """Run the mutate-and-check probe against one test file.
+
+    Builds one mutation candidate per ``test_*`` function in the file
+    (``mutate_source_candidates``) and runs each in turn. The first
+    KILLED result wins outright — some test in the file demonstrably
+    catches that class of mutation, so the file (and the acceptance
+    criterion it verifies) is not falsely penalised for a sibling
+    function's weak assertions (#630). If nothing is killed, the result
+    is exactly what the original single-mutation probe would have
+    returned (the first function's candidate) — a genuinely weak-only
+    file still SURVIVES.
 
     Args:
         test_file: Absolute path to the original generated test file.
@@ -268,42 +350,65 @@ def run_mutate_probe(
             error_message=f"could not read {test_file}: {exc}",
         )
 
-    mutated, mutation = mutate_source(source)
-    if mutated is None or mutation is None:
+    candidates = mutate_source_candidates(source)
+    if not candidates:
         return MutationResult(verdict=MutationVerdict.NO_MUTATION)
 
-    # Caller-controlled placement of the mutant file.
-    runner_target = test_file
-    if write_mutant_to is not None:
+    def _probe_one(mutated: str, mutation: MutationApplied) -> MutationResult:
+        """Run one mutation candidate through the runner; ERROR/KILLED/SURVIVED.
+
+        Closes over ``test_file``/``project_dir``/``runner_fn``/
+        ``write_mutant_to``/``seed``/``tail_chars`` — kept as a nested
+        closure (rather than a module-level helper) so it isn't its own
+        many-argument function.
+        """
+        runner_target = test_file
+        if write_mutant_to is not None:
+            try:
+                write_mutant_to.parent.mkdir(parents=True, exist_ok=True)
+                write_mutant_to.write_text(mutated)
+                runner_target = write_mutant_to
+            except OSError as exc:
+                return MutationResult(
+                    verdict=MutationVerdict.ERROR,
+                    mutation=mutation,
+                    mutated_source=mutated,
+                    error_message=f"could not write mutant to {write_mutant_to}: {exc}",
+                )
+
         try:
-            write_mutant_to.parent.mkdir(parents=True, exist_ok=True)
-            write_mutant_to.write_text(mutated)
-            runner_target = write_mutant_to
-        except OSError as exc:
+            res = runner_fn(runner_target, project_dir, seed)
+        except Exception as exc:  # noqa: BLE001 — runner errors → ERROR verdict
             return MutationResult(
                 verdict=MutationVerdict.ERROR,
                 mutation=mutation,
                 mutated_source=mutated,
-                error_message=f"could not write mutant to {write_mutant_to}: {exc}",
+                error_message=f"{type(exc).__name__}: {exc}"[:500],
             )
 
-    try:
-        res = runner_fn(runner_target, project_dir, seed)
-    except Exception as exc:  # noqa: BLE001 — runner errors → ERROR verdict
+        verdict = (
+            MutationVerdict.KILLED if res.returncode != 0 else MutationVerdict.SURVIVED
+        )
         return MutationResult(
-            verdict=MutationVerdict.ERROR,
+            verdict=verdict,
             mutation=mutation,
             mutated_source=mutated,
-            error_message=f"{type(exc).__name__}: {exc}"[:500],
+            runner_stdout_tail=(res.stdout or "")[-tail_chars:],
+            runner_stderr_tail=(res.stderr or "")[-tail_chars:],
         )
 
-    verdict = (
-        MutationVerdict.KILLED if res.returncode != 0 else MutationVerdict.SURVIVED
-    )
-    return MutationResult(
-        verdict=verdict,
-        mutation=mutation,
-        mutated_source=mutated,
-        runner_stdout_tail=(res.stdout or "")[-tail_chars:],
-        runner_stderr_tail=(res.stderr or "")[-tail_chars:],
-    )
+    first_result: MutationResult | None = None
+    for mutated, mutation in candidates:
+        candidate_result = _probe_one(mutated, mutation)
+        if candidate_result.verdict == MutationVerdict.KILLED:
+            # Strongest possible signal: some test in this file DOES catch
+            # this class of mutation (#630) — no need to probe the rest.
+            return candidate_result
+        if first_result is None:
+            first_result = candidate_result
+
+    # Nothing was killed — report the first function's candidate, exactly
+    # what the pre-#630 single-mutation probe would have returned.
+    if first_result is None:  # pragma: no cover — unreachable, candidates non-empty
+        raise RuntimeError("run_mutate_probe: no candidate produced a result")
+    return first_result

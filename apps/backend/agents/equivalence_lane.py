@@ -35,8 +35,56 @@ if TYPE_CHECKING:
 
 # A runner executes a command in the sandbox and returns an object exposing
 # ``.stdout`` (str) and ``.returncode`` (int). Matches the DockerRunner result
-# shape the evaluator already uses.
+# shape the evaluator already uses. ``.returncode`` is REQUIRED, not optional
+# (TFactory#959): without a status there is no way to tell a harness that ran
+# and found nothing from one that never started, and this lane reads the
+# difference as a golden corpus.
 RunnerFn = Callable[..., Any]
+
+
+class HarnessDidNotRunError(RuntimeError):
+    """A parity harness produced no results and did not exit cleanly.
+
+    Distinct from an empty corpus, which is a MEASUREMENT ("the harness ran;
+    there was nothing to compare"). This is the ABSENCE of one.
+    """
+
+
+def _require_harness_ran(what: str, result: Any, parsed: list[dict[str, Any]]) -> None:
+    """Raise unless *what*'s harness actually produced a measurement.
+
+    Same rule as ``scripts/ratchet_helpers.require_tool_ran`` (Factory#590),
+    minus a tier this harness does not have. ruff and mypy exit 1 for "ran and
+    found something"; the parity protocol reports divergence *in its stdout
+    JSON* and still exits 0, so 0 is the only exit code that means "ran".
+
+    *parsed* is this lane's version of that helper's ``measured`` qualifier. A
+    target-supplied ``parity_harness`` is third-party code that may exit
+    non-zero having still emitted a full corpus (a wrapper propagating some
+    other status), and results on stdout prove it ran. Only "no results AND not
+    a clean exit" is the failure.
+
+    The case ruff and mypy never face: ``runner_fn`` is injected and duck-typed,
+    so ``.returncode`` may be missing altogether. A runner that cannot report a
+    status cannot show its harness ran, so that fails closed too — reading the
+    silence as clean is the whole defect.
+    """
+    if parsed:
+        return
+    rc = getattr(result, "returncode", None)
+    if rc == 0:
+        return
+    detail = (
+        f"exited {rc}"
+        if rc is not None
+        else "reported no exit status (its runner carries no `.returncode`)"
+    )
+    stderr = (getattr(result, "stderr", "") or "").strip()
+    raise HarnessDidNotRunError(
+        f"the {what} harness {detail} and produced no results, so it did not run"
+        + (f"; stderr: {stderr[:500]}" if stderr else "")
+    )
+
 
 _PY_ORACLE_HARNESS = """\
 # AUTO-GENERATED RFC-0010 oracle harness — runs the legacy source over the
@@ -131,18 +179,23 @@ def capture_oracle(
     """Run the legacy source over the input vectors → golden vectors.
 
     ``runner_fn(harness_path, project_dir, stdin)`` runs the harness in the
-    sandbox and returns a result with ``.stdout``. Only Python oracles are
-    auto-generated today; other source languages must ship a ``parity_harness``.
+    sandbox and returns a result with ``.stdout`` and ``.returncode``. Only
+    Python oracles are auto-generated today; other source languages must ship a
+    ``parity_harness``.
+
+    Raises :class:`HarnessDidNotRunError` when the harness never ran — an empty
+    corpus is only a corpus if something produced it.
     """
     vectors = input_vectors(manifest)
     if language != "python":
-        return run_candidate(oracle_root, manifest, runner_fn)
+        return run_candidate(oracle_root, manifest, runner_fn, what="oracle")
     root = Path(oracle_root)
     root.mkdir(parents=True, exist_ok=True)
     harness = root / ".tfactory_oracle_harness.py"
     harness.write_text(generate_python_oracle_harness(), encoding="utf-8")
     result = runner_fn(harness, root, json.dumps(vectors))
     golden = _parse_results(getattr(result, "stdout", ""))
+    _require_harness_ran("oracle", result, golden)
     # The harness emits id/module/output/error; carry the input vector's
     # `critical` flag (declared in the manifest) onto the golden vector so the
     # comparison can fail hard on a critical divergence.
@@ -154,16 +207,62 @@ def capture_oracle(
 
 
 def run_candidate(
-    candidate_root: Path, manifest: dict[str, Any], runner_fn: RunnerFn
+    candidate_root: Path,
+    manifest: dict[str, Any],
+    runner_fn: RunnerFn,
+    *,
+    what: str = "candidate",
 ) -> list[dict[str, Any]]:
     """Run the target impl's ``parity_harness`` over the same input vectors.
 
     The target must expose a protocol-conformant harness (AIFactory rewrite mode
     scaffolds one). ``runner_fn`` is the candidate runner (e.g. the Nix env).
+    *what* names the side being run, so a non-Python oracle (which is also a
+    ``parity_harness``) is diagnosed as the oracle it is.
+
+    Raises :class:`HarnessDidNotRunError` when the harness never ran — a missing
+    ``parity_harness`` is exactly the case this catches.
     """
     vectors = input_vectors(manifest)
     result = runner_fn(Path("parity_harness"), candidate_root, json.dumps(vectors))
-    return _parse_results(getattr(result, "stdout", ""))
+    parsed = _parse_results(getattr(result, "stdout", ""))
+    _require_harness_ran(what, result, parsed)
+    return parsed
+
+
+def _unmeasured(
+    reason: str, findings_dir: Path | None, *, verdict: str = "reject"
+) -> dict[str, Any]:
+    """The lane could not measure. Report THAT, and reject.
+
+    Before TFactory#959 a dead harness surfaced as ``modules X UNPROVEN (no
+    corpus coverage)`` — a sentence about the manifest and the candidate, for a
+    failure in neither. That is the Factory#430 shape: one message covering both
+    "the thing under test is wrong" and "I could not measure it", which sends
+    the reader somewhere else entirely. A wrong explanation costs more than none.
+
+    No ``golden_corpus.json`` is written: hashing ``[]`` mints a stable,
+    meaningless digest that later runs would compare against.
+
+    ``verdict`` is ``reject`` for a lane that tried and could not measure, and
+    ``not_run`` for one that was never enabled — see :func:`record_not_measured`.
+    """
+    claim = f"Equivalence NOT MEASURED — {reason}. Fix the harness, then re-run."
+    if findings_dir is not None:
+        findings_dir = Path(findings_dir)
+        findings_dir.mkdir(parents=True, exist_ok=True)
+        (findings_dir / "equivalence_report.json").write_text(
+            json.dumps({"measured": False, "error": reason, "claim": claim}, indent=2),
+            encoding="utf-8",
+        )
+    return {
+        "verdicts": [
+            {"lane": "equivalence", "verdict": verdict, "reason": reason},
+        ],
+        "parity_ratio": 0.0,
+        "claim": claim,
+        "passed": False,
+    }
 
 
 def _corpus_hash(golden: list[dict[str, Any]]) -> str:
@@ -187,13 +286,22 @@ def run_equivalence_lane(
     ``findings/golden_corpus.json`` + the parity report. Returns
     ``{verdicts, parity_ratio, claim, passed}`` — the verdicts feed val_block at
     VAL-2, where partial parity fails and the gate caps achieved_level.
+
+    A harness that never ran returns a single ``reject`` verdict naming the dead
+    harness (see :func:`_unmeasured`), never an empty corpus dressed up as one.
     """
     eq = (contract.get("tfactory") or {}).get("equivalence") or {}
     threshold = eq.get("parity_threshold", 1.0)
     manifest = eq.get("manifest") or eq
 
-    golden = capture_oracle(oracle_root, manifest, oracle_runner)
-    candidate = run_candidate(candidate_root, manifest, candidate_runner)
+    try:
+        golden = capture_oracle(oracle_root, manifest, oracle_runner)
+        candidate = run_candidate(candidate_root, manifest, candidate_runner)
+    except HarnessDidNotRunError as exc:
+        # Reject, and say which harness died. Rejecting (not skipping) keeps the
+        # lane fail-closed at VAL-2 even when the manifest declares nothing —
+        # the path that had no second line of defence at all.
+        return _unmeasured(str(exc), findings_dir)
 
     declared = {
         f.get("module") for f in manifest.get("functions", []) if f.get("module")
@@ -252,6 +360,32 @@ def merge_verdicts(spec_dir: Path, new_verdicts: list[dict[str, Any]]) -> None:
             pass
     doc.setdefault("verdicts", []).extend(new_verdicts)
     path.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+
+
+def record_not_measured(
+    spec_dir: Path, reason: str, *, verdict: str = "reject"
+) -> dict[str, Any]:
+    """Record in FINDINGS that a declared equivalence lane did not measure.
+
+    A lane that never ran used to leave one WARNING line in the evaluator log
+    and nothing else: no ``equivalence_report.json``, no ``equivalence``
+    verdict. ``val_block`` still reported VAL-2 as ``not_run`` so nothing was
+    overclaimed — but "the lane was never enabled" and "the lane tried and could
+    not run" were indistinguishable in the findings, and the findings are what a
+    human reads (#972, Factory#430). A log line is not a record.
+
+    ``verdict`` says which of the two happened:
+
+    - ``reject`` — declared and enabled, tried, could not run (no Docker daemon,
+      the Job could not be created, the image is missing). Fail-closed, matching
+      the dead-harness path in :func:`_unmeasured`.
+    - ``not_run`` — declared but the lane is switched off. An operator choice,
+      not a failure: it neither passes nor fails VAL-2, and val_block already
+      understands ``not_run`` exactly that way.
+    """
+    result = _unmeasured(reason, Path(spec_dir) / "findings", verdict=verdict)
+    merge_verdicts(spec_dir, result["verdicts"])
+    return result
 
 
 def _docker_oracle_runner(image: str = "tfactory-runner-pytest:latest") -> RunnerFn:

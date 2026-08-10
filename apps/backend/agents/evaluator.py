@@ -45,12 +45,15 @@ import logging as _logging
 import os
 import shutil
 import traceback
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
+from agents.preflight_static import package_root_rel_paths, requirements_files
 from agents.run_result import RunResultLike
+from agents.verdict_vote import majority_vote
 
 if TYPE_CHECKING:
     from tools.runners.docker_runner import DockerRunResult
@@ -67,12 +70,34 @@ from agents.evaluator_targets import (
     _test_credential_specs,
 )
 from agents.evaluator_verdicts import _validate_verdicts
+from agents.mutate_probe import (
+    MutationApplied,
+    MutationResult,
+    MutationVerdict,
+    mutate_source_candidates,
+)
+from agents.mutation_dispatch import is_mutation_supported, mutant_extension
 from agents.nix_env import (
+    detect_serve_command,
     environment_from_contract,
     is_nix_environment,
+    parse_mut_exits,
+    parse_pytest_exits,
     run_pytest_lane_via_nix,
 )
-from agents.workspace_status import now_iso, read_status, write_status_patch
+from agents.stability_runner import (
+    DEFAULT_SEED,
+    RERUN_COUNT,
+    StabilityResult,
+    StabilityRun,
+    classify_stability_runs,
+)
+from agents.workspace_status import (
+    anchor_stage_task,
+    now_iso,
+    read_status,
+    write_status_patch,
+)
 
 _eval_log = _logging.getLogger(__name__)
 
@@ -180,6 +205,12 @@ _RunResultLike = RunResultLike
 
 _PYTEST_IMAGE = "tfactory-runner-pytest:latest"
 
+# Port the api lane self-serves the SUT on INSIDE the Nix Job pod (#612 reopened):
+# a spec-ingest app has no external target, so the endpoint test can only reach it
+# by booting it in the same pod at 127.0.0.1. The pod is network-isolated, so a
+# fixed port is safe (distinct from the browser lane's 8099 for clarity).
+_API_SELF_SERVE_PORT = 8200
+
 
 def _parse_marker_exit(stdout: str | None, prefix: str, default: int) -> int:
     """Recover the real exit code from an ``echo <prefix>$?`` marker line.
@@ -254,11 +285,14 @@ def _nix_verify_mode(spec_dir: Path) -> bool:
         return False
 
 
-def _maybe_nix_verify(
+def _maybe_nix_verify(  # noqa: PLR0913 - explicit api-lane self-serve knobs
     spec_dir: Path,
     project_dir: Path,
     test_file: Path,
     extra_env: dict[str, str],
+    *,
+    serve_command: str | None = None,
+    serve_port: int | None = None,
 ) -> DockerRunResult | None:
     """Run the pytest lane via the Nix k8s Job when selected, else None.
 
@@ -270,7 +304,17 @@ def _maybe_nix_verify(
         return None
     try:
         nix_res = run_pytest_lane_via_nix(
-            spec_dir, project_dir, test_file, extra_env=extra_env, timeout=300
+            # Cold Nix builds (seed /nix + build python+fastapi+httpx+pytest from
+            # the flake) can exceed 5 min on first use; the warm store amortizes
+            # later runs. Give it room so the lane doesn't time out to an empty
+            # log and misgrade a passing test (#621).
+            spec_dir,
+            project_dir,
+            test_file,
+            extra_env=extra_env,
+            timeout=900,
+            serve_command=serve_command,
+            serve_port=serve_port,
         )
     except Exception as exc:  # noqa: BLE001 - never fail the lane on a config gap
         _eval_log.warning(
@@ -325,11 +369,51 @@ def _ensure_host_venv(project_dir: Path) -> Path:
     vdir = Path(tempfile.mkdtemp(prefix="tf-hostvenv-"))
     _venv.create(vdir, with_pip=True)
     py = str(vdir / "bin" / "python")
-    args = [py, "-m", "pip", "install", "-q", "pytest", "pytest-cov"]
-    req = Path(project_dir) / "requirements.txt"
-    if req.exists():
-        args += ["-r", str(req)]
-    subprocess.run(args, capture_output=True, text=True, timeout=600)
+    # requests (#612): api-lane subtasks are generated as plain requests-based
+    # httpx-free tests hitting TFACTORY_TARGET_URL (see the pytest framework
+    # descriptor's api-lane context_block) — install it unconditionally so
+    # those tests import cleanly even when the SUT itself doesn't declare it.
+    subprocess.run(  # noqa: S603 — fixed pip argv, no untrusted input
+        [py, "-m", "pip", "install", "-q", "pytest", "pytest-cov", "requests"],
+        capture_output=True,
+        text=True,
+        timeout=600,
+        check=False,
+    )
+    # #759: a monorepo declares its deps below the root — this repo has no root
+    # requirements.txt or pyproject.toml at all, only apps/web-server/ and
+    # apps/backend/ ones — so both install branches used to be skipped and the
+    # venv got pytest and nothing else. Every test that imported the app then
+    # died at collection on a missing third-party package, and the run reported
+    # an error against correct code. Installed one file at a time so a single
+    # unresolvable pin cannot take the others down with it.
+    for req in requirements_files(Path(project_dir)):
+        subprocess.run(  # noqa: S603 — fixed pip argv, no untrusted input
+            [py, "-m", "pip", "install", "-q", "-r", str(req)],
+            capture_output=True,
+            text=True,
+            timeout=600,
+            check=False,
+        )
+    # Install the SUT itself when it ships a pyproject.toml (best-effort). The
+    # bare install pulls in the project's runtime deps AND registers the package
+    # — covering src-layout repos that have no requirements.txt, so
+    # ``from <pkg> import ...`` resolves in the venv. The ``[test]``/``[dev]``
+    # passes then pull common test-only deps (e.g. httpx for FastAPI's
+    # TestClient) that live in an optional-dependencies group. Each pass is
+    # non-fatal: an undeclared extra simply fails without affecting the others,
+    # and the src PYTHONPATH added by the runner still resolves bare-source
+    # imports if every install fails (#613).
+    if (Path(project_dir) / "pyproject.toml").exists():
+        pdir = str(project_dir)
+        for target in (pdir, f"{pdir}[test]", f"{pdir}[dev]"):
+            subprocess.run(  # noqa: S603 — fixed pip argv, no untrusted input
+                [py, "-m", "pip", "install", "-q", "-e", target],
+                capture_output=True,
+                text=True,
+                timeout=600,
+                check=False,
+            )
     _HOST_VENVS[key] = vdir
     return vdir
 
@@ -354,7 +438,19 @@ def _run_pytest_on_host(
         "--junitxml=junit.xml --cov-report=xml:coverage.xml --cov=. 2>&1; "
         "echo __PYTEST_EXIT=$?"
     )
-    env = {**os.environ, **extra_env, "PYTHONPATH": str(Path(scratch).resolve())}
+    scratch_root = Path(scratch).resolve()
+    pythonpath = str(scratch_root)
+    src_dir = scratch_root / "src"
+    if src_dir.is_dir():
+        pythonpath = f"{src_dir}{os.pathsep}{pythonpath}"
+    # #756: a monorepo keeps its packages below both of those (e.g.
+    # apps/web-server/server), so without the real roots pytest cannot collect
+    # and every AC reports an import error against correct code.
+    for rel in package_root_rel_paths(scratch_root):
+        root = str(scratch_root if rel == "." else scratch_root / rel)
+        if root not in pythonpath.split(os.pathsep):
+            pythonpath = f"{root}{os.pathsep}{pythonpath}"
+    env = {**os.environ, **extra_env, "PYTHONPATH": pythonpath}
     res = subprocess.run(
         ["sh", "-c", cmd], capture_output=True, text=True, timeout=300, env=env
     )
@@ -414,7 +510,13 @@ def _resolve_runner_fn(
                 "--cov-report=xml:/scratch/coverage.xml --cov=. 2>&1; "
                 "echo __PYTEST_EXIT=$?"
             )
-            extra_env = {"PYTHONHASHSEED": str(seed)}
+            # ``/scratch/src`` first so src-layout packages import inside the
+            # container; ``/scratch`` covers flat layouts. A missing path is
+            # simply ignored by the interpreter.
+            extra_env = {
+                "PYTHONHASHSEED": str(seed),
+                "PYTHONPATH": f"/scratch/src{os.pathsep}/scratch",
+            }
             if target_url:
                 extra_env["TFACTORY_TARGET_URL"] = target_url
                 extra_env["APP_URL"] = target_url
@@ -445,7 +547,30 @@ def _resolve_runner_fn(
             # drift). Returns None / falls through to the legacy host/docker runner
             # on any config gap — never hard-fails the lane. Creds are env-only here
             # and get wiped by whichever fallback path runs below.
-            nix_res = _maybe_nix_verify(spec_dir, project_dir_arg, test_file, extra_env)
+            # api lane, no external target (spec-ingest self-serve, #612): the
+            # host self-serve path (_maybe_self_serve_api_bundle) can't reach the
+            # Nix Job pod, so it's skipped in nix mode and target_url is None here.
+            # Boot the SUT INSIDE the Job instead — detect its serve command so
+            # run_pytest_lane_via_nix starts it at 127.0.0.1:_API_SELF_SERVE_PORT
+            # and injects TFACTORY_TARGET_URL before pytest runs.
+            serve_command = None
+            if network == "host" and not target_url:
+                try:
+                    serve_command = detect_serve_command(
+                        Path(project_dir_arg),
+                        environment_from_contract(spec_dir),
+                        port=_API_SELF_SERVE_PORT,
+                    )
+                except Exception:  # noqa: BLE001 - detection is best-effort
+                    serve_command = None
+            nix_res = _maybe_nix_verify(
+                spec_dir,
+                project_dir_arg,
+                test_file,
+                extra_env,
+                serve_command=serve_command,
+                serve_port=_API_SELF_SERVE_PORT,
+            )
             if nix_res is not None:
                 sandbox_creds.wipe()
                 test_creds.wipe()
@@ -455,8 +580,17 @@ def _resolve_runner_fn(
             # result shape; secrets still wiped.)
             if _host_runner_mode():
                 try:
-                    return _run_pytest_on_host(
-                        scratch, test_file, extra_env, project_dir_arg
+                    # #1024: this is the branch k3d actually takes, and it also
+                    # builds its paths inside `scratch`, which the `finally`
+                    # below deletes before the caller sees them. Same dangling
+                    # result as the DockerRunner branch, different construction
+                    # site — persist here too.
+                    return _with_durable_artifacts(
+                        spec_dir,
+                        test_file,
+                        _run_pytest_on_host(
+                            scratch, test_file, extra_env, project_dir_arg
+                        ),
                     )
                 finally:
                     sandbox_creds.wipe()
@@ -474,14 +608,21 @@ def _resolve_runner_fn(
                 sandbox_creds.wipe()  # erase materialised secret files
                 test_creds.wipe()
             code = _parse_marker_exit(res.stdout, "__PYTEST_EXIT=", res.returncode)
-            junit = scratch / "junit.xml"
-            cov = scratch / "coverage.xml"
+            # #1024: these MUST outlive the scratch dir. The `finally` below
+            # deletes it before the returned value ever reaches the caller, so
+            # the paths were true at construction (`cov.exists()` passed) and
+            # dangling by the time anyone read them — which is why no consumer
+            # ever used coverage_xml_path and coverage reached the verdict as a
+            # judge-authored guess. Copy them somewhere durable and point at
+            # that instead.
+            junit = _persist_run_artifact(spec_dir, test_file, scratch / "junit.xml")
+            cov = _persist_run_artifact(spec_dir, test_file, scratch / "coverage.xml")
             return DockerRunResult(
                 returncode=code,
                 stdout=res.stdout,
                 stderr=res.stderr,
-                junit_xml_path=junit if junit.exists() else None,
-                coverage_xml_path=cov if cov.exists() else None,
+                junit_xml_path=junit,
+                coverage_xml_path=cov,
                 argv=res.argv,
             )
         finally:
@@ -560,6 +701,183 @@ def _completed_functional_subtasks(plan: dict) -> list[dict]:
             st.get("lane") in ("unit", "functional")
             and st.get("language") in (None, "python")
         ),
+    )
+
+
+def _lane_by_test_id(plan: dict[str, Any]) -> dict[str, str]:
+    """Map every planned subtask id to its lane, from test_plan.json.
+
+    The plan is the authoritative source of a test's lane: the planner assigned
+    it, gen-functional generated against it, and the evaluator dispatched the
+    matching runner from it. The judge LLM is never asked for it.
+    """
+    out: dict[str, str] = {}
+    for phase in plan.get("phases") or []:
+        if not isinstance(phase, dict):
+            continue
+        for st in phase.get("subtasks") or []:
+            if not isinstance(st, dict):
+                continue
+            tid = str(st.get("id") or "").strip()
+            lane = str(st.get("lane") or "").strip().lower()
+            if tid and lane:
+                out[tid] = lane
+    return out
+
+
+def _stamp_verdict_lanes(spec_dir: Path, doc: dict[str, Any]) -> tuple[int, int]:
+    """Stamp each verdict's ``lane`` from the plan. Returns (stamped, unmatched).
+
+    ``val_block`` groups verdicts into VAL levels by ``verdict["lane"]``, and a
+    verdict with no lane silently reads as ``unit`` (its ``or "unit"`` default).
+    Nothing ever wrote that field, so every verdict — api, browser, integration
+    — was counted as unit: VAL-2 saw no verdicts at all and reported "no
+    api/integration/browser lane ran in this verify", which capped every run at
+    VAL-0 no matter what actually ran (#1018).
+
+    The tell was in the VAL text itself: a 7-verdict run whose plan had 2 unit
+    subtasks still reported "unit lane: 1/7 test verdict(s) did not pass".
+
+    A verdict whose test_id is not in the plan is left WITHOUT a lane rather
+    than defaulted, so it stays visibly unattributed instead of silently
+    inflating the unit lane — the same failure this fixes.
+    """
+    try:
+        plan = json.loads((spec_dir / "test_plan.json").read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        _eval_log.warning("[evaluator] lane stamp skipped, plan unreadable: %s", exc)
+        return 0, 0
+    lanes = _lane_by_test_id(plan)
+    stamped = unmatched = 0
+    for v in doc.get("verdicts") or []:
+        if not isinstance(v, dict):
+            continue
+        lane = lanes.get(str(v.get("test_id") or "").strip())
+        if lane:
+            v["lane"] = lane
+            stamped += 1
+        else:
+            unmatched += 1
+    if unmatched:
+        _eval_log.warning(
+            "[evaluator] %d verdict(s) have no matching plan subtask; left "
+            "unattributed rather than defaulted to unit",
+            unmatched,
+        )
+    return stamped, unmatched
+
+
+def _is_test_path(path: str) -> bool:
+    """Whether a coverage entry is test code rather than the SUT."""
+    p = path.replace("\\", "/").lower()
+    parts = p.split("/")
+    return (
+        "tests" in parts
+        or "test" in parts
+        or parts[-1].startswith("test_")
+        or parts[-1].endswith("_test.py")
+        or "conftest.py" in parts[-1]
+    )
+
+
+def _measured_coverage(spec_dir: Path, test_id: str) -> tuple[int | None, float | None]:
+    """(covered SUT lines, delta pct) for one test, measured from its coverage.xml.
+
+    Returns ``(None, None)`` when no coverage report was captured — "not
+    measured", which the confidence scorer drops, as opposed to a numeric zero
+    which it scores as "exercises none" (#1024).
+
+    Test files are excluded from the count. A pytest run with ``--cov=.``
+    reports the test module itself, and every test covers its own lines, so
+    including them would make the signal 1.0 for everything and measure
+    nothing.
+
+    ``delta_pct`` is only returned when a baseline snapshot exists, because a
+    delta without one is not a delta. Nothing writes ``baseline_coverage.xml``
+    today, so it is ``None`` in practice — deliberately left as the honest gap
+    rather than reported against an implied-empty baseline, which would inflate
+    every test's apparent contribution.
+    """
+    after = spec_dir / "findings" / "runs" / test_id / "coverage.xml"
+    if not after.is_file():
+        return None, None
+    try:
+        from agents.coverage_delta import parse_coverage_xml  # noqa: PLC0415
+
+        snap = parse_coverage_xml(after)
+    except Exception as exc:  # noqa: BLE001 — a signal must never fail the run
+        _eval_log.warning("[evaluator] coverage parse failed for %s: %s", test_id, exc)
+        return None, None
+    covered = sum(
+        len(lines)
+        for path, lines in (snap.covered_lines or {}).items()
+        if not _is_test_path(path)
+    )
+    delta_pct: float | None = None
+    baseline = spec_dir / "findings" / "baseline_coverage.xml"
+    if baseline.is_file():
+        with contextlib.suppress(Exception):
+            from agents.coverage_delta import compute_delta  # noqa: PLC0415
+
+            delta_pct = compute_delta(parse_coverage_xml(baseline), snap).delta_pct
+    return covered, delta_pct
+
+
+def _stamp_verdict_coverage(spec_dir: Path, doc: dict[str, Any]) -> tuple[int, int]:
+    """Overwrite each verdict's coverage signals with the measured ones.
+
+    Returns ``(measured, unmeasured)``. The judge is asked for
+    ``coverage_delta_pct`` in the prompt and cannot observe it, so it wrote a
+    plausible ``0`` on every verdict — and ``confidence._coverage_subscore``
+    scores ``0`` as "exercises none" while ``None`` is dropped, so every test
+    was penalised for a check that never ran (#1024). Measured values replace
+    the guess; where nothing was measured the keys are set to ``None`` so the
+    scorer drops them instead of reading a fabricated zero.
+    """
+    measured = unmeasured = 0
+    for v in doc.get("verdicts") or []:
+        if not isinstance(v, dict):
+            continue
+        summary = v.get("signals_summary")
+        if not isinstance(summary, dict):
+            continue
+        covered, delta_pct = _measured_coverage(
+            spec_dir, str(v.get("test_id") or "").strip()
+        )
+        summary["coverage_new_lines"] = covered
+        summary["coverage_delta_pct"] = delta_pct
+        if covered is None:
+            unmeasured += 1
+        else:
+            measured += 1
+    return measured, unmeasured
+
+
+def _apply_lane_attribution(spec_dir: Path, verdicts_path: Path) -> None:
+    """Read verdicts.json, stamp lanes from the plan, write it back.
+
+    Deliberately NOT folded into the confidence/flaky enrichment block that
+    precedes its call site: that one is best-effort on purpose because its
+    output is additive metadata, whereas the lane is what ``val_block`` groups
+    VAL levels by — swallowing a failure there would silently downgrade the run
+    to VAL-0, which is the very bug this fixes (#1018).
+    """
+    try:
+        doc = json.loads(verdicts_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        _eval_log.error("[evaluator] lane attribution failed: %s", exc)
+        return
+    stamped, unmatched = _stamp_verdict_lanes(spec_dir, doc)
+    measured, unmeasured = _stamp_verdict_coverage(spec_dir, doc)
+    with contextlib.suppress(OSError):
+        verdicts_path.write_text(json.dumps(doc, indent=2))
+    _eval_log.info(
+        "[evaluator] deterministic stamps: lane stamped=%d unmatched=%d; "
+        "coverage measured=%d unmeasured=%d",
+        stamped,
+        unmatched,
+        measured,
+        unmeasured,
     )
 
 
@@ -743,19 +1061,168 @@ def _coverage_delta_for_subtask(
         return None
 
 
+def _nix_batched_stability(
+    spec_dir: Path, project_dir: Path, test_file: Path
+) -> StabilityResult | None:
+    """#776: the 3x stability samples as ONE Nix Job instead of three.
+
+    Each ``check_stability`` sample is a full Nix Job whose cost (re-lock the
+    flake, pip-install the SUT, ``nix develop`` entry) dwarfs the pytest run and
+    is IDENTICAL across samples — so a single spec pays it ``rerun_count`` times
+    per subtask, serially, and blows the verify deadline. Here one Job runs pytest
+    ``rerun_count`` times in the same shell; we recover the per-run exit codes and
+    classify them with the SAME rule ``check_stability`` uses, for a byte-identical
+    verdict. Unit lane only (hermetic, ``network="none"`` → no creds/serve), which
+    is exactly where ``_build_signal_bundle`` calls this.
+
+    Returns the StabilityResult, or None when the Nix lane is unavailable at run
+    time so the caller falls back to the per-sample ``check_stability`` path.
+    """
+    res = run_pytest_lane_via_nix(
+        spec_dir,
+        project_dir,
+        test_file,
+        extra_env={"PYTHONHASHSEED": str(DEFAULT_SEED)},
+        reruns=RERUN_COUNT,
+    )
+    if res is None:
+        return None
+    runs = [
+        StabilityRun(returncode=code, stdout_tail=tail[-500:], stderr_tail="")
+        for code, tail in parse_pytest_exits(res.stdout)
+    ]
+    if not runs:
+        return None
+    return classify_stability_runs(runs, seed=DEFAULT_SEED, rerun_count=len(runs))
+
+
+def _mutation_from_codes(
+    candidates: list[tuple[str, MutationApplied]], codes: list[int]
+) -> MutationResult | None:
+    """Build a MutationResult from batched per-mutant exit codes (#776 Stage 1b).
+
+    Applies the SAME rule as ``run_mutate_probe``: KILLED when the mutant's
+    pytest exit code is non-zero, and the FIRST killed candidate wins outright;
+    if nothing is killed, the first candidate's SURVIVED result is returned. So
+    the verdict is byte-identical to the per-candidate path — the only difference
+    is that every candidate ran in ONE Job instead of one Job each.
+    """
+    first: MutationResult | None = None
+    for (mutated, mutation), code in zip(candidates, codes, strict=False):
+        verdict = MutationVerdict.KILLED if code != 0 else MutationVerdict.SURVIVED
+        result = MutationResult(
+            verdict=verdict, mutation=mutation, mutated_source=mutated
+        )
+        if verdict == MutationVerdict.KILLED:
+            return result
+        if first is None:
+            first = result
+    return first
+
+
+def _nix_batched_signals(
+    spec_dir: Path, project_dir: Path, subtask: dict[str, Any]
+) -> tuple[StabilityResult | None, MutationResult | None]:
+    """#776 Stage 1b: the 3x stability samples AND every mutation candidate for one
+    subtask in ONE Nix Job instead of ``1 + M`` Jobs.
+
+    The ~minutes of per-Job cost (mostly k8s pod lifecycle + the ``nix develop``
+    env build) is IDENTICAL across the stability samples and the mutants and
+    dwarfs the pytest runs (seconds each), so a single subtask paid it ``1 + M``
+    times serially and blew the verify deadline. Here one Job runs the original
+    test ``rerun_count`` times (stability) plus each mutation-candidate test once
+    (mutation); we recover the per-run exit codes and classify them with the SAME
+    rules the per-primitive path uses, for byte-identical verdicts.
+
+    Returns ``(StabilityResult | None, MutationResult | None)``:
+      - ``(None, None)`` when the Nix lane is unavailable at run time — the caller
+        falls back to the per-primitive path.
+      - ``mutation is None`` (with a real stability) only when candidates existed
+        but the batch didn't return one code per candidate (a truncated Job) — the
+        caller then computes mutation via the per-candidate path, so an incomplete
+        batch never yields a wrong mutation verdict.
+    """
+    test_file = spec_dir / subtask["files_to_create"][0]
+    if not test_file.exists():
+        return None, None
+
+    language = subtask.get("language")
+    candidates: list[tuple[str, MutationApplied]] = []
+    if is_mutation_supported(language):
+        try:
+            candidates = mutate_source_candidates(test_file.read_text())
+        except OSError:
+            candidates = []
+
+    mutant_files: list[Path] = []
+    if candidates:
+        ext = mutant_extension(language)
+        mutant_dir = spec_dir / "findings" / "mutants"
+        mutant_dir.mkdir(parents=True, exist_ok=True)
+        for k, (mutated, _mutation) in enumerate(candidates, start=1):
+            p = mutant_dir / f"{subtask['id']}__c{k}{ext}"
+            try:
+                p.write_text(mutated)
+                mutant_files.append(p)
+            except OSError:
+                pass
+
+    res = run_pytest_lane_via_nix(
+        spec_dir,
+        project_dir,
+        test_file,
+        extra_env={"PYTHONHASHSEED": str(DEFAULT_SEED)},
+        reruns=RERUN_COUNT,
+        mutant_files=mutant_files or None,
+    )
+    if res is None:
+        return None, None
+
+    runs = [
+        StabilityRun(returncode=code, stdout_tail=tail[-500:], stderr_tail="")
+        for code, tail in parse_pytest_exits(res.stdout)
+    ]
+    stability = (
+        classify_stability_runs(runs, seed=DEFAULT_SEED, rerun_count=len(runs))
+        if runs
+        else None
+    )
+
+    mutation = None
+    if candidates:
+        codes = parse_mut_exits(res.stdout)
+        if len(codes) >= len(candidates):
+            mutation = _mutation_from_codes(candidates, codes)
+        # else: truncated batch → leave None so the caller re-runs mutation
+        # per-candidate (correctness over the Job-count saving in this rare case).
+    elif is_mutation_supported(language):
+        mutation = MutationResult(verdict=MutationVerdict.NO_MUTATION)
+
+    return stability, mutation
+
+
 def _stability_for_subtask(
     spec_dir: Path,
     project_dir: Path,
     subtask: dict,
     runner_fn,
 ):
-    """Run the 3× stability check for one test."""
+    """Run the 3× stability check for one test.
+
+    In Nix mode the three samples are batched into ONE Job (#776); every other
+    backend runs them per-sample via ``check_stability`` and ``runner_fn``.
+    """
     from agents.stability_runner import check_stability
 
     test_file = spec_dir / subtask["files_to_create"][0]
     if not test_file.exists():
         return None
     try:
+        if _nix_verify_mode(spec_dir):
+            batched = _nix_batched_stability(spec_dir, project_dir, test_file)
+            if batched is not None:
+                return batched
+            # Nix lane unavailable at run time → fall through to per-sample runs.
         return check_stability(test_file, project_dir, runner_fn)
     except Exception as exc:  # noqa: BLE001
         _eval_log.warning(
@@ -782,9 +1249,27 @@ def _flaky_history_for_subtask(spec_dir: Path, subtask: dict, stability):
     from agents.flaky_history import record_outcome
     from agents.stability_runner import StabilityVerdict
 
+    # #787: an ENVIRONMENTAL failure is not a test-reliability signal and must
+    # not be recorded. When the runner itself raised (ERROR), or the test never
+    # actually ran because the SUT was missing/not booted — a collection/import
+    # error, or the api-lane app never came up — recording a `false` outcome
+    # poisons the cross-run flip-rate: a deadline-reaped / no-SUT first attempt
+    # records `false`, the next real run records `true`, the resulting
+    # flip_rate=1.00 deterministically demotes every `accept` -> `flag`. Only a
+    # STABLE pass or a GENUINE test failure (assertion / flake) is a real
+    # outcome; skip the environmental ones so re-verifying a spec that first
+    # reaped does not spuriously flag good tests.
+    verdict = stability.verdict
+    if verdict == StabilityVerdict.ERROR:
+        return None
+    if verdict == StabilityVerdict.CONSISTENT_FAIL and getattr(
+        stability, "failure_kind", None
+    ) in ("import", "app_not_healthy"):
+        return None
+
     try:
         store = spec_dir.parent.parent / "test_history.json"
-        passed = stability.verdict == StabilityVerdict.STABLE
+        passed = verdict == StabilityVerdict.STABLE
         return record_outcome(store, subtask["id"], passed)
     except Exception as exc:  # noqa: BLE001
         _eval_log.warning(
@@ -876,15 +1361,15 @@ def _ci_parity_for_subtask(spec_dir: Path, subtask: dict):
     )
 
 
-def _build_signal_bundle(
+def _assemble_signals(
     spec_dir: Path,
-    project_dir: Path,
-    subtask: dict,
-    runner_fn,
+    subtask: dict[str, Any],
+    stability: StabilityResult | None,
+    mutation: MutationResult | None,
 ) -> EvaluatorSignals:
-    """Run every available signal primitive against ``subtask`` and
-    return a bundle the prompt helper can format."""
-    stability = _stability_for_subtask(spec_dir, project_dir, subtask, runner_fn)
+    """Build the EvaluatorSignals bundle from precomputed stability + mutation,
+    filling in the cheap host-side signals (coverage/lint/flaky-history/ci-parity).
+    """
     return EvaluatorSignals(
         test_id=subtask["id"],
         test_file=spec_dir / subtask["files_to_create"][0],
@@ -892,11 +1377,122 @@ def _build_signal_bundle(
         rationale=subtask.get("rationale") or "?",
         coverage_delta=_coverage_delta_for_subtask(spec_dir, subtask),
         stability=stability,
-        mutation=_mutation_for_subtask(spec_dir, project_dir, subtask, runner_fn),
+        mutation=mutation,
         lint_promotion=_lint_promotion_for_subtask(spec_dir, subtask),
         flaky_history=_flaky_history_for_subtask(spec_dir, subtask, stability),
         ci_parity=_ci_parity_for_subtask(spec_dir, subtask),
     )
+
+
+def _persist_run_artifact(
+    spec_dir: Path, test_file: Path, src: Path | None
+) -> Path | None:
+    """Copy a run artifact out of the runner's scratch dir before it is deleted.
+
+    Returns the durable path, or None when the runner produced no such file.
+
+    The scratch dir is removed in the runner's ``finally``, which executes
+    before the constructed result reaches its caller — so a path into it is
+    already dead on arrival (#1024). Keyed by test-file stem because that is
+    what ``_run`` knows; ``_capturing_coverage`` re-files it under the
+    subtask id that ``_coverage_delta_for_subtask`` looks up.
+    """
+    if src is None or not Path(src).is_file():
+        return None
+    src = Path(src)
+    dest_dir = spec_dir / "findings" / "_run_artifacts" / Path(test_file).stem
+    try:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / src.name
+        shutil.copyfile(src, dest)
+    except OSError as exc:
+        _eval_log.warning("[evaluator] could not persist %s: %s", src.name, exc)
+        return None
+    return dest
+
+
+def _with_durable_artifacts(spec_dir: Path, test_file: Path, res: Any) -> Any:
+    """Re-point a run result's artifact paths outside the doomed scratch dir.
+
+    Both runner branches build ``junit_xml_path`` / ``coverage_xml_path`` inside
+    the scratch directory that the caller's ``finally`` deletes, so the paths
+    are dead before any consumer reads them (#1024). Copy the files somewhere
+    durable and swap the paths for the copies.
+    """
+    junit = _persist_run_artifact(
+        spec_dir, test_file, getattr(res, "junit_xml_path", None)
+    )
+    cov = _persist_run_artifact(
+        spec_dir, test_file, getattr(res, "coverage_xml_path", None)
+    )
+    with contextlib.suppress(AttributeError, TypeError):
+        res.junit_xml_path = junit
+        res.coverage_xml_path = cov
+    return res
+
+
+def _capturing_coverage(spec_dir: Path, subtask: dict[str, Any], runner_fn: Any) -> Any:
+    """Wrap ``runner_fn`` so each run's coverage.xml is kept for this subtask.
+
+    The lanes already ask pytest for ``--cov-report=xml:coverage.xml`` and the
+    result carries ``coverage_xml_path``, but it pointed into the runner's
+    scratch dir and nothing copied it out. `_coverage_delta_for_subtask` looks
+    for ``findings/runs/<test_id>/coverage.xml``, found nothing, and returned
+    "not computed" — so the only coverage number reaching the verdict was the
+    one the judge invented, uniformly ``0`` (#1024).
+
+    Copies rather than moves: the scratch dir belongs to the runner, and a
+    stability check runs the same test several times. The last run wins, which
+    is the right one — same test, same code, so the snapshots agree, and a
+    mutation run (which deliberately breaks the SUT) is not what we want to
+    record. Never raises: coverage is a signal, not a gate.
+    """
+    dest_dir = spec_dir / "findings" / "runs" / str(subtask.get("id") or "unknown")
+
+    def _run(*args: Any, **kwargs: Any) -> Any:
+        res = runner_fn(*args, **kwargs)
+        src = getattr(res, "coverage_xml_path", None)
+        if src is not None:
+            with contextlib.suppress(OSError):
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(src, dest_dir / "coverage.xml")
+        return res
+
+    return _run
+
+
+def _build_signal_bundle(
+    spec_dir: Path,
+    project_dir: Path,
+    subtask: dict,
+    runner_fn,
+) -> EvaluatorSignals:
+    """Run every available signal primitive against ``subtask`` and
+    return a bundle the prompt helper can format.
+
+    In Nix mode the 3x stability + every mutation candidate are batched into ONE
+    Job (#776 Stage 1b); every other backend computes them per-primitive. A Nix
+    lane that's unavailable at run time, or a truncated mutation batch, falls back
+    to the per-primitive path so the verdict is never degraded by the batching.
+    """
+    # #1024: every pytest lane writes a coverage.xml and nothing kept it, so
+    # `_coverage_delta_for_subtask` never found its `after` snapshot and coverage
+    # reached the verdict as a judge-authored guess. Persist it at the runner
+    # seam — the only place the path is still in scope, and the one both the
+    # stability and mutation paths go through.
+    runner_fn = _capturing_coverage(spec_dir, subtask, runner_fn)
+    if _nix_verify_mode(spec_dir):
+        stability, mutation = _nix_batched_signals(spec_dir, project_dir, subtask)
+        if stability is not None:
+            if mutation is None:
+                mutation = _mutation_for_subtask(
+                    spec_dir, project_dir, subtask, runner_fn
+                )
+            return _assemble_signals(spec_dir, subtask, stability, mutation)
+        # Nix unavailable at run time → per-primitive path below.
+    stability = _stability_for_subtask(spec_dir, project_dir, subtask, runner_fn)
+    mutation = _mutation_for_subtask(spec_dir, project_dir, subtask, runner_fn)
+    return _assemble_signals(spec_dir, subtask, stability, mutation)
 
 
 # ─── Browser-lane signal computation (static base_url path) ─────────────
@@ -1480,8 +2076,91 @@ def _build_kube_or_static_bundle(
             runtime.wait_for_healthy()
             return make_bundle(make_runner(runtime.target_url))
     target_url = _browser_target_url(spec_dir, st)
+    if target_url is None:
+        # api lane, spec-ingest, no .tfactory.yml target configured (#612):
+        # self-serve the SUT instead of leaving VAL-2 permanently unreachable.
+        self_served = _maybe_self_serve_api_bundle(
+            spec_dir, project_dir, st, make_runner, make_bundle
+        )
+        if self_served is not None:
+            return self_served
     _gate_target_health(spec_dir, st, target, target_url)
     return make_bundle(make_runner(target_url))
+
+
+def _maybe_self_serve_api_bundle(
+    spec_dir: Path,
+    project_dir: Path,
+    st: dict[str, Any],
+    make_runner: Callable[[str], Any],
+    make_bundle: Callable[[Any], Any],
+) -> Any | None:
+    """Self-serve the SUT for an api-lane subtask with no configured target.
+
+    The spec-ingest case (#612): a freshly-generated app has no
+    ``.tfactory.yml`` target yet, so ``_browser_target_url`` returns None and
+    the api lane would otherwise always run with no app to hit (VAL-2 stuck
+    ``not_run``/failed). Detects the app's entrypoint (``agents.nix_env.
+    detect_serve_command``), boots it on a free host port via
+    ``LocalServeRuntime``, health-polls it, runs the bundle against it, and
+    always tears the process down.
+
+    Only engages when the lane's test process will run in the SAME
+    host/network-namespace as this self-served app — i.e. when the run is
+    NOT using the Nix k8s Job backend (that lane executes in a separate pod
+    and could never reach a ``127.0.0.1`` URL bound here). When nixjob is
+    selected, or nothing is detectable/startable, returns None so the caller
+    falls through to the existing honest no-target path unchanged. Never
+    raises into the run — self-serve is best-effort.
+    """
+    if st.get("lane") != "api":
+        return None
+    if _nix_verify_mode(spec_dir):
+        _eval_log.info(
+            "api lane self-serve skipped for %s: nixjob backend runs the test "
+            "in a separate pod that can't reach a host-local URL (follow-up)",
+            st.get("id"),
+        )
+        return None
+    try:
+        # deferred best-effort imports (file convention)
+        from tools.runners.free_port import find_free_port  # noqa: PLC0415
+        from tools.runners.local_serve_runtime import (  # noqa: PLC0415
+            LocalServeRuntime,
+            LocalServeRuntimeError,
+        )
+
+        env = environment_from_contract(spec_dir)
+        port = find_free_port()
+        serve_cmd = detect_serve_command(Path(project_dir), env, port=port)
+        if not serve_cmd:
+            _eval_log.info(
+                "api lane self-serve: no serve command detected for %s", st.get("id")
+            )
+            return None
+        serve_cmd = _host_serve_command(serve_cmd, Path(project_dir))
+        runtime = LocalServeRuntime(serve_cmd, Path(project_dir), port)
+        with runtime:
+            runtime.wait_for_healthy()
+            return make_bundle(make_runner(runtime.target_url))
+    except LocalServeRuntimeError as exc:
+        _eval_log.warning("api lane self-serve did not become healthy: %s", exc)
+        return None
+    except Exception as exc:  # noqa: BLE001 — self-serve is best-effort
+        _eval_log.warning("api lane self-serve errored (non-blocking): %s", exc)
+        return None
+
+
+def _host_serve_command(serve_cmd: str, project_dir: Path) -> str:
+    """Rewrite a bare ``python`` serve command to use the project's host venv
+    interpreter (built by ``_ensure_host_venv``), so the self-served app sees
+    the SUT's installed deps (e.g. uvicorn/fastapi) instead of falling
+    through to whatever ``python`` resolves to on PATH. Non-Python serve
+    commands (e.g. ``npm start``) are returned unchanged."""
+    if not serve_cmd.startswith("python "):
+        return serve_cmd
+    venv_py = str(_ensure_host_venv(project_dir) / "bin" / "python")
+    return venv_py + serve_cmd[len("python") :]
 
 
 def _gate_target_health(spec_dir, subtask, target, target_url) -> None:
@@ -1593,43 +2272,208 @@ def _build_all_bundles(spec_dir, project_dir, unit, browser, api, jest, go) -> l
     return bundles
 
 
-async def _run_evaluator_session(spec_dir, project_dir, bundles, verbose) -> bool:
-    """Invoke the LLM with the signal bundles, then validate verdicts.json.
+def _vote_count() -> int:
+    """Best-of-N vote count for the judge session (#649). Default 3; min 1."""
+    try:
+        n = int(os.getenv("TFACTORY_VERDICT_VOTES", "3"))
+    except ValueError:
+        n = 3
+    return max(1, n)
+
+
+async def _judge_once(
+    spec_dir: Path, project_dir: Path, prompt: str, verbose: bool
+) -> tuple[dict[str, Any] | None, str, str]:
+    """One independent judge call: session + verdicts.json validation (#649).
+
+    Returns ``(doc, "", "")`` on success, or ``(None, phase, error)`` on any
+    failure so the caller can count the call as a fail-closed deny vote
+    without writing a terminal status per call.
+    """
+    verdicts_path = spec_dir / "findings" / "verdicts.json"
+    verdicts_path.unlink(missing_ok=True)
+    try:
+        client = await _resolve_evaluator_client(spec_dir, project_dir)
+        await _invoke_session(client, prompt, spec_dir, verbose)
+    except Exception as exc:  # noqa: BLE001 — surface in status
+        _eval_log.error("evaluator session raised: %s\n%s", exc, traceback.format_exc())
+        return None, "evaluator_session_error", str(exc)[:500]
+    ok, err, _count = _validate_verdicts(verdicts_path)
+    if not ok:
+        return None, "evaluator_invalid_verdicts", err
+    try:
+        doc = json.loads(verdicts_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        return None, "evaluator_invalid_verdicts", f"verdicts.json unreadable: {exc}"
+    if not isinstance(doc, dict):
+        return None, "evaluator_invalid_verdicts", "verdicts.json root is not an object"
+    return doc, "", ""
+
+
+async def _collect_judge_docs(
+    spec_dir: Path, project_dir: Path, prompt: str, verbose: bool, n: int
+) -> tuple[list[dict[str, Any] | None], tuple[str, str] | None]:
+    """Run ``n`` independent judge calls; keep per-call docs + first failure."""
+    docs: list[dict[str, Any] | None] = []
+    first_failure: tuple[str, str] | None = None
+    for i in range(n):
+        doc, fail_phase, fail_err = await _judge_once(
+            spec_dir, project_dir, prompt, verbose
+        )
+        docs.append(doc)
+        if doc is None:
+            first_failure = first_failure or (fail_phase, fail_err)
+        elif n > 1:
+            # Per-call audit trail (verdicts.json itself is cleared per call).
+            (spec_dir / "findings" / f"verdicts.vote{i}.json").write_text(
+                json.dumps(doc, indent=2)
+            )
+    return docs, first_failure
+
+
+def _entry_for(doc: dict[str, Any] | None, test_id: str) -> dict[str, Any] | None:
+    """Find one test's verdict entry in a judge run's doc (None-tolerant)."""
+    verdicts = (doc or {}).get("verdicts")
+    if not isinstance(verdicts, list):
+        return None
+    for v in verdicts:
+        if isinstance(v, dict) and v.get("test_id") == test_id:
+            return v
+    return None
+
+
+def _voted_test_ids(docs: list[dict[str, Any] | None]) -> list[str]:
+    """Union of test_ids across judge runs, first-seen order preserved."""
+    order: list[str] = []
+    for doc in docs:
+        verdicts = (doc or {}).get("verdicts")
+        for v in verdicts if isinstance(verdicts, list) else []:
+            tid = v.get("test_id") if isinstance(v, dict) else None
+            if isinstance(tid, str) and tid and tid not in order:
+                order.append(tid)
+    return order
+
+
+async def _merge_voted_verdicts(
+    docs: list[dict[str, Any] | None],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Merge N judge runs into one verdicts doc via per-test majority vote (#649).
+
+    A run that crashed/was invalid (``None`` doc) or is simply missing a test
+    casts a fail-closed reject vote for that test. Each merged entry carries a
+    ``vote`` block (all votes, split, dissent with the dissenter's reasons);
+    the doc carries a ``verdict_vote`` split summary for calibration.
+    Returns ``(merged_doc, vote_summary)``.
+    """
+    base = next(d for d in docs if d is not None)
+
+    async def _replay(i: int) -> dict[str, Any] | None:
+        return docs[i]
+
+    order = _voted_test_ids(docs)
+    merged: list[dict[str, Any]] = []
+    splits: Counter[str] = Counter()
+    for tid in order:
+
+        def _extract(doc: dict[str, Any] | None, _tid: str = tid) -> str | None:
+            entry = _entry_for(doc, _tid)
+            value = entry.get("verdict") if entry else None
+            return value if isinstance(value, str) else None
+
+        result = await majority_vote(_replay, _extract, n=len(docs))
+        splits[result.split] += 1
+        # Prefer a majority voter's entry for the payload; fall back to any
+        # run that produced the test (a crash-driven reject majority may have
+        # no entry of its own).
+        entry: dict[str, Any] | None = None
+        for i, vote in enumerate(result.votes):
+            candidate = _entry_for(docs[i], tid)
+            if vote == result.majority and candidate is not None:
+                entry = dict(candidate)
+                break
+        if entry is None:
+            entry = dict(
+                next(e for e in (_entry_for(d, tid) for d in docs) if e is not None)
+            )
+        if entry.get("verdict") != result.majority:
+            reasons = entry.get("reasons")
+            entry["reasons"] = (list(reasons) if isinstance(reasons, list) else []) + [
+                f"majority vote {result.split}: {result.majority} overrides this "
+                f"entry's own judge call ({entry.get('verdict')}); crashed or "
+                "missing votes count as reject (fail-closed)"
+            ]
+            entry["verdict"] = result.majority
+        entry["vote"] = {
+            "votes": list(result.votes),
+            "split": result.split,
+            "dissent": [
+                {
+                    "call": i,
+                    "verdict": result.votes[i],
+                    "reasons": (_entry_for(docs[i], tid) or {}).get("reasons"),
+                }
+                for i in result.dissent
+            ],
+        }
+        merged.append(entry)
+
+    doc = dict(base)
+    doc["verdicts"] = merged
+    contested = sum(c for s, c in splits.items() if not s.endswith("-0"))
+    summary: dict[str, Any] = {
+        "calls": len(docs),
+        "failed_calls": sum(1 for d in docs if d is None),
+        "tests": len(order),
+        "splits": dict(splits),
+        "split_rate": round(contested / len(order), 2) if order else 0.0,
+    }
+    doc["verdict_vote"] = summary
+    return doc, summary
+
+
+async def _run_evaluator_session(
+    spec_dir: Path,
+    project_dir: Path,
+    bundles: list[EvaluatorSignals],
+    verbose: bool,
+) -> bool:
+    """Invoke the judge LLM best-of-N (#649) and write the voted verdicts.json.
+
+    The judge session is the one GATING LLM verdict in TFactory, so it never
+    gates on a single pass: ``TFACTORY_VERDICT_VOTES`` (default 3) independent
+    sessions run over the same prompt and each test's verdict is the majority,
+    with judge crashes counted as reject votes (fail-closed). Deterministic
+    signals are computed once, before the vote, and stay untouched.
 
     Returns True on success (status → ``evaluated`` and Triager scheduled),
-    False on a session error or invalid verdicts (status → ``evaluator_failed``).
+    False when every judge call failed (status → ``evaluator_failed``).
     """
     from prompts_pkg.prompts import get_tfactory_evaluator_prompt
 
     prompt = get_tfactory_evaluator_prompt(spec_dir, project_dir, bundles)
-    client = await _resolve_evaluator_client(spec_dir, project_dir)
-    try:
-        session_status, _response, _err = await _invoke_session(
-            client,
-            prompt,
-            spec_dir,
-            verbose,
-        )
-    except Exception as exc:  # noqa: BLE001 — surface in status
-        _eval_log.error("evaluator session raised: %s\n%s", exc, traceback.format_exc())
+    verdicts_path = spec_dir / "findings" / "verdicts.json"
+    n = _vote_count()
+    docs, first_failure = await _collect_judge_docs(
+        spec_dir, project_dir, prompt, verbose, n
+    )
+
+    if all(d is None for d in docs):
+        fail_phase, fail_err = first_failure or ("evaluator_session_error", "unknown")
         _write_status_patch(
             spec_dir,
             status="evaluator_failed",
-            phase="evaluator_session_error",
-            evaluator_error=str(exc)[:500],
+            phase=fail_phase,
+            evaluator_error=fail_err,
         )
         return False
 
-    verdicts_path = spec_dir / "findings" / "verdicts.json"
-    ok, err, count = _validate_verdicts(verdicts_path)
-    if not ok:
-        _write_status_patch(
-            spec_dir,
-            status="evaluator_failed",
-            phase="evaluator_invalid_verdicts",
-            evaluator_error=err,
-        )
-        return False
+    vote_summary: dict[str, Any] | None = None
+    if n > 1:
+        merged, vote_summary = await _merge_voted_verdicts(docs)
+        verdicts_path.write_text(json.dumps(merged, indent=2))
+        count = len(merged.get("verdicts") or [])
+    else:
+        count = len((docs[0] or {}).get("verdicts") or [])
 
     # Stamp deterministic confidence + flaky-history onto each verdict + a
     # run-level rollup (#238, #239). Best-effort: a scoring hiccup must never
@@ -1641,6 +2485,11 @@ async def _run_evaluator_session(spec_dir, project_dir, bundles, verbose) -> boo
         from agents.confidence import enrich_verdicts
 
         flaky_by_test_id = {}
+        # Deterministic import-vs-assertion classification for a
+        # consistent_fail (#629) — fixes the `reasons` narrative regardless
+        # of what the judge LLM guessed. Only populated when stability
+        # actually ran and landed on CONSISTENT_FAIL.
+        failure_kind_by_test_id = {}
         for b in bundles:
             fh = getattr(b, "flaky_history", None)
             if fh is not None:
@@ -1652,8 +2501,20 @@ async def _run_evaluator_session(spec_dir, project_dir, bundles, verbose) -> boo
                         b.test_id,
                         exc_info=True,
                     )
+            stability = getattr(b, "stability", None)
+            failure_kind = (
+                getattr(stability, "failure_kind", None) if stability else None
+            )
+            if failure_kind is not None:
+                failure_kind_by_test_id[b.test_id] = {
+                    "failure_kind": failure_kind,
+                    "rerun_count": getattr(stability, "rerun_count", 3),
+                    # The underlying exception line (#892) — so the reason names
+                    # the missing module instead of just its bucket.
+                    "failure_detail": getattr(stability, "failure_detail", None),
+                }
         doc = json.loads(verdicts_path.read_text())
-        enrich_verdicts(doc, flaky_by_test_id)
+        enrich_verdicts(doc, flaky_by_test_id, failure_kind_by_test_id)
         # Honor the RFC-0002 contract execution scope (#247): record declared
         # coverage_target / mutation_scope / security_scope into the run output.
         try:
@@ -1667,12 +2528,18 @@ async def _run_evaluator_session(spec_dir, project_dir, bundles, verbose) -> boo
     except Exception as exc:  # noqa: BLE001 — confidence is additive metadata
         _eval_log.warning("confidence/flaky enrichment skipped: %s", exc)
 
+    _apply_lane_attribution(spec_dir, verdicts_path)
+
+    # Vote splits ride on status.json so the Triager's completion envelope
+    # surfaces them (calibration hook, #649 step 5).
+    _vote_fields = {"verdict_vote": vote_summary} if vote_summary else {}
     _write_status_patch(
         spec_dir,
         status="evaluated",
         phase="evaluator_complete",
         verdicts_count=count,
         tests_evaluated=len(bundles),
+        **_vote_fields,
     )
     # Forward-chain to the Triager (Task 8, #9). Gated by ``TFACTORY_AUTO_TRIAGE``
     # env; tests pin it off to keep this layer deterministic.
@@ -1689,29 +2556,70 @@ def _equivalence_lane_enabled() -> bool:
     )
 
 
+def _record_equivalence_not_measured(
+    spec_dir: Path, reason: str, *, verdict: str
+) -> None:
+    """Leave the not-measured record in findings, or say why we could not."""
+    try:
+        from agents.equivalence_lane import (  # noqa: PLC0415 - lazy by design
+            record_not_measured,
+        )
+
+        record_not_measured(spec_dir, reason, verdict=verdict)
+    except Exception:  # noqa: BLE001 - recording must never fail the verify
+        _eval_log.exception(
+            "equivalence lane: could not record the not-measured finding (%s)", reason
+        )
+
+
 def _maybe_run_equivalence_lane(spec_dir: Path, project_dir: Path) -> None:
     """Run the RFC-0010 equivalence lane when enabled + the contract declares one.
 
-    Reads the signed contract from ``context/task_contract.json``; no-op when the
-    flag is off, the contract is absent, or it carries no ``tfactory.equivalence``
-    block. Best-effort — a failure here never fails the verify.
+    Reads the signed contract from ``context/task_contract.json``; a true no-op
+    when the contract is absent or carries no ``tfactory.equivalence`` block —
+    nothing was declared, so there is nothing to report.
+
+    Once a contract DOES declare the lane, every exit from here leaves a record
+    in ``findings/`` (#972). Best-effort still means the verify does not fail on
+    an infrastructure problem, but "best-effort" must not mean "silent": a
+    skipped lane that leaves only a log line makes the findings file — the
+    artifact a human reads — identical whether the lane passed or never ran.
     """
-    if not _equivalence_lane_enabled():
+    contract_path = Path(spec_dir) / "context" / "task_contract.json"
+    if not contract_path.is_file():
         return
     try:
-        contract_path = Path(spec_dir) / "context" / "task_contract.json"
-        if not contract_path.is_file():
-            return
         contract = json.loads(contract_path.read_text())
-        if not ((contract.get("tfactory") or {}).get("equivalence")):
-            return
+    except (OSError, ValueError) as exc:
+        # Unreadable contract: we cannot know whether a lane was declared, so
+        # there is nothing honest to record against it. Log and leave.
+        _eval_log.warning("equivalence lane: unreadable task_contract.json: %s", exc)
+        return
+    if not ((contract.get("tfactory") or {}).get("equivalence")):
+        return
+
+    if not _equivalence_lane_enabled():
+        # Declared by the contract, switched off by the operator. Not a failure
+        # — but it must not read as a lane that ran and passed.
+        reason = "equivalence lane is disabled (TFACTORY_EQUIVALENCE_LANE is not set)"
+        _eval_log.info("equivalence lane: %s", reason)
+        _record_equivalence_not_measured(spec_dir, reason, verdict="not_run")
+        return
+
+    try:
         from agents.equivalence_lane import run_from_spec
 
         result = run_from_spec(spec_dir, project_dir, contract)
         if result is not None:
             _eval_log.info("equivalence lane: %s", result.get("claim"))
     except Exception as exc:  # noqa: BLE001 - equivalence is best-effort
-        _eval_log.warning("equivalence lane skipped: %s", exc)
+        # Declared, enabled, tried, could not run: no Docker daemon, the Job
+        # could not be created, the image is missing. Fail closed, the same call
+        # the dead-harness path makes (#959).
+        _eval_log.warning("equivalence lane could not run: %s", exc)
+        _record_equivalence_not_measured(
+            spec_dir, f"the lane could not run: {exc}", verdict="reject"
+        )
 
 
 async def run_evaluator(
@@ -1742,6 +2650,13 @@ async def run_evaluator(
                   → evaluated_empty     (no tests to evaluate)
                   → evaluator_failed    (validation / session error)
     """
+    # The spec tree is a linked worktree whose gitdir pointer is absolute, so it
+    # is wrong for anyone who mounted the workspace at a different root (#868).
+    # Repair toward THIS process's view before any stage runs git. Idempotent and
+    # a no-op when the pointer already resolves.
+    from agents.utils import repair_linked_worktree  # noqa: PLC0415 - lazy by design
+
+    repair_linked_worktree(project_dir)
     try:
         _write_status_patch(
             spec_dir,
@@ -1866,6 +2781,10 @@ def schedule_evaluator(
     if os.environ.get("TFACTORY_AUTO_EVALUATE", "1") == "0":
         return None
     task = asyncio.create_task(run_evaluator(spec_dir, project_dir, mode=mode))
-    _BG_EVALUATOR_TASKS.add(task)
-    task.add_done_callback(_BG_EVALUATOR_TASKS.discard)
-    return task
+    return anchor_stage_task(
+        task,
+        _BG_EVALUATOR_TASKS,
+        spec_dir=spec_dir,
+        stage="evaluator",
+        failed_status="evaluator_failed",
+    )

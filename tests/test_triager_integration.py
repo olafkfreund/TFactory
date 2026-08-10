@@ -411,8 +411,8 @@ async def test_full_chain_to_triager_happy(
     assert gw["ok"] is True
     # 6 test files staged
     assert len(gw["committed_paths"]) == 6
-    # 5 git argvs: verify, checkout, add, commit, rev-parse HEAD
-    assert len(gw["argv_log"]) == 5
+    # 6 git argvs (push path): fetch, checkout -B, add, commit, push, rev-parse HEAD
+    assert len(gw["argv_log"]) == 6
 
     # ── pr_comment skipped (no PR number) — body written to disk ─
     pc = status["pr_comment"]

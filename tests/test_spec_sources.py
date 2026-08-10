@@ -82,6 +82,74 @@ def test_parse_markdown_no_criteria_raises():
         parse_markdown("# Title\n\nJust prose, no criteria.\n")
 
 
+# ── the spec body must survive ingestion (#855) ────────────────────────
+
+SLUG_SPEC = """\
+## Endpoints
+
+- `GET /healthz`
+- `POST /slug`
+
+## Slug rules
+
+- lowercase ASCII only; transliterate accented characters
+- truncate to 200 characters BEFORE slugging, never after
+- never cut mid-word when a hyphen boundary exists in the last 20 characters
+
+## Acceptance Criteria
+
+- AC#1: GET /healthz returns HTTP 200 and exactly {"status":"ok"}
+- AC#2: POST /slug {"text":"Hello, World!"} returns {"slug":"hello-world"}
+
+## Out of scope
+
+- authentication
+"""
+
+
+def test_spec_body_survives_ingest_verbatim():
+    """#855: behaviour stated in the body but never restated as an AC was lost.
+
+    The planner reads the rendered spec, so the rendered spec has to still
+    contain what the requester actually wrote.
+    """
+    md = ingest(SLUG_SPEC).to_markdown()
+    for stated in (
+        "transliterate accented characters",
+        "BEFORE slugging",
+        "hyphen boundary",
+        "Out of scope",
+    ):
+        assert stated in md, f"spec body lost at ingest: {stated!r}"
+
+
+def test_ac_prefix_is_not_duplicated():
+    """#855 (minor): rendered ACs read '**AC#1:** AC#1: ...'."""
+    md = ingest(SLUG_SPEC).to_markdown()
+    assert "**AC#1:** AC#1:" not in md
+    assert '**AC#1:** GET /healthz returns HTTP 200 and exactly {"status":"ok"}' in md
+
+
+def test_title_falls_back_to_first_heading_when_no_h1():
+    """#855 (minor): a spec whose top heading is '##' became 'Untitled spec'."""
+    assert ingest(SLUG_SPEC).title == "Endpoints"
+
+
+def test_rendered_spec_reparses_to_the_same_criteria():
+    """Carrying the body must not make the canonical spec re-parse differently."""
+    spec = ingest(SLUG_SPEC)
+    assert [c.text for c in parse_markdown(spec.to_markdown()).criteria] == [
+        c.text for c in spec.criteria
+    ]
+
+
+def test_unrepresented_sections_names_what_was_not_turned_into_acs():
+    from spec_sources import unrepresented_sections  # noqa: PLC0415
+
+    sections = unrepresented_sections(ingest(SLUG_SPEC).to_markdown())
+    assert sections == ["Endpoints", "Slug rules", "Out of scope"]
+
+
 # ── gherkin ────────────────────────────────────────────────────────────
 
 GHERKIN = """\

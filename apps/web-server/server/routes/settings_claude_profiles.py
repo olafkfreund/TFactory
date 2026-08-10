@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 
 from fastapi import APIRouter
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from .settings import (
     _sync_env_token_for_active_profile,
@@ -49,7 +49,7 @@ class ClaudeProfile(BaseModel):
     name: str
     email: str | None = None
     # Frontend expects oauthToken, backend stored token - alias for backward compat
-    oauthToken: str | None = Field(None, alias="token")
+    oauthToken: str | None = Field(None, alias="token", repr=False)
     # Frontend expects isDefault, backend stored isActive - alias for backward compat
     isDefault: bool = Field(False, alias="isActive")
 
@@ -406,7 +406,7 @@ async def complete_claude_profile_oauth(profile_id: str, body: dict):
 
 
 class SetTokenRequest(BaseModel):
-    token: str
+    token: SecretStr
     email: str | None = None
 
 
@@ -416,18 +416,19 @@ async def set_claude_profile_token(profile_id: str, request: SetTokenRequest):
     try:
         logger = logging.getLogger(__name__)
         # Validate token
-        if not request.token or not request.token.strip():
+        secret = request.token.get_secret_value() if request.token else ""
+        if not secret.strip():
             return {"success": False, "error": "Token cannot be empty"}
 
         # Validate token length (Claude tokens are typically > 20 characters)
-        if len(request.token) < 20:
+        if len(secret) < 20:
             return {
                 "success": False,
                 "error": "Token appears invalid. Must be at least 20 characters.",
             }
 
         # Validate token format (Claude session tokens start with 'sess-' or API keys with 'sk-ant-')
-        token = request.token.strip()
+        token = secret.strip()
         if not (token.startswith("sess-") or token.startswith("sk-ant-")):
             return {
                 "success": False,

@@ -97,38 +97,6 @@ async def send_to_user(user_id: str, event_type: str, payload: dict):
         _unregister_client(ws)
 
 
-async def send_to_org(org_id: str, event_type: str, payload: dict):
-    """Send an event only to members of a specific organization.
-
-    Falls back to broadcast for legacy (non-JWT) connections so they
-    aren't excluded.
-    """
-    message = json.dumps({"type": event_type, "payload": payload})
-    disconnected: list[WebSocket] = []
-
-    for ws, client in list(_clients.items()):
-        # Send to: org members, or legacy clients (no user_id)
-        if client.user_id is None or org_id in client.org_ids:
-            try:
-                await ws.send_text(message)
-            except Exception:
-                disconnected.append(ws)
-
-    for ws in disconnected:
-        _unregister_client(ws)
-
-
-def update_client_orgs(user_id: str, org_ids: set[str]) -> None:
-    """Update the org memberships for all connections of a given user.
-
-    Call this after the user's org memberships change so routing
-    reflects the new state.
-    """
-    for client in _clients.values():
-        if client.user_id == user_id:
-            client.org_ids = org_ids
-
-
 # ---------------------------------------------------------------------------
 # WebSocket endpoint
 # ---------------------------------------------------------------------------
@@ -195,12 +163,6 @@ async def emit_task_progress(task_id: str, progress: dict):
     await broadcast_event("task:progress", {"taskId": task_id, **progress})
 
 
-async def emit_task_error(task_id: str, error: str):
-    import logging
-    logging.getLogger(__name__).info(f"[WebSocket] Emitting task:error - taskId: {task_id}, error: {error[:100]}...")
-    await broadcast_event("task:error", {"taskId": task_id, "error": error})
-
-
 async def emit_task_status(task_id: str, status: str, review_reason: str | None = None):
     import logging
     payload = {"taskId": task_id, "status": status}
@@ -230,16 +192,8 @@ async def emit_task_update(task_id: str, task_data: dict):
     await broadcast_event("task:update", {"taskId": task_id, **task_data})
 
 
-async def emit_changelog_progress(project_id: str, progress: dict):
-    await broadcast_event("changelog:progress", {"projectId": project_id, **progress})
-
-
 async def emit_insights_chunk(project_id: str, chunk: str):
     await broadcast_event("insights:chunk", {"projectId": project_id, "chunk": chunk})
-
-
-async def emit_insights_status(project_id: str, status: str):
-    await broadcast_event("insights:status", {"projectId": project_id, "status": status})
 
 
 async def emit_profile_switch(task_id: str, switch_data: dict):

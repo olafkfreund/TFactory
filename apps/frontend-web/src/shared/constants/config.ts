@@ -47,8 +47,6 @@ export const DEFAULT_APP_SETTINGS = {
   betaUpdates: false,
   // Language preference (default to English)
   language: 'en' as const,
-  // BMad Method session segmentation (disabled by default - opt-in feature)
-  bmadSessionSegmentation: false
 };
 
 // ============================================

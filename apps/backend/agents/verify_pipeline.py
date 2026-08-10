@@ -42,6 +42,9 @@ import os
 import sys
 from pathlib import Path
 
+from agents.utils import repair_linked_worktree
+from tools.runners.job_tracing import init_agent_tracing
+
 _log = logging.getLogger(__name__)
 
 # Spec statuses that mean the verify produced a real verdict (the Triager ran to
@@ -200,6 +203,18 @@ def _read_traceability(spec_dir: Path) -> list[dict[str, object]] | None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # First, before argument parsing: this is the only thing in the process that
+    # can make the run's trace reach the verify (Factory#638). ``verify_dispatch``
+    # puts TRACEPARENT + the OTLP config on this Job; this opens the one span
+    # that continues it, and everything the pipeline starts below is a child of
+    # it. No-op when TRACEPARENT is unset (the in-pod path, local CLI runs), and
+    # it never raises — tracing is not allowed to be why a verify fails.
+    #
+    # Before argparse rather than after, so a Job that dies on a bad argument
+    # still reports a span: an exit is a fact about the run, and the span is
+    # flushed from an atexit hook on a bounded budget either way.
+    init_agent_tracing()
+
     parser = argparse.ArgumentParser(
         prog="agents.verify_pipeline",
         description="Run the TFactory evaluate→triage verify pipeline for one spec.",
@@ -221,6 +236,14 @@ def main(argv: list[str] | None = None) -> int:
 
     spec_dir = Path(args.spec)
     project_dir = Path(args.project)
+
+    # Before ANY stage touches git: the spec tree was created as a linked
+    # worktree on the control plane and its gitdir pointer still names the
+    # control-plane path, which does not exist under this Job's /work mount
+    # (#868). Nothing has run git yet, so this is the one place a single repair
+    # fixes every downstream caller (git_writer, dependency_review, planner,
+    # agents.utils) at once.
+    repair_linked_worktree(project_dir)
 
     ok, final_status = asyncio.run(
         run_verify_pipeline(spec_dir, project_dir, mode=args.mode)

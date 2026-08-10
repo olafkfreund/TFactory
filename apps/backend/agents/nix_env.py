@@ -19,18 +19,26 @@ runtime — the lane runs as a k8s Job using the tfactory-runner-nix image).
 from __future__ import annotations
 
 import contextlib
+import itertools
 import json
 import logging
+import os
 import shutil
+import tempfile
+import threading
+import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from agents.preflight_static import package_root_rel_paths, requirements_files
 from agents.task_contract import read_task_contract
 from tools.runners.docker_runner import DockerRunResult
 from tools.runners.nix_provisioner import (
     Manifest,
     generate_flake,
+    generate_lock,
     nix_develop_argv,
 )
 
@@ -42,6 +50,7 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 
 _FLAKE = "flake.nix"
+_FLAKE_LOCK = "flake.lock"
 
 
 @dataclass
@@ -95,11 +104,40 @@ def detect_serve_command(
     return None
 
 
+def nix_in_image() -> bool:
+    """True when nix Jobs should source ``/nix`` from their image, not the PVC.
+
+    The warm ``tfactory-nix-store`` PVC is RWO ``local-path``: only ONE pod can
+    mount it at a time, so the evaluator's concurrent per-test / stability-sample
+    / mutation Jobs serialise on a single mount (#623). Its PV is also
+    nodeAffinity-pinned to whichever node first consumed it — today that is the
+    same node as ``tfactory-data``, which is luck, not design: if it ever
+    re-provisions onto the other node, every Job mounting both RWO claims becomes
+    unschedulable outright (no node satisfies both affinities). That is exactly
+    what happened to AIFactory (Factory#253, AIFactory#830).
+
+    Dropping the mount is not a correctness trade: ``build_job_manifest``'s seed
+    initContainer copies the image's own ``/nix`` into the PVC, so the image IS
+    the store the warm cache is seeded from. The cost is the closures realised
+    *during* a task — re-fetched from the binary cache per Job instead of
+    persisting. Speed for concurrency.
+
+    Requires the build-user caps (#660): a cold ``/nix`` substitutes most paths
+    but still builds the shell env locally, which needs SETUID/SETGID/KILL.
+    Proven on the factory cluster — a provisioner-generated flake, no nix-store
+    PVC, resolved from the image + cache.nixos.org and ran the lane green.
+    """
+    return os.environ.get("TFACTORY_NIX_IN_IMAGE", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
 def nix_runner_from_env() -> KubeJobSandbox | None:
     """Build a KubeJobSandbox from the deployment's TFACTORY_* env, or None when
     the Nix-lane sandbox isn't configured (so callers degrade gracefully)."""
-    import os
-
     image = os.environ.get("TFACTORY_NIX_RUNNER_IMAGE")
     if not image:
         return None
@@ -110,9 +148,25 @@ def nix_runner_from_env() -> KubeJobSandbox | None:
     # RFC-0016 #197: opt-in warm /nix/store PVC so the toolchain closure persists
     # across Nix lane Jobs instead of cold-fetching each run. Absent → no mount,
     # so nothing breaks if the PVC is not provisioned.
-    nix_store_pvc = os.environ.get("TFACTORY_NIX_STORE_PVC") or None
+    # #623: skipped entirely when nix comes from the image — the PVC is RWO, so
+    # it is also the mutex the evaluator's concurrent Jobs serialise on. See
+    # nix_in_image.
+    nix_store_pvc = (
+        None if nix_in_image() else (os.environ.get("TFACTORY_NIX_STORE_PVC") or None)
+    )
+    # #623: the data root (workspaces PVC) is NOT always mounted at the control
+    # plane's default /home/nonroot/.tfactory — the verify Job mounts it at /work.
+    # The sandbox derives each Job's co-mount subPath via pvc_subpath(workdir,
+    # data_root); if data_root is wrong, pvc_subpath returns None and the nested
+    # Nix Job co-mounts nothing (empty /work → the SUT is unimportable → every AC
+    # rejects). TFACTORY_DATA_ROOT lets the enclosing context declare where the
+    # PVC actually is; absent → the KubeJobSandbox default is unchanged.
+    kw: dict[str, str] = {}
+    data_root = os.environ.get("TFACTORY_DATA_ROOT")
+    if data_root:
+        kw["data_root"] = data_root
     return KubeJobSandbox(
-        image, namespace=ns, repo_pvc=pvc, nix_store_pvc=nix_store_pvc
+        image, namespace=ns, repo_pvc=pvc, nix_store_pvc=nix_store_pvc, **kw
     )
 
 
@@ -120,10 +174,40 @@ _JOB_SCRIPT = "_tf_nix_job.sh"
 _E2E_STAGE = ".tf_e2e"  # staged generated browser specs (in the worktree)
 _PW_CONFIG = "_tf_pw.config.ts"
 _SHOTS = "shots"
+# Where the Job pip-installs the SUT's deps (#764). S108 is about host temp
+# files; this is a path INSIDE the Job container, chosen because /tmp is the one
+# location its non-root uid can write — the co-mounted /work is read-only to it.
+_DEPS_TARGET = "/tmp/tf_sut_deps"  # noqa: S108
 _PYTEST_STAGE = ".tf_pytest"  # staged junit/coverage the Nix Job writes back
 _GOTEST_STAGE = ".tf_gotest"  # staged junit/coverage the Go Nix Job writes back
+
+
+def _in_job_pythonpath(scratch: Path, mount: str) -> str:
+    """PYTHONPATH for the in-Job pytest run, as a colon-joined string.
+
+    `<mount>/src` + `<mount>` cover flat and src-layout repos and miss a
+    monorepo entirely, whose packages sit at e.g. `apps/web-server/server`.
+    Collection then fails before a single assertion runs and every acceptance
+    criterion reports an import error against correct code (#756).
+
+    Roots are discovered from the scratch copy the Job co-mounts, so a repo-
+    relative root maps 1:1 onto its in-Job path. The two historical entries stay,
+    last, so existing layouts behave exactly as before.
+    """
+    roots = [
+        f"{mount}/{rel}" if rel != "." else mount
+        for rel in package_root_rel_paths(scratch)
+    ]
+    roots += [p for p in (f"{mount}/src", mount) if p not in roots]
+    return ":".join(roots)
+
+
 _DEPLOY_STAGE = ".tf_deploy"  # generated deploy flake dir (co-mounted in the Job)
 _NIX_MOUNT = "/work"  # where KubeJobSandbox co-mounts the worktree in the Job
+
+# Emitted by the api-lane Job script when the self-served SUT never accepts a
+# connection — so a boot failure reads as infra, not a silent endpoint-test bug.
+_APP_NOT_HEALTHY_MARKER = "__TF_APP_NOT_HEALTHY__"
 
 # The deploy-lane tools we can run hermetically inside a per-task Nix Job (#597,
 # #603): ``tfsec`` + ``trivy`` are pure Go binaries (no insecure transitive deps),
@@ -132,33 +216,205 @@ _NIX_MOUNT = "/work"  # where KubeJobSandbox co-mounts the worktree in the Job
 # config`` = multi-framework misconfig gate (``--skip-check-update`` = embedded
 # rego checks), ``opentofu`` = the ``tofu init``/``validate``/``plan`` rung
 # (init -backend=false installs any declared providers via the Job's network).
+# config`` = multi-framework misconfig gate (``--skip-check-update`` = embedded
+# rego checks), ``opentofu`` = the ``tofu init``/``validate``/``plan`` rung
+# (init -backend=false installs any declared providers via the Job's network).
 # ``checkov`` was dropped (#603): in the pinned nixpkgs it pulls
 # ``python3.13-ecdsa`` marked insecure (CVE-2024-23342), so ``pkgs.checkov`` refuses
 # to evaluate and aborts the whole ``nix develop`` (proven live 2026-06-30). Unfree
-# ``terraform`` and ``kubectl apply --dry-run=server`` (live cluster API + RBAC)
-# stay an honest ``not_run``. A tool absent from this set is never a silent pass —
-# ``run_deploy_lane``'s ``tool_available`` records it as ``not_run``.
-_DEPLOY_NIX_TOOLS: tuple[str, ...] = ("tfsec", "trivy", "opentofu")
+# ``terraform`` stays an honest ``not_run``. ``kubectl`` (for the VAL-2
+# ``apply --dry-run=server`` rung, #603) is included but GATED at dispatch on the
+# deploy dry-run SA being configured (:func:`run_deploy_lane_via_nix`): without
+# the SA + RBAC it is dropped so the step stays an honest ``not_run`` rather than
+# a dry-run that fails for want of cluster auth. A tool absent from the runnable
+# set is never a silent pass — ``run_deploy_lane``'s ``tool_available`` records
+# it as ``not_run``.
+_DEPLOY_NIX_TOOLS: tuple[str, ...] = ("tfsec", "trivy", "opentofu", "kubectl")
+
+# Env naming the ServiceAccount that grants the deploy Job in-cluster RBAC for
+# ``kubectl create --dry-run=server`` (#603). Unset → the kubectl rung stays an
+# honest not_run (no SA is attached and kubectl is dropped from the runnable set).
+_DEPLOY_DRYRUN_SA_ENV = "TFACTORY_DEPLOY_DRYRUN_SA"
+
+# Gates Nix-lane Job dispatch within a verify process. run() offloads to threads
+# (#620), so a threading primitive is the right choice — but WHICH one depends on
+# the store regime:
+#   * shared warm-store PVC: it is RWO, so only one Job can co-mount it at a time
+#     (#623) — a strict Lock serialises them.
+#   * nix-in-image (nix_in_image()): each Job's /nix is image-local, there is NO
+#     shared mount to contend for, and that mode exists precisely to buy "speed
+#     for concurrency" (see nix_in_image.__doc__). A strict Lock here re-serialises
+#     the very fan-out (S x (3 + mutants) Jobs) in-image was meant to parallelise —
+#     the single biggest reason a real verify run drags on. Use a BoundedSemaphore
+#     so the Jobs run concurrently under a ceiling, rather than one at a time.
+_NIX_JOB_LOCK = threading.Lock()
 
 
-def run_pytest_lane_via_nix(
+def _nix_job_concurrency() -> int:
+    """Max concurrent nix Jobs when the store is image-local (no shared PVC).
+
+    ponytail: fixed ceiling (env-overridable), not autoscaled — a single-node k3d
+    can't absorb an unbounded fan-out of 500 MB-image Job pods at once. Raise
+    TFACTORY_NIX_JOB_CONCURRENCY (or wire it to node count) if throughput matters.
+    """
+    try:
+        return max(1, int(os.getenv("TFACTORY_NIX_JOB_CONCURRENCY", "4")))
+    except ValueError:
+        return 4
+
+
+# Concurrency gate for the image-local regime. Sized once at import; the strict
+# _NIX_JOB_LOCK still guards the shared-PVC path.
+_NIX_JOB_SEM = threading.BoundedSemaphore(_nix_job_concurrency())
+
+
+def _nix_dispatch_gate() -> contextlib.AbstractContextManager[bool]:
+    """The right dispatch gate for the current store regime (see _NIX_JOB_LOCK).
+
+    Both a Lock and a BoundedSemaphore are ``with``-usable context managers, so
+    the call site treats them uniformly.
+    """
+    return _NIX_JOB_SEM if nix_in_image() else _NIX_JOB_LOCK
+
+
+def _build_pytest_cmd(mount: str, name: str, reruns: int) -> str:
+    """The in-shell pytest command for the Job script.
+
+    ``reruns<=1`` is the byte-identical single run. ``reruns>1`` (#776) repeats the
+    SAME pytest in the ONE dev shell, each pass wrapped in a ``__PYTEST_RUN=<i>`` /
+    ``__PYTEST_EXIT=<code>`` pair so ``parse_pytest_exits`` recovers per-run codes —
+    paying the per-Job setup (re-lock, pip, ``nix develop`` entry) once, not N times.
+    """
+    one = (
+        f"python -m pytest tests/{name} -p no:cacheprovider -q "
+        f"--junitxml={mount}/{_PYTEST_STAGE}/junit.xml "
+        f"--cov-report=xml:{mount}/{_PYTEST_STAGE}/coverage.xml --cov=. 2>&1; "
+        "echo __PYTEST_EXIT=$?"
+    )
+    if reruns <= 1:
+        return f"cd {mount} && {one}"
+    loop = "".join(f"echo __PYTEST_RUN={i}\n{one}\n" for i in range(1, reruns + 1))
+    return f"cd {mount}\n{loop}"
+
+
+def _stage_mutants(mutant_files: list[Path] | None, tests_dir: Path) -> list[str]:
+    """Copy each mutation-candidate test into the Job's ``tests/`` dir; return the
+    basenames that staged successfully (#776 Stage 1b). Best-effort per file so a
+    single unwritable candidate never takes the whole batch down.
+    """
+    names: list[str] = []
+    for mf in mutant_files or []:
+        mn = Path(mf).name
+        with contextlib.suppress(OSError):
+            shutil.copy2(mf, tests_dir / mn)
+            names.append(mn)
+    return names
+
+
+def _build_mutants_cmd(mutant_names: list[str]) -> str:
+    """#776 Stage 1b: run each staged mutant test ONCE in the same dev shell as
+    the stability batch, wrapping each in a ``__MUT_RUN=<k>`` / ``__MUT_EXIT=<code>``
+    pair so ``parse_mut_exits`` recovers per-mutant codes.
+
+    A SEPARATE exit marker (``__MUT_EXIT``, not ``__PYTEST_EXIT``) keeps
+    ``parse_pytest_exits`` — which reads the stability samples — from mistaking a
+    mutant's exit code for a stability run. Mutants only need the exit code
+    (KILLED = non-zero), so no junit/coverage. Assumes the shell already ``cd``'d
+    into the mount (the stability command does).
+    """
+    parts = [
+        f"echo __MUT_RUN={k}\n"
+        f"python -m pytest tests/{mn} -p no:cacheprovider -q 2>&1; "
+        "echo __MUT_EXIT=$?\n"
+        for k, mn in enumerate(mutant_names, start=1)
+    ]
+    return "".join(parts)
+
+
+# Where the junit/coverage copies live. They are copied OFF the PVC scratch so
+# the caller can read them after this function returns (the scratch is gone by
+# then) — a deliberate contract with no matching "and then the caller drops
+# them", so one directory accumulated per dispatched test for the life of the
+# pod (#997). The regression lane makes it worse in proportion to corpus size.
+# Collecting them under one root lets each call drop what earlier runs left.
+_JUNIT_ARTIFACTS_ROOT = Path(tempfile.gettempdir()) / "tf-nixjunit"
+# ponytail: age-based, because no call site owns the lifetime today. Well past
+# any lane timeout (900s) plus its aggregation, so a run in flight never loses
+# its files. If a caller ever does own the lifetime, pass the dir in and delete
+# this.
+_JUNIT_ARTIFACTS_MAX_AGE_S = 6 * 3600
+
+
+def _sweep_stale_junit_artifacts(max_age_s: float = _JUNIT_ARTIFACTS_MAX_AGE_S) -> int:
+    """Drop artifact dirs older than *max_age_s*. Returns how many were removed.
+
+    Only touches directories under our own root, and only ones whose mtime is
+    past the cutoff — a dir a concurrent call is still filling is younger than
+    the cutoff by construction, so this can never pull files out from under a
+    live run.
+    """
+    if not _JUNIT_ARTIFACTS_ROOT.is_dir():
+        return 0
+    cutoff = time.time() - max_age_s
+    removed = 0
+    for entry in _JUNIT_ARTIFACTS_ROOT.iterdir():
+        try:
+            if entry.is_dir() and entry.stat().st_mtime < cutoff:
+                shutil.rmtree(entry, ignore_errors=True)
+                removed += 1
+        except OSError:  # raced with another sweep; it is gone either way
+            continue
+    if removed:
+        _log.info("run_pytest_lane_via_nix: swept %d stale artifact dir(s)", removed)
+    return removed
+
+
+def _new_junit_artifacts_dir() -> Path:
+    """A fresh dir for one run's junit/coverage, sweeping stale ones on the way in."""
+    _sweep_stale_junit_artifacts()
+    _JUNIT_ARTIFACTS_ROOT.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix="run-", dir=_JUNIT_ARTIFACTS_ROOT))
+
+
+def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve knobs + one linear staging flow
     spec_dir: Path,
     project_dir: Path,
     test_file: Path,
     *,
     extra_env: dict[str, str] | None = None,
-    timeout: int = 300,
+    timeout: int = 900,
+    serve_command: str | None = None,
+    serve_port: int | None = None,
+    reruns: int = 1,
+    mutant_files: list[Path] | None = None,
 ) -> DockerRunResult | None:
     """Run ONE pytest file inside the per-task Nix dev shell as a k8s Job.
 
+    ``reruns`` (>1, #776) runs the SAME pytest ``reruns`` times inside the ONE
+    dev shell, emitting a ``__PYTEST_RUN=<i>`` / ``__PYTEST_EXIT=<code>`` pair per
+    pass. This is the stability batch: the ~minutes of per-Job cost (re-lock, pip
+    install the SUT, ``nix develop`` entry) is paid ONCE instead of once per
+    stability sample. ``reruns=1`` is byte-identical to the pre-#776 single run.
+    Callers that need the per-run codes parse them with ``parse_pytest_exits``.
+
+    When ``serve_command`` is given (the api lane with no external target, #612),
+    the Job first boots the SUT in the SAME pod at ``127.0.0.1:serve_port``,
+    waits for it to accept a connection, and exports ``TFACTORY_TARGET_URL`` /
+    ``APP_URL`` before pytest — so an endpoint test reaches the running app
+    instead of raising ``KeyError`` on an unset URL. Mirrors the browser lane's
+    in-Job serve (``build_browser_job_command``). If the app never comes up, a
+    ``_APP_NOT_HEALTHY_MARKER`` line is emitted and logged so the failure reads
+    as infra, not an AC failure.
+
     The toolchain (python + pytest + pytest-cov) comes from the materialized flake
     (declared in the contract ``environment``), not the image — so the verify env
-    matches the build env with no drift. The worktree is co-mounted at
-    ``_NIX_MOUNT``; the test is staged into ``tests/`` there (the Job sees the real
-    worktree, not a host scratch copy, so ``from <module> import ...`` resolves the
-    same way the DockerRunner path does), pytest writes junit + coverage into a
-    staging dir on the worktree, and we collect them back as a DockerRunResult-
-    shaped result.
+    matches the build env with no drift. To keep concurrent runs from clobbering
+    the shared project checkout, the SUT is copied into a per-run scratch dir under
+    the workspaces PVC (#623); the flake + the specific test are materialized there,
+    the scratch is co-mounted at ``_NIX_MOUNT`` so ``from <module> import ...``
+    resolves like the DockerRunner path, pytest writes junit + coverage into a
+    staging dir on the scratch, and we copy those back (off the scratch) as a
+    DockerRunResult-shaped result before removing the scratch.
 
     Returns None when there's no nix environment or the sandbox isn't configured,
     so the caller falls back to the host/docker runner. Mirrors the staging +
@@ -166,8 +422,7 @@ def run_pytest_lane_via_nix(
     """
     mount = _NIX_MOUNT
     env = environment_from_contract(spec_dir)
-    plan = materialize_flake(spec_dir, project_dir, env=env)
-    if plan is None:
+    if not is_nix_environment(env):
         return None
     # Consume the engine purely through the unified seam (#426): this lane works
     # with any ExecutionSandbox the factory returns, not just KubeJobSandbox.
@@ -176,53 +431,181 @@ def run_pytest_lane_via_nix(
         _log.info("run_pytest_lane_via_nix: TFACTORY_NIX_RUNNER_IMAGE unset; skipping")
         return None
 
-    pd = Path(project_dir)
+    # #623: isolate every run in a per-run scratch COPY of the checkout, instead of
+    # mutating the shared project checkout in place. All specs for a project share
+    # ONE checkout, and each run writes flake.nix + a job script + a staging dir
+    # into it; overlapping specs/mutation runs clobber each other and flake a
+    # passing test to consistent_fail (proven: the same test passes in isolation
+    # but rejects in-pipeline). The scratch is a sibling under the workspaces PVC
+    # (so the Job can co-mount it by subPath) and is removed after the run — the
+    # same isolation the docker path gets from _stage_sut_into_scratch.
+    src = Path(project_dir)
+    scratch = src.parent / f"_nixrun-{uuid.uuid4().hex[:12]}"
     name = Path(test_file).name
-    tests_dir = pd / "tests"
-    tests_dir.mkdir(exist_ok=True)
-    staged_test = tests_dir / name
-    # Stage the specific (generated or mutated) test into the worktree's tests/
-    # dir so the co-mounted Job runs THAT file. The SUT already lives in the
-    # worktree, so unlike the host/docker path we don't copy the whole project.
-    if Path(test_file).resolve() != staged_test.resolve():
-        shutil.copy2(test_file, staged_test)
-    stage = pd / _PYTEST_STAGE
-    shutil.rmtree(stage, ignore_errors=True)
-    stage.mkdir(parents=True, exist_ok=True)
-    # The Job runs as a non-root uid against the co-mounted worktree; make the
-    # staging dir writable so pytest can drop junit/coverage there.
-    with contextlib.suppress(OSError):
-        stage.chmod(0o777)
-
-    # Inject seed/credentials the host/docker path would set, exported in-shell so
-    # the test process inherits them (PYTHONHASHSEED, TFACTORY_TARGET_URL, ...).
-    exports = "".join(
-        f"export {k}={_shquote(str(v))}\n" for k, v in (extra_env or {}).items()
-    )
-    pytest_cmd = (
-        f"cd {mount} && "
-        f"python -m pytest tests/{name} -p no:cacheprovider -q "
-        f"--junitxml={mount}/{_PYTEST_STAGE}/junit.xml "
-        f"--cov-report=xml:{mount}/{_PYTEST_STAGE}/coverage.xml --cov=. 2>&1; "
-        "echo __PYTEST_EXIT=$?"
-    )
-    (pd / _JOB_SCRIPT).write_text(
-        "#!/usr/bin/env bash\nset +e\n" + exports + pytest_cmd + "\n",
-        encoding="utf-8",
-    )
-    job_cmd = f"nix develop path:{mount}#default --command bash {mount}/{_JOB_SCRIPT}"
     try:
-        res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)
-    finally:
-        (pd / _JOB_SCRIPT).unlink(missing_ok=True)
-        staged_test.unlink(missing_ok=True)
+        # Copy the SUT into the scratch (skip .git + any prior lane artifacts).
+        shutil.copytree(
+            src,
+            scratch,
+            ignore=shutil.ignore_patterns(
+                ".git",
+                _PYTEST_STAGE,
+                _GOTEST_STAGE,
+                _E2E_STAGE,
+                _DEPLOY_STAGE,
+                _JOB_SCRIPT,
+            ),
+            dirs_exist_ok=True,
+        )
+        plan = materialize_flake(spec_dir, scratch, env=env)
+        if plan is None:
+            return None
+        pd = scratch
+        tests_dir = pd / "tests"
+        tests_dir.mkdir(exist_ok=True)
+        staged_test = tests_dir / name
+        # Stage the specific (generated or mutated) test into the scratch's tests/
+        # dir so the co-mounted Job runs THAT file.
+        if Path(test_file).resolve() != staged_test.resolve():
+            shutil.copy2(test_file, staged_test)
+        # #776 Stage 1b: also stage the subtask's mutation-candidate test variants
+        # into tests/ so the SAME Job that runs the stability batch also runs each
+        # mutant once — folding the ``M`` per-candidate mutation Jobs into this one.
+        # The stability run below targets ``tests/<name>`` explicitly, so these
+        # extra files are never collected by it.
+        mutant_names = _stage_mutants(mutant_files, tests_dir)
+        stage = pd / _PYTEST_STAGE
+        stage.mkdir(parents=True, exist_ok=True)
+        # The Job runs as a non-root uid against the co-mounted scratch; make the
+        # staging dir writable so pytest can drop junit/coverage there.
+        with contextlib.suppress(OSError):
+            stage.chmod(0o777)
 
-    code = _parse_pytest_exit(res.stdout)
-    junit = stage / "junit.xml"
-    cov = stage / "coverage.xml"
+        # Inject seed/credentials the host/docker path would set, exported in-shell
+        # so the test process inherits them (PYTHONHASHSEED, TFACTORY_TARGET_URL...).
+        exports = "".join(
+            f"export {k}={_shquote(str(v))}\n" for k, v in (extra_env or {}).items()
+        )
+        # src-layout: make ``<work>/src`` (and ``<work>``) importable so
+        # ``from <pkg> import ...`` resolves inside the hermetic Nix Job — the host
+        # runner does the same (evaluator._run_pytest_on_host). Without it a
+        # ``src/<pkg>/`` package fails at collection and every AC shows as an error
+        # rather than its real pass/fail. Prepended to any PYTHONPATH above (#615).
+        # Only prepend the pip target when there is something to install, so a
+        # repo with no requirements.txt gets a byte-identical export.
+        _reqs = requirements_files(scratch)
+        _prefix = f"{_DEPS_TARGET}:" if _reqs else ""
+        srcpath = (
+            f'export PYTHONPATH="{_prefix}{_in_job_pythonpath(scratch, mount)}'
+            f'${{PYTHONPATH:+:$PYTHONPATH}}"\n'
+        )
+        # #764: install the SUT's own requirements into the Job. The flake's
+        # curated PyPI->nixpkgs allowlist can never be complete, and a repo that
+        # declares its deps only in requirements.txt gets nothing from it, so a
+        # real app is unimportable and every AC comes back a collection error
+        # against correct code — the same failure #759 fixed on the host path.
+        # --target avoids ensurepip/venv questions in the nix interpreter, and
+        # /tmp is writable by the Job's non-root uid while the co-mounted /work
+        # is not. Best-effort per file (the script runs under `set +e`): one
+        # unresolvable pin must not take the rest down, and the roots on
+        # PYTHONPATH remain the fallback.
+        deps_prelude = "".join(
+            f"pip install -q --target {_DEPS_TARGET} -r "
+            f"{mount}/{req.relative_to(scratch).as_posix()} 2>&1 | tail -2\n"
+            for req in _reqs
+        )
+        # api lane self-serve (#612): boot the SUT in-Job at 127.0.0.1:port and
+        # export TFACTORY_TARGET_URL before pytest, so the endpoint test reaches
+        # the running app. Readiness = "accepts a connection" (curl WITHOUT -f):
+        # a bare FastAPI has no `/` route, so requiring a 2xx would hang a healthy
+        # app on its 404. ponytail: fixed 30s poll; raise only if slow apps show up.
+        serve_prelude = ""
+        if serve_command:
+            url = f"http://127.0.0.1:{serve_port}"
+            serve_prelude = (
+                f"export TFACTORY_TARGET_URL={url}\n"
+                f"export APP_URL={url}\n"
+                f"cd {mount}\n"
+                f"{serve_command} >/tmp/tf_app.log 2>&1 &\n"
+                f"for i in $(seq 1 30); do "
+                f"curl -sS -o /dev/null {url}/ >/dev/null 2>&1 && break; sleep 1; "
+                f"done\n"
+                f"curl -sS -o /dev/null {url}/ >/dev/null 2>&1 || "
+                f'echo "{_APP_NOT_HEALTHY_MARKER} SUT did not accept a connection '
+                f'on {url}; see /tmp/tf_app.log"\n'
+            )
+        pytest_cmd = _build_pytest_cmd(mount, name, reruns)
+        if mutant_names:
+            pytest_cmd = pytest_cmd + "\n" + _build_mutants_cmd(mutant_names)
+        (pd / _JOB_SCRIPT).write_text(
+            "#!/usr/bin/env bash\nset +e\n"
+            + exports
+            + srcpath
+            + deps_prelude
+            + serve_prelude
+            + pytest_cmd
+            + "\n",
+            encoding="utf-8",
+        )
+        job_cmd = (
+            f"nix develop path:{mount}#default --command bash {mount}/{_JOB_SCRIPT}"
+        )
+        # A per-task Nix build can fail transiently (the nixpkgs fetch can flake).
+        # Retry ONLY when pytest never emitted its exit marker (a build/setup
+        # failure before the test ran, not a genuine test failure) — so a real
+        # fail (e.g. a caught hardcode) is never masked.
+        attempts = 2
+        # Gate dispatch by store regime: a strict lock for the RWO shared PVC
+        # (co-mount contention, #623), a bounded semaphore for image-local /nix
+        # so the fan-out actually runs concurrently (see _NIX_JOB_LOCK).
+        with _nix_dispatch_gate():
+            res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)
+            for attempt in range(1, attempts):
+                if "__PYTEST_EXIT=" in (res.stdout or ""):
+                    break
+                _log.warning(
+                    "run_pytest_lane_via_nix: no pytest exit marker (nix build "
+                    "likely failed transiently); retry %d/%d. tail=%r",
+                    attempt + 1,
+                    attempts,
+                    (res.stdout or "")[-300:],
+                )
+                res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)
+
+        stdout = res.stdout or ""
+        app_unhealthy = bool(serve_command) and _APP_NOT_HEALTHY_MARKER in stdout
+        if app_unhealthy:
+            _log.warning(
+                "run_pytest_lane_via_nix: SUT never became healthy for %s — the "
+                "api test ran against a down app (infra, not an AC failure). "
+                "tail=%r",
+                Path(spec_dir).name,
+                stdout[-300:],
+            )
+            # The marker is echoed BEFORE pytest, so a long pytest traceback can
+            # push it out of check_stability's 500-char stdout_tail. Re-append it
+            # at the very end so the failure_kind classifier still sees it and
+            # buckets this as an infra not_run rather than an AC failure.
+            stdout += f"\n{_APP_NOT_HEALTHY_MARKER} (SUT boot failed)\n"
+
+        # Copy the small junit/coverage OFF the PVC scratch so the returned paths
+        # survive the scratch cleanup below (the caller reads them after we return).
+        out_dir = _new_junit_artifacts_dir()
+        junit = out_dir / "junit.xml"
+        cov = out_dir / "coverage.xml"
+        for produced, dest in (
+            (stage / "junit.xml", junit),
+            (stage / "coverage.xml", cov),
+        ):
+            if produced.is_file():
+                shutil.copy2(produced, dest)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+    code = _parse_pytest_exit(stdout)
     return DockerRunResult(
         returncode=code,
-        stdout=res.stdout or "",
+        stdout=stdout,
         stderr="",
         junit_xml_path=junit if junit.is_file() else None,
         coverage_xml_path=cov if cov.is_file() else None,
@@ -392,6 +775,62 @@ def _parse_pytest_exit(output: str | None) -> int:
     return _parse_exit_marker(output, "__PYTEST_EXIT=")
 
 
+def parse_pytest_exits(output: str | None) -> list[tuple[int, str]]:
+    """Recover per-run ``(exit_code, stdout_segment)`` pairs from a batched run.
+
+    The batched job script (#776) emits, per pass, a ``__PYTEST_RUN=<i>`` line,
+    the pytest output, then ``__PYTEST_EXIT=<code>``. Split on the RUN markers and
+    read each pass's own EXIT marker plus the text up to it. A pass whose EXIT
+    marker is missing (e.g. the shell died mid-run) counts as a failure (code 1),
+    mirroring ``_parse_exit_marker`` — never a false pass. With no RUN markers
+    (the ``reruns=1`` legacy shape) returns a single pair from the last EXIT
+    marker, so a plain single run round-trips unchanged.
+    """
+    lines = (output or "").splitlines()
+    run_idxs = [i for i, ln in enumerate(lines) if ln.startswith("__PYTEST_RUN=")]
+    if not run_idxs:
+        return [(_parse_pytest_exit(output), output or "")]
+    bounds = [*run_idxs, len(lines)]
+    runs: list[tuple[int, str]] = []
+    for start, stop in itertools.pairwise(bounds):
+        code = 1
+        body: list[str] = []
+        for ln in lines[start + 1 : stop]:
+            if ln.startswith("__PYTEST_EXIT="):
+                with contextlib.suppress(ValueError):
+                    code = int(ln.split("=", 1)[1])
+            else:
+                body.append(ln)
+        runs.append((code, "\n".join(body)))
+    return runs
+
+
+def parse_mut_exits(output: str | None) -> list[int]:
+    """Recover per-mutant exit codes from a batched run's ``__MUT_RUN=<k>`` /
+    ``__MUT_EXIT=<code>`` markers (#776 Stage 1b), in run order.
+
+    A mutant whose EXIT marker is missing (the shell died mid-run) counts as
+    code 1 — a failure, mirroring ``_parse_exit_marker``. The caller compares the
+    recovered count to the number of candidates and falls back to the
+    per-candidate mutation path when they don't match, so an incomplete batch
+    never yields a wrong mutation verdict. Empty list when no mutant ran.
+    """
+    lines = (output or "").splitlines()
+    run_idxs = [i for i, ln in enumerate(lines) if ln.startswith("__MUT_RUN=")]
+    if not run_idxs:
+        return []
+    bounds = [*run_idxs, len(lines)]
+    codes: list[int] = []
+    for start, stop in itertools.pairwise(bounds):
+        code = 1
+        for ln in lines[start + 1 : stop]:
+            if ln.startswith("__MUT_EXIT="):
+                with contextlib.suppress(ValueError):
+                    code = int(ln.split("=", 1)[1])
+        codes.append(code)
+    return codes
+
+
 def _slice_marked_segment(output: str, begin: str, end_prefix: str) -> str:
     """Return the text between a ``begin`` marker line and the next ``end_prefix``
     marker line — one deploy step's captured output. Best-effort: returns "" when
@@ -468,12 +907,32 @@ def run_deploy_lane_via_nix(  # noqa: PLR0913 - explicit keyword-only deploy-lan
         return None
 
     available = set(_DEPLOY_NIX_TOOLS)
+    # kubectl create --dry-run=server needs the cluster API + a scoped SA token.
+    # Without the SA configured (RBAC not deployed) keep the hermetic posture and
+    # drop kubectl so the rung stays an honest not_run — never a dry-run that
+    # fails for lack of cluster auth.
+    deploy_sa = os.environ.get(_DEPLOY_DRYRUN_SA_ENV)
+    if not deploy_sa:
+        available.discard("kubectl")
     planned = plan_deploy_steps(files, required_scans=required_scans)
     runnable = [s for s in planned if s.tool in available]
     if not runnable:
         # No deploy step is runnable in a hermetic Job; let the caller fall back
         # to the local runner (which produces the identical honest not_run block).
         return None
+
+    # When a kubectl server-dry-run will run, give THIS deploy Job the scoped SA
+    # token + API network (verify lanes stay token-less). The other scanners
+    # (tfsec/trivy/tofu) are unaffected — they don't touch the cluster. getattr:
+    # only the KubeJobSandbox carries with_manifest_kw; other ExecutionSandbox
+    # impls fall through unchanged.
+    _with_kw = getattr(sandbox, "with_manifest_kw", None)
+    if (
+        deploy_sa
+        and _with_kw is not None
+        and any(s.tool == "kubectl" for s in runnable)
+    ):
+        sandbox = _with_kw(service_account=deploy_sa, network_none=False)
 
     pd = Path(project_dir)
     mount = _NIX_MOUNT
@@ -812,7 +1271,14 @@ def materialize_flake(
     if repo_has_flake and not m.provisioning_generated:
         _log.info("nix_env: respecting repo-owned %s (manifest not generated)", _FLAKE)
     else:
-        flake_path.write_text(generate_flake(env), encoding="utf-8")
+        flake_path.write_text(
+            generate_flake(env, project_dir=project_dir), encoding="utf-8"
+        )
+        # #778: ship the lock too so each ephemeral verify Job reuses it instead of
+        # re-locking nixpkgs on every run. None for a non-default rev → nix locks it.
+        lock = generate_lock()
+        if lock is not None:
+            (Path(project_dir) / _FLAKE_LOCK).write_text(lock, encoding="utf-8")
         _log.info("nix_env: wrote generated %s for %s", _FLAKE, spec_dir.name)
 
     return NixPlan(

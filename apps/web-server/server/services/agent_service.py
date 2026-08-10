@@ -7,6 +7,7 @@ enabling task execution with real-time streaming of logs and progress.
 
 import asyncio
 import json
+import logging
 import os
 import re
 import shutil
@@ -42,7 +43,18 @@ class TaskPhase(str, Enum):
 
 
 def phase_to_status(phase: TaskPhase) -> str:
-    """Map execution phase to task status for kanban column placement."""
+    """Map execution phase to task status for kanban column placement.
+
+    The mapping below covers every TaskPhase member, so the fallback should
+    never fire for well-formed input. If it ever does (a future phase added
+    without updating this mapping, or a caller bypassing the TaskPhase type),
+    that's an unmapped phase silently becoming "in_progress" - which asserts
+    the task is actively being worked on when we actually don't know that.
+    The frontend's TaskStatus union is a closed 5-value enum with no
+    "unknown" column, so inventing a new status would make the task
+    disappear from the kanban board entirely; logging is the safe fix
+    (Factory#431).
+    """
     mapping = {
         TaskPhase.SPEC_CREATION: "in_progress",
         TaskPhase.PLANNING: "in_progress",
@@ -53,6 +65,11 @@ def phase_to_status(phase: TaskPhase) -> str:
         TaskPhase.COMPLETED: "human_review",
         TaskPhase.FAILED: "human_review",
     }
+    if phase not in mapping:
+        logging.getLogger(__name__).warning(
+            "phase_to_status: unmapped phase %r, defaulting to 'in_progress'",
+            phase,
+        )
     return mapping.get(phase, "in_progress")
 
 
@@ -744,9 +761,9 @@ class AgentService:
             # Update active profile
             data["activeProfileId"] = profile_id
 
-            # Write back with secure permissions
-            profiles_file.write_text(json.dumps(data, indent=2))
-            profiles_file.chmod(0o600)
+            # Write back with secure permissions (0600 from creation — #663)
+            from ..paths import write_secret_file
+            write_secret_file(profiles_file, json.dumps(data, indent=2))
 
             # Update env token to match active profile (if available)
             token = None
@@ -2381,6 +2398,87 @@ class AgentService:
         except OSError as e:
             logger.error(f"[AgentService] Failed to write skill_context.md: {e}")
 
+    def _author_spec_and_plan(
+        self,
+        spec_dir: Path,
+        *,
+        title: str,
+        description: str,
+        complexity: str | None,
+        approve: bool,
+    ) -> None:
+        """Deterministically write spec.md + test_plan.json for a task (#779).
+
+        Replaces the never-packaged Claude-driven ``runners/spec_runner.py``
+        subprocess (it was absent from the image, so the old path 500'd with
+        exit 2 before any planning). A "simple" task gets a single-subtask plan
+        (the proven fast-path shape); anything else is decomposed by the
+        deterministic, no-LLM planner_lib. When ``approve`` is set, marks the
+        plan reviewed so the coding phase (run.py --force) isn't gated on a
+        human this automated path can't reach.
+        """
+        import json
+
+        spec_dir.mkdir(parents=True, exist_ok=True)
+        spec_file = spec_dir / "spec.md"
+        if not spec_file.exists():
+            spec_file.write_text(f"# {title}\n\n{description}\n")
+
+        def _single_subtask_plan() -> dict:
+            return {
+                "feature": title,
+                "workflow_type": "feature",
+                "status": "in_progress",
+                "current_phase": "coding",
+                "phases": [
+                    {
+                        "phase": 1,
+                        "name": "Implementation",
+                        "subtasks": [
+                            {
+                                "id": "1.1",
+                                "description": (
+                                    f"{title}: {description}" if description else title
+                                ),
+                                "status": "pending",
+                            }
+                        ],
+                    }
+                ],
+            }
+
+        test_plan = spec_dir / "test_plan.json"
+        if complexity == "simple":
+            test_plan.write_text(json.dumps(_single_subtask_plan(), indent=2))
+        else:
+            # Deterministic, no-LLM decomposition of the spec we just wrote.
+            if str(self.backend_path) not in sys.path:
+                sys.path.insert(0, str(self.backend_path))
+            from planner_lib.main import generate_test_plan
+
+            generate_test_plan(spec_dir)
+            # planner_lib yields no phases without project context (fresh repo /
+            # no project_index.json). run.py needs at least one actionable
+            # subtask, so fall back to the single-subtask shape rather than
+            # handing it an empty plan that would no-op.
+            try:
+                if not json.loads(test_plan.read_text()).get("phases"):
+                    test_plan.write_text(json.dumps(_single_subtask_plan(), indent=2))
+            except (json.JSONDecodeError, OSError):
+                test_plan.write_text(json.dumps(_single_subtask_plan(), indent=2))
+
+        if approve:
+            (spec_dir / "review_state.json").write_text(
+                json.dumps(
+                    {
+                        "approved": True,
+                        "approved_by": "auto-inprocess",
+                        "approved_at": datetime.now().isoformat(),
+                    },
+                    indent=2,
+                )
+            )
+
     async def start_spec_creation(
         self,
         task_id: str,
@@ -2391,7 +2489,7 @@ class AgentService:
         auto_continue: bool = True,
         user_id: str = "",
     ) -> asyncio.subprocess.Process:
-        """Start spec creation for a task."""
+        """Create a task's spec + plan in-process, then start execution (#779)."""
         import logging
         logger = logging.getLogger(__name__)
         if task_id in self.running_tasks:
@@ -2426,31 +2524,40 @@ class AgentService:
                 except (json.JSONDecodeError, OSError) as e:
                     logger.warning(f"[AgentService] Failed to read task_metadata.json: {e}")
 
-        # Build command
+        # #779: the historical `runners/spec_runner.py` (a Claude-driven spec
+        # author) was never packaged into the image, so this path 500'd with
+        # exit 2 before any planning. Author a minimal spec.md from the
+        # title/description and derive the plan deterministically (planner_lib) —
+        # the same components the "simple" fast path and the live PARR handoff
+        # already use — then hand the ready spec to run.py below.
+        if spec_dir is None:
+            spec_dir = (
+                project_path / ".tfactory" / "specs" / safe_component(task_id.split(":", 1)[-1])
+            )
+        spec_id = spec_dir.name
+        self._author_spec_and_plan(
+            spec_dir,
+            title=title,
+            description=description,
+            complexity=complexity,
+            approve=should_auto_approve,
+        )
+        logger.info(
+            f"[AgentService] Authored spec + plan in-process for {task_id} "
+            f"(complexity={complexity or 'standard'}, auto_approve={should_auto_approve}, "
+            f"model={spec_phase_model or 'sonnet'})"
+        )
+
+        # Build command — run.py drives the real pipeline against the spec + plan
+        # we just wrote. --force bypasses the review gate when auto-approved.
         cmd = [
             sys.executable,
-            str(self.backend_path / "runners" / "spec_runner.py"),
-            "--task", f"{title}\n\n{description}",
+            str(self.backend_path / "run.py"),
+            "--spec", spec_id,
             "--project-dir", str(project_path),
         ]
-
-        # Pass spec phase model if configured (multi-model support)
-        if spec_phase_model:
-            cmd.extend(["--model", spec_phase_model])
-            logger.info(f"[AgentService] [Model: {spec_phase_model}] Starting spec creation for {task_id}")
-        else:
-            logger.info(f"[AgentService] [Model: sonnet] Starting spec creation for {task_id} (default)")
-
-        # Fix 1: Only auto-approve if task doesn't require manual review
         if should_auto_approve:
-            cmd.append("--auto-approve")
-
-        # Fix 4: Pass existing spec directory to prevent duplicate task creation
-        if spec_dir:
-            cmd.extend(["--spec-dir", str(spec_dir)])
-
-        if complexity:
-            cmd.extend(["--complexity", complexity])
+            cmd.append("--force")
 
         # Set environment — scrub ANTHROPIC_API_KEY so spawned subprocesses
         # can never silently bill the direct-API account (OAuth-only policy;

@@ -66,7 +66,7 @@ export function RegressionPanel({ projectId, fetchFn }: Props) {
           <span
             data-testid="rp-verdict"
             className={`inline-flex items-center gap-1 text-xs ${
-              summary.has_regressions ? 'text-red-400' : 'text-green-400'
+              summary.has_regressions ? 'text-destructive' : 'text-success'
             }`}
           >
             {summary.has_regressions ? (
@@ -87,7 +87,7 @@ export function RegressionPanel({ projectId, fetchFn }: Props) {
           <Loader2 className="h-3.5 w-3.5 animate-spin" /> loading…
         </div>
       )}
-      {error && <div className="text-xs text-red-400">{error}</div>}
+      {error && <div className="text-xs text-destructive">{error}</div>}
 
       {summary && !loading && !error && summary.runs.length === 0 && (
         <div data-testid="rp-empty" className="text-xs text-muted-foreground">

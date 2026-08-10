@@ -24,12 +24,17 @@ import pytest
 
 # Inherited prompts_pkg imports providers + SDK; pre-mock to stay offline.
 for _m in [
-    "claude_agent_sdk", "claude_agent_sdk.types",
-    "core.client", "phase_config", "providers.factory",
+    "claude_agent_sdk",
+    "claude_agent_sdk.types",
+    "core.client",
+    "phase_config",
+    "providers.factory",
 ]:
     sys.modules.setdefault(_m, MagicMock())
 
 from prompts_pkg.prompts import (  # noqa: E402
+    _build_changed_symbols_block,
+    _source_branch_changed_files,
     get_tfactory_planner_prompt,
     get_tfactory_planner_replan_prompt,
 )
@@ -156,6 +161,7 @@ def test_initial_raises_when_md_missing(
 ) -> None:
     """If planner.md is missing, FileNotFoundError surfaces clearly."""
     import prompts_pkg.prompts as mod
+
     monkeypatch.setattr(mod, "PROMPTS_DIR", tmp_path)  # empty dir
     with pytest.raises(FileNotFoundError, match="planner.md"):
         get_tfactory_planner_prompt(Path("/ws/x"), Path("/p"))
@@ -165,6 +171,7 @@ def test_replan_raises_when_md_missing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     import prompts_pkg.prompts as mod
+
     monkeypatch.setattr(mod, "PROMPTS_DIR", tmp_path)
     with pytest.raises(FileNotFoundError, match="planner_replan.md"):
         get_tfactory_planner_replan_prompt(Path("/ws/x"), Path("/p"))
@@ -276,17 +283,19 @@ def test_planner_prompt_catalog_block_shows_total_count(tmp_path: Path) -> None:
 
     tests = []
     for i in range(3):
-        tests.append({
-            "test_id": f"tc-{i}",
-            "test_file": f"tests/test_{i}.py",
-            "framework": "pytest",
-            "lane": "unit",
-            "language": "python",
-            "covers_acs": [f"AC#{i}"],
-            "generated_at": "2026-05-28T00:00:00Z",
-            "generated_by_task": "003",
-            "last_verdict": "accept",
-        })
+        tests.append(
+            {
+                "test_id": f"tc-{i}",
+                "test_file": f"tests/test_{i}.py",
+                "framework": "pytest",
+                "lane": "unit",
+                "language": "python",
+                "covers_acs": [f"AC#{i}"],
+                "generated_at": "2026-05-28T00:00:00Z",
+                "generated_by_task": "003",
+                "last_verdict": "accept",
+            }
+        )
     (spec_dir / "context" / "tests_catalog.json").write_text(
         json.dumps({"version": 1, "updated_at": "2026-05-28T00:00:00Z", "tests": tests})
     )
@@ -420,9 +429,324 @@ def test_full_prompt_includes_detected_language_block(tmp_path: Path) -> None:
     assert "framework: go-test" in p
 
 
+# =============================================================================
+# #696 — lane follows the deliverable, not repo-global markers
+# =============================================================================
+
+import json  # noqa: E402
+import subprocess  # noqa: E402
+
+
+def _git_repo_with_branch_diff(
+    tmp_path: Path, base_files: dict[str, str], branch_files: dict[str, str]
+) -> Path:
+    """Build a repo whose default branch has ``base_files`` and whose checked-out
+    (detached) HEAD adds ``branch_files`` — mirroring the spec-ingest checkout."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+
+    def _git(*args: str) -> None:
+        subprocess.run(["git", "-C", str(proj), *args], check=True, capture_output=True)
+
+    _git("init", "-b", "main")
+    _git("config", "user.email", "t@t")
+    _git("config", "user.name", "t")
+    for name, text in base_files.items():
+        p = proj / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text)
+    _git("add", "-A")
+    _git("commit", "-m", "base")
+    # Simulate the clone's remote-tracking default branch.
+    _git("update-ref", "refs/remotes/origin/main", "main")
+    for name, text in branch_files.items():
+        p = proj / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text)
+    _git("add", "-A")
+    _git("commit", "-m", "build")
+    # Detached HEAD, like _add_spec_worktree's detached worktree checkout.
+    _git("checkout", "--detach")
+    return proj
+
+
+def _spec_with_source_branch(tmp_path: Path, ac_text: str) -> Path:
+    spec_dir = _spec_with_ac(tmp_path, ac_text)
+    (spec_dir / "context" / "source.json").write_text(
+        json.dumps({"mode": "spec_ingest", "source_branch": "feat/build"})
+    )
+    return spec_dir
+
+
+def test_python_diff_wins_over_go_repo_markers(tmp_path: Path) -> None:
+    """#696 repro: go.mod repo + pure-Python source-branch diff → Python lane."""
+    proj = _git_repo_with_branch_diff(
+        tmp_path,
+        base_files={"go.mod": "module hello\n", "main.go": "package main\n"},
+        branch_files={
+            "helpers/roman.py": "def roman(n): ...\n",
+            "tests/test_roman.py": "def test_roman(): ...\n",
+        },
+    )
+    spec_dir = _spec_with_source_branch(tmp_path, "Deliver the helpers politely.")
+    block = _build_detected_language_block(spec_dir, proj)
+    assert "**python** project" in block
+    assert "language: python" in block
+    assert "source-branch diff" in block
+
+
+def test_go_diff_in_python_repo_selects_go(tmp_path: Path) -> None:
+    """Polyglot ladder reverse: pyproject repo + pure-Go diff → Go lane."""
+    proj = _git_repo_with_branch_diff(
+        tmp_path,
+        base_files={"pyproject.toml": "[project]\nname='x'\n"},
+        branch_files={"greet.go": "package main\n", "greet_test.go": "package main\n"},
+    )
+    spec_dir = _spec_with_source_branch(tmp_path, "Greet the user politely.")
+    block = _build_detected_language_block(spec_dir, proj)
+    assert "**go** project" in block
+    assert "language: go" in block
+
+
+def test_spec_named_py_files_win_over_mixed_manifests(tmp_path: Path) -> None:
+    """No branch diff, mixed go.mod+pyproject repo, AC names helpers/*.py → Python."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "go.mod").write_text("module hello\n")
+    (proj / "pyproject.toml").write_text("[project]\nname='x'\n")
+    spec_dir = _spec_with_ac(
+        tmp_path,
+        "## AC\n- AC#1: helpers/roman.py converts integers.\n"
+        "- AC#2: tests/test_roman.py passes.\n",
+    )
+    block = _build_detected_language_block(spec_dir, proj)
+    assert "**python** project" in block
+    assert "language: python" in block
+
+
+def test_diff_patch_fallback_selects_language(tmp_path: Path) -> None:
+    """No git checkout, but snapshotter diff.patch is pure Python → Python lane."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "go.mod").write_text("module hello\n")
+    spec_dir = _spec_with_ac(tmp_path, "Deliver the helpers politely.")
+    (spec_dir / "context" / "diff.patch").write_text(
+        "--- a/helpers/roman.py\n+++ b/helpers/roman.py\n"
+        "--- a/tests/test_roman.py\n+++ b/tests/test_roman.py\n"
+    )
+    block = _build_detected_language_block(spec_dir, proj)
+    assert "**python** project" in block
+
+
 def test_planner_body_offers_go_in_schema_and_registry() -> None:
     """planner.md now lists Go as a language option and go-test as a framework."""
     p = get_tfactory_planner_prompt(Path("/ws/x"), Path("/p"))
     assert "go" in p and "go-test" in p
     # the framework registry block enumerates the real go-test descriptor
     assert "go-test: language=go" in p
+
+
+# ── #737: symbols the build delivered ───────────────────────────────────
+#
+# Reproduces the real failure: the coder shipped a private `_is_safe_mcp_url_host`
+# while the planner tested an invented public `assert_safe_mcp_url`, so every
+# subtask was rejected by the import pre-flight until the replan budget ran out.
+
+
+def _spec_with_build(tmp_path: Path, source: str) -> tuple[Path, Path]:
+    """A spec whose diff.patch names one changed module, with that module on disk."""
+    spec_dir = _spec_with_ac(tmp_path, "Reject unsafe MCP URLs.")
+    (spec_dir / "context" / "diff.patch").write_text(
+        "--- a/server/routes/git.py\n+++ b/server/routes/git.py\n"
+    )
+    proj = tmp_path / "proj"
+    (proj / "server" / "routes").mkdir(parents=True)
+    (proj / "server" / "routes" / "git.py").write_text(source)
+    return spec_dir, proj
+
+
+def test_symbols_block_lists_what_was_built_not_what_was_specced(
+    tmp_path: Path,
+) -> None:
+    spec_dir, proj = _spec_with_build(
+        tmp_path,
+        "def _is_safe_mcp_url_host(url: str) -> bool:\n"
+        "    return True\n\n\n"
+        "class Health:\n"
+        "    def check(self) -> None: ...\n"
+        "    def __init__(self) -> None: ...\n",
+    )
+    block = _build_changed_symbols_block(spec_dir, proj)
+
+    # The private helper that actually exists must be offered as a target.
+    assert "`server/routes/git.py::_is_safe_mcp_url_host`" in block
+    assert "`server/routes/git.py::Health`" in block
+    assert "`server/routes/git.py::Health.check`" in block
+    # Dunders are noise, never a test target.
+    assert "__init__" not in block
+    # The invented name is absent — that is the whole point.
+    assert "assert_safe_mcp_url" not in block
+    # And it reaches the planner in both modes.
+    assert "_is_safe_mcp_url_host" in get_tfactory_planner_prompt(spec_dir, proj)
+    assert "_is_safe_mcp_url_host" in get_tfactory_planner_replan_prompt(spec_dir, proj)
+
+
+def test_symbols_block_empty_when_no_python_changed(tmp_path: Path) -> None:
+    """No signal → no block, so planner behaviour is unchanged (never a lie)."""
+    spec_dir = _spec_with_ac(tmp_path, "Ship it.")
+    (spec_dir / "context" / "diff.patch").write_text(
+        "--- a/main.go\n+++ b/main.go\n"
+        "--- a/tests/test_only.py\n+++ b/tests/test_only.py\n"
+    )
+    assert _build_changed_symbols_block(spec_dir, tmp_path / "proj") == ""
+
+
+def test_symbols_block_survives_unparseable_source(tmp_path: Path) -> None:
+    """A syntax error in the build must not take the whole planner down."""
+    spec_dir, proj = _spec_with_build(tmp_path, "def broken(:\n")
+    assert _build_changed_symbols_block(spec_dir, proj) == ""
+
+
+def test_base_is_the_branch_cut_from_not_the_default(tmp_path: Path) -> None:
+    """#737 follow-up: a build cut from `dev` must not report dev's lead over main.
+
+    Real topology: main, dev ahead of main, build branch off dev. Diffing against
+    origin/HEAD (main) reported every file dev had moved — on TFactory itself, 53
+    files instead of the 5 the build touched, which crowded the real target out
+    of the symbol list entirely.
+    """
+    proj = tmp_path / "repo"
+    proj.mkdir()
+
+    def _git(*args: str) -> None:
+        subprocess.run(  # noqa: S603
+            ["git", "-C", str(proj), *args],  # noqa: S607
+            check=True,
+            capture_output=True,
+        )
+
+    _git("init", "-b", "main", "--quiet")
+    _git("config", "user.email", "t@t")
+    _git("config", "user.name", "t")
+    (proj / "on_main.py").write_text("def from_main() -> None: ...\n")
+    _git("add", "-A")
+    _git("commit", "-qm", "main")
+
+    _git("checkout", "-q", "-b", "dev")
+    (proj / "on_dev.py").write_text("def from_dev() -> None: ...\n")
+    _git("add", "-A")
+    _git("commit", "-qm", "dev moves ahead")
+
+    _git("checkout", "-q", "-b", "aifactory/007-feature")
+    (proj / "built.py").write_text("def the_thing_that_was_built() -> None: ...\n")
+    _git("add", "-A")
+    _git("commit", "-qm", "the build")
+
+    # The ingest checkout is detached; origin/* are the refs the code consults.
+    for ref in ("main", "dev"):
+        _git("update-ref", f"refs/remotes/origin/{ref}", ref)
+    _git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+
+    spec_dir = tmp_path / "spec"
+    (spec_dir / "context").mkdir(parents=True)
+    (spec_dir / "context" / "source.json").write_text(
+        '{"source_branch": "aifactory/007-feature"}'
+    )
+
+    changed = _source_branch_changed_files(spec_dir, proj)
+    assert changed == ["built.py"], changed  # not on_dev.py — that is dev's lead
+
+    block = _build_changed_symbols_block(spec_dir, proj)
+    assert "the_thing_that_was_built" in block
+    assert "from_dev" not in block
+
+
+def test_stale_base_ref_is_refreshed_before_diff(tmp_path: Path) -> None:
+    """#751: a build cut from a NEWER dev than this clone last fetched must not
+    attribute dev's intervening commits to the build.
+
+    Real topology: TFactory ingest fetches only the build branch, so origin/dev
+    here can be stale. If dev moved ahead after the clone and the build was cut
+    from that newer dev, merge-base(stale origin/dev, HEAD) sits before the real
+    cut point and the diff includes files the build never touched. The base-ref
+    fetch at the top of _source_branch_changed_files closes that gap.
+    """
+    origin = tmp_path / "origin.git"
+
+    def _o(*args: str) -> None:
+        subprocess.run(  # noqa: S603
+            ["git", "-C", str(origin), *args],
+            check=True,
+            capture_output=True,  # noqa: S607
+        )
+
+    # Bare origin seeded via a scratch worktree with main + dev(D1).
+    seed = tmp_path / "seed"
+    subprocess.run(  # noqa: S603
+        ["git", "init", "-b", "main", "--quiet", str(seed)],
+        check=True,
+        capture_output=True,  # noqa: S607
+    )
+
+    def _s(*args: str) -> None:
+        subprocess.run(  # noqa: S603
+            ["git", "-C", str(seed), *args],
+            check=True,
+            capture_output=True,  # noqa: S607
+        )
+
+    _s("config", "user.email", "t@t")
+    _s("config", "user.name", "t")
+    (seed / "on_main.py").write_text("def from_main() -> None: ...\n")
+    _s("add", "-A")
+    _s("commit", "-qm", "main")
+    _s("checkout", "-q", "-b", "dev")
+    (seed / "dev_old.py").write_text("def dev_old() -> None: ...\n")
+    _s("add", "-A")
+    _s("commit", "-qm", "dev D1")
+    subprocess.run(  # noqa: S603
+        ["git", "clone", "--bare", "--quiet", str(seed), str(origin)],  # noqa: S607
+        check=True,
+        capture_output=True,
+    )
+
+    # Clone the project — its origin/dev now points at the stale D1.
+    proj = tmp_path / "repo"
+    subprocess.run(  # noqa: S603
+        ["git", "clone", "--quiet", str(origin), str(proj)],
+        check=True,
+        capture_output=True,  # noqa: S607
+    )
+
+    # Origin's dev moves ahead (D2), and the build branch is cut from that D2.
+    _s("checkout", "-q", "dev")
+    (seed / "dev_new.py").write_text("def dev_new() -> None: ...\n")
+    _s("add", "-A")
+    _s("commit", "-qm", "dev D2 (after clone)")
+    _s("checkout", "-q", "-b", "aifactory/007-feature")
+    (seed / "built.py").write_text("def the_thing_that_was_built() -> None: ...\n")
+    _s("add", "-A")
+    _s("commit", "-qm", "the build")
+    _s("push", "-q", str(origin), "dev", "aifactory/007-feature")
+
+    # Ingest fetches ONLY the build branch and checks it out detached — leaving
+    # this clone's origin/dev stale at D1 (the exact #751 condition).
+    def _p(*args: str) -> None:
+        subprocess.run(  # noqa: S603
+            ["git", "-C", str(proj), *args],
+            check=True,
+            capture_output=True,  # noqa: S607
+        )
+
+    _p("fetch", "--no-tags", "origin", "aifactory/007-feature")
+    _p("checkout", "-q", "--detach", "FETCH_HEAD")
+
+    spec_dir = tmp_path / "spec"
+    (spec_dir / "context").mkdir(parents=True)
+    (spec_dir / "context" / "source.json").write_text(
+        '{"source_branch": "aifactory/007-feature"}'
+    )
+
+    changed = _source_branch_changed_files(spec_dir, proj)
+    # Without the refresh: dev_new.py leaks in (it is D2's, not the build's).
+    assert changed == ["built.py"], changed

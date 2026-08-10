@@ -59,3 +59,16 @@ def test_result_stays_within_specs_root(tmp_path):
     root = (base / ".tfactory" / "specs").resolve()
     result = safe_spec_dir(base, "001-feature").resolve()
     assert root == result or root in result.parents
+
+
+def test_trusted_project_root_resolves_existing_dir(tmp_path):
+    from server.routes._specpath import trusted_project_root
+
+    assert trusted_project_root(str(tmp_path)) == tmp_path.resolve()
+
+
+def test_trusted_project_root_rejects_missing_dir(tmp_path):
+    from server.routes._specpath import trusted_project_root
+
+    with pytest.raises(ValueError, match="Project path does not exist"):
+        trusted_project_root(str(tmp_path / "nope"))

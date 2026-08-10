@@ -7,6 +7,7 @@ Helper functions for git operations, plan management, and file syncing.
 
 import json
 import logging
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -114,3 +115,125 @@ def sync_plan_to_source(spec_dir: Path, source_spec_dir: Path | None) -> bool:
     except Exception as e:
         logger.warning(f"Failed to sync implementation plan to source: {e}")
         return False
+
+
+def _broken_worktree_gitdir(project_dir: Path) -> Path | None:
+    """Return the stale gitdir iff ``project_dir`` is a linked worktree whose
+    ``gitdir:`` pointer does not resolve from here; ``None`` when there is
+    nothing to repair (a normal clone, a non-repo, or a healthy worktree).
+    """
+    dot_git = project_dir / ".git"
+    if not dot_git.is_file():
+        return None  # a normal clone, or not a repo at all
+    try:
+        pointer = dot_git.read_text().strip()
+    except OSError:
+        return None
+    if not pointer.startswith("gitdir:"):
+        return None
+    stale = Path(pointer.split(":", 1)[1].strip())
+    return None if (stale / "gitdir").is_file() else stale
+
+
+def _find_main_repo(project_dir: Path, stale_gitdir: Path) -> Path | None:
+    """Locate the main repo that owns the linked worktree at ``project_dir``.
+
+    ``stale_gitdir`` is the (now wrong) ``<repo>/.git/worktrees/<id>`` path read
+    out of the worktree's ``.git`` file; the repo's directory NAME survives the
+    remount even though its absolute path does not. Two layouts are searched, for
+    each ancestor of the worktree, deepest first:
+
+    * the ancestor itself is the repo (a worktree nested inside its own clone);
+    * the repo is a SIBLING named like the old one -- which is the real TFactory
+      layout: the spec tree lives at ``workspaces/<uuid>/specs/<spec>/.worktree``
+      while its base clone is ``workspaces/<project-name>``, so the repo is NOT
+      an ancestor and an ancestor-only walk finds nothing.
+
+    ponytail: re-roots on the repo's own directory name only. If a future layout
+    moves the clone deeper than one level under a shared ancestor, widen this to
+    try longer suffixes of ``stale_gitdir``.
+    """
+    parts = stale_gitdir.parts
+    if ".git" not in parts:
+        return None
+    dot_git_at = len(parts) - 1 - parts[::-1].index(".git")
+    if dot_git_at == 0:
+        return None  # a bare ".git/..." pointer names no repo directory
+    repo_name = parts[dot_git_at - 1]
+    for ancestor in project_dir.parents:
+        for candidate in (ancestor, ancestor / repo_name):
+            if (candidate / ".git").is_dir():
+                return candidate
+    return None
+
+
+def repair_linked_worktree(project_dir: Path) -> None:
+    """Re-point a relocated linked git worktree at its real gitdir (#868).
+
+    The spec tree is a *linked* worktree created on the control plane
+    (``task_control._add_spec_worktree``), so its ``.git`` is a FILE holding an
+    ABSOLUTE ``gitdir:`` path under ``/home/nonroot/.tfactory/...``. The verify
+    Job mounts the same PVC at ``/work``, so that absolute path does not exist
+    there and every git command against the tree dies with
+    ``fatal: not a git repository: (null)`` -- which is why ``git_writer`` could
+    never commit the generated tests back while the verdict still looked healthy.
+
+    ``git worktree repair`` is exactly this repair and is idempotent, but it must
+    run FROM THE MAIN REPO: git cannot discover the repository from the broken
+    linked tree. Repairing from there rewrites BOTH pointer files -- the main
+    repo's ``.git/worktrees/<id>/gitdir`` and the linked tree's ``.git``.
+
+    Symmetric by construction: it always repairs toward the view of the process
+    that calls it, so the Job repairs to ``/work`` and a later in-pod stage
+    repairs back to the control-plane root.
+
+    No-op unless ``project_dir`` really is a linked worktree whose pointer is
+    broken. Best-effort: a failure is logged and the caller continues, because a
+    pointer repair must never be why a verify reports a different verdict.
+    """
+    stale = _broken_worktree_gitdir(project_dir)
+    if stale is None:
+        return
+
+    main_repo = _find_main_repo(project_dir, stale)
+    if main_repo is None:
+        logger.warning(
+            "[worktree-repair] %s is a linked worktree pointing at a missing "
+            "gitdir %s, and no main repo was found near it; git commands against "
+            "it will fail (#868)",
+            project_dir,
+            stale,
+        )
+        return
+    # Strip ambient git env, as _add_spec_worktree does: an inherited GIT_DIR /
+    # GIT_WORK_TREE would hijack our ``-C`` and repair the wrong repository.
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
+    }
+    try:
+        proc = subprocess.run(  # noqa: S603 - fixed git argv
+            ["git", "-C", str(main_repo), "worktree", "repair", str(project_dir)],  # noqa: S607 - git from PATH
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+            env=env,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:  # pragma: no cover
+        logger.warning("[worktree-repair] git worktree repair failed: %s (#868)", exc)
+        return
+    if proc.returncode != 0:
+        logger.warning(
+            "[worktree-repair] repair of %s from %s failed: %s (#868)",
+            project_dir,
+            main_repo,
+            (proc.stderr or proc.stdout).strip()[:200],
+        )
+        return
+    logger.info(
+        "[worktree-repair] repaired linked worktree %s against %s (#868)",
+        project_dir,
+        main_repo,
+    )

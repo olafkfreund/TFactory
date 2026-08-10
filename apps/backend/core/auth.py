@@ -165,6 +165,36 @@ def _get_token_from_claude_credentials() -> str | None:
     return None
 
 
+def prefer_refreshable_credentials() -> bool:
+    """Drop a static ``CLAUDE_CODE_OAUTH_TOKEN`` from the env when the OAuth
+    credentials file carries a ``refreshToken``.
+
+    A token passed via ``CLAUDE_CODE_OAUTH_TOKEN`` is static: once its access
+    token expires the SDK can only 401 — it has no refresh token to renew it.
+    ``~/.claude/.credentials.json`` DOES carry a refresh token, so when that file
+    is present the SDK should own auth and refresh the (possibly expired) access
+    token itself (the same file+refresh path AIFactory build Jobs already use).
+
+    This is the scrub the ``create_client`` comment says must happen at spawn
+    time; previously it only ran under remote-control, so ordinary verify/plan
+    agents stayed pinned to the expired env token. Only ``CLAUDE_CODE_OAUTH_TOKEN``
+    is dropped — a deliberate ``ANTHROPIC_AUTH_TOKEN`` (CCR/proxy) is left alone.
+
+    Returns True if the env was scrubbed; safe no-op when the file is absent or
+    has no refresh token.
+    """
+    path = Path.home() / ".claude" / ".credentials.json"
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+    oauth = data.get("claudeAiOauth", data)
+    if isinstance(oauth, dict) and oauth.get("refreshToken"):
+        os.environ.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+        return True
+    return False
+
+
 def get_auth_token() -> str | None:
     """
     Get authentication token from environment variables or credential stores.

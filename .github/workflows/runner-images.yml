@@ -17,15 +17,27 @@
 
 name: Build runner images
 
+# The negations matter (#886). `docker/tfactory-runner-*/**` matches the nix and
+# portal-ui directories too, but neither is in the matrix below — nix has
+# nix-runner-image.yml and portal-ui has portal-ui-runner-image.yml, because both
+# need a shape this matrix cannot express. So a change to either fired this
+# workflow, built nine unrelated images, went green, and built nothing that
+# changed. A trigger that runs and cannot possibly do the work is worse than no
+# trigger: it looks like coverage. tests/test_runner_image_workflows.py holds the
+# matrix and these filters to the set of directories that actually exist.
 on:
   push:
     branches: [main]
     paths:
       - 'docker/tfactory-runner-*/**'
+      - '!docker/tfactory-runner-nix/**'
+      - '!docker/tfactory-runner-portal-ui/**'
       - '.github/workflows/runner-images.yml'
   pull_request:
     paths:
       - 'docker/tfactory-runner-*/**'
+      - '!docker/tfactory-runner-nix/**'
+      - '!docker/tfactory-runner-portal-ui/**'
       - '.github/workflows/runner-images.yml'
 
 # Cancel superseded runs on the same ref (matches ci.yml convention)
@@ -33,14 +45,28 @@ concurrency:
   group: runner-images-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Workflow-level floor only. `permissions:` takes no expression, so a single
+# job spanning both triggers granted `id-token: write` (and `packages: write`)
+# to pull_request runs, which build PR-controlled Dockerfiles (#948). The
+# build/publish split below is the narrowing: both elevated capabilities are
+# declared on the push-only `publish` job.
 permissions:
   contents: read
-  packages: write   # publish runner images to GHCR (push to main only)
 
+# The runner list appears in TWO matrix blocks below — one per job — because a
+# matrix job cannot fan out into a second matrix job leg-by-leg. They must stay
+# identical; tests/test_runner_image_workflows.py asserts that, so a runner
+# added to one and not the other fails CI rather than going quietly unpublished.
 jobs:
+  # --------------------------------------------------------------------------
+  # Runs on BOTH triggers: build, load, smoke. Nothing here pushes, so it needs
+  # no registry credentials and no OIDC token.
+  # --------------------------------------------------------------------------
   build:
     name: build ${{ matrix.runner }} image
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       fail-fast: false   # keep building remaining images if one fails
       matrix:
@@ -66,8 +92,11 @@ jobs:
           file: docker/tfactory-runner-${{ matrix.runner }}/Dockerfile
           push: false
           load: true
+          # `:latest` only. This job pushes nothing -- it loads into the local
+          # daemon for the smoke steps below, and every one of them runs
+          # `tfactory-runner-<x>:latest`. The second tag here was a raw 40-char
+          # `github.sha` that was written and never read (#890).
           tags: |
-            tfactory-runner-${{ matrix.runner }}:${{ github.sha }}
             tfactory-runner-${{ matrix.runner }}:latest
           # GHA cache: reuse layer cache across runs scoped per framework image.
           # mode=max: cache all layers, not just the final stage.
@@ -207,11 +236,54 @@ jobs:
               ;;
           esac
 
-      # Publish to GHCR — only on push to main, and only after the smoke above
-      # passed (a broken image never reaches the registry). PRs (incl. forks)
-      # skip these steps, so they stay build-and-smoke only.
+  # --------------------------------------------------------------------------
+  # Publish to GHCR — only on push to main, and only after every smoke above
+  # passed (a broken image never reaches the registry). PRs (incl. forks) never
+  # reach this job, which is the point: `packages: write` and `id-token: write`
+  # are declared here and are absent from the pull_request path entirely (#948).
+  #
+  # `needs: build` is job-to-job, not leg-to-leg — GitHub has no per-leg fan-out
+  # — so a single failing smoke now blocks publication of ALL nine images rather
+  # than just its own. That is deliberate: the alternative shapes either
+  # duplicate the 130-line smoke into this job or publish past a gate that
+  # failed. Nothing goes stale silently, because the run is red.
+  # --------------------------------------------------------------------------
+  publish:
+    name: publish ${{ matrix.runner }} image
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write   # publish runner images to GHCR
+      id-token: write   # cosign keyless via GitHub OIDC (Factory#524)
+    strategy:
+      fail-fast: false
+      matrix:
+        # Must equal the `build` matrix above; the invariant test holds them so.
+        runner: [pytest, jest, playwright, vitest, cypress, java, selenium, cucumber, cloud]
+
+    env:
+      IMAGE: "ghcr.io/${{ github.repository_owner }}/tfactory-runner-${{ matrix.runner }}"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # `sha-<short>`, matching every other image the fleet publishes. These
+      # nine used to be tagged with the raw 40-char `github.sha`, which
+      # factory-gitops' `fleet-match` cannot parse — its `carries()` only
+      # recognises `sha-<short>` — so the nine were invisible to the drift
+      # tooling by construction (#890, factory-gitops#89). Nothing in the
+      # cluster pins them by tag yet, which is exactly why this is cheap now
+      # and awkward later.
+      - id: tags
+        run: echo "sha=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Log in to GHCR
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -219,16 +291,60 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # Re-run the build to push: every layer is already in the GHA cache from
-      # the build step above, so this is effectively just a registry upload.
+      # the build job, so this is effectively just a registry upload. This is
+      # the same second build-push-action call the old single job made; it now
+      # runs on its own runner, so it pulls the cache rather than inheriting it.
       - name: Push tfactory-runner-${{ matrix.runner }} to GHCR
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        id: push
         uses: docker/build-push-action@v5
         with:
           context: docker/tfactory-runner-${{ matrix.runner }}
           file: docker/tfactory-runner-${{ matrix.runner }}/Dockerfile
           push: true
+          # See nix-runner-image.yml. All nine of these Dockerfiles happen to
+          # carry the label already, but "happens to" is the property #952 is
+          # about: setting it on the workflow means a tenth runner added to the
+          # matrix is linked whether or not its author remembers (#952).
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
           tags: |
-            ghcr.io/${{ github.repository_owner }}/tfactory-runner-${{ matrix.runner }}:${{ github.sha }}
-            ghcr.io/${{ github.repository_owner }}/tfactory-runner-${{ matrix.runner }}:latest
+            ${{ env.IMAGE }}:${{ steps.tags.outputs.sha }}
+            ${{ env.IMAGE }}:latest
           cache-from: type=gha,scope=runner-${{ matrix.runner }}
           cache-to: type=gha,mode=max,scope=runner-${{ matrix.runner }}
+
+      # ---------------------------------------------------------------------
+      # Sign what this workflow publishes (Factory#524).
+      #
+      # These nine images are where generated test code is executed. The
+      # admission policy covered only the four service images, so the sandbox
+      # images were both unsigned and unselected by any rule — not even an
+      # Audit warning. Same keyless flow as deploy.yml.
+      #
+      # Sign by DIGEST: cosign signatures are digest-keyed, so one signature
+      # covers both :<sha> and :latest for this runner.
+      #
+      # The certificate SAN is derived from the workflow FILE, not the job, so
+      # moving these steps into `publish` leaves the signed identity
+      # byte-identical: .../runner-images.yml@refs/heads/main, which is what
+      # `verify-tfactory-runner-signature` pins.
+      # ---------------------------------------------------------------------
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3.7.0
+
+      - name: Sign tfactory-runner-${{ matrix.runner }}
+        env:
+          DIGEST: "${{ steps.push.outputs.digest }}"
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+      # Assert the EXACT identity the admission rule pins, anchored at both
+      # ends — not a repo prefix. A self-test looser than the gate it models
+      # passes on signatures the gate rejects (Factory#522).
+      - name: Verify signature (self-test) — ${{ matrix.runner }}
+        env:
+          DIGEST: "${{ steps.push.outputs.digest }}"
+        run: |
+          cosign verify \
+            --certificate-identity-regexp "^https://github\.com/${{ github.repository }}/\.github/workflows/runner-images\.yml@refs/heads/main$" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "${IMAGE}@${DIGEST}"

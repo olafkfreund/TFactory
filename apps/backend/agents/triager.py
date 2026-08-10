@@ -40,11 +40,13 @@ from agents.completion_envelope import (
     CompletionEvidence,
 )
 from agents.workspace_status import (
+    anchor_stage_task,
     now_iso,
     read_status,
     truthy,
     write_status_patch,
 )
+from repo_ref import is_github
 
 _triage_log = _logging.getLogger(__name__)
 
@@ -374,6 +376,49 @@ def _read_status(spec_dir: Path) -> dict:
 _TERMINAL_STATUSES = frozenset({"triaged", "triaged_empty", "triager_failed"})
 
 
+def _triaged_empty_warnings(
+    final_status: str,
+    committed_count: int,
+    flagged_count: int,
+    rejected_count: int,
+    ac_summary: object,
+) -> list[str]:
+    """Loud diagnostics for a hollow verdict (#729).
+
+    A ``triaged_empty`` that came from rejecting 100% of the generated tests is
+    almost never N independent judgements — it is a systematic failure (the wrong
+    build tree checked out, see #742; a collection/import error; a harness
+    mismatch). Left as a bare ``triaged_empty`` it reads as a clean "nothing to
+    do" and nobody notices. Same for an all-unverified AC fidelity. Return the
+    warnings to persist on status.json so the cockpit/report surface them.
+    """
+    warnings: list[str] = []
+    if (
+        final_status == "triaged_empty"
+        and rejected_count > 0
+        and committed_count == 0
+        and flagged_count == 0
+    ):
+        warnings.append(
+            f"triaged_empty from a 100% rejection: all {rejected_count} generated "
+            "tests were rejected and none committed. This is almost always a "
+            "systematic failure (wrong build tree checked out — #742 — a "
+            "collection/import error, or a harness mismatch), not independent "
+            "judgements. Inspect the rejected candidates' evaluation output before "
+            "trusting this verdict."
+        )
+    if (
+        isinstance(ac_summary, dict)
+        and ac_summary.get("total")
+        and not ac_summary.get("verified")
+    ):
+        warnings.append(
+            f"0/{ac_summary.get('total')} acceptance criteria verified — no "
+            "committed test exercises any acceptance criterion."
+        )
+    return warnings
+
+
 def _write_status_patch(spec_dir: Path, **fields: object) -> None:
     # Shared core: merge + persist + emit the "triager" stage event (#95).
     write_status_patch(spec_dir, "triager", **fields)
@@ -504,6 +549,12 @@ def _correlation_issue_number(status: dict, source: dict) -> int | None:
         if raw is None:
             raw = src.get("correlation_id")
         if raw is None:
+            # AIFactory's spec_ingest handoff nests the origin issue under
+            # `aifactory.github_issue` (task_control); read it too (#964).
+            ai = src.get("aifactory")
+            if isinstance(ai, dict):
+                raw = ai.get("github_issue")
+        if raw is None:
             continue
         try:
             return int(raw)
@@ -550,6 +601,9 @@ def _completion_result_summary(status: dict) -> dict[str, Any]:
         "rejected_count",
         "verdicts_count",
         "dedup_collision_count",
+        # Judge majority-vote split summary (#649 calibration hook); present
+        # only when the evaluator ran best-of-N (TFACTORY_VERDICT_VOTES > 1).
+        "verdict_vote",
     )
     return {k: status[k] for k in keys if k in status}
 
@@ -691,13 +745,64 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> CompletionEnvelo
         _triage_log.debug(
             "triager: verification block emit failed (degraded)", exc_info=True
         )
-    # RFC-0013 (#447): when the contract's deployment block marks the change
-    # high-risk or production, surface the deploy gate verdict so the merge
-    # policy / handback can hold a change back without a DRY-RUN deploy proof.
+    # RFC-0013 deploy gate (#447) + #650 dependency review — both gate
+    # annotations applied by one helper (see _apply_gate_annotations).
+    _apply_gate_annotations(spec_dir, envelope)
+    return envelope
+
+
+def _apply_gate_annotations(spec_dir: Path, envelope: CompletionEnvelope) -> None:
+    """Attach the deploy-gate and dependency-review verdicts to the envelope.
+
+    RFC-0013 (#447): when the contract's deployment block marks the change
+    high-risk or production, surface the deploy gate verdict so the merge
+    policy / handback can hold a change back without a DRY-RUN deploy proof.
+
+    #650: agent-added dependency review — the 6th verdict signal. Surface the
+    persisted block on the envelope so CFactory can render the findings, and
+    GATE on fail (unpinned or HIGH/CRITICAL added vuln): a would-be success
+    outcome is downgraded to human_review, consistent with the VAL honesty
+    rule — never silently accept. Best-effort read; absent block = no change.
+    """
     _gate = _deploy_gate_annotation(spec_dir)
     if _gate is not None:
         envelope["deploy_gate"] = _gate
-    return envelope
+    try:
+        from agents.dependency_review import (  # noqa: PLC0415 - lazy by design
+            read_dependency_review,
+        )
+
+        _dep = read_dependency_review(spec_dir)
+    except Exception:  # noqa: BLE001 - the dep review must never break emit
+        _dep = None
+    if _dep is not None:
+        envelope["dependency_review"] = _dep
+        if _dep.get("status") == "fail" and envelope.get("outcome") == "success":
+            envelope["outcome"] = "human_review"
+            envelope["halt_reason"] = "dependency_review: " + str(
+                _dep.get("reason") or "agent-added dependency failed the gate"
+            )
+
+    # #896: contradictory acceptance criteria travel into the envelope so a
+    # human sees the contradiction NAMED, rather than inferring it from a stuck
+    # subtask. Nothing the coder can do fixes this — the spec must change — so
+    # it routes to human_review exactly as a failed dependency review does.
+    try:
+        from agents.criterion_conflict import (  # noqa: PLC0415 - lazy by design
+            read_criterion_conflicts,
+        )
+
+        _conflict = read_criterion_conflicts(spec_dir)
+    except Exception:  # noqa: BLE001 - must never break emit
+        _conflict = None
+    if _conflict is not None:
+        envelope["criterion_conflict"] = _conflict
+        if _conflict.get("gating") and envelope.get("outcome") == "success":
+            envelope["outcome"] = "human_review"
+            envelope["halt_reason"] = "criterion_conflict: " + str(
+                _conflict.get("reason")
+                or "acceptance criteria are mutually unsatisfiable"
+            )
 
 
 def _attach_traceability(spec_dir: Path, verification_block: dict[str, Any]) -> None:
@@ -723,7 +828,17 @@ def _attach_traceability(spec_dir: Path, verification_block: dict[str, Any]) -> 
         plan = json.loads(plan_path.read_text())
         vdoc = json.loads(verdicts_path.read_text())
         verdicts = vdoc.get("verdicts") if isinstance(vdoc, dict) else None
-        ledger = build_ac_ledger(plan, verdicts or [])
+        # Same conflicts the fidelity ledger used (#896) — read back from the
+        # finding rather than re-detected, so the matrix and the ledger can
+        # never disagree about which criteria are unverifiable.
+        from agents.criterion_conflict import (  # noqa: PLC0415 - lazy by design
+            read_criterion_conflicts,
+        )
+
+        _conflict = read_criterion_conflicts(spec_dir) or {}
+        ledger = build_ac_ledger(
+            plan, verdicts or [], conflicts=_conflict.get("conflicts") or None
+        )
         trace = build_traceability(ledger, verification_block)
         if trace:
             verification_block["traceability"] = trace
@@ -1018,6 +1133,44 @@ def _render_and_write_report(
     return report, report_md
 
 
+def _detect_criterion_conflicts(
+    spec_dir: Path, plan: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Detect + persist contradictory acceptance criteria (#896). Never raises.
+
+    Reads the criteria from the same place the ledger does — the plan phases
+    named ``AC#N: <text>`` — so detection does not depend on the generator
+    having flagged the contradiction during a (stochastic) generation step.
+    Returns the finding records, or ``[]``.
+    """
+    try:
+        from agents.ac_fidelity import _split_ac  # noqa: PLC0415 - lazy by design
+        from agents.criterion_conflict import (  # noqa: PLC0415 - lazy by design
+            detect_criterion_conflicts,
+            write_criterion_conflicts,
+        )
+
+        criteria: list[tuple[str, str]] = []
+        for ph in plan.get("phases", []) or []:
+            name = ph.get("name") or ""
+            if name.lower().startswith("replan"):
+                continue
+            criteria.append(_split_ac(name, ph.get("phase")))
+        conflicts = [c.to_dict() for c in detect_criterion_conflicts(criteria)]
+        if conflicts:
+            write_criterion_conflicts(spec_dir, conflicts)
+            _triage_log.error(
+                "criterion conflict: %d unsatisfiable acceptance-criterion "
+                "pair(s) — the specification must be corrected: %s",
+                len(conflicts),
+                "; ".join(c["contradiction"] for c in conflicts),
+            )
+        return conflicts
+    except Exception as exc:  # noqa: BLE001 - detection must never break triage
+        _triage_log.warning("criterion conflict detection failed: %s", exc)
+        return []
+
+
 def _write_ac_fidelity(spec_dir, committed, flagged, rejects) -> dict:
     """Build + write the per-AC fidelity ledger (findings/ac_fidelity.{json,md}).
 
@@ -1053,8 +1206,22 @@ def _write_ac_fidelity(spec_dir, committed, flagged, rejects) -> dict:
                 for c in rejects
             ]
         )
+        # The ingested spec, so the report can name the parts of it that were
+        # never acceptance criteria and so were never verified (#855).
+        try:
+            spec_markdown = (spec_dir / "context" / "aifactory_spec.md").read_text()
+        except OSError:
+            spec_markdown = None
+        # #896: a criterion that contradicts another cannot be satisfied by any
+        # test. Detect it, write it as a first-class finding, and grade those
+        # ACs UNVERIFIABLE rather than folding them into `unverified`, where
+        # they read identically to "the generator failed".
+        conflicts = _detect_criterion_conflicts(spec_dir, plan)
         ledger = attach_screenshots(
-            build_ac_ledger(plan, verdicts), spec_dir / "findings"
+            build_ac_ledger(
+                plan, verdicts, spec_markdown=spec_markdown, conflicts=conflicts
+            ),
+            spec_dir / "findings",
         )
         fd = spec_dir / "findings"
         fd.mkdir(parents=True, exist_ok=True)
@@ -1077,7 +1244,10 @@ def _run_git_side_effect(project_dir, committed, flagged, source_meta) -> dict:
 
     from tools.git_writer import GitWriteRequest, write_tests_to_branch
 
-    branch = source_meta.get("branch") or ""
+    # AIFactory's handoff writes the feature branch under `source_branch`
+    # (task_control.create_spec_ingest_workspace); accept either key so the
+    # accepted tests actually commit back to the PR branch (#964).
+    branch = source_meta.get("branch") or source_meta.get("source_branch") or ""
     files_to_commit = tuple(
         (c.test_file, c.source) for c in (*committed, *flagged) if c.source
     )
@@ -1096,7 +1266,13 @@ def _run_git_side_effect(project_dir, committed, flagged, source_meta) -> dict:
             f"tfactory: add {len(committed)} accepted + {len(flagged)} flagged tests"
         ),
     )
-    git_write_result = write_tests_to_branch(request, dry_run=_git_writer_dry_run())
+    # push=True (#723): when git-write is live (TFACTORY_TRIAGER_GIT_WRITE=1) the
+    # accepted tests are pushed to the PR branch, so they surface on the PR — a
+    # scoped, opt-in override of the no-auto-push default. When git-write is off
+    # this stays dry-run (the push argv is only recorded, never executed).
+    git_write_result = write_tests_to_branch(
+        request, dry_run=_git_writer_dry_run(), push=True
+    )
     return {
         "skipped": False,
         "dry_run": git_write_result.dry_run,
@@ -1112,6 +1288,27 @@ def _run_pr_side_effect(project_dir, findings_dir, source_meta, report_md) -> di
     """Post the report to the PR (dry-run by default), or write the body to disk
     when there's no PR number. Returns a summary dict for status.json."""
     pr_number = int(source_meta.get("pr_number") or 0)
+    # RFC-0020 3.5 (Factory#366): this step is gh-CLI-driven (`gh pr comment`),
+    # so it only works on GitHub. A GitLab or Azure DevOps tenant's verdict is
+    # written to disk instead — the SAME fallback a missing PR number already
+    # takes, which is why this costs no new failure path.
+    #
+    # Written rather than dropped, and dropped rather than attempted: the verify
+    # has already run and the report is worth reading, but throwing a GitLab
+    # project at `gh` either errors after the fact or, worse, comments on a
+    # same-named GitHub repo that happens to exist.
+    provider = source_meta.get("provider") or "github"
+    if pr_number > 0 and report_md and not is_github(provider):
+        (findings_dir / "pr_comment_body.md").write_text(report_md)
+        return {
+            "skipped": True,
+            "reason": (
+                f"provider {provider!r} is not GitHub; the PR comment is gh-CLI-driven. "
+                "The report is on disk — post it on the merge request."
+            ),
+            "provider": provider,
+            "body_written_to": str(findings_dir / "pr_comment_body.md"),
+        }
     if pr_number > 0 and report_md:
         from tools.pr_comment import PRCommentRequest, post_pr_comment
 
@@ -1311,6 +1508,12 @@ async def run_triager(
                   → triager_failed    (any hard error)
     """
     del verbose
+    # git_writer commits the accepted tests back through ``project_dir``; if the
+    # linked worktree's absolute gitdir pointer names another mount root, every
+    # git command there fails (#868). Repair toward this process's view first.
+    from agents.utils import repair_linked_worktree  # noqa: PLC0415 - lazy by design
+
+    repair_linked_worktree(project_dir)
     try:
         _write_status_patch(
             spec_dir,
@@ -1322,27 +1525,11 @@ async def run_triager(
         verdicts = _load_verdicts_or_fail(spec_dir)
         if verdicts is None:
             return False
-        # RFC-0006 #75: run the VAL-3 disposable-target lane ONCE (gated — a
-        # no-op until a contract declares effectful VAL-3 commands AND a target
-        # backend is configured), recording findings/val3_outcome.json before the
-        # verification block is read. Mandatory teardown is guaranteed inside.
-        # Best-effort: never breaks triage; default keeps VAL-3 honestly not_run.
-        try:
-            from agents.disposable_target import record_val3
-            from agents.task_contract import read_tfactory_profile
-
-            _prof = read_tfactory_profile(spec_dir)
-            _src = _load_source_meta(spec_dir)
-            _vprofile = (
-                _src.get("verification") if isinstance(_src, dict) else None
-            ) or None
-            record_val3(
-                spec_dir,
-                _vprofile,
-                getattr(_prof, "access", None) if _prof else None,
-            )
-        except Exception:  # noqa: BLE001 - VAL-3 lane must never break triage
-            pass
+        # RFC-0006 #75 VAL-3 lane + #650 dependency review (6th verdict
+        # signal) — both best-effort side-effects recorded to findings/ before
+        # the verification block / completion envelope are read.
+        _record_val3_side_effect(spec_dir)
+        _run_dependency_review_side_effect(spec_dir, project_dir)
         candidates = _build_candidates(spec_dir, verdicts)
 
         if not candidates:
@@ -1421,21 +1608,30 @@ async def run_triager(
         # 7. Record summaries in status.json.
         committed_count = len(committed)
         flagged_count = len(flagged)
+        rejected_count = len(rejects)
         final_status = (
             "triaged" if (committed_count or flagged_count) else "triaged_empty"
         )
+        # #729: a silent triaged_empty from a systematic 100% rejection reads as a
+        # clean run. Surface the real signal instead.
+        triager_warnings = _triaged_empty_warnings(
+            final_status, committed_count, flagged_count, rejected_count, ac_summary
+        )
+        for _w in triager_warnings:
+            _triage_log.warning("triager: %s", _w)
         _write_status_patch(
             spec_dir,
             status=final_status,
             phase="triager_complete",
             committed_count=committed_count,
-            rejected_count=len(rejects),
+            rejected_count=rejected_count,
             flagged_count=flagged_count,
             ac_fidelity=ac_summary,
             dedup_collision_count=len(dedup_result.collisions),
             git_writer=git_result_summary,
             pr_comment=pr_comment_summary,
             pr_status=pr_status_summary,
+            triager_warnings=triager_warnings,
         )
         return True
 
@@ -1448,6 +1644,47 @@ async def run_triager(
             triager_error=str(exc)[:500],
         )
         return False
+
+
+def _record_val3_side_effect(spec_dir: Path) -> None:
+    """RFC-0006 #75: run the VAL-3 disposable-target lane ONCE (gated — a no-op
+    until a contract declares effectful VAL-3 commands AND a target backend is
+    configured), recording findings/val3_outcome.json before the verification
+    block is read. Mandatory teardown is guaranteed inside. Best-effort: never
+    breaks triage; default keeps VAL-3 honestly not_run. Verbatim move out of
+    ``run_triager`` (#650)."""
+    try:
+        from agents.disposable_target import record_val3  # noqa: PLC0415 - lazy
+        from agents.task_contract import read_tfactory_profile  # noqa: PLC0415 - lazy
+
+        _prof = read_tfactory_profile(spec_dir)
+        _src = _load_source_meta(spec_dir)
+        _vprofile = (
+            _src.get("verification") if isinstance(_src, dict) else None
+        ) or None
+        record_val3(
+            spec_dir,
+            _vprofile,
+            getattr(_prof, "access", None) if _prof else None,
+        )
+    except Exception:  # noqa: BLE001 - VAL-3 lane must never break triage
+        pass
+
+
+def _run_dependency_review_side_effect(spec_dir: Path, project_dir: Path) -> None:
+    """#650: review the dependency-manifest diff of the checked-out task branch
+    (source_branch, #96) vs its base and persist the verdict block to
+    findings/dependency_review.json — the artifact the completion envelope
+    reads. A no-manifest-change task short-circuits after one git diff.
+    Best-effort: the review must never break triage."""
+    try:
+        from agents.dependency_review import (  # noqa: PLC0415 - lazy by design
+            run_dependency_review,
+        )
+
+        run_dependency_review(spec_dir, project_dir)
+    except Exception:  # noqa: BLE001 - dep review must never break triage
+        _triage_log.debug("triager: dependency review failed (degraded)", exc_info=True)
 
 
 def _load_source_meta(spec_dir: Path) -> dict:
@@ -1499,6 +1736,10 @@ def schedule_triager(
     if os.environ.get("TFACTORY_AUTO_TRIAGE", "1") == "0":
         return None
     task = asyncio.create_task(run_triager(spec_dir, project_dir, mode=mode))
-    _BG_TRIAGER_TASKS.add(task)
-    task.add_done_callback(_BG_TRIAGER_TASKS.discard)
-    return task
+    return anchor_stage_task(
+        task,
+        _BG_TRIAGER_TASKS,
+        spec_dir=spec_dir,
+        stage="triager",
+        failed_status="triager_failed",
+    )

@@ -75,6 +75,113 @@ class StabilityRun:
         return self.returncode == 0
 
 
+# ─── Failure-kind classifier (#629) ─────────────────────────────────────
+# The Evaluator's judge LLM previously had to *guess* whether a
+# CONSISTENT_FAIL was an import/collection error or a genuine assertion
+# failure, from the numeric ``consistent_fail`` verdict alone. With no
+# deterministic signal to distinguish the two, it sometimes labelled a
+# real assertion failure ("assert 0.0 == 300.0") as "the subject module
+# is not resolvable/importable" — sending a human chasing a phantom
+# import/co-mount bug. This helper reads the captured pytest stdout/stderr
+# (deterministically, no LLM) to tell the two apart.
+
+# ponytail: mirror of nix_env._APP_NOT_HEALTHY_MARKER — a wire marker the api
+# lane's verify Job echoes when the self-served SUT never boots. Duplicated (not
+# imported) to keep this low-level module dependency-light / cycle-free.
+_APP_NOT_HEALTHY_MARKER = "__TF_APP_NOT_HEALTHY__"
+
+_IMPORT_MARKERS = (
+    "ModuleNotFoundError",
+    "ImportError",
+    "No module named",
+    "error during collection",
+    "errors during collection",
+    "cannot import name",
+)
+
+_ASSERTION_MARKERS = (
+    "AssertionError",
+    "assert ",
+    "FAILED",
+    "E   assert",
+)
+
+# Pytest exit codes: 0 = all passed, 1 = tests failed (assertions), 2 = usage
+# error / collection error, 5 = no tests collected.
+_PYTEST_COLLECTION_ERROR_CODE = 2
+_PYTEST_TEST_FAILURE_CODE = 1
+
+
+def classify_pytest_failure(stdout: str, returncode: int) -> str:
+    """Deterministically classify *why* a pytest run failed.
+
+    Args:
+        stdout: Captured stdout (+ stderr, if the caller concatenates it) of
+            the pytest invocation. Only substring markers are checked — this
+            is intentionally a cheap heuristic, not a parser.
+        returncode: The process exit code pytest returned.
+
+    Returns:
+        - ``"app_not_healthy"`` — the api lane's self-served app-under-test
+          never came up (the verify Job emitted ``__TF_APP_NOT_HEALTHY__``), so
+          the endpoint test failed against a down app. Infra, not a wrong
+          subject — takes precedence over the connection-error noise below.
+        - ``"import"`` — a collection/import error: the text contains one of
+          ``ModuleNotFoundError``, ``ImportError``, ``No module named``,
+          ``error during collection``, ``errors during collection``,
+          ``cannot import name``, OR the exit code is 2 (pytest's dedicated
+          collection-error/usage-error code).
+        - ``"assertion"`` — a genuine test failure: the text contains
+          ``AssertionError``, ``assert ``, ``FAILED``, or ``E   assert``,
+          AND the exit code is 1 (pytest's test-failure code).
+        - ``"unknown"`` — neither pattern matched (includes a clean pass,
+          and any failure shape this heuristic doesn't recognise).
+    """
+    text = stdout or ""
+    if _APP_NOT_HEALTHY_MARKER in text:
+        return "app_not_healthy"
+    if returncode == _PYTEST_COLLECTION_ERROR_CODE or any(
+        marker in text for marker in _IMPORT_MARKERS
+    ):
+        return "import"
+    if returncode == _PYTEST_TEST_FAILURE_CODE and any(
+        marker in text for marker in _ASSERTION_MARKERS
+    ):
+        return "assertion"
+    return "unknown"
+
+
+# The exception classes worth quoting verbatim in a verdict's reason. #892: the
+# reason said "import/collection error" and stopped there, so every diagnosis
+# started with a pod exec to find out WHICH module was missing — the difference
+# between a five-minute fix and an issue. pytest already prints the answer; this
+# lifts the one line that carries it.
+_DETAIL_PREFIXES = (
+    "E   ModuleNotFoundError:",
+    "E   ImportError:",
+    "ModuleNotFoundError:",
+    "ImportError:",
+)
+
+
+def error_detail(stdout: str) -> str | None:
+    """The first underlying exception line in a pytest run, or None.
+
+    Deterministic and cheap: scans for the first line starting with one of
+    ``_DETAIL_PREFIXES`` and returns it stripped of pytest's ``E   `` gutter.
+    Returns None when the captured text holds no such line (e.g. the tail was
+    truncated past it) — callers then keep their generic wording rather than
+    inventing a cause.
+    """
+    for raw in (stdout or "").splitlines():
+        line = raw.strip()
+        for prefix in _DETAIL_PREFIXES:
+            if line.startswith(prefix):
+                detail = line.removeprefix("E   ").strip()
+                return detail[:200]
+    return None
+
+
 @dataclass(frozen=True)
 class StabilityResult:
     """Aggregate verdict + per-run record from ``check_stability``."""
@@ -89,6 +196,45 @@ class StabilityResult:
     def is_acceptable(self) -> bool:
         """Convenience: did the test prove itself stable?"""
         return self.verdict == StabilityVerdict.STABLE
+
+    @property
+    def failure_kind(self) -> str | None:
+        """Deterministic classification of *why* a CONSISTENT_FAIL failed (#629).
+
+        Only meaningful for ``CONSISTENT_FAIL`` — a ``STABLE`` run has
+        nothing to classify, and a ``FLAKY`` run's runs disagree on outcome
+        (a mixed signal a single classification can't represent). Returns
+        ``None`` in those cases, or when there are no captured runs.
+
+        Combines every run's stdout_tail + stderr_tail (all runs share the
+        same returncode for a CONSISTENT_FAIL, so this is just widening the
+        marker search across whatever each run's truncated tail happened to
+        retain).
+        """
+        if self.verdict != StabilityVerdict.CONSISTENT_FAIL or not self.runs:
+            return None
+        return classify_pytest_failure(self._combined_output, self.runs[0].returncode)
+
+    @property
+    def failure_detail(self) -> str | None:
+        """The underlying exception line behind a CONSISTENT_FAIL, or None (#892).
+
+        ``failure_kind`` says *which bucket*; this says *what actually broke*, so
+        the verdict's reason can name the missing module instead of leaving a
+        human to go and find it.
+        """
+        if self.verdict != StabilityVerdict.CONSISTENT_FAIL or not self.runs:
+            return None
+        return error_detail(self._combined_output)
+
+    @property
+    def _combined_output(self) -> str:
+        """Every run's captured stdout+stderr tails, concatenated.
+
+        All runs of a CONSISTENT_FAIL share a returncode, so this just widens the
+        search across whatever each run's truncated tail happened to retain.
+        """
+        return "\n".join(f"{r.stdout_tail}\n{r.stderr_tail}" for r in self.runs)
 
 
 # ─── Public entrypoint ──────────────────────────────────────────────────
@@ -157,6 +303,19 @@ def check_stability(
             )
         )
 
+    return classify_stability_runs(runs, seed=seed, rerun_count=rerun_count)
+
+
+def classify_stability_runs(
+    runs: list[StabilityRun], *, seed: int, rerun_count: int
+) -> StabilityResult:
+    """Turn N per-run records into a stability verdict.
+
+    The single source of truth for the STABLE / CONSISTENT_FAIL / FLAKY rule,
+    shared by ``check_stability`` (host/docker: one runner_fn call per run) and
+    the Nix batched path (#776: all N runs in ONE Job, then classified here) so
+    both produce a byte-identical verdict from the same return codes.
+    """
     codes = {r.returncode for r in runs}
     if codes == {0}:
         verdict = StabilityVerdict.STABLE

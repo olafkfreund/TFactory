@@ -11,7 +11,7 @@ What it runs (only the steps whose files are present in the change):
 
   - terraform : ``tofu init``/``validate`` (VAL-0) + ``tofu plan`` (VAL-2, no apply)
                 via OpenTofu (free/hermetic; unfree ``terraform`` won't nix-eval)
-  - helm/k8s  : ``helm template | kubeconform`` and ``kubectl apply --dry-run=server``
+  - helm/k8s  : ``helm template | kubeconform`` and ``kubectl create --dry-run=server``
   - scans     : ``tfsec`` / ``trivy config`` (IaC), reusing the cloud-prowler image
                 for container/cloud posture (descriptors in :data:`SCAN_DESCRIPTORS`).
 
@@ -63,17 +63,42 @@ _EFFECTFUL_TOKENS: frozenset[str] = frozenset(
         "upgrade",  # helm upgrade
         "sync",  # argocd app sync
         "rollout",  # kubectl rollout (restart/undo)
+        # Factory#569: the k8s rung now runs `kubectl create --dry-run=server`,
+        # so `create` MUST be effectful here — otherwise a bare `kubectl create`
+        # (no dry-run flag) would sail through the guard and really write. The
+        # sibling mutating verbs were always missing; they are added in the same
+        # pass because every one of them routes through this one check.
+        "create",  # kubectl create
+        "delete",  # kubectl delete
+        "replace",  # kubectl replace
+        "patch",  # kubectl patch
     }
 )
-# Flags that make an otherwise-effectful verb safe (dry-run / plan only).
+# Flags that make an otherwise-effectful verb safe. A dry-run indicator is a
+# FLAG, and it is matched EXACTLY. Two holes were closed here (TFactory#953
+# review) once `create` became effectful above and this guard became the only
+# thing standing between a generated descriptor and a real write:
+#
+#   * `plan`/`template`/`validate` used to live in this set. They are bare
+#     SUBCOMMANDS, not flags, so ANY token equal to one of them satisfied the
+#     check -- `kubectl create -f plan` (a file named `plan`, entirely plausible
+#     in a planning pipeline) was accepted and would really write. They were also
+#     DEAD: every step that carries them (`tofu plan`, `helm template`,
+#     `tofu validate`) contains no effectful token, so they never rescued a
+#     command that would otherwise be rejected. Deleting them closes the bypass
+#     and loses nothing -- test_assert_dry_run_allows_the_real_lane_spellings
+#     pins every argv the lane actually assembles.
+#   * The old `t.startswith("--dry-run")` fallback accepted `--dry-run=none`,
+#     which is kubectl's "actually do it" value, and `--dry-run=false`. Exact
+#     matching is the point.
+#
+# Fails CLOSED: an unlisted spelling (e.g. kubectl's deprecated `--dry-run=true`)
+# raises rather than being waved through. No assembled step uses one.
 _DRY_RUN_FLAGS: frozenset[str] = frozenset(
     {
         "--dry-run",
         "--dry-run=server",
         "--dry-run=client",
-        "plan",
-        "template",
-        "validate",
     }
 )
 
@@ -86,22 +111,22 @@ def assert_dry_run(argv: Iterable[str]) -> None:
     """Refuse any argv that would effectfully apply (RFC-0013 prod guard).
 
     A command is allowed only when it carries no effectful verb, OR when a
-    dry-run/plan flag is also present (so ``kubectl apply --dry-run=server`` and
-    ``terraform plan`` pass, while ``terraform apply`` / ``helm upgrade`` are
-    rejected). Defence-in-depth: every step is checked before it is run.
+    dry-run FLAG is also present (so ``kubectl create --dry-run=server`` passes,
+    while ``terraform apply`` / ``helm upgrade`` / a bare ``kubectl create`` are
+    rejected). ``terraform plan`` and ``helm template`` pass on the first arm --
+    they carry no effectful verb at all, which is why the dry-run set holds only
+    flags. Defence-in-depth: every step is checked before it is run.
     """
     tokens = list(argv)
     token_set = set(tokens)
-    has_dry_flag = bool(token_set & _DRY_RUN_FLAGS) or any(
-        t.startswith("--dry-run") for t in tokens
-    )
+    has_dry_flag = bool(token_set & _DRY_RUN_FLAGS)
     if has_dry_flag:
         return
     effectful = token_set & _EFFECTFUL_TOKENS
     if effectful:
         raise ProductionApplyError(
             f"refusing to run an effectful deploy step {sorted(effectful)} without a "
-            f"dry-run/plan flag — production deploys are never autonomous (RFC-0013): "
+            f"dry-run flag — production deploys are never autonomous (RFC-0013): "
             f"{' '.join(tokens)}"
         )
 
@@ -273,11 +298,30 @@ def plan_deploy_steps(
         )
 
     if _matches(files, _K8S_GLOBS) or _matches(files, _HELM_GLOBS):
+        # `create --dry-run=server`, NOT `apply --dry-run=server` (Factory#569).
+        # Measured on the live k3d API server: `apply` GETs every object first to
+        # compute the merge patch, so it needs `get` on every kind in the
+        # descriptor -- INCLUDING `secrets`, which is how the deploy SA ended up
+        # able to read `factory-secrets`. `create --dry-run=server` POSTs straight
+        # to the API with dryRun=All and needs `create` ALONE: the SA now reads
+        # nothing at all. Both spellings already failed on a name that exists
+        # (apply 403s for want of `patch`, create returns AlreadyExists), so this
+        # loses no verdict -- see the issue for the impersonated measurements.
+        # Point kubectl at the DETECTED manifest files, not `-f .`: the worktree
+        # root holds no manifests when they live under k8s/ (kubectl -f . reads
+        # only root-level files → "error reading [.]"), and `-f . -R` would sweep
+        # in unrelated yaml (mkdocs.yml, CI workflows) that fail server-dry-run.
+        k8s_files = [f for f in files if _matches([f], _K8S_GLOBS)]
+        fargs: tuple[str, ...] = ()
+        for f in k8s_files:
+            fargs += ("-f", f)
+        if not fargs:  # helm-only match → fall back to the root (template output)
+            fargs = ("-f", ".")
         steps.append(
             DeployStep(
-                name="kubectl-apply-dry-run",
+                name="kubectl-create-dry-run",
                 level="VAL-2",
-                argv=("kubectl", "apply", "--dry-run=server", "-f", "."),
+                argv=("kubectl", "create", "--dry-run=server", *fargs),
                 tool="kubectl",
                 kind="dry-run",
             )

@@ -27,6 +27,13 @@ Status mapping (ledger AC grade -> schema status), honest by construction:
                                        NOT a clean pass)
   - ``unverified`` with tests -> ``failed``  (every covering test rejected)
   - ``unverified`` with no tests -> ``not_run`` (no test covers this AC)
+  - ``unverifiable``  -> ``failed``   ALWAYS (#896) — the criterion contradicts
+                                      another, so no test could satisfy it. It
+                                      is capped exactly as a failure is, and
+                                      never as ``not_run``: "no test ran" would
+                                      understate a criterion that is provably
+                                      unsatisfiable, and ``not_run`` reads as a
+                                      coverage gap somebody could close.
 """
 
 from __future__ import annotations
@@ -46,6 +53,12 @@ def _row_status(ac_status: str, has_tests: bool) -> str:
     """
     if ac_status == "verified":
         return "passed"
+    if ac_status == "unverifiable":
+        # #896: a provably unsatisfiable criterion is capped exactly as a
+        # failure, with or without covering tests. `failed` is the only status
+        # the gate treats as capping; `skipped`/`not_run` would let the run keep
+        # its VAL ceiling on a spec that cannot be satisfied.
+        return "failed"
     if ac_status == "flagged_only":
         return "skipped"
     # "unverified" (or any unknown grade): tests that all rejected -> failed;

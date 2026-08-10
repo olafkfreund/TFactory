@@ -6,9 +6,13 @@ import '@testing-library/jest-dom/vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 // Translate keys to their inline English fallback so assertions read naturally.
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (_key: string, fallback?: string) => fallback ?? _key }),
-}));
+// `t` must be a STABLE reference: the component's `load` callback depends on
+// it, so a fresh function per render refires the load effect and inflates the
+// mocked-fetch call counts.
+vi.mock('react-i18next', () => {
+  const t = (_key: string, fallback?: string) => fallback ?? _key;
+  return { useTranslation: () => ({ t }) };
+});
 
 vi.mock('../../../lib/api-client', () => ({
   get: vi.fn(),

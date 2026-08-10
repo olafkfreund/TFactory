@@ -82,6 +82,20 @@ decides):
 If the lint rejects, the Planner gets a replan request — same as
 pre-flight failure. Avoid these patterns from the start.
 
+### 3. Criterion-literal check
+
+Every number the subtask's `description` states must appear in the code you
+write. **Comments and docstrings do not count**, so a value you mention only
+to explain why you are not asserting it counts as absent, and the file is
+rejected.
+
+So: assert the criterion AS WRITTEN. Never derive an expected value from the
+implementation — you read the target code for its signature, never to decide
+what the answer should be. If a criterion contradicts the code, or another
+criterion, assert it anyway and let the test FAIL: that is how the
+contradiction reaches a human. Do not "correct" it, and never write "the spec
+has a typo" in place of the stated value.
+
 ---
 
 ## What you have

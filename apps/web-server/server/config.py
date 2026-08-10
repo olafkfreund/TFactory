@@ -8,10 +8,10 @@ import os
 import secrets
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
 
-from .paths import get_data_dir, get_data_file
+from .paths import get_data_dir, get_data_file, write_secret_file
 
 
 class Settings(BaseSettings):
@@ -28,14 +28,22 @@ class Settings(BaseSettings):
     SSL_KEYFILE: str = ""  # Path to SSL private key
 
     # Authentication
-    API_TOKEN: str = ""  # Will generate default if not set
+    API_TOKEN: str = Field(default="", repr=False)  # Will generate default if not set
+
+    # Federated search (#149). The cockpit (CFactory) aggregates every portal's
+    # work and exposes a ranked /api/search; this portal proxies to it so its ⌘K
+    # palette offers the same cross-portal search same-origin. CFACTORY_SEARCH_URL
+    # is the cockpit's in-cluster base; CFACTORY_READ_KEY is a read-scoped cockpit
+    # key. Both empty = feature off (proxy returns an empty result set).
+    CFACTORY_SEARCH_URL: str = "http://cfactory.factory.svc.cluster.local:3111"
+    CFACTORY_READ_KEY: str = ""
     DISABLE_AUTH: bool = False  # Set to True to disable auth (dev only)
     # Escape hatch for DISABLE_AUTH on a non-loopback HOST. Off by default so
     # the startup guard hard-fails an unauthenticated network binding.
     ALLOW_INSECURE_AUTH: bool = False
 
     # JWT Configuration
-    JWT_SECRET: str = ""  # Auto-generated if not set
+    JWT_SECRET: str = Field(default="", repr=False)  # Auto-generated if not set
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     JWT_ALGORITHM: str = "HS256"
@@ -94,6 +102,19 @@ class Settings(BaseSettings):
     LIVENESS_SWEEP_INTERVAL_SECONDS: int = 300  # how often to sweep
     LIVENESS_SWEEP_DEADLINE_SECONDS: float = 600  # idle budget before stalled
 
+    # Inline-orphan startup reconcile (#774) — one-shot at boot: fail any spec
+    # stranded at `planning`/`generating` by a control-plane roll (those inline
+    # stages have no Job for the #767 reaper to see). Safe under the RWO
+    # workspaces PVC (a fresh pod only mounts after the dead one released it).
+    # ON by default; set APP_INLINE_ORPHAN_RECONCILE_ENABLED=0 to disable (e.g.
+    # a dev server started with --reload, where subprocesses outlive the reload).
+    INLINE_ORPHAN_RECONCILE_ENABLED: bool = True
+
+    # Worktree GC (#742) — one-shot at boot: remove the per-spec git worktree of
+    # terminal specs to reclaim disk on the workspaces PVC (#781). ON by default;
+    # set APP_WORKTREE_GC_ENABLED=0 to disable.
+    WORKTREE_GC_ENABLED: bool = True
+
     # Completion-event outbox relay (#281) — drains the durable outbox so
     # RFC-0001 completion events reach CFactory at-least-once, surviving crashes
     # and transient sink outages. OFF by default; opt in with
@@ -109,7 +130,7 @@ class Settings(BaseSettings):
     # the endpoint validates a shared secret in the X-TFactory-Handback-Token
     # header against INBOUND_HANDBACK_SECRET.
     INBOUND_HANDBACK_ENABLED: bool = False
-    INBOUND_HANDBACK_SECRET: str = ""
+    INBOUND_HANDBACK_SECRET: str = Field(default="", repr=False)
 
     class Config:
         env_file = ".env"
@@ -159,8 +180,7 @@ class Settings(BaseSettings):
 
         # Save token
         token_file.parent.mkdir(parents=True, exist_ok=True)
-        token_file.write_text(token)
-        token_file.chmod(0o600)  # Owner read/write only
+        write_secret_file(token_file, token)  # 0600 from creation, no readable window
 
         print(f"\n{'=' * 60}")
         print("TFactory - First Run Setup")
@@ -189,8 +209,7 @@ class Settings(BaseSettings):
 
         # Save secret
         secret_file.parent.mkdir(parents=True, exist_ok=True)
-        secret_file.write_text(secret)
-        secret_file.chmod(0o600)  # Owner read/write only
+        write_secret_file(secret_file, secret)  # 0600 from creation, no readable window
 
         return secret
 

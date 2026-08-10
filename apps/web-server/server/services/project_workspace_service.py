@@ -178,6 +178,20 @@ def _validate_git_ref(ref: str) -> str:
     return ref
 
 
+# Per-workspace clone locks (#806): two concurrent first-ingests of the same
+# project both clone+set-url into the same dir and collide on the git config lock
+# ("could not lock config file .git/config"), 500-ing one. Serialize per
+# workspace path so the second caller waits, then finds the clone present and
+# takes the idempotent fetch path. In-process is sufficient: the workspaces PVC is
+# ReadWriteOnce, so a single pod owns the clone dir.
+_clone_locks: dict[str, asyncio.Lock] = {}
+
+
+def _clone_lock_for(workspace: Path) -> asyncio.Lock:
+    # setdefault is atomic across the single-threaded event loop (no await here).
+    return _clone_locks.setdefault(str(workspace), asyncio.Lock())
+
+
 async def clone_or_update(
     git_url: str,
     branch: str | None = None,
@@ -239,73 +253,74 @@ async def clone_or_update(
     else:
         askpass_ctx = contextlib.nullcontext({})
 
-    with askpass_ctx as cred_env:
-        if (workspace / ".git").is_dir():
-            # Existing clone — fetch + reset/fast-forward.
-            # For credentialed pulls, point origin at the username-only URL
-            # FOR THIS OPERATION ONLY, then restore the bare origin afterwards.
-            if credential is not None:
-                await _run_git(
-                    ["remote", "set-url", "origin", fetch_url],
-                    cwd=workspace,
-                    timeout=timeout_seconds,
-                )
-            try:
-                await _run_git(
-                    ["fetch", "--prune", "origin"],
-                    cwd=workspace,
-                    timeout=timeout_seconds,
-                    extra_env=cred_env,
-                )
-                if branch:
+    async with _clone_lock_for(workspace):
+        with askpass_ctx as cred_env:
+            if (workspace / ".git").is_dir():
+                # Existing clone — fetch + reset/fast-forward.
+                # For credentialed pulls, point origin at the username-only URL
+                # FOR THIS OPERATION ONLY, then restore the bare origin afterwards.
+                if credential is not None:
                     await _run_git(
-                        ["checkout", branch],
+                        ["remote", "set-url", "origin", fetch_url],
                         cwd=workspace,
                         timeout=timeout_seconds,
                     )
-                await _run_git(
-                    ["pull", "--ff-only"],
-                    cwd=workspace,
-                    timeout=timeout_seconds,
-                    extra_env=cred_env,
-                )
-            finally:
-                if credential is not None:
-                    # Restore origin to the bare URL so even the username
-                    # doesn't linger in ``.git/config``.
-                    try:
+                try:
+                    await _run_git(
+                        ["fetch", "--prune", "origin"],
+                        cwd=workspace,
+                        timeout=timeout_seconds,
+                        extra_env=cred_env,
+                    )
+                    if branch:
                         await _run_git(
-                            ["remote", "set-url", "origin", git_url],
+                            ["checkout", branch],
                             cwd=workspace,
                             timeout=timeout_seconds,
                         )
-                    except GitOperationError:
-                        pass
-            logger.info("[workspace] pulled latest into %s", workspace)
-            return workspace
+                    await _run_git(
+                        ["pull", "--ff-only"],
+                        cwd=workspace,
+                        timeout=timeout_seconds,
+                        extra_env=cred_env,
+                    )
+                finally:
+                    if credential is not None:
+                        # Restore origin to the bare URL so even the username
+                        # doesn't linger in ``.git/config``.
+                        try:
+                            await _run_git(
+                                ["remote", "set-url", "origin", git_url],
+                                cwd=workspace,
+                                timeout=timeout_seconds,
+                            )
+                        except GitOperationError:
+                            pass
+                logger.info("[workspace] pulled latest into %s", workspace)
+                return workspace
 
-        # Fresh clone. ``--`` ends option parsing so a hostile URL/dir starting
-        # with ``-`` can't be read as a git flag (review C1 arg-injection).
-        cmd = ["clone"]
-        if branch:
-            cmd.extend(["--branch", branch])
-        cmd.extend(["--", fetch_url, str(workspace)])
-        await _run_git(
-            cmd, cwd=workspace.parent, timeout=timeout_seconds, extra_env=cred_env
-        )
-        if credential is not None:
-            # Strip the credential username from origin so it isn't persisted
-            # in the workspace's ``.git/config``.
-            try:
-                await _run_git(
-                    ["remote", "set-url", "origin", git_url],
-                    cwd=workspace,
-                    timeout=timeout_seconds,
-                )
-            except GitOperationError:
-                pass
-        logger.info("[workspace] cloned %s → %s", git_url, workspace)
-        return workspace
+            # Fresh clone. ``--`` ends option parsing so a hostile URL/dir starting
+            # with ``-`` can't be read as a git flag (review C1 arg-injection).
+            cmd = ["clone"]
+            if branch:
+                cmd.extend(["--branch", branch])
+            cmd.extend(["--", fetch_url, str(workspace)])
+            await _run_git(
+                cmd, cwd=workspace.parent, timeout=timeout_seconds, extra_env=cred_env
+            )
+            if credential is not None:
+                # Strip the credential username from origin so it isn't persisted
+                # in the workspace's ``.git/config``.
+                try:
+                    await _run_git(
+                        ["remote", "set-url", "origin", git_url],
+                        cwd=workspace,
+                        timeout=timeout_seconds,
+                    )
+                except GitOperationError:
+                    pass
+            logger.info("[workspace] cloned %s → %s", git_url, workspace)
+            return workspace
 
 
 class GitOperationError(RuntimeError):
@@ -346,9 +361,7 @@ async def _run_git(
         raise GitOperationError(f"git executable not found on PATH: {e}") from e
 
     try:
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(), timeout=timeout
-        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except asyncio.TimeoutError as e:
         try:
             proc.kill()

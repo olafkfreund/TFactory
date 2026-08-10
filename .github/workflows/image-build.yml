@@ -1,0 +1,128 @@
+# image-build.yml — Factory#486.
+#
+# Compiles the root Dockerfile on every pull request. Until this existed, no PR
+# check in this repo built that file. The `docker` acceptance job only *inspects*
+# base images with `docker buildx imagetools inspect`; the frontend jobs run
+# against the host toolchain, not the image. The first real compile happened in
+# deploy.yml and release.yml, after merge — so a base-image bump (the class that
+# killed #393 when a pinned Chainguard digest was garbage-collected upstream)
+# merged without anything having built it. This closes that.
+#
+# Shape copied from nix-runner-image.yml and runner-images.yml, which already do
+# exactly this for the docker/tfactory-runner-* images. Differences, on purpose:
+#
+#   NO `paths:` filter. A required status check that does not run on a given PR
+#   leaves that PR blocked forever, so this runs on every PR unconditionally.
+#   (Related trap this fleet has been bitten by: in GitHub path filters `*` does
+#   not cross `/`, so '*.md' and '**/*.md' select different things.)
+#
+#   No registry write. `push: false`, no docker/login-action, no packages: write.
+#   `load: true` only so the smoke step below can run the image.
+#
+# Rule 4.7 — every way this job can fail to do its work is an explicit failure:
+#   * No matrix, so there is no "matrix resolved to zero targets" silent pass.
+#   * No `if:` on any step, so no step can be skipped into a green.
+#   * The build is not trusted on its own: the smoke step asserts the image was
+#     actually produced (`docker image inspect`) and actually runs. A build that
+#     somehow exported nothing goes red instead of passing quietly.
+#
+# Cost: see the PR that introduced this for measured wall-clock. The gha layer
+# cache (scope=image-build) is populated by the push-to-dev run below, which is
+# what PR runs read from — Actions caches fall back to the default branch.
+
+name: Image build (PR gate)
+
+on:
+  pull_request: {}
+  # Populate the gha layer cache on the default branch so PR runs are warm.
+  push:
+    branches: [dev]
+
+concurrency:
+  # Includes github.workflow: a bare `<name>-${{ github.ref }}` group collides
+  # with any other workflow that reuses the same key on the same ref, and the two
+  # runs then cancel each other (CFactory#265).
+  group: image-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  TAG: tfactory:pr-${{ github.sha }}
+
+jobs:
+  build:
+    name: Build root Dockerfile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Factory#495 — the toolchain CI tests on and the toolchain the image
+      # builds with must be the same Node major.
+      #
+      # They were not. This repo tested on one major and built the shipped bundle
+      # on another, and `engines` was satisfied by both so nothing complained.
+      # The build below (#486) catches a Node major that cannot BUILD. It cannot
+      # catch one that builds a DIFFERENT bundle from the one the tests ran
+      # against — different Rollup native binary, different transpile target,
+      # different `npm ci` resolution — because in that case the tests are green
+      # AND the image builds.
+      #
+      # `.nvmrc` is the single declaration. Every `actions/setup-node` reads it
+      # via `node-version-file`, so the workflow side cannot drift by
+      # construction; this step is what stops the Dockerfile drifting away from
+      # it, which is the direction it drifted last time (a base-image bump that
+      # did not move the workflow). Runs before the build so a mismatch fails in
+      # seconds rather than after a full image compile.
+      #
+      # Fails closed (rule 4.7): a renamed stage, a moved Dockerfile or a deleted
+      # .nvmrc leaves one side empty, and an empty-vs-empty comparison would
+      # otherwise pass. Both sides are asserted non-empty first.
+      - name: Node major — .nvmrc must match the image's frontend build stage
+        env:
+          NODE_DOCKERFILE: Dockerfile
+          NODE_STAGE: frontend-build
+        run: |
+          set -euo pipefail
+          # `|| true` on both captures so an ABSENT input reaches the explicit
+          # error below: under `pipefail` a failing grep would otherwise kill the
+          # step with no message at all, which is a red build nobody can read.
+          declared="$(head -n1 .nvmrc 2>/dev/null | tr -dc '0-9.' | cut -d. -f1 || true)"
+          built="$(grep -E "^FROM .* AS ${NODE_STAGE}\$" "${NODE_DOCKERFILE}" 2>/dev/null \
+                   | grep -oE 'node:[0-9]+' | cut -d: -f2 | sort -u || true)"
+          test -n "${declared}" \
+            || { echo "::error::.nvmrc is missing or declares no Node major"; exit 1; }
+          test -n "${built}" \
+            || { echo "::error::no 'FROM ... node:<major> AS ${NODE_STAGE}' in ${NODE_DOCKERFILE}"; exit 1; }
+          if [ "${declared}" != "${built}" ]; then
+            echo "::error::Node major drift: .nvmrc says ${declared}, ${NODE_DOCKERFILE} stage ${NODE_STAGE} builds on ${built}"
+            exit 1
+          fi
+          echo "Node major aligned: ${declared} (.nvmrc == ${NODE_DOCKERFILE} stage ${NODE_STAGE})"
+
+      - uses: docker/setup-buildx-action@v3
+
+      # amd64 only, matching deploy.yml — the p510 k3d cluster is amd64 and the
+      # frontend `vite build` fails under QEMU-emulated arm64.
+      - name: Build root Dockerfile (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ${{ env.TAG }}
+          cache-from: type=gha,scope=image-build
+          cache-to: type=gha,mode=max,scope=image-build
+
+      # The build step going green is not proof an image exists. Assert it does,
+      # then run the interpreter the deployed CMD invokes.
+      - name: Smoke — image exists and runs
+        run: |
+          set -euo pipefail
+          docker image inspect "${TAG}" > /dev/null
+          docker run --rm "${TAG}" \
+            /home/projects/MagesticAI/.venv/bin/python \
+            -c 'import sys; print("tfactory image ok:", sys.version)'

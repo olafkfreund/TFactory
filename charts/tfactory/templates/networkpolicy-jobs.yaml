@@ -1,0 +1,87 @@
+{{- /*
+NetworkPolicy for the per-task Job pods (#651, Factory#274 compensating
+controls). The main chart NetworkPolicy selects the Helm selectorLabels; the
+verify-orchestration, nix-lane, and deploy-lane Job pods built by
+apps/backend/tools/runners/kube_sandbox.py carry only `app: tfactory-sandbox`
+(+ factory.io/* on the Job object), so without this policy they matched
+nothing and had unrestricted ingress + egress.
+
+Default-deny ingress (nothing may connect INTO a task pod), egress limited to:
+  - DNS (kube-system kube-dns)
+  - 443/tcp to public IPs: nix binary caches (substituters), git remotes,
+    LLM provider APIs, the OpenTofu registry for the deploy lane
+  - the kube API server (the verify-orchestration Job dispatches nested
+    per-lane Jobs via the k8s API) — post-DNAT this is the node's port 6443
+    on k3s, so the port/cidr are values-configurable
+  - pods in the SAME namespace: Postgres (the verify Job writes its own
+    job-state row), MinIO artifact store, and the TFactory API
+*/ -}}
+{{- if and .Values.networkPolicy.enabled .Values.networkPolicy.jobPods.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "tfactory.fullname" . }}-job-pods
+  labels:
+    {{- include "tfactory.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: tfactory-sandbox
+  policyTypes:
+    - Ingress
+    - Egress
+  # No ingress rules: default-deny — nothing connects into a task pod.
+  egress:
+    # DNS lookup — flake inputs, binary caches, git remotes.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- if .Values.networkPolicy.jobPods.allowExternalHttps }}
+    # 443/tcp to public IPs only: nix substituters (cache.nixos.org), git
+    # remotes, LLM APIs, the OpenTofu registry (deploy lane `tofu init`).
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+    {{- end }}
+    {{- with .Values.networkPolicy.jobPods.kubeApiServer }}
+    {{- if .enabled }}
+    # kube API server — the verify-orchestration Job creates nested per-lane
+    # Jobs. NetworkPolicy is enforced post-DNAT on most CNIs, so this must
+    # match the API server's real endpoint (node IP:6443 on k3s), not the
+    # ClusterIP. Tighten `cidr` to the control-plane node(s) where known.
+    - to:
+        - ipBlock:
+            cidr: {{ .cidr | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ .port }}
+    {{- end }}
+    {{- end }}
+    {{- if .Values.networkPolicy.jobPods.allowIntraNamespace }}
+    # Same-namespace services the task pods legitimately need: Postgres
+    # (durable job-state row), MinIO artifacts, the TFactory API. Kept
+    # namespace-wide for simplicity — tighten via extraEgressRules +
+    # allowIntraNamespace=false where per-service selectors are known.
+    - to:
+        - podSelector: {}
+    {{- end }}
+    {{- with .Values.networkPolicy.jobPods.extraEgressRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}
