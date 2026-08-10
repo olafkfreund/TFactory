@@ -9,11 +9,19 @@ policy / handback as a blocking gate.
 
 The rule (RFC-0013 §3/§6):
 
-  - ``risk_class == "high"`` OR ``production_classification == "production"``
+  - ``risk_class`` in {``"high"``, ``"medium"``} OR
+    ``production_classification == "production"``
         => the ``deploy`` lane is REQUIRED, and a missing/failed deploy
            verification BLOCKS merge (the change must not auto-merge).
-  - otherwise (low/medium, non-prod, or no deployment block at all)
+  - otherwise (``risk_class == "low"``, non-prod, or no deployment block at all)
         => the deploy lane is NOT forced; existing behaviour is unchanged.
+
+``medium`` was added after the original #447 implementation: an intermediate-risk
+change still warrants a dry-run proof before merge, and the lane was previously
+``not_run`` for it. Widening the TRIGGER cannot make a deploy effectful — the
+production apply guard (``assert_dry_run`` / ``ProductionApplyError``) lives in
+``tools.runners.deploy_runner``, not here, and this module neither imports nor
+calls it.
 
 This is **pure** and **additive**: an absent ``deployment`` block yields
 ``DeployRequirement(required=False, ...)`` so old contracts behave exactly as

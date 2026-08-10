@@ -51,7 +51,11 @@ def test_low_risk_does_not_force_deploy_lane():
 
 
 def test_medium_risk_forces_deploy_lane():
-    """risk_class=medium now triggers the dry-run lane (issue #252)."""
+    """risk_class=medium now triggers the dry-run lane (RFC-0013 §3, #608).
+
+    Not #252 — that number is a merged Backstage TechInsights PR in this repo.
+    The parent implementation is #447 (high/production); this is its extension.
+    """
     contract = {
         "deployment": {"risk_class": "medium", "production_classification": "internal"}
     }
