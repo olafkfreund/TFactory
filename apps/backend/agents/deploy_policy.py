@@ -9,11 +9,19 @@ policy / handback as a blocking gate.
 
 The rule (RFC-0013 §3/§6):
 
-  - ``risk_class == "high"`` OR ``production_classification == "production"``
+  - ``risk_class`` in {``"high"``, ``"medium"``} OR
+    ``production_classification == "production"``
         => the ``deploy`` lane is REQUIRED, and a missing/failed deploy
            verification BLOCKS merge (the change must not auto-merge).
-  - otherwise (low/medium, non-prod, or no deployment block at all)
+  - otherwise (``risk_class == "low"``, non-prod, or no deployment block at all)
         => the deploy lane is NOT forced; existing behaviour is unchanged.
+
+``medium`` was added after the original #447 implementation: an intermediate-risk
+change still warrants a dry-run proof before merge, and the lane was previously
+``not_run`` for it. Widening the TRIGGER cannot make a deploy effectful — the
+production apply guard (``assert_dry_run`` / ``ProductionApplyError``) lives in
+``tools.runners.deploy_runner``, not here, and this module neither imports nor
+calls it.
 
 This is **pure** and **additive**: an absent ``deployment`` block yields
 ``DeployRequirement(required=False, ...)`` so old contracts behave exactly as
@@ -44,6 +52,7 @@ __all__ = [
 DEPLOY_LANE = "deploy"
 
 _HIGH_RISK = "high"
+_MEDIUM_RISK = "medium"
 _PRODUCTION = "production"
 
 
@@ -92,9 +101,16 @@ def _norm(value: object) -> str | None:
 def deploy_requirement_from_contract(contract: dict | None) -> DeployRequirement:
     """Derive the deploy-lane requirement from a contract's ``deployment`` block.
 
-    Returns ``required=True`` when ``risk_class == "high"`` or
-    ``production_classification == "production"`` (RFC-0013 §3). An absent
-    deployment block, or a low/medium non-prod one, yields ``required=False``.
+    Returns ``required=True`` when any of the following hold (RFC-0013 §3):
+      * ``risk_class == "high"``   — highest structural risk;
+      * ``risk_class == "medium"`` — intermediate risk, still warrants a dry-run
+                                      proof before merge (additive; was not_run before);
+      * ``production_classification == "production"`` — touches prod.
+
+    An absent deployment block, or a ``risk_class == "low"`` non-prod one, yields
+    ``required=False``. The dry-run production guard (``assert_dry_run`` /
+    ``ProductionApplyError``) lives in ``deploy_runner``, NOT here, so widening
+    the trigger cannot cause an effectful apply.
     """
     block = deployment_block_from_contract(contract)
     if block is None:
@@ -106,6 +122,8 @@ def deploy_requirement_from_contract(contract: dict | None) -> DeployRequirement
     reasons: list[str] = []
     if risk == _HIGH_RISK:
         reasons.append("risk_class=high")
+    if risk == _MEDIUM_RISK:
+        reasons.append("risk_class=medium")
     if prod == _PRODUCTION:
         reasons.append("production_classification=production")
 
