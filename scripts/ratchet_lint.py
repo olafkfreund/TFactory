@@ -56,8 +56,10 @@ import re
 import subprocess
 import sys
 from collections import Counter
+from collections.abc import Mapping
 from functools import cache
 from pathlib import Path
+from types import MappingProxyType
 
 # Canonical shared ratchet rules, vendored byte-exact from the Factory hub
 # and byte-exact drift-gated (Factory#403). scripts/ is sys.path[0] when this
@@ -144,7 +146,13 @@ def owning_package(path: str, packages: list[str]) -> str:
 
 
 def changed_python_files(base: str, packages: list[str]) -> list[str]:
-    """Python files under any of *packages* changed (added/modified) vs *base*."""
+    """Python files under any of *packages* changed vs *base*.
+
+    ``ACMR`` — added, copied, modified, RENAMED. ``diff.renames`` has defaulted
+    to true since git 2.9, so a moved file has status R; the previous ``AM``
+    excluded it and a rename was gated by nothing at all (#1005). See
+    :func:`rename_sources` for why the baseline must follow the move.
+    """
     res = _run(["git", "diff", "--name-only", "--diff-filter=ACMR", f"{base}...HEAD"])
     if res.returncode != 0:
         sys.stderr.write(res.stderr)
@@ -189,7 +197,7 @@ def ruff_counts(source: str, filename: str) -> Counter[str]:
 
 
 @cache
-def rename_sources(base: str) -> tuple[tuple[str, str], ...]:
+def rename_sources(base: str) -> Mapping[str, str]:
     """``(head_path, base_path)`` pairs for files this diff MOVED.
 
     The other half of the ``ACMR`` change above (#1005). Once renames are
@@ -202,9 +210,11 @@ def rename_sources(base: str) -> tuple[tuple[str, str], ...]:
     Renames are what ``-M`` reports; ask git rather than guessing from content
     similarity here. Cached per base — one subprocess, not one per file.
 
-    Returns a tuple of pairs rather than a dict because the value is CACHED and
-    therefore shared: every caller gets the same object back, so a mutable one
-    could be modified by one caller and silently observed by the next.
+    Returns a read-only ``MappingProxyType``: the value is CACHED and therefore
+    shared, so a plain dict could be mutated by one caller and silently observed
+    by the next — while a tuple of pairs would make every caller rebuild a dict
+    per file, for both the ruff and the mypy leg. The proxy is immutable AND
+    directly subscriptable.
     """
     res = _run(
         ["git", "diff", "--name-status", "-M", "--diff-filter=R", f"{base}...HEAD"]
@@ -212,15 +222,15 @@ def rename_sources(base: str) -> tuple[tuple[str, str], ...]:
     if res.returncode != 0:
         # No rename information available: fall back to identity mapping rather
         # than failing. Worst case is the pre-#1005 behaviour for moved files.
-        return ()
-    pairs: list[tuple[str, str]] = []
+        return MappingProxyType({})
+    pairs: dict[str, str] = {}
     for line in res.stdout.splitlines():
         # `R<similarity>\told\tnew`
         status, _, paths = line.partition("\t")
         old, _, new = paths.partition("\t")
         if status.startswith("R") and old and new:
-            pairs.append((new, old))
-    return tuple(pairs)
+            pairs[new] = old
+    return MappingProxyType(pairs)
 
 
 def file_at_base(base: str, path: str) -> str | None:
@@ -230,7 +240,7 @@ def file_at_base(base: str, path: str) -> str | None:
     path in :func:`regressions` — only the CONTENT comes from the old location.
     Judging the two sides under different per-file-ignores is Factory#510.
     """
-    src = dict(rename_sources(base)).get(path, path)
+    src = rename_sources(base).get(path, path)
     res = _run(["git", "show", f"{base}:{src}"])
     return res.stdout if res.returncode == 0 else None
 
