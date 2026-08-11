@@ -1358,3 +1358,84 @@ def test_replan_budget_partial_verify_records_tests_generated(
     assert status["phase"] == "planner_replan_budget_partial_verify", status
     assert status["status"] == "generated"
     assert status["tests_generated"] == 1, status
+
+
+def _stage_planning_worker(spec_dir: Path, *, requested: str, observed: str) -> None:
+    """Stage the usage record a real session would have folded into status.json.
+
+    ``worker_id`` is load-bearing: ``usage._workers_from_status`` re-indexes on
+    it and drops any record without one.
+    """
+    (spec_dir / "status.json").write_text(
+        json.dumps(
+            {
+                "usage": {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cost_usd": 0.0,
+                    "workers": [
+                        {
+                            "worker_id": "planning",
+                            "phase": "planning",
+                            "requested_model": requested,
+                            "model": observed,
+                            "input_tokens": 0,
+                            "output_tokens": 0,
+                        }
+                    ],
+                }
+            }
+        )
+    )
+
+# ── End to end: the behaviour the issue actually asked for ────────────────
+#
+# "with a deliberately invalid credential, assert the resulting status names
+#  authentication and that exactly one session is attempted. Asserting only that
+#  the run fails would pass today."
+
+
+@pytest.mark.asyncio
+async def test_only_ONE_session_is_attempted_when_the_first_never_ran(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """The whole point: no retry into an auth failure that cannot succeed."""
+    calls = mock_sdk(plans=[None, None])  # both sessions would write nothing
+
+    # Faithful to what record_in_status persists when a session never reaches a
+    # model: requested id known, observed id empty. The mock does not write
+    # usage, so stage it as the session would have.
+    _stage_planning_worker(spec_dir, requested="claude-opus-5", observed="")
+
+    ok = await run_planner(spec_dir, project_dir)
+
+    assert ok is False
+    assert len(calls) == 1, "a session that never ran must not be retried"
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["status"] == "planner_failed"
+    assert status["phase"] == "planner_session_never_ran"
+    # The record must point at the environment, not at plan validity — the whole
+    # misattribution this fixes.
+    assert "invalid" not in status["phase"]
+    assert "credential" in status["planner_error"]
+
+
+@pytest.mark.asyncio
+async def test_a_local_model_run_still_gets_its_retry(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """The guard must not steal Ollama's legitimate second attempt.
+
+    Zero tokens, observed model set — a real local run. The first session writes
+    nothing, the retry succeeds, and the run must PLAN rather than be declared
+    an auth failure.
+    """
+    calls = mock_sdk(plans=[None, _make_valid_plan_json(1)])
+    _stage_planning_worker(
+        spec_dir, requested="ollama:qwen3:14b", observed="qwen3:14b"
+    )
+
+    ok = await run_planner(spec_dir, project_dir)
+
+    assert ok is True, "a zero-token local run must keep its retry"
+    assert len(calls) == 2
