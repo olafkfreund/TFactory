@@ -56,7 +56,10 @@ import re
 import subprocess
 import sys
 from collections import Counter
+from collections.abc import Mapping
+from functools import cache
 from pathlib import Path
+from types import MappingProxyType
 
 # Canonical shared ratchet rules, vendored byte-exact from the Factory hub
 # and byte-exact drift-gated (Factory#403). scripts/ is sys.path[0] when this
@@ -143,8 +146,14 @@ def owning_package(path: str, packages: list[str]) -> str:
 
 
 def changed_python_files(base: str, packages: list[str]) -> list[str]:
-    """Python files under any of *packages* changed (added/modified) vs *base*."""
-    res = _run(["git", "diff", "--name-only", "--diff-filter=AM", f"{base}...HEAD"])
+    """Python files under any of *packages* changed vs *base*.
+
+    ``ACMR`` — added, copied, modified, RENAMED. ``diff.renames`` has defaulted
+    to true since git 2.9, so a moved file has status R; the previous ``AM``
+    excluded it and a rename was gated by nothing at all (#1005). See
+    :func:`rename_sources` for why the baseline must follow the move.
+    """
+    res = _run(["git", "diff", "--name-only", "--diff-filter=ACMR", f"{base}...HEAD"])
     if res.returncode != 0:
         sys.stderr.write(res.stderr)
         sys.exit(2)
@@ -187,8 +196,63 @@ def ruff_counts(source: str, filename: str) -> Counter[str]:
     return ruff_findings(res)
 
 
+@cache
+def rename_sources(base: str) -> Mapping[str, str]:
+    """``(head_path, base_path)`` pairs for files this diff MOVED.
+
+    The other half of the ``ACMR`` change above (#1005). Once renames are
+    visible, looking a moved file up on base by its HEAD path finds nothing and
+    reads the baseline as **0**, so every pre-existing violation in it reports
+    as net-new. AIFactory's fork had exactly that and made a pure ``git mv`` of
+    a legacy file report ``0 -> 167`` — a gate punishing the cleanup it exists
+    to encourage (AIFactory#1218).
+
+    Renames are what ``-M`` reports; ask git rather than guessing from content
+    similarity here. Cached per base — one subprocess, not one per file.
+
+    Returns a read-only ``MappingProxyType``: the value is CACHED and therefore
+    shared, so a plain dict could be mutated by one caller and silently observed
+    by the next — while a tuple of pairs would make every caller rebuild a dict
+    per file, for both the ruff and the mypy leg. The proxy is immutable AND
+    directly subscriptable.
+    """
+    res = _run(
+        ["git", "diff", "--name-status", "-M", "--diff-filter=R", f"{base}...HEAD"]
+    )
+    if res.returncode != 0:
+        # Return an EMPTY map rather than failing: `file_at_base` then falls
+        # through its `.get(path, path)` to the HEAD path, which is the
+        # pre-fix behaviour for moved files. Say "empty", not "identity" —
+        # the identity is what the CALLER does with an empty map, and the
+        # stderr line below says the baseline reads empty.
+        #
+        # But SAY SO. A gate that quietly gets less accurate is the failure
+        # mode this whole change is about.
+        sys.stderr.write(
+            "ratchet: could not read rename information; moved files will be "
+            "measured against an empty baseline\n"
+        )
+        sys.stderr.write(res.stderr)
+        return MappingProxyType({})
+    pairs: dict[str, str] = {}
+    for line in res.stdout.splitlines():
+        # `R<similarity>\told\tnew`
+        status, _, paths = line.partition("\t")
+        old, _, new = paths.partition("\t")
+        if status.startswith("R") and old and new:
+            pairs[new] = old
+    return MappingProxyType(pairs)
+
+
 def file_at_base(base: str, path: str) -> str | None:
-    res = _run(["git", "show", f"{base}:{path}"])
+    """The file's content on *base*, following a rename to its old path.
+
+    Identity (the ``path`` the counter judges by) deliberately stays the HEAD
+    path in :func:`regressions` — only the CONTENT comes from the old location.
+    Judging the two sides under different per-file-ignores is Factory#510.
+    """
+    src = rename_sources(base).get(path, path)
+    res = _run(["git", "show", f"{base}:{src}"])
     return res.stdout if res.returncode == 0 else None
 
 
