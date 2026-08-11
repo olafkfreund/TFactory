@@ -1363,30 +1363,37 @@ def test_replan_budget_partial_verify_records_tests_generated(
 def _stage_planning_worker(spec_dir: Path, *, requested: str, observed: str) -> None:
     """Stage the usage record a real session would have folded into status.json.
 
+    UPDATES the existing status rather than replacing it: the ``spec_dir``
+    fixture writes ``task_id``/``project_id``/``spec_id``/``status``/``phase``
+    exactly as ``task_create_and_run`` would, and ``record_in_status`` only ever
+    touches the ``usage`` key. Clobbering the rest would test a status shape
+    production never produces and could hide a bug in code that reads them.
+
     ``worker_id`` is load-bearing: ``usage._workers_from_status`` re-indexes on
     it and drops any record without one.
     """
-    (spec_dir / "status.json").write_text(
-        json.dumps(
+    path = spec_dir / "status.json"
+    try:
+        status = json.loads(path.read_text())
+    except (OSError, ValueError):
+        status = {}
+    status["usage"] = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "workers": [
             {
-                "usage": {
-                    "input_tokens": 0,
-                    "output_tokens": 0,
-                    "cost_usd": 0.0,
-                    "workers": [
-                        {
-                            "worker_id": "planning",
-                            "phase": "planning",
-                            "requested_model": requested,
-                            "model": observed,
-                            "input_tokens": 0,
-                            "output_tokens": 0,
-                        }
-                    ],
-                }
+                "worker_id": "planning",
+                "phase": "planning",
+                "requested_model": requested,
+                "model": observed,
+                "input_tokens": 0,
+                "output_tokens": 0,
             }
-        )
-    )
+        ],
+    }
+    path.write_text(json.dumps(status))
+
 
 # ── End to end: the behaviour the issue actually asked for ────────────────
 #
@@ -1411,6 +1418,9 @@ async def test_only_ONE_session_is_attempted_when_the_first_never_ran(
 
     assert ok is False
     assert len(calls) == 1, "a session that never ran must not be retried"
+    # The staged usage must not have wiped the spec's own identity fields —
+    # a status.json carrying only `usage` is a shape production never writes.
+    assert json.loads((spec_dir / "status.json").read_text())["spec_id"] == "001"
     status = json.loads((spec_dir / "status.json").read_text())
     assert status["status"] == "planner_failed"
     assert status["phase"] == "planner_session_never_ran"

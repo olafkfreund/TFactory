@@ -16,14 +16,10 @@ legitimate retry on every local-model run.
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apps" / "backend"))
-
-from agents.planner import _planning_reached_a_model  # noqa: E402
+from agents.planner import _planning_reached_a_model
 
 
 def _write_status(spec_dir: Path, workers: list[dict] | None) -> None:
