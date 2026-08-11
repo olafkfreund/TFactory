@@ -220,8 +220,16 @@ def rename_sources(base: str) -> Mapping[str, str]:
         ["git", "diff", "--name-status", "-M", "--diff-filter=R", f"{base}...HEAD"]
     )
     if res.returncode != 0:
-        # No rename information available: fall back to identity mapping rather
-        # than failing. Worst case is the pre-#1005 behaviour for moved files.
+        # Fall back to identity mapping rather than failing — worst case is the
+        # pre-#1005 behaviour for moved files — but SAY SO. A gate that quietly
+        # gets less accurate is the failure mode this whole change is about: the
+        # baseline would silently read as empty for a moved file and nothing
+        # would indicate why.
+        sys.stderr.write(
+            "ratchet: could not read rename information; moved files will be "
+            "measured against an empty baseline\n"
+        )
+        sys.stderr.write(res.stderr)
         return MappingProxyType({})
     pairs: dict[str, str] = {}
     for line in res.stdout.splitlines():
