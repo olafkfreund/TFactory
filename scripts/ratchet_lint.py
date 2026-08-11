@@ -220,11 +220,14 @@ def rename_sources(base: str) -> Mapping[str, str]:
         ["git", "diff", "--name-status", "-M", "--diff-filter=R", f"{base}...HEAD"]
     )
     if res.returncode != 0:
-        # Fall back to identity mapping rather than failing — worst case is the
-        # pre-#1005 behaviour for moved files — but SAY SO. A gate that quietly
-        # gets less accurate is the failure mode this whole change is about: the
-        # baseline would silently read as empty for a moved file and nothing
-        # would indicate why.
+        # Return an EMPTY map rather than failing: `file_at_base` then falls
+        # through its `.get(path, path)` to the HEAD path, which is the
+        # pre-fix behaviour for moved files. Say "empty", not "identity" —
+        # the identity is what the CALLER does with an empty map, and the
+        # stderr line below says the baseline reads empty.
+        #
+        # But SAY SO. A gate that quietly gets less accurate is the failure
+        # mode this whole change is about.
         sys.stderr.write(
             "ratchet: could not read rename information; moved files will be "
             "measured against an empty baseline\n"
