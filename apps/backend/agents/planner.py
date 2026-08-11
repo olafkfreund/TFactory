@@ -382,7 +382,52 @@ _ERR_KIND_MEANING = {
 }
 
 
-async def _run_session_with_retry(
+def _planning_reached_a_model(spec_dir: Path) -> bool:
+    """Did any planning session actually reach a model? (#1011)
+
+    NOT a token check, deliberately. Ollama and the OpenAI-compatible endpoints
+    report **no token counts at all** but DO report which model served the turn
+    — ``usage.record_in_status`` exists to capture exactly that. A zero-token
+    predicate would classify every local-model planner run as "never ran",
+    suppress its legitimate retry, and blame a credential that was fine.
+
+    The honest signal is the OBSERVED model id, which ``usage.record_in_status``
+    already refuses to guess: *"NEVER the requested model — a request is not
+    evidence that anything ran."* A session that never started leaves
+    ``workers[planning].model`` empty while ``requested_model`` is set, and the
+    record degrades to the ``model: "<synthetic>"`` seen in #1011's failure.
+
+    Cumulative by design: ``_fold_worker`` only ever overwrites ``model`` with
+    another observed id, so once ANY planning session has reached a model this
+    stays True and the normal retry applies.
+
+    Returns **True when it cannot tell** — an unreadable status must behave
+    exactly as today rather than invent an auth failure. Same reason
+    ``credential_validity`` keeps ``unknown`` out of ``invalid`` (#858).
+    """
+    try:
+        # Deferred: keeps this diagnosis off the module import path, and the
+        # whole call is inside the try so an import failure degrades to "cannot
+        # tell" rather than taking the planner down.
+        from usage import usage_block_from_status  # noqa: PLC0415
+
+        block = usage_block_from_status(spec_dir) or {}
+    except Exception:  # noqa: BLE001 - diagnosis must never break the planner
+        return True
+    workers = block.get("workers")
+    if not isinstance(workers, list):
+        # No per-phase record at all: nothing to conclude from, so behave as
+        # today. (The key is omitted entirely when nothing was observed, #869.)
+        return True
+    for w in workers:
+        if not isinstance(w, dict):
+            continue
+        if str(w.get("phase") or "") == "planning" and str(w.get("model") or ""):
+            return True
+    return False
+
+
+async def _run_session_with_retry(  # noqa: PLR0911 - one guard clause per way a planner session can end
     spec_dir: Path,
     project_dir: Path,
     prompt: str,
@@ -420,6 +465,33 @@ async def _run_session_with_retry(
     ok, err_kind, plan = _validate_emitted_plan(spec_dir)
     if ok:
         return True, plan
+
+    # #1011: the session returned WITHOUT error and wrote nothing because it
+    # never reached a model — a dead credential, on 2026-08-07. The #854 guard
+    # above misses this: it keys on ``status == "error"``, and this session did
+    # not error, so control fell through to "plan missing -> retry". Retrying an
+    # auth failure cannot succeed; it spends another wall-clock minute reaching
+    # the same verdict, and the run is then filed under a phase that names plan
+    # validity while the record's own ``model: "<synthetic>"`` says the session
+    # never started.
+    if not _planning_reached_a_model(spec_dir):
+        _planner_log.error(
+            "planner: the session never reached a model (no observed model id "
+            "recorded for the planning phase) — not retrying"
+        )
+        _write_status_patch(
+            spec_dir,
+            status="planner_failed",
+            phase="planner_session_never_ran",
+            planner_error=(
+                "the planning session never reached a model — no observed model "
+                "id was recorded, so no plan could have been produced. This is an "
+                "environment failure (most often an expired or revoked Claude "
+                "credential), not an invalid plan. Not retried: an auth failure "
+                "cannot succeed on a second attempt."
+            ),
+        )
+        return False, None
 
     _planner_log.warning(
         "planner: first session produced %s (%s); retrying once", err_kind, plan
