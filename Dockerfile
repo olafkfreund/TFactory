@@ -182,8 +182,21 @@ RUN mkdir -p /home/nonroot/.npm-global \
 # never npm-installs them. The install-clis init container did this at pod start
 # and, on a slow/hung npm registry, ran 8+ min and stalled the whole rollout —
 # stranding in-flight specs. .npm-global/bin is already on PATH (below). Versions
-# are pinned here now (Dependabot tracks the Dockerfile); a bump is an image
-# rebuild + canary, same as any other dependency.
+# are pinned here now; a bump is an image rebuild + canary, same as any other
+# dependency.
+#
+# The pins are watched by the hub `agent-CLI freshness` job
+# (Factory/scripts/check_cli_freshness.py --open-bump-pr), which proposes bumps
+# as `chore/agent-cli-pins` across all three service repos at once and never
+# merges them, plus factory-gitops/.github/workflows/cli-canary.yml, which
+# asserts every repo pins all three CLIs identically and that each pin installs
+# and launches.
+#
+# NOT Dependabot, whatever an earlier version of this comment claimed
+# (factory-gitops#206). Dependabot's Dockerfile parser reads `FROM` lines only —
+# no package-ecosystem parses shell arguments inside a RUN layer, so it cannot
+# see the `@version` on the npm install below and never could. It does cover the
+# `FROM` lines in this file, and nothing else in it.
 #
 # `install.cjs` is NOT redundant with the npm postinstall (Factory#383). The
 # postinstall downloads the 275 MB platform-native binary correctly, but leaves
