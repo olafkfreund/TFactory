@@ -1,10 +1,22 @@
-# CodeQL advanced-setup config. Runs the default query suite for every rule,
-# but swaps the stock py/path-injection for our barrier-aware variant
-# (py/path-injection-sanitized) which recognises this repo's sanitizers
-# (safe_component / safe_spec_dir / safe_join / os.path.basename /
-# get_next_spec_id) so verified-safe code clears organically.
+# CodeQL advanced-setup config. Swaps the stock py/path-injection for our
+# barrier-aware variant (py/path-injection-sanitized) which recognises this
+# repo's sanitizers (safe_component / safe_spec_dir / safe_join /
+# os.path.basename / get_next_spec_id) so verified-safe code clears organically.
+#
+# security-and-quality added (Factory#711). This repo reported ZERO open
+# code-scanning alerts while AIFactory reported ~1470 — and the difference was
+# almost entirely which questions were being asked, not code quality. TFactory
+# never ran anything but CodeQL's DEFAULT suite; the rules that make up the bulk
+# of AIFactory's volume (py/log-injection, py/stack-trace-exposure,
+# py/empty-except, py/unused-import) live in security-and-quality only.
+#
+# A zero produced by asking less is the same failure as a nightly that cannot go
+# red (Factory#697): the number improves because the measurement stopped. Expect
+# this repo's count to jump sharply on the first scan after this lands. That is
+# the change working, not a regression.
 name: "TFactory CodeQL config"
 queries:
+  - uses: security-and-quality
   - uses: ./.github/codeql/custom-queries
 query-filters:
   - exclude:
