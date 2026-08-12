@@ -221,12 +221,48 @@ class TestToolExecutorReadWrite:
 class TestAgenticProviderInit:
     """OllamaAgenticProvider initialization and payload building."""
 
-    def test_default_values(self):
+    def test_default_values(self, monkeypatch):
+        # The endpoint is resolved from the environment since #1099, so this
+        # has to clear it or the assertion below depends on whoever is running
+        # the suite.
+        for var in ("OLLAMA_BASE_URL", "OLLAMA_API_URL", "OLLAMA_HOST"):
+            monkeypatch.delenv(var, raising=False)
         p = OllamaAgenticProvider()
         assert p._model == "llama3.2"
         assert p._base_url == "http://localhost:11434"
         assert p._max_turns == 25
         assert p._timeout == 600
+
+    # ---- #1099: the endpoint must come from the environment -----------------
+    #
+    # The defect: neither provider read any env var, so a contract pinned to
+    # `ollama:<model>` used the localhost default INSIDE A POD, where there is
+    # no Ollama — and the only working route was to spell the phase
+    # `openai-compatible:` instead. Nothing in the production call path passes
+    # a base_url, so the constructor default was the whole behaviour.
+
+    def test_env_supplies_the_endpoint_when_the_caller_names_none(self, monkeypatch):
+        monkeypatch.setenv("OLLAMA_BASE_URL", "http://host.k3d.internal:11434")
+        assert OllamaAgenticProvider()._base_url == "http://host.k3d.internal:11434"
+
+    def test_an_explicit_base_url_still_wins_over_the_environment(self, monkeypatch):
+        # Resolution must not become a new way to ignore the caller.
+        monkeypatch.setenv("OLLAMA_BASE_URL", "http://from-env:11434")
+        p = OllamaAgenticProvider(base_url="http://explicit:11434")
+        assert p._base_url == "http://explicit:11434"
+
+    def test_ollama_host_is_accepted_last(self, monkeypatch):
+        # Ollama's own client variable, honoured so an operator who set only
+        # that is not silently sent to localhost — but OLLAMA_BASE_URL wins.
+        monkeypatch.delenv("OLLAMA_API_URL", raising=False)
+        monkeypatch.setenv("OLLAMA_HOST", "http://only-host:11434")
+        assert OllamaAgenticProvider()._base_url == "http://only-host:11434"
+        monkeypatch.setenv("OLLAMA_BASE_URL", "http://wins:11434")
+        assert OllamaAgenticProvider()._base_url == "http://wins:11434"
+
+    def test_a_trailing_slash_is_stripped(self, monkeypatch):
+        monkeypatch.setenv("OLLAMA_BASE_URL", "http://host.k3d.internal:11434/")
+        assert OllamaAgenticProvider()._base_url == "http://host.k3d.internal:11434"
 
     def test_custom_values(self, tmp_path):
         p = OllamaAgenticProvider(
