@@ -16,6 +16,11 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from server.services.url_safety import (
+    assert_safe_outbound_url,
+    build_no_redirect_opener,
+)
+
 from ._specpath import safe_join
 
 # Single source of truth for the gh-CLI wrapper lives in github.py (its heaviest
@@ -203,10 +208,16 @@ def _safe_ollama_base_url(base_url: str | None) -> str:
     """Validate a request-supplied Ollama base URL (SSRF guard, review H2).
 
     Ollama may legitimately run on the LAN (e.g. host.k3d.internal), so private
-    ranges aren't blocked, but the scheme must be http/https, the cloud-metadata
-    endpoint is blocked, and only ``scheme://netloc`` is returned -- dropping any
-    path/query/fragment so the appended ``/api/...`` can't be truncated (``#``)
-    or redirected to another resource.
+    ranges aren't blocked (``allow_private=True``), but the shared guard in
+    ``services.url_safety`` enforces an http(s) scheme and resolves the host to
+    refuse the cloud metadata ranges by ADDRESS. The check this replaces
+    compared the hostname against two literal strings, which any of
+    ``169.254.169.254.nip.io``, an alternate spelling of the same address, or a
+    private name pointing there walked straight past.
+
+    Only ``scheme://netloc`` is returned -- dropping any path/query/fragment so
+    the appended ``/api/...`` can't be truncated (``#``) or redirected to
+    another resource.
     """
     if not base_url or not base_url.strip():
         return "http://localhost:11434"
@@ -215,17 +226,21 @@ def _safe_ollama_base_url(base_url: str | None) -> str:
     parsed = urlparse(base_url.strip())
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         raise HTTPException(status_code=400, detail="Invalid Ollama base URL")
-    if parsed.hostname in ("169.254.169.254", "metadata.google.internal"):
-        raise HTTPException(status_code=400, detail="Disallowed Ollama base URL")
-    return f"{parsed.scheme}://{parsed.netloc}"
+    normalized = f"{parsed.scheme}://{parsed.netloc}"
+    try:
+        assert_safe_outbound_url(normalized, allow_private=True)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Disallowed Ollama base URL: {exc}"
+        ) from exc
+    return normalized
 
 
 def check_ollama_running(base_url: str | None = None) -> bool:
     """Check if Ollama server is running."""
-    import urllib.request
     url = _safe_ollama_base_url(base_url)
     try:
-        urllib.request.urlopen(f"{url}/api/tags", timeout=5)
+        build_no_redirect_opener().open(f"{url}/api/tags", timeout=5)
         return True
     except Exception:
         return False
@@ -266,11 +281,10 @@ async def install_ollama():
 async def list_ollama_models(baseUrl: str | None = Query(None)):
     """List available Ollama models."""
     import json
-    import urllib.request
 
     url = _safe_ollama_base_url(baseUrl)
     try:
-        response = urllib.request.urlopen(f"{url}/api/tags", timeout=10)
+        response = build_no_redirect_opener().open(f"{url}/api/tags", timeout=10)
         data = json.loads(response.read().decode())
         models = [m["name"] for m in data.get("models", [])]
         return {"success": True, "data": models}
@@ -282,14 +296,13 @@ async def list_ollama_models(baseUrl: str | None = Query(None)):
 async def list_ollama_embedding_models(baseUrl: str | None = Query(None)):
     """List Ollama embedding models with installation status."""
     import json
-    import urllib.request
 
     url = _safe_ollama_base_url(baseUrl)
 
     # Get installed models from Ollama
     installed_models = set()
     try:
-        response = urllib.request.urlopen(f"{url}/api/tags", timeout=10)
+        response = build_no_redirect_opener().open(f"{url}/api/tags", timeout=10)
         data = json.loads(response.read().decode())
         for m in data.get("models", []):
             name = m.get("name", "")
@@ -336,7 +349,7 @@ async def pull_ollama_model(request: PullModelRequest):
             method="POST"
         )
         # This is a blocking call - for large models consider background task
-        response = urllib.request.urlopen(req, timeout=600)  # 10 min timeout
+        response = build_no_redirect_opener().open(req, timeout=600)  # 10 min timeout
         result = json.loads(response.read().decode())
 
         # Check if pull was successful
@@ -849,7 +862,10 @@ async def check_mcp_health(server: McpServerConfig):
             if server.headers:
                 for key, value in server.headers.items():
                     req.add_header(key, value)
-            urllib.request.urlopen(req, timeout=5)
+            # No-redirect opener: _is_safe_mcp_url_host validated the host that
+            # was configured, and a 302 to 169.254.169.254 defeats any check made
+            # before the request was sent.
+            build_no_redirect_opener().open(req, timeout=5)
             return {
                 "success": True,
                 "data": {
