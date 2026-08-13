@@ -74,7 +74,9 @@ if TREE_SITTER_AVAILABLE:
 
         LANGUAGES_AVAILABLE[".py"] = tspython.language()
     except ImportError:
-        pass
+        logger.warning(
+            "tree_sitter_python not available; .py falls back to regex analysis"
+        )
 
     try:
         import tree_sitter_javascript as tsjs
@@ -82,7 +84,9 @@ if TREE_SITTER_AVAILABLE:
         LANGUAGES_AVAILABLE[".js"] = tsjs.language()
         LANGUAGES_AVAILABLE[".jsx"] = tsjs.language()
     except ImportError:
-        pass
+        logger.warning(
+            "tree_sitter_javascript not available; .js/.jsx fall back to regex analysis"
+        )
 
     try:
         import tree_sitter_typescript as tsts
@@ -90,7 +94,9 @@ if TREE_SITTER_AVAILABLE:
         LANGUAGES_AVAILABLE[".ts"] = tsts.language_typescript()
         LANGUAGES_AVAILABLE[".tsx"] = tsts.language_tsx()
     except ImportError:
-        pass
+        logger.warning(
+            "tree_sitter_typescript not available; .ts/.tsx fall back to regex analysis"
+        )
 
 # Import our modular components
 from .semantic_analysis.comparison import compare_elements

@@ -226,7 +226,15 @@ def _parse_marker_exit(stdout: str | None, prefix: str, default: int) -> int:
             try:
                 code = int(line.split("=", 1)[1])
             except ValueError:
-                pass
+                # Marker line present but not parseable as an int: the
+                # verdict falls back to the previous/default code instead of
+                # crashing, but a malformed marker is itself a signal the
+                # runner's output got corrupted, so log it.
+                _eval_log.warning(
+                    "[evaluator] unparseable exit marker for prefix %r (line length %d)",
+                    prefix,
+                    len(line),
+                )
     return code
 
 
@@ -1164,8 +1172,16 @@ def _nix_batched_signals(
             try:
                 p.write_text(mutated)
                 mutant_files.append(p)
-            except OSError:
-                pass
+            except OSError as exc:
+                # A mutant that fails to write is a mutant that never gets
+                # tested, silently shrinking the mutation-score denominator.
+                _eval_log.warning(
+                    "[evaluator] failed to write mutant %d/%d for %s: %s",
+                    k,
+                    len(candidates),
+                    subtask.get("id"),
+                    exc,
+                )
 
     res = run_pytest_lane_via_nix(
         spec_dir,
@@ -1823,11 +1839,13 @@ def _resolve_jest_runner_fn(image: str = _JEST_IMAGE):
             dst_test = scratch / rel
             dst_test.parent.mkdir(parents=True, exist_ok=True)
             _sh.copy2(test_file, dst_test)
+            # The container runs as a non-root uid; make scratch world-writable.
+            # Best-effort: a per-file chmod failure just means that file stays
+            # less permissive, which surfaces as a real container failure
+            # later rather than a silently wrong verdict.
             for p in scratch.rglob("*"):
-                try:
+                with contextlib.suppress(OSError):
                     p.chmod(0o777)
-                except OSError:
-                    pass
             scratch.chmod(0o777)
 
             runner = DockerRunner(image=image, network="none", read_only_rootfs=False)

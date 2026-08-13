@@ -16,6 +16,7 @@ injectable so tests never spawn a real container.
 
 from __future__ import annotations
 
+import logging
 import subprocess
 import time
 import uuid
@@ -26,6 +27,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
 
 from .free_port import find_free_port
+
+_log = logging.getLogger(__name__)
 
 
 class DockerRunRuntimeError(Exception):
@@ -222,7 +225,11 @@ class DockerRunRuntime:
             except HTTPError as exc:
                 if exc.code == wait_for.expect_status:
                     return True
-            except (URLError, TimeoutError, OSError):
-                pass
+            except (URLError, TimeoutError, OSError) as exc:
+                # Connection refused / not-yet-listening is the expected
+                # steady state until the container comes up; the deadline
+                # check above is what turns a persistent failure into a
+                # real timeout. Debug-only so a healthy startup stays quiet.
+                _log.debug("health poll for %s not ready yet: %s", url, exc)
             time.sleep(self.poll_interval)
         return False

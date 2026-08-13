@@ -390,14 +390,21 @@ class SecurityScanner:
                             )
                         )
                 except json.JSONDecodeError:
-                    pass
+                    # pip-audit ran and returned output that isn't valid JSON:
+                    # a real failure, not "no vulnerabilities found". Record
+                    # it so the scan result doesn't read as clean.
+                    result.scan_errors.append("pip-audit produced unparseable output")
 
         except FileNotFoundError:
             pass  # pip-audit not available
         except subprocess.TimeoutExpired:
-            pass
-        except Exception:
-            pass
+            result.scan_errors.append("pip-audit timed out")
+        except Exception as e:
+            # Was a bare swallow: any other pip-audit failure (permissions,
+            # network, unexpected CLI behaviour) silently reported as zero
+            # Python vulnerabilities found, matching the sibling npm-audit
+            # method's behaviour instead.
+            result.scan_errors.append(f"pip-audit error: {e!s}")
 
     def _is_python_project(self, project_dir: Path) -> bool:
         """Check if this is a Python project."""

@@ -33,12 +33,15 @@ Browser + Integration lane dispatch (Task 8 / #24):
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from .deploy_runner import run_deploy_lane
 from .docker_runner import DockerRunner, DockerRunResult
+
+_log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Errors
@@ -217,8 +220,14 @@ def dispatch_deploy_lane(  # noqa: PLR0913 - explicit keyword-only deploy-lane k
             (findings / "deploy_verification.json").write_text(
                 json.dumps(result.verification, indent=2)
             )
-        except OSError:
-            pass
+        except OSError as exc:
+            # Non-fatal by design: a missing proof file makes the deploy
+            # gate fall back to "no proof" rather than crashing the verify
+            # pipeline, but that fallback then blocks the change with no
+            # obvious cause, so log it.
+            _log.warning(
+                "deploy_verification.json write failed for %s: %s", spec_dir, exc
+            )
     return DispatchResult(
         lane=DEPLOY_LANE,
         runner_used="deploy",

@@ -30,9 +30,12 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+
+_log = logging.getLogger(__name__)
 
 __all__ = [
     "MANIFEST_NAME",
@@ -196,8 +199,12 @@ def pin_manifest(
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(manifest, indent=2))
-    except OSError:
-        pass
+    except OSError as exc:
+        # If the manifest can't be pinned, the next handback round has
+        # nothing to diff against, so a weakened/dropped assertion would go
+        # undetected instead of being rejected. Log it — this module's whole
+        # job is catching that silently.
+        _log.warning("assertion_manifest.json write failed for %s: %s", spec_dir, exc)
     return manifest
 
 
