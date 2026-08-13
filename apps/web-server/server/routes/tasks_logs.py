@@ -17,6 +17,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 
+from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, HTTPException, status
 
 from .projects import load_projects
@@ -32,7 +33,7 @@ async def get_task_logs(task_id: str):
     Returns phase-based logs from task_logs.json if available,
     checking both main spec dir and worktree.
     """
-    logger.info(f"[GetTaskLogs] Called with task_id: {task_id}")
+    logger.info(f"[GetTaskLogs] Called with task_id: {sanitize_log(task_id)}")
 
     if ":" not in task_id:
         raise HTTPException(
@@ -45,12 +46,12 @@ async def get_task_logs(task_id: str):
     # escape the specs root (CodeQL py/path-injection); a traversal attempt then
     # resolves to a non-existent spec (404) rather than an arbitrary path.
     spec_id = os.path.basename(spec_id)
-    logger.info(f"[GetTaskLogs] project_id={project_id}, spec_id={spec_id}")
+    logger.info(f"[GetTaskLogs] project_id={sanitize_log(project_id)}, spec_id={sanitize_log(spec_id)}")
 
     projects = load_projects()
 
     if project_id not in projects:
-        logger.error(f"[GetTaskLogs] Project not found: {project_id}")
+        logger.error(f"[GetTaskLogs] Project not found: {sanitize_log(project_id)}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Project not found",
@@ -82,8 +83,8 @@ async def get_task_logs(task_id: str):
     ):
         raise HTTPException(status_code=400, detail="Invalid spec id")
 
-    logger.info(f"[GetTaskLogs] Checking spec_dir: {spec_dir}")
-    logger.info(f"[GetTaskLogs] Checking worktree_spec_dir: {worktree_spec_dir}")
+    logger.info(f"[GetTaskLogs] Checking spec_dir: {sanitize_log(spec_dir)}")
+    logger.info(f"[GetTaskLogs] Checking worktree_spec_dir: {sanitize_log(worktree_spec_dir)}")
 
     # Check for task_logs.json (phase-based logs) - prefer worktree if exists
     task_logs_file = None

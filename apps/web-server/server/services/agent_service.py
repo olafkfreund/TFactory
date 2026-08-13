@@ -18,6 +18,8 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 
+from factory_common.logsafe import sanitize_log
+
 from ..config import get_settings
 from ..routes._specpath import safe_component
 from ..utils.subprocess_env import make_subprocess_env
@@ -824,7 +826,7 @@ class AgentService:
         else:
             new_cmd.extend(["--model", "sonnet"])
 
-        logger.info(f"[AgentService] [Model: sonnet] Fallback triggered for {task_id} (original: {failed_model})")
+        logger.info(f"[AgentService] [Model: sonnet] Fallback triggered for {sanitize_log(task_id)} (original: {sanitize_log(failed_model)})")
 
         # Emit WebSocket event for model fallback
         from ..websockets.events import broadcast_event
@@ -968,7 +970,7 @@ class AgentService:
         _logger = logging.getLogger(__name__)
         sig = _dedup_signature(payload)
         if not force and self._last_emitted_task_update.get(task_id) == sig:
-            _logger.debug("[AgentService] dedup-suppressed task:update for %s", task_id)
+            _logger.debug("[AgentService] dedup-suppressed task:update for %s", sanitize_log(task_id))
             return
         self._last_emitted_task_update[task_id] = sig
         await emit_task_update(task_id, payload)
@@ -1129,7 +1131,7 @@ class AgentService:
 
             # Log stderr to server logs for debugging
             if is_stderr and line:
-                logger.warning(f"[AgentService] Task {task_id} stderr: {line}")
+                logger.warning(f"[AgentService] Task {sanitize_log(task_id)} stderr: {sanitize_log(line)}")
                 # Also mirror stderr to a per-spec file so post-mortem
                 # debugging works even when the subprocess dies before
                 # writing its own task_logs.json (#146).
@@ -1153,7 +1155,7 @@ class AgentService:
             # Detect rate limit messages to trigger failover after exit
             if self._is_rate_limit_line(line):
                 self._task_rate_limits[task_id] = True
-                logger.warning(f"[AgentService] Rate limit detected for task {task_id} (will attempt failover if enabled)")
+                logger.warning(f"[AgentService] Rate limit detected for task {sanitize_log(task_id)} (will attempt failover if enabled)")
 
             # Write to task_logs.json for detailed phase logs
             if log_writer and spec_id and not is_stderr:
@@ -1547,7 +1549,7 @@ class AgentService:
                                 # Check if we've already emitted PLAN_REVIEW for this task
                                 current_phase = self._task_current_phases.get(task_id)
                                 if current_phase != TaskPhase.PLAN_REVIEW:
-                                    logger.info(f"[AgentService] Detected review checkpoint for {detected_spec_id} (plan_review.html exists)")
+                                    logger.info(f"[AgentService] Detected review checkpoint for {sanitize_log(detected_spec_id)} (plan_review.html exists)")
 
                                     # Update plan status to human_review
                                     await self._update_plan_status(project_path, detected_spec_id, "human_review", task_id)
@@ -1565,7 +1567,7 @@ class AgentService:
 
                                     # Mark phase as emitted
                                     self._task_current_phases[task_id] = TaskPhase.PLAN_REVIEW
-                                    logger.info(f"[AgentService] Emitted PLAN_REVIEW status for {task_id}")
+                                    logger.info(f"[AgentService] Emitted PLAN_REVIEW status for {sanitize_log(task_id)}")
 
                     # If we detect a rate limit and failover is enabled, don't wait for the process to exit.
                     if cmd and env:
@@ -1579,7 +1581,7 @@ class AgentService:
                             and self._should_retry_with_failover()
                         ):
                             logger.warning(
-                                f"[AgentService] Rate limit detected for {task_id} while running; terminating process to trigger profile failover"
+                                f"[AgentService] Rate limit detected for {sanitize_log(task_id)} while running; terminating process to trigger profile failover"
                             )
                             rate_limit_forced_restart = True
                             try:
@@ -1603,7 +1605,7 @@ class AgentService:
                 await self._sync_worktree_files(project_path, spec_id, task_id)
 
             exit_model = self._task_profiles.get(task_id, {}).get("model", "unknown")
-            logger.info(f"[AgentService] [Model: {exit_model}] Task {task_id} process exited with code {return_code}")
+            logger.info(f"[AgentService] [Model: {sanitize_log(exit_model)}] Task {sanitize_log(task_id)} process exited with code {sanitize_log(return_code)}")
 
             # Early model fallback: if a non-Claude model failed, retry with Sonnet
             # before any other processing (spec detection, plan status, etc.)
@@ -1648,7 +1650,7 @@ class AgentService:
                                 cmd=None, env=None
                             )
                         )
-                        logger.info(f"[AgentService] Task {task_id} restarted with fallback model (sonnet)")
+                        logger.info(f"[AgentService] Task {sanitize_log(task_id)} restarted with fallback model (sonnet)")
                         return
 
             # Special case: Spec creation (project_path provided, spec_id is None)
@@ -1750,7 +1752,7 @@ class AgentService:
                         review_data = json.loads(review_state_file.read_text())
                         if not review_data.get("approved", False):
                             # This is NOT a failure - it's waiting for human review!
-                            logger.info(f"[AgentService] Task {task_id} awaiting human review (not a failure)")
+                            logger.info(f"[AgentService] Task {sanitize_log(task_id)} awaiting human review (not a failure)")
 
                             # Get actual phase BEFORE cleanup
                             actual_phase = self._get_current_phase(task_id)
@@ -1802,7 +1804,7 @@ class AgentService:
                                 previous_phase=actual_phase,  # Enable status event emission
                             )
 
-                            logger.info(f"[AgentService] Task {task_id} transitioned to {emit_phase.value} phase (was {actual_phase.value})")
+                            logger.info(f"[AgentService] Task {sanitize_log(task_id)} transitioned to {sanitize_log(emit_phase.value)} phase (was {sanitize_log(actual_phase.value)})")
                             return  # Exit early - not a failure
 
                     except (json.JSONDecodeError, OSError) as e:
@@ -1829,11 +1831,11 @@ class AgentService:
                 if should_retry:
                     failed_profile_id = profile_info.get("profileId")
                     reason = "rate_limit" if rate_limit_detected else "early_failure"
-                    logger.info(f"[AgentService] {reason.replace('_', ' ')} detected for {task_id}, attempting profile failover")
+                    logger.info(f"[AgentService] {sanitize_log(reason.replace('_', ' '))} detected for {sanitize_log(task_id)}, attempting profile failover")
 
                     # Attempt retry with different profile
                     if not failed_profile_id:
-                        logger.warning(f"[AgentService] No failed profile recorded for {task_id}; cannot failover")
+                        logger.warning(f"[AgentService] No failed profile recorded for {sanitize_log(task_id)}; cannot failover")
                         new_proc = None
                     else:
                         new_proc = await self._retry_task_with_profile(
@@ -1885,16 +1887,16 @@ class AgentService:
                             )
                         )
 
-                        logger.info(f"[AgentService] Task {task_id} restarted with alternate profile")
+                        logger.info(f"[AgentService] Task {sanitize_log(task_id)} restarted with alternate profile")
                         return  # Exit this monitor instance
                     else:
-                        logger.warning(f"[AgentService] No alternate profile available for task {task_id}, trying model fallback")
+                        logger.warning(f"[AgentService] No alternate profile available for task {sanitize_log(task_id)}, trying model fallback")
 
 
             # If stop_task() already handled cleanup, skip duplicate processing
             if task_id in self._task_stopped:
                 self._task_stopped.discard(task_id)
-                logger.info(f"[AgentService] Task {task_id} was stopped by user, skipping _monitor_process cleanup")
+                logger.info(f"[AgentService] Task {sanitize_log(task_id)} was stopped by user, skipping _monitor_process cleanup")
                 return
 
             # Get actual phase BEFORE cleanup (needed for proper status emission)
@@ -1913,7 +1915,7 @@ class AgentService:
                     main_log_writer.set_phase_status(spec_id, actual_phase, final_status)
 
                 del self._task_log_writers[task_id]
-                logger.debug(f"[AgentService] Finalized task logs for {task_id}")
+                logger.debug(f"[AgentService] Finalized task logs for {sanitize_log(task_id)}")
 
             # Auto-continuation: if process exited successfully but subtasks remain,
             # restart execution instead of marking as completed (max 10 continuation rounds)
@@ -1941,9 +1943,9 @@ class AgentService:
                         if pending_count > 0 and round_num <= 10:
                             setattr(self, continuation_key, round_num)
                             logger.info(
-                                f"[AgentService] Auto-continuation round {round_num}: "
-                                f"{completed_count}/{total_count} subtasks done, "
-                                f"{pending_count} remaining for {spec_id}"
+                                f"[AgentService] Auto-continuation round {sanitize_log(round_num)}: "
+                                f"{sanitize_log(completed_count)}/{sanitize_log(total_count)} subtasks done, "
+                                f"{sanitize_log(pending_count)} remaining for {sanitize_log(spec_id)}"
                             )
 
                             # Clean up current run tracking
@@ -1972,21 +1974,21 @@ class AgentService:
                                     spec_id=spec_id,
                                     auto_continue=True,
                                 )
-                                logger.info(f"[AgentService] Auto-continuation started for {spec_id} (round {round_num})")
+                                logger.info(f"[AgentService] Auto-continuation started for {sanitize_log(spec_id)} (round {sanitize_log(round_num)})")
                                 return  # Exit this monitor — new monitor will take over
                             except Exception as e:
-                                logger.error(f"[AgentService] Auto-continuation failed for {spec_id}: {e}")
+                                logger.error(f"[AgentService] Auto-continuation failed for {sanitize_log(spec_id)}: {sanitize_log(e)}")
                                 # Fall through to normal completion
                         elif pending_count > 0 and round_num > 10:
                             logger.warning(
-                                f"[AgentService] Auto-continuation limit reached (10 rounds) for {spec_id}, "
-                                f"{pending_count} subtasks still pending"
+                                f"[AgentService] Auto-continuation limit reached (10 rounds) for {sanitize_log(spec_id)}, "
+                                f"{sanitize_log(pending_count)} subtasks still pending"
                             )
                         else:
                             # All subtasks done — clean up continuation tracker
                             if hasattr(self, continuation_key):
                                 delattr(self, continuation_key)
-                            logger.info(f"[AgentService] All {total_count} subtasks completed for {spec_id}")
+                            logger.info(f"[AgentService] All {sanitize_log(total_count)} subtasks completed for {sanitize_log(spec_id)}")
                     except (json.JSONDecodeError, OSError) as e:
                         logger.warning(f"[AgentService] Could not check subtask status for auto-continuation: {e}")
 
@@ -1998,7 +2000,7 @@ class AgentService:
             # moved the WebSocket events to the explicit _emit_progress.
             if spec_id and project_path:
                 status = "completed" if return_code == 0 else "failed"
-                logger.info(f"[AgentService._monitor_process] About to call _update_plan_status: spec_id={spec_id}, status={status}, task_id={task_id}, project_path={project_path}")
+                logger.info(f"[AgentService._monitor_process] About to call _update_plan_status: spec_id={sanitize_log(spec_id)}, status={sanitize_log(status)}, task_id={sanitize_log(task_id)}, project_path={sanitize_log(project_path)}")
                 await self._update_plan_status(
                     project_path, spec_id, status, task_id, emit_events=False
                 )
@@ -2105,7 +2107,7 @@ class AgentService:
                     except Exception:
                         logger.debug("Failed to send task completion notification", exc_info=True)
             else:
-                logger.error(f"[AgentService] Task {task_id} failed with exit code {return_code}")
+                logger.error(f"[AgentService] Task {sanitize_log(task_id)} failed with exit code {sanitize_log(return_code)}")
                 await self._emit_progress(
                     TaskProgress(
                         task_id=task_id,
@@ -2136,7 +2138,7 @@ class AgentService:
             try:
                 await _rmux_reap(_reap_spec_id)
             except Exception:
-                logger.warning(f"[AgentService] rmux reap hook raised (ignored); spec_id={_reap_spec_id}")
+                logger.warning(f"[AgentService] rmux reap hook raised (ignored); spec_id={sanitize_log(_reap_spec_id)}")
 
             # Clean up tracking data AFTER all emissions are complete
             # This must happen after _emit_progress so it can still read
@@ -2196,8 +2198,8 @@ class AgentService:
         # Sanitize request-derived spec_id before building a path (py/path-injection).
         spec_id = safe_component(spec_id)
         plan_file = project_path / ".tfactory" / "specs" / spec_id / "test_plan.json"
-        logger.info(f"[AgentService._update_plan_status] CALLED for spec_id={spec_id}, status={status}, task_id={task_id}")
-        logger.info(f"[AgentService._update_plan_status] plan_file path: {plan_file}")
+        logger.info(f"[AgentService._update_plan_status] CALLED for spec_id={sanitize_log(spec_id)}, status={sanitize_log(status)}, task_id={sanitize_log(task_id)}")
+        logger.info(f"[AgentService._update_plan_status] plan_file path: {sanitize_log(plan_file)}")
         logger.info(f"[AgentService._update_plan_status] plan_file exists: {plan_file.exists()}")
         if not plan_file.exists():
             logger.warning("[AgentService._update_plan_status] plan_file does not exist, returning early")
@@ -2217,13 +2219,13 @@ class AgentService:
 
             # Don't overwrite if user explicitly marked task as done via kanban
             if plan.get("status") == "done":
-                logger.info(f"[AgentService._update_plan_status] Plan status is 'done' (user-set), skipping overwrite for {spec_id}")
+                logger.info(f"[AgentService._update_plan_status] Plan status is 'done' (user-set), skipping overwrite for {sanitize_log(spec_id)}")
                 return
 
             # Fix 2: Validate that the plan is not just a minimal status object
             # A valid plan should have phases and subtasks from spec creation
             if "phases" not in plan or not plan.get("phases"):
-                logger.error(f"[AgentService] Invalid or minimal implementation plan detected for {spec_id}")
+                logger.error(f"[AgentService] Invalid or minimal implementation plan detected for {sanitize_log(spec_id)}")
                 if emit_events:
                     await self._safe_emit_task_status(task_id, "failed", "invalid_plan")
                 return
@@ -2238,7 +2240,7 @@ class AgentService:
             logger.info(f"[AgentService._update_plan_status] About to write file with status={plan.get('status')}, reviewReason={plan.get('reviewReason')}")
             plan_file.write_text(json.dumps(plan, indent=2))
             logger.info("[AgentService._update_plan_status] Successfully wrote plan_file")
-            logger.info(f"[AgentService] Updated plan status to '{plan['status']}' for {spec_id}")
+            logger.info(f"[AgentService] Updated plan status to '{sanitize_log(plan['status'])}' for {sanitize_log(spec_id)}")
 
             # Extract subtasks for WebSocket broadcast
             subtasks_data = []
@@ -2294,7 +2296,7 @@ class AgentService:
                     fallback_reason = phase_to_review_reason(phase_enum) if phase_enum else None
                     await self._safe_emit_task_status(task_id, fallback_status, fallback_reason)
                 except Exception:
-                    logger.error(f"[AgentService] Failed to emit fallback task:status for {task_id}")
+                    logger.error(f"[AgentService] Failed to emit fallback task:status for {sanitize_log(task_id)}")
 
     def _write_skill_context(self, spec_dir: Path) -> None:
         """Write skill_context.md to spec_dir based on selectedSkills in task_metadata.json.
@@ -2517,7 +2519,7 @@ class AgentService:
                     metadata = json.loads(task_metadata_file.read_text())
                     if metadata.get("requireReviewBeforeCoding", False):
                         should_auto_approve = False
-                        logger.info(f"[AgentService] Task {task_id} requires manual review - NOT auto-approving spec")
+                        logger.info(f"[AgentService] Task {sanitize_log(task_id)} requires manual review - NOT auto-approving spec")
                     # Read spec phase model from auto profile config
                     if metadata.get("isAutoProfile") and metadata.get("phaseModels"):
                         spec_phase_model = metadata["phaseModels"].get("spec")
@@ -2543,9 +2545,9 @@ class AgentService:
             approve=should_auto_approve,
         )
         logger.info(
-            f"[AgentService] Authored spec + plan in-process for {task_id} "
-            f"(complexity={complexity or 'standard'}, auto_approve={should_auto_approve}, "
-            f"model={spec_phase_model or 'sonnet'})"
+            f"[AgentService] Authored spec + plan in-process for {sanitize_log(task_id)} "
+            f"(complexity={sanitize_log(complexity or 'standard')}, auto_approve={sanitize_log(should_auto_approve)}, "
+            f"model={sanitize_log(spec_phase_model or 'sonnet')})"
         )
 
         # Build command — run.py drives the real pipeline against the spec + plan
@@ -2572,7 +2574,7 @@ class AgentService:
         # Quick Mode for simple tasks (safety net if simple task reaches spec creation)
         if complexity == "simple":
             env["QUICK_MODE"] = "true"
-            logger.info(f"[AgentService] Quick Mode enabled for spec creation task {task_id}")
+            logger.info(f"[AgentService] Quick Mode enabled for spec creation task {sanitize_log(task_id)}")
 
         # Load backend .env file for graphiti and other settings
         backend_env_file = self.backend_path / ".env"
@@ -2748,7 +2750,7 @@ class AgentService:
 
                     require_review = task_metadata.get("requireReviewBeforeCoding", False)
                 except (json.JSONDecodeError, OSError) as e:
-                    logger.warning(f"[AgentService] Could not sync metadata for {task_id}: {e}")
+                    logger.warning(f"[AgentService] Could not sync metadata for {sanitize_log(task_id)}: {sanitize_log(e)}")
             elif task_metadata_file.exists():
                 try:
                     import json
@@ -2767,9 +2769,9 @@ class AgentService:
             if not require_review or force:
                 cmd.append("--force")  # Bypass approval check for headless execution
                 if force:
-                    logger.info(f"[AgentService] Using --force for {task_id} (plan manually approved)")
+                    logger.info(f"[AgentService] Using --force for {sanitize_log(task_id)} (plan manually approved)")
             else:
-                logger.info(f"[AgentService] Human review before coding enabled for task {task_id} - not using --force")
+                logger.info(f"[AgentService] Human review before coding enabled for task {sanitize_log(task_id)} - not using --force")
 
         if base_branch:
             cmd.extend(["--base-branch", base_branch])
@@ -2777,12 +2779,12 @@ class AgentService:
         # Skip QA for quick mode (simple tasks) - coder_quick.md validates inline
         if mode == "quick":
             cmd.append("--skip-qa")
-            logger.info(f"[AgentService] Skipping QA for quick mode task {task_id}")
+            logger.info(f"[AgentService] Skipping QA for quick mode task {sanitize_log(task_id)}")
 
         # Stop after planning for Copilot delegation flow (#94)
         if stop_after_planning:
             cmd.append("--stop-after-planning")
-            logger.info(f"[AgentService] Stop-after-planning for {task_id} (Copilot delegation)")
+            logger.info(f"[AgentService] Stop-after-planning for {sanitize_log(task_id)} (Copilot delegation)")
 
         # Set environment — scrub ANTHROPIC_API_KEY so spawned subprocesses
         # can never silently bill the direct-API account (OAuth-only policy;
@@ -2804,7 +2806,7 @@ class AgentService:
         # Quick Mode: Use simplified prompts (~70% fewer tokens)
         if mode == "quick":
             env["QUICK_MODE"] = "true"
-            logger.info(f"[AgentService] Quick Mode enabled for task {task_id}")
+            logger.info(f"[AgentService] Quick Mode enabled for task {sanitize_log(task_id)}")
 
         # Load backend .env file for graphiti and other settings
         backend_env_file = self.backend_path / ".env"
@@ -2866,8 +2868,8 @@ class AgentService:
             logger.warning("[AgentService] No Claude OAuth token available")
 
         exec_model_display = self._task_profiles.get(task_id, {}).get("model", "sonnet")
-        logger.info(f"[AgentService] [Model: {exec_model_display}] Starting task execution for {task_id}")
-        logger.info(f"[AgentService] Command: {' '.join(cmd)}")
+        logger.info(f"[AgentService] [Model: {sanitize_log(exec_model_display)}] Starting task execution for {sanitize_log(task_id)}")
+        logger.info(f"[AgentService] Command: {sanitize_log(' '.join(cmd))}")
 
         # Claude Code Remote Control (Issue #50 / native --remote-control flag).
         # When enabled per-task, the spawned `claude` registers a session with
@@ -2919,7 +2921,7 @@ class AgentService:
                 "Scrubbed CLAUDE_CODE_OAUTH_TOKEN/ANTHROPIC_AUTH_TOKEN — "
                 "agent will fall back to ~/.claude/.credentials.json "
                 "(must be a full-scope token from `claude auth login`).",
-                task_id, _rc_session_name,
+                sanitize_log(task_id), sanitize_log(_rc_session_name),
             )
 
         # E2E test mode (Epic #44 R4): when TFACTORY_TEST_AGENT_CMD is
@@ -2936,7 +2938,7 @@ class AgentService:
             logger.warning(
                 "[AgentService] TFACTORY_TEST_AGENT_CMD active — replacing "
                 "agent command with %r (task_id=%s). MUST NOT be set in prod.",
-                cmd, task_id,
+                sanitize_log(cmd), sanitize_log(task_id),
             )
 
         # RFC-0016 (#465): admission control. Each verify spawns runtime/test
@@ -3051,7 +3053,7 @@ class AgentService:
             # Already swallowed inside _rmux_create; this except is a
             # belt-and-suspenders guard so a wrapper bug here cannot
             # take down task execution.
-            logger.warning(f"[AgentService] rmux create hook raised (ignored); spec_id={spec_id}")
+            logger.warning(f"[AgentService] rmux create hook raised (ignored); spec_id={sanitize_log(spec_id)}")
 
         return proc
 
@@ -3060,7 +3062,7 @@ class AgentService:
         import logging
         logger = logging.getLogger(__name__)
         if task_id not in self.running_tasks:
-            logger.info(f"[AgentService] Task {task_id} not in running_tasks (already stopped or never started)")
+            logger.info(f"[AgentService] Task {sanitize_log(task_id)} not in running_tasks (already stopped or never started)")
             return False
 
         # Mark as stopped BEFORE termination so _monitor_process defers to us
@@ -3089,7 +3091,7 @@ class AgentService:
             main_log_writer.finalize(spec_id, actual_phase)
             main_log_writer.set_phase_status(spec_id, actual_phase, "failed")
             del self._task_log_writers[task_id]
-            logger.debug(f"[AgentService] Finalized task logs for stopped task {task_id}")
+            logger.debug(f"[AgentService] Finalized task logs for stopped task {sanitize_log(task_id)}")
 
         # Persist failed status to test_plan.json
         if spec_dir:
@@ -3106,7 +3108,7 @@ class AgentService:
         try:
             await _rmux_reap(_reap_spec_id)
         except Exception:
-            logger.warning(f"[AgentService] rmux reap hook raised in stop_task (ignored); spec_id={_reap_spec_id}")
+            logger.warning(f"[AgentService] rmux reap hook raised in stop_task (ignored); spec_id={sanitize_log(_reap_spec_id)}")
 
         # Use pop with default to handle race condition where _monitor_process
         # might have already removed the task

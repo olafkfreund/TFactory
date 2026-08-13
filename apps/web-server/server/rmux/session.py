@@ -35,6 +35,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator
 
+from factory_common.logsafe import sanitize_log
+
 from .wrapper import RmuxError, RmuxWrapper
 
 logger = logging.getLogger(__name__)
@@ -139,7 +141,7 @@ class SessionRegistry:
             )
             logger.info(
                 "rmux session created: spec_id=%s session=%s fifo=%s",
-                spec_id, session_name, fifo_path,
+                sanitize_log(spec_id), sanitize_log(session_name), sanitize_log(fifo_path),
             )
             return fifo_path
 
@@ -177,7 +179,7 @@ class SessionRegistry:
 
         logger.info(
             "rmux session reaped: spec_id=%s session=%s",
-            spec_id, state.session_name,
+            sanitize_log(spec_id), sanitize_log(state.session_name),
         )
 
     # ------------------------------------------------------------------

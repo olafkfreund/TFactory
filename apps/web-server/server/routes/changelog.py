@@ -10,6 +10,7 @@ import logging
 import re
 from pathlib import Path as FilePath
 
+from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, HTTPException, Path
 from pydantic import BaseModel
 
@@ -188,7 +189,7 @@ async def load_task_specs(projectId: str = Path(...), request: LoadSpecsRequest 
                     "path": str(spec_path.relative_to(project_path))
                 })
             except Exception:
-                logger.exception("Failed to read spec for task %s", task_id)
+                logger.exception("Failed to read spec for task %s", sanitize_log(task_id))
                 specs.append({
                     "taskId": task_id,
                     "content": None,
@@ -206,7 +207,7 @@ async def load_task_specs(projectId: str = Path(...), request: LoadSpecsRequest 
                         "path": str(matching[0].relative_to(project_path))
                     })
                 except Exception:
-                    logger.exception("Failed to read spec for task %s", task_id)
+                    logger.exception("Failed to read spec for task %s", sanitize_log(task_id))
                     specs.append({
                         "taskId": task_id,
                         "content": None,

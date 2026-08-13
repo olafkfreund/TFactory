@@ -40,6 +40,7 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
+from factory_common.logsafe import sanitize_log
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -516,16 +517,16 @@ async def try_admit_verify(
                 logger.info(
                     "[job-state] verify job_id=%s queued behind admission cap "
                     "(%s=%d); will auto-start when a slot frees",
-                    job_id,
-                    _MAX_CONCURRENT_ENV,
-                    max_concurrent_verifies(),
+                    sanitize_log(job_id),
+                    sanitize_log(_MAX_CONCURRENT_ENV),
+                    sanitize_log(max_concurrent_verifies()),
                 )
             return admitted
     except Exception:  # noqa: BLE001 — admission must never hard-block a verify
         logger.warning(
             "[job-state] admission check failed for job_id=%s; "
             "admitting (fail-open)",
-            job_id,
+            sanitize_log(job_id),
             exc_info=True,
         )
         return True
@@ -557,7 +558,7 @@ async def record_started(
     except Exception:  # noqa: BLE001 — durable tracking must never break a verify
         logger.warning(
             "[job-state] failed to record start for job_id=%s (continuing)",
-            job_id,
+            sanitize_log(job_id),
             exc_info=True,
         )
 
@@ -611,14 +612,14 @@ async def record_terminal(
                     logger.info(
                         "[job-state] promoted queued verify job_id=%s to running "
                         "after job_id=%s finished",
-                        promoted.get("job_id"),
-                        job_id,
+                        sanitize_log(promoted.get("job_id")),
+                        sanitize_log(job_id),
                     )
                     return promoted.get("job_id")
     except Exception:  # noqa: BLE001 — durable tracking must never break a verify
         logger.warning(
             "[job-state] failed to record terminal for job_id=%s (continuing)",
-            job_id,
+            sanitize_log(job_id),
             exc_info=True,
         )
     return None

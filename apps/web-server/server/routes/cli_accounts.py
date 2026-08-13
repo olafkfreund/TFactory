@@ -17,6 +17,7 @@ import threading
 import time
 from pathlib import Path
 
+from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, SecretStr
 
@@ -744,7 +745,7 @@ def install_or_update_cli(cli: str):
 
     # Step 2: Install/update via npm
     try:
-        logger.info(f"[{cli}] Running npm install -g {package}...")
+        logger.info(f"[{sanitize_log(cli)}] Running npm install -g {sanitize_log(package)}...")
         if cli == "gemini":
             install_result = _run(["npm", "install", "-g", "--prefix", os.path.expanduser("~/.gemini/antigravity-cli"), package], timeout=120)
         else:
@@ -792,7 +793,7 @@ def install_or_update_cli(cli: str):
         }
 
     action = "updated" if was_update else "installed"
-    logger.info(f"[{cli}] Successfully {action}: {new_version}")
+    logger.info(f"[{sanitize_log(cli)}] Successfully {sanitize_log(action)}: {sanitize_log(new_version)}")
 
     return {
         "success": True,

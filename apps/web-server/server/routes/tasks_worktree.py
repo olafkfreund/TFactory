@@ -20,6 +20,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter
 from pydantic import BaseModel
 
@@ -203,7 +204,7 @@ async def get_worktree_merge_preview(task_id: str):
         # output is logged server-side only; it is never surfaced in the API
         # response (avoids leaking command/stack-trace text to clients).
         logger.exception(
-            "git merge-tree failed while computing merge preview for task %s", task_id
+            "git merge-tree failed while computing merge preview for task %s", sanitize_log(task_id)
         )
         has_conflicts = True
 
@@ -481,12 +482,12 @@ async def resolve_worktree_conflicts(
     merge_head = project_path / ".git" / "MERGE_HEAD"
     if merge_head.exists():
         logger.info(
-            f"Merge already in progress for {task_id}, resolving existing conflicts"
+            f"Merge already in progress for {sanitize_log(task_id)}, resolving existing conflicts"
         )
     else:
         # Start the git merge (allow conflicts)
         logger.info(
-            f"Starting git merge of {worktree_branch} into current branch for task {task_id}"
+            f"Starting git merge of {sanitize_log(worktree_branch)} into current branch for task {sanitize_log(task_id)}"
         )
         merge_result = subprocess.run(
             ["git", "merge", worktree_branch, "--no-commit", "--no-ff"],
@@ -497,7 +498,7 @@ async def resolve_worktree_conflicts(
 
         if merge_result.returncode == 0:
             # Clean merge, no conflicts - commit it
-            logger.info(f"Clean merge for {task_id}, committing")
+            logger.info(f"Clean merge for {sanitize_log(task_id)}, committing")
             commit_result = subprocess.run(
                 ["git", "commit", "-m", f"Merge {worktree_branch} into current branch"],
                 cwd=project_path,
@@ -520,7 +521,7 @@ async def resolve_worktree_conflicts(
                 "error": f"Git merge failed: {merge_result.stderr.strip()}",
             }
         else:
-            logger.info(f"Merge has conflicts for {task_id}, resolving with AI")
+            logger.info(f"Merge has conflicts for {sanitize_log(task_id)}, resolving with AI")
 
     if not options.useAI:
         return {
@@ -729,7 +730,7 @@ async def resolve_uncommitted_conflicts(task_id: str):
     import logging
 
     logger = logging.getLogger(__name__)
-    logger.info(f"Resolving uncommitted conflicts for task {task_id}")
+    logger.info(f"Resolving uncommitted conflicts for task {sanitize_log(task_id)}")
 
     # Find the task's project
     projects_data_dir = get_data_dir()
@@ -1012,7 +1013,7 @@ async def resolve_git_merge_conflicts(task_id: str):
     import logging
 
     logger = logging.getLogger(__name__)
-    logger.info(f"Resolving git merge conflicts for task {task_id}")
+    logger.info(f"Resolving git merge conflicts for task {sanitize_log(task_id)}")
 
     # Find the task's project
     projects_data_dir = get_data_dir()
@@ -1060,7 +1061,7 @@ async def resolve_git_merge_conflicts(task_id: str):
         logger.info(f"Found merge in progress in main project: {project_path}")
     elif merge_head_worktree and (merge_head_worktree / "MERGE_HEAD").exists():
         work_path = worktree_path
-        logger.info(f"Found merge in progress in worktree: {worktree_path}")
+        logger.info(f"Found merge in progress in worktree: {sanitize_log(worktree_path)}")
     else:
         # No merge in progress - check if there are files with conflict markers anyway
         # This can happen if the merge state was cleared but files still have markers
@@ -1136,7 +1137,7 @@ async def resolve_git_merge_conflicts(task_id: str):
         try:
             full_path = work_path / file_path
             if not full_path.exists():
-                logger.warning(f"Conflicted file not found: {full_path}")
+                logger.warning(f"Conflicted file not found: {sanitize_log(full_path)}")
                 failed_files.append({"file": file_path, "error": "File not found"})
                 continue
 
@@ -1179,7 +1180,7 @@ async def resolve_git_merge_conflicts(task_id: str):
 
                 # Write resolved content
                 full_path.write_text(resolved_content)
-                logger.info(f"Wrote resolved content to {full_path}")
+                logger.info(f"Wrote resolved content to {sanitize_log(full_path)}")
 
                 # Stage the file
                 result = subprocess.run(
@@ -1303,7 +1304,7 @@ async def abort_worktree_merge(task_id: str):
     import logging
 
     logger = logging.getLogger(__name__)
-    logger.info(f"Aborting merge for task {task_id}")
+    logger.info(f"Aborting merge for task {sanitize_log(task_id)}")
 
     # Parse task_id to get spec_id
     # task_id could be "project_id:spec_id" or just "spec_id"
@@ -1363,7 +1364,7 @@ async def abort_worktree_merge(task_id: str):
                 )
                 if result.returncode == 0:
                     aborted_locations.append("worktree")
-                    logger.info(f"Aborted merge in worktree: {worktree_path}")
+                    logger.info(f"Aborted merge in worktree: {sanitize_log(worktree_path)}")
                 else:
                     logger.warning(
                         f"Failed to abort merge in worktree: {result.stderr}"

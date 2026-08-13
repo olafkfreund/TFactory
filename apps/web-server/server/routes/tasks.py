@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal, Optional
 
+from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
@@ -351,8 +352,8 @@ def sync_worktree_to_main_spec(project_path: Path, spec_id: str) -> bool:
 
             logger = logging.getLogger(__name__)
             logger.info(
-                f"[WorktreeSync] Syncing plan for {spec_id}: "
-                f"worktree has {worktree_completed} completed vs main {main_completed}"
+                f"[WorktreeSync] Syncing plan for {sanitize_log(spec_id)}: "
+                f"worktree has {sanitize_log(worktree_completed)} completed vs main {sanitize_log(main_completed)}"
             )
             main_plan_file.write_text(json.dumps(worktree_plan, indent=2))
             return True
@@ -362,7 +363,7 @@ def sync_worktree_to_main_spec(project_path: Path, spec_id: str) -> bool:
         import logging
 
         logging.getLogger(__name__).warning(
-            f"[WorktreeSync] Failed to sync {spec_id}: {e}"
+            f"[WorktreeSync] Failed to sync {sanitize_log(spec_id)}: {sanitize_log(e)}"
         )
         return False
 

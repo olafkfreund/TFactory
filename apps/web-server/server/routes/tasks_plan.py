@@ -15,6 +15,7 @@ import json
 import logging
 from pathlib import Path
 
+from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, HTTPException, status
 
 from ._specpath import safe_spec_dir
@@ -79,7 +80,7 @@ async def approve_plan(
             import logging
 
             logger = logging.getLogger(__name__)
-            logger.info(f"[ApprovePlan] Reading plan file: {plan_file}")
+            logger.info(f"[ApprovePlan] Reading plan file: {sanitize_log(plan_file)}")
             plan = json.loads(plan_file.read_text())
             logger.info(
                 f"[ApprovePlan] Current status: {plan.get('status')}, planStatus: {plan.get('planStatus')}, reviewReason: {plan.get('reviewReason')}"
@@ -105,7 +106,7 @@ async def approve_plan(
         import logging
 
         logging.getLogger(__name__).warning(
-            f"[ApprovePlan] Plan file does not exist: {plan_file}"
+            f"[ApprovePlan] Plan file does not exist: {sanitize_log(plan_file)}"
         )
 
     # Emit status change via WebSocket
@@ -130,7 +131,7 @@ async def approve_plan(
 
                 logger = logging.getLogger(__name__)
                 logger.info(
-                    f"[ApprovePlan] Cleaning up stale spec creation process for {task_id}"
+                    f"[ApprovePlan] Cleaning up stale spec creation process for {sanitize_log(task_id)}"
                 )
                 try:
                     await agent_service.stop_task(task_id)
@@ -165,7 +166,7 @@ async def approve_plan(
             import logging
 
             logging.getLogger(__name__).warning(
-                f"Auto-restart failed for {task_id}: {e}"
+                f"Auto-restart failed for {sanitize_log(task_id)}: {sanitize_log(e)}"
             )
 
     return {

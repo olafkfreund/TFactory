@@ -39,6 +39,7 @@ import logging
 import re
 from datetime import datetime
 
+from factory_common.logsafe import sanitize_log
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -169,7 +170,7 @@ async def erase_user(db: AsyncSession, user_id: str) -> dict:
     logger.info(
         "GDPR erasure complete for user_id=%s — %d audit rows anonymized, "
         "%d email accounts deleted",
-        user_id, len(audit_rows), len(ea_rows),
+        sanitize_log(user_id), sanitize_log(len(audit_rows)), sanitize_log(len(ea_rows)),
     )
 
     return {

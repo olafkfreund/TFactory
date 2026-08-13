@@ -13,6 +13,7 @@ import subprocess
 from pathlib import Path
 from urllib.parse import urlparse
 
+from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
@@ -66,7 +67,7 @@ def run_git_command(args: list[str], cwd: str) -> dict:
             return {"success": False, "error": result.stderr.strip()}
         return {"success": True, "output": result.stdout.strip()}
     except Exception:
-        logger.exception("git command failed: %s", " ".join(args))
+        logger.exception("git command failed: %s", sanitize_log(" ".join(args)))
         return {"success": False, "error": "Failed to run git command"}
 
 
@@ -806,7 +807,7 @@ def _is_safe_mcp_url_host(url: str) -> bool:
             hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM
         )
     except (socket.gaierror, UnicodeError, OSError):
-        logger.warning("MCP health check: cannot resolve host %r (blocked)", hostname)
+        logger.warning("MCP health check: cannot resolve host %r (blocked)", sanitize_log(hostname))
         return False
     if not addresses:
         return False
@@ -819,7 +820,7 @@ def _is_safe_mcp_url_host(url: str) -> bool:
             continue  # local MCP server — allowed (before the reserved test for ::1)
         if ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
             logger.warning(
-                "MCP health check: blocked unsafe address %s for host %r", ip, hostname
+                "MCP health check: blocked unsafe address %s for host %r", sanitize_log(ip), sanitize_log(hostname)
             )
             return False
         # private (10/8, 172.16/12, 192.168/16) and public both fall through = allowed

@@ -14,6 +14,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from factory_common.logsafe import sanitize_log
+
 from ...websockets.events import broadcast_event
 from .base import ProviderInfo, ProviderModel, ProviderStrategy
 
@@ -183,7 +185,7 @@ class ClaudeProvider(ProviderStrategy):
         else:
             logger.warning("[ClaudeProvider] No OAuth token available")
 
-        logger.info(f"[ClaudeProvider] Starting CLI: {' '.join(cmd[:5])}...")
+        logger.info(f"[ClaudeProvider] Starting CLI: {sanitize_log(' '.join(cmd[:5]))}...")
 
         try:
             await broadcast_event("insights:chunk", {

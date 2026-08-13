@@ -24,6 +24,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -95,10 +96,10 @@ async def check_new_issues(projectId: str) -> dict[str, Any]:
     try:
         result = await auto_fix_service.check_new_and_start_all(projectId)
     except ValueError:
-        logger.exception("[auto_fix] check_new_and_start_all failed project=%s", projectId)
+        logger.exception("[auto_fix] check_new_and_start_all failed project=%s", sanitize_log(projectId))
         raise HTTPException(status_code=404, detail="Project or resource not found")
     except Exception:
-        logger.exception("[auto_fix] check_new_issues failed project=%s", projectId)
+        logger.exception("[auto_fix] check_new_issues failed project=%s", sanitize_log(projectId))
         raise HTTPException(status_code=500, detail="check failed")
     return result
 
@@ -109,11 +110,11 @@ async def start_auto_fix_one(projectId: str, issueNumber: int) -> dict[str, Any]
     try:
         return await auto_fix_service.start_auto_fix(projectId, issueNumber)
     except ValueError:
-        logger.exception("[auto_fix] start_auto_fix failed project=%s", projectId)
+        logger.exception("[auto_fix] start_auto_fix failed project=%s", sanitize_log(projectId))
         raise HTTPException(status_code=404, detail="Project or resource not found")
     except Exception:
         logger.exception(
             "[auto_fix] start_auto_fix failed project=%s issue=%d",
-            projectId, issueNumber,
+            sanitize_log(projectId), sanitize_log(issueNumber),
         )
         raise HTTPException(status_code=500, detail="start failed")

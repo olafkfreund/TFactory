@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 
+from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
@@ -382,8 +383,8 @@ async def attach_pr(project_id: str, spec_id: str, req: PrAttachRequest) -> dict
     except Exception:  # noqa: BLE001 — best-effort; source.json is the record
         logger.exception(
             "attach_pr: failed to post pending PR comment for %s/%s",
-            project_id,
-            spec_id,
+            sanitize_log(project_id),
+            sanitize_log(spec_id),
         )
         posted = {"ok": False, "error": "failed to post PR comment"}
 
