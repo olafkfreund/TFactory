@@ -368,7 +368,10 @@ async def check_new_issues(project_id: str) -> list[dict[str, Any]]:
 
     logger.info(
         "[auto_fix] check_new_issues project=%s provider=%s existing=%d new=%d",
-        sanitize_log(project_id), sanitize_log(provider_type), sanitize_log(len(existing)), sanitize_log(len(new)),
+        sanitize_log(project_id),
+        sanitize_log(provider_type),
+        sanitize_log(len(existing)),
+        sanitize_log(len(new)),
     )
     return new
 
@@ -623,7 +626,9 @@ async def check_new_and_start_all(project_id: str) -> dict[str, Any]:
         delegation_summary = await scan_delegated_tasks(project_id)
     except Exception as e:  # pragma: no cover
         logger.warning(
-            "[auto_fix] delegation tracker failed project=%s err=%s", sanitize_log(project_id), sanitize_log(e)
+            "[auto_fix] delegation tracker failed project=%s err=%s",
+            sanitize_log(project_id),
+            sanitize_log(e),
         )
 
     return {

@@ -820,7 +820,9 @@ def _is_safe_mcp_url_host(url: str) -> bool:
             continue  # local MCP server — allowed (before the reserved test for ::1)
         if ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
             logger.warning(
-                "MCP health check: blocked unsafe address %s for host %r", sanitize_log(ip), sanitize_log(hostname)
+                "MCP health check: blocked unsafe address %s for host %r",
+                sanitize_log(ip),
+                sanitize_log(hostname),
             )
             return False
         # private (10/8, 172.16/12, 192.168/16) and public both fall through = allowed

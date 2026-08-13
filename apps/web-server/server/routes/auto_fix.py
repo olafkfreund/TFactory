@@ -96,7 +96,10 @@ async def check_new_issues(projectId: str) -> dict[str, Any]:
     try:
         result = await auto_fix_service.check_new_and_start_all(projectId)
     except ValueError:
-        logger.exception("[auto_fix] check_new_and_start_all failed project=%s", sanitize_log(projectId))
+        logger.exception(
+            "[auto_fix] check_new_and_start_all failed project=%s",
+            sanitize_log(projectId),
+        )
         raise HTTPException(status_code=404, detail="Project or resource not found")
     except Exception:
         logger.exception("[auto_fix] check_new_issues failed project=%s", sanitize_log(projectId))

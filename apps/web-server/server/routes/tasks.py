@@ -352,8 +352,10 @@ def sync_worktree_to_main_spec(project_path: Path, spec_id: str) -> bool:
 
             logger = logging.getLogger(__name__)
             logger.info(
-                f"[WorktreeSync] Syncing plan for {sanitize_log(spec_id)}: "
-                f"worktree has {sanitize_log(worktree_completed)} completed vs main {sanitize_log(main_completed)}"
+                "[WorktreeSync] Syncing plan for %s: worktree has %s completed vs main %s",
+                sanitize_log(spec_id),
+                sanitize_log(worktree_completed),
+                sanitize_log(main_completed),
             )
             main_plan_file.write_text(json.dumps(worktree_plan, indent=2))
             return True

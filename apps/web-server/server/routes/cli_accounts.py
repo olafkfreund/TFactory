@@ -793,7 +793,12 @@ def install_or_update_cli(cli: str):
         }
 
     action = "updated" if was_update else "installed"
-    logger.info(f"[{sanitize_log(cli)}] Successfully {sanitize_log(action)}: {sanitize_log(new_version)}")
+    logger.info(
+        "[%s] Successfully %s: %s",
+        sanitize_log(cli),
+        sanitize_log(action),
+        sanitize_log(new_version),
+    )
 
     return {
         "success": True,

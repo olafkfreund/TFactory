@@ -103,7 +103,10 @@ class ChangelogService:
     ) -> bool:
         """Start changelog generation for a project."""
         if self.is_running(project_id):
-            logger.warning(f"Changelog generation already running for project {sanitize_log(project_id)}")
+            logger.warning(
+                "Changelog generation already running for project %s",
+                sanitize_log(project_id),
+            )
             return False
 
         settings = get_settings()
@@ -168,7 +171,11 @@ class ChangelogService:
         if request.get("customInstructions"):
             cmd.extend(["--custom-instructions", request["customInstructions"]])
 
-        logger.info(f"Starting changelog generation for {sanitize_log(project_id)}: {sanitize_log(' '.join(cmd))}")
+        logger.info(
+            "Starting changelog generation for %s: %s",
+            sanitize_log(project_id),
+            sanitize_log(' '.join(cmd)),
+        )
 
         # Set up environment with PYTHONPATH pointing to backend.
         # Scrub ANTHROPIC_API_KEY (OAuth-only policy — see core/auth.py).
@@ -320,7 +327,13 @@ class ChangelogService:
     ):
         """Emit progress event via WebSocket."""
         progress = PHASE_PROGRESS.get(phase, 0)
-        logger.info(f"[{sanitize_log(project_id)}] Phase: {sanitize_log(phase.value)} ({sanitize_log(progress)}%) - {sanitize_log(message)}")
+        logger.info(
+            "[%s] Phase: %s (%s%%) - %s",
+            sanitize_log(project_id),
+            sanitize_log(phase.value),
+            sanitize_log(progress),
+            sanitize_log(message),
+        )
 
         await broadcast_event("changelog:progress", {
             "projectId": project_id,

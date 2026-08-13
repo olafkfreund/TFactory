@@ -46,7 +46,11 @@ async def get_task_logs(task_id: str):
     # escape the specs root (CodeQL py/path-injection); a traversal attempt then
     # resolves to a non-existent spec (404) rather than an arbitrary path.
     spec_id = os.path.basename(spec_id)
-    logger.info(f"[GetTaskLogs] project_id={sanitize_log(project_id)}, spec_id={sanitize_log(spec_id)}")
+    logger.info(
+        "[GetTaskLogs] project_id=%s, spec_id=%s",
+        sanitize_log(project_id),
+        sanitize_log(spec_id),
+    )
 
     projects = load_projects()
 

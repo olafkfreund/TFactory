@@ -416,7 +416,10 @@ class InsightsService:
         task = self._running_tasks.pop(project_id, None)
         if task and not task.done():
             task.cancel()
-            logger.info(f"[InsightsService] Cancelled running task for project {sanitize_log(project_id)}")
+            logger.info(
+                "[InsightsService] Cancelled running task for project %s",
+                sanitize_log(project_id),
+            )
             return True
         return False
 

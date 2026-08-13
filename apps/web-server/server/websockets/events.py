@@ -170,9 +170,18 @@ async def emit_task_status(task_id: str, status: str, review_reason: str | None 
     payload = {"taskId": task_id, "status": status}
     if review_reason:
         payload["reviewReason"] = review_reason
-        logging.getLogger(__name__).info(f"[WebSocket] Emitting task:status - taskId: {sanitize_log(task_id)}, status: {sanitize_log(status)}, reviewReason: {sanitize_log(review_reason)}")
+        logging.getLogger(__name__).info(
+            "[WebSocket] Emitting task:status - taskId: %s, status: %s, reviewReason: %s",
+            sanitize_log(task_id),
+            sanitize_log(status),
+            sanitize_log(review_reason),
+        )
     else:
-        logging.getLogger(__name__).info(f"[WebSocket] Emitting task:status - taskId: {sanitize_log(task_id)}, status: {sanitize_log(status)}")
+        logging.getLogger(__name__).info(
+            "[WebSocket] Emitting task:status - taskId: %s, status: %s",
+            sanitize_log(task_id),
+            sanitize_log(status),
+        )
     await broadcast_event("task:status", payload)
 
 
@@ -180,7 +189,11 @@ async def emit_task_log(task_id: str, log: str):
     import logging
     # Only log the first 50 chars to avoid flooding logs with full log content
     log_preview = log[:50].replace('\n', '\\n') if len(log) > 50 else log.replace('\n', '\\n')
-    logging.getLogger(__name__).debug(f"[WebSocket] Emitting task:log - taskId: {sanitize_log(task_id)}, log: {sanitize_log(log_preview)}...")
+    logging.getLogger(__name__).debug(
+        "[WebSocket] Emitting task:log - taskId: %s, log: %s...",
+        sanitize_log(task_id),
+        sanitize_log(log_preview),
+    )
     await broadcast_event("task:log", {"taskId": task_id, "log": log})
 
 
@@ -190,7 +203,12 @@ async def emit_task_update(task_id: str, task_data: dict):
     exec_progress = task_data.get("executionProgress", {})
     phase = exec_progress.get("phase", "N/A") if exec_progress else "N/A"
     progress = exec_progress.get("phaseProgress", "N/A") if exec_progress else "N/A"
-    logging.getLogger(__name__).info(f"[WebSocket] Emitting task:update - taskId: {sanitize_log(task_id)}, phase: {sanitize_log(phase)}, progress: {sanitize_log(progress)}%")
+    logging.getLogger(__name__).info(
+        "[WebSocket] Emitting task:update - taskId: %s, phase: %s, progress: %s%%",
+        sanitize_log(task_id),
+        sanitize_log(phase),
+        sanitize_log(progress),
+    )
     await broadcast_event("task:update", {"taskId": task_id, **task_data})
 
 

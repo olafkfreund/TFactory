@@ -465,7 +465,10 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
         try:
             result_data = handler(tool_args)
         except Exception:
-            logger.exception("mcp_copilot: tool %r raised unexpected error", sanitize_log(tool_name))
+            logger.exception(
+                "mcp_copilot: tool %r raised unexpected error",
+                sanitize_log(tool_name),
+            )
             return _err(-32603, "Internal error")
 
         return _ok({
