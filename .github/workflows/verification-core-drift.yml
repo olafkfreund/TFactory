@@ -57,21 +57,13 @@ env:
   # Pinned Factory hub commit carrying the canonical verification-core modules.
   # Bump deliberately when re-vendoring (see header).
   #
-  # !! RE-POINT BEFORE MERGING (Factory#638) !!
-  # The value below is the HEAD OF AN OPEN HUB PR BRANCH
-  # (olafkfreund/Factory#644, feat/638-verify-job-tracing). The hub squash-merges,
-  # so that commit ceases to exist the moment the PR lands and this pin then
-  # resolves to nothing. Replace it with the SQUASH-MERGE commit on hub `main`
-  # before merging this PR. It is deliberately left pointing at the branch so CI
-  # goes RED rather than green-on-a-stale-canonical: a pin that still resolves is
-  # the failure mode that cost four re-points in one day.
-  #
-  # Why it has to move at all: this PR vendors apps/backend/tools/runners/
-  # job_tracing.py, which does not exist at d7c7687b. The gate checks the
-  # canonical out AT THIS PIN while its own logic floats at hub `main`, so once
-  # the hub registers the module in SERVICE_LAYOUTS (step 3) a stale pin means
-  # the gate looks for a canonical that is not there.
-  HUB_PIN_SHA: "de50e3fe06af17631cc374c4dbdbd4d34e1ac058"
+  # Bumped for olafkfreund/Factory#714 (py/tarslip): the hub's artifact_store.py
+  # now always extracts with the stdlib `data` filter instead of falling back to
+  # an unfiltered extractall on pre-3.12 runtimes. This value is the SQUASH-MERGE
+  # commit on hub `main`, not a PR-branch head — the hub squash-merges, so a
+  # branch head ceases to exist the moment the PR lands and the pin then resolves
+  # to nothing (Factory#638).
+  HUB_PIN_SHA: "11834afc75523324d95448ae6ce07eeca907c63b"
 
 jobs:
   drift:
