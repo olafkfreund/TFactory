@@ -24,11 +24,16 @@
 # rewriting the FROM line. Same tag class that was garbage-collected in #864, so
 # this covers the real failure case and not a tidier neighbour of it.
 #
-# Not covered, stated rather than implied: helmv3 charts, github-actions SHA
-# pinning, and `COPY --from=<image>` pins -- Dependabot's Dockerfile parser only
-# reads FROM. None of those were covered before either; this just stops the
-# config from claiming they were. If the Renovate App is ever installed, delete
-# this file rather than let two bots rewrite the same FROM lines.
+# github-actions IS now covered -- see the second updates entry. It was listed
+# here as a known gap until Factory#711 pinned all 48 flagged action refs to
+# immutable SHAs; a SHA pin with no updater is a pin that rots, so the two land
+# together rather than trading one exposure for another.
+#
+# Still not covered, stated rather than implied: helmv3 charts, and
+# `COPY --from=<image>` pins -- Dependabot's Dockerfile parser only reads FROM.
+# Neither was covered before either; this just stops the config from claiming
+# they were. If the Renovate App is ever installed, delete this file rather than
+# let two bots rewrite the same FROM lines.
 version: 2
 updates:
   - package-ecosystem: docker
@@ -48,3 +53,37 @@ updates:
     commit-message:
       prefix: "chore(deps)"
     open-pull-requests-limit: 5
+
+  # github-actions. Added alongside the SHA pinning in Factory#711.
+  #
+  # Why it is not optional: every third-party action in .github/workflows/ is now
+  # pinned to a 40-character commit SHA. That closes the mutable-tag supply-chain
+  # path, and it also freezes the action at that commit forever -- an upstream
+  # SECURITY fix no longer arrives by moving tag. Without this updater the pins
+  # silently rot, which is a worse position than the tags were in. Dependabot
+  # reads the `# vX.Y.Z` trailing comment on each pin and keeps both the SHA and
+  # the comment current, which is why the pins carry that exact format.
+  #
+  # Weekly, not daily: an action pin does not rot in one direction the way a base
+  # image digest does, and the docker lane above already carries the daily cost.
+  #
+  # Grouped into ONE pull request on purpose. 48 pins across 11 distinct actions
+  # would otherwise open up to 11 PRs in a single run -- which is precisely how
+  # routine updates got switched off for noise in the first place (AIFactory#34).
+  - package-ecosystem: github-actions
+    directory: "/"
+    # Same Factory#491 reasoning as the docker lane above: pin the target branch
+    # rather than inherit it, or a default-branch flip splits bumps across both.
+    target-branch: dev
+    schedule:
+      interval: weekly
+    labels:
+      - dependencies
+      - github-actions
+    commit-message:
+      prefix: "chore(deps)"
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns:
+          - "*"
