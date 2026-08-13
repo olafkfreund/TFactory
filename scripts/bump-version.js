@@ -29,7 +29,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execSync, execFileSync } = require('child_process');
+const { execFileSync } = require('child_process');
 
 // Colors for terminal output
 const colors = {
@@ -101,15 +101,6 @@ function bumpVersion(currentVersion, bumpType) {
   }
 }
 
-// Execute shell command
-function exec(command, options = {}) {
-  try {
-    return execSync(command, { encoding: 'utf8', stdio: 'pipe', ...options }).trim();
-  } catch (err) {
-    error(`Command failed: ${command}\n${err.message}`);
-  }
-}
-
 // Execute a command without a shell — the binary and each argument are passed
 // as a separate argv element, so no value (including the argv-derived version
 // string) can be interpreted by a shell (command-injection barrier).
@@ -123,7 +114,7 @@ function execFile(file, args, options = {}) {
 
 // Check if git working directory is clean
 function checkGitStatus() {
-  const status = exec('git status --porcelain');
+  const status = execFile('git', ['status', '--porcelain']);
   if (status) {
     error('Git working directory is not clean. Please commit or stash changes first.');
   }
