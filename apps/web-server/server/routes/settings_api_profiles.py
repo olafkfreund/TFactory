@@ -18,6 +18,11 @@ from pathlib import Path
 from fastapi import APIRouter
 from pydantic import BaseModel, Field, SecretStr
 
+from server.services.url_safety import (
+    assert_safe_outbound_url,
+    build_no_redirect_opener,
+)
+
 from ..config import get_settings
 from ..paths import write_secret_file
 
@@ -346,6 +351,27 @@ class TestConnectionRequest(BaseModel):
     apiKey: SecretStr
 
 
+def _safe_profile_models_url(base_url: str) -> str:
+    """Validate an API-profile base URL and return the ``/models`` URL to fetch.
+
+    STRICT posture (``allow_private`` left at its default False): an API profile
+    is a cloud endpoint -- it maps onto ``ANTHROPIC_BASE_URL`` and friends, and
+    the shipped examples are ``https://api.anthropic.com`` and equivalents. A
+    profile has no legitimate reason to point inside the network, so this is the
+    one place in the LLM settings where RFC-1918 is refused outright. Both
+    endpoints below send the caller's API key in an Authorization header, so an
+    unguarded URL leaks a credential as well as reaching an internal service.
+
+    Local self-hosted servers are served by /api/settings/local-providers
+    (routes/settings_llm_providers.py), which uses the permissive posture.
+
+    Raises ``ValueError`` -- the callers already turn any exception into a
+    generic "connection test failed", which is the correct fail-closed answer.
+    """
+    assert_safe_outbound_url(base_url)
+    return f"{base_url}/models"
+
+
 @router.post("/api-profiles/test")
 async def test_api_connection(request: TestConnectionRequest):
     """Test connection to an API endpoint."""
@@ -353,10 +379,10 @@ async def test_api_connection(request: TestConnectionRequest):
 
     try:
         req = urllib.request.Request(
-            f"{request.baseUrl}/models",
+            _safe_profile_models_url(request.baseUrl),
             headers={"Authorization": f"Bearer {request.apiKey.get_secret_value()}"},
         )
-        urllib.request.urlopen(req, timeout=10)
+        build_no_redirect_opener().open(req, timeout=10)
         return {"success": True, "data": {"connected": True}}
     except Exception:
         logger.exception("API connection test failed")
@@ -371,10 +397,10 @@ async def discover_api_models(request: TestConnectionRequest):
 
     try:
         req = urllib.request.Request(
-            f"{request.baseUrl}/models",
+            _safe_profile_models_url(request.baseUrl),
             headers={"Authorization": f"Bearer {request.apiKey.get_secret_value()}"},
         )
-        response = urllib.request.urlopen(req, timeout=10)
+        response = build_no_redirect_opener().open(req, timeout=10)
         data = json_module.loads(response.read().decode())
         models = [m.get("id") for m in data.get("data", [])]
         return {"success": True, "data": models}
