@@ -38,6 +38,8 @@ from collections.abc import Iterator
 from pathlib import Path
 from urllib.parse import urlparse
 
+from factory_common.logsafe import sanitize_log
+
 from ..routes._specpath import safe_component
 
 logger = logging.getLogger(__name__)
@@ -296,7 +298,7 @@ async def clone_or_update(
                             )
                         except GitOperationError:
                             pass
-                logger.info("[workspace] pulled latest into %s", workspace)
+                logger.info("[workspace] pulled latest into %s", sanitize_log(workspace))
                 return workspace
 
             # Fresh clone. ``--`` ends option parsing so a hostile URL/dir starting
@@ -319,7 +321,11 @@ async def clone_or_update(
                     )
                 except GitOperationError:
                     pass
-            logger.info("[workspace] cloned %s → %s", git_url, workspace)
+            logger.info(
+                "[workspace] cloned %s → %s",
+                sanitize_log(git_url),
+                sanitize_log(workspace),
+            )
             return workspace
 
 
@@ -341,7 +347,11 @@ async def _run_git(
     operations without ever putting the token on the command line.
     """
     cmd = ["git", *args]
-    logger.debug("[workspace] running: git %s (cwd=%s)", " ".join(args), cwd)
+    logger.debug(
+        "[workspace] running: git %s (cwd=%s)",
+        sanitize_log(" ".join(args)),
+        sanitize_log(cwd),
+    )
     # Defense in depth against a malicious clone URL (Factory security review C1):
     # restrict git's transports so the ``ext::`` / transport-helper RCE vector
     # (e.g. ``git clone 'ext::sh -c ...'``) is refused even if URL validation is

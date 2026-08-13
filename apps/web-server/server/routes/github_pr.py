@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 
+from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 
@@ -247,7 +248,7 @@ async def post_pr_comment(
             comment_id = await provider.add_comment(prNumber, request.body)
             return {"success": True, "data": {"commentId": comment_id}}
         except Exception:
-            logger.exception("Failed to post comment to PR #%s", prNumber)
+            logger.exception("Failed to post comment to PR #%s", sanitize_log(prNumber))
             return JSONResponse(
                 status_code=500,
                 content={"success": False, "error": "Failed to post comment"},
@@ -293,7 +294,7 @@ async def approve_pr(
             await provider.post_review(prNumber, review)
             return {"success": True}
         except Exception:
-            logger.exception("Failed to approve PR #%s", prNumber)
+            logger.exception("Failed to approve PR #%s", sanitize_log(prNumber))
             return JSONResponse(
                 status_code=500,
                 content={"success": False, "error": "Failed to approve PR"},
@@ -338,7 +339,7 @@ async def merge_pr(
                     content={"success": False, "error": "Failed to merge PR"},
                 )
         except Exception:
-            logger.exception("Failed to merge PR #%s", prNumber)
+            logger.exception("Failed to merge PR #%s", sanitize_log(prNumber))
             return JSONResponse(
                 status_code=500,
                 content={"success": False, "error": "Failed to merge PR"},

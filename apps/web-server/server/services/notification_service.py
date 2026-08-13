@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from factory_common.logsafe import sanitize_log
 from sqlalchemy import select
 
 from ..database import OrgMember
@@ -169,9 +170,9 @@ class NotificationService:
 
         logger.debug(
             "Notification created: user_id=%s type=%s title=%s",
-            user_id,
-            type,
-            title,
+            sanitize_log(user_id),
+            sanitize_log(type),
+            sanitize_log(title),
         )
         return notification
 

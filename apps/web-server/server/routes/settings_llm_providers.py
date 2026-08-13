@@ -15,6 +15,7 @@ import logging
 from pathlib import Path
 from urllib.parse import urlparse
 
+from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, Body, HTTPException, Query
 from pydantic import BaseModel, Field, SecretStr
 
@@ -361,7 +362,7 @@ async def list_openai_compat_models(
 
         return {"models": models}
     except Exception:
-        logger.exception("Failed to list OpenAI-compatible models from %s", baseUrl)
+        logger.exception("Failed to list OpenAI-compatible models from %s", sanitize_log(baseUrl))
         return {"success": False, "error": "Failed to list models"}
 
 
@@ -410,7 +411,7 @@ async def test_openai_compat_connection(request: OpenAICompatTestRequest):
         }
     except Exception:
         logger.exception(
-            "OpenAI-compatible connection test failed for %s", request.baseUrl
+            "OpenAI-compatible connection test failed for %s", sanitize_log(request.baseUrl)
         )
         return {"success": False, "error": "Connection test failed"}
 
@@ -423,8 +424,9 @@ async def pull_ollama_model(
     """Pull (download) an Ollama model."""
     base = _safe_local_base_url(ollamaBaseUrl)
     try:
-        import httpx
         import json
+
+        import httpx
 
         # Stream the pull progress
         async with httpx.AsyncClient(timeout=300.0, follow_redirects=False) as client:

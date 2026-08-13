@@ -17,6 +17,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from factory_common.logsafe import sanitize_log
+
 logger = logging.getLogger(__name__)
 
 
@@ -258,7 +260,7 @@ class PRDataService:
         try:
             review_data = json.loads(review_file.read_text())
         except (json.JSONDecodeError, OSError):
-            logger.exception("Failed to read review data for PR #%s", pr_number)
+            logger.exception("Failed to read review data for PR #%s", sanitize_log(pr_number))
             return {"success": False, "error": "Failed to read review data"}
 
         findings = review_data.get("findings", [])
@@ -565,7 +567,7 @@ class PRDataService:
         except json.JSONDecodeError:
             return {"success": False, "error": "Failed to parse stored review data"}
         except OSError:
-            logger.exception("Failed to read review file for PR #%s", pr_number)
+            logger.exception("Failed to read review file for PR #%s", sanitize_log(pr_number))
             return {"success": False, "error": "Failed to read review file"}
 
     def delete_review(
@@ -587,7 +589,7 @@ class PRDataService:
         try:
             review_file.unlink()
         except OSError:
-            logger.exception("Failed to delete review file for PR #%s", pr_number)
+            logger.exception("Failed to delete review file for PR #%s", sanitize_log(pr_number))
             return {"success": False, "error": "Failed to delete review file"}
 
         # Update the index file to remove the entry
@@ -626,7 +628,7 @@ class PRDataService:
         except json.JSONDecodeError:
             return {"success": False, "error": "Failed to parse review logs"}
         except OSError:
-            logger.exception("Failed to read logs file for PR #%s", pr_number)
+            logger.exception("Failed to read logs file for PR #%s", sanitize_log(pr_number))
             return {"success": False, "error": "Failed to read logs file"}
 
     # ------------------------------------------------------------------

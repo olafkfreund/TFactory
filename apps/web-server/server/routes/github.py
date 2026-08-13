@@ -11,6 +11,7 @@ import subprocess
 import sys
 from pathlib import Path as FilePath
 
+from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
@@ -1106,7 +1107,7 @@ async def investigate_github_issue(
                 except Exception:
                     all_comments = []
             except Exception:
-                logger.exception("Failed to fetch issue %s", issueNumber)
+                logger.exception("Failed to fetch issue %s", sanitize_log(issueNumber))
                 return {
                     "success": False,
                     "error": "Failed to fetch issue",

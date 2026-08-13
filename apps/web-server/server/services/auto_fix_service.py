@@ -32,6 +32,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from factory_common.logsafe import sanitize_log
+
 logger = logging.getLogger(__name__)
 
 
@@ -365,8 +367,11 @@ async def check_new_issues(project_id: str) -> list[dict[str, Any]]:
         })
 
     logger.info(
-        "[auto_fix] check_new_issues project=%s provider=%s existing=%d new=%d",
-        project_id, provider_type, len(existing), len(new),
+        "[auto_fix] check_new_issues project=%s provider=%s existing=%s new=%s",
+        sanitize_log(project_id),
+        sanitize_log(provider_type),
+        sanitize_log(len(existing)),
+        sanitize_log(len(new)),
     )
     return new
 
@@ -574,8 +579,8 @@ async def _pull_clone_if_any(project_id: str) -> None:
     except GitOperationError as e:
         logger.warning(
             "[auto_fix] pull-on-poll failed for project=%s: %s — continuing with stale clone",
-            project_id,
-            e,
+            sanitize_log(project_id),
+            sanitize_log(e),
         )
 
 
@@ -609,8 +614,8 @@ async def check_new_and_start_all(project_id: str) -> dict[str, Any]:
             started.append({**iss, **result})
         except Exception:  # pragma: no cover — bubble for visibility
             logger.exception(
-                "[auto_fix] start failed project=%s issue=%d",
-                project_id, iss["number"],
+                "[auto_fix] start failed project=%s issue=%s",
+                sanitize_log(project_id), sanitize_log(iss["number"]),
             )
             errors.append({"issueNumber": iss["number"], "error": "Failed to start auto-fix"})
 
@@ -621,7 +626,9 @@ async def check_new_and_start_all(project_id: str) -> dict[str, Any]:
         delegation_summary = await scan_delegated_tasks(project_id)
     except Exception as e:  # pragma: no cover
         logger.warning(
-            "[auto_fix] delegation tracker failed project=%s err=%s", project_id, e
+            "[auto_fix] delegation tracker failed project=%s err=%s",
+            sanitize_log(project_id),
+            sanitize_log(e),
         )
 
     return {
