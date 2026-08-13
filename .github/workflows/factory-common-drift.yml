@@ -5,7 +5,7 @@ name: factory_common drift
 #
 # This repo vendors the hub's shared layer at apps/web-server/factory_common/.
 # That copy MUST stay byte-identical to the canonical at the SHA pinned in
-# apps/web-server/factory_common/.hub-sha. This job checks out the hub at that
+# apps/web-server/factory_common/.hub-sha. This job fetches the hub tree at that
 # SHA and diffs the tracked files; a byte mismatch fails the build.
 #
 # The gate ships in the SAME pull request as the vendored copy it guards, so
@@ -24,6 +24,24 @@ name: factory_common drift
 # PR-branch head. The hub squash-merges, so a branch head stops existing the
 # moment its PR lands and the pin then resolves to nothing -- a gate that cannot
 # run rather than one that fails honestly.
+#
+# WHY A TARBALL AND NOT actions/checkout (TFactory#1052):
+# The first version of this gate used a second actions/checkout to pull the hub
+# at `ref: <the pinned SHA>`. That SHA is read from a file in the PR's own tree,
+# so CodeQL correctly raised actions/untrusted-checkout/medium against it -- a
+# NET-NEW alert introduced by this very workflow, in the same week the fleet
+# closed 50 of them (Factory#711). Fetching the canonical as a tarball removes
+# the finding at source rather than arguing it down: there is no checkout of a
+# PR-controlled ref, and no job token to leave behind in a .git/config. It also
+# matches factory-github-drift.yml in this repo, which fetches its canonical the
+# same way for unrelated reasons.
+#
+# NOT fixed by that change, stated rather than implied: the pin is still chosen
+# by the PR, and codeload serves any commit in the hub's fork network (verified:
+# an orphaned hub PR-branch head still returns 200). So a PR can still point
+# .hub-sha at a fork commit crafted to match its own edited copy and pass this
+# gate. That is a gate bypass, not code execution, and it is tracked in
+# TFactory#1049.
 
 on:
   pull_request:
@@ -32,7 +50,7 @@ on:
     # (Factory#525). A filter switches the gate off for exactly the PR that
     # never touches the listed paths, and on a green PR page "the check did not
     # run" is indistinguishable from "the check passed" (Factory#471). This gate
-    # is a four-file diff against a checkout; running it always costs seconds.
+    # is a four-file diff against a tarball; running it always costs seconds.
   push:
     branches: [dev, main]
 
@@ -43,51 +61,54 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  HUB_REPO: "olafkfreund/Factory"
+  VENDORED: "apps/web-server/factory_common"
+
 jobs:
   drift:
     name: vendored factory_common matches the hub canonical
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          path: tfactory
 
-      - name: Read pinned hub SHA
+      - name: Read and validate the pinned hub SHA
         id: pin
         # Validated before use, because this file comes from the PR's own tree:
         # on a fork PR its contents are attacker-controlled, and the value is
-        # handed straight to actions/checkout as a `ref`. Reject anything that is
-        # not a bare 40-character commit id. (CodeQL actions/untrusted-checkout;
-        # the sibling gates in AIFactory grew this guard in Factory#711.)
+        # interpolated into the download URL below. Anything that is not a bare
+        # 40-character commit id is rejected, so the pin cannot carry a path
+        # traversal, a query string or a second URL.
         run: |
           set -euo pipefail
-          sha="$(tr -d '[:space:]' < tfactory/apps/web-server/factory_common/.hub-sha)"
+          sha="$(tr -d '[:space:]' < "${VENDORED}/.hub-sha")"
           if ! printf '%s' "$sha" | grep -qE '^[0-9a-f]{40}$'; then
-            echo "factory_common/.hub-sha is not a 40-character commit SHA: '${sha}'" >&2
+            echo "${VENDORED}/.hub-sha is not a 40-character commit SHA: '${sha}'" >&2
             exit 1
           fi
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
-      # No continue-on-error: an unreachable hub is a gate that cannot run, and
-      # per standards rule 4.7 that must fail rather than pass. If Factory ever
-      # becomes private, add a read token here -- do not add a soft-skip.
-      - name: Check out hub factory-common at the pinned SHA
-        uses: actions/checkout@v4
-        with:
-          repository: olafkfreund/Factory
-          ref: ${{ steps.pin.outputs.sha }}
-          path: factory-hub
-          # This tree is only ever diffed, never executed, and nothing here runs
-          # git against it afterwards. Do not leave the job token behind in
-          # factory-hub/.git/config, where a checked-out ref chosen by the PR
-          # would sit next to it.
-          persist-credentials: false
+      - name: Fetch the hub canonical tree at the pinned SHA
+        # Passed through env rather than interpolated straight into the script,
+        # so the value can never be parsed as shell.
+        env:
+          SHA: ${{ steps.pin.outputs.sha }}
+        # curl -f: a 404 (garbage-collected or non-existent pin) fails the job.
+        # No continue-on-error and no soft-skip anywhere in this gate: an
+        # unreachable hub is a gate that CANNOT run, and per standards rule 4.7
+        # that must fail rather than report success.
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/hub
+          curl -fsSL "https://codeload.github.com/${HUB_REPO}/tar.gz/${SHA}" -o /tmp/hub.tgz
+          tar -xzf /tmp/hub.tgz -C /tmp/hub --strip-components=3 \
+            --wildcards "*/shared/factory-common/*"
 
       - name: Diff vendored factory_common against the hub canonical
         run: |
           set -euo pipefail
-          canonical="factory-hub/shared/factory-common/factory_common"
-          vendored="tfactory/apps/web-server/factory_common"
+          canonical="/tmp/hub/factory_common"
+          vendored="${VENDORED}"
           expected="__init__.py http.py logsafe.py secrets.py"
 
           # The file list is hand-maintained, and a hand-maintained list is
@@ -110,8 +131,8 @@ jobs:
 
           for f in ${expected}; do
             if ! diff "${vendored}/${f}" "${canonical}/${f}"; then
-              echo "DRIFT: ${vendored}/${f} diverged from the hub canonical (${canonical}/${f})."
-              echo "Re-vendor from the hub and bump apps/web-server/factory_common/.hub-sha,"
+              echo "DRIFT: ${vendored}/${f} diverged from the hub canonical."
+              echo "Re-vendor from the hub and bump ${VENDORED}/.hub-sha,"
               echo "or land the change in shared/factory-common/ in the hub first."
               exit 1
             fi
