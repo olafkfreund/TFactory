@@ -52,7 +52,7 @@ async def trigger_gdpr_erasure(
         )
 
     logger.warning(
-        "GDPR erasure executed: user_id=%s by actor=%s audit_rows=%d",
+        "GDPR erasure executed: user_id=%s by actor=%s audit_rows=%s",
         sanitize_log(user_id),
         sanitize_log(getattr(current_user, "id", "unknown")),
         sanitize_log(summary["audit_rows_anonymized"]),

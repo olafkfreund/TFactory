@@ -93,7 +93,7 @@ async def run_delegation(
             await asyncio.wait_for(proc.wait(), timeout=PLANNER_TIMEOUT_SECONDS)
         except asyncio.TimeoutError:
             logger.warning(
-                "[delegation_runner] planner timed out after %ds task=%s — "
+                "[delegation_runner] planner timed out after %ss task=%s — "
                 "posting comment with whatever was written so far",
                 sanitize_log(PLANNER_TIMEOUT_SECONDS),
                 sanitize_log(task_id),
@@ -121,7 +121,7 @@ async def run_delegation(
         if existing is not None:
             logger.info(
                 "[delegation_runner] enrichment comment already exists on "
-                "issue=%d (id=%s) — skipping re-post",
+                "issue=%s (id=%s) — skipping re-post",
                 sanitize_log(issue_number),
                 sanitize_log(existing),
             )
@@ -131,7 +131,7 @@ async def run_delegation(
             posted = True
     except Exception as e:
         logger.warning(
-            "[delegation_runner] comment post failed project=%s issue=%d err=%s",
+            "[delegation_runner] comment post failed project=%s issue=%s err=%s",
             sanitize_log(project_id),
             sanitize_log(issue_number),
             sanitize_log(e),
@@ -194,7 +194,7 @@ async def _existing_enrichment_comment(
         comments = await provider.api_get(f"/repos/{repo}/issues/{issue_number}/comments")
     except Exception as e:
         logger.debug(
-            "[delegation_runner] could not list comments on issue=%d: %s",
+            "[delegation_runner] could not list comments on issue=%s: %s",
             sanitize_log(issue_number),
             sanitize_log(e),
         )

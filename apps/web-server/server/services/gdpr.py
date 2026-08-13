@@ -168,8 +168,8 @@ async def erase_user(db: AsyncSession, user_id: str) -> dict:
 
     await db.commit()
     logger.info(
-        "GDPR erasure complete for user_id=%s — %d audit rows anonymized, "
-        "%d email accounts deleted",
+        "GDPR erasure complete for user_id=%s — %s audit rows anonymized, "
+        "%s email accounts deleted",
         sanitize_log(user_id), sanitize_log(len(audit_rows)), sanitize_log(len(ea_rows)),
     )
 

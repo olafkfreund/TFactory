@@ -156,7 +156,7 @@ async def scan_delegated_tasks(project_id: str) -> dict[str, Any]:
             await _emit_status(project_id, item, "declined")
 
     logger.info(
-        "[delegation_tracker] scan project=%s delegated=%d promoted=%d declined=%d",
+        "[delegation_tracker] scan project=%s delegated=%s promoted=%s declined=%s",
         sanitize_log(project_id),
         sanitize_log(len(delegated)),
         sanitize_log(len(promoted)),
@@ -218,7 +218,7 @@ async def _emit_status(
         await emit_task_status(task_id, new_status)
         if pr_number is not None:
             logger.info(
-                "[delegation_tracker] task %s → %s (PR #%d)",
+                "[delegation_tracker] task %s → %s (PR #%s)",
                 sanitize_log(task_id),
                 sanitize_log(new_status),
                 sanitize_log(pr_number),

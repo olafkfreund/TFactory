@@ -516,7 +516,7 @@ async def try_admit_verify(
             if not admitted:
                 logger.info(
                     "[job-state] verify job_id=%s queued behind admission cap "
-                    "(%s=%d); will auto-start when a slot frees",
+                    "(%s=%s); will auto-start when a slot frees",
                     sanitize_log(job_id),
                     sanitize_log(_MAX_CONCURRENT_ENV),
                     sanitize_log(max_concurrent_verifies()),

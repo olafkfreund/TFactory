@@ -367,7 +367,7 @@ async def check_new_issues(project_id: str) -> list[dict[str, Any]]:
         })
 
     logger.info(
-        "[auto_fix] check_new_issues project=%s provider=%s existing=%d new=%d",
+        "[auto_fix] check_new_issues project=%s provider=%s existing=%s new=%s",
         sanitize_log(project_id),
         sanitize_log(provider_type),
         sanitize_log(len(existing)),
@@ -614,7 +614,7 @@ async def check_new_and_start_all(project_id: str) -> dict[str, Any]:
             started.append({**iss, **result})
         except Exception:  # pragma: no cover — bubble for visibility
             logger.exception(
-                "[auto_fix] start failed project=%s issue=%d",
+                "[auto_fix] start failed project=%s issue=%s",
                 sanitize_log(project_id), sanitize_log(iss["number"]),
             )
             errors.append({"issueNumber": iss["number"], "error": "Failed to start auto-fix"})
