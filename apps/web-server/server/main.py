@@ -22,6 +22,7 @@ from starlette.status import HTTP_404_NOT_FOUND
 from . import env_bootstrap  # noqa: F401  — loads .env into os.environ first
 from .auth import TokenAuthMiddleware
 from .config import get_settings
+from .crypto.kms import enforce_kms_safety
 from .database.engine import init_db
 from .logging_config import setup_logging
 from .routes import (
@@ -762,6 +763,10 @@ if __name__ == "__main__":
     import uvicorn
 
     settings = get_settings()
+
+    # AIFactory#1290: never come up with a KMS backend that was selected but
+    # cannot be constructed - every credential read/write would fail later.
+    enforce_kms_safety()
 
     # Build uvicorn config
     uvicorn_config = {

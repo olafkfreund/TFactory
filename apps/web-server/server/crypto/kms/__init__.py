@@ -32,6 +32,63 @@ class Backend(Protocol):
 
 _INSTANCE: Backend | None = None
 
+# The default backend. Selecting anything else is an explicit operator
+# statement that credentials must be encrypted at rest (AIFactory#1290).
+DEFAULT_BACKEND = "fernet"
+
+
+def configured_backend_name() -> str:
+    """The backend name from env, normalised. ``fernet`` when unset."""
+    return (
+        (
+            os.environ.get("APP_KMS_BACKEND")
+            or os.environ.get("KMS_BACKEND")
+            or DEFAULT_BACKEND
+        )
+        .strip()
+        .lower()
+    )
+
+
+def encryption_is_required() -> bool:
+    """True when the operator explicitly chose a non-default KMS backend.
+
+    ``fernet`` (the default, and what you get with no env at all) is the
+    single-operator posture where a missing key means nothing was ever
+    provisioned. Anything else means the operator asked for a KMS, and a
+    deployment that cannot use it is a misconfiguration, not a fallback.
+    """
+    return configured_backend_name() != DEFAULT_BACKEND
+
+
+def enforce_kms_safety() -> None:
+    """Refuse to start when a selected KMS backend cannot be constructed.
+
+    Called only from the real server entrypoint (``server.main.__main__``), so
+    TestClient never reaches it. The chart now refuses to render a selected
+    backend with no key (AIFactory#1290) -- but a render check cannot see an
+    empty Secret, a values file setting the key to ``""``, or a KMS the pod
+    cannot reach, so this catches what the chart cannot.
+
+    Deliberately CONSTRUCT-only: every backend's ``from_env()`` reads
+    environment and builds a client, with no network round-trip. So this
+    catches configuration faults, which are permanent and cannot heal at
+    runtime, and it does NOT turn a transient KMS outage during a rolling
+    restart into a CrashLoopBackOff -- that stays a per-write failure through
+    ``EncryptedString``, which already raises rather than storing plaintext.
+    """
+    if not encryption_is_required():
+        return
+    try:
+        get_backend()
+    except Exception as exc:  # every backend raises its own error type
+        raise SystemExit(
+            f"Refusing to start: APP_KMS_BACKEND={configured_backend_name()!r} "
+            f"was selected but the backend could not be constructed ({exc}). "
+            "Every credential read or write would fail at runtime. Provision "
+            "the backend's key/credentials, or unset APP_KMS_BACKEND."
+        ) from exc
+
 
 def get_backend() -> Backend:
     """Resolve the configured backend. Cached per process.
@@ -46,11 +103,7 @@ def get_backend() -> Backend:
     if _INSTANCE is not None:
         return _INSTANCE
 
-    name = (
-        os.environ.get("APP_KMS_BACKEND")
-        or os.environ.get("KMS_BACKEND")
-        or "fernet"
-    ).strip().lower()
+    name = configured_backend_name()
 
     if name == "fernet":
         from .fernet import FernetBackend
