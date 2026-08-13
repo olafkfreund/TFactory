@@ -9,7 +9,7 @@ import io
 import json
 import os
 import sys
-from contextlib import redirect_stdout
+from contextlib import redirect_stdout, suppress
 
 import pytest
 
@@ -107,7 +107,9 @@ def test_correlation_id_propagates_to_httpx() -> None:
         reset_correlation_id(token)
 
     assert resp.status_code == 200
-    assert captured["headers"].get(CORRELATION_ID_HEADER.lower()) == "rid-propagated-9876"
+    assert (
+        captured["headers"].get(CORRELATION_ID_HEADER.lower()) == "rid-propagated-9876"
+    )
 
 
 @pytest.mark.obs
@@ -119,10 +121,10 @@ def test_metrics_exposes_prometheus_format(fresh_obs_app) -> None:
     # Reset any prior metrics so this test is hermetic.
     collectors = list(REGISTRY._collector_to_names.keys())  # type: ignore[attr-defined]
     for c in collectors:
-        try:
+        # Collector may have already been unregistered by another cleanup
+        # pass in this hermetic-reset loop; that race is the expected case.
+        with suppress(KeyError):
             REGISTRY.unregister(c)
-        except KeyError:
-            pass
 
     # Make sure METRICS_SCRAPE_TOKEN isn't lingering from a prior test.
     os.environ.pop("METRICS_SCRAPE_TOKEN", None)
@@ -155,10 +157,10 @@ def test_handler_label_uses_route_template(fresh_obs_app) -> None:
     # Hermetic registry.
     collectors = list(REGISTRY._collector_to_names.keys())  # type: ignore[attr-defined]
     for c in collectors:
-        try:
+        # Collector may have already been unregistered by another cleanup
+        # pass in this hermetic-reset loop; that race is the expected case.
+        with suppress(KeyError):
             REGISTRY.unregister(c)
-        except KeyError:
-            pass
     os.environ.pop("METRICS_SCRAPE_TOKEN", None)
 
     from server.observability import install_metrics
@@ -192,10 +194,10 @@ def test_metrics_requires_token_when_configured(fresh_obs_app) -> None:
     # Hermetic.
     collectors = list(REGISTRY._collector_to_names.keys())  # type: ignore[attr-defined]
     for c in collectors:
-        try:
+        # Collector may have already been unregistered by another cleanup
+        # pass in this hermetic-reset loop; that race is the expected case.
+        with suppress(KeyError):
             REGISTRY.unregister(c)
-        except KeyError:
-            pass
 
     os.environ["METRICS_SCRAPE_TOKEN"] = "secret-scrape-token-zzz"
 
@@ -228,9 +230,12 @@ def test_metrics_requires_token_when_configured(fresh_obs_app) -> None:
 
 def _grafana_dashboard_missing() -> bool:
     from pathlib import Path
+
     return not (
         Path(__file__).resolve().parents[2]
-        / "guides" / "observability" / "grafana-tfactory.json"
+        / "guides"
+        / "observability"
+        / "grafana-tfactory.json"
     ).is_file()
 
 
@@ -254,7 +259,11 @@ def test_grafana_dashboard_json_is_valid() -> None:
     panel_titles = {p.get("title", "").lower() for p in data["panels"]}
     # Required panels per issue #33.
     required = [
-        "request rate", "latency", "error", "audit", "oidc",
+        "request rate",
+        "latency",
+        "error",
+        "audit",
+        "oidc",
     ]
     for token in required:
         assert any(token in title for title in panel_titles), (

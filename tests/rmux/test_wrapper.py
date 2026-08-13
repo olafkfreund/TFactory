@@ -15,6 +15,7 @@ Two layers:
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 from pathlib import Path
@@ -107,12 +108,18 @@ class TestEnsureDaemon:
         socket_dir = tmp_path / "rmux-socket"
         assert not socket_dir.exists()
         wrapper = RmuxWrapper(rmux_bin="rmux", socket_dir=socket_dir)
+
         # Patch the subprocess so we don't actually run rmux here.
         async def _fake_communicate():
             return (b"", b"no server running on socket")
-        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_proc:
+
+        with patch(
+            "asyncio.create_subprocess_exec", new_callable=AsyncMock
+        ) as mock_proc:
             mock_proc.return_value.communicate = _fake_communicate
-            mock_proc.return_value.returncode = 1  # rmux returns non-zero when no server
+            mock_proc.return_value.returncode = (
+                1  # rmux returns non-zero when no server
+            )
             try:
                 await wrapper.ensure_daemon()
             except RmuxError:
@@ -139,8 +146,10 @@ class TestStderrClassification:
     @pytest.mark.asyncio
     async def test_no_server_raises_daemon_error(self, tmp_path) -> None:
         wrapper = RmuxWrapper(socket_dir=tmp_path)
+
         async def fake_comm():
             return (b"", b"no server running on /tmp/sock")
+
         with patch(
             "asyncio.create_subprocess_exec",
             new_callable=AsyncMock,
@@ -153,8 +162,10 @@ class TestStderrClassification:
     @pytest.mark.asyncio
     async def test_missing_session_raises_session_error(self, tmp_path) -> None:
         wrapper = RmuxWrapper(socket_dir=tmp_path)
+
         async def fake_comm():
             return (b"", b"can't find session: ghost-session")
+
         with patch(
             "asyncio.create_subprocess_exec",
             new_callable=AsyncMock,
@@ -168,8 +179,10 @@ class TestStderrClassification:
     async def test_swallow_no_server_returns_empty(self, tmp_path) -> None:
         """list_sessions wants "no server" to mean [] not raise."""
         wrapper = RmuxWrapper(socket_dir=tmp_path)
+
         async def fake_comm():
             return (b"", b"no server running")
+
         with patch(
             "asyncio.create_subprocess_exec",
             new_callable=AsyncMock,
@@ -186,8 +199,10 @@ class TestStderrClassification:
         """Unrecognised stderr → plain RmuxError (still typed enough to
         catch broadly, but doesn't lie about being a daemon/session error)."""
         wrapper = RmuxWrapper(socket_dir=tmp_path)
+
         async def fake_comm():
             return (b"", b"some other weird rmux error")
+
         with patch(
             "asyncio.create_subprocess_exec",
             new_callable=AsyncMock,
@@ -217,16 +232,14 @@ def integration_wrapper(tmp_path):
     yield wrapper
     # Best-effort teardown — never raise from a fixture cleanup.
     import asyncio
+
     async def _cleanup():
-        try:
+        with contextlib.suppress(RmuxError):
             for name in await wrapper.list_sessions():
                 await wrapper.kill_session(name, ignore_missing=True)
-        except RmuxError:
-            pass
-    try:
+
+    with contextlib.suppress(Exception):
         asyncio.run(_cleanup())
-    except Exception:
-        pass
 
 
 @pytest.mark.rmux
@@ -238,7 +251,9 @@ class TestIntegrationRoundtrip:
     rmux daemon: new-session → send-text → capture-pane → kill-session."
     """
 
-    async def test_ensure_daemon_succeeds_when_rmux_present(self, integration_wrapper) -> None:
+    async def test_ensure_daemon_succeeds_when_rmux_present(
+        self, integration_wrapper
+    ) -> None:
         await integration_wrapper.ensure_daemon()
         assert integration_wrapper.socket_path.parent.exists()
 
@@ -270,6 +285,7 @@ class TestIntegrationRoundtrip:
         # rmux is async — give the shell a moment to echo and the
         # pane to settle.  100 ms is plenty per R0a's ~2 ms latency.
         import asyncio
+
         await asyncio.sleep(0.3)
 
         # 4. capture-pane shows the probe AND the echo
@@ -347,8 +363,9 @@ class TestIntegrationRoundtrip:
         # Background FIFO reader writing arrivals to a capture file.
         capture = tmp_path / "capture.out"
         reader_proc = await asyncio.create_subprocess_exec(
-            "bash", "-c",
-            f"while IFS= read -r line; do echo \"$line\" >> {capture}; done < {fifo}",
+            "bash",
+            "-c",
+            f'while IFS= read -r line; do echo "$line" >> {capture}; done < {fifo}',
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )
@@ -370,8 +387,12 @@ class TestIntegrationRoundtrip:
             await asyncio.sleep(0.5)
 
             content = capture.read_text() if capture.exists() else ""
-            assert "PROBE-1" in content, f"PROBE-1 missing from FIFO capture:\n{content}"
-            assert "PROBE-2" in content, f"PROBE-2 missing from FIFO capture:\n{content}"
+            assert "PROBE-1" in content, (
+                f"PROBE-1 missing from FIFO capture:\n{content}"
+            )
+            assert "PROBE-2" in content, (
+                f"PROBE-2 missing from FIFO capture:\n{content}"
+            )
         finally:
             await integration_wrapper.kill_session(session, ignore_missing=True)
             # The FIFO reader may exit on its own (EOF when the writer
@@ -380,7 +401,7 @@ class TestIntegrationRoundtrip:
                 reader_proc.terminate()
                 await asyncio.wait_for(reader_proc.wait(), timeout=2)
             except (ProcessLookupError, asyncio.TimeoutError):
-                try:
+                # Reader already exited between the race check above and
+                # the kill attempt below — that's the success case here.
+                with contextlib.suppress(ProcessLookupError):
                     reader_proc.kill()
-                except ProcessLookupError:
-                    pass
