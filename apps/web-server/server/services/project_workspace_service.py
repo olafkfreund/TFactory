@@ -71,7 +71,18 @@ def slug_from_git_url(git_url: str) -> str:
     ``https://github.com/olaf/TFactory.git`` → ``olaf-TFactory``
     ``https://gitlab.com/group/sub/repo`` → ``group-sub-repo``
 
-    The slug is used as the directory name under ``workspace_root()``.
+    The slug is used as the directory name under ``workspace_root()``, so the
+    return value must be a single literal path component. ``.`` is inside the
+    permitted charset below, which means a URL path of ``..`` survives the
+    substitution intact and names the PARENT of the workspace root. The
+    substitution alone therefore does not make the result filesystem-safe, and
+    this function refuses such a URL (HTTP 400) rather than silently rewriting
+    it -- registering a project under a name the caller did not ask for is its
+    own surprise. Path separators cannot survive (they hyphenate), so ``.`` and
+    ``..`` are the whole hazard.
+
+    Raises:
+        HTTPException: 400 if the URL yields a slug that is not a safe component.
     """
     # SCP-style ("git@host:owner/repo.git") — split on the colon, drop the host.
     if git_url.startswith("git@") and ":" in git_url:
@@ -84,7 +95,9 @@ def slug_from_git_url(git_url: str) -> str:
         path = path[:-4]
     # Replace any non-alnum/hyphen char with hyphen; collapse repeats.
     slug = re.sub(r"[^A-Za-z0-9._-]+", "-", path).strip("-")
-    return slug or "workspace"
+    # Reuse the repo's existing component barrier rather than re-deriving the
+    # rule here -- it already rejects "." / ".." and any non-bare component.
+    return safe_component(slug or "workspace")
 
 
 def _inject_credential(git_url: str, username: str) -> str:
