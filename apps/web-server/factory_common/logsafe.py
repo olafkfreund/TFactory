@@ -80,7 +80,14 @@ def sanitize_log(value: object, max_length: int | None = DEFAULT_MAX_LENGTH) -> 
         ``\\r``, other control characters escaped as ``\\xNN``, and everything
         else left exactly as it was.
     """
-    text = value if isinstance(value, str) else str(value)
+    # Unconditional str(), not `value if isinstance(value, str) else str(value)`:
+    # str() of a str returns the same object, so the branch bought nothing, and
+    # keeping the original object alive in `text` let a caller's pathlib.Path
+    # flow into `text.replace(...)` below - which CodeQL then resolves as
+    # `Path.replace`, a filesystem RENAME, and reports as py/path-injection in
+    # every consumer of this module (three such false positives in TFactory
+    # alone). Stringify first and the value is a str from here down.
+    text = str(value)
     # Order matters only for readability: do the record-separator characters
     # first so the common case is a single pass of cheap str.replace.
     text = text.replace("\r\n", "\\n").replace("\n", "\\n").replace("\r", "\\r")
