@@ -134,19 +134,30 @@ function updatePackageJson(newVersion) {
   const frontendPath = path.join(__dirname, '..', 'apps', 'frontend-web', 'package.json');
   const rootPath = path.join(__dirname, '..', 'package.json');
 
-  if (!fs.existsSync(frontendPath)) {
-    error(`package.json not found at ${frontendPath}`);
+  // Read-then-write, no existsSync probe first: the probe was a check-time /
+  // use-time gap (CodeQL js/file-system-race) and it bought nothing, because
+  // readFileSync already reports a missing file. Ask the filesystem once.
+  let frontendJson;
+  try {
+    frontendJson = JSON.parse(fs.readFileSync(frontendPath, 'utf8'));
+  } catch (err) {
+    error(`package.json not readable at ${frontendPath}: ${err.message}`);
   }
-
-  // Update frontend package.json
-  const frontendJson = JSON.parse(fs.readFileSync(frontendPath, 'utf8'));
   const oldVersion = frontendJson.version;
   frontendJson.version = newVersion;
   fs.writeFileSync(frontendPath, JSON.stringify(frontendJson, null, 2) + '\n');
 
-  // Update root package.json if it exists
-  if (fs.existsSync(rootPath)) {
-    const rootJson = JSON.parse(fs.readFileSync(rootPath, 'utf8'));
+  // The root package.json is optional: a missing file is skipped, anything else
+  // is a real failure and must not be swallowed.
+  let rootJson = null;
+  try {
+    rootJson = JSON.parse(fs.readFileSync(rootPath, 'utf8'));
+  } catch (err) {
+    if (err.code !== 'ENOENT') {
+      error(`package.json not readable at ${rootPath}: ${err.message}`);
+    }
+  }
+  if (rootJson) {
     rootJson.version = newVersion;
     fs.writeFileSync(rootPath, JSON.stringify(rootJson, null, 2) + '\n');
   }
@@ -158,12 +169,16 @@ function updatePackageJson(newVersion) {
 function updateBackendInit(newVersion) {
   const initPath = path.join(__dirname, '..', 'apps', 'backend', '__init__.py');
 
-  if (!fs.existsSync(initPath)) {
+  let content;
+  try {
+    content = fs.readFileSync(initPath, 'utf8');
+  } catch (err) {
+    if (err.code !== 'ENOENT') {
+      error(`Backend __init__.py not readable at ${initPath}: ${err.message}`);
+    }
     warning(`Backend __init__.py not found at ${initPath}, skipping`);
     return false;
   }
-
-  let content = fs.readFileSync(initPath, 'utf8');
   content = content.replace(/__version__\s*=\s*"[^"]*"/, `__version__ = "${newVersion}"`);
   fs.writeFileSync(initPath, content);
   return true;
