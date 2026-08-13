@@ -74,7 +74,7 @@ jobs:
       - id: tags
         run: echo "sha=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
 
       # Build and LOAD (never push here). The smoke below is a publication gate:
       # a broken image, or an image carrying a stale harness, must not reach the
@@ -84,7 +84,7 @@ jobs:
       #
       # context: . — the repo root, because the Dockerfile COPYs portal_testing/.
       - name: Build tfactory-runner-portal-ui
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
         with:
           context: .
           file: docker/tfactory-runner-portal-ui/Dockerfile
@@ -185,10 +185,10 @@ jobs:
       - id: tags
         run: echo "sha=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
         with:
           registry: ghcr.io
           username: "${{ github.repository_owner }}"
@@ -199,7 +199,7 @@ jobs:
 
       - name: Push tfactory-runner-portal-ui to GHCR
         id: push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
         with:
           context: .
           file: docker/tfactory-runner-portal-ui/Dockerfile
@@ -231,7 +231,7 @@ jobs:
       # what `verify-tfactory-runner-signature` pins.
       # ---------------------------------------------------------------------
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3.7.0
+        uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da  # v3.7.0
 
       - name: Sign image (cosign keyless via Sigstore + GitHub OIDC)
         run: cosign sign --yes "${IMAGE}@${{ steps.push.outputs.digest }}"
