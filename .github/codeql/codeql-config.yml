@@ -39,3 +39,35 @@ query-filters:
       id: py/path-injection
   - exclude:
       id: py/partial-ssrf
+paths-ignore:
+  # apps/backend/agents/evidence/*.tmpl.ts (js/syntax-error, 14 alerts closed
+  # here, #768-#781). These are string templates that
+  # agents.evidence.layout.render_playwright_config() / render_auth_setup_steps()
+  # render into a generated test workspace, not TypeScript source. Several
+  # `@@MARKER@@` placeholders sit in bare code position (e.g.
+  # `outputDir: "@@OUTPUT_DIR@@",@@SNAPSHOT_PATH_TEMPLATE@@`, a standalone
+  # `@@LOGIN_STEPS@@` line inside the setup() body) so they expand into extra
+  # object properties / statements at render time -- which makes the file, as
+  # committed, invalid TypeScript by design. The extractor cannot parse it, so
+  # it was never contributing coverage; this documents that instead of leaving
+  # an unexplained parse failure. The `.tmpl.ts` suffix already signals the
+  # convention (compare auth.setup.tmpl.ts, whose placeholders all sit inside
+  # string literals and therefore DOES parse -- it is not excluded).
+  #
+  # KNOWN GAP this exclusion creates: auth.setup.steps.tmpl.ts embeds a real,
+  # non-template function (`__tfTotp`, RFC-6238 TOTP generation for MFA
+  # login steps) alongside the placeholders, and this glob stops that function
+  # from being scanned too -- it is genuine security-sensitive logic, not
+  # template scaffolding. It is not extracted to its own module here because
+  # the renderer (layout.py) writes only a single self-contained
+  # `auth.setup.ts` into the generated workspace; splitting `__tfTotp` out
+  # would require layout.py to also copy a helper file alongside it, which is
+  # a real behaviour change deserving its own reviewed PR, not a drive-by here.
+  # Tracked as a follow-up issue.
+  #
+  # Nothing lints, typechecks or builds these files today: no root package.json
+  # `lint`/`build`/`typecheck` script reaches apps/backend/agents/evidence/, and
+  # the Python tests around these renderers only assert on substituted
+  # substrings -- never parse the rendered output. That gap is unrelated to
+  # CodeQL and is not fixed by this exclusion.
+  - "apps/backend/agents/evidence/*.tmpl.ts"
