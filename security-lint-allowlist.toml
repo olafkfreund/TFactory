@@ -17,12 +17,17 @@
 #   * `expires` is optional and enforced when present.
 #
 # THERE IS NO S301 ENTRY, DELIBERATELY.
-# `apps/web-server/server/services/skills_service.py` calls `pickle.load` on
-# `dev` as this is written. It is the reason this gate exists, and it is being
-# FIXED in TFactory#1058, not grandfathered here. Until that PR merges this
-# gate is RED on this branch — and that redness is the demonstration, not a
-# defect. A security gate that would grandfather a live RCE to keep its own
-# introduction PR green is not a gate.
+# `apps/web-server/server/services/skills_service.py` called `pickle.load` on a
+# startup cache file for months. It is the reason this gate exists. It was
+# FIXED (TFactory#1058, pickle -> JSON) rather than grandfathered here, and
+# until that fix merged this gate was RED on this branch — deliberately. A
+# security gate that would grandfather a live RCE to keep its own introduction
+# PR green is not a gate.
+#
+# The gate went green when the fix landed and this branch rebased on `dev`,
+# with no edit to this file. That is the intended property: the transition
+# itself is the evidence the fix reached the default branch. If an S301 entry
+# ever appears here, read it as a decision someone made, not as housekeeping.
 
 [[allow]]
 path = "apps/backend/agents/coverage_delta.py"
