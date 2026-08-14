@@ -16,6 +16,8 @@ from pathlib import Path
 
 from factory_common.logsafe import sanitize_log
 
+from server.error_ref import client_error
+
 from ..routes._specpath import safe_component
 from ..websockets.events import broadcast_event
 from .insights_providers import get_provider
@@ -386,11 +388,11 @@ class InsightsService:
                 "type": "done",
             })
         except Exception as e:
-            logger.error(f"[InsightsService] Provider error: {e}", exc_info=True)
+            logger.error("[InsightsService] Provider error: %s", sanitize_log(e), exc_info=True)
             await broadcast_event("insights:chunk", {
                 "projectId": project_id,
                 "type": "error",
-                "error": str(e),
+                "error": client_error(logger, "InsightsService failed", e),
             })
         finally:
             self._running_tasks.pop(project_id, None)
@@ -512,9 +514,15 @@ class InsightsService:
                 f"stderr_len={len(stderr_text)}"
             )
             if stderr_text:
-                logger.info(f"[InsightsService] generate_task stderr: {stderr_text[:500]}")
+                logger.info(
+                    "[InsightsService] generate_task stderr: %s",
+                    sanitize_log(stderr_text[:500]),
+                )
             if response:
-                logger.info(f"[InsightsService] generate_task stdout: {response[:300]}")
+                logger.info(
+                    "[InsightsService] generate_task stdout: %s",
+                    sanitize_log(response[:300]),
+                )
 
             if proc.returncode != 0 and not response:
                 logger.error(f"[InsightsService] claude CLI exited {proc.returncode}")
@@ -528,7 +536,11 @@ class InsightsService:
             logger.error("[InsightsService] generate_task_from_chat timed out (120s)")
             return {"title": "", "description": ""}
         except Exception as e:
-            logger.error(f"[InsightsService] generate_task_from_chat failed: {e}", exc_info=True)
+            logger.error(
+                "[InsightsService] generate_task_from_chat failed: %s",
+                sanitize_log(e),
+                exc_info=True,
+            )
             return {"title": "", "description": ""}
 
     def clear_session(self, project_path: Path, project_id: str) -> InsightsSession:

@@ -13,6 +13,10 @@ import subprocess
 import time
 from pathlib import Path
 
+from factory_common.logsafe import sanitize_log
+
+from server.error_ref import client_error
+
 from ...websockets.events import broadcast_event
 from .base import ProviderInfo, ProviderModel, ProviderStrategy
 from .tools import execute_tool, get_tool_definitions
@@ -79,7 +83,7 @@ class OllamaProvider(ProviderStrategy):
                 if info.models:
                     info.available = True
         except Exception as e:
-            logger.debug(f"[OllamaProvider] Detection failed: {e}")
+            logger.debug("[OllamaProvider] Detection failed: %s", sanitize_log(e))
             # Fallback: check if ollama is installed but server may be down
             try:
                 result = subprocess.run(
@@ -319,10 +323,10 @@ class OllamaProvider(ProviderStrategy):
             return final_text
 
         except Exception as e:
-            logger.error(f"[OllamaProvider] Error: {e}", exc_info=True)
+            logger.error("[OllamaProvider] Error: %s", sanitize_log(e), exc_info=True)
             await broadcast_event("insights:chunk", {
                 "projectId": project_id,
                 "type": "error",
-                "error": str(e),
+                "error": client_error(logger, "OllamaProvider failed", e),
             })
             return ""

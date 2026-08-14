@@ -11,6 +11,10 @@ import logging
 import time
 from pathlib import Path
 
+from factory_common.logsafe import sanitize_log
+
+from server.error_ref import client_error
+
 from ...websockets.events import broadcast_event
 from .base import ProviderInfo, ProviderModel, ProviderStrategy
 
@@ -79,7 +83,11 @@ class OpenAICompatProvider(ProviderStrategy):
                 if info.models:
                     info.available = True
         except Exception as e:
-            logger.debug(f"[OpenAICompat:{self.provider_id}] Detection failed: {e}")
+            logger.debug(
+                "[OpenAICompat:%s] Detection failed: %s",
+                sanitize_log(self.provider_id),
+                sanitize_log(e),
+            )
 
         return info
 
@@ -174,10 +182,15 @@ class OpenAICompatProvider(ProviderStrategy):
             return accumulated
 
         except Exception as e:
-            logger.error(f"[OpenAICompat:{self.provider_id}] Error: {e}", exc_info=True)
+            logger.error(
+                "[OpenAICompat:%s] Error: %s",
+                sanitize_log(self.provider_id),
+                sanitize_log(e),
+                exc_info=True,
+            )
             await broadcast_event("insights:chunk", {
                 "projectId": project_id,
                 "type": "error",
-                "error": str(e),
+                "error": client_error(logger, "OpenAICompat failed", e),
             })
             return ""
