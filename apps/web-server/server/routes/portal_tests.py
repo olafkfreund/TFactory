@@ -8,11 +8,14 @@ expose the portals and a dispatch trigger.
 
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
+
+from server.error_ref import client_error
 
 # portal_testing lives at the repo root (a nix-runtime harness, deliberately out
 # of the strict backend package).
@@ -22,6 +25,8 @@ if str(_ROOT) not in sys.path:
 
 from portal_testing import config as portal_config  # noqa: E402
 from portal_testing.dispatch import dispatch_portal_ui  # noqa: E402
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/portal-tests", tags=["Portal UI tests"])
 
@@ -60,7 +65,10 @@ def dispatch(portal: str, run_id: str) -> DispatchResult:
             portal=portal,
             run_id=run_id,
             dispatched=False,
-            detail=f"k8s dispatch unavailable: {e}. Run locally via the portal_testing flake.",
+            detail=(
+                client_error(logger, "k8s dispatch unavailable", e)
+                + ". Run locally via the portal_testing flake."
+            ),
         )
     return DispatchResult(
         portal=portal,

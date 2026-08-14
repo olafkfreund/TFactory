@@ -14,6 +14,8 @@ from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, HTTPException, Path
 from pydantic import BaseModel
 
+from server.error_ref import client_error
+
 from ..services.insights_service import get_insights_service
 from ._specpath import safe_component
 
@@ -981,7 +983,7 @@ async def clear_insights_session(projectId: str = Path(...)):
         logging.getLogger(__name__).error(f"Failed to clear insights session: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to clear insights session: {str(e)}"
+            detail=client_error(logger, "Failed to clear insights session", e)
         )
 
 
