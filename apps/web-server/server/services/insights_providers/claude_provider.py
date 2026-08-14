@@ -16,6 +16,8 @@ from pathlib import Path
 
 from factory_common.logsafe import sanitize_log
 
+from server.error_ref import client_error
+
 from ...websockets.events import broadcast_event
 from .base import ProviderInfo, ProviderModel, ProviderStrategy
 
@@ -296,11 +298,11 @@ class ClaudeProvider(ProviderStrategy):
             stderr_text = ""
             if stderr_output:
                 stderr_text = stderr_output.decode("utf-8", errors="replace").strip()
-                logger.warning(f"[ClaudeProvider] stderr: {stderr_text}")
+                logger.warning("[ClaudeProvider] stderr: %s", sanitize_log(stderr_text))
 
             if proc.returncode != 0 and not accumulated_content.strip():
                 error_msg = stderr_text or f"Claude CLI exited with code {proc.returncode}"
-                logger.error(f"[ClaudeProvider] CLI failed: {error_msg}")
+                logger.error("[ClaudeProvider] CLI failed: %s", sanitize_log(error_msg))
                 await broadcast_event("insights:chunk", {
                     "projectId": project_id,
                     "type": "error",
@@ -327,10 +329,10 @@ class ClaudeProvider(ProviderStrategy):
             return accumulated_content
 
         except Exception as e:
-            logger.error(f"[ClaudeProvider] Error: {e}", exc_info=True)
+            logger.error("[ClaudeProvider] Error: %s", sanitize_log(e), exc_info=True)
             await broadcast_event("insights:chunk", {
                 "projectId": project_id,
                 "type": "error",
-                "error": str(e),
+                "error": client_error(logger, "ClaudeProvider failed", e),
             })
             return ""

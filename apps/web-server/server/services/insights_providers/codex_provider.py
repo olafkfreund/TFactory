@@ -10,6 +10,10 @@ import shlex
 import time
 from pathlib import Path
 
+from factory_common.logsafe import sanitize_log
+
+from server.error_ref import client_error
+
 from ...websockets.events import broadcast_event
 from .base import ProviderInfo, ProviderModel, ProviderStrategy
 
@@ -148,10 +152,10 @@ class CodexProvider(ProviderStrategy):
             return accumulated
 
         except Exception as e:
-            logger.error(f"[CodexProvider] Error: {e}", exc_info=True)
+            logger.error("[CodexProvider] Error: %s", sanitize_log(e), exc_info=True)
             await broadcast_event("insights:chunk", {
                 "projectId": project_id,
                 "type": "error",
-                "error": str(e),
+                "error": client_error(logger, "CodexProvider failed", e),
             })
             return ""
