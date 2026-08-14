@@ -12,6 +12,10 @@ import re
 import subprocess
 from pathlib import Path
 
+from factory_common.logsafe import sanitize_log
+
+from server.error_ref import InputRejectedError, client_error
+
 logger = logging.getLogger(__name__)
 
 MAX_FILE_LINES = 500
@@ -25,7 +29,7 @@ def _validate_path(project_path: Path, requested: str) -> Path:
     resolved_project = project_path.resolve()
     resolved = (resolved_project / requested).resolve()
     if not str(resolved).startswith(str(resolved_project)):
-        raise ValueError(f"Path escapes project directory: {requested}")
+        raise InputRejectedError(f"Path escapes project directory: {requested}")
     return resolved
 
 
@@ -119,7 +123,7 @@ def _search_code(project_path: Path, args: dict) -> str:
     except subprocess.TimeoutExpired:
         return f"Search timed out after {SEARCH_TIMEOUT}s for pattern: {pattern}"
     except Exception as e:
-        return f"Search error: {e}"
+        return client_error(logger, "code search failed", e)
 
 
 _TOOL_MAP = {
@@ -137,10 +141,14 @@ def execute_tool(name: str, args: dict, project_path: Path) -> str:
             return f"Unknown tool: {name}"
         return fn(project_path, args)
     except ValueError as e:
-        return f"Security error: {e}"
+        # InputRejectedError passes through verbatim; any other ValueError
+        # a helper raises gets a reference id instead (#1073).
+        return client_error(logger, "tool rejected the request", e)
     except Exception as e:
-        logger.error(f"[tools] Error executing {name}: {e}", exc_info=True)
-        return f"Tool error: {e}"
+        logger.error(
+            "[tools] Error executing %s: %s", sanitize_log(name), sanitize_log(e), exc_info=True
+        )
+        return client_error(logger, f"tool {name} failed", e)
 
 
 def get_tool_definitions() -> list[dict]:

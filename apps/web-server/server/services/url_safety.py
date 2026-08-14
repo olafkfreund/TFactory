@@ -42,6 +42,8 @@ import urllib.parse
 import urllib.request
 from typing import IO
 
+from server.error_ref import InputRejectedError
+
 # Link-local carries the cloud metadata services (169.254.169.254 on AWS/Azure,
 # and GCP's metadata.google.internal resolves into the same /16). Reaching one
 # of these yields instance credentials, so it is refused in BOTH postures --
@@ -78,16 +80,33 @@ def build_no_redirect_opener() -> urllib.request.OpenerDirector:
 
 
 def assert_safe_outbound_url(url: str, *, allow_private: bool = False) -> None:
-    """Raise ``ValueError`` if ``url`` is unsafe to fetch server-side.
+    """Raise :class:`InputRejectedError` if ``url`` is unsafe to fetch server-side.
 
     See the module docstring for what each posture does and does not promise.
+
+    ``InputRejectedError`` rather than a plain ``ValueError`` (#1073), and the
+    distinction is the point: it subclasses ``ValueError``, so every existing
+    ``except ValueError`` still catches it, but it marks these messages as
+    *deliberately safe to hand back*. ``client_error`` returns
+    ``InputRejectedError.client_message`` verbatim and gives every OTHER
+    exception a correlation id instead -- so a caller who typed a bad URL keeps
+    the fixable 400, while a ``ValueError`` raised from inside some library this
+    function calls no longer reaches them by accident.
+
+    Note the resolve failure no longer interpolates the ``socket.gaierror``.
+    That was third-party text riding out on a repo-owned exception -- the shape
+    that made CFactory's ``AdapterError`` leak an upstream host while looking
+    safe. The host is the caller's own input and stays; the inner exception is
+    preserved on ``__cause__`` for the log.
     """
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme not in ("http", "https"):
-        raise ValueError(f"unsupported URL scheme {parsed.scheme!r} (only http/https)")
+        raise InputRejectedError(
+            f"unsupported URL scheme {parsed.scheme!r} (only http/https)"
+        )
     host = parsed.hostname
     if not host:
-        raise ValueError("URL has no host")
+        raise InputRejectedError("URL has no host")
 
     default_port = 443 if parsed.scheme == "https" else 80
     try:
@@ -95,13 +114,13 @@ def assert_safe_outbound_url(url: str, *, allow_private: bool = False) -> None:
             host, parsed.port or default_port, proto=socket.IPPROTO_TCP
         )
     except socket.gaierror as exc:
-        raise ValueError(f"cannot resolve host {host!r}: {exc}") from exc
+        raise InputRejectedError(f"cannot resolve host {host!r}") from exc
 
     for info in infos:
         ip = ipaddress.ip_address(info[4][0])
         # Refused in both postures.
         if any(ip in net for net in _METADATA_NETS):
-            raise ValueError(
+            raise InputRejectedError(
                 f"refusing to fetch link-local/metadata address {ip} - this is the "
                 "cloud instance-credentials endpoint, never a real service URL"
             )
@@ -115,4 +134,4 @@ def assert_safe_outbound_url(url: str, *, allow_private: bool = False) -> None:
             or ip.is_multicast
             or ip.is_unspecified
         ):
-            raise ValueError(f"refusing to fetch non-public address {ip} (SSRF)")
+            raise InputRejectedError(f"refusing to fetch non-public address {ip} (SSRF)")

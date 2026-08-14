@@ -19,6 +19,7 @@ from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, Body, HTTPException, Query
 from pydantic import BaseModel, Field, SecretStr
 
+from server.error_ref import client_error
 from server.services.url_safety import assert_safe_outbound_url
 
 router = APIRouter()
@@ -50,8 +51,11 @@ def _safe_local_base_url(base_url: str) -> str:
     try:
         assert_safe_outbound_url(normalized, allow_private=True)
     except ValueError as exc:
+        # See routes/git.py: InputRejectedError passes through verbatim,
+        # anything else gets a correlation id (#1073).
         raise HTTPException(
-            status_code=400, detail=f"Disallowed base URL: {exc}"
+            status_code=400,
+            detail=client_error(logger, "disallowed base URL", exc),
         ) from exc
     return normalized
 
