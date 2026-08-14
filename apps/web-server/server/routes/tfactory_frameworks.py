@@ -15,15 +15,19 @@ the point when this module is loaded.
 
 from __future__ import annotations
 
+import logging
 import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Response
-from fastapi import status as http_status
+from fastapi import APIRouter, HTTPException, Response, status as http_status
+
+from server.error_ref import client_error
 
 from ._specpath import safe_slug
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -153,7 +157,7 @@ def list_frameworks() -> dict:
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"failed to load framework registry: {exc}",
+            detail=client_error(logger, "failed to load framework registry", exc),
         ) from exc
 
     rows = [_summary_row(name, desc) for name, desc in sorted(registry.items())]
@@ -189,7 +193,7 @@ def get_framework(name: str) -> Response:
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"failed to load framework registry: {exc}",
+            detail=client_error(logger, "failed to load framework registry", exc),
         ) from exc
 
     if name not in registry:

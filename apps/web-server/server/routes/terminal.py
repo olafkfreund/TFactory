@@ -14,6 +14,8 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from server.error_ref import client_error
+
 from ..config import get_settings
 from ..pty.manager import get_pty_manager
 from ..services.terminal_worktree_service import TerminalWorktreeService
@@ -605,7 +607,7 @@ async def save_terminal_buffer(terminal_id: str, request: dict):
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to save terminal buffer: {str(e)}"
+            detail=client_error(logger, "Failed to save terminal buffer", e)
         )
 
 

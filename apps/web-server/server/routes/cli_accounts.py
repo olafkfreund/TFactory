@@ -21,6 +21,8 @@ from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, SecretStr
 
+from server.error_ref import client_error
+
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
@@ -755,7 +757,7 @@ def install_or_update_cli(cli: str):
             error_msg = install_result.stderr.strip() or install_result.stdout.strip()
             return {
                 "success": False,
-                "error": f"npm install failed: {error_msg}",
+                "error": client_error(logger, "npm install failed", error_msg),
             }
 
         # Create antigravity -> gemini symlink if we just installed gemini CLI
