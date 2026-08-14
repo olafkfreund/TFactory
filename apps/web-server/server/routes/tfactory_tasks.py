@@ -21,11 +21,14 @@ Workspace root resolution:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from server.error_ref import client_error
 
 from ._specpath import safe_slug
 
@@ -57,6 +60,8 @@ from fastapi import (
 from pydantic import BaseModel
 
 from ._tenancy import DEFAULT_TENANT, multi_tenant_enabled, resolve_tenant
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -317,7 +322,7 @@ def _serve_artefact_file(
     except OSError as exc:
         raise HTTPException(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"could not read artefact: {exc}",
+            detail=client_error(logger, "could not read artefact", exc),
         ) from exc
     return Response(content=content, media_type=media_type)
 
@@ -562,7 +567,7 @@ def get_catalog(spec_id: str) -> Response:
     except OSError as exc:
         raise HTTPException(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"could not read catalog: {exc}",
+            detail=client_error(logger, "could not read catalog", exc),
         ) from exc
 
     return Response(content=content, media_type="application/json")
@@ -701,7 +706,7 @@ def get_evidence_artifact(spec_id: str, test_id: str, artifact: str) -> Response
     except OSError as exc:
         raise HTTPException(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"could not read artifact: {exc}",
+            detail=client_error(logger, "could not read artifact", exc),
         ) from exc
 
     return Response(content=content, media_type=_evidence_content_type(artifact))
@@ -761,7 +766,7 @@ def _serve_findings_media(spec_id: str, subdir: str, artifact: str) -> Response:
     except OSError as exc:
         raise HTTPException(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"could not read artifact: {exc}",
+            detail=client_error(logger, "could not read artifact", exc),
         ) from exc
     return Response(content=content, media_type=_evidence_content_type(artifact))
 
@@ -899,7 +904,7 @@ def dismiss_run(spec_id: str) -> dict[str, Any]:
         status_path.write_text(json.dumps(doc, indent=2), encoding="utf-8")
     except OSError as exc:
         raise HTTPException(
-            status_code=500, detail=f"could not write status.json: {exc}"
+            status_code=500, detail=client_error(logger, "could not write status.json", exc)
         ) from exc
     return {"ok": True, "dismissed": True, "dismissed_at": doc["dismissed_at"]}
 

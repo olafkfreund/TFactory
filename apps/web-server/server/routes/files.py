@@ -21,6 +21,8 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
+from server.error_ref import client_error
+
 from ..auth import _try_decode_jwt
 from ..config import get_settings
 from ._specpath import safe_join
@@ -634,7 +636,7 @@ async def write_file(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to write file: {str(e)}",
+            detail=client_error(logger, "Failed to write file", e),
         )
 
     return {"success": True, "path": path}
@@ -663,7 +665,7 @@ async def delete_file(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to delete: {str(e)}",
+            detail=client_error(logger, "Failed to delete", e),
         )
 
     return {"success": True}
@@ -842,7 +844,7 @@ async def get_git_diff(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Git error: {str(e)}",
+            detail=client_error(logger, "Git error", e),
         )
 
 
@@ -916,5 +918,5 @@ async def clear_insights_session(projectId: str):
         logging.getLogger(__name__).error(f"Failed to clear files insights session: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to clear files insights session: {str(e)}"
+            detail=client_error(logger, "Failed to clear files insights session", e)
         )
