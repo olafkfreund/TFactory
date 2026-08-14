@@ -17,6 +17,7 @@ from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from server.error_ref import client_error
 from server.services.url_safety import (
     assert_safe_outbound_url,
     build_no_redirect_opener,
@@ -231,8 +232,13 @@ def _safe_ollama_base_url(base_url: str | None) -> str:
     try:
         assert_safe_outbound_url(normalized, allow_private=True)
     except ValueError as exc:
+        # client_error returns an InputRejectedError's own message verbatim,
+        # so the caller keeps the fixable 400 -- and any OTHER ValueError
+        # reaching this handler, from a library rather than our validator,
+        # now gets a correlation id instead of being echoed (#1073).
         raise HTTPException(
-            status_code=400, detail=f"Disallowed Ollama base URL: {exc}"
+            status_code=400,
+            detail=client_error(logger, "disallowed Ollama base URL", exc),
         ) from exc
     return normalized
 
