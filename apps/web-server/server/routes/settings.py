@@ -16,6 +16,8 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
+from server.error_ref import client_error
+
 from ..paths import write_secret_file
 
 # --------------------------------------------------------------------------
@@ -547,7 +549,7 @@ async def update_api_key(request: UpdateApiKeyRequest):
         raise
     except Exception as e:
         raise HTTPException(
-            status_code=500, detail=f"Failed to update API key: {str(e)}"
+            status_code=500, detail=client_error(logger, "Failed to update API key", e)
         )
 
 
@@ -585,10 +587,13 @@ async def save_tab_state(state: dict):
         return {"success": True}
     except OSError as e:
         raise HTTPException(
-            status_code=500, detail=f"Failed to save tab state: {str(e)}"
+            status_code=500, detail=client_error(logger, "Failed to save tab state", e)
         )
     except (TypeError, ValueError) as e:
-        raise HTTPException(status_code=400, detail=f"Invalid tab state data: {str(e)}")
+        raise HTTPException(
+            status_code=400,
+            detail=client_error(logger, "Invalid tab state data", e),
+        )
 
 
 # --------------------------------------------------------------------------
@@ -1159,11 +1164,11 @@ async def update_source_env(config: SourceEnvUpdate):
         raise
     except json.JSONDecodeError as e:
         raise HTTPException(
-            status_code=500, detail=f"Failed to parse existing .env file: {str(e)}"
+            status_code=500, detail=client_error(logger, "Failed to parse existing .env file", e)
         )
     except Exception as e:
         raise HTTPException(
-            status_code=500, detail=f"Failed to update source environment: {str(e)}"
+            status_code=500, detail=client_error(logger, "Failed to update source environment", e)
         )
 
 

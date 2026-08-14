@@ -14,6 +14,8 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from server.error_ref import client_error
+
 # --------------------------------------------------------------------------
 # Type Definitions for Validation
 # --------------------------------------------------------------------------
@@ -464,7 +466,7 @@ async def scan_for_projects(request: ScanProjectsRequest):
         # Handle unexpected errors
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to scan for projects: {str(e)}"
+            detail=client_error(logger, "Failed to scan for projects", e)
         )
 
 
@@ -505,7 +507,7 @@ async def add_project(project: ProjectCreate):
         except GitOperationError as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Clone failed: {e}",
+                detail=client_error(logger, "Clone failed", e),
             )
         project_path = cloned_path.resolve()
         created_directory = True
@@ -521,7 +523,12 @@ async def add_project(project: ProjectCreate):
             except OSError as e:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Cannot create directory: {project.path} ({e})",
+                    # The path is the caller's own input, so it stays; only the
+                    # exception is withheld -- an OSError here names the parent
+                    # directory it could not write into, which is ours.
+                    detail=client_error(
+                        logger, f"Cannot create directory: {project.path}", e
+                    ),
                 )
 
         if not project_path.is_dir():
@@ -844,7 +851,7 @@ async def update_project_settings(project_id: str, settings: ProjectSettingsUpda
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to update project settings: {str(e)}"
+            detail=client_error(logger, "Failed to update project settings", e)
         )
 
 

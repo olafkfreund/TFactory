@@ -5,17 +5,22 @@ Handles starting, stopping, and monitoring task execution.
 """
 
 import json
+import logging
 from pathlib import Path
 
 from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
+from server.error_ref import client_error
+
 from ..services.agent_service import get_agent_service
 from ..websockets.events import emit_task_status
 from ._specpath import safe_component
 from .projects import load_projects
 from .tasks import sync_worktree_to_main_spec
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -305,7 +310,7 @@ async def start_task(task_id: str, request: StartTaskRequest, raw_request: Reque
             except Exception as e:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Failed to start spec creation: {str(e)}",
+                    detail=client_error(logger, "Failed to start spec creation", e),
                 )
 
     # Sync runtime options to task_metadata.json for backend to read
@@ -444,7 +449,7 @@ async def start_task(task_id: str, request: StartTaskRequest, raw_request: Reque
             logger.exception(f"[StartTask] Delegation failed for {sanitize_log(task_id)}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Delegation failed: {e}",
+                detail=client_error(logger, "Delegation failed", e),
             )
         return {
             "success": True,
@@ -494,7 +499,7 @@ async def start_task(task_id: str, request: StartTaskRequest, raw_request: Reque
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to start task: {str(e)}",
+            detail=client_error(logger, "Failed to start task", e),
         )
 
     return {
@@ -686,7 +691,7 @@ async def create_and_run_task(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to start task creation: {str(e)}",
+            detail=client_error(logger, "Failed to start task creation", e),
         )
 
     return {
