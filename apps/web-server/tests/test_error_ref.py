@@ -189,13 +189,18 @@ def test_a_newline_in_the_exception_cannot_forge_a_log_line(
 @pytest.mark.xfail(
     strict=True,
     reason=(
-        "error_reference passes exc_info for any BaseException, and the logging "
-        "module renders str(exc) itself when formatting that -- never through "
-        "sanitize_log. So the sanitised message is accompanied by a raw copy, "
-        "and an attacker-controlled exception message still forges a log line. "
-        "Present in AIFactory's shipped copy too; tracked in AIFactory#1320. "
-        "Strict, so this flips to a failure the moment it is fixed and must "
-        "then be promoted to a normal assertion."
+        "STILL TRUE of error_reference in isolation, and deliberately so. It "
+        "passes exc_info for any BaseException, and the logging module renders "
+        "str(exc) itself when formatting that -- never through sanitize_log. "
+        "So attaching a LINE-BASED handler to this function, as this test does, "
+        "still yields a forgeable line. "
+        "AIFactory#1320 is closed, and it was closed at the right layer: the "
+        "application writes one JSON object per line (see logging_config and "
+        "test_log_forgery), where a newline in a field cannot start a record. "
+        "The guarantee belongs to the formatter, not to error_reference -- "
+        "which is why this stays xfail rather than being deleted: it pins where "
+        "the protection actually lives. Strict, so if error_reference is ever "
+        "made safe on its own the marker fails and must be promoted."
     ),
 )
 def test_an_exception_message_cannot_forge_a_log_line_either(
