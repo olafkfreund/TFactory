@@ -54,17 +54,6 @@
     file identically -- never patched in one fork alone (rule 4.2, one
     engine no drift). Flagged to the hub owner; not fixed here.
   issue: 718
-- path: apps/web-server/server/routes/oidc_routes.py
-  rule: raw-exception-in-response
-  reason: >-
-    Read the actual site: the flagged str(exc)[:200] reaches only
-    logger.warning (server-side log), never the HTTPException `detail=`,
-    which is the static string "OIDC callback rejected". Not a leak as
-    written. This site is forked identically in PFactory/AIFactory/TFactory;
-    per #718 coordination this is not being re-decided independently in one
-    fork. Pending the coordinated call on whether the log line itself should
-    also move to sanitize_log (a separate, smaller CWE-117 concern).
-  issue: 718
 - path: tests/fixtures/demo-scenarios/multi-lane/sut/api_quote.py
   rule: raw-exception-in-response
   reason: >-
