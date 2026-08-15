@@ -182,9 +182,16 @@ def _load_status(
 # ---------------------------------------------------------------------------
 
 
-def _format_error(exc: Exception | str) -> dict[str, Any]:
-    """Return the MCP content-block error shape (``isError=True``)."""
-    text = str(exc) if isinstance(exc, Exception) else exc
+def _format_error(text: str) -> dict[str, Any]:
+    """Return the MCP content-block error shape (``isError=True``).
+
+    ``str`` only (#718): every call site in this module already passes a
+    developer-written message or a pre-rendered ``str(exc)``, so the
+    ``Exception`` overload was dead in practice and, worse, let a raw
+    exception reach this response unexamined -- the shape CWE-209 is about.
+    Callers that have an exception decide what of it is safe to say, same as
+    every route handler in apps/web-server/server/routes does.
+    """
     return {
         "content": [{"type": "text", "text": f"Error: {text}"}],
         "isError": True,
@@ -337,7 +344,15 @@ def create_spec_ingest_workspace(
         fmt_enum = SpecFormat(fmt) if fmt else None
         spec = ingest(spec_text, fmt=fmt_enum)
     except (SpecSourceError, ValueError) as exc:
-        raise ValueError(f"could not parse spec: {exc}") from exc
+        # #718: was f"could not parse spec: {exc}" -- interpolating the inner
+        # exception is the shape url_safety.py's docstring warns against.
+        # Every raise site that can reach here (SpecSourceError's 4 sites in
+        # spec_sources.py, and stdlib ValueError from SpecFormat(fmt) on an
+        # unrecognised format string) is developer-written text about the
+        # spec/fmt the caller just sent, verified, so exc.args[0] is safe to
+        # prefix rather than needing to be discarded like a genuinely unknown
+        # exception's text would.
+        raise ValueError(f"could not parse spec: {exc.args[0]}") from exc
     if not spec.criteria:
         raise ValueError("spec has no acceptance criteria")
 

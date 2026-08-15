@@ -65,7 +65,18 @@ def probe(
     try:
         code = opener(url, timeout)
     except Exception as exc:  # noqa: BLE001 — unreachable target is a gate failure
-        return HealthResult(ok=False, url=url, detail=f"unreachable: {exc}")
+        # #718: was f"unreachable: {exc}". `result.detail` is not local -- the
+        # caller (evaluator._gate_target_health) persists it into status.json
+        # via target_health_detail, which apps/web-server's tfactory_tasks.py
+        # serves back through the task-status API. `except Exception` here can
+        # catch urllib.error.URLError, whose str() renders the underlying
+        # errno/reason (DNS failure detail, connection-refused detail) --
+        # internals about this server's network path, not about the caller's
+        # own input. The exception CLASS name is diagnostic (timeout vs DNS
+        # vs connection-refused read differently) without repeating that.
+        return HealthResult(
+            ok=False, url=url, detail=f"unreachable: {type(exc).__name__}"
+        )
     ok = code == expect_status
     return HealthResult(
         ok=ok,
