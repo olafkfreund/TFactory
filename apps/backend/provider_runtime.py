@@ -384,10 +384,34 @@ def run_install(
     try:
         proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
         returncode = proc.returncode
+        # Factory#780, half two: up to 4000 bytes of the install command's OWN
+        # stdout/stderr, verbatim, in the response body. Deliberately NOT
+        # redacted or truncated further -- an install endpoint that cannot show
+        # you why the install failed is not much of an install endpoint, and
+        # this route sits behind TokenAuthMiddleware (not in PUBLIC_PREFIXES,
+        # checked in server/auth.py), so the audience is an authenticated
+        # operator of THIS deployment, not an anonymous caller. What a package
+        # manager can plausibly echo here -- filesystem paths, registry URLs,
+        # proxy hostnames -- is the same class of information `argv` above
+        # already discloses in the same response (`"command": result.command`
+        # in routes/provider_runtimes.py). If that trust boundary ever widens
+        # (a read-only/lower-privilege token gains access to this route), this
+        # decision needs revisiting alongside it.
         output = ((proc.stdout or "") + (proc.stderr or ""))[-4000:]
     except (OSError, subprocess.SubprocessError) as exc:
         returncode = -1
-        output = f"install failed to launch: {exc}"
+        # Factory#780, half one: was f"install failed to launch: {exc}". Unlike
+        # the case above, `exc` here is a raw stdlib OSError/SubprocessError --
+        # nobody chose its wording, and str(exc) on a FileNotFoundError/
+        # TimeoutExpired renders the absolute path to the binary this process
+        # tried to exec and/or the full argv, which is materially more
+        # specific than "an install command failed" needs to be. The
+        # authenticated-operator reasoning above does not extend to *this*
+        # text the same way, because it is not the install command's own
+        # output -- it is this server's launch mechanics. Exception class name
+        # only: still distinguishes "binary not found" from "timed out" from
+        # "permission denied" without repeating the path.
+        output = f"install failed to launch: {type(exc).__name__}"
     return InstallResult(
         name=name,
         command=argv,
