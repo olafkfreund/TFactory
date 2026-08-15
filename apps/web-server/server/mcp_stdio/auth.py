@@ -32,8 +32,9 @@ from dataclasses import dataclass
 
 from fastapi import HTTPException, Request, status
 
+from server.error_ref import InputRejectedError, client_error
+
 from ..config import get_settings
-from ..error_ref import InputRejectedError, client_error
 from ..mcp_remote import auth as mcp_remote_auth
 
 logger = logging.getLogger(__name__)

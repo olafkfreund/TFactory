@@ -28,7 +28,8 @@ from mcp.server.models import InitializationOptions
 from mcp.server.sse import SseServerTransport
 from mcp.types import TextContent, Tool
 
-from ..error_ref import InputRejectedError, client_error
+from server.error_ref import InputRejectedError, client_error
+
 from .auth import MCPAuthError, authenticate
 from .tools import dispatch_tool_call, get_tool_definitions
 

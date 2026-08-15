@@ -10,8 +10,9 @@ import os
 from pathlib import Path
 from threading import Lock
 
+from server.error_ref import InputRejectedError
+
 from ..config import get_settings
-from ..error_ref import InputRejectedError
 from .session import PTYSession
 
 
