@@ -71,12 +71,12 @@ jobs:
     name: ratchet (ruff + mypy no-regression on changed py)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Need history back to the PR base for the diff-scoped ratchet.
           fetch-depth: 0
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
@@ -114,8 +114,8 @@ jobs:
     # Pinned to the SAME ruff version the tree was formatted with so the check
     # is deterministic; a version skew here was the original red.
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
       - name: Install ruff (pinned)
@@ -127,7 +127,7 @@ jobs:
     name: shared-baseline drift gate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: tfactory
       - name: Read pinned hub SHA
@@ -153,7 +153,7 @@ jobs:
       # token here - do not restore the soft-skip. Factory#434; same removal
       # AIFactory#1092 / #1095 made in that repo's two drift gates.
       - name: Check out hub standards at the pinned SHA
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: olafkfreund/Factory
           ref: ${{ steps.pin.outputs.sha }}
