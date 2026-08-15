@@ -49,15 +49,22 @@ def test_detect_pip_uses_importlib_metadata(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_detect_binary_runs_version_command(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(pr.shutil, "which", lambda b: f"/usr/bin/{b}" if b == "codex" else None)
     monkeypatch.setattr(
-        pr.subprocess, "run",
-        lambda *a, **k: SimpleNamespace(stdout="codex 1.5.0\n", stderr="", returncode=0),
+        pr.shutil, "which", lambda b: f"/usr/bin/{b}" if b == "codex" else None
+    )
+    monkeypatch.setattr(
+        pr.subprocess,
+        "run",
+        lambda *a, **k: SimpleNamespace(
+            stdout="codex 1.5.0\n", stderr="", returncode=0
+        ),
     )
     assert pr.detect_installed(pr.get_runtime("codex")) == "1.5.0"
 
 
-def test_detect_returns_none_when_binary_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_detect_returns_none_when_binary_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(pr.shutil, "which", lambda b: None)
     assert pr.detect_installed(pr.get_runtime("codex")) is None
 
@@ -71,7 +78,8 @@ def test_detect_pip_falls_back_to_backend_venv(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr("importlib.metadata.version", _boom)
     monkeypatch.setattr(pr, "_backend_python", lambda: "/be/.venv/bin/python")
     monkeypatch.setattr(
-        pr.subprocess, "run",
+        pr.subprocess,
+        "run",
         lambda *a, **k: SimpleNamespace(stdout="0.2.87\n", stderr="", returncode=0),
     )
     assert pr.detect_installed(pr.get_runtime("claude")) == "0.2.87"
@@ -88,7 +96,9 @@ def test_detect_pip_none_when_no_backend_venv(monkeypatch: pytest.MonkeyPatch) -
 # ── binary resolution via well-known paths (antigravity) ─────────────────────
 
 
-def test_find_binary_probes_extra_paths(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_find_binary_probes_extra_paths(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(pr.shutil, "which", lambda b: None)  # not on PATH
     binp = tmp_path / "antigravity"
     binp.write_text("#!/bin/sh\n")
@@ -120,10 +130,14 @@ def test_detect_npm_prefers_package_json_over_cli(
     (pkg / "package.json").write_text(json.dumps({"version": "1.7.2"}))
     binp = pkg / "bin" / "codex"
     binp.write_text("#!/usr/bin/env node\n")
-    monkeypatch.setattr(pr.shutil, "which", lambda b: str(binp) if b == "codex" else None)
+    monkeypatch.setattr(
+        pr.shutil, "which", lambda b: str(binp) if b == "codex" else None
+    )
 
     def _should_not_run(*a, **k):  # version must come from package.json, not the CLI
-        raise AssertionError("CLI --version should not be spawned when package.json wins")
+        raise AssertionError(
+            "CLI --version should not be spawned when package.json wins"
+        )
 
     monkeypatch.setattr(pr.subprocess, "run", _should_not_run)
     assert pr.detect_installed(pr.get_runtime("codex")) == "1.7.2"
@@ -133,9 +147,12 @@ def test_detect_npm_prefers_package_json_over_cli(
 
 
 def test_latest_npm_via_npm_view(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(pr.shutil, "which", lambda b: "/usr/bin/npm" if b == "npm" else None)
     monkeypatch.setattr(
-        pr.subprocess, "run",
+        pr.shutil, "which", lambda b: "/usr/bin/npm" if b == "npm" else None
+    )
+    monkeypatch.setattr(
+        pr.subprocess,
+        "run",
         lambda *a, **k: SimpleNamespace(stdout="1.9.0\n", stderr="", returncode=0),
     )
     assert pr.latest_version(pr.get_runtime("codex")) == "1.9.0"
@@ -213,7 +230,12 @@ def test_status_unmanaged_has_no_latest(monkeypatch: pytest.MonkeyPatch) -> None
 def test_install_argv_npm_latest_and_pinned() -> None:
     rt = pr.get_runtime("codex")
     assert pr.install_argv(rt) == ["npm", "install", "-g", "@openai/codex@latest"]
-    assert pr.install_argv(rt, "1.4.0") == ["npm", "install", "-g", "@openai/codex@1.4.0"]
+    assert pr.install_argv(rt, "1.4.0") == [
+        "npm",
+        "install",
+        "-g",
+        "@openai/codex@1.4.0",
+    ]
 
 
 def test_install_argv_pip() -> None:
@@ -238,8 +260,12 @@ def test_install_argv_unmanaged_raises() -> None:
 
 @pytest.mark.parametrize(
     "a,b,older",
-    [("1.0.0", "1.2.0", True), ("1.2.0", "1.2.0", False), ("2.0.0", "1.9.9", False),
-     ("0.1.16", "0.1.20", True)],
+    [
+        ("1.0.0", "1.2.0", True),
+        ("1.2.0", "1.2.0", False),
+        ("2.0.0", "1.9.9", False),
+        ("0.1.16", "0.1.20", True),
+    ],
 )
 def test_semver_lt(a, b, older) -> None:
     assert pr._semver_lt(a, b) is older
@@ -250,8 +276,11 @@ def test_semver_lt(a, b, older) -> None:
 
 def test_run_install_executes_and_redetects(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        pr.subprocess, "run",
-        lambda *a, **k: SimpleNamespace(stdout="added 1 package\n", stderr="", returncode=0),
+        pr.subprocess,
+        "run",
+        lambda *a, **k: SimpleNamespace(
+            stdout="added 1 package\n", stderr="", returncode=0
+        ),
     )
     monkeypatch.setattr(pr, "detect_installed", lambda rt: "1.9.0")
     res = pr.run_install("codex")
@@ -268,3 +297,27 @@ def test_run_install_unmanaged_raises() -> None:
 def test_run_install_unknown_raises() -> None:
     with pytest.raises(KeyError):
         pr.run_install("nope")
+
+
+def test_run_install_launch_failure_does_not_leak_the_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Factory#780: a launch failure (binary missing, permission denied, ...)
+    must not put the absolute path or errno text in the response body -- that
+    is this server's launch mechanics, not the install command's own output.
+    Assert the ABSENCE of the leaked detail, not the presence of a friendly
+    message (a friendly message could still smuggle the path in alongside
+    it)."""
+    secret_path = "/opt/super-secret-internal-tooling/npm"
+
+    def _boom(*a, **k):
+        raise FileNotFoundError(2, "No such file or directory", secret_path)
+
+    monkeypatch.setattr(pr.subprocess, "run", _boom)
+    monkeypatch.setattr(pr, "detect_installed", lambda rt: None)
+    res = pr.run_install("codex")
+    assert res.returncode == -1
+    assert secret_path not in res.output
+    assert "No such file or directory" not in res.output
+    # Still says SOMETHING -- the exception class -- so it isn't a bare "failed".
+    assert "FileNotFoundError" in res.output
