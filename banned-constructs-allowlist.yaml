@@ -62,3 +62,26 @@
     `pragma: no cover - guarded by Query(ge=0)` (FastAPI's own validation
     already rejects negative inputs before this branch is reachable).
   issue: 718
+
+# --- newly visible after Factory#781 widened the detector (bare f-string
+# interpolation + more exception spellings) and this branch rebased onto it.
+# Both are genuine `except Exception`/`except ImportError` catches returning
+# an interpolated inner exception -- real findings, not false positives --
+# but neither is in a file this PR already touches, and #718's own
+# coordination rule is fix-in-files-you're-touching, list the rest, don't
+# widen scope while three other repos are in flight on the same issue.
+- path: apps/backend/query_memory.py
+  rule: raw-exception-in-response
+  reason: >-
+    Two sites (ImportError, broad Exception) in a CLI command function
+    (cmd_*), returning f"...: {e}" in the command's result dict. Genuine
+    bare-interpolation leak, same shape as the 21 measured fleet-wide for
+    #718 -- not fixed here, out of scope for this PR's file set.
+  issue: 718
+- path: apps/backend/agents/health_gate.py
+  rule: raw-exception-in-response
+  reason: >-
+    `except Exception as exc: return HealthResult(..., detail=f"unreachable:
+    {exc}")` -- broad catch, interpolated inner exception. Genuine finding,
+    not fixed here, out of scope for this PR's file set.
+  issue: 718
