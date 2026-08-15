@@ -11,6 +11,7 @@ from pathlib import Path
 from threading import Lock
 
 from ..config import get_settings
+from ..error_ref import InputRejectedError
 from .session import PTYSession
 
 
@@ -46,7 +47,16 @@ class PTYManager:
         with self._lock:
             # Check session limit
             if len(self.sessions) >= self._max_sessions:
-                raise RuntimeError(f"Maximum sessions ({self._max_sessions}) reached")
+                # InputRejectedError (#718) rather than a bare RuntimeError: the
+                # message is a fixed, developer-written capacity limit, safe to
+                # hand back verbatim -- but RuntimeError is a stdlib type any
+                # code in this method (including PTYSession.start() below)
+                # could also raise, so leaving it as RuntimeError would let
+                # callers keep trusting a str(exc) that stops being safe the
+                # moment something else in this method starts raising one.
+                raise InputRejectedError(
+                    f"Maximum sessions ({self._max_sessions}) reached"
+                )
 
             # Create session - only pass id if provided, otherwise let dataclass generate UUID
             session_kwargs = {
@@ -80,6 +90,7 @@ class PTYManager:
         settings = get_settings()
         profiles_file = Path(settings.PROJECTS_DATA_DIR) / "claude-profiles.json"
         from ..paths import get_data_file
+
         legacy_profiles_file = get_data_file("claude-profiles.json")
         if not profiles_file.exists() and legacy_profiles_file.exists():
             profiles_file = legacy_profiles_file
@@ -90,20 +101,25 @@ class PTYManager:
                 profiles = data.get("profiles", [])
                 active_id = data.get("activeProfileId")
 
-                usable = [
-                    p for p in profiles
-                    if p.get("oauthToken") or p.get("token")
-                ]
+                usable = [p for p in profiles if p.get("oauthToken") or p.get("token")]
 
                 for profile in usable:
                     if profile.get("id") == active_id:
                         token = profile.get("oauthToken") or profile.get("token")
-                        return (token, profile.get("id"), profile.get("name", "Active Profile"))
+                        return (
+                            token,
+                            profile.get("id"),
+                            profile.get("name", "Active Profile"),
+                        )
 
                 if usable:
                     profile = usable[0]
                     token = profile.get("oauthToken") or profile.get("token")
-                    return (token, profile.get("id"), profile.get("name", "Default Profile"))
+                    return (
+                        token,
+                        profile.get("id"),
+                        profile.get("name", "Default Profile"),
+                    )
             except (json.JSONDecodeError, OSError):
                 pass
 
@@ -152,8 +168,7 @@ class PTYManager:
         """Remove sessions whose PTY processes have exited."""
         with self._lock:
             dead_sessions = [
-                sid for sid, session in self.sessions.items()
-                if not session.is_alive()
+                sid for sid, session in self.sessions.items() if not session.is_alive()
             ]
             for sid in dead_sessions:
                 del self.sessions[sid]

@@ -19,6 +19,8 @@ from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
+from server.error_ref import client_error
+
 from ._specpath import safe_component
 from ._tenancy import resolve_tenant
 
@@ -311,9 +313,22 @@ async def ingest_spec(
             repo_ref=req.repo,
         )
     except FileExistsError as exc:
-        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        # The message names spec_dir's server-side path -- redact rather than
+        # mark: unlike VisualBaselineError/provider_runtime's KeyError above,
+        # this one has not been verified never to reveal server topology.
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail=client_error(logger, "spec already exists", exc),
+        ) from exc
     except ValueError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        # create_spec_ingest_workspace's own ValueError interpolates the inner
+        # parse exception's text (f"could not parse spec: {exc}") -- the same
+        # shape url_safety.py's docstring warns against, so it is not safe to
+        # trust here either. Redact rather than mark.
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=client_error(logger, "could not ingest spec", exc),
+        ) from exc
 
     return {"task_id": req.spec_id, "project_id": req.project_id, **result}
 

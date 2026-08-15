@@ -1,0 +1,75 @@
+# Allowlist for scripts/check_banned_constructs.py (Factory hub, vendored gate;
+# see olafkfreund/Factory#718). Each entry needs a `reason` and an `issue` --
+# an entry with no issue is itself a gate failure (an unreviewed grandfather
+# is not a grandfather).
+#
+# Keyed (path, rule), so a NEW occurrence of the same rule added later to an
+# allowlisted file still fails the gate.
+
+# --- exists-then-read: a separate rule, not triaged in #718's classification
+# pass (see the PFactory report on that issue: "exists-then-read | separate
+# rule, not triaged here"). Grouped here rather than fixed because the fix
+# shape (read-and-catch vs. check-then-read) needs its own pass across the
+# fleet, not a one-off per repo.
+- path: scripts/record-portal-walkthrough.ts
+  rule: exists-then-read
+  reason: TOCTOU check-then-read; separate rule from #718's error-disclosure classification, not yet triaged fleet-wide
+  issue: 718
+- path: scripts/capture-screenshots.ts
+  rule: exists-then-read
+  reason: TOCTOU check-then-read; separate rule from #718's error-disclosure classification, not yet triaged fleet-wide
+  issue: 718
+- path: scripts/capture-portal-gallery.ts
+  rule: exists-then-read
+  reason: TOCTOU check-then-read; separate rule from #718's error-disclosure classification, not yet triaged fleet-wide
+  issue: 718
+- path: scripts/bump-version.js
+  rule: exists-then-read
+  reason: TOCTOU check-then-read; separate rule from #718's error-disclosure classification, not yet triaged fleet-wide
+  issue: 718
+- path: apps/backend/core/auth.py
+  rule: exists-then-read
+  reason: TOCTOU check-then-read; separate rule from #718's error-disclosure classification, not yet triaged fleet-wide
+  issue: 718
+
+# --- raw-exception-in-response: genuine false positives / out-of-scope, read
+# and verified individually (never a blanket allowlist of the rule).
+- path: apps/web-server/tests/test_route_error_leak.py
+  rule: raw-exception-in-response
+  reason: >-
+    False positive: line 5 is a docstring quoting an f-string EXAMPLE of the
+    leak this test file exists to catch. The prose filter in
+    check_banned_constructs.py deliberately does not skip it (any real f"...
+    {exc}" in a response body also lives in a string token, and skipping
+    f-string-shaped lines as prose would hide that). #718's classification
+    comment names this exact line as a legitimate allowlist candidate.
+  issue: 718
+- path: apps/web-server/factory_common/http.py
+  rule: raw-exception-in-response
+  reason: >-
+    Vendored byte-exact from the Factory hub (shared/factory-common/), kept
+    identical by the factory_common drift gate. `last_error = str(exc)` on a
+    caught urllib.error.URLError is a real finding, but the fix belongs in
+    the hub canonical and must re-vendor to every fork that carries this
+    file identically -- never patched in one fork alone (rule 4.2, one
+    engine no drift). Flagged to the hub owner; not fixed here.
+  issue: 718
+- path: apps/web-server/server/routes/oidc_routes.py
+  rule: raw-exception-in-response
+  reason: >-
+    Read the actual site: the flagged str(exc)[:200] reaches only
+    logger.warning (server-side log), never the HTTPException `detail=`,
+    which is the static string "OIDC callback rejected". Not a leak as
+    written. This site is forked identically in PFactory/AIFactory/TFactory;
+    per #718 coordination this is not being re-decided independently in one
+    fork. Pending the coordinated call on whether the log line itself should
+    also move to sanitize_log (a separate, smaller CWE-117 concern).
+  issue: 718
+- path: tests/fixtures/demo-scenarios/multi-lane/sut/api_quote.py
+  rule: raw-exception-in-response
+  reason: >-
+    Demo-harness fixture SUT (system-under-test) for the multi-lane test
+    scenario, not a production route. The `except ValueError` is marked
+    `pragma: no cover - guarded by Query(ge=0)` (FastAPI's own validation
+    already rejects negative inputs before this branch is reachable).
+  issue: 718

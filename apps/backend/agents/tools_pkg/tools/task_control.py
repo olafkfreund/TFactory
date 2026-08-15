@@ -182,9 +182,16 @@ def _load_status(
 # ---------------------------------------------------------------------------
 
 
-def _format_error(exc: Exception | str) -> dict[str, Any]:
-    """Return the MCP content-block error shape (``isError=True``)."""
-    text = str(exc) if isinstance(exc, Exception) else exc
+def _format_error(text: str) -> dict[str, Any]:
+    """Return the MCP content-block error shape (``isError=True``).
+
+    ``str`` only (#718): every call site in this module already passes a
+    developer-written message or a pre-rendered ``str(exc)``, so the
+    ``Exception`` overload was dead in practice and, worse, let a raw
+    exception reach this response unexamined -- the shape CWE-209 is about.
+    Callers that have an exception decide what of it is safe to say, same as
+    every route handler in apps/web-server/server/routes does.
+    """
     return {
         "content": [{"type": "text", "text": f"Error: {text}"}],
         "isError": True,
