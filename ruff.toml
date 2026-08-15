@@ -1,5 +1,15 @@
 # Ruff configuration for MagesticAI
 
+# The Python this repo TARGETS (Factory#730). Absent, ruff inferred a version
+# old enough to classify `tomllib` (stdlib since 3.11) as third-party, which
+# is how this was found: security-lint/security_lint.py, vendored byte-exact
+# from the hub and clean under standards/ruff.toml, reported I001 here. The
+# bytes were identical; the verdict was not. Matched to standards/ruff.toml
+# deliberately -- this is the fleet floor (coding-standards.md section 1,
+# "Python (3.11+)"), not a strictness knob. AIFactory's root ruff.toml made
+# the same fix first, for the same reason.
+target-version = "py311"
+
 # Vendored verification-core copies (Factory#158): these files are byte-exact
 # mirrors of the Factory hub canonical (scripts/) and are governed by the
 # byte-exact drift gate (verification-core-drift workflow), NOT this repo's style
@@ -57,6 +67,14 @@ ignore = [
     "B007",   # loop control variable not used
     "F821",   # undefined name (forward refs in type hints used as strings)
     "UP035",  # deprecated typing imports (legacy modules use typing.List/Dict)
+    # 20 sites, newly visible now that target-version = py311 turns this rule
+    # on (Factory#730/#763). NOT auto-applied: `class X(str, Enum)` -> `class
+    # X(StrEnum)` is a BEHAVIOR change, not a style one -- str(member) returns
+    # the value itself under StrEnum, but "ClassName.MEMBER" under the str+Enum
+    # mixin, and several of the 20 (verdict/status enums) are serialized to
+    # JSON or logged. Ratchet backlog: convert per-class once each one's
+    # str()/repr call sites are checked, not as an unsafe-fix sweep.
+    "UP042",  # replace str+Enum mixin with StrEnum
 ]
 
 [lint.per-file-ignores]
@@ -70,6 +88,17 @@ ignore = [
     "F811",   # redefined-while-unused (pytest fixture argument shadowing)
 ]
 "test_*.py" = ["F401", "F811"]
+
+# The shared test carve-out from standards/ruff.toml (Factory#730). `extend`
+# does not deep-merge per-file-ignores -- defining this table locally replaces
+# the baseline's, so the carve-out is repeated verbatim here, the same
+# technique PFactory's root ruff.toml already uses. Neither S nor PL is in
+# this repo's `select` above, so this is a no-op today and stays that way
+# until one of them is adopted -- at which point it is already correct instead
+# of silently reopening a hole standards/ruff.toml closed.
+"**/test_*.py" = ["S101", "PLR2004"]
+"**/*_test.py" = ["S101", "PLR2004"]
+"**/tests/**" = ["S101", "PLR2004"]
 
 [format]
 quote-style = "double"

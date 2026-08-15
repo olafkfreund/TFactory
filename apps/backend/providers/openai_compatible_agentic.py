@@ -194,7 +194,7 @@ class OpenAICompatibleAgenticProvider(OpenAICompatibleHeadersMixin, BaseLLMProvi
                     asyncio.to_thread(self._http_post, url, payload),
                     timeout=float(self._timeout),
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 yield AssistantMessage(
                     content=[
                         TextBlock(

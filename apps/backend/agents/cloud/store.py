@@ -76,7 +76,7 @@ def _slug(value: str) -> str:
 
 def new_assessment_id(provider: str, account: str | None, *, now=None) -> str:
     """A sortable, filesystem-safe id: ``<provider>-<account>-<UTC timestamp>``."""
-    ts = (now or datetime.datetime.now(datetime.timezone.utc)).strftime("%Y%m%d%H%M%S")
+    ts = (now or datetime.datetime.now(datetime.UTC)).strftime("%Y%m%d%H%M%S")
     return f"{_slug(provider)}-{_slug(account or 'unknown')}-{ts}"
 
 

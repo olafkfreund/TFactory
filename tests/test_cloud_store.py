@@ -83,7 +83,7 @@ def test_download_path_md_and_json(store_root) -> None:
 def test_new_assessment_id_is_sortable_and_safe() -> None:
     import datetime
 
-    now = datetime.datetime(2026, 6, 3, 8, 30, 0, tzinfo=datetime.timezone.utc)
+    now = datetime.datetime(2026, 6, 3, 8, 30, 0, tzinfo=datetime.UTC)
     aid = store.new_assessment_id("gcp", "sarc-493418", now=now)
     assert aid == "gcp-sarc-493418-20260603083000"
     # unsafe chars in the account are slugged away

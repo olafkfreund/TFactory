@@ -1,7 +1,7 @@
 """Login module post-diff."""
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 
 from .session import _STORE, Session
 
@@ -11,7 +11,7 @@ def login_user(email: str, password: str) -> Session | None:
     if user is None:
         return None
     session_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     expires = now + timedelta(hours=24)
     s = Session(
         id=session_id, user_id=user.id, email=email,

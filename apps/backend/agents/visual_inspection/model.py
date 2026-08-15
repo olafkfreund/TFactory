@@ -89,7 +89,7 @@ class RunMeta:
 
 def new_run_id(target_name: str, *, now: datetime.datetime | None = None) -> str:
     """Sortable, filesystem-safe run id: ``<target>-<UTC timestamp>``."""
-    ts = (now or datetime.datetime.now(datetime.timezone.utc)).strftime("%Y%m%d%H%M%S")
+    ts = (now or datetime.datetime.now(datetime.UTC)).strftime("%Y%m%d%H%M%S")
     return f"{slugify(target_name)}-{ts}"
 
 

@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 _FACT_NAME = "tfactory.test_quality"
@@ -28,7 +28,7 @@ _DEFAULT_TIMEOUT = 5.0
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _techinsights_url() -> str | None:
