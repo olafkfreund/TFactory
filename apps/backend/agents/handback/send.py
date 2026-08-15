@@ -26,7 +26,7 @@ import json
 import os
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .render import render_fix_request_md
@@ -75,7 +75,7 @@ class SendResult:
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _correlation_key_for(spec_dir: Path) -> str | None:

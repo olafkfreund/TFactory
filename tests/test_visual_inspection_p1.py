@@ -16,7 +16,7 @@ from agents.visual_inspection import (
     verdict_for,
 )
 
-_NOW = datetime.datetime(2026, 6, 3, 13, 5, 0, tzinfo=datetime.timezone.utc)
+_NOW = datetime.datetime(2026, 6, 3, 13, 5, 0, tzinfo=datetime.UTC)
 _TARGET = {"name": "snow", "platform": "servicenow", "base_url": "https://acme.service-now.com"}
 
 

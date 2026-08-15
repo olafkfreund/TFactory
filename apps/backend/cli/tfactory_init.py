@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -230,7 +230,7 @@ def _build_docker_compose_target(
 
 def _now_z() -> str:
     """Return the current time as an ISO-8601 UTC string with Z suffix."""
-    return datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _create_empty_catalog(catalog_path: Path) -> None:

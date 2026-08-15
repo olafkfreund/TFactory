@@ -400,7 +400,7 @@ class TestIntegrationRoundtrip:
             try:
                 reader_proc.terminate()
                 await asyncio.wait_for(reader_proc.wait(), timeout=2)
-            except (ProcessLookupError, asyncio.TimeoutError):
+            except (TimeoutError, ProcessLookupError):
                 # Reader already exited between the race check above and
                 # the kill attempt below — that's the success case here.
                 with contextlib.suppress(ProcessLookupError):

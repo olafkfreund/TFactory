@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -169,7 +169,7 @@ def resolve_targets_for_emit(
     * neither → env-resolved set (repo always + Backstage/Confluence when
       env-configured).
     """
-    updated_at = datetime.now(timezone.utc).isoformat()
+    updated_at = datetime.now(UTC).isoformat()
     if targets is not None:
         return targets
     if connections is not None:

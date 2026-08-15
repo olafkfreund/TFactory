@@ -22,7 +22,7 @@ import os
 import shutil
 import sys
 from collections.abc import Iterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from agents.liveness import StallVerdict, check_and_mark
@@ -98,7 +98,7 @@ def sweep(
     flipped have ``verdict.stalled is True``. ``now`` defaults to current UTC.
     """
     root = workspace_root or default_workspace_root()
-    when = now or datetime.now(timezone.utc)
+    when = now or datetime.now(UTC)
     results: list[tuple[Path, StallVerdict]] = []
     for spec_dir in iter_spec_dirs(root):
         verdict = check_and_mark(spec_dir, now=when, deadline_seconds=deadline_seconds)

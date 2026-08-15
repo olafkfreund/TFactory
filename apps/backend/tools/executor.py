@@ -363,7 +363,7 @@ class ToolExecutor:
             stdout, stderr = await asyncio.wait_for(
                 proc.communicate(), timeout=float(timeout)
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return ToolResultBlock(
                 content=f"Command timed out after {timeout}s: {command}",
                 is_error=True,
@@ -466,7 +466,7 @@ class ToolExecutor:
                 cwd=str(self._working_dir),
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return ToolResultBlock(
                 content=f"Grep timed out searching for: {pattern}",
                 is_error=True,

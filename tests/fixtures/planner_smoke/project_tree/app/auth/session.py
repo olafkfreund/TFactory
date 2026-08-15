@@ -1,7 +1,7 @@
 """Session module post-diff — the planner Glob/Greps against this tree."""
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 
 SESSION_TTL_HOURS = 24
 GRACE_WINDOW_MIN = 5
@@ -20,7 +20,7 @@ _STORE: dict[str, Session] = {}
 
 
 def _now_utc():
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def get_session(session_id: str) -> Session | None:

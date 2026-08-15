@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -86,7 +86,7 @@ def test_enforce_retention_empty_evidence_dir(tmp_path: Path) -> None:
 
 
 def test_enforce_retention_passing_within_window_kept(tmp_path: Path) -> None:
-    now = datetime(2026, 5, 29, 12, 0, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 5, 29, 12, 0, 0, tzinfo=UTC)
     spec_dir = _make_spec_dir(tmp_path, ["t1"])
     _write_verdicts(spec_dir, {"t1": "accept"})
     # t1 mtime = 3 days ago — within 7-day window
@@ -99,7 +99,7 @@ def test_enforce_retention_passing_within_window_kept(tmp_path: Path) -> None:
 
 
 def test_enforce_retention_passing_expired_pruned(tmp_path: Path) -> None:
-    now = datetime(2026, 5, 29, 12, 0, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 5, 29, 12, 0, 0, tzinfo=UTC)
     spec_dir = _make_spec_dir(tmp_path, ["t1"])
     _write_verdicts(spec_dir, {"t1": "accept"})
     # t1 mtime = 10 days ago — beyond 7-day window
@@ -112,7 +112,7 @@ def test_enforce_retention_passing_expired_pruned(tmp_path: Path) -> None:
 
 
 def test_enforce_retention_passing_exactly_at_boundary_kept(tmp_path: Path) -> None:
-    now = datetime(2026, 5, 29, 12, 0, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 5, 29, 12, 0, 0, tzinfo=UTC)
     spec_dir = _make_spec_dir(tmp_path, ["t1"])
     _write_verdicts(spec_dir, {"t1": "accept"})
     # Exactly 7 days old — on boundary, should NOT be pruned (age < cutoff)
@@ -128,7 +128,7 @@ def test_enforce_retention_passing_exactly_at_boundary_kept(tmp_path: Path) -> N
 
 
 def test_enforce_retention_failures_forever_never_pruned(tmp_path: Path) -> None:
-    now = datetime(2026, 5, 29, tzinfo=timezone.utc)
+    now = datetime(2026, 5, 29, tzinfo=UTC)
     spec_dir = _make_spec_dir(tmp_path, ["t1"])
     _write_verdicts(spec_dir, {"t1": "reject"})
     # t1 mtime = 1000 days ago — very old
@@ -144,7 +144,7 @@ def test_enforce_retention_failures_forever_never_pruned(tmp_path: Path) -> None
 
 
 def test_enforce_retention_flagged_expired_pruned(tmp_path: Path) -> None:
-    now = datetime(2026, 5, 29, tzinfo=timezone.utc)
+    now = datetime(2026, 5, 29, tzinfo=UTC)
     spec_dir = _make_spec_dir(tmp_path, ["t1"])
     _write_verdicts(spec_dir, {"t1": "flag"})
     _set_mtime(spec_dir / "findings" / "evidence" / "t1", now - timedelta(days=100))
@@ -155,7 +155,7 @@ def test_enforce_retention_flagged_expired_pruned(tmp_path: Path) -> None:
 
 
 def test_enforce_retention_flagged_within_window_kept(tmp_path: Path) -> None:
-    now = datetime(2026, 5, 29, tzinfo=timezone.utc)
+    now = datetime(2026, 5, 29, tzinfo=UTC)
     spec_dir = _make_spec_dir(tmp_path, ["t1"])
     _write_verdicts(spec_dir, {"t1": "flag"})
     _set_mtime(spec_dir / "findings" / "evidence" / "t1", now - timedelta(days=10))
@@ -170,7 +170,7 @@ def test_enforce_retention_flagged_within_window_kept(tmp_path: Path) -> None:
 
 
 def test_enforce_retention_unknown_verdict_kept_forever(tmp_path: Path) -> None:
-    now = datetime(2026, 5, 29, tzinfo=timezone.utc)
+    now = datetime(2026, 5, 29, tzinfo=UTC)
     spec_dir = _make_spec_dir(tmp_path, ["t1"])
     # No verdicts.json → unknown verdict → failures bucket → forever
     _set_mtime(spec_dir / "findings" / "evidence" / "t1", now - timedelta(days=500))
@@ -191,7 +191,7 @@ def _make_evidence_with_payload(spec_dir: Path, test_id: str, payload_bytes: int
 
 
 def test_enforce_retention_size_cap_prunes_oldest(tmp_path: Path) -> None:
-    now = datetime(2026, 5, 29, tzinfo=timezone.utc)
+    now = datetime(2026, 5, 29, tzinfo=UTC)
     spec_dir = tmp_path / "spec"
     spec_dir.mkdir()
     (spec_dir / "findings").mkdir()
@@ -218,7 +218,7 @@ def test_enforce_retention_size_cap_prunes_oldest(tmp_path: Path) -> None:
 
 
 def test_enforce_retention_no_size_cap_skips_size_sweep(tmp_path: Path) -> None:
-    now = datetime(2026, 5, 29, tzinfo=timezone.utc)
+    now = datetime(2026, 5, 29, tzinfo=UTC)
     spec_dir = tmp_path / "spec"
     spec_dir.mkdir()
     (spec_dir / "findings").mkdir()
@@ -241,7 +241,7 @@ def test_enforce_retention_no_size_cap_skips_size_sweep(tmp_path: Path) -> None:
 
 
 def test_enforce_retention_bytes_freed_accuracy(tmp_path: Path) -> None:
-    now = datetime(2026, 5, 29, tzinfo=timezone.utc)
+    now = datetime(2026, 5, 29, tzinfo=UTC)
     spec_dir = tmp_path / "spec"
     spec_dir.mkdir()
     (spec_dir / "findings").mkdir()
@@ -260,7 +260,7 @@ def test_enforce_retention_bytes_freed_accuracy(tmp_path: Path) -> None:
 
 
 def test_enforce_retention_retained_count_accurate(tmp_path: Path) -> None:
-    now = datetime(2026, 5, 29, tzinfo=timezone.utc)
+    now = datetime(2026, 5, 29, tzinfo=UTC)
     spec_dir = _make_spec_dir(tmp_path, ["t1", "t2", "t3"])
     _write_verdicts(spec_dir, {"t1": "accept", "t2": "accept", "t3": "reject"})
     # t1 expires, t2 and t3 should be retained

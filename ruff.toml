@@ -67,6 +67,14 @@ ignore = [
     "B007",   # loop control variable not used
     "F821",   # undefined name (forward refs in type hints used as strings)
     "UP035",  # deprecated typing imports (legacy modules use typing.List/Dict)
+    # 20 sites, newly visible now that target-version = py311 turns this rule
+    # on (Factory#730/#763). NOT auto-applied: `class X(str, Enum)` -> `class
+    # X(StrEnum)` is a BEHAVIOR change, not a style one -- str(member) returns
+    # the value itself under StrEnum, but "ClassName.MEMBER" under the str+Enum
+    # mixin, and several of the 20 (verdict/status enums) are serialized to
+    # JSON or logged. Ratchet backlog: convert per-class once each one's
+    # str()/repr call sites are checked, not as an unsafe-fix sweep.
+    "UP042",  # replace str+Enum mixin with StrEnum
 ]
 
 [lint.per-file-ignores]
