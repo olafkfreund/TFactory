@@ -29,7 +29,7 @@ import pytest
 from agents.coverage_delta import CoverageParseError, parse_coverage_xml
 from agents.lang_java.jacoco_coverage import parse_jacoco_xml
 from agents.nix_env import parse_browser_junit
-from agents.safe_xml import EntityDeclarationRejected, fromstring, parse
+from agents.safe_xml import EntityDeclarationError, fromstring, parse
 
 # Five levels of ten-fold nesting: &lol5; expands to 100,000 "lol"s (300 KB)
 # from a 500-byte document. Enough to demonstrate the amplification, small
@@ -97,12 +97,12 @@ def test_the_bomb_really_is_a_bomb() -> None:
 
 
 def test_helper_rejects_entity_declarations() -> None:
-    with pytest.raises(EntityDeclarationRejected):
+    with pytest.raises(EntityDeclarationError):
         fromstring(_bomb(_COVERAGE_BODY))
 
 
 def test_helper_rejects_external_entity_declarations() -> None:
-    with pytest.raises(EntityDeclarationRejected):
+    with pytest.raises(EntityDeclarationError):
         fromstring(_external(_COVERAGE_BODY))
 
 
