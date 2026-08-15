@@ -344,7 +344,15 @@ def create_spec_ingest_workspace(
         fmt_enum = SpecFormat(fmt) if fmt else None
         spec = ingest(spec_text, fmt=fmt_enum)
     except (SpecSourceError, ValueError) as exc:
-        raise ValueError(f"could not parse spec: {exc}") from exc
+        # #718: was f"could not parse spec: {exc}" -- interpolating the inner
+        # exception is the shape url_safety.py's docstring warns against.
+        # Every raise site that can reach here (SpecSourceError's 4 sites in
+        # spec_sources.py, and stdlib ValueError from SpecFormat(fmt) on an
+        # unrecognised format string) is developer-written text about the
+        # spec/fmt the caller just sent, verified, so exc.args[0] is safe to
+        # prefix rather than needing to be discarded like a genuinely unknown
+        # exception's text would.
+        raise ValueError(f"could not parse spec: {exc.args[0]}") from exc
     if not spec.criteria:
         raise ValueError("spec has no acceptance criteria")
 

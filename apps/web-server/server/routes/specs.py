@@ -19,7 +19,7 @@ from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
-from server.error_ref import client_error
+from server.error_ref import InputRejectedError, client_error
 
 from ._specpath import safe_component
 from ._tenancy import resolve_tenant
@@ -321,13 +321,20 @@ async def ingest_spec(
             detail=client_error(logger, "spec already exists", exc),
         ) from exc
     except ValueError as exc:
-        # create_spec_ingest_workspace's own ValueError interpolates the inner
-        # parse exception's text (f"could not parse spec: {exc}") -- the same
-        # shape url_safety.py's docstring warns against, so it is not safe to
-        # trust here either. Redact rather than mark.
+        # create_spec_ingest_workspace's ValueError is developer-written about
+        # the caller's own spec_text/fmt -- verified: every raise site it can
+        # reach (SpecSourceError's 4 sites in spec_sources.py, stdlib
+        # ValueError from an unrecognised SpecFormat) is safe text about the
+        # caller's own input, and task_control.py no longer interpolates an
+        # inner exception into it (#718 fixed that at the source instead of
+        # here). Marked, not redacted, so a caller who sent an unparseable
+        # spec still gets the fixable "no acceptance criteria" / "could not
+        # parse" detail rather than a bare reference id.
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            detail=client_error(logger, "could not ingest spec", exc),
+            detail=client_error(
+                logger, "could not ingest spec", InputRejectedError(exc.args[0])
+            ),
         ) from exc
 
     return {"task_id": req.spec_id, "project_id": req.project_id, **result}
