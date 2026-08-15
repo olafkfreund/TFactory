@@ -1133,13 +1133,17 @@ def parse_browser_junit(junit_path: Path) -> dict[str, bool]:
     """Map each browser spec file -> passed (no failures/errors), from playwright
     junit (``<testsuite name="<spec>.spec.ts" failures=F errors=E>``). Pure;
     returns {} when the file is absent/unparseable."""
-    import xml.etree.ElementTree as ET
+    from agents import safe_xml
 
     p = Path(junit_path)
     if not p.is_file():
         return {}
     try:
-        root = ET.parse(p).getroot()
+        # The SUT's own browser run writes this report inside the sandbox, so it
+        # is untrusted: `safe_parse` refuses entity declarations and an
+        # entity-expansion bomb lands in the same "no evidence" branch as any
+        # other broken report (Factory#722).
+        root = safe_xml.parse(p).getroot()
     except Exception:  # noqa: BLE001 - a broken report is just "no evidence"
         return {}
     out: dict[str, bool] = {}
