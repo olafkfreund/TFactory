@@ -330,7 +330,7 @@ jobs:
       # `verify-tfactory-runner-signature` pins.
       # ---------------------------------------------------------------------
       - name: Install cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+        uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da  # v3.7.0
 
       - name: Sign tfactory-runner-${{ matrix.runner }}
         env:
@@ -348,3 +348,10 @@ jobs:
             --certificate-identity-regexp "^https://github\.com/${{ github.repository }}/\.github/workflows/runner-images\.yml@refs/heads/main$" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             "${IMAGE}@${DIGEST}"
+
+      # The self-test above asks cosign about cosign. This asks the question
+      # the CLUSTER asks. See the script header and Factory#804.
+      - name: Assert the signature is where Kyverno looks — ${{ matrix.runner }}
+        env:
+          DIGEST: "${{ steps.push.outputs.digest }}"
+        run: ./.github/scripts/assert-signature-location.sh "${IMAGE}" "${DIGEST}"
