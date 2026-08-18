@@ -18,4 +18,11 @@ useDefault = true
     # acw_yourKeyHere), not real credentials.
     '''apps/web-server/README\.md''',
     '''guides/REMOTE_MCP_SERVER\.md''',
+    # tests/test_secrets_egress.py feeds credential-shaped strings to
+    # scrub_patterns()/redaction helpers so the redactor under test has something
+    # to redact -- e.g. `api_key = "..."` asserted to be absent from the output.
+    # Not real credentials. Found because the scheduled full-history scan has
+    # failed on every run it has ever had (3/3) and blocked nothing, a scheduled
+    # gate having no PR to turn red.
+    '''tests/test_secrets_egress\.py''',
   ]
