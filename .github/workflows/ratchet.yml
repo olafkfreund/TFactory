@@ -144,6 +144,19 @@ jobs:
             exit 1
           fi
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Assert the pin is really on hub main
+        # The 40-hex check above closes ref confusion and argument injection,
+        # not the BYPASS. GitHub keeps every fork in one shared object store, so
+        # a commit that exists only in a fork of Factory is a valid 40-hex SHA
+        # that actions/checkout resolves happily -- a fork PR could pin a
+        # standards/ tree crafted to match its own drifted vendored copy and
+        # this gate would diff two matching trees and go green (TFactory#1049).
+        # Path: this job checks the repo out under tfactory/, so the script
+        # lives at tfactory/.github/scripts/.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.pin.outputs.sha }}
+        run: tfactory/.github/scripts/assert-hub-pin-on-main.sh "${SHA}" "standards/.hub-sha"
       # No continue-on-error: an unreachable hub is a gate that cannot run, and
       # per standards rule 4.7 that must fail rather than pass. This step used
       # to be `continue-on-error: true` with the diff below guarded on

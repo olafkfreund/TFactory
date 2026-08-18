@@ -75,6 +75,22 @@ jobs:
         with:
           path: service
 
+      - name: Assert the pinned canonical SHA is really on hub main
+        # HUB_PIN_SHA lives in THIS file, and on a `pull_request` trigger this
+        # file is the PR's copy -- so the pin is PR-controlled and is handed
+        # straight to actions/checkout as a `ref`. Every fork of Factory shares
+        # one object store, so a commit existing only in a fork is a valid
+        # 40-hex SHA that actions/checkout resolves happily: a fork PR could pin
+        # a canonical crafted to match its own drifted vendored copy and this
+        # gate would go green (TFactory#1049). The CHECKER checkout below is at
+        # `ref: main`, a branch this repo names, so it needs no such assert.
+        # Path: this job checks the service out under service/, so the script
+        # lives at service/.github/scripts/.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ env.HUB_PIN_SHA }}
+        run: service/.github/scripts/assert-hub-pin-on-main.sh "${SHA}" "verification-core-drift.yml HUB_PIN_SHA"
+
       - name: Check out the Factory hub canonical at the pinned SHA
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
