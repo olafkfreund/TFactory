@@ -36,12 +36,17 @@ name: factory_common drift
 # matches factory-github-drift.yml in this repo, which fetches its canonical the
 # same way for unrelated reasons.
 #
-# NOT fixed by that change, stated rather than implied: the pin is still chosen
-# by the PR, and codeload serves any commit in the hub's fork network (verified:
-# an orphaned hub PR-branch head still returns 200). So a PR can still point
-# .hub-sha at a fork commit crafted to match its own edited copy and pass this
-# gate. That is a gate bypass, not code execution, and it is tracked in
-# TFactory#1049.
+# THE PIN BYPASS THAT CHANGE DID NOT CLOSE, AND WHAT NOW DOES (TFactory#1049):
+# the pin is still chosen by the PR, and codeload serves any commit in the hub's
+# fork network (verified: an orphaned hub PR-branch head still returns 200). So
+# a PR could point .hub-sha at a fork commit crafted to match its own edited
+# copy and pass this gate -- a gate bypass, not code execution. The
+# "Assert the pin is really on hub main" step below now closes it: it asks the
+# hub, via `repos/olafkfreund/Factory/compare/main...<sha>`, whether the pin is
+# reachable from hub main, and fails on anything but `identical`/`behind`. See
+# .github/scripts/assert-hub-pin-on-main.sh for why that is the compare API and
+# not a local `git merge-base`, and for the one thing it still cannot close (a
+# fork PR runs its OWN copy of this workflow and can delete the step).
 
 on:
   pull_request:
@@ -87,6 +92,19 @@ jobs:
             exit 1
           fi
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Assert the pin is really on hub main
+        # The 40-hex check above closes ref confusion and argument injection,
+        # not the BYPASS. GitHub keeps every fork in one shared object store, so
+        # a commit that exists only in a fork of Factory is a valid 40-hex SHA
+        # and codeload still serves it from Factory itself -- a fork PR could
+        # pin a canonical tree crafted to match its own drifted vendored copy
+        # and this gate would diff two matching trees and go green
+        # (TFactory#1049).
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.pin.outputs.sha }}
+        run: .github/scripts/assert-hub-pin-on-main.sh "${SHA}" "${VENDORED}/.hub-sha"
 
       - name: Fetch the hub canonical tree at the pinned SHA
         # Passed through env rather than interpolated straight into the script,

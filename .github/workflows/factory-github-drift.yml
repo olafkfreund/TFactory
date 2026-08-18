@@ -50,6 +50,20 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Assert the pinned canonical SHA is really on hub main
+        # HUB_SHA lives in THIS file, and on a `pull_request` trigger this file
+        # is the PR's copy -- so the pin is PR-controlled. Every fork of Factory
+        # shares one object store, so a commit that exists only in a fork is a
+        # valid 40-hex SHA and codeload serves it from Factory itself: a fork PR
+        # could pin a canonical tree crafted to match its own drifted vendored
+        # copy and this gate would diff two matching trees and go green
+        # (TFactory#1049). HUB_CHECKER_REF is not checked: `main` is a branch
+        # this repo names, not a PR-supplied pin.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ env.HUB_SHA }}
+        run: .github/scripts/assert-hub-pin-on-main.sh "${SHA}" "factory-github-drift.yml HUB_SHA"
+
       - name: Fetch hub drift checker (main) + canonical tree (pinned SHA)
         run: |
           set -euo pipefail
