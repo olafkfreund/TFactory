@@ -44,23 +44,6 @@
     f-string-shaped lines as prose would hide that). #718's classification
     comment names this exact line as a legitimate allowlist candidate.
   issue: 718
-- path: apps/web-server/factory_common/http.py
-  rule: raw-exception-in-response
-  reason: >-
-    Vendored, drift-gated, and unreachable -- three independent facts, any
-    one of which would have to change before this became live. Vendored
-    byte-exact from the Factory hub (shared/factory-common/), kept identical
-    by the factory_common drift gate, so a local edit would break
-    .hub-sha and the fix belongs in the hub canonical + re-vendor regardless.
-    Unreachable: verified with a control (grepped origin/dev) --
-    `HttpClient`/`HttpResponse` have zero usages outside this file, the only
-    `from factory_common import ...` anywhere in the repo pulls `logsafe`
-    (never `http`), and no `.body["error"]`/`.body.get("error")` access
-    exists anywhere. Same result independently confirmed in PFactory,
-    AIFactory, CFactory, and the hub itself (imported only by a CLI
-    benchmark script there, whose output nothing reads for "error"). The
-    class of finding is settled fleet-wide, not just deferred here.
-  issue: 718
 - path: tests/fixtures/demo-scenarios/multi-lane/sut/api_quote.py
   rule: raw-exception-in-response
   reason: >-
