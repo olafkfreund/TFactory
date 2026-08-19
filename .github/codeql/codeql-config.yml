@@ -54,16 +54,15 @@ paths-ignore:
   # convention (compare auth.setup.tmpl.ts, whose placeholders all sit inside
   # string literals and therefore DOES parse -- it is not excluded).
   #
-  # KNOWN GAP this exclusion creates: auth.setup.steps.tmpl.ts embeds a real,
-  # non-template function (`__tfTotp`, RFC-6238 TOTP generation for MFA
-  # login steps) alongside the placeholders, and this glob stops that function
-  # from being scanned too -- it is genuine security-sensitive logic, not
-  # template scaffolding. It is not extracted to its own module here because
-  # the renderer (layout.py) writes only a single self-contained
-  # `auth.setup.ts` into the generated workspace; splitting `__tfTotp` out
-  # would require layout.py to also copy a helper file alongside it, which is
-  # a real behaviour change deserving its own reviewed PR, not a drive-by here.
-  # Tracked as a follow-up issue.
+  # auth.setup.steps.tmpl.ts used to embed a real, non-template function
+  # (`__tfTotp`, RFC-6238 TOTP generation for MFA login steps) alongside the
+  # placeholders, which this glob stopped from being scanned too -- it was
+  # genuine security-sensitive logic, not template scaffolding (#1063). It now
+  # lives in `apps/backend/agents/evidence/tftotp.helper.ts`, a plain module
+  # with no `@@MARKER@@` placeholders that IS covered by this analysis;
+  # `agents.evidence.layout.scaffold_auth_setup()` copies it alongside the
+  # rendered `auth.setup.ts` into the generated test workspace so the
+  # `./tftotp.helper` import resolves at Playwright run time.
   #
   # Nothing lints, typechecks or builds these files today: no root package.json
   # `lint`/`build`/`typecheck` script reaches apps/backend/agents/evidence/, and
