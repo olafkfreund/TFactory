@@ -15,7 +15,6 @@ Follows the same subprocess + WebSocket pattern as agent_service.py:
 import asyncio
 import json
 import logging
-import os
 import re
 import sys
 from dataclasses import dataclass, field
@@ -320,7 +319,7 @@ class PRReviewService:
             try:
                 proc.terminate()
                 await asyncio.wait_for(proc.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 proc.kill()
             except Exception as e:
                 logger.error(f"Error cancelling PR review: {e}")
