@@ -44,7 +44,8 @@ class ValidatedOutboundUrlSanitizer extends ServerSideRequestForgery::Sanitizer 
   ValidatedOutboundUrlSanitizer() {
     exists(DataFlow::CallCfgNode call, string name |
       name in [
-          "_safe_ollama_base_url", "_safe_local_base_url", "_safe_profile_models_url"
+          "_safe_ollama_base_url", "_safe_local_base_url", "_safe_profile_models_url",
+          "_safe_mcp_url", "_safe_probe_models_url"
         ] and
       (
         call.getFunction().asExpr().(Name).getId() = name or

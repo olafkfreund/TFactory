@@ -24,7 +24,11 @@ if str(_WEB_SERVER) not in sys.path:
     sys.path.insert(0, str(_WEB_SERVER))
 
 from fastapi import HTTPException  # noqa: E402
-from server.routes.git import _safe_ollama_base_url  # noqa: E402
+from server.routes.git import (
+    _safe_mcp_url,  # noqa: E402
+    _safe_ollama_base_url,  # noqa: E402
+)
+from server.routes.llm_endpoints import _safe_probe_models_url  # noqa: E402
 from server.routes.settings_api_profiles import _safe_profile_models_url  # noqa: E402
 from server.routes.settings_llm_providers import _safe_local_base_url  # noqa: E402
 from server.services.url_safety import (  # noqa: E402
@@ -122,3 +126,47 @@ def test_api_profile_helper_uses_the_strict_posture() -> None:
         _safe_profile_models_url("http://127.0.0.1:8080")
     with pytest.raises(ValueError, match="link-local/metadata"):
         _safe_profile_models_url("http://169.254.169.254")
+
+
+def test_mcp_helper_keeps_the_local_and_lan_case_working() -> None:
+    """MCP servers overwhelmingly run on localhost; the permissive posture is
+    the whole reason this helper is not simply the strict guard (#1047)."""
+    assert _safe_mcp_url("http://localhost:3000/mcp") == "http://localhost:3000/mcp"
+    assert _safe_mcp_url("http://127.0.0.1:8931/sse") == "http://127.0.0.1:8931/sse"
+
+
+def test_mcp_helper_refuses_metadata_and_bad_schemes() -> None:
+    with pytest.raises(ValueError, match="link-local/metadata"):
+        _safe_mcp_url("http://169.254.169.254/latest/meta-data/")
+    with pytest.raises(ValueError, match="Unsupported or invalid"):
+        _safe_mcp_url("file:///etc/passwd")
+
+
+def test_probe_helper_keeps_a_byo_local_endpoint_working() -> None:
+    """LM Studio on localhost is the ordinary case for a BYO LLM endpoint."""
+    assert (
+        _safe_probe_models_url("http://localhost:1234")
+        == "http://localhost:1234/v1/models"
+    )
+    # A path prefix survives -- an OpenAI-compatible gateway legitimately has
+    # one, and collapsing to scheme://netloc would break every such endpoint.
+    assert (
+        _safe_probe_models_url("http://10.0.0.5:8000/openai/")
+        == "http://10.0.0.5:8000/openai/v1/models"
+    )
+
+
+def test_probe_helper_refuses_metadata_and_bad_schemes() -> None:
+    with pytest.raises(ValueError, match="link-local/metadata"):
+        _safe_probe_models_url("http://169.254.169.254/latest/meta-data/")
+    with pytest.raises(ValueError, match="Invalid base URL"):
+        _safe_probe_models_url("file:///etc/passwd")
+
+
+def test_probe_helper_drops_a_fragment_that_would_truncate_the_appended_path() -> None:
+    """Without this, "http://host#" makes the fetched URL "http://host#/v1/models"
+    -- the server sees "/" and the appended path is thrown away client-side."""
+    assert (
+        _safe_probe_models_url("http://127.0.0.1:1234/base#x")
+        == "http://127.0.0.1:1234/base/v1/models"
+    )
