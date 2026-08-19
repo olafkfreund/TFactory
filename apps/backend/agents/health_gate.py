@@ -24,6 +24,8 @@ import os
 import subprocess
 from dataclasses import dataclass
 
+from tools.runners.net_guard import UnsafeTargetURLError, assert_safe_target_url
+
 
 @dataclass(frozen=True)
 class HealthResult:
@@ -53,6 +55,24 @@ def probe(
     ``opener(url, timeout) -> status_code`` is injectable for tests; the default
     uses stdlib urllib. Any transport error → ``ok=False`` with the reason.
     """
+    # SSRF guard (#1117, same defence as AppRuntime._poll_one for #359): the
+    # probed URL comes from the tested repo's own ``.tfactory.yml`` target
+    # block, which TFactory does not author and must not trust. Checked BEFORE
+    # any fetch and fail-closed, so a DNS failure here is a block too.
+    #
+    # ``allow_loopback=True``: a target served on the host (the api lane's
+    # self-serve path, a docker_run container publishing to localhost) is a
+    # legitimate health-probe target, exactly as it is for AppRuntime.
+    # ``allow_private`` stays False, matching the AppRuntime default -- nothing
+    # in production opts in. Cloud metadata / link-local is refused in every
+    # posture; that is the address this guard exists for.
+    try:
+        assert_safe_target_url(url, allow_loopback=True)
+    except (UnsafeTargetURLError, OSError) as exc:
+        return HealthResult(
+            ok=False, url=url, detail=f"blocked_unsafe_target: {type(exc).__name__}"
+        )
+
     if opener is None:
 
         def opener(u: str, t: int) -> int:  # noqa: ANN001
