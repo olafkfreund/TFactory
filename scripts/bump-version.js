@@ -153,7 +153,14 @@ function updatePackageJson(newVersion) {
     fs.writeFileSync(rootPath, JSON.stringify(rootJson, null, 2) + '\n');
   }
 
-  return { oldVersion, packagePath: frontendPath };
+  // Report what was actually written. Step 7 stages these by name, and a
+  // pathspec that matches nothing makes `git add` exit non-zero (#1045).
+  const updated = ['apps/frontend-web/package.json'];
+  if (rootJson) {
+    updated.push('package.json');
+  }
+
+  return { oldVersion, packagePath: frontendPath, updated };
 }
 
 // Update apps/backend/__init__.py version
@@ -233,11 +240,12 @@ function main() {
 
   // 5. Update all version files
   info('Updating package.json files...');
-  updatePackageJson(newVersion);
+  const { updated: staged } = updatePackageJson(newVersion);
   success('Updated package.json files');
 
   info('Updating apps/backend/__init__.py...');
   if (updateBackendInit(newVersion)) {
+    staged.push('apps/backend/__init__.py');
     success('Updated apps/backend/__init__.py');
   }
 
@@ -275,7 +283,10 @@ function main() {
 
   // 7. Create git commit
   info('Creating git commit...');
-  execFile('git', ['add', 'apps/frontend-web/package.json', 'package.json', 'apps/backend/__init__.py']);
+  // Stage only what was written. Naming a file the updaters deliberately
+  // skipped makes git fail on an unmatched pathspec, which aborted the bump
+  // AFTER the frontend package.json had already been rewritten (#1045).
+  execFile('git', ['add', ...staged]);
   execFile('git', ['commit', '-m', `chore: bump version to ${newVersion}`]);
   success(`Created commit: "chore: bump version to ${newVersion}"`);
 
