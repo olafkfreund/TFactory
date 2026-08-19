@@ -94,3 +94,36 @@ def test_max_attempts_one_means_no_retry():
     out = RetryingRunner(inner, max_attempts=1).run(_entry())
     assert out.status is TestStatus.FAILED
     assert inner.calls == 1
+
+
+def test_the_propagated_exception_is_the_last_real_one():
+    """Guards the py/illegal-raise fix (CodeQL 1599).
+
+    `raise last_exc` carried a `# type: ignore[misc]` because `last_exc` is
+    `Exception | None` and CodeQL saw `raise None` -> TypeError. It is in fact
+    unreachable with None (`attempts >= 1`, and the only way out of the loop
+    without returning is the except branch), so the fix states that in code
+    instead of silencing it -- and the risk of that fix is substituting a
+    placeholder for the real exception. Pin the identity.
+
+    `test_all_attempts_raise_propagates` cannot catch that: its
+    `pytest.raises(RuntimeError)` also matches the fallback.
+    """
+    last = RuntimeError("second")
+    inner = _ScriptedRunner([RuntimeError("first"), last])
+    with pytest.raises(RuntimeError) as excinfo:
+        RetryingRunner(inner, max_attempts=2).run(_entry())
+
+    assert excinfo.value is last
+    assert str(excinfo.value) == "second"
+
+
+def test_non_positive_max_attempts_still_runs_once():
+    """`attempts = max(1, self.max_attempts)` is what makes the None branch
+    unreachable. If that floor is ever removed, the loop body is skipped and
+    the fix's explicit error fires instead of `TypeError: exceptions must
+    derive from BaseException`."""
+    inner = _ScriptedRunner([TestStatus.PASSED])
+    out = RetryingRunner(inner, max_attempts=0).run(_entry())
+    assert out.status is TestStatus.PASSED
+    assert inner.calls == 1
