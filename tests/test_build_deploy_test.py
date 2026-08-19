@@ -2,6 +2,12 @@
 
 Covers the schema (BuildStep + DockerRunTarget), the build runner, and the
 DockerRunRuntime lifecycle. All subprocess/network behind seams — no Docker.
+
+The two health-poll cases use the literal ``8.8.8.8`` rather than the name
+``x``: since #1117 ``_poll_one`` SSRF-checks the URL before fetching it, and
+that check resolves the host, so a name would add a real DNS lookup to an
+otherwise hermetic test. It has to be a GLOBAL address — the check's default
+posture refuses private ones, and ``ipaddress`` counts TEST-NET-3 as private.
 """
 
 from __future__ import annotations
@@ -209,7 +215,7 @@ def test_runtime_wait_for_healthy_success(monkeypatch):
             return False
 
     monkeypatch.setattr(mod.urlrequest, "urlopen", lambda *a, **k: _Resp())
-    wf = [SimpleNamespace(url="http://x/health", expect_status=200, timeout_seconds=5)]
+    wf = [SimpleNamespace(url="http://8.8.8.8/health", expect_status=200, timeout_seconds=5)]
     rt = DockerRunRuntime(_target(wait_for=wf), runner_fn=_DockerRunner(), clock=lambda: 0.0)
     rt.start()
     rt.wait_for_healthy()  # urlopen returns 200 → healthy
@@ -224,7 +230,7 @@ def test_runtime_wait_for_healthy_timeout(monkeypatch):
     monkeypatch.setattr(mod.urlrequest, "urlopen", _boom)
     monkeypatch.setattr(mod.time, "sleep", lambda *_: None)
     clk = iter([0.0, 1.0, 2.0, 99.0])
-    wf = [SimpleNamespace(url="http://x/health", expect_status=200, timeout_seconds=5)]
+    wf = [SimpleNamespace(url="http://8.8.8.8/health", expect_status=200, timeout_seconds=5)]
     rt = DockerRunRuntime(_target(wait_for=wf), runner_fn=_DockerRunner(), clock=lambda: next(clk))
     rt.start()
     with pytest.raises(DockerRunRuntimeError, match="not healthy"):
