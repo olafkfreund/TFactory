@@ -9,11 +9,11 @@ import re
 import subprocess
 from pathlib import Path as FilePath
 
+from factory_common.url_safety import assert_safe_outbound_url
 from fastapi import APIRouter, Path, Query
 from pydantic import BaseModel, Field, SecretStr
 
 from server.error_ref import InputRejectedError
-from server.services.url_safety import assert_safe_outbound_url
 
 logger = logging.getLogger(__name__)
 
