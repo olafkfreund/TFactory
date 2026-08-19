@@ -39,8 +39,6 @@ if str(_WEB_SERVER) not in sys.path:
 
 from server.routes import (  # noqa: E402
     context as context_routes,
-)
-from server.routes import (
     projects as projects_store,
 )
 
@@ -128,3 +126,36 @@ def test_ordinary_values_still_write(client: TestClient, project: Path) -> None:
     assert r.json()["success"] is True
     assert _env(project)["OLLAMA_EMBEDDING_MODEL"] == "nomic-embed-text"
     assert _env(project)["EXISTING_KEY"] == "keep-me"
+
+
+# The two token checks below were merged into a single exit while fixing #1124
+# (PLR0911). Nothing covered either message before, so the refactor would have
+# been silent either way -- these pin the behaviour, not the shape.
+
+
+def _patch_token(client: TestClient, **body: Any) -> Any:
+    """Credential fields sit at the top level of the body, not under a provider."""
+    return client.patch("/api/projects/p1/env", json=body)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("   ", "cannot be empty"),
+        ("short", "must be at least 10 characters"),
+    ],
+    ids=["whitespace-only", "too-short"],
+)
+def test_a_rejected_token_keeps_its_own_message(
+    client: TestClient, project: Path, value: str, expected: str
+) -> None:
+    r = _patch_token(client, githubToken=value)
+    assert r.json()["success"] is False
+    assert r.json()["error"] == f"githubToken {expected}"
+    assert "GITHUB_TOKEN" not in _env(project)
+
+
+def test_an_acceptable_token_is_written(client: TestClient, project: Path) -> None:
+    r = _patch_token(client, githubToken="ghp_long_enough_token")
+    assert r.json()["success"] is True
+    assert _env(project)["GITHUB_TOKEN"] == "ghp_long_enough_token"

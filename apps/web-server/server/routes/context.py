@@ -23,6 +23,9 @@ logger = logging.getLogger(__name__)
 # line terminators for that parser and are deliberately not listed.
 _FORBIDDEN_IN_ENV_RE = re.compile(r"[\r\n]")
 
+# Minimum length for a credential written into .tfactory/.env.
+_MIN_TOKEN_LENGTH = 10
+
 # Env keys written by PATCH /env whose value the BACKEND later fetches (#1112).
 #
 # These are not settings, they are outbound-request destinations that arrive in
@@ -598,17 +601,20 @@ async def update_project_env(
                 if value:
                     # Strip whitespace and validate token is not empty
                     value = value.strip()
+                    # One exit for both token checks. Two returns here plus the
+                    # line-separator guard below put this handler over PLR0911's
+                    # limit; merging them keeps both messages verbatim and reads
+                    # better than an early-return chain (#1124).
+                    token_error = None
                     if not value:
-                        return {
-                            "success": False,
-                            "error": f"{config_key} cannot be empty",
-                        }
-                    # Validate minimum token length for security
-                    if len(value) < 10:
-                        return {
-                            "success": False,
-                            "error": f"{config_key} must be at least 10 characters",
-                        }
+                        token_error = f"{config_key} cannot be empty"
+                    elif len(value) < _MIN_TOKEN_LENGTH:
+                        token_error = (
+                            f"{config_key} must be at least "
+                            f"{_MIN_TOKEN_LENGTH} characters"
+                        )
+                    if token_error:
+                        return {"success": False, "error": token_error}
                     existing[env_key] = value
 
                     # Mirror for backwards compatibility
