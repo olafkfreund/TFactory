@@ -31,8 +31,8 @@ from __future__ import annotations
 import logging
 
 import pytest
+from factory_common.url_safety import assert_safe_outbound_url
 from server.error_ref import InputRejectedError, client_error
-from server.services.url_safety import assert_safe_outbound_url
 
 PRIVATE = "http://10.0.0.5:11434"
 

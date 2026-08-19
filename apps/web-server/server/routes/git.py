@@ -12,14 +12,14 @@ from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
 from factory_common.logsafe import sanitize_log
+from factory_common.url_safety import (
+    assert_safe_outbound_url,
+    build_no_redirect_opener,
+)
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from server.error_ref import InputRejectedError, client_error
-from server.services.url_safety import (
-    assert_safe_outbound_url,
-    build_no_redirect_opener,
-)
 
 from ._specpath import safe_join
 
@@ -209,7 +209,7 @@ def _safe_ollama_base_url(base_url: str | None) -> str:
 
     Ollama may legitimately run on the LAN (e.g. host.k3d.internal), so private
     ranges aren't blocked (``allow_private=True``), but the shared guard in
-    ``services.url_safety`` enforces an http(s) scheme and resolves the host to
+    ``factory_common.url_safety`` enforces an http(s) scheme and resolves the host to
     refuse the cloud metadata ranges by ADDRESS. The check this replaces
     compared the hostname against two literal strings, which any of
     ``169.254.169.254.nip.io``, an alternate spelling of the same address, or a

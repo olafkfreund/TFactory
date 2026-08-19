@@ -13,7 +13,7 @@ not growing a second dialect of this check).
 
 from __future__ import annotations
 
-from server.services.url_safety import assert_safe_outbound_url
+from factory_common.url_safety import assert_safe_outbound_url
 
 
 def safe_git_base_url(base_url: str | None) -> str | None:
