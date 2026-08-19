@@ -16,11 +16,11 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from factory_common.logsafe import sanitize_log
+from factory_common.url_safety import assert_safe_outbound_url
 from fastapi import APIRouter, Body, HTTPException, Query
 from pydantic import BaseModel, Field, SecretStr
 
 from server.error_ref import client_error
-from server.services.url_safety import assert_safe_outbound_url
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

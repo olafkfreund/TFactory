@@ -15,13 +15,12 @@ import json
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter
-from pydantic import BaseModel, Field, SecretStr
-
-from server.services.url_safety import (
+from factory_common.url_safety import (
     assert_safe_outbound_url,
     build_no_redirect_opener,
 )
+from fastapi import APIRouter
+from pydantic import BaseModel, Field, SecretStr
 
 from ..config import get_settings
 from ..paths import write_secret_file

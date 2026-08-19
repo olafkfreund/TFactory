@@ -16,7 +16,7 @@
 # the change working, not a regression.
 #
 # py/partial-ssrf gets the same swap, for the same reason (#1048). The outbound
-# URL guard in services/url_safety.py establishes safety by RAISING, and stock
+# URL guard in factory_common/url_safety.py establishes safety by RAISING, and stock
 # CodeQL does not model a raise as a barrier -- PFactory measured returning the
 # checked value instead and it did not help, because the function returns its
 # argument and the taint flows straight through. py/partial-ssrf-sanitized is

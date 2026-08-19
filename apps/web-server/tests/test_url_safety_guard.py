@@ -23,6 +23,10 @@ _WEB_SERVER = Path(__file__).resolve().parents[1]
 if str(_WEB_SERVER) not in sys.path:
     sys.path.insert(0, str(_WEB_SERVER))
 
+from factory_common.url_safety import (  # noqa: E402
+    _NoRedirect,
+    assert_safe_outbound_url,
+)
 from fastapi import HTTPException  # noqa: E402
 from server.routes.git import (  # noqa: E402
     _safe_mcp_url,
@@ -31,10 +35,6 @@ from server.routes.git import (  # noqa: E402
 from server.routes.llm_endpoints import _safe_probe_models_url  # noqa: E402
 from server.routes.settings_api_profiles import _safe_profile_models_url  # noqa: E402
 from server.routes.settings_llm_providers import _safe_local_base_url  # noqa: E402
-from server.services.url_safety import (  # noqa: E402
-    _NoRedirect,
-    assert_safe_outbound_url,
-)
 
 # 169.254.169.254 is the cloud metadata address. Both postures must refuse it;
 # that is the whole reason the permissive posture is not simply "no check".

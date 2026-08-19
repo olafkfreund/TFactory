@@ -17,7 +17,9 @@ import semmle.python.security.dataflow.ServerSideRequestForgeryQuery
 import PartialServerSideRequestForgeryFlow::PathGraph
 
 /**
- * The outbound-URL guard in `services/url_safety.py` resolves the host and
+ * The outbound-URL guard in `factory_common/url_safety.py` (the hub canonical,
+ * vendored; this server ran a forked copy at `services/url_safety.py` until
+ * #1111) resolves the host and
  * refuses non-http(s) schemes and the cloud metadata ranges (and, in the strict
  * posture, every non-public address). The route helpers below call it and
  * return a NORMALISED `scheme://netloc` -- path, query and fragment discarded --
@@ -31,11 +33,16 @@ import PartialServerSideRequestForgeryFlow::PathGraph
  * config swaps the stock query for this one -- the query is REPLACED, not
  * removed, so an unguarded call site still reports.
  *
- * Deliberately NOT barriered: `assert_safe_outbound_url` itself. It validates
- * and returns None, so barriering its call would clear nothing and imply
- * something it does not do. Only the helpers that return a validated value are
- * barriers, and each one is covered by a posture test in
- * apps/web-server/tests/test_url_safety_guard.py.
+ * Deliberately NOT barriered: `assert_safe_outbound_url` itself. Since #1111
+ * this server runs the hub canonical, which DOES return the checked URL, so
+ * barriering it would no longer be meaningless -- but every call site here
+ * still calls it as a statement and fetches the helper's normalised value, so
+ * a barrier on the guard would clear flows this repo has not shown to be
+ * sanitised. Only the helpers that return a validated value are barriers, and
+ * each one is covered by a posture test in
+ * apps/web-server/tests/test_url_safety_guard.py. Registering the guard itself
+ * is a separate change, with its own alert-delta evidence, not a free ride on
+ * this one.
  */
 class ValidatedOutboundUrlSanitizer extends ServerSideRequestForgery::Sanitizer {
   // The class is `ServerSideRequestForgery::Sanitizer` from
