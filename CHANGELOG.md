@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- **Starting a task with auto-continue off no longer crashes it, after the agent
+  has already spawned (#1104).** The human-review gate -- `spec_dir`,
+  `require_review`, and the `--force` decision -- sat one indent level too deep,
+  inside `if auto_continue:`. Nothing about reading `task_metadata.json` depends
+  on auto-continue; the block had drifted under the two-line `if` above it.
+  `auto_continue` is a client-supplied API field, so `POST` with
+  `"auto_continue": false` reached the `spec_dir` read at
+  `agent_service.py:3144`, outside the block, and raised `UnboundLocalError` --
+  *after* `create_subprocess_exec` had returned. The caller was told the task
+  failed while an orphaned agent process kept running against it. Two quieter
+  casualties shared the block: `--force` was never decided on that path, and
+  `_write_skill_context` never ran, so a task's selected skills were silently
+  dropped. The same defect was present in PFactory and AIFactory and is fixed in
+  all three; CodeQL flagged it here and in PFactory but not in AIFactory, so the
+  alert list was not evidence of absence.
+- **A retry that exhausted every attempt raises the real exception (#1104).**
+  `RetryingRunner.run` ended in `raise last_exc` under a `# type: ignore[misc]`.
+  It is genuinely unreachable with `None`, but stating that in code rather than
+  silencing the analyzer means a future change to the `max(1, ...)` floor
+  produces a named error instead of
+  `TypeError: exceptions must derive from BaseException` from this frame,
+  burying the real fault.
 - **A generated test whose prose claims it corrected the spec is rejected
   (#995).** A coding agent that finds the behaviour disagrees with an acceptance
   criterion sometimes resolves the conflict by adjusting the test and noting that
