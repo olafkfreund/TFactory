@@ -26,6 +26,7 @@ jobs:
       github.event.label.name == 'tfactory:run' &&
       contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.issue.author_association)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Trigger TFactory test task
         # Untrusted fields (issue title/number) are passed via env, never

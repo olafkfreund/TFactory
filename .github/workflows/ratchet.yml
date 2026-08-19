@@ -70,6 +70,7 @@ jobs:
   ratchet:
     name: ratchet (ruff + mypy no-regression on changed py)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -110,6 +111,7 @@ jobs:
   format-check:
     name: ruff format --check (apps/backend + scripts)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # Formatting is auto-applied, never reviewed (standards section 3.6).
     # Pinned to the SAME ruff version the tree was formatted with so the check
     # is deterministic; a version skew here was the original red.
@@ -126,6 +128,7 @@ jobs:
   config-drift:
     name: shared-baseline drift gate
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
