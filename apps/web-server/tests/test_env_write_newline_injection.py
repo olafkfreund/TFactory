@@ -27,6 +27,7 @@ import sys
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import pytest
 from fastapi import FastAPI
@@ -36,7 +37,7 @@ _WEB_SERVER = Path(__file__).resolve().parents[1]
 if str(_WEB_SERVER) not in sys.path:
     sys.path.insert(0, str(_WEB_SERVER))
 
-from server.routes import (  # noqa: E402 - after the sys.path insert above
+from server.routes import (  # noqa: E402
     context as context_routes,
 )
 from server.routes import (
@@ -82,8 +83,8 @@ def _env(project: Path) -> dict[str, str]:
     if not path.exists():
         return {}
     out: dict[str, str] = {}
-    for line in path.read_text().splitlines():
-        line = line.strip()
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
         if line and not line.startswith("#") and "=" in line:
             key, value = line.split("=", 1)
             out[key.strip()] = value.strip()
@@ -111,8 +112,6 @@ def test_a_url_key_is_refused_too_despite_passing_the_ssrf_check(
     client: TestClient, project: Path
 ) -> None:
     """urlparse strips newlines, so the #1112 guard admits this payload."""
-    from urllib.parse import urlparse
-
     payload = f"http://8.8.8.8:11434/\n{FORGED}"
     assert urlparse(payload).hostname == "8.8.8.8", (
         "if urlparse stops stripping newlines this test no longer covers the gap"
