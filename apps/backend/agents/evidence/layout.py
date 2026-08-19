@@ -36,6 +36,7 @@ Usage::
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 from agents.evidence.visual_baseline import _safe_component
@@ -325,8 +326,9 @@ def render_auth_setup_steps(
             )
         elif action == "fill_totp" and sel and totp_env:
             # Class B MFA: generate a fresh RFC-6238 code from the injected seed
-            # env var, at fill time (never expires in flight). __tfTotp is the
-            # helper embedded in auth.setup.steps.tmpl.ts. Variant opts (digits/
+            # env var, at fill time (never expires in flight). __tfTotp is
+            # imported from tftotp.helper.ts (#1063), which scaffold_auth_setup()
+            # copies alongside the rendered auth.setup.ts. Variant opts (digits/
             # alg/period) are non-secret config baked in from the credential.
             o = totp_opts or {}
             _digits = int(o.get("digits", 6))
@@ -401,6 +403,7 @@ def scaffold_auth_setup(spec_dir: Path | str) -> bool:
         return False
 
     steps = auth.get("steps")
+    needs_totp_helper = bool(steps)
     if steps:
         # Multi-step / SSO login — the declared steps own the navigation.
         setup_ts = render_auth_setup_steps(
@@ -441,6 +444,14 @@ def scaffold_auth_setup(spec_dir: Path | str) -> bool:
     # `secret_env` variable name. (CWE-312: env-var reference, not a secret.)
     (tests_dir / "auth.setup.ts").write_text(setup_ts, encoding="utf-8")
     (spec_dir / "playwright.config.ts").write_text(config_ts, encoding="utf-8")
+    if needs_totp_helper:
+        # auth.setup.steps.tmpl.ts imports __tfTotp from "./tftotp.helper" (#1063)
+        # — copy the helper into the SAME directory as auth.setup.ts so that
+        # relative import resolves wherever Playwright executes the generated
+        # file (a different cwd, a container, its own tsconfig — none of that
+        # matters for a same-directory relative import).
+        helper_src = Path(__file__).with_name("tftotp.helper.ts")
+        shutil.copyfile(helper_src, tests_dir / "tftotp.helper.ts")
     return True
 
 
