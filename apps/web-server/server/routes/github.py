@@ -15,6 +15,8 @@ from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+from server.services.git_base_url import safe_git_base_url
+
 from ._specpath import safe_component
 
 router = APIRouter()
@@ -613,7 +615,7 @@ def _get_project_provider(projectId: str):
 
     # Map settings fields
     token = settings.get("gitToken")
-    base_url = settings.get("gitBaseUrl")
+    base_url = safe_git_base_url(settings.get("gitBaseUrl"))
     org = settings.get("gitOrg")
     proj_name = settings.get("gitProject")
     repo_name = settings.get("gitRepo")

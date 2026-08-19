@@ -34,6 +34,8 @@ from typing import Any
 
 from factory_common.logsafe import sanitize_log
 
+from server.services.git_base_url import safe_git_base_url
+
 logger = logging.getLogger(__name__)
 
 
@@ -207,7 +209,9 @@ def _provider_for(project_id: str):
     from runners.github.providers.protocol import ProviderType
 
     token = settings.get("gitToken")
-    base_url = settings.get("gitBaseUrl")
+    # Same guard as routes/github.py -- imported rather than re-implemented so
+    # the two readers of gitBaseUrl cannot drift apart (#1110).
+    base_url = safe_git_base_url(settings.get("gitBaseUrl"))
     org = settings.get("gitOrg")
     proj_name = settings.get("gitProject")
     repo_name = settings.get("gitRepo")
