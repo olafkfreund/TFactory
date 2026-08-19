@@ -31,6 +31,7 @@ bytes that will run in the cluster.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import shlex
@@ -155,6 +156,46 @@ def _claim_for_mount_path(pod: Any, mount_path: str) -> str | None:
     return None
 
 
+def _import_kubernetes_asyncio() -> Any:
+    """Lazily import the (untyped, stub-less) ``kubernetes_asyncio`` package.
+
+    Mirrors ``agents.verify_dispatch._import_kubernetes_asyncio``: the control
+    plane image ships ``kubernetes_asyncio`` (async, matching the rest of the
+    control plane), not the sync ``kubernetes`` client (#1001) -- the harness
+    image needs neither, so the import stays lazy and this module stays
+    importable without either package installed.
+    """
+    import importlib  # noqa: PLC0415 - lazy by design
+
+    return importlib.import_module("kubernetes_asyncio")
+
+
+async def _k8s_client_and_config() -> tuple[Any, Any]:
+    """Load kube config (in-cluster, kubeconfig fallback) and return ``(k8s, api)``."""
+    k8s = _import_kubernetes_asyncio()
+    try:
+        k8s.config.load_incluster_config()
+    except Exception:  # noqa: BLE001 - dev/test fallback
+        await k8s.config.load_kube_config()
+    return k8s, k8s.client.ApiClient()
+
+
+async def _read_control_plane_pod_claim(mount_path: str) -> str | None:
+    """Ask the running control-plane pod which PVC it mounts at ``mount_path``."""
+    k8s, api = await _k8s_client_and_config()
+    try:
+        pod_name = os.environ["HOSTNAME"]
+        namespace = (
+            Path("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+            .read_text()
+            .strip()
+        )
+        pod = await k8s.client.CoreV1Api(api).read_namespaced_pod(pod_name, namespace)
+        return _claim_for_mount_path(pod, mount_path)
+    finally:
+        await api.close()
+
+
 def resolve_data_pvc() -> str:
     """The data claim the portal-ui Job should co-mount.
 
@@ -165,28 +206,22 @@ def resolve_data_pvc() -> str:
     actually holding, in any environment, without this module having to know the
     claim's name. Best-effort -- outside a pod, or without ``pods get`` on the
     service account, it falls back to the constant.
+
+    Stays a plain sync function (``asyncio.run`` bridges to the async
+    ``kubernetes_asyncio`` client) so callers -- ``build_portal_ui_job_manifest``
+    and the FastAPI route, both sync -- need no changes. Same bridge pattern as
+    ``agents.verify_dispatch``'s blocking dispatch path.
     """
     override = os.environ.get("TFACTORY_DATA_PVC")
     if override:
         return override
     try:
-        from kubernetes import client, config  # type: ignore
-
-        config.load_incluster_config()
-        pod_name = os.environ["HOSTNAME"]
-        namespace = (
-            Path("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
-            .read_text()
-            .strip()
-        )
-        pod = client.CoreV1Api().read_namespaced_pod(pod_name, namespace)
-        claim = _claim_for_mount_path(pod, _DATA_MOUNT_PATH)
+        claim = asyncio.run(_read_control_plane_pod_claim(_DATA_MOUNT_PATH))
         if claim:
             return claim
         _log.warning(
-            "portal-ui dispatch: control-plane pod %s mounts no PVC at %s; "
+            "portal-ui dispatch: control-plane pod mounts no PVC at %s; "
             "falling back to %s",
-            pod_name,
             _DATA_MOUNT_PATH,
             DEFAULT_DATA_PVC,
         )
@@ -357,28 +392,36 @@ def build_portal_ui_job_manifest(
     }
 
 
+async def _create_job(manifest: dict[str, Any]) -> None:
+    k8s, api = await _k8s_client_and_config()
+    try:
+        batch = k8s.client.BatchV1Api(api)
+        await batch.create_namespaced_job(manifest["metadata"]["namespace"], manifest)
+    finally:
+        await api.close()
+
+
 def dispatch_portal_ui(portal_key: str, run_id: str, **kwargs: Any) -> str:
     """Submit the portal-ui Job to the cluster. Returns the Job name.
 
-    Best-effort: requires the kubernetes client + in-cluster config. Raises a
-    clear error if unavailable (e.g. running outside a pod) so callers can fall
-    back to a local ``python -m portal_testing.run`` invocation.
+    Best-effort: requires ``kubernetes_asyncio`` (the client the control-plane
+    image ships, #1001 -- the sync ``kubernetes`` client is not in the image) +
+    in-cluster config. Raises a clear error if unavailable (e.g. running outside
+    a pod) so callers can fall back to a local ``python -m portal_testing.run``
+    invocation.
+
+    Stays a plain sync function -- ``asyncio.run`` bridges to the async client,
+    same pattern as ``resolve_data_pvc`` and ``agents.verify_dispatch``'s
+    blocking dispatch path -- so the FastAPI route above it needs no changes.
     """
     manifest = build_portal_ui_job_manifest(portal_key, run_id, **kwargs)
     try:
-        from kubernetes import client, config  # type: ignore
+        _import_kubernetes_asyncio()
     except ImportError as e:  # pragma: no cover - environment dependent
         raise RuntimeError(
             "kubernetes client not available; run the harness locally"
         ) from e
-    try:
-        config.load_incluster_config()
-    except Exception:  # noqa: BLE001 - fall back to kubeconfig
-        config.load_kube_config()
-    batch = client.BatchV1Api()
-    batch.create_namespaced_job(
-        namespace=manifest["metadata"]["namespace"], body=manifest
-    )
+    asyncio.run(_create_job(manifest))
     return manifest["metadata"]["name"]
 
 
