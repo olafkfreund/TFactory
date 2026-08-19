@@ -31,10 +31,20 @@ def safe_git_base_url(base_url: str | None) -> str | None:
 
     The check sits here, where the untrusted value is read, and not inside
     ``runners/github/providers/factory.py``: that file is the vendored
-    factory-github canonical shared byte-for-byte with PFactory, AIFactory and
-    CFactory, none of which feed it a stored URL. Guarding at TFactory's own
-    trust boundary keeps the canonical undrifted and puts the check next to the
-    input it distrusts.
+    factory-github canonical, byte-identical (``2dfd1ced``) across TFactory,
+    PFactory, AIFactory and CFactory and gated by a blocking drift check.
+    Guarding at TFactory's own trust boundary keeps the canonical undrifted and
+    puts the check next to the input it distrusts.
+
+    An earlier version of this docstring added "none of which feed it a stored
+    URL". That was wrong: PFactory reads the same setting into the same
+    ``_base_url`` from ``routes/github.py``, and was unguarded until
+    PFactory#610 closed it with a copy of this module. The placement argument
+    does not depend on that claim -- the guard belongs at each repo's own trust
+    boundary whether or not the siblings share the exposure -- so the sentence
+    is removed rather than corrected in place. AIFactory and CFactory carry the
+    canonical but showed no backend reader of the setting; that was a grep, and
+    greps under-count, so treat it as unconfirmed.
 
     ``allow_private=True``: a self-hosted GitLab CE/EE or Azure DevOps Server on
     a LAN is a legitimate target, so refusing RFC-1918 would break real
