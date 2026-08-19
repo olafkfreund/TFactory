@@ -45,6 +45,7 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # A job-level block REPLACES the workflow-level one rather than merging with
     # it, so `contents: read` has to be restated here.
     permissions:
@@ -225,6 +226,7 @@ jobs:
   seam-check:
     needs: deploy
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # Inherits the workflow floor (`contents: read`) deliberately. It checks out
     # a public repo and makes outbound HTTP calls with a fleet token of its own;
     # it has no use for GHCR or for a signing identity (#957).

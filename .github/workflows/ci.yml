@@ -18,6 +18,7 @@ jobs:
   backend-lint-test:
     name: backend (ruff + pytest)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -89,6 +90,7 @@ jobs:
   critical-fast:
     name: critical (fast PR gate)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # Fast, hermetic, high-signal subset (pytest -m critical; the curated
     # module list lives in tests/conftest.py CRITICAL_MODULES). Mirrors the
     # full backend job's setup but runs only the critical lane so PRs get a
@@ -130,6 +132,7 @@ jobs:
   postgres-acceptance:
     name: postgres (P1 acceptance, PG ${{ matrix.pg }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -179,6 +182,7 @@ jobs:
   secrets-acceptance:
     name: secrets (P2 acceptance)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # P2 EncryptedString / KMS acceptance. Three services run as
     # sidecars so the integration tests gate every PR:
     #   - postgres   → P2.3 column migration + backfill tests
@@ -263,6 +267,7 @@ jobs:
   oidc-acceptance:
     name: oidc (P3 acceptance)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # P3 OIDC SSO tests. Boots a Keycloak dev-mode container with the
     # `tfactory` realm imported from tests/oidc/fixtures/keycloak-realm.json.
     # Tests that need the IdP read OIDC_ISSUER_URL/CLIENT_ID/SECRET from
@@ -322,6 +327,7 @@ jobs:
   helm-acceptance:
     name: helm (P4 acceptance)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # P4 Helm chart tests. The harness lands first (P4.0a) with all
     # seven acceptance tests skip-pending; chart templates + lint +
     # kubeconform + kind install arrive in P4.1+. Job is green from
@@ -372,6 +378,7 @@ jobs:
   audit-acceptance:
     name: audit (P5 acceptance)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # P5 audit-hardening tests run entirely in-process against
     # in-memory SQLite — hash chain, retention job, GDPR erasure,
     # and export streaming are all pure-Python. No service container
@@ -405,6 +412,7 @@ jobs:
   obs-acceptance:
     name: obs (P6 acceptance)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -434,6 +442,7 @@ jobs:
   rmux-acceptance:
     name: rmux (R0b acceptance)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # Epic #44 / issue #45. R0b ships apps/web-server/server/rmux/wrapper.py
     # — the async subprocess wrapper that every later rmux phase depends
     # on. Tests run against a real rmux daemon installed on the runner.
@@ -489,6 +498,7 @@ jobs:
   evidence-acceptance:
     name: evidence (P7 acceptance)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # P7 closes the v1.0 Epic. Tests verify the compliance docs + the
     # three ship-readiness drill scripts exist and have the structural
     # contract auditors expect. No service containers — purely
@@ -520,6 +530,7 @@ jobs:
   frontend-typecheck:
     name: frontend (typecheck)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -539,6 +550,7 @@ jobs:
   frontend-test:
     name: frontend (vitest)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # Blocking vitest gate (Factory hub #261): runs the apps/frontend-web
     # component/unit suite so the tests can no longer silently rot.
     steps:
@@ -560,6 +572,7 @@ jobs:
   script-tests:
     name: scripts (node --test)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # `npm run test:scripts` has existed for a while and no workflow ran it, so
     # scripts/argv-safety.test.mjs was passing into a void -- the same shape as
     # the untriggered lanes in Factory#693 and #805. Gating it here means the
@@ -581,6 +594,7 @@ jobs:
   frontend-lint:
     name: frontend (eslint, blocking)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # Blocking ESLint gate (Factory hub #261): ESLint 9 flat config
     # (typescript-eslint strictTypeChecked + react-hooks + jsx-a11y),
     # mirroring AIFactory. Tuned green at adoption via a warning baseline
@@ -608,6 +622,7 @@ jobs:
   docker-acceptance:
     name: docker (P0 acceptance)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # Docker is preinstalled on ubuntu-latest runners. Tests opt-in via
     # `-m docker`; all are skipped until P0.1+ implementations land,
     # so this job is green from day 1 and turns red the moment an
