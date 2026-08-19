@@ -37,14 +37,19 @@ def safe_git_base_url(base_url: str | None) -> str | None:
     puts the check next to the input it distrusts.
 
     An earlier version of this docstring added "none of which feed it a stored
-    URL". That was wrong: PFactory reads the same setting into the same
-    ``_base_url`` from ``routes/github.py``, and was unguarded until
-    PFactory#610 closed it with a copy of this module. The placement argument
-    does not depend on that claim -- the guard belongs at each repo's own trust
-    boundary whether or not the siblings share the exposure -- so the sentence
-    is removed rather than corrected in place. AIFactory and CFactory carry the
-    canonical but showed no backend reader of the setting; that was a grep, and
-    greps under-count, so treat it as unconfirmed.
+    URL". That was wrong, and it is now wrong in all three siblings rather than
+    one: PFactory reads the same setting into the same ``_base_url`` from
+    ``routes/github.py`` (PFactory#610, closed by #611), CFactory feeds
+    ``target.base_url`` in the same shape (CFactory#412), and AIFactory reaches
+    its git providers the same way (AIFactory#1360).
+
+    The placement argument never depended on that claim -- the guard belongs at
+    each repo's own trust boundary whether or not the siblings share the
+    exposure -- so the sentence is removed rather than corrected in place.
+
+    Worth keeping the history: the sibling scope was first recorded as "showed
+    no backend reader", from a grep. Greps under-count, it was flagged as
+    unconfirmed for exactly that reason, and all three turned out to have it.
 
     ``allow_private=True``: a self-hosted GitLab CE/EE or Azure DevOps Server on
     a LAN is a legitimate target, so refusing RFC-1918 would break real
