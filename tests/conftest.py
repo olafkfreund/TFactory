@@ -1467,6 +1467,7 @@ CRITICAL_MODULES = frozenset(
         "test_cloud_issues",  # findings → GitHub issues (#133/#152)
         "test_cloud_store",  # multi-assessment portal store + downloads (#133/#152)
         "test_sdk_shape_contract",  # SDK message fields the readers rely on (#882)
+        "test_git_provider_base_url_guard",  # PAT-leaking provider base URL (#1110)
     }
 )
 
