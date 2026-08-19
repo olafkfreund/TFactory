@@ -5,6 +5,7 @@ Handles project context, memory infrastructure, and Graphiti integration.
 """
 
 import logging
+import re
 import subprocess
 from pathlib import Path as FilePath
 
@@ -15,6 +16,12 @@ from server.error_ref import InputRejectedError
 from server.services.url_safety import assert_safe_outbound_url
 
 logger = logging.getLogger(__name__)
+
+# Characters that terminate a line in the .env file this route writes (#1124).
+# CR is included because the reader strips it, so a lone CR would still split
+# the record on some tooling while looking harmless here. U+2028/U+2029 are not
+# line terminators for that parser and are deliberately not listed.
+_FORBIDDEN_IN_ENV_RE = re.compile(r"[\r\n]")
 
 # Env keys written by PATCH /env whose value the BACKEND later fetches (#1112).
 #
@@ -45,6 +52,7 @@ router = APIRouter()
 # Request/Response Models
 # ============================================
 
+
 class TestConnectionRequest(BaseModel):
     __test__ = False  # not a pytest test class despite the Test* name
 
@@ -59,6 +67,7 @@ class ValidateApiKeyRequest(BaseModel):
 
 class ProjectEnvUpdate(BaseModel):
     """Model for updating project environment configuration."""
+
     githubToken: str | None = Field(default=None, repr=False)
     githubRepo: str | None = None
     gitProvider: str | None = None
@@ -135,19 +144,25 @@ async def get_project_context(projectId: str = Path(...)):
                         memory_count += 1
                         try:
                             data = json.loads(insight_file.read_text())
-                            memories.append({
-                                "id": f"{spec_dir.name}:{insight_file.stem}",
-                                "specId": spec_dir.name,
-                                "sessionNumber": data.get("session_number", 0),
-                                "timestamp": data.get("timestamp"),
-                                "type": "session_insight",
-                                "content": _extract_memory_summary(data),
-                                "subtasksCompleted": data.get("subtasks_completed", []),
-                                "discoveries": data.get("discoveries", {}),
-                                "whatWorked": data.get("what_worked", []),
-                                "whatFailed": data.get("what_failed", []),
-                                "recommendations": data.get("recommendations_for_next_session", [])
-                            })
+                            memories.append(
+                                {
+                                    "id": f"{spec_dir.name}:{insight_file.stem}",
+                                    "specId": spec_dir.name,
+                                    "sessionNumber": data.get("session_number", 0),
+                                    "timestamp": data.get("timestamp"),
+                                    "type": "session_insight",
+                                    "content": _extract_memory_summary(data),
+                                    "subtasksCompleted": data.get(
+                                        "subtasks_completed", []
+                                    ),
+                                    "discoveries": data.get("discoveries", {}),
+                                    "whatWorked": data.get("what_worked", []),
+                                    "whatFailed": data.get("what_failed", []),
+                                    "recommendations": data.get(
+                                        "recommendations_for_next_session", []
+                                    ),
+                                }
+                            )
                         except Exception:
                             continue
 
@@ -167,12 +182,12 @@ async def get_project_context(projectId: str = Path(...)):
                 "enabled": True,
                 "available": memory_count > 0 or graphiti_available,
                 "sessionInsightsCount": memory_count,
-                "graphitiAvailable": graphiti_available
+                "graphitiAvailable": graphiti_available,
             },
             "memoryState": None,
             "recentMemories": recent_memories,
-            "isLoading": False
-        }
+            "isLoading": False,
+        },
     }
 
 
@@ -194,7 +209,7 @@ async def refresh_project_index(projectId: str = Path(...)):
             cwd=project_path,
             capture_output=True,
             text=True,
-            timeout=30
+            timeout=30,
         )
 
         files = result.stdout.strip().split("\n") if result.returncode == 0 else []
@@ -204,7 +219,7 @@ async def refresh_project_index(projectId: str = Path(...)):
             "files": len(files),
             "languages": {},
             "frameworks": [],
-            "lastRefreshed": __import__("datetime").datetime.now().isoformat()
+            "lastRefreshed": __import__("datetime").datetime.now().isoformat(),
         }
 
         # Count files by extension
@@ -217,6 +232,7 @@ async def refresh_project_index(projectId: str = Path(...)):
         index_path = project_path / ".tfactory" / "project_index.json"
         index_path.parent.mkdir(parents=True, exist_ok=True)
         import json
+
         index_path.write_text(json.dumps(index, indent=2))
 
         return {"success": True, "data": index}
@@ -258,8 +274,8 @@ async def get_memory_status(projectId: str = Path(...)):
             "available": memory_count > 0 or graphiti_available,
             "sessionInsightsCount": memory_count,
             "graphitiAvailable": graphiti_available,
-            "reason": None if memory_count > 0 else "No session insights recorded yet"
-        }
+            "reason": None if memory_count > 0 else "No session insights recorded yet",
+        },
     }
 
 
@@ -291,21 +307,31 @@ async def search_memories(projectId: str = Path(...), q: str = Query(...)):
                             # Search in patterns, gotchas, what worked/failed
                             content_to_search = json.dumps(data).lower()
                             if query_lower in content_to_search:
-                                results.append({
-                                    "id": f"{spec_dir.name}:{insight_file.stem}",
-                                    "specId": spec_dir.name,
-                                    "sessionNumber": data.get("session_number", 0),
-                                    "timestamp": data.get("timestamp"),
-                                    "type": "session_insight",
-                                    "content": _extract_memory_summary(data),
-                                    "score": float(content_to_search.count(query_lower)),
-                                    "subtasksCompleted": data.get("subtasks_completed", []),
-                                    "discoveries": data.get("discoveries", {}),
-                                    "whatWorked": data.get("what_worked", []),
-                                    "whatFailed": data.get("what_failed", []),
-                                    "recommendations": data.get("recommendations_for_next_session", []),
-                                    "changedFiles": data.get("discoveries", {}).get("changed_files", [])
-                                })
+                                results.append(
+                                    {
+                                        "id": f"{spec_dir.name}:{insight_file.stem}",
+                                        "specId": spec_dir.name,
+                                        "sessionNumber": data.get("session_number", 0),
+                                        "timestamp": data.get("timestamp"),
+                                        "type": "session_insight",
+                                        "content": _extract_memory_summary(data),
+                                        "score": float(
+                                            content_to_search.count(query_lower)
+                                        ),
+                                        "subtasksCompleted": data.get(
+                                            "subtasks_completed", []
+                                        ),
+                                        "discoveries": data.get("discoveries", {}),
+                                        "whatWorked": data.get("what_worked", []),
+                                        "whatFailed": data.get("what_failed", []),
+                                        "recommendations": data.get(
+                                            "recommendations_for_next_session", []
+                                        ),
+                                        "changedFiles": data.get("discoveries", {}).get(
+                                            "changed_files", []
+                                        ),
+                                    }
+                                )
                         except Exception:
                             continue
 
@@ -338,19 +364,25 @@ async def get_recent_memories(projectId: str = Path(...), limit: int = Query(10)
                     for insight_file in insights_dir.glob("session_*.json"):
                         try:
                             data = json.loads(insight_file.read_text())
-                            memories.append({
-                                "id": f"{spec_dir.name}:{insight_file.stem}",
-                                "specId": spec_dir.name,
-                                "sessionNumber": data.get("session_number", 0),
-                                "timestamp": data.get("timestamp"),
-                                "type": "session_insight",
-                                "content": _extract_memory_summary(data),
-                                "subtasksCompleted": data.get("subtasks_completed", []),
-                                "discoveries": data.get("discoveries", {}),
-                                "whatWorked": data.get("what_worked", []),
-                                "whatFailed": data.get("what_failed", []),
-                                "recommendations": data.get("recommendations_for_next_session", [])
-                            })
+                            memories.append(
+                                {
+                                    "id": f"{spec_dir.name}:{insight_file.stem}",
+                                    "specId": spec_dir.name,
+                                    "sessionNumber": data.get("session_number", 0),
+                                    "timestamp": data.get("timestamp"),
+                                    "type": "session_insight",
+                                    "content": _extract_memory_summary(data),
+                                    "subtasksCompleted": data.get(
+                                        "subtasks_completed", []
+                                    ),
+                                    "discoveries": data.get("discoveries", {}),
+                                    "whatWorked": data.get("what_worked", []),
+                                    "whatFailed": data.get("what_failed", []),
+                                    "recommendations": data.get(
+                                        "recommendations_for_next_session", []
+                                    ),
+                                }
+                            )
                         except Exception:
                             continue
 
@@ -411,7 +443,7 @@ async def get_project_env(projectId: str = Path(...)):
         "gitRepo": "",
         "gitBaseUrl": "",
         "gitOrg": "",
-        "gitProject": ""
+        "gitProject": "",
     }
 
     # Initialize graphiti provider config
@@ -486,7 +518,9 @@ async def get_project_env(projectId: str = Path(...)):
                     elif key == "AZURE_OPENAI_ENDPOINT":
                         graphiti_provider_config["azureOpenaiBaseUrl"] = value
                     elif key == "AZURE_OPENAI_EMBEDDING_DEPLOYMENT":
-                        graphiti_provider_config["azureOpenaiEmbeddingDeployment"] = value
+                        graphiti_provider_config["azureOpenaiEmbeddingDeployment"] = (
+                            value
+                        )
                     elif key == "GRAPHITI_DATABASE":
                         graphiti_provider_config["database"] = value
                     elif key == "GRAPHITI_DB_PATH":
@@ -501,10 +535,7 @@ async def get_project_env(projectId: str = Path(...)):
     # Also check for Claude auth via keychain
     try:
         result = subprocess.run(
-            ["claude", "--version"],
-            capture_output=True,
-            text=True,
-            timeout=5
+            ["claude", "--version"], capture_output=True, text=True, timeout=5
         )
         if result.returncode == 0:
             config["claudeAuthStatus"] = "authenticated"
@@ -515,7 +546,9 @@ async def get_project_env(projectId: str = Path(...)):
 
 
 @project_router.patch("/env")
-async def update_project_env(projectId: str = Path(...), config: ProjectEnvUpdate = ...):
+async def update_project_env(
+    projectId: str = Path(...), config: ProjectEnvUpdate = ...
+):
     """
     Update project environment configuration.
 
@@ -568,13 +601,13 @@ async def update_project_env(projectId: str = Path(...), config: ProjectEnvUpdat
                     if not value:
                         return {
                             "success": False,
-                            "error": f"{config_key} cannot be empty"
+                            "error": f"{config_key} cannot be empty",
                         }
                     # Validate minimum token length for security
                     if len(value) < 10:
                         return {
                             "success": False,
-                            "error": f"{config_key} must be at least 10 characters"
+                            "error": f"{config_key} must be at least 10 characters",
                         }
                     existing[env_key] = value
 
@@ -670,7 +703,38 @@ async def update_project_env(projectId: str = Path(...), config: ProjectEnvUpdat
         # Ensure .tfactory directory exists
         env_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Write back to .env file
+        # Write back to .env file.
+        #
+        # #1124: guard the SERIALISATION, not each mapping loop above. Three
+        # loops feed `existing` and a fourth would inherit this for free; a
+        # per-loop check would not.
+        #
+        # REJECT rather than escape. The file is read back by a hand-rolled
+        # parser in agent_service (`line.split("=", 1)` per line) that has no
+        # quoting and no unescaping, so an escaped "\\n" would round-trip as a
+        # literal backslash-n and silently corrupt the value. A newline in any
+        # key or value forges additional assignments, and those land in the
+        # agent subprocess environment -- which is how a settings field becomes
+        # a way to set ANTHROPIC_BASE_URL.
+        #
+        # The URL guard above does not cover this even for URL keys: urlparse
+        # strips ASCII newlines per WHATWG before parsing, so the check passes
+        # and the raw string still reaches this line.
+        for _key, _value in existing.items():
+            if _FORBIDDEN_IN_ENV_RE.search(str(_key)) or _FORBIDDEN_IN_ENV_RE.search(
+                str(_value)
+            ):
+                logger.warning(
+                    "[context] refusing .env write: %r contains a line separator", _key
+                )
+                return {
+                    "success": False,
+                    "error": (
+                        f"{_key}: value contains a line separator, which would "
+                        "inject additional environment variables"
+                    ),
+                }
+
         content = "\n".join(f"{k}={v}" for k, v in existing.items())
         env_path.write_text(content)
 
@@ -681,30 +745,47 @@ async def update_project_env(projectId: str = Path(...), config: ProjectEnvUpdat
         # Also update settings in projects.json
         try:
             from .projects import save_projects
+
             if "settings" not in projects[projectId]:
                 projects[projectId]["settings"] = {}
 
             # Save settings fields to project dictionary
-            for field in ["gitProvider", "gitToken", "gitRepo", "gitBaseUrl", "gitOrg", "gitProject"]:
+            for field in [
+                "gitProvider",
+                "gitToken",
+                "gitRepo",
+                "gitBaseUrl",
+                "gitOrg",
+                "gitProject",
+            ]:
                 if field in config_dict:
                     projects[projectId]["settings"][field] = config_dict[field]
 
             # Handle backward compatibility: mirror githubRepo and githubToken in projects.json
             if "githubRepo" in config_dict:
-                projects[projectId]["settings"]["githubRepo"] = config_dict["githubRepo"]
+                projects[projectId]["settings"]["githubRepo"] = config_dict[
+                    "githubRepo"
+                ]
                 if "gitRepo" not in projects[projectId]["settings"]:
-                    projects[projectId]["settings"]["gitRepo"] = config_dict["githubRepo"]
+                    projects[projectId]["settings"]["gitRepo"] = config_dict[
+                        "githubRepo"
+                    ]
             elif "gitRepo" in config_dict:
                 projects[projectId]["settings"]["githubRepo"] = config_dict["gitRepo"]
 
             if "githubToken" in config_dict:
-                projects[projectId]["settings"]["githubToken"] = config_dict["githubToken"]
+                projects[projectId]["settings"]["githubToken"] = config_dict[
+                    "githubToken"
+                ]
                 if "gitToken" not in projects[projectId]["settings"]:
-                    projects[projectId]["settings"]["gitToken"] = config_dict["githubToken"]
+                    projects[projectId]["settings"]["gitToken"] = config_dict[
+                        "githubToken"
+                    ]
             elif "gitToken" in config_dict:
                 projects[projectId]["settings"]["githubToken"] = config_dict["gitToken"]
 
             from datetime import datetime
+
             projects[projectId]["updated_at"] = datetime.now().isoformat()
             save_projects(projects)
         except Exception:
@@ -712,7 +793,7 @@ async def update_project_env(projectId: str = Path(...), config: ProjectEnvUpdat
 
         return {
             "success": True,
-            "message": "Environment configuration updated successfully"
+            "message": "Environment configuration updated successfully",
         }
 
     except Exception:
@@ -723,13 +804,7 @@ async def update_project_env(projectId: str = Path(...), config: ProjectEnvUpdat
 @project_router.get("/claude-auth")
 async def check_claude_auth(projectId: str = Path(...)):
     """Check Claude authentication status."""
-    return {
-        "success": True,
-        "data": {
-            "authenticated": False,
-            "method": None
-        }
-    }
+    return {"success": True, "data": {"authenticated": False, "method": None}}
 
 
 @project_router.post("/claude-setup")
@@ -751,18 +826,12 @@ async def invoke_claude_setup(projectId: str = Path(...)):
 
         projects = load_projects()
         if projectId not in projects:
-            return {
-                "success": False,
-                "error": f"Project {projectId} not found"
-            }
+            return {"success": False, "error": f"Project {projectId} not found"}
 
         # Check if Claude CLI is installed
         try:
             version_result = subprocess.run(
-                ["claude", "--version"],
-                capture_output=True,
-                text=True,
-                timeout=5
+                ["claude", "--version"], capture_output=True, text=True, timeout=5
             )
             cli_installed = version_result.returncode == 0
         except (FileNotFoundError, subprocess.TimeoutExpired):
@@ -777,9 +846,9 @@ async def invoke_claude_setup(projectId: str = Path(...)):
                     "steps": [
                         "Visit https://claude.ai/download to download Claude CLI",
                         "Follow the installation instructions for your platform",
-                        "Run 'claude setup' in your terminal to authenticate"
-                    ]
-                }
+                        "Run 'claude setup' in your terminal to authenticate",
+                    ],
+                },
             }
 
         # Check if Claude is already authenticated by trying a simple command
@@ -787,10 +856,7 @@ async def invoke_claude_setup(projectId: str = Path(...)):
             # The 'claude' command without arguments will fail if not authenticated
             # We use --version as a proxy for checking if basic auth works
             auth_check = subprocess.run(
-                ["claude", "--version"],
-                capture_output=True,
-                text=True,
-                timeout=5
+                ["claude", "--version"], capture_output=True, text=True, timeout=5
             )
 
             # If we got here and returncode is 0, Claude CLI is working
@@ -802,7 +868,7 @@ async def invoke_claude_setup(projectId: str = Path(...)):
             return {
                 "success": True,
                 "message": "Claude CLI is already authenticated and ready to use",
-                "authenticated": True
+                "authenticated": True,
             }
 
         # Claude is installed but not authenticated
@@ -818,24 +884,22 @@ async def invoke_claude_setup(projectId: str = Path(...)):
                     "Run: claude setup",
                     "Follow the prompts to authenticate with your Claude account",
                     "The setup will open a browser for OAuth authentication",
-                    "After completing setup, refresh this page to verify authentication"
+                    "After completing setup, refresh this page to verify authentication",
                 ],
-                "note": "This is a one-time setup. Once authenticated, the credentials will be stored securely."
-            }
+                "note": "This is a one-time setup. Once authenticated, the credentials will be stored securely.",
+            },
         }
 
     except Exception:
         logger.exception("Failed to check Claude setup status")
-        return {
-            "success": False,
-            "error": "Failed to check Claude setup status"
-        }
+        return {"success": False, "error": "Failed to check Claude setup status"}
 
 
 # ============================================
 # Memory Infrastructure Routes
 # Global routes at /api/memory
 # ============================================
+
 
 @router.get("/infrastructure")
 async def get_memory_infrastructure_status(dbPath: str | None = Query(None)):
@@ -847,8 +911,8 @@ async def get_memory_infrastructure_status(dbPath: str | None = Query(None)):
             "databasePath": dbPath or str(FilePath.home() / ".tfactory" / "memories"),
             "databaseExists": False,
             "databases": [],
-            "ready": False
-        }
+            "ready": False,
+        },
     }
 
 
@@ -863,10 +927,7 @@ async def test_memory_connection(request: TestConnectionRequest):
     """Test connection to memory database."""
     return {
         "success": True,
-        "data": {
-            "success": False,
-            "message": "Memory database not configured"
-        }
+        "data": {"success": False, "message": "Memory database not configured"},
     }
 
 
@@ -874,13 +935,7 @@ async def test_memory_connection(request: TestConnectionRequest):
 async def validate_llm_api_key(request: ValidateApiKeyRequest):
     """Validate an LLM provider API key."""
     # TODO: Actually validate the key
-    return {
-        "success": True,
-        "data": {
-            "valid": True,
-            "message": "API key validated"
-        }
-    }
+    return {"success": True, "data": {"valid": True, "message": "API key validated"}}
 
 
 @router.post("/test-graphiti")
@@ -889,15 +944,8 @@ async def test_graphiti_connection(request: TestGraphitiRequest):
     return {
         "success": True,
         "data": {
-            "database": {
-                "success": False,
-                "message": "Graphiti not configured"
-            },
-            "llmProvider": {
-                "success": False,
-                "message": "LLM provider not configured"
-            },
-            "ready": False
-        }
+            "database": {"success": False, "message": "Graphiti not configured"},
+            "llmProvider": {"success": False, "message": "LLM provider not configured"},
+            "ready": False,
+        },
     }
-
