@@ -557,6 +557,27 @@ jobs:
       - name: Run frontend tests
         run: npm -w apps/frontend-web run test
 
+  script-tests:
+    name: scripts (node --test)
+    runs-on: ubuntu-latest
+    # `npm run test:scripts` has existed for a while and no workflow ran it, so
+    # scripts/argv-safety.test.mjs was passing into a void -- the same shape as
+    # the untriggered lanes in Factory#693 and #805. Gating it here means the
+    # repo's own scripts are covered by something.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      # No `npm ci` on purpose: these tests use only node: built-ins, so
+      # requiring the workspace install would make the gate slower and give it
+      # a dependency it does not have.
+      - name: Run script tests
+        run: npm run test:scripts
+
   frontend-lint:
     name: frontend (eslint, blocking)
     runs-on: ubuntu-latest
