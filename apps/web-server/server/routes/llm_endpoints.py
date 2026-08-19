@@ -29,10 +29,14 @@ from pydantic import BaseModel, Field, HttpUrl, SecretStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from server.error_ref import InputRejectedError, client_error
+from server.services.url_safety import (
+    assert_safe_outbound_url,
+    build_no_redirect_opener,
+)
+
 from ..database import LLMEndpoint, User
 from ..database.engine import get_db
-from ..error_ref import InputRejectedError, client_error
-from ..services.url_safety import assert_safe_outbound_url, build_no_redirect_opener
 from .auth_routes import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -208,14 +212,13 @@ def _probe_models(
     except Exception as exc:  # pragma: no cover - defensive
         return EndpointTestResponse(ok=False, error=f"Unexpected error: {exc}")
 
+    # ``data = None`` on a decode failure rather than an early return: the two
+    # rejections share a response shape, and merging them keeps this function
+    # under the return-count bar now that the SSRF guard has its own exit.
     try:
-        data = json.loads(raw)
+        data: Any = json.loads(raw)
     except json.JSONDecodeError:
-        return EndpointTestResponse(
-            ok=False,
-            status_code=status_code,
-            error="Response is not JSON",
-        )
+        data = None
 
     # OpenAI shape: {"data": [{"id": "..."}, ...]}
     # Some servers return a bare list.
@@ -228,7 +231,11 @@ def _probe_models(
         return EndpointTestResponse(
             ok=False,
             status_code=status_code,
-            error="Unexpected response shape (no 'data' array)",
+            error=(
+                "Response is not JSON"
+                if data is None
+                else "Unexpected response shape (no 'data' array)"
+            ),
         )
 
     model_ids: list[str] = []

@@ -24,9 +24,9 @@ if str(_WEB_SERVER) not in sys.path:
     sys.path.insert(0, str(_WEB_SERVER))
 
 from fastapi import HTTPException  # noqa: E402
-from server.routes.git import (
-    _safe_mcp_url,  # noqa: E402
-    _safe_ollama_base_url,  # noqa: E402
+from server.routes.git import (  # noqa: E402
+    _safe_mcp_url,
+    _safe_ollama_base_url,
 )
 from server.routes.llm_endpoints import _safe_probe_models_url  # noqa: E402
 from server.routes.settings_api_profiles import _safe_profile_models_url  # noqa: E402
