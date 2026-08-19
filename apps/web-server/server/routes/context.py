@@ -11,7 +11,32 @@ from pathlib import Path as FilePath
 from fastapi import APIRouter, Path, Query
 from pydantic import BaseModel, Field, SecretStr
 
+from server.error_ref import InputRejectedError
+from server.services.url_safety import assert_safe_outbound_url
+
 logger = logging.getLogger(__name__)
+
+# Env keys written by PATCH /env whose value the BACKEND later fetches (#1112).
+#
+# These are not settings, they are outbound-request destinations that arrive in
+# an HTTP request body. `graphitiProviderConfig.ollamaBaseUrl` lands in
+# `.tfactory/.env` as OLLAMA_BASE_URL, agent_service loads that file into the
+# agent subprocess environment, and providers/_ollama_http.py,
+# providers/openai_compatible*.py and integrations/graphiti read it back and
+# fetch it -- with `_build_headers` attaching the configured API key. The write
+# is what makes the read side's "configured base_url, not untrusted input"
+# comment untrue, so the check belongs here, on the write.
+#
+# Laundering is the precise harm: routes/settings_llm_providers.py already
+# refuses a metadata-range Ollama URL on the way in, and this route accepted the
+# same value for the same eventual fetch. One door checked, one door open.
+#
+# `allow_private=True` for both, matching `_safe_local_base_url`: a self-hosted
+# Ollama on localhost or a LAN box IS the product, and an Azure-compatible
+# endpoint behind an internal gateway is a real deployment. Neither posture
+# admits the cloud metadata range, which is the address with a credential
+# payoff and no legitimate use.
+_PROVIDER_URL_ENV_KEYS = frozenset({"OLLAMA_BASE_URL", "AZURE_OPENAI_ENDPOINT"})
 
 router = APIRouter()
 
@@ -560,8 +585,7 @@ async def update_project_env(projectId: str = Path(...), config: ProjectEnvUpdat
                         existing["GIT_TOKEN"] = value
                 else:
                     # Allow removing tokens by setting to empty string
-                    if env_key in existing:
-                        del existing[env_key]
+                    existing.pop(env_key, None)
                     if env_key == "GIT_TOKEN" and "GITHUB_TOKEN" in existing:
                         del existing["GITHUB_TOKEN"]
                     elif env_key == "GITHUB_TOKEN" and "GIT_TOKEN" in existing:
@@ -590,8 +614,7 @@ async def update_project_env(projectId: str = Path(...), config: ProjectEnvUpdat
                         existing["GIT_REPO"] = val_strip
                 else:
                     # Allow removing by setting to empty
-                    if env_key in existing:
-                        del existing[env_key]
+                    existing.pop(env_key, None)
                     if env_key == "GIT_REPO" and "GITHUB_REPO" in existing:
                         del existing["GITHUB_REPO"]
                     elif env_key == "GITHUB_REPO" and "GIT_REPO" in existing:
@@ -630,6 +653,16 @@ async def update_project_env(projectId: str = Path(...), config: ProjectEnvUpdat
                     if config_key in gpc:
                         value = gpc[config_key]
                         if value is not None and value != "":
+                            if env_key in _PROVIDER_URL_ENV_KEYS:
+                                try:
+                                    assert_safe_outbound_url(
+                                        str(value), allow_private=True
+                                    )
+                                except InputRejectedError as exc:
+                                    return {
+                                        "success": False,
+                                        "error": f"{config_key}: {exc.client_message}",
+                                    }
                             existing[env_key] = str(value)
                         elif env_key in existing:
                             del existing[env_key]
