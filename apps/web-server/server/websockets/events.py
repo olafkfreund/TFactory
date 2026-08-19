@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from ..auth import WebSocketAuthError, authenticate_websocket, verify_websocket_token
+from ..auth import WebSocketAuthError, authenticate_websocket
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +144,7 @@ async def events_websocket(websocket: WebSocket):
                 if data == "ping":
                     await websocket.send_text("pong")
 
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 try:
                     await websocket.send_text(json.dumps({"type": "ping"}))
                 except Exception:

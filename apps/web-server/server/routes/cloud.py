@@ -46,7 +46,7 @@ class CloudRunRequest(BaseModel):
     fail_on_severity: str = "high"
 
 
-async def _run_assessment_bg(req: "CloudRunRequest") -> None:
+async def _run_assessment_bg(req: CloudRunRequest) -> None:
     """Background: run the (slow, Docker) assessment + mirror it into the store."""
     try:
         out = await asyncio.to_thread(

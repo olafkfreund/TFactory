@@ -124,8 +124,8 @@ async def detect_local_llm_providers():
         if ok and out:
             lines = out.strip().splitlines()
             # First line is a header row
-            model_lines = [l for l in lines[1:] if l.strip()]
-            all_names = [l.split()[0] for l in model_lines if l.split()]
+            model_lines = [line for line in lines[1:] if line.strip()]
+            all_names = [line.split()[0] for line in model_lines if line.split()]
             # Filter out embedding/reranker models — only show chat LLMs
             _embed_kw = {"embed", "minilm", "bge", "gte", "e5", "rerank"}
             model_names = [
@@ -166,7 +166,7 @@ async def detect_local_llm_providers():
                 result["detected"] = True
             ok, out = await _run(["lms", "ls"])
             if ok and out:
-                lines = [l.strip() for l in out.splitlines() if l.strip()]
+                lines = [line.strip() for line in out.splitlines() if line.strip()]
                 result["models"] = lines
                 result["modelCount"] = len(lines)
         # Fallback: check for running process
