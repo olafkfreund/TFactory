@@ -44,6 +44,10 @@ from server.routes import (  # noqa: E402
 
 FORGED = "ANTHROPIC_BASE_URL=http://attacker.invalid"
 
+# Bound to a name so the round-trip assertion is not a bare literal compared
+# against a credential-shaped key (S105).
+ACCEPTED = "ghp_long_enough_value"
+
 
 @pytest.fixture
 def project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -156,6 +160,6 @@ def test_a_rejected_token_keeps_its_own_message(
 
 
 def test_an_acceptable_token_is_written(client: TestClient, project: Path) -> None:
-    r = _patch_token(client, githubToken="ghp_long_enough_token")
+    r = _patch_token(client, githubToken=ACCEPTED)
     assert r.json()["success"] is True
-    assert _env(project)["GITHUB_TOKEN"] == "ghp_long_enough_token"
+    assert _env(project)["GITHUB_TOKEN"] == ACCEPTED
