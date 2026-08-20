@@ -12,6 +12,8 @@ import os
 from pathlib import Path
 from typing import Any, Literal, TypedDict
 
+from routing_policy import policy_route
+
 logger = logging.getLogger(__name__)
 
 # Model shorthand to full model ID mapping
@@ -322,6 +324,19 @@ def get_phase_model(
     # Non-auto profile: use single model from metadata
     if metadata and metadata.get("model"):
         return resolve_model_id(metadata["model"])
+
+    # Operator's per-stage routing policy (TFACTORY_ROUTING_POLICY). Sits
+    # directly above the built-in default and below everything explicit, so it
+    # replaces the default rather than overriding a per-task choice. Returns
+    # None when unset or unparseable, making this a no-op with no policy set.
+    #
+    # This is the leg that most needs it: verify tasks arrive via
+    # /api/specs/ingest, which writes no task_metadata.json at all, so every
+    # check above falls through and the default is the ONLY thing deciding the
+    # model. Without a policy the stage cannot be retargeted without a release.
+    routed = policy_route(phase)
+    if routed is not None:
+        return resolve_model_id(routed[0])
 
     # Fall back to default phase configuration
     return resolve_model_id(DEFAULT_PHASE_MODELS[phase])
