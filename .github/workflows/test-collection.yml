@@ -9,31 +9,32 @@ name: test collection (no orphaned test files)
 # fleet-wide sweep found 57 such files across three repos, 421 tests that pass
 # when run by hand and have never once run in CI.
 #
-# This repo does not start at zero. Seven files sit outside the collected paths
-# derived from this repo's pytest invocations, and each is registered in
-# `uncollected-tests-allowlist.toml` with a written reason and an issue.
+# This repo started at nine registered exceptions and is now at ZERO: every
+# test file in the tree is inside a path CI collects. Both halves of getting
+# there are worth knowing before you touch this gate.
 #
-# The group worth knowing before you touch this gate: five of the seven are
-# named `test_*.py` and define `test_*` functions but contain no `assert` at all
-# -- they signal outcome by `return True`/`return False`. Pytest records a test
-# that returns False as PASSED, warning only. So those five are the one group
-# that must NOT simply be wired into a pytest path: doing so adds green checks
-# that cannot go red, which is the defect Factory#832 exists to catch
-# (TFactory#1133).
+# Seven were named `test_*.py` and defined `test_*` functions but contained no
+# `assert` at all -- they signalled outcome by `return True`/`return False`.
+# Pytest records a test that returns False as PASSED, warning only, so simply
+# wiring them into a pytest path would have added green checks that cannot go
+# red, which is the defect Factory#832 exists to catch. They were renamed out of
+# the test namespace or rewritten instead (TFactory#1133).
 #
-# It was nine until TFactory#1134. Two of them -- `portal_testing/
-# test_capability.py` and `test_dispatch.py`, 33 tests between them -- DO run in
-# CI, inside the runner image at `/app/portal_testing`, and were registered only
+# The other two -- `portal_testing/test_capability.py` and `test_dispatch.py`,
+# 33 tests between them -- were never really exceptions. They DO run in CI,
+# inside the runner image at `/app/portal_testing`, and were registered only
 # because the derivation could not map that container path back to this repo's
 # `portal_testing/`. The hub gate now reads a `# test-collection: <repo path>`
-# directive written on the invocation itself (see
-# `portal-ui-runner-image.yml`), so those two are collected rather than
-# excused. The directive is still derivation, not a declared list: it annotates
-# a real pytest line in a real workflow, and a path that does not exist -- or
-# `.`, or anything escaping the tree -- is an unknown verdict, not a pass.
+# directive written on the invocation itself (see `portal-ui-runner-image.yml`),
+# so those two are collected rather than excused (TFactory#1134). The directive
+# is still derivation, not a declared list: it annotates a real pytest line in a
+# real workflow, and a path that does not exist -- or `.`, or anything escaping
+# the tree -- is an unknown verdict, not a pass.
 #
-# The registry is a ratchet -- an entry that stops matching a real uncollected
-# file also fails the gate, so seven can only become six.
+# Zero is the ratchet's resting state, not its retirement. The registry file
+# stays, the gate still reads it, and an entry that stops matching a real
+# uncollected file still fails -- so the next exception is a reviewable diff
+# against nothing.
 #
 # HOW THE BOUNDARY IS DECIDED. The gate does not read a list of collected paths.
 # It DERIVES them from this repo's own `.github/workflows/*.yml` pytest
@@ -167,11 +168,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # The count is now legitimately ZERO, which makes `grep -c || true`
+          # ambiguous: a missing file prints 0 too, and "no exceptions left"
+          # would then be indistinguishable from "the registry was deleted".
+          # That is the pass-shaped empty measurement this gate exists to catch,
+          # so the file's absence is an error rather than a number (#1134).
+          if [ ! -f uncollected-tests-allowlist.toml ]; then
+            echo "uncollected-tests-allowlist.toml is MISSING -- that is not the same as zero entries" >&2
+            exit 1
+          fi
           count=$(grep -c '^\[\[allow\]\]' uncollected-tests-allowlist.toml || true)
           {
             echo "## Test-collection gate"
             echo ""
-            echo "- Registered uncollected test files: **${count:-0}**"
+            echo "- Registered uncollected test files: **${count}**"
             echo "- Every entry carries a written reason and an issue; the gate fails without them."
             echo "- An entry that matches nothing also fails, so this number can only go down."
+            echo "- It is currently zero: every test file in the tree is inside a collected path."
           } >> "$GITHUB_STEP_SUMMARY"
