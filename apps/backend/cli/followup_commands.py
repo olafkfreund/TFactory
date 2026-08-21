@@ -232,7 +232,14 @@ def handle_followup_command(
         verbose: Enable verbose output
     """
     # Lazy imports to avoid loading heavy modules
-    from agent import run_followup_planner
+    # `agents.followup_planner`, not `agent`. NOTE the module differs from
+    # PFactory's, where the same function lives in `agents/planner.py` --
+    # these forks diverged, so the sibling fix does not port verbatim.
+    # The function is alive and unchanged here; only its re-export moved
+    # when core/agent.py was narrowed to the names `agents` exports. That
+    # docstring still claims this fork "removed ... run_followup_planner",
+    # which is stale: removed from the facade, not from the codebase.
+    from agents.followup_planner import run_followup_planner
 
     from .utils import print_banner, validate_environment
 
