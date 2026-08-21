@@ -100,12 +100,19 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # The SQUASH-MERGE SHA of Factory#849 (the gate, #846, plus the name-line fix
-  # found wiring it here) on hub main, not that PR's branch head.
+  # The SQUASH-MERGE SHA of Factory#933 (the `# test-collection:` directive this
+  # repo's portal-ui-runner-image.yml now writes, TFactory#1134) on hub main, not
+  # that PR's branch head.
   # The hub squash-merges, so a branch head stops existing the moment its PR
   # lands and the pin then resolves to nothing -- a gate that cannot run rather
   # than one that fails honestly (Factory#638).
-  HUB_PIN_SHA: "67733bdb8f1a0382881241f4d885216bf77d0b49"
+  #
+  # Bumped from 67733bdb (Factory#849) because the directive is useless without
+  # the engine that reads it: with the old pin this job fetches a gate that
+  # cannot resolve `/app/portal_testing`, and the two entries this PR deletes
+  # would read as uncollected AND unregistered. Factory#848 is why this bump is
+  # manual -- check_pin_freshness.py cannot see a fetch-at-pin gate.
+  HUB_PIN_SHA: "56705654f1b1cbe1d242340d26b4724741a4df18"
 
 jobs:
   collection:
