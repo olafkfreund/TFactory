@@ -6,7 +6,6 @@ Shows how Magestic AI automatically generates provider-specific database names
 to prevent embedding dimension mismatches.
 """
 
-import os
 import sys
 from pathlib import Path
 
@@ -16,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from integrations.graphiti.config import GraphitiConfig
 
 
-def test_provider_naming():
+def check_provider_naming():
     """Demonstrate provider-specific database naming."""
 
     print("\n" + "=" * 70)
@@ -65,4 +64,4 @@ def test_provider_naming():
 
 
 if __name__ == "__main__":
-    test_provider_naming()
+    check_provider_naming()

@@ -18,12 +18,12 @@ from .analyzers import (
     analyze_service,
 )
 from .ci_discovery import CIDiscovery
+from .discovery import TestDiscovery
 
 # Import from analysis module root (these are other analysis tools)
 from .project_analyzer import ProjectAnalyzer
 from .risk_classifier import RiskClassifier
 from .security_scanner import SecurityScanner
-from .test_discovery import TestDiscovery
 
 # insight_extractor is a module with functions, not a class, so don't import it here
 # Import it directly when needed: from analysis import insight_extractor
