@@ -6,7 +6,7 @@ the broker's resolve_cloud WIF head incl. the refresh-on-expiry path.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
