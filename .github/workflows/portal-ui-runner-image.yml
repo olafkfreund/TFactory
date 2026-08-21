@@ -148,6 +148,18 @@ jobs:
       # which never imports dispatch.py. Mounting it keeps the image
       # self-contained AND keeps the #885 regressions executing against the
       # bytes that will run in the cluster, which is the whole point of this gate.
+      #
+      # THE `# test-collection:` DIRECTIVE on the pytest line (TFactory#1134).
+      # The hub's check_test_collection.py derives which paths CI collects from
+      # this repo's own pytest invocations, so that no hand-kept list can go
+      # stale against the workflows. It cannot resolve `/app/portal_testing`:
+      # that is a container path, and the whole point of this step is that the
+      # directory has been vendored into an image. Unannotated, the 33 tests
+      # below read as uncollected and end up in uncollected-tests-allowlist.toml
+      # with a reason saying "covered, the gate just cannot see it" -- which
+      # turns a covered area into a documented gap and invites someone to delete
+      # the tests. The directive names the repo directory this invocation runs,
+      # and it lives here, on the line, so deleting the step deletes it too.
       # ---------------------------------------------------------------------
       - name: Gate — the vendored harness in the image is THIS commit's
         run: |
@@ -156,7 +168,7 @@ jobs:
             -v "${PWD}/apps/backend/tools:/app/apps/backend/tools:ro" \
             "${IMAGE}:latest" \
             sh -c 'pip install --quiet --no-cache-dir pytest pyyaml \
-                   && python -m pytest /app/portal_testing -q'
+                   && python -m pytest /app/portal_testing -q'  # test-collection: portal_testing
 
   # --------------------------------------------------------------------------
   # Publish — push to main only, and only past the gate in `build` above, which

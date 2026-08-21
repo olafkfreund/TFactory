@@ -9,22 +9,31 @@ name: test collection (no orphaned test files)
 # fleet-wide sweep found 57 such files across three repos, 421 tests that pass
 # when run by hand and have never once run in CI.
 #
-# This repo does not start at zero. Nine files sit outside the 11 collected
-# paths derived from 12 pytest invocations, and each is registered in
+# This repo does not start at zero. Seven files sit outside the collected paths
+# derived from this repo's pytest invocations, and each is registered in
 # `uncollected-tests-allowlist.toml` with a written reason and an issue.
 #
-# Two of the three groups are worth knowing before you touch this gate. Five of
-# the nine are named `test_*.py` and define `test_*` functions but contain no
-# `assert` at all -- they signal outcome by `return True`/`return False`. Pytest
-# records a test that returns False as PASSED, warning only. So those five are
-# the one group that must NOT simply be wired into a pytest path: doing so adds
-# green checks that cannot go red, which is the defect Factory#832 exists to
-# catch (TFactory#1133). The other two are real suites that DO run in CI, via
-# `/app/portal_testing` inside the runner image -- a container path this gate's
-# derivation cannot map back to a repo directory (TFactory#1134).
+# The group worth knowing before you touch this gate: five of the seven are
+# named `test_*.py` and define `test_*` functions but contain no `assert` at all
+# -- they signal outcome by `return True`/`return False`. Pytest records a test
+# that returns False as PASSED, warning only. So those five are the one group
+# that must NOT simply be wired into a pytest path: doing so adds green checks
+# that cannot go red, which is the defect Factory#832 exists to catch
+# (TFactory#1133).
+#
+# It was nine until TFactory#1134. Two of them -- `portal_testing/
+# test_capability.py` and `test_dispatch.py`, 33 tests between them -- DO run in
+# CI, inside the runner image at `/app/portal_testing`, and were registered only
+# because the derivation could not map that container path back to this repo's
+# `portal_testing/`. The hub gate now reads a `# test-collection: <repo path>`
+# directive written on the invocation itself (see
+# `portal-ui-runner-image.yml`), so those two are collected rather than
+# excused. The directive is still derivation, not a declared list: it annotates
+# a real pytest line in a real workflow, and a path that does not exist -- or
+# `.`, or anything escaping the tree -- is an unknown verdict, not a pass.
 #
 # The registry is a ratchet -- an entry that stops matching a real uncollected
-# file also fails the gate, so nine can only become eight.
+# file also fails the gate, so seven can only become six.
 #
 # HOW THE BOUNDARY IS DECIDED. The gate does not read a list of collected paths.
 # It DERIVES them from this repo's own `.github/workflows/*.yml` pytest
