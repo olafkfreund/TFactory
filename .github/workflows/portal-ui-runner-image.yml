@@ -260,23 +260,45 @@ jobs:
       # cannot reach it.
       - name: Pin PORTAL_UI_IMAGE in factory-gitops
         if: "${{ env.GITOPS_PAT != '' }}"
+        env:
+          # Tag AND digest, exactly as nix-runner-image.yml builds its PIN.
+          # The digest is what the cluster actually resolves when both are
+          # present, so a pin that carries a stale one points at the old image
+          # while reading as current (TFactory#1141).
+          PIN: "${{ env.IMAGE }}:${{ steps.tags.outputs.sha }}@${{ steps.push.outputs.digest }}"
         run: |
           set -euo pipefail
           git clone --depth 1 "https://x:${GITOPS_PAT}@github.com/${GITOPS_REPO}.git" gitops
           cd "gitops/${GITOPS_PATH}"
+          # Match the WHOLE existing value -- tag, or tag@digest, or bare
+          # `latest` -- and replace it, the same as the nix runner does. The
+          # previous class `[A-Za-z0-9._-]+` stopped at `@`, so it rewrote the
+          # tag and left the old digest behind: a new tag on an old image.
           sed -i -E \
-            "s#(name: PORTAL_UI_IMAGE, value: \"${IMAGE}:)[A-Za-z0-9._-]+#\\1${{ steps.tags.outputs.sha }}#" \
+            "s#(name: PORTAL_UI_IMAGE, value: \")[^\"]+#\\1${PIN}#" \
             manifests.yaml
           # Fail loudly rather than push a no-op. A sed that silently matches
           # nothing is how TFACTORY_IMAGE sat two weeks stale (#719) while every
           # artefact except the outcome looked like a working control. The image
           # is already published at this point, so this failing breaks the run,
           # not the artefact.
-          grep -qF "name: PORTAL_UI_IMAGE, value: \"${IMAGE}:${{ steps.tags.outputs.sha }}\"" manifests.yaml || {
-            echo "::error::PORTAL_UI_IMAGE pin not found in ${GITOPS_REPO}/${GITOPS_PATH}/manifests.yaml." >&2
-            echo "Add: - { name: PORTAL_UI_IMAGE, value: \"${IMAGE}:${{ steps.tags.outputs.sha }}\" }" >&2
+          #
+          # Distinguish the two ways this can fail: a pin that is absent needs
+          # ADDING, one that is present but wrong needs FIXING. The old message
+          # said "not found ... Add:" for both, so following it on a mis-edit
+          # would have added a duplicate entry.
+          if ! grep -qF "name: PORTAL_UI_IMAGE, value: \"${PIN}\"" manifests.yaml; then
+            if grep -qF "name: PORTAL_UI_IMAGE" manifests.yaml; then
+              echo "::error::PORTAL_UI_IMAGE is present but did not take the new pin." >&2
+              echo "Wanted: ${PIN}" >&2
+              echo "Found:  $(grep -oE 'name: PORTAL_UI_IMAGE, value: "[^"]*"' manifests.yaml || true)" >&2
+              echo "Fix the existing entry; do NOT add a second one." >&2
+            else
+              echo "::error::PORTAL_UI_IMAGE pin not found in ${GITOPS_REPO}/${GITOPS_PATH}/manifests.yaml." >&2
+              echo "Add: - { name: PORTAL_UI_IMAGE, value: \"${PIN}\" }" >&2
+            fi
             exit 1
-          }
+          fi
           cd ..
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
