@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Tests for the test_discovery module.
+Tests for the analysis.discovery module.
 
 Tests cover:
 - Framework detection for various languages
@@ -11,17 +11,13 @@ Tests cover:
 """
 
 import json
-
-# Add tfactory to path for imports
-import sys
 import tempfile
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "Apps" / "backend"))
-
-from test_discovery import (
+# apps/backend is on sys.path via tests/conftest.py.
+from analysis.discovery import (
     TestDiscovery,
     TestDiscoveryResult,
     TestFramework,

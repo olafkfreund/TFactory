@@ -22,13 +22,13 @@ Usage:
 
     # Run the test:
     cd tfactory
-    python integrations/graphiti/test_graphiti_memory.py
+    python scripts/graphiti/check_graphiti_memory.py
 
     # Or run specific tests:
-    python integrations/graphiti/test_graphiti_memory.py --test connection
-    python integrations/graphiti/test_graphiti_memory.py --test save
-    python integrations/graphiti/test_graphiti_memory.py --test search
-    python integrations/graphiti/test_graphiti_memory.py --test ollama
+    python scripts/graphiti/check_graphiti_memory.py --test connection
+    python scripts/graphiti/check_graphiti_memory.py --test save
+    python scripts/graphiti/check_graphiti_memory.py --test search
+    python scripts/graphiti/check_graphiti_memory.py --test ollama
 """
 
 import argparse
@@ -92,7 +92,7 @@ def print_info(message: str):
     print(f"  ℹ️  {message}")
 
 
-async def test_ladybugdb_connection(db_path: str, database: str) -> bool:
+async def check_ladybugdb_connection(db_path: str, database: str) -> bool:
     """Test basic LadybugDB connection."""
     print_header("1. Testing LadybugDB Connection")
 
@@ -134,7 +134,7 @@ async def test_ladybugdb_connection(db_path: str, database: str) -> bool:
         return False
 
 
-async def test_save_episode(db_path: str, database: str) -> tuple[str, str]:
+async def check_save_episode(db_path: str, database: str) -> tuple[str, str]:
     """Test saving an episode to the graph."""
     print_header("2. Testing Episode Save")
 
@@ -207,7 +207,7 @@ async def test_save_episode(db_path: str, database: str) -> tuple[str, str]:
         return None, None
 
 
-async def test_keyword_search(db_path: str, database: str) -> bool:
+async def check_keyword_search(db_path: str, database: str) -> bool:
     """Test keyword search (works without embeddings)."""
     print_header("3. Testing Keyword Search")
 
@@ -263,7 +263,7 @@ async def test_keyword_search(db_path: str, database: str) -> bool:
         return False
 
 
-async def test_semantic_search(db_path: str, database: str, group_id: str) -> bool:
+async def check_semantic_search(db_path: str, database: str, group_id: str) -> bool:
     """Test semantic search using embeddings."""
     print_header("4. Testing Semantic Search")
 
@@ -340,7 +340,7 @@ async def test_semantic_search(db_path: str, database: str, group_id: str) -> bo
         return False
 
 
-async def test_ollama_embeddings() -> bool:
+async def check_ollama_embeddings() -> bool:
     """Test Ollama embedding generation directly."""
     print_header("5. Testing Ollama Embeddings")
 
@@ -424,7 +424,7 @@ async def test_ollama_embeddings() -> bool:
         return False
 
 
-async def test_graphiti_memory_class(db_path: str, database: str) -> bool:
+async def check_graphiti_memory_class(db_path: str, database: str) -> bool:
     """Test the GraphitiMemory wrapper class."""
     print_header("6. Testing GraphitiMemory Class")
 
@@ -536,7 +536,7 @@ async def test_graphiti_memory_class(db_path: str, database: str) -> bool:
         return False
 
 
-async def test_database_contents(db_path: str, database: str) -> bool:
+async def check_database_contents(db_path: str, database: str) -> bool:
     """Show what's in the database (debug)."""
     print_header("7. Database Contents (Debug)")
 
@@ -674,44 +674,44 @@ async def main():
     group_id = None
 
     if test in ["all", "connection"]:
-        await test_ladybugdb_connection(args.db_path, args.database)
+        await check_ladybugdb_connection(args.db_path, args.database)
 
     if test in ["all", "ollama"]:
-        await test_ollama_embeddings()
+        await check_ollama_embeddings()
 
     if test in ["all", "save"]:
-        _, group_id = await test_save_episode(args.db_path, args.database)
+        _, group_id = await check_save_episode(args.db_path, args.database)
         if group_id:
             print("\n  Waiting 2 seconds for embedding processing...")
             await asyncio.sleep(2)
 
     if test in ["all", "keyword"]:
-        await test_keyword_search(args.db_path, args.database)
+        await check_keyword_search(args.db_path, args.database)
 
     if test in ["all", "semantic"]:
-        await test_semantic_search(
+        await check_semantic_search(
             args.db_path, args.database, group_id or "ladybug_test_group"
         )
 
     if test in ["all", "memory"]:
-        await test_graphiti_memory_class(args.db_path, args.database)
+        await check_graphiti_memory_class(args.db_path, args.database)
 
     if test in ["all", "contents"]:
-        await test_database_contents(args.db_path, args.database)
+        await check_database_contents(args.db_path, args.database)
 
     print_header("TEST SUMMARY")
     print("  Tests completed. Check the results above for any failures.")
     print()
     print("  Quick commands:")
     print("    # Run all tests:")
-    print("    python integrations/graphiti/test_graphiti_memory.py")
+    print("    python scripts/graphiti/check_graphiti_memory.py")
     print()
     print("    # Test just Ollama embeddings:")
-    print("    python integrations/graphiti/test_graphiti_memory.py --test ollama")
+    print("    python scripts/graphiti/check_graphiti_memory.py --test ollama")
     print()
     print("    # Test with production database:")
     print(
-        "    python integrations/graphiti/test_graphiti_memory.py --database magestic_ai_memory"
+        "    python scripts/graphiti/check_graphiti_memory.py --database magestic_ai_memory"
     )
     print()
 

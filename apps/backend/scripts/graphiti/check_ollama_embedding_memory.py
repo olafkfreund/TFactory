@@ -36,13 +36,13 @@ NOTE: graphiti-core internally uses an OpenAI reranker for search ranking.
 
 Usage:
     cd apps/backend
-    python integrations/graphiti/test_ollama_embedding_memory.py
+    python scripts/graphiti/check_ollama_embedding_memory.py
 
     # Run specific tests:
-    python integrations/graphiti/test_ollama_embedding_memory.py --test embeddings
-    python integrations/graphiti/test_ollama_embedding_memory.py --test create
-    python integrations/graphiti/test_ollama_embedding_memory.py --test retrieve
-    python integrations/graphiti/test_ollama_embedding_memory.py --test full-cycle
+    python scripts/graphiti/check_ollama_embedding_memory.py --test embeddings
+    python scripts/graphiti/check_ollama_embedding_memory.py --test create
+    python scripts/graphiti/check_ollama_embedding_memory.py --test retrieve
+    python scripts/graphiti/check_ollama_embedding_memory.py --test full-cycle
 """
 
 import argparse
@@ -122,7 +122,7 @@ def apply_ladybug_monkeypatch():
 # ============================================================================
 
 
-async def test_ollama_embeddings() -> bool:
+async def check_ollama_embeddings() -> bool:
     """
     Test Ollama embedding generation directly via API.
 
@@ -272,7 +272,7 @@ async def test_ollama_embeddings() -> bool:
 # ============================================================================
 
 
-async def test_memory_creation(test_db_path: Path) -> tuple[Path, Path, bool]:
+async def check_memory_creation(test_db_path: Path) -> tuple[Path, Path, bool]:
     """
     Test creating memories using GraphitiMemory with Ollama embeddings.
 
@@ -421,7 +421,7 @@ async def test_memory_creation(test_db_path: Path) -> tuple[Path, Path, bool]:
 # ============================================================================
 
 
-async def test_memory_retrieval(spec_dir: Path, project_dir: Path) -> bool:
+async def check_memory_retrieval(spec_dir: Path, project_dir: Path) -> bool:
     """
     Test retrieving memories using semantic search with Ollama embeddings.
 
@@ -535,7 +535,7 @@ async def test_memory_retrieval(spec_dir: Path, project_dir: Path) -> bool:
 # ============================================================================
 
 
-async def test_full_cycle(test_db_path: Path) -> bool:
+async def check_full_cycle(test_db_path: Path) -> bool:
     """
     Test the complete memory lifecycle:
     1. Create unique test data
@@ -553,7 +553,7 @@ async def test_full_cycle(test_db_path: Path) -> bool:
 
     # Override database path for testing
     os.environ["GRAPHITI_DB_PATH"] = str(test_db_path / "graphiti_db")
-    os.environ["GRAPHITI_DATABASE"] = "test_full_cycle"
+    os.environ["GRAPHITI_DATABASE"] = "check_full_cycle"
 
     try:
         from integrations.graphiti.memory import GraphitiMemory
@@ -788,26 +788,28 @@ async def main():
 
     try:
         if test in ["all", "embeddings"]:
-            results["embeddings"] = await test_ollama_embeddings()
+            results["embeddings"] = await check_ollama_embeddings()
 
         spec_dir = None
         project_dir = None
 
         if test in ["all", "create"]:
-            spec_dir, project_dir, results["create"] = await test_memory_creation(
+            spec_dir, project_dir, results["create"] = await check_memory_creation(
                 test_db_path
             )
 
         if test in ["all", "retrieve"]:
             if spec_dir and project_dir:
-                results["retrieve"] = await test_memory_retrieval(spec_dir, project_dir)
+                results["retrieve"] = await check_memory_retrieval(
+                    spec_dir, project_dir
+                )
             else:
                 print_info(
                     "Skipping retrieve test - no spec/project dir from create test"
                 )
 
         if test in ["all", "full-cycle"]:
-            results["full-cycle"] = await test_full_cycle(test_db_path)
+            results["full-cycle"] = await check_full_cycle(test_db_path)
 
     finally:
         # Cleanup unless --keep-db specified
@@ -843,18 +845,18 @@ async def main():
     print()
     print("  Commands:")
     print("    # Run all tests:")
-    print("    python integrations/graphiti/test_ollama_embedding_memory.py")
+    print("    python scripts/graphiti/check_ollama_embedding_memory.py")
     print()
     print("    # Run specific test:")
     print(
-        "    python integrations/graphiti/test_ollama_embedding_memory.py --test embeddings"
+        "    python scripts/graphiti/check_ollama_embedding_memory.py --test embeddings"
     )
     print(
-        "    python integrations/graphiti/test_ollama_embedding_memory.py --test full-cycle"
+        "    python scripts/graphiti/check_ollama_embedding_memory.py --test full-cycle"
     )
     print()
     print("    # Keep database for inspection:")
-    print("    python integrations/graphiti/test_ollama_embedding_memory.py --keep-db")
+    print("    python scripts/graphiti/check_ollama_embedding_memory.py --keep-db")
     print()
 
 

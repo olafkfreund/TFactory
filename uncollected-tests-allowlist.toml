@@ -7,93 +7,12 @@
 # that no longer matches a real uncollected file. An entry cannot outlive the
 # problem it documents.
 #
-# Nine entries, in three groups:
+# Two entries. The seven that TFactory#1133 tracked are gone -- the files they
+# described were renamed out of the test namespace or deleted, so the entries
+# would now match nothing and the gate would fail on them. What remains:
 #
-#   1. Two production modules whose names sit in the test namespace for domain
-#      reasons (`TestDiscovery`, `TestFramework`), not because they are tests.
-#   2. Five files named `test_*.py` that contain no `assert` at all -- they
-#      return True/False. Pytest passes a test that returns False, so these are
-#      the one group that must NOT simply be collected (TFactory#1133).
-#   3. Two real, substantial suites that DO run in CI, via a container path the
-#      gate's derivation cannot map back to a repo directory (TFactory#1134).
-
-[[allow]]
-path = "apps/backend/analysis/test_discovery.py"
-reason = """
-A 690-line production module, not a test. It detects a project's test
-framework, test command and test directories, and its output feeds the QA
-agent, the test creator and the planner. The `test_` prefix and the
-`TestDiscovery` / `TestFramework` / `TestDiscoveryResult` class names come from
-the domain it models -- discovering tests -- not from pytest. It defines no
-assert and returns True/False from its three `test_*` helpers, so collecting it
-would add three checks that cannot fail. Renaming it to `discovery.py` is the
-right end state and is tracked in TFactory#1133.
-"""
-issue = "TFactory#1133"
-
-[[allow]]
-path = "apps/backend/test_discovery.py"
-reason = """
-A 21-line backward-compatibility shim that re-exports `analysis.test_discovery`.
-It contains no test functions at all -- collecting it would collect nothing.
-It disappears when the module above is renamed.
-"""
-issue = "TFactory#1133"
-
-[[allow]]
-path = "apps/backend/scripts/graphiti/test_graphiti_memory.py"
-reason = """
-Seven `test_*` functions, zero asserts, 31 `return True`/`return False`
-statements, driven by an `if __name__ == "__main__"` block. Pytest records a
-test that returns False as PASSED, emitting only PytestReturnNotNoneWarning, so
-collecting this file would add seven green checks that can never go red. It also
-takes fixture-style parameters (`db_path`) that no conftest provides, so pytest
-errors on all seven today. Converting the returns to asserts is TFactory#1133.
-"""
-issue = "TFactory#1133"
-
-[[allow]]
-path = "apps/backend/scripts/graphiti/test_ollama_embedding_memory.py"
-reason = """
-Same shape as test_graphiti_memory.py: four `test_*` functions, zero asserts, 13
-return-style outcomes, and undeclared fixture parameters. Collecting it would
-add checks that cannot fail. Tracked with the rest in TFactory#1133.
-"""
-issue = "TFactory#1133"
-
-[[allow]]
-path = "apps/backend/scripts/graphiti/test_provider_naming.py"
-reason = """
-One `test_*` function, zero asserts. Measured: copied under `tests/` and run
-alone it reports `1 passed` -- and would report `1 passed` no matter what the
-provider naming logic did, because nothing in it can fail. That is the exact
-pass-shaped empty measurement Factory#832 exists to catch, so it stays out of
-collection until it asserts something (TFactory#1133).
-"""
-issue = "TFactory#1133"
-
-[[allow]]
-path = "apps/backend/test_quick_improvements.py"
-reason = """
-Four `test_*` functions, zero asserts. Three of the four fail on import today
-(`ModuleNotFoundError: No module named 'spec'`), so the file is not merely
-unrun, it is stale. Collecting it would turn a silent gap into a red build
-without adding any real coverage, since none of the four can fail once imports
-are fixed. Rewrite is TFactory#1133.
-"""
-issue = "TFactory#1133"
-
-[[allow]]
-path = "apps/backend/test_quick_improvements_simple.py"
-reason = """
-Four `test_*` functions, zero asserts, eight return-style outcomes. This is the
-file that made the danger concrete during Factory#844: copied into `tests/` and
-run alone it reports `4 passed`, and re-running with `-W error::UserWarning`
-shows why -- `PytestReturnNotNoneWarning: test_template_matching returned
-<class 'bool'>`. All four checks could be failing and the output would be
-byte-identical. Not collected until it asserts (TFactory#1133).
-"""
-issue = "TFactory#1133"
+#   Two real, substantial suites that DO run in CI, via a container path the
+#   gate's derivation cannot map back to a repo directory (TFactory#1134).
 
 [[allow]]
 path = "portal_testing/test_capability.py"
