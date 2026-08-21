@@ -6,6 +6,8 @@ import asyncio
 import logging
 import time
 
+from factory_common.logsafe import sanitize_log
+
 from .base import ProviderInfo, ProviderStrategy
 from .claude_provider import ClaudeProvider
 from .codex_provider import CodexProvider
@@ -79,7 +81,11 @@ async def detect_all_providers() -> list[ProviderInfo]:
     for provider_id, elapsed, result in timed_results:
         timings[provider_id] = f"{elapsed:.3f}s"
         if isinstance(result, Exception):
-            logger.warning(f"Provider detection failed for {provider_id}: {result}")
+            logger.warning(
+                "Provider detection failed for %s: %s",
+                sanitize_log(provider_id),
+                sanitize_log(result),
+            )
             continue
         infos.append(result)
 

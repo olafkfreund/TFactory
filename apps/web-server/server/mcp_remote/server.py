@@ -28,6 +28,8 @@ from mcp.server.models import InitializationOptions
 from mcp.server.sse import SseServerTransport
 from mcp.types import TextContent, Tool
 
+from server.error_ref import InputRejectedError, client_error
+
 from .auth import MCPAuthError, authenticate
 from .tools import dispatch_tool_call, get_tool_definitions
 
@@ -146,8 +148,14 @@ async def messages_endpoint(request: Request):
     try:
         await authenticate(request.headers.get("Authorization"))
     except MCPAuthError as exc:
+        # MCPAuthError's messages are developer-written, verified across all
+        # 6 raise sites in mcp_remote/auth.py -- none interpolate an inner
+        # exception. Same treatment as mcp_stdio/auth.py's identical catch.
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=client_error(
+                logger, "authentication failed", InputRejectedError(exc.args[0])
+            ),
         ) from exc
     return await _sse_transport.handle_post_message(
         request.scope, request.receive, request._send

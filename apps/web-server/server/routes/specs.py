@@ -15,8 +15,11 @@ from __future__ import annotations
 
 import logging
 
+from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, Header, HTTPException, status
 from pydantic import BaseModel, Field
+
+from server.error_ref import InputRejectedError, client_error
 
 from ._specpath import safe_component
 from ._tenancy import resolve_tenant
@@ -310,9 +313,29 @@ async def ingest_spec(
             repo_ref=req.repo,
         )
     except FileExistsError as exc:
-        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        # The message names spec_dir's server-side path -- redact rather than
+        # mark: unlike VisualBaselineError/provider_runtime's KeyError above,
+        # this one has not been verified never to reveal server topology.
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail=client_error(logger, "spec already exists", exc),
+        ) from exc
     except ValueError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        # create_spec_ingest_workspace's ValueError is developer-written about
+        # the caller's own spec_text/fmt -- verified: every raise site it can
+        # reach (SpecSourceError's 4 sites in spec_sources.py, stdlib
+        # ValueError from an unrecognised SpecFormat) is safe text about the
+        # caller's own input, and task_control.py no longer interpolates an
+        # inner exception into it (#718 fixed that at the source instead of
+        # here). Marked, not redacted, so a caller who sent an unparseable
+        # spec still gets the fixable "no acceptance criteria" / "could not
+        # parse" detail rather than a bare reference id.
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=client_error(
+                logger, "could not ingest spec", InputRejectedError(exc.args[0])
+            ),
+        ) from exc
 
     return {"task_id": req.spec_id, "project_id": req.project_id, **result}
 
@@ -382,8 +405,8 @@ async def attach_pr(project_id: str, spec_id: str, req: PrAttachRequest) -> dict
     except Exception:  # noqa: BLE001 — best-effort; source.json is the record
         logger.exception(
             "attach_pr: failed to post pending PR comment for %s/%s",
-            project_id,
-            spec_id,
+            sanitize_log(project_id),
+            sanitize_log(spec_id),
         )
         posted = {"ok": False, "error": "failed to post PR comment"}
 

@@ -57,7 +57,7 @@ from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Any
 
 from providers import BaseLLMProvider
-from providers._ollama_http import OllamaHTTPMixin
+from providers._ollama_http import OllamaHTTPMixin, resolve_ollama_base_url
 from providers.types import AssistantMessage, TextBlock
 
 logger = logging.getLogger(__name__)
@@ -66,7 +66,6 @@ logger = logging.getLogger(__name__)
 # Module-level defaults (overridable per-instance)
 # ---------------------------------------------------------------------------
 
-_DEFAULT_BASE_URL: str = "http://localhost:11434"
 _DEFAULT_MODEL: str = "llama3.2"
 _DEFAULT_TIMEOUT: int = 300  # seconds
 
@@ -108,12 +107,14 @@ class OllamaProvider(OllamaHTTPMixin, BaseLLMProvider):
     def __init__(
         self,
         model: str = _DEFAULT_MODEL,
-        base_url: str = _DEFAULT_BASE_URL,
+        base_url: str | None = None,
         timeout: int = _DEFAULT_TIMEOUT,
         extra_options: dict[str, Any] | None = None,
     ) -> None:
         self._model = model
-        self._base_url = base_url.rstrip("/")
+        # #1099: same resolution as the agentic provider — env when the
+        # caller names none, explicit argument still wins.
+        self._base_url = (base_url or resolve_ollama_base_url()).rstrip("/")
         self._timeout = timeout
         self._extra_options: dict[str, Any] = extra_options or {}
         # Default to 32K context for QA review of large codebases
@@ -188,8 +189,8 @@ class OllamaProvider(OllamaHTTPMixin, BaseLLMProvider):
                 asyncio.to_thread(self._http_post, url, payload),
                 timeout=float(self._timeout),
             )
-        except asyncio.TimeoutError:
-            raise asyncio.TimeoutError(
+        except TimeoutError:
+            raise TimeoutError(
                 f"Ollama API request timed out after {self._timeout}s. "
                 "Increase timeout= or reduce prompt size."
             )

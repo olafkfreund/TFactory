@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -106,7 +106,7 @@ def test_failed_delivery_persists_for_replay(tmp_path):
     assert len(list(tmp_path.glob("*.json"))) == 1  # still durable
 
     # Later pass (entry now due): sink is back.
-    future = datetime.now(timezone.utc) + timedelta(hours=2)
+    future = datetime.now(UTC) + timedelta(hours=2)
     stats2 = ob.relay_once(lambda e, i: True, root=tmp_path, now=future)
     assert stats2.delivered == 1
     assert list(tmp_path.glob("*.json")) == []
@@ -151,7 +151,7 @@ def test_not_due_entry_is_skipped(tmp_path):
     p = tmp_path / "evt-4.json"
     data = json.loads(p.read_text())
     data["next_attempt_at"] = (
-        datetime.now(timezone.utc) + timedelta(hours=1)
+        datetime.now(UTC) + timedelta(hours=1)
     ).isoformat()
     p.write_text(json.dumps(data))
 

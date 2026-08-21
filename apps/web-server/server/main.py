@@ -22,6 +22,7 @@ from starlette.status import HTTP_404_NOT_FOUND
 from . import env_bootstrap  # noqa: F401  — loads .env into os.environ first
 from .auth import TokenAuthMiddleware
 from .config import get_settings
+from .crypto.kms import enforce_kms_safety
 from .database.engine import init_db
 from .logging_config import setup_logging
 from .routes import (
@@ -51,6 +52,7 @@ from .routes import (
     search,
     skills,
     specs,
+    target_credentials,
     tasks,
     tasks_clarifications,
     tasks_logs,
@@ -58,7 +60,6 @@ from .routes import (
     tasks_views,
     tasks_worktree,
     terminal,
-    test_target_credentials,
     visual_inspection,
     well_known,
 )
@@ -495,7 +496,7 @@ def create_app() -> FastAPI:
     app.include_router(git_credentials.router)
 
     # Test-target credentials for "log in then test" (#107)
-    app.include_router(test_target_credentials.router)
+    app.include_router(target_credentials.router)
 
     # Provider runtime version manager (#121)
     app.include_router(provider_runtimes.router)
@@ -762,6 +763,10 @@ if __name__ == "__main__":
     import uvicorn
 
     settings = get_settings()
+
+    # AIFactory#1290: never come up with a KMS backend that was selected but
+    # cannot be constructed - every credential read/write would fail later.
+    enforce_kms_safety()
 
     # Build uvicorn config
     uvicorn_config = {

@@ -27,12 +27,17 @@ synthetic legacy key) so handlers can record key_id in audit logs.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from fastapi import HTTPException, Request, status
 
+from server.error_ref import InputRejectedError, client_error
+
 from ..config import get_settings
 from ..mcp_remote import auth as mcp_remote_auth
+
+logger = logging.getLogger(__name__)
 
 # Re-export the named scopes so callers don't have to know which
 # module owns the constants.
@@ -41,12 +46,14 @@ PROJECT_WRITE_SCOPE = "project:write"
 TASK_WRITE_SCOPE = "task:write"
 TASK_MERGE_SCOPE = "task:merge"
 
-ALL_SCOPES = frozenset({
-    MCP_READ_SCOPE,
-    PROJECT_WRITE_SCOPE,
-    TASK_WRITE_SCOPE,
-    TASK_MERGE_SCOPE,
-})
+ALL_SCOPES = frozenset(
+    {
+        MCP_READ_SCOPE,
+        PROJECT_WRITE_SCOPE,
+        TASK_WRITE_SCOPE,
+        TASK_MERGE_SCOPE,
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -110,9 +117,15 @@ def require_acw_scope(scope: str):
         try:
             key = await mcp_remote_auth.authenticate(f"Bearer {token}")
         except mcp_remote_auth.MCPAuthError as exc:
+            # MCPAuthError's messages are developer-written ("Invalid API
+            # key", "API key has expired", etc. -- verified across all 6
+            # raise sites in mcp_remote/auth.py, none interpolate an inner
+            # exception).
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=str(exc),
+                detail=client_error(
+                    logger, "authentication failed", InputRejectedError(exc.args[0])
+                ),
             ) from exc
 
         if not key.has_scope(scope):

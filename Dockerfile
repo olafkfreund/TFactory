@@ -33,7 +33,7 @@
 # the runtime stage -- so the base's CVE posture is not part of the attack
 # surface. The runtime stage stays on Chainguard, where it does matter.
 # Digest bumps land via Dependabot PRs (.github/dependabot.yml).
-FROM docker.io/node:26-bookworm-slim@sha256:9e6f9357d371591e32ab6f2d8a26d63bdd0d17c29eee3f4f3e7e454d9634bf73 AS frontend-build
+FROM docker.io/node:26-bookworm-slim@sha256:cd565714d4da3e84bfd341e31448f81d47c6362198f152345297c9c1154e6341 AS frontend-build
 
 USER root
 WORKDIR /build
@@ -101,8 +101,27 @@ RUN apk upgrade --no-cache
 #                   can create the sandbox.
 #   socat         — required alongside bwrap by the SDK sandbox network-proxy
 #                   path; its absence triggers the same warning.
+# Two version floors below are CVE remediation, not preference. `apk upgrade`
+# earlier in this stage does not clear either, because both packages come from
+# the base image layer and must be named explicitly to be pulled forward:
+#   libssl3 / libcrypto3 3.6.3-r3 — CVE-2026-14456 (HIGH), fixed in 3.6.3-r5.
+#                        Named together because they ship from the same openssl
+#                        origin and apk will not move one without the other.
+#   busybox 1.37.0-r61 — CVE-2026-38753 (DoS via crafted AWK in awk_sub) and
+#                        CVE-2026-38754 (heap overflow in ifsbreakup, shell/ash.c),
+#                        both HIGH, both fixed in 1.38.0-r0.
+#   wget    1.25.0-r14 — CVE-2026-58471 and CVE-2026-58472, both HIGH, both
+#                        fixed in 1.25.0-r15.
+# Floors rather than == pins, so the build stays green as Wolfi revs further
+# (1.38.0-r1 and later already exist); drop each once the base digest ships it.
+# Verified present in the Wolfi x86_64 APKINDEX, then confirmed against the
+# pinned base digest itself — a floor above the newest available version fails
+# the build outright.
 RUN apk add --no-cache \
         bash \
+        "busybox>=1.38.0-r0" \
+        "libcrypto3>=3.6.3-r5" \
+        "libssl3>=3.6.3-r5" \
         "binutils>2.46-r1" \
         bubblewrap \
         ca-certificates \
@@ -114,7 +133,7 @@ RUN apk add --no-cache \
         nodejs \
         npm \
         socat \
-        wget
+        "wget>=1.25.0-r15"
 
 # Epic #44 R3 — optionally bundle the rmux binary.
 #
@@ -182,8 +201,21 @@ RUN mkdir -p /home/nonroot/.npm-global \
 # never npm-installs them. The install-clis init container did this at pod start
 # and, on a slow/hung npm registry, ran 8+ min and stalled the whole rollout —
 # stranding in-flight specs. .npm-global/bin is already on PATH (below). Versions
-# are pinned here now (Dependabot tracks the Dockerfile); a bump is an image
-# rebuild + canary, same as any other dependency.
+# are pinned here now; a bump is an image rebuild + canary, same as any other
+# dependency.
+#
+# The pins are watched by the hub `agent-CLI freshness` job
+# (Factory/scripts/check_cli_freshness.py --open-bump-pr), which proposes bumps
+# as `chore/agent-cli-pins` across all three service repos at once and never
+# merges them, plus factory-gitops/.github/workflows/cli-canary.yml, which
+# asserts every repo pins all three CLIs identically and that each pin installs
+# and launches.
+#
+# NOT Dependabot, whatever an earlier version of this comment claimed
+# (factory-gitops#206). Dependabot's Dockerfile parser reads `FROM` lines only —
+# no package-ecosystem parses shell arguments inside a RUN layer, so it cannot
+# see the `@version` on the npm install below and never could. It does cover the
+# `FROM` lines in this file, and nothing else in it.
 #
 # `install.cjs` is NOT redundant with the npm postinstall (Factory#383). The
 # postinstall downloads the 275 MB platform-native binary correctly, but leaves
@@ -197,9 +229,9 @@ RUN mkdir -p /home/nonroot/.npm-global \
 # because nothing asserted the CLI works. Full path, since PATH is set for the
 # runtime user rather than for RUN.
 RUN npm install -g \
-        @anthropic-ai/claude-code@2.1.224 \
-        @openai/codex@0.147.0 \
-        @google/gemini-cli@0.54.4 \
+        @anthropic-ai/claude-code@2.1.238 \
+        @openai/codex@0.149.0 \
+        @google/gemini-cli@0.56.0 \
  && node /home/nonroot/.npm-global/lib/node_modules/@anthropic-ai/claude-code/install.cjs \
  && /home/nonroot/.npm-global/bin/claude --version \
  && npm cache clean --force \

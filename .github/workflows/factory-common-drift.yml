@@ -1,0 +1,172 @@
+name: factory_common drift
+
+# Byte-exact drift gate for the vendored factory_common package
+# (epic Factory#154; hub canonical: shared/factory-common/factory_common/).
+#
+# This repo vendors the hub's shared layer at apps/web-server/factory_common/.
+# That copy MUST stay byte-identical to the canonical at the SHA pinned in
+# apps/web-server/factory_common/.hub-sha. This job fetches the hub tree at that
+# SHA and diffs the tracked files; a byte mismatch fails the build.
+#
+# The gate ships in the SAME pull request as the vendored copy it guards, so
+# there is never a window in which the copy exists ungated. An unchecked
+# vendored copy is worse than no vendored copy, because it carries the
+# appearance of a contract (the reasoning in verification-core-drift.yml, and
+# Factory#397 / Factory#400).
+#
+# To change a vendored module: land it in the hub canonical first, re-vendor it
+# here byte-for-byte, then bump .hub-sha. Never edit a vendored copy to satisfy
+# a local style bar -- these copies are governed by this byte-exact gate, not by
+# the repo style config.
+#
+# PIN HAZARD (Factory#638, and the same note verification-core-drift.yml
+# carries): .hub-sha must hold a SQUASH-MERGE commit on hub `main`, never a hub
+# PR-branch head. The hub squash-merges, so a branch head stops existing the
+# moment its PR lands and the pin then resolves to nothing -- a gate that cannot
+# run rather than one that fails honestly.
+#
+# WHY A TARBALL AND NOT actions/checkout (TFactory#1052):
+# The first version of this gate used a second actions/checkout to pull the hub
+# at `ref: <the pinned SHA>`. That SHA is read from a file in the PR's own tree,
+# so CodeQL correctly raised actions/untrusted-checkout/medium against it -- a
+# NET-NEW alert introduced by this very workflow, in the same week the fleet
+# closed 50 of them (Factory#711). Fetching the canonical as a tarball removes
+# the finding at source rather than arguing it down: there is no checkout of a
+# PR-controlled ref, and no job token to leave behind in a .git/config. It also
+# matches factory-github-drift.yml in this repo, which fetches its canonical the
+# same way for unrelated reasons.
+#
+# THE PIN BYPASS THAT CHANGE DID NOT CLOSE, AND WHAT NOW DOES (TFactory#1049):
+# the pin is still chosen by the PR, and codeload serves any commit in the hub's
+# fork network (verified: an orphaned hub PR-branch head still returns 200). So
+# a PR could point .hub-sha at a fork commit crafted to match its own edited
+# copy and pass this gate -- a gate bypass, not code execution. The
+# "Assert the pin is really on hub main" step below now closes it: it asks the
+# hub, via `repos/olafkfreund/Factory/compare/main...<sha>`, whether the pin is
+# reachable from hub main, and fails on anything but `identical`/`behind`. See
+# .github/scripts/assert-hub-pin-on-main.sh for why that is the compare API and
+# not a local `git merge-base`, and for the one thing it still cannot close (a
+# fork PR runs its OWN copy of this workflow and can delete the step).
+
+on:
+  pull_request:
+    branches: [dev, main]
+    # No paths: filter, matching verification-core-drift.yml in this repo
+    # (Factory#525). A filter switches the gate off for exactly the PR that
+    # never touches the listed paths, and on a green PR page "the check did not
+    # run" is indistinguishable from "the check passed" (Factory#471). This gate
+    # is a four-file diff against a tarball; running it always costs seconds.
+  push:
+    branches: [dev, main]
+
+concurrency:
+  group: factory-common-drift-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  HUB_REPO: "olafkfreund/Factory"
+  VENDORED: "apps/web-server/factory_common"
+
+jobs:
+  drift:
+    name: vendored factory_common matches the hub canonical
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Read and validate the pinned hub SHA
+        id: pin
+        # Validated before use, because this file comes from the PR's own tree:
+        # on a fork PR its contents are attacker-controlled, and the value is
+        # interpolated into the download URL below. Anything that is not a bare
+        # 40-character commit id is rejected, so the pin cannot carry a path
+        # traversal, a query string or a second URL.
+        run: |
+          set -euo pipefail
+          sha="$(tr -d '[:space:]' < "${VENDORED}/.hub-sha")"
+          if ! printf '%s' "$sha" | grep -qE '^[0-9a-f]{40}$'; then
+            echo "${VENDORED}/.hub-sha is not a 40-character commit SHA: '${sha}'" >&2
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Assert the pin is really on hub main
+        # The 40-hex check above closes ref confusion and argument injection,
+        # not the BYPASS. GitHub keeps every fork in one shared object store, so
+        # a commit that exists only in a fork of Factory is a valid 40-hex SHA
+        # and codeload still serves it from Factory itself -- a fork PR could
+        # pin a canonical tree crafted to match its own drifted vendored copy
+        # and this gate would diff two matching trees and go green
+        # (TFactory#1049).
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.pin.outputs.sha }}
+        run: .github/scripts/assert-hub-pin-on-main.sh "${SHA}" "${VENDORED}/.hub-sha"
+
+      - name: Fetch the hub canonical tree at the pinned SHA
+        # Passed through env rather than interpolated straight into the script,
+        # so the value can never be parsed as shell.
+        env:
+          SHA: ${{ steps.pin.outputs.sha }}
+        # curl -f: a 404 (garbage-collected or non-existent pin) fails the job.
+        # No continue-on-error and no soft-skip anywhere in this gate: an
+        # unreachable hub is a gate that CANNOT run, and per standards rule 4.7
+        # that must fail rather than report success.
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/hub
+          curl -fsSL "https://codeload.github.com/${HUB_REPO}/tar.gz/${SHA}" -o /tmp/hub.tgz
+          tar -xzf /tmp/hub.tgz -C /tmp/hub --strip-components=3 \
+            --wildcards "*/shared/factory-common/*"
+
+      - name: Diff vendored factory_common against the hub canonical
+        run: |
+          set -euo pipefail
+          canonical="/tmp/hub/factory_common"
+          vendored="${VENDORED}"
+
+          # Discovered, not listed (Factory#767, matching AIFactory#1299). A
+          # hand-maintained file list is precisely how logsafe.py (Factory#717)
+          # and url_safety.py (Factory#734) became vendored-but-ungated: a list
+          # naming N files cannot notice an (N+1)th, so vendoring a new module
+          # without editing the list left it vendored and unguarded -- green
+          # gate, unchecked copy. The expected set IS the canonical directory's
+          # own file list, so a new canonical module is gated the moment it
+          # exists there, with no row for someone to forget to add.
+          #
+          # LIMITATION: `ls -1 ./*.py` only sees top-level .py files -- it
+          # misses subdirectories and dotfiles. factory_common has no
+          # subpackage today; if it ever gains one, this derivation needs a
+          # `find`-based rewrite alongside it, or a module could again land
+          # vendored and unguarded, just one directory level down.
+          expected="$(cd "${canonical}" && ls -1 ./*.py | sed 's|^\./||' | sort | tr '\n' ' ')"
+          if [ -z "${expected// /}" ]; then
+            echo "Canonical tree at the pinned SHA contains no .py files -- refusing"
+            echo "to compare against an empty expectation."
+            exit 1
+          fi
+          echo "canonical: ${expected}"
+
+          found="$(cd "${vendored}" && ls -1 ./*.py | sed 's|^\./||' | sort | tr '\n' ' ')"
+          if [ "${found}" != "${expected}" ]; then
+            echo "MODULE SET MISMATCH for ${vendored}"
+            echo "  canonical holds: ${expected}"
+            echo "  this copy holds: ${found}"
+            echo "Vendor the WHOLE canonical directory. factory_common/__init__.py"
+            echo "imports every sibling module, so a partial copy is an ImportError."
+            exit 1
+          fi
+
+          for f in ${expected}; do
+            if ! diff "${vendored}/${f}" "${canonical}/${f}"; then
+              echo "DRIFT: ${vendored}/${f} diverged from the hub canonical."
+              echo "Re-vendor from the hub and bump ${VENDORED}/.hub-sha,"
+              echo "or land the change in shared/factory-common/ in the hub first."
+              exit 1
+            fi
+          done
+          echo "No drift: vendored factory_common matches the pinned hub canonical."

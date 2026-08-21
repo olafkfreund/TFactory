@@ -66,15 +66,16 @@ jobs:
   # --------------------------------------------------------------------------
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - id: tags
         run: echo "sha=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
 
       # Build and LOAD (never push here). The smoke below is a publication gate:
       # a broken image, or an image carrying a stale harness, must not reach the
@@ -84,7 +85,7 @@ jobs:
       #
       # context: . — the repo root, because the Dockerfile COPYs portal_testing/.
       - name: Build tfactory-runner-portal-ui
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
         with:
           context: .
           file: docker/tfactory-runner-portal-ui/Dockerfile
@@ -171,6 +172,7 @@ jobs:
     needs: build
     if: "${{ github.event_name == 'push' }}"
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write      # push to GHCR
@@ -180,15 +182,15 @@ jobs:
     env:
       GITOPS_PAT: "${{ secrets.GITOPS_PAT }}"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - id: tags
         run: echo "sha=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
         with:
           registry: ghcr.io
           username: "${{ github.repository_owner }}"
@@ -199,7 +201,7 @@ jobs:
 
       - name: Push tfactory-runner-portal-ui to GHCR
         id: push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
         with:
           context: .
           file: docker/tfactory-runner-portal-ui/Dockerfile
@@ -231,7 +233,7 @@ jobs:
       # what `verify-tfactory-runner-signature` pins.
       # ---------------------------------------------------------------------
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3.7.0
+        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5  # v3.10.1
 
       - name: Sign image (cosign keyless via Sigstore + GitHub OIDC)
         run: cosign sign --yes "${IMAGE}@${{ steps.push.outputs.digest }}"
@@ -245,6 +247,11 @@ jobs:
             --certificate-identity-regexp "^https://github\.com/${{ github.repository }}/\.github/workflows/portal-ui-runner-image\.yml@refs/heads/main$" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             "${IMAGE}@${{ steps.push.outputs.digest }}"
+
+      # The self-test above asks cosign about cosign. This asks the question
+      # the CLUSTER asks. See the script header and Factory#804.
+      - name: Assert the signature is where Kyverno looks
+        run: ./.github/scripts/assert-signature-location.sh "${IMAGE}" "${{ steps.push.outputs.digest }}"
 
       # Move the Job's pin to the image just published. Without this the lane
       # keeps resolving a floating tag and #886 recurs the moment someone builds

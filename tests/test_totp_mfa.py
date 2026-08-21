@@ -78,8 +78,11 @@ def test_fill_totp_renders_runtime_generation():
     # The code is generated at fill time from the seed env var (never a static code).
     assert '__tfTotp(process.env["TF_TOTP_SEED"]' in ts
     assert '#otp' in ts
-    # The helper itself is present in the rendered setup.
-    assert "function __tfTotp(" in ts
+    # __tfTotp is imported from the extracted helper module (#1063), not
+    # inlined in the rendered setup — the helper is a plain, CodeQL-scanned
+    # .ts file that scaffold_auth_setup() copies alongside auth.setup.ts.
+    assert 'import { __tfTotp } from "./tftotp.helper";' in ts
+    assert "function __tfTotp(" not in ts
     # No literal seed/code is ever inlined.
     assert _SEED not in ts
 

@@ -2,19 +2,24 @@
 Git, Ollama, MCP, and utility routes.
 """
 
-import ipaddress
 import json
 import logging
 import re
 import shlex
 import shutil
-import socket
 import subprocess
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
+from factory_common.logsafe import sanitize_log
+from factory_common.url_safety import (
+    assert_safe_outbound_url,
+    build_no_redirect_opener,
+)
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
+
+from server.error_ref import InputRejectedError, client_error
 
 from ._specpath import safe_join
 
@@ -61,7 +66,7 @@ def run_git_command(args: list[str], cwd: str) -> dict:
             return {"success": False, "error": result.stderr.strip()}
         return {"success": True, "output": result.stdout.strip()}
     except Exception:
-        logger.exception("git command failed: %s", " ".join(args))
+        logger.exception("git command failed: %s", sanitize_log(" ".join(args)))
         return {"success": False, "error": "Failed to run git command"}
 
 
@@ -203,10 +208,16 @@ def _safe_ollama_base_url(base_url: str | None) -> str:
     """Validate a request-supplied Ollama base URL (SSRF guard, review H2).
 
     Ollama may legitimately run on the LAN (e.g. host.k3d.internal), so private
-    ranges aren't blocked, but the scheme must be http/https, the cloud-metadata
-    endpoint is blocked, and only ``scheme://netloc`` is returned -- dropping any
-    path/query/fragment so the appended ``/api/...`` can't be truncated (``#``)
-    or redirected to another resource.
+    ranges aren't blocked (``allow_private=True``), but the shared guard in
+    ``factory_common.url_safety`` enforces an http(s) scheme and resolves the host to
+    refuse the cloud metadata ranges by ADDRESS. The check this replaces
+    compared the hostname against two literal strings, which any of
+    ``169.254.169.254.nip.io``, an alternate spelling of the same address, or a
+    private name pointing there walked straight past.
+
+    Only ``scheme://netloc`` is returned -- dropping any path/query/fragment so
+    the appended ``/api/...`` can't be truncated (``#``) or redirected to
+    another resource.
     """
     if not base_url or not base_url.strip():
         return "http://localhost:11434"
@@ -215,17 +226,26 @@ def _safe_ollama_base_url(base_url: str | None) -> str:
     parsed = urlparse(base_url.strip())
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         raise HTTPException(status_code=400, detail="Invalid Ollama base URL")
-    if parsed.hostname in ("169.254.169.254", "metadata.google.internal"):
-        raise HTTPException(status_code=400, detail="Disallowed Ollama base URL")
-    return f"{parsed.scheme}://{parsed.netloc}"
+    normalized = f"{parsed.scheme}://{parsed.netloc}"
+    try:
+        assert_safe_outbound_url(normalized, allow_private=True)
+    except ValueError as exc:
+        # client_error returns an InputRejectedError's own message verbatim,
+        # so the caller keeps the fixable 400 -- and any OTHER ValueError
+        # reaching this handler, from a library rather than our validator,
+        # now gets a correlation id instead of being echoed (#1073).
+        raise HTTPException(
+            status_code=400,
+            detail=client_error(logger, "disallowed Ollama base URL", exc),
+        ) from exc
+    return normalized
 
 
 def check_ollama_running(base_url: str | None = None) -> bool:
     """Check if Ollama server is running."""
-    import urllib.request
     url = _safe_ollama_base_url(base_url)
     try:
-        urllib.request.urlopen(f"{url}/api/tags", timeout=5)
+        build_no_redirect_opener().open(f"{url}/api/tags", timeout=5)
         return True
     except Exception:
         return False
@@ -266,11 +286,10 @@ async def install_ollama():
 async def list_ollama_models(baseUrl: str | None = Query(None)):
     """List available Ollama models."""
     import json
-    import urllib.request
 
     url = _safe_ollama_base_url(baseUrl)
     try:
-        response = urllib.request.urlopen(f"{url}/api/tags", timeout=10)
+        response = build_no_redirect_opener().open(f"{url}/api/tags", timeout=10)
         data = json.loads(response.read().decode())
         models = [m["name"] for m in data.get("models", [])]
         return {"success": True, "data": models}
@@ -282,14 +301,13 @@ async def list_ollama_models(baseUrl: str | None = Query(None)):
 async def list_ollama_embedding_models(baseUrl: str | None = Query(None)):
     """List Ollama embedding models with installation status."""
     import json
-    import urllib.request
 
     url = _safe_ollama_base_url(baseUrl)
 
     # Get installed models from Ollama
     installed_models = set()
     try:
-        response = urllib.request.urlopen(f"{url}/api/tags", timeout=10)
+        response = build_no_redirect_opener().open(f"{url}/api/tags", timeout=10)
         data = json.loads(response.read().decode())
         for m in data.get("models", []):
             name = m.get("name", "")
@@ -336,7 +354,7 @@ async def pull_ollama_model(request: PullModelRequest):
             method="POST"
         )
         # This is a blocking call - for large models consider background task
-        response = urllib.request.urlopen(req, timeout=600)  # 10 min timeout
+        response = build_no_redirect_opener().open(req, timeout=600)  # 10 min timeout
         result = json.loads(response.read().decode())
 
         # Check if pull was successful
@@ -768,88 +786,69 @@ class McpServerConfig(BaseModel):
     headers: dict | None = None
 
 
-@mcp_router.post("/health")
-def _is_safe_mcp_url_host(url: str) -> bool:
-    """SSRF guard for a request-supplied MCP server URL (companion to
-    ``_safe_ollama_base_url``).
+def _safe_mcp_url(url: str) -> str:
+    """Validate a request-supplied MCP server URL and return the value to fetch.
 
-    MCP servers commonly run on localhost/LAN, so loopback and private ranges are
-    allowed by design — but EVERY resolved address is checked and cloud-metadata /
-    link-local (``169.254.0.0/16``, ``fe80::/10``), reserved, multicast and
-    unspecified addresses are blocked, so a configured value cannot be pointed at
-    the instance-metadata service or a link-local target. Loopback is tested
-    BEFORE the reserved test so IPv6 ``::1`` (which ``is_reserved`` also matches)
-    is not wrongly rejected. An unresolvable host fails closed.
+    PERMISSIVE posture (``allow_private=True``), same reasoning as
+    ``_safe_ollama_base_url``: most MCP servers run on localhost or a
+    cluster-internal address, so refusing RFC-1918 would delete the feature
+    rather than harden it. What is kept is what costs no legitimate use -- an
+    http(s) scheme, and a hard refusal of the cloud metadata addresses.
 
-    ponytail: check-then-connect — urllib re-resolves the host, so a DNS-rebinding
-    attacker who controls the name could still differ between check and request;
-    pin the resolved IP if that vector matters.
+    This replaces ``_is_safe_mcp_url_host`` (#794), which was a second, hand-
+    rolled dialect of the same address check. It was adequate, which is exactly
+    the problem: two dialects drift, and a fix applied to one misses the other
+    (#1047). The path/query are preserved -- an MCP endpoint legitimately lives
+    under a path such as ``/mcp`` -- and the fragment is dropped because it is
+    never sent on the wire and only serves to truncate what a reader sees.
+
+    Behaviour change, stated rather than implied: the shared guard's permissive
+    posture refuses the metadata ranges but not multicast, unspecified or
+    other reserved addresses, which the old dialect also refused. None of those
+    complete a TCP handshake to something worth reaching; the metadata range,
+    which does, is refused by both.
+
+    Raises ``InputRejectedError`` (a ``ValueError``), whose message the caller
+    may hand back verbatim.
     """
-    hostname = urlparse(url).hostname
-    if not hostname:
-        return False
-    try:
-        addresses = socket.getaddrinfo(
-            hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM
-        )
-    except (socket.gaierror, UnicodeError, OSError):
-        logger.warning("MCP health check: cannot resolve host %r (blocked)", hostname)
-        return False
-    if not addresses:
-        return False
-    for info in addresses:
-        try:
-            ip = ipaddress.ip_address(info[4][0])
-        except ValueError:
-            return False
-        if ip.is_loopback:
-            continue  # local MCP server — allowed (before the reserved test for ::1)
-        if ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
-            logger.warning(
-                "MCP health check: blocked unsafe address %s for host %r", ip, hostname
-            )
-            return False
-        # private (10/8, 172.16/12, 192.168/16) and public both fall through = allowed
-    return True
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise InputRejectedError("Unsupported or invalid server URL")
+    validated = urlunparse(
+        (parsed.scheme, parsed.netloc, parsed.path, parsed.params, parsed.query, "")
+    )
+    assert_safe_outbound_url(validated, allow_private=True)
+    return validated
 
 
+@mcp_router.post("/health")
 async def check_mcp_health(server: McpServerConfig):
     """Check health of an MCP server."""
     if server.type == "http" and server.url:
         import urllib.request
 
-        # SSRF guard: an MCP server URL is configured by the operator themselves
-        # and, by design, very often points at a local/LAN endpoint (most MCP
-        # servers run on localhost). We restrict the scheme to http/https so a
-        # configured value cannot be coerced into a file://, gopher://, ftp://
-        # (etc.) request, AND (SSRF hardening) resolve the host and block
-        # cloud-metadata / link-local / reserved addresses — loopback + private
-        # stay allowed for the intended LAN use case (_is_safe_mcp_url_host).
-        parsed = urlparse(server.url)
-        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        try:
+            target = _safe_mcp_url(server.url)
+        except ValueError as exc:
             return {
                 "success": True,
                 "data": {
                     "serverId": server.id,
                     "status": "unhealthy",
-                    "message": "Unsupported or invalid server URL",
-                },
-            }
-        if not _is_safe_mcp_url_host(server.url):
-            return {
-                "success": True,
-                "data": {
-                    "serverId": server.id,
-                    "status": "unhealthy",
-                    "message": "Server URL resolves to a blocked address",
+                    "message": client_error(logger, "disallowed MCP server URL", exc),
                 },
             }
         try:
-            req = urllib.request.Request(server.url, method="HEAD")
+            # ``target``, not ``server.url``: the guard returns the value to
+            # fetch so a call site cannot check one string and request another.
+            req = urllib.request.Request(target, method="HEAD")
             if server.headers:
                 for key, value in server.headers.items():
                     req.add_header(key, value)
-            urllib.request.urlopen(req, timeout=5)
+            # No-redirect opener: _safe_mcp_url validated the host that was
+            # configured, and a 302 to 169.254.169.254 defeats any check made
+            # before the request was sent.
+            build_no_redirect_opener().open(req, timeout=5)
             return {
                 "success": True,
                 "data": {

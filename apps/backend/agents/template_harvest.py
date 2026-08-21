@@ -26,7 +26,7 @@ import logging
 import os
 import re
 from collections.abc import Iterable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -38,7 +38,7 @@ _MUTATION_OK = frozenset({"killed", "no_mutation", "skip", "skipped", None})
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _slug(s: str) -> str:

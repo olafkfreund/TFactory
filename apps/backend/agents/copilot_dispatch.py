@@ -45,7 +45,7 @@ import json
 import logging
 import os
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -332,7 +332,7 @@ def _write_dispatch_metadata(
         "enabled": dispatched,
         "issue_number": issue_number,
         "pr_number": pr_number,
-        "dispatched_at": datetime.now(timezone.utc).isoformat(),
+        "dispatched_at": datetime.now(UTC).isoformat(),
         "timed_out": timed_out,
     }
     meta_path.write_text(json.dumps(meta, indent=2))

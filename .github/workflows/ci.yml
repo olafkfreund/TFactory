@@ -18,11 +18,12 @@ jobs:
   backend-lint-test:
     name: backend (ruff + pytest)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
@@ -36,7 +37,7 @@ jobs:
         run: python scripts/check_schema_drift.py
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
         with:
           version: "latest"
 
@@ -89,6 +90,7 @@ jobs:
   critical-fast:
     name: critical (fast PR gate)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # Fast, hermetic, high-signal subset (pytest -m critical; the curated
     # module list lives in tests/conftest.py CRITICAL_MODULES). Mirrors the
     # full backend job's setup but runs only the critical lane so PRs get a
@@ -96,15 +98,15 @@ jobs:
     # `backend (ruff + pytest)`. Mark this a required check in branch
     # protection so it gates merges.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
         with:
           version: "latest"
 
@@ -130,6 +132,7 @@ jobs:
   postgres-acceptance:
     name: postgres (P1 acceptance, PG ${{ matrix.pg }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -151,15 +154,15 @@ jobs:
     env:
       TEST_POSTGRES_URL: "postgresql+asyncpg://tfactory_test:tfactory_test@localhost:5432/tfactory_test"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
         with:
           version: "latest"
 
@@ -179,6 +182,7 @@ jobs:
   secrets-acceptance:
     name: secrets (P2 acceptance)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # P2 EncryptedString / KMS acceptance. Three services run as
     # sidecars so the integration tests gate every PR:
     #   - postgres   → P2.3 column migration + backfill tests
@@ -235,15 +239,15 @@ jobs:
       VAULT_ADDR: "http://localhost:8200"
       VAULT_TOKEN: "root-test-token"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
         with:
           version: "latest"
 
@@ -263,13 +267,14 @@ jobs:
   oidc-acceptance:
     name: oidc (P3 acceptance)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # P3 OIDC SSO tests. Boots a Keycloak dev-mode container with the
     # `tfactory` realm imported from tests/oidc/fixtures/keycloak-realm.json.
     # Tests that need the IdP read OIDC_ISSUER_URL/CLIENT_ID/SECRET from
     # the job env. Until P3.1 lands real test bodies, the suite collects
     # cleanly with all 6 acceptance tests in skip-pending state.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Start Keycloak (with realm import)
         # Keycloak's official image's `start-dev` mode auto-unseals
@@ -294,12 +299,12 @@ jobs:
           done
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
         with:
           version: "latest"
 
@@ -322,15 +327,16 @@ jobs:
   helm-acceptance:
     name: helm (P4 acceptance)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # P4 Helm chart tests. The harness lands first (P4.0a) with all
     # seven acceptance tests skip-pending; chart templates + lint +
     # kubeconform + kind install arrive in P4.1+. Job is green from
     # day one — same pattern as P2.0a and P3.0a.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
         with:
           version: "3.16.0"
 
@@ -342,19 +348,19 @@ jobs:
           sudo install /tmp/kubeconform /usr/local/bin/
 
       - name: Install kind + kubectl
-        uses: helm/kind-action@v1.10.0
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc  # v1.14.0
         with:
           install_only: true
           version: "v0.24.0"
           kubectl_version: "v1.30.0"
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
         with:
           version: "latest"
 
@@ -372,20 +378,21 @@ jobs:
   audit-acceptance:
     name: audit (P5 acceptance)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # P5 audit-hardening tests run entirely in-process against
     # in-memory SQLite — hash chain, retention job, GDPR erasure,
     # and export streaming are all pure-Python. No service container
     # needed. Same TDD-first scaffold as P2.0a/P3.0a/P4.0a.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
         with:
           version: "latest"
 
@@ -405,16 +412,17 @@ jobs:
   obs-acceptance:
     name: obs (P6 acceptance)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
         with:
           version: "latest"
 
@@ -434,12 +442,13 @@ jobs:
   rmux-acceptance:
     name: rmux (R0b acceptance)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # Epic #44 / issue #45. R0b ships apps/web-server/server/rmux/wrapper.py
     # — the async subprocess wrapper that every later rmux phase depends
     # on. Tests run against a real rmux daemon installed on the runner.
     # The binary is pinned by SHA-256; see design doc §3.4.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install rmux v0.3.1 (linux-x86_64 gnu, SHA-256 pinned)
         run: |
@@ -464,12 +473,12 @@ jobs:
           rmux -V
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
         with:
           version: "latest"
 
@@ -489,20 +498,21 @@ jobs:
   evidence-acceptance:
     name: evidence (P7 acceptance)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # P7 closes the v1.0 Epic. Tests verify the compliance docs + the
     # three ship-readiness drill scripts exist and have the structural
     # contract auditors expect. No service containers — purely
     # filesystem / subprocess validation.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
         with:
           version: "latest"
 
@@ -520,11 +530,12 @@ jobs:
   frontend-typecheck:
     name: frontend (typecheck)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
           cache: "npm"
@@ -539,13 +550,14 @@ jobs:
   frontend-test:
     name: frontend (vitest)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # Blocking vitest gate (Factory hub #261): runs the apps/frontend-web
     # component/unit suite so the tests can no longer silently rot.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
           cache: "npm"
@@ -557,9 +569,32 @@ jobs:
       - name: Run frontend tests
         run: npm -w apps/frontend-web run test
 
+  script-tests:
+    name: scripts (node --test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # `npm run test:scripts` has existed for a while and no workflow ran it, so
+    # scripts/argv-safety.test.mjs was passing into a void -- the same shape as
+    # the untriggered lanes in Factory#693 and #805. Gating it here means the
+    # repo's own scripts are covered by something.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      # No `npm ci` on purpose: these tests use only node: built-ins, so
+      # requiring the workspace install would make the gate slower and give it
+      # a dependency it does not have.
+      - name: Run script tests
+        run: npm run test:scripts
+
   frontend-lint:
     name: frontend (eslint, blocking)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # Blocking ESLint gate (Factory hub #261): ESLint 9 flat config
     # (typescript-eslint strictTypeChecked + react-hooks + jsx-a11y),
     # mirroring AIFactory. Tuned green at adoption via a warning baseline
@@ -567,10 +602,10 @@ jobs:
     # so net-new ERRORS and net-new WARNINGS over the baseline both fail
     # the build. Ratchet plan: see eslint.config.js TODOs.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
           cache: "npm"
@@ -587,12 +622,13 @@ jobs:
   docker-acceptance:
     name: docker (P0 acceptance)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # Docker is preinstalled on ubuntu-latest runners. Tests opt-in via
     # `-m docker`; all are skipped until P0.1+ implementations land,
     # so this job is green from day 1 and turns red the moment an
     # implementation chunk lands but its acceptance test doesn't pass.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Docker Buildx
         # buildx is needed for `docker buildx imagetools inspect`, used by
@@ -600,58 +636,44 @@ jobs:
         # support both amd64 + arm64 manifests. QEMU is NOT needed here —
         # the test inspects manifests, it doesn't cross-build. Cross-arch
         # building happens in release.yml at tag push time only.
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
 
       # Trivy is PINNED, not `latest` (Factory#664). `latest` means the scanner
       # changes without a commit, so a scan verdict is not attributable to
       # anything in git and a Trivy release can turn the fleet red at once with
       # no change from us. Bump deliberately, like image digests and CLI pins.
       #
-      # The retry covers a download that failed after the version resolved
-      # (observed once in 37 runs, 2026-08-10). A plain loop rather than a retry
-      # action: five lines against third-party surface in the CVE-scan path.
+      # Installed by aquasecurity's own SHA-pinned action, not by curl-ing
+      # `contrib/install.sh` and `sh`-ing it (Factory#808). The old form fetched
+      # that script by a SHA held in this workflow file, and on `pull_request`
+      # the workflow file is the PR's own copy; every fork of a repo shares one
+      # object store with upstream, so a fork PR could repoint the SHA at its own
+      # script and the runner would execute it. An action `uses:` pin resolves
+      # against the action repo and is not repointable that way. The action also
+      # puts the binary on $GITHUB_PATH itself, so no manual PATH append here.
       #
       # Do NOT add `continue-on-error` - a scan that passes without scanning is
       # a control that would look identical having done nothing (rule 4.10). The
-      # closing `--version` asserts the binary is runnable, not assumed.
+      # `--version` step below asserts the binary is runnable, not assumed.
       - name: Install Trivy (for P0.8 CVE scan)
-        env:
-          TRIVY_VERSION: "0.73.0"
-          # The installer is fetched by COMMIT, not by the vX.Y.Z tag: a tag is
-          # mutable and can be moved, so a tag-pinned script can change with no
-          # change on our side - which would defeat the point of pinning at all.
-          # This is the commit v0.73.0 points at; the fetched script is byte-identical
-          # to the tag copy, verified before pinning.
-          TRIVY_INSTALLER_SHA: "40c73e5d6166dcc0346a1ab4e94499d1572854e4"
-        run: |
-          set -euo pipefail
-          for attempt in 1 2 3; do
-            if curl -sSfL --retry 3 --retry-delay 5 \
-                 "https://raw.githubusercontent.com/aquasecurity/trivy/${TRIVY_INSTALLER_SHA}/contrib/install.sh" \
-                 -o /tmp/install-trivy.sh \
-               && sh /tmp/install-trivy.sh -b "${HOME}/.local/bin" "v${TRIVY_VERSION}"; then
-              break
-            fi
-            if [ "$attempt" = "3" ]; then
-              echo "::error::Trivy v${TRIVY_VERSION} could not be installed after 3 attempts."
-              exit 1
-            fi
-            echo "install attempt ${attempt} failed; retrying in 15s"
-            sleep 15
-          done
-          echo "${HOME}/.local/bin" >> "$GITHUB_PATH"
-          "${HOME}/.local/bin/trivy" --version
+        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567  # v0.3.1
+        with:
+          version: v0.73.0
+          cache: false
+
+      - name: Assert Trivy is runnable
+        run: trivy --version
 
       - name: Install Syft (for P0.9 SBOM generation)
-        uses: anchore/sbom-action/download-syft@v0.17.8
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610  # v0.24.0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
         with:
           version: "latest"
 

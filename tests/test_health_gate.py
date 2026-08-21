@@ -2,6 +2,14 @@
 
 Pure — the HTTP probe and kubectl call are injected via seams, so no network or
 cluster is touched.
+
+The probe hosts are LITERAL addresses rather than names like ``x`` or
+``app.example.com``. Since #1117 ``probe`` SSRF-checks the URL before handing it
+to the opener, and that check resolves the host; a name would put a real DNS
+lookup in front of every one of these tests, which is neither hermetic nor fast.
+``8.8.8.8`` is used because ``ipaddress`` reports it ``is_global`` — the check's
+default posture refuses anything else, so a private stand-in would pass for the
+wrong reason. The refusal cases live in test_ssrf_remaining_sinks.py.
 """
 
 from __future__ import annotations
@@ -18,12 +26,12 @@ from agents.health_gate import (
 
 
 def test_probe_ok():
-    r = probe("http://x/healthz", opener=lambda u, t: 200)
+    r = probe("http://8.8.8.8/healthz", opener=lambda u, t: 200)
     assert r.ok and r.status_code == 200 and r.detail == ""
 
 
 def test_probe_wrong_status():
-    r = probe("http://x/healthz", expect_status=200, opener=lambda u, t: 503)
+    r = probe("http://8.8.8.8/healthz", expect_status=200, opener=lambda u, t: 503)
     assert not r.ok
     assert "got 503" in r.detail
 
@@ -32,7 +40,7 @@ def test_probe_unreachable():
     def boom(u, t):
         raise ConnectionError("refused")
 
-    r = probe("http://x/healthz", opener=boom)
+    r = probe("http://8.8.8.8/healthz", opener=boom)
     assert not r.ok
     assert "unreachable" in r.detail
 
@@ -41,7 +49,7 @@ def test_probe_unreachable():
 
 
 def test_gate_passes_through_without_config():
-    assert gate("http://x", None).ok is True
+    assert gate("http://8.8.8.8", None).ok is True
     assert gate(None, {"path": "/healthz"}).ok is True
 
 
@@ -52,15 +60,15 @@ def test_gate_builds_url_and_probes():
         seen["url"] = u
         return 200
 
-    r = gate("https://app.example.com/", {"path": "/healthz", "expect_status": 200}, opener=opener)
+    r = gate("https://8.8.8.8/", {"path": "/healthz", "expect_status": 200}, opener=opener)
     assert r.ok
-    assert seen["url"] == "https://app.example.com/healthz"
+    assert seen["url"] == "https://8.8.8.8/healthz"
 
 
 def test_gate_fails_on_bad_status():
-    r = gate("https://app.example.com", {"path": "/up", "expect_status": 200}, opener=lambda u, t: 500)
+    r = gate("https://8.8.8.8", {"path": "/up", "expect_status": 200}, opener=lambda u, t: 500)
     assert not r.ok
-    assert r.url == "https://app.example.com/up"
+    assert r.url == "https://8.8.8.8/up"
 
 
 # ─── resolve_target_url ──────────────────────────────────────────────────

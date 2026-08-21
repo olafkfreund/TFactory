@@ -64,4 +64,12 @@ class RetryingRunner:
         if last_outcome is not None:
             return last_outcome
         # Every attempt raised — propagate so run_corpus records an ERROR.
-        raise last_exc  # type: ignore[misc]
+        # `last_exc is not None` holds by construction (`attempts >= 1`, and the
+        # only way out of the loop without returning is the except branch), but
+        # state it in code rather than in a `type: ignore`: if that reasoning
+        # ever stops holding, bare `raise None` raises
+        # TypeError("exceptions must derive from BaseException") from this
+        # frame and buries the real fault (py/illegal-raise).
+        if last_exc is None:  # pragma: no cover - unreachable by construction
+            raise RuntimeError(f"retry loop for {entry.test_id} produced no outcome")
+        raise last_exc

@@ -15,8 +15,11 @@ from __future__ import annotations
 
 import logging
 
+from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from server.error_ref import InputRejectedError, client_error
 
 from ..database import User
 from ..database.engine import get_db
@@ -45,15 +48,22 @@ async def trigger_gdpr_erasure(
     """
     try:
         summary = await erase_user(db, user_id)
-    except ValueError as exc:
+    except InputRejectedError as exc:
+        # erase_user raises InputRejectedError directly (#718) rather than a
+        # bare ValueError -- marked at the one place that actually knows the
+        # message is developer-written about the caller's own user_id, not
+        # re-derived here from a ValueError this handler cannot itself vouch
+        # for. InputRejectedError still subclasses ValueError, so any other
+        # existing `except ValueError` around this call keeps working.
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
-        )
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=client_error(logger, "user not found", exc),
+        ) from exc
 
     logger.warning(
-        "GDPR erasure executed: user_id=%s by actor=%s audit_rows=%d",
-        user_id,
-        getattr(current_user, "id", "unknown"),
-        summary["audit_rows_anonymized"],
+        "GDPR erasure executed: user_id=%s by actor=%s audit_rows=%s",
+        sanitize_log(user_id),
+        sanitize_log(getattr(current_user, "id", "unknown")),
+        sanitize_log(summary["audit_rows_anonymized"]),
     )
     return summary

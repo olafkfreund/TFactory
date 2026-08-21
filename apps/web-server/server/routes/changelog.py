@@ -10,8 +10,11 @@ import logging
 import re
 from pathlib import Path as FilePath
 
+from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, HTTPException, Path
 from pydantic import BaseModel
+
+from server.error_ref import client_error
 
 from ..services.insights_service import get_insights_service
 from ._specpath import safe_component
@@ -188,7 +191,7 @@ async def load_task_specs(projectId: str = Path(...), request: LoadSpecsRequest 
                     "path": str(spec_path.relative_to(project_path))
                 })
             except Exception:
-                logger.exception("Failed to read spec for task %s", task_id)
+                logger.exception("Failed to read spec for task %s", sanitize_log(task_id))
                 specs.append({
                     "taskId": task_id,
                     "content": None,
@@ -206,7 +209,7 @@ async def load_task_specs(projectId: str = Path(...), request: LoadSpecsRequest 
                         "path": str(matching[0].relative_to(project_path))
                     })
                 except Exception:
-                    logger.exception("Failed to read spec for task %s", task_id)
+                    logger.exception("Failed to read spec for task %s", sanitize_log(task_id))
                     specs.append({
                         "taskId": task_id,
                         "content": None,
@@ -980,7 +983,7 @@ async def clear_insights_session(projectId: str = Path(...)):
         logging.getLogger(__name__).error(f"Failed to clear insights session: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to clear insights session: {str(e)}"
+            detail=client_error(logger, "Failed to clear insights session", e)
         )
 
 

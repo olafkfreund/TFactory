@@ -13,9 +13,10 @@ import json
 import logging
 from dataclasses import dataclass, field
 
+from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from ..auth import WebSocketAuthError, authenticate_websocket, verify_websocket_token
+from ..auth import WebSocketAuthError, authenticate_websocket
 
 logger = logging.getLogger(__name__)
 
@@ -118,9 +119,10 @@ async def events_websocket(websocket: WebSocket):
     # If authenticated user, load their org memberships for routing
     if user_info and user_info.get("id"):
         try:
-            from ..database.engine import async_session_factory
-            from ..database import OrgMember
             from sqlalchemy import select
+
+            from ..database import OrgMember
+            from ..database.engine import async_session_factory
 
             async with async_session_factory() as session:
                 result = await session.execute(
@@ -142,7 +144,7 @@ async def events_websocket(websocket: WebSocket):
                 if data == "ping":
                     await websocket.send_text("pong")
 
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 try:
                     await websocket.send_text(json.dumps({"type": "ping"}))
                 except Exception:
@@ -168,9 +170,18 @@ async def emit_task_status(task_id: str, status: str, review_reason: str | None 
     payload = {"taskId": task_id, "status": status}
     if review_reason:
         payload["reviewReason"] = review_reason
-        logging.getLogger(__name__).info(f"[WebSocket] Emitting task:status - taskId: {task_id}, status: {status}, reviewReason: {review_reason}")
+        logging.getLogger(__name__).info(
+            "[WebSocket] Emitting task:status - taskId: %s, status: %s, reviewReason: %s",
+            sanitize_log(task_id),
+            sanitize_log(status),
+            sanitize_log(review_reason),
+        )
     else:
-        logging.getLogger(__name__).info(f"[WebSocket] Emitting task:status - taskId: {task_id}, status: {status}")
+        logging.getLogger(__name__).info(
+            "[WebSocket] Emitting task:status - taskId: %s, status: %s",
+            sanitize_log(task_id),
+            sanitize_log(status),
+        )
     await broadcast_event("task:status", payload)
 
 
@@ -178,7 +189,11 @@ async def emit_task_log(task_id: str, log: str):
     import logging
     # Only log the first 50 chars to avoid flooding logs with full log content
     log_preview = log[:50].replace('\n', '\\n') if len(log) > 50 else log.replace('\n', '\\n')
-    logging.getLogger(__name__).debug(f"[WebSocket] Emitting task:log - taskId: {task_id}, log: {log_preview}...")
+    logging.getLogger(__name__).debug(
+        "[WebSocket] Emitting task:log - taskId: %s, log: %s...",
+        sanitize_log(task_id),
+        sanitize_log(log_preview),
+    )
     await broadcast_event("task:log", {"taskId": task_id, "log": log})
 
 
@@ -188,7 +203,12 @@ async def emit_task_update(task_id: str, task_data: dict):
     exec_progress = task_data.get("executionProgress", {})
     phase = exec_progress.get("phase", "N/A") if exec_progress else "N/A"
     progress = exec_progress.get("phaseProgress", "N/A") if exec_progress else "N/A"
-    logging.getLogger(__name__).info(f"[WebSocket] Emitting task:update - taskId: {task_id}, phase: {phase}, progress: {progress}%")
+    logging.getLogger(__name__).info(
+        "[WebSocket] Emitting task:update - taskId: %s, phase: %s, progress: %s%%",
+        sanitize_log(task_id),
+        sanitize_log(phase),
+        sanitize_log(progress),
+    )
     await broadcast_event("task:update", {"taskId": task_id, **task_data})
 
 
@@ -225,8 +245,8 @@ async def emit_task_logs_stream(spec_id: str, chunk: dict):
     chunk_type = chunk.get("type", "unknown")
     content_preview = chunk.get("content", "")[:50].replace('\n', '\\n') if chunk.get("content") else ""
     logging.getLogger(__name__).debug(
-        f"[WebSocket] Emitting task-logs:stream - specId: {spec_id}, "
-        f"type: {chunk_type}, content: {content_preview}..."
+        f"[WebSocket] Emitting task-logs:stream - specId: {sanitize_log(spec_id)}, "
+        f"type: {sanitize_log(chunk_type)}, content: {sanitize_log(content_preview)}..."
     )
     await broadcast_event("task-logs:stream", {"specId": spec_id, "chunk": chunk})
 
@@ -248,13 +268,13 @@ async def emit_subtask_update(task_id: str, subtask_id: str, status: str, previo
     logger = logging.getLogger(__name__)
     if previous_status:
         logger.info(
-            f"[WebSocket] Emitting task:subtask-update - taskId: {task_id}, "
-            f"subtaskId: {subtask_id}, status: {previous_status} -> {status}"
+            f"[WebSocket] Emitting task:subtask-update - taskId: {sanitize_log(task_id)}, "
+            f"subtaskId: {sanitize_log(subtask_id)}, status: {sanitize_log(previous_status)} -> {sanitize_log(status)}"
         )
     else:
         logger.info(
-            f"[WebSocket] Emitting task:subtask-update - taskId: {task_id}, "
-            f"subtaskId: {subtask_id}, status: {status}"
+            f"[WebSocket] Emitting task:subtask-update - taskId: {sanitize_log(task_id)}, "
+            f"subtaskId: {sanitize_log(subtask_id)}, status: {sanitize_log(status)}"
         )
     await broadcast_event("task:subtask-update", {
         "taskId": task_id,

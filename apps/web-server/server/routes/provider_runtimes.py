@@ -14,11 +14,14 @@ Installs are explicit (POST only), never silent.
 
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
+
+from server.error_ref import InputRejectedError, client_error
 
 # Add apps/backend to sys.path so ``import provider_runtime`` resolves (the
 # canonical pattern used by routes/mcp.py + services/auto_fix_service.py).
@@ -27,6 +30,8 @@ if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
 
 import provider_runtime as pr  # noqa: E402  (after sys.path insert)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/provider-runtimes", tags=["Provider Runtimes"])
 
@@ -64,8 +69,16 @@ def pin_provider_runtime(name: str, body: _VersionBody) -> dict:
     try:
         pr.set_pin(name, body.version)
     except KeyError as exc:
+        # provider_runtime.get_runtime's KeyError is developer-written
+        # ("unknown provider runtime %r; known: %s") -- verified, no inner
+        # exception interpolated. Marked safe here rather than via str(exc):
+        # KeyError is a stdlib type any code could raise, so the route
+        # boundary is where "this specific KeyError is safe" is enforced.
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=client_error(
+                logger, "unknown provider runtime", InputRejectedError(exc.args[0])
+            ),
         ) from exc
     return _status_dict(pr.get_status(name, check_latest=False))
 
@@ -75,12 +88,28 @@ def update_provider_runtime(name: str, body: _VersionBody) -> dict:
     try:
         result = pr.run_install(name, body.version)
     except KeyError as exc:
+        # provider_runtime.get_runtime's KeyError is developer-written
+        # ("unknown provider runtime %r; known: %s") -- verified, no inner
+        # exception interpolated. Marked safe here rather than via str(exc):
+        # KeyError is a stdlib type any code could raise, so the route
+        # boundary is where "this specific KeyError is safe" is enforced.
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=client_error(
+                logger, "unknown provider runtime", InputRejectedError(exc.args[0])
+            ),
         ) from exc
     except ValueError as exc:
+        # install_argv's ValueError is developer-written ("X is user-managed"
+        # / "cannot build an install command for kind %r"), verified, no
+        # inner exception interpolated.
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=client_error(
+                logger,
+                "cannot install this provider runtime",
+                InputRejectedError(exc.args[0]),
+            ),
         ) from exc
     return {
         "name": result.name,

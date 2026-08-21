@@ -19,15 +19,21 @@ from __future__ import annotations
 
 import json
 import logging
+import urllib.error
+import urllib.parse
+import urllib.request
 from typing import Any
 
-import urllib.error
-import urllib.request
-
+from factory_common.url_safety import (
+    assert_safe_outbound_url,
+    build_no_redirect_opener,
+)
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, HttpUrl, SecretStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from server.error_ref import InputRejectedError, client_error
 
 from ..database import LLMEndpoint, User
 from ..database.engine import get_db
@@ -121,6 +127,40 @@ def _to_response(endpoint: LLMEndpoint) -> EndpointResponse:
     )
 
 
+def _safe_probe_models_url(base_url: str) -> str:
+    """Validate a BYO LLM endpoint's base URL and return the URL to probe.
+
+    PERMISSIVE posture (``allow_private=True``). The whole point of a BYO
+    endpoint is that the operator points it at a server they run: LM Studio on
+    ``localhost:1234``, vLLM on a cluster-internal address, an OpenAI-compatible
+    gateway on the LAN. Refusing RFC-1918 here would delete the feature. What
+    the guard keeps is what costs no legitimate use: an http(s) scheme, and a
+    hard refusal of the cloud metadata range -- never anyone's LM Studio, and
+    the single highest-value SSRF target. Strict-posture cloud API base URLs go
+    through routes/settings_api_profiles.py instead.
+
+    This probe had no guard at all before #1047, and it is a live sink in two
+    ways: ``POST /api/llm-endpoints/test`` passes a base URL straight out of the
+    request body, and ``POST /api/llm-endpoints/{id}/test`` replays one stored
+    on the row. Both attach the endpoint's API key as a Bearer header, so an
+    unguarded URL hands a credential to whatever it reaches.
+
+    Unlike the local-provider helper this does NOT collapse the URL to
+    ``scheme://netloc``: an OpenAI-compatible base legitimately carries a path
+    prefix (``https://gateway.example/openai``), and dropping it would break
+    every such endpoint. Query and fragment ARE dropped, which is where the
+    truncate-the-appended-path trick lives.
+    """
+    parsed = urllib.parse.urlparse((base_url or "").strip())
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise InputRejectedError("Invalid base URL (only http/https with a host)")
+    normalized = urllib.parse.urlunparse(
+        (parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", "", "")
+    )
+    assert_safe_outbound_url(normalized, allow_private=True)
+    return f"{normalized}/v1/models"
+
+
 def _probe_models(
     base_url: str,
     api_key: str | None,
@@ -133,7 +173,17 @@ def _probe_models(
     and available model IDs.  Catches all network errors so the caller gets
     structured feedback instead of an exception.
     """
-    url = f"{base_url.rstrip('/')}/v1/models"
+    try:
+        url = _safe_probe_models_url(base_url)
+    except ValueError as exc:
+        # client_error hands an InputRejectedError message back verbatim -- the
+        # operator needs to know their base URL was refused and why. Any OTHER
+        # ValueError reaching here comes from a library rather than our
+        # validator and gets a correlation id instead of being echoed (#1073).
+        return EndpointTestResponse(
+            ok=False, error=client_error(logger, "disallowed LLM base URL", exc)
+        )
+
     req_headers: dict[str, str] = {"Accept": "application/json"}
     if api_key:
         req_headers["Authorization"] = f"Bearer {api_key}"
@@ -142,7 +192,10 @@ def _probe_models(
 
     req = urllib.request.Request(url, headers=req_headers, method="GET")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        # No-redirect opener: the guard checked the host that was configured,
+        # and a 302 to 169.254.169.254 defeats any check made before the
+        # request was sent -- with the Bearer header attached.
+        with build_no_redirect_opener().open(req, timeout=timeout) as resp:
             status_code = resp.getcode()
             raw = resp.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as exc:
@@ -159,14 +212,13 @@ def _probe_models(
     except Exception as exc:  # pragma: no cover - defensive
         return EndpointTestResponse(ok=False, error=f"Unexpected error: {exc}")
 
+    # ``data = None`` on a decode failure rather than an early return: the two
+    # rejections share a response shape, and merging them keeps this function
+    # under the return-count bar now that the SSRF guard has its own exit.
     try:
-        data = json.loads(raw)
+        data: Any = json.loads(raw)
     except json.JSONDecodeError:
-        return EndpointTestResponse(
-            ok=False,
-            status_code=status_code,
-            error="Response is not JSON",
-        )
+        data = None
 
     # OpenAI shape: {"data": [{"id": "..."}, ...]}
     # Some servers return a bare list.
@@ -179,7 +231,11 @@ def _probe_models(
         return EndpointTestResponse(
             ok=False,
             status_code=status_code,
-            error="Unexpected response shape (no 'data' array)",
+            error=(
+                "Response is not JSON"
+                if data is None
+                else "Unexpected response shape (no 'data' array)"
+            ),
         )
 
     model_ids: list[str] = []

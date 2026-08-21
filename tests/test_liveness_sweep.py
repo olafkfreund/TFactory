@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -14,11 +14,11 @@ from agents.liveness_sweep import (
     sweep,
 )
 
-_NOW = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+_NOW = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
 
 
 def _iso(dt: datetime) -> str:
-    return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
+    return dt.astimezone(UTC).isoformat(timespec="seconds")
 
 
 def _spec(root: Path, project: str, spec: str, **status: object) -> Path:

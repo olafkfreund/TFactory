@@ -15,6 +15,8 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 
+from agents import safe_xml
+
 
 @dataclass(frozen=True)
 class JacocoCoverage:
@@ -31,9 +33,13 @@ class JacocoCoverage:
 
 def parse_jacoco_xml(xml_text: str) -> JacocoCoverage:
     """Parse JaCoCo XML into a JacocoCoverage. Empty on malformed input."""
+    # NOT a trusted local report, which is what this line used to claim:
+    # jacoco.xml is written by the SUT's own Maven/Gradle build running in the
+    # verification sandbox, exactly like the Cobertura and JUnit reports
+    # (Factory#722). Same remedy -- reject entity declarations.
     try:
-        root = ET.fromstring(xml_text)  # noqa: S314 — trusted local report
-    except ET.ParseError:
+        root = safe_xml.fromstring(xml_text)
+    except (ET.ParseError, safe_xml.EntityDeclarationError):
         return JacocoCoverage(frozenset(), 0, 0)
 
     covered: set[tuple[str, int]] = set()

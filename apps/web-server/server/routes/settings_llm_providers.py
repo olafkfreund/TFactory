@@ -13,12 +13,51 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from urllib.parse import urlparse
 
-from fastapi import APIRouter, Body, Query
+from factory_common.logsafe import sanitize_log
+from factory_common.url_safety import assert_safe_outbound_url
+from fastapi import APIRouter, Body, HTTPException, Query
 from pydantic import BaseModel, Field, SecretStr
+
+from server.error_ref import client_error
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _safe_local_base_url(base_url: str) -> str:
+    """Validate a request-supplied local-provider base URL; return scheme://netloc.
+
+    PERMISSIVE posture (``allow_private=True``). Every endpoint in this module
+    exists to reach a server the operator runs themselves -- Ollama on
+    ``localhost:11434``, LM Studio / vLLM / LocalAI on ``localhost:8080``, or one
+    of those on a LAN or cluster-internal address. Refusing RFC-1918 here would
+    not harden anything, it would delete the feature. So the guard keeps only
+    what costs no legitimate use: an http(s) scheme, and a hard refusal of the
+    cloud metadata addresses, which are never somebody's Ollama.
+
+    Returning ``scheme://netloc`` drops any path/query/fragment, so the caller's
+    appended ``/api/tags`` or ``/v1/models`` cannot be truncated with ``#`` or
+    pointed at a different resource.
+
+    Cloud API endpoints do NOT belong here -- those go through
+    routes/settings_api_profiles.py, which uses the strict posture.
+    """
+    parsed = urlparse((base_url or "").strip())
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise HTTPException(status_code=400, detail="Invalid base URL")
+    normalized = f"{parsed.scheme}://{parsed.netloc}"
+    try:
+        assert_safe_outbound_url(normalized, allow_private=True)
+    except ValueError as exc:
+        # See routes/git.py: InputRejectedError passes through verbatim,
+        # anything else gets a correlation id (#1073).
+        raise HTTPException(
+            status_code=400,
+            detail=client_error(logger, "disallowed base URL", exc),
+        ) from exc
+    return normalized
 
 
 @router.get("/local-llm/detect")
@@ -85,8 +124,8 @@ async def detect_local_llm_providers():
         if ok and out:
             lines = out.strip().splitlines()
             # First line is a header row
-            model_lines = [l for l in lines[1:] if l.strip()]
-            all_names = [l.split()[0] for l in model_lines if l.split()]
+            model_lines = [line for line in lines[1:] if line.strip()]
+            all_names = [line.split()[0] for line in model_lines if line.split()]
             # Filter out embedding/reranker models — only show chat LLMs
             _embed_kw = {"embed", "minilm", "bge", "gte", "e5", "rerank"}
             model_names = [
@@ -127,7 +166,7 @@ async def detect_local_llm_providers():
                 result["detected"] = True
             ok, out = await _run(["lms", "ls"])
             if ok and out:
-                lines = [l.strip() for l in out.splitlines() if l.strip()]
+                lines = [line.strip() for line in out.splitlines() if line.strip()]
                 result["models"] = lines
                 result["modelCount"] = len(lines)
         # Fallback: check for running process
@@ -246,11 +285,15 @@ async def list_ollama_models(
     ollamaBaseUrl: str = Query(default="http://localhost:11434"),
 ):
     """List available Ollama models."""
+    # Guard outside the try: a rejected URL is a 400, not a generic failure.
+    base = _safe_local_base_url(ollamaBaseUrl)
     try:
         import httpx
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(f"{ollamaBaseUrl}/api/tags")
+        # follow_redirects is httpx's default-off, stated explicitly because it
+        # is load-bearing here: a 302 would leave the validated host behind.
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
+            response = await client.get(f"{base}/api/tags")
             response.raise_for_status()
             data = response.json()
 
@@ -295,6 +338,7 @@ async def list_openai_compat_models(
     and returns ``{models: [{name: str}]}`` — the same envelope shape used by
     the Ollama models endpoint so callers can treat both identically.
     """
+    base = _safe_local_base_url(baseUrl)
     try:
         import httpx
 
@@ -302,8 +346,8 @@ async def list_openai_compat_models(
         if apiKey:
             headers["Authorization"] = f"Bearer {apiKey}"
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(f"{baseUrl}/v1/models", headers=headers)
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
+            response = await client.get(f"{base}/v1/models", headers=headers)
             response.raise_for_status()
             data = response.json()
 
@@ -322,7 +366,7 @@ async def list_openai_compat_models(
 
         return {"models": models}
     except Exception:
-        logger.exception("Failed to list OpenAI-compatible models from %s", baseUrl)
+        logger.exception("Failed to list OpenAI-compatible models from %s", sanitize_log(baseUrl))
         return {"success": False, "error": "Failed to list models"}
 
 
@@ -341,6 +385,7 @@ async def test_openai_compat_connection(request: OpenAICompatTestRequest):
     number of (non-embedding) models available so the caller can confirm the
     server is reachable and serving models.
     """
+    base = _safe_local_base_url(request.baseUrl)
     try:
         import httpx
 
@@ -348,8 +393,8 @@ async def test_openai_compat_connection(request: OpenAICompatTestRequest):
         if request.apiKey:
             headers["Authorization"] = f"Bearer {request.apiKey.get_secret_value()}"
 
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.get(f"{request.baseUrl}/v1/models", headers=headers)
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=False) as client:
+            response = await client.get(f"{base}/v1/models", headers=headers)
             response.raise_for_status()
             data = response.json()
 
@@ -370,7 +415,7 @@ async def test_openai_compat_connection(request: OpenAICompatTestRequest):
         }
     except Exception:
         logger.exception(
-            "OpenAI-compatible connection test failed for %s", request.baseUrl
+            "OpenAI-compatible connection test failed for %s", sanitize_log(request.baseUrl)
         )
         return {"success": False, "error": "Connection test failed"}
 
@@ -381,14 +426,16 @@ async def pull_ollama_model(
     ollamaBaseUrl: str = Body(default="http://localhost:11434", embed=True),
 ):
     """Pull (download) an Ollama model."""
+    base = _safe_local_base_url(ollamaBaseUrl)
     try:
-        import httpx
         import json
 
+        import httpx
+
         # Stream the pull progress
-        async with httpx.AsyncClient(timeout=300.0) as client:
+        async with httpx.AsyncClient(timeout=300.0, follow_redirects=False) as client:
             async with client.stream(
-                "POST", f"{ollamaBaseUrl}/api/pull", json={"name": modelName}
+                "POST", f"{base}/api/pull", json={"name": modelName}
             ) as response:
                 response.raise_for_status()
 
@@ -413,12 +460,13 @@ async def test_ollama_connection(
     ollamaBaseUrl: str = Body(..., embed=True), modelName: str = Body(..., embed=True)
 ):
     """Test Ollama connection and model availability."""
+    base = _safe_local_base_url(ollamaBaseUrl)
     try:
         import httpx
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
             # Check if server is reachable
-            response = await client.get(f"{ollamaBaseUrl}/api/tags")
+            response = await client.get(f"{base}/api/tags")
             response.raise_for_status()
 
             # Check if model exists
@@ -433,7 +481,7 @@ async def test_ollama_connection(
 
             # Test model with simple query
             test_response = await client.post(
-                f"{ollamaBaseUrl}/v1/chat/completions",
+                f"{base}/v1/chat/completions",
                 json={
                     "model": modelName,
                     "messages": [{"role": "user", "content": "Test"}],

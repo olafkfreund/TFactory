@@ -26,8 +26,10 @@ import json
 import os
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
+
+from tools.runners.net_guard import assert_safe_target_url
 
 from .render import render_fix_request_md
 from .request import CorrectionRequest
@@ -75,7 +77,7 @@ class SendResult:
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _correlation_key_for(spec_dir: Path) -> str | None:
@@ -117,6 +119,22 @@ def default_sender(payload: dict) -> dict:
         raise ValueError("no AIFactory api_url in source.json aifactory envelope")
 
     url = f"{api_url}/api/tasks/{task_id}/apply-correction"
+    # SSRF guard (#1117). Honest severity first: ``api_url`` is NOT reachable
+    # from any HTTP route. It is written into ``context/source.json`` only by
+    # the snapshotter, from ``$TFACTORY_AIFACTORY_API_URL`` (default
+    # ``http://localhost:3101``) or an explicit argument that only the demo
+    # scripts pass; the two other writers of source.json never set it, and
+    # ``POST /api/specs/{p}/{s}/pr`` -- the one route that edits the file --
+    # rewrites exactly ``pr_number`` and ``repo_slug``. So this is
+    # defence-in-depth on a value read back off disk, not a live SSRF. No
+    # credential rides on the request either: the only header is Content-Type.
+    #
+    # Both flags on, because the shipped default IS loopback and an AIFactory
+    # on the cluster network is RFC-1918. What the check still buys, and the
+    # reason it is worth four lines: a source.json that named
+    # 169.254.169.254 would POST the hand-back body at the cloud
+    # instance-credentials endpoint, which no posture permits.
+    assert_safe_target_url(url, allow_private=True, allow_loopback=True)
     body = json.dumps(
         {
             "fix_request_md": payload["fix_request_md"],
@@ -138,7 +156,7 @@ def default_sender(payload: dict) -> dict:
     req = urllib.request.Request(
         url, data=body, method="POST", headers={"Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 (trusted host)
+    with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 - checked above
         raw = resp.read().decode() or "{}"
     return json.loads(raw)
 

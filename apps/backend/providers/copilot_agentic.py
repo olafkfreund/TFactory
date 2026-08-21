@@ -173,7 +173,7 @@ class CopilotAgenticProvider(BaseLLMProvider):
             stdout_b, stderr_b = await asyncio.wait_for(
                 proc.communicate(), timeout=float(self._timeout)
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             proc.kill()
             raise RuntimeError(
                 f"Copilot run exceeded timeout ({self._timeout}s)"

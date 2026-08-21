@@ -32,9 +32,10 @@ jobs:
   release:
     name: Tag + GitHub release
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout with parent commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
 
@@ -141,7 +142,7 @@ jobs:
 
       - name: Set up Docker Buildx
         if: steps.detect.outputs.should_release == 'true'
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
 
       # Same credentials as deploy.yml, which pushes to this exact package
       # every merge to main. release.yml used the default GITHUB_TOKEN and got
@@ -151,7 +152,7 @@ jobs:
       # lanes disagreed about whether they could push the same image (#740).
       - name: Log in to GHCR
         if: steps.detect.outputs.should_release == 'true'
-        uses: docker/login-action@v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
         with:
           registry: ghcr.io
           username: "${{ github.repository_owner }}"
@@ -160,7 +161,7 @@ jobs:
       - name: Build + push bank-pilot image (WITH_RMUX=false, amd64)
         if: steps.detect.outputs.should_release == 'true'
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
         with:
           context: .
           file: Dockerfile
@@ -183,7 +184,7 @@ jobs:
       - name: Build + push dev/demo image (WITH_RMUX=true, amd64-only)
         if: steps.detect.outputs.should_release == 'true'
         id: build_rmux
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
         with:
           context: .
           file: Dockerfile
@@ -199,7 +200,7 @@ jobs:
 
       - name: Install cosign
         if: steps.detect.outputs.should_release == 'true'
-        uses: sigstore/cosign-installer@v3.7.0
+        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5  # v3.10.1
 
       - name: Sign both images (cosign keyless via Sigstore + GitHub OIDC)
         if: steps.detect.outputs.should_release == 'true'
@@ -211,9 +212,14 @@ jobs:
           cosign sign --yes "$IMAGE"
           cosign sign --yes "$IMAGE_RMUX"
 
+          # Asks the question the CLUSTER asks, not cosign's. Factory#804.
+          repo="ghcr.io/${{ github.repository_owner }}/tfactory"
+          ./.github/scripts/assert-signature-location.sh "$repo" "${{ steps.build.outputs.digest }}"
+          ./.github/scripts/assert-signature-location.sh "$repo" "${{ steps.build_rmux.outputs.digest }}"
+
       - name: Install Syft
         if: steps.detect.outputs.should_release == 'true'
-        uses: anchore/sbom-action/download-syft@v0.17.8
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610  # v0.24.0
 
       - name: Generate SBOMs + attest both images with cosign
         if: steps.detect.outputs.should_release == 'true'

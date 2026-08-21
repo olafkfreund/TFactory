@@ -70,13 +70,14 @@ jobs:
   ratchet:
     name: ratchet (ruff + mypy no-regression on changed py)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Need history back to the PR base for the diff-scoped ratchet.
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
@@ -110,12 +111,13 @@ jobs:
   format-check:
     name: ruff format --check (apps/backend + scripts)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # Formatting is auto-applied, never reviewed (standards section 3.6).
     # Pinned to the SAME ruff version the tree was formatted with so the check
     # is deterministic; a version skew here was the original red.
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
       - name: Install ruff (pinned)
@@ -126,13 +128,38 @@ jobs:
   config-drift:
     name: shared-baseline drift gate
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: tfactory
       - name: Read pinned hub SHA
         id: pin
-        run: echo "sha=$(tr -d '[:space:]' < tfactory/standards/.hub-sha)" >> "$GITHUB_OUTPUT"
+        # Validated before use, because this file comes from the PR's own tree:
+        # on a fork PR its contents are attacker-controlled, and the value is
+        # handed straight to actions/checkout as a `ref`. Reject anything that is
+        # not a bare 40-character commit id.
+        run: |
+          set -euo pipefail
+          sha="$(tr -d '[:space:]' < tfactory/standards/.hub-sha)"
+          if ! printf '%s' "$sha" | grep -qE '^[0-9a-f]{40}$'; then
+            echo "standards/.hub-sha is not a 40-character commit SHA: '${sha}'" >&2
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Assert the pin is really on hub main
+        # The 40-hex check above closes ref confusion and argument injection,
+        # not the BYPASS. GitHub keeps every fork in one shared object store, so
+        # a commit that exists only in a fork of Factory is a valid 40-hex SHA
+        # that actions/checkout resolves happily -- a fork PR could pin a
+        # standards/ tree crafted to match its own drifted vendored copy and
+        # this gate would diff two matching trees and go green (TFactory#1049).
+        # Path: this job checks the repo out under tfactory/, so the script
+        # lives at tfactory/.github/scripts/.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.pin.outputs.sha }}
+        run: tfactory/.github/scripts/assert-hub-pin-on-main.sh "${SHA}" "standards/.hub-sha"
       # No continue-on-error: an unreachable hub is a gate that cannot run, and
       # per standards rule 4.7 that must fail rather than pass. This step used
       # to be `continue-on-error: true` with the diff below guarded on
@@ -142,11 +169,16 @@ jobs:
       # token here - do not restore the soft-skip. Factory#434; same removal
       # AIFactory#1092 / #1095 made in that repo's two drift gates.
       - name: Check out hub standards at the pinned SHA
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: olafkfreund/Factory
           ref: ${{ steps.pin.outputs.sha }}
           path: factory-hub
+          # This tree is only ever diffed, never executed, and nothing here runs
+          # git against it afterwards. Do not leave the job token behind in
+          # factory-hub/.git/config, where a checked-out ref chosen by the PR
+          # would sit next to it.
+          persist-credentials: false
       - name: Diff vendored configs against the pinned hub baseline
         run: |
           set -euo pipefail
@@ -171,3 +203,54 @@ jobs:
             exit 1
           fi
           echo "No drift: vendored files match the pinned hub baseline."
+
+      # Factory#730: the step above compares FILE BYTES. standards/ruff.toml
+      # can be byte-identical to the hub while the EFFECTIVE config a plain
+      # `ruff check` resolves is not -- a per-file-ignores table that a local
+      # override replaces rather than merges, or a target-version that never
+      # reaches the root config, reopen exactly what the vendored file closes,
+      # and no byte diff sees either. This asserts on resolved behaviour.
+      #
+      # The probe lives under tests/ so it must earn the shared S101/PLR2004
+      # test carve-out (standards/ruff.toml's per-file-ignores), and it sorts
+      # stdlib `tomllib` ahead of a third-party import -- clean only under
+      # target-version >= py311 (tomllib is stdlib since 3.11; an older or
+      # unset target classifies it third-party and demands the opposite
+      # order). The hub baseline is clean on this probe by construction, so
+      # this repo's ORDINARY `ruff check` (no --config override) must be too.
+      # This is exactly the shape that missed a target-version here before
+      # (security-lint/security_lint.py, vendored byte-exact, reported I001).
+      - name: Install ruff (pinned)
+        run: pip install "ruff==${RUFF_VERSION}"
+
+      - name: Effective config matches the hub baseline (not just file bytes)
+        working-directory: tfactory
+        run: |
+          set -euo pipefail
+          probe_dir="tests/__ruff_drift_probe__"
+          probe="${probe_dir}/test_probe.py"
+          mkdir -p "${probe_dir}"
+          cat > "${probe}" <<'PY'
+          import tomllib
+
+          import requests
+
+          assert requests and tomllib
+          PY
+          trap 'rm -rf "${probe_dir}"' EXIT
+
+          repo_verdict="$(ruff check --select S,I,UP --output-format concise "${probe}" 2>&1 || true)"
+          hub_verdict="$(ruff check --select S,I,UP --output-format concise --config ../factory-hub/standards/ruff.toml "${probe}" 2>&1 || true)"
+
+          if [ "${repo_verdict}" != "${hub_verdict}" ]; then
+            echo "::error::Effective ruff config has drifted from the hub baseline (Factory#730)."
+            echo "--- this repo, ordinary \`ruff check\` (no --config override) ---"
+            echo "${repo_verdict}"
+            echo "--- hub baseline (standards/ruff.toml) ---"
+            echo "${hub_verdict}"
+            echo "File bytes can match while the EFFECTIVE config (per-file-ignores reach, target-version)"
+            echo "does not. Fix the root ruff.toml (extend / target-version / per-file-ignores); this is"
+            echo "not a standards/ruff.toml byte diff."
+            exit 1
+          fi
+          echo "Effective config matches the hub baseline for the S101/target-version probe."

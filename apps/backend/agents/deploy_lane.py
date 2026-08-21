@@ -16,12 +16,15 @@ degrades to "no proof written" and never breaks the verify pipeline.
 
 from __future__ import annotations
 
+import logging
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
 from tools.runners.deploy_runner import StepResult
 from tools.runners.lane_dispatch import dispatch_deploy_lane
+
+_log = logging.getLogger(__name__)
 
 # File names / suffixes the deploy lane keys on — mirrors deploy_runner's
 # _TERRAFORM_GLOBS / _HELM_GLOBS / _K8S_GLOBS so ``_matches`` detects the lane.
@@ -44,8 +47,12 @@ def _persist_deploy_verification(
         (findings / "deploy_verification.json").write_text(
             json.dumps(verification, indent=2)
         )
-    except OSError:
-        pass
+    except OSError as exc:
+        # Deliberately non-fatal (see module docstring): a missing proof file
+        # just means the deploy gate falls back to "no proof" and holds the
+        # change, rather than the verify pipeline crashing. Still log it,
+        # since an unexplained gate hold is otherwise hard to debug.
+        _log.warning("deploy_verification.json write failed for %s: %s", spec_dir, exc)
 
 
 def _discover_deploy_files(project_dir: Path) -> list[str]:

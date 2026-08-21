@@ -1,0 +1,28 @@
+title = "gitleaks config for TFactory"
+
+[extend]
+useDefault = true
+
+[allowlist]
+  description = "Known false positives triaged during Factory#724 secret-scanning rollout"
+  paths = [
+    # Fixtures for TFactory's own secret-detection feature: these files
+    # deliberately embed fake API keys/tokens as test/prompt input so the
+    # scanner code under test has something to find. No real credentials.
+    '''tests/test_scan_secrets\.py''',
+    '''tests/test_security_scanner\.py''',
+    '''tests/test_structured_outputs\.py''',
+    '''tests/test_skills_service\.py''',
+    '''apps/backend/prompts/github/pr_followup\.md''',
+    # Doc examples using literal placeholder bearer tokens (YOUR_TOKEN,
+    # acw_yourKeyHere), not real credentials.
+    '''apps/web-server/README\.md''',
+    '''guides/REMOTE_MCP_SERVER\.md''',
+    # tests/test_secrets_egress.py feeds credential-shaped strings to
+    # scrub_patterns()/redaction helpers so the redactor under test has something
+    # to redact -- e.g. `api_key = "..."` asserted to be absent from the output.
+    # Not real credentials. Found because the scheduled full-history scan has
+    # failed on every run it has ever had (3/3) and blocked nothing, a scheduled
+    # gate having no PR to turn red.
+    '''tests/test_secrets_egress\.py''',
+  ]

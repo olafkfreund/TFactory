@@ -11,6 +11,10 @@ import shutil
 import time
 from pathlib import Path
 
+from factory_common.logsafe import sanitize_log
+
+from server.error_ref import client_error
+
 from ...websockets.events import broadcast_event
 from .base import ProviderInfo, ProviderModel, ProviderStrategy
 
@@ -18,6 +22,9 @@ logger = logging.getLogger(__name__)
 
 # Gemini models (static fallback list)
 GEMINI_MODELS = [
+    ProviderModel(id="gemini-3.7-flash-medium", label="Gemini 3.7 Flash (Medium)"),
+    ProviderModel(id="gemini-3.7-flash-high", label="Gemini 3.7 Flash (High)"),
+    ProviderModel(id="gemini-3.7-flash-low", label="Gemini 3.7 Flash (Low)"),
     ProviderModel(id="gemini-3.1-pro-preview", label="Gemini 3.1 Pro (Preview)"),
     ProviderModel(id="gemini-2.5-pro", label="Gemini 2.5 Pro"),
     ProviderModel(id="gemini-3.5-flash", label="Gemini 3.5 Flash"),
@@ -156,10 +163,10 @@ class GeminiProvider(ProviderStrategy):
             return accumulated
 
         except Exception as e:
-            logger.error(f"[GeminiProvider] Error: {e}", exc_info=True)
+            logger.error("[GeminiProvider] Error: %s", sanitize_log(e), exc_info=True)
             await broadcast_event("insights:chunk", {
                 "projectId": project_id,
                 "type": "error",
-                "error": str(e),
+                "error": client_error(logger, "GeminiProvider failed", e),
             })
             return ""

@@ -9,11 +9,53 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import urllib.error
 import urllib.request
 from typing import Any
 
 _PATH_TAGS: str = "/api/tags"
+
+DEFAULT_OLLAMA_BASE_URL: str = "http://localhost:11434"
+
+# Env vars naming the Ollama endpoint, in precedence order. ``OLLAMA_HOST`` is
+# Ollama's own client variable and is accepted last so an operator who has set
+# only that is not surprised by localhost.
+_BASE_URL_ENV: tuple[str, ...] = ("OLLAMA_BASE_URL", "OLLAMA_API_URL", "OLLAMA_HOST")
+
+
+def _first_env(names: tuple[str, ...]) -> str | None:
+    for name in names:
+        val = os.environ.get(name)
+        if val and val.strip():
+            return val.strip()
+    return None
+
+
+def resolve_ollama_base_url() -> str:
+    """The Ollama endpoint from the environment, else localhost (#1099).
+
+    THE resolver for the SELF-HOSTED Ollama endpoint, so a deployment that sets
+    ``OLLAMA_BASE_URL`` cannot be honoured by one caller and ignored by another.
+
+    That was the bug: this provider read no environment variable at all, so
+    ``OllamaAgenticProvider`` defaulted to ``http://localhost:11434`` and a
+    contract pinned to ``ollama:<model>`` silently tried localhost inside a pod,
+    where there is no Ollama. The endpoint was only reachable by spelling the
+    phase ``openai-compatible:`` instead.
+
+    Ported from AIFactory, which fixed the same vendored provider first — the
+    canonical moved and this fork did not, and nothing was red because the file
+    is not byte-compared.
+
+    NO cloud counterpart here, deliberately, and that is the one place TFactory
+    differs from AIFactory: #870 routes ``ollama-cloud`` through
+    ``openai-compatible`` (see ``agents/gen_functional._RUNTIME_TO_PROVIDER``),
+    which carries its own ``base_url`` and ``api_key``. An
+    ``OLLAMA_API_KEY``-reading resolver here would have no caller, and an unused
+    credential path is worse than a missing one.
+    """
+    return (_first_env(_BASE_URL_ENV) or DEFAULT_OLLAMA_BASE_URL).rstrip("/")
 
 
 class OllamaHTTPMixin:

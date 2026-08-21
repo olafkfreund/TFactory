@@ -6,7 +6,7 @@ the broker's resolve_cloud WIF head incl. the refresh-on-expiry path.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -41,7 +41,7 @@ def _entry(**over) -> OperatorWifEntry:
 
 
 def test_mint_aws_returns_short_lived_keys(monkeypatch: pytest.MonkeyPatch) -> None:
-    exp = datetime.now(timezone.utc) + timedelta(hours=1)
+    exp = datetime.now(UTC) + timedelta(hours=1)
     fake = _FakeSTS(exp)
     monkeypatch.setattr(wif, "_sts_client", lambda: fake)
     creds = wif.mint_wif("aws", _entry(), now=0.0)
@@ -62,7 +62,7 @@ def test_expired_respects_skew() -> None:
 def test_token_from_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tok = tmp_path / "token.jwt"
     tok.write_text("file-jwt\n")
-    fake = _FakeSTS(datetime.now(timezone.utc) + timedelta(hours=1))
+    fake = _FakeSTS(datetime.now(UTC) + timedelta(hours=1))
     captured = {}
     monkeypatch.setattr(wif, "_sts_client", lambda: fake)
 
@@ -105,7 +105,7 @@ def test_broker_resolve_cloud_uses_wif(tmp_path: Path, monkeypatch: pytest.Monke
 
     monkeypatch.setattr(broker, "CREDENTIALS_CONFIG_PATH", _wif_config_file(tmp_path))
     broker.reset_config_cache()
-    fake = _FakeSTS(datetime.now(timezone.utc) + timedelta(hours=1))
+    fake = _FakeSTS(datetime.now(UTC) + timedelta(hours=1))
     monkeypatch.setattr(wif, "_sts_client", lambda: fake)
     try:
         b = broker.CredentialBroker(tmp_path, tmp_path, egress_allowed=True)
@@ -126,7 +126,7 @@ def test_broker_refreshes_expired_wif(tmp_path: Path, monkeypatch: pytest.Monkey
     monkeypatch.setattr(broker, "CREDENTIALS_CONFIG_PATH", _wif_config_file(tmp_path))
     broker.reset_config_cache()
     # Expiration already in the past → every resolve must re-mint (refresh).
-    fake = _FakeSTS(datetime.now(timezone.utc) - timedelta(minutes=5))
+    fake = _FakeSTS(datetime.now(UTC) - timedelta(minutes=5))
     monkeypatch.setattr(wif, "_sts_client", lambda: fake)
     try:
         b = broker.CredentialBroker(tmp_path, tmp_path, egress_allowed=True)

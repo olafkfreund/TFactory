@@ -7,7 +7,7 @@ never clobbering a settled or just-finished task (fail-safe allowlist).
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -19,7 +19,7 @@ from agents.liveness import (
     mark_stalled,
 )
 
-_NOW = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+_NOW = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
 _DEADLINE = 900.0
 
 
@@ -29,7 +29,7 @@ def _write_status(spec_dir: Path, **fields: object) -> None:
 
 
 def _iso(dt: datetime) -> str:
-    return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
+    return dt.astimezone(UTC).isoformat(timespec="seconds")
 
 
 # ── evaluate_liveness: the stalled case ─────────────────────────────────────

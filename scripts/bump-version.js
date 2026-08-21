@@ -29,7 +29,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execSync, execFileSync } = require('child_process');
+const { execFileSync } = require('child_process');
 
 // Colors for terminal output
 const colors = {
@@ -101,15 +101,6 @@ function bumpVersion(currentVersion, bumpType) {
   }
 }
 
-// Execute shell command
-function exec(command, options = {}) {
-  try {
-    return execSync(command, { encoding: 'utf8', stdio: 'pipe', ...options }).trim();
-  } catch (err) {
-    error(`Command failed: ${command}\n${err.message}`);
-  }
-}
-
 // Execute a command without a shell — the binary and each argument are passed
 // as a separate argv element, so no value (including the argv-derived version
 // string) can be interpreted by a shell (command-injection barrier).
@@ -123,7 +114,7 @@ function execFile(file, args, options = {}) {
 
 // Check if git working directory is clean
 function checkGitStatus() {
-  const status = exec('git status --porcelain');
+  const status = execFile('git', ['status', '--porcelain']);
   if (status) {
     error('Git working directory is not clean. Please commit or stash changes first.');
   }
@@ -134,36 +125,58 @@ function updatePackageJson(newVersion) {
   const frontendPath = path.join(__dirname, '..', 'apps', 'frontend-web', 'package.json');
   const rootPath = path.join(__dirname, '..', 'package.json');
 
-  if (!fs.existsSync(frontendPath)) {
-    error(`package.json not found at ${frontendPath}`);
+  // Read-then-write, no existsSync probe first: the probe was a check-time /
+  // use-time gap (CodeQL js/file-system-race) and it bought nothing, because
+  // readFileSync already reports a missing file. Ask the filesystem once.
+  let frontendJson;
+  try {
+    frontendJson = JSON.parse(fs.readFileSync(frontendPath, 'utf8'));
+  } catch (err) {
+    error(`package.json not readable at ${frontendPath}: ${err.message}`);
   }
-
-  // Update frontend package.json
-  const frontendJson = JSON.parse(fs.readFileSync(frontendPath, 'utf8'));
   const oldVersion = frontendJson.version;
   frontendJson.version = newVersion;
   fs.writeFileSync(frontendPath, JSON.stringify(frontendJson, null, 2) + '\n');
 
-  // Update root package.json if it exists
-  if (fs.existsSync(rootPath)) {
-    const rootJson = JSON.parse(fs.readFileSync(rootPath, 'utf8'));
+  // The root package.json is optional: a missing file is skipped, anything else
+  // is a real failure and must not be swallowed.
+  let rootJson = null;
+  try {
+    rootJson = JSON.parse(fs.readFileSync(rootPath, 'utf8'));
+  } catch (err) {
+    if (err.code !== 'ENOENT') {
+      error(`package.json not readable at ${rootPath}: ${err.message}`);
+    }
+  }
+  if (rootJson) {
     rootJson.version = newVersion;
     fs.writeFileSync(rootPath, JSON.stringify(rootJson, null, 2) + '\n');
   }
 
-  return { oldVersion, packagePath: frontendPath };
+  // Report what was actually written. Step 7 stages these by name, and a
+  // pathspec that matches nothing makes `git add` exit non-zero (#1045).
+  const updated = ['apps/frontend-web/package.json'];
+  if (rootJson) {
+    updated.push('package.json');
+  }
+
+  return { oldVersion, packagePath: frontendPath, updated };
 }
 
 // Update apps/backend/__init__.py version
 function updateBackendInit(newVersion) {
   const initPath = path.join(__dirname, '..', 'apps', 'backend', '__init__.py');
 
-  if (!fs.existsSync(initPath)) {
+  let content;
+  try {
+    content = fs.readFileSync(initPath, 'utf8');
+  } catch (err) {
+    if (err.code !== 'ENOENT') {
+      error(`Backend __init__.py not readable at ${initPath}: ${err.message}`);
+    }
     warning(`Backend __init__.py not found at ${initPath}, skipping`);
     return false;
   }
-
-  let content = fs.readFileSync(initPath, 'utf8');
   content = content.replace(/__version__\s*=\s*"[^"]*"/, `__version__ = "${newVersion}"`);
   fs.writeFileSync(initPath, content);
   return true;
@@ -227,11 +240,12 @@ function main() {
 
   // 5. Update all version files
   info('Updating package.json files...');
-  updatePackageJson(newVersion);
+  const { updated: staged } = updatePackageJson(newVersion);
   success('Updated package.json files');
 
   info('Updating apps/backend/__init__.py...');
   if (updateBackendInit(newVersion)) {
+    staged.push('apps/backend/__init__.py');
     success('Updated apps/backend/__init__.py');
   }
 
@@ -269,7 +283,10 @@ function main() {
 
   // 7. Create git commit
   info('Creating git commit...');
-  execFile('git', ['add', 'apps/frontend-web/package.json', 'package.json', 'apps/backend/__init__.py']);
+  // Stage only what was written. Naming a file the updaters deliberately
+  // skipped makes git fail on an unmatched pathspec, which aborted the bump
+  // AFTER the frontend package.json had already been rewritten (#1045).
+  execFile('git', ['add', ...staged]);
   execFile('git', ['commit', '-m', `chore: bump version to ${newVersion}`]);
   success(`Created commit: "chore: bump version to ${newVersion}"`);
 

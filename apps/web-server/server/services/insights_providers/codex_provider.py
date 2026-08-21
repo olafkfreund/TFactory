@@ -10,6 +10,10 @@ import shlex
 import time
 from pathlib import Path
 
+from factory_common.logsafe import sanitize_log
+
+from server.error_ref import client_error
+
 from ...websockets.events import broadcast_event
 from .base import ProviderInfo, ProviderModel, ProviderStrategy
 
@@ -17,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 # Codex models (static fallback list)
 CODEX_MODELS = [
+    ProviderModel(id="gpt-5.6", label="GPT-5.6"),
     ProviderModel(id="gpt-5.5", label="GPT-5.5"),
     ProviderModel(id="gpt-5.4", label="GPT-5.4"),
     ProviderModel(id="gpt-5.4-mini", label="GPT-5.4 Mini"),
@@ -148,10 +153,10 @@ class CodexProvider(ProviderStrategy):
             return accumulated
 
         except Exception as e:
-            logger.error(f"[CodexProvider] Error: {e}", exc_info=True)
+            logger.error("[CodexProvider] Error: %s", sanitize_log(e), exc_info=True)
             await broadcast_event("insights:chunk", {
                 "projectId": project_id,
                 "type": "error",
-                "error": str(e),
+                "error": client_error(logger, "CodexProvider failed", e),
             })
             return ""

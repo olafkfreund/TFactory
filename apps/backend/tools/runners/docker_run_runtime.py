@@ -16,6 +16,7 @@ injectable so tests never spawn a real container.
 
 from __future__ import annotations
 
+import logging
 import subprocess
 import time
 import uuid
@@ -26,6 +27,9 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
 
 from .free_port import find_free_port
+from .net_guard import UnsafeTargetURLError, assert_safe_target_url
+
+_log = logging.getLogger(__name__)
 
 
 class DockerRunRuntimeError(Exception):
@@ -212,6 +216,23 @@ class DockerRunRuntime:
 
     def _poll_one(self, wait_for) -> bool:
         url = self._rewrite_url(wait_for.url)
+        # SSRF guard (#1117). ``wait_for.url`` is declared in the tested repo's
+        # own ``.tfactory.yml`` and reaches here unmodified, which is the same
+        # untrusted input AppRuntime._poll_one has guarded since #359; this
+        # sibling was simply missed. Checked AFTER _rewrite_url so the value
+        # inspected is the one actually fetched below -- rewriting first and
+        # checking the declared URL would leave the fetched one unchecked.
+        #
+        # ``allow_loopback=True``: the container publishes to a host port, so
+        # localhost is the normal case. ``allow_private`` stays False, matching
+        # AppRuntime's default. Cloud metadata / link-local is refused in both
+        # postures. Fail closed -- a DNS failure is a block, not a retry.
+        try:
+            assert_safe_target_url(url, allow_loopback=True)
+        except (UnsafeTargetURLError, OSError) as exc:
+            raise DockerRunRuntimeError(
+                f"blocked_unsafe_target: refusing to health-poll {url}: {exc}"
+            ) from exc
         deadline = self._clock() + wait_for.timeout_seconds
         while self._clock() < deadline:
             try:
@@ -222,7 +243,11 @@ class DockerRunRuntime:
             except HTTPError as exc:
                 if exc.code == wait_for.expect_status:
                     return True
-            except (URLError, TimeoutError, OSError):
-                pass
+            except (URLError, TimeoutError, OSError) as exc:
+                # Connection refused / not-yet-listening is the expected
+                # steady state until the container comes up; the deadline
+                # check above is what turns a persistent failure into a
+                # real timeout. Debug-only so a healthy startup stays quiet.
+                _log.debug("health poll for %s not ready yet: %s", url, exc)
             time.sleep(self.poll_interval)
         return False

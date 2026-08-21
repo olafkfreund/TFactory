@@ -1,11 +1,72 @@
-# CodeQL advanced-setup config. Runs the default query suite for every rule,
-# but swaps the stock py/path-injection for our barrier-aware variant
-# (py/path-injection-sanitized) which recognises this repo's sanitizers
-# (safe_component / safe_spec_dir / safe_join / os.path.basename /
-# get_next_spec_id) so verified-safe code clears organically.
+# CodeQL advanced-setup config. Swaps the stock py/path-injection for our
+# barrier-aware variant (py/path-injection-sanitized) which recognises this
+# repo's sanitizers (safe_component / safe_spec_dir / safe_join /
+# os.path.basename / get_next_spec_id) so verified-safe code clears organically.
+#
+# security-and-quality added (Factory#711). This repo reported ZERO open
+# code-scanning alerts while AIFactory reported ~1470 — and the difference was
+# almost entirely which questions were being asked, not code quality. TFactory
+# never ran anything but CodeQL's DEFAULT suite; the rules that make up the bulk
+# of AIFactory's volume (py/log-injection, py/stack-trace-exposure,
+# py/empty-except, py/unused-import) live in security-and-quality only.
+#
+# A zero produced by asking less is the same failure as a nightly that cannot go
+# red (Factory#697): the number improves because the measurement stopped. Expect
+# this repo's count to jump sharply on the first scan after this lands. That is
+# the change working, not a regression.
+#
+# py/partial-ssrf gets the same swap, for the same reason (#1048). The outbound
+# URL guard in factory_common/url_safety.py establishes safety by RAISING, and stock
+# CodeQL does not model a raise as a barrier -- PFactory measured returning the
+# checked value instead and it did not help, because the function returns its
+# argument and the taint flows straight through. py/partial-ssrf-sanitized is
+# the stock query plus a barrier on the route helpers that call the guard AND
+# return a normalised scheme://netloc.
+#
+# Both entries here are REPLACEMENTS, not removals: every excluded rule id has a
+# -sanitized twin in ./custom-queries asking the identical question. An
+# unguarded call site still reports -- that is proven, not asserted: a
+# deliberately unguarded probe sink was added to a scratch file and confirmed to
+# report under py/partial-ssrf-sanitized before being deleted, and removing the
+# guard from a real call site brings its alert back. An exclude here WITHOUT a
+# twin query would be silencing the rule, and is not allowed.
 name: "TFactory CodeQL config"
 queries:
+  - uses: security-and-quality
   - uses: ./.github/codeql/custom-queries
 query-filters:
   - exclude:
       id: py/path-injection
+  - exclude:
+      id: py/partial-ssrf
+paths-ignore:
+  # apps/backend/agents/evidence/*.tmpl.ts (js/syntax-error, 14 alerts closed
+  # here, #768-#781). These are string templates that
+  # agents.evidence.layout.render_playwright_config() / render_auth_setup_steps()
+  # render into a generated test workspace, not TypeScript source. Several
+  # `@@MARKER@@` placeholders sit in bare code position (e.g.
+  # `outputDir: "@@OUTPUT_DIR@@",@@SNAPSHOT_PATH_TEMPLATE@@`, a standalone
+  # `@@LOGIN_STEPS@@` line inside the setup() body) so they expand into extra
+  # object properties / statements at render time -- which makes the file, as
+  # committed, invalid TypeScript by design. The extractor cannot parse it, so
+  # it was never contributing coverage; this documents that instead of leaving
+  # an unexplained parse failure. The `.tmpl.ts` suffix already signals the
+  # convention (compare auth.setup.tmpl.ts, whose placeholders all sit inside
+  # string literals and therefore DOES parse -- it is not excluded).
+  #
+  # auth.setup.steps.tmpl.ts used to embed a real, non-template function
+  # (`__tfTotp`, RFC-6238 TOTP generation for MFA login steps) alongside the
+  # placeholders, which this glob stopped from being scanned too -- it was
+  # genuine security-sensitive logic, not template scaffolding (#1063). It now
+  # lives in `apps/backend/agents/evidence/tftotp.helper.ts`, a plain module
+  # with no `@@MARKER@@` placeholders that IS covered by this analysis;
+  # `agents.evidence.layout.scaffold_auth_setup()` copies it alongside the
+  # rendered `auth.setup.ts` into the generated test workspace so the
+  # `./tftotp.helper` import resolves at Playwright run time.
+  #
+  # Nothing lints, typechecks or builds these files today: no root package.json
+  # `lint`/`build`/`typecheck` script reaches apps/backend/agents/evidence/, and
+  # the Python tests around these renderers only assert on substituted
+  # substrings -- never parse the rendered output. That gap is unrelated to
+  # CodeQL and is not fixed by this exclusion.
+  - "apps/backend/agents/evidence/*.tmpl.ts"

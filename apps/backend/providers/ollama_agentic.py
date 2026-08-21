@@ -54,7 +54,7 @@ from pathlib import Path
 from typing import Any
 
 from providers import BaseLLMProvider
-from providers._ollama_http import OllamaHTTPMixin
+from providers._ollama_http import OllamaHTTPMixin, resolve_ollama_base_url
 from providers.types import (
     AssistantMessage,
     TextBlock,
@@ -70,7 +70,6 @@ logger = logging.getLogger(__name__)
 # Defaults
 # ---------------------------------------------------------------------------
 
-_DEFAULT_BASE_URL: str = "http://localhost:11434"
 _DEFAULT_MODEL: str = "llama3.2"
 _DEFAULT_TIMEOUT: int = 600  # seconds per request (agentic needs more time)
 _DEFAULT_MAX_TURNS: int = 25
@@ -136,7 +135,7 @@ class OllamaAgenticProvider(OllamaHTTPMixin, BaseLLMProvider):
     def __init__(
         self,
         model: str = _DEFAULT_MODEL,
-        base_url: str = _DEFAULT_BASE_URL,
+        base_url: str | None = None,
         timeout: int = _DEFAULT_TIMEOUT,
         working_dir: Path | str = Path("."),
         max_turns: int = _DEFAULT_MAX_TURNS,
@@ -152,7 +151,13 @@ class OllamaAgenticProvider(OllamaHTTPMixin, BaseLLMProvider):
         if model.startswith("ollama:"):
             model = model[len("ollama:") :]
         self._model = model
-        self._base_url = base_url.rstrip("/")
+        # #1099: resolve the endpoint from the environment when the caller
+        # does not name one. This constructor is where every route into the
+        # provider converges, so fixing it here fixes them all — nothing in
+        # the production call path passed a base_url and nothing read an env
+        # var, so a contract pinned to `ollama:<model>` tried localhost
+        # inside a pod. An explicit argument still wins.
+        self._base_url = (base_url or resolve_ollama_base_url()).rstrip("/")
         self._timeout = timeout
         self._working_dir = Path(working_dir).resolve()
         self._max_turns = max_turns
@@ -243,7 +248,7 @@ class OllamaAgenticProvider(OllamaHTTPMixin, BaseLLMProvider):
                     asyncio.to_thread(self._http_post, url, payload),
                     timeout=float(self._timeout),
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 yield AssistantMessage(
                     content=[
                         TextBlock(

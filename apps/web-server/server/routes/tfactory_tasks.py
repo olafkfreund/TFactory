@@ -21,11 +21,14 @@ Workspace root resolution:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from server.error_ref import InputRejectedError, client_error
 
 from ._specpath import safe_slug
 
@@ -57,6 +60,8 @@ from fastapi import (
 from pydantic import BaseModel
 
 from ._tenancy import DEFAULT_TENANT, multi_tenant_enabled, resolve_tenant
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -317,7 +322,7 @@ def _serve_artefact_file(
     except OSError as exc:
         raise HTTPException(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"could not read artefact: {exc}",
+            detail=client_error(logger, "could not read artefact", exc),
         ) from exc
     return Response(content=content, media_type=media_type)
 
@@ -562,7 +567,7 @@ def get_catalog(spec_id: str) -> Response:
     except OSError as exc:
         raise HTTPException(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"could not read catalog: {exc}",
+            detail=client_error(logger, "could not read catalog", exc),
         ) from exc
 
     return Response(content=content, media_type="application/json")
@@ -701,7 +706,7 @@ def get_evidence_artifact(spec_id: str, test_id: str, artifact: str) -> Response
     except OSError as exc:
         raise HTTPException(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"could not read artifact: {exc}",
+            detail=client_error(logger, "could not read artifact", exc),
         ) from exc
 
     return Response(content=content, media_type=_evidence_content_type(artifact))
@@ -761,7 +766,7 @@ def _serve_findings_media(spec_id: str, subdir: str, artifact: str) -> Response:
     except OSError as exc:
         raise HTTPException(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"could not read artifact: {exc}",
+            detail=client_error(logger, "could not read artifact", exc),
         ) from exc
     return Response(content=content, media_type=_evidence_content_type(artifact))
 
@@ -899,7 +904,8 @@ def dismiss_run(spec_id: str) -> dict[str, Any]:
         status_path.write_text(json.dumps(doc, indent=2), encoding="utf-8")
     except OSError as exc:
         raise HTTPException(
-            status_code=500, detail=f"could not write status.json: {exc}"
+            status_code=500,
+            detail=client_error(logger, "could not write status.json", exc),
         ) from exc
     return {"ok": True, "dismissed": True, "dismissed_at": doc["dismissed_at"]}
 
@@ -936,7 +942,21 @@ def list_visual_baselines(spec_id: str, target: str) -> dict:
     try:
         entries = vb.list_baselines(spec_dir, target)
     except vb.VisualBaselineError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # VisualBaselineError's message is developer-written validation text
+        # about the caller's own target/snapshot name (verified: all 3 raise
+        # sites in visual_baseline.py, none interpolate an inner exception).
+        # It stays a plain ValueError in apps/backend (no HTTP awareness by
+        # design), so it is marked safe here at the route boundary instead of
+        # via str(exc) -- client_error() reads InputRejectedError.client_message
+        # by attribute, not the exception's rendered text.
+        raise HTTPException(
+            status_code=400,
+            detail=client_error(
+                logger,
+                "invalid visual baseline request",
+                InputRejectedError(exc.args[0]),
+            ),
+        ) from exc
     return {
         "target": target,
         "baselines": [
@@ -954,7 +974,21 @@ def get_visual_baseline(spec_id: str, target: str, snapshot: str):
     try:
         path = vb.baseline_path(spec_dir, target, snapshot)
     except vb.VisualBaselineError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # VisualBaselineError's message is developer-written validation text
+        # about the caller's own target/snapshot name (verified: all 3 raise
+        # sites in visual_baseline.py, none interpolate an inner exception).
+        # It stays a plain ValueError in apps/backend (no HTTP awareness by
+        # design), so it is marked safe here at the route boundary instead of
+        # via str(exc) -- client_error() reads InputRejectedError.client_message
+        # by attribute, not the exception's rendered text.
+        raise HTTPException(
+            status_code=400,
+            detail=client_error(
+                logger,
+                "invalid visual baseline request",
+                InputRejectedError(exc.args[0]),
+            ),
+        ) from exc
     if not path.is_file():
         raise HTTPException(status_code=404, detail="baseline not found")
     return _FileResponse(path, media_type="image/png", filename=snapshot)
@@ -981,7 +1015,21 @@ def accept_visual_baseline(
     try:
         dest = vb.accept_baseline(spec_dir, target, snapshot, src)
     except vb.VisualBaselineError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # VisualBaselineError's message is developer-written validation text
+        # about the caller's own target/snapshot name (verified: all 3 raise
+        # sites in visual_baseline.py, none interpolate an inner exception).
+        # It stays a plain ValueError in apps/backend (no HTTP awareness by
+        # design), so it is marked safe here at the route boundary instead of
+        # via str(exc) -- client_error() reads InputRejectedError.client_message
+        # by attribute, not the exception's rendered text.
+        raise HTTPException(
+            status_code=400,
+            detail=client_error(
+                logger,
+                "invalid visual baseline request",
+                InputRejectedError(exc.args[0]),
+            ),
+        ) from exc
     return {
         "accepted": True,
         "target": target,

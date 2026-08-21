@@ -24,11 +24,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from agents.equivalence_runner import ParityReport, compare_corpus
+
+_log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from agents.execution_sandbox import ExecutionSandbox
@@ -357,7 +360,15 @@ def merge_verdicts(spec_dir: Path, new_verdicts: list[dict[str, Any]]) -> None:
             if isinstance(loaded, dict):
                 doc = loaded
         except ValueError:
-            pass
+            # Corrupt verdicts.json: prior verdicts in this file are lost,
+            # not just skipped — val_block reads this file to compute the
+            # achieved VAL level, so silently resetting it would understate
+            # what already ran. Log loudly rather than swallow.
+            _log.warning(
+                "verdicts.json at %s is not valid JSON; resetting it and "
+                "losing any previously recorded verdicts",
+                path,
+            )
     doc.setdefault("verdicts", []).extend(new_verdicts)
     path.write_text(json.dumps(doc, indent=2), encoding="utf-8")
 

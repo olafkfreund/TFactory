@@ -15,13 +15,14 @@ Follows the same subprocess + WebSocket pattern as agent_service.py:
 import asyncio
 import json
 import logging
-import os
 import re
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
+
+from factory_common.logsafe import sanitize_log
 
 from ..config import get_settings
 from ..websockets.events import broadcast_event
@@ -214,7 +215,7 @@ class PRReviewService:
         """
         key = self._review_key(project_id, pr_number)
         if key in self.running_reviews:
-            logger.warning(f"PR review already running for {key}")
+            logger.warning(f"PR review already running for {sanitize_log(key)}")
             return False
 
         settings = get_settings()
@@ -235,7 +236,7 @@ class PRReviewService:
             command, str(pr_number),
         ]
 
-        logger.info(f"Starting PR review for {key}: {' '.join(cmd)}")
+        logger.info(f"Starting PR review for {sanitize_log(key)}: {sanitize_log(' '.join(cmd))}")
 
         # Set up environment — scrub ANTHROPIC_API_KEY (OAuth-only policy).
         from ..utils.subprocess_env import make_subprocess_env
@@ -318,7 +319,7 @@ class PRReviewService:
             try:
                 proc.terminate()
                 await asyncio.wait_for(proc.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 proc.kill()
             except Exception as e:
                 logger.error(f"Error cancelling PR review: {e}")
@@ -359,7 +360,7 @@ class PRReviewService:
                     line = line_bytes.decode("utf-8", errors="replace").rstrip()
                     if line:
                         stderr_lines.append(line)
-                        logger.debug(f"[{key}] STDERR: {line}")
+                        logger.debug(f"[{sanitize_log(key)}] STDERR: {sanitize_log(line)}")
 
             # Start stderr reader in background
             stderr_task = asyncio.create_task(read_stderr())
@@ -369,7 +370,7 @@ class PRReviewService:
                 line = line_bytes.decode("utf-8", errors="replace").rstrip()
                 if not line:
                     continue
-                logger.debug(f"[{key}] {line}")
+                logger.debug(f"[{sanitize_log(key)}] {sanitize_log(line)}")
 
                 # Parse progress from runner output
                 phase, progress, message = self._parse_progress(line)
@@ -411,7 +412,7 @@ class PRReviewService:
                     if stderr_lines
                     else f"PR review failed with exit code {return_code}"
                 )
-                logger.error(f"PR review failed for {key}: {error_msg}")
+                logger.error(f"PR review failed for {sanitize_log(key)}: {sanitize_log(error_msg)}")
 
                 # Finalize logs on failure
                 if log_writer:
@@ -423,7 +424,7 @@ class PRReviewService:
                 await self._emit_error(project_id, pr_number, error_msg)
 
         except asyncio.CancelledError:
-            logger.info(f"PR review cancelled for {key}")
+            logger.info(f"PR review cancelled for {sanitize_log(key)}")
             raise
         except Exception as e:
             logger.error(f"Error processing PR review output: {e}", exc_info=True)
@@ -475,7 +476,14 @@ class PRReviewService:
         if progress is None:
             progress = PHASE_PROGRESS.get(phase, 0)
 
-        logger.info(f"[{project_id}:PR#{pr_number}] Phase: {phase.value} ({progress}%) - {message}")
+        logger.info(
+            "[%s:PR#%s] Phase: %s (%s%%) - %s",
+            sanitize_log(project_id),
+            sanitize_log(pr_number),
+            sanitize_log(phase.value),
+            sanitize_log(progress),
+            sanitize_log(message),
+        )
 
         await broadcast_event("pr:review-progress", {
             "projectId": project_id,
@@ -495,7 +503,7 @@ class PRReviewService:
 
         Reads stored review result from disk if available.
         """
-        logger.info(f"[{project_id}:PR#{pr_number}] Review complete")
+        logger.info(f"[{sanitize_log(project_id)}:PR#{sanitize_log(pr_number)}] Review complete")
 
         # Try to read stored review result JSON from the project's .tfactory directory
         # Runner saves to: .tfactory/github/pr/review_{pr_number}.json
@@ -526,7 +534,12 @@ class PRReviewService:
         error: str,
     ):
         """Emit error event via WebSocket."""
-        logger.error(f"[{project_id}:PR#{pr_number}] Review error: {error}")
+        logger.error(
+            "[%s:PR#%s] Review error: %s",
+            sanitize_log(project_id),
+            sanitize_log(pr_number),
+            sanitize_log(error),
+        )
 
         await broadcast_event("pr:review-error", {
             "projectId": project_id,

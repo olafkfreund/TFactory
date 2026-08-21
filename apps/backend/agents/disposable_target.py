@@ -262,6 +262,10 @@ def record_val3(
         fdir.mkdir(parents=True, exist_ok=True)
         record = {k: v for k, v in asdict(outcome).items() if k != "output"}
         (fdir / "val3_outcome.json").write_text(json.dumps(record, indent=2))
-    except OSError:
-        pass
+    except OSError as exc:
+        # Documented best-effort (see docstring): the caller still gets the
+        # real outcome object, but a later read via read_verification_block
+        # will see no cached record. Log so a missing VAL-3 cache isn't a
+        # silent mystery.
+        logger.warning("val3_outcome.json write failed for %s: %s", spec_dir, exc)
     return outcome

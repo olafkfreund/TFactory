@@ -1435,6 +1435,7 @@ CRITICAL_MODULES = frozenset(
         "test_badge",  # acceptance badge SVG + component linkage (#241)
         "test_badges_route",  # public badge endpoint (#241)
         "test_health_gate",  # pre-lane health gate + URL resolution (#234)
+        "test_ssrf_remaining_sinks",  # spec-derived outbound URL guards (#1117)
         "test_rate_limit",  # webhook rate limiter (#242)
         "test_build_deploy_test",  # build → deploy → test orchestration (#233)
         "test_java_lane",  # Java JUnit + PIT + JaCoCo wedge (#237)
@@ -1467,6 +1468,7 @@ CRITICAL_MODULES = frozenset(
         "test_cloud_issues",  # findings → GitHub issues (#133/#152)
         "test_cloud_store",  # multi-assessment portal store + downloads (#133/#152)
         "test_sdk_shape_contract",  # SDK message fields the readers rely on (#882)
+        "test_git_provider_base_url_guard",  # PAT-leaking provider base URL (#1110)
     }
 )
 
