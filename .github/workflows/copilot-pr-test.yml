@@ -45,33 +45,52 @@ jobs:
             -f context="tfactory/suite" \
             -f target_url="${{ vars.TFACTORY_URL }}"
 
+      # TFactory#1148. This step used to capture the HTTP status and emit a
+      # `::warning::` for a non-2xx, so a 404 left the job GREEN -- a
+      # verification gate reporting success having verified nothing
+      # (Factory#832). If the suite did not start, nothing was verified, and
+      # the only honest conclusion is red.
+      #
+      # As of TFactory#1148 no route serves this path: the repo declares no
+      # PR-intake task-creation endpoint at all, so this call returns 404 and
+      # this gate now fails, loudly, the first time a Copilot PR opens. That is
+      # the intended behaviour until the endpoint exists.
       - name: Trigger TFactory suite
         id: trigger
+        env:
+          # Bound into env rather than interpolated into the shell: neither the
+          # PR number nor the repo name is trusted shell input.
+          TFACTORY_URL: ${{ vars.TFACTORY_URL }}
+          TFACTORY_TOKEN: ${{ secrets.TFACTORY_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          RESPONSE=$(curl -s -w "\n%{http_code}" \
-            -X POST "${{ vars.TFACTORY_URL }}/api/tasks/from-pr" \
-            -H "Authorization: Bearer ${{ secrets.TFACTORY_TOKEN }}" \
+          set -euo pipefail
+          PAYLOAD=$(jq -n \
+            --argjson pr_number "$PR_NUMBER" \
+            --arg repo "$REPO" \
+            --arg head_sha "$HEAD_SHA" \
+            '{pr_number: $pr_number, repo: $repo, head_sha: $head_sha}')
+          # A connection failure exits non-zero here and `set -e` ends the job.
+          RESPONSE=$(curl -sS -w "\n%{http_code}" \
+            -X POST "${TFACTORY_URL}/api/tasks/from-pr" \
+            -H "Authorization: Bearer ${TFACTORY_TOKEN}" \
             -H "Content-Type: application/json" \
-            -d '{
-              "pr_number": ${{ github.event.pull_request.number }},
-              "repo": "${{ github.repository }}",
-              "head_sha": "${{ github.event.pull_request.head.sha }}"
-            }')
-          HTTP_STATUS=$(echo "$RESPONSE" | tail -n1)
-          BODY=$(echo "$RESPONSE" | head -n-1)
+            -d "$PAYLOAD")
+          HTTP_STATUS=$(printf '%s' "$RESPONSE" | tail -n1)
+          BODY=$(printf '%s' "$RESPONSE" | sed '$d')
           echo "HTTP status: $HTTP_STATUS"
           if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
-            echo "task_created=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::TFactory API returned HTTP $HTTP_STATUS; suite not started"
-          else
-            TASK_ID=$(echo "$BODY" | jq -r '.task_id // .spec_id // "unknown"')
-            echo "task_id=$TASK_ID" >> "$GITHUB_OUTPUT"
-            echo "task_created=true" >> "$GITHUB_OUTPUT"
-            echo "TFactory task: $TASK_ID"
+            echo "::error::TFactory API returned HTTP $HTTP_STATUS for POST ${TFACTORY_URL}/api/tasks/from-pr. The suite did not start, so this PR has NOT been verified."
+            printf '%s\n' "$BODY" | head -c 2000
+            exit 1
           fi
+          TASK_ID=$(printf '%s' "$BODY" | jq -r '.task_id // .spec_id // "unknown"')
+          echo "task_id=$TASK_ID" >> "$GITHUB_OUTPUT"
+          echo "TFactory task: $TASK_ID"
 
       - name: Update commit status (queued)
-        if: steps.trigger.outputs.task_created == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -80,6 +99,23 @@ jobs:
             -H "Content-Type: application/json" \
             -f state=pending \
             -f description="TFactory suite queued (task: ${{ steps.trigger.outputs.task_id }})" \
+            -f context="tfactory/suite" \
+            -f target_url="${{ vars.TFACTORY_URL }}"
+
+      # Without this the `pending` status posted above would stand forever on a
+      # commit whose suite never started -- a second, quieter version of the
+      # same lie. `error` is not a verdict on the code: it says the gate could
+      # not run, which is what happened.
+      - name: Clear the pending status when the suite never started
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api "/repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }}" \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -f state=error \
+            -f description="TFactory suite did not start; nothing was verified" \
             -f context="tfactory/suite" \
             -f target_url="${{ vars.TFACTORY_URL }}"
 
