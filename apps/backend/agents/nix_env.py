@@ -297,6 +297,33 @@ def _build_pytest_cmd(mount: str, name: str, reruns: int) -> str:
     return f"cd {mount}\n{loop}"
 
 
+def _build_browser_cmd(mount: str, name: str, reruns: int) -> str:
+    """The in-shell Playwright command for the Job script (TFactory#1152).
+
+    Mirrors :func:`_build_pytest_cmd` and deliberately emits the SAME
+    ``__PYTEST_RUN`` / ``__PYTEST_EXIT`` markers, so ``parse_pytest_exits`` and the
+    whole stability-classification path work unchanged. The markers are a Job
+    protocol, not a pytest detail; renaming them here would fork the parser for no
+    gain.
+
+    The binary is ``playwright``, never ``npx playwright``. npx re-fetches a
+    mismatched playwright from the npm registry and runs THAT, ignoring the
+    version-matched one the flake put on PATH -- proven live: `npx playwright test`
+    reported "no tests found" while `playwright test` on the same shell passed in
+    6.5s. The flake supplies `playwright-test` whenever a browser lane is implied
+    (see nix_provisioner._needs_browser), so the bare binary is on PATH here.
+
+    No junit/coverage flags: Playwright's reporters differ from pytest's, and the
+    stability signal only needs the exit code per run. `--reporter=line` keeps the
+    output parseable and small in Job logs.
+    """
+    one = f"playwright test tests/{name} --reporter=line 2>&1; echo __PYTEST_EXIT=$?"
+    if reruns <= 1:
+        return f"cd {mount} && {one}"
+    loop = "".join(f"echo __PYTEST_RUN={i}\n{one}\n" for i in range(1, reruns + 1))
+    return f"cd {mount}\n{loop}"
+
+
 def _stage_mutants(mutant_files: list[Path] | None, tests_dir: Path) -> list[str]:
     """Copy each mutation-candidate test into the Job's ``tests/`` dir; return the
     basenames that staged successfully (#776 Stage 1b). Best-effort per file so a
@@ -387,6 +414,7 @@ def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve kno
     serve_port: int | None = None,
     reruns: int = 1,
     mutant_files: list[Path] | None = None,
+    lane: str = "unit",
 ) -> DockerRunResult | None:
     """Run ONE pytest file inside the per-task Nix dev shell as a k8s Job.
 
@@ -534,7 +562,12 @@ def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve kno
                 f'echo "{_APP_NOT_HEALTHY_MARKER} SUT did not accept a connection '
                 f'on {url}; see /tmp/tf_app.log"\n'
             )
-        pytest_cmd = _build_pytest_cmd(mount, name, reruns)
+        # TFactory#1152: the browser lane runs Playwright, not pytest, but through
+        # this SAME Job path — the flake, the co-mount, the retry-on-missing-marker
+        # and the exit-marker protocol are all lane-agnostic. Only the one command
+        # differs, so only the one command is branched.
+        build_cmd = _build_browser_cmd if lane == "browser" else _build_pytest_cmd
+        pytest_cmd = build_cmd(mount, name, reruns)
         if mutant_names:
             pytest_cmd = pytest_cmd + "\n" + _build_mutants_cmd(mutant_names)
         (pd / _JOB_SCRIPT).write_text(
@@ -1265,6 +1298,32 @@ def materialize_flake(
     """
     env = env if env is not None else environment_from_contract(spec_dir)
     if not is_nix_environment(env):
+        # TFactory#1152: a repo that COMMITS its own flake.nix already declares a
+        # nix environment — RFC-0005 says the flake IS the deliverable. Returning
+        # None here because a SEPARATE artifact (the contract) does not mention it
+        # made every low- and medium-tier card unverifiable by the nix lanes: those
+        # run with skip_planning, so no planner writes an `environment` block, so
+        # `environment: null`, so this early return fired and run_browser_evidence
+        # no-opped. The flake sitting in the worktree was never consulted.
+        #
+        # No commands are inferred: without a manifest there is nothing to infer
+        # them FROM, and guessing would be worse than the caller supplying its own
+        # (run_browser_evidence builds its own Playwright command). The plan exists
+        # to say "there is a usable flake here", which is exactly what the caller
+        # needs to decide.
+        if (Path(project_dir) / _FLAKE).exists():
+            _log.info(
+                "nix_env: no contract nix env, honouring repo-owned %s in %s",
+                _FLAKE,
+                project_dir,
+            )
+            return NixPlan(
+                flake_dir=Path(project_dir),
+                verify_commands=[],
+                proof_verify=[],
+                network="none",
+                generated=False,
+            )
         return None
     assert env is not None  # narrowed by is_nix_environment
 
