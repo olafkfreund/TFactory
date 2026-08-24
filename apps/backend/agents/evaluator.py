@@ -1070,7 +1070,7 @@ def _coverage_delta_for_subtask(
 
 
 def _nix_batched_stability(
-    spec_dir: Path, project_dir: Path, test_file: Path
+    spec_dir: Path, project_dir: Path, test_file: Path, lane: str = "unit"
 ) -> StabilityResult | None:
     """#776: the 3x stability samples as ONE Nix Job instead of three.
 
@@ -1092,7 +1092,7 @@ def _nix_batched_stability(
         test_file,
         extra_env={"PYTHONHASHSEED": str(DEFAULT_SEED)},
         reruns=RERUN_COUNT,
-        lane=str(subtask.get("lane") or "unit"),
+        lane=lane,
     )
     if res is None:
         return None
@@ -1238,7 +1238,9 @@ def _stability_for_subtask(
         return None
     try:
         if _nix_verify_mode(spec_dir):
-            batched = _nix_batched_stability(spec_dir, project_dir, test_file)
+            batched = _nix_batched_stability(
+                spec_dir, project_dir, test_file, str(subtask.get("lane") or "unit")
+            )
             if batched is not None:
                 return batched
             # Nix lane unavailable at run time → fall through to per-sample runs.
