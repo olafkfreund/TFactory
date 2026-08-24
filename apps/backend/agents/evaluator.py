@@ -1092,6 +1092,7 @@ def _nix_batched_stability(
         test_file,
         extra_env={"PYTHONHASHSEED": str(DEFAULT_SEED)},
         reruns=RERUN_COUNT,
+        lane=str(subtask.get("lane") or "unit"),
     )
     if res is None:
         return None
@@ -1190,6 +1191,8 @@ def _nix_batched_signals(
         extra_env={"PYTHONHASHSEED": str(DEFAULT_SEED)},
         reruns=RERUN_COUNT,
         mutant_files=mutant_files or None,
+        # TFactory#1152: a browser subtask runs Playwright in this same Job.
+        lane=str(subtask.get("lane") or "unit"),
     )
     if res is None:
         return None, None
