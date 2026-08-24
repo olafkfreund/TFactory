@@ -283,7 +283,9 @@ def _system_pkg_attrs(m: Manifest) -> list[str]:
     return [p for p in m.system_packages if p.lower() not in _DROP_SYSTEM_PKGS]
 
 
-def generate_flake(env: dict, *, nixpkgs: str = DEFAULT_NIXPKGS, project_dir=None) -> str:
+def generate_flake(
+    env: dict, *, nixpkgs: str = DEFAULT_NIXPKGS, project_dir=None
+) -> str:
     """Render a reproducible `flake.nix` from an RFC-0005 environment manifest.
 
     Mirrors the proven PoC: a single devShell with the language toolchain, any
@@ -302,7 +304,9 @@ def generate_flake(env: dict, *, nixpkgs: str = DEFAULT_NIXPKGS, project_dir=Non
         pkg_lines.append(f"pkgs.{_go_attr(m)}")
     else:
         py = _python_attr(m)
-        py_pkgs = [_PY_PKG_ALIASES.get(p, p) for p in _python_libs(m, project_dir=project_dir)]
+        py_pkgs = [
+            _PY_PKG_ALIASES.get(p, p) for p in _python_libs(m, project_dir=project_dir)
+        ]
         if py_pkgs:
             # Reference each attr as ``p."name"`` (quoted) rather than
             # ``with p; [ name ]`` so hyphenated attrs (pytest-cov,
@@ -326,9 +330,7 @@ def generate_flake(env: dict, *, nixpkgs: str = DEFAULT_NIXPKGS, project_dir=Non
     let_lines = ""
     env_lines = ""
     if browser:
-        let_lines = (
-            "\n      fontsConf = pkgs.makeFontsConf { fontDirectories = [ pkgs.dejavu_fonts ]; };"
-        )
+        let_lines = "\n      fontsConf = pkgs.makeFontsConf { fontDirectories = [ pkgs.dejavu_fonts ]; };"
         env_lines = (
             "\n        # Nix-provided, version-matched browsers — no network "
             "download.\n"
@@ -418,6 +420,31 @@ def _python_libs(m: Manifest, project_dir=None) -> list[str]:
     return out
 
 
+# `npx <tool>` re-fetches `<tool>` from the npm registry even when the flake has
+# already put a version-matched copy on PATH, then runs THAT copy — so the whole
+# point of provisioning is silently undone. Proven live: with the flake's
+# playwright-test-1.60.0 on PATH, `npx playwright test` emitted
+#   npm warn exec The following package was not found and will be installed: playwright@1.62.1
+#   Error: Cannot find module '@playwright/test'
+# and found no tests, while `playwright test` on the same shell passed in 6.5s.
+#
+# Only `playwright` is rewritten. The module header states this rule for the Nix
+# substrate, and the flake provably ships that binary whenever a browser lane is
+# implied. Stripping `npx` from a tool the flake does NOT ship would turn a
+# working fetch into "command not found", which is worse than the bug — so the
+# other npx-based commands discovery emits (mocha, cypress, nyc) are left alone
+# until their toolchains are in the flake too.
+_NPX_PROVIDED_BY_FLAKE = ("playwright",)
+
+
+def _strip_npx(command: str) -> str:
+    """Drop a leading ``npx`` when the flake supplies the tool itself."""
+    parts = command.split()
+    if len(parts) >= 2 and parts[0] == "npx" and parts[1] in _NPX_PROVIDED_BY_FLAKE:
+        return " ".join(parts[1:])
+    return command
+
+
 def nix_develop_argv(
     flake_dir: str,
     commands: list[str],
@@ -440,7 +467,7 @@ def nix_develop_argv(
     """
     if not commands:
         raise ProvisionError("no commands to run in the nix dev shell")
-    joined = " && ".join(commands)
+    joined = " && ".join(_strip_npx(c) for c in commands)
     ref = f"path:{flake_dir}#{attr}" if path_ref else f"{flake_dir}#{attr}"
     return [
         binary,
@@ -475,7 +502,9 @@ def _test() -> None:
     assert "python313.withPackages" in flake, flake
     assert "playwright-test" in flake and "nodejs_22" in flake, flake
     assert "PLAYWRIGHT_BROWSERS_PATH" in flake, flake
-    assert "pkgs.chromium" not in flake, "bare chromium must be dropped for the pw stack"
+    assert "pkgs.chromium" not in flake, (
+        "bare chromium must be dropped for the pw stack"
+    )
     assert "fastapi" in flake and "pytest" in flake, flake  # web+test libs inferred
     # fonts: headless chromium needs them to render text in a minimal container.
     assert "dejavu_fonts" in flake and "FONTCONFIG_FILE" in flake, flake
@@ -533,6 +562,20 @@ def _test() -> None:
     # path_ref for a co-mounted git worktree (avoids the git-fetcher ownership trap).
     argv_p = nix_develop_argv("/work", ["true"], path_ref=True)
     assert argv_p[2] == "path:/work#default", argv_p
+
+    # 4b. `npx playwright` is rewritten to the flake's own binary (TFactory#1152).
+    # discovery.py emits "npx playwright test" — correct for the docker runner
+    # images, fatal here: npx re-fetches a mismatched playwright from npm and the
+    # spec then cannot resolve @playwright/test, so the lane reports zero tests.
+    argv_npx = nix_develop_argv("/work", ["npx playwright test tests/e2e"])
+    assert argv_npx[-1] == "playwright test tests/e2e", argv_npx  # noqa: S101
+    # tools the flake does NOT ship keep their npx — stripping it would turn a
+    # working fetch into "command not found".
+    argv_keep = nix_develop_argv("/work", ["npx cypress run", "npx mocha"])
+    assert argv_keep[-1] == "npx cypress run && npx mocha", argv_keep  # noqa: S101
+    # a bare `npx` and an unrelated command are left exactly as they are.
+    argv_bare = nix_develop_argv("/work", ["npx", "playwright test"])
+    assert argv_bare[-1] == "npx && playwright test", argv_bare  # noqa: S101
 
     # 5. materialize-or-halt uses proof.verify; empty => true.
     a = materialize_or_halt_argv("/work", env_browser)
