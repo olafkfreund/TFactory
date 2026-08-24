@@ -945,3 +945,42 @@ def test_deploy_lane_kubectl_gated_on_dryrun_sa(tmp_path, monkeypatch):
         "network_none": False,
     }
     _ = res  # first-call result unused beyond the SA assertion
+
+
+# ── TFactory#1152: a repo-committed flake is a nix environment ────────────────
+#
+# skip_planning (every low- and medium-tier card) means no planner writes an
+# `environment` block, so the contract says `environment: null`. materialize_flake
+# used to return None on that alone, so run_browser_evidence no-opped and the
+# browser lane produced nothing — while a perfectly good flake.nix sat unread in
+# the worktree. RFC-0005 calls the flake the deliverable; these pin that it is
+# treated as one.
+
+
+def test_repo_owned_flake_without_contract_env_is_honoured(tmp_path):
+    spec = tmp_path / "specs" / "147"
+    spec.mkdir(parents=True)
+    _write_contract(spec, None)  # environment: null — the skip_planning shape
+    project = tmp_path / "proj"
+    project.mkdir()
+    committed = '{ description = "repo-owned"; }\n'
+    (project / "flake.nix").write_text(committed, encoding="utf-8")
+
+    plan = materialize_flake(spec, project, env=None)
+    assert plan is not None, "a committed flake.nix must count as a nix environment"
+    assert plan.flake_dir == project
+    assert plan.generated is False
+    # The repo's own flake must NOT be overwritten by a generated one.
+    assert (project / "flake.nix").read_text() == committed
+
+
+def test_no_contract_env_and_no_flake_still_returns_none(tmp_path):
+    """The fallback must not fire on nothing — that would claim a nix env that
+    does not exist and send the lane to a Job with no flake to evaluate."""
+    spec = tmp_path / "specs" / "148"
+    spec.mkdir(parents=True)
+    _write_contract(spec, None)
+    project = tmp_path / "proj2"
+    project.mkdir()
+
+    assert materialize_flake(spec, project, env=None) is None
