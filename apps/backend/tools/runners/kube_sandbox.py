@@ -145,6 +145,7 @@ def build_job_manifest(
     timeout: int = 900,
     repo_pvc: str | None = None,
     repo_subpath: str | None = None,
+    workspace_uri: str | None = None,
     workdir: str = "/work",
     repo_ro: bool = False,
     network_none: bool = False,
@@ -152,6 +153,24 @@ def build_job_manifest(
     service_account: str | None = None,
 ) -> dict:
     """Pure builder for the per-task Job manifest. No cluster access.
+
+    When ``workspace_uri`` is given (RFC-0017 #190) the Job takes NO PVC at all:
+    ``workdir`` is an ``emptyDir`` and the consumer unpacks the packed workspace
+    from ``WORKSPACE_URI`` into it at startup. This is what makes a verify Job
+    node-agnostic -- the ``repo_pvc`` co-mount below is RWO, so it pins the Job to
+    whichever node holds the worktree, and that pin is the single reason this fleet
+    cannot verify across nodes. AIFactory's build path already runs this way
+    (``AIFACTORY_PACK_WORKSPACE``); this brings verify onto the same footing.
+
+    ``workspace_uri`` WINS over ``repo_pvc`` when both are passed, deliberately: a
+    caller mid-migration that still threads its PVC should get the packed
+    behaviour rather than silently re-pinning itself to a node.
+
+    CALLER CONTRACT -- ``emptyDir`` dies with the Job. Screenshots, junit and
+    coverage written into ``workdir`` are LOST unless the caller pushes them back
+    (``ARTIFACTS_URI``). On the co-mounted path those files survived incidentally
+    because the PVC outlived the pod; here they do not. Getting this wrong is
+    silent: the Job goes green and the evidence simply is not there.
 
     When ``repo_pvc`` is given the worktree is co-mounted **rw** by default at
     ``workdir`` (the browser lane writes screenshots/junit into it, which
@@ -209,7 +228,32 @@ def build_job_manifest(
         pod_spec["serviceAccountName"] = service_account
     volumes: list[dict[str, Any]] = []
     mounts: list[dict[str, Any]] = []
-    if repo_pvc:
+    if workspace_uri:
+        # RFC-0017 #190, applied to the verify lane. A packed-workspace Job has NO
+        # PVC co-mount -- that co-mount is exactly what pins the Job to the node
+        # holding the RWO worktree, and it is the only reason this fleet cannot run
+        # verify across nodes. The consumer unpacks WORKSPACE_URI into `workdir` at
+        # startup, so `workdir` must be a WRITABLE node-local target: an emptyDir.
+        #
+        # Checked BEFORE repo_pvc so a caller that passes both gets the packed
+        # behaviour rather than silently re-pinning itself. Passing both is a
+        # migration state, not an error.
+        #
+        # WARNING for callers: emptyDir dies with the Job. Anything the lane writes
+        # into `workdir` -- screenshots, junit, coverage -- is LOST unless it is
+        # explicitly pushed back to ARTIFACTS_URI. On the co-mounted path those
+        # files survived incidentally because the PVC outlived the pod; here they do
+        # not. That difference already cost this fleet one silent data-loss bug on
+        # the AIFactory side.
+        container["workingDir"] = workdir
+        mounts.append({"name": "repo", "mountPath": workdir})
+        volumes.append({"name": "repo", "emptyDir": {}})
+        # This builder sets no container env otherwise, so create the list rather
+        # than appending to one that does not exist.
+        container.setdefault("env", []).append(
+            {"name": "WORKSPACE_URI", "value": workspace_uri}
+        )
+    elif repo_pvc:
         container["workingDir"] = workdir
         mounts.append(
             {
