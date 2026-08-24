@@ -7,116 +7,21 @@
 # that no longer matches a real uncollected file. An entry cannot outlive the
 # problem it documents.
 #
-# Nine entries, in three groups:
+# ZERO entries. It ends empty, which is the point of a ratchet.
 #
-#   1. Two production modules whose names sit in the test namespace for domain
-#      reasons (`TestDiscovery`, `TestFramework`), not because they are tests.
-#   2. Five files named `test_*.py` that contain no `assert` at all -- they
-#      return True/False. Pytest passes a test that returns False, so these are
-#      the one group that must NOT simply be collected (TFactory#1133).
-#   3. Two real, substantial suites that DO run in CI, via a container path the
-#      gate's derivation cannot map back to a repo directory (TFactory#1134).
-
-[[allow]]
-path = "apps/backend/analysis/test_discovery.py"
-reason = """
-A 690-line production module, not a test. It detects a project's test
-framework, test command and test directories, and its output feeds the QA
-agent, the test creator and the planner. The `test_` prefix and the
-`TestDiscovery` / `TestFramework` / `TestDiscoveryResult` class names come from
-the domain it models -- discovering tests -- not from pytest. It defines no
-assert and returns True/False from its three `test_*` helpers, so collecting it
-would add three checks that cannot fail. Renaming it to `discovery.py` is the
-right end state and is tracked in TFactory#1133.
-"""
-issue = "TFactory#1133"
-
-[[allow]]
-path = "apps/backend/test_discovery.py"
-reason = """
-A 21-line backward-compatibility shim that re-exports `analysis.test_discovery`.
-It contains no test functions at all -- collecting it would collect nothing.
-It disappears when the module above is renamed.
-"""
-issue = "TFactory#1133"
-
-[[allow]]
-path = "apps/backend/scripts/graphiti/test_graphiti_memory.py"
-reason = """
-Seven `test_*` functions, zero asserts, 31 `return True`/`return False`
-statements, driven by an `if __name__ == "__main__"` block. Pytest records a
-test that returns False as PASSED, emitting only PytestReturnNotNoneWarning, so
-collecting this file would add seven green checks that can never go red. It also
-takes fixture-style parameters (`db_path`) that no conftest provides, so pytest
-errors on all seven today. Converting the returns to asserts is TFactory#1133.
-"""
-issue = "TFactory#1133"
-
-[[allow]]
-path = "apps/backend/scripts/graphiti/test_ollama_embedding_memory.py"
-reason = """
-Same shape as test_graphiti_memory.py: four `test_*` functions, zero asserts, 13
-return-style outcomes, and undeclared fixture parameters. Collecting it would
-add checks that cannot fail. Tracked with the rest in TFactory#1133.
-"""
-issue = "TFactory#1133"
-
-[[allow]]
-path = "apps/backend/scripts/graphiti/test_provider_naming.py"
-reason = """
-One `test_*` function, zero asserts. Measured: copied under `tests/` and run
-alone it reports `1 passed` -- and would report `1 passed` no matter what the
-provider naming logic did, because nothing in it can fail. That is the exact
-pass-shaped empty measurement Factory#832 exists to catch, so it stays out of
-collection until it asserts something (TFactory#1133).
-"""
-issue = "TFactory#1133"
-
-[[allow]]
-path = "apps/backend/test_quick_improvements.py"
-reason = """
-Four `test_*` functions, zero asserts. Three of the four fail on import today
-(`ModuleNotFoundError: No module named 'spec'`), so the file is not merely
-unrun, it is stale. Collecting it would turn a silent gap into a red build
-without adding any real coverage, since none of the four can fail once imports
-are fixed. Rewrite is TFactory#1133.
-"""
-issue = "TFactory#1133"
-
-[[allow]]
-path = "apps/backend/test_quick_improvements_simple.py"
-reason = """
-Four `test_*` functions, zero asserts, eight return-style outcomes. This is the
-file that made the danger concrete during Factory#844: copied into `tests/` and
-run alone it reports `4 passed`, and re-running with `-W error::UserWarning`
-shows why -- `PytestReturnNotNoneWarning: test_template_matching returned
-<class 'bool'>`. All four checks could be failing and the output would be
-byte-identical. Not collected until it asserts (TFactory#1133).
-"""
-issue = "TFactory#1133"
-
-[[allow]]
-path = "portal_testing/test_capability.py"
-reason = """
-A real test file -- four tests, 11 asserts -- that DOES run in CI. It is
-collected by `portal-ui-runner-image.yml`, which runs `python -m pytest
-/app/portal_testing -q` inside the runner image, where `/app/portal_testing` is
-this directory mounted in. The gate derives collected paths from workflow pytest
-arguments and cannot map that container path back to a repo directory, so it
-reads as uncollected. Marking it "never runs" would be false and would invite
-someone to delete covered tests. Teaching the gate about container paths is
-TFactory#1134. It also needs Playwright, which the host venv does not have.
-"""
-issue = "TFactory#1134"
-
-[[allow]]
-path = "portal_testing/test_dispatch.py"
-reason = """
-The largest suite in this list and the clearest reason the registry records
-reality rather than convenience: 29 tests, 67 asserts, covering the portal-UI
-job manifest and the visual-inspection adapter. Verified passing (`29 passed`).
-Like test_capability.py it runs in CI via `/app/portal_testing` inside the
-runner image, a container path the derivation cannot resolve to a repo
-directory. Tracked in TFactory#1134.
-"""
-issue = "TFactory#1134"
+# The seven that TFactory#1133 tracked are gone: the files they described were
+# renamed out of the test namespace or deleted, so the entries would now match
+# nothing and the gate would fail on them.
+#
+# The last two -- `portal_testing/test_capability.py` and `test_dispatch.py`,
+# 33 tests between them -- were never really exceptions. They DO run in CI,
+# inside the runner image at `/app/portal_testing`, and were listed only because
+# the gate's derivation could not map that container path back to this repo's
+# `portal_testing/`. The hub gate now reads a `# test-collection: <repo path>`
+# directive written on the invocation that mounts it (Factory#933,
+# TFactory#1134), so they are collected rather than excused. Registering covered
+# tests as exceptions is how a covered area becomes a documented gap.
+#
+# An empty file is not a dormant one: the gate still reads it, and it still
+# fails on an entry that matches nothing, on a placeholder reason and on a
+# missing issue. Adding an entry here is a reviewable diff against zero.
