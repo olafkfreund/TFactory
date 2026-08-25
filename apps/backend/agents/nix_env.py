@@ -105,7 +105,11 @@ class NixPlan:
 
 
 def detect_serve_command(
-    project_dir: Path, env: dict | None = None, *, port: int = 8099
+    project_dir: Path,
+    env: dict | None = None,
+    *,
+    port: int = 8099,
+    targets: list[str] | None = None,
 ) -> str | None:
     """How to start the app inside the materialized env for a browser/api lane.
 
@@ -113,16 +117,36 @@ def detect_serve_command(
     detect from the checkout (FastAPI/Flask via uvicorn, or a node start script).
     Returns None when nothing is detectable (the lane then runs without serving —
     honest, not a guess).
+
+    ``targets`` are the spec's files. A POLYGLOT repo holds more than one app, and
+    a repo-wide probe returns whichever it finds first for every spec: spec 165
+    served a static ``games/tictactoe/index.html`` with
+    ``uvicorn app.main:app`` because the same checkout also holds
+    ``src/app/main.py`` (TFactory#1174). An app rooted at a directory serves this
+    spec only when a target lives under it; otherwise it is a different app in the
+    same repo and None is the honest answer. Omitted keeps the repo-wide
+    behaviour, so a single-app repo is unaffected.
     """
     if env and env.get("serve_command"):
         return str(env["serve_command"])
     pd = Path(project_dir)
+
+    def _serves(app_dir: Path) -> bool:
+        """Does the spec touch the tree this app is rooted in?"""
+        if not targets:
+            return True
+        try:
+            base = app_dir.resolve().relative_to(pd.resolve()).parts
+        except ValueError:
+            return True
+        return any(Path(str(t)).parts[: len(base)] == base for t in targets)
+
     # Python ASGI: prefer a root app.py exposing `app`, then a src/app package.
     if (pd / "app.py").is_file() and "app" in (pd / "app.py").read_text(
         errors="ignore"
     ):
         return f"python -m uvicorn app:app --host 127.0.0.1 --port {port}"
-    if (pd / "src" / "app" / "main.py").is_file():
+    if (pd / "src" / "app" / "main.py").is_file() and _serves(pd / "src"):
         return f"python -m uvicorn app.main:app --host 127.0.0.1 --port {port}"
     if (pd / "main.py").is_file() and "app" in (pd / "main.py").read_text(
         errors="ignore"
@@ -1231,7 +1255,14 @@ def run_browser_evidence(
         }
     _write_pw_config(project_dir, port=port)
 
-    serve = detect_serve_command(project_dir, env, port=port)
+    # The SUT this spec names (task_control writes it to source.json). Absent on
+    # some ingest paths, and then detection stays repo-wide exactly as before.
+    try:
+        _src = json.loads((Path(spec_dir) / "source.json").read_text())
+        _targets = [str(t) for t in (_src.get("target_paths") or [])] or None
+    except (OSError, json.JSONDecodeError, TypeError):
+        _targets = None
+    serve = detect_serve_command(project_dir, env, port=port, targets=_targets)
     # Scope the run to the staged config (NOT the contract's generic
     # "playwright test", which would also pick up stale repo specs). Export the
     # URL env the generated specs read.

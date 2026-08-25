@@ -1775,9 +1775,16 @@ def _browser_evidence_stability(spec_dir: Path, subtask: dict):
         return None
     files = subtask.get("files_to_create") or []
     spec_name = Path(files[0]).name if files else ""
-    if spec_name not in results:
+    # Match on BASENAME. The junit names a suite by the spec's path relative to
+    # testDir, so staging specs at a nested path (`e2e/x.spec.ts`) renamed every
+    # key while `files_to_create` still holds `tests/e2e/x.spec.ts`. A bare-name
+    # lookup then missed every entry, no stability was produced, and a lane that
+    # had run 20 tests green fell through to `error` (TFactory#1176). Comparing
+    # basenames survives either staging layout.
+    by_base = {Path(k).name: v for k, v in results.items()}
+    if spec_name not in by_base:
         return None
-    passed = bool(results[spec_name])
+    passed = bool(by_base[spec_name])
     verdict = StabilityVerdict.STABLE if passed else StabilityVerdict.CONSISTENT_FAIL
     # Represent the junit outcome as a real graded run (rc 0 pass / 1 fail) so
     # downstream sees a graded result, not "0 runs collected". The Nix Job IS the
