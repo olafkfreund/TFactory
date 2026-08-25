@@ -83,6 +83,7 @@ from agents.nix_env import (
     is_nix_environment,
     parse_mut_exits,
     parse_pytest_exits,
+    run_jest_lane_via_nix,
     run_pytest_lane_via_nix,
 )
 from agents.stability_runner import (
@@ -1859,7 +1860,7 @@ def _completed_jest_subtasks(plan: dict) -> list[dict]:
     )
 
 
-def _resolve_jest_runner_fn(image: str = _JEST_IMAGE):
+def _resolve_jest_runner_fn(image: str = _JEST_IMAGE, spec_dir: Path | None = None):
     """Return a runner_fn(test_file, project_dir, seed) -> DockerRunResult that
     runs ONE Jest/TypeScript spec in the runner image.
 
@@ -1874,6 +1875,14 @@ def _resolve_jest_runner_fn(image: str = _JEST_IMAGE):
     from tools.runners.docker_runner import DockerRunner, DockerRunResult
 
     def _run(test_file: Path, project_dir_arg: Path, seed: int) -> DockerRunResult:
+        # TFactory#1165: prefer the in-cluster Nix Job. TFactory pods have no
+        # container runtime, so the DockerRunner body below cannot run there at
+        # all; it stays for hosts that do have docker. None means "sandbox not
+        # configured", which is the only case that should reach the fallback.
+        if spec_dir is not None:
+            nix_res = run_jest_lane_via_nix(test_file, project_dir_arg, spec_dir)
+            if nix_res is not None:
+                return nix_res
         scratch = Path(_tmp.mkdtemp(prefix="tf-jest-"))
         try:
             # Copy the SUT (.ts modules + jest/ts config) into scratch root, then
@@ -2335,7 +2344,7 @@ def _build_all_bundles(spec_dir, project_dir, unit, browser, api, jest, go) -> l
             )
         )
     if jest:
-        jest_runner = _resolve_jest_runner_fn()
+        jest_runner = _resolve_jest_runner_fn(spec_dir=spec_dir)
         bundles += [
             _build_jest_signal_bundle(spec_dir, project_dir, st, jest_runner)
             for st in jest
