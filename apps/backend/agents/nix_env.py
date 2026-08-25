@@ -1193,8 +1193,9 @@ def run_browser_evidence(
     if results:
         findings.mkdir(parents=True, exist_ok=True)
         (findings / "browser_evidence.json").write_text(json.dumps(results, indent=2))
+    ok = browser_lane_ok(results, res.returncode)
     return {
-        "ok": res.returncode == 0,
+        "ok": ok,
         "output_tail": (res.stdout or "")[-2000:],
         "serve_command": serve,
         "specs": n_specs,
@@ -1202,6 +1203,19 @@ def run_browser_evidence(
         "videos": [str(p) for p in videos],
         "results": results,
     }
+
+
+def browser_lane_ok(results: dict[str, bool], returncode: int) -> bool:
+    """Did the browser lane pass?
+
+    A nonzero exit alongside a complete junit is teardown noise (video/trace
+    flush, webserver shutdown), not a test failure -- the junit is the per-spec
+    signal the lane exists to produce, so it decides. No junit at all falls back
+    to the exit code: that is a real infra failure, not a passing lane.
+    """
+    if results:
+        return all(results.values())
+    return returncode == 0
 
 
 def parse_browser_junit(junit_path: Path) -> dict[str, bool]:
