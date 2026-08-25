@@ -96,3 +96,50 @@ def test_browser_lane_reads_source_json_from_the_context_dir(tmp_path, monkeypat
     assert seen.get("targets") == ["games/tictactoe/index.html"], (
         "run_browser_evidence must read source.json from the context dir"
     )
+
+
+# spec 171's actual target_paths, from context/source.json
+_TTT = ["games/tictactoe/index.html", "games/tictactoe/game.js"]
+
+
+def _all_four(tmp_path):
+    """Every branch detect_serve_command probes, in one polyglot checkout."""
+    (tmp_path / "app.py").write_text("app = 1\n")
+    (tmp_path / "main.py").write_text("app = 1\n")
+    (tmp_path / "package.json").write_text('{"scripts": {"start": "x"}}')
+    (tmp_path / "src" / "app").mkdir(parents=True)
+    (tmp_path / "src" / "app" / "main.py").write_text("app = 1\n")
+    (tmp_path / "games" / "tictactoe").mkdir(parents=True)
+    (tmp_path / "games" / "tictactoe" / "index.html").write_text("<html></html>")
+    return tmp_path
+
+
+def test_no_branch_serves_a_static_page(tmp_path):
+    """TFactory#1174: spec 171 scoped away the src/app python app and fell
+    through to the repo package.json, returning `npm start` for a static page.
+    Three of the four branches probe the REPO ROOT, where _serves() is vacuously
+    true, so only a guard ahead of all of them works."""
+    assert detect_serve_command(_all_four(tmp_path), targets=_TTT) is None
+
+
+def test_a_python_target_still_gets_its_server(tmp_path):
+    cmd = detect_serve_command(_all_four(tmp_path), targets=["src/app/links.py"])
+    assert cmd is not None and "uvicorn" in cmd
+
+
+def test_no_targets_keeps_repo_wide_behaviour(tmp_path):
+    """Single-app repos and every existing caller must not shift."""
+    assert detect_serve_command(_all_four(tmp_path)) is not None
+
+
+def test_a_bare_js_target_is_not_treated_as_a_static_page(tmp_path):
+    """A lone .js may be a node app's entry point -- a page must be present."""
+    cmd = detect_serve_command(_all_four(tmp_path), targets=["src/index.js"])
+    assert cmd is not None
+
+
+def test_the_contract_still_overrides_everything(tmp_path):
+    cmd = detect_serve_command(
+        _all_four(tmp_path), {"serve_command": "python -m http.server"}, targets=_TTT
+    )
+    assert cmd == "python -m http.server"
