@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agents import nix_env
+from agents import evaluator, nix_env
 from agents.evaluator import _resolve_jest_runner_fn
 from tools.runners.docker_runner import DockerRunResult
 
@@ -22,7 +22,7 @@ def test_jest_runner_prefers_the_nix_lane(monkeypatch, tmp_path):
         seen.append((Path(test_file).name, Path(spec_dir)))
         return sentinel
 
-    monkeypatch.setattr(nix_env, "run_jest_lane_via_nix", fake)
+    monkeypatch.setattr(evaluator, "run_jest_lane_via_nix", fake)
     run = _resolve_jest_runner_fn(spec_dir=tmp_path)
     got = run(tmp_path / "move-places-mark.test.ts", tmp_path, 0)
 

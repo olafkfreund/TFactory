@@ -83,6 +83,7 @@ from agents.nix_env import (
     is_nix_environment,
     parse_mut_exits,
     parse_pytest_exits,
+    run_jest_lane_via_nix,
     run_pytest_lane_via_nix,
 )
 from agents.stability_runner import (
@@ -1879,8 +1880,6 @@ def _resolve_jest_runner_fn(image: str = _JEST_IMAGE, spec_dir: Path | None = No
         # all; it stays for hosts that do have docker. None means "sandbox not
         # configured", which is the only case that should reach the fallback.
         if spec_dir is not None:
-            from agents.nix_env import run_jest_lane_via_nix
-
             nix_res = run_jest_lane_via_nix(test_file, project_dir_arg, spec_dir)
             if nix_res is not None:
                 return nix_res
