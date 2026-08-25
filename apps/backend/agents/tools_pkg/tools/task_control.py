@@ -303,6 +303,29 @@ def _add_spec_worktree(
         return f"source_branch worktree error: {exc}", ""
 
 
+def _correlation_from_contract(contract: dict[str, Any] | None) -> int | None:
+    """The origin issue number from the task contract, or None.
+
+    AIFactory threads it at ``provenance.github_issue`` (#964). Read defensively:
+    a contract is an external payload, and a malformed one must not break ingest
+    -- a task with no correlation key still verifies correctly, it just cannot be
+    joined to its card.
+    """
+    if not isinstance(contract, dict):
+        return None
+    prov = contract.get("provenance")
+    if not isinstance(prov, dict):
+        return None
+    issue = prov.get("github_issue")
+    if isinstance(issue, bool):  # bool is an int subclass; not an issue number
+        return None
+    if isinstance(issue, int):
+        return issue
+    if isinstance(issue, str) and issue.strip().isdigit():
+        return int(issue.strip())
+    return None
+
+
 def create_spec_ingest_workspace(
     *,
     project_id: str,
@@ -468,7 +491,7 @@ def create_spec_ingest_workspace(
     }
     (context_dir / "source.json").write_text(json.dumps(source, indent=2))
 
-    status = {
+    status: dict[str, Any] = {
         "task_id": spec_id,
         "project_id": project_id,
         "spec_id": spec_id,
@@ -480,6 +503,20 @@ def create_spec_ingest_workspace(
         "created_at": _now_iso(),
         "updated_at": _now_iso(),
     }
+    # The RFC-0001 correlation key, threaded from the contract AIFactory already
+    # sends (#964 puts it at provenance.github_issue). Ingest accepted the
+    # contract and never read this field, so every verify task was created with
+    # no key to join on.
+    #
+    # The consequence is invisible until someone looks for evidence: TFactory's
+    # completion event has nothing to correlate, so CFactory's work item keeps
+    # whichever tfactory slice it last had. Observed live -- work item 561 had
+    # aifactory=spec 160 and tfactory=spec 150, TEN specs stale, so the portal
+    # requested spec 160's screenshots under spec 150 and every image 404'd. The
+    # browser lane had produced them correctly and TFactory served them correctly.
+    _corr = _correlation_from_contract(contract)
+    if _corr is not None:
+        status["correlation_key"] = _corr
     if checkout_failed_reason:
         status["source_checkout_error"] = checkout_failed_reason
     _status_file(project_id, spec_id, root).write_text(json.dumps(status, indent=2))
