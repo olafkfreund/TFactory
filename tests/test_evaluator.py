@@ -1941,3 +1941,68 @@ def test_lane_progress_survives_a_verdict_with_no_signals(tmp_path):
 
     path = _write_verdicts(tmp_path, [{"test_id": "a", "lane": "api"}])
     assert _derive_lane_progress(tmp_path, path) == {"api": "executed"}
+
+
+# ── jest staging flattened the test away from its imports (#1165) ─────────────
+#
+# The SUT is copied into the scratch dir preserving structure, but the TEST was
+# kept at its own path only when "tests" appeared in it, and flattened to the
+# bare filename otherwise. So games/tictactoe/game.test.js landed at the scratch
+# ROOT while its require("./game.js") target sat three directories away, and
+# every JS project without a tests/ dir failed on the import before jest ran a
+# single assertion.
+#
+# Same defect as the e2e staging flattening: a test moved away from the layout it
+# was authored against breaks its own fixtures, and reports as a test failure
+# rather than a staging failure.
+
+
+def _staged_rel(test_file, project_dir):
+    """The placement _resolve_jest_runner_fn computes for a staged spec."""
+    from pathlib import Path as _P
+
+    try:
+        return _P(test_file).resolve().relative_to(_P(project_dir).resolve())
+    except ValueError:
+        return _P(_P(test_file).name)
+
+
+def test_a_test_outside_a_tests_dir_keeps_its_path(tmp_path):
+    """The spec-160 layout: games/tictactoe/game.test.js beside its module."""
+    proj = tmp_path / "proj"
+    d = proj / "games" / "tictactoe"
+    d.mkdir(parents=True)
+    (d / "game.js").write_text("module.exports = {};")
+    tf = d / "game.test.js"
+    tf.write_text("require('./game.js');")
+
+    rel = _staged_rel(tf, proj)
+
+    assert rel == Path("games/tictactoe/game.test.js")
+    # the property that matters: ./game.js resolves next to the staged test
+    assert (proj / rel).parent.joinpath("game.js").is_file()
+
+
+def test_a_conventional_tests_dir_still_works(tmp_path):
+    """The layout the old heuristic handled must not regress."""
+    proj = tmp_path / "proj"
+    d = proj / "tests" / "unit"
+    d.mkdir(parents=True)
+    (d / "game.js").write_text("module.exports = {};")
+    tf = d / "game.test.js"
+    tf.write_text("require('./game.js');")
+
+    assert _staged_rel(tf, proj) == Path("tests/unit/game.test.js")
+
+
+def test_a_test_outside_the_project_falls_back_to_its_name(tmp_path):
+    """No faithful placement exists. The bare name at least runs; a guessed
+    prefix would resolve to the WRONG module and produce a confident wrong
+    verdict."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    outside = tmp_path / "elsewhere" / "x.test.js"
+    outside.parent.mkdir()
+    outside.write_text("x")
+
+    assert _staged_rel(outside, proj) == Path("x.test.js")

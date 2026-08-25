@@ -618,3 +618,50 @@ async def test_task_rerun_refires_planner_when_enabled(
     assert "re-fired" in body["note"]
     if _BG_PLANNER_TASKS:
         await asyncio.gather(*list(_BG_PLANNER_TASKS), return_exceptions=True)
+
+
+# ── ingest dropped the correlation key, so evidence could not be found ────────
+#
+# AIFactory threads the origin issue at contract.provenance.github_issue (#964).
+# Ingest accepted the contract and never read it, so every verify task was
+# created with no key to join on -- TFactory's completion event had nothing to
+# correlate and CFactory's work item kept whichever tfactory slice it last had.
+#
+# Observed live: work item 561 carried aifactory=spec 160 and tfactory=spec 150,
+# TEN specs stale. The portal asked for spec 160's screenshots under spec 150 and
+# every image 404'd, while the browser lane had produced them correctly and
+# TFactory served them correctly. Only the mapping was wrong.
+
+
+def test_the_correlation_key_is_read_from_the_contract():
+    from agents.tools_pkg.tools.task_control import _correlation_from_contract
+
+    assert _correlation_from_contract({"provenance": {"github_issue": 561}}) == 561
+
+
+def test_a_numeric_string_is_accepted():
+    """Providers and JSON round-trips stringify numbers; a key that arrives as
+    "561" is the same key."""
+    from agents.tools_pkg.tools.task_control import _correlation_from_contract
+
+    assert _correlation_from_contract({"provenance": {"github_issue": "561"}}) == 561
+
+
+def test_a_bool_is_not_an_issue_number():
+    """bool is an int subclass in Python, so True would otherwise correlate to
+    issue 1 and join the task to an unrelated card."""
+    from agents.tools_pkg.tools.task_control import _correlation_from_contract
+
+    assert _correlation_from_contract({"provenance": {"github_issue": True}}) is None
+
+
+def test_a_malformed_contract_never_breaks_ingest():
+    """A contract is an external payload. A task with no correlation key still
+    verifies correctly -- it just cannot be joined to its card -- so this must
+    degrade rather than raise."""
+    from agents.tools_pkg.tools.task_control import _correlation_from_contract
+
+    for bad in (None, {}, {"provenance": None}, {"provenance": {}},
+                {"provenance": {"github_issue": "not-a-number"}},
+                {"provenance": []}, "a string", 42):
+        assert _correlation_from_contract(bad) is None
