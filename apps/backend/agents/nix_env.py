@@ -30,7 +30,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from agents.preflight_static import package_root_rel_paths, requirements_files
 from agents.task_contract import read_task_contract
@@ -51,6 +51,25 @@ _log = logging.getLogger(__name__)
 
 _FLAKE = "flake.nix"
 _FLAKE_LOCK = "flake.lock"
+
+# TFactory#1152: the smallest manifest a browser lane can run on when the
+# contract declares none. Low- and medium-tier cards run with skip_planning, so
+# no planner ever writes an `environment` block — which left the browser lane
+# structurally unreachable for the majority of cards, not merely flaky for them.
+#
+# One word buys the whole toolchain: "chromium" is the token the provisioner's
+# _needs_browser looks for, and on seeing it the provisioner DROPS the bare attr
+# and substitutes the version-matched playwright-test + playwright-driver.browsers
+# stack, nodejs and the fonts headless chromium needs to render. Naming those here
+# would duplicate that mapping and let the two drift.
+#
+# generated=True on purpose: this manifest is ours, not the repo's, so it must
+# never win over a flake the repo committed. materialize_flake enforces that by
+# checking for a repo-owned flake BEFORE consulting this.
+_BROWSER_FALLBACK_ENV: dict[str, Any] = {
+    "system_packages": ["chromium"],
+    "provisioning": {"method": "nix", "generated": True},
+}
 
 
 @dataclass
@@ -1092,7 +1111,9 @@ def run_browser_evidence(
     the gap honestly). Proven live 2026-06-17.
     """
     env = environment_from_contract(spec_dir)
-    plan = materialize_flake(spec_dir, project_dir, env=env)
+    plan = materialize_flake(
+        spec_dir, project_dir, env=env, fallback_env=_BROWSER_FALLBACK_ENV
+    )
     if plan is None:
         return None
     # Same unified-seam consumption as run_pytest_lane_via_nix (#426).
@@ -1288,13 +1309,24 @@ def is_nix_environment(env: dict | None) -> bool:
 
 
 def materialize_flake(
-    spec_dir: Path, project_dir: Path, *, env: dict | None = None
+    spec_dir: Path,
+    project_dir: Path,
+    *,
+    env: dict | None = None,
+    fallback_env: dict[str, Any] | None = None,
 ) -> NixPlan | None:
     """Write ``flake.nix`` into ``project_dir`` from the contract environment.
 
     Returns a NixPlan (flake dir + commands) when the contract declares a nix
     environment, else None (caller falls back to the legacy lane runner). Does
     NOT overwrite a repo-owned flake unless the manifest is ``generated``.
+
+    ``fallback_env`` is a manifest to use when the contract declares no nix
+    environment AND the repo carries no flake of its own — the skip_planning
+    case (#1152), where there is no planner to write one and nothing to fall
+    back to. It is consulted LAST, so a repo-owned flake still wins; a caller
+    that passes one is saying "this lane can run on this minimum", not
+    overriding what the repo or the contract asked for.
     """
     env = env if env is not None else environment_from_contract(spec_dir)
     if not is_nix_environment(env):
@@ -1324,8 +1356,20 @@ def materialize_flake(
                 network="none",
                 generated=False,
             )
-        return None
-    assert env is not None  # narrowed by is_nix_environment
+        if fallback_env is None:
+            return None
+        # No contract manifest and no repo flake. Without this the lane cannot
+        # run at all: `nix develop /work#default` has no flake to evaluate, all
+        # three stability attempts error, every test is flagged, and the run
+        # reports "sandbox/browser-lane failure" — which reads as flakiness
+        # rather than as a lane that was never reachable (#1152).
+        _log.info(
+            "nix_env: no contract env and no repo %s, generating from the "
+            "caller's fallback manifest",
+            _FLAKE,
+        )
+        env = fallback_env
+    assert env is not None  # narrowed by is_nix_environment, or set from fallback
 
     m = Manifest.from_contract(env)
     flake_path = Path(project_dir) / _FLAKE
