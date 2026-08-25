@@ -1081,3 +1081,87 @@ def test_a_real_contract_env_still_beats_the_fallback(tmp_path):
     assert "playwright-test" not in flake, (
         "the fallback must not leak into a planned env"
     )
+
+
+# ── e2e staging flattened the path, so every relative fixture 404'd ───────────
+#
+# Generated browser specs resolve fixtures relatively:
+#     path.resolve(__dirname, '..', '..', 'games', 'tictactoe', 'index.html')
+# which is correct from tests/e2e. Staging copied them FLAT into .tf_e2e, one
+# level too shallow, so with the worktree co-mounted at /work the two `..` steps
+# went /work/.tf_e2e -> /work -> / and Playwright reported
+#     net::ERR_FILE_NOT_FOUND at file:///games/tictactoe/index.html
+#
+# Three e2e tests failed that way on spec 160 while the page under test was
+# correct. The evaluator recorded it as "brittle path resolution" in the
+# generated tests. The tests were right; the staging moved them.
+
+
+def _spec_with_e2e(tmp_path):
+    spec = tmp_path / "spec"
+    (spec / "tests" / "e2e").mkdir(parents=True)
+    (spec / "tests" / "e2e" / "tictactoe-playable.spec.ts").write_text("x")
+    project = tmp_path / "work"
+    (project / "games" / "tictactoe").mkdir(parents=True)
+    (project / "games" / "tictactoe" / "index.html").write_text("<html>")
+    return spec, project
+
+
+def test_staging_keeps_the_path_below_tests(tmp_path):
+    from agents.nix_env import _E2E_STAGE, _stage_browser_specs
+
+    spec, project = _spec_with_e2e(tmp_path)
+    assert _stage_browser_specs(spec, project) == 1
+
+    staged = next((project / _E2E_STAGE).rglob("*.spec.ts"))
+    assert (
+        staged.relative_to(project)
+        == Path(_E2E_STAGE) / "e2e" / "tictactoe-playable.spec.ts"
+    )
+
+
+def test_a_relative_fixture_resolves_from_the_staged_location(tmp_path):
+    """The property that actually matters, asserted the way the spec computes it.
+
+    Checking the staged filename alone would pass with the old flattening too --
+    it is the DEPTH that was wrong, and only resolving the path catches that.
+    """
+    from agents.nix_env import _E2E_STAGE, _stage_browser_specs
+
+    spec, project = _spec_with_e2e(tmp_path)
+    _stage_browser_specs(spec, project)
+    staged = next((project / _E2E_STAGE).rglob("*.spec.ts"))
+
+    resolved = (
+        staged.parent / ".." / ".." / "games" / "tictactoe" / "index.html"
+    ).resolve()
+    assert resolved.is_file(), f"{resolved} does not exist -- the staged depth is wrong"
+
+
+def test_nested_spec_dirs_keep_their_shape(tmp_path):
+    from agents.nix_env import _E2E_STAGE, _stage_browser_specs
+
+    spec = tmp_path / "spec"
+    (spec / "tests" / "e2e" / "deep").mkdir(parents=True)
+    (spec / "tests" / "e2e" / "deep" / "a.spec.ts").write_text("x")
+    project = tmp_path / "work"
+    project.mkdir()
+
+    _stage_browser_specs(spec, project)
+
+    assert (project / _E2E_STAGE / "e2e" / "deep" / "a.spec.ts").is_file()
+
+
+def test_stale_repo_specs_are_still_excluded(tmp_path):
+    """The reason .tf_e2e exists: a leftover spec in the repo once pointed the
+    Job at the wrong port. Staging must still isolate from those."""
+    from agents.nix_env import _E2E_STAGE, _stage_browser_specs
+
+    spec, project = _spec_with_e2e(tmp_path)
+    (project / "tests").mkdir(parents=True, exist_ok=True)
+    (project / "tests" / "stale.spec.ts").write_text("stale")
+
+    _stage_browser_specs(spec, project)
+    staged = {p.name for p in (project / _E2E_STAGE).rglob("*.spec.ts")}
+
+    assert staged == {"tictactoe-playable.spec.ts"}
