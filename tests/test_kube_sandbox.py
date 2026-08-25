@@ -259,7 +259,9 @@ def test_service_account_opt_in_mounts_token():
     """The deploy lane's kubectl --dry-run=server needs a scoped SA token; passing
     service_account sets it AND flips automount on (verify lanes never do)."""
     m = build_job_manifest(
-        "jsa", "img", ["kubectl apply --dry-run=server -f ."],
+        "jsa",
+        "img",
+        ["kubectl apply --dry-run=server -f ."],
         service_account="tfactory-deploy-dryrun",
     )
     spec = m["spec"]["template"]["spec"]
@@ -331,3 +333,69 @@ def test_job_name_stays_a_valid_dns_label():
     # VALIDITY is not, and assert_job_policy checks that for whatever scheme a
     # consumer picks.
     assert_job_policy(build_job_manifest("j1", "img", ["true"]))
+
+
+# ── RFC-0017 #190: packed workspace, no PVC, node-agnostic ────────────────────
+#
+# The repo_pvc co-mount is RWO, so it pins a verify Job to whichever node holds
+# the worktree. That pin is the single reason this fleet cannot verify across
+# nodes. These pin the packed alternative.
+
+
+def test_packed_workspace_uses_emptydir_and_no_pvc():
+    m = build_job_manifest(
+        "j-packed",
+        "img",
+        ["nix develop /work#default -c playwright test"],
+        workspace_uri="s3://factory-artifacts/tfactory/1/spec/workspace.tar.gz",
+    )
+    spec = m["spec"]["template"]["spec"]
+    repo = [v for v in spec["volumes"] if v["name"] == "repo"]
+    assert len(repo) == 1, spec["volumes"]
+    assert repo[0] == {"name": "repo", "emptyDir": {}}, repo[0]
+    # No PVC anywhere — a PVC is exactly what re-pins the Job to a node.
+    assert all("persistentVolumeClaim" not in v for v in spec["volumes"]), spec[
+        "volumes"
+    ]
+    c = spec["containers"][0]
+    assert c["workingDir"] == "/work"
+    env = {e["name"]: e["value"] for e in c.get("env", [])}
+    assert env["WORKSPACE_URI"].endswith("workspace.tar.gz"), env
+
+
+def test_packed_workspace_wins_over_repo_pvc():
+    """A caller mid-migration that still threads its PVC must get the packed
+    behaviour, not silently re-pin itself to a node. Passing both is a migration
+    state, not an error — and the failure mode it guards against is invisible:
+    the Job runs fine, it just cannot schedule anywhere else."""
+    m = build_job_manifest(
+        "j-both",
+        "img",
+        ["true"],
+        repo_pvc="tfactory-data",
+        repo_subpath="workspaces/x",
+        workspace_uri="s3://bucket/w.tar.gz",
+    )
+    spec = m["spec"]["template"]["spec"]
+    assert all("persistentVolumeClaim" not in v for v in spec["volumes"]), spec[
+        "volumes"
+    ]
+    repo = [v for v in spec["volumes"] if v["name"] == "repo"]
+    assert repo[0] == {"name": "repo", "emptyDir": {}}, repo[0]
+    mounts = spec["containers"][0]["volumeMounts"]
+    repo_mt = [m2 for m2 in mounts if m2["name"] == "repo"]
+    # subPath belongs to the PVC path; the packed mount must not carry it.
+    assert "subPath" not in repo_mt[0], repo_mt[0]
+
+
+def test_no_workspace_uri_keeps_the_pvc_path_unchanged():
+    """The default must be byte-identical to before, or this change is a
+    regression for every existing caller."""
+    m = build_job_manifest(
+        "j-pvc", "img", ["true"], repo_pvc="tfactory-data", repo_subpath="workspaces/x"
+    )
+    spec = m["spec"]["template"]["spec"]
+    repo = [v for v in spec["volumes"] if v["name"] == "repo"]
+    assert repo[0]["persistentVolumeClaim"]["claimName"] == "tfactory-data", repo[0]
+    env = {e["name"]: e["value"] for e in spec["containers"][0].get("env", [])}
+    assert "WORKSPACE_URI" not in env, env
