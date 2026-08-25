@@ -168,23 +168,23 @@ def detect_serve_command(
     # (TFactory#1174). Spec 171 proved it: scoping rejected the src/app python
     # app and detection fell straight through to the repo's package.json and
     # returned "npm start" for a static tic-tac-toe page.
-    if _static_page_targets(targets):
-        return None
-
-    # Python ASGI: prefer a root app.py exposing `app`, then a src/app package.
-    if (pd / "app.py").is_file() and "app" in (pd / "app.py").read_text(
-        errors="ignore"
-    ):
-        return f"python -m uvicorn app:app --host 127.0.0.1 --port {port}"
-    if (pd / "src" / "app" / "main.py").is_file() and _serves(pd / "src"):
-        return f"python -m uvicorn app.main:app --host 127.0.0.1 --port {port}"
-    if (pd / "main.py").is_file() and "app" in (pd / "main.py").read_text(
-        errors="ignore"
-    ):
-        return f"python -m uvicorn main:app --host 127.0.0.1 --port {port}"
-    pkg = pd / "package.json"
-    if pkg.is_file() and '"start"' in pkg.read_text(errors="ignore"):
-        return "npm start"
+    # Wrapped rather than an early `return None` so the return count does not
+    # grow (PLR0911): the trailing `return None` already answers the static case.
+    if not _static_page_targets(targets):
+        # Python ASGI: prefer a root app.py exposing `app`, then a src/app package.
+        if (pd / "app.py").is_file() and "app" in (pd / "app.py").read_text(
+            errors="ignore"
+        ):
+            return f"python -m uvicorn app:app --host 127.0.0.1 --port {port}"
+        if (pd / "src" / "app" / "main.py").is_file() and _serves(pd / "src"):
+            return f"python -m uvicorn app.main:app --host 127.0.0.1 --port {port}"
+        if (pd / "main.py").is_file() and "app" in (pd / "main.py").read_text(
+            errors="ignore"
+        ):
+            return f"python -m uvicorn main:app --host 127.0.0.1 --port {port}"
+        pkg = pd / "package.json"
+        if pkg.is_file() and '"start"' in pkg.read_text(errors="ignore"):
+            return "npm start"
     return None
 
 
