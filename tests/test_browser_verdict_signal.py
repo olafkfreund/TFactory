@@ -87,3 +87,37 @@ def test_browser_lane_ok_without_junit_falls_back_to_exit_code():
 
     assert browser_lane_ok({}, 1) is False
     assert browser_lane_ok({}, 0) is True
+
+
+def test_stability_matches_a_nested_junit_key(tmp_path):
+    """TFactory#1176: spec 165 ran 20 browser tests green, 0 failures, 21
+    screenshots -- and `lane_progress` still read `browser: error`.
+
+    The junit names a suite by its path relative to testDir, so staging specs
+    nested (`e2e/x.spec.ts`) renamed every evidence key while `files_to_create`
+    still held `tests/e2e/x.spec.ts`. The bare-name lookup missed every entry.
+    """
+    findings = tmp_path / "findings"
+    findings.mkdir()
+    (findings / "browser_evidence.json").write_text(
+        json.dumps({"e2e/ttt-click-empty-cell.spec.ts": True})
+    )
+    st = _browser_evidence_stability(
+        tmp_path, {"files_to_create": ["tests/e2e/ttt-click-empty-cell.spec.ts"]}
+    )
+    assert st is not None, "nested junit key must still resolve"
+    assert st.verdict is StabilityVerdict.STABLE
+
+
+def test_stability_still_fails_a_failing_nested_spec(tmp_path):
+    """Basename matching must not turn a real failure into a pass."""
+    findings = tmp_path / "findings"
+    findings.mkdir()
+    (findings / "browser_evidence.json").write_text(
+        json.dumps({"e2e/ttt-click-empty-cell.spec.ts": False})
+    )
+    st = _browser_evidence_stability(
+        tmp_path, {"files_to_create": ["tests/e2e/ttt-click-empty-cell.spec.ts"]}
+    )
+    assert st is not None
+    assert st.verdict is StabilityVerdict.CONSISTENT_FAIL
