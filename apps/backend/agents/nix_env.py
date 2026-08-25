@@ -72,6 +72,17 @@ _BROWSER_FALLBACK_ENV: dict[str, Any] = {
 }
 
 
+# "jest" is the token the provisioner's _needs_jest looks for; on seeing it the
+# provisioner drops the bare attr and substitutes nodePackages.jest plus nodejs
+# (only when the browser block has not already added node). Same shape as
+# _BROWSER_FALLBACK_ENV above, and generated=True for the same reason: this
+# manifest is ours, so a flake the repo committed must still win.
+_JEST_FALLBACK_ENV: dict[str, Any] = {
+    "system_packages": ["jest"],
+    "provisioning": {"method": "nix", "generated": True},
+}
+
+
 @dataclass
 class NixPlan:
     """A materialized Nix environment ready to run via the Job backend."""
@@ -799,6 +810,71 @@ def run_gotest_lane_via_nix(
         junit_xml_path=junit if junit.is_file() else None,
         coverage_xml_path=cov if cov.is_file() else None,
         argv=["nix", "develop", f"path:{mount}#default", "--", "go", "test", "./..."],
+    )
+
+
+def run_jest_lane_via_nix(
+    test_file: Path,
+    project_dir: Path,
+    spec_dir: Path,
+    *,
+    timeout: int = 300,
+) -> DockerRunResult | None:
+    """Run ONE jest spec inside the per-task Nix dev shell as a k8s Job.
+
+    TFactory#1165: the jest lane's only runner was DockerRunner-based, and
+    TFactory pods have no container runtime, so every JavaScript/TypeScript unit
+    test errored before it started. This is the in-cluster path, shaped like
+    :func:`run_gotest_lane_via_nix`.
+
+    Runs bare ``jest``, never ``npx jest``: npx re-fetches from the npm registry
+    and silently undoes the flake's provisioning (TFactory#1152). The worktree is
+    co-mounted at ``_NIX_MOUNT`` and the spec runs at its own path relative to the
+    project so its relative imports resolve as authored.
+
+    Returns None when the sandbox isn't configured (caller falls back).
+    """
+    mount = _NIX_MOUNT
+    plan = materialize_flake(
+        spec_dir,
+        project_dir,
+        env=environment_from_contract(spec_dir),
+        fallback_env=_JEST_FALLBACK_ENV,
+    )
+    if plan is None:
+        return None
+    sandbox: ExecutionSandbox | None = nix_runner_from_env()
+    if sandbox is None:
+        _log.info("run_jest_lane_via_nix: TFACTORY_NIX_RUNNER_IMAGE unset; skipping")
+        return None
+
+    pd = Path(project_dir)
+    try:
+        rel = Path(test_file).resolve().relative_to(pd.resolve()).as_posix()
+    except ValueError:
+        # A spec staged outside the project can't resolve its imports anyway;
+        # fall back to the bare name rather than handing jest an absolute path.
+        rel = Path(test_file).name
+
+    # set +e + the marker recover the real jest exit: the wrapper exits 0 so the
+    # Job "succeeds" and the lane reads the test result, not the pod phase.
+    jest_cmd = (
+        f"cd {mount} && jest --ci --forceExit {_shquote(rel)} 2>&1; echo __JEST_EXIT=$?"
+    )
+    (pd / _JOB_SCRIPT).write_text(
+        "#!/usr/bin/env bash\nset +e\n" + jest_cmd + "\n", encoding="utf-8"
+    )
+    job_cmd = f"nix develop path:{mount}#default --command bash {mount}/{_JOB_SCRIPT}"
+    try:
+        res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)
+    finally:
+        (pd / _JOB_SCRIPT).unlink(missing_ok=True)
+
+    return DockerRunResult(
+        returncode=_parse_exit_marker(res.stdout, "__JEST_EXIT="),
+        stdout=res.stdout or "",
+        stderr="",
+        argv=["nix", "develop", f"path:{mount}#default", "--", "jest", rel],
     )
 
 
