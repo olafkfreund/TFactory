@@ -63,7 +63,7 @@ env:
   # commit on hub `main`, not a PR-branch head — the hub squash-merges, so a
   # branch head ceases to exist the moment the PR lands and the pin then resolves
   # to nothing (Factory#638).
-  HUB_PIN_SHA: "e9d97871d68aa28b3fbc841e389c1980b9253754"
+  HUB_PIN_SHA: "04371f2cf848f8733d8c7722e989c54364d11ab4"
 
 jobs:
   drift:
