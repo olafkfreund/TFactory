@@ -984,3 +984,100 @@ def test_no_contract_env_and_no_flake_still_returns_none(tmp_path):
     project.mkdir()
 
     assert materialize_flake(spec, project, env=None) is None
+
+
+# ── TFactory#1152 part 2: no contract env AND no repo flake ────────────────────
+#
+# The repo-owned-flake fallback above only helps a repo that committed one. A
+# skip_planning card against a repo with neither had no path at all: `nix develop
+# /work#default` with no flake to evaluate, three stability attempts all erroring,
+# every test flagged, and a verdict reading "sandbox/browser-lane failure" — which
+# reads as a flaky lane rather than one that was never reachable.
+
+
+def test_browser_fallback_generates_a_flake_when_there_is_nothing_else(tmp_path):
+    from agents.nix_env import _BROWSER_FALLBACK_ENV
+
+    spec = tmp_path / "specs" / "155"
+    spec.mkdir(parents=True)
+    _write_contract(spec, None)  # environment: null — the skip_planning shape
+    project = tmp_path / "proj"
+    project.mkdir()
+
+    plan = materialize_flake(
+        spec, project, env=None, fallback_env=_BROWSER_FALLBACK_ENV
+    )
+    assert plan is not None, "the lane must have a flake to develop against"
+    assert plan.generated is True
+    assert (project / "flake.nix").exists()
+
+
+def test_the_fallback_flake_actually_carries_the_browser_toolchain(tmp_path):
+    """The point is a RUNNABLE browser lane, not merely a file called flake.nix.
+
+    One token does it: the provisioner sees "chromium", drops the bare attr and
+    substitutes the version-matched playwright stack. Asserting on the rendered
+    flake rather than on the manifest is deliberate — it is the flake that has to
+    be right, and a manifest assertion would pass even if that mapping broke.
+    """
+    from agents.nix_env import _BROWSER_FALLBACK_ENV
+
+    spec = tmp_path / "specs" / "156"
+    spec.mkdir(parents=True)
+    _write_contract(spec, None)
+    project = tmp_path / "proj"
+    project.mkdir()
+
+    materialize_flake(spec, project, env=None, fallback_env=_BROWSER_FALLBACK_ENV)
+    flake = (project / "flake.nix").read_text()
+    assert "playwright-test" in flake
+    assert "PLAYWRIGHT_BROWSERS_PATH" in flake
+    assert "nodejs" in flake
+
+
+def test_a_repo_owned_flake_still_beats_the_fallback(tmp_path):
+    """Precedence, and the reason it matters: the fallback is OUR guess at a
+    minimum, the committed flake is what the repo actually declared. Overwriting
+    it would silently replace a project's real environment with a browser stub —
+    a failure that leaves a green-looking generated flake behind and no sign that
+    anything was lost.
+    """
+    from agents.nix_env import _BROWSER_FALLBACK_ENV
+
+    spec = tmp_path / "specs" / "157"
+    spec.mkdir(parents=True)
+    _write_contract(spec, None)
+    project = tmp_path / "proj"
+    project.mkdir()
+    committed = '{ description = "repo-owned"; }\n'
+    (project / "flake.nix").write_text(committed, encoding="utf-8")
+
+    plan = materialize_flake(
+        spec, project, env=None, fallback_env=_BROWSER_FALLBACK_ENV
+    )
+    assert plan is not None
+    assert plan.generated is False
+    assert (project / "flake.nix").read_text() == committed
+
+
+def test_a_real_contract_env_still_beats_the_fallback(tmp_path):
+    """The fallback is last, not first. A card that DID plan must get the
+    environment its planner declared, not our minimum."""
+    from agents.nix_env import _BROWSER_FALLBACK_ENV
+
+    spec = tmp_path / "specs" / "158"
+    spec.mkdir(parents=True)
+    env = {
+        "language": "go",
+        "provisioning": {"method": "nix", "generated": True},
+    }
+    _write_contract(spec, env)
+    project = tmp_path / "proj"
+    project.mkdir()
+
+    materialize_flake(
+        spec, project, env=env, fallback_env=_BROWSER_FALLBACK_ENV
+    )
+    flake = (project / "flake.nix").read_text()
+    assert "go" in flake
+    assert "playwright-test" not in flake, "the fallback must not leak into a planned env"

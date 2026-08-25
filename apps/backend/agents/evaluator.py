@@ -889,6 +889,56 @@ def _apply_lane_attribution(spec_dir: Path, verdicts_path: Path) -> None:
     )
 
 
+def _derive_lane_progress(spec_dir: Path, verdicts_path: Path) -> dict[str, str] | None:
+    """Derive each lane's execution state from the lane-stamped verdicts.
+
+    ``lane_progress`` was initialised to ``pending`` for every lane and then
+    never advanced: two initialisers, one rerun reset, and no writer anywhere
+    that moves a lane off ``pending``. So "every lane pending" was equally true
+    of a clean run and a dead one, and every consumer reading it was reading a
+    constant — including the cockpit's stage badge and this repo's own demo
+    runbook, which told operators to check exactly this field.
+
+    Derived from the verdicts rather than stamped at each lane's call site
+    because the five lanes take five different execution paths through
+    ``_build_all_bundles``; one derivation covers all of them and cannot drift
+    lane by lane as those paths change.
+
+    Must run AFTER ``_apply_lane_attribution`` — that is what puts ``lane`` on
+    a verdict at all. Before it, every verdict looks like ``unit``.
+
+    ``error`` stays distinct from ``pending`` deliberately. A lane that tried
+    and could not run (no flake, no sandbox) is a different fact from a lane
+    nobody asked for, and collapsing the two is what let #1152 read as "nothing
+    was requested" when the truth was "the runner is broken". Returns ``None``
+    when no verdict carries a lane, leaving the existing value untouched rather
+    than overwriting it with a guess.
+    """
+    try:
+        doc = json.loads(verdicts_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        _eval_log.warning("[evaluator] lane_progress skipped, verdicts unreadable: %s", exc)
+        return None
+    ran: dict[str, bool] = {}
+    for v in doc.get("verdicts") or []:
+        lane = str(v.get("lane") or "").strip().lower()
+        if not lane:
+            continue
+        summary = v.get("signals_summary")
+        stability = str((summary or {}).get("stability") or "").strip().lower()
+        # Only an explicit stability=error means the runner failed. A verdict
+        # with no stability at all was still produced BY a lane that ran, so it
+        # counts as executed — treating "unknown" as failure would repaint every
+        # healthy run red, which is the same class of bug in the other direction.
+        ran[lane] = ran.get(lane, False) or stability != "error"
+    if not ran:
+        return None
+    progress = dict(_read_status(spec_dir).get("lane_progress") or {})
+    for lane, ok in ran.items():
+        progress[lane] = "executed" if ok else "error"
+    return progress
+
+
 def _framework_coverage_strategy(subtask: dict) -> str | None:
     """Look up the framework descriptor's coverage_strategy for a subtask.
 
@@ -2555,14 +2605,19 @@ async def _run_evaluator_session(
 
     # Vote splits ride on status.json so the Triager's completion envelope
     # surfaces them (calibration hook, #649 step 5).
-    _vote_fields = {"verdict_vote": vote_summary} if vote_summary else {}
+    _extra_fields: dict[str, object] = (
+        {"verdict_vote": vote_summary} if vote_summary else {}
+    )
+    _lane_progress = _derive_lane_progress(spec_dir, verdicts_path)
+    if _lane_progress:
+        _extra_fields["lane_progress"] = _lane_progress
     _write_status_patch(
         spec_dir,
         status="evaluated",
         phase="evaluator_complete",
         verdicts_count=count,
         tests_evaluated=len(bundles),
-        **_vote_fields,
+        **_extra_fields,
     )
     # Forward-chain to the Triager (Task 8, #9). Gated by ``TFACTORY_AUTO_TRIAGE``
     # env; tests pin it off to keep this layer deterministic.

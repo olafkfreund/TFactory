@@ -1842,3 +1842,90 @@ def test_docker_runner_result_paths_survive_the_caller_cleanup(tmp_path, monkeyp
         "coverage path does not survive the runner's scratch cleanup"
     )
     assert res.coverage_xml_path.read_text() == _COBERTURA
+
+
+def _write_verdicts(tmp_path, verdicts):
+    import json
+
+    p = tmp_path / "verdicts.json"
+    p.write_text(json.dumps({"verdicts": verdicts}))
+    return p
+
+
+def test_lane_progress_separates_a_lane_that_ran_from_one_that_could_not(tmp_path):
+    """#1152/#431: lane_progress was written 'pending' and never advanced.
+
+    Two initialisers, one rerun reset, no writer anywhere that moved a lane off
+    'pending' — so "every lane pending" was equally true of a clean run and a
+    dead one. The cockpit badge and this repo's demo runbook both told readers
+    to check that field, and it was a constant.
+
+    error must stay distinct from pending: a lane that tried and could not run
+    is a different fact from a lane nobody asked for.
+    """
+    from agents.evaluator import _derive_lane_progress
+
+    path = _write_verdicts(
+        tmp_path,
+        [
+            {"test_id": "a", "lane": "unit", "signals_summary": {"stability": "stable"}},
+            {"test_id": "b", "lane": "browser", "signals_summary": {"stability": "error"}},
+        ],
+    )
+    assert _derive_lane_progress(tmp_path, path) == {
+        "unit": "executed",
+        "browser": "error",
+    }
+
+
+def test_lane_progress_needs_only_one_real_result_to_call_a_lane_executed(tmp_path):
+    """A lane with a mix is executed, not error: one test erroring is a test
+    result, whereas ALL of them erroring is what a broken runner looks like."""
+    from agents.evaluator import _derive_lane_progress
+
+    path = _write_verdicts(
+        tmp_path,
+        [
+            {"test_id": "a", "lane": "browser", "signals_summary": {"stability": "error"}},
+            {"test_id": "b", "lane": "browser", "signals_summary": {"stability": "flaky"}},
+        ],
+    )
+    assert _derive_lane_progress(tmp_path, path) == {"browser": "executed"}
+
+
+def test_lane_progress_leaves_untouched_lanes_pending(tmp_path):
+    """Only lanes that produced a verdict are claimed either way. A lane nobody
+    ran keeps whatever status.json already said, rather than being guessed at."""
+    import json
+
+    from agents.evaluator import _derive_lane_progress
+
+    (tmp_path / "status.json").write_text(
+        json.dumps({"lane_progress": {"unit": "pending", "mutation": "pending"}})
+    )
+    path = _write_verdicts(
+        tmp_path,
+        [{"test_id": "a", "lane": "unit", "signals_summary": {"stability": "stable"}}],
+    )
+    assert _derive_lane_progress(tmp_path, path) == {
+        "unit": "executed",
+        "mutation": "pending",
+    }
+
+
+def test_lane_progress_is_none_when_no_verdict_carries_a_lane(tmp_path):
+    """None, not {}. An empty dict would overwrite a real lane_progress with
+    nothing; None leaves the existing value alone."""
+    from agents.evaluator import _derive_lane_progress
+
+    path = _write_verdicts(tmp_path, [{"test_id": "a"}])
+    assert _derive_lane_progress(tmp_path, path) is None
+
+
+def test_lane_progress_survives_a_verdict_with_no_signals(tmp_path):
+    """Unknown stability counts as executed. Treating unknown as failure would
+    repaint healthy runs red — the same bug pointing the other way."""
+    from agents.evaluator import _derive_lane_progress
+
+    path = _write_verdicts(tmp_path, [{"test_id": "a", "lane": "api"}])
+    assert _derive_lane_progress(tmp_path, path) == {"api": "executed"}
