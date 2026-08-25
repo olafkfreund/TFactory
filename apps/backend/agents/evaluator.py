@@ -1888,10 +1888,30 @@ def _resolve_jest_runner_fn(image: str = _JEST_IMAGE):
                     _sh.copytree(item, dst, dirs_exist_ok=True)
                 else:
                     _sh.copy2(item, dst)
-            tparts = Path(test_file).parts
-            if "tests" in tparts:
-                rel = Path(*tparts[tparts.index("tests") :])  # tests/<...>/x.test.ts
-            else:
+            # Keep the test at its OWN path relative to the project. The SUT is
+            # copied above preserving structure, so a test staged anywhere else
+            # cannot resolve its relative imports.
+            #
+            # This used to keep the path only when "tests" appeared in it and
+            # flatten to the bare filename otherwise -- so
+            # games/tictactoe/game.test.js landed at the scratch ROOT while its
+            # require("./game.js") target sat at games/tictactoe/game.js, three
+            # directories away. Every JS project that does not use a tests/ dir
+            # failed on the import before jest ran an assertion.
+            #
+            # Same defect as the e2e staging flattening: a test moved away from
+            # the layout it was authored against breaks its own fixtures, and
+            # reports as a test failure rather than a staging failure.
+            try:
+                rel = (
+                    Path(test_file)
+                    .resolve()
+                    .relative_to(Path(project_dir_arg).resolve())
+                )
+            except ValueError:
+                # Outside the project: no faithful placement exists. The bare
+                # name at least runs; a guessed prefix would resolve to the wrong
+                # module and produce a confident wrong verdict.
                 rel = Path(Path(test_file).name)
             dst_test = scratch / rel
             dst_test.parent.mkdir(parents=True, exist_ok=True)

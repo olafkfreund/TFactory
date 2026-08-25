@@ -1070,9 +1070,30 @@ def _stage_browser_specs(spec_dir: Path, project_dir: Path) -> int:
     dest = Path(project_dir) / _E2E_STAGE
     shutil.rmtree(dest, ignore_errors=True)
     dest.mkdir(parents=True, exist_ok=True)
+    tests_root = Path(spec_dir) / "tests"
     n = 0
-    for src in sorted((Path(spec_dir) / "tests").rglob("*.spec.ts")):
-        shutil.copy2(src, dest / src.name)
+    for src in sorted(tests_root.rglob("*.spec.ts")):
+        # Preserve the path BELOW ``tests/`` rather than flattening to the file
+        # name. The stage dir stands in for ``tests``, so a spec authored at
+        # ``tests/e2e/x.spec.ts`` lands at ``.tf_e2e/e2e/x.spec.ts`` and keeps
+        # its depth from the repo root.
+        #
+        # Flattening broke every generated spec that resolves a fixture
+        # relatively, and did it silently. The specs compute
+        # ``path.resolve(__dirname, '..', '..', 'games', ...)`` -- correct from
+        # ``tests/e2e``. Staged flat into ``.tf_e2e`` they were one level too
+        # shallow, so with the worktree co-mounted at /work the two ``..`` steps
+        # went /work/.tf_e2e -> /work -> / and Playwright reported
+        # ``net::ERR_FILE_NOT_FOUND at file:///games/tictactoe/index.html``.
+        #
+        # Three e2e tests failed that way on spec 160 while the page they were
+        # testing was correct. The evaluator recorded it as "brittle path
+        # resolution" in the generated tests -- the tests were right; the
+        # staging moved them.
+        rel = src.relative_to(tests_root)
+        target = dest / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, target)
         n += 1
     return n
 
