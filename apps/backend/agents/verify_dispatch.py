@@ -211,6 +211,21 @@ _SDK_PASSTHROUGH_ENV: tuple[str, ...] = (
     "OPENAI_COMPATIBLE_MAX_TOKENS",
     "GEMINI_API_KEY",
     "GOOGLE_API_KEY",
+    # Object storage for verify evidence (#1152 follow-up). The verify Job is a
+    # SEPARATE pod: it inherits nothing from the control plane, and these four are
+    # set on the tfactory Deployment by factory-gitops, not on the Job. Without
+    # them verify_artifacts logs "S3_ENDPOINT unset; skipping artifact upload"
+    # and returns [] -- fail-open by design, so the verdict is correct and the
+    # screenshots, recordings and junit it just produced are silently dropped.
+    #
+    # Observed on spec 160: the browser lane EXECUTED and committed tests, and
+    # the evidence on the branch stayed byte-identical to main. A lane that runs
+    # and uploads nothing is indistinguishable from one that never ran, which is
+    # the same class of confusion #1161 fixed for lane_progress.
+    "S3_ENDPOINT",
+    "S3_BUCKET",
+    "S3_ACCESS_KEY",
+    "S3_SECRET_KEY",
     # #871 — the gemini/antigravity CLI refuses to run in an "untrusted"
     # workspace and exits BEFORE any API call. providers/gemini_agentic.py spawns
     # that CLI as a subprocess, which inherits the Job container's env, so the
@@ -232,6 +247,11 @@ _SDK_PASSTHROUGH_ENV: tuple[str, ...] = (
 # provider name) are non-secret config forwarded as plain values regardless.
 _PROVIDER_SECRET_ENV: frozenset[str] = frozenset(
     {
+        # Object-storage credentials. Not a "provider" in the LLM sense, but they
+        # want exactly this handling: secretKeyRef when an env-Secret is
+        # configured, resolved env value otherwise, and NEVER argv.
+        "S3_ACCESS_KEY",
+        "S3_SECRET_KEY",
         "ANTHROPIC_AUTH_TOKEN",
         "OPENAI_API_KEY",
         "OPENAI_COMPATIBLE_API_KEY",
