@@ -917,7 +917,9 @@ def _derive_lane_progress(spec_dir: Path, verdicts_path: Path) -> dict[str, str]
     try:
         doc = json.loads(verdicts_path.read_text())
     except (OSError, json.JSONDecodeError) as exc:
-        _eval_log.warning("[evaluator] lane_progress skipped, verdicts unreadable: %s", exc)
+        _eval_log.warning(
+            "[evaluator] lane_progress skipped, verdicts unreadable: %s", exc
+        )
         return None
     ran: dict[str, bool] = {}
     for v in doc.get("verdicts") or []:

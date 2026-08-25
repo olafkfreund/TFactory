@@ -1868,8 +1868,16 @@ def test_lane_progress_separates_a_lane_that_ran_from_one_that_could_not(tmp_pat
     path = _write_verdicts(
         tmp_path,
         [
-            {"test_id": "a", "lane": "unit", "signals_summary": {"stability": "stable"}},
-            {"test_id": "b", "lane": "browser", "signals_summary": {"stability": "error"}},
+            {
+                "test_id": "a",
+                "lane": "unit",
+                "signals_summary": {"stability": "stable"},
+            },
+            {
+                "test_id": "b",
+                "lane": "browser",
+                "signals_summary": {"stability": "error"},
+            },
         ],
     )
     assert _derive_lane_progress(tmp_path, path) == {
@@ -1886,8 +1894,16 @@ def test_lane_progress_needs_only_one_real_result_to_call_a_lane_executed(tmp_pa
     path = _write_verdicts(
         tmp_path,
         [
-            {"test_id": "a", "lane": "browser", "signals_summary": {"stability": "error"}},
-            {"test_id": "b", "lane": "browser", "signals_summary": {"stability": "flaky"}},
+            {
+                "test_id": "a",
+                "lane": "browser",
+                "signals_summary": {"stability": "error"},
+            },
+            {
+                "test_id": "b",
+                "lane": "browser",
+                "signals_summary": {"stability": "flaky"},
+            },
         ],
     )
     assert _derive_lane_progress(tmp_path, path) == {"browser": "executed"}

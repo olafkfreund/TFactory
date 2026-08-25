@@ -1075,9 +1075,9 @@ def test_a_real_contract_env_still_beats_the_fallback(tmp_path):
     project = tmp_path / "proj"
     project.mkdir()
 
-    materialize_flake(
-        spec, project, env=env, fallback_env=_BROWSER_FALLBACK_ENV
-    )
+    materialize_flake(spec, project, env=env, fallback_env=_BROWSER_FALLBACK_ENV)
     flake = (project / "flake.nix").read_text()
     assert "go" in flake
-    assert "playwright-test" not in flake, "the fallback must not leak into a planned env"
+    assert "playwright-test" not in flake, (
+        "the fallback must not leak into a planned env"
+    )

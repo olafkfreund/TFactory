@@ -30,7 +30,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from agents.preflight_static import package_root_rel_paths, requirements_files
 from agents.task_contract import read_task_contract
@@ -66,7 +66,7 @@ _FLAKE_LOCK = "flake.lock"
 # generated=True on purpose: this manifest is ours, not the repo's, so it must
 # never win over a flake the repo committed. materialize_flake enforces that by
 # checking for a repo-owned flake BEFORE consulting this.
-_BROWSER_FALLBACK_ENV = {
+_BROWSER_FALLBACK_ENV: dict[str, Any] = {
     "system_packages": ["chromium"],
     "provisioning": {"method": "nix", "generated": True},
 }
@@ -1313,7 +1313,7 @@ def materialize_flake(
     project_dir: Path,
     *,
     env: dict | None = None,
-    fallback_env: dict | None = None,
+    fallback_env: dict[str, Any] | None = None,
 ) -> NixPlan | None:
     """Write ``flake.nix`` into ``project_dir`` from the contract environment.
 
