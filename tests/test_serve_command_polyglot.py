@@ -46,3 +46,53 @@ def test_the_contract_still_wins(tmp_path):
         targets=["games/tictactoe/index.html"],
     )
     assert cmd == "python -m http.server 8099"
+
+
+def test_browser_lane_reads_source_json_from_the_context_dir(tmp_path, monkeypatch):
+    """TFactory#1174: `task_control` writes source.json into the spec's CONTEXT
+    dir (task_control.py:492), not its root. Reading the root found nothing, so
+    `targets` was always None and the scoping never fired -- spec 170 still
+    recorded `uvicorn app.main:app` for a static page.
+    """
+    import json as _json
+
+    from agents import nix_env
+
+    spec_dir = tmp_path / "spec"
+    (spec_dir / "context").mkdir(parents=True)
+    (spec_dir / "context" / "source.json").write_text(
+        _json.dumps({"target_paths": ["games/tictactoe/index.html"]})
+    )
+    # _stage_browser_specs copies from spec_dir/tests, so the specs live there
+    (spec_dir / "tests" / "e2e").mkdir(parents=True)
+    (spec_dir / "tests" / "e2e" / "x.spec.ts").write_text("// spec")
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+
+    seen: dict = {}
+
+    def _spy(pd, env=None, *, port=8099, targets=None):
+        seen["targets"] = targets
+        return None
+
+    monkeypatch.setattr(nix_env, "detect_serve_command", _spy)
+    monkeypatch.setattr(nix_env, "_write_pw_config", lambda *a, **k: None)
+    monkeypatch.setattr(nix_env, "materialize_flake", lambda *a, **k: object())
+
+    class _Res:
+        returncode = 0
+        stdout = ""
+
+    class _Sandbox:
+        def run(self, *a, **k):
+            return _Res()
+
+    # nix_runner_from_env() returning None short-circuits BEFORE serve detection,
+    # so the lane needs a sandbox for the read under test to be reached at all.
+    monkeypatch.setattr(nix_env, "nix_runner_from_env", lambda: _Sandbox())
+
+    nix_env.run_browser_evidence(spec_dir, project_dir)
+
+    assert seen.get("targets") == ["games/tictactoe/index.html"], (
+        "run_browser_evidence must read source.json from the context dir"
+    )
