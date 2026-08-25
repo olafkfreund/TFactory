@@ -399,3 +399,59 @@ def test_no_workspace_uri_keeps_the_pvc_path_unchanged():
     assert repo[0]["persistentVolumeClaim"]["claimName"] == "tfactory-data", repo[0]
     env = {e["name"]: e["value"] for e in spec["containers"][0].get("env", [])}
     assert "WORKSPACE_URI" not in env, env
+
+
+# ── TFactory#1152 fallout: a finished Job's logs outlive the investigation ─────
+
+
+def test_ttl_defaults_unchanged_when_the_env_is_unset(monkeypatch):
+    from tools.runners.kube_sandbox import _TTL_DEFAULT, _resolve_ttl
+
+    monkeypatch.delenv("TFACTORY_SANDBOX_JOB_TTL", raising=False)
+    assert _resolve_ttl(None) == _TTL_DEFAULT
+
+
+def test_the_env_raises_the_ttl(monkeypatch):
+    """Why this is configurable at all: #1152's sandbox Jobs failed with
+    BackoffLimitExceeded and were garbage-collected before anyone could read
+    why, so three investigations had only stability=error to work from."""
+    from tools.runners.kube_sandbox import _resolve_ttl
+
+    monkeypatch.setenv("TFACTORY_SANDBOX_JOB_TTL", "3600")
+    assert _resolve_ttl(None) == 3600
+
+
+def test_an_explicit_argument_still_wins_over_the_env(monkeypatch):
+    from tools.runners.kube_sandbox import _resolve_ttl
+
+    monkeypatch.setenv("TFACTORY_SANDBOX_JOB_TTL", "3600")
+    assert _resolve_ttl(30) == 30
+
+
+def test_a_junk_value_falls_back_instead_of_raising(monkeypatch):
+    """A bad env var must not take the verify lane down."""
+    from tools.runners.kube_sandbox import _TTL_DEFAULT, _resolve_ttl
+
+    monkeypatch.setenv("TFACTORY_SANDBOX_JOB_TTL", "soon")
+    assert _resolve_ttl(None) == _TTL_DEFAULT
+
+
+def test_zero_does_not_become_delete_immediately(monkeypatch):
+    """Kubernetes reads ttlSecondsAfterFinished=0 as 'delete the moment it
+    finishes', which would destroy the very evidence this exists to keep. A
+    non-positive value is a mistake, not an instruction."""
+    from tools.runners.kube_sandbox import _TTL_DEFAULT, _resolve_ttl
+
+    for junk in ("0", "-1"):
+        monkeypatch.setenv("TFACTORY_SANDBOX_JOB_TTL", junk)
+        assert _resolve_ttl(None) == _TTL_DEFAULT
+
+
+def test_the_resolved_ttl_reaches_the_manifest(monkeypatch):
+    """The wiring, not just the resolver — a value that never reaches
+    ttlSecondsAfterFinished changes nothing about how long logs survive."""
+    from tools.runners.kube_sandbox import build_job_manifest
+
+    monkeypatch.setenv("TFACTORY_SANDBOX_JOB_TTL", "1800")
+    manifest = build_job_manifest("tfsbx-x", "img:tag", ["true"])
+    assert manifest["spec"]["ttlSecondsAfterFinished"] == 1800

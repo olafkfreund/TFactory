@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import logging
+import os
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -132,6 +133,45 @@ def _describe_pod(pod: Any) -> str:
     return " ".join(parts)
 
 
+_TTL_ENV = "TFACTORY_SANDBOX_JOB_TTL"
+_TTL_DEFAULT = 180
+
+
+def _resolve_ttl(explicit: int | None) -> int:
+    """Seconds a finished sandbox Job (and its logs) survives.
+
+    Overridable because 180s is tuned for a healthy fleet and is exactly wrong
+    when something is broken: TFactory#1152's sandbox Jobs failed with
+    BackoffLimitExceeded and were garbage-collected before anyone could read why,
+    so three separate investigations had only "stability=error" to go on. The
+    default is unchanged, so raising it is a deliberate act while debugging
+    rather than a standing cost.
+
+    An unparseable value falls back to the default rather than raising. A bad env
+    var should not take the verify lane down -- and it must not silently become
+    0 either, which Kubernetes reads as "delete immediately" and would destroy
+    the very evidence this exists to keep.
+    """
+    if explicit is not None:
+        return explicit
+    raw = os.environ.get(_TTL_ENV, "").strip()
+    if not raw:
+        return _TTL_DEFAULT
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "%s=%r is not an integer; using %ds", _TTL_ENV, raw, _TTL_DEFAULT
+        )
+        return _TTL_DEFAULT
+    if value <= 0:
+        logger.warning(
+            "%s=%d is not positive; using %ds", _TTL_ENV, value, _TTL_DEFAULT
+        )
+        return _TTL_DEFAULT
+    return value
+
+
 def build_job_manifest(
     name: str,
     image: str,
@@ -141,7 +181,7 @@ def build_job_manifest(
     image_pull_secret: str = "ghcr-pull",
     cpus: str = "2",
     memory: str = "4Gi",
-    ttl_seconds: int = 180,
+    ttl_seconds: int | None = None,
     timeout: int = 900,
     repo_pvc: str | None = None,
     repo_subpath: str | None = None,
@@ -306,7 +346,7 @@ def build_job_manifest(
             "labels": {"app": "tfactory-sandbox"},
         },
         "spec": {
-            "ttlSecondsAfterFinished": ttl_seconds,
+            "ttlSecondsAfterFinished": _resolve_ttl(ttl_seconds),
             "backoffLimit": 0,
             "activeDeadlineSeconds": timeout,
             "template": {
