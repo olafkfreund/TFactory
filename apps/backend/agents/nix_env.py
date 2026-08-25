@@ -1255,10 +1255,13 @@ def run_browser_evidence(
         }
     _write_pw_config(project_dir, port=port)
 
-    # The SUT this spec names (task_control writes it to source.json). Absent on
-    # some ingest paths, and then detection stays repo-wide exactly as before.
+    # The SUT this spec names. task_control writes source.json into the spec's
+    # CONTEXT dir, not its root (task_control.py:492) -- reading the root found
+    # nothing, so `targets` was always None and the scoping in
+    # detect_serve_command never fired (TFactory#1174). Still tolerant of the
+    # file being absent: detection then stays repo-wide, exactly as before.
     try:
-        _src = json.loads((Path(spec_dir) / "source.json").read_text())
+        _src = json.loads((Path(spec_dir) / "context" / "source.json").read_text())
         _targets = [str(t) for t in (_src.get("target_paths") or [])] or None
     except (OSError, json.JSONDecodeError, TypeError):
         _targets = None
