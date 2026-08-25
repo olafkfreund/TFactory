@@ -1415,3 +1415,74 @@ async def test_a_legacy_two_tuple_probe_is_read_as_succeeded_unknown():
 
     exists, active, succeeded = await vd._probe_job("factory", "v", probe_fn=_legacy)
     assert (exists, active, succeeded) == (True, False, False)
+
+
+# ── the verify Job could not upload its own evidence (#1152 follow-up) ────────
+#
+# The verify Job is a SEPARATE pod: it inherits nothing from the control plane.
+# S3_* is set on the tfactory Deployment by factory-gitops, not on the Job, so
+# verify_artifacts logged "S3_ENDPOINT unset; skipping artifact upload" and
+# returned [] -- fail-open by design, so the verdict was right and the
+# screenshots, recordings and junit it had just produced were silently dropped.
+#
+# Observed on spec 160: the browser lane EXECUTED and committed tests, and the
+# evidence on the branch stayed byte-identical to main. A lane that runs and
+# uploads nothing is indistinguishable from one that never ran.
+
+
+def _s3_env(monkeypatch, *, secret_name: str | None = None) -> None:
+    monkeypatch.setenv("S3_ENDPOINT", "http://minio.factory.svc.cluster.local:9000")
+    monkeypatch.setenv("S3_BUCKET", "factory")
+    monkeypatch.setenv("S3_ACCESS_KEY", "ak")
+    monkeypatch.setenv("S3_SECRET_KEY", "sk")
+    if secret_name:
+        monkeypatch.setenv("TFACTORY_VERIFY_PROVIDER_SECRET_NAME", secret_name)
+    else:
+        monkeypatch.delenv("TFACTORY_VERIFY_PROVIDER_SECRET_NAME", raising=False)
+
+
+def test_the_verify_job_gets_the_object_store_env(monkeypatch) -> None:
+    """All four, or the upload no-ops and the evidence is lost."""
+    from agents.verify_dispatch import _provider_env_entries
+
+    _s3_env(monkeypatch)
+    names = {e["name"] for e in _provider_env_entries() if e["name"].startswith("S3_")}
+
+    assert names == {"S3_ENDPOINT", "S3_BUCKET", "S3_ACCESS_KEY", "S3_SECRET_KEY"}
+
+
+def test_the_credentials_use_secretkeyref_when_a_secret_is_configured(
+    monkeypatch,
+) -> None:
+    """Endpoint and bucket are config; the keys are credentials. With an
+    env-Secret configured they must be sourced by reference so no literal lands
+    in the manifest or in etcd."""
+    from agents.verify_dispatch import _provider_env_entries
+
+    _s3_env(monkeypatch, secret_name="factory-secrets")
+    by = {e["name"]: e for e in _provider_env_entries() if e["name"].startswith("S3_")}
+
+    assert by["S3_ENDPOINT"]["value"].endswith(":9000")
+    assert by["S3_BUCKET"]["value"] == "factory"
+    for cred in ("S3_ACCESS_KEY", "S3_SECRET_KEY"):
+        ref = by[cred]["valueFrom"]["secretKeyRef"]
+        assert ref["name"] == "factory-secrets"
+        assert "value" not in by[cred], f"{cred} must not carry a literal"
+    assert by["S3_ACCESS_KEY"]["valueFrom"]["secretKeyRef"]["key"] == "s3-access-key"
+
+
+def test_nothing_is_forwarded_when_the_pod_has_no_object_store(monkeypatch) -> None:
+    """Unset stays unset. Upload is an enhancement, never a verdict blocker, so
+    a deployment without object storage must dispatch exactly as before."""
+    from agents.verify_dispatch import _provider_env_entries
+
+    for var in (
+        "S3_ENDPOINT",
+        "S3_BUCKET",
+        "S3_ACCESS_KEY",
+        "S3_SECRET_KEY",
+        "TFACTORY_VERIFY_PROVIDER_SECRET_NAME",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+    assert not [e for e in _provider_env_entries() if e["name"].startswith("S3_")]
