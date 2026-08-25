@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -116,6 +117,7 @@ def evaluate_liveness(
     *,
     now: datetime,
     deadline_seconds: float | None = None,
+    job_active: Callable[[], bool] | None = None,
 ) -> StallVerdict:
     """Decide whether the task at ``spec_dir`` has stalled — no side effects.
 
@@ -125,6 +127,15 @@ def evaluate_liveness(
     A missing/corrupt ``status.json``, a non-active status, or an unparseable
     ``updated_at`` all yield ``stalled=False`` — fail-safe; never flip on
     ambiguous input.
+
+    ``job_active`` is optional corroboration for a Job-backed stage (#1173).
+    ``updated_at`` is a HEARTBEAT, not liveness: the evaluator writes status only
+    at phase boundaries, so a browser lane that installs a flake, serves the page
+    and records video per spec looks identical to a dead one. Spec 165 was flagged
+    while its Job had been Running 26 minutes and had written 44 screenshots. When
+    the predicate says the backing Job is still running, quiet is not death, and
+    the verdict joins the fail-safe set above. Omitted (``None``) keeps the
+    timestamp-only behaviour, so no caller changes meaning by upgrading.
     """
     deadline = _deadline_seconds() if deadline_seconds is None else deadline_seconds
     status_path = spec_dir / "status.json"
@@ -148,6 +159,14 @@ def evaluate_liveness(
 
     idle = (now - updated).total_seconds()
     if idle > deadline:
+        if job_active is not None and job_active():
+            return StallVerdict(
+                False,
+                st,
+                phase,
+                idle,
+                f"active '{st}' idle {idle:.0f}s but its Job is still running",
+            )
         return StallVerdict(
             True,
             st,
@@ -222,6 +241,7 @@ def check_and_mark(
     *,
     now: datetime | None = None,
     deadline_seconds: float | None = None,
+    job_active: Callable[[], bool] | None = None,
 ) -> StallVerdict:
     """Evaluate liveness and flip to ``stalled`` if needed. Driver convenience.
 
@@ -229,7 +249,9 @@ def check_and_mark(
     defaults to the current UTC time.
     """
     when = now or datetime.now(UTC)
-    verdict = evaluate_liveness(spec_dir, now=when, deadline_seconds=deadline_seconds)
+    verdict = evaluate_liveness(
+        spec_dir, now=when, deadline_seconds=deadline_seconds, job_active=job_active
+    )
     if verdict.stalled:
         mark_stalled(spec_dir, verdict, now=when)
     return verdict
