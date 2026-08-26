@@ -872,6 +872,7 @@ def run_gotest_lane_via_nix(
 # all (`nodePackages` removed; a search finds only coc-jest editor plugins), so
 # `nodePackages.jest` in a generated flake cannot even evaluate. Pinned so a lane
 # is not at the mercy of npm's latest.
+_JEST_BIN = "./node_modules/.bin/jest"
 _JEST_NPM_PKGS = "jest@29 ts-jest@29 typescript@5 @types/jest@29"
 
 
@@ -971,33 +972,31 @@ def run_jest_lane_via_nix(
     # outside the rerun loop, and a failure exits 127 loudly rather than leaving
     # a shell where `jest` is silently absent: that exact silence is why every
     # jest test read `consistent_fail` for weeks (TFactory#1195).
-    # `npm install -g` lands the runner under `npm prefix -g`, whose bin dir is
-    # NOT on PATH inside the nix develop shell -- the flake sets PATH from its
-    # own inputs. The install therefore SUCCEEDS and `jest` is still not found,
-    # which is why the loud __JEST_SETUP_FAILED guard below never fired and the
-    # lane still reported exit 127 (TFactory#1195). The whole job script is one
-    # bash process, so exporting here persists to every rerun below.
+    # Installed LOCALLY. A *global* install gives each package its own tree, so
+    # ts-jest sat at the top level while its peer jest-util was nested under
+    # jest/node_modules/ where ts-jest could not resolve it -- "Cannot find
+    # module 'jest-util'" (TFactory#1195). A local install hoists one flat tree,
+    # making them siblings, and the binary then has a fixed known path -- which
+    # is why no PATH or module-search-path workaround is needed here any more.
     setup = (
         f"cd {mount} && "
-        'export PATH="$(npm prefix -g)/bin:$PATH" && '
-        "if ! command -v jest >/dev/null 2>&1; then "
-        f"npm install -g --silent {_JEST_NPM_PKGS} "
+        f"if [ ! -x {_JEST_BIN} ]; then "
+        f"npm install --no-save --no-audit --no-fund --silent {_JEST_NPM_PKGS} "
         '|| { echo "__JEST_SETUP_FAILED: npm install of the jest runner failed"; '
         "exit 127; }; fi; "
-        # Prove the runner is CALLABLE, not merely installed. Without this a
-        # PATH miss shows up as a bare "jest: command not found" on the first
-        # rerun line, which the per-run capture attributes to the test itself.
-        "command -v jest >/dev/null 2>&1 "
-        '|| { echo "__JEST_SETUP_FAILED: jest installed but not on PATH"; '
+        # Prove the runner is CALLABLE, not merely installed -- otherwise a
+        # resolution miss surfaces as a bare error on the first rerun line,
+        # which the per-run capture attributes to the test itself.
+        f"[ -x {_JEST_BIN} ] "
+        '|| { echo "__JEST_SETUP_FAILED: jest runner missing after install"; '
         "exit 127; }"
     )
     _write_jest_config(pd)
-    # NODE_PATH: jest resolves ts-jest through it, and the runner is installed
-    # GLOBALLY (npm -g) rather than into the worktree's node_modules -- without
-    # this jest reports the transform as missing even though it is installed.
+    # The local install puts jest, ts-jest and their shared peers in the
+    # worktree's own node_modules, so ordinary resolution finds the transform.
     one = (
-        f"cd {mount} && NODE_PATH=$(npm root -g) "
-        f"jest --ci --forceExit --config {_JEST_CONFIG} {_shquote(rel)} 2>&1; "
+        f"cd {mount} && "
+        f"{_JEST_BIN} --ci --forceExit --config {_JEST_CONFIG} {_shquote(rel)} 2>&1; "
         f"echo __PYTEST_EXIT=$?"
     )
     jest_cmd = (
