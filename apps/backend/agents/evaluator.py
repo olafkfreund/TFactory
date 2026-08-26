@@ -54,6 +54,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from agents.preflight_static import package_root_rel_paths, requirements_files
 from agents.run_result import RunResultLike
 from agents.verdict_vote import majority_vote
+from tfactory_secrets.redaction import scrub_log_text
 
 if TYPE_CHECKING:
     from tools.runners.docker_runner import DockerRunResult
@@ -2341,6 +2342,51 @@ def _gate_target_health(spec_dir, subtask, target, target_url) -> None:
         _eval_log.warning("health gate skipped: %s", exc)
 
 
+_RUN_OUTPUT_FILE = "lane_runs.json"
+_RUN_TAIL_CHARS = 4000
+
+
+def _persist_run_output(spec_dir: Path, bundles: list[Any]) -> None:
+    """Write failing-run output to ``findings/lane_runs.json`` (#1195).
+
+    ``verdicts.json`` is authored by the judge LLM, so a per-run stdout tail
+    cannot live there.  Without this file a lane failure is only diagnosable
+    by re-running the whole card, which costs 25-45 minutes.  Failing runs
+    only, tail-bounded, and scrubbed with the shared secret patterns because
+    test output routinely echoes the environment.
+    """
+    entries: list[dict[str, Any]] = []
+    for bundle in bundles:
+        stability = getattr(bundle, "stability", None)
+        if stability is None:
+            continue
+        failing = [r for r in getattr(stability, "runs", ()) if r.returncode != 0]
+        if not failing:
+            continue
+        entries.append(
+            {
+                "test_id": bundle.test_id,
+                "test_file": str(bundle.test_file),
+                "verdict": getattr(stability.verdict, "value", str(stability.verdict)),
+                "failure_kind": stability.failure_kind,
+                "error_message": stability.error_message,
+                "runs": [
+                    {
+                        "returncode": r.returncode,
+                        "stdout_tail": scrub_log_text(r.stdout_tail[-_RUN_TAIL_CHARS:]),
+                        "stderr_tail": scrub_log_text(r.stderr_tail[-_RUN_TAIL_CHARS:]),
+                    }
+                    for r in failing
+                ],
+            }
+        )
+    if not entries:
+        return
+    out = Path(spec_dir) / "findings" / _RUN_OUTPUT_FILE
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps({"tests": entries}, indent=2), encoding="utf-8")
+
+
 def _build_all_bundles(spec_dir, project_dir, unit, browser, api, jest, go) -> list:
     """Compute the per-test signal bundle for every completed subtask.
 
@@ -2885,6 +2931,13 @@ async def run_evaluator(
             jest_completed,
             go_completed,
         )
+
+        # 3b. Persist failing-run output for post-mortem (#1195). The judge
+        #     owns verdicts.json, so the stdout tails need their own file.
+        try:
+            _persist_run_output(spec_dir, bundles)
+        except Exception as exc:  # noqa: BLE001 - diagnostics are best-effort
+            _eval_log.warning("persisting run output failed (non-blocking): %s", exc)
 
         # 4-5. Invoke the SDK session + validate the verdicts it wrote.
         ok = await _run_evaluator_session(spec_dir, project_dir, bundles, verbose)
