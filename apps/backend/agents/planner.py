@@ -27,6 +27,7 @@ import asyncio
 import json
 import logging as _logging
 import os
+import re
 import subprocess
 import traceback
 from pathlib import Path
@@ -175,6 +176,13 @@ def _validate_emitted_plan(spec_dir: Path) -> tuple[bool, str, object | None]:
       - ok=False, error_kind="schema"           → JSON valid but not a plan
       - ok=False, error_kind="invalid_framework" → (language, framework, lane)
           not consistent with the framework registry (v0.2 polyglot check).
+      - ok=False, error_kind="invalid_test_path" → a ``files_to_create`` entry
+          sits outside the framework's ``test_path_conventions``. Downstream
+          reads the plan's path literally (Gen-Functional writes there,
+          ``_stage_browser_specs`` stages from ``<spec_dir>/tests``), so a
+          plan that puts a Playwright spec next to the SUT produces a lane
+          with zero evidence (spec 172, 2026-08-26). Reject it here, where
+          the retry already exists.
           v0.1 subtasks that have neither language nor framework set pass
           through this check unchanged — backward-compat is preserved.
     """
@@ -208,9 +216,15 @@ def _validate_emitted_plan(spec_dir: Path) -> tuple[bool, str, object | None]:
         )
         return True, "", plan
 
-    ok, detail = _validate_framework_consistency(plan, registry)
-    if not ok:
-        return False, "invalid_framework", detail
+    # Looped rather than two `if not ok: return` blocks so adding a validator
+    # does not grow the return count past the strict bar (PLR0911).
+    for check, kind in (
+        (_validate_framework_consistency, "invalid_framework"),
+        (_validate_test_paths, "invalid_test_path"),
+    ):
+        ok, detail = check(plan, registry)
+        if not ok:
+            return False, kind, detail
     return True, "", plan
 
 
@@ -258,6 +272,59 @@ def _validate_framework_consistency(plan, registry) -> tuple[bool, str]:
                     f"{supported}, but subtask declared lane {lane_str!r}"
                 )
 
+    return True, ""
+
+
+def _glob_matches(pattern: str, rel: str) -> bool:
+    """Globstar match: ``**/`` spans zero or more directories, ``*`` and ``?``
+    stop at ``/``. ``fnmatch`` is the wrong tool here -- its ``*`` crosses
+    ``/`` and its ``**/`` demands at least one directory, so
+    ``tests/**/test_*.py`` would reject ``tests/test_x.py``.
+    """
+    out, i = "", 0
+    while i < len(pattern):
+        if pattern.startswith("**/", i):
+            out += "(?:.*/)?"
+            i += 3
+        elif pattern[i] == "*":
+            out += "[^/]*"
+            i += 1
+        elif pattern[i] == "?":
+            out += "[^/]"
+            i += 1
+        else:
+            out += re.escape(pattern[i])
+            i += 1
+    return re.fullmatch(out, rel) is not None
+
+
+def _validate_test_paths(plan, registry) -> tuple[bool, str]:
+    """Every ``files_to_create`` entry must match one of the subtask's
+    framework ``test_path_conventions`` (fnmatch globs, as the registry
+    validator compiles them). Subtasks without a framework, and frameworks
+    that declare no conventions, are not checked. Also rejects absolute
+    paths and ``..`` -- the path is joined onto the spec workspace verbatim.
+    """
+    for phase in plan.phases:
+        for st in phase.subtasks:
+            desc = registry.get(st.framework) if st.framework else None
+            if desc is None or not desc.test_path_conventions:
+                continue
+            for rel in st.files_to_create or []:
+                parts = Path(rel).parts
+                if Path(rel).is_absolute() or ".." in parts:
+                    return False, (
+                        f"subtask {st.id!r}: files_to_create entry {rel!r} must be "
+                        "a plain path relative to the spec workspace"
+                    )
+                if not any(
+                    _glob_matches(pat, rel) for pat in desc.test_path_conventions
+                ):
+                    return False, (
+                        f"subtask {st.id!r}: files_to_create entry {rel!r} does not "
+                        f"match any test_path_conventions of framework "
+                        f"{st.framework!r}: {list(desc.test_path_conventions)}"
+                    )
     return True, ""
 
 
@@ -1015,6 +1082,15 @@ _RETRY_REMINDERS = {
         "'language' nor 'framework' set are allowed — omit both fields "
         "if you don't need polyglot metadata. "
         "Re-emit the corrected plan now."
+    ),
+    "invalid_test_path": (
+        "Your previous turn produced `test_plan.json` but a subtask's "
+        "`files_to_create` path is outside where its framework's tests are "
+        "run from: {detail}. Test files are written into the TFactory spec "
+        "workspace, NOT next to the code under test -- a Playwright spec goes "
+        "under `tests/e2e/`, a pytest file under `tests/`, regardless of "
+        "where the target lives. Re-emit the plan with every "
+        "`files_to_create` path matching its framework's conventions."
     ),
 }
 
