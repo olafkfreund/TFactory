@@ -41,6 +41,32 @@ class Redactor:
         return text
 
 
+# Unquoted ``NAME=value`` — the shape logs and captured test output actually
+# emit.  ``scrub_patterns`` only matches *quoted* assignments because it was
+# written to scan source files, so an env dump slips straight through it.
+_ASSIGNMENT_RE = re.compile(
+    r"\b([A-Za-z0-9_]*"
+    r"(?:SECRET|TOKEN|PASSWORD|PASSWD|APIKEY|API_KEY|API-KEY"
+    r"|ACCESS_KEY|ACCESS-KEY|CREDENTIAL|PRIVATE_KEY)"
+    r"[A-Za-z0-9_]*)(\s*[:=]\s*)([^\s'\"]{4,})",
+    re.IGNORECASE,
+)
+
+
+def scrub_assignments(text: str) -> str:
+    """Mask unquoted ``NAME=value`` secrets in free-form text."""
+    return _ASSIGNMENT_RE.sub(lambda m: m.group(1) + m.group(2) + _MASK, text)
+
+
+def scrub_log_text(text: str) -> str:
+    """Scrub text bound for a log or an on-disk diagnostic artefact.
+
+    Both layers: the source-shaped patterns *and* the unquoted assignments
+    that dominate real command output.
+    """
+    return scrub_assignments(scrub_patterns(text))
+
+
 def scrub_patterns(text: str) -> str:
     """Backstop: mask the *value* group of assignment-shaped secrets in text."""
     from security.scan_secrets import ALL_PATTERNS

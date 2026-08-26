@@ -160,3 +160,32 @@ def test_cli_resolve_redacts(capsys, monkeypatch):
     rc = main(["resolve", "env:CLI_SECRET"])
     out = capsys.readouterr().out
     assert rc == 0 and "donotprint" not in out and "chars>" in out
+
+
+class TestUnquotedAssignmentScrubbing:
+    """``scrub_patterns`` matches only *quoted* assignments — it was written to
+    scan source files.  Captured command output emits unquoted ``NAME=value``,
+    which slipped through entirely until ``scrub_log_text`` (#1195)."""
+
+    def test_an_unquoted_env_dump_is_masked(self):
+        from tfactory_secrets.redaction import scrub_log_text
+
+        leaked = "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY"
+        out = scrub_log_text(f"env: {leaked}")
+
+        assert "wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY" not in out
+        assert "AWS_SECRET_ACCESS_KEY" in out  # the name stays; only the value goes
+
+    def test_the_quoted_layer_still_applies(self):
+        from tfactory_secrets.redaction import scrub_log_text
+
+        out = scrub_log_text('api_key = "' + "a" * 40 + '"')
+
+        assert "a" * 40 not in out
+
+    def test_ordinary_output_survives(self):
+        from tfactory_secrets.redaction import scrub_log_text
+
+        text = "FAIL tests/game.test.ts\n  Expected: 3\n  Received: 2"
+
+        assert scrub_log_text(text) == text
