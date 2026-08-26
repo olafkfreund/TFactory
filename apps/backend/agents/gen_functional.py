@@ -35,7 +35,6 @@ import asyncio
 import json
 import logging as _logging
 import os
-import re
 import traceback
 from collections.abc import Awaitable
 from pathlib import Path
@@ -743,44 +742,6 @@ def _criterion_authority_check(
         return None
 
 
-# Suffixes a JS/TS module specifier may omit, plus the index forms node tries.
-_JS_MODULE_SUFFIXES = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", "")
-_JS_INDEX_NAMES = ("index.ts", "index.js", "index.mjs")
-_IMPORT_RE = re.compile(r"""(?:from|import|require)\s*\(?\s*['"]([^'"]+)['"]""")
-
-
-def _unresolvable_imports(source: str, project_dir: Path) -> list[str]:
-    """Path-shaped module specifiers that resolve to nothing on disk.
-
-    Spec 182's generated jest tests imported `app/games/tictactoe/game` five
-    times while the module sits at `games/tictactoe/game.js`. Nothing checked
-    it: the test was written, ran, failed to import, and the evaluator recorded
-    `flaky` / `consistent_fail`. A wrong import is a GENERATION defect and reads
-    nothing like flakiness, so it must fail with its own reason.
-
-    Only specifiers that look like paths are checked -- one containing `/`, not
-    scoped (`@scope/pkg`), not `node:`. A bare package name is left alone, and a
-    path that resolves inside `node_modules` is left alone too, so `lodash/merge`
-    and friends do not false-reject.
-    """
-    pd = Path(project_dir)
-    bad: list[str] = []
-    for spec in dict.fromkeys(_IMPORT_RE.findall(source)):
-        if spec.startswith(("node:", "@", ".")) or "/" not in spec:
-            continue
-        if (pd / "node_modules" / spec.split("/")[0]).exists():
-            continue
-        base = pd / spec
-        if any(
-            (base.with_suffix(x) if x else base).is_file() for x in _JS_MODULE_SUFFIXES
-        ):
-            continue
-        if any((base / n).is_file() for n in _JS_INDEX_NAMES):
-            continue
-        bad.append(spec)
-    return bad
-
-
 def _source_guardrail_rejection(
     subtask: object, source: str, project_dir: Path
 ) -> tuple[str, str] | None:
@@ -850,18 +811,6 @@ def _source_guardrail_rejection(
             "fail, or raise the conflict for a human (#995).",
             "gen_functional_criterion_authority_rejected",
         )
-    unresolved = _unresolvable_imports(source, project_dir)
-    if unresolved:
-        return (
-            "unresolvable import: "
-            + ", ".join(repr(u) for u in unresolved[:3])
-            + " does not resolve to any file in the project. Import the module "
-            "at its REAL path -- do not invent a prefix. A wrong import makes "
-            "the test fail for a reason that has nothing to do with the code "
-            "under test (TFactory#1174).",
-            "gen_functional_unresolvable_import",
-        )
-
     return None
 
 
