@@ -867,6 +867,13 @@ def run_gotest_lane_via_nix(
     )
 
 
+# The jest runner comes from npm, not the flake: nixpkgs has no jest package at
+# all (`nodePackages` removed; a search finds only coc-jest editor plugins), so
+# `nodePackages.jest` in a generated flake cannot even evaluate. Pinned so a lane
+# is not at the mercy of npm's latest.
+_JEST_NPM_PKGS = "jest@29 ts-jest@29 typescript@5 @types/jest@29"
+
+
 def run_jest_lane_via_nix(
     test_file: Path,
     project_dir: Path,
@@ -931,12 +938,30 @@ def run_jest_lane_via_nix(
     # milliseconds, so a 3-sample stability check paid that cost three times per
     # spec. Only the samples of ONE spec are batched; per-test isolation is
     # unchanged.
+    # nixpkgs has NO jest package -- `nodePackages` was removed and a search
+    # returns only editor plugins -- so the per-task flake cannot provide it, and
+    # a repo-owned flake (which wins by design) will not either. The flake does
+    # give us nodejs, so the runner comes from npm. Installed ONCE per lane,
+    # outside the rerun loop, and a failure exits 127 loudly rather than leaving
+    # a shell where `jest` is silently absent: that exact silence is why every
+    # jest test read `consistent_fail` for weeks (TFactory#1195).
+    setup = (
+        f"cd {mount} && "
+        "if ! command -v jest >/dev/null 2>&1; then "
+        f"npm install -g --silent {_JEST_NPM_PKGS} "
+        '|| { echo "__JEST_SETUP_FAILED: npm install of the jest runner failed"; '
+        "exit 127; }; fi"
+    )
     one = (
         f"cd {mount} && jest --ci --forceExit {_shquote(rel)} 2>&1; "
         f"echo __PYTEST_EXIT=$?"
     )
-    jest_cmd = "".join(
-        f"echo __PYTEST_RUN={i}\n{one}\n" for i in range(1, max(1, reruns) + 1)
+    jest_cmd = (
+        setup
+        + "\n"
+        + "".join(
+            f"echo __PYTEST_RUN={i}\n{one}\n" for i in range(1, max(1, reruns) + 1)
+        )
     )
     (pd / _JOB_SCRIPT).write_text(
         "#!/usr/bin/env bash\nset +e\n" + jest_cmd + "\n", encoding="utf-8"

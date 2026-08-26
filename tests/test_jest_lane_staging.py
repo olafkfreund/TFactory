@@ -82,3 +82,50 @@ def test_the_staged_copy_is_removed_afterwards(tmp_path, monkeypatch):
     nix_env.run_jest_lane_via_nix(tf, wt, spec)
 
     assert not (wt / "tests" / "unit" / "winner-draw.test.ts").exists()
+
+
+def test_the_runner_is_installed_before_jest_is_invoked(tmp_path, monkeypatch):
+    """TFactory#1195: the lane shell had NO jest -- `jest: command not found`,
+    exit 127 -- so every jest test read `consistent_fail` for weeks and the
+    import path was never even evaluated.
+
+    nixpkgs has no jest package, so the flake cannot supply it; the job installs
+    it from npm using the flake's node.
+    """
+    spec, tf, wt = _spec(tmp_path)
+    cap: dict = {}
+    _stub(monkeypatch, cap)
+
+    nix_env.run_jest_lane_via_nix(tf, wt, spec)
+    script = cap["script"]
+
+    assert "npm install -g" in script, script
+    assert "jest@29" in script and "ts-jest@29" in script, script
+    # The install must come BEFORE the first jest invocation.
+    assert script.index("npm install -g") < script.index("jest --ci"), script
+
+
+def test_a_failed_runner_install_fails_loudly(tmp_path, monkeypatch):
+    """A silent install failure is exactly how exit 127 went unnoticed."""
+    spec, tf, wt = _spec(tmp_path)
+    cap: dict = {}
+    _stub(monkeypatch, cap)
+
+    nix_env.run_jest_lane_via_nix(tf, wt, spec)
+    script = cap["script"]
+
+    assert "__JEST_SETUP_FAILED" in script, script
+    assert "exit 127" in script, script
+
+
+def test_the_runner_is_installed_once_not_per_sample(tmp_path, monkeypatch):
+    """Installing inside the rerun loop would pay it 3x per spec."""
+    spec, tf, wt = _spec(tmp_path)
+    cap: dict = {}
+    _stub(monkeypatch, cap)
+
+    nix_env.run_jest_lane_via_nix(tf, wt, spec, reruns=3)
+    script = cap["script"]
+
+    assert script.count("npm install -g") == 1, script
+    assert script.count("jest --ci") == 3, script
