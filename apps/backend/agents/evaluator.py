@@ -2346,7 +2346,7 @@ _RUN_OUTPUT_FILE = "lane_runs.json"
 _RUN_TAIL_CHARS = 4000
 
 
-def _persist_run_output(spec_dir: Path, bundles: list) -> None:
+def _persist_run_output(spec_dir: Path, bundles: list[Any]) -> None:
     """Write failing-run output to ``findings/lane_runs.json`` (#1195).
 
     ``verdicts.json`` is authored by the judge LLM, so a per-run stdout tail
@@ -2355,7 +2355,7 @@ def _persist_run_output(spec_dir: Path, bundles: list) -> None:
     only, tail-bounded, and scrubbed with the shared secret patterns because
     test output routinely echoes the environment.
     """
-    entries: list[dict] = []
+    entries: list[dict[str, Any]] = []
     for bundle in bundles:
         stability = getattr(bundle, "stability", None)
         if stability is None:
