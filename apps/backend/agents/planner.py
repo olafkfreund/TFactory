@@ -31,7 +31,7 @@ import re
 import subprocess
 import traceback
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from test_plan import ImplementationPlan, Subtask
@@ -298,7 +298,7 @@ def _glob_matches(pattern: str, rel: str) -> bool:
     return re.fullmatch(out, rel) is not None
 
 
-def _validate_test_paths(plan, registry) -> tuple[bool, str]:
+def _validate_test_paths(plan: Any, registry: Any) -> tuple[bool, str]:
     """Every ``files_to_create`` entry must match one of the subtask's
     framework ``test_path_conventions`` (fnmatch globs, as the registry
     validator compiles them). Subtasks without a framework, and frameworks
