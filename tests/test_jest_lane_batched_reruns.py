@@ -106,3 +106,82 @@ def test_default_is_a_single_pass(tmp_path, monkeypatch):
     tf.write_text("// t")
     nix_env.run_jest_lane_via_nix(tf, tmp_path, tmp_path)
     assert cap["script"].count("jest --ci") == 1
+
+
+def test_nix_mode_accepts_a_repo_owned_flake(tmp_path):
+    """TFactory#1187: nix mode read False for every contract-less card.
+
+    `plan_nix_env` learned in #1152 that a repo-owned flake IS a nix env; this
+    predicate never did. So spec-ingest and low/medium skip_planning cards took
+    the per-sample route and paid 24 `nix develop` entries at ~45s -- 71% of a
+    25-minute lane phase -- with the batched path never entered.
+    """
+    import os
+
+    from agents import evaluator
+
+    os.environ["TFACTORY_NIX_RUNNER_IMAGE"] = "img:test"
+    try:
+        spec = tmp_path / "spec"
+        (spec / "context").mkdir(parents=True)
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        # No contract -> the old rule said False.
+        assert evaluator._nix_verify_mode(spec, proj) is False
+        (proj / "flake.nix").write_text("{ }")
+        assert evaluator._nix_verify_mode(spec, proj) is True
+    finally:
+        os.environ.pop("TFACTORY_NIX_RUNNER_IMAGE", None)
+
+
+def test_a_jest_subtask_reaches_the_batched_lane_through_the_real_route(
+    tmp_path, monkeypatch
+):
+    """Enter via `_stability_for_subtask`, NOT `_nix_batched_stability` directly.
+
+    The #1188 test called the batched helper directly, so it passed while
+    production was unchanged: the gate above it (`_nix_verify_mode`) was False
+    and the branch was never reached. It tested the branch, not the route.
+    """
+    import os
+
+    from agents import evaluator
+
+    os.environ["TFACTORY_NIX_RUNNER_IMAGE"] = "img:test"
+    try:
+        spec = tmp_path / "spec"
+        (spec / "context").mkdir(parents=True)
+        (spec / "tests").mkdir()
+        (spec / "tests" / "x.test.ts").write_text("// t")
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        (proj / "flake.nix").write_text("{ }")
+
+        seen: dict = {}
+
+        from tools.runners.docker_runner import DockerRunResult
+
+        def _fake(test_file, project_dir, spec_dir, *, reruns=1, **kw):
+            seen["reruns"] = reruns
+            # Three passes, all green, in the markers parse_pytest_exits reads.
+            out = "".join(f"__PYTEST_RUN={i}\nok\n__PYTEST_EXIT=0\n" for i in (1, 2, 3))
+            return DockerRunResult(returncode=0, stdout=out, stderr="", argv=["nix"])
+
+        monkeypatch.setattr(evaluator, "run_jest_lane_via_nix", _fake)
+        monkeypatch.setattr(evaluator, "run_pytest_lane_via_nix", lambda *a, **k: None)
+
+        evaluator._stability_for_subtask(
+            spec,
+            proj,
+            {
+                "framework": "jest",
+                "lane": "unit",
+                "files_to_create": ["tests/x.test.ts"],
+            },
+            lambda *a, **k: None,
+        )
+        assert seen.get("reruns") == 3, (
+            "jest must reach the batched lane, not per-sample"
+        )
+    finally:
+        os.environ.pop("TFACTORY_NIX_RUNNER_IMAGE", None)

@@ -269,7 +269,7 @@ def _host_runner_mode() -> bool:
     return not _container_runtime_available()  # auto: host when no runtime
 
 
-def _nix_verify_mode(spec_dir: Path) -> bool:
+def _nix_verify_mode(spec_dir: Path, project_dir: Path | None = None) -> bool:
     """Whether the pytest lane should run via the Nix k8s Job (RFC-0016 #469).
 
     nixjob is the DEFAULT verify execution path: ON when a Nix runner image is
@@ -289,9 +289,21 @@ def _nix_verify_mode(spec_dir: Path) -> bool:
     if not os.environ.get("TFACTORY_NIX_RUNNER_IMAGE"):
         return False
     try:
-        return is_nix_environment(environment_from_contract(spec_dir))
+        if is_nix_environment(environment_from_contract(spec_dir)):
+            return True
     except Exception:  # noqa: BLE001 - any contract-read issue → legacy runner
         return False
+    # A REPO-OWNED flake is just as good a nix env as a contract-declared one.
+    # `plan_nix_env` learned that in #1152 and honours it ("no contract nix env,
+    # honouring repo-owned flake.nix"); this predicate never did. So for every
+    # contract-less card -- which is every spec-ingest and every low/medium
+    # skip_planning card -- nix mode read False and the batching behind it
+    # (#776 pytest, #1188 jest) was dead code. Spec 181 paid 24 separate
+    # `nix develop` entries at ~45s, 71% of a 25-minute lane phase, with the
+    # batched path never entered (TFactory#1187).
+    # `is not None` rather than `bool(...)`: the latter does not narrow
+    # `Path | None` for mypy --strict, and a second `return` would trip PLR0911.
+    return project_dir is not None and (Path(project_dir) / "flake.nix").is_file()
 
 
 def _maybe_nix_verify(  # noqa: PLR0913 - explicit api-lane self-serve knobs
@@ -309,7 +321,7 @@ def _maybe_nix_verify(  # noqa: PLR0913 - explicit api-lane self-serve knobs
     isn't selected / is unavailable / errors — so the caller falls through to the
     legacy host/docker runner. Never raises (a config gap must not fail the lane).
     """
-    if not _nix_verify_mode(spec_dir):
+    if not _nix_verify_mode(spec_dir, project_dir):
         return None
     try:
         nix_res = run_pytest_lane_via_nix(
@@ -1311,7 +1323,7 @@ def _stability_for_subtask(
     if not test_file.exists():
         return None
     try:
-        if _nix_verify_mode(spec_dir):
+        if _nix_verify_mode(spec_dir, project_dir):
             batched = _nix_batched_stability(
                 spec_dir,
                 project_dir,
@@ -1580,7 +1592,7 @@ def _build_signal_bundle(
     # seam — the only place the path is still in scope, and the one both the
     # stability and mutation paths go through.
     runner_fn = _capturing_coverage(spec_dir, subtask, runner_fn)
-    if _nix_verify_mode(spec_dir):
+    if _nix_verify_mode(spec_dir, project_dir):
         stability, mutation = _nix_batched_signals(spec_dir, project_dir, subtask)
         if stability is not None:
             if mutation is None:
@@ -2251,7 +2263,7 @@ def _maybe_self_serve_api_bundle(
     """
     if st.get("lane") != "api":
         return None
-    if _nix_verify_mode(spec_dir):
+    if _nix_verify_mode(spec_dir, project_dir):
         _eval_log.info(
             "api lane self-serve skipped for %s: nixjob backend runs the test "
             "in a separate pod that can't reach a host-local URL (follow-up)",
