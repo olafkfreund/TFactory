@@ -873,6 +873,7 @@ def run_jest_lane_via_nix(
     spec_dir: Path,
     *,
     timeout: int = 300,
+    reruns: int = 1,
 ) -> DockerRunResult | None:
     """Run ONE jest spec inside the per-task Nix dev shell as a k8s Job.
 
@@ -912,8 +913,20 @@ def run_jest_lane_via_nix(
 
     # set +e + the marker recover the real jest exit: the wrapper exits 0 so the
     # Job "succeeds" and the lane reads the test result, not the pod phase.
-    jest_cmd = (
-        f"cd {mount} && jest --ci --forceExit {_shquote(rel)} 2>&1; echo __JEST_EXIT=$?"
+    # `reruns` > 1 repeats the SAME spec in the ONE dev shell (TFactory#1187),
+    # wrapping each pass in the `__PYTEST_RUN=<i>` / `__PYTEST_EXIT=<code>` pair
+    # `parse_pytest_exits` already understands -- the browser lane reuses those
+    # markers for the same reason. Measured: entering `nix develop` costs ~44s
+    # (mean of 6 consecutive entries, +/-3s) while a jest unit test runs in
+    # milliseconds, so a 3-sample stability check paid that cost three times per
+    # spec. Only the samples of ONE spec are batched; per-test isolation is
+    # unchanged.
+    one = (
+        f"cd {mount} && jest --ci --forceExit {_shquote(rel)} 2>&1; "
+        f"echo __PYTEST_EXIT=$?"
+    )
+    jest_cmd = "".join(
+        f"echo __PYTEST_RUN={i}\n{one}\n" for i in range(1, max(1, reruns) + 1)
     )
     (pd / _JOB_SCRIPT).write_text(
         "#!/usr/bin/env bash\nset +e\n" + jest_cmd + "\n", encoding="utf-8"
@@ -925,7 +938,7 @@ def run_jest_lane_via_nix(
         (pd / _JOB_SCRIPT).unlink(missing_ok=True)
 
     return DockerRunResult(
-        returncode=_parse_exit_marker(res.stdout, "__JEST_EXIT="),
+        returncode=_parse_exit_marker(res.stdout, "__PYTEST_EXIT="),
         stdout=res.stdout or "",
         stderr="",
         argv=["nix", "develop", f"path:{mount}#default", "--", "jest", rel],
