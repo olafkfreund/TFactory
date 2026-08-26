@@ -225,8 +225,8 @@ def test_default_rerun_count_is_three() -> None:
 
 
 def test_stdout_tail_truncated(test_file: Path, project_dir: Path) -> None:
-    """Long stdout is truncated to ``tail_chars`` to keep verdicts.json
-    a reasonable size."""
+    """Long stdout is bounded by ``tail_chars`` to keep the findings a
+    reasonable size, keeping BOTH ends so the error line survives (#1195)."""
     big_stdout = "x" * 10_000 + "TAIL_MARKER"
 
     def _runner(_tf, _pd, _seed):
@@ -234,8 +234,9 @@ def test_stdout_tail_truncated(test_file: Path, project_dir: Path) -> None:
 
     result = check_stability(test_file, project_dir, _runner, tail_chars=100)
     for r in result.runs:
-        assert len(r.stdout_tail) == 100
+        assert len(r.stdout_tail) < 200  # bounded, plus the truncation notice
         assert r.stdout_tail.endswith("TAIL_MARKER")
+        assert r.stdout_tail.startswith("x")  # the head survives too
 
 
 def test_stderr_tail_truncated(test_file: Path, project_dir: Path) -> None:
@@ -246,8 +247,9 @@ def test_stderr_tail_truncated(test_file: Path, project_dir: Path) -> None:
 
     result = check_stability(test_file, project_dir, _runner, tail_chars=50)
     for r in result.runs:
-        assert len(r.stderr_tail) == 50
+        assert len(r.stderr_tail) < 150  # bounded, plus the truncation notice
         assert r.stderr_tail.endswith("STDERR_TAIL")
+        assert r.stderr_tail.startswith("e")  # the head survives too
 
 
 def test_empty_stdout_stderr_handled(test_file: Path, project_dir: Path) -> None:
