@@ -971,12 +971,25 @@ def run_jest_lane_via_nix(
     # outside the rerun loop, and a failure exits 127 loudly rather than leaving
     # a shell where `jest` is silently absent: that exact silence is why every
     # jest test read `consistent_fail` for weeks (TFactory#1195).
+    # `npm install -g` lands the runner under `npm prefix -g`, whose bin dir is
+    # NOT on PATH inside the nix develop shell -- the flake sets PATH from its
+    # own inputs. The install therefore SUCCEEDS and `jest` is still not found,
+    # which is why the loud __JEST_SETUP_FAILED guard below never fired and the
+    # lane still reported exit 127 (TFactory#1195). The whole job script is one
+    # bash process, so exporting here persists to every rerun below.
     setup = (
         f"cd {mount} && "
+        'export PATH="$(npm prefix -g)/bin:$PATH" && '
         "if ! command -v jest >/dev/null 2>&1; then "
         f"npm install -g --silent {_JEST_NPM_PKGS} "
         '|| { echo "__JEST_SETUP_FAILED: npm install of the jest runner failed"; '
-        "exit 127; }; fi"
+        "exit 127; }; fi; "
+        # Prove the runner is CALLABLE, not merely installed. Without this a
+        # PATH miss shows up as a bare "jest: command not found" on the first
+        # rerun line, which the per-run capture attributes to the test itself.
+        "command -v jest >/dev/null 2>&1 "
+        '|| { echo "__JEST_SETUP_FAILED: jest installed but not on PATH"; '
+        "exit 127; }"
     )
     _write_jest_config(pd)
     # NODE_PATH: jest resolves ts-jest through it, and the runner is installed
