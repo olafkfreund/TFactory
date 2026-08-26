@@ -92,6 +92,7 @@ from agents.stability_runner import (
     RERUN_COUNT,
     StabilityResult,
     StabilityRun,
+    _clip,
     classify_stability_runs,
 )
 from agents.workspace_status import (
@@ -1167,7 +1168,11 @@ def _nix_batched_stability(
         if jres is None:
             return None
         jruns = [
-            StabilityRun(returncode=code, stdout_tail=tail[-500:], stderr_tail="")
+            StabilityRun(
+                returncode=code,
+                stdout_tail=_clip(tail, _RUN_TAIL_CHARS),
+                stderr_tail="",
+            )
             for code, tail in parse_pytest_exits(jres.stdout)
         ]
         if not jruns:
@@ -1184,7 +1189,9 @@ def _nix_batched_stability(
     if res is None:
         return None
     runs = [
-        StabilityRun(returncode=code, stdout_tail=tail[-500:], stderr_tail="")
+        StabilityRun(
+            returncode=code, stdout_tail=_clip(tail, _RUN_TAIL_CHARS), stderr_tail=""
+        )
         for code, tail in parse_pytest_exits(res.stdout)
     ]
     if not runs:
@@ -1285,7 +1292,9 @@ def _nix_batched_signals(
         return None, None
 
     runs = [
-        StabilityRun(returncode=code, stdout_tail=tail[-500:], stderr_tail="")
+        StabilityRun(
+            returncode=code, stdout_tail=_clip(tail, _RUN_TAIL_CHARS), stderr_tail=""
+        )
         for code, tail in parse_pytest_exits(res.stdout)
     ]
     stability = (
