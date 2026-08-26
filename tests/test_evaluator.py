@@ -1454,7 +1454,7 @@ def test_build_signal_bundle_uses_batched_path_in_nix_mode(tmp_path, monkeypatch
 
     fake_stab = StabilityResult(verdict=StabilityVerdict.STABLE)
     fake_mut = MutationResult(verdict=MutationVerdict.KILLED)
-    monkeypatch.setattr(evaluator, "_nix_verify_mode", lambda sd: True)
+    monkeypatch.setattr(evaluator, "_nix_verify_mode", lambda *a, **k: True)
     monkeypatch.setattr(
         evaluator, "_nix_batched_signals", lambda sd, pd, st: (fake_stab, fake_mut)
     )
@@ -1476,7 +1476,7 @@ def test_build_signal_bundle_falls_back_when_nix_unavailable(tmp_path, monkeypat
     spec_dir = tmp_path / "proj" / "specs" / "001"
     subtask = _mk_unit_subtask(spec_dir)
 
-    monkeypatch.setattr(evaluator, "_nix_verify_mode", lambda sd: True)
+    monkeypatch.setattr(evaluator, "_nix_verify_mode", lambda *a, **k: True)
     monkeypatch.setattr(evaluator, "_nix_batched_signals", lambda *a: (None, None))
     called = {"stab": False, "mut": False}
 

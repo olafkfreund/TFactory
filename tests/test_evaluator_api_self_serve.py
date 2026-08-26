@@ -81,7 +81,7 @@ def test_skipped_when_nixjob_backend_selected(tmp_path, monkeypatch):
     """The Nix Job path executes in a separate pod — a 127.0.0.1 URL bound on
     the evaluator's own host is unreachable there, so self-serve must not
     engage (falls through to the existing honest not_run path)."""
-    monkeypatch.setattr("agents.evaluator._nix_verify_mode", lambda spec_dir: True)
+    monkeypatch.setattr("agents.evaluator._nix_verify_mode", lambda *a, **k: True)
     calls = []
     monkeypatch.setattr(
         "agents.evaluator.detect_serve_command",
@@ -96,7 +96,7 @@ def test_skipped_when_nixjob_backend_selected(tmp_path, monkeypatch):
 
 
 def test_returns_none_when_no_serve_command_detected(tmp_path, monkeypatch):
-    monkeypatch.setattr("agents.evaluator._nix_verify_mode", lambda spec_dir: False)
+    monkeypatch.setattr("agents.evaluator._nix_verify_mode", lambda *a, **k: False)
     monkeypatch.setattr("agents.evaluator.detect_serve_command", lambda *a, **k: None)
     st = {"id": "x", "lane": "api"}
     result = _maybe_self_serve_api_bundle(
@@ -106,7 +106,7 @@ def test_returns_none_when_no_serve_command_detected(tmp_path, monkeypatch):
 
 
 def test_happy_path_boots_serves_and_tears_down(tmp_path, monkeypatch):
-    monkeypatch.setattr("agents.evaluator._nix_verify_mode", lambda spec_dir: False)
+    monkeypatch.setattr("agents.evaluator._nix_verify_mode", lambda *a, **k: False)
     monkeypatch.setattr(
         "agents.evaluator.detect_serve_command",
         lambda project_dir, env, port=8099: f"python -m uvicorn app:app --port {port}",
@@ -139,7 +139,7 @@ def test_happy_path_boots_serves_and_tears_down(tmp_path, monkeypatch):
 
 
 def test_returns_none_and_tears_down_when_health_check_fails(tmp_path, monkeypatch):
-    monkeypatch.setattr("agents.evaluator._nix_verify_mode", lambda spec_dir: False)
+    monkeypatch.setattr("agents.evaluator._nix_verify_mode", lambda *a, **k: False)
     monkeypatch.setattr(
         "agents.evaluator.detect_serve_command",
         lambda project_dir, env, port=8099: "python -m uvicorn app:app",
@@ -253,7 +253,7 @@ def test_api_lane_with_external_target_does_not_self_serve(tmp_path, monkeypatch
 def test_build_kube_or_static_bundle_falls_through_to_self_serve(tmp_path, monkeypatch):
     """No .tfactory.yml at all (spec-ingest) + lane=api must reach self-serve,
     not silently run with target_url=None."""
-    monkeypatch.setattr("agents.evaluator._nix_verify_mode", lambda spec_dir: False)
+    monkeypatch.setattr("agents.evaluator._nix_verify_mode", lambda *a, **k: False)
     monkeypatch.setattr(
         "agents.evaluator.detect_serve_command",
         lambda project_dir, env, port=8099: f"python -m uvicorn app:app --port {port}",
@@ -280,7 +280,7 @@ def test_build_kube_or_static_bundle_stays_honest_when_nothing_startable(
 ):
     """No target, no detectable serve command: falls through to the existing
     target_url=None path unchanged — never silently invents a URL."""
-    monkeypatch.setattr("agents.evaluator._nix_verify_mode", lambda spec_dir: False)
+    monkeypatch.setattr("agents.evaluator._nix_verify_mode", lambda *a, **k: False)
     monkeypatch.setattr("agents.evaluator.detect_serve_command", lambda *a, **k: None)
     st = {"id": "x", "lane": "api"}
     result = _build_kube_or_static_bundle(
