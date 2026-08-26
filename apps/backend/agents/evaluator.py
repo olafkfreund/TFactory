@@ -1123,7 +1123,11 @@ def _coverage_delta_for_subtask(
 
 
 def _nix_batched_stability(
-    spec_dir: Path, project_dir: Path, test_file: Path, lane: str = "unit"
+    spec_dir: Path,
+    project_dir: Path,
+    test_file: Path,
+    lane: str = "unit",
+    framework: str | None = None,
 ) -> StabilityResult | None:
     """#776: the 3x stability samples as ONE Nix Job instead of three.
 
@@ -1139,6 +1143,23 @@ def _nix_batched_stability(
     Returns the StabilityResult, or None when the Nix lane is unavailable at run
     time so the caller falls back to the per-sample ``check_stability`` path.
     """
+    if (framework or "").strip().lower() == "jest":
+        # Jest was never on the batched path: this helper called the pytest lane
+        # unconditionally, which cannot run a .test.ts, returned None, and every
+        # jest subtask fell through to the per-sample route -- three `nix develop`
+        # entries at ~44s each (TFactory#1187).
+        jres = run_jest_lane_via_nix(
+            test_file, project_dir, spec_dir, reruns=RERUN_COUNT
+        )
+        if jres is None:
+            return None
+        jruns = [
+            StabilityRun(returncode=code, stdout_tail=tail[-500:], stderr_tail="")
+            for code, tail in parse_pytest_exits(jres.stdout)
+        ]
+        if not jruns:
+            return None
+        return classify_stability_runs(jruns, seed=DEFAULT_SEED, rerun_count=len(jruns))
     res = run_pytest_lane_via_nix(
         spec_dir,
         project_dir,
@@ -1292,7 +1313,11 @@ def _stability_for_subtask(
     try:
         if _nix_verify_mode(spec_dir):
             batched = _nix_batched_stability(
-                spec_dir, project_dir, test_file, str(subtask.get("lane") or "unit")
+                spec_dir,
+                project_dir,
+                test_file,
+                str(subtask.get("lane") or "unit"),
+                framework=str(subtask.get("framework") or "") or None,
             )
             if batched is not None:
                 return batched
