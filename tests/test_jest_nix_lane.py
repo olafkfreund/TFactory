@@ -42,4 +42,4 @@ def test_jest_nix_lane_runs_bare_jest_not_npx():
     fn.body = fn.body[1:]  # drop the docstring -- it *names* npx to warn about it
     body = ast.unparse(fn)
     assert "npx" not in body
-    assert "jest --ci" in body
+    assert "_JEST_BIN} --ci" in body  # local binary path, not a bare PATH lookup
