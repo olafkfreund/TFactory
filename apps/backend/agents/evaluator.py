@@ -2367,20 +2367,14 @@ def _persist_run_output(spec_dir: Path, bundles: list[Any]) -> None:
             {
                 "test_id": bundle.test_id,
                 "test_file": str(bundle.test_file),
-                "verdict": getattr(
-                    stability.verdict, "value", str(stability.verdict)
-                ),
+                "verdict": getattr(stability.verdict, "value", str(stability.verdict)),
                 "failure_kind": stability.failure_kind,
                 "error_message": stability.error_message,
                 "runs": [
                     {
                         "returncode": r.returncode,
-                        "stdout_tail": scrub_log_text(
-                            r.stdout_tail[-_RUN_TAIL_CHARS:]
-                        ),
-                        "stderr_tail": scrub_log_text(
-                            r.stderr_tail[-_RUN_TAIL_CHARS:]
-                        ),
+                        "stdout_tail": scrub_log_text(r.stdout_tail[-_RUN_TAIL_CHARS:]),
+                        "stderr_tail": scrub_log_text(r.stderr_tail[-_RUN_TAIL_CHARS:]),
                     }
                     for r in failing
                 ],
