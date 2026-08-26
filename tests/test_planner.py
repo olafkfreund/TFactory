@@ -488,7 +488,7 @@ async def test_invalid_after_retry_never_ends_in_an_empty_tail(
 async def test_invalid_after_retry_explains_what_missing_means(
     spec_dir: Path, project_dir: Path, mock_sdk
 ) -> None:
-    """"missing" names a file that was never written, not a malformed plan."""
+    """ "missing" names a file that was never written, not a malformed plan."""
     mock_sdk(plans=[None, None])
     await run_planner(spec_dir, project_dir)
     status = json.loads((spec_dir / "status.json").read_text())
@@ -900,6 +900,14 @@ def _make_polyglot_subtask(
             "expected": "exit 0",
         },
     }
+    # The path must sit where the framework's tests are actually run from
+    # (registry ``test_path_conventions``; enforced by the Planner since spec
+    # 172 put a Playwright spec next to the SUT and the browser lane ran
+    # nothing). A pytest path on a playwright subtask is that same bug.
+    if framework == "playwright":
+        st["files_to_create"] = [f"tests/e2e/{subtask_id}.spec.ts"]
+    elif framework in ("jest", "vitest"):
+        st["files_to_create"] = [f"tests/{subtask_id}.test.ts"]
     if language is not None:
         st["language"] = language
     if framework is not None:
@@ -1441,11 +1449,45 @@ async def test_a_local_model_run_still_gets_its_retry(
     an auth failure.
     """
     calls = mock_sdk(plans=[None, _make_valid_plan_json(1)])
-    _stage_planning_worker(
-        spec_dir, requested="ollama:qwen3:14b", observed="qwen3:14b"
-    )
+    _stage_planning_worker(spec_dir, requested="ollama:qwen3:14b", observed="qwen3:14b")
 
     ok = await run_planner(spec_dir, project_dir)
 
     assert ok is True, "a zero-token local run must keep its retry"
     assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_planner_test_path_off_convention_triggers_retry(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """A browser subtask whose ``files_to_create`` sits outside the framework's
+    ``test_path_conventions`` is rejected and the Planner is retried.
+
+    Spec 172 (2026-08-26): the Planner emitted
+    ``games/tictactoe/tests/e2e/x.spec.ts`` -- next to the SUT -- instead of
+    ``tests/e2e/x.spec.ts``. Nothing checked it; Gen-Functional wrote the
+    file where the plan said, and ``_stage_browser_specs`` (which reads
+    ``<spec_dir>/tests``) staged zero specs, so the browser lane produced no
+    evidence while 7 specs sat on disk. The path is the registry's contract;
+    enforce it where the plan is accepted, with the retry that already exists.
+    """
+    bad = _make_polyglot_subtask(
+        subtask_id="ui", language="typescript", framework="playwright", lane="browser"
+    )
+    bad["files_to_create"] = ["games/tictactoe/tests/e2e/click-empty-cell.spec.ts"]
+    good = _make_polyglot_subtask(
+        subtask_id="ui", language="typescript", framework="playwright", lane="browser"
+    )
+    good["files_to_create"] = ["tests/e2e/click-empty-cell.spec.ts"]
+
+    calls = mock_sdk(
+        plans=[_make_polyglot_plan_json([bad]), _make_polyglot_plan_json([good])]
+    )
+    ok = await run_planner(spec_dir, project_dir)
+    assert ok is True
+    assert len(calls) == 2, "the off-convention plan must NOT be accepted first time"
+    assert "invalid_test_path" in calls[1]["prompt"]
+    assert "tests/e2e/**/*.spec.ts" in calls[1]["prompt"]
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["status"] == "planned"
