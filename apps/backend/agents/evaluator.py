@@ -301,7 +301,9 @@ def _nix_verify_mode(spec_dir: Path, project_dir: Path | None = None) -> bool:
     # (#776 pytest, #1188 jest) was dead code. Spec 181 paid 24 separate
     # `nix develop` entries at ~45s, 71% of a 25-minute lane phase, with the
     # batched path never entered (TFactory#1187).
-    return bool(project_dir) and (Path(project_dir) / "flake.nix").is_file()
+    # `is not None` rather than `bool(...)`: the latter does not narrow
+    # `Path | None` for mypy --strict, and a second `return` would trip PLR0911.
+    return project_dir is not None and (Path(project_dir) / "flake.nix").is_file()
 
 
 def _maybe_nix_verify(  # noqa: PLR0913 - explicit api-lane self-serve knobs
