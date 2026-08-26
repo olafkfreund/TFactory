@@ -101,10 +101,10 @@ def test_the_runner_is_installed_before_jest_is_invoked(tmp_path, monkeypatch):
     nix_env.run_jest_lane_via_nix(tf, wt, spec)
     script = cap["script"]
 
-    assert "npm install -g" in script, script
+    assert "npm install --no-save" in script, script
     assert "jest@29" in script and "ts-jest@29" in script, script
     # The install must come BEFORE the first jest invocation.
-    assert script.index("npm install -g") < script.index("jest --ci"), script
+    assert script.index("npm install --no-save") < script.index("/jest --ci"), script
 
 
 def test_a_failed_runner_install_fails_loudly(tmp_path, monkeypatch):
@@ -129,8 +129,8 @@ def test_the_runner_is_installed_once_not_per_sample(tmp_path, monkeypatch):
     nix_env.run_jest_lane_via_nix(tf, wt, spec, reruns=3)
     script = cap["script"]
 
-    assert script.count("npm install -g") == 1, script
-    assert script.count("jest --ci") == 3, script
+    assert script.count("npm install --no-save") == 1, script
+    assert script.count("/jest --ci") == 3, script
 
 
 def test_a_ts_transform_is_supplied(tmp_path, monkeypatch):
@@ -148,15 +148,23 @@ def test_a_ts_transform_is_supplied(tmp_path, monkeypatch):
     assert "ts-jest" in cfg and "tsx?$" in cfg, cfg
 
 
-def test_node_path_lets_jest_find_the_global_ts_jest(tmp_path, monkeypatch):
-    """The runner is installed with `npm -g`, not into the worktree, so jest
-    reports the transform missing unless NODE_PATH points at the global root."""
+def test_the_transform_resolves_from_the_worktree(tmp_path, monkeypatch):
+    """Replaces the old NODE_PATH test. The runner is now installed into the
+    worktree, so jest and ts-jest share one hoisted tree and ordinary node
+    resolution finds the transform -- no module-search-path override needed.
+
+    The global install this replaced left ts-jest at the top level with its
+    peer jest-util nested under jest/node_modules/, unresolvable (#1195).
+    """
     spec, tf, wt = _spec(tmp_path)
     cap: dict = {}
     _stub(monkeypatch, cap)
 
     nix_env.run_jest_lane_via_nix(tf, wt, spec)
-    assert "NODE_PATH=$(npm root -g)" in cap["script"], cap["script"]
+    script = cap["script"]
+
+    assert "NODE_PATH" not in script, script
+    assert "./node_modules/.bin/jest" in script, script
 
 
 def test_our_config_is_removed_and_repo_files_untouched(tmp_path, monkeypatch):
