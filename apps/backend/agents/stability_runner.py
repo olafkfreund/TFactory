@@ -240,6 +240,20 @@ class StabilityResult:
 # ─── Public entrypoint ──────────────────────────────────────────────────
 
 
+def _clip(text: str, limit: int) -> str:
+    """Keep BOTH ends of ``text`` when it exceeds ``limit``.
+
+    A tail-only clip is the wrong half for the failures that matter: a node or
+    jest stack trace puts the diagnosis ("Cannot find module 'x'") on the FIRST
+    line and pads the rest with frames, so a 500-char tail preserved the noise
+    and discarded the cause (TFactory#1195).
+    """
+    if len(text) <= limit:
+        return text
+    half = limit // 2
+    return f"{text[:half]}\n...[{len(text) - limit} chars truncated]...\n{text[-half:]}"
+
+
 def check_stability(
     test_file: Path,
     project_dir: Path,
@@ -247,7 +261,7 @@ def check_stability(
     *,
     seed: int = DEFAULT_SEED,
     rerun_count: int = RERUN_COUNT,
-    tail_chars: int = 500,
+    tail_chars: int = 4000,
 ) -> StabilityResult:
     """Re-run ``test_file`` ``rerun_count`` times via ``runner_fn``;
     return a stability verdict.
@@ -298,8 +312,8 @@ def check_stability(
         runs.append(
             StabilityRun(
                 returncode=res.returncode,
-                stdout_tail=(res.stdout or "")[-tail_chars:],
-                stderr_tail=(res.stderr or "")[-tail_chars:],
+                stdout_tail=_clip(res.stdout or "", tail_chars),
+                stderr_tail=_clip(res.stderr or "", tail_chars),
             )
         )
 
