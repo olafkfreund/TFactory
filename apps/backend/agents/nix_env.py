@@ -904,12 +904,22 @@ def run_jest_lane_via_nix(
         return None
 
     pd = Path(project_dir)
+    # STAGE the spec's test into the worktree at its AUTHORED relative path, the
+    # way `_stage_go_test` does for Go (TFactory#1195). The generated test lives
+    # under `<spec_dir>/tests/...` while the SUT is the co-mounted worktree, so
+    # `relative_to(project_dir)` raised and the old fallback handed jest a BARE
+    # FILENAME -- which matches no test path, so jest reported
+    # "0 matches" and the lane failed even when jest was present. Staging at the
+    # authored path also makes the test's own `../../<module>` import resolve,
+    # because it now sits where it was written to sit.
+    staged: Path | None = None
     try:
         rel = Path(test_file).resolve().relative_to(pd.resolve()).as_posix()
     except ValueError:
-        # A spec staged outside the project can't resolve its imports anyway;
-        # fall back to the bare name rather than handing jest an absolute path.
-        rel = Path(test_file).name
+        rel = Path(test_file).resolve().relative_to(Path(spec_dir).resolve()).as_posix()
+        staged = pd / rel
+        staged.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(test_file, staged)
 
     # set +e + the marker recover the real jest exit: the wrapper exits 0 so the
     # Job "succeeds" and the lane reads the test result, not the pod phase.
@@ -936,6 +946,10 @@ def run_jest_lane_via_nix(
         res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)
     finally:
         (pd / _JOB_SCRIPT).unlink(missing_ok=True)
+        # Leave the worktree as we found it: a staged copy left behind would be
+        # picked up by the NEXT lane as if the repo shipped it.
+        if staged is not None:
+            staged.unlink(missing_ok=True)
 
     return DockerRunResult(
         returncode=_parse_exit_marker(res.stdout, "__PYTEST_EXIT="),
