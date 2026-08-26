@@ -257,6 +257,7 @@ def nix_runner_from_env() -> KubeJobSandbox | None:
 _JOB_SCRIPT = "_tf_nix_job.sh"
 _E2E_STAGE = ".tf_e2e"  # staged generated browser specs (in the worktree)
 _PW_CONFIG = "_tf_pw.config.ts"
+_JEST_CONFIG = "_tf_jest.config.js"
 _SHOTS = "shots"
 # Where the Job pip-installs the SUT's deps (#764). S108 is about host temp
 # files; this is a path INSIDE the Job container, chosen because /tmp is the one
@@ -874,6 +875,31 @@ def run_gotest_lane_via_nix(
 _JEST_NPM_PKGS = "jest@29 ts-jest@29 typescript@5 @types/jest@29"
 
 
+def _write_jest_config(project_dir: Path) -> Path:
+    """Write OUR jest config beside the worktree and return its path.
+
+    A generated `.test.ts` uses `import`, which bare jest rejects with
+    "Cannot use import statement outside a module" -- reproduced (TFactory#1195).
+    The transform is what makes TypeScript run at all.
+
+    Written under a `_tf_` name and passed with `--config`, exactly as
+    `_write_pw_config` does for Playwright, so a repo that ships its own jest
+    config is never clobbered and our run is deterministic either way.
+    `diagnostics: false` keeps a type error from failing a test whose RUNTIME
+    behaviour is what the lane grades.
+    """
+    cfg = (
+        "module.exports = {\n"
+        "  testEnvironment: 'node',\n"
+        "  transform: { '^.+\\\\.tsx?$': ['ts-jest', { diagnostics: false }] },\n"
+        "  moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json', 'node'],\n"
+        "};\n"
+    )
+    path = Path(project_dir) / _JEST_CONFIG
+    path.write_text(cfg, encoding="utf-8")
+    return path
+
+
 def run_jest_lane_via_nix(
     test_file: Path,
     project_dir: Path,
@@ -952,8 +978,13 @@ def run_jest_lane_via_nix(
         '|| { echo "__JEST_SETUP_FAILED: npm install of the jest runner failed"; '
         "exit 127; }; fi"
     )
+    _write_jest_config(pd)
+    # NODE_PATH: jest resolves ts-jest through it, and the runner is installed
+    # GLOBALLY (npm -g) rather than into the worktree's node_modules -- without
+    # this jest reports the transform as missing even though it is installed.
     one = (
-        f"cd {mount} && jest --ci --forceExit {_shquote(rel)} 2>&1; "
+        f"cd {mount} && NODE_PATH=$(npm root -g) "
+        f"jest --ci --forceExit --config {_JEST_CONFIG} {_shquote(rel)} 2>&1; "
         f"echo __PYTEST_EXIT=$?"
     )
     jest_cmd = (
@@ -975,6 +1006,7 @@ def run_jest_lane_via_nix(
         # picked up by the NEXT lane as if the repo shipped it.
         if staged is not None:
             staged.unlink(missing_ok=True)
+        (pd / _JEST_CONFIG).unlink(missing_ok=True)
 
     return DockerRunResult(
         returncode=_parse_exit_marker(res.stdout, "__PYTEST_EXIT="),

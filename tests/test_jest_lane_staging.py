@@ -43,6 +43,8 @@ def _stub(monkeypatch, cap):
             cap["staged"] = sorted(
                 p.relative_to(wd).as_posix() for p in wd.rglob("*.test.ts")
             )
+            jc = wd / nix_env._JEST_CONFIG
+            cap["written_config"] = jc.read_text() if jc.is_file() else None
             return _Res()
 
     monkeypatch.setattr(nix_env, "materialize_flake", lambda *a, **k: object())
@@ -129,3 +131,43 @@ def test_the_runner_is_installed_once_not_per_sample(tmp_path, monkeypatch):
 
     assert script.count("npm install -g") == 1, script
     assert script.count("jest --ci") == 3, script
+
+
+def test_a_ts_transform_is_supplied(tmp_path, monkeypatch):
+    """TFactory#1195: a generated `.test.ts` uses `import`, which bare jest
+    rejects with "Cannot use import statement outside a module"."""
+    spec, tf, wt = _spec(tmp_path)
+    cap: dict = {}
+    _stub(monkeypatch, cap)
+
+    nix_env.run_jest_lane_via_nix(tf, wt, spec)
+
+    assert f"--config {nix_env._JEST_CONFIG}" in cap["script"], cap["script"]
+    assert cap["written_config"] is not None, "no jest config was written"
+    cfg = cap["written_config"]
+    assert "ts-jest" in cfg and "tsx?$" in cfg, cfg
+
+
+def test_node_path_lets_jest_find_the_global_ts_jest(tmp_path, monkeypatch):
+    """The runner is installed with `npm -g`, not into the worktree, so jest
+    reports the transform missing unless NODE_PATH points at the global root."""
+    spec, tf, wt = _spec(tmp_path)
+    cap: dict = {}
+    _stub(monkeypatch, cap)
+
+    nix_env.run_jest_lane_via_nix(tf, wt, spec)
+    assert "NODE_PATH=$(npm root -g)" in cap["script"], cap["script"]
+
+
+def test_our_config_is_removed_and_repo_files_untouched(tmp_path, monkeypatch):
+    """`_tf_`-prefixed and cleaned up: a repo's own jest config is never
+    clobbered, and nothing of ours is left for the next lane to trip over."""
+    spec, tf, wt = _spec(tmp_path)
+    (wt / "jest.config.js").write_text("// the repo's own")
+    cap: dict = {}
+    _stub(monkeypatch, cap)
+
+    nix_env.run_jest_lane_via_nix(tf, wt, spec)
+
+    assert not (wt / nix_env._JEST_CONFIG).exists(), "our config was left behind"
+    assert (wt / "jest.config.js").read_text() == "// the repo's own"
