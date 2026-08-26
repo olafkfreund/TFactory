@@ -1845,8 +1845,6 @@ def test_docker_runner_result_paths_survive_the_caller_cleanup(tmp_path, monkeyp
 
 
 def _write_verdicts(tmp_path, verdicts):
-    import json
-
     p = tmp_path / "verdicts.json"
     p.write_text(json.dumps({"verdicts": verdicts}))
     return p
@@ -1912,8 +1910,6 @@ def test_lane_progress_needs_only_one_real_result_to_call_a_lane_executed(tmp_pa
 def test_lane_progress_leaves_untouched_lanes_pending(tmp_path):
     """Only lanes that produced a verdict are claimed either way. A lane nobody
     ran keeps whatever status.json already said, rather than being guessed at."""
-    import json
-
     from agents.evaluator import _derive_lane_progress
 
     (tmp_path / "status.json").write_text(
