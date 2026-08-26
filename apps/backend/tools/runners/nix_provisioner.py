@@ -309,9 +309,7 @@ def _system_pkg_attrs(m: Manifest) -> list[str]:
     return [p for p in m.system_packages if p.lower() not in _DROP_SYSTEM_PKGS]
 
 
-def generate_flake(
-    env: dict, *, nixpkgs: str = DEFAULT_NIXPKGS, project_dir=None
-) -> str:
+def generate_flake(env: dict, *, nixpkgs: str = DEFAULT_NIXPKGS, project_dir=None) -> str:
     """Render a reproducible `flake.nix` from an RFC-0005 environment manifest.
 
     Mirrors the proven PoC: a single devShell with the language toolchain, any
@@ -330,9 +328,7 @@ def generate_flake(
         pkg_lines.append(f"pkgs.{_go_attr(m)}")
     else:
         py = _python_attr(m)
-        py_pkgs = [
-            _PY_PKG_ALIASES.get(p, p) for p in _python_libs(m, project_dir=project_dir)
-        ]
+        py_pkgs = [_PY_PKG_ALIASES.get(p, p) for p in _python_libs(m, project_dir=project_dir)]
         if py_pkgs:
             # Reference each attr as ``p."name"`` (quoted) rather than
             # ``with p; [ name ]`` so hyphenated attrs (pytest-cov,
@@ -350,18 +346,12 @@ def generate_flake(
         sys_attrs_with_node += ["nodejs_22", "playwright-test", "dejavu_fonts"]
     jest = _needs_jest(m)
     if jest:
-        # NODE ONLY. nixpkgs has no jest package: `nodePackages` was removed
-        # (aliases.nix throws) and a search finds only coc-jest editor plugins,
-        # so the `pkgs.nodePackages.jest` this used to emit could never evaluate
-        # -- the flake either threw or, with a repo-owned flake winning, was
-        # never consulted, and the lane got a shell with no jest at all
-        # (TFactory#1195: `jest: command not found`, exit 127, every jest test
-        # `consistent_fail` for weeks). The runner now comes from npm inside the
-        # job; see `_JEST_NPM_PKGS` in agents/nix_env.py. Node is added only when
-        # the browser block has not already added it -- listing nodejs_22 twice
-        # is a duplicate-package eval error, not a no-op.
+        # nodePackages.jest, not a bare `jest` attr (there is none), and node is
+        # added only when the browser block has not already added it -- listing
+        # nodejs_22 twice is a duplicate-package eval error, not a no-op.
         if not browser:
             sys_attrs_with_node.append("nodejs_22")
+        pkg_lines.append("pkgs.nodePackages.jest")
     for a in sys_attrs_with_node:
         pkg_lines.append(f"pkgs.{a}")
 
@@ -370,7 +360,9 @@ def generate_flake(
     let_lines = ""
     env_lines = ""
     if browser:
-        let_lines = "\n      fontsConf = pkgs.makeFontsConf { fontDirectories = [ pkgs.dejavu_fonts ]; };"
+        let_lines = (
+            "\n      fontsConf = pkgs.makeFontsConf { fontDirectories = [ pkgs.dejavu_fonts ]; };"
+        )
         env_lines = (
             "\n        # Nix-provided, version-matched browsers — no network "
             "download.\n"
@@ -483,11 +475,7 @@ _NPX_MIN_PARTS = 2
 def _strip_npx(command: str) -> str:
     """Drop a leading ``npx`` when the flake supplies the tool itself."""
     parts = command.split()
-    if (
-        len(parts) >= _NPX_MIN_PARTS
-        and parts[0] == "npx"
-        and parts[1] in _NPX_PROVIDED_BY_FLAKE
-    ):
+    if len(parts) >= _NPX_MIN_PARTS and parts[0] == "npx" and parts[1] in _NPX_PROVIDED_BY_FLAKE:
         return " ".join(parts[1:])
     return command
 
@@ -569,9 +557,7 @@ def _test() -> None:
     assert "python313.withPackages" in flake, flake
     assert "playwright-test" in flake and "nodejs_22" in flake, flake
     assert "PLAYWRIGHT_BROWSERS_PATH" in flake, flake
-    assert "pkgs.chromium" not in flake, (
-        "bare chromium must be dropped for the pw stack"
-    )
+    assert "pkgs.chromium" not in flake, "bare chromium must be dropped for the pw stack"
     assert "fastapi" in flake and "pytest" in flake, flake  # web+test libs inferred
     # fonts: headless chromium needs them to render text in a minimal container.
     assert "dejavu_fonts" in flake and "FONTCONFIG_FILE" in flake, flake
