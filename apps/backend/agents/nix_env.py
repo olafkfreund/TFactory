@@ -104,6 +104,26 @@ class NixPlan:
         )
 
 
+# Suffixes a browser can load straight off disk. A bare .js target is NOT enough
+# on its own -- it may be a node app's entry point -- so a page must also be
+# present for the set to count as static.
+_STATIC_SUFFIXES = frozenset({".html", ".htm", ".css", ".js", ".mjs"})
+
+
+def _static_page_targets(targets: list[str] | None) -> bool:
+    """True when every target is a static web asset and at least one is a page.
+
+    ``None``/empty is False: no targets means no evidence, and the caller keeps
+    its repo-wide behaviour rather than guessing the spec needs no server.
+    """
+    if not targets:
+        return False
+    sufs = [Path(str(t)).suffix.lower() for t in targets]
+    if not any(s in (".html", ".htm") for s in sufs):
+        return False
+    return all(s in _STATIC_SUFFIXES for s in sufs)
+
+
 def detect_serve_command(
     project_dir: Path,
     env: dict | None = None,
@@ -141,20 +161,30 @@ def detect_serve_command(
             return True
         return any(Path(str(t)).parts[: len(base)] == base for t in targets)
 
-    # Python ASGI: prefer a root app.py exposing `app`, then a src/app package.
-    if (pd / "app.py").is_file() and "app" in (pd / "app.py").read_text(
-        errors="ignore"
-    ):
-        return f"python -m uvicorn app:app --host 127.0.0.1 --port {port}"
-    if (pd / "src" / "app" / "main.py").is_file() and _serves(pd / "src"):
-        return f"python -m uvicorn app.main:app --host 127.0.0.1 --port {port}"
-    if (pd / "main.py").is_file() and "app" in (pd / "main.py").read_text(
-        errors="ignore"
-    ):
-        return f"python -m uvicorn main:app --host 127.0.0.1 --port {port}"
-    pkg = pd / "package.json"
-    if pkg.is_file() and '"start"' in pkg.read_text(errors="ignore"):
-        return "npm start"
+    # A static page needs no server at all: playwright opens it over file://,
+    # which is how these specs' own tests already drive it. This guards ALL the
+    # branches below at once -- three of them probe the REPO ROOT, where
+    # _serves() is vacuously true, so per-branch scoping cannot help them
+    # (TFactory#1174). Spec 171 proved it: scoping rejected the src/app python
+    # app and detection fell straight through to the repo's package.json and
+    # returned "npm start" for a static tic-tac-toe page.
+    # Wrapped rather than an early `return None` so the return count does not
+    # grow (PLR0911): the trailing `return None` already answers the static case.
+    if not _static_page_targets(targets):
+        # Python ASGI: prefer a root app.py exposing `app`, then a src/app package.
+        if (pd / "app.py").is_file() and "app" in (pd / "app.py").read_text(
+            errors="ignore"
+        ):
+            return f"python -m uvicorn app:app --host 127.0.0.1 --port {port}"
+        if (pd / "src" / "app" / "main.py").is_file() and _serves(pd / "src"):
+            return f"python -m uvicorn app.main:app --host 127.0.0.1 --port {port}"
+        if (pd / "main.py").is_file() and "app" in (pd / "main.py").read_text(
+            errors="ignore"
+        ):
+            return f"python -m uvicorn main:app --host 127.0.0.1 --port {port}"
+        pkg = pd / "package.json"
+        if pkg.is_file() and '"start"' in pkg.read_text(errors="ignore"):
+            return "npm start"
     return None
 
 
