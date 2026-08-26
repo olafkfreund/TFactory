@@ -37,7 +37,7 @@ import logging as _logging
 import os
 import traceback
 from collections.abc import Awaitable
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Literal
 
 from agents.workspace_status import now_iso, read_status, write_status_patch
@@ -267,12 +267,73 @@ async def _invoke_session(
 # ─── Workspace helpers ──────────────────────────────────────────────────
 
 
+_TEST_ROOT = "tests"
+
+# Frameworks whose tests must sit BESIDE the code they test, not under `tests/`.
+# Go enforces this: a `_test.go` file has to be in the package it tests.
+_COLOCATED_FRAMEWORKS = frozenset({"go-test", "gotest", "go"})
+
+
+def _normalise_test_path(path: str, framework: str | None) -> str:
+    """Rebase a planned test path onto ``tests/``.
+
+    `files_to_create` is whatever the planner LLM typed -- no code validated it
+    (TFactory#1174 follow-up). Spec 172 was handed `target_paths` in
+    `context/source.json`, which the planner prompt tells it to read, so it
+    mirrored the SUT layout and emitted
+    `games/tictactoe/tests/e2e/x.spec.ts`. `<spec_dir>/tests` is a contract six
+    consumers rely on, and the browser stager globs it exactly, so the lane
+    staged nothing and produced no evidence at all while reporting success.
+
+    Rebasing happens BEFORE the prompt is built, so the agent is told the final
+    path and authors the spec for that depth. Rewriting afterwards would move a
+    file whose own `path.resolve(__dirname, '..', '..', ...)` was written for
+    the old depth -- right location, silently broken fixture resolution.
+    """
+    if (framework or "").strip().lower() in _COLOCATED_FRAMEWORKS:
+        return path
+    parts = PurePosixPath(path).parts
+    if not parts or parts[0] == _TEST_ROOT:
+        return path
+    if _TEST_ROOT in parts:
+        # Keep the segment from the LAST `tests/` onward: a spec planned at
+        # `games/tictactoe/tests/e2e/x.spec.ts` is authored for `e2e/`'s depth.
+        i = len(parts) - 1 - parts[::-1].index(_TEST_ROOT)
+        return str(PurePosixPath(*parts[i:]))
+    return str(PurePosixPath(_TEST_ROOT, *parts))
+
+
+def _framework_of(subtask) -> str | None:
+    """`framework` off a dataclass subtask or its dict form."""
+    f = getattr(subtask, "framework", None)
+    if f is None and isinstance(subtask, dict):
+        f = subtask.get("framework")
+    return f
+
+
 def _files_to_create(subtask) -> list[str]:
-    """Subtask.files_to_create may be a list (dataclass) or list-via-dict."""
+    """Subtask.files_to_create may be a list (dataclass) or list-via-dict.
+
+    Paths are normalised onto `tests/` here because this getter feeds BOTH the
+    prompt that tells the agent where to write and the `spec_dir / files[0]`
+    join that checks it did -- normalising once keeps them equal by construction.
+    """
     f = getattr(subtask, "files_to_create", None)
     if f is None and isinstance(subtask, dict):
         f = subtask.get("files_to_create")
-    return list(f or [])
+    fw = _framework_of(subtask)
+    out: list[str] = []
+    for raw in list(f or []):
+        fixed = _normalise_test_path(str(raw), fw)
+        if fixed != str(raw):
+            _gen_log.info(
+                "[gen] normalised planned test path %r -> %r (framework=%s)",
+                str(raw),
+                fixed,
+                fw,
+            )
+        out.append(fixed)
+    return out
 
 
 def _write_replan_request(

@@ -176,10 +176,17 @@ If no registry entry satisfies the constraint, default to
 3. **Budget:** hard cap **30 subtasks total**. Prefer breadth over depth.
 4. **`target`** = `<repo-relative path>::<symbol>`. Verify via Glob/Grep.
 5. **`rationale`** — copy AC text verbatim (≤ 200 chars) or `"AC#N: ..."`.
-6. **`files_to_create`** — one file per subtask. pytest → `tests/unit/test_*.py`;
-   jest → `tests/*.test.ts`; playwright → `tests/e2e/*.spec.ts`;
-   go-test → `<pkg>/<name>_test.go` **next to the code under test** (Go requires
-   `_test.go` files to sit in the package they test, not a separate `tests/` dir).
+6. **`files_to_create`** — one file per subtask, and the path MUST start with
+   `tests/`: pytest → `tests/unit/test_*.py`; jest → `tests/*.test.ts`;
+   playwright → `tests/e2e/*.spec.ts`. Do **not** mirror the layout of the code
+   under test — `games/foo/tests/e2e/x.spec.ts` is wrong even though the code
+   lives at `games/foo/`. `tests/` is a contract the verification lanes glob
+   exactly; a path outside it means the lane stages nothing and silently
+   produces no evidence.
+   The ONE exception is go-test → `<pkg>/<name>_test.go` **next to the code
+   under test**, because Go requires `_test.go` files to sit in the package they
+   test. That exception is Go-only and does not license co-locating any other
+   framework's tests.
 7. **Mixed repos** — emit subtasks in *both* languages when diff touches both.
    Do NOT skip TypeScript subtasks; v0.2 lights multiple lanes.
 8. **No `replan-*` phases** in the initial plan.
