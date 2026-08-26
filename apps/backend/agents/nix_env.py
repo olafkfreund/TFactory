@@ -257,6 +257,7 @@ def nix_runner_from_env() -> KubeJobSandbox | None:
 _JOB_SCRIPT = "_tf_nix_job.sh"
 _E2E_STAGE = ".tf_e2e"  # staged generated browser specs (in the worktree)
 _PW_CONFIG = "_tf_pw.config.ts"
+_JEST_CONFIG = "_tf_jest.config.js"
 _SHOTS = "shots"
 # Where the Job pip-installs the SUT's deps (#764). S108 is about host temp
 # files; this is a path INSIDE the Job container, chosen because /tmp is the one
@@ -867,6 +868,38 @@ def run_gotest_lane_via_nix(
     )
 
 
+# The jest runner comes from npm, not the flake: nixpkgs has no jest package at
+# all (`nodePackages` removed; a search finds only coc-jest editor plugins), so
+# `nodePackages.jest` in a generated flake cannot even evaluate. Pinned so a lane
+# is not at the mercy of npm's latest.
+_JEST_NPM_PKGS = "jest@29 ts-jest@29 typescript@5 @types/jest@29"
+
+
+def _write_jest_config(project_dir: Path) -> Path:
+    """Write OUR jest config beside the worktree and return its path.
+
+    A generated `.test.ts` uses `import`, which bare jest rejects with
+    "Cannot use import statement outside a module" -- reproduced (TFactory#1195).
+    The transform is what makes TypeScript run at all.
+
+    Written under a `_tf_` name and passed with `--config`, exactly as
+    `_write_pw_config` does for Playwright, so a repo that ships its own jest
+    config is never clobbered and our run is deterministic either way.
+    `diagnostics: false` keeps a type error from failing a test whose RUNTIME
+    behaviour is what the lane grades.
+    """
+    cfg = (
+        "module.exports = {\n"
+        "  testEnvironment: 'node',\n"
+        "  transform: { '^.+\\\\.tsx?$': ['ts-jest', { diagnostics: false }] },\n"
+        "  moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json', 'node'],\n"
+        "};\n"
+    )
+    path = Path(project_dir) / _JEST_CONFIG
+    path.write_text(cfg, encoding="utf-8")
+    return path
+
+
 def run_jest_lane_via_nix(
     test_file: Path,
     project_dir: Path,
@@ -904,12 +937,22 @@ def run_jest_lane_via_nix(
         return None
 
     pd = Path(project_dir)
+    # STAGE the spec's test into the worktree at its AUTHORED relative path, the
+    # way `_stage_go_test` does for Go (TFactory#1195). The generated test lives
+    # under `<spec_dir>/tests/...` while the SUT is the co-mounted worktree, so
+    # `relative_to(project_dir)` raised and the old fallback handed jest a BARE
+    # FILENAME -- which matches no test path, so jest reported
+    # "0 matches" and the lane failed even when jest was present. Staging at the
+    # authored path also makes the test's own `../../<module>` import resolve,
+    # because it now sits where it was written to sit.
+    staged: Path | None = None
     try:
         rel = Path(test_file).resolve().relative_to(pd.resolve()).as_posix()
     except ValueError:
-        # A spec staged outside the project can't resolve its imports anyway;
-        # fall back to the bare name rather than handing jest an absolute path.
-        rel = Path(test_file).name
+        rel = Path(test_file).resolve().relative_to(Path(spec_dir).resolve()).as_posix()
+        staged = pd / rel
+        staged.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(test_file, staged)
 
     # set +e + the marker recover the real jest exit: the wrapper exits 0 so the
     # Job "succeeds" and the lane reads the test result, not the pod phase.
@@ -921,12 +964,35 @@ def run_jest_lane_via_nix(
     # milliseconds, so a 3-sample stability check paid that cost three times per
     # spec. Only the samples of ONE spec are batched; per-test isolation is
     # unchanged.
+    # nixpkgs has NO jest package -- `nodePackages` was removed and a search
+    # returns only editor plugins -- so the per-task flake cannot provide it, and
+    # a repo-owned flake (which wins by design) will not either. The flake does
+    # give us nodejs, so the runner comes from npm. Installed ONCE per lane,
+    # outside the rerun loop, and a failure exits 127 loudly rather than leaving
+    # a shell where `jest` is silently absent: that exact silence is why every
+    # jest test read `consistent_fail` for weeks (TFactory#1195).
+    setup = (
+        f"cd {mount} && "
+        "if ! command -v jest >/dev/null 2>&1; then "
+        f"npm install -g --silent {_JEST_NPM_PKGS} "
+        '|| { echo "__JEST_SETUP_FAILED: npm install of the jest runner failed"; '
+        "exit 127; }; fi"
+    )
+    _write_jest_config(pd)
+    # NODE_PATH: jest resolves ts-jest through it, and the runner is installed
+    # GLOBALLY (npm -g) rather than into the worktree's node_modules -- without
+    # this jest reports the transform as missing even though it is installed.
     one = (
-        f"cd {mount} && jest --ci --forceExit {_shquote(rel)} 2>&1; "
+        f"cd {mount} && NODE_PATH=$(npm root -g) "
+        f"jest --ci --forceExit --config {_JEST_CONFIG} {_shquote(rel)} 2>&1; "
         f"echo __PYTEST_EXIT=$?"
     )
-    jest_cmd = "".join(
-        f"echo __PYTEST_RUN={i}\n{one}\n" for i in range(1, max(1, reruns) + 1)
+    jest_cmd = (
+        setup
+        + "\n"
+        + "".join(
+            f"echo __PYTEST_RUN={i}\n{one}\n" for i in range(1, max(1, reruns) + 1)
+        )
     )
     (pd / _JOB_SCRIPT).write_text(
         "#!/usr/bin/env bash\nset +e\n" + jest_cmd + "\n", encoding="utf-8"
@@ -936,6 +1002,11 @@ def run_jest_lane_via_nix(
         res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)
     finally:
         (pd / _JOB_SCRIPT).unlink(missing_ok=True)
+        # Leave the worktree as we found it: a staged copy left behind would be
+        # picked up by the NEXT lane as if the repo shipped it.
+        if staged is not None:
+            staged.unlink(missing_ok=True)
+        (pd / _JEST_CONFIG).unlink(missing_ok=True)
 
     return DockerRunResult(
         returncode=_parse_exit_marker(res.stdout, "__PYTEST_EXIT="),
