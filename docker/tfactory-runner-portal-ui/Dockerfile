@@ -15,20 +15,6 @@
 #   python -m portal_testing.run <portal> --visual-inspection --run-id <id>
 FROM mcr.microsoft.com/playwright/python:v1.49.0-noble
 
-# This image shipped NO security-upgrade layer, so it carried whatever the
-# pinned base tag was built with, indefinitely. The base IS Debian/Ubuntu --
-# it simply never called apt -- so an upgrade is both possible and needed.
-# SECURITY_REFRESH changes daily so the layer is not served from the build
-# cache forever (CFactory#440).
-#
-# `upgrade` only replaces already-installed packages; it never adds new ones,
-# so the vendored browsers and their pinned versions are untouched.
-ARG SECURITY_REFRESH=0
-RUN echo "security refresh: ${SECURITY_REFRESH}" \
-    && apt-get update \
-    && apt-get upgrade --yes \
-    && rm -rf /var/lib/apt/lists/*
-
 
 WORKDIR /app
 
@@ -37,6 +23,17 @@ WORKDIR /app
 # the real TOTP at the Keycloak MFA step. PLAYWRIGHT_BROWSERS_PATH points at the
 # baked browsers so nothing is downloaded at runtime.
 RUN pip install --no-cache-dir playwright==1.49.0 "pyotp>=2.9"
+
+# Placed AFTER pip, deliberately. Upgrading first pulled a newer system Python
+# carrying PEP 668's EXTERNALLY-MANAGED marker, and the pip install below then
+# failed with `error: externally-managed-environment`. Running the upgrade last
+# leaves the build steps untouched -- and busts less cache, since only this
+# final layer rebuilds daily.
+ARG SECURITY_REFRESH=0
+RUN echo "security refresh: ${SECURITY_REFRESH}" \
+    && apt-get update \
+    && apt-get upgrade --yes \
+    && rm -rf /var/lib/apt/lists/*
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 # Vendor the harness. `python -m portal_testing.run` resolves it from /app.
