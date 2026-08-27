@@ -897,9 +897,22 @@ def _write_jest_config(project_dir: Path) -> Path:
     # Guarded: applied ONLY when the project has no real `app/` directory, so a
     # project that genuinely ships one is never remapped, and a wrong import
     # still fails -- the mapping only redirects, it does not invent a module.
-    mapper = ""
+    # Two generator habits, both observed in real runs, both resolving to the
+    # same place: <rootDir>.
+    #
+    #   app/games/tictactoe/game            -- a bare specifier node resolves
+    #                                          against node_modules, not the root
+    #   ../../.worktree/games/tictactoe/game -- the worktree directory name spliced
+    #                                          into a relative path, when the test
+    #                                          file is ALREADY inside that worktree
+    #
+    # The `app/` mapping stays guarded to projects with no real app/ directory.
+    # The `.worktree` one needs no guard: the worktree IS rootDir, so any path
+    # routed through it belongs at rootDir by definition.
+    entries = ["'^(?:.*/)?\\\\.worktree/(.*)$': '<rootDir>/$1'"]
     if not (Path(project_dir) / "app").is_dir():
-        mapper = "  moduleNameMapper: { '^app/(.*)$': '<rootDir>/$1' },\n"
+        entries.append("'^app/(.*)$': '<rootDir>/$1'")
+    mapper = "  moduleNameMapper: { " + ", ".join(entries) + " },\n"
     cfg = (
         "module.exports = {\n"
         "  testEnvironment: 'node',\n"

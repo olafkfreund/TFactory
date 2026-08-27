@@ -98,7 +98,9 @@ def test_resources_default_requests_present():
     m = build_job_manifest("jr2", "img", ["true"])
     res = m["spec"]["template"]["spec"]["containers"][0]["resources"]
     assert res["requests"]["cpu"] == "2"
-    assert res["requests"]["memory"] == "4Gi"
+    # Raised from 4Gi: an uncached nix derivation OOM-killed inside the old cap
+    # while the node sat at 4% of 251Gi (spec 190).
+    assert res["requests"]["memory"] == "8Gi"
 
 
 def test_no_warm_nix_store_by_default():
