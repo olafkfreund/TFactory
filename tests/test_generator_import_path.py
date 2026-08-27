@@ -48,10 +48,35 @@ def test_a_project_that_really_has_an_app_dir_is_not_remapped(tmp_path):
 
     cfg = _write_jest_config(tmp_path).read_text()
 
-    assert "moduleNameMapper" not in cfg
+    # The mapper itself still exists -- it carries the unconditional .worktree
+    # entry -- so assert the absence of the APP rule specifically, not of the
+    # whole block.
+    assert "'^app/(.*)$'" not in cfg
+    assert ".worktree" in cfg
 
 
 def test_the_transform_is_still_configured(tmp_path):
     cfg = _write_jest_config(tmp_path).read_text()
 
     assert "ts-jest" in cfg
+
+
+def test_the_config_maps_a_worktree_prefixed_path(tmp_path):
+    """Observed in spec 189: the generator spliced the checkout directory's own
+    name into a relative import --
+
+        Cannot find module '../../.worktree/games/tictactoe/game.js'
+
+    -- while the test file was already inside that checkout. The worktree IS
+    rootDir, so anything routed through it belongs at rootDir.
+    """
+    (tmp_path / "games").mkdir()
+
+    cfg = _write_jest_config(tmp_path).read_text()
+
+    assert ".worktree" in cfg
+    assert "<rootDir>/$1" in cfg
+
+
+def test_the_prompt_warns_against_naming_the_checkout_directory():
+    assert "ALREADY INSIDE the project checkout" in _PROMPT.read_text()
