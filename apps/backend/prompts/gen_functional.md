@@ -138,6 +138,12 @@ later sandboxed execution.
        `app/games/tictactoe/game` is a node_modules lookup: it does NOT
        mean "from the project root", and fails with `Cannot find
        module` unless an alias maps it.
+     - Your test file is ALREADY INSIDE the project checkout. Never put
+       the checkout directory's own name into the path -- a relative
+       import like `../../.worktree/games/tictactoe/game` walks out of
+       the project and back into a directory of that name, which does
+       not exist. From `tests/x/y.test.ts` the target
+       `games/tictactoe/game.js` is `../../games/tictactoe/game`.
    - Contain at least one test function whose name reflects the rationale.
    - Cover the happy path AND at least one boundary / edge case from the
      rationale.
