@@ -126,8 +126,18 @@ later sandboxed execution.
 6. **Write** ONE test file at the path provided in the SUBTASK CONTEXT. The
    file should:
    - Begin with a comment restating the AC from the `rationale` field.
-   - Import the target symbol using the dotted path matching the project
-     layout — NOT relative imports.
+   - Import the target symbol using the form that RESOLVES in this
+     project's language:
+     - **Python**: the dotted path matching the project layout
+       (`from app.services.cache import get`) — NOT relative imports.
+     - **JavaScript / TypeScript**: a RELATIVE path from the test file
+       to the target (`import { move } from "../../games/tictactoe/game"`),
+       unless the project actually defines an alias — check
+       `tsconfig.json` `paths` or the package `imports` field before
+       using a bare specifier. A bare specifier such as
+       `app/games/tictactoe/game` is a node_modules lookup: it does NOT
+       mean "from the project root", and fails with `Cannot find
+       module` unless an alias maps it.
    - Contain at least one test function whose name reflects the rationale.
    - Cover the happy path AND at least one boundary / edge case from the
      rationale.
