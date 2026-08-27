@@ -889,11 +889,23 @@ def _write_jest_config(project_dir: Path) -> Path:
     `diagnostics: false` keeps a type error from failing a test whose RUNTIME
     behaviour is what the lane grades.
     """
+    # Deterministic net for a persistent generator habit: the model writes a
+    # bare `app/...` specifier, which node treats as a node_modules lookup, not
+    # as "from the project root" -- "Cannot find module 'app/games/tictactoe/
+    # game'" (TFactory#1195). gen_functional.md now spells the correct form out,
+    # but prompt output is not deterministic and a lane run costs ~30 minutes.
+    # Guarded: applied ONLY when the project has no real `app/` directory, so a
+    # project that genuinely ships one is never remapped, and a wrong import
+    # still fails -- the mapping only redirects, it does not invent a module.
+    mapper = ""
+    if not (Path(project_dir) / "app").is_dir():
+        mapper = "  moduleNameMapper: { '^app/(.*)$': '<rootDir>/$1' },\n"
     cfg = (
         "module.exports = {\n"
         "  testEnvironment: 'node',\n"
         "  transform: { '^.+\\\\.tsx?$': ['ts-jest', { diagnostics: false }] },\n"
         "  moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json', 'node'],\n"
+        f"{mapper}"
         "};\n"
     )
     path = Path(project_dir) / _JEST_CONFIG
