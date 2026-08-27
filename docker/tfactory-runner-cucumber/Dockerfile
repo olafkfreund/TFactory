@@ -11,6 +11,21 @@
 # rootfs, /scratch the only rw surface; egress flipped on per run for the app.
 FROM mcr.microsoft.com/playwright:v1.49.0-noble AS runner
 
+# This image shipped NO security-upgrade layer, so it carried whatever the
+# pinned base tag was built with, indefinitely. The base IS Debian/Ubuntu --
+# it simply never called apt -- so an upgrade is both possible and needed.
+# SECURITY_REFRESH changes daily so the layer is not served from the build
+# cache forever (CFactory#440).
+#
+# `upgrade` only replaces already-installed packages; it never adds new ones,
+# so the vendored browsers and their pinned versions are untouched.
+ARG SECURITY_REFRESH=0
+RUN echo "security refresh: ${SECURITY_REFRESH}" \
+    && apt-get update \
+    && apt-get upgrade --yes \
+    && rm -rf /var/lib/apt/lists/*
+
+
 ENV NODE_ENV=test CI=true
 RUN npm install -g \
     @cucumber/cucumber@11 \

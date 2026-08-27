@@ -47,6 +47,11 @@ jobs:
     permissions:
       contents: read
     steps:
+      # Rebuild the security layer at most daily; without a changing arg the
+      # `apt-get upgrade` layer is served from the build cache forever.
+      - name: Compute security-refresh token
+        run: echo "SECURITY_REFRESH=$(date -u +%Y-%m-%d)" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - id: tags
@@ -69,6 +74,8 @@ jobs:
           tags: |
             ${{ env.IMAGE }}:${{ steps.tags.outputs.sha }}
             ${{ env.IMAGE }}:latest
+          build-args: |
+            SECURITY_REFRESH=${{ env.SECURITY_REFRESH }}
           cache-from: type=gha,scope=nix-runner
           cache-to: type=gha,mode=max,scope=nix-runner
 
@@ -146,6 +153,8 @@ jobs:
           tags: |
             ${{ env.IMAGE }}:${{ steps.tags.outputs.sha }}
             ${{ env.IMAGE }}:latest
+          build-args: |
+            SECURITY_REFRESH=${{ env.SECURITY_REFRESH }}
           cache-from: type=gha,scope=nix-runner
           cache-to: type=gha,mode=max,scope=nix-runner
 
