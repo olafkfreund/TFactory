@@ -78,6 +78,17 @@ _BROWSER_FALLBACK_ENV: dict[str, Any] = {
 # _BROWSER_FALLBACK_ENV above, and generated=True for the same reason: this
 # manifest is ours, so a flake the repo committed must still win.
 _JEST_FALLBACK_ENV: dict[str, Any] = {
+    # `language` matters, and its ABSENCE is not neutral. The provisioner treats
+    # an unset language as python -- deliberately, so a manifest that omits it
+    # still gets the pytest harness -- so a jest lane with no declared language
+    # was provisioning a python env it can never use. That env is what OOM-killed
+    # the verify Job in specs 190 and 192. `jest` is unambiguously JavaScript, so
+    # saying so costs nothing here.
+    #
+    # Not done for _BROWSER_FALLBACK_ENV on purpose: a PYTHON web app with a
+    # browser lane and no contract env would then be mislabelled and lose its
+    # harness. A browser lane says nothing about the language; a jest lane does.
+    "language": "javascript",
     "system_packages": ["jest"],
     "provisioning": {"method": "nix", "generated": True},
 }

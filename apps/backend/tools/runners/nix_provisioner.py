@@ -446,7 +446,19 @@ def _python_libs(m: Manifest, project_dir=None) -> list[str]:
     # An explicit mention in the commands still pulls the stack in, so a project
     # that really uses it is unaffected -- as is any Python project with a
     # browser lane, which is what this clause was for.
-    if "uvicorn" in hay or "fastapi" in hay or "httpx" in hay or (_needs_browser(m) and py_harness):
+    # The browser clause needs a POSITIVE python signal, not merely "language
+    # unset". `py_harness` treats an unset language as python so the pytest
+    # harness still lands for manifests that omit it -- correct there, wrong
+    # here: a JS spec that declares no language was still buying fastapi +
+    # uvicorn + httpx off the back of its browser lane, which is the build that
+    # OOM-killed the verify Job (TFactory specs 190/192).
+    py_explicit = (m.language or "").lower() == "python" or "pytest" in hay
+    if (
+        "uvicorn" in hay
+        or "fastapi" in hay
+        or "httpx" in hay
+        or (_needs_browser(m) and py_explicit)
+    ):
         libs += ["fastapi", "uvicorn", "httpx"]
     if project_dir is not None:
         libs += _deps_from_pyproject(project_dir)
