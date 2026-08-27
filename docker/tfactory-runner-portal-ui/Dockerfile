@@ -15,6 +15,21 @@
 #   python -m portal_testing.run <portal> --visual-inspection --run-id <id>
 FROM mcr.microsoft.com/playwright/python:v1.49.0-noble
 
+# This image shipped NO security-upgrade layer, so it carried whatever the
+# pinned base tag was built with, indefinitely. The base IS Debian/Ubuntu --
+# it simply never called apt -- so an upgrade is both possible and needed.
+# SECURITY_REFRESH changes daily so the layer is not served from the build
+# cache forever (CFactory#440).
+#
+# `upgrade` only replaces already-installed packages; it never adds new ones,
+# so the vendored browsers and their pinned versions are untouched.
+ARG SECURITY_REFRESH=0
+RUN echo "security refresh: ${SECURITY_REFRESH}" \
+    && apt-get update \
+    && apt-get upgrade --yes \
+    && rm -rf /var/lib/apt/lists/*
+
+
 WORKDIR /app
 
 # The MS base bakes the browser binaries (/ms-playwright) + OS deps, but NOT the
