@@ -180,7 +180,18 @@ def build_job_manifest(
     namespace: str = "factory",
     image_pull_secret: str = "ghcr-pull",
     cpus: str = "2",
-    memory: str = "4Gi",
+    # 8Gi, not 4Gi. Spec 190 lost two jest verdicts to:
+    #     error: Cannot build '/nix/store/...-python3-3.13.13-env.drv'.
+    #            Reason: builder failed due to signal 9 (Killed).
+    # Signal 9 with the node at 4% of 251Gi is the Job's OWN cgroup limit, not
+    # node exhaustion -- a derivation that missed the binary cache has to build
+    # locally, inside 4Gi, alongside the store copies already running.
+    #
+    # This is a response to an observed OOM, not a measured requirement: 8Gi is
+    # the next step up and the node has room. `requests == limits` (below), so
+    # each concurrent lane reserves this much -- at the ~3-4 concurrent this
+    # cluster sustains that is ~32Gi of 251Gi.
+    memory: str = "8Gi",
     ttl_seconds: int | None = None,
     timeout: int = 900,
     repo_pvc: str | None = None,
