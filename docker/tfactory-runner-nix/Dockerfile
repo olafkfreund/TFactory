@@ -14,7 +14,11 @@
 # Proven 2026-06-17: a manifest-generated flake materialized in THIS base and ran
 # a Playwright browser lane green, producing real screenshots (with the fonts +
 # pinned-nixpkgs-rev fixes in nix_provisioner).
-FROM nixos/nix:2.30.1
+# 2.35.2, bumped from 2.30.1. This image has no apk or apt, so the fleet's
+# daily `apk upgrade` security refresh cannot reach it -- its packages come
+# from the Nix store, and the only way to pick up upstream fixes is to move
+# the tag. That made it the one runner with no upgrade path at all.
+FROM nixos/nix:2.35.2
 
 # flakes + the new CLI; filter-syscalls=false is required for nix to run inside
 # an unprivileged container (proven). No build sandbox tricks needed because
