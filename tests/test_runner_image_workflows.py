@@ -492,26 +492,30 @@ def test_runner_images_are_tagged_sha_short_not_a_raw_commit_sha():
         )
 
 
-def test_the_nix_lane_pin_env_vars_are_the_ones_ci_bumps():
-    """Two halves of one mechanism in two repos, as with PORTAL_UI_IMAGE.
+def test_this_repo_no_longer_writes_the_nix_lane_pin():
+    """The pin moved to factory-runners (Factory#1003), and only ONE repo may
+    write it.
 
-    The chart and factory-gitops name TFACTORY_NIX_RUNNER_IMAGE and
-    TFACTORY_VAL3_K8S_JOB_IMAGE; nix-runner-image.yml must bump those same
-    names. A rename on either side leaves the lane silently back on the floating
-    `:latest` it was pinned away from -- and, unlike a broken build, that
-    failure reports success.
+    This used to assert that nix-runner-image.yml bumps TFACTORY_NIX_RUNNER_IMAGE
+    and TFACTORY_VAL3_K8S_JOB_IMAGE. factory-runners builds and signs
+    factory-runner-nix now, so it owns the pin, and the equivalent assertion
+    lives beside it in that repo's tests/test_workflow_scripts.py.
+
+    The direction is inverted here on purpose. Two writers is the dangerous
+    state, not zero: both seds match `[^"]+`, so with this workflow bumping as
+    well the pin would flap between tfactory-runner-nix and factory-runner-nix
+    depending on which built last, and NEITHER RUN WOULD FAIL. This test fails
+    if the bump is ever reinstated here.
+
+    The chart assertion is kept: it is the half of the premise that still lives
+    in this repo, and a rename there would leave the lane on a floating tag.
     """
     text = _workflows()["nix-runner-image.yml"][0]
     for var in ("TFACTORY_NIX_RUNNER_IMAGE", "TFACTORY_VAL3_K8S_JOB_IMAGE"):
-        assert var in text, (
-            f"nix-runner-image.yml does not bump {var}, so the cluster keeps "
-            "resolving whatever it was pinned to before (#890)."
+        assert var not in text, (
+            f"nix-runner-image.yml writes {var} again. factory-runners owns "
+            "this pin; two writers make it flap with no failing check."
         )
-    # And it must pin the digest it just published and verified, not a bare tag.
-    assert "@${{ steps.build.outputs.digest }}" in text, (
-        "nix-runner-image.yml must pin the digest it published, not only a tag "
-        "(#890)."
-    )
     assert "TFACTORY_NIX_RUNNER_IMAGE" in (
         _ROOT / "charts" / "tfactory" / "templates" / "deployment.yaml"
     ).read_text(), "premise changed: the chart no longer sets this env var"
