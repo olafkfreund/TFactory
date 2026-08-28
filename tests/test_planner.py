@@ -1491,3 +1491,75 @@ async def test_planner_test_path_off_convention_triggers_retry(
     assert "tests/e2e/**/*.spec.ts" in calls[1]["prompt"]
     status = json.loads((spec_dir / "status.json").read_text())
     assert status["status"] == "planned"
+
+
+# ── systemic replan cause (Factory#1004 / TFactory#1224) ──────────────────
+#
+# Exhausting the global replan budget reports only "we went round 12 times".
+# Six subtasks each stuck at two replans hits that budget identically to six
+# genuinely separate problems, so the status record cannot distinguish one
+# shared cause -- one fix -- from six. These cover the distinction.
+
+
+def _status_with(tmp_path, reasons):
+    (tmp_path / "status.json").write_text(json.dumps({"replan_reasons": reasons}))
+    return tmp_path
+
+
+def test_one_reason_across_several_subtasks_reads_as_systemic(tmp_path):
+    from agents.planner import _systemic_replan_cause
+
+    spec = _status_with(
+        tmp_path,
+        [
+            {"subtask_id": "s1", "reason": "cannot resolve import './game' at line 3"},
+            {
+                "subtask_id": "s2",
+                "reason": "cannot resolve import './board' at line 41",
+            },
+            {"subtask_id": "s3", "reason": "cannot resolve import './score' at line 7"},
+        ],
+    )
+    found = _systemic_replan_cause(spec)
+    assert found is not None, "three subtasks, one cause -- should read as systemic"
+    _cause, n = found
+    assert n == 3
+
+
+def test_one_subtask_replanned_repeatedly_is_not_systemic(tmp_path):
+    """Ordinary per-subtask stuckness, already handled by _STUCK_AFTER_REPLANS.
+
+    The count is over DISTINCT subtasks; counting entries would report this as
+    systemic and send someone hunting a shared cause that does not exist.
+    """
+    from agents.planner import _systemic_replan_cause
+
+    spec = _status_with(
+        tmp_path,
+        [
+            {"subtask_id": "s1", "reason": "cannot resolve import './game' at line 3"},
+            {"subtask_id": "s1", "reason": "cannot resolve import './game' at line 9"},
+            {"subtask_id": "s1", "reason": "cannot resolve import './game' at line 12"},
+        ],
+    )
+    assert _systemic_replan_cause(spec) is None
+
+
+def test_genuinely_different_failures_are_not_systemic(tmp_path):
+    from agents.planner import _systemic_replan_cause
+
+    spec = _status_with(
+        tmp_path,
+        [
+            {"subtask_id": "s1", "reason": "cannot resolve import './game'"},
+            {"subtask_id": "s2", "reason": "assertion failed: expected 3 got 4"},
+            {"subtask_id": "s3", "reason": "timed out after 600s"},
+        ],
+    )
+    assert _systemic_replan_cause(spec) is None
+
+
+def test_no_replan_history_is_not_systemic(tmp_path):
+    from agents.planner import _systemic_replan_cause
+
+    assert _systemic_replan_cause(_status_with(tmp_path, [])) is None
