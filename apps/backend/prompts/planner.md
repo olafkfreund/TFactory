@@ -98,6 +98,9 @@ is absent or inconclusive, derive the language from the acceptance-criteria
 - AC says `cargo test` / `cargo build`, or a `Cargo.toml` exists → **`rust`**.
 - AC says `pytest`, or `pyproject.toml` / `setup.py` exists → **`(python, pytest, unit)`**.
 - AC says `npm test` / `jest` / `vitest`, or `package.json` exists → **`(typescript, jest, unit)`**.
+  Name the test files `.test.js` unless the project actually ships TypeScript
+  (a `tsconfig.json` or `.ts` sources) — a `.test.ts` in a plain-JavaScript
+  project has no transform to run it, and is rejected as `invalid_test_path`.
 
 Set BOTH `language` and `framework` on every subtask to match. **Never leave
 `language` null and never default a non-Python target to pytest** — that emits
