@@ -35,6 +35,7 @@ import asyncio
 import json
 import logging as _logging
 import os
+import re
 import traceback
 from collections.abc import Awaitable
 from pathlib import Path
@@ -742,6 +743,99 @@ def _criterion_authority_check(
         return None
 
 
+# Suffixes a JS/TS module specifier may omit, plus the index forms node tries.
+_JS_MODULE_SUFFIXES = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", "")
+_JS_INDEX_NAMES = ("index.ts", "index.js", "index.mjs")
+_IMPORT_RE = re.compile(r"""(?:from|import|require)\s*\(?\s*['"]([^'"]+)['"]""")
+
+
+def _unresolvable_imports(
+    source: str, project_dir: Path, test_path: Path | None = None
+) -> list[str]:
+    """Module specifiers in ``source`` that resolve to nothing on disk.
+
+    Spec 182's generated jest tests imported ``app/games/tictactoe/game`` five
+    times while the module sits at ``games/tictactoe/game.js``. The regex only
+    matches QUOTED specifiers, so it sees JS/TS ``import``/``require`` and never
+    a Python ``from x import y``.
+
+    Two shapes are checked, because two shapes are silently rewritten by the
+    jest lane's ``moduleNameMapper`` (``nix_env._write_jest_config``):
+
+    * root-relative — contains ``/``, not scoped (``@scope/pkg``), not
+      ``node:``, and does not resolve inside ``node_modules``, so a bare package
+      and ``lodash/merge`` are left alone. Resolved against ``project_dir``.
+    * relative (``./``, ``../``) — resolved against the TEST FILE's directory,
+      which is what node does, and only when ``test_path`` is given. This is the
+      ``../../.worktree/...`` habit the mapper's second rule redirects.
+    """
+    pd = Path(project_dir)
+    bad: list[str] = []
+    for spec in dict.fromkeys(_IMPORT_RE.findall(source)):
+        if spec.startswith("."):
+            if test_path is None:
+                continue
+            base = (Path(test_path).parent / spec).resolve()
+        else:
+            if spec.startswith(("node:", "@")) or "/" not in spec:
+                continue
+            if (pd / "node_modules" / spec.split("/")[0]).exists():
+                continue
+            base = pd / spec
+        if any(
+            (base.with_suffix(x) if x else base).is_file() for x in _JS_MODULE_SUFFIXES
+        ):
+            continue
+        if any((base / n).is_file() for n in _JS_INDEX_NAMES):
+            continue
+        bad.append(spec)
+    return bad
+
+
+def _record_unresolvable_imports(
+    spec_dir: Path, subtask: object, source: str, project_dir: Path, test_path: Path
+) -> list[str]:
+    """Log and persist any specifier the generated test invented (#1174).
+
+    This does NOT reject. #1192 made an unresolvable import a hard guardrail and
+    #1194 reverted it: the rejection routes to a Planner replan, and the replan
+    storm halved committed tests, took the browser lane from ok to not-ok and
+    doubled the run (24.7 -> 47.0 min). The generation defect is real but it is
+    smaller than that, so it is recorded rather than rejected.
+
+    Recording is not optional, though. The jest lane maps ``^app/(.*)$`` to
+    ``<rootDir>`` so the very same wrong import now PASSES there while still
+    failing in the Docker fallback runner and in any project that really ships
+    an ``app/`` tree. Naming the specifier in ``status.json`` is what keeps that
+    rewrite visible instead of silently green.
+    """
+    try:
+        bad = _unresolvable_imports(source, project_dir, test_path)
+    except Exception as exc:  # noqa: BLE001 — never fail generation on a report
+        _gen_log.warning("unresolvable-import scan errored (%s); skipping", exc)
+        return []
+    if not bad:
+        return []
+    entries = [f"{getattr(subtask, 'id', '?')}: unresolvable import {s!r}" for s in bad]
+    _gen_log.warning(
+        "gen_functional: %s imports %s, which resolves to no file in %s — the "
+        "jest lane's moduleNameMapper may rewrite it to <rootDir> and hide this "
+        "(TFactory#1174)",
+        test_path.name,
+        ", ".join(repr(s) for s in bad),
+        project_dir,
+    )
+    # Accumulate: one patch per subtask, and a later subtask's finding must not
+    # clobber an earlier one's.
+    record = [*(_read_status(spec_dir).get("unresolvable_imports") or []), *entries]
+    _write_status_patch(
+        spec_dir,
+        unresolvable_imports=record,
+        gen_functional_warnings=record,
+    )
+    return bad
+
+
 def _source_guardrail_rejection(
     subtask: object, source: str, project_dir: Path
 ) -> tuple[str, str] | None:
@@ -879,7 +973,9 @@ async def _generate_one_subtask(
         )
         return "rejected"
 
-    rejection = _source_guardrail_rejection(subtask, test_path.read_text(), project_dir)
+    source = test_path.read_text()
+    _record_unresolvable_imports(spec_dir, subtask, source, project_dir, test_path)
+    rejection = _source_guardrail_rejection(subtask, source, project_dir)
     if rejection is not None:
         reason, phase = rejection
         _reject_subtask_for_replan(
