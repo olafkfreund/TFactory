@@ -341,6 +341,55 @@ _STUCK_AFTER_REPLANS = 2
 _GLOBAL_REPLAN_BUDGET = 12
 
 
+# Distinct subtasks rejected for the SAME normalised reason before we call the
+# cause systemic rather than per-subtask. Two is a coincidence; three is a
+# pattern worth naming in the failure.
+_SYSTEMIC_CAUSE_MIN_SUBTASKS = 3
+_FINGERPRINT_CHARS = 80
+# Volatile pieces of a rejection reason: subtask ids, line/column numbers, hex
+# digests, quoted paths. Two subtasks failing the same way produce reasons that
+# differ only in these, so they must be stripped before comparing.
+_VOLATILE_RE = re.compile(r"(0x[0-9a-f]+|\b\d+\b|'[^']*'|\"[^\"]*\"|`[^`]*`)")
+
+
+def _reason_fingerprint(reason: str) -> str:
+    """Normalise a rejection reason so the same failure compares equal."""
+    return _VOLATILE_RE.sub("*", (reason or "").lower()).strip()[:_FINGERPRINT_CHARS]
+
+
+def _systemic_replan_cause(spec_dir: Path) -> tuple[str, int] | None:
+    """The one rejection reason shared by several DIFFERENT subtasks, if any.
+
+    The global replan budget bounds the plan<->generate loop, but exhausting it
+    says only "we went round 12 times" -- and that is what a run reports when
+    every lane is failing for one shared reason, which is the case worth acting
+    on. Six subtasks each stuck at two replans hits the budget exactly like six
+    genuinely separate problems would, and the two are indistinguishable in the
+    status record even though the fix for one is a single change and for the
+    other is six.
+
+    Counts DISTINCT subtasks, not entries: a single subtask replanned twice for
+    the same reason is ordinary per-subtask stuckness, already handled by
+    ``_STUCK_AFTER_REPLANS``, and must not be reported as systemic.
+    """
+    by_fingerprint: dict[str, set[str]] = {}
+    for entry in _read_status(spec_dir).get("replan_reasons") or []:
+        if not isinstance(entry, dict):
+            continue
+        fingerprint = _reason_fingerprint(str(entry.get("reason") or ""))
+        if not fingerprint:
+            continue
+        by_fingerprint.setdefault(fingerprint, set()).add(
+            str(entry.get("subtask_id") or "")
+        )
+    if not by_fingerprint:
+        return None
+    fingerprint, subtasks = max(by_fingerprint.items(), key=lambda kv: len(kv[1]))
+    if len(subtasks) < _SYSTEMIC_CAUSE_MIN_SUBTASKS:
+        return None
+    return fingerprint, len(subtasks)
+
+
 def _load_replan_request(spec_dir: Path) -> tuple[bool, str, dict | None]:
     """Read + validate context/replan_request.json.
 
@@ -722,6 +771,14 @@ def _finalize_replan(
             f"global replan budget {_GLOBAL_REPLAN_BUDGET} exhausted "
             f"(total replans={total_replans}); inspect rejected subtasks",
         ]
+        systemic = _systemic_replan_cause(spec_dir)
+        if systemic is not None:
+            cause, n_subtasks = systemic
+            base_warnings.append(
+                f"{n_subtasks} different subtasks were rejected for the same "
+                f"reason — this is one systemic cause, not "
+                f"{n_subtasks} separate ones: {cause!r}"
+            )
         if committed:
             _write_status_patch(
                 spec_dir,
