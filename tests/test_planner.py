@@ -1563,3 +1563,78 @@ def test_no_replan_history_is_not_systemic(tmp_path):
     from agents.planner import _systemic_replan_cause
 
     assert _systemic_replan_cause(_status_with(tmp_path, [])) is None
+
+
+# ── TFactory#1171: a JavaScript project must not be planned TypeScript tests ──
+
+
+def _write_javascript_project(project_dir: Path) -> None:
+    """A checkout that ships JavaScript and no TypeScript (spec 161's shape)."""
+    (project_dir / "package.json").write_text('{"name": "tictactoe"}')
+    (project_dir / "games").mkdir()
+    (project_dir / "games" / "game.js").write_text("export const move = () => {};\n")
+
+
+def _write_typescript_project(project_dir: Path) -> None:
+    """The other side of the signal — the same app, genuinely TypeScript."""
+    (project_dir / "package.json").write_text('{"name": "tictactoe"}')
+    (project_dir / "tsconfig.json").write_text("{}")
+    (project_dir / "games").mkdir()
+    (project_dir / "games" / "game.ts").write_text("export const move = () => {};\n")
+
+
+def _jest_plan_json(test_file: str) -> str:
+    st = _make_polyglot_subtask(
+        subtask_id="js-1", language="typescript", framework="jest", lane="unit"
+    )
+    st["files_to_create"] = [test_file]
+    return _make_polyglot_plan_json([st])
+
+
+@pytest.mark.asyncio
+async def test_typescript_test_path_rejected_in_a_javascript_project(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """Spec 161: a JS tic-tac-toe got `tests/*.test.ts`, which nothing can run."""
+    _write_javascript_project(project_dir)
+    calls = mock_sdk(
+        plans=[
+            _jest_plan_json("tests/move-places-mark.test.ts"),
+            _make_valid_plan_json(1),
+        ]
+    )
+    ok = await run_planner(spec_dir, project_dir)
+    assert ok is True
+    assert len(calls) == 2  # the .ts path was rejected and replanned
+    assert "invalid_test_path" in calls[1]["prompt"] or "RETRY" in calls[1]["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_javascript_test_path_accepted_in_a_javascript_project(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """The form the planner must reach for instead — and jest can actually run."""
+    _write_javascript_project(project_dir)
+    calls = mock_sdk(plans=[_jest_plan_json("tests/move-places-mark.test.js")])
+    ok = await run_planner(spec_dir, project_dir)
+    assert ok is True
+    assert len(calls) == 1  # accepted first time — no replan
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["status"] == "planned"
+
+
+@pytest.mark.asyncio
+async def test_typescript_test_path_accepted_in_a_typescript_project(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """The signal has to cut both ways, or it is not reading the project at all.
+
+    Identical plan to the rejected one above; only the checkout differs.
+    """
+    _write_typescript_project(project_dir)
+    calls = mock_sdk(plans=[_jest_plan_json("tests/move-places-mark.test.ts")])
+    ok = await run_planner(spec_dir, project_dir)
+    assert ok is True
+    assert len(calls) == 1
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["status"] == "planned"
