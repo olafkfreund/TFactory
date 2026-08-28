@@ -914,6 +914,7 @@ async def dispatch_verify_job(  # noqa: PLR0913 - 3 domain args + injectable sea
         worker_ref=worker_ref,
         store=store,
     )
+    _record_spec_worker_ref(spec_dir, worker_ref)
 
     # Build the verify-orchestration manifest from the sandbox coordinates and
     # apply it. The manifest carries the dedicated SA + JOB_ID/CORRELATION_KEY/
@@ -1132,6 +1133,38 @@ async def _record_dispatch(
         _log.warning(
             "[verify-dispatch] failed to record dispatch for job_id=%s (continuing)",
             job_id,
+            exc_info=True,
+        )
+
+
+# The spec-workspace copy of the Job coordinates. The durable Postgres row stays
+# the source of truth (concurrency-conventions.md §3); this is a read-only echo
+# of it for callers that hold a spec dir and nothing else.
+SPEC_WORKER_REF_FILE = "worker_ref.json"
+
+
+def _record_spec_worker_ref(spec_dir: Path, worker_ref: dict[str, Any]) -> None:
+    """Echo the Job coordinates into the spec workspace for the #95 watchdog (#1173).
+
+    The liveness sweep is a plain filesystem walk: it is handed a spec dir with no
+    store handle, no event loop and no job_id, which is exactly why the
+    ``job_active`` corroboration added for #1173 stayed inert after it landed --
+    the sweep had no way to NAME the Job it was supposed to ask about, so it kept
+    calling ``check_and_mark`` with the parameter defaulted to ``None`` and spec
+    170 was false-stalled all over again. Dispatch is the one moment where the
+    spec dir and the Job name are both in hand, so it writes the pair down.
+
+    Best-effort by design: a workspace we cannot write simply leaves the sweep on
+    its old timestamp-only verdict, and must never break the dispatch itself.
+    """
+    try:
+        (spec_dir / SPEC_WORKER_REF_FILE).write_text(
+            json.dumps(worker_ref, indent=2), encoding="utf-8"
+        )
+    except OSError:
+        _log.warning(
+            "[verify-dispatch] could not record worker_ref in %s (continuing)",
+            spec_dir,
             exc_info=True,
         )
 
