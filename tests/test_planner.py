@@ -1491,3 +1491,150 @@ async def test_planner_test_path_off_convention_triggers_retry(
     assert "tests/e2e/**/*.spec.ts" in calls[1]["prompt"]
     status = json.loads((spec_dir / "status.json").read_text())
     assert status["status"] == "planned"
+
+
+# ── systemic replan cause (Factory#1004 / TFactory#1224) ──────────────────
+#
+# Exhausting the global replan budget reports only "we went round 12 times".
+# Six subtasks each stuck at two replans hits that budget identically to six
+# genuinely separate problems, so the status record cannot distinguish one
+# shared cause -- one fix -- from six. These cover the distinction.
+
+
+def _status_with(tmp_path, reasons):
+    (tmp_path / "status.json").write_text(json.dumps({"replan_reasons": reasons}))
+    return tmp_path
+
+
+def test_one_reason_across_several_subtasks_reads_as_systemic(tmp_path):
+    from agents.planner import _systemic_replan_cause
+
+    spec = _status_with(
+        tmp_path,
+        [
+            {"subtask_id": "s1", "reason": "cannot resolve import './game' at line 3"},
+            {
+                "subtask_id": "s2",
+                "reason": "cannot resolve import './board' at line 41",
+            },
+            {"subtask_id": "s3", "reason": "cannot resolve import './score' at line 7"},
+        ],
+    )
+    found = _systemic_replan_cause(spec)
+    assert found is not None, "three subtasks, one cause -- should read as systemic"
+    _cause, n = found
+    assert n == 3
+
+
+def test_one_subtask_replanned_repeatedly_is_not_systemic(tmp_path):
+    """Ordinary per-subtask stuckness, already handled by _STUCK_AFTER_REPLANS.
+
+    The count is over DISTINCT subtasks; counting entries would report this as
+    systemic and send someone hunting a shared cause that does not exist.
+    """
+    from agents.planner import _systemic_replan_cause
+
+    spec = _status_with(
+        tmp_path,
+        [
+            {"subtask_id": "s1", "reason": "cannot resolve import './game' at line 3"},
+            {"subtask_id": "s1", "reason": "cannot resolve import './game' at line 9"},
+            {"subtask_id": "s1", "reason": "cannot resolve import './game' at line 12"},
+        ],
+    )
+    assert _systemic_replan_cause(spec) is None
+
+
+def test_genuinely_different_failures_are_not_systemic(tmp_path):
+    from agents.planner import _systemic_replan_cause
+
+    spec = _status_with(
+        tmp_path,
+        [
+            {"subtask_id": "s1", "reason": "cannot resolve import './game'"},
+            {"subtask_id": "s2", "reason": "assertion failed: expected 3 got 4"},
+            {"subtask_id": "s3", "reason": "timed out after 600s"},
+        ],
+    )
+    assert _systemic_replan_cause(spec) is None
+
+
+def test_no_replan_history_is_not_systemic(tmp_path):
+    from agents.planner import _systemic_replan_cause
+
+    assert _systemic_replan_cause(_status_with(tmp_path, [])) is None
+
+
+# ── TFactory#1171: a JavaScript project must not be planned TypeScript tests ──
+
+
+def _write_javascript_project(project_dir: Path) -> None:
+    """A checkout that ships JavaScript and no TypeScript (spec 161's shape)."""
+    (project_dir / "package.json").write_text('{"name": "tictactoe"}')
+    (project_dir / "games").mkdir()
+    (project_dir / "games" / "game.js").write_text("export const move = () => {};\n")
+
+
+def _write_typescript_project(project_dir: Path) -> None:
+    """The other side of the signal — the same app, genuinely TypeScript."""
+    (project_dir / "package.json").write_text('{"name": "tictactoe"}')
+    (project_dir / "tsconfig.json").write_text("{}")
+    (project_dir / "games").mkdir()
+    (project_dir / "games" / "game.ts").write_text("export const move = () => {};\n")
+
+
+def _jest_plan_json(test_file: str) -> str:
+    st = _make_polyglot_subtask(
+        subtask_id="js-1", language="typescript", framework="jest", lane="unit"
+    )
+    st["files_to_create"] = [test_file]
+    return _make_polyglot_plan_json([st])
+
+
+@pytest.mark.asyncio
+async def test_typescript_test_path_rejected_in_a_javascript_project(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """Spec 161: a JS tic-tac-toe got `tests/*.test.ts`, which nothing can run."""
+    _write_javascript_project(project_dir)
+    calls = mock_sdk(
+        plans=[
+            _jest_plan_json("tests/move-places-mark.test.ts"),
+            _make_valid_plan_json(1),
+        ]
+    )
+    ok = await run_planner(spec_dir, project_dir)
+    assert ok is True
+    assert len(calls) == 2  # the .ts path was rejected and replanned
+    assert "invalid_test_path" in calls[1]["prompt"] or "RETRY" in calls[1]["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_javascript_test_path_accepted_in_a_javascript_project(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """The form the planner must reach for instead — and jest can actually run."""
+    _write_javascript_project(project_dir)
+    calls = mock_sdk(plans=[_jest_plan_json("tests/move-places-mark.test.js")])
+    ok = await run_planner(spec_dir, project_dir)
+    assert ok is True
+    assert len(calls) == 1  # accepted first time — no replan
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["status"] == "planned"
+
+
+@pytest.mark.asyncio
+async def test_typescript_test_path_accepted_in_a_typescript_project(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """The signal has to cut both ways, or it is not reading the project at all.
+
+    Identical plan to the rejected one above; only the checkout differs.
+    """
+    _write_typescript_project(project_dir)
+    calls = mock_sdk(plans=[_jest_plan_json("tests/move-places-mark.test.ts")])
+    ok = await run_planner(spec_dir, project_dir)
+    assert ok is True
+    assert len(calls) == 1
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["status"] == "planned"

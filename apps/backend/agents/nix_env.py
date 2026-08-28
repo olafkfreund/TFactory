@@ -73,10 +73,14 @@ _BROWSER_FALLBACK_ENV: dict[str, Any] = {
 
 
 # "jest" is the token the provisioner's _needs_jest looks for; on seeing it the
-# provisioner drops the bare attr and substitutes nodePackages.jest plus nodejs
-# (only when the browser block has not already added node). Same shape as
-# _BROWSER_FALLBACK_ENV above, and generated=True for the same reason: this
-# manifest is ours, so a flake the repo committed must still win.
+# provisioner drops the bare attr and adds nodejs (only when the browser block
+# has not already added node). It adds NO jest package: nixpkgs has none, and
+# the `nodePackages.jest` it used to substitute was removed upstream on
+# 2026-03-03 and now throws, which failed the whole flake eval rather than
+# omitting a package (Factory#1007). The runner comes from the npm install in
+# the lane setup below instead. Same shape as _BROWSER_FALLBACK_ENV above, and
+# generated=True for the same reason: this manifest is ours, so a flake the
+# repo committed must still win.
 _JEST_FALLBACK_ENV: dict[str, Any] = {
     # `language` matters, and its ABSENCE is not neutral. The provisioner treats
     # an unset language as python -- deliberately, so a manifest that omits it
