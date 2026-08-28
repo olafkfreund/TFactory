@@ -42,11 +42,18 @@ manifest_signals:
   - "package.json:jest"
 
 # Glob patterns for where Jest tests live.
+# The .js forms are not decoration: jest runs both, and a project that ships
+# plain JavaScript has no transform for a .test.ts (TFactory#1171 -- spec 161
+# got four TypeScript tests in a project with no TypeScript at all). The
+# Planner rejects a .ts path on such a checkout, so the .js form must be legal
+# for it to plan instead.
 test_path_conventions:
   - "**/*.test.ts"
   - "**/*.test.tsx"
   - "**/*.spec.ts"
   - "src/**/__tests__/**/*.ts"
+  - "**/*.test.js"
+  - "**/*.test.jsx"
 
 # Template filenames — populated in Task 12 (#28).
 templates:
@@ -65,7 +72,9 @@ coverage_strategy: lcov
 # LLM context block — injected into the Gen-Functional prompt.
 # Teaches the LLM Jest idioms for reliable, non-flaky TypeScript unit tests.
 context_block: |
-  You are generating Jest tests in TypeScript for the Unit lane.
+  You are generating Jest tests for the Unit lane, in the language the
+  project is written in: TypeScript for a TypeScript project, plain
+  JavaScript (`.test.js`) for a project that ships no TypeScript.
 
   Test structure:
     - Use describe() blocks for grouping related tests

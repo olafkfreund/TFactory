@@ -30,6 +30,8 @@ import os
 import re
 import subprocess
 import traceback
+from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -166,7 +168,9 @@ async def _invoke_session(
         )
 
 
-def _validate_emitted_plan(spec_dir: Path) -> tuple[bool, str, object | None]:
+def _validate_emitted_plan(
+    spec_dir: Path, project_dir: Path
+) -> tuple[bool, str, object | None]:
     """Load + validate test_plan.json the agent just wrote.
 
     Returns ``(ok, error_kind, plan)``:
@@ -182,7 +186,9 @@ def _validate_emitted_plan(spec_dir: Path) -> tuple[bool, str, object | None]:
           ``_stage_browser_specs`` stages from ``<spec_dir>/tests``), so a
           plan that puts a Playwright spec next to the SUT produces a lane
           with zero evidence (spec 172, 2026-08-26). Reject it here, where
-          the retry already exists.
+          the retry already exists. Same kind is returned for a TypeScript
+          test path planned into a project that ships no TypeScript
+          (TFactory#1171).
           v0.1 subtasks that have neither language nor framework set pass
           through this check unchanged — backward-compat is preserved.
     """
@@ -218,10 +224,11 @@ def _validate_emitted_plan(spec_dir: Path) -> tuple[bool, str, object | None]:
 
     # Looped rather than two `if not ok: return` blocks so adding a validator
     # does not grow the return count past the strict bar (PLR0911).
-    for check, kind in (
+    checks: tuple[tuple[Callable[[Any, Any], tuple[bool, str]], str], ...] = (
         (_validate_framework_consistency, "invalid_framework"),
-        (_validate_test_paths, "invalid_test_path"),
-    ):
+        (partial(_validate_test_paths, project_dir=project_dir), "invalid_test_path"),
+    )
+    for check, kind in checks:
         ok, detail = check(plan, registry)
         if not ok:
             return False, kind, detail
@@ -298,24 +305,81 @@ def _glob_matches(pattern: str, rel: str) -> bool:
     return re.fullmatch(out, rel) is not None
 
 
-def _validate_test_paths(plan: Any, registry: Any) -> tuple[bool, str]:
+# Vendored / generated trees say nothing about what the project is written in:
+# node_modules ships .ts type declarations for packages a plain-JS app merely
+# consumes, which is exactly the false TypeScript signal this must not read.
+_NON_SOURCE_DIRS = frozenset({".git", "node_modules", "dist", "build", ".next"})
+
+
+def _project_is_plain_javascript(project_dir: Path) -> bool:
+    """True when the checkout ships JavaScript and no TypeScript.
+
+    A POSITIVE JavaScript signal is required, not merely the absence of
+    TypeScript: an empty or non-Node checkout must read as "unknown" and leave
+    path validation exactly as it was.
+
+    Best-effort — an unreadable tree returns False, which only ever loosens the
+    check.
+    """
+    if (project_dir / "tsconfig.json").exists():
+        return False
+    has_js = has_ts = False
+    try:
+        for _root, dirs, files in os.walk(project_dir):
+            dirs[:] = [d for d in dirs if d not in _NON_SOURCE_DIRS]
+            for name in files:
+                ext = Path(name).suffix.lower()
+                if ext in (".ts", ".tsx"):
+                    has_ts = True
+                elif ext in (".js", ".jsx", ".mjs", ".cjs"):
+                    has_js = True
+            if has_ts:
+                return False
+    except OSError:
+        return False
+    return has_js
+
+
+def _validate_test_paths(
+    plan: Any, registry: Any, project_dir: Path
+) -> tuple[bool, str]:
     """Every ``files_to_create`` entry must match one of the subtask's
     framework ``test_path_conventions`` (fnmatch globs, as the registry
     validator compiles them). Subtasks without a framework, and frameworks
     that declare no conventions, are not checked. Also rejects absolute
     paths and ``..`` -- the path is joined onto the spec workspace verbatim.
+
+    A ``.ts``/``.tsx`` test planned into a plain-JavaScript checkout is rejected
+    too (TFactory#1171): spec 161 built a JavaScript tic-tac-toe and the plan
+    named ``tests/*.test.ts``, because the whole jest lane is described as
+    TypeScript -- the registry's language, its ``test_path_conventions`` and its
+    ``context_block`` all say so -- and nothing downstream ever consults the
+    project. Only frameworks that offer a JavaScript convention are held to it,
+    so this cannot reach a framework with no ``.js`` form to fall back on.
     """
+    plain_js = _project_is_plain_javascript(project_dir)
     for phase in plan.phases:
         for st in phase.subtasks:
             desc = registry.get(st.framework) if st.framework else None
             if desc is None or not desc.test_path_conventions:
                 continue
+            js_form = plain_js and any(
+                pat.endswith((".js", ".jsx")) for pat in desc.test_path_conventions
+            )
             for rel in st.files_to_create or []:
                 parts = Path(rel).parts
                 if Path(rel).is_absolute() or ".." in parts:
                     return False, (
                         f"subtask {st.id!r}: files_to_create entry {rel!r} must be "
                         "a plain path relative to the spec workspace"
+                    )
+                if js_form and rel.endswith((".ts", ".tsx")):
+                    return False, (
+                        f"subtask {st.id!r}: files_to_create entry {rel!r} is a "
+                        f"TypeScript test, but this project ships JavaScript and no "
+                        f"TypeScript -- write the JavaScript form instead "
+                        f"(framework {st.framework!r} conventions: "
+                        f"{list(desc.test_path_conventions)})"
                     )
                 if not any(
                     _glob_matches(pat, rel) for pat in desc.test_path_conventions
@@ -578,7 +642,7 @@ async def _run_session_with_retry(  # noqa: PLR0911 - one guard clause per way a
         )
         return False, None
 
-    ok, err_kind, plan = _validate_emitted_plan(spec_dir)
+    ok, err_kind, plan = _validate_emitted_plan(spec_dir, project_dir)
     if ok:
         return True, plan
 
@@ -626,7 +690,7 @@ async def _run_session_with_retry(  # noqa: PLR0911 - one guard clause per way a
         )
         return False, None
 
-    ok, err_kind, plan = _validate_emitted_plan(spec_dir)
+    ok, err_kind, plan = _validate_emitted_plan(spec_dir, project_dir)
     if ok:
         return True, plan
 
@@ -653,7 +717,7 @@ async def _run_session_with_retry(  # noqa: PLR0911 - one guard clause per way a
             client_fb, prompt, spec_dir, verbose
         )
         if fb_status != "error":
-            ok, err_kind, plan = _validate_emitted_plan(spec_dir)
+            ok, err_kind, plan = _validate_emitted_plan(spec_dir, project_dir)
             if ok:
                 _planner_log.info(
                     "planner: recovered on fallback model %s", fallback_model
@@ -1053,7 +1117,9 @@ async def _run_planner_replan(
         # 2. Load the existing test_plan.json — replan MUST have an
         #    existing plan to amend; if it's missing, the caller should
         #    invoke initial mode instead.
-        ok_before, kind_before, plan_before = _validate_emitted_plan(spec_dir)
+        ok_before, kind_before, plan_before = _validate_emitted_plan(
+            spec_dir, project_dir
+        )
         if not ok_before:
             _write_status_patch(
                 spec_dir,
