@@ -113,12 +113,9 @@ jobs:
       contents: read
       packages: write      # push to GHCR
       id-token: write      # cosign keyless via GitHub OIDC (Factory#524)
-    # `secrets` is not allowed in a step-level `if:` -- hoist to job env, same as
-    # deploy.yml and portal-ui-runner-image.yml.
-    env:
-      GITOPS_PAT: "${{ secrets.GITOPS_PAT }}"
-      GITOPS_REPO: olafkfreund/factory-gitops
-      GITOPS_PATH: apps/tfactory/manifests
+    # No GITOPS_* env any more: this job stopped writing the gitops pin when
+    # factory-runners took it over, and a secret still wired to a step that no
+    # longer exists is an invitation to wire it back up by accident.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -213,33 +210,15 @@ jobs:
       # an image whose signature has not been checked is the state #890 and
       # Factory#524 exist to remove.
       # ----------------------------------------------------------------------
-      - name: Pin the nix runner in factory-gitops
-        if: "${{ env.GITOPS_PAT != '' }}"
-        env:
-          PIN: "${{ env.IMAGE }}:${{ steps.tags.outputs.sha }}@${{ steps.build.outputs.digest }}"
-        run: |
-          set -euo pipefail
-          git clone --quiet --depth 1 "https://x:${GITOPS_PAT}@github.com/${GITOPS_REPO}.git" gitops
-          cd "gitops/${GITOPS_PATH}"
-
-          # Both Job images the Nix lane dispatches. Match the whole existing
-          # value -- tag, or tag@digest, or bare `latest` -- and replace it.
-          for var in TFACTORY_VAL3_K8S_JOB_IMAGE TFACTORY_NIX_RUNNER_IMAGE; do
-            sed -i -E "s#(name: ${var}, value: \")[^\"]+#\\1${PIN}#" manifests.yaml
-            # Fail loudly rather than push a no-op. A sed that silently matches
-            # nothing is how TFACTORY_IMAGE sat two weeks stale (#719) while
-            # every artefact except the outcome looked like a working control.
-            # The image is published and verified by this point, so failing here
-            # breaks the run, not the artefact.
-            grep -qF "name: ${var}, value: \"${PIN}\"" manifests.yaml || {
-              echo "::error::${var} pin not found in ${GITOPS_REPO}/${GITOPS_PATH}/manifests.yaml." >&2
-              echo "Add: - { name: ${var}, value: \"${PIN}\" }" >&2
-              exit 1
-            }
-          done
-
-          cd ..
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -qam "cd(tfactory): nix runner ${{ steps.tags.outputs.sha }} [skip ci]" || exit 0
-          git push --quiet
+      # The gitops pin is written by factory-runners now (Factory#1003).
+      #
+      # It builds and signs factory-runner-nix, so the repo that produces the
+      # image is the repo that says which image the cluster runs. This workflow
+      # keeps BUILDING tfactory-runner-nix for the moment -- a fallback while
+      # the new image is proven -- but it must not also write the pin.
+      #
+      # BOTH WRITERS AT ONCE IS THE FAILURE THIS AVOIDS. The sed on either side
+      # matches `[^"]+`, so with two of them live the pin flaps between
+      # tfactory-runner-nix and factory-runner-nix depending on which image
+      # built last, and NEITHER RUN FAILS. No conflict, no red check, just a
+      # cluster running whichever won the race.
