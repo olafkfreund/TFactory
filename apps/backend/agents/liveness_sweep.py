@@ -17,11 +17,12 @@ in-flight tasks is a cheap no-op.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import shutil
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -32,6 +33,7 @@ __all__ = [
     "default_workspace_root",
     "gc_terminal_worktrees",
     "iter_spec_dirs",
+    "job_active_probe",
     "reconcile_inline_orphans",
     "sweep",
 ]
@@ -101,9 +103,76 @@ def sweep(
     when = now or datetime.now(UTC)
     results: list[tuple[Path, StallVerdict]] = []
     for spec_dir in iter_spec_dirs(root):
-        verdict = check_and_mark(spec_dir, now=when, deadline_seconds=deadline_seconds)
+        # #1173: the watchdog gained a second-signal hook but nothing ever passed
+        # one, so it kept flipping on the heartbeat alone. Hand it the probe here
+        # — the sweep is the only driver, so wiring it once covers every flip.
+        verdict = check_and_mark(
+            spec_dir,
+            now=when,
+            deadline_seconds=deadline_seconds,
+            job_active=job_active_probe(spec_dir),
+        )
         results.append((spec_dir, verdict))
     return results
+
+
+def job_active_probe(spec_dir: Path) -> Callable[[], bool] | None:
+    """Build the watchdog's SECOND liveness signal for a Job-backed spec (#1173).
+
+    ``status.json``'s ``updated_at`` is a heartbeat, not liveness: the evaluator
+    writes it only at phase boundaries, so a lane that spends 26 minutes
+    materializing a flake, serving the page and recording video per spec is
+    byte-identical to a dead one. Specs 165 and 170 were both flipped
+    ``watchdog_stalled`` mid-flight and then finished green — one signal cannot
+    tell "quiet" from "dead". The k8s Job the spec was dispatched as is a
+    genuinely independent second signal, and ``verify_dispatch`` now writes its
+    coordinates next to ``status.json`` so this filesystem walk can reach it.
+
+    Returns ``None`` — meaning "no second signal, keep the timestamp-only
+    verdict" — when the spec has no usable ref: an in-pod verify, a spec
+    dispatched before this landed, or a ref we cannot parse. That is deliberately
+    NOT the same as answering "no Job", which would read as death.
+
+    The probe itself FAILS CLOSED to *alive*. Every unanswerable step — the lazy
+    import, the event loop, the k8s API call (``_probe_job`` already reports a
+    Job active on any API error) — returns ``True``. The asymmetry is the whole
+    reason: a false stall stops a live run and discards work that cannot be
+    recovered, while a missed stall costs at most the Job's own
+    ``activeDeadlineSeconds``, which k8s enforces whatever we think. The tie goes
+    to "still alive".
+    """
+    try:
+        # Lazy so the backend's sweep entrypoint does not drag the dispatch module
+        # in at import time; the constant lives with the writer so the two halves
+        # of the contract cannot drift apart. Importing it costs nothing — the k8s
+        # client itself is loaded lazily, deeper in, and only by ``_probe_job``.
+        from agents.verify_dispatch import SPEC_WORKER_REF_FILE  # noqa: PLC0415
+
+        ref = json.loads((spec_dir / SPEC_WORKER_REF_FILE).read_text(encoding="utf-8"))
+    except (ImportError, json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(ref, dict) or ref.get("kind") != "k8s-job":
+        return None
+    job_name = ref.get("job_name")
+    if not isinstance(job_name, str) or not job_name:
+        return None
+    namespace = ref.get("namespace") or "factory"
+
+    def _active() -> bool:
+        # Inside the closure on purpose: evaluate_liveness only calls this once
+        # a spec is already past its deadline, so the k8s round-trip never
+        # happens on the common healthy tick — that stays a read of one file.
+        try:
+            from agents.verify_dispatch import _probe_job  # noqa: PLC0415
+
+            # The sweep is sync (it runs in a worker thread off the web-server
+            # loop, or straight from the CLI), so there is no loop to await on.
+            _exists, active, _succeeded = asyncio.run(_probe_job(namespace, job_name))
+        except Exception:  # noqa: BLE001 - an unanswerable probe must read alive
+            return True
+        return bool(active)
+
+    return _active
 
 
 def reconcile_inline_orphans(

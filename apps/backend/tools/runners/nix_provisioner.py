@@ -298,9 +298,9 @@ _DROP_SYSTEM_PKGS = {
     "browser",
     "playwright-driver",
     # Same reason as the browser attrs above: `jest` is the TRIGGER token, not a
-    # top-level nixpkgs attr. It is dropped here and the real package is added
-    # from nodePackages below, so a manifest can say "jest" without knowing the
-    # attribute path.
+    # top-level nixpkgs attr. It is dropped here and buys nodejs below; the
+    # runner itself comes from npm at lane setup, because nixpkgs has no jest
+    # attribute to name (see the jest block in generate_flake).
     "jest",
 }
 
@@ -345,13 +345,27 @@ def generate_flake(env: dict, *, nixpkgs: str = DEFAULT_NIXPKGS, project_dir=Non
         # textless — proven in-container 2026-06-17).
         sys_attrs_with_node += ["nodejs_22", "playwright-test", "dejavu_fonts"]
     jest = _needs_jest(m)
-    if jest:
-        # nodePackages.jest, not a bare `jest` attr (there is none), and node is
-        # added only when the browser block has not already added it -- listing
-        # nodejs_22 twice is a duplicate-package eval error, not a no-op.
-        if not browser:
-            sys_attrs_with_node.append("nodejs_22")
-        pkg_lines.append("pkgs.nodePackages.jest")
+    # NODE ONLY -- there is no jest attribute, because nixpkgs has none to give.
+    #
+    # This used to emit `pkgs.nodePackages.jest`. nixpkgs removed the whole
+    # `nodePackages` set on 2026-03-03, and it did not degrade to a no-op: the
+    # attribute now THROWS, so a manifest naming jest produced a flake that
+    # failed to EVALUATE -- taking the entire dev shell down with it, not just
+    # jest. The lane then reported a runner failure rather than a test result,
+    # which is the same shape as TFactory#1165 and reads as flakiness rather
+    # than a missing package. Measured against nixpkgs 567a49d1: forcing the
+    # devShell derivation errored with "nodePackages has been removed" before
+    # this change and resolves to a .drv after it. Note `nix eval` of the shell
+    # NAME passes either way -- the package list is lazy, so a check that does
+    # not force the derivation reports a healthy flake that cannot build.
+    #
+    # The runner comes from npm instead: nix_env.py installs jest/ts-jest/
+    # typescript locally, once per lane, and exits 127 loudly if the install or
+    # the binary check fails. So node is all the flake owes this lane, and only
+    # when the browser block has not already added it -- listing nodejs_22
+    # twice is a duplicate-package eval error, not a no-op.
+    if jest and not browser:
+        sys_attrs_with_node.append("nodejs_22")
     for a in sys_attrs_with_node:
         pkg_lines.append(f"pkgs.{a}")
 

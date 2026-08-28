@@ -135,7 +135,9 @@ def evaluate_liveness(
     while its Job had been Running 26 minutes and had written 44 screenshots. When
     the predicate says the backing Job is still running, quiet is not death, and
     the verdict joins the fail-safe set above. Omitted (``None``) keeps the
-    timestamp-only behaviour, so no caller changes meaning by upgrading.
+    timestamp-only behaviour, so no caller changes meaning by upgrading, and it
+    is never consulted for an inline stage (:data:`_INLINE_STALL_STATUSES`),
+    which has no Job for it to be about.
     """
     deadline = _deadline_seconds() if deadline_seconds is None else deadline_seconds
     status_path = spec_dir / "status.json"
@@ -159,7 +161,12 @@ def evaluate_liveness(
 
     idle = (now - updated).total_seconds()
     if idle > deadline:
-        if job_active is not None and job_active():
+        # Inline stages have no Job, so a Job verdict cannot speak for them: a
+        # spec sitting at planning/generating with a worker_ref left over from an
+        # EARLIER verify would otherwise read as alive forever off a Job that has
+        # nothing to do with the stage now running. Ask only where the answer is
+        # about this stage.
+        if st not in _INLINE_STALL_STATUSES and job_active is not None and job_active():
             return StallVerdict(
                 False,
                 st,
