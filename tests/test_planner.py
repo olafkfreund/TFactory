@@ -1502,8 +1502,6 @@ async def test_planner_test_path_off_convention_triggers_retry(
 
 
 def _status_with(tmp_path, reasons):
-    import json
-
     (tmp_path / "status.json").write_text(json.dumps({"replan_reasons": reasons}))
     return tmp_path
 
