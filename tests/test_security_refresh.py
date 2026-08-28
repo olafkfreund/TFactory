@@ -26,6 +26,22 @@ _WORKFLOWS = _ROOT / ".github/workflows"
 _STEP = re.compile(r"^(\s*)- (?:name|id|uses):.*$", re.M)
 _FILE = re.compile(r"^\s*file:\s*(\S+)\s*$", re.M)
 _UPGRADE = re.compile(r"(apt-get|apk)\s+upgrade")
+# A Dockerfile COMMENT is not an upgrade layer. `_UPGRADE` used to be searched
+# against the raw file, so a comment mentioning `apk upgrade` counted as one --
+# and the comment most likely to say those words is the one explaining that an
+# image has no apk at all and therefore cannot be refreshed that way. That is
+# exactly what happened on TFactory#1223: a base-tag bump whose comment read
+# "the fleet's daily `apk upgrade` security refresh cannot reach it" was failed
+# by this test for having an unrefreshable upgrade layer it does not have.
+#
+# Strip comments before searching. Line continuations do not need unfolding: a
+# `#` line inside a RUN continuation ends the instruction in Docker anyway.
+_COMMENT = re.compile(r"^\s*#.*$", re.M)
+
+
+def _upgrades(text: str) -> bool:
+    """True when the Dockerfile actually RUNS a package upgrade."""
+    return bool(_UPGRADE.search(_COMMENT.sub("", text)))
 
 
 def _cached_builds():
@@ -47,7 +63,7 @@ def test_every_cached_upgrade_layer_can_be_rebuilt():
     for wf, dockerfile, body in _cached_builds():
         if not dockerfile.is_file():
             continue
-        if not _UPGRADE.search(dockerfile.read_text()):
+        if not _upgrades(dockerfile.read_text()):
             continue  # no upgrade layer to freeze
         if "SECURITY_REFRESH" not in body:
             offenders.append(
@@ -94,7 +110,7 @@ def test_apt_based_runner_images_upgrade_their_packages():
         body = f.read_text()
         if "apt-get" not in body:
             continue  # not a Debian/Ubuntu base (e.g. nixos/nix)
-        if not _UPGRADE.search(body):
+        if not _upgrades(body):
             missing.append(f.parent.name)
 
     assert not missing, f"runner image with no security-upgrade layer: {missing}"
@@ -105,9 +121,27 @@ def test_runner_upgrade_layers_can_be_rebuilt():
     frozen = []
     for f in _RUNNERS:
         body = f.read_text()
-        if not _UPGRADE.search(body):
+        if not _upgrades(body):
             continue
         if "ARG SECURITY_REFRESH" not in body or "${SECURITY_REFRESH}" not in body:
             frozen.append(f.parent.name)
 
     assert not frozen, f"runner upgrade layer with no cache-bust: {frozen}"
+
+
+def test_a_comment_mentioning_apk_upgrade_is_not_an_upgrade_layer():
+    """The comment most likely to say "apk upgrade" is the one explaining that
+    an image has no apk and cannot be refreshed that way.
+
+    TFactory#1223 was blocked by exactly that: a base-tag bump whose comment
+    read "the fleet's daily `apk upgrade` security refresh cannot reach it" was
+    failed for having an unrefreshable upgrade layer it does not have. Searching
+    the raw file cannot tell an instruction from a note about one.
+    """
+    assert not _upgrades(
+        "# the daily `apk upgrade` cannot reach this image\nFROM nixos/nix:2.35.2\n"
+    )
+    assert not _upgrades("#RUN apt-get upgrade -y\nFROM debian\n")
+    # ...and a real instruction still counts, including after a comment.
+    assert _upgrades("# note about upgrades\nRUN apk upgrade --no-cache\n")
+    assert _upgrades("RUN apt-get update && apt-get upgrade -y\n")
