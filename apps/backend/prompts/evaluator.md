@@ -69,6 +69,36 @@ The JSON document MUST validate against this shape:
 - **`semantic_relevance`** is YOUR judgement, not derived from a
   signal — see "The fifth signal" below.
 
+A minimal **valid** document (one verdict; note
+`coverage_delta_pct` is a number, never a quoted string):
+
+<!-- eval:example -->
+```json
+{
+  "evaluator_version": "task7-commit5",
+  "mode": "initial",
+  "generated_at": "2026-08-29T00:00:00Z",
+  "verdicts": [
+    {
+      "test_id": "ac1-login-sets-24h-expiry",
+      "test_file": "tests/test_login_expiry.py",
+      "verdict": "accept",
+      "reasons": ["killed mutation probe; +5.2% coverage on new code"],
+      "signals_summary": {
+        "coverage_delta_pct": 5.2,
+        "coverage_new_lines": 7,
+        "stability": "stable",
+        "mutation": "killed",
+        "lint_promotion": "no_findings",
+        "ci_parity": "yes"
+      },
+      "semantic_relevance": "high",
+      "semantic_notes": "Asserts the 24h expiry the AC names."
+    }
+  ]
+}
+```
+
 ---
 
 ## The signals
