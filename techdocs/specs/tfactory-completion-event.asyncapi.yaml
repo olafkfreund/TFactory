@@ -135,6 +135,10 @@ components:
         result:
           type: object
           properties:
+            # #1260: accepted_count is what triage accepted; committed_count is
+            # what the git write actually landed. They differ exactly when
+            # delivery failed (outcome then reads `failure`/`delivery_failed`).
+            accepted_count: { type: integer }
             committed_count: { type: integer }
             flagged_count: { type: integer }
             rejected_count: { type: integer }
