@@ -543,6 +543,50 @@ def _int_or_none(value: object) -> int | None:
         return None
 
 
+def _zero_tests_verdict(status: dict) -> tuple[str, str] | None:
+    """#1253 — the ``(outcome, halt_reason)`` for a verify that generated 0 tests.
+
+    ``None`` when the rule does not apply.
+
+    A measurement of ZERO must not render as a pass. ``no_evidence`` catches a
+    ``triaged`` with no verdicts, but it cannot see the stage before it: a run
+    whose GENERATION produced nothing has no verdicts to be missing, and lands
+    on a terminal status that reads clean.
+
+    A blanket failure on 0 would be a false-refusal generator — there ARE
+    legitimate zeros (a spec with nothing to verify; a lane deliberately not
+    run). So the rule keys on whether the run STATED a reason, following the
+    ``{"status": "skipped", "reason": ...}`` convention ``dependency_review``
+    already uses:
+
+      0 tests + a stated reason -> ``empty``, with the skip named on the wire.
+      0 tests + no reason       -> ``failure``. Generation silently produced
+                                   nothing. Nothing was tested, and that is not
+                                   a pass — the same thing ``copilot-pr-test.yml``
+                                   says of a job that skipped.
+
+    Neither is ``success``, and the two are distinguishable from each other. No
+    new ``outcome`` token is minted: consumers already read ``empty`` and
+    ``failure``, and one they do not know is one more thing rendered as a
+    plausible pass.
+
+    A run that never recorded ``tests_generated`` is NOT treated as zero —
+    absent is not the same measurement as zero, and ``no_evidence`` covers the
+    verdict-free case on its own.
+    """
+    if _int_or_none(status.get("tests_generated")) != 0:
+        return None
+    reason = status.get("verify_skip_reason")
+    if isinstance(reason, str) and reason.strip():
+        halt_reason = "zero_tests: " + f"skipped — {reason.strip()}"
+        return "empty", halt_reason
+    halt_reason = (
+        "zero_tests: verify generated 0 tests and stated no reason; "
+        "nothing was tested, which is not a pass"
+    )
+    return "failure", halt_reason
+
+
 def _outcome_for_status(status_value: str | None) -> str:
     """Map a terminal TFactory status to a normalized coarse outcome."""
     if status_value == "triaged":
@@ -662,42 +706,12 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> CompletionEnvelo
         outcome = "failure"
         halt_reason = "no_evidence: verify produced no verdicts"
 
-    # #1253: a measurement of ZERO must not render as a pass. `no_evidence`
-    # above catches a `triaged` with no verdicts, but it cannot see the stage
-    # before it: a run whose GENERATION produced nothing has no verdicts to be
-    # missing, and lands on a terminal status that reads clean.
-    #
-    # A blanket failure on 0 would be a false-refusal generator — there ARE
-    # legitimate zeros (a spec with nothing to verify; a lane deliberately not
-    # run). So the rule keys on whether the run STATED a reason, following the
-    # `{"status": "skipped", "reason": ...}` convention `dependency_review`
-    # already uses:
-    #
-    #   0 tests + a stated reason -> `empty`, with the skip named on the wire.
-    #   0 tests + no reason       -> `failure`. Generation silently produced
-    #                                nothing. Nothing was tested, and that is
-    #                                not a pass (`copilot-pr-test.yml` says the
-    #                                same of a job that skipped).
-    #
-    # Neither is `success`, and both are distinguishable from each other. No new
-    # `outcome` token is minted: consumers already read `empty` and `failure`,
-    # and one they do not know is one more thing rendered as a plausible pass.
-    #
-    # A run that never recorded `tests_generated` at all is NOT treated as zero —
-    # absent is not the same measurement as zero, and `no_evidence` covers the
-    # verdict-free case on its own.
-    _tests_generated = _int_or_none(status.get("tests_generated"))
-    _skip_reason = status.get("verify_skip_reason")
-    if _tests_generated == 0 and outcome != "failure":
-        if isinstance(_skip_reason, str) and _skip_reason.strip():
-            outcome = "empty"
-            halt_reason = "zero_tests: " + f"skipped — {_skip_reason.strip()}"
-        else:
-            outcome = "failure"
-            halt_reason = (
-                "zero_tests: verify generated 0 tests and stated no reason; "
-                "nothing was tested, which is not a pass"
-            )
+    # #1253 zero_tests (see _zero_tests_verdict). Runs after no_evidence and
+    # never overrides an existing failure — the first rule to refuse keeps its
+    # reason.
+    _zero_tests = _zero_tests_verdict(status) if outcome != "failure" else None
+    if _zero_tests is not None:
+        outcome, halt_reason = _zero_tests
 
     envelope: CompletionEnvelope = {
         # RFC-0001 core: the six required fields (Factory#4). `correlation_key`
