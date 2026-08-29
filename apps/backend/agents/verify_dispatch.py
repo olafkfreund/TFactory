@@ -1375,6 +1375,11 @@ def _is_k8s_job_ref(record: dict[str, Any]) -> bool:
     return isinstance(ref, dict) and ref.get("kind") == "k8s-job"
 
 
+#: A Job that finished is deleted by ``ttlSecondsAfterFinished``, so 404 is the
+#: normal end state of one that ran -- an ANSWER, not a probe gap.
+_HTTP_NOT_FOUND = 404
+
+
 async def _probe_job(
     namespace: str, job_name: str, *, probe_fn: Any = None
 ) -> tuple[bool, bool, bool]:
@@ -1405,7 +1410,29 @@ async def _probe_job(
             job = await batch.read_namespaced_job(job_name, namespace)
         finally:
             await api.close()
-    except Exception:  # noqa: BLE001 - a probe gap must not reap a live verify
+    except Exception as exc:  # noqa: BLE001 - a probe gap must not reap a live verify
+        # A 404 is an ANSWER, not a gap. `ttlSecondsAfterFinished` (300s) deletes
+        # a finished Job, so "not found" is the normal end state of one that ran
+        # and went away -- and it is the exact case reap_if_orphaned exists for.
+        #
+        # Folding it into the blanket except made that branch UNREACHABLE from
+        # production: every 404 returned (exists, active), so a Job that died
+        # without writing a terminal row (OOM, an unhandled raise before
+        # _record_terminal) read as "still running" forever once GC'd, and the
+        # liveness sweep -- which calls this same probe for its second signal --
+        # reported it alive at every sweep. Its tests only ever injected a
+        # probe_fn returning (False, False), so they proved nothing about this
+        # path.
+        #
+        # Everything else still fails toward alive: an API outage, a permission
+        # error or a timeout must not reap a running verify.
+        if getattr(exc, "status", None) == _HTTP_NOT_FOUND:
+            _log.info(
+                "[verify-dispatch] job %s/%s not found (finished and GC'd)",
+                namespace,
+                job_name,
+            )
+            return False, False, False
         _log.debug(
             "[verify-dispatch] job probe failed for %s/%s (treating as active)",
             namespace,
