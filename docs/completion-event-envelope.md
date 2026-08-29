@@ -57,7 +57,7 @@ additive TFactory detail (RFC §7 permits extra fields):
   "repo": "owner/name",
   "branch": "feat/x",
   "pr_number": 88,
-  "result": { "committed_count": 3, "flagged_count": 1, "rejected_count": 2,
+  "result": { "accepted_count": 3, "committed_count": 3, "flagged_count": 1, "rejected_count": 2,
               "verdicts_count": 6, "dedup_collision_count": 0 },
   "emitted_at": "2026-06-04T16:30:00+00:00",
 
@@ -128,8 +128,21 @@ to `outcome="failure"` with `halt_reason="no_evidence: verify produced no verdic
 **unless** the run produced *actionable evidence* — any one of:
 
 - `verdicts_count > 0` (the Evaluator emitted at least one verdict), or
-- `committed_count > 0` (at least one test accepted), or
+- `accepted_count > 0` (at least one test accepted), or
 - `flagged_count > 0` (at least one test flagged).
+
+### Delivery gate (#1260)
+
+`accepted_count` is how many tests triage **accepted**; `committed_count` is how
+many actually **landed on the branch**. They are equal on a successful (or
+declared dry-run) write and differ exactly when the write failed — in which case
+`committed_count` is `0`, whatever was accepted.
+
+A run whose `git_writer.ok` is false therefore reports `outcome="failure"` with
+`halt_reason="delivery_failed: …"`, and `triage_report.md` lists the accepted
+tests under "Accepted but NOT committed" instead of a Committed table. Before
+this, a failed checkout still reported `committed_count: 5` for work that reached
+no branch — a positive count for work that did not happen.
 
 Two deliberate boundaries:
 
@@ -146,7 +159,7 @@ counts the gate was decided on:
 "evidence": {
   "proof_kind": "tests",   // TFactory's evidence is the test verdicts
   "verdicts": 6,           // = verdicts_count
-  "accepted": 3,           // = committed_count
+  "accepted": 3,           // = accepted_count
   "flagged": 1,            // = flagged_count
   "rejected": 2            // = rejected_count
 }
