@@ -659,10 +659,21 @@ async def create_and_run_task(
     description: str,
     request: StartTaskRequest,
 ):
-    """Create a new task and immediately start execution.
+    """Author a spec for a new task. This route does NOT run verification.
 
-    This is a convenience endpoint that combines task creation
-    with spec creation and execution.
+    #1253: this shares a name with the ``task_create_and_run`` MCP *agent*
+    tool, which is a different thing entirely -- that one takes
+    ``spec_id``/``branch``/``base_ref`` and is the real verify entry point.
+    This route takes a title and a description and calls
+    ``start_spec_creation``: it authors a spec, and the test-generation
+    pipeline never runs. An end-to-end PARR run lost a cycle picking this
+    route for a verification and getting a generic single-subtask "coding"
+    plan with zero tests back.
+
+    The response says so rather than leaving the caller to infer it from a
+    bare ``success: true``. The general guard is in the triager
+    (``zero_tests``): whichever route a run arrives by, a terminal verify that
+    generated nothing can no longer read as a completed verification.
     """
     projects = load_projects()
 
@@ -697,5 +708,12 @@ async def create_and_run_task(
     return {
         "success": True,
         "task_id": temp_task_id,
-        "message": "Task creation started. Connect to WebSocket for progress updates.",
+        # `verification: "not_started"` is stated, not implied. A caller reading
+        # only `success: true` cannot otherwise tell this apart from a route
+        # that verified something (#1253).
+        "verification": "not_started",
+        "message": (
+            "Spec creation started; this route does NOT run verification. "
+            "Connect to WebSocket for progress updates."
+        ),
     }
