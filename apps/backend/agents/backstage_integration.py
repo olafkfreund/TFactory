@@ -96,9 +96,13 @@ def build_facts(spec_dir: Path, status: dict) -> dict:
 
     verdicts_count = int(status.get("verdicts_count") or len(verdicts) or 0)
     committed = int(status.get("committed_count") or 0)
+    # #1260: accept_rate measures the JUDGE, so it keys on what triage accepted,
+    # not on what the git write managed to land. `committed_count` now reads 0
+    # when delivery failed; older status.json files have only the one field.
+    accepted = int(status.get("accepted_count") or committed)
     flagged = int(status.get("flagged_count") or 0)
     rejected = int(status.get("rejected_count") or 0)
-    accept_rate = round(committed / verdicts_count, 4) if verdicts_count else 0.0
+    accept_rate = round(accepted / verdicts_count, 4) if verdicts_count else 0.0
 
     return {
         "accept_rate": accept_rate,
@@ -106,6 +110,7 @@ def build_facts(spec_dir: Path, status: dict) -> dict:
         "mean_confidence": conf.get("mean", 0.0),
         "commit_readiness": conf.get("commit_readiness", "low"),
         "verdicts_count": verdicts_count,
+        "accepted_count": accepted,
         "committed_count": committed,
         "flagged_count": flagged,
         "rejected_count": rejected,

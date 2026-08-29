@@ -69,6 +69,7 @@ _COVERED: dict[str, str] = {
     "dependency_review": "test_dependency_review_rule_refuses_a_gating_fail",
     "criterion_conflict": "test_criterion_conflict_rule_refuses_a_gating_conflict",
     "zero_tests": "test_zero_tests_rule_refuses_an_unexplained_empty_generation",
+    "delivery_failed": "test_delivery_failed_rule_refuses_an_uncommitted_accept",
 }
 
 # Members deliberately out of scope, each with the reason stated.
@@ -329,6 +330,40 @@ def test_zero_tests_rule_refuses_an_unexplained_empty_generation(
 
     # A run that never recorded the count is not the same measurement as zero.
     assert _build_completion_envelope(tmp_path, _status())["outcome"] == "success"
+
+
+def test_delivery_failed_rule_refuses_an_uncommitted_accept(tmp_path: Path) -> None:
+    """#1260 — accepted tests that reached no branch are not a delivered verify.
+
+    Both directions on purpose: a rule that refused every write would be a
+    false-refusal generator, and one that refused none is the defect itself.
+    """
+    failed = _build_completion_envelope(
+        tmp_path,
+        _status(
+            accepted_count=5,
+            committed_count=0,
+            git_writer={"ok": False, "committed_paths": [], "error": "checkout failed"},
+        ),
+    )
+    assert failed["outcome"] == "failure", (
+        "a run whose git write failed delivered nothing and must not report a "
+        "successful verification"
+    )
+    assert failed["halt_reason"].startswith("delivery_failed:")
+    assert "5" in failed["halt_reason"], "the accepted-but-undelivered count"
+
+    # The inverse: a successful write is untouched, and still reports what landed.
+    ok = _build_completion_envelope(
+        tmp_path,
+        _status(
+            accepted_count=5,
+            committed_count=5,
+            git_writer={"ok": True, "committed_paths": ["tests/test_a.py"]},
+        ),
+    )
+    assert ok["outcome"] == "success", "a delivered verify must still pass"
+    assert ok["result"]["committed_count"] == 5
 
 
 def test_criterion_conflict_rule_refuses_a_gating_conflict(tmp_path: Path) -> None:
