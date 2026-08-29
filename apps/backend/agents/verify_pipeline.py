@@ -50,7 +50,17 @@ _log = logging.getLogger(__name__)
 # Spec statuses that mean the verify produced a real verdict (the Triager ran to
 # completion). Anything else terminal-by-name with no verdict is the
 # "lanes pending, no verdict" stall the reaper/store classify as `stuck` (#464).
-_VERDICT_STATUSES = frozenset({"triaged", "triaged_empty", "evaluated_empty"})
+# `evaluated_empty` is deliberately NOT here (#1253 follow-up). The evaluator
+# writes it from its "no completed subtasks" early exit -- it evaluated nothing
+# and wrote `verdicts: []`. Counting that as a verdict recorded the Job `done`,
+# which is the same measurement-of-zero-rendered-as-a-pass this file's #464 rule
+# exists to catch. It is the no-verdict stall, so it maps to `stuck`.
+#
+# `triaged_empty` STAYS: the triager reaches it after really judging candidates
+# and committing none -- a 100% rejection IS a verdict, and #729 already
+# surfaces that case loudly rather than silently. Dropping it too would reap
+# healthy runs as stalls, which is the false-refusal half of the same defect.
+_VERDICT_STATUSES = frozenset({"triaged", "triaged_empty"})
 _FAILED_STATUSES = frozenset({"evaluator_failed", "triager_failed"})
 
 

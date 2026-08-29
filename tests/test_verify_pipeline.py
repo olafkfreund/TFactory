@@ -130,6 +130,36 @@ async def test_terminal_no_verdict_status_marks_no_verdict(monkeypatch):
     assert store.calls[0]["has_verdict"] is False
 
 
+async def test_terminal_evaluated_empty_is_not_a_verdict(monkeypatch):
+    """#1253 follow-up — the evaluator's no-work early exit is a stall, not done.
+
+    ``evaluated_empty`` is written from "no completed subtasks" with
+    ``verdicts: []``. It used to sit in ``_VERDICT_STATUSES``, so the Job
+    recorded ``done``: a measurement of zero rendered as a pass, in the file
+    whose #464 rule exists to catch exactly that.
+    """
+    store = await _record_with_store(
+        monkeypatch, job_id="j5", final_status="evaluated_empty"
+    )
+    assert store.calls[0]["has_verdict"] is False, (
+        "evaluated_empty evaluated nothing; recording it done hides the stall"
+    )
+
+
+async def test_terminal_triaged_empty_is_still_a_verdict(monkeypatch):
+    """The false-refusal direction — a 100% rejection IS a judgement.
+
+    Reaping this as a stall would be the same defect with the opposite sign:
+    healthy runs marked stuck.
+    """
+    store = await _record_with_store(
+        monkeypatch, job_id="j6", final_status="triaged_empty"
+    )
+    assert store.calls[0]["has_verdict"] is True, (
+        "the triager reached triaged_empty by really judging candidates"
+    )
+
+
 async def test_terminal_write_is_skipped_when_store_unavailable(monkeypatch, caplog):
     # No `server` module importable → best-effort skip, never raises.
     import sys

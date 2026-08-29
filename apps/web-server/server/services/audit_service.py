@@ -42,6 +42,44 @@ from ..database.engine import async_session_factory
 
 logger = logging.getLogger(__name__)
 
+# #1252 follow-up. Both write paths below deliberately swallow their exception
+# so audit logging can never crash the calling operation -- that is the right
+# call for the caller, and the wrong one for the reader of the log, because a
+# dropped entry is indistinguishable from an action that never happened. The
+# hash chain cannot help: prev_hash/entry_hash detect a MUTATED row, and a row
+# that was never written leaves the surviving chain perfectly intact.
+#
+# So the drop stays non-fatal but stops being silent: ERROR (a WARNING pages
+# nobody) plus a counter, which is the half a dashboard or an alert can act on.
+# A log line is evidence after you already suspect something; a counter is how
+# you come to suspect it.
+try:
+    from prometheus_client import Counter
+
+    AUDIT_WRITE_FAILURES = Counter(
+        "tfactory_audit_write_failures_total",
+        "Audit log entries that could not be written (the action still "
+        "succeeded; the audit trail has a hole).",
+        ["action", "resource_type"],
+    )
+except ImportError:
+    # Only a genuinely absent prometheus_client disables the counter. This is
+    # NOT a bare `except Exception`: that would swallow the duplicate-timeseries
+    # ValueError from a double registration and leave AUDIT_WRITE_FAILURES None,
+    # silently removing the very signal this block exists to add -- the same
+    # defect one level up. An unexpected failure here should be loud.
+    AUDIT_WRITE_FAILURES = None  # type: ignore[assignment]
+
+
+def _record_write_failure(action: str, resource_type: str) -> None:
+    """Count one dropped audit entry. Never raises."""
+    if AUDIT_WRITE_FAILURES is None:
+        return
+    try:
+        AUDIT_WRITE_FAILURES.labels(action=action, resource_type=resource_type).inc()
+    except Exception:  # noqa: BLE001 - a metrics failure must not mask the drop
+        logger.debug("audit write-failure counter unavailable", exc_info=True)
+
 # ---------------------------------------------------------------------------
 # Action constants
 # ---------------------------------------------------------------------------
@@ -168,7 +206,8 @@ async def log_audit_event(
         db.add(entry)
         await db.flush()
     except Exception:
-        logger.warning(
+        _record_write_failure(action, resource_type)
+        logger.error(
             "Failed to write audit log entry: action=%s resource_type=%s resource_id=%s",
             action,
             resource_type,
@@ -220,7 +259,8 @@ async def log_audit_event_bg(
             session.add(entry)
             await session.commit()
     except Exception:
-        logger.warning(
+        _record_write_failure(action, resource_type)
+        logger.error(
             "Failed to write background audit log entry: action=%s resource_type=%s resource_id=%s",
             sanitize_log(action),
             sanitize_log(resource_type),
