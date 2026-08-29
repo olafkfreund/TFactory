@@ -33,6 +33,12 @@ co-mount, nothing is lost), while ``restore_workspace`` and
 Job has no spec to verify, and a failed push-back means the run's evidence is
 already gone; both must fail the Job loudly rather than produce a green run with
 nothing behind it.
+
+Raising is only half of that, though (#1243): the pod's exit code is not what the
+control plane reads. ``verify_pipeline.main`` catches both raises and turns them
+into the DURABLE verdict — a terminal job-state row with ``has_verdict=False`` and
+the reason — because ``reconcile_and_reap_once`` never probes a Job once a
+terminal row exists, so a row that already said ``done`` could not be corrected.
 """
 
 from __future__ import annotations
