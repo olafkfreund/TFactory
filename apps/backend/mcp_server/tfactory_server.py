@@ -37,8 +37,10 @@ import argparse
 import asyncio
 import os
 import sys
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Spec / project resolution
@@ -85,6 +87,39 @@ def _build_project_dir_resolver() -> Callable[[], Path]:
         )
 
     return resolve
+
+
+# ---------------------------------------------------------------------------
+# Error surfacing
+# ---------------------------------------------------------------------------
+
+
+def _named_errors(sdk_tool: Any) -> Any:
+    """Wrap a tool so an escaping exception reaches the caller NAMED.
+
+    The MCP transport renders an uncaught handler exception as ``str(exc)``.
+    For the exception types that actually escape — ``KeyError``, ``IndexError``,
+    ``AttributeError`` — that is the bare argument and nothing else: a
+    ``KeyError('projects')`` arrives at Claude Code as the single word
+    ``'projects'``, which reads as a data-shape problem no matter what the real
+    fault was. Prefixing the type name costs one wrapper and one line of output,
+    and is the difference between a two-minute fix and an afternoon.
+
+    Applied here, at the one point every tool from every registry passes
+    through, rather than at ~30 individual handlers.
+    """
+    original: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] = sdk_tool.handler
+
+    async def handler(args: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return await original(args)
+        except Exception as exc:  # noqa: BLE001 - deliberate: name it, don't mask it
+            return {
+                "content": [{"type": "text", "text": f"{type(exc).__name__}: {exc}"}],
+                "is_error": True,
+            }
+
+    return replace(sdk_tool, handler=handler)
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +176,10 @@ async def _run(spec_dir_factory: Callable[[], Path]) -> None:
     sdk_cfg = create_sdk_mcp_server(
         name="tfactory",
         version="1.0.0",
-        tools=spec_internal_tools + task_control_tools + regression_tools,
+        tools=[
+            _named_errors(t)
+            for t in spec_internal_tools + task_control_tools + regression_tools
+        ],
     )
 
     server = sdk_cfg["instance"]  # mcp.server.lowlevel.server.Server

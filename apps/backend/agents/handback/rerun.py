@@ -43,15 +43,22 @@ def _now_iso() -> str:
 
 def _project_root(project_id: str, root: Path | None = None) -> Path:
     """The AIFactory project's checkout path, from projects.json (``.`` if absent)."""
-    pf = _workspace_root(root) / "projects.json"
-    if pf.exists():
-        try:
-            data = json.loads(pf.read_text())
-        except (json.JSONDecodeError, OSError):
-            data = {}
-        for p in data.get("projects", []):
-            if p.get("id") == project_id:
-                return Path(p.get("root_path", ".")).expanduser()
+    # Shared reader, not a second one: this used to assume the
+    # ``{"projects": [...]}`` envelope and so resolved EVERY project to "."
+    # against the map-shaped file the web-server writes — silently running the
+    # rerun in the wrong tree instead of failing.
+    from agents.tools_pkg.tools.task_control import (  # noqa: PLC0415
+        ProjectsFileError,
+        _load_projects,
+    )
+
+    try:
+        data = _load_projects(_workspace_root(root))
+    except ProjectsFileError:
+        return Path()
+    for p in data["projects"]:
+        if p.get("id") == project_id:
+            return Path(p.get("root_path") or ".").expanduser()
     return Path(".")
 
 
