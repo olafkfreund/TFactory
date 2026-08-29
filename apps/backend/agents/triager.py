@@ -543,7 +543,7 @@ def _int_or_none(value: object) -> int | None:
         return None
 
 
-def _zero_tests_verdict(status: dict) -> tuple[str, str] | None:
+def _zero_tests_verdict(status: dict[str, Any]) -> tuple[str, str] | None:
     """#1253 — the ``(outcome, halt_reason)`` for a verify that generated 0 tests.
 
     ``None`` when the rule does not apply.
@@ -585,6 +585,44 @@ def _zero_tests_verdict(status: dict) -> tuple[str, str] | None:
         "nothing was tested, which is not a pass"
     )
     return "failure", halt_reason
+
+
+def _status_verdict(
+    status_value: str | None,
+    evidence: CompletionEvidence,
+    status: dict[str, Any],
+) -> tuple[str, str | None]:
+    """The normalized ``(outcome, halt_reason)`` from the spec's own status.
+
+    Two rules, in order; the first to refuse keeps its reason.
+
+    RFC-0001a evidence gate: a verify may only report a success OUTCOME if it
+    produced real verdicts. A "triaged" with zero verdicts evaluated nothing —
+    downgrade the normalized ``outcome`` to failure with a ``no_evidence``
+    reason so no consumer renders it green. We do NOT rewrite TFactory's
+    internal ``status`` (its state machine + handback read it) and we
+    deliberately do NOT treat all-flagged as a failure — ``flag`` means "needs
+    human attention" by design and drives the handback loop, which is a valid
+    non-failure outcome.
+
+    Then #1253 ``zero_tests`` (see :func:`_zero_tests_verdict`), which catches
+    the stage before: a run whose GENERATION produced nothing has no verdicts to
+    be missing, so ``no_evidence`` cannot see it.
+    """
+    # Actionable evidence = any real verdict produced (evaluated, accepted, or
+    # flagged). A "triaged" success with NONE of these evaluated nothing.
+    actionable = (
+        evidence["verdicts"] > 0 or evidence["accepted"] > 0 or evidence["flagged"] > 0
+    )
+    if status_value == "triaged" and not actionable:
+        halt_reason = "no_evidence: verify produced no verdicts"
+        return "failure", halt_reason
+    outcome = _outcome_for_status(status_value)
+    if outcome == "failure":
+        # zero_tests only ever refuses; it never softens a status that already
+        # failed on its own.
+        return outcome, None
+    return _zero_tests_verdict(status) or (outcome, None)
 
 
 def _outcome_for_status(status_value: str | None) -> str:
@@ -697,21 +735,7 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> CompletionEnvelo
         "flagged": int(status.get("flagged_count") or 0),
         "rejected": int(status.get("rejected_count") or 0),
     }
-    outcome = _outcome_for_status(status_value)
-    halt_reason: str | None = None
-    # Actionable evidence = any real verdict produced (evaluated, accepted, or
-    # flagged). A "triaged" success with NONE of these evaluated nothing.
-    _actionable = _verdicts > 0 or evidence["accepted"] > 0 or evidence["flagged"] > 0
-    if status_value == "triaged" and not _actionable:
-        outcome = "failure"
-        halt_reason = "no_evidence: verify produced no verdicts"
-
-    # #1253 zero_tests (see _zero_tests_verdict). Runs after no_evidence and
-    # never overrides an existing failure — the first rule to refuse keeps its
-    # reason.
-    _zero_tests = _zero_tests_verdict(status) if outcome != "failure" else None
-    if _zero_tests is not None:
-        outcome, halt_reason = _zero_tests
+    outcome, halt_reason = _status_verdict(status_value, evidence, status)
 
     envelope: CompletionEnvelope = {
         # RFC-0001 core: the six required fields (Factory#4). `correlation_key`
