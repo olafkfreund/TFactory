@@ -118,21 +118,78 @@ def _projects_file(root: Path | None = None) -> Path:
     return (root or _workspace_root()) / "projects.json"
 
 
+class ProjectsFileError(RuntimeError):
+    """``projects.json`` is present but unreadable or of an unknown shape.
+
+    Raised instead of returning an empty registry: "no projects" and "I could
+    not parse your registry" are different answers, and silently collapsing
+    the second into the first is how a shape mismatch stayed invisible.
+    """
+
+
+def _normalize_projects(raw: Any, pf: Path) -> list[dict[str, Any]]:
+    """Flatten either on-disk ``projects.json`` shape into the tools' entries.
+
+    Two writers share this file. The web-server's ``JsonProjectStore`` owns the
+    canonical shape — an id-keyed map ``{id: {name, path, ...}}`` — while these
+    tools historically read (and wrote) a ``{"projects": [...]}`` envelope.
+    Against a map-shaped file every ``data["projects"]`` raised
+    ``KeyError('projects')``, which the MCP layer surfaced as the bare string
+    ``'projects'``: a shape bug wearing an auth bug's clothes.
+
+    The map keys the id and names the checkout ``path``; the envelope carries
+    ``id``/``root_path`` inline. Both are emitted here as the envelope entry
+    shape the tools already return, so no call site changes.
+    """
+    if isinstance(raw, dict) and isinstance(raw.get("projects"), list):
+        return [p for p in raw["projects"] if isinstance(p, dict)]
+    if isinstance(raw, dict):
+        entries = []
+        for pid, meta in raw.items():
+            if not isinstance(meta, dict):
+                continue
+            entry = {**meta, "id": pid}
+            # The map stores the checkout as ``path``; the tools speak
+            # ``root_path``. Keep both so either key resolves.
+            entry.setdefault("root_path", meta.get("path", ""))
+            entries.append(entry)
+        return entries
+    if isinstance(raw, list):
+        return [p for p in raw if isinstance(p, dict)]
+    raise ProjectsFileError(
+        f"{pf} has unsupported top-level type {type(raw).__name__}; expected an "
+        'id-keyed object or {"projects": [...]}'
+    )
+
+
 def _load_projects(root: Path | None = None) -> dict[str, Any]:
     """Return ``{"projects": [...]}``; empty if the file doesn't exist."""
     pf = _projects_file(root)
     if not pf.exists():
         return {"projects": []}
     try:
-        return json.loads(pf.read_text())
-    except (json.JSONDecodeError, OSError):
-        return {"projects": []}
+        raw = json.loads(pf.read_text())
+    except (json.JSONDecodeError, OSError) as exc:
+        raise ProjectsFileError(
+            f"cannot read {pf}: {type(exc).__name__}: {exc}"
+        ) from exc
+    return {"projects": _normalize_projects(raw, pf)}
 
 
 def _save_projects(data: dict[str, Any], root: Path | None = None) -> None:
+    """Persist the envelope back in the web-server's canonical map shape.
+
+    Writing the envelope here would leave the file unreadable to the portal's
+    ``JsonProjectStore`` — the same drift, pointed the other way.
+    """
     pf = _projects_file(root)
     pf.parent.mkdir(parents=True, exist_ok=True)
-    pf.write_text(json.dumps(data, indent=2))
+    projects: dict[str, Any] = {}
+    for entry in data.get("projects", []):
+        meta = {k: v for k, v in entry.items() if k != "id"}
+        meta.setdefault("path", meta.get("root_path", ""))
+        projects[entry["id"]] = meta
+    pf.write_text(json.dumps(projects, indent=2))
 
 
 def _spec_dir(project_id: str, spec_id: str, root: Path | None = None) -> Path:
@@ -194,7 +251,14 @@ def _format_error(text: str) -> dict[str, Any]:
     """
     return {
         "content": [{"type": "text", "text": f"Error: {text}"}],
+        # Both spellings deliberately. create_sdk_mcp_server's adapter reads
+        # ``result.get("is_error", False)`` when it builds the wire
+        # CallToolResult, so ``isError`` alone left every tool error flagged as
+        # a SUCCESS on the wire -- the text said "Error:", the protocol said
+        # fine. ``isError`` stays for the tests and callers that assert on the
+        # handler's return value directly.
         "isError": True,
+        "is_error": True,
     }
 
 

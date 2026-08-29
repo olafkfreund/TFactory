@@ -87,12 +87,19 @@ async def test_project_create_registers_new_project(isolated_workspace):
     entry = json.loads(result["content"][0]["text"])
     assert entry["id"] == "proj-1"
     assert entry["name"] == "My Project"
-    assert entry["root_path"].endswith("/tmp/checkout") or entry["root_path"] == "/tmp/checkout"
+    assert (
+        entry["root_path"].endswith("/tmp/checkout")
+        or entry["root_path"] == "/tmp/checkout"
+    )
     assert "created_at" in entry
 
-    # Persisted to <workspace_root>/projects.json
+    # Persisted to <workspace_root>/projects.json in the id-keyed map shape the
+    # web-server's JsonProjectStore reads. The old {"projects": [...]} envelope
+    # left the file invisible to the portal (and vice versa).
     saved = json.loads((isolated_workspace / "projects.json").read_text())
-    assert [p["id"] for p in saved["projects"]] == ["proj-1"]
+    assert list(saved) == ["proj-1"]
+    assert saved["proj-1"]["name"] == "My Project"
+    assert saved["proj-1"]["path"] == saved["proj-1"]["root_path"]
 
 
 @pytest.mark.asyncio
