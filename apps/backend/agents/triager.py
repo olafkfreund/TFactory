@@ -587,6 +587,47 @@ def _zero_tests_verdict(status: dict[str, Any]) -> tuple[str, str] | None:
     return "failure", halt_reason
 
 
+def _delivery_error(git_writer: object) -> str | None:
+    """#1260 — the error from a git write that was ATTEMPTED and FAILED.
+
+    ``None`` when the accepted tests were delivered, when the write was a
+    declared dry-run (``ok`` stays true and ``dry_run: true`` is recorded on the
+    same summary), or when there was nothing to write.
+
+    This is the single reconciliation point between ``git_writer.ok`` and the
+    counts reported three fields away from it. Before it existed, a run whose
+    checkout failed still reported ``committed_count: 5`` — a POSITIVE count for
+    work that reached no branch, which is the one shape a reader never doubts.
+    """
+    if not isinstance(git_writer, dict):
+        return None
+    if git_writer.get("ok") is False:
+        return str(git_writer.get("error") or "git write failed")[:300]
+    return None
+
+
+def _delivery_verdict(status: dict[str, Any]) -> tuple[str, str] | None:
+    """#1260 — the ``(outcome, halt_reason)`` for a run whose delivery failed.
+
+    ``None`` when the rule does not apply. A verify that accepted tests and then
+    failed to commit them did not deliver; its terminal outcome must not read as
+    a clean verification. As with #1253 we do NOT rewrite TFactory's internal
+    ``status`` (the state machine + handback read it) and we mint no new outcome
+    token — consumers already render ``failure``.
+    """
+    error = _delivery_error(status.get("git_writer"))
+    if not error:
+        return None
+    accepted = _int_or_none(status.get("accepted_count")) or 0
+    # Literal-first concatenation (as `zero_tests` writes it): the #1247
+    # gate-honesty registry reads the rule name out of this string by AST, and
+    # an f-string would hide the rule from the scan that demands a refusal proof.
+    halt_reason = "delivery_failed: " + (
+        f"{accepted} accepted test(s) were not committed — {error}"
+    )
+    return "failure", halt_reason
+
+
 def _status_verdict(
     status_value: str | None,
     evidence: CompletionEvidence,
@@ -608,6 +649,10 @@ def _status_verdict(
     Then #1253 ``zero_tests`` (see :func:`_zero_tests_verdict`), which catches
     the stage before: a run whose GENERATION produced nothing has no verdicts to
     be missing, so ``no_evidence`` cannot see it.
+
+    Then #1260 ``delivery_failed`` (see :func:`_delivery_verdict`), which catches
+    the stage AFTER: a run that accepted tests and then failed to commit them has
+    verdicts and non-zero counts, so neither rule above can see it.
     """
     # Actionable evidence = any real verdict produced (evaluated, accepted, or
     # flagged). A "triaged" success with NONE of these evaluated nothing.
@@ -622,7 +667,7 @@ def _status_verdict(
         # zero_tests only ever refuses; it never softens a status that already
         # failed on its own.
         return outcome, None
-    return _zero_tests_verdict(status) or (outcome, None)
+    return _zero_tests_verdict(status) or _delivery_verdict(status) or (outcome, None)
 
 
 def _outcome_for_status(status_value: str | None) -> str:
@@ -692,6 +737,9 @@ def _correlation_key(spec_dir: Path, status: dict, source: dict) -> str:
 def _completion_result_summary(status: dict) -> dict[str, Any]:
     """Service-specific result counts for the envelope (absent keys omitted)."""
     keys = (
+        # #1260: `accepted_count` is what triage accepted; `committed_count` is
+        # what actually landed. They differ exactly when delivery failed.
+        "accepted_count",
         "committed_count",
         "flagged_count",
         "rejected_count",
@@ -731,7 +779,12 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> CompletionEnvelo
     evidence: CompletionEvidence = {
         "proof_kind": "tests",
         "verdicts": _verdicts,
-        "accepted": int(status.get("committed_count") or 0),
+        # #1260: the accept count, which is what "did this evaluate anything"
+        # asks. `committed_count` now reads 0 when delivery failed, and a
+        # delivery failure must not be laundered into `no_evidence`.
+        "accepted": int(
+            status.get("accepted_count") or status.get("committed_count") or 0
+        ),
         "flagged": int(status.get("flagged_count") or 0),
         "rejected": int(status.get("rejected_count") or 0),
     }
@@ -1177,8 +1230,14 @@ def _render_and_write_report(
     dedup_result,
     keepers,
     decisions,
+    delivery_error: str | None = None,
 ) -> tuple:
-    """Build the report and write triage_report.{json,md}; return (report, report_md)."""
+    """Build the report and write triage_report.{json,md}; return (report, report_md).
+
+    ``delivery_error`` (#1260) is the git_writer error when the accepted tests
+    were not committed; it makes the report say so instead of printing a
+    "Committed" table for a write that failed.
+    """
     from agents.triage_report import build_report, render_json, render_markdown
 
     # Resolve the SUT's Backstage entity ref for catalog linkage (#241).
@@ -1203,6 +1262,7 @@ def _render_and_write_report(
         decisions=decisions,
         spec_dir=spec_dir,
         component_ref=component_ref,
+        delivery_error=delivery_error,
     )
     findings_dir = spec_dir / "findings"
     findings_dir.mkdir(parents=True, exist_ok=True)
@@ -1628,6 +1688,7 @@ async def run_triager(
                 spec_dir,
                 status="triaged_empty",
                 phase="triager_no_candidates",
+                accepted_count=0,
                 committed_count=0,
                 rejected_count=0,
                 flagged_count=0,
@@ -1643,7 +1704,16 @@ async def run_triager(
         # 3. Dedup + rank the keepers into committed/flagged survivors.
         dedup_result, committed, flagged = _dedup_and_rank(keepers)
 
-        # 4. Build + render the report.
+        # 4. Commit the survivors, THEN render the report (#1260). The report
+        # states what was committed, so it cannot be written before the write
+        # that decides it — that ordering is how a failed checkout still printed
+        # a "Committed (accept) | 5" table.
+        findings_dir = spec_dir / "findings"
+        source_meta = _load_source_meta(spec_dir)
+        git_result_summary = _run_git_side_effect(
+            project_dir, committed, flagged, source_meta
+        )
+        delivery_error = _delivery_error(git_result_summary)
         report, report_md = _render_and_write_report(
             spec_dir,
             mode,
@@ -1654,17 +1724,14 @@ async def run_triager(
             dedup_result,
             keepers,
             decisions,
+            delivery_error=delivery_error,
         )
 
         # 4b. AC fidelity: which acceptance criteria are actually verified (honest).
         ac_summary = _write_ac_fidelity(spec_dir, committed, flagged, rejects)
 
-        # 5-6. Side-effects (both dry-run by default per the no-auto-push policy).
-        findings_dir = spec_dir / "findings"
-        source_meta = _load_source_meta(spec_dir)
-        git_result_summary = _run_git_side_effect(
-            project_dir, committed, flagged, source_meta
-        )
+        # 5-6. Remaining side-effects (dry-run by default per the no-auto-push
+        # policy).
         pr_comment_summary = _run_pr_side_effect(
             project_dir, findings_dir, source_meta, report_md
         )
@@ -1695,23 +1762,36 @@ async def run_triager(
         _maybe_harvest(spec_dir, project_dir, keepers)
 
         # 7. Record summaries in status.json.
-        committed_count = len(committed)
+        # #1260: two distinct concepts, two distinct names. `accepted_count` is
+        # what triage decided; `committed_count` is what landed on the branch.
+        # A failed write means nothing landed, whatever was accepted.
+        accepted_count = len(committed)
+        committed_count = 0 if delivery_error else accepted_count
         flagged_count = len(flagged)
         rejected_count = len(rejects)
+        # Keyed on the ACCEPT count: a delivery failure must not be demoted to
+        # `triaged_empty`, which reads as a clean "nothing to do". The failure is
+        # carried by the completion outcome (_delivery_verdict) instead.
         final_status = (
-            "triaged" if (committed_count or flagged_count) else "triaged_empty"
+            "triaged" if (accepted_count or flagged_count) else "triaged_empty"
         )
         # #729: a silent triaged_empty from a systematic 100% rejection reads as a
         # clean run. Surface the real signal instead.
         triager_warnings = _triaged_empty_warnings(
             final_status, committed_count, flagged_count, rejected_count, ac_summary
         )
+        if delivery_error:
+            triager_warnings.append(
+                f"delivery failed: {accepted_count} accepted test(s) were NOT "
+                f"committed and reached no branch — {delivery_error}"
+            )
         for _w in triager_warnings:
             _triage_log.warning("triager: %s", _w)
         _write_status_patch(
             spec_dir,
             status=final_status,
             phase="triager_complete",
+            accepted_count=accepted_count,
             committed_count=committed_count,
             rejected_count=rejected_count,
             flagged_count=flagged_count,

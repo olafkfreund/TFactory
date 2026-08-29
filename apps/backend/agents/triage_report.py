@@ -97,10 +97,28 @@ class TriageReport:
     # (``component:default/<name>``). None when no repo/component could be
     # resolved. Surfaced in the report header + JSON for catalog linkage.
     component_ref: str | None = None
+    # #1260: the git_writer error when the accepted tests were NOT delivered.
+    # None means the write succeeded (or was a declared dry-run). When set, the
+    # accepted candidates are still listed — under a heading that says they did
+    # not land — and ``committed_count`` reads 0, because nothing was committed.
+    delivery_error: str | None = None
+
+    @property
+    def accepted_count(self) -> int:
+        """How many candidates the triage ACCEPTED (#1260). Independent of
+        whether they were delivered."""
+        return len(self.committed)
 
     @property
     def committed_count(self) -> int:
-        return len(self.committed)
+        """How many accepted tests were actually COMMITTED (#1260).
+
+        Zero when the git write failed. ``accepted_count`` is the count of what
+        triage decided; this is the count of what landed. Conflating them let a
+        run whose ``git_writer.ok`` was false report "5 committed" for work that
+        reached no branch.
+        """
+        return 0 if self.delivery_error else len(self.committed)
 
     @property
     def rejected_count(self) -> int:
@@ -161,6 +179,7 @@ def build_report(
     decisions: dict | None = None,
     spec_dir: Path | None = None,
     component_ref: str | None = None,
+    delivery_error: str | None = None,
 ) -> TriageReport:
     """Construct a TriageReport from the Triager's commit-5 working set.
 
@@ -202,6 +221,7 @@ def build_report(
         evidence_urls_by_test_id=evidence_urls_by_test_id,
         flaky_by_test_id=flaky_by_test_id,
         component_ref=component_ref,
+        delivery_error=delivery_error,
     )
 
 
@@ -294,7 +314,9 @@ def render_json(report: TriageReport) -> str:
         "component_ref": report.component_ref,
         "summary": {
             "dedup_input_count": report.dedup_input_count,
+            "accepted_count": report.accepted_count,
             "committed_count": report.committed_count,
+            "delivery_error": report.delivery_error,
             "flagged_count": report.flagged_count,
             "rejected_count": report.rejected_count,
             "skipped_count": report.skipped_count,
@@ -457,6 +479,7 @@ def render_markdown(report: TriageReport) -> str:
         "| Bucket | Count |\n"
         "|---|---:|\n"
         f"| Dedup input | {report.dedup_input_count} |\n"
+        f"| Accepted | {report.accepted_count} |\n"
         f"| Committed (accept) | {report.committed_count} |\n"
         f"| Flagged | {report.flagged_count} |\n"
         f"| Skipped (operator locked) | {report.skipped_count} |\n"
@@ -502,11 +525,25 @@ def render_markdown(report: TriageReport) -> str:
         "# Triage Report\n",
         f"_Mode: {report.mode} · Generated at {report.generated_at}_\n",
     ]
+    if report.delivery_error:
+        # #1260: an unsuccessful write must not print a "Committed" table. The
+        # accepted tests are still listed — under a heading that says they did
+        # not land — so a reader gets the work AND the fact it was not delivered.
+        parts.append(
+            "> **Delivery FAILED — nothing was committed.** "
+            f"{report.accepted_count} test(s) were accepted and none reached the "
+            f"branch: `{report.delivery_error}`\n"
+        )
     if report.component_ref:
         parts.append(f"_Covers: `{report.component_ref}`_\n")
     parts += [
         _section("Summary", summary_table),
-        _section("Committed", committed_body),
+        _section(
+            "Accepted but NOT committed (delivery failed)"
+            if report.delivery_error
+            else "Committed",
+            committed_body,
+        ),
         _section("Flagged", flagged_body),
         _section("Skipped", skipped_body),
         _section("Rejected", rejected_body),
