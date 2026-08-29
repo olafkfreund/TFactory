@@ -68,6 +68,7 @@ _COVERED: dict[str, str] = {
     "no_evidence": "test_no_evidence_rule_refuses_a_verdict_free_run",
     "dependency_review": "test_dependency_review_rule_refuses_a_gating_fail",
     "criterion_conflict": "test_criterion_conflict_rule_refuses_a_gating_conflict",
+    "zero_tests": "test_zero_tests_rule_refuses_an_unexplained_empty_generation",
 }
 
 # Members deliberately out of scope, each with the reason stated.
@@ -294,6 +295,40 @@ def test_dependency_review_rule_refuses_a_gating_fail(tmp_path: Path) -> None:
         "a failing dependency review must downgrade a would-be success"
     )
     assert envelope["halt_reason"].startswith("dependency_review:")
+
+
+def test_zero_tests_rule_refuses_an_unexplained_empty_generation(
+    tmp_path: Path,
+) -> None:
+    """#1253 — and it must refuse in ONE direction only.
+
+    Both directions are asserted here on purpose: a rule that failed every zero
+    would be a false-refusal generator, which is the same defect wearing the
+    opposite sign.
+    """
+    unexplained = _build_completion_envelope(tmp_path, _status(tests_generated=0))
+    assert unexplained["outcome"] == "failure", (
+        "a verify that generated 0 tests and stated no reason must not report "
+        "success — nothing was tested"
+    )
+    assert unexplained["halt_reason"].startswith("zero_tests:")
+
+    # A stated skip is legitimate and must stay distinguishable: not a success,
+    # not a refusal, and carrying the reason.
+    skipped = _build_completion_envelope(
+        tmp_path,
+        _status(tests_generated=0, verify_skip_reason="no pending subtasks"),
+    )
+    assert skipped["outcome"] == "empty", (
+        "an explicitly-skipped generation must not be reported as a failure"
+    )
+    assert skipped["halt_reason"] != unexplained["halt_reason"], (
+        "a stated skip and a silent empty must not render identically"
+    )
+    assert "no pending subtasks" in skipped["halt_reason"]
+
+    # A run that never recorded the count is not the same measurement as zero.
+    assert _build_completion_envelope(tmp_path, _status())["outcome"] == "success"
 
 
 def test_criterion_conflict_rule_refuses_a_gating_conflict(tmp_path: Path) -> None:
