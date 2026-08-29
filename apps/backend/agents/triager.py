@@ -618,7 +618,13 @@ def _delivery_verdict(status: dict[str, Any]) -> tuple[str, str] | None:
     error = _delivery_error(status.get("git_writer"))
     if not error:
         return None
-    accepted = _int_or_none(status.get("accepted_count")) or 0
+    # committed_count is the fallback for a status.json written before the
+    # pair existed, where it still carried the ACCEPT count.
+    accepted = (
+        _int_or_none(status.get("accepted_count"))
+        or _int_or_none(status.get("committed_count"))
+        or 0
+    )
     # Literal-first concatenation (as `zero_tests` writes it): the #1247
     # gate-honesty registry reads the rule name out of this string by AST, and
     # an f-string would hide the rule from the scan that demands a refusal proof.
