@@ -609,7 +609,11 @@ class AuditLog(Base):
     )
     action: Mapped[str] = mapped_column(String(255), nullable=False)
     resource_type: Mapped[str] = mapped_column(String(255), nullable=False)
-    resource_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # Free-form pointer into whichever table ``resource_type`` names -- NOT a
+    # UUID column. Task ids are composite ("{project_id}:{spec_slug}", 53+
+    # chars), so this matches ``resource_type``'s width. See migration
+    # e5a9c7d1b3f2.
+    resource_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     details_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     ip: Mapped[str | None] = mapped_column(String(45), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
