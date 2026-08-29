@@ -57,7 +57,7 @@ additive TFactory detail (RFC §7 permits extra fields):
   "repo": "owner/name",
   "branch": "feat/x",
   "pr_number": 88,
-  "result": { "committed_count": 3, "flagged_count": 1, "rejected_count": 2,
+  "result": { "accepted_count": 3, "committed_count": 3, "flagged_count": 1, "rejected_count": 2,
               "verdicts_count": 6, "dedup_collision_count": 0 },
   "emitted_at": "2026-06-04T16:30:00+00:00",
 
