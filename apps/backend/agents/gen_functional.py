@@ -1092,11 +1092,17 @@ async def run_gen_functional(
                 _advance_to_evaluator(spec_dir, project_dir)
                 _advance_to_review(spec_dir, project_dir)
                 return True
+            # #1253: this is the LEGITIMATE zero — the plan asked for nothing,
+            # so nothing was generated. State it as a machine-readable reason,
+            # not only as prose in a warning, so the completion envelope can
+            # tell it apart from "generation silently produced nothing". A
+            # warning nobody parses is the same green as no warning at all.
             _write_status_patch(
                 spec_dir,
                 status="generated_empty",
                 phase="gen_functional_no_pending",
                 tests_generated=0,
+                verify_skip_reason="no pending subtasks to generate",
                 gen_functional_warnings=["no pending subtasks to generate"],
             )
             return True

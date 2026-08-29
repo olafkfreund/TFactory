@@ -675,6 +675,11 @@ async def test_no_pending_subtasks_is_generated_empty(
     status = json.loads((spec_dir / "status.json").read_text())
     assert status["status"] == "generated_empty"
     assert status["tests_generated"] == 0
+    # #1253: the legitimate zero must state its reason in a field the
+    # completion envelope can read, not only in prose. Without this the
+    # envelope cannot tell "nothing to generate" from "generation silently
+    # produced nothing", and defaults the pair to the safe answer: refusal.
+    assert status["verify_skip_reason"] == "no pending subtasks to generate"
 
 
 @pytest.mark.asyncio

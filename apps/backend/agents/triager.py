@@ -529,6 +529,20 @@ def _completion_sentinel_enabled() -> bool:
 # imported at the top of this module from agents/completion_schema.py (#360).
 
 
+def _int_or_none(value: object) -> int | None:
+    """A count, or None when the key was absent/unparseable.
+
+    Deliberately NOT ``int(x or 0)``: absent is not the same measurement as
+    zero, and #1253's rule turns on exactly that distinction.
+    """
+    if isinstance(value, bool) or not isinstance(value, int | str):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _outcome_for_status(status_value: str | None) -> str:
     """Map a terminal TFactory status to a normalized coarse outcome."""
     if status_value == "triaged":
@@ -647,6 +661,43 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> CompletionEnvelo
     if status_value == "triaged" and not _actionable:
         outcome = "failure"
         halt_reason = "no_evidence: verify produced no verdicts"
+
+    # #1253: a measurement of ZERO must not render as a pass. `no_evidence`
+    # above catches a `triaged` with no verdicts, but it cannot see the stage
+    # before it: a run whose GENERATION produced nothing has no verdicts to be
+    # missing, and lands on a terminal status that reads clean.
+    #
+    # A blanket failure on 0 would be a false-refusal generator — there ARE
+    # legitimate zeros (a spec with nothing to verify; a lane deliberately not
+    # run). So the rule keys on whether the run STATED a reason, following the
+    # `{"status": "skipped", "reason": ...}` convention `dependency_review`
+    # already uses:
+    #
+    #   0 tests + a stated reason -> `empty`, with the skip named on the wire.
+    #   0 tests + no reason       -> `failure`. Generation silently produced
+    #                                nothing. Nothing was tested, and that is
+    #                                not a pass (`copilot-pr-test.yml` says the
+    #                                same of a job that skipped).
+    #
+    # Neither is `success`, and both are distinguishable from each other. No new
+    # `outcome` token is minted: consumers already read `empty` and `failure`,
+    # and one they do not know is one more thing rendered as a plausible pass.
+    #
+    # A run that never recorded `tests_generated` at all is NOT treated as zero —
+    # absent is not the same measurement as zero, and `no_evidence` covers the
+    # verdict-free case on its own.
+    _tests_generated = _int_or_none(status.get("tests_generated"))
+    _skip_reason = status.get("verify_skip_reason")
+    if _tests_generated == 0 and outcome != "failure":
+        if isinstance(_skip_reason, str) and _skip_reason.strip():
+            outcome = "empty"
+            halt_reason = "zero_tests: " + f"skipped — {_skip_reason.strip()}"
+        else:
+            outcome = "failure"
+            halt_reason = (
+                "zero_tests: verify generated 0 tests and stated no reason; "
+                "nothing was tested, which is not a pass"
+            )
 
     envelope: CompletionEnvelope = {
         # RFC-0001 core: the six required fields (Factory#4). `correlation_key`
