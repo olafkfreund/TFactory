@@ -234,6 +234,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--mode", default="initial", choices=["initial", "rerun"])
     args = parser.parse_args(argv)
 
+    # TFactory#1159 packed path: /work is an emptyDir and the workspace arrives by
+    # reference, so it must be on disk before ANY stage (or the git repair below)
+    # looks at it. Returns None on the co-mounted path — WORKSPACE_URI is unset
+    # there — which is also how we know at the end whether to push anything back.
+    from agents.verify_workspace import (  # noqa: PLC0415 - lazy by design
+        push_back_workspace,
+        restore_workspace,
+    )
+
+    packed_root = restore_workspace()
+
     spec_dir = Path(args.spec)
     project_dir = Path(args.project)
 
@@ -262,6 +273,34 @@ def main(argv: list[str] | None = None) -> int:
         _log.warning(
             "[verify-pipeline] no --job-id/$JOB_ID; skipping durable terminal write"
         )
+
+    # The evidence push-back, and the LAST thing that touches the workspace: on the
+    # packed path everything above wrote into an emptyDir that dies with this pod.
+    # emit_verify_artifacts (above, inside _record_terminal) already uploads the
+    # findings + evidence tree file-by-file, but it is fail-open by design and
+    # covers only what it enumerates — status.json, the lane staging dirs and the
+    # screenshots outside findings/evidence are not in that set. This repacks the
+    # whole root, and a failure here FAILS THE JOB: a green Job whose evidence
+    # silently went nowhere is exactly the outcome #1159 exists to prevent.
+    if packed_root is not None:
+        if not args.job_id:
+            _log.error(
+                "[verify-pipeline] packed workspace with no --job-id/$JOB_ID; "
+                "the evidence has nowhere to go"
+            )
+            return 1
+        try:
+            push_back_workspace(
+                root=packed_root,
+                job_id=args.job_id,
+                correlation_key=args.correlation_key,
+            )
+        except Exception:  # noqa: BLE001 - ANY failure here loses the evidence
+            _log.exception(
+                "[verify-pipeline] pushing the packed workspace back failed; "
+                "the run's evidence is lost with this pod"
+            )
+            return 1
 
     # Exit non-zero on a hard failure so the Job is marked failed even if the
     # durable write was skipped (the reaper then reaps on the k8s-side signal).
