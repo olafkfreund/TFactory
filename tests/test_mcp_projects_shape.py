@@ -108,7 +108,6 @@ def test_escaping_exception_reaches_the_caller_named():
     """A KeyError must not arrive as the bare string ``'projects'``."""
     pytest.importorskip("claude_agent_sdk")
     from claude_agent_sdk import tool
-
     from mcp_server.tfactory_server import _named_errors
 
     @tool("boom", "raises", {"type": "object"})
@@ -126,7 +125,6 @@ def test_escaping_exception_reaches_the_caller_named():
 def test_named_errors_leaves_a_successful_tool_alone():
     pytest.importorskip("claude_agent_sdk")
     from claude_agent_sdk import tool
-
     from mcp_server.tfactory_server import _named_errors
 
     @tool("ok", "works", {"type": "object"})
