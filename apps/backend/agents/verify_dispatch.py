@@ -133,6 +133,9 @@ _ENV_RUNNING_IMAGE = "TFACTORY_IMAGE"
 # image bakes this layout (Dockerfile ENV APP_BACKEND_PATH); gitops can override.
 _ENV_BACKEND_PATH = "APP_BACKEND_PATH"
 _DEFAULT_BACKEND_PATH = "/home/projects/MagesticAI/apps/backend"
+# Where the workspaces PVC is mounted on the control plane (kube_sandbox's own
+# default). Used when the injected sandbox carries no data_root of its own.
+_DEFAULT_DATA_ROOT = "/home/nonroot/.tfactory"
 # The verify pipeline's terminal store write imports ``server.*`` (the web-server
 # sibling app), so its dir goes on PYTHONPATH too. It sits next to the backend
 # (``…/apps/web-server``), derived from the backend path's parent.
@@ -539,6 +542,11 @@ class VerifyJobConfig:
     # materialized into the project worktree (like the lane path), so the develop
     # ref must point there. Defaults to the project subpath.
     flake_subpath: str | None = None
+    # TFactory#1159: packed-workspace URI. When set, kube_sandbox gives the Job an
+    # ``emptyDir`` at ``mount`` and NO PVC (``workspace_uri`` deliberately wins over
+    # ``repo_pvc``), and the pipeline unpacks this URI into it at startup. Default
+    # None keeps today's RWO co-mount, so this field is inert until a caller packs.
+    workspace_uri: str | None = None
 
 
 # -- file-auth CLI credential seeding (#481) --------------------------------- #
@@ -692,6 +700,7 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
         repo_subpath="",  # mount the data root; the command paths are mount-relative
         workdir=cfg.mount,
         nix_store_pvc=cfg.nix_store_pvc,
+        workspace_uri=cfg.workspace_uri,
     )
 
     pod_spec = manifest["spec"]["template"]["spec"]
@@ -721,6 +730,11 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
         env.append({"name": "PYTHONPATH", "value": _pythonpath_for(cfg.backend_path)})
     if cfg.correlation_key is not None:
         env.append({"name": "CORRELATION_KEY", "value": str(cfg.correlation_key)})
+    # WORKSPACE_URI is set by the sandbox builder; this says where to unpack it.
+    # The pipeline needs both, because the --spec/--project arguments are absolute
+    # paths under the mount, not relative to some implied cwd (#1159).
+    if cfg.workspace_uri:
+        env.append({"name": "WORKSPACE_ROOT", "value": cfg.mount})
     # Pass DATABASE_URL through so the Job's terminal write lands in the same
     # Postgres the control plane polls. Only when actually set (dev/SQLite omits).
     db_url = os.environ.get(cfg.database_url_env)
@@ -821,7 +835,11 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
     # credential crosses as a ``secretKeyRef``, never a literal.
     env.extend(job_dispatch.trace_env(SERVICE))
     container = pod_spec["containers"][0]
-    container["env"] = env
+    # PREPEND, not assign: kube_sandbox already put WORKSPACE_URI on the container
+    # for a packed dispatch (#1159), and overwriting the list dropped the one env
+    # that tells the Job where its workspace is — it would have started against an
+    # empty emptyDir and reported a verdict about nothing.
+    container["env"] = [*container.get("env", []), *env]
 
     # Label the durable coordinates so a reconciler can list verify Jobs.
     manifest["metadata"].setdefault("labels", {})
@@ -847,6 +865,7 @@ async def dispatch_verify_job(  # noqa: PLR0913 - 3 domain args + injectable sea
     spec_dir: Path,
     project_dir: Path,
     correlation_key: str | int | None = None,
+    pack_workspace: bool = False,
     sandbox: Any = None,
     store: Any = None,
     apply_fn: Any = None,
@@ -926,6 +945,21 @@ async def dispatch_verify_job(  # noqa: PLR0913 - 3 domain args + injectable sea
     spec_subpath = _pvc_subpath(spec_dir, sandbox)
     project_subpath = _pvc_subpath(project_dir, sandbox)
     verify_image = resolve_verify_image(getattr(sandbox, "image", ""))
+    # TFactory#1159. Opt-in per call, NOT read from env here: the operator-facing
+    # TFACTORY_PACK_WORKSPACE toggle is #1160, and a flag that changes behaviour by
+    # merely existing is not a toggle. Fail-open — a None URI (no object store, a
+    # pack error) keeps the RWO co-mount, so a storage gap never strands a verify.
+    workspace_uri = (
+        _pack_workspace_for(
+            job_id=job_id,
+            spec_dir=spec_dir,
+            project_dir=project_dir,
+            sandbox=sandbox,
+            correlation_key=correlation_key,
+        )
+        if pack_workspace
+        else None
+    )
     cfg = VerifyJobConfig(
         job_id=job_id,
         image=verify_image,
@@ -939,6 +973,7 @@ async def dispatch_verify_job(  # noqa: PLR0913 - 3 domain args + injectable sea
         # The orchestration Job runs the verify pipeline directly on the runtime
         # image (it imports the backend); only the lanes it spawns nix-develop.
         nix_develop=False,
+        workspace_uri=workspace_uri,
     )
     manifest = build_verify_job_manifest(cfg)
     _log.info(
@@ -1010,11 +1045,33 @@ def _import_kubernetes_asyncio() -> Any:
     return importlib.import_module("kubernetes_asyncio")
 
 
+def _pack_workspace_for(
+    *,
+    job_id: str,
+    spec_dir: Path,
+    project_dir: Path,
+    sandbox: Any,
+    correlation_key: str | int | None,
+) -> str | None:
+    """Pack the spec workspace to object storage for a packed dispatch (#1159)."""
+    from agents.verify_workspace import (  # noqa: PLC0415 - lazy by design
+        pack_for_dispatch,
+    )
+
+    return pack_for_dispatch(
+        spec_dir=spec_dir,
+        project_dir=project_dir,
+        data_root=getattr(sandbox, "data_root", _DEFAULT_DATA_ROOT),
+        job_id=job_id,
+        correlation_key=correlation_key,
+    )
+
+
 def _pvc_subpath(path: Path, sandbox: Any) -> str:
     """PVC-relative subpath for ``path`` under the sandbox data root, or ''."""
     from tools.runners.kube_sandbox import pvc_subpath  # noqa: PLC0415 - lazy by design
 
-    data_root = getattr(sandbox, "data_root", "/home/nonroot/.tfactory")
+    data_root = getattr(sandbox, "data_root", _DEFAULT_DATA_ROOT)
     sub = pvc_subpath(str(path), data_root)
     return sub or ""
 
