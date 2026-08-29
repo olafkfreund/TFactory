@@ -432,9 +432,12 @@ def test_the_job_pin_env_var_is_the_one_ci_bumps():
 # ---------------------------------------------------------------------------
 
 _CHART_VALUES = _ROOT / "charts" / "tfactory" / "values.yaml"
-# `ghcr.io/<owner>/tfactory-runner-<name>` followed by whatever pins it.
+# `ghcr.io/<owner>/[t]factory-runner-<name>` followed by whatever pins it. Both
+# prefixes: the nix lane was rebuilt as `factory-runner-nix` by factory-runners
+# (Factory#1018), and a regex that only knew the old name would have stopped
+# examining the very pin this test exists for -- silently, as zero matches.
 _RUNNER_PIN = re.compile(
-    r"ghcr\.io/[a-z0-9-]+/tfactory-runner-[a-z0-9-]+(?P<pin>[^\"'\s]*)"
+    r"ghcr\.io/[a-z0-9-]+/t?factory-runner-[a-z0-9-]+(?P<pin>[^\"'\s]*)"
 )
 
 

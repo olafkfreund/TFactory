@@ -115,7 +115,7 @@ def test_warm_nix_store_mounted_with_seed_init():
     # RFC-0016 #197: whole /nix served from the warm-store PVC + seed initContainer.
     m = build_job_manifest(
         "j5",
-        "ghcr.io/olafkfreund/tfactory-runner-nix:latest",
+        "ghcr.io/olafkfreund/factory-runner-nix:latest",
         ["nix develop path:/work#default -c cargo test"],
         repo_pvc="tfactory-data",
         repo_subpath="ws/proj",
