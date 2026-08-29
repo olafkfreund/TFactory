@@ -259,8 +259,69 @@ def _pack(data_root: Path) -> str:
     return uri
 
 
+def _lifecycle_of(row: dict[str, Any]) -> str:
+    """The canonical state the durable store WILL record for this row.
+
+    Loaded straight off disk because the sibling web-server app is not on the
+    backend tests' sys.path; using the real mapper (rather than restating its
+    rules here) is what makes these assertions about the verdict a reader of the
+    control plane actually sees, not about the kwargs we happened to pass.
+    """
+    import importlib.util  # noqa: PLC0415 - lazy; only this helper needs it
+
+    src = (
+        Path(__file__).parent.parent
+        / "apps/web-server/server/services/job_state_status.py"
+    )
+    spec = importlib.util.spec_from_file_location("_jss_status_for_test", src)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return str(
+        mod.to_lifecycle_state(
+            row.get("service_status"), has_verdict=bool(row.get("has_verdict"))
+        )
+    )
+
+
+@pytest.fixture
+def durable_rows(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    """Capture what ``_record_terminal`` writes to the durable job-state store.
+
+    The real ``_record_terminal`` runs — only the sibling app's store module is
+    stubbed — so the classification under test (#1243: a lost workspace must not
+    leave a ``done`` row) is the module's own, not the test's.
+    """
+    import sys  # noqa: PLC0415 - lazy; fixture-local
+    import types  # noqa: PLC0415 - lazy; fixture-local
+
+    rows: list[dict[str, Any]] = []
+
+    async def _record_terminal(job_id: str, **kw: Any) -> None:
+        rows.append({"job_id": job_id, **kw})
+
+    server = types.ModuleType("server")
+    services = types.ModuleType("server.services")
+    jss = types.ModuleType("server.services.job_state_store")
+    jss.record_terminal = _record_terminal  # type: ignore[attr-defined]
+    services.job_state_store = jss  # type: ignore[attr-defined]
+    server.services = services  # type: ignore[attr-defined]
+    for name, mod in (
+        ("server", server),
+        ("server.services", services),
+        ("server.services.job_state_store", jss),
+    ):
+        monkeypatch.setitem(sys.modules, name, mod)
+    return rows
+
+
 def _run_pipeline_main(
-    monkeypatch: pytest.MonkeyPatch, *, uri: str, workdir: Path, on_run: Any
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    uri: str,
+    workdir: Path,
+    on_run: Any,
+    record: Any = None,
 ) -> int:
     """Drive ``verify_pipeline.main`` on the packed path with the stages stubbed."""
     from agents import verify_pipeline as vp
@@ -273,7 +334,8 @@ def _run_pipeline_main(
         return None
 
     monkeypatch.setattr(vp, "run_verify_pipeline", _fake_pipeline)
-    monkeypatch.setattr(vp, "_record_terminal", _fake_record)
+    if record is None:
+        monkeypatch.setattr(vp, "_record_terminal", _fake_record)
     monkeypatch.setattr(vp, "repair_linked_worktree", lambda _p: None)
     monkeypatch.setenv(vw.ENV_WORKSPACE_URI, uri)
     monkeypatch.setenv(vw.ENV_WORKSPACE_ROOT, str(workdir))
@@ -324,3 +386,103 @@ def test_pipeline_main_fails_the_job_when_evidence_cannot_be_pushed_back(
         monkeypatch, uri=uri, workdir=tmp_path / "emptydir", on_run=lambda _s: None
     )
     assert rc == 1
+
+
+# -- #1243: the DURABLE verdict, not just the pod's exit code ------------------
+
+
+def test_failed_push_back_makes_the_durable_verdict_stuck(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_s3: _FakeS3,
+    data_root: Path,
+    tmp_path: Path,
+    durable_rows: list[dict[str, Any]],
+) -> None:
+    """The row the control plane reads must NOT say done.
+
+    Exiting non-zero was already true before #1243 and was not enough:
+    ``reconcile_and_reap_once`` short-circuits on "a terminal row the Job wrote
+    wins" and never probes the Job, so a ``done`` row written before the
+    push-back is the final word. The verdict itself has to carry the loss.
+    """
+    uri = _pack(data_root)
+
+    def _boom(**_kw: Any) -> str:
+        raise RuntimeError("minio down")
+
+    monkeypatch.setattr(vw, "push_back_workspace", _boom)
+    rc = _run_pipeline_main(
+        monkeypatch,
+        uri=uri,
+        workdir=tmp_path / "emptydir",
+        on_run=lambda _s: None,
+        record=True,
+    )
+
+    assert rc == 1
+    assert len(durable_rows) == 1, durable_rows
+    row = durable_rows[0]
+    assert row["has_verdict"] is False
+    assert "minio down" in str(row["error"])
+    assert _lifecycle_of(row) == "stuck"
+
+
+def test_successful_push_back_still_records_the_real_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_s3: _FakeS3,
+    data_root: Path,
+    tmp_path: Path,
+    durable_rows: list[dict[str, Any]],
+) -> None:
+    """The mutation's control: with the push-back working the row stays done."""
+    rc = _run_pipeline_main(
+        monkeypatch,
+        uri=_pack(data_root),
+        workdir=tmp_path / "emptydir",
+        on_run=lambda _s: None,
+        record=True,
+    )
+
+    assert rc == 0
+    assert durable_rows[0]["has_verdict"] is True
+    assert durable_rows[0]["error"] is None
+    assert _lifecycle_of(durable_rows[0]) == "done"
+
+
+def test_failed_restore_still_writes_a_terminal_row(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_s3: _FakeS3,
+    tmp_path: Path,
+    durable_rows: list[dict[str, Any]],
+) -> None:
+    """A restore that raises used to leave NO row at all — the pod just died.
+
+    The row must also not be an active state: an empty status maps to ``queued``,
+    which would keep holding an RFC-0016 admission slot forever.
+    """
+    from agents import verify_pipeline as vp
+
+    def _boom(**_kw: Any) -> Path:
+        raise RuntimeError("store unreachable")
+
+    monkeypatch.setattr(vw, "restore_workspace", _boom)
+    monkeypatch.setattr(vp, "repair_linked_worktree", lambda _p: None)
+    monkeypatch.setenv(vw.ENV_WORKSPACE_URI, "s3://b/k")
+    monkeypatch.setenv(vw.ENV_WORKSPACE_ROOT, str(tmp_path / "emptydir"))
+
+    rc = vp.main(
+        [
+            "--spec",
+            str(tmp_path / "spec"),
+            "--project",
+            str(tmp_path / "spec" / ".worktree"),
+            "--job-id",
+            "job-1",
+        ]
+    )
+
+    assert rc == 1
+    assert len(durable_rows) == 1, durable_rows
+    row = durable_rows[0]
+    assert "store unreachable" in str(row["error"])
+    assert _lifecycle_of(row) not in ("queued", "running", "done")

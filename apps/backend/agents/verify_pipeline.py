@@ -114,6 +114,7 @@ async def _record_terminal(
     final_status: str,
     spec_dir: Path | None = None,
     correlation_key: str | int | None = None,
+    error_override: str | None = None,
 ) -> None:
     """Idempotently write the Job's terminal job-state row. Best-effort.
 
@@ -128,11 +129,21 @@ async def _record_terminal(
     evidence to object storage and stamp the resulting ``artifacts[]`` URIs onto
     the row. Both steps are fail-open — a store/upload failure never changes the
     verdict the Job already wrote to its workspace.
+
+    ``error_override`` (#1243) is the one thing that DOES change the verdict: it
+    says the workspace this verdict describes did not survive the pod (a failed
+    restore, or a failed evidence push-back). ``has_verdict`` is forced False so
+    the store's #464 rule records ``stuck`` instead of ``done`` — the Job exiting
+    non-zero is not enough on its own, because ``reconcile_and_reap_once`` skips
+    the k8s probe entirely once a terminal row exists.
     """
     has_verdict = final_status in _VERDICT_STATUSES
     error = None
     if final_status in _FAILED_STATUSES:
         error = f"verify failed in-Job (status={final_status})"
+    if error_override:
+        has_verdict = False
+        error = error_override
 
     # RFC-0015 §4 D2: persist the requirement->test->VAL traceability matrix onto
     # the durable job_states row (the #468 store / #465 verification data) so the
@@ -243,7 +254,21 @@ def main(argv: list[str] | None = None) -> int:
         restore_workspace,
     )
 
-    packed_root = restore_workspace()
+    try:
+        packed_root = restore_workspace()
+    except Exception as exc:  # noqa: BLE001 - any restore failure, same outcome
+        # #1243: this used to raise straight out of main(), so the pod died with a
+        # traceback and NOTHING wrote the job-state row — recovery then depended
+        # entirely on the reaper. Record the terminal row here instead, under a
+        # *_failed status: an empty status maps to `queued`, which would leave the
+        # row holding an admission slot rather than releasing it.
+        _log.exception("[verify-pipeline] restoring the packed workspace failed")
+        _record_terminal_now(
+            args,
+            final_status="workspace_restore_failed",
+            error_override=f"restoring the packed workspace failed: {exc}",
+        )
+        return 1
 
     spec_dir = Path(args.spec)
     project_dir = Path(args.project)
@@ -260,28 +285,21 @@ def main(argv: list[str] | None = None) -> int:
         run_verify_pipeline(spec_dir, project_dir, mode=args.mode)
     )
 
-    if args.job_id:
-        asyncio.run(
-            _record_terminal(
-                args.job_id,
-                final_status=final_status,
-                spec_dir=spec_dir,
-                correlation_key=args.correlation_key,
-            )
-        )
-    else:
-        _log.warning(
-            "[verify-pipeline] no --job-id/$JOB_ID; skipping durable terminal write"
-        )
-
     # The evidence push-back, and the LAST thing that touches the workspace: on the
     # packed path everything above wrote into an emptyDir that dies with this pod.
-    # emit_verify_artifacts (above, inside _record_terminal) already uploads the
+    # emit_verify_artifacts (below, inside _record_terminal) already uploads the
     # findings + evidence tree file-by-file, but it is fail-open by design and
     # covers only what it enumerates — status.json, the lane staging dirs and the
     # screenshots outside findings/evidence are not in that set. This repacks the
-    # whole root, and a failure here FAILS THE JOB: a green Job whose evidence
-    # silently went nowhere is exactly the outcome #1159 exists to prevent.
+    # whole root.
+    #
+    # BEFORE the terminal write, not after (#1243): the durable row is the only
+    # thing the control plane reads. `reconcile_and_reap_once` short-circuits on
+    # "a terminal row the Job already wrote wins" and never probes the Job, so a
+    # verdict written first could no longer be corrected by a `return 1` here —
+    # the run stayed green with its evidence gone. The failure is carried into
+    # `_record_terminal` as error_override, which records `stuck` + the reason.
+    push_back_error: str | None = None
     if packed_root is not None:
         if not args.job_id:
             _log.error(
@@ -295,16 +313,55 @@ def main(argv: list[str] | None = None) -> int:
                 job_id=args.job_id,
                 correlation_key=args.correlation_key,
             )
-        except Exception:  # noqa: BLE001 - ANY failure here loses the evidence
+        except Exception as exc:  # noqa: BLE001 - ANY failure here loses evidence
             _log.exception(
                 "[verify-pipeline] pushing the packed workspace back failed; "
                 "the run's evidence is lost with this pod"
             )
-            return 1
+            push_back_error = f"pushing the packed workspace back failed: {exc}"
+
+    if args.job_id:
+        asyncio.run(
+            _record_terminal(
+                args.job_id,
+                final_status=final_status,
+                spec_dir=spec_dir,
+                correlation_key=args.correlation_key,
+                error_override=push_back_error,
+            )
+        )
+    else:
+        _log.warning(
+            "[verify-pipeline] no --job-id/$JOB_ID; skipping durable terminal write"
+        )
 
     # Exit non-zero on a hard failure so the Job is marked failed even if the
     # durable write was skipped (the reaper then reaps on the k8s-side signal).
-    return 0 if ok else 1
+    return 1 if push_back_error else (0 if ok else 1)
+
+
+def _record_terminal_now(
+    args: argparse.Namespace, *, final_status: str, error_override: str
+) -> None:
+    """Write the terminal row for a failure that happened outside the pipeline.
+
+    Separate from the in-line write at the end of ``main`` only because it runs
+    before there is a workspace on disk: no spec tree means no artifacts and no
+    traceability to stamp. Best-effort, like every other durable write here.
+    """
+    if not args.job_id:
+        _log.warning(
+            "[verify-pipeline] no --job-id/$JOB_ID; skipping durable terminal write"
+        )
+        return
+    asyncio.run(
+        _record_terminal(
+            args.job_id,
+            final_status=final_status,
+            correlation_key=args.correlation_key,
+            error_override=error_override,
+        )
+    )
 
 
 if __name__ == "__main__":

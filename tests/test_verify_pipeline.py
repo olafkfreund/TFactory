@@ -155,9 +155,10 @@ def test_main_exits_zero_on_success(monkeypatch, tmp_path):
 
     recorded = {}
 
-    async def fake_record(job_id, *, final_status, spec_dir=None, correlation_key=None):
+    async def fake_record(job_id, *, final_status, **kw):
         recorded["job_id"] = job_id
         recorded["final_status"] = final_status
+        recorded["error_override"] = kw.get("error_override")
 
     monkeypatch.setattr(vp, "run_verify_pipeline", fake_pipeline)
     monkeypatch.setattr(vp, "_record_terminal", fake_record)
@@ -165,4 +166,8 @@ def test_main_exits_zero_on_success(monkeypatch, tmp_path):
         ["--spec", str(tmp_path), "--project", str(tmp_path), "--job-id", "jX"]
     )
     assert rc == 0
-    assert recorded == {"job_id": "jX", "final_status": "triaged"}
+    assert recorded == {
+        "job_id": "jX",
+        "final_status": "triaged",
+        "error_override": None,
+    }

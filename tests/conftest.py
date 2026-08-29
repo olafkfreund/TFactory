@@ -1435,6 +1435,7 @@ CRITICAL_MODULES = frozenset(
         "test_badge",  # acceptance badge SVG + component linkage (#241)
         "test_badges_route",  # public badge endpoint (#241)
         "test_health_gate",  # pre-lane health gate + URL resolution (#234)
+        "test_gate_honesty",  # every gate/verdict rule carries a refusal proof (#1247)
         "test_ssrf_remaining_sinks",  # spec-derived outbound URL guards (#1117)
         "test_rate_limit",  # webhook rate limiter (#242)
         "test_build_deploy_test",  # build → deploy → test orchestration (#233)
