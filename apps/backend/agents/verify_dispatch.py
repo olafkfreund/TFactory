@@ -1375,6 +1375,11 @@ def _is_k8s_job_ref(record: dict[str, Any]) -> bool:
     return isinstance(ref, dict) and ref.get("kind") == "k8s-job"
 
 
+#: A Job that finished is deleted by ``ttlSecondsAfterFinished``, so 404 is the
+#: normal end state of one that ran -- an ANSWER, not a probe gap.
+_HTTP_NOT_FOUND = 404
+
+
 async def _probe_job(
     namespace: str, job_name: str, *, probe_fn: Any = None
 ) -> tuple[bool, bool, bool]:
@@ -1421,7 +1426,7 @@ async def _probe_job(
         #
         # Everything else still fails toward alive: an API outage, a permission
         # error or a timeout must not reap a running verify.
-        if getattr(exc, "status", None) == 404:
+        if getattr(exc, "status", None) == _HTTP_NOT_FOUND:
             _log.info(
                 "[verify-dispatch] job %s/%s not found (finished and GC'd)",
                 namespace,
