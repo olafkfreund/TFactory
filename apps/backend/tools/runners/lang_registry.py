@@ -25,6 +25,7 @@ from the code that actually invokes it (v0.2 modality spine):
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 
 
 class UnsupportedLanguageError(KeyError):
@@ -92,6 +93,70 @@ _REGISTRY: dict[str, dict[str, ToolSpec | None]] = {
 }
 
 
+@lru_cache(maxsize=1)
+def _descriptor_registry() -> dict[str, dict[str, ToolSpec | None]]:
+    """Rows for descriptor-declared languages (swift, kotlin, ...).
+
+    Built from the vendored ``languages/*.yaml`` descriptors (hub canonical
+    ``contracts/languages/``; see ``language_descriptors.py``), so onboarding a
+    language is a descriptor drop, not an edit to :data:`_REGISTRY`. Only lanes
+    the descriptor marks ``available: true`` get a ToolSpec; an unavailable lane
+    stays ``None`` here — structurally unrunnable, so it can never be reported
+    as passed — and its mandatory reason is served by
+    :func:`unavailable_lane_reason` for RFC-0006 VAL-0 evidence.
+
+    Lazy (first call) + cached: this module must stay import-cheap, and the
+    descriptor load needs PyYAML. A broken vendoring (missing/invalid
+    descriptors) raises loudly here rather than narrowing the registry back to
+    the static table — an empty extension must not look like a clean one.
+    """
+    from .language_descriptors import load_languages  # noqa: PLC0415 — lazy, import-cheap module
+
+    rows: dict[str, dict[str, ToolSpec | None]] = {}
+    for name, descriptor in load_languages().items():
+        if name in _REGISTRY:
+            # The hand-curated static rows stay authoritative for languages
+            # they already describe; descriptors EXTEND the registry.
+            continue
+        lanes: dict[str, ToolSpec | None] = {}
+        for key in _LANE_KEYS:
+            lane = descriptor.lane(key)
+            if lane is not None and lane.available:
+                lanes[key] = ToolSpec(
+                    binary=lane.tool,
+                    description=f"{lane.command} (language descriptor)",
+                    available_at_mvp=True,
+                    phase="descriptor",
+                )
+            else:
+                lanes[key] = None
+        rows[name] = lanes
+    return rows
+
+
+def _full_registry() -> dict[str, dict[str, ToolSpec | None]]:
+    """Static rows merged over the descriptor-declared ones (static wins)."""
+    merged = dict(_descriptor_registry())
+    merged.update(_REGISTRY)
+    return merged
+
+
+def unavailable_lane_reason(language: str, lane: str) -> str | None:
+    """The descriptor's declared reason a lane cannot run, or None.
+
+    This is the machine-readable honesty the descriptors exist for: a lane that
+    is absent BECAUSE of a substrate limit (XCUITest needs macOS; Espresso needs
+    an emulator) surfaces its reason for VAL-0 evidence instead of being
+    indistinguishable from a lane nobody thought about.
+    """
+    from .language_descriptors import load_languages  # noqa: PLC0415 — lazy, import-cheap module
+
+    descriptor = load_languages().get(language.lower())
+    if descriptor is None:
+        return None
+    return descriptor.unavailable_reason(lane)
+
+
 def _tool_from_manifest(manifest: dict | None) -> ToolSpec | None:
     """Synthesize an on-demand ToolSpec from the RFC-0005 environment manifest.
 
@@ -135,16 +200,17 @@ def get_tool_for_lane(
             manifest verify path to fall back to.
     """
     lang = language.lower()
-    if lang not in _REGISTRY:
+    registry = _full_registry()
+    if lang not in registry:
         spec = _tool_from_manifest(manifest)
         if spec is not None:
             return spec
         raise UnsupportedLanguageError(
             f"language {language!r} not in tfactory registry "
-            f"(supported: {sorted(_REGISTRY)}) and no environment-manifest "
+            f"(supported: {sorted(registry)}) and no environment-manifest "
             "verify_commands to provision on-demand"
         )
-    return _REGISTRY[lang].get(lane)
+    return registry[lang].get(lane)
 
 
 def languages_supporting_lane(lane: str, *, mvp_only: bool = False) -> list[str]:
@@ -153,7 +219,7 @@ def languages_supporting_lane(lane: str, *, mvp_only: bool = False) -> list[str]
     When ``mvp_only=True``, also require ``available_at_mvp=True``.
     """
     out = []
-    for lang, lanes in _REGISTRY.items():
+    for lang, lanes in _full_registry().items():
         spec = lanes.get(lane)
         if spec is None:
             continue
