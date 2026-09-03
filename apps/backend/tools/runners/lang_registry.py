@@ -110,7 +110,9 @@ def _descriptor_registry() -> dict[str, dict[str, ToolSpec | None]]:
     descriptors) raises loudly here rather than narrowing the registry back to
     the static table — an empty extension must not look like a clean one.
     """
-    from .language_descriptors import load_languages  # noqa: PLC0415 — lazy, import-cheap module
+    from .language_descriptors import (
+        load_languages,  # noqa: PLC0415 — lazy, import-cheap module
+    )
 
     rows: dict[str, dict[str, ToolSpec | None]] = {}
     for name, descriptor in load_languages().items():
@@ -149,7 +151,9 @@ def unavailable_lane_reason(language: str, lane: str) -> str | None:
     an emulator) surfaces its reason for VAL-0 evidence instead of being
     indistinguishable from a lane nobody thought about.
     """
-    from .language_descriptors import load_languages  # noqa: PLC0415 — lazy, import-cheap module
+    from .language_descriptors import (
+        load_languages,  # noqa: PLC0415 — lazy, import-cheap module
+    )
 
     descriptor = load_languages().get(language.lower())
     if descriptor is None:
