@@ -37,6 +37,24 @@ class _ExplodingSession:
     async def execute(self, *_a, **_k):  # pragma: no cover - not reached
         raise AssertionError("execute should not be reached")
 
+    def begin_nested(self):
+        """The real writer wraps its insert in a SAVEPOINT.
+
+        Without this, ``async with db.begin_nested()`` raises AttributeError
+        *inside* the try -- so the failure test would still see its ERROR and
+        its counter while ``flush`` was never called, passing for a reason
+        that has nothing to do with a dropped audit row.
+        """
+
+        class _Savepoint:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_exc):
+                return False
+
+        return _Savepoint()
+
     def add(self, entry: object) -> None:
         self.added.append(entry)
 
