@@ -99,6 +99,12 @@ VENDORED_SKIP = frozenset(
         "apps/backend/agents/verification_gate.py",
         "apps/backend/tools/runners/nix_provisioner.py",
         "apps/backend/tools/runners/artifact_store.py",
+        # RFC-0005 paved road: nix_provisioner's sibling, vendored byte-exact
+        # from the hub's scripts/language_descriptors.py together with the
+        # tools/runners/languages/*.yaml descriptors it globs. Held to the
+        # hub's bar (its CI env carries types-PyYAML; this repo's ratchet env
+        # does not), policed by verification-core-drift.yml.
+        "apps/backend/tools/runners/language_descriptors.py",
     }
 )
 

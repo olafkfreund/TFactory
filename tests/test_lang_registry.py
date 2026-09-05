@@ -129,9 +129,18 @@ def test_deprecated_v01_lane_returns_none():
 
 
 def test_languages_supporting_lane_mvp_only_for_unit():
-    """v0.2 MVP: Python + TypeScript both have unit lane available."""
+    """MVP unit lanes: the v0.2 pair plus the descriptor-declared languages.
+
+    swift and kotlin joined via tools/runners/languages/*.yaml, and their unit
+    lanes are marked available because they were RUN on this substrate (a
+    minimal SPM package and Gradle module, inside the provisioner-generated
+    Nix shells), not because a table says so.
+    """
     assert set(languages_supporting_lane("unit", mvp_only=True)) == {
-        "python", "typescript",
+        "python",
+        "typescript",
+        "swift",
+        "kotlin",
     }
 
 
@@ -141,19 +150,23 @@ def test_languages_supporting_lane_mvp_only_for_browser():
 
 
 def test_languages_supporting_lane_unfiltered_for_unit():
-    """Unfiltered: Python + TypeScript + Java (#237) have unit registrations."""
+    """Unfiltered: the static rows (#237) plus the descriptor languages."""
     assert set(languages_supporting_lane("unit", mvp_only=False)) == {
-        "python", "typescript", "java",
+        "python",
+        "typescript",
+        "java",
+        "swift",
+        "kotlin",
     }
 
 
-def test_languages_supporting_lane_mvp_only_empty_for_v03_lanes():
-    """API, integration, mutation are v0.3+ — not MVP available in v0.2."""
-    for lane in ("api", "integration", "mutation"):
-        # MVP-only filter excludes non-MVP entries
-        assert languages_supporting_lane(lane, mvp_only=True) == [], (
-            f"{lane!r} should have no MVP-available languages in v0.2"
-        )
+def test_languages_supporting_lane_mvp_only_for_v03_lanes():
+    """API/integration/mutation: static rows are v0.3+ (not MVP); kotlin's
+    descriptor lights api + mutation because gradle test and gradle pitest were
+    actually run (pitest generated and killed real mutants, 2026-09-03)."""
+    assert languages_supporting_lane("api", mvp_only=True) == ["kotlin"]
+    assert languages_supporting_lane("integration", mvp_only=True) == []
+    assert languages_supporting_lane("mutation", mvp_only=True) == ["kotlin"]
 
 
 # ── ToolSpec immutability ───────────────────────────────────────────────
