@@ -22,7 +22,6 @@ if str(_WEB_SERVER) not in sys.path:
     sys.path.insert(0, str(_WEB_SERVER))
 
 import pytest  # noqa: E402
-
 from server import config as config_mod  # noqa: E402
 
 
