@@ -55,7 +55,7 @@ def test_target_url_uses_given_port():
 # ── start / stop ─────────────────────────────────────────────────────────
 
 
-def test_start_invokes_popen_with_shell_and_new_session():
+def test_start_invokes_popen_with_argv_and_new_session():
     proc = _FakeProc()
     calls = {}
 
@@ -71,8 +71,9 @@ def test_start_invokes_popen_with_shell_and_new_session():
         popen_fn=fake_popen,
     )
     rt.start()
-    assert calls["cmd"] == "python -m uvicorn app:app --port 8123"
-    assert calls["kwargs"]["shell"] is True
+    # argv list, never a shell string — see test_serve_command_injection.py
+    assert calls["cmd"] == ["python", "-m", "uvicorn", "app:app", "--port", "8123"]
+    assert "shell" not in calls["kwargs"]
     assert calls["kwargs"]["cwd"] == "/proj"
     assert calls["kwargs"]["start_new_session"] is True
     assert rt._proc is proc
