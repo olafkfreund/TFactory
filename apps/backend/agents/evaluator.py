@@ -46,7 +46,7 @@ import os
 import shutil
 import traceback
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -2545,9 +2545,23 @@ def _entry_for(doc: dict[str, Any] | None, test_id: str) -> dict[str, Any] | Non
     return None
 
 
-def _voted_test_ids(docs: list[dict[str, Any] | None]) -> list[str]:
-    """Union of test_ids across judge runs, first-seen order preserved."""
+def _voted_test_ids(
+    docs: list[dict[str, Any] | None], catalog: Iterable[str] = ()
+) -> list[str]:
+    """Ids to vote on: the generated-test CATALOG first, then judge extras.
+
+    Seeding from ``catalog`` (the test ids the generator actually produced) is
+    what makes the fail-closed promise hold. Taking the union of judge output
+    alone means a test that EVERY judge omitted — the common LLM truncation
+    failure on a long verdict list — is simply absent from the merged doc: no
+    vote is taken, and the run reports a clean pass over the tests that
+    survived. Judge-only ids are still kept (appended), so an id the catalog
+    does not know about is reported rather than dropped.
+    """
     order: list[str] = []
+    for seeded in catalog:
+        if isinstance(seeded, str) and seeded and seeded not in order:
+            order.append(seeded)
     for doc in docs:
         verdicts = (doc or {}).get("verdicts")
         for v in verdicts if isinstance(verdicts, list) else []:
@@ -2557,13 +2571,39 @@ def _voted_test_ids(docs: list[dict[str, Any] | None]) -> list[str]:
     return order
 
 
+def _unjudged_entry(test_id: str, test_file: str | None) -> dict[str, Any]:
+    """The verdict entry for a generated test NO judge call returned (#649).
+
+    Distinguishable from a judged reject on sight: ``judged`` is False and the
+    reason says the verdict was never taken, so a reviewer cannot read this as
+    a considered rejection — or, worse, miss it as a silent pass.
+    """
+    entry: dict[str, Any] = {
+        "test_id": test_id,
+        "verdict": "reject",
+        "judged": False,
+        "reasons": [
+            "no judge call returned a verdict for this generated test "
+            "(all calls omitted it); an unjudged test casts a fail-closed "
+            "reject vote rather than dropping out of the merged verdicts"
+        ],
+    }
+    if test_file:
+        entry["test_file"] = test_file
+    return entry
+
+
 async def _merge_voted_verdicts(
     docs: list[dict[str, Any] | None],
+    catalog: Mapping[str, str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Merge N judge runs into one verdicts doc via per-test majority vote (#649).
 
     A run that crashed/was invalid (``None`` doc) or is simply missing a test
-    casts a fail-closed reject vote for that test. Each merged entry carries a
+    casts a fail-closed reject vote for that test. ``catalog`` maps every
+    GENERATED test id to its file: the vote is taken over those ids, so a test
+    every judge omitted votes reject (see :func:`_unjudged_entry`) instead of
+    vanishing. Each merged entry carries a
     ``vote`` block (all votes, split, dissent with the dissenter's reasons);
     the doc carries a ``verdict_vote`` split summary for calibration.
     Returns ``(merged_doc, vote_summary)``.
@@ -2573,7 +2613,8 @@ async def _merge_voted_verdicts(
     async def _replay(i: int) -> dict[str, Any] | None:
         return docs[i]
 
-    order = _voted_test_ids(docs)
+    catalog = catalog or {}
+    order = _voted_test_ids(docs, catalog)
     merged: list[dict[str, Any]] = []
     splits: Counter[str] = Counter()
     for tid in order:
@@ -2595,8 +2636,11 @@ async def _merge_voted_verdicts(
                 entry = dict(candidate)
                 break
         if entry is None:
-            entry = dict(
-                next(e for e in (_entry_for(d, tid) for d in docs) if e is not None)
+            found = next((e for e in (_entry_for(d, tid) for d in docs) if e), None)
+            entry = (
+                dict(found)
+                if found is not None
+                else _unjudged_entry(tid, catalog.get(tid))
             )
         if entry.get("verdict") != result.majority:
             reasons = entry.get("reasons")
@@ -2627,6 +2671,7 @@ async def _merge_voted_verdicts(
         "calls": len(docs),
         "failed_calls": sum(1 for d in docs if d is None),
         "tests": len(order),
+        "unjudged": sum(1 for e in merged if e.get("judged") is False),
         "splits": dict(splits),
         "split_rate": round(contested / len(order), 2) if order else 0.0,
     }
@@ -2672,7 +2717,11 @@ async def _run_evaluator_session(
 
     vote_summary: dict[str, Any] | None = None
     if n > 1:
-        merged, vote_summary = await _merge_voted_verdicts(docs)
+        # The bundles ARE the catalog of generated tests: seed the vote from
+        # them so a test every judge omitted still votes reject (fail-closed).
+        merged, vote_summary = await _merge_voted_verdicts(
+            docs, {b.test_id: str(b.test_file) for b in bundles}
+        )
         verdicts_path.write_text(json.dumps(merged, indent=2))
         count = len(merged.get("verdicts") or [])
     else:
