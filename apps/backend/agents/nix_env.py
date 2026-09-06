@@ -23,6 +23,7 @@ import itertools
 import json
 import logging
 import os
+import shlex
 import shutil
 import tempfile
 import threading
@@ -139,6 +140,35 @@ def _static_page_targets(targets: list[str] | None) -> bool:
     return all(s in _STATIC_SUFFIXES for s in sufs)
 
 
+# Characters that give a shell the power to run a SECOND command. The contract's
+# ``environment.serve_command`` is spec-derived text (GitHub issue body → plan →
+# contract), and two sinks still hand a serve command to a shell: the in-Job
+# preludes built by ``build_nix_job_command``/``build_browser_job_command``
+# below. Those run inside the sandbox pod rather than on the verify host, but a
+# serve command is meant to name ONE process, so a metacharacter is never
+# legitimate here and rejecting it costs nothing (TFactory#1290).
+_SHELL_METACHARACTERS = frozenset(";&|<>`$()\n\r\x00")
+
+
+def _is_safe_serve_command(command: str) -> bool:
+    """True when ``command`` names one process and cannot chain a second.
+
+    Two independent conditions, both required: no shell metacharacter, and it
+    parses as a POSIX argv with at least one word. This is a source-side
+    allow-shape check, NOT the only defence — ``LocalServeRuntime`` exec's an
+    argv list with no shell at all, so the host sink is safe even if this
+    check is ever bypassed.
+    """
+    if not command.strip():
+        return False
+    if _SHELL_METACHARACTERS & set(command):
+        return False
+    try:
+        return bool(shlex.split(command))
+    except ValueError:  # unbalanced quotes
+        return False
+
+
 def detect_serve_command(
     project_dir: Path,
     env: dict | None = None,
@@ -148,10 +178,12 @@ def detect_serve_command(
 ) -> str | None:
     """How to start the app inside the materialized env for a browser/api lane.
 
-    Order: the contract ``environment.serve_command`` (authoritative) → else
-    detect from the checkout (FastAPI/Flask via uvicorn, or a node start script).
-    Returns None when nothing is detectable (the lane then runs without serving —
-    honest, not a guess).
+    Order: the contract ``environment.serve_command`` (authoritative, but only
+    when it passes ``_is_safe_serve_command`` — it is spec-derived text, so an
+    imported issue body reaches it) → else detect from the checkout
+    (FastAPI/Flask via uvicorn, or a node start script). Returns None when
+    nothing is detectable (the lane then runs without serving — honest, not a
+    guess).
 
     ``targets`` are the spec's files. A POLYGLOT repo holds more than one app, and
     a repo-wide probe returns whichever it finds first for every spec: spec 165
@@ -162,8 +194,19 @@ def detect_serve_command(
     same repo and None is the honest answer. Omitted keeps the repo-wide
     behaviour, so a single-app repo is unaffected.
     """
-    if env and env.get("serve_command"):
-        return str(env["serve_command"])
+    declared = str(env["serve_command"]) if env and env.get("serve_command") else None
+    if declared is not None:
+        if _is_safe_serve_command(declared):
+            return declared
+        # Not a fatal error for the run: fall through to local detection, which
+        # is the honest answer for this checkout. Refusing the declared value is
+        # the point — see _is_safe_serve_command (TFactory#1290).
+        _log.warning(
+            "ignoring contract environment.serve_command: it is not a single "
+            "runnable command (shell metacharacters or unparseable quoting). "
+            "Falling back to detection. value=%r",
+            declared,
+        )
     pd = Path(project_dir)
 
     def _serves(app_dir: Path) -> bool:

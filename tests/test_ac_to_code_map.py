@@ -36,7 +36,10 @@ def spec(tmp_path):
 
 
 def _write(spec, ac_map):
-    contract = {"contract_version": "2", "tfactory": {"lanes": ["unit"], "ac_to_code_map": ac_map}}
+    contract = {
+        "contract_version": "2",
+        "tfactory": {"lanes": ["unit"], "ac_to_code_map": ac_map},
+    }
     (spec / "context" / "aifactory_plan.json").write_text(json.dumps(contract))
 
 

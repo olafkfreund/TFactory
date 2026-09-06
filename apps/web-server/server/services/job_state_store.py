@@ -524,8 +524,7 @@ async def try_admit_verify(
             return admitted
     except Exception:  # noqa: BLE001 — admission must never hard-block a verify
         logger.warning(
-            "[job-state] admission check failed for job_id=%s; "
-            "admitting (fail-open)",
+            "[job-state] admission check failed for job_id=%s; admitting (fail-open)",
             sanitize_log(job_id),
             exc_info=True,
         )

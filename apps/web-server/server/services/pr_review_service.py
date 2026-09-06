@@ -30,6 +30,7 @@ from ..websockets.events import broadcast_event
 
 class PRReviewPhase(str, Enum):
     """PR review execution phases."""
+
     STARTING = "starting"
     FETCHING = "fetching"
     ANALYZING = "analyzing"
@@ -56,6 +57,7 @@ PROGRESS_PATTERN = re.compile(r"\[PR\s*#\d+\]\s*\[\s*(\d+)%\]\s*(.*)")
 @dataclass
 class PRReviewProgress:
     """PR review progress information."""
+
     project_id: str
     pr_number: int
     phase: PRReviewPhase
@@ -119,11 +121,13 @@ class PRReviewLogWriter:
         if phase_key not in self._data["phases"]:
             self.start_phase(phase)
 
-        self._data["phases"][phase_key]["entries"].append({
-            "timestamp": datetime.now().isoformat(),
-            "message": message,
-            "progress": progress,
-        })
+        self._data["phases"][phase_key]["entries"].append(
+            {
+                "timestamp": datetime.now().isoformat(),
+                "message": message,
+                "progress": progress,
+            }
+        )
         self._save()
 
     def complete_phase(self, phase: PRReviewPhase, status: str = "completed") -> None:
@@ -232,14 +236,19 @@ class PRReviewService:
         cmd = [
             sys.executable,
             str(runner_script),
-            "--project", str(project_path),
-            command, str(pr_number),
+            "--project",
+            str(project_path),
+            command,
+            str(pr_number),
         ]
 
-        logger.info(f"Starting PR review for {sanitize_log(key)}: {sanitize_log(' '.join(cmd))}")
+        logger.info(
+            f"Starting PR review for {sanitize_log(key)}: {sanitize_log(' '.join(cmd))}"
+        )
 
         # Set up environment — scrub ANTHROPIC_API_KEY (OAuth-only policy).
         from ..utils.subprocess_env import make_subprocess_env
+
         env = make_subprocess_env()
         env["PYTHONUNBUFFERED"] = "1"
         env["PYTHONIOENCODING"] = "utf-8"
@@ -249,7 +258,9 @@ class PRReviewService:
         backend_pythonpath = str(backend_path)
         github_runner_path = str(backend_path / "runners" / "github")
         if existing_pythonpath:
-            env["PYTHONPATH"] = f"{backend_pythonpath}:{github_runner_path}:{existing_pythonpath}"
+            env["PYTHONPATH"] = (
+                f"{backend_pythonpath}:{github_runner_path}:{existing_pythonpath}"
+            )
         else:
             env["PYTHONPATH"] = f"{backend_pythonpath}:{github_runner_path}"
 
@@ -289,7 +300,9 @@ class PRReviewService:
 
             # Emit initial progress
             await self._emit_progress(
-                project_id, pr_number, PRReviewPhase.STARTING,
+                project_id,
+                pr_number,
+                PRReviewPhase.STARTING,
                 "Starting PR review...",
             )
 
@@ -354,13 +367,16 @@ class PRReviewService:
         previous_phase: PRReviewPhase | None = None
 
         try:
+
             async def read_stderr():
                 """Collect stderr for error reporting."""
                 async for line_bytes in proc.stderr:
                     line = line_bytes.decode("utf-8", errors="replace").rstrip()
                     if line:
                         stderr_lines.append(line)
-                        logger.debug(f"[{sanitize_log(key)}] STDERR: {sanitize_log(line)}")
+                        logger.debug(
+                            f"[{sanitize_log(key)}] STDERR: {sanitize_log(line)}"
+                        )
 
             # Start stderr reader in background
             stderr_task = asyncio.create_task(read_stderr())
@@ -389,7 +405,11 @@ class PRReviewService:
                         log_writer.add_entry(phase, message, progress)
 
                     await self._emit_progress(
-                        project_id, pr_number, phase, message, progress,
+                        project_id,
+                        pr_number,
+                        phase,
+                        message,
+                        progress,
                     )
 
             # Wait for stderr reader to finish
@@ -401,7 +421,9 @@ class PRReviewService:
             if return_code == 0:
                 # Finalize logs on success
                 if log_writer:
-                    final_phase = self._current_phases.get(key, PRReviewPhase.GENERATING)
+                    final_phase = self._current_phases.get(
+                        key, PRReviewPhase.GENERATING
+                    )
                     log_writer.complete_phase(final_phase)
                     log_writer.finalize("completed")
 
@@ -412,7 +434,9 @@ class PRReviewService:
                     if stderr_lines
                     else f"PR review failed with exit code {return_code}"
                 )
-                logger.error(f"PR review failed for {sanitize_log(key)}: {sanitize_log(error_msg)}")
+                logger.error(
+                    f"PR review failed for {sanitize_log(key)}: {sanitize_log(error_msg)}"
+                )
 
                 # Finalize logs on failure
                 if log_writer:
@@ -485,13 +509,16 @@ class PRReviewService:
             sanitize_log(message),
         )
 
-        await broadcast_event("pr:review-progress", {
-            "projectId": project_id,
-            "phase": phase.value,
-            "prNumber": pr_number,
-            "progress": progress,
-            "message": message,
-        })
+        await broadcast_event(
+            "pr:review-progress",
+            {
+                "projectId": project_id,
+                "phase": phase.value,
+                "prNumber": pr_number,
+                "progress": progress,
+                "message": message,
+            },
+        )
 
     async def _emit_complete(
         self,
@@ -503,7 +530,9 @@ class PRReviewService:
 
         Reads stored review result from disk if available.
         """
-        logger.info(f"[{sanitize_log(project_id)}:PR#{sanitize_log(pr_number)}] Review complete")
+        logger.info(
+            f"[{sanitize_log(project_id)}:PR#{sanitize_log(pr_number)}] Review complete"
+        )
 
         # Try to read stored review result JSON from the project's .tfactory directory
         # Runner saves to: .tfactory/github/pr/review_{pr_number}.json
@@ -521,11 +550,14 @@ class PRReviewService:
 
         from .pr_data_service import _convert_keys
 
-        await broadcast_event("pr:review-complete", {
-            "projectId": project_id,
-            "prNumber": pr_number,
-            "result": _convert_keys(result_data) if result_data else None,
-        })
+        await broadcast_event(
+            "pr:review-complete",
+            {
+                "projectId": project_id,
+                "prNumber": pr_number,
+                "result": _convert_keys(result_data) if result_data else None,
+            },
+        )
 
     async def _emit_error(
         self,
@@ -541,11 +573,14 @@ class PRReviewService:
             sanitize_log(error),
         )
 
-        await broadcast_event("pr:review-error", {
-            "projectId": project_id,
-            "prNumber": pr_number,
-            "error": error,
-        })
+        await broadcast_event(
+            "pr:review-error",
+            {
+                "projectId": project_id,
+                "prNumber": pr_number,
+                "error": error,
+            },
+        )
 
     def _cleanup(self, key: str):
         """Clean up tracking state for a review."""

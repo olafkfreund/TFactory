@@ -97,7 +97,10 @@ def test_max_flag_rate_enforced(tmp_path):
 
 
 def test_block_on_reject(tmp_path):
-    verdicts = [_accept("a"), {"test_id": "b", "verdict": "reject", "signals_summary": {}}]
+    verdicts = [
+        _accept("a"),
+        {"test_id": "b", "verdict": "reject", "signals_summary": {}},
+    ]
     path = _write_verdicts(tmp_path, verdicts)
     assert evaluate_gate(path, GatePolicy(block_on_reject=True)).passed is False
     # Default policy does NOT block on reject (rejects are dropped junk tests).
@@ -129,10 +132,10 @@ def test_accepted_unstable_fails(tmp_path):
 
 
 def test_guardrails_can_be_disabled(tmp_path):
-    path = _write_verdicts(tmp_path, [_accept("a", mutation="survived", stability="flaky")])
-    policy = GatePolicy(
-        block_on_survived_mutation=False, require_stable_accepts=False
+    path = _write_verdicts(
+        tmp_path, [_accept("a", mutation="survived", stability="flaky")]
     )
+    policy = GatePolicy(block_on_survived_mutation=False, require_stable_accepts=False)
     assert evaluate_gate(path, policy).passed is True
 
 

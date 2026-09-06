@@ -19,7 +19,11 @@ def _rec(status="FAIL", severity="High", title="t", region="us-east-1", check="i
         "finding_info": {"title": title, "uid": f"prowler-aws-{check}-123"},
         "metadata": {"event_code": check},
         "resources": [{"name": "res-1", "region": region, "uid": "arn:aws:..."}],
-        "cloud": {"region": region, "provider": "aws", "account": {"uid": "533267307120"}},
+        "cloud": {
+            "region": region,
+            "provider": "aws",
+            "account": {"uid": "533267307120"},
+        },
     }
 
 
@@ -95,11 +99,13 @@ def test_assess_critical_breaches_high_gate() -> None:
 
 
 def test_inventory_findings_sorted_worst_first_and_scoped() -> None:
-    findings = parse_ocsf([
-        _rec(severity="Low", title="low one", region="eu-west-2"),
-        _rec(severity="Critical", title="crit one", region="us-east-1"),
-        _rec(status="PASS", severity="High"),  # passes are excluded
-    ])
+    findings = parse_ocsf(
+        [
+            _rec(severity="Low", title="low one", region="eu-west-2"),
+            _rec(severity="Critical", title="crit one", region="us-east-1"),
+            _rec(status="PASS", severity="High"),  # passes are excluded
+        ]
+    )
     out = to_inventory_findings(findings)
     assert [f["title"] for f in out] == ["crit one", "low one"]  # critical first
     assert out[0]["scope"] == "us-east-1"
@@ -114,7 +120,13 @@ def test_inventory_findings_limit() -> None:
 def test_inventory_findings_feeds_diagram() -> None:
     from agents.diagrams import render_cloud_topology
 
-    findings = parse_ocsf([_rec(severity="High", title="15/18 users no MFA", region=None)])
-    inv = {"provider": "aws", "account": "1", "findings": to_inventory_findings(findings)}
+    findings = parse_ocsf(
+        [_rec(severity="High", title="15/18 users no MFA", region=None)]
+    )
+    inv = {
+        "provider": "aws",
+        "account": "1",
+        "findings": to_inventory_findings(findings),
+    }
     out = render_cloud_topology(inv)
     assert "🔴 15/18 users no MFA (high)" in out

@@ -204,7 +204,8 @@ async def get_worktree_merge_preview(task_id: str):
         # output is logged server-side only; it is never surfaced in the API
         # response (avoids leaking command/stack-trace text to clients).
         logger.exception(
-            "git merge-tree failed while computing merge preview for task %s", sanitize_log(task_id)
+            "git merge-tree failed while computing merge preview for task %s",
+            sanitize_log(task_id),
         )
         has_conflicts = True
 
@@ -523,7 +524,9 @@ async def resolve_worktree_conflicts(
                 "error": f"Git merge failed: {merge_result.stderr.strip()}",
             }
         else:
-            logger.info(f"Merge has conflicts for {sanitize_log(task_id)}, resolving with AI")
+            logger.info(
+                f"Merge has conflicts for {sanitize_log(task_id)}, resolving with AI"
+            )
 
     if not options.useAI:
         return {
@@ -868,7 +871,9 @@ async def resolve_uncommitted_conflicts(task_id: str):
                     "error": f"Failed to stash changes: {result.stderr or result.stdout}",
                 }
     except subprocess.CalledProcessError:
-        logger.exception("Failed to stash changes before resolving uncommitted conflicts")
+        logger.exception(
+            "Failed to stash changes before resolving uncommitted conflicts"
+        )
         return {"success": False, "error": "Failed to stash changes"}
 
     resolved_files = []
@@ -1063,7 +1068,9 @@ async def resolve_git_merge_conflicts(task_id: str):
         logger.info(f"Found merge in progress in main project: {project_path}")
     elif merge_head_worktree and (merge_head_worktree / "MERGE_HEAD").exists():
         work_path = worktree_path
-        logger.info(f"Found merge in progress in worktree: {sanitize_log(worktree_path)}")
+        logger.info(
+            f"Found merge in progress in worktree: {sanitize_log(worktree_path)}"
+        )
     else:
         # No merge in progress - check if there are files with conflict markers anyway
         # This can happen if the merge state was cleared but files still have markers
@@ -1366,7 +1373,9 @@ async def abort_worktree_merge(task_id: str):
                 )
                 if result.returncode == 0:
                     aborted_locations.append("worktree")
-                    logger.info(f"Aborted merge in worktree: {sanitize_log(worktree_path)}")
+                    logger.info(
+                        f"Aborted merge in worktree: {sanitize_log(worktree_path)}"
+                    )
                 else:
                     logger.warning(
                         f"Failed to abort merge in worktree: {result.stderr}"

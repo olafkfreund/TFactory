@@ -45,7 +45,9 @@ def _clean_registry():
 
 
 def test_gate_closed_without_effectful_commands() -> None:
-    ok, reason = should_provision_val3({"levels": {"VAL-3": {"commands": []}}}, None, env=_LOCAL_VM)
+    ok, reason = should_provision_val3(
+        {"levels": {"VAL-3": {"commands": []}}}, None, env=_LOCAL_VM
+    )
     assert ok is False and "no effectful" in reason
 
 

@@ -190,9 +190,15 @@ class AppSettings(BaseModel):
     )
 
     # Global API keys
-    globalClaudeOAuthToken: str | None = Field(None, description="Global Claude OAuth token", repr=False)
-    globalOpenAIApiKey: str | None = Field(None, description="Global OpenAI API key", repr=False)
-    globalAnthropicApiKey: str | None = Field(None, description="Global Anthropic API key", repr=False)
+    globalClaudeOAuthToken: str | None = Field(
+        None, description="Global Claude OAuth token", repr=False
+    )
+    globalOpenAIApiKey: str | None = Field(
+        None, description="Global OpenAI API key", repr=False
+    )
+    globalAnthropicApiKey: str | None = Field(
+        None, description="Global Anthropic API key", repr=False
+    )
 
     # Onboarding
     onboardingCompleted: bool | None = Field(
@@ -206,11 +212,19 @@ class AppSettings(BaseModel):
     emailMicrosoftClientId: str | None = Field(
         None, description="Microsoft OAuth Client ID for email notifications"
     )
-    emailMicrosoftClientSecret: str | None = Field(None, description="Microsoft OAuth Client Secret for email notifications", repr=False)
+    emailMicrosoftClientSecret: str | None = Field(
+        None,
+        description="Microsoft OAuth Client Secret for email notifications",
+        repr=False,
+    )
     emailGoogleClientId: str | None = Field(
         None, description="Google OAuth Client ID for email notifications"
     )
-    emailGoogleClientSecret: str | None = Field(None, description="Google OAuth Client Secret for email notifications", repr=False)
+    emailGoogleClientSecret: str | None = Field(
+        None,
+        description="Google OAuth Client Secret for email notifications",
+        repr=False,
+    )
 
     # LLM Provider Settings (for AI features: changelog, insights)
     llmProvider: Literal["ollama", "anthropic", "openai"] | None = Field(
@@ -1019,15 +1033,23 @@ async def request_usage_update():
 class SourceEnvUpdate(BaseModel):
     """Model for updating Magestic AI source environment configuration."""
 
-    claudeToken: str | None = Field(None, description="Claude Code OAuth token (CLAUDE_CODE_OAUTH_TOKEN)", repr=False)
+    claudeToken: str | None = Field(
+        None,
+        description="Claude Code OAuth token (CLAUDE_CODE_OAUTH_TOKEN)",
+        repr=False,
+    )
     anthropicBaseUrl: str | None = Field(
         None, description="Custom Anthropic API endpoint (ANTHROPIC_BASE_URL)"
     )
     graphitiEnabled: bool | None = Field(
         None, description="Enable Graphiti memory system (GRAPHITI_ENABLED)"
     )
-    githubToken: str | None = Field(None, description="GitHub personal access token (GITHUB_TOKEN)", repr=False)
-    openaiApiKey: str | None = Field(None, description="OpenAI API key for Graphiti (OPENAI_API_KEY)", repr=False)
+    githubToken: str | None = Field(
+        None, description="GitHub personal access token (GITHUB_TOKEN)", repr=False
+    )
+    openaiApiKey: str | None = Field(
+        None, description="OpenAI API key for Graphiti (OPENAI_API_KEY)", repr=False
+    )
     debug: bool | None = Field(None, description="Enable debug mode (DEBUG)")
 
 
@@ -1164,11 +1186,13 @@ async def update_source_env(config: SourceEnvUpdate):
         raise
     except json.JSONDecodeError as e:
         raise HTTPException(
-            status_code=500, detail=client_error(logger, "Failed to parse existing .env file", e)
+            status_code=500,
+            detail=client_error(logger, "Failed to parse existing .env file", e),
         )
     except Exception as e:
         raise HTTPException(
-            status_code=500, detail=client_error(logger, "Failed to update source environment", e)
+            status_code=500,
+            detail=client_error(logger, "Failed to update source environment", e),
         )
 
 

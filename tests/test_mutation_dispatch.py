@@ -15,18 +15,27 @@ from agents import mutation_dispatch as md  # noqa: E402
 
 # ── normalize_language ─────────────────────────────────────────────────
 
-@pytest.mark.parametrize("raw,expected", [
-    (None, "python"),
-    ("python", "python"), ("Python", "python"), ("py", "python"),
-    ("typescript", "typescript"), ("TS", "typescript"),
-    ("javascript", "typescript"), ("js", "typescript"),
-    ("java", "java"),  # unknown passes through (lowercased)
-])
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        (None, "python"),
+        ("python", "python"),
+        ("Python", "python"),
+        ("py", "python"),
+        ("typescript", "typescript"),
+        ("TS", "typescript"),
+        ("javascript", "typescript"),
+        ("js", "typescript"),
+        ("java", "java"),  # unknown passes through (lowercased)
+    ],
+)
 def test_normalize_language(raw, expected):
     assert md.normalize_language(raw) == expected
 
 
 # ── is_mutation_supported ──────────────────────────────────────────────
+
 
 @pytest.mark.parametrize("lang", [None, "python", "py", "typescript", "ts", "js"])
 def test_supported(lang):
@@ -52,6 +61,7 @@ def test_mutant_extension():
 
 # ── run_language_mutation routing ──────────────────────────────────────
 
+
 def test_routes_python_to_py_probe(monkeypatch, tmp_path):
     calls = {}
 
@@ -61,10 +71,14 @@ def test_routes_python_to_py_probe(monkeypatch, tmp_path):
         return "PY_REPORT"
 
     import agents.mutate_probe as mp
+
     monkeypatch.setattr(mp, "run_mutate_probe", fake_py)
 
     out = md.run_language_mutation(
-        "python", tmp_path / "t.py", tmp_path, runner_fn=object(),
+        "python",
+        tmp_path / "t.py",
+        tmp_path,
+        runner_fn=object(),
         mutant_path=tmp_path / "m.py",
     )
     assert out == "PY_REPORT"
@@ -80,10 +94,14 @@ def test_routes_typescript_to_ts_probe(monkeypatch, tmp_path):
         return "TS_REPORT"
 
     import agents.lang_typescript.mutate_probe as tsp
+
     monkeypatch.setattr(tsp, "run_ts_mutate_probe", fake_ts)
 
     out = md.run_language_mutation(
-        "typescript", tmp_path / "t.ts", tmp_path, runner_fn=object(),
+        "typescript",
+        tmp_path / "t.ts",
+        tmp_path,
+        runner_fn=object(),
         mutant_path=tmp_path / "m.ts",
     )
     assert out == "TS_REPORT"
@@ -93,16 +111,26 @@ def test_routes_typescript_to_ts_probe(monkeypatch, tmp_path):
 def test_js_alias_routes_to_ts_probe(monkeypatch, tmp_path):
     seen = {}
     import agents.lang_typescript.mutate_probe as tsp
-    monkeypatch.setattr(tsp, "run_ts_mutate_probe",
-                        lambda *a, **k: seen.setdefault("hit", True))
-    md.run_language_mutation("js", tmp_path / "t.test.js", tmp_path,
-                             runner_fn=None, mutant_path=tmp_path / "m.ts")
+
+    monkeypatch.setattr(
+        tsp, "run_ts_mutate_probe", lambda *a, **k: seen.setdefault("hit", True)
+    )
+    md.run_language_mutation(
+        "js",
+        tmp_path / "t.test.js",
+        tmp_path,
+        runner_fn=None,
+        mutant_path=tmp_path / "m.ts",
+    )
     assert seen.get("hit") is True
 
 
 def test_unsupported_language_returns_none(tmp_path):
     out = md.run_language_mutation(
-        "go", tmp_path / "t_test.go", tmp_path, runner_fn=None,
+        "go",
+        tmp_path / "t_test.go",
+        tmp_path,
+        runner_fn=None,
         mutant_path=tmp_path / "m.go",
     )
     assert out is None
@@ -110,9 +138,13 @@ def test_unsupported_language_returns_none(tmp_path):
 
 def test_default_none_language_routes_python(monkeypatch, tmp_path):
     import agents.mutate_probe as mp
+
     monkeypatch.setattr(mp, "run_mutate_probe", lambda *a, **k: "PY")
     out = md.run_language_mutation(
-        None, tmp_path / "t.py", tmp_path, runner_fn=None,
+        None,
+        tmp_path / "t.py",
+        tmp_path,
+        runner_fn=None,
         mutant_path=tmp_path / "m.py",
     )
     assert out == "PY"

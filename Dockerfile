@@ -55,7 +55,7 @@ RUN mkdir -p apps/web-server/static \
 # Stage 2: Runtime (Chainguard Python, dev variant for now — minimal split
 # happens in P0.5 once we know what the runtime *actually* needs)
 # ---------------------------------------------------------------------------
-FROM cgr.dev/chainguard/python:latest-dev@sha256:534fb1a1b9ad4d9d149ab669ca4218be76c84990e2f3379c7f703d224647666b AS runtime
+FROM cgr.dev/chainguard/python:latest-dev@sha256:aa89119db7f7fb4a6628ac82e2c38404cc64cd56ccd858d2c78646776b3fffef AS runtime
 
 USER root
 
@@ -250,9 +250,37 @@ RUN npm install -g \
 # agent_service.py's sys.executable expectations)
 RUN python3 -m venv /home/projects/MagesticAI/.venv
 
+# pip is removed from the venv in the same layer that finishes using it, and
+# the base copies are apk-deleted below. Ported from PFactory#679, which hit
+# and solved this first; TFactory#1277 is the same two findings here.
+#
+# The two HIGH findings this clears are NOT project dependencies — nothing in
+# either requirements file needs msgpack or constrains setuptools. Both are
+# declared by pip 26.2.1's own vendored SBOM, `pip/_vendor/bom.cdx.json`
+# (msgpack 1.1.2, GHSA-6v7p-g79w-8964; setuptools 70.3.0, CVE-2025-47273),
+# which is what Trivy reads. A requirements pin therefore cannot touch them:
+# verified by installing `msgpack>=1.2.1` and `setuptools>=78.1.1` into this
+# venv and re-scanning — pip 26.2.1 ships 1.2.2 and 84.0.0 ALONGSIDE the
+# vendored entries and Trivy still reports 1.1.2 and 70.3.0. No pip upgrade
+# clears them either: 26.2.1 IS the latest release, and pip main still vendors
+# setuptools 70.3.0.
+#
+# pip is build-time-only here — runtime never installs packages, and cluster
+# egress allows apk + npm only, so an in-pod `pip install` could not reach PyPI
+# anyway. `provider_runtime.install_argv` has a `sys.executable -m pip install`
+# branch for the claude-agent-sdk; PFactory carries that identical branch and
+# still removes pip, so this keeps the three services consistent.
 RUN /home/projects/MagesticAI/.venv/bin/pip install --no-cache-dir \
         -r /home/projects/MagesticAI/apps/web-server/requirements.txt \
-        -r /home/projects/MagesticAI/apps/backend/requirements.txt
+        -r /home/projects/MagesticAI/apps/backend/requirements.txt \
+ && /home/projects/MagesticAI/.venv/bin/pip uninstall -y pip
+
+# Remove the base image's pip too (same findings, second copy).
+# py3-pip-wheel is ensurepip's bundled wheel — only needed by `python -m venv`,
+# which has already run. Verified: the venv imports its stack fine afterwards.
+USER root
+RUN apk del --no-cache py3.14-pip py3.14-pip-base py3-pip-wheel
+USER nonroot
 
 # Git identity for in-container worktree operations
 RUN git config --global user.name "TFactory" \

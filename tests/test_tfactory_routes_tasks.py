@@ -34,25 +34,39 @@ if "fastapi" not in sys.modules:
     _fastapi = types.ModuleType("fastapi")
 
     class _APIRouter:
-        def __init__(self, *args, **kwargs): pass
+        def __init__(self, *args, **kwargs):
+            pass
+
         def get(self, *args, **kwargs):
             def _decorator(fn):
                 return fn
+
             return _decorator
+
         def post(self, *args, **kwargs):
             def _decorator(fn):
                 return fn
+
             return _decorator
+
         def websocket(self, *args, **kwargs):
             def _decorator(fn):
                 return fn
+
             return _decorator
 
     class _WebSocket:  # only used for type annotations in the route module
-        async def accept(self): pass
-        async def send_text(self, _t: str): pass
-        async def receive_text(self) -> str: return ""
-        async def close(self, code: int = 1000, reason: str = ""): pass
+        async def accept(self):
+            pass
+
+        async def send_text(self, _t: str):
+            pass
+
+        async def receive_text(self) -> str:
+            return ""
+
+        async def close(self, code: int = 1000, reason: str = ""):
+            pass
 
     class _WebSocketDisconnect(Exception):
         pass
@@ -64,9 +78,12 @@ if "fastapi" not in sys.modules:
             self.detail = detail
 
     class _Response:
-        def __init__(self, content=b"", media_type: str = "", status_code: int = 200) -> None:
+        def __init__(
+            self, content=b"", media_type: str = "", status_code: int = 200
+        ) -> None:
             self.content = (
-                content if isinstance(content, (bytes, bytearray))
+                content
+                if isinstance(content, (bytes, bytearray))
                 else str(content).encode()
             )
             self.media_type = media_type
@@ -92,9 +109,7 @@ if "fastapi" not in sys.modules:
 from fastapi import HTTPException as _HTTPException  # noqa: E402
 
 # Add apps/web-server/ to sys.path so ``from server.routes...`` resolves.
-WEB_SERVER_PATH = (
-    Path(__file__).parent.parent / "apps" / "web-server"
-)
+WEB_SERVER_PATH = Path(__file__).parent.parent / "apps" / "web-server"
 if str(WEB_SERVER_PATH) not in sys.path:
     sys.path.insert(0, str(WEB_SERVER_PATH))
 
@@ -231,7 +246,8 @@ def test_list_tasks_empty_workspace(workspace_root: Path) -> None:
 
 
 def test_list_tasks_no_root_dir(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Workspace root doesn't exist at all — graceful empty response."""
     monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path / "nonexistent"))
@@ -259,11 +275,15 @@ def test_list_tasks_single(workspace_root: Path) -> None:
 
 def test_list_tasks_sorted_newest_first(workspace_root: Path) -> None:
     _make_task(
-        workspace_root, project_id="demo", spec_id="older",
+        workspace_root,
+        project_id="demo",
+        spec_id="older",
         updated_at="2026-05-01T00:00:00+00:00",
     )
     _make_task(
-        workspace_root, project_id="demo", spec_id="newer",
+        workspace_root,
+        project_id="demo",
+        spec_id="newer",
         updated_at="2026-05-28T00:00:00+00:00",
     )
     result = list_tasks()
@@ -274,16 +294,21 @@ def test_list_tasks_sorted_newest_first(workspace_root: Path) -> None:
 
 
 def test_list_tasks_tenant_filter_flag_on(
-    workspace_root: Path, monkeypatch: pytest.MonkeyPatch,
+    workspace_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Multi-tenant on: only the request tenant's rows come back (#683)."""
     monkeypatch.setenv("TFACTORY_MULTI_TENANT", "true")
     _make_task(
-        workspace_root, project_id="demo", spec_id="acme-1",
+        workspace_root,
+        project_id="demo",
+        spec_id="acme-1",
         extra_status={"tenant": "acme"},
     )
     _make_task(
-        workspace_root, project_id="demo", spec_id="other-1",
+        workspace_root,
+        project_id="demo",
+        spec_id="other-1",
         extra_status={"tenant": "other"},
     )
     # Legacy row without a tenant field — lazily backfills to "default".
@@ -300,12 +325,15 @@ def test_list_tasks_tenant_filter_flag_on(
 
 
 def test_list_tasks_tenant_flag_off_unchanged(
-    workspace_root: Path, monkeypatch: pytest.MonkeyPatch,
+    workspace_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Multi-tenant off (default): all rows regardless of tenant (#683)."""
     monkeypatch.delenv("TFACTORY_MULTI_TENANT", raising=False)
     _make_task(
-        workspace_root, project_id="demo", spec_id="acme-1",
+        workspace_root,
+        project_id="demo",
+        spec_id="acme-1",
         extra_status={"tenant": "acme"},
     )
     _make_task(workspace_root, project_id="demo", spec_id="legacy-1")
@@ -327,9 +355,7 @@ def test_list_tasks_across_multiple_projects(workspace_root: Path) -> None:
 def test_list_tasks_skips_malformed_status_json(workspace_root: Path) -> None:
     """A spec_dir with broken status.json still gets a row — fields
     fall back to defaults."""
-    spec_dir = (
-        workspace_root / "workspaces" / "demo" / "specs" / "broken"
-    )
+    spec_dir = workspace_root / "workspaces" / "demo" / "specs" / "broken"
     spec_dir.mkdir(parents=True)
     (spec_dir / "status.json").write_text("not json{")
 
@@ -347,7 +373,9 @@ def test_list_tasks_skips_malformed_status_json(workspace_root: Path) -> None:
 
 def test_get_task_happy_returns_full_status(workspace_root: Path) -> None:
     _make_task(
-        workspace_root, project_id="demo", spec_id="042-x",
+        workspace_root,
+        project_id="demo",
+        spec_id="042-x",
         status="triaged",
         extra_status={
             "verdicts_count": 6,
@@ -383,7 +411,9 @@ def test_get_task_artefacts_meta_existence_flags(
     workspace_root: Path,
 ) -> None:
     _make_task(
-        workspace_root, project_id="demo", spec_id="042-x",
+        workspace_root,
+        project_id="demo",
+        spec_id="042-x",
         artefacts=[
             "test_plan.json",
             "findings/verdicts.json",
@@ -405,7 +435,9 @@ def test_get_task_artefacts_paths_relative(workspace_root: Path) -> None:
     """Artefact paths are spec_dir-relative — frontend joins them to
     its own base URL, doesn't need absolute filesystem paths."""
     _make_task(
-        workspace_root, project_id="demo", spec_id="042-x",
+        workspace_root,
+        project_id="demo",
+        spec_id="042-x",
         artefacts=["test_plan.json"],
     )
     result = get_task("042-x")
@@ -468,7 +500,9 @@ def test_serve_artefact_returns_response_with_content(
     (spec_dir / "test_plan.json").write_text(body)
 
     response = _serve_artefact_file(
-        "042-x", "test_plan.json", "application/json",
+        "042-x",
+        "test_plan.json",
+        "application/json",
     )
     assert response.media_type == "application/json"
     assert response.body == body.encode("utf-8")
@@ -553,30 +587,38 @@ def test_get_pr_comment_body_returns_markdown(
 # ── Path-traversal protection (re-asserted per endpoint) ───────────────
 
 
-@pytest.mark.parametrize("handler", [
-    get_verdicts,
-    get_triage_report_json,
-    get_triage_report_md,
-    get_test_plan,
-    get_pr_comment_body,
-])
+@pytest.mark.parametrize(
+    "handler",
+    [
+        get_verdicts,
+        get_triage_report_json,
+        get_triage_report_md,
+        get_test_plan,
+        get_pr_comment_body,
+    ],
+)
 def test_all_artefact_endpoints_reject_malformed_spec_id(
-    workspace_root: Path, handler,
+    workspace_root: Path,
+    handler,
 ) -> None:
     with pytest.raises(_HTTPException) as exc:
         handler("../../etc/passwd")
     assert exc.value.status_code == 400
 
 
-@pytest.mark.parametrize("handler", [
-    get_verdicts,
-    get_triage_report_json,
-    get_triage_report_md,
-    get_test_plan,
-    get_pr_comment_body,
-])
+@pytest.mark.parametrize(
+    "handler",
+    [
+        get_verdicts,
+        get_triage_report_json,
+        get_triage_report_md,
+        get_test_plan,
+        get_pr_comment_body,
+    ],
+)
 def test_all_artefact_endpoints_404_when_spec_missing(
-    workspace_root: Path, handler,
+    workspace_root: Path,
+    handler,
 ) -> None:
     with pytest.raises(_HTTPException) as exc:
         handler("nonexistent-spec")
@@ -701,7 +743,9 @@ def test_tail_log_payload_includes_all_log_stems(
 
     payload = tail_log_payload("042-x")
     assert set(payload["files"].keys()) == {
-        "planner", "gen_functional", "evaluator",
+        "planner",
+        "gen_functional",
+        "evaluator",
     }
     assert payload["files"]["planner"] == ["p1", "p2"]
     assert payload["files"]["gen_functional"] == ["g1"]
@@ -736,7 +780,8 @@ def test_tail_log_payload_decodes_utf8(workspace_root: Path) -> None:
 
     payload = tail_log_payload("042-x")
     assert payload["files"]["planner"] == [
-        "started café · finished résumé", "emoji 🎉 ok",
+        "started café · finished résumé",
+        "emoji 🎉 ok",
     ]
 
 
@@ -764,7 +809,9 @@ def test_get_catalog_returns_snapshotted_catalog(workspace_root: Path) -> None:
     spec_dir = _make_task(workspace_root, project_id="demo", spec_id="042-x")
     context_dir = spec_dir / "context"
     context_dir.mkdir(parents=True, exist_ok=True)
-    catalog_body = '{"version": 1, "entries": [{"id": "test_foo", "path": "tests/test_foo.py"}]}'
+    catalog_body = (
+        '{"version": 1, "entries": [{"id": "test_foo", "path": "tests/test_foo.py"}]}'
+    )
     (context_dir / "tests_catalog.json").write_text(catalog_body)
 
     response = get_catalog("042-x")
@@ -805,6 +852,7 @@ def test_get_catalog_catalog_json_is_valid_json(workspace_root: Path) -> None:
     context_dir = spec_dir / "context"
     context_dir.mkdir(parents=True, exist_ok=True)
     import json
+
     catalog = {"version": 1, "entries": []}
     (context_dir / "tests_catalog.json").write_text(json.dumps(catalog))
 
@@ -821,15 +869,29 @@ def _make_evaluated_task(workspace_root: Path, *, spec_id: str = "001-x") -> Pat
     and a source.json carrying the handover branch."""
     spec_dir = _make_task(workspace_root, project_id="proj", spec_id=spec_id)
     (spec_dir / "tests").mkdir()
-    (spec_dir / "tests" / "test_pricing.py").write_text("def test_x():\n    assert True\n")
+    (spec_dir / "tests" / "test_pricing.py").write_text(
+        "def test_x():\n    assert True\n"
+    )
     (spec_dir / "context").mkdir()
     (spec_dir / "context" / "source.json").write_text(json.dumps({"branch": "feat/x"}))
-    (spec_dir / "findings" / "verdicts.json").write_text(json.dumps({
-        "verdicts": [
-            {"test_id": "t-accept", "verdict": "accept", "test_file": "tests/test_pricing.py"},
-            {"test_id": "t-reject", "verdict": "reject", "test_file": "tests/other.py"},
-        ],
-    }))
+    (spec_dir / "findings" / "verdicts.json").write_text(
+        json.dumps(
+            {
+                "verdicts": [
+                    {
+                        "test_id": "t-accept",
+                        "verdict": "accept",
+                        "test_file": "tests/test_pricing.py",
+                    },
+                    {
+                        "test_id": "t-reject",
+                        "verdict": "reject",
+                        "test_file": "tests/other.py",
+                    },
+                ],
+            }
+        )
+    )
     return spec_dir
 
 
@@ -845,15 +907,23 @@ def test_merge_dry_run_returns_planned_files(workspace_root: Path) -> None:
 
 def test_merge_uses_target_branch_override(workspace_root: Path) -> None:
     _make_evaluated_task(workspace_root)
-    out = merge_accepted_tests("001-x", MergeRequest(dry_run=True, target_branch="release/1"))
+    out = merge_accepted_tests(
+        "001-x", MergeRequest(dry_run=True, target_branch="release/1")
+    )
     assert out["branch"] == "release/1"
 
 
 def test_merge_no_accepts_is_400(workspace_root: Path) -> None:
     spec_dir = _make_task(workspace_root, project_id="proj", spec_id="002-y")
-    (spec_dir / "findings" / "verdicts.json").write_text(json.dumps({
-        "verdicts": [{"test_id": "t", "verdict": "reject", "test_file": "tests/a.py"}],
-    }))
+    (spec_dir / "findings" / "verdicts.json").write_text(
+        json.dumps(
+            {
+                "verdicts": [
+                    {"test_id": "t", "verdict": "reject", "test_file": "tests/a.py"}
+                ],
+            }
+        )
+    )
     with pytest.raises(_HTTPException) as exc:
         merge_accepted_tests("002-y", MergeRequest(dry_run=True))
     assert exc.value.status_code == 400

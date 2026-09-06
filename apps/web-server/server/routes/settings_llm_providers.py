@@ -366,7 +366,9 @@ async def list_openai_compat_models(
 
         return {"models": models}
     except Exception:
-        logger.exception("Failed to list OpenAI-compatible models from %s", sanitize_log(baseUrl))
+        logger.exception(
+            "Failed to list OpenAI-compatible models from %s", sanitize_log(baseUrl)
+        )
         return {"success": False, "error": "Failed to list models"}
 
 
@@ -374,7 +376,9 @@ class OpenAICompatTestRequest(BaseModel):
     """Request model for testing an OpenAI-compatible server connection."""
 
     baseUrl: str = Field(..., description="Base URL of the OpenAI-compatible server")
-    apiKey: SecretStr | None = Field(None, description="Optional API key for authentication")
+    apiKey: SecretStr | None = Field(
+        None, description="Optional API key for authentication"
+    )
 
 
 @router.post("/openai-compat/test")
@@ -415,7 +419,8 @@ async def test_openai_compat_connection(request: OpenAICompatTestRequest):
         }
     except Exception:
         logger.exception(
-            "OpenAI-compatible connection test failed for %s", sanitize_log(request.baseUrl)
+            "OpenAI-compatible connection test failed for %s",
+            sanitize_log(request.baseUrl),
         )
         return {"success": False, "error": "Connection test failed"}
 

@@ -175,7 +175,9 @@ class EmailService:
 
         creds = get_email_oauth_credentials()
         if not creds:
-            logger.warning("No Microsoft OAuth credentials configured for token refresh")
+            logger.warning(
+                "No Microsoft OAuth credentials configured for token refresh"
+            )
             return None
 
         client_id, client_secret = creds
@@ -205,7 +207,9 @@ class EmailService:
         new_refresh_token = token_data.get("refresh_token", account.refresh_token)
         expires_in = token_data.get("expires_in", 3600)
 
-        new_expiry = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(seconds=expires_in)
+        new_expiry = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(
+            seconds=expires_in
+        )
 
         # Update DB
         try:
@@ -222,7 +226,8 @@ class EmailService:
                 await session.commit()
         except Exception:
             logger.warning(
-                "Failed to persist refreshed token for %s", account.email_address,
+                "Failed to persist refreshed token for %s",
+                account.email_address,
                 exc_info=True,
             )
 
@@ -303,7 +308,9 @@ class EmailService:
         new_refresh_token = token_data.get("refresh_token", account.refresh_token)
         expires_in = token_data.get("expires_in", 3600)
 
-        new_expiry = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(seconds=expires_in)
+        new_expiry = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(
+            seconds=expires_in
+        )
 
         # Update DB
         try:
@@ -320,7 +327,8 @@ class EmailService:
                 await session.commit()
         except Exception:
             logger.warning(
-                "Failed to persist refreshed token for %s", account.email_address,
+                "Failed to persist refreshed token for %s",
+                account.email_address,
                 exc_info=True,
             )
 

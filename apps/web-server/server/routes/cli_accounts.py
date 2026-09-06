@@ -22,6 +22,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, SecretStr
 
 from server.error_ref import client_error
+from server.paths import write_secret_file
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -31,6 +32,11 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 SUPPORTED_CLIS = {"codex", "gemini"}
+
+# How long a polling thread waits for the server loop to run the broadcast
+# coroutine before giving up and logging. Bounded so a wedged loop cannot pin
+# a daemon thread forever.
+_BROADCAST_TIMEOUT_SECONDS = 10.0
 
 CREDENTIALS_DIR = Path.home() / ".tfactory"
 
@@ -94,7 +100,10 @@ def get_gemini_binary() -> str:
 
 def _validate_cli(cli: str) -> None:
     if cli not in SUPPORTED_CLIS:
-        raise HTTPException(status_code=400, detail=f"Unsupported CLI: {cli}. Must be one of: {', '.join(SUPPORTED_CLIS)}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported CLI: {cli}. Must be one of: {', '.join(SUPPORTED_CLIS)}",
+        )
 
 
 def _detect_cli_version(cli: str) -> str | None:
@@ -120,7 +129,9 @@ def _detect_cli_version(cli: str) -> str | None:
             try:
                 result = subprocess.run(
                     ["bash", "-l", "-c", f"which {shlex.quote(binary)}"],
-                    capture_output=True, text=True, timeout=5,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
                 )
                 if result.returncode == 0 and result.stdout.strip():
                     bin_path = result.stdout.strip()
@@ -331,9 +342,7 @@ def _detect_gemini_credentials() -> tuple[bool, str | None, str | None]:
     if settings:
         # Nested path: security.auth.selectedType
         selected_type = (
-            settings.get("security", {})
-            .get("auth", {})
-            .get("selectedType", "")
+            settings.get("security", {}).get("auth", {}).get("selectedType", "")
         )
         if selected_type in ("oauth-personal", "LOGIN_WITH_GOOGLE"):
             return True, "google_login", None
@@ -395,15 +404,25 @@ def _get_cli_status(cli: str) -> CLIAccountStatus:
 
 
 def _save_credentials(cli: str, data: dict) -> None:
-    """Save credentials to ~/.tfactory/{cli}-credentials.json with 0o600."""
+    """Save credentials to ~/.tfactory/{cli}-credentials.json with 0o600.
+
+    Goes through ``paths.write_secret_file`` (#688) rather than ``write_text``
+    + ``chmod``: the latter creates the file at the umask default with the
+    OAuth token already in it and only narrows it afterwards (a readable
+    window), and truncates in place, so a concurrent reader gets a torn file
+    and concludes there are no credentials.
+    """
     CREDENTIALS_DIR.mkdir(parents=True, exist_ok=True)
-    path = CLI_CONFIG[cli]["stored_credentials"]
-    path.write_text(json.dumps(data, indent=2))
-    path.chmod(0o600)
+    write_secret_file(CLI_CONFIG[cli]["stored_credentials"], json.dumps(data, indent=2))
 
 
-def _poll_codex_token(mtime_before: float) -> None:
-    """Poll ~/.codex/auth.json for new credentials after user runs `codex login`."""
+def _poll_codex_token(mtime_before: float, loop: asyncio.AbstractEventLoop) -> None:
+    """Poll ~/.codex/auth.json for new credentials after user runs `codex login`.
+
+    ``loop`` is the ASGI server's running loop, captured by the caller; this
+    function runs in a worker thread and hands it to
+    ``_broadcast_cli_auth_event`` so the outcome reaches the browser.
+    """
     credentials_path = CLI_CONFIG["codex"]["credentials_file"]
     for _ in range(90):  # ~3 minutes
         try:
@@ -414,25 +433,35 @@ def _poll_codex_token(mtime_before: float) -> None:
                     if auth_data:
                         tokens = auth_data.get("tokens", {})
                         if tokens.get("access_token") or tokens.get("refresh_token"):
-                            _save_credentials("codex", {
-                                "source": "cli_login",
-                                "access_token": tokens.get("access_token"),
-                                "refresh_token": tokens.get("refresh_token"),
-                                "expires_at": auth_data.get("expires_at"),
-                                "imported_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                            })
+                            _save_credentials(
+                                "codex",
+                                {
+                                    "source": "cli_login",
+                                    "access_token": tokens.get("access_token"),
+                                    "refresh_token": tokens.get("refresh_token"),
+                                    "expires_at": auth_data.get("expires_at"),
+                                    "imported_at": time.strftime(
+                                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                                    ),
+                                },
+                            )
                             logger.info("[Codex] Credentials detected and saved")
-                            _broadcast_cli_auth_event("codex", True)
+                            _broadcast_cli_auth_event("codex", True, loop)
                             return
         except Exception as e:
             logger.warning(f"[Codex] Polling error: {e}")
         time.sleep(2)
     logger.warning("[Codex] Credentials not detected within timeout")
-    _broadcast_cli_auth_event("codex", False)
+    _broadcast_cli_auth_event("codex", False, loop)
 
 
-def _poll_gemini_token(mtime_before: float) -> None:
-    """Poll ~/.gemini/settings.json and oauth_creds.json for new credentials."""
+def _poll_gemini_token(mtime_before: float, loop: asyncio.AbstractEventLoop) -> None:
+    """Poll ~/.gemini/settings.json and oauth_creds.json for new credentials.
+
+    ``loop`` is the ASGI server's running loop, captured by the caller; this
+    function runs in a worker thread and hands it to
+    ``_broadcast_cli_auth_event`` so the outcome reaches the browser.
+    """
     settings_path = CLI_CONFIG["gemini"]["credentials_file"]
     oauth_path = CLI_CONFIG["gemini"]["oauth_credentials_file"]
 
@@ -453,7 +482,9 @@ def _poll_gemini_token(mtime_before: float) -> None:
                     oauth_changed = True
 
             if settings_changed or oauth_changed:
-                settings = _read_json_file(settings_path) if settings_path.exists() else {}
+                settings = (
+                    _read_json_file(settings_path) if settings_path.exists() else {}
+                )
                 selected_type = ""
                 if settings:
                     selected_type = (
@@ -462,42 +493,75 @@ def _poll_gemini_token(mtime_before: float) -> None:
                         .get("selectedType", "")
                     )
 
-                if selected_type in ("oauth-personal", "LOGIN_WITH_GOOGLE") or oauth_changed:
-                    _save_credentials("gemini", {
-                        "source": "cli_login",
-                        "selectedType": selected_type or "oauth-personal",
-                        "authMethod": "google_login",
-                        "imported_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    })
+                if (
+                    selected_type in ("oauth-personal", "LOGIN_WITH_GOOGLE")
+                    or oauth_changed
+                ):
+                    _save_credentials(
+                        "gemini",
+                        {
+                            "source": "cli_login",
+                            "selectedType": selected_type or "oauth-personal",
+                            "authMethod": "google_login",
+                            "imported_at": time.strftime(
+                                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                            ),
+                        },
+                    )
                     logger.info("[Gemini] Credentials detected and saved")
-                    _broadcast_cli_auth_event("gemini", True)
+                    _broadcast_cli_auth_event("gemini", True, loop)
                     return
-                elif selected_type == "API_KEY" or (settings and settings.get("apiKey")):
-                    _save_credentials("gemini", {
-                        "source": "cli_login",
-                        "selectedType": selected_type,
-                        "authMethod": "api_key",
-                        "imported_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    })
+                elif selected_type == "API_KEY" or (
+                    settings and settings.get("apiKey")
+                ):
+                    _save_credentials(
+                        "gemini",
+                        {
+                            "source": "cli_login",
+                            "selectedType": selected_type,
+                            "authMethod": "api_key",
+                            "imported_at": time.strftime(
+                                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                            ),
+                        },
+                    )
                     logger.info("[Gemini] API key credentials detected and saved")
-                    _broadcast_cli_auth_event("gemini", True)
+                    _broadcast_cli_auth_event("gemini", True, loop)
                     return
         except Exception as e:
             logger.warning(f"[Gemini] Polling error: {e}")
         time.sleep(2)
     logger.warning("[Gemini] Credentials not detected within timeout")
-    _broadcast_cli_auth_event("gemini", False)
+    _broadcast_cli_auth_event("gemini", False, loop)
 
 
-def _broadcast_cli_auth_event(cli: str, success: bool) -> None:
-    """Broadcast a cli-account-auth event via WebSocket."""
+def _broadcast_cli_auth_event(
+    cli: str, success: bool, loop: asyncio.AbstractEventLoop
+) -> None:
+    """Broadcast a cli-account-auth event on the ASGI server's event loop.
+
+    Called from the credential-polling worker threads, which have no event
+    loop of their own. ``loop`` MUST be the loop the ASGI server is running
+    on, because the WebSocket connections this event has to reach are owned
+    by that loop.
+
+    Running the coroutine on a fresh ``asyncio.new_event_loop()`` here (as
+    this did before) touches another loop's transports: the send either
+    raises "attached to a different loop" or corrupts the connection.
+    ``broadcast_event`` swallows send errors and unregisters the client, so
+    the failure is SILENT -- the browser never receives ``cli-account-auth``
+    and the portal shows the CLI login as never having completed.
+    ``run_coroutine_threadsafe`` schedules onto the live loop instead, which
+    is the only loop allowed to write to those sockets.
+    """
     try:
         from ..websockets.events import broadcast_event
-        loop = asyncio.new_event_loop()
-        loop.run_until_complete(
-            broadcast_event("cli-account-auth", {"cli": cli, "success": success})
+
+        future = asyncio.run_coroutine_threadsafe(
+            broadcast_event("cli-account-auth", {"cli": cli, "success": success}),
+            loop,
         )
-        loop.close()
+        future.result(timeout=_BROADCAST_TIMEOUT_SECONDS)
     except Exception as e:
         logger.warning(f"Failed to broadcast cli-account-auth event: {e}")
 
@@ -538,15 +602,26 @@ async def import_cli_credentials(cli: str):
         if auth_data:
             tokens = auth_data.get("tokens", {})
             if tokens.get("access_token") or tokens.get("refresh_token"):
-                _save_credentials(cli, {
-                    "source": "import",
-                    "access_token": tokens.get("access_token"),
-                    "refresh_token": tokens.get("refresh_token"),
-                    "expires_at": auth_data.get("expires_at"),
-                    "imported_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                })
-                return {"success": True, "message": "Codex credentials imported successfully"}
-        return {"success": False, "error": "No Codex credentials found at ~/.codex/auth.json"}
+                _save_credentials(
+                    cli,
+                    {
+                        "source": "import",
+                        "access_token": tokens.get("access_token"),
+                        "refresh_token": tokens.get("refresh_token"),
+                        "expires_at": auth_data.get("expires_at"),
+                        "imported_at": time.strftime(
+                            "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                        ),
+                    },
+                )
+                return {
+                    "success": True,
+                    "message": "Codex credentials imported successfully",
+                }
+        return {
+            "success": False,
+            "error": "No Codex credentials found at ~/.codex/auth.json",
+        }
 
     else:  # gemini
         # Check settings.json for auth type
@@ -554,42 +629,58 @@ async def import_cli_credentials(cli: str):
         selected_type = ""
         if settings:
             selected_type = (
-                settings.get("security", {})
-                .get("auth", {})
-                .get("selectedType", "")
+                settings.get("security", {}).get("auth", {}).get("selectedType", "")
             )
 
         # Check oauth_creds.json
         oauth_creds = _read_json_file(cfg["oauth_credentials_file"])
 
         if selected_type in ("oauth-personal", "LOGIN_WITH_GOOGLE") or oauth_creds:
-            _save_credentials(cli, {
-                "source": "import",
-                "selectedType": selected_type or "oauth-personal",
-                "authMethod": "google_login",
-                "imported_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            })
-            return {"success": True, "message": "Gemini credentials imported successfully"}
+            _save_credentials(
+                cli,
+                {
+                    "source": "import",
+                    "selectedType": selected_type or "oauth-personal",
+                    "authMethod": "google_login",
+                    "imported_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                },
+            )
+            return {
+                "success": True,
+                "message": "Gemini credentials imported successfully",
+            }
         if settings and (selected_type == "API_KEY" or settings.get("apiKey")):
-            _save_credentials(cli, {
-                "source": "import",
-                "selectedType": selected_type,
-                "authMethod": "api_key",
-                "imported_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            })
-            return {"success": True, "message": "Gemini credentials imported successfully"}
-        return {"success": False, "error": "No Gemini credentials found at ~/.gemini/settings.json"}
+            _save_credentials(
+                cli,
+                {
+                    "source": "import",
+                    "selectedType": selected_type,
+                    "authMethod": "api_key",
+                    "imported_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                },
+            )
+            return {
+                "success": True,
+                "message": "Gemini credentials imported successfully",
+            }
+        return {
+            "success": False,
+            "error": "No Gemini credentials found at ~/.gemini/settings.json",
+        }
 
 
 @router.post("/cli-accounts/{cli}/api-key")
 async def set_cli_api_key(cli: str, body: APIKeyRequest):
     """Save a manual API key for a CLI."""
     _validate_cli(cli)
-    _save_credentials(cli, {
-        "source": "api_key",
-        "api_key": body.api_key.get_secret_value(),
-        "saved_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-    })
+    _save_credentials(
+        cli,
+        {
+            "source": "api_key",
+            "api_key": body.api_key.get_secret_value(),
+            "saved_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        },
+    )
     return {"success": True, "message": f"API key saved for {cli}"}
 
 
@@ -607,9 +698,15 @@ async def start_cli_login(cli: str):
     credentials_path = cfg["credentials_file"]
 
     mtime_before = credentials_path.stat().st_mtime if credentials_path.exists() else 0
+    # The polling thread has no loop of its own; capture the server's here,
+    # while we are still on it, so the broadcast lands on the loop that owns
+    # the WebSocket connections.
+    loop = asyncio.get_running_loop()
 
     if cli == "codex":
-        threading.Thread(target=_poll_codex_token, args=(mtime_before,), daemon=True).start()
+        threading.Thread(
+            target=_poll_codex_token, args=(mtime_before, loop), daemon=True
+        ).start()
         return {
             "success": True,
             "data": {
@@ -618,7 +715,9 @@ async def start_cli_login(cli: str):
             },
         }
     else:  # gemini
-        threading.Thread(target=_poll_gemini_token, args=(mtime_before,), daemon=True).start()
+        threading.Thread(
+            target=_poll_gemini_token, args=(mtime_before, loop), daemon=True
+        ).start()
         return {
             "success": True,
             "data": {
@@ -674,14 +773,18 @@ async def start_cli_login_terminal(cli: str):
     # Start credential file polling in background
     credentials_path = cfg["credentials_file"]
     mtime_before = credentials_path.stat().st_mtime if credentials_path.exists() else 0
+    # The polling thread has no loop of its own; capture the server's here,
+    # while we are still on it, so the broadcast lands on the loop that owns
+    # the WebSocket connections.
+    loop = asyncio.get_running_loop()
 
     if cli == "codex":
         threading.Thread(
-            target=_poll_codex_token, args=(mtime_before,), daemon=True
+            target=_poll_codex_token, args=(mtime_before, loop), daemon=True
         ).start()
     else:
         threading.Thread(
-            target=_poll_gemini_token, args=(mtime_before,), daemon=True
+            target=_poll_gemini_token, args=(mtime_before, loop), daemon=True
         ).start()
 
     return {
@@ -721,7 +824,6 @@ def install_or_update_cli(cli: str):
             timeout=timeout,
         )
 
-
     # Check existing version (to determine install vs update)
     old_version = _detect_cli_version(cli)
     was_update = old_version is not None
@@ -731,7 +833,9 @@ def install_or_update_cli(cli: str):
         # Two commands — use hardcoded shell string (no user input)
         node_check = subprocess.run(
             ["bash", "-l", "-c", "node --version && npm --version"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         if node_check.returncode != 0:
             return {
@@ -747,9 +851,21 @@ def install_or_update_cli(cli: str):
 
     # Step 2: Install/update via npm
     try:
-        logger.info(f"[{sanitize_log(cli)}] Running npm install -g {sanitize_log(package)}...")
+        logger.info(
+            f"[{sanitize_log(cli)}] Running npm install -g {sanitize_log(package)}..."
+        )
         if cli == "gemini":
-            install_result = _run(["npm", "install", "-g", "--prefix", os.path.expanduser("~/.gemini/antigravity-cli"), package], timeout=120)
+            install_result = _run(
+                [
+                    "npm",
+                    "install",
+                    "-g",
+                    "--prefix",
+                    os.path.expanduser("~/.gemini/antigravity-cli"),
+                    package,
+                ],
+                timeout=120,
+            )
         else:
             install_result = _run(["npm", "install", "-g", package], timeout=120)
 

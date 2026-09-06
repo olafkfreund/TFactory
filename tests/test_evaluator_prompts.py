@@ -91,7 +91,10 @@ def lint_promotion_clean():
 
 @pytest.fixture
 def dataclass_bundle(
-    coverage_delta, stability_stable, mutation_killed, lint_promotion_clean,
+    coverage_delta,
+    stability_stable,
+    mutation_killed,
+    lint_promotion_clean,
 ):
     """A realistic per-test bundle as commit 5 will construct."""
     from dataclasses import dataclass, field
@@ -118,7 +121,10 @@ def dataclass_bundle(
 
 @pytest.fixture
 def dict_bundle(
-    coverage_delta, stability_stable, mutation_killed, lint_promotion_clean,
+    coverage_delta,
+    stability_stable,
+    mutation_killed,
+    lint_promotion_clean,
 ):
     """Dict-shaped variant (post-JSON-load shape)."""
     return {
@@ -232,7 +238,9 @@ def test_block_missing_signals_degrades_gracefully() -> None:
 
 def test_assembles_with_one_bundle(dataclass_bundle) -> None:
     p = get_tfactory_evaluator_prompt(
-        Path("/ws/spec"), Path("/proj"), [dataclass_bundle],
+        Path("/ws/spec"),
+        Path("/proj"),
+        [dataclass_bundle],
     )
     assert "/ws/spec" in p
     assert "/proj" in p
@@ -243,7 +251,9 @@ def test_assembles_with_one_bundle(dataclass_bundle) -> None:
 
 def test_assembles_with_many_bundles(dataclass_bundle, dict_bundle) -> None:
     p = get_tfactory_evaluator_prompt(
-        Path("/ws/spec"), Path("/proj"), [dataclass_bundle, dict_bundle],
+        Path("/ws/spec"),
+        Path("/proj"),
+        [dataclass_bundle, dict_bundle],
     )
     assert "Number of generated tests to evaluate: 2" in p
     assert "ac1-login-sets-24h-expiry" in p
@@ -292,7 +302,9 @@ def test_body_mentions_verdicts_json_schema(dataclass_bundle) -> None:
 
 def test_total_size_in_range(dataclass_bundle) -> None:
     p = get_tfactory_evaluator_prompt(
-        Path("/ws"), Path("/p"), [dataclass_bundle],
+        Path("/ws"),
+        Path("/p"),
+        [dataclass_bundle],
     )
     # Body ~8KB + context block ~2KB.
     assert 8_000 < len(p) < 20_000, f"unexpected size {len(p)}"
@@ -302,13 +314,18 @@ def test_total_size_in_range(dataclass_bundle) -> None:
 
 
 def test_raises_when_md_missing(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, dataclass_bundle,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    dataclass_bundle,
 ) -> None:
     import prompts_pkg.prompts as mod
+
     monkeypatch.setattr(mod, "PROMPTS_DIR", tmp_path)  # empty dir
     with pytest.raises(FileNotFoundError, match="evaluator.md"):
         get_tfactory_evaluator_prompt(
-            Path("/ws"), Path("/p"), [dataclass_bundle],
+            Path("/ws"),
+            Path("/p"),
+            [dataclass_bundle],
         )
 
 

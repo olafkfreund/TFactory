@@ -23,6 +23,7 @@ def _fake_module(name: str) -> types.ModuleType:
 
 # ── Vault (#66) ─────────────────────────────────────────────────────────────
 
+
 def test_vault_resolve_kv2_field(monkeypatch):
     from tfactory_secrets.backends.vault import VaultBackend
     from tfactory_secrets.refs import parse_ref
@@ -52,7 +53,8 @@ def test_vault_single_key_no_field(monkeypatch):
 
     hvac = _fake_module("hvac")
     hvac.Client = lambda url, token: type(
-        "C", (), {"read": lambda self, p: {"data": {"only": "v"}}})()
+        "C", (), {"read": lambda self, p: {"data": {"only": "v"}}}
+    )()
     monkeypatch.setitem(sys.modules, "hvac", hvac)
     monkeypatch.setenv("VAULT_ADDR", "https://vault.example.com")
     assert VaultBackend().resolve(parse_ref("vault:kv/one")).value == "v"
@@ -62,8 +64,13 @@ def test_vault_egress_classification(monkeypatch):
     from tfactory_secrets import EgressClass
     from tfactory_secrets.backends.vault import VaultBackend
 
-    assert VaultBackend(addr="https://127.0.0.1:8200").egress_class() is EgressClass.LOCAL
-    assert VaultBackend(addr="https://vault.example.com").egress_class() is EgressClass.SELF_HOSTED
+    assert (
+        VaultBackend(addr="https://127.0.0.1:8200").egress_class() is EgressClass.LOCAL
+    )
+    assert (
+        VaultBackend(addr="https://vault.example.com").egress_class()
+        is EgressClass.SELF_HOSTED
+    )
 
 
 def test_vault_unavailable_without_addr(monkeypatch):
@@ -87,6 +94,7 @@ def test_vault_missing_path(monkeypatch):
 
 
 # ── Azure Key Vault (#67) ───────────────────────────────────────────────────
+
 
 def _install_fake_azure(monkeypatch, secret_value=None, raise_name=None):
     identity = _fake_module("azure.identity")
@@ -135,6 +143,7 @@ def test_azure_keyvault_not_found(monkeypatch):
 
 # ── AWS Secrets Manager (#68) ───────────────────────────────────────────────
 
+
 def _install_fake_boto3(monkeypatch, secret_string=None, error_code=None):
     boto3 = _fake_module("boto3")
     botocore = _fake_module("botocore")
@@ -172,7 +181,10 @@ def test_aws_sm_plain_and_json(monkeypatch):
     assert b.resolve(parse_ref("aws-sm://staging/api#token")).value == "tok"
 
     _install_fake_boto3(monkeypatch, secret_string="plain-secret")
-    assert AwsSecretsManagerBackend().resolve(parse_ref("aws-sm://plain")).value == "plain-secret"
+    assert (
+        AwsSecretsManagerBackend().resolve(parse_ref("aws-sm://plain")).value
+        == "plain-secret"
+    )
 
 
 def test_aws_sm_not_found(monkeypatch):
@@ -186,6 +198,7 @@ def test_aws_sm_not_found(monkeypatch):
 
 
 # ── GCP Secret Manager (#69) ────────────────────────────────────────────────
+
 
 def _install_fake_gcp(monkeypatch, payload=None, raise_name=None, recorder=None):
     google = _fake_module("google")
@@ -243,12 +256,16 @@ def test_gcp_sm_not_found(monkeypatch):
 
 # ── factory wiring ──────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("alias,cls", [
-    ("vault", "VaultBackend"),
-    ("azurekv", "AzureKeyVaultBackend"),
-    ("aws-sm", "AwsSecretsManagerBackend"),
-    ("gcp-sm", "GcpSecretManagerBackend"),
-])
+
+@pytest.mark.parametrize(
+    "alias,cls",
+    [
+        ("vault", "VaultBackend"),
+        ("azurekv", "AzureKeyVaultBackend"),
+        ("aws-sm", "AwsSecretsManagerBackend"),
+        ("gcp-sm", "GcpSecretManagerBackend"),
+    ],
+)
 def test_factory_routes_to_cloud_backends(alias, cls):
     from tfactory_secrets.factory import get_secrets_backend
 

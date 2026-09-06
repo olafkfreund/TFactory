@@ -92,6 +92,7 @@ def test_write_execute_into_extra_root(tmp_path):
 
 # ── Robustness against local-model malformed tool calls (qwen2.5-coder) ──────
 
+
 def test_non_dict_tool_input_is_recoverable_error(tmp_path):
     """A list (not object) as tool input must NOT crash — it returns an error
     result so the agent session survives and the model can retry."""

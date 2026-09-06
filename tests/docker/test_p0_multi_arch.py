@@ -100,7 +100,9 @@ def test_multi_arch_buildable() -> None:
             entry.get("platform", {}).get("architecture")
             for entry in manifest.get("manifests", [])
         }
-        assert "amd64" in arches, \
+        assert "amd64" in arches, (
             f"{ref} does not include linux/amd64 (found arches: {sorted(a for a in arches if a)})"
-        assert "arm64" in arches, \
+        )
+        assert "arm64" in arches, (
             f"{ref} does not include linux/arm64 (found arches: {sorted(a for a in arches if a)})"
+        )

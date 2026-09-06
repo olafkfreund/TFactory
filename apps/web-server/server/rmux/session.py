@@ -115,9 +115,7 @@ class SessionRegistry:
 
         async with self._registry_lock:
             if spec_id in self._states:
-                raise ValueError(
-                    f"rmux session already exists for spec_id={spec_id!r}"
-                )
+                raise ValueError(f"rmux session already exists for spec_id={spec_id!r}")
 
             # Create panes dir + FIFO.  mkfifo blows up if the path
             # already exists, so unlink first (idempotent recovery
@@ -129,9 +127,7 @@ class SessionRegistry:
 
             # Bring up rmux + session + pipe-pane in one shot.
             await self._wrapper.ensure_daemon()
-            await self._wrapper.new_session(
-                session_name, worktree_path, agent_cmd
-            )
+            await self._wrapper.new_session(session_name, worktree_path, agent_cmd)
             await self._wrapper.pipe_pane(session_name, fifo_path)
 
             self._states[spec_id] = SessionState(
@@ -141,7 +137,9 @@ class SessionRegistry:
             )
             logger.info(
                 "rmux session created: spec_id=%s session=%s fifo=%s",
-                sanitize_log(spec_id), sanitize_log(session_name), sanitize_log(fifo_path),
+                sanitize_log(spec_id),
+                sanitize_log(session_name),
+                sanitize_log(fifo_path),
             )
             return fifo_path
 
@@ -159,9 +157,7 @@ class SessionRegistry:
         # Outside the registry lock — these are slow-ish subprocess ops
         # and other callers don't need to wait on them.
         try:
-            await self._wrapper.kill_session(
-                state.session_name, ignore_missing=True
-            )
+            await self._wrapper.kill_session(state.session_name, ignore_missing=True)
         except RmuxError:
             logger.warning(
                 "rmux kill-session failed during reap (ignored): %s",
@@ -179,7 +175,8 @@ class SessionRegistry:
 
         logger.info(
             "rmux session reaped: spec_id=%s session=%s",
-            sanitize_log(spec_id), sanitize_log(state.session_name),
+            sanitize_log(spec_id),
+            sanitize_log(state.session_name),
         )
 
     # ------------------------------------------------------------------

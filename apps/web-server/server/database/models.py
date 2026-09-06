@@ -72,9 +72,7 @@ class User(Base):
     # admin UI to render "Erased on YYYY-MM-DD" placeholders instead
     # of treating the user row as deleted. The audit chain preserves
     # historical user_id references via SHA-256 hashing.
-    gdpr_erased_at: Mapped[datetime | None] = mapped_column(
-        DateTime, nullable=True
-    )
+    gdpr_erased_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     avatar_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     role: Mapped[str] = mapped_column(String(50), nullable=False, default="user")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
@@ -96,9 +94,7 @@ class User(Base):
         back_populates="user",
         foreign_keys="OrgMember.user_id",
     )
-    api_keys: Mapped[list["ApiKey"]] = relationship(
-        "ApiKey", back_populates="user"
-    )
+    api_keys: Mapped[list["ApiKey"]] = relationship("ApiKey", back_populates="user")
 
     def __repr__(self) -> str:
         return f"<User id={self.id!r} email={self.email!r}>"
@@ -192,9 +188,7 @@ class OrgMember(Base):
         back_populates="org_memberships",
         foreign_keys=[user_id],
     )
-    inviter: Mapped["User | None"] = relationship(
-        "User", foreign_keys=[invited_by]
-    )
+    inviter: Mapped["User | None"] = relationship("User", foreign_keys=[invited_by])
 
     def __repr__(self) -> str:
         return (
@@ -229,9 +223,7 @@ class OidcRefreshSession(Base):
     user_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id"), nullable=False, index=True
     )
-    jti: Mapped[str] = mapped_column(
-        String(64), unique=True, nullable=False
-    )
+    jti: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     oidc_sub: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
@@ -307,9 +299,7 @@ class Task(Base):
     )
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    status: Mapped[str] = mapped_column(
-        String(50), nullable=False, default="backlog"
-    )
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="backlog")
     spec_dir: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     created_by: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("users.id"), nullable=True
@@ -326,12 +316,8 @@ class Task(Base):
 
     # Relationships
     project: Mapped["Project"] = relationship("Project", back_populates="tasks")
-    creator: Mapped["User | None"] = relationship(
-        "User", foreign_keys=[created_by]
-    )
-    assignee: Mapped["User | None"] = relationship(
-        "User", foreign_keys=[assigned_to]
-    )
+    creator: Mapped["User | None"] = relationship("User", foreign_keys=[created_by])
+    assignee: Mapped["User | None"] = relationship("User", foreign_keys=[assigned_to])
 
     def __repr__(self) -> str:
         return f"<Task id={self.id!r} title={self.title!r} status={self.status!r}>"
@@ -480,9 +466,7 @@ class TestTargetCredential(Base):
     organization: Mapped["Organization"] = relationship("Organization")
 
     # A credential name is unique per org so .tfactory.yml refs are unambiguous.
-    __table_args__ = (
-        UniqueConstraint("org_id", "name", name="uq_test_cred_org_name"),
-    )
+    __table_args__ = (UniqueConstraint("org_id", "name", name="uq_test_cred_org_name"),)
 
     def __repr__(self) -> str:
         return f"<TestTargetCredential id={self.id!r} name={self.name!r}>"
@@ -498,9 +482,7 @@ class EmailAccount(Base):
 
     __tablename__ = "email_accounts"
     __table_args__ = (
-        UniqueConstraint(
-            "user_id", "provider", name="uq_email_accounts_user_provider"
-        ),
+        UniqueConstraint("user_id", "provider", name="uq_email_accounts_user_provider"),
     )
 
     id: Mapped[str] = mapped_column(
@@ -515,12 +497,8 @@ class EmailAccount(Base):
     email_address: Mapped[str] = mapped_column(String(255), nullable=False)
     # P2.3: OAuth credentials encrypted at rest via EncryptedString.
     # See apps/web-server/server/crypto/ for the at-rest encryption layer.
-    access_token: Mapped[str] = mapped_column(
-        _EncryptedString(), nullable=False
-    )
-    refresh_token: Mapped[str | None] = mapped_column(
-        _EncryptedString(), nullable=True
-    )
+    access_token: Mapped[str] = mapped_column(_EncryptedString(), nullable=False)
+    refresh_token: Mapped[str | None] = mapped_column(_EncryptedString(), nullable=True)
     token_expiry: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     scopes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -630,17 +608,13 @@ class AuditLog(Base):
     # row's content (or the genesis sentinel for the first row).
     # Threat model: tamper-detection within the audit log only.
     # Signed external anchor = v1.1.
-    prev_hash: Mapped[str | None] = mapped_column(
-        String(64), nullable=True
-    )
+    prev_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     # Relationships (read-only lookups, no back_populates needed)
     organization: Mapped["Organization | None"] = relationship(
         "Organization", foreign_keys=[org_id]
     )
-    user: Mapped["User | None"] = relationship(
-        "User", foreign_keys=[user_id]
-    )
+    user: Mapped["User | None"] = relationship("User", foreign_keys=[user_id])
 
     def __repr__(self) -> str:
         return (
@@ -673,25 +647,31 @@ class KmsDataKey(Base):
         String(36), primary_key=True, default=_generate_uuid
     )
     org_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("organizations.id", ondelete="CASCADE"),
-        nullable=False, unique=True, index=True,
+        String(36),
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
     )
     wrapped_key: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     kms_key_id: Mapped[str] = mapped_column(
-        String(255), nullable=False,
+        String(255),
+        nullable=False,
         comment="Identifier of the KMS root key that wrapped this data key. "
-                "For fernet backend: literal `fernet:default`. For aws_kms: "
-                "the KMS ARN. Lets rotation runbooks know which backend "
-                "wrapped each row.",
+        "For fernet backend: literal `fernet:default`. For aws_kms: "
+        "the KMS ARN. Lets rotation runbooks know which backend "
+        "wrapped each row.",
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )
     rotated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now(),
+        DateTime,
+        nullable=False,
+        server_default=func.now(),
         comment="Updated on every re-wrap (root key rotation). The "
-                "DataKeyManager polls this column to invalidate its "
-                "in-process LRU cache.",
+        "DataKeyManager polls this column to invalidate its "
+        "in-process LRU cache.",
     )
 
     def __repr__(self) -> str:
@@ -760,9 +740,7 @@ class JobState(Base):
     # Optional finer-grained phase (e.g. "review_initial_complete").
     phase: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # Execution attempt counter (RFC-0008 failover / restart increments).
-    attempt: Mapped[int] = mapped_column(
-        nullable=False, default=1, server_default="1"
-    )
+    attempt: Mapped[int] = mapped_column(nullable=False, default=1, server_default="1")
     # JSON blobs (Text for SQLite/Postgres portability — never large content).
     # admission bookkeeping: {enqueued_at, queue_position, started_at}.
     admission_json: Mapped[str | None] = mapped_column(Text, nullable=True)

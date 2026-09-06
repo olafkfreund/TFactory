@@ -179,16 +179,17 @@ class Settings(BaseSettings):
         token = secrets.token_urlsafe(32)
 
         # Save token
-        token_file.parent.mkdir(parents=True, exist_ok=True)
         write_secret_file(token_file, token)  # 0600 from creation, no readable window
 
+        # #324 (M1): never print the token value — stdout lands in container /
+        # CI / journald logs. Point operators at the 0600 file instead.
         print(f"\n{'=' * 60}")
         print("TFactory - First Run Setup")
         print(f"{'=' * 60}")
-        print(f"Generated API token: {token}")
-        print(f"Token saved to: {token_file}")
-        print("\nUse this token to authenticate API requests:")
-        print(f"  Authorization: Bearer {token}")
+        print(f"Generated API token saved to: {token_file}")
+        print(f"Read it with:  cat {token_file}")
+        print("\nThen authenticate API requests with:")
+        print("  Authorization: Bearer <token>")
         print(f"{'=' * 60}\n")
 
         return token

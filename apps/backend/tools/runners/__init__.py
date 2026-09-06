@@ -27,6 +27,7 @@ from .lang_registry import (
     UnsupportedLanguageError,
     get_tool_for_lane,
     languages_supporting_lane,
+    unavailable_lane_reason,
 )
 
 __all__ = [
@@ -39,4 +40,5 @@ __all__ = [
     "dispatch_lane",
     "get_tool_for_lane",
     "languages_supporting_lane",
+    "unavailable_lane_reason",
 ]

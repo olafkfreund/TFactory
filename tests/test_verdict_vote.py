@@ -310,3 +310,72 @@ async def test_gating_site_all_crashes_is_evaluator_failed(
     assert status["status"] == "evaluator_failed"
     assert status["phase"] == "evaluator_session_error"
     assert "boom" in status["evaluator_error"]
+
+
+# ── The omitted-test case: a judge that drops a test must not drop the gate ──
+
+
+def _two_test_plan() -> dict:
+    plan = _make_test_plan()
+    plan["phases"][0]["subtasks"].append(
+        {
+            "id": "st1",
+            "description": "Subtask 1",
+            "status": "completed",
+            "lane": "functional",
+            "target": "app/m1.py::f1",
+            "rationale": "AC#4 rate limit",
+            "files_to_create": ["tests/test_1.py"],
+            "verification": {"type": "command", "command": "pytest tests/test_1.py"},
+        }
+    )
+    return plan
+
+
+@pytest.fixture
+def spec_dir_two_tests(spec_dir: Path) -> Path:
+    """The single-test spec, plus a second generated test (st1)."""
+    spec_dir.joinpath("test_plan.json").write_text(json.dumps(_two_test_plan()))
+    spec_dir.joinpath("tests", "test_1.py").write_text(
+        '"""Test file."""\ndef test_y():\n    assert 1 == 1\n'
+    )
+    return spec_dir
+
+
+@pytest.mark.usefixtures("_evaluator_env")
+async def test_test_omitted_by_every_judge_votes_reject(
+    spec_dir_two_tests: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """All 3 judges drop st1 (LLM truncation) → st1 still casts a reject vote.
+
+    Before the fix the merged doc was seeded from the union of judge OUTPUT, so
+    a test every judge omitted was simply absent: the run reported a clean pass
+    over the tests that survived. The catalog of GENERATED tests is what seeds
+    the vote.
+    """
+    from agents.evaluator import run_evaluator
+
+    # Every call returns a doc naming only st0 — st1 never appears.
+    _install_session_mock(monkeypatch, ["accept", "accept", "accept"])
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+
+    ok = await run_evaluator(spec_dir_two_tests, project_dir, mode="initial")
+    assert ok is True
+
+    doc = json.loads((spec_dir_two_tests / "findings" / "verdicts.json").read_text())
+    by_id = {v["test_id"]: v for v in doc["verdicts"]}
+    assert set(by_id) == {"st0", "st1"}, "the omitted test must not vanish"
+
+    # The specific omitted test — not merely the count — casts the deny vote.
+    omitted = by_id["st1"]
+    assert omitted["verdict"] == "reject"
+    assert omitted["vote"]["votes"] == ["reject", "reject", "reject"]
+    # ...and is distinguishable from a judged reject.
+    assert omitted["judged"] is False
+    assert any("no judge call returned a verdict" in r for r in omitted["reasons"])
+    assert doc["verdict_vote"]["unjudged"] == 1
+
+    # The judged test is untouched.
+    assert by_id["st0"]["verdict"] == "accept"
+    assert by_id["st0"].get("judged") is not False

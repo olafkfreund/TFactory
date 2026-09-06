@@ -119,7 +119,9 @@ def _completed_envelope(spec_dir: Path) -> dict:
 
 def _seed_verdicts(spec_dir: Path, verdicts: list[dict]) -> None:
     (spec_dir / "findings").mkdir(parents=True, exist_ok=True)
-    (spec_dir / "findings" / "verdicts.json").write_text(json.dumps({"verdicts": verdicts}))
+    (spec_dir / "findings" / "verdicts.json").write_text(
+        json.dumps({"verdicts": verdicts})
+    )
 
 
 def test_envelope_carries_honest_verification_block(
@@ -130,10 +132,13 @@ def test_envelope_carries_honest_verification_block(
     surfaced as a gap — never silently 'done'."""
     monkeypatch.setenv("TFACTORY_COMPLETION_SENTINEL", "1")
     _seed_status(tmp_path)
-    _seed_verdicts(tmp_path, [
-        {"test_id": "u1", "lane": "unit", "verdict": "accept"},
-        {"test_id": "a1", "lane": "api", "verdict": "accept"},
-    ])
+    _seed_verdicts(
+        tmp_path,
+        [
+            {"test_id": "u1", "lane": "unit", "verdict": "accept"},
+            {"test_id": "a1", "lane": "api", "verdict": "accept"},
+        ],
+    )
     _write_status_patch(
         tmp_path, status="triaged", phase="triager_complete", committed_count=2
     )
@@ -285,8 +290,8 @@ def test_evidence_gate_triaged_with_no_verdicts_is_failure(
     _seed_status(tmp_path)
     _write_status_patch(tmp_path, status="triaged")  # no verdict counts at all
     env = _completed_envelope(tmp_path)
-    assert env["status"] == "triaged"          # internal status preserved
-    assert env["outcome"] == "failure"          # but the outcome is not green
+    assert env["status"] == "triaged"  # internal status preserved
+    assert env["outcome"] == "failure"  # but the outcome is not green
     assert "no_evidence" in (env.get("halt_reason") or "")
     assert env["evidence"]["proof_kind"] == "tests"
 

@@ -103,11 +103,15 @@ def test_two_docker_runs_get_distinct_host_ports():
     runner_a = _RecordingRunner()
     runner_b = _RecordingRunner()
     rt_a = DockerRunRuntime(
-        _docker_target(), runner_fn=runner_a, clock=lambda: 0.0,
+        _docker_target(),
+        runner_fn=runner_a,
+        clock=lambda: 0.0,
         port_picker=_port_sequence(40001),
     )
     rt_b = DockerRunRuntime(
-        _docker_target(), runner_fn=runner_b, clock=lambda: 0.0,
+        _docker_target(),
+        runner_fn=runner_b,
+        clock=lambda: 0.0,
         port_picker=_port_sequence(40002),
     )
     rt_a.start()
@@ -141,7 +145,9 @@ def test_docker_run_handles_ports_without_explicit_host():
     """A ``"3000"`` mapping (no host side) still binds a dynamic host port."""
     runner = _RecordingRunner()
     rt = DockerRunRuntime(
-        _docker_target(ports=["3000"]), runner_fn=runner, clock=lambda: 0.0,
+        _docker_target(ports=["3000"]),
+        runner_fn=runner,
+        clock=lambda: 0.0,
         port_picker=_port_sequence(45000),
     )
     rt.start()
@@ -164,8 +170,11 @@ def test_docker_run_carries_cpu_and_memory_caps():
 def test_docker_run_resource_caps_overridable():
     runner = _RecordingRunner()
     rt = DockerRunRuntime(
-        _docker_target(), runner_fn=runner, clock=lambda: 0.0,
-        cpus="4", memory="8g",
+        _docker_target(),
+        runner_fn=runner,
+        clock=lambda: 0.0,
+        cpus="4",
+        memory="8g",
     )
     rt.start()
     argv = runner.run_argvs()[0]
@@ -187,7 +196,10 @@ def test_two_app_runtimes_get_distinct_project_names():
 def test_app_runtime_passes_project_name_to_up_and_down():
     runner = _RecordingRunner()
     rt = AppRuntime(
-        _compose_target(), Path("/repo"), runner_fn=runner, clock=lambda: 0.0,
+        _compose_target(),
+        Path("/repo"),
+        runner_fn=runner,
+        clock=lambda: 0.0,
         project_name="tf-fixed01",
     )
     rt.start()

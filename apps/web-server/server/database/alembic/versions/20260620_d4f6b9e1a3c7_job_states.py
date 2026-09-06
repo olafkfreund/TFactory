@@ -57,9 +57,7 @@ def upgrade() -> None:
         ),
         sa.Column("service_status", sa.String(length=64), nullable=True),
         sa.Column("phase", sa.String(length=64), nullable=True),
-        sa.Column(
-            "attempt", sa.Integer(), nullable=False, server_default="1"
-        ),
+        sa.Column("attempt", sa.Integer(), nullable=False, server_default="1"),
         sa.Column("admission_json", sa.Text(), nullable=True),
         sa.Column("worker_ref_json", sa.Text(), nullable=True),
         sa.Column("artifacts_json", sa.Text(), nullable=True),
@@ -80,12 +78,8 @@ def upgrade() -> None:
         ),
         sa.Column("ended_at", sa.DateTime(), nullable=True),
     )
-    op.create_index(
-        "ix_job_states_lifecycle_state", "job_states", ["lifecycle_state"]
-    )
-    op.create_index(
-        "ix_job_states_correlation_key", "job_states", ["correlation_key"]
-    )
+    op.create_index("ix_job_states_lifecycle_state", "job_states", ["lifecycle_state"])
+    op.create_index("ix_job_states_correlation_key", "job_states", ["correlation_key"])
 
 
 def downgrade() -> None:

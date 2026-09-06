@@ -78,8 +78,15 @@ def test_the_resolve_failure_does_not_carry_the_inner_exception() -> None:
 
     message = caught.value.client_message
     assert "no-such-host.invalid" in message, "the caller's own host should stay"
-    for fragment in ("Errno", "gaierror", "Name or service not known", "Temporary failure"):
-        assert fragment not in message, f"stdlib text leaked into the message: {message!r}"
+    for fragment in (
+        "Errno",
+        "gaierror",
+        "Name or service not known",
+        "Temporary failure",
+    ):
+        assert fragment not in message, (
+            f"stdlib text leaked into the message: {message!r}"
+        )
     # Still recoverable for whoever debugs it.
     assert caught.value.__cause__ is not None, "the inner exception was lost entirely"
 
@@ -94,7 +101,9 @@ def test_a_foreign_valueerror_is_redacted() -> None:
     logger = logging.getLogger("tfactory.test.url_rejection")
     internal = "/etc/tfactory/credentials.yaml"
 
-    ours = client_error(logger, "ctx", InputRejectedError("Invalid baseUrl: use http/https"))
+    ours = client_error(
+        logger, "ctx", InputRejectedError("Invalid baseUrl: use http/https")
+    )
     assert ours == "Invalid baseUrl: use http/https"
 
     theirs = client_error(logger, "disallowed base URL", ValueError(f"boom {internal}"))

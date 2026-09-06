@@ -81,9 +81,12 @@ def test_snapshot_happy_path(populated_spec: Path, tmp_path: Path) -> None:
 def test_copies_are_read_only(populated_spec: Path, tmp_path: Path) -> None:
     dest = tmp_path / "tfactory" / "workspaces" / "demo" / "specs" / "001-login"
     snapshot_aifactory_spec(
-        project_id="demo", spec_id="001-login",
-        branch="feature/login", base_ref="main",
-        project_root_path=None, dest_spec_dir=dest,
+        project_id="demo",
+        spec_id="001-login",
+        branch="feature/login",
+        base_ref="main",
+        project_root_path=None,
+        dest_spec_dir=dest,
     )
     for fname in ("aifactory_spec.md", "aifactory_plan.json"):
         mode = (dest / "context" / fname).stat().st_mode & 0o777
@@ -93,16 +96,27 @@ def test_copies_are_read_only(populated_spec: Path, tmp_path: Path) -> None:
 def test_source_json_schema(populated_spec: Path, tmp_path: Path) -> None:
     dest = tmp_path / "tfactory" / "ws"
     res = snapshot_aifactory_spec(
-        project_id="demo", spec_id="001-login",
-        branch="feature/x", base_ref="main",
-        project_root_path=None, dest_spec_dir=dest,
+        project_id="demo",
+        spec_id="001-login",
+        branch="feature/x",
+        base_ref="main",
+        project_root_path=None,
+        dest_spec_dir=dest,
     )
     data = json.loads((dest / "context" / "source.json").read_text())
     expected_keys = {
-        "project_id", "spec_id", "branch", "base_ref",
-        "aifactory_spec_dir", "snapshotted_at",
-        "has_spec_md", "has_plan_json", "has_diff_patch",
-        "sha_at_handover", "diff_stat", "warnings",
+        "project_id",
+        "spec_id",
+        "branch",
+        "base_ref",
+        "aifactory_spec_dir",
+        "snapshotted_at",
+        "has_spec_md",
+        "has_plan_json",
+        "has_diff_patch",
+        "sha_at_handover",
+        "diff_stat",
+        "warnings",
     }
     assert expected_keys.issubset(data.keys())
     assert data["project_id"] == "demo"
@@ -118,9 +132,12 @@ def test_source_json_carries_handback_target(
     correction can target the original spec (epic #182)."""
     dest = tmp_path / "tfactory" / "ws"
     snapshot_aifactory_spec(
-        project_id="demo", spec_id="001-login",
-        branch="feature/x", base_ref="main",
-        project_root_path=None, dest_spec_dir=dest,
+        project_id="demo",
+        spec_id="001-login",
+        branch="feature/x",
+        base_ref="main",
+        project_root_path=None,
+        dest_spec_dir=dest,
     )
     data = json.loads((dest / "context" / "source.json").read_text())
 
@@ -144,9 +161,12 @@ def test_handback_api_url_env_override(
     monkeypatch.setenv("TFACTORY_AIFACTORY_API_URL", "https://aif.internal:8443")
     dest = tmp_path / "tfactory" / "ws"
     snapshot_aifactory_spec(
-        project_id="demo", spec_id="001-login",
-        branch="feature/x", base_ref="main",
-        project_root_path=None, dest_spec_dir=dest,
+        project_id="demo",
+        spec_id="001-login",
+        branch="feature/x",
+        base_ref="main",
+        project_root_path=None,
+        dest_spec_dir=dest,
     )
     data = json.loads((dest / "context" / "source.json").read_text())
     assert data["aifactory"]["api_url"] == "https://aif.internal:8443"
@@ -158,9 +178,12 @@ def test_handback_api_url_explicit_arg_wins(
     """An explicit api_url arg beats the env default."""
     dest = tmp_path / "tfactory" / "ws"
     snapshot_aifactory_spec(
-        project_id="demo", spec_id="001-login",
-        branch="feature/x", base_ref="main",
-        project_root_path=None, dest_spec_dir=dest,
+        project_id="demo",
+        spec_id="001-login",
+        branch="feature/x",
+        base_ref="main",
+        project_root_path=None,
+        dest_spec_dir=dest,
         api_url="http://example:9000",
     )
     data = json.loads((dest / "context" / "source.json").read_text())
@@ -177,9 +200,12 @@ def test_missing_spec_md_is_soft_fail(aifactory: Path, tmp_path: Path) -> None:
     (spec / "implementation_plan.json").write_text('{"phases": []}')
     dest = tmp_path / "ws"
     res = snapshot_aifactory_spec(
-        project_id="demo", spec_id="001",
-        branch="f/x", base_ref="main",
-        project_root_path=None, dest_spec_dir=dest,
+        project_id="demo",
+        spec_id="001",
+        branch="f/x",
+        base_ref="main",
+        project_root_path=None,
+        dest_spec_dir=dest,
     )
     assert res.has_spec_md is False
     assert res.has_plan_json is True
@@ -192,20 +218,28 @@ def test_missing_plan_json_is_soft_fail(aifactory: Path, tmp_path: Path) -> None
     (spec / "spec.md").write_text("# spec")
     dest = tmp_path / "ws"
     res = snapshot_aifactory_spec(
-        project_id="demo", spec_id="001",
-        branch="f/x", base_ref="main",
-        project_root_path=None, dest_spec_dir=dest,
+        project_id="demo",
+        spec_id="001",
+        branch="f/x",
+        base_ref="main",
+        project_root_path=None,
+        dest_spec_dir=dest,
     )
     assert res.has_spec_md is True
     assert res.has_plan_json is False
     assert any("implementation_plan.json missing" in w for w in res.warnings)
 
 
-def test_project_root_none_skips_git_with_warning(populated_spec: Path, tmp_path: Path) -> None:
+def test_project_root_none_skips_git_with_warning(
+    populated_spec: Path, tmp_path: Path
+) -> None:
     res = snapshot_aifactory_spec(
-        project_id="demo", spec_id="001-login",
-        branch="feature/login", base_ref="main",
-        project_root_path=None, dest_spec_dir=tmp_path / "ws",
+        project_id="demo",
+        spec_id="001-login",
+        branch="feature/login",
+        base_ref="main",
+        project_root_path=None,
+        dest_spec_dir=tmp_path / "ws",
     )
     assert res.has_diff_patch is False
     assert any("project_root_path not provided" in w for w in res.warnings)
@@ -213,8 +247,10 @@ def test_project_root_none_skips_git_with_warning(populated_spec: Path, tmp_path
 
 def test_bad_project_root_is_soft_fail(populated_spec: Path, tmp_path: Path) -> None:
     res = snapshot_aifactory_spec(
-        project_id="demo", spec_id="001-login",
-        branch="feature/login", base_ref="main",
+        project_id="demo",
+        spec_id="001-login",
+        branch="feature/login",
+        base_ref="main",
         project_root_path=tmp_path / "does" / "not" / "exist",
         dest_spec_dir=tmp_path / "ws",
     )
@@ -228,9 +264,12 @@ def test_bad_project_root_is_soft_fail(populated_spec: Path, tmp_path: Path) -> 
 def test_missing_source_spec_dir_raises(aifactory: Path, tmp_path: Path) -> None:
     with pytest.raises(SnapshotError) as exc:
         snapshot_aifactory_spec(
-            project_id="ghost", spec_id="404",
-            branch="f/x", base_ref="main",
-            project_root_path=None, dest_spec_dir=tmp_path / "ws",
+            project_id="ghost",
+            spec_id="404",
+            branch="f/x",
+            base_ref="main",
+            project_root_path=None,
+            dest_spec_dir=tmp_path / "ws",
         )
     assert "AIFactory spec dir not found" in str(exc.value)
 
@@ -240,8 +279,7 @@ def test_missing_source_spec_dir_raises(aifactory: Path, tmp_path: Path) -> None
 
 def _git(cmd: list[str], cwd: Path) -> str:
     return subprocess.run(
-        ["git", "-C", str(cwd), *cmd],
-        capture_output=True, text=True, check=True
+        ["git", "-C", str(cwd), *cmd], capture_output=True, text=True, check=True
     ).stdout.strip()
 
 
@@ -249,7 +287,11 @@ def _git_available() -> bool:
     try:
         subprocess.run(["git", "--version"], capture_output=True, check=True, timeout=5)
         return True
-    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+    except (
+        FileNotFoundError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+    ):
         return False
 
 
@@ -266,15 +308,20 @@ def test_git_diff_captured_for_real_repo(populated_spec: Path, tmp_path: Path) -
     _git(["commit", "-m", "base"], repo)
 
     _git(["checkout", "-b", "feature/login"], repo)
-    (repo / "a.py").write_text("def add(a, b):\n    return a + b\n\ndef sub(a, b):\n    return a - b\n")
+    (repo / "a.py").write_text(
+        "def add(a, b):\n    return a + b\n\ndef sub(a, b):\n    return a - b\n"
+    )
     _git(["add", "a.py"], repo)
     _git(["commit", "-m", "add sub"], repo)
 
     dest = tmp_path / "ws"
     res = snapshot_aifactory_spec(
-        project_id="demo", spec_id="001-login",
-        branch="feature/login", base_ref="main",
-        project_root_path=repo, dest_spec_dir=dest,
+        project_id="demo",
+        spec_id="001-login",
+        branch="feature/login",
+        base_ref="main",
+        project_root_path=repo,
+        dest_spec_dir=dest,
     )
 
     assert res.has_diff_patch is True
@@ -368,9 +415,7 @@ def test_snapshot_with_tfactory_yml_writes_context_file(
     assert mode == 0o444, f"Expected 0o444, got {oct(mode)}"
 
 
-def test_snapshot_without_tfactory_yml(
-    populated_spec: Path, tmp_path: Path
-) -> None:
+def test_snapshot_without_tfactory_yml(populated_spec: Path, tmp_path: Path) -> None:
     """No .tfactory.yml in project_root → has_tfactory_yml=False, no
     context/tfactory_yml.json, no warning about absence."""
     project_root = _make_project_root(tmp_path)  # no .tfactory.yml
@@ -429,9 +474,7 @@ def test_snapshot_with_tests_catalog_writes_context_file(
     assert mode == 0o444, f"Expected 0o444, got {oct(mode)}"
 
 
-def test_snapshot_without_tests_catalog(
-    populated_spec: Path, tmp_path: Path
-) -> None:
+def test_snapshot_without_tests_catalog(populated_spec: Path, tmp_path: Path) -> None:
     """No .tfactory/tests-catalog.json → has_tests_catalog=False, no
     context/tests_catalog.json, no warning about absence."""
     project_root = _make_project_root(tmp_path)  # no catalog
@@ -510,9 +553,7 @@ def test_snapshot_no_project_root_path_skips_both(
     assert not any("tests-catalog" in w for w in res.warnings)
 
 
-def test_source_json_includes_new_flags(
-    populated_spec: Path, tmp_path: Path
-) -> None:
+def test_source_json_includes_new_flags(populated_spec: Path, tmp_path: Path) -> None:
     """source.json written to context/ contains has_tfactory_yml and
     has_tests_catalog keys with correct bool values."""
     project_root = _make_project_root(tmp_path)

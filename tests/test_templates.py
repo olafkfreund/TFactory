@@ -50,8 +50,7 @@ def _no_unsubstituted(text: str) -> bool:
 def _ts_looks_valid(text: str) -> bool:
     """Cheap structural check: a TypeScript file has at least one import or test/describe call."""
     return bool(
-        re.search(r"\bimport\b", text)
-        or re.search(r"\b(test|describe|it)\s*\(", text)
+        re.search(r"\bimport\b", text) or re.search(r"\b(test|describe|it)\s*\(", text)
     )
 
 
@@ -101,7 +100,9 @@ class TestLoadTemplateParsing:
         assert "description" in str(exc_info.value)
 
     def test_handles_empty_vars(self, tmp_path: Path) -> None:
-        p = _make_template(tmp_path, "description: no vars\nvars: []\n", "static body\n")
+        p = _make_template(
+            tmp_path, "description: no vars\nvars: []\n", "static body\n"
+        )
         tmpl = load_template(p)
         assert tmpl.metadata.vars == ()
 
@@ -133,7 +134,9 @@ class TestLoadTemplateParsing:
 
 class TestTemplateFileInstantiate:
     def test_substitutes_vars(self, tmp_path: Path) -> None:
-        p = _make_template(tmp_path, "description: d\nvars:\n  - name\n", "hello ${name}\n")
+        p = _make_template(
+            tmp_path, "description: d\nvars:\n  - name\n", "hello ${name}\n"
+        )
         result = load_template(p).instantiate(name="world")
         assert result == "hello world\n"
 
@@ -152,7 +155,9 @@ class TestTemplateFileInstantiate:
         assert "unknown vars passed" in str(exc_info.value)
         assert "extra" in str(exc_info.value)
 
-    def test_instantiate_unsubstituted_placeholder_in_body(self, tmp_path: Path) -> None:
+    def test_instantiate_unsubstituted_placeholder_in_body(
+        self, tmp_path: Path
+    ) -> None:
         """If the body has ${not_in_vars} but the var is not in metadata, it still errors."""
         # vars list is empty but body has a placeholder — string.Template will raise KeyError
         p = tmp_path / "t.tmpl"

@@ -175,8 +175,7 @@ class OrgRoleChecker:
     def __init__(self, minimum_role: str) -> None:
         if minimum_role not in VALID_ROLES:
             raise ValueError(
-                f"Invalid minimum_role {minimum_role!r}. "
-                f"Must be one of {VALID_ROLES}"
+                f"Invalid minimum_role {minimum_role!r}. Must be one of {VALID_ROLES}"
             )
         self.minimum_role = minimum_role
         self.minimum_level = _role_level(minimum_role)
@@ -188,9 +187,7 @@ class OrgRoleChecker:
         db: AsyncSession = Depends(get_db),
     ) -> OrgMember:
         # Verify the organization exists
-        result = await db.execute(
-            select(Organization).where(Organization.id == org_id)
-        )
+        result = await db.execute(select(Organization).where(Organization.id == org_id))
         org = result.scalar_one_or_none()
         if org is None:
             raise HTTPException(
@@ -363,9 +360,7 @@ async def get_organization(
     """Return details for a single organization. Requires membership."""
 
     # Fetch the org
-    result = await db.execute(
-        select(Organization).where(Organization.id == org_id)
-    )
+    result = await db.execute(select(Organization).where(Organization.id == org_id))
     org = result.scalar_one_or_none()
     if org is None:
         raise HTTPException(
@@ -405,9 +400,7 @@ async def update_organization(
     """Update organization fields. Requires admin or owner role."""
 
     # Fetch the org
-    result = await db.execute(
-        select(Organization).where(Organization.id == org_id)
-    )
+    result = await db.execute(select(Organization).where(Organization.id == org_id))
     org = result.scalar_one_or_none()
     if org is None:
         raise HTTPException(
@@ -455,7 +448,9 @@ async def update_organization(
     )
     member_count = count_result.scalar() or 0
 
-    logger.info(f"Organization updated: {sanitize_log(org.slug)} (id={sanitize_log(org.id)})")
+    logger.info(
+        f"Organization updated: {sanitize_log(org.slug)} (id={sanitize_log(org.id)})"
+    )
 
     return OrgResponse(
         id=org.id,
@@ -486,9 +481,7 @@ async def delete_organization(
     """
 
     # Fetch the org
-    result = await db.execute(
-        select(Organization).where(Organization.id == org_id)
-    )
+    result = await db.execute(select(Organization).where(Organization.id == org_id))
     org = result.scalar_one_or_none()
     if org is None:
         raise HTTPException(
@@ -497,9 +490,7 @@ async def delete_organization(
         )
 
     # Delete all memberships first
-    await db.execute(
-        delete(OrgMember).where(OrgMember.org_id == org_id)
-    )
+    await db.execute(delete(OrgMember).where(OrgMember.org_id == org_id))
 
     # Delete the organization
     await db.delete(org)
@@ -556,9 +547,7 @@ async def invite_member(
         )
 
     # Look up the user by email
-    result = await db.execute(
-        select(User).where(User.email == body.email)
-    )
+    result = await db.execute(select(User).where(User.email == body.email))
     target_user = result.scalar_one_or_none()
     if target_user is None:
         raise HTTPException(
@@ -728,9 +717,7 @@ async def update_member_role(
     await db.refresh(target_membership)
 
     # Load the user info for the response
-    user_result = await db.execute(
-        select(User).where(User.id == user_id)
-    )
+    user_result = await db.execute(select(User).where(User.id == user_id))
     target_user = user_result.scalar_one_or_none()
 
     logger.info(

@@ -79,7 +79,9 @@ def _extract_digest(stored_hash: str) -> str:
 
 
 class CreateApiKeyRequest(BaseModel):
-    name: str = Field(..., min_length=1, max_length=255, description="Human-readable name for the key")
+    name: str = Field(
+        ..., min_length=1, max_length=255, description="Human-readable name for the key"
+    )
     org_id: str = Field(..., description="Organization ID this key is scoped to")
     scopes: list[str] | None = Field(
         default=None,

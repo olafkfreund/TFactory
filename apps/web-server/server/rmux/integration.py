@@ -70,7 +70,8 @@ async def create_if_enabled(
     except Exception:
         logger.warning(
             "rmux create_for_task failed (falling back to PTY); spec_id=%s",
-            sanitize_log(spec_id), exc_info=True,
+            sanitize_log(spec_id),
+            exc_info=True,
         )
         return None
 
@@ -90,5 +91,6 @@ async def reap_if_enabled(spec_id: str) -> None:
     except Exception:
         logger.warning(
             "rmux reap_for_task failed (ignored); spec_id=%s",
-            sanitize_log(spec_id), exc_info=True,
+            sanitize_log(spec_id),
+            exc_info=True,
         )

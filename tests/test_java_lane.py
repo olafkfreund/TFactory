@@ -79,7 +79,9 @@ def test_probe_survived_when_mutant_passes(tmp_path):
 
 def test_probe_no_mutant_when_no_assertion(tmp_path):
     f = _write(tmp_path, "int x = 1;")
-    rep = run_java_mutate_probe(f, tmp_path, runner_fn=lambda m, p: SimpleNamespace(returncode=1))
+    rep = run_java_mutate_probe(
+        f, tmp_path, runner_fn=lambda m, p: SimpleNamespace(returncode=1)
+    )
     assert rep.verdict == JavaMutationVerdict.NO_MUTANT
 
 
@@ -113,7 +115,9 @@ def test_run_language_mutation_routes_java(tmp_path):
 
     f = _write(tmp_path, "assertEquals(5, calc());")
     rep = run_language_mutation(
-        "java", f, tmp_path,
+        "java",
+        f,
+        tmp_path,
         runner_fn=lambda m, p: SimpleNamespace(returncode=1),
         mutant_path=tmp_path / "m.java",
     )

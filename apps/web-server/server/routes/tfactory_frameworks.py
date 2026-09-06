@@ -94,9 +94,7 @@ def _summary_row(name: str, desc: Any) -> dict:
         "name": name,
         "language": desc.language,
         "coverage_strategy": desc.coverage_strategy,
-        "lanes": [
-            (v.value if hasattr(v, "value") else str(v)) for v in desc.lanes
-        ],
+        "lanes": [(v.value if hasattr(v, "value") else str(v)) for v in desc.lanes],
         "version_range": desc.version_range,
         "template_count": len(desc.templates),
     }

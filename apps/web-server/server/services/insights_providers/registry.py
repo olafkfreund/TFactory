@@ -70,10 +70,7 @@ async def detect_all_providers() -> list[ProviderInfo]:
     total_start = time.perf_counter()
 
     timed_results = await asyncio.gather(
-        *[
-            _timed_detect(pid, prov)
-            for pid, prov in _providers.items()
-        ],
+        *[_timed_detect(pid, prov) for pid, prov in _providers.items()],
     )
 
     timings: dict[str, str] = {}

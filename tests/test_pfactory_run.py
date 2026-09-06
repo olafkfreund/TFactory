@@ -31,7 +31,9 @@ def _oracle(plan_id="001-orders", priority="p1") -> PFactoryOracle:
         risk="medium",
         access_verified=True,
         taxonomy_version="v1",
-        citations=(Citation(why="needs auth", uri="https://owasp.org/x", source="owasp"),),
+        citations=(
+            Citation(why="needs auth", uri="https://owasp.org/x", source="owasp"),
+        ),
         acceptance_criteria=("AC#1: requires auth", "AC#2: returns 401 when missing"),
     )
 

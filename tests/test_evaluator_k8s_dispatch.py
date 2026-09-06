@@ -108,8 +108,13 @@ def test_kube_runtime_for_threads_port_forward_to_real_runtime() -> None:
     from agents.evaluator import _kube_runtime_for
 
     target = {
-        "name": "web", "type": "kubernetes", "context": "kind-x",
-        "namespace": "demo", "service": "web", "port": 8080, "port_forward": True,
+        "name": "web",
+        "type": "kubernetes",
+        "context": "kind-x",
+        "namespace": "demo",
+        "service": "web",
+        "port": 8080,
+        "port_forward": True,
     }
     rt = _kube_runtime_for(target)  # real KubernetesRuntime (no mock)
     assert rt is not None

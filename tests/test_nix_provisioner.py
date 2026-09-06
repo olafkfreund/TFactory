@@ -44,14 +44,19 @@ def test_generate_flake_go_toolchain_and_tools():
 
     env = {
         "language": "go",
-        "toolchain": {"go": "1.22"},
+        # 1.25 is an explicitly mapped minor at the current hub pin: go_1_21/22
+        # no longer exist at DEFAULT_NIXPKGS and go_1_23 throws (Factory#1019).
+        # Asserting go_1_22 here was the text-pin that kept the broken output
+        # green; the re-vendor that brought the fixed _GO_ATTR moves this test
+        # to a minor the table actually maps.
+        "toolchain": {"go": "1.25"},
         "system_packages": ["gotestsum", "gocover-cobertura"],
         "verify_commands": ["go test ./..."],
         "provisioning": {"method": "nix", "ref": "flake.nix", "generated": True},
     }
     flake = generate_flake(env)
     # pinned minor -> explicit attr; test+coverage tools ride in as system pkgs.
-    assert "pkgs.go_1_22" in flake, flake
+    assert "pkgs.go_1_25" in flake, flake
     assert "pkgs.gotestsum" in flake and "pkgs.gocover-cobertura" in flake, flake
     # no python toolchain / withPackages / inferred pytest for a go env.
     assert "withPackages" not in flake, flake
@@ -127,7 +132,12 @@ def test_go_flake_gets_no_python_harness_libs():
     flake = generate_flake(
         {
             "language": "go",
-            "toolchain": {"go": "1.22"},
+            # 1.25 is an explicitly mapped minor at the current hub pin: go_1_21/22
+            # no longer exist at DEFAULT_NIXPKGS and go_1_23 throws (Factory#1019).
+            # Asserting go_1_22 here was the text-pin that kept the broken output
+            # green; the re-vendor that brought the fixed _GO_ATTR moves this test
+            # to a minor the table actually maps.
+            "toolchain": {"go": "1.25"},
             "verify_commands": ["go test ./..."],
             "provisioning": {"method": "nix", "generated": True},
         }

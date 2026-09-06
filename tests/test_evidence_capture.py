@@ -192,16 +192,19 @@ def test_render_playwright_config_no_placeholder_leakage(tmp_path: Path) -> None
 # ─── content_type_for_artifact ────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("filename,expected", [
-    ("screenshot.png", "image/png"),
-    ("SCREENSHOT.PNG", "image/png"),
-    ("video.webm", "video/webm"),
-    ("trace.zip", "application/zip"),
-    ("network.har", "application/json"),
-    ("events.jsonl", "application/json"),
-    ("clip.mp4", "video/mp4"),
-    ("unknown.bin", "application/octet-stream"),
-])
+@pytest.mark.parametrize(
+    "filename,expected",
+    [
+        ("screenshot.png", "image/png"),
+        ("SCREENSHOT.PNG", "image/png"),
+        ("video.webm", "video/webm"),
+        ("trace.zip", "application/zip"),
+        ("network.har", "application/json"),
+        ("events.jsonl", "application/json"),
+        ("clip.mp4", "video/mp4"),
+        ("unknown.bin", "application/octet-stream"),
+    ],
+)
 def test_content_type_for_artifact(filename: str, expected: str) -> None:
     assert content_type_for_artifact(filename) == expected
 
@@ -241,10 +244,7 @@ def _urls_to_raw(
     urls: dict[str, str | list[str]],
 ) -> tuple[tuple[str, str | tuple[str, ...]], ...]:
     """Convert a plain dict to the hashable evidence_urls_raw format."""
-    return tuple(
-        (k, tuple(v) if isinstance(v, list) else v)
-        for k, v in urls.items()
-    )
+    return tuple((k, tuple(v) if isinstance(v, list) else v) for k, v in urls.items())
 
 
 def test_catalog_entry_default_evidence_fields() -> None:

@@ -51,17 +51,21 @@ def _make_runner(
 ) -> object:
     mutants = mutants or []
     stdout = _stryker_json(mutants)
+
     def _runner(cmd, cwd, *, image, timeout):
         return _FakeRunResult(returncode=returncode, stdout=stdout)
+
     return _runner
 
 
 def _recording_runner(calls: list, returncode: int = 0, mutants: list | None = None):
     mutants = mutants or []
     stdout = _stryker_json(mutants)
+
     def _runner(cmd, cwd, *, image, timeout):
         calls.append({"cmd": cmd, "cwd": cwd, "image": image, "timeout": timeout})
         return _FakeRunResult(returncode=returncode, stdout=stdout)
+
     return _runner
 
 
@@ -201,7 +205,9 @@ def test_parse_json_with_prefix_log_lines() -> None:
 
 
 def test_parse_exposes_full_stryker_dict() -> None:
-    raw = _stryker_json([{"id": "42", "status": "Killed", "location": {"start": {"line": 3}}}])
+    raw = _stryker_json(
+        [{"id": "42", "status": "Killed", "location": {"start": {"line": 3}}}]
+    )
     _, data = _parse_stryker_report(raw)
     assert data is not None
     assert "mutants" in data
@@ -229,8 +235,10 @@ def test_survived_when_mutant_passes(tmp_path: Path, project_dir: Path) -> None:
 
 def test_no_mutant_when_no_assertions(tmp_path: Path, project_dir: Path) -> None:
     test_file = _write_ts(tmp_path, "const x = 5;\n")
+
     def _should_not_run(*a, **kw):
         pytest.fail("runner should not be called when no mutation found")
+
     report = run_ts_mutate_probe(test_file, project_dir, runner_fn=_should_not_run)
     assert report.verdict == TSMutationVerdict.NO_MUTANT
     assert report.mutated_assertion is None
@@ -268,7 +276,9 @@ def test_raw_stryker_json_exposed(tmp_path: Path, project_dir: Path) -> None:
     assert report.raw_stryker_json["mutants"][0]["id"] == "99"
 
 
-def test_mutated_assertion_field_human_readable(tmp_path: Path, project_dir: Path) -> None:
+def test_mutated_assertion_field_human_readable(
+    tmp_path: Path, project_dir: Path
+) -> None:
     test_file = _write_ts(tmp_path, "test('x', () => { expect(val).toBe(7); });\n")
     runner = _make_runner(returncode=0, mutants=[{"id": "1", "status": "Killed"}])
     report = run_ts_mutate_probe(test_file, project_dir, runner_fn=runner)
@@ -280,7 +290,9 @@ def test_mutated_assertion_field_human_readable(tmp_path: Path, project_dir: Pat
 def test_runner_fn_receives_stryker_command(tmp_path: Path, project_dir: Path) -> None:
     test_file = _write_ts(tmp_path, "test('x', () => { expect(n).toBe(1); });\n")
     calls: list = []
-    runner = _recording_runner(calls, returncode=0, mutants=[{"id": "1", "status": "Killed"}])
+    runner = _recording_runner(
+        calls, returncode=0, mutants=[{"id": "1", "status": "Killed"}]
+    )
     run_ts_mutate_probe(test_file, project_dir, runner_fn=runner)
     assert len(calls) == 1
     assert any("stryker" in str(c).lower() for c in calls[0]["cmd"])
@@ -289,18 +301,25 @@ def test_runner_fn_receives_stryker_command(tmp_path: Path, project_dir: Path) -
 def test_runner_image_passed_through(tmp_path: Path, project_dir: Path) -> None:
     test_file = _write_ts(tmp_path, "test('x', () => { expect(n).toBe(2); });\n")
     calls: list = []
-    runner = _recording_runner(calls, returncode=0, mutants=[{"id": "1", "status": "Killed"}])
+    runner = _recording_runner(
+        calls, returncode=0, mutants=[{"id": "1", "status": "Killed"}]
+    )
     run_ts_mutate_probe(
-        test_file, project_dir,
+        test_file,
+        project_dir,
         runner_fn=runner,
         runner_image="tfactory-runner-playwright:latest",
     )
     assert calls[0]["image"] == "tfactory-runner-playwright:latest"
 
 
-def test_stryker_exit_nonzero_still_parses_report(tmp_path: Path, project_dir: Path) -> None:
+def test_stryker_exit_nonzero_still_parses_report(
+    tmp_path: Path, project_dir: Path
+) -> None:
     """Stryker may exit non-zero even on a successful run with some unresolved mutants."""
-    test_file = _write_ts(tmp_path, "test('x', () => { expect(n).toHaveLength(3); });\n")
+    test_file = _write_ts(
+        tmp_path, "test('x', () => { expect(n).toHaveLength(3); });\n"
+    )
     # Stryker exits 1 but still emits a JSON report.
     runner = _make_runner(returncode=1, mutants=[{"id": "1", "status": "Survived"}])
     report = run_ts_mutate_probe(test_file, project_dir, runner_fn=runner)

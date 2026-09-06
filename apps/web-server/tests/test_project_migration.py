@@ -51,7 +51,9 @@ async def session():
     await engine.dispose()
 
 
-async def _seed_user(session, *, email: str, org_name: str = "Personal") -> tuple[str, str]:
+async def _seed_user(
+    session, *, email: str, org_name: str = "Personal"
+) -> tuple[str, str]:
     user = User(password_hash="x", email=email, role="user")
     session.add(user)
     await session.flush()

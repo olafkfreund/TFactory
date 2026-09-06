@@ -40,16 +40,20 @@ class _FakeRunResult:
 
 def _make_runner(returncode: int, stdout: str = "", stderr: str = ""):
     """Return a runner_fn that always returns the given canned result."""
+
     def _runner(cmd, cwd, *, image, timeout):
         return _FakeRunResult(returncode=returncode, stdout=stdout, stderr=stderr)
+
     return _runner
 
 
 def _recording_runner(calls: list, returncode: int = 0, stdout: str = ""):
     """Runner that records calls for assertion."""
+
     def _runner(cmd, cwd, *, image, timeout):
         calls.append({"cmd": cmd, "cwd": cwd, "image": image, "timeout": timeout})
         return _FakeRunResult(returncode=returncode, stdout=stdout)
+
     return _runner
 
 
@@ -137,7 +141,9 @@ def test_parse_mixed_error_types_separated() -> None:
 def ts_file(tmp_path: Path) -> Path:
     """Create a minimal TypeScript test file in tmp_path."""
     f = tmp_path / "mytest.test.ts"
-    f.write_text("import { foo } from './foo';\ntest('x', () => { expect(foo()).toBe(1); });\n")
+    f.write_text(
+        "import { foo } from './foo';\ntest('x', () => { expect(foo()).toBe(1); });\n"
+    )
     return f
 
 
@@ -164,7 +170,9 @@ def test_single_unresolved_import_detected(ts_file: Path, tmp_path: Path) -> Non
     assert report.other_errors == ()
 
 
-def test_multiple_unresolved_imports_all_captured(ts_file: Path, tmp_path: Path) -> None:
+def test_multiple_unresolved_imports_all_captured(
+    ts_file: Path, tmp_path: Path
+) -> None:
     tsc_output = (
         "mytest.test.ts(1,1): error TS2307: Cannot find module './foo' or its corresponding type declarations.\n"
         "mytest.test.ts(2,1): error TS2307: Cannot find module '@org/bar' or its corresponding type declarations.\n"
@@ -179,7 +187,9 @@ def test_multiple_unresolved_imports_all_captured(ts_file: Path, tmp_path: Path)
     assert "../utils/baz" in report.unresolved_imports
 
 
-def test_distinguishes_unresolved_from_syntax_errors(ts_file: Path, tmp_path: Path) -> None:
+def test_distinguishes_unresolved_from_syntax_errors(
+    ts_file: Path, tmp_path: Path
+) -> None:
     tsc_output = (
         "mytest.test.ts(1,1): error TS2307: Cannot find module './missing' or its corresponding type declarations.\n"
         "mytest.test.ts(5,1): error TS1005: ';' expected.\n"
@@ -222,7 +232,8 @@ def test_runner_image_passed_through(ts_file: Path, tmp_path: Path) -> None:
     calls: list = []
     runner = _recording_runner(calls, returncode=0)
     run_ts_preflight(
-        ts_file, tmp_path,
+        ts_file,
+        tmp_path,
         runner_fn=runner,
         runner_image="tfactory-runner-playwright:latest",
     )
@@ -240,13 +251,28 @@ def test_runner_receives_tsc_command(ts_file: Path, tmp_path: Path) -> None:
     assert str(ts_file) in calls[0]["cmd"]
 
 
-@pytest.mark.parametrize("error_code,msg,expected_bucket", [
-    ("TS2307", "Cannot find module './x' or its corresponding type declarations.", "unresolved"),
-    ("TS2304", "Cannot find name 'MyType'.", "unresolved"),
-    ("TS1005", "';' expected.", "other"),
-    ("TS2345", "Argument of type 'string' is not assignable to parameter of type 'number'.", "other"),
-    ("TS2551", "Property 'foo' does not exist on type 'Bar'. Did you mean 'baz'?", "other"),
-])
+@pytest.mark.parametrize(
+    "error_code,msg,expected_bucket",
+    [
+        (
+            "TS2307",
+            "Cannot find module './x' or its corresponding type declarations.",
+            "unresolved",
+        ),
+        ("TS2304", "Cannot find name 'MyType'.", "unresolved"),
+        ("TS1005", "';' expected.", "other"),
+        (
+            "TS2345",
+            "Argument of type 'string' is not assignable to parameter of type 'number'.",
+            "other",
+        ),
+        (
+            "TS2551",
+            "Property 'foo' does not exist on type 'Bar'. Did you mean 'baz'?",
+            "other",
+        ),
+    ],
+)
 def test_parametrized_error_code_classification(
     ts_file: Path,
     tmp_path: Path,

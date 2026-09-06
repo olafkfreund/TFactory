@@ -45,7 +45,13 @@ def test_dry_run_builds_argv_no_subprocess(tmp_path):
     result = post_pr_status(_req(tmp_path), dry_run=True, runner_fn=runner)
     assert result.ok and result.dry_run
     assert called == []
-    assert result.argv[:5] == ("gh", "api", "-X", "POST", "repos/acme/widgets/statuses/abc123")
+    assert result.argv[:5] == (
+        "gh",
+        "api",
+        "-X",
+        "POST",
+        "repos/acme/widgets/statuses/abc123",
+    )
     assert "-f" in result.argv and "state=success" in result.argv
     assert "context=TFactory / tests" in result.argv
 
@@ -69,9 +75,7 @@ def test_description_truncated_to_140(tmp_path):
 
 
 def test_target_url_included_when_present(tmp_path):
-    result = post_pr_status(
-        _req(tmp_path, target_url="https://x/report"), dry_run=True
-    )
+    result = post_pr_status(_req(tmp_path, target_url="https://x/report"), dry_run=True)
     assert any(a == "target_url=https://x/report" for a in result.argv)
 
 

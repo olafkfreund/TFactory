@@ -34,4 +34,6 @@ def test_core_agent_facade_imports_and_all_exports_resolve():
     """
     module = importlib.import_module("core.agent")
     unresolved = [name for name in module.__all__ if not hasattr(module, name)]
-    assert not unresolved, "unresolvable core.agent.__all__ entries: " + ", ".join(unresolved)
+    assert not unresolved, "unresolvable core.agent.__all__ entries: " + ", ".join(
+        unresolved
+    )

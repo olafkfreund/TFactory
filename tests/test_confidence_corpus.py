@@ -49,26 +49,36 @@ def test_no_flaky_is_unchanged():
 
 
 def test_stable_flaky_classification_no_penalty():
-    v = _verdict(flaky={"classification": "stable", "flip_rate": 0.0, "runs": 5}, **_all_green())
+    v = _verdict(
+        flaky={"classification": "stable", "flip_rate": 0.0, "runs": 5}, **_all_green()
+    )
     assert compute_confidence(v) == 1.0
 
 
 def test_new_flaky_classification_no_penalty():
-    v = _verdict(flaky={"classification": "new", "flip_rate": 0.0, "runs": 1}, **_all_green())
+    v = _verdict(
+        flaky={"classification": "new", "flip_rate": 0.0, "runs": 1}, **_all_green()
+    )
     assert compute_confidence(v) == 1.0
 
 
 def test_flaky_penalises_in_proportion_to_flip_rate():
     # base 1.0 * (1 - 0.25) = 0.75
-    v = _verdict(flaky={"classification": "flaky", "flip_rate": 0.25, "runs": 8}, **_all_green())
+    v = _verdict(
+        flaky={"classification": "flaky", "flip_rate": 0.25, "runs": 8}, **_all_green()
+    )
     assert compute_confidence(v) == 0.75
     # base 1.0 * (1 - 0.5) = 0.5
-    v2 = _verdict(flaky={"classification": "flaky", "flip_rate": 0.5, "runs": 8}, **_all_green())
+    v2 = _verdict(
+        flaky={"classification": "flaky", "flip_rate": 0.5, "runs": 8}, **_all_green()
+    )
     assert compute_confidence(v2) == 0.5
 
 
 def test_flaky_penalty_floor():
-    v = _verdict(flaky={"classification": "flaky", "flip_rate": 0.95, "runs": 8}, **_all_green())
+    v = _verdict(
+        flaky={"classification": "flaky", "flip_rate": 0.95, "runs": 8}, **_all_green()
+    )
     assert compute_confidence(v) == FLAKY_PENALTY_FLOOR
 
 
@@ -81,7 +91,11 @@ def test_flaky_missing_flip_rate_defaults_half():
 
 
 def test_override_demotes_accept_to_flag():
-    v = _verdict(verdict="accept", flaky={"classification": "flaky", "flip_rate": 0.4, "runs": 6}, **_all_green())
+    v = _verdict(
+        verdict="accept",
+        flaky={"classification": "flaky", "flip_rate": 0.4, "runs": 6},
+        **_all_green(),
+    )
     changed = apply_flaky_override(v)
     assert changed is True
     assert v["verdict"] == "flag"
@@ -89,13 +103,18 @@ def test_override_demotes_accept_to_flag():
 
 
 def test_override_never_touches_reject():
-    v = _verdict(verdict="reject", flaky={"classification": "flaky", "flip_rate": 0.4, "runs": 6})
+    v = _verdict(
+        verdict="reject", flaky={"classification": "flaky", "flip_rate": 0.4, "runs": 6}
+    )
     assert apply_flaky_override(v) is False
     assert v["verdict"] == "reject"
 
 
 def test_override_noop_when_stable():
-    v = _verdict(verdict="accept", flaky={"classification": "stable", "flip_rate": 0.0, "runs": 6})
+    v = _verdict(
+        verdict="accept",
+        flaky={"classification": "stable", "flip_rate": 0.0, "runs": 6},
+    )
     assert apply_flaky_override(v) is False
     assert v["verdict"] == "accept"
 
@@ -142,32 +161,55 @@ _CORPUS = [
     ),
     (
         "survived-mutant",
-        _verdict(verdict="reject", mutation="survived", stability="stable",
-                 semantic="high", coverage_new_lines=5, lint_promotion="no findings"),
+        _verdict(
+            verdict="reject",
+            mutation="survived",
+            stability="stable",
+            semantic="high",
+            coverage_new_lines=5,
+            lint_promotion="no findings",
+        ),
         None,
         "reject",
         0.70,
     ),
     (
         "low-semantic-flag",
-        _verdict(verdict="flag", mutation="killed", stability="stable",
-                 semantic="low", coverage_new_lines=5, lint_promotion="no findings"),
+        _verdict(
+            verdict="flag",
+            mutation="killed",
+            stability="stable",
+            semantic="low",
+            coverage_new_lines=5,
+            lint_promotion="no findings",
+        ),
         None,
         "flag",
         0.80,
     ),
     (
         "browser-no-coverage",
-        _verdict(verdict="accept", mutation="killed", stability="stable",
-                 semantic="high", lint_promotion="no findings"),
+        _verdict(
+            verdict="accept",
+            mutation="killed",
+            stability="stable",
+            semantic="high",
+            lint_promotion="no findings",
+        ),
         None,
         "accept",
         1.0,
     ),
     (
         "zero-coverage",
-        _verdict(verdict="flag", mutation="killed", stability="stable",
-                 semantic="high", coverage_new_lines=0, lint_promotion="no findings"),
+        _verdict(
+            verdict="flag",
+            mutation="killed",
+            stability="stable",
+            semantic="high",
+            coverage_new_lines=0,
+            lint_promotion="no findings",
+        ),
         None,
         "flag",
         0.85,
@@ -181,8 +223,14 @@ _CORPUS = [
     ),
     (
         "all-bad-reject",
-        _verdict(verdict="reject", mutation="survived", stability="flaky",
-                 semantic="low", coverage_new_lines=0, lint_promotion="promoted to reject"),
+        _verdict(
+            verdict="reject",
+            mutation="survived",
+            stability="flaky",
+            semantic="low",
+            coverage_new_lines=0,
+            lint_promotion="promoted to reject",
+        ),
         None,
         "reject",
         0.0,
@@ -201,4 +249,6 @@ def test_scoring_corpus(case_id, verdict, flaky, exp_verdict, exp_conf):
     enrich_verdicts(doc, flaky_map)
     out = doc["verdicts"][0]
     assert out["verdict"] == exp_verdict, f"{case_id}: verdict drift"
-    assert out["signals_summary"]["confidence"] == exp_conf, f"{case_id}: confidence drift"
+    assert out["signals_summary"]["confidence"] == exp_conf, (
+        f"{case_id}: confidence drift"
+    )

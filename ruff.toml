@@ -25,6 +25,11 @@ extend-exclude = [
     "scripts/ratchet_helpers.py",
     "apps/backend/agents/verification_gate.py",
     "apps/backend/tools/runners/nix_provisioner.py",
+    # Its sibling: the declarative language-descriptor loader, vendored together
+    # with tools/runners/languages/*.yaml (the descriptors it globs). Same hub
+    # canonical (scripts/language_descriptors.py), same drift gate, same reason
+    # to keep the local formatter off it.
+    "apps/backend/tools/runners/language_descriptors.py",
     "apps/backend/tools/runners/artifact_store.py",
     "apps/backend/tools/runners/job_dispatch.py",
     # Factory#638: the far half of job_dispatch.trace_env — the bootstrap the

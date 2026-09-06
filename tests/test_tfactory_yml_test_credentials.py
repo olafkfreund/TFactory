@@ -131,4 +131,6 @@ def test_subtask_requires_auth_defaults_false_and_is_omitted() -> None:
     st = Subtask(id="s2", description="plain")
     assert st.requires_auth is False
     assert "requires_auth" not in st.to_dict()  # terse: omit at default
-    assert Subtask.from_dict({"id": "s3", "description": "legacy"}).requires_auth is False
+    assert (
+        Subtask.from_dict({"id": "s3", "description": "legacy"}).requires_auth is False
+    )

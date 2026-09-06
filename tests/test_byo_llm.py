@@ -22,24 +22,45 @@ from byo_llm import (  # noqa: E402
 
 # ── host_is_local ──────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("host", [
-    "localhost", "127.0.0.1", "0.0.0.0", "::1",
-    "192.168.1.10", "10.0.0.5", "172.16.4.4", "169.254.1.1",
-    "ollama.local", "vllm.internal", "box.lan",
-])
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "localhost",
+        "127.0.0.1",
+        "0.0.0.0",
+        "::1",
+        "192.168.1.10",
+        "10.0.0.5",
+        "172.16.4.4",
+        "169.254.1.1",
+        "ollama.local",
+        "vllm.internal",
+        "box.lan",
+    ],
+)
 def test_local_hosts(host):
     assert host_is_local(host) is True
 
 
-@pytest.mark.parametrize("host", [
-    "api.openai.com", "openrouter.ai", "8.8.8.8", "example.com",
-    "1.1.1.1", None, "",
-])
+@pytest.mark.parametrize(
+    "host",
+    [
+        "api.openai.com",
+        "openrouter.ai",
+        "8.8.8.8",
+        "example.com",
+        "1.1.1.1",
+        None,
+        "",
+    ],
+)
 def test_non_local_hosts(host):
     assert host_is_local(host) is False
 
 
 # ── classify: Ollama (local by default) ────────────────────────────────
+
 
 def test_ollama_default_is_local():
     assert classify("ollama:qwen3:14b") is EgressClass.LOCAL
@@ -55,6 +76,7 @@ def test_ollama_remote_is_self_hosted():
 
 # ── classify: openai-compatible (depends on host) ──────────────────────
 
+
 def test_openai_compatible_localhost_is_local():
     # vLLM / LM Studio / LocalAI on localhost
     assert classify("openai-compatible:qwen2.5", "http://localhost:8000/v1") is (
@@ -69,9 +91,9 @@ def test_openai_compatible_private_ip_is_local():
 
 
 def test_openai_compatible_managed_host_is_cloud():
-    assert classify("openai-compatible:gpt-4o-mini", "https://openrouter.ai/api/v1") is (
-        EgressClass.MANAGED_CLOUD
-    )
+    assert classify(
+        "openai-compatible:gpt-4o-mini", "https://openrouter.ai/api/v1"
+    ) is (EgressClass.MANAGED_CLOUD)
 
 
 def test_openai_compatible_own_vps_is_self_hosted():
@@ -81,6 +103,7 @@ def test_openai_compatible_own_vps_is_self_hosted():
 
 
 # ── classify: managed providers ────────────────────────────────────────
+
 
 def test_claude_default_is_managed():
     assert classify("claude-sonnet-4-5-20250929") is EgressClass.MANAGED_CLOUD
@@ -97,6 +120,7 @@ def test_gemini_is_managed():
 
 
 # ── resolve_base_url (env-aware) ───────────────────────────────────────
+
 
 def test_resolve_ollama_default(monkeypatch):
     monkeypatch.delenv("OLLAMA_BASE_URL", raising=False)
@@ -116,6 +140,7 @@ def test_resolve_openai_compatible_env(monkeypatch):
 
 
 # ── egress_report surface ──────────────────────────────────────────────
+
 
 def test_egress_report_local(monkeypatch):
     monkeypatch.delenv("OLLAMA_BASE_URL", raising=False)

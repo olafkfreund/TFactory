@@ -34,19 +34,28 @@ class StartTaskRequest(BaseModel):
     """Request to start task execution."""
 
     auto_continue: bool = Field(True, description="Auto-continue to next phase")
-    complexity: str | None = Field(None, description="Complexity override for spec creation")
+    complexity: str | None = Field(
+        None, description="Complexity override for spec creation"
+    )
     # Task execution options (matches frontend TaskStartOptions)
     parallel: bool | None = Field(None, description="Enable parallel execution")
     workers: int | None = Field(None, description="Number of parallel workers")
     model: str | None = Field(None, description="Model override for execution")
-    baseBranch: str | None = Field(None, description="Base branch for worktree creation")
-    mode: str | None = Field("full", description="Execution mode: 'quick' for simplified prompts, 'full' for comprehensive")
+    baseBranch: str | None = Field(
+        None, description="Base branch for worktree creation"
+    )
+    mode: str | None = Field(
+        "full",
+        description="Execution mode: 'quick' for simplified prompts, 'full' for comprehensive",
+    )
 
 
 class RecoverTaskRequest(BaseModel):
     """Request to recover a stuck task."""
 
-    targetStatus: str | None = Field("backlog", description="Target status after recovery")
+    targetStatus: str | None = Field(
+        "backlog", description="Target status after recovery"
+    )
     autoRestart: bool = Field(False, description="Auto-restart the task after recovery")
 
 
@@ -111,8 +120,11 @@ async def start_task(task_id: str, request: StartTaskRequest, raw_request: Reque
     This will run the planner, coder, and QA agents.
     """
     import logging
+
     logger = logging.getLogger(__name__)
-    logger.info(f"[StartTask] ===== START ENDPOINT CALLED ===== task_id: {sanitize_log(task_id)}")
+    logger.info(
+        f"[StartTask] ===== START ENDPOINT CALLED ===== task_id: {sanitize_log(task_id)}"
+    )
 
     # Parse task ID
     if ":" not in task_id:
@@ -144,6 +156,7 @@ async def start_task(task_id: str, request: StartTaskRequest, raw_request: Reque
     # This handles the case where projects.py created the spec directory but spec_runner.py hasn't run yet
     # A valid plan MUST have "phases" array - minimal plans with just {"status": "..."} are invalid
     import logging
+
     logger = logging.getLogger(__name__)
     test_plan = spec_dir / "test_plan.json"
     logger.info(f"[StartTask] Checking for test_plan.json at {sanitize_log(test_plan)}")
@@ -154,10 +167,15 @@ async def start_task(task_id: str, request: StartTaskRequest, raw_request: Reque
     if test_plan.exists():
         try:
             import json
+
             plan_data = json.loads(test_plan.read_text())
             # Valid plan must have "phases" key (even if empty array)
-            plan_is_valid = "phases" in plan_data and isinstance(plan_data.get("phases"), (list, dict))
-            logger.info(f"[StartTask] Plan validity check: has_phases={plan_is_valid}, keys={list(plan_data.keys())}")
+            plan_is_valid = "phases" in plan_data and isinstance(
+                plan_data.get("phases"), (list, dict)
+            )
+            logger.info(
+                f"[StartTask] Plan validity check: has_phases={plan_is_valid}, keys={list(plan_data.keys())}"
+            )
 
             # Guard against re-starting a completed task
             if plan_data.get("status") == "done":
@@ -173,6 +191,7 @@ async def start_task(task_id: str, request: StartTaskRequest, raw_request: Reque
         # Need to run spec creation first - read title/description from requirements.json
         import json
         from datetime import datetime
+
         logger.info(
             "[StartTask] No valid implementation plan found, will run spec creation for %s",
             sanitize_log(task_id),
@@ -228,7 +247,9 @@ async def start_task(task_id: str, request: StartTaskRequest, raw_request: Reque
                         "subtasks": [
                             {
                                 "id": "1.1",
-                                "description": f"{title}: {description}" if description else title,
+                                "description": f"{title}: {description}"
+                                if description
+                                else title,
                                 "status": "pending",
                             }
                         ],
@@ -240,11 +261,16 @@ async def start_task(task_id: str, request: StartTaskRequest, raw_request: Reque
 
             # 3. Pre-approve (skip review gate)
             review_state_file = spec_dir / "review_state.json"
-            review_state_file.write_text(json.dumps({
-                "approved": True,
-                "approved_by": "auto-simple",
-                "approved_at": datetime.now().isoformat(),
-            }, indent=2))
+            review_state_file.write_text(
+                json.dumps(
+                    {
+                        "approved": True,
+                        "approved_by": "auto-simple",
+                        "approved_at": datetime.now().isoformat(),
+                    },
+                    indent=2,
+                )
+            )
 
             # 4. Set task_metadata for quick mode + reduced thinking
             task_metadata_file = spec_dir / "task_metadata.json"
@@ -267,7 +293,9 @@ async def start_task(task_id: str, request: StartTaskRequest, raw_request: Reque
 
             # Mark plan as valid so we fall through to the execution path below
             plan_is_valid = True
-            logger.info("[StartTask] Fast path: spec + plan generated, proceeding to execution")
+            logger.info(
+                "[StartTask] Fast path: spec + plan generated, proceeding to execution"
+            )
 
         else:
             # === STANDARD PATH: Run full spec creation ===
@@ -298,7 +326,9 @@ async def start_task(task_id: str, request: StartTaskRequest, raw_request: Reque
                         sanitize_log(test_plan),
                     )
                 except (json.JSONDecodeError, OSError) as e:
-                    logger.warning(f"[StartTask] Failed to persist spec creation status: {e}")
+                    logger.warning(
+                        f"[StartTask] Failed to persist spec creation status: {e}"
+                    )
 
                 # Emit status to show spec creation in progress
                 await emit_task_status(task_id, "in_progress")
@@ -316,6 +346,7 @@ async def start_task(task_id: str, request: StartTaskRequest, raw_request: Reque
     # Sync runtime options to task_metadata.json for backend to read
     # This ensures model/thinking/baseBranch overrides are available to run.py
     import json
+
     task_metadata_file = spec_dir / "task_metadata.json"
     task_metadata = {}
     if task_metadata_file.exists():
@@ -406,7 +437,9 @@ async def start_task(task_id: str, request: StartTaskRequest, raw_request: Reque
                         sanitize_log(task_id),
                     )
             except (json.JSONDecodeError, OSError) as e:
-                logger.warning(f"[StartTask] Failed to persist human_review status: {e}")
+                logger.warning(
+                    f"[StartTask] Failed to persist human_review status: {e}"
+                )
 
             await emit_task_status(task_id, "human_review", "plan_review")
 
@@ -433,9 +466,14 @@ async def start_task(task_id: str, request: StartTaskRequest, raw_request: Reque
     if isinstance(issue_number, str) and issue_number.isdigit():
         issue_number = int(issue_number)
 
-    if wants_delegation and provider_type in ("github", "gitlab") and isinstance(issue_number, int):
+    if (
+        wants_delegation
+        and provider_type in ("github", "gitlab")
+        and isinstance(issue_number, int)
+    ):
         from ..services.auto_fix_service import _provider_for
         from ..services.delegation_runner import run_delegation
+
         try:
             provider = _provider_for(project_id)
             result = await run_delegation(
@@ -446,7 +484,9 @@ async def start_task(task_id: str, request: StartTaskRequest, raw_request: Reque
                 provider=provider,
             )
         except Exception as e:
-            logger.exception(f"[StartTask] Delegation failed for {sanitize_log(task_id)}")
+            logger.exception(
+                f"[StartTask] Delegation failed for {sanitize_log(task_id)}"
+            )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=client_error(logger, "Delegation failed", e),
@@ -539,7 +579,9 @@ async def stop_task(task_id: str):
 
 
 @router.post("/{task_id}/recover")
-async def recover_task(task_id: str, request: RecoverTaskRequest = RecoverTaskRequest()):
+async def recover_task(
+    task_id: str, request: RecoverTaskRequest = RecoverTaskRequest()
+):
     """Recover a stuck task by resetting its status.
 
     Use this when a task shows as running but the process has died.
@@ -629,6 +671,7 @@ async def recover_task(task_id: str, request: RecoverTaskRequest = RecoverTaskRe
         except Exception:
             # If auto-restart fails, still return success for recovery
             import logging
+
             logging.getLogger(__name__).exception(
                 "Auto-restart failed for %s",
                 sanitize_log(task_id),
@@ -643,12 +686,13 @@ async def recover_task(task_id: str, request: RecoverTaskRequest = RecoverTaskRe
         "success": True,
         "data": {
             "task_id": task_id,
-            "message": "Task recovered" + (" and restarted" if auto_restarted else f" and reset to {reset_status}"),
+            "message": "Task recovered"
+            + (" and restarted" if auto_restarted else f" and reset to {reset_status}"),
             "newStatus": reset_status,
             "autoRestarted": auto_restarted,
             "autoRestartError": auto_restart_error,
             "recovered": True,
-        }
+        },
     }
 
 
@@ -688,6 +732,7 @@ async def create_and_run_task(
 
     # Generate a temporary task ID for spec creation
     import uuid
+
     temp_task_id = f"{project_id}:pending-{uuid.uuid4().hex[:8]}"
 
     try:

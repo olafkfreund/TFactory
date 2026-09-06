@@ -27,7 +27,11 @@ def test_empty_scopes_returns_none():
 
 def test_full_scope():
     s = build_execution_scope(
-        _profile(coverage_target=0.8, mutation_scope=("src/**.py",), security_scope=("owasp:*",))
+        _profile(
+            coverage_target=0.8,
+            mutation_scope=("src/**.py",),
+            security_scope=("owasp:*",),
+        )
     )
     assert s["coverage_target"] == 0.8
     assert s["mutation_scope"] == ["src/**.py"]

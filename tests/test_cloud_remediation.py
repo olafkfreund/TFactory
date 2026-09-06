@@ -9,9 +9,16 @@ from agents.cloud.remediation import render_remediation_plan
 from agents.cloud.report import assess_and_write, cloud_findings_paths
 
 
-def _rec(status="FAIL", severity="High", title="MFA disabled", check="iam_mfa",
-         region="us-east-1", desc="Enable MFA for all users.", risk="Account takeover.",
-         refs=("https://hub.prowler.com/check/iam_mfa",)):
+def _rec(
+    status="FAIL",
+    severity="High",
+    title="MFA disabled",
+    check="iam_mfa",
+    region="us-east-1",
+    desc="Enable MFA for all users.",
+    risk="Account takeover.",
+    refs=("https://hub.prowler.com/check/iam_mfa",),
+):
     return {
         "status_code": status,
         "severity": severity,
@@ -47,7 +54,11 @@ def test_plan_includes_fix_risk_and_refs() -> None:
 
 def test_plan_dedups_by_check_with_count() -> None:
     # 3 findings of the same check across resources → one item, "3 affected"
-    recs = [_rec(region="us-east-1"), _rec(region="us-east-1"), _rec(region="eu-west-2")]
+    recs = [
+        _rec(region="us-east-1"),
+        _rec(region="us-east-1"),
+        _rec(region="eu-west-2"),
+    ]
     plan = render_remediation_plan(parse_ocsf(recs))
     assert plan.count("### 1.") == 1
     assert "3 affected" in plan

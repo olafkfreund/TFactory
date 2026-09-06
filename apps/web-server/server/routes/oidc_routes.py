@@ -126,7 +126,9 @@ async def oidc_login(request: Request):
     extra: dict[str, str] = {}
     if request.query_params.get("prompt") == "none":
         extra["prompt"] = "none"
-    return await oauth.oidc.authorize_redirect(request, redirect_uri, nonce=nonce, **extra)
+    return await oauth.oidc.authorize_redirect(
+        request, redirect_uri, nonce=nonce, **extra
+    )
 
 
 @router.get(
@@ -456,10 +458,10 @@ async def oidc_logout(
             detail="OIDC SSO is not configured on this deployment",
         )
 
-    supplied = body.refresh_token.get_secret_value() if body and body.refresh_token else None
-    refresh_token = supplied or request.cookies.get(
-        "refresh_token"
+    supplied = (
+        body.refresh_token.get_secret_value() if body and body.refresh_token else None
     )
+    refresh_token = supplied or request.cookies.get("refresh_token")
 
     if refresh_token:
         settings = get_settings()

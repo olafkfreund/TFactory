@@ -37,7 +37,9 @@ def test_sops_decrypt_whole_and_field(monkeypatch, tmp_path, fake_decrypt):
     from tfactory_secrets.refs import parse_ref
 
     # Pretend sops is installed.
-    monkeypatch.setattr(lf.shutil, "which", lambda b: "/usr/bin/sops" if b == "sops" else None)
+    monkeypatch.setattr(
+        lf.shutil, "which", lambda b: "/usr/bin/sops" if b == "sops" else None
+    )
     p = tmp_path / "secrets.enc.yaml"
     p.write_text("placeholder\n")
 
@@ -72,7 +74,9 @@ def test_age_decrypt_with_identity(monkeypatch, tmp_path, fake_decrypt):
     from tfactory_secrets.backends.localfile import LocalFileBackend
     from tfactory_secrets.refs import parse_ref
 
-    monkeypatch.setattr(lf.shutil, "which", lambda b: "/usr/bin/age" if b == "age" else None)
+    monkeypatch.setattr(
+        lf.shutil, "which", lambda b: "/usr/bin/age" if b == "age" else None
+    )
     identity = tmp_path / "key.txt"
     identity.write_text("AGE-SECRET-KEY-1FAKE\n")
     monkeypatch.setenv("TFACTORY_AGE_IDENTITY", str(identity))
@@ -91,7 +95,9 @@ def test_agenix_uses_age_path(monkeypatch, tmp_path, fake_decrypt):
     from tfactory_secrets.backends.localfile import LocalFileBackend
     from tfactory_secrets.refs import parse_ref
 
-    monkeypatch.setattr(lf.shutil, "which", lambda b: "/usr/bin/rage" if b == "rage" else None)
+    monkeypatch.setattr(
+        lf.shutil, "which", lambda b: "/usr/bin/rage" if b == "rage" else None
+    )
     identity = tmp_path / "id.txt"
     identity.write_text("AGE-SECRET-KEY-1FAKE\n")
     monkeypatch.setenv("TFACTORY_AGE_IDENTITY", str(identity))
@@ -111,7 +117,9 @@ def test_age_missing_identity_raises(monkeypatch, tmp_path):
     from tfactory_secrets.backends.localfile import LocalFileBackend
     from tfactory_secrets.refs import parse_ref
 
-    monkeypatch.setattr(lf.shutil, "which", lambda b: "/usr/bin/age" if b == "age" else None)
+    monkeypatch.setattr(
+        lf.shutil, "which", lambda b: "/usr/bin/age" if b == "age" else None
+    )
     for env in lf._AGE_IDENTITY_ENV:
         monkeypatch.delenv(env, raising=False)
     # Point defaults at a nonexistent dir so discovery fails deterministically.
@@ -129,7 +137,9 @@ def test_decrypt_nonzero_exit_raises(monkeypatch, tmp_path):
     from tfactory_secrets.backends.localfile import LocalFileBackend
     from tfactory_secrets.refs import parse_ref
 
-    monkeypatch.setattr(lf.shutil, "which", lambda b: "/usr/bin/sops" if b == "sops" else None)
+    monkeypatch.setattr(
+        lf.shutil, "which", lambda b: "/usr/bin/sops" if b == "sops" else None
+    )
 
     class _Proc:
         returncode = 1

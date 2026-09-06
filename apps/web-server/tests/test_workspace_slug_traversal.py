@@ -96,9 +96,7 @@ async def test_clone_or_update_refuses_traversing_slug_override(tmp_path):
     sentinel.mkdir()
 
     with pytest.raises(HTTPException) as exc:
-        await pws.clone_or_update(
-            git_url="https://host/repo", slug="..", root=root
-        )
+        await pws.clone_or_update(git_url="https://host/repo", slug="..", root=root)
     assert exc.value.status_code == 400
     # The parent of the root is untouched -- no clone landed there.
     assert sorted(p.name for p in tmp_path.iterdir()) == ["sentinel", "workspaces"]
@@ -137,9 +135,7 @@ def client(tmp_path, monkeypatch):
 
         return _Proc()
 
-    monkeypatch.setattr(
-        "asyncio.create_subprocess_exec", fake_create_subprocess_exec
-    )
+    monkeypatch.setattr("asyncio.create_subprocess_exec", fake_create_subprocess_exec)
 
     app = FastAPI()
     app.include_router(projects_route.router, prefix="/api/projects")

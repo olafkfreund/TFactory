@@ -19,7 +19,9 @@ from server.routes import terminal  # noqa: E402
 _SECRET = "/srv/secret-root/tenant-42/.tfactory/terminal-sessions/terminal_a.json"
 
 
-def test_unlink_failure_reports_a_count_not_the_exception_or_path(monkeypatch, tmp_path):
+def test_unlink_failure_reports_a_count_not_the_exception_or_path(
+    monkeypatch, tmp_path
+):
     sessions = tmp_path / ".tfactory" / "terminal-sessions"
     sessions.mkdir(parents=True)
     (sessions / "terminal_a.json").write_text("{}")

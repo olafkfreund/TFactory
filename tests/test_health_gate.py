@@ -60,13 +60,19 @@ def test_gate_builds_url_and_probes():
         seen["url"] = u
         return 200
 
-    r = gate("https://8.8.8.8/", {"path": "/healthz", "expect_status": 200}, opener=opener)
+    r = gate(
+        "https://8.8.8.8/", {"path": "/healthz", "expect_status": 200}, opener=opener
+    )
     assert r.ok
     assert seen["url"] == "https://8.8.8.8/healthz"
 
 
 def test_gate_fails_on_bad_status():
-    r = gate("https://8.8.8.8", {"path": "/up", "expect_status": 200}, opener=lambda u, t: 500)
+    r = gate(
+        "https://8.8.8.8",
+        {"path": "/up", "expect_status": 200},
+        opener=lambda u, t: 500,
+    )
     assert not r.ok
     assert r.url == "https://8.8.8.8/up"
 
@@ -75,12 +81,18 @@ def test_gate_fails_on_bad_status():
 
 
 def test_resolve_prefers_env_override():
-    url = resolve_target_url({"base_url": "https://declared/"}, env={"TFACTORY_TARGET_URL": "https://ci-deployed/"})
+    url = resolve_target_url(
+        {"base_url": "https://declared/"},
+        env={"TFACTORY_TARGET_URL": "https://ci-deployed/"},
+    )
     assert url == "https://ci-deployed"
 
 
 def test_resolve_uses_base_url():
-    assert resolve_target_url({"base_url": "https://declared/"}, env={}) == "https://declared"
+    assert (
+        resolve_target_url({"base_url": "https://declared/"}, env={})
+        == "https://declared"
+    )
 
 
 def test_resolve_none_when_absent():
@@ -97,7 +109,9 @@ def test_discover_ingress_returns_url():
 
 
 def test_discover_ingress_custom_scheme():
-    url = discover_ingress_url("prod", "web", scheme="http", runner=lambda args: "internal.svc")
+    url = discover_ingress_url(
+        "prod", "web", scheme="http", runner=lambda args: "internal.svc"
+    )
     assert url == "http://internal.svc"
 
 

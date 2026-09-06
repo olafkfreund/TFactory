@@ -23,9 +23,14 @@ from server.routes import provider_runtimes as mod  # noqa: E402
 
 def _status(**over):
     base = {
-        "name": "codex", "kind": "npm", "managed": True, "installed": True,
-        "installed_version": "1.0.0", "latest_version": "1.2.0",
-        "pinned_version": None, "update_available": True,
+        "name": "codex",
+        "kind": "npm",
+        "managed": True,
+        "installed": True,
+        "installed_version": "1.0.0",
+        "latest_version": "1.2.0",
+        "pinned_version": None,
+        "update_available": True,
     }
     base.update(over)
     return mod.pr.RuntimeStatus(**base)
@@ -45,8 +50,12 @@ def test_list_returns_runtime_status_rows(monkeypatch: pytest.MonkeyPatch) -> No
 
 def test_pin_sets_and_returns_status(monkeypatch: pytest.MonkeyPatch) -> None:
     captured = {}
-    monkeypatch.setattr(mod.pr, "set_pin", lambda n, v: captured.update(name=n, version=v))
-    monkeypatch.setattr(mod.pr, "get_status", lambda n, **k: _status(pinned_version="1.0.0"))
+    monkeypatch.setattr(
+        mod.pr, "set_pin", lambda n, v: captured.update(name=n, version=v)
+    )
+    monkeypatch.setattr(
+        mod.pr, "get_status", lambda n, **k: _status(pinned_version="1.0.0")
+    )
     out = mod.pin_provider_runtime("codex", mod._VersionBody(version="1.0.0"))
     assert captured == {"name": "codex", "version": "1.0.0"}
     assert out["pinnedVersion"] == "1.0.0"
@@ -64,8 +73,11 @@ def test_pin_unknown_runtime_is_404(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_update_returns_install_result(monkeypatch: pytest.MonkeyPatch) -> None:
     result = mod.pr.InstallResult(
-        name="codex", command=["npm", "install", "-g", "@openai/codex@latest"],
-        returncode=0, output="added 1 package", installed_version="1.2.0",
+        name="codex",
+        command=["npm", "install", "-g", "@openai/codex@latest"],
+        returncode=0,
+        output="added 1 package",
+        installed_version="1.2.0",
     )
     monkeypatch.setattr(mod.pr, "run_install", lambda n, v: result)
     out = mod.update_provider_runtime("codex", mod._VersionBody(version=None))

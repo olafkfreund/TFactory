@@ -54,7 +54,7 @@ def test_mint_aws_returns_short_lived_keys(monkeypatch: pytest.MonkeyPatch) -> N
 
 def test_expired_respects_skew() -> None:
     creds = wif.WifCredentials("aws", {}, expires_at=1000.0)
-    assert creds.expired(now=1000.0) is True           # past hard expiry
+    assert creds.expired(now=1000.0) is True  # past hard expiry
     assert creds.expired(now=950.0, skew=60.0) is True  # within skew window
     assert creds.expired(now=800.0, skew=60.0) is False
 
@@ -94,13 +94,21 @@ def _wif_config_file(tmp_path: Path) -> Path:
 
     p = tmp_path / "credentials.json"
     p.write_text(
-        json.dumps({"wif": {"aws": {"role_arn": "arn:aws:iam::1:role/tf", "token": "oidc-jwt"}}})
+        json.dumps(
+            {
+                "wif": {
+                    "aws": {"role_arn": "arn:aws:iam::1:role/tf", "token": "oidc-jwt"}
+                }
+            }
+        )
     )
     p.chmod(0o600)
     return p
 
 
-def test_broker_resolve_cloud_uses_wif(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_broker_resolve_cloud_uses_wif(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from tfactory_secrets import broker
 
     monkeypatch.setattr(broker, "CREDENTIALS_CONFIG_PATH", _wif_config_file(tmp_path))
@@ -120,7 +128,9 @@ def test_broker_resolve_cloud_uses_wif(tmp_path: Path, monkeypatch: pytest.Monke
         broker.reset_config_cache()
 
 
-def test_broker_refreshes_expired_wif(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_broker_refreshes_expired_wif(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from tfactory_secrets import broker
 
     monkeypatch.setattr(broker, "CREDENTIALS_CONFIG_PATH", _wif_config_file(tmp_path))

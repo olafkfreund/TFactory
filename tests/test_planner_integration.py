@@ -47,30 +47,42 @@ def workspace(tmp_path: Path) -> Path:
         (spec_dir / sub).mkdir()
 
     # status.json — as task_create_and_run wrote it
-    (spec_dir / "status.json").write_text(json.dumps({
-        "task_id": "042-session-expiry",
-        "project_id": "demo",
-        "spec_id": "042-session-expiry",
-        "status": "pending",
-        "phase": "created",
-    }))
+    (spec_dir / "status.json").write_text(
+        json.dumps(
+            {
+                "task_id": "042-session-expiry",
+                "project_id": "demo",
+                "spec_id": "042-session-expiry",
+                "status": "pending",
+                "phase": "created",
+            }
+        )
+    )
 
     # context/* — as the snapshotter wrote it (Task 3)
-    shutil.copy(FIXTURE / "aifactory_spec.md", spec_dir / "context" / "aifactory_spec.md")
-    shutil.copy(FIXTURE / "aifactory_plan.json", spec_dir / "context" / "aifactory_plan.json")
+    shutil.copy(
+        FIXTURE / "aifactory_spec.md", spec_dir / "context" / "aifactory_spec.md"
+    )
+    shutil.copy(
+        FIXTURE / "aifactory_plan.json", spec_dir / "context" / "aifactory_plan.json"
+    )
     shutil.copy(FIXTURE / "diff.patch", spec_dir / "context" / "diff.patch")
-    (spec_dir / "context" / "source.json").write_text(json.dumps({
-        "project_id": "demo",
-        "spec_id": "042-session-expiry",
-        "branch": "feature/session-expiry",
-        "base_ref": "main",
-        "aifactory_spec_dir": "/fake/aifactory/workspaces/demo/specs/042-session-expiry",
-        "snapshotted_at": "2026-05-28T00:00:00+00:00",
-        "has_spec_md": True,
-        "has_plan_json": True,
-        "has_diff_patch": True,
-        "warnings": [],
-    }))
+    (spec_dir / "context" / "source.json").write_text(
+        json.dumps(
+            {
+                "project_id": "demo",
+                "spec_id": "042-session-expiry",
+                "branch": "feature/session-expiry",
+                "base_ref": "main",
+                "aifactory_spec_dir": "/fake/aifactory/workspaces/demo/specs/042-session-expiry",
+                "snapshotted_at": "2026-05-28T00:00:00+00:00",
+                "has_spec_md": True,
+                "has_plan_json": True,
+                "has_diff_patch": True,
+                "warnings": [],
+            }
+        )
+    )
 
     return spec_dir
 
@@ -86,126 +98,128 @@ def _make_realistic_plan(spec_dir_str: str) -> str:
 
     One phase per AC; concrete pytest verifications; correct targets.
     """
-    return json.dumps({
-        "feature": "Add session expiry to the auth module",
-        "workflow_type": "feature",
-        "services_involved": ["backend"],
-        "phases": [
-            {
-                "phase": 1,
-                "name": "AC#1: login_user sets expires_at to +24h",
-                "type": "implementation",
-                "subtasks": [
-                    {
-                        "id": "ac1-login-sets-24h-expiry",
-                        "description": "login_user returns a session with expires_at exactly 24h after creation",
-                        "status": "pending",
-                        "lane": "functional",
-                        "target": "app/auth/login.py::login_user",
-                        "rationale": "AC#1: login_user(...) returns a session whose expires_at is exactly 24 hours after creation",
-                        "files_to_create": ["tests/test_login_expiry.py"],
-                        "verification": {
-                            "type": "command",
-                            "command": "pytest tests/test_login_expiry.py",
-                            "expected": "exit 0",
+    return json.dumps(
+        {
+            "feature": "Add session expiry to the auth module",
+            "workflow_type": "feature",
+            "services_involved": ["backend"],
+            "phases": [
+                {
+                    "phase": 1,
+                    "name": "AC#1: login_user sets expires_at to +24h",
+                    "type": "implementation",
+                    "subtasks": [
+                        {
+                            "id": "ac1-login-sets-24h-expiry",
+                            "description": "login_user returns a session with expires_at exactly 24h after creation",
+                            "status": "pending",
+                            "lane": "functional",
+                            "target": "app/auth/login.py::login_user",
+                            "rationale": "AC#1: login_user(...) returns a session whose expires_at is exactly 24 hours after creation",
+                            "files_to_create": ["tests/test_login_expiry.py"],
+                            "verification": {
+                                "type": "command",
+                                "command": "pytest tests/test_login_expiry.py",
+                                "expected": "exit 0",
+                            },
                         },
-                    },
-                    {
-                        "id": "ac1-login-preserves-existing-fields",
-                        "description": "login_user return shape (id, user_id, email, created_at) unchanged",
-                        "status": "pending",
-                        "lane": "functional",
-                        "target": "app/auth/login.py::login_user",
-                        "rationale": "AC#1 (regression guard): existing Session shape unchanged",
-                        "files_to_create": ["tests/test_login_shape.py"],
-                        "verification": {
-                            "type": "command",
-                            "command": "pytest tests/test_login_shape.py",
-                            "expected": "exit 0",
+                        {
+                            "id": "ac1-login-preserves-existing-fields",
+                            "description": "login_user return shape (id, user_id, email, created_at) unchanged",
+                            "status": "pending",
+                            "lane": "functional",
+                            "target": "app/auth/login.py::login_user",
+                            "rationale": "AC#1 (regression guard): existing Session shape unchanged",
+                            "files_to_create": ["tests/test_login_shape.py"],
+                            "verification": {
+                                "type": "command",
+                                "command": "pytest tests/test_login_shape.py",
+                                "expected": "exit 0",
+                            },
                         },
-                    },
-                ],
-                "parallel_safe": False,
-            },
-            {
-                "phase": 2,
-                "name": "AC#2: get_session expires + removes",
-                "type": "implementation",
-                "subtasks": [
-                    {
-                        "id": "ac2-expired-returns-none",
-                        "description": "get_session returns None for an expired session",
-                        "status": "pending",
-                        "lane": "functional",
-                        "target": "app/auth/session.py::get_session",
-                        "rationale": "AC#2: returns None for an expired session",
-                        "files_to_create": ["tests/test_get_session_expired.py"],
-                        "verification": {
-                            "type": "command",
-                            "command": "pytest tests/test_get_session_expired.py",
-                            "expected": "exit 0",
+                    ],
+                    "parallel_safe": False,
+                },
+                {
+                    "phase": 2,
+                    "name": "AC#2: get_session expires + removes",
+                    "type": "implementation",
+                    "subtasks": [
+                        {
+                            "id": "ac2-expired-returns-none",
+                            "description": "get_session returns None for an expired session",
+                            "status": "pending",
+                            "lane": "functional",
+                            "target": "app/auth/session.py::get_session",
+                            "rationale": "AC#2: returns None for an expired session",
+                            "files_to_create": ["tests/test_get_session_expired.py"],
+                            "verification": {
+                                "type": "command",
+                                "command": "pytest tests/test_get_session_expired.py",
+                                "expected": "exit 0",
+                            },
                         },
-                    },
-                    {
-                        "id": "ac2-expired-removed-from-store",
-                        "description": "get_session also removes the expired entry from _STORE",
-                        "status": "pending",
-                        "lane": "functional",
-                        "target": "app/auth/session.py::get_session",
-                        "rationale": "AC#2: removes it from the session store",
-                        "files_to_create": ["tests/test_get_session_removes.py"],
-                        "verification": {
-                            "type": "command",
-                            "command": "pytest tests/test_get_session_removes.py",
-                            "expected": "exit 0",
+                        {
+                            "id": "ac2-expired-removed-from-store",
+                            "description": "get_session also removes the expired entry from _STORE",
+                            "status": "pending",
+                            "lane": "functional",
+                            "target": "app/auth/session.py::get_session",
+                            "rationale": "AC#2: removes it from the session store",
+                            "files_to_create": ["tests/test_get_session_removes.py"],
+                            "verification": {
+                                "type": "command",
+                                "command": "pytest tests/test_get_session_removes.py",
+                                "expected": "exit 0",
+                            },
                         },
-                    },
-                ],
-                "parallel_safe": False,
-            },
-            {
-                "phase": 3,
-                "name": "AC#3: refresh_session honours grace window",
-                "type": "implementation",
-                "subtasks": [
-                    {
-                        "id": "ac3-refresh-within-grace",
-                        "description": "refresh_session extends expiry by 24h within last 5min",
-                        "status": "pending",
-                        "lane": "functional",
-                        "target": "app/auth/session.py::refresh_session",
-                        "rationale": "AC#3: extends expires_at by another 24h within grace window",
-                        "files_to_create": ["tests/test_refresh_within_grace.py"],
-                        "verification": {
-                            "type": "command",
-                            "command": "pytest tests/test_refresh_within_grace.py",
-                            "expected": "exit 0",
+                    ],
+                    "parallel_safe": False,
+                },
+                {
+                    "phase": 3,
+                    "name": "AC#3: refresh_session honours grace window",
+                    "type": "implementation",
+                    "subtasks": [
+                        {
+                            "id": "ac3-refresh-within-grace",
+                            "description": "refresh_session extends expiry by 24h within last 5min",
+                            "status": "pending",
+                            "lane": "functional",
+                            "target": "app/auth/session.py::refresh_session",
+                            "rationale": "AC#3: extends expires_at by another 24h within grace window",
+                            "files_to_create": ["tests/test_refresh_within_grace.py"],
+                            "verification": {
+                                "type": "command",
+                                "command": "pytest tests/test_refresh_within_grace.py",
+                                "expected": "exit 0",
+                            },
                         },
-                    },
-                    {
-                        "id": "ac3-refresh-outside-grace-noop",
-                        "description": "refresh_session returns unmodified session outside grace window",
-                        "status": "pending",
-                        "lane": "functional",
-                        "target": "app/auth/session.py::refresh_session",
-                        "rationale": "AC#3: outside grace window, returns the unmodified session",
-                        "files_to_create": ["tests/test_refresh_outside_grace.py"],
-                        "verification": {
-                            "type": "command",
-                            "command": "pytest tests/test_refresh_outside_grace.py",
-                            "expected": "exit 0",
+                        {
+                            "id": "ac3-refresh-outside-grace-noop",
+                            "description": "refresh_session returns unmodified session outside grace window",
+                            "status": "pending",
+                            "lane": "functional",
+                            "target": "app/auth/session.py::refresh_session",
+                            "rationale": "AC#3: outside grace window, returns the unmodified session",
+                            "files_to_create": ["tests/test_refresh_outside_grace.py"],
+                            "verification": {
+                                "type": "command",
+                                "command": "pytest tests/test_refresh_outside_grace.py",
+                                "expected": "exit 0",
+                            },
                         },
-                    },
-                ],
-                "parallel_safe": True,
-            },
-        ],
-        "final_acceptance": [
-            "All three functions behave per the AC. No regressions in logout_user.",
-        ],
-        "status": "in_progress",
-        "planStatus": "pending",
-    })
+                    ],
+                    "parallel_safe": True,
+                },
+            ],
+            "final_acceptance": [
+                "All three functions behave per the AC. No regressions in logout_user.",
+            ],
+            "status": "in_progress",
+            "planStatus": "pending",
+        }
+    )
 
 
 # ── Mock SDK ────────────────────────────────────────────────────────────
@@ -214,10 +228,17 @@ def _make_realistic_plan(spec_dir_str: str) -> str:
 @pytest.fixture
 def mock_sdk_realistic(monkeypatch: pytest.MonkeyPatch, workspace: Path):
     """SDK mock that emits the realistic plan for this fixture."""
+
     class _FakeAsyncCM:
-        async def __aenter__(self): return self
-        async def __aexit__(self, *args): return None
-    async def _resolve(*a, **kw): return _FakeAsyncCM()
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+    async def _resolve(*a, **kw):
+        return _FakeAsyncCM()
+
     async def _invoke(client, prompt, spec_dir_arg, verbose):
         (spec_dir_arg / "test_plan.json").write_text(
             _make_realistic_plan(str(spec_dir_arg))
@@ -233,7 +254,9 @@ def mock_sdk_realistic(monkeypatch: pytest.MonkeyPatch, workspace: Path):
 
 @pytest.mark.asyncio
 async def test_full_pipeline_against_realistic_fixture(
-    workspace: Path, project_dir: Path, mock_sdk_realistic,
+    workspace: Path,
+    project_dir: Path,
+    mock_sdk_realistic,
 ) -> None:
     """Drive the planner against a realistic 3-AC spec and verify
     every shape the downstream Gen-Functional agent depends on."""
@@ -277,40 +300,63 @@ async def test_full_pipeline_against_realistic_fixture(
         # Target points at a real symbol in the fixture project tree
         assert "::" in s["target"]
         path_part = s["target"].split("::")[0]
-        assert (project_dir / path_part).exists(), \
+        assert (project_dir / path_part).exists(), (
             f"subtask {s['id']!r} target {path_part} not in fixture project tree"
+        )
 
 
 @pytest.mark.asyncio
 async def test_pipeline_handles_truncation_against_fixture(
-    workspace: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    workspace: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Even with a realistic-shaped spec, if the agent over-emits we truncate."""
+
     class _FakeAsyncCM:
-        async def __aenter__(self): return self
-        async def __aexit__(self, *args): return None
-    async def _resolve(*a, **kw): return _FakeAsyncCM()
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+    async def _resolve(*a, **kw):
+        return _FakeAsyncCM()
+
     async def _invoke(client, prompt, spec_dir_arg, verbose):
         # 50 subtasks across one phase
         plan = {
-            "feature": "huge", "workflow_type": "feature", "services_involved": [],
-            "phases": [{
-                "phase": 1, "name": "everything", "type": "implementation",
-                "subtasks": [
-                    {
-                        "id": f"s{i}", "description": "x", "status": "pending",
-                        "lane": "functional", "target": "app/auth/session.py::get_session",
-                        "rationale": f"AC#1 extra {i}",
-                        "files_to_create": [f"tests/test_{i}.py"],
-                        "verification": {
-                            "type": "command", "command": f"pytest tests/test_{i}.py",
-                            "expected": "exit 0",
-                        },
-                    } for i in range(50)
-                ],
-                "parallel_safe": False,
-            }],
-            "final_acceptance": [], "status": "in_progress", "planStatus": "pending",
+            "feature": "huge",
+            "workflow_type": "feature",
+            "services_involved": [],
+            "phases": [
+                {
+                    "phase": 1,
+                    "name": "everything",
+                    "type": "implementation",
+                    "subtasks": [
+                        {
+                            "id": f"s{i}",
+                            "description": "x",
+                            "status": "pending",
+                            "lane": "functional",
+                            "target": "app/auth/session.py::get_session",
+                            "rationale": f"AC#1 extra {i}",
+                            "files_to_create": [f"tests/test_{i}.py"],
+                            "verification": {
+                                "type": "command",
+                                "command": f"pytest tests/test_{i}.py",
+                                "expected": "exit 0",
+                            },
+                        }
+                        for i in range(50)
+                    ],
+                    "parallel_safe": False,
+                }
+            ],
+            "final_acceptance": [],
+            "status": "in_progress",
+            "planStatus": "pending",
         }
         (spec_dir_arg / "test_plan.json").write_text(json.dumps(plan))
         return "complete", "mock response", {}
@@ -328,7 +374,9 @@ async def test_pipeline_handles_truncation_against_fixture(
 
 @pytest.mark.asyncio
 async def test_pipeline_idempotent_when_replan_completes(
-    workspace: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    workspace: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
     mock_sdk_realistic,
 ) -> None:
     """Initial planning + a follow-up replan land cleanly side-by-side."""
@@ -338,37 +386,46 @@ async def test_pipeline_idempotent_when_replan_completes(
     phases_before = len(plan_before["phases"])
 
     # Gen-Functional rejects the first subtask — simulate.
-    (workspace / "context" / "replan_request.json").write_text(json.dumps({
-        "subtask_id": "ac1-login-sets-24h-expiry",
-        "reason": "hallucinated import: time.timezone",
-        "failed_target": "app/auth/login.py::nonexistent",
-    }))
+    (workspace / "context" / "replan_request.json").write_text(
+        json.dumps(
+            {
+                "subtask_id": "ac1-login-sets-24h-expiry",
+                "reason": "hallucinated import: time.timezone",
+                "failed_target": "app/auth/login.py::nonexistent",
+            }
+        )
+    )
 
     # Replan: mock the agent emitting the existing plan + a new replan-1 phase.
     async def _replan_invoke(client, prompt, spec_dir_arg, verbose):
         new_plan = json.loads((spec_dir_arg / "test_plan.json").read_text())
-        new_plan["phases"].append({
-            "phase": phases_before + 1,
-            "name": "replan-1",
-            "type": "implementation",
-            "subtasks": [{
-                "id": "ac1-login-sets-24h-expiry-r1",
-                "description": "Verify login_user sets expires_at via datetime.timedelta(hours=24)",
-                "status": "pending",
-                "lane": "functional",
-                "target": "app/auth/login.py::login_user",
-                "rationale": "Replan of 'ac1-login-sets-24h-expiry': original used hallucinated import; this uses datetime.timedelta",
-                "files_to_create": ["tests/test_login_expiry_v2.py"],
-                "verification": {
-                    "type": "command",
-                    "command": "pytest tests/test_login_expiry_v2.py",
-                    "expected": "exit 0",
-                },
-            }],
-            "parallel_safe": False,
-        })
+        new_plan["phases"].append(
+            {
+                "phase": phases_before + 1,
+                "name": "replan-1",
+                "type": "implementation",
+                "subtasks": [
+                    {
+                        "id": "ac1-login-sets-24h-expiry-r1",
+                        "description": "Verify login_user sets expires_at via datetime.timedelta(hours=24)",
+                        "status": "pending",
+                        "lane": "functional",
+                        "target": "app/auth/login.py::login_user",
+                        "rationale": "Replan of 'ac1-login-sets-24h-expiry': original used hallucinated import; this uses datetime.timedelta",
+                        "files_to_create": ["tests/test_login_expiry_v2.py"],
+                        "verification": {
+                            "type": "command",
+                            "command": "pytest tests/test_login_expiry_v2.py",
+                            "expected": "exit 0",
+                        },
+                    }
+                ],
+                "parallel_safe": False,
+            }
+        )
         (spec_dir_arg / "test_plan.json").write_text(json.dumps(new_plan))
         return "complete", "mock", {}
+
     monkeypatch.setattr("agents.planner._invoke_session", _replan_invoke)
 
     ok = await run_planner(workspace, project_dir, mode="replan")

@@ -122,10 +122,15 @@ def test_taxonomy_version_read_from_meta_block() -> None:
 def test_requirements_mirrored_labels_path() -> None:
     req = {
         "title": "Test orders",
-        "metadata": {"plan_id": "001-orders", "labels": ["pfactory", "handoff:tfactory"]},
+        "metadata": {
+            "plan_id": "001-orders",
+            "labels": ["pfactory", "handoff:tfactory"],
+        },
     }
     d = classify_requirements(req)
-    assert d.picked_up is True and d.source == "requirements" and d.plan_id == "001-orders"
+    assert (
+        d.picked_up is True and d.source == "requirements" and d.plan_id == "001-orders"
+    )
 
 
 def test_requirements_explicit_handoff_path() -> None:
@@ -188,11 +193,17 @@ def test_pickup_requirements_enqueues_governed_target() -> None:
     req = {
         "title": "Test orders",
         "description": "ACs...",
-        "metadata": {"plan_id": "001-orders", "labels": ["pfactory", "handoff:tfactory"]},
+        "metadata": {
+            "plan_id": "001-orders",
+            "labels": ["pfactory", "handoff:tfactory"],
+        },
     }
     d = pickup_requirements(req, enqueue=enqueued.append)
     assert d.picked_up is True and len(enqueued) == 1
-    assert enqueued[0]["plan_id"] == "001-orders" and enqueued[0]["source"] == "requirements"
+    assert (
+        enqueued[0]["plan_id"] == "001-orders"
+        and enqueued[0]["source"] == "requirements"
+    )
 
 
 def test_decision_is_frozen() -> None:
@@ -213,7 +224,10 @@ def test_cli_governed_issue_exits_zero(tmp_path, capsys) -> None:
     # gh-style labels ([{"name": ...}]) must be normalized by the CLI.
     f.write_text(
         json.dumps(
-            {"number": 9, "labels": [{"name": "pfactory"}, {"name": "handoff:tfactory"}]}
+            {
+                "number": 9,
+                "labels": [{"name": "pfactory"}, {"name": "handoff:tfactory"}],
+            }
         )
     )
     rc = _main(["--issue", str(f)])

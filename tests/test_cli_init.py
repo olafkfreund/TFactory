@@ -44,9 +44,12 @@ class TestInitNonInteractive:
         result = run_init(
             tmp_path,
             "--non-interactive",
-            "--target-name", "api",
-            "--target-type", "http",
-            "--base-url", "https://api.staging.example.com",
+            "--target-name",
+            "api",
+            "--target-type",
+            "http",
+            "--base-url",
+            "https://api.staging.example.com",
         )
         assert result.exit_code == 0, result.output
         yml_path = tmp_path / ".tfactory.yml"
@@ -62,11 +65,16 @@ class TestInitNonInteractive:
         result = run_init(
             tmp_path,
             "--non-interactive",
-            "--target-name", "web",
-            "--target-type", "http",
-            "--base-url", "https://staging.example.com",
-            "--auth-type", "bearer",
-            "--auth-token-env", "STAGING_TOKEN",
+            "--target-name",
+            "web",
+            "--target-type",
+            "http",
+            "--base-url",
+            "https://staging.example.com",
+            "--auth-type",
+            "bearer",
+            "--auth-token-env",
+            "STAGING_TOKEN",
         )
         assert result.exit_code == 0, result.output
         text = (tmp_path / ".tfactory.yml").read_text()
@@ -77,12 +85,18 @@ class TestInitNonInteractive:
         result = run_init(
             tmp_path,
             "--non-interactive",
-            "--target-name", "web",
-            "--target-type", "http",
-            "--base-url", "https://staging.example.com",
-            "--auth-type", "basic",
-            "--auth-username-env", "API_USER",
-            "--auth-password-env", "API_PASS",
+            "--target-name",
+            "web",
+            "--target-type",
+            "http",
+            "--base-url",
+            "https://staging.example.com",
+            "--auth-type",
+            "basic",
+            "--auth-username-env",
+            "API_USER",
+            "--auth-password-env",
+            "API_PASS",
         )
         assert result.exit_code == 0, result.output
         text = (tmp_path / ".tfactory.yml").read_text()
@@ -94,9 +108,12 @@ class TestInitNonInteractive:
         run_init(
             tmp_path,
             "--non-interactive",
-            "--target-name", "api",
-            "--target-type", "http",
-            "--base-url", "https://api.example.com",
+            "--target-name",
+            "api",
+            "--target-type",
+            "http",
+            "--base-url",
+            "https://api.example.com",
         )
         catalog_path = tmp_path / ".tfactory" / "tests-catalog.json"
         assert catalog_path.exists(), "tests-catalog.json not created"
@@ -111,9 +128,18 @@ class TestInitNonInteractive:
         runner = CliRunner()
         result = runner.invoke(
             tfactory_main,
-            ["init", "--repo-root", str(tmp_path),
-             "--non-interactive", "--target-name", "api",
-             "--target-type", "http", "--base-url", "https://api.example.com"],
+            [
+                "init",
+                "--repo-root",
+                str(tmp_path),
+                "--non-interactive",
+                "--target-name",
+                "api",
+                "--target-type",
+                "http",
+                "--base-url",
+                "https://api.example.com",
+            ],
             catch_exceptions=False,
         )
         assert result.exit_code != 0
@@ -127,25 +153,35 @@ class TestInitNonInteractive:
             tmp_path,
             "--force",
             "--non-interactive",
-            "--target-name", "new-api",
-            "--target-type", "http",
-            "--base-url", "https://new.example.com",
+            "--target-name",
+            "new-api",
+            "--target-type",
+            "http",
+            "--base-url",
+            "https://new.example.com",
         )
         assert result.exit_code == 0, result.output
         text = existing.read_text()
         assert "new-api" in text
         # Precise check on the parsed value (not a loose URL substring match).
         config = yaml.safe_load(text)
-        assert any(t["base_url"] == "https://new.example.com" for t in config["targets"])
+        assert any(
+            t["base_url"] == "https://new.example.com" for t in config["targets"]
+        )
 
-    def test_validates_generated_yaml_via_load_tfactory_yml(self, tmp_path: Path) -> None:
+    def test_validates_generated_yaml_via_load_tfactory_yml(
+        self, tmp_path: Path
+    ) -> None:
         """Validate that the generated YAML is parseable by load_tfactory_yml."""
         run_init(
             tmp_path,
             "--non-interactive",
-            "--target-name", "api",
-            "--target-type", "http",
-            "--base-url", "https://api.staging.example.com",
+            "--target-name",
+            "api",
+            "--target-type",
+            "http",
+            "--base-url",
+            "https://api.staging.example.com",
         )
         from tfactory_yml import load_tfactory_yml
 
@@ -160,10 +196,16 @@ class TestInitNonInteractive:
         runner = CliRunner()
         result = runner.invoke(
             tfactory_main,
-            ["init", "--repo-root", str(tmp_path),
-             "--non-interactive",
-             "--target-type", "http",
-             "--base-url", "https://api.example.com"],
+            [
+                "init",
+                "--repo-root",
+                str(tmp_path),
+                "--non-interactive",
+                "--target-type",
+                "http",
+                "--base-url",
+                "https://api.example.com",
+            ],
             catch_exceptions=False,
         )
         assert result.exit_code != 0
@@ -172,10 +214,16 @@ class TestInitNonInteractive:
         runner = CliRunner()
         result = runner.invoke(
             tfactory_main,
-            ["init", "--repo-root", str(tmp_path),
-             "--non-interactive",
-             "--target-name", "api",
-             "--target-type", "http"],
+            [
+                "init",
+                "--repo-root",
+                str(tmp_path),
+                "--non-interactive",
+                "--target-name",
+                "api",
+                "--target-type",
+                "http",
+            ],
             catch_exceptions=False,
         )
         assert result.exit_code != 0
@@ -184,15 +232,22 @@ class TestInitNonInteractive:
         """Existing catalog is preserved — init does not clobber it."""
         catalog_path = tmp_path / ".tfactory" / "tests-catalog.json"
         catalog_path.parent.mkdir(parents=True)
-        original = {"version": 1, "updated_at": "2026-01-01T00:00:00Z", "tests": [{"id": "x"}]}
+        original = {
+            "version": 1,
+            "updated_at": "2026-01-01T00:00:00Z",
+            "tests": [{"id": "x"}],
+        }
         catalog_path.write_text(json.dumps(original))
 
         run_init(
             tmp_path,
             "--non-interactive",
-            "--target-name", "api",
-            "--target-type", "http",
-            "--base-url", "https://api.example.com",
+            "--target-name",
+            "api",
+            "--target-type",
+            "http",
+            "--base-url",
+            "https://api.example.com",
         )
         # Catalog should remain unchanged
         data = json.loads(catalog_path.read_text())
@@ -209,10 +264,14 @@ class TestInitDockerCompose:
         result = run_init(
             tmp_path,
             "--non-interactive",
-            "--target-name", "web",
-            "--target-type", "docker_compose",
-            "--compose-file", "docker-compose.test.yml",
-            "--compose-services", "app,db",
+            "--target-name",
+            "web",
+            "--target-type",
+            "docker_compose",
+            "--compose-file",
+            "docker-compose.test.yml",
+            "--compose-services",
+            "app,db",
         )
         assert result.exit_code == 0, result.output
         text = (tmp_path / ".tfactory.yml").read_text()

@@ -51,8 +51,12 @@ def test_connector_target_validates() -> None:
 def test_unknown_platform_rejected() -> None:
     with pytest.raises(ValidationError):
         ConnectorTarget.model_validate(
-            {"name": "x", "type": "connector", "platform": "jira",
-             "base_url": "https://x.example.com"}
+            {
+                "name": "x",
+                "type": "connector",
+                "platform": "jira",
+                "base_url": "https://x.example.com",
+            }
         )
 
 
@@ -61,11 +65,15 @@ def test_connector_in_config_with_ref_auth() -> None:
     cfg = TFactoryConfig.model_validate(
         _cfg(
             {
-                "name": "snow", "type": "connector", "platform": "servicenow",
+                "name": "snow",
+                "type": "connector",
+                "platform": "servicenow",
                 "base_url": "https://acme.service-now.com",
                 "auth": {"type": "ref", "ref": "snow-svc"},
             },
-            test_credentials={"snow-svc": {"ref": "env:SNOW_TOKEN", "as_secret": "TEST_PASSWORD"}},
+            test_credentials={
+                "snow-svc": {"ref": "env:SNOW_TOKEN", "as_secret": "TEST_PASSWORD"}
+            },
         )
     )
     assert type(cfg.targets[0]).__name__ == "ConnectorTarget"
@@ -75,11 +83,15 @@ def test_ref_auth_validator_still_fires_for_connector() -> None:
     # auth.ref must name a declared credential — even on a connector target
     with pytest.raises(ValidationError):
         TFactoryConfig.model_validate(
-            _cfg({
-                "name": "snow", "type": "connector", "platform": "servicenow",
-                "base_url": "https://acme.service-now.com",
-                "auth": {"type": "ref", "ref": "missing"},
-            })
+            _cfg(
+                {
+                    "name": "snow",
+                    "type": "connector",
+                    "platform": "servicenow",
+                    "base_url": "https://acme.service-now.com",
+                    "auth": {"type": "ref", "ref": "missing"},
+                }
+            )
         )
 
 
@@ -129,7 +141,12 @@ def test_connector_visual_lane_opt_in() -> None:
 
 def test_http_target_visual_lane_marker() -> None:
     t = HttpTarget.model_validate(
-        {"name": "web", "type": "http", "base_url": "https://app.example.com", "visual": True}
+        {
+            "name": "web",
+            "type": "http",
+            "base_url": "https://app.example.com",
+            "visual": True,
+        }
     )
     assert t.visual is True
     # Default off when unset.

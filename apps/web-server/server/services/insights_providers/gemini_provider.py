@@ -42,7 +42,11 @@ class GeminiProvider(ProviderStrategy):
         # Fast path: just check if gemini/antigravity binary exists on PATH
         # (running `gemini --version` takes ~3s due to Node.js startup)
         binary = get_gemini_binary()
-        installed = (shutil.which(binary) is not None) if not binary.startswith("/") else Path(binary).exists()
+        installed = (
+            (shutil.which(binary) is not None)
+            if not binary.startswith("/")
+            else Path(binary).exists()
+        )
 
         authenticated, auth_method, _ = (False, None, None)
         if installed:
@@ -67,6 +71,7 @@ class GeminiProvider(ProviderStrategy):
         conversation_history: list[dict] | None,
     ) -> str:
         from ...routes.cli_accounts import get_gemini_binary
+
         cmd = ["bash", "-l", "-c"]
 
         effective_model = model or (model_config or {}).get("model", "gemini-2.5-flash")
@@ -78,7 +83,9 @@ class GeminiProvider(ProviderStrategy):
         # (security review M4). The prompt is bound to the explicit ``--prompt``
         # flag below. A legitimate model id never starts with ``-``.
         if effective_model.startswith("-"):
-            logger.warning("[GeminiProvider] Rejected option-like model: %r", effective_model)
+            logger.warning(
+                "[GeminiProvider] Rejected option-like model: %r", effective_model
+            )
             raise ValueError(f"invalid model value: {effective_model!r}")
 
         # Build prompt with conversation context for stateless CLI
@@ -99,17 +106,21 @@ class GeminiProvider(ProviderStrategy):
 
         # Scrub ANTHROPIC_API_KEY (OAuth-only policy — see core/auth.py).
         from ...utils.subprocess_env import make_subprocess_env
+
         env = make_subprocess_env()
         env["PYTHONUNBUFFERED"] = "1"
 
         logger.info(f"[GeminiProvider] Starting: gemini --model {effective_model}")
 
         try:
-            await broadcast_event("insights:chunk", {
-                "projectId": project_id,
-                "type": "text",
-                "content": "",
-            })
+            await broadcast_event(
+                "insights:chunk",
+                {
+                    "projectId": project_id,
+                    "type": "text",
+                    "content": "",
+                },
+            )
 
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -126,47 +137,65 @@ class GeminiProvider(ProviderStrategy):
                 if not line:
                     continue
                 accumulated += line + "\n"
-                await broadcast_event("insights:chunk", {
-                    "projectId": project_id,
-                    "type": "text",
-                    "content": line + "\n",
-                })
+                await broadcast_event(
+                    "insights:chunk",
+                    {
+                        "projectId": project_id,
+                        "type": "text",
+                        "content": line + "\n",
+                    },
+                )
 
             await proc.wait()
 
             stderr_output = await proc.stderr.read()
             if proc.returncode != 0 and not accumulated.strip():
-                stderr_text = stderr_output.decode("utf-8", errors="replace").strip() if stderr_output else ""
-                error_msg = stderr_text or f"Gemini CLI exited with code {proc.returncode}"
-                await broadcast_event("insights:chunk", {
-                    "projectId": project_id,
-                    "type": "error",
-                    "error": error_msg,
-                })
+                stderr_text = (
+                    stderr_output.decode("utf-8", errors="replace").strip()
+                    if stderr_output
+                    else ""
+                )
+                error_msg = (
+                    stderr_text or f"Gemini CLI exited with code {proc.returncode}"
+                )
+                await broadcast_event(
+                    "insights:chunk",
+                    {
+                        "projectId": project_id,
+                        "type": "error",
+                        "error": error_msg,
+                    },
+                )
                 return ""
 
             elapsed = time.monotonic() - stream_start
             estimated_tokens = max(1, len(accumulated) // 4)
             tokens_per_sec = round(estimated_tokens / elapsed, 1) if elapsed > 0 else 0
 
-            await broadcast_event("insights:chunk", {
-                "projectId": project_id,
-                "type": "done",
-                "metrics": {
-                    "outputTokens": estimated_tokens,
-                    "tokensPerSecond": tokens_per_sec,
-                    "elapsedSeconds": round(elapsed, 1),
-                    "estimated": True,
+            await broadcast_event(
+                "insights:chunk",
+                {
+                    "projectId": project_id,
+                    "type": "done",
+                    "metrics": {
+                        "outputTokens": estimated_tokens,
+                        "tokensPerSecond": tokens_per_sec,
+                        "elapsedSeconds": round(elapsed, 1),
+                        "estimated": True,
+                    },
                 },
-            })
+            )
 
             return accumulated
 
         except Exception as e:
             logger.error("[GeminiProvider] Error: %s", sanitize_log(e), exc_info=True)
-            await broadcast_event("insights:chunk", {
-                "projectId": project_id,
-                "type": "error",
-                "error": client_error(logger, "GeminiProvider failed", e),
-            })
+            await broadcast_event(
+                "insights:chunk",
+                {
+                    "projectId": project_id,
+                    "type": "error",
+                    "error": client_error(logger, "GeminiProvider failed", e),
+                },
+            )
             return ""

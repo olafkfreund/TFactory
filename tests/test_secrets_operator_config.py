@@ -30,7 +30,11 @@ def test_schema_parses_cloud_and_named() -> None:
     cfg = OperatorCredentialsConfig.model_validate(
         {
             "cloud": {
-                "gcp": {"ref": "gcp-sm://p/sa", "as": "GOOGLE_APPLICATION_CREDENTIALS", "kind": "file"},
+                "gcp": {
+                    "ref": "gcp-sm://p/sa",
+                    "as": "GOOGLE_APPLICATION_CREDENTIALS",
+                    "kind": "file",
+                },
             },
             "credentials": {
                 "staging-db": {"ref": "vault:secret/data/db#url", "as": "DATABASE_URL"},
@@ -73,14 +77,20 @@ def test_load_non_object_is_empty(tmp_path: Path) -> None:
 def test_load_valid_populates(tmp_path: Path) -> None:
     p = _write(
         tmp_path / "credentials.json",
-        {"credentials": {"db": {"ref": "vault:secret/data/db#url", "as": "DATABASE_URL"}}},
+        {
+            "credentials": {
+                "db": {"ref": "vault:secret/data/db#url", "as": "DATABASE_URL"}
+            }
+        },
     )
     cfg = load_operator_config(p)
     assert cfg.credentials["db"].ref == "vault:secret/data/db#url"
     assert cfg.credentials["db"].as_ == "DATABASE_URL"
 
 
-def test_loose_mode_warns_but_loads(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+def test_loose_mode_warns_but_loads(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     p = _write(
         tmp_path / "credentials.json",
         {"cloud": {"aws": {"ref": "aws-sm://s/api#token", "as": "AWS_TOKEN"}}},
@@ -92,13 +102,21 @@ def test_loose_mode_warns_but_loads(tmp_path: Path, caplog: pytest.LogCaptureFix
     assert any("recommend chmod 600" in r.message for r in caplog.records)
 
 
-def test_broker_reads_operator_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_broker_reads_operator_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from tfactory_secrets import broker
 
     p = _write(
         tmp_path / "credentials.json",
         {
-            "cloud": {"gcp": {"ref": "gcp-sm://p/sa", "as": "GOOGLE_APPLICATION_CREDENTIALS", "kind": "file"}},
+            "cloud": {
+                "gcp": {
+                    "ref": "gcp-sm://p/sa",
+                    "as": "GOOGLE_APPLICATION_CREDENTIALS",
+                    "kind": "file",
+                }
+            },
             "credentials": {"db": {"ref": "env:DATABASE_URL", "as": "DATABASE_URL"}},
         },
     )
@@ -108,7 +126,9 @@ def test_broker_reads_operator_config(tmp_path: Path, monkeypatch: pytest.Monkey
         cloud = broker._cloud_config()
         named = broker._operator_credentials()
         assert cloud["gcp"]["ref"] == "gcp-sm://p/sa"
-        assert cloud["gcp"]["as"] == "GOOGLE_APPLICATION_CREDENTIALS"  # dict shape, aliased
+        assert (
+            cloud["gcp"]["as"] == "GOOGLE_APPLICATION_CREDENTIALS"
+        )  # dict shape, aliased
         assert named["db"]["ref"] == "env:DATABASE_URL"
     finally:
         broker.reset_config_cache()

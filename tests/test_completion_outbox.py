@@ -150,9 +150,7 @@ def test_not_due_entry_is_skipped(tmp_path):
     # Force a future next_attempt_at.
     p = tmp_path / "evt-4.json"
     data = json.loads(p.read_text())
-    data["next_attempt_at"] = (
-        datetime.now(UTC) + timedelta(hours=1)
-    ).isoformat()
+    data["next_attempt_at"] = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
     p.write_text(json.dumps(data))
 
     stats = ob.relay_once(lambda e, i: True, root=tmp_path)
@@ -330,4 +328,7 @@ def test_triager_legacy_post_when_outbox_disabled(tmp_path, monkeypatch):
 
     # Legacy direct POST happened; nothing parked in the outbox.
     assert posted.get("url") == "http://sink.example/hook"
-    assert not (tmp_path / "outbox").glob("*.json") or ob.pending(tmp_path / "outbox") == []
+    assert (
+        not (tmp_path / "outbox").glob("*.json")
+        or ob.pending(tmp_path / "outbox") == []
+    )

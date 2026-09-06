@@ -64,27 +64,39 @@ def workspace(tmp_path: Path) -> Path:
     spec_dir.mkdir(parents=True)
     for sub in ("context", "tests", "findings", "logs", "memory"):
         (spec_dir / sub).mkdir()
-    (spec_dir / "status.json").write_text(json.dumps({
-        "task_id": "042-session-expiry",
-        "project_id": "demo",
-        "spec_id": "042-session-expiry",
-        "status": "pending",
-        "phase": "created",
-    }))
-    shutil.copy(FIXTURE / "aifactory_spec.md", spec_dir / "context" / "aifactory_spec.md")
-    shutil.copy(FIXTURE / "aifactory_plan.json", spec_dir / "context" / "aifactory_plan.json")
+    (spec_dir / "status.json").write_text(
+        json.dumps(
+            {
+                "task_id": "042-session-expiry",
+                "project_id": "demo",
+                "spec_id": "042-session-expiry",
+                "status": "pending",
+                "phase": "created",
+            }
+        )
+    )
+    shutil.copy(
+        FIXTURE / "aifactory_spec.md", spec_dir / "context" / "aifactory_spec.md"
+    )
+    shutil.copy(
+        FIXTURE / "aifactory_plan.json", spec_dir / "context" / "aifactory_plan.json"
+    )
     shutil.copy(FIXTURE / "diff.patch", spec_dir / "context" / "diff.patch")
-    (spec_dir / "context" / "source.json").write_text(json.dumps({
-        "project_id": "demo",
-        "spec_id": "042-session-expiry",
-        "branch": "feature/session-expiry",
-        "base_ref": "main",
-        "snapshotted_at": "2026-05-28T00:00:00+00:00",
-        "has_spec_md": True,
-        "has_plan_json": True,
-        "has_diff_patch": True,
-        "warnings": [],
-    }))
+    (spec_dir / "context" / "source.json").write_text(
+        json.dumps(
+            {
+                "project_id": "demo",
+                "spec_id": "042-session-expiry",
+                "branch": "feature/session-expiry",
+                "base_ref": "main",
+                "snapshotted_at": "2026-05-28T00:00:00+00:00",
+                "has_spec_md": True,
+                "has_plan_json": True,
+                "has_diff_patch": True,
+                "warnings": [],
+            }
+        )
+    )
     return spec_dir
 
 
@@ -107,88 +119,120 @@ _SUBTASK_IDS = [
 
 
 def _realistic_plan_json() -> str:
-    return json.dumps({
-        "feature": "Add session expiry to the auth module",
-        "workflow_type": "feature",
-        "services_involved": ["backend"],
-        "phases": [
-            {
-                "phase": 1, "name": "AC#1", "type": "implementation",
-                "subtasks": [
-                    {
-                        "id": _SUBTASK_IDS[0],
-                        "description": "login_user sets expires_at",
-                        "status": "pending", "lane": "functional",
-                        "target": "app/auth/login.py::login_user",
-                        "rationale": "AC#1",
-                        "files_to_create": ["tests/test_login_expiry.py"],
-                        "verification": {"type": "command", "command": "pytest tests/test_login_expiry.py"},
-                    },
-                    {
-                        "id": _SUBTASK_IDS[1],
-                        "description": "Session shape unchanged",
-                        "status": "pending", "lane": "functional",
-                        "target": "app/auth/login.py::login_user",
-                        "rationale": "AC#1 regression",
-                        "files_to_create": ["tests/test_login_shape.py"],
-                        "verification": {"type": "command", "command": "pytest tests/test_login_shape.py"},
-                    },
-                ],
-                "parallel_safe": False,
-            },
-            {
-                "phase": 2, "name": "AC#2", "type": "implementation",
-                "subtasks": [
-                    {
-                        "id": _SUBTASK_IDS[2],
-                        "description": "get_session None on expired",
-                        "status": "pending", "lane": "functional",
-                        "target": "app/auth/session.py::get_session",
-                        "rationale": "AC#2",
-                        "files_to_create": ["tests/test_get_session_expired.py"],
-                        "verification": {"type": "command", "command": "pytest tests/test_get_session_expired.py"},
-                    },
-                    {
-                        "id": _SUBTASK_IDS[3],
-                        "description": "get_session removes expired",
-                        "status": "pending", "lane": "functional",
-                        "target": "app/auth/session.py::get_session",
-                        "rationale": "AC#2 store",
-                        "files_to_create": ["tests/test_get_session_removes.py"],
-                        "verification": {"type": "command", "command": "pytest tests/test_get_session_removes.py"},
-                    },
-                ],
-                "parallel_safe": False,
-            },
-            {
-                "phase": 3, "name": "AC#3", "type": "implementation",
-                "subtasks": [
-                    {
-                        "id": _SUBTASK_IDS[4],
-                        "description": "refresh within grace",
-                        "status": "pending", "lane": "functional",
-                        "target": "app/auth/session.py::refresh_session",
-                        "rationale": "AC#3 within",
-                        "files_to_create": ["tests/test_refresh_within_grace.py"],
-                        "verification": {"type": "command", "command": "pytest tests/test_refresh_within_grace.py"},
-                    },
-                    {
-                        "id": _SUBTASK_IDS[5],
-                        "description": "refresh noop outside",
-                        "status": "pending", "lane": "functional",
-                        "target": "app/auth/session.py::refresh_session",
-                        "rationale": "AC#3 outside",
-                        "files_to_create": ["tests/test_refresh_outside_grace.py"],
-                        "verification": {"type": "command", "command": "pytest tests/test_refresh_outside_grace.py"},
-                    },
-                ],
-                "parallel_safe": True,
-            },
-        ],
-        "final_acceptance": [],
-        "status": "in_progress",
-        "planStatus": "pending",
-    })
+    return json.dumps(
+        {
+            "feature": "Add session expiry to the auth module",
+            "workflow_type": "feature",
+            "services_involved": ["backend"],
+            "phases": [
+                {
+                    "phase": 1,
+                    "name": "AC#1",
+                    "type": "implementation",
+                    "subtasks": [
+                        {
+                            "id": _SUBTASK_IDS[0],
+                            "description": "login_user sets expires_at",
+                            "status": "pending",
+                            "lane": "functional",
+                            "target": "app/auth/login.py::login_user",
+                            "rationale": "AC#1",
+                            "files_to_create": ["tests/test_login_expiry.py"],
+                            "verification": {
+                                "type": "command",
+                                "command": "pytest tests/test_login_expiry.py",
+                            },
+                        },
+                        {
+                            "id": _SUBTASK_IDS[1],
+                            "description": "Session shape unchanged",
+                            "status": "pending",
+                            "lane": "functional",
+                            "target": "app/auth/login.py::login_user",
+                            "rationale": "AC#1 regression",
+                            "files_to_create": ["tests/test_login_shape.py"],
+                            "verification": {
+                                "type": "command",
+                                "command": "pytest tests/test_login_shape.py",
+                            },
+                        },
+                    ],
+                    "parallel_safe": False,
+                },
+                {
+                    "phase": 2,
+                    "name": "AC#2",
+                    "type": "implementation",
+                    "subtasks": [
+                        {
+                            "id": _SUBTASK_IDS[2],
+                            "description": "get_session None on expired",
+                            "status": "pending",
+                            "lane": "functional",
+                            "target": "app/auth/session.py::get_session",
+                            "rationale": "AC#2",
+                            "files_to_create": ["tests/test_get_session_expired.py"],
+                            "verification": {
+                                "type": "command",
+                                "command": "pytest tests/test_get_session_expired.py",
+                            },
+                        },
+                        {
+                            "id": _SUBTASK_IDS[3],
+                            "description": "get_session removes expired",
+                            "status": "pending",
+                            "lane": "functional",
+                            "target": "app/auth/session.py::get_session",
+                            "rationale": "AC#2 store",
+                            "files_to_create": ["tests/test_get_session_removes.py"],
+                            "verification": {
+                                "type": "command",
+                                "command": "pytest tests/test_get_session_removes.py",
+                            },
+                        },
+                    ],
+                    "parallel_safe": False,
+                },
+                {
+                    "phase": 3,
+                    "name": "AC#3",
+                    "type": "implementation",
+                    "subtasks": [
+                        {
+                            "id": _SUBTASK_IDS[4],
+                            "description": "refresh within grace",
+                            "status": "pending",
+                            "lane": "functional",
+                            "target": "app/auth/session.py::refresh_session",
+                            "rationale": "AC#3 within",
+                            "files_to_create": ["tests/test_refresh_within_grace.py"],
+                            "verification": {
+                                "type": "command",
+                                "command": "pytest tests/test_refresh_within_grace.py",
+                            },
+                        },
+                        {
+                            "id": _SUBTASK_IDS[5],
+                            "description": "refresh noop outside",
+                            "status": "pending",
+                            "lane": "functional",
+                            "target": "app/auth/session.py::refresh_session",
+                            "rationale": "AC#3 outside",
+                            "files_to_create": ["tests/test_refresh_outside_grace.py"],
+                            "verification": {
+                                "type": "command",
+                                "command": "pytest tests/test_refresh_outside_grace.py",
+                            },
+                        },
+                    ],
+                    "parallel_safe": True,
+                },
+            ],
+            "final_acceptance": [],
+            "status": "in_progress",
+            "planStatus": "pending",
+        }
+    )
 
 
 # Six realistic test sources — each imports real symbols from the
@@ -253,21 +297,34 @@ _SOURCES: dict[str, str] = {
 
 def _install_planner_mock(monkeypatch: pytest.MonkeyPatch) -> None:
     class _CM:
-        async def __aenter__(self): return self
-        async def __aexit__(self, *_): return None
-    async def _resolve(*_a, **_kw): return _CM()
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+    async def _resolve(*_a, **_kw):
+        return _CM()
+
     async def _invoke(_client, _prompt, spec_dir_arg, _verbose):
         (spec_dir_arg / "test_plan.json").write_text(_realistic_plan_json())
         return "complete", "ok", {}
+
     monkeypatch.setattr("agents.planner._resolve_planner_client", _resolve)
     monkeypatch.setattr("agents.planner._invoke_session", _invoke)
 
 
 def _install_gen_functional_mock(monkeypatch: pytest.MonkeyPatch) -> None:
     class _CM:
-        async def __aenter__(self): return self
-        async def __aexit__(self, *_): return None
-    async def _resolve(*_a, **_kw): return _CM()
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+    async def _resolve(*_a, **_kw):
+        return _CM()
+
     async def _invoke(_client, prompt, spec_dir_arg, _verbose):
         m = re.search(r"Subtask:\s*`([^`]+)`", prompt)
         assert m is not None
@@ -286,6 +343,7 @@ def _install_gen_functional_mock(monkeypatch: pytest.MonkeyPatch) -> None:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(source)
         return "complete", "ok", {}
+
     monkeypatch.setattr("agents.gen_functional._resolve_client", _resolve)
     monkeypatch.setattr("agents.gen_functional._invoke_session", _invoke)
 
@@ -296,10 +354,14 @@ def _install_evaluator_runner_mock(monkeypatch: pytest.MonkeyPatch) -> None:
             self.returncode = rc
             self.stdout = ""
             self.stderr = ""
+
     def _runner(test_file, _pd, _seed):
         # Mutants → fail (KILLED); originals → pass
         return _FakeRes(1 if "mutants" in str(test_file) else 0)
-    def _resolve(_sd, _pd): return _runner
+
+    def _resolve(_sd, _pd):
+        return _runner
+
     monkeypatch.setattr("agents.evaluator._resolve_runner_fn", _resolve)
 
 
@@ -308,10 +370,16 @@ def _install_evaluator_sdk_mock(
     verdict_for_id,
 ) -> None:
     """Mock Evaluator SDK to emit verdicts per the supplier function."""
+
     class _CM:
-        async def __aenter__(self): return self
-        async def __aexit__(self, *_): return None
-    async def _resolve(*_a, **_kw): return _CM()
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+    async def _resolve(*_a, **_kw):
+        return _CM()
 
     async def _invoke(_client, prompt, spec_dir_arg, _verbose):
         ids = re.findall(r"### Test `([^`]+)`", prompt)
@@ -476,6 +544,7 @@ async def test_full_chain_with_mixed_verdicts_buckets_correctly(
         idx = _SUBTASK_IDS.index(tid)
         # 0,1 → accept ; 2,3 → flag ; 4,5 → reject
         return ("accept", "accept", "flag", "flag", "reject", "reject")[idx]
+
     _install_evaluator_sdk_mock(monkeypatch, verdict_for_id=_mixed)
 
     await run_planner(workspace, project_dir)
