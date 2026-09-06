@@ -97,7 +97,9 @@ def ruff_on_path() -> Iterator[None]:
 def test_ruff_exempts_every_shape_of_test_path() -> None:
     named = rl.ruff_counts(_ASSERTION, "apps/web-server/tests/test_x.py")
     helper = rl.ruff_counts(_ASSERTION, "apps/web-server/tests/verify_performance.py")
-    assert "S101" not in helper, "a helper under tests/ must get the test assert carve-out"
+    assert "S101" not in helper, (
+        "a helper under tests/ must get the test assert carve-out"
+    )
     assert helper == named, "two files under tests/ must not get two different verdicts"
 
 
@@ -109,4 +111,6 @@ def test_ruff_still_holds_production_to_the_assert_bar() -> None:
 def test_the_ruff_rule_lives_in_the_canonical_module() -> None:
     """The ratchet must CONSUME the shared rules, not carry its own copy."""
     for name in ("is_test_file", "ruff_stdin_argv", "MYPY_TEST_RELAX"):
-        assert getattr(rl, name) is getattr(rh, name), f"{name} is not the canonical object"
+        assert getattr(rl, name) is getattr(rh, name), (
+            f"{name} is not the canonical object"
+        )

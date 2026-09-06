@@ -71,7 +71,11 @@ def get_config(project_id: str) -> dict[str, Any] | None:
     settings = project.get("settings") or {}
     cfg = settings.get("autoFix") or {}
     # Layer defaults so old projects with partial state still answer the contract
-    return {**DEFAULT_AUTO_FIX_CONFIG, **cfg, "queue": settings.get("autoFix", {}).get("queue", [])}
+    return {
+        **DEFAULT_AUTO_FIX_CONFIG,
+        **cfg,
+        "queue": settings.get("autoFix", {}).get("queue", []),
+    }
 
 
 def save_config(project_id: str, config: dict[str, Any]) -> bool:
@@ -149,7 +153,11 @@ def _existing_issue_numbers(project_path: Path) -> set[int]:
             continue
         # Match "NNN-gh{ISSUE}-..." or "NNN-mr{N}-..." (GitLab/ADO future-proof)
         name = d.name
-        for prefix in ("-gh", "-mr", "-wi"):  # gh=github, mr=gitlab MR, wi=ado work item
+        for prefix in (
+            "-gh",
+            "-mr",
+            "-wi",
+        ):  # gh=github, mr=gitlab MR, wi=ado work item
             if prefix not in name:
                 continue
             tail = name.split(prefix, 1)[1]
@@ -220,6 +228,7 @@ def _provider_for(project_id: str):
     if not repo_name:
         try:
             from ..routes.github import _get_repo_full_name
+
             repo_name = _get_repo_full_name(project_path) or ""
         except Exception:
             repo_name = ""
@@ -295,7 +304,9 @@ def _write_spec_dir(
     url = issue.get("url", "")
 
     prefix = _issue_prefix_for(provider_type)
-    spec_name = f"{_next_spec_id(project_path):03d}-{prefix}{issue_number}-{_slug(title)}"
+    spec_name = (
+        f"{_next_spec_id(project_path):03d}-{prefix}{issue_number}-{_slug(title)}"
+    )
     spec_dir = specs_dir / spec_name
     spec_dir.mkdir(parents=True, exist_ok=True)
 
@@ -350,6 +361,7 @@ async def check_new_issues(project_id: str) -> list[dict[str, Any]]:
 
     # Fetch open issues from the provider
     from runners.github.providers.protocol import IssueFilters
+
     provider = _provider_for(project_id)
     cfg = get_config(project_id) or {}
     label_filter = cfg.get("labels") or []
@@ -360,15 +372,17 @@ async def check_new_issues(project_id: str) -> list[dict[str, Any]]:
     for iss in issues:
         if iss.number in existing:
             continue
-        new.append({
-            "number": iss.number,
-            "title": iss.title,
-            "body": iss.body,
-            "state": iss.state,
-            "labels": list(iss.labels or []),
-            "url": iss.url,
-            "provider": provider_type,
-        })
+        new.append(
+            {
+                "number": iss.number,
+                "title": iss.title,
+                "body": iss.body,
+                "state": iss.state,
+                "labels": list(iss.labels or []),
+                "url": iss.url,
+                "provider": provider_type,
+            }
+        )
 
     logger.info(
         "[auto_fix] check_new_issues project=%s provider=%s existing=%s new=%s",
@@ -560,6 +574,7 @@ async def _pull_clone_if_any(project_id: str) -> None:
     errors — a stale clone is better than a poll cycle that aborts.
     """
     from ..routes.projects import load_projects
+
     projects = load_projects()
     proj = projects.get(project_id) or {}
     git_url = proj.get("clonedFrom")
@@ -573,6 +588,7 @@ async def _pull_clone_if_any(project_id: str) -> None:
             GitOperationError,
             clone_or_update,
         )
+
         await clone_or_update(
             git_url=git_url,
             branch=proj.get("clonedBranch"),
@@ -619,14 +635,18 @@ async def check_new_and_start_all(project_id: str) -> dict[str, Any]:
         except Exception:  # pragma: no cover — bubble for visibility
             logger.exception(
                 "[auto_fix] start failed project=%s issue=%s",
-                sanitize_log(project_id), sanitize_log(iss["number"]),
+                sanitize_log(project_id),
+                sanitize_log(iss["number"]),
             )
-            errors.append({"issueNumber": iss["number"], "error": "Failed to start auto-fix"})
+            errors.append(
+                {"issueNumber": iss["number"], "error": "Failed to start auto-fix"}
+            )
 
     # Advance any delegated tasks alongside polling for new issues.
     delegation_summary: dict[str, Any] = {}
     try:
         from .delegation_tracker import scan_delegated_tasks
+
         delegation_summary = await scan_delegated_tasks(project_id)
     except Exception as e:  # pragma: no cover
         logger.warning(

@@ -42,7 +42,9 @@ def test_acceptance_badge_no_data():
 
 
 def test_acceptance_badge_rounds_rate():
-    svg = acceptance_badge({"verdicts_count": 3, "accept_rate": 0.6667, "commit_readiness": "medium"})
+    svg = acceptance_badge(
+        {"verdicts_count": 3, "accept_rate": 0.6667, "commit_readiness": "medium"}
+    )
     assert "67%" in svg
 
 

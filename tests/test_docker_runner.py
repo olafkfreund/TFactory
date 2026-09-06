@@ -234,8 +234,10 @@ def test_run_returns_result_on_success(monkeypatch, tmp_path):
 
 def test_run_raises_timeout(monkeypatch, tmp_path):
     monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/docker")
+
     def _boom(*args, **kwargs):
         raise subprocess.TimeoutExpired(cmd="docker", timeout=1)
+
     monkeypatch.setattr(subprocess, "run", _boom)
     r = DockerRunner()
     with pytest.raises(DockerTimeoutError):
@@ -280,9 +282,11 @@ def test_run_omits_artifact_paths_when_missing(monkeypatch, tmp_path):
 def test_run_pytest_command_shape(monkeypatch, tmp_path):
     """The wrapper builds bash -lc with pytest + cov + junit emit."""
     captured = {}
+
     def _capture(*args, **kw):
         captured["argv"] = args[0]
         return _fake_completed(0)
+
     monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/docker")
     monkeypatch.setattr(subprocess, "run", _capture)
 
@@ -305,9 +309,11 @@ def test_run_pytest_command_shape(monkeypatch, tmp_path):
 
 def test_run_pytest_omits_cov_arg_when_package_unset(monkeypatch, tmp_path):
     captured = {}
+
     def _capture(*args, **kw):
         captured["argv"] = args[0]
         return _fake_completed(0)
+
     monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/docker")
     monkeypatch.setattr(subprocess, "run", _capture)
 
@@ -467,10 +473,16 @@ def _docker_available() -> bool:
     try:
         subprocess.run(
             ["docker", "--version"],
-            capture_output=True, check=True, timeout=3,
+            capture_output=True,
+            check=True,
+            timeout=3,
         )
         return True
-    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+    except (
+        FileNotFoundError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+    ):
         return False
 
 
@@ -531,6 +543,7 @@ def _image_available(image: str) -> bool:
 
 # --- pytest image -----------------------------------------------------------
 
+
 @pytest.mark.slow
 @pytest.mark.skipif(not _docker_available(), reason="docker not available")
 @pytest.mark.skipif(
@@ -574,6 +587,7 @@ def test_pytest_image_has_pytest_on_path(tmp_path):
 
 # --- jest image -------------------------------------------------------------
 
+
 @pytest.mark.slow
 @pytest.mark.skipif(not _docker_available(), reason="docker not available")
 @pytest.mark.skipif(
@@ -614,6 +628,7 @@ def test_jest_image_has_jest_on_path(tmp_path):
 
 
 # --- playwright image -------------------------------------------------------
+
 
 @pytest.mark.slow
 @pytest.mark.skipif(not _docker_available(), reason="docker not available")

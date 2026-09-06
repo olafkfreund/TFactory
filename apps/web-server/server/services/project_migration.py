@@ -33,8 +33,8 @@ class ProjectMigrationError(RuntimeError):
 class MigrationResult:
     owner_user_id: str
     org_id: str
-    created: list[str] = field(default_factory=list)   # paths inserted
-    skipped: list[str] = field(default_factory=list)    # paths already present
+    created: list[str] = field(default_factory=list)  # paths inserted
+    skipped: list[str] = field(default_factory=list)  # paths already present
 
     @property
     def created_count(self) -> int:
@@ -59,7 +59,9 @@ async def _resolve_owner(session: AsyncSession, owner_user_id: str | None) -> st
     if len(users) == 1:
         return users[0].id
     if not users:
-        raise ProjectMigrationError("no users in the database — cannot resolve an owner")
+        raise ProjectMigrationError(
+            "no users in the database — cannot resolve an owner"
+        )
     raise ProjectMigrationError(
         f"{len(users)} users found — pass owner_user_id explicitly to choose the target"
     )
@@ -68,10 +70,14 @@ async def _resolve_owner(session: AsyncSession, owner_user_id: str | None) -> st
 async def _resolve_personal_org(session: AsyncSession, owner_user_id: str) -> str:
     """Return the owner's Personal org id (prefer name=='Personal')."""
     owned = (
-        await session.execute(
-            select(Organization).where(Organization.owner_id == owner_user_id)
+        (
+            await session.execute(
+                select(Organization).where(Organization.owner_id == owner_user_id)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     if not owned:
         raise ProjectMigrationError(
             f"user {owner_user_id!r} owns no organization — cannot place projects"
@@ -85,7 +91,9 @@ async def _resolve_personal_org(session: AsyncSession, owner_user_id: str) -> st
 def _iter_entries(projects_json: Any) -> Iterator[tuple[str | None, dict]]:
     """Yield (project_id, entry) tolerating both the ``{id: {...}}`` map and the
     ``{"projects": [{...}]}`` list shapes."""
-    if isinstance(projects_json, dict) and isinstance(projects_json.get("projects"), list):
+    if isinstance(projects_json, dict) and isinstance(
+        projects_json.get("projects"), list
+    ):
         for entry in projects_json["projects"]:
             if isinstance(entry, dict):
                 yield entry.get("id"), entry
@@ -114,7 +122,9 @@ async def migrate_projects_to_db(
         p.path
         for p in (
             await session.execute(select(Project).where(Project.org_id == org_id))
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     }
 
     result = MigrationResult(owner_user_id=owner, org_id=org_id)
@@ -126,9 +136,7 @@ async def migrate_projects_to_db(
             result.skipped.append(path)
             continue
         name = entry.get("name") or Path(path).name
-        session.add(
-            Project(org_id=org_id, name=name, path=path, created_by=owner)
-        )
+        session.add(Project(org_id=org_id, name=name, path=path, created_by=owner))
         existing_paths.add(path)
         result.created.append(path)
 

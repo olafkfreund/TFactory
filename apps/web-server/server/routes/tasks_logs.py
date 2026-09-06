@@ -88,7 +88,9 @@ async def get_task_logs(task_id: str):
         raise HTTPException(status_code=400, detail="Invalid spec id")
 
     logger.info(f"[GetTaskLogs] Checking spec_dir: {sanitize_log(spec_dir)}")
-    logger.info(f"[GetTaskLogs] Checking worktree_spec_dir: {sanitize_log(worktree_spec_dir)}")
+    logger.info(
+        f"[GetTaskLogs] Checking worktree_spec_dir: {sanitize_log(worktree_spec_dir)}"
+    )
 
     # Check for task_logs.json (phase-based logs) - prefer worktree if exists
     task_logs_file = None

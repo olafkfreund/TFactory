@@ -1,0 +1,11 @@
+# Revisions to skip when running `git blame`.
+#
+# Only bulk, behaviour-free reformats belong here. GitHub honours this file
+# automatically; locally, opt in once with:
+#
+#     git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# style(format): widen the ruff format gate to apps/web-server and tests (#1285)
+# One-off `ruff format` sweep of 324 files that had drifted behind a gate
+# checking only `apps/backend scripts`. No behaviour change.
+ed39c5db512db3c68fc2ba87f197380c144f8d3b

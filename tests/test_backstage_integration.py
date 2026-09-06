@@ -28,15 +28,31 @@ def spec(tmp_path):
 def _write_verdicts(spec, **summary_extra):
     doc = {
         "verdicts": [
-            {"test_id": "a", "verdict": "accept", "signals_summary": {"confidence": 0.9}},
-            {"test_id": "b", "verdict": "flag", "signals_summary": {
-                "confidence": 0.5, "flaky": {"classification": "flaky", "flip_rate": 0.5},
-            }},
-            {"test_id": "c", "verdict": "reject", "signals_summary": {"confidence": 0.1}},
+            {
+                "test_id": "a",
+                "verdict": "accept",
+                "signals_summary": {"confidence": 0.9},
+            },
+            {
+                "test_id": "b",
+                "verdict": "flag",
+                "signals_summary": {
+                    "confidence": 0.5,
+                    "flaky": {"classification": "flaky", "flip_rate": 0.5},
+                },
+            },
+            {
+                "test_id": "c",
+                "verdict": "reject",
+                "signals_summary": {"confidence": 0.1},
+            },
         ],
         "confidence_summary": {
-            "mean": 0.5, "accepted_mean": 0.9, "commit_readiness": "high",
-            "count": 3, "accepted_count": 1,
+            "mean": 0.5,
+            "accepted_mean": 0.9,
+            "commit_readiness": "high",
+            "count": 3,
+            "accepted_count": 1,
         },
     }
     (spec / "findings" / "verdicts.json").write_text(json.dumps(doc))
@@ -56,7 +72,10 @@ def _status():
 
 
 def test_component_ref_from_repo_slug():
-    assert _component_ref({"repo_slug": "olafkfreund/AIFactory"}) == "component:default/aifactory"
+    assert (
+        _component_ref({"repo_slug": "olafkfreund/AIFactory"})
+        == "component:default/aifactory"
+    )
 
 
 def test_component_ref_override_bare_name(monkeypatch):
@@ -106,7 +125,9 @@ def test_disabled_is_noop(spec, monkeypatch):
 
 def test_no_component_is_noop(spec, monkeypatch):
     monkeypatch.setenv("TFACTORY_BACKSTAGE_TECHINSIGHTS_URL", "https://bs.example/api")
-    out = maybe_emit_backstage(spec, _status(), poster=lambda *a: pytest.fail("posted"), source={})
+    out = maybe_emit_backstage(
+        spec, _status(), poster=lambda *a: pytest.fail("posted"), source={}
+    )
     assert out["emitted"] is False
     assert out["reason"] == "no_component"
 

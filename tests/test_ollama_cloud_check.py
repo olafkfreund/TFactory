@@ -157,7 +157,9 @@ def test_check_unreachable():
 
 
 def test_check_reachable_but_no_models():
-    with patch("urllib.request.urlopen", return_value=_mock_urlopen_response({"data": []})):
+    with patch(
+        "urllib.request.urlopen", return_value=_mock_urlopen_response({"data": []})
+    ):
         result = check_ollama_cloud("https://ollama.com", "sk-test")
     assert result.ok is False
     assert "no models" in result.error

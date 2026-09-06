@@ -68,7 +68,9 @@ def test_blocks_ipv6_link_local():
 def test_blocks_when_any_resolved_address_is_metadata():
     """A name resolving to both a public and a metadata address is refused."""
     with (
-        patch("socket.getaddrinfo", return_value=_gai("93.184.216.34", "169.254.169.254")),
+        patch(
+            "socket.getaddrinfo", return_value=_gai("93.184.216.34", "169.254.169.254")
+        ),
         pytest.raises(ValueError, match="metadata"),
     ):
         _safe_mcp_url("http://mixed/")

@@ -9,11 +9,21 @@ import pytest
 from agents.cloud import store
 
 
-def _write_assessment(root: Path, aid: str, *, verdict="reject", failed=5, account="1") -> Path:
+def _write_assessment(
+    root: Path, aid: str, *, verdict="reject", failed=5, account="1"
+) -> Path:
     d = root / aid
     (d / "diagrams").mkdir(parents=True)
     (d / "cloud_assessment.json").write_text(
-        json.dumps({"provider": "aws", "account": account, "verdict": verdict, "failed": failed, "passed": 10})
+        json.dumps(
+            {
+                "provider": "aws",
+                "account": account,
+                "verdict": verdict,
+                "failed": failed,
+                "passed": 10,
+            }
+        )
     )
     (d / "cloud_assessment.md").write_text("# report")
     (d / "cloud_remediation_plan.md").write_text("# plan")
@@ -72,7 +82,10 @@ def test_safe_id_rejects_traversal(store_root) -> None:
 def test_download_path_md_and_json(store_root) -> None:
     _write_assessment(store_root, "aws-1-x")
     assert store.download_path("aws-1-x", "report.md").name == "cloud_assessment.md"
-    assert store.download_path("aws-1-x", "remediation.md").name == "cloud_remediation_plan.md"
+    assert (
+        store.download_path("aws-1-x", "remediation.md").name
+        == "cloud_remediation_plan.md"
+    )
     assert store.download_path("aws-1-x", "issues.json").name == "cloud_issues.json"
     assert store.download_path("aws-1-x", "bogus.kind") is None
 
@@ -87,7 +100,9 @@ def test_new_assessment_id_is_sortable_and_safe() -> None:
     aid = store.new_assessment_id("gcp", "sarc-493418", now=now)
     assert aid == "gcp-sarc-493418-20260603083000"
     # unsafe chars in the account are slugged away
-    assert store.new_assessment_id("azure", "sub/with space", now=now).startswith("azure-sub-with-space-")
+    assert store.new_assessment_id("azure", "sub/with space", now=now).startswith(
+        "azure-sub-with-space-"
+    )
 
 
 def test_write_assessment_mirrors_findings_into_store(store_root, tmp_path) -> None:
@@ -95,7 +110,14 @@ def test_write_assessment_mirrors_findings_into_store(store_root, tmp_path) -> N
     findings = tmp_path / "spec" / "findings"
     (findings / "diagrams").mkdir(parents=True)
     (findings / "cloud_assessment.json").write_text(
-        json.dumps({"provider": "gcp", "account": "sarc-493418", "verdict": "reject", "failed": 8})
+        json.dumps(
+            {
+                "provider": "gcp",
+                "account": "sarc-493418",
+                "verdict": "reject",
+                "failed": 8,
+            }
+        )
     )
     (findings / "cloud_assessment.md").write_text("# report")
     (findings / "cloud_remediation_plan.md").write_text("# plan")
@@ -108,7 +130,9 @@ def test_write_assessment_mirrors_findings_into_store(store_root, tmp_path) -> N
     assert dst == store_root / aid
     # it now appears in the listing + reads back
     listed = store.list_assessments()
-    assert len(listed) == 1 and listed[0]["id"] == aid and listed[0]["provider"] == "gcp"
+    assert (
+        len(listed) == 1 and listed[0]["id"] == aid and listed[0]["provider"] == "gcp"
+    )
     detail = store.read_assessment(aid)
     assert detail["reportMarkdown"] == "# report"
     assert detail["diagramMermaid"] == "graph LR"
@@ -119,7 +143,9 @@ def test_write_assessment_tolerates_missing_artifacts(store_root, tmp_path) -> N
     # only the JSON exists; writer copies what it finds, skips the rest
     findings = tmp_path / "spec" / "findings"
     findings.mkdir(parents=True)
-    (findings / "cloud_assessment.json").write_text(json.dumps({"provider": "aws", "account": "1"}))
+    (findings / "cloud_assessment.json").write_text(
+        json.dumps({"provider": "aws", "account": "1"})
+    )
     dst = store.write_assessment(tmp_path / "spec", "aws-1-20260603000000")
     assert (dst / "cloud_assessment.json").is_file()
     assert not (dst / "cloud_remediation_plan.md").exists()

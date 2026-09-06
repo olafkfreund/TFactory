@@ -31,7 +31,9 @@ def _entry(test_id: str, lane: str = "unit") -> CorpusEntry:
 class _MapRunner:
     """Returns a preset status per test_id; raises for ids mapped to an error."""
 
-    def __init__(self, statuses: dict[str, TestStatus], *, raise_on: set[str] = frozenset()):
+    def __init__(
+        self, statuses: dict[str, TestStatus], *, raise_on: set[str] = frozenset()
+    ):
         self._statuses = statuses
         self._raise_on = raise_on
 

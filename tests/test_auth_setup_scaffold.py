@@ -68,8 +68,12 @@ def test_scaffolds_auth_setup_and_config(tmp_path) -> None:
 
 
 def test_returns_false_without_ref_auth_target(tmp_path) -> None:
-    http = {"name": "api", "type": "http", "base_url": "https://x",
-            "auth": {"type": "bearer", "token_env": "T"}}
+    http = {
+        "name": "api",
+        "type": "http",
+        "base_url": "https://x",
+        "auth": {"type": "bearer", "token_env": "T"},
+    }
     _snapshot(tmp_path, [http], _TEST_CREDS)
     assert scaffold_auth_setup(tmp_path) is False
     assert not (tmp_path / "tests" / "auth.setup.ts").exists()
@@ -135,7 +139,10 @@ _STEPS_TOTP_TARGET = {
     **_STEPS_TARGET,
     "auth": {
         **_STEPS_TARGET["auth"],
-        "steps": [*_STEPS_TARGET["auth"]["steps"], {"action": "fill_totp", "selector": "#otp"}],
+        "steps": [
+            *_STEPS_TARGET["auth"]["steps"],
+            {"action": "fill_totp", "selector": "#otp"},
+        ],
     },
 }
 _TEST_CREDS_WITH_TOTP = {
@@ -172,7 +179,9 @@ def test_totp_helper_not_copied_for_single_step_login(tmp_path) -> None:
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node CLI not available")
-def test_copied_totp_helper_round_trips_through_node_and_matches_rfc6238(tmp_path) -> None:
+def test_copied_totp_helper_round_trips_through_node_and_matches_rfc6238(
+    tmp_path,
+) -> None:
     """The helper must parse AND execute after the renderer copies it, and must
     still compute the official RFC 6238 (Appendix B) test vectors — proving the
     extraction did not change what MFA login actually fills in.

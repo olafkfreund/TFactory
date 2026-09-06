@@ -17,7 +17,9 @@ app = FastAPI(title="TFactory Demo — Quote API")
 def get_quote(
     base: float = Query(..., ge=0, description="Per-unit base price"),
     qty: int = Query(..., ge=0, description="Number of units"),
-    discount_pct: float = Query(0.0, description="Discount percent, clamped to [0,100]"),
+    discount_pct: float = Query(
+        0.0, description="Discount percent, clamped to [0,100]"
+    ),
 ) -> dict[str, float | int]:
     """Return ``{"base", "qty", "discount_pct", "total"}`` for the inputs."""
     try:

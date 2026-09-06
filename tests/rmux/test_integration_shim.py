@@ -31,22 +31,26 @@ class TestIsEnabled:
 
     def test_unset_is_false(self, monkeypatch) -> None:
         from server.rmux.integration import is_enabled
+
         monkeypatch.delenv("TFACTORY_RMUX_ENABLED", raising=False)
         assert is_enabled() is False
 
     def test_empty_string_is_false(self, monkeypatch) -> None:
         from server.rmux.integration import is_enabled
+
         monkeypatch.setenv("TFACTORY_RMUX_ENABLED", "")
         assert is_enabled() is False
 
     def test_false_is_false(self, monkeypatch) -> None:
         from server.rmux.integration import is_enabled
+
         monkeypatch.setenv("TFACTORY_RMUX_ENABLED", "false")
         assert is_enabled() is False
 
     @pytest.mark.parametrize("value", ["true", "TRUE", "True", "1", "yes", "on"])
     def test_truthy_values(self, monkeypatch, value) -> None:
         from server.rmux.integration import is_enabled
+
         monkeypatch.setenv("TFACTORY_RMUX_ENABLED", value)
         assert is_enabled() is True
 
@@ -69,8 +73,11 @@ class TestFlagOffIsByteForByteUnchanged:
     """
 
     @pytest.mark.asyncio
-    async def test_create_returns_none_when_flag_unset(self, monkeypatch, tmp_path) -> None:
+    async def test_create_returns_none_when_flag_unset(
+        self, monkeypatch, tmp_path
+    ) -> None:
         from server.rmux import integration
+
         monkeypatch.delenv("TFACTORY_RMUX_ENABLED", raising=False)
         # Patch get_registry to make sure it's NEVER called when off.
         with patch("server.rmux.integration.get_registry") as mock_get:
@@ -83,6 +90,7 @@ class TestFlagOffIsByteForByteUnchanged:
     @pytest.mark.asyncio
     async def test_reap_is_noop_when_flag_unset(self, monkeypatch) -> None:
         from server.rmux import integration
+
         monkeypatch.delenv("TFACTORY_RMUX_ENABLED", raising=False)
         with patch("server.rmux.integration.get_registry") as mock_get:
             await integration.reap_if_enabled("001")
@@ -102,6 +110,7 @@ class TestFlagOnInvokesRegistry:
         self, monkeypatch, tmp_path
     ) -> None:
         from server.rmux import integration
+
         monkeypatch.setenv("TFACTORY_RMUX_ENABLED", "true")
         fake_fifo = tmp_path / "fake.fifo"
         mock_registry = type(
@@ -116,8 +125,10 @@ class TestFlagOnInvokesRegistry:
             # The worktree path must follow the .tfactory/worktrees/tasks/<spec> convention
             call_kwargs = mock_registry.create_for_task.await_args.kwargs
             assert call_kwargs["spec_id"] == "001-feature"
-            assert call_kwargs["worktree_path"] == \
-                tmp_path / ".tfactory" / "worktrees" / "tasks" / "001-feature"
+            assert (
+                call_kwargs["worktree_path"]
+                == tmp_path / ".tfactory" / "worktrees" / "tasks" / "001-feature"
+            )
             assert call_kwargs["agent_cmd"] == "ls"
 
     @pytest.mark.asyncio
@@ -127,9 +138,11 @@ class TestFlagOnInvokesRegistry:
         """Per design §6 failure-mode: rmux create errors must NOT take
         down task execution — they fall back to PTY + UI banner."""
         from server.rmux import integration
+
         monkeypatch.setenv("TFACTORY_RMUX_ENABLED", "true")
         mock_registry = type(
-            "MockRegistry", (),
+            "MockRegistry",
+            (),
             {"create_for_task": AsyncMock(side_effect=RuntimeError("rmux died"))},
         )()
         with patch("server.rmux.integration.get_registry", return_value=mock_registry):
@@ -142,6 +155,7 @@ class TestFlagOnInvokesRegistry:
     @pytest.mark.asyncio
     async def test_reap_calls_registry_reap_for_task(self, monkeypatch) -> None:
         from server.rmux import integration
+
         monkeypatch.setenv("TFACTORY_RMUX_ENABLED", "true")
         mock_registry = type(
             "MockRegistry", (), {"reap_for_task": AsyncMock(return_value=None)}

@@ -8,6 +8,7 @@ Seeded bug (AC#4): GET /api/keys/{key} for a MISSING key returns HTTP 200 with
 ``{"value": null}`` instead of HTTP 404. A contract test asserting 404 on a
 missing key fails, and the Triager surfaces it as a reject.
 """
+
 from __future__ import annotations
 
 from fastapi import FastAPI
@@ -48,5 +49,6 @@ def get_key(key: str):
 def delete_key(key: str):
     existed = key in _STORE
     _STORE.pop(key, None)
-    return JSONResponse({"key": key, "deleted": existed},
-                        status_code=200 if existed else 404)
+    return JSONResponse(
+        {"key": key, "deleted": existed}, status_code=200 if existed else 404
+    )

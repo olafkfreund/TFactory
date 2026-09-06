@@ -17,16 +17,20 @@ if str(_BACKEND_DIR) not in sys.path:
 
 # ── ref routing (mirrors tests/test_studio_routing.py) ──────────────────────
 
-@pytest.mark.parametrize("ref,backend", [
-    ("env:STAGING_API_TOKEN", "env"),
-    ("file:/run/secrets/token", "localfile"),
-    ("sops:secrets.enc.yaml#api_token", "localfile"),
-    ("agenix:staging-token.age", "localfile"),
-    ("vault:secret/data/tfactory/staging#api_token", "vault"),
-    ("azurekv://my-vault/STAGING-API-TOKEN", "azure_keyvault"),
-    ("aws-sm://staging/api#token", "aws_secrets_manager"),
-    ("gcp-sm://my-project/staging-api-token", "gcp_secret_manager"),
-])
+
+@pytest.mark.parametrize(
+    "ref,backend",
+    [
+        ("env:STAGING_API_TOKEN", "env"),
+        ("file:/run/secrets/token", "localfile"),
+        ("sops:secrets.enc.yaml#api_token", "localfile"),
+        ("agenix:staging-token.age", "localfile"),
+        ("vault:secret/data/tfactory/staging#api_token", "vault"),
+        ("azurekv://my-vault/STAGING-API-TOKEN", "azure_keyvault"),
+        ("aws-sm://staging/api#token", "aws_secrets_manager"),
+        ("gcp-sm://my-project/staging-api-token", "gcp_secret_manager"),
+    ],
+)
 def test_infer_backend_from_ref(ref, backend):
     from tfactory_secrets.refs import infer_backend_from_ref
 
@@ -52,14 +56,24 @@ def test_parse_ref_authority_family():
     assert aws.locator == "staging/api" and aws.field == "token"
 
     gcp = parse_ref("gcp-sm://proj/sec/7")
-    assert gcp.extra["project"] == "proj" and gcp.locator == "sec" and gcp.version == "7"
+    assert (
+        gcp.extra["project"] == "proj" and gcp.locator == "sec" and gcp.version == "7"
+    )
     assert parse_ref("gcp-sm://proj/sec").version is None
 
 
-@pytest.mark.parametrize("bad", [
-    "", "noscheme", "bogus:whatever", "env:", "azurekv://onlyvault",
-    "gcp-sm://onlyproject", "vault:#field-only",
-])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "",
+        "noscheme",
+        "bogus:whatever",
+        "env:",
+        "azurekv://onlyvault",
+        "gcp-sm://onlyproject",
+        "vault:#field-only",
+    ],
+)
 def test_parse_ref_rejects_bad(bad):
     from tfactory_secrets import InvalidSecretRefError
     from tfactory_secrets.refs import parse_ref
@@ -70,14 +84,25 @@ def test_parse_ref_rejects_bad(bad):
 
 # ── factory ─────────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("alias,canonical", [
-    ("env", "env"), ("environment", "env"),
-    ("file", "localfile"), ("sops", "localfile"), ("agenix", "localfile"),
-    ("vault", "vault"), ("HCV", "vault"),
-    ("azurekv", "azure_keyvault"), ("akv", "azure_keyvault"),
-    ("aws-sm", "aws_secrets_manager"), ("asm", "aws_secrets_manager"),
-    ("gcp-sm", "gcp_secret_manager"), ("gsm", "gcp_secret_manager"),
-])
+
+@pytest.mark.parametrize(
+    "alias,canonical",
+    [
+        ("env", "env"),
+        ("environment", "env"),
+        ("file", "localfile"),
+        ("sops", "localfile"),
+        ("agenix", "localfile"),
+        ("vault", "vault"),
+        ("HCV", "vault"),
+        ("azurekv", "azure_keyvault"),
+        ("akv", "azure_keyvault"),
+        ("aws-sm", "aws_secrets_manager"),
+        ("asm", "aws_secrets_manager"),
+        ("gcp-sm", "gcp_secret_manager"),
+        ("gsm", "gcp_secret_manager"),
+    ],
+)
 def test_resolve_canonical_aliases(alias, canonical):
     from tfactory_secrets.factory import resolve_canonical
 
@@ -114,6 +139,7 @@ def test_factory_unknown_backend_raises():
 
 # ── env backend ─────────────────────────────────────────────────────────────
 
+
 def test_env_backend_resolves(monkeypatch):
     from tfactory_secrets import EgressClass
     from tfactory_secrets.backends.env import EnvBackend
@@ -137,6 +163,7 @@ def test_env_backend_missing_raises(monkeypatch):
 
 
 # ── localfile backend ───────────────────────────────────────────────────────
+
 
 def test_localfile_plaintext_whole_file(tmp_path):
     from tfactory_secrets import EgressClass
@@ -174,6 +201,7 @@ def test_localfile_missing_file(tmp_path):
 
 
 # ── redaction ───────────────────────────────────────────────────────────────
+
 
 def test_secret_value_repr_redacts():
     from tfactory_secrets import SecretValue

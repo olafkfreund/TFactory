@@ -14,7 +14,9 @@ def login_user(email: str, password: str) -> Session | None:
     now = datetime.now(UTC)
     expires = now + timedelta(hours=24)
     s = Session(
-        id=session_id, user_id=user.id, email=email,
+        id=session_id,
+        user_id=user.id,
+        email=email,
         created_at=now.isoformat(),
         expires_at=expires.isoformat(),
     )

@@ -157,7 +157,9 @@ def test_unknown_arg_exits_two() -> None:
 @pytest.mark.parametrize("n", list(range(1, 10)))
 def test_dry_run_scenario_passes(n: int, state_dir: Path) -> None:
     proc = _run(
-        "--dry-run", "--scenario", str(n),
+        "--dry-run",
+        "--scenario",
+        str(n),
         env_extra={"TFACTORY_E2E_STATE_DIR": str(state_dir)},
     )
     assert proc.returncode == 0, (
@@ -170,7 +172,9 @@ def test_dry_run_scenario_passes(n: int, state_dir: Path) -> None:
 
 def test_dry_run_scenario_zero_rejected(state_dir: Path) -> None:
     proc = _run(
-        "--dry-run", "--scenario", "0",
+        "--dry-run",
+        "--scenario",
+        "0",
         env_extra={"TFACTORY_E2E_STATE_DIR": str(state_dir)},
     )
     assert proc.returncode != 0
@@ -179,7 +183,9 @@ def test_dry_run_scenario_zero_rejected(state_dir: Path) -> None:
 def test_dry_run_scenario_ten_rejected(state_dir: Path) -> None:
     """The dispatcher's regex caps scenarios at 1-9."""
     proc = _run(
-        "--dry-run", "--scenario", "10",
+        "--dry-run",
+        "--scenario",
+        "10",
         env_extra={"TFACTORY_E2E_STATE_DIR": str(state_dir)},
     )
     # Either rejected (rc != 0) OR clearly noted as invalid
@@ -188,7 +194,9 @@ def test_dry_run_scenario_ten_rejected(state_dir: Path) -> None:
 
 def test_dry_run_scenario_non_numeric_rejected(state_dir: Path) -> None:
     proc = _run(
-        "--dry-run", "--scenario", "abc",
+        "--dry-run",
+        "--scenario",
+        "abc",
         env_extra={"TFACTORY_E2E_STATE_DIR": str(state_dir)},
     )
     assert proc.returncode != 0
@@ -199,7 +207,8 @@ def test_dry_run_scenario_non_numeric_rejected(state_dir: Path) -> None:
 
 def test_dry_run_all_passes(state_dir: Path) -> None:
     proc = _run(
-        "--dry-run", "--all",
+        "--dry-run",
+        "--all",
         env_extra={"TFACTORY_E2E_STATE_DIR": str(state_dir)},
     )
     assert proc.returncode == 0, proc.stderr
@@ -214,7 +223,8 @@ def test_dry_run_all_records_state(state_dir: Path) -> None:
     """After --dry-run --all, the state file should have an entry for
     each of the 9 scenarios."""
     _run(
-        "--dry-run", "--all",
+        "--dry-run",
+        "--all",
         env_extra={"TFACTORY_E2E_STATE_DIR": str(state_dir)},
     )
     state_file = state_dir / "e2e-state.json"
@@ -234,7 +244,9 @@ def test_dry_run_skips_env_var_checks(state_dir: Path) -> None:
     """In dry-run mode the script must NOT require ANTHROPIC_API_KEY +
     friends — those checks live behind the dry-run conditional."""
     proc = _run(
-        "--dry-run", "--scenario", "1",
+        "--dry-run",
+        "--scenario",
+        "1",
         env_extra={"TFACTORY_E2E_STATE_DIR": str(state_dir)},
     )
     assert proc.returncode == 0
@@ -242,9 +254,7 @@ def test_dry_run_skips_env_var_checks(state_dir: Path) -> None:
     assert "skipping env" in proc.stdout
 
 
-def test_dry_run_survives_absent_backend_venv(
-    state_dir: Path, tmp_path: Path
-) -> None:
+def test_dry_run_survives_absent_backend_venv(state_dir: Path, tmp_path: Path) -> None:
     """A dry run must not need ``apps/backend/.venv`` (#883).
 
     Pointed at an interpreter that does not exist, ``--dry-run`` falls back to
@@ -253,7 +263,9 @@ def test_dry_run_survives_absent_backend_venv(
     where the real backend venv is present.
     """
     proc = _run(
-        "--dry-run", "--scenario", "1",
+        "--dry-run",
+        "--scenario",
+        "1",
         env_extra={
             "TFACTORY_E2E_STATE_DIR": str(state_dir),
             "TFACTORY_PYTHON_BIN": str(tmp_path / "no-such-venv" / "bin" / "python"),
@@ -269,13 +281,12 @@ def test_dry_run_survives_absent_backend_venv(
     assert doc["scenarios"]["scenario_1_workspace_creation"]["outcome"] == "pass"
 
 
-def test_real_run_still_requires_backend_venv(
-    state_dir: Path, tmp_path: Path
-) -> None:
+def test_real_run_still_requires_backend_venv(state_dir: Path, tmp_path: Path) -> None:
     """The fallback is dry-run only — a real run imports ``apps.backend.*``
     and must still fail loudly when the backend venv is missing (#883)."""
     proc = _run(
-        "--scenario", "1",
+        "--scenario",
+        "1",
         env_extra={
             "TFACTORY_E2E_STATE_DIR": str(state_dir),
             "TFACTORY_PYTHON_BIN": str(tmp_path / "no-such-venv" / "bin" / "python"),

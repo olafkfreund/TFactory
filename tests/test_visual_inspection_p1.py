@@ -17,7 +17,11 @@ from agents.visual_inspection import (
 )
 
 _NOW = datetime.datetime(2026, 6, 3, 13, 5, 0, tzinfo=datetime.UTC)
-_TARGET = {"name": "snow", "platform": "servicenow", "base_url": "https://acme.service-now.com"}
+_TARGET = {
+    "name": "snow",
+    "platform": "servicenow",
+    "base_url": "https://acme.service-now.com",
+}
 
 
 def _steps(fail: bool) -> list[StepResult]:
@@ -26,8 +30,15 @@ def _steps(fail: bool) -> list[StepResult]:
         StepResult(2, "open incident", "pass", screenshot="02-open-incident-pass.png"),
     ]
     if fail:
-        s.append(StepResult(3, "submit", "fail", screenshot="03-submit-fail.png",
-                            error="expected toast 'Saved' — got 'Required field'"))
+        s.append(
+            StepResult(
+                3,
+                "submit",
+                "fail",
+                screenshot="03-submit-fail.png",
+                error="expected toast 'Saved' — got 'Required field'",
+            )
+        )
     else:
         s.append(StepResult(3, "submit", "pass", screenshot="03-submit-pass.png"))
     return s
@@ -47,8 +58,14 @@ def test_new_run_id_sortable_and_slugged() -> None:
 
 
 def test_build_meta_counts_and_verdict() -> None:
-    meta = build_meta(run_id="snow-x", target=_TARGET, steps=_steps(fail=True),
-                      created_at=_NOW.isoformat(), video="video.webm", trace="trace.zip")
+    meta = build_meta(
+        run_id="snow-x",
+        target=_TARGET,
+        steps=_steps(fail=True),
+        created_at=_NOW.isoformat(),
+        video="video.webm",
+        trace="trace.zip",
+    )
     d = meta.to_dict()
     assert d["verdict"] == "fail"
     assert d["counts"] == {"steps": 3, "passed": 2, "failed": 1}
@@ -60,8 +77,12 @@ def test_build_meta_counts_and_verdict() -> None:
 
 
 def test_report_renders_verdict_steps_and_problems() -> None:
-    meta = build_meta(run_id="snow-x", target=_TARGET, steps=_steps(fail=True),
-                      created_at=_NOW.isoformat())
+    meta = build_meta(
+        run_id="snow-x",
+        target=_TARGET,
+        steps=_steps(fail=True),
+        created_at=_NOW.isoformat(),
+    )
     md = render_inspection_report(meta)
     assert "🔴 FAIL" in md and "2/3 steps passed" in md
     assert "| 1 | login |" in md and "![login](01-login-pass.png)" in md
@@ -72,16 +93,24 @@ def test_report_renders_verdict_steps_and_problems() -> None:
 
 
 def test_report_clean_run_says_none() -> None:
-    meta = build_meta(run_id="snow-x", target=_TARGET, steps=_steps(fail=False),
-                      created_at=_NOW.isoformat())
+    meta = build_meta(
+        run_id="snow-x",
+        target=_TARGET,
+        steps=_steps(fail=False),
+        created_at=_NOW.isoformat(),
+    )
     md = render_inspection_report(meta)
     assert "✅ PASS" in md
     assert "None — every verification step passed" in md
 
 
 def test_report_is_byte_stable() -> None:
-    meta = build_meta(run_id="snow-x", target=_TARGET, steps=_steps(fail=True),
-                      created_at=_NOW.isoformat())
+    meta = build_meta(
+        run_id="snow-x",
+        target=_TARGET,
+        steps=_steps(fail=True),
+        created_at=_NOW.isoformat(),
+    )
     assert render_inspection_report(meta) == render_inspection_report(meta)
 
 
@@ -91,7 +120,11 @@ def test_report_is_byte_stable() -> None:
 def _evidence(tmp: Path) -> Path:
     ev = tmp / "evidence"
     ev.mkdir()
-    for name in ("01-login-pass.png", "02-open-incident-pass.png", "03-submit-fail.png"):
+    for name in (
+        "01-login-pass.png",
+        "02-open-incident-pass.png",
+        "03-submit-fail.png",
+    ):
         (ev / name).write_bytes(b"\x89PNG\r\n\x1a\n" + name.encode())
     (ev / "video.webm").write_bytes(b"VIDEO")
     (ev / "trace.zip").write_bytes(b"PK\x03\x04TRACE")
@@ -100,8 +133,14 @@ def _evidence(tmp: Path) -> Path:
 
 def test_package_run_assembles_the_folder(tmp_path) -> None:
     ev = _evidence(tmp_path)
-    meta = build_meta(run_id="snow-20260603130500", target=_TARGET, steps=_steps(fail=True),
-                      created_at=_NOW.isoformat(), video="video.webm", trace="trace.zip")
+    meta = build_meta(
+        run_id="snow-20260603130500",
+        target=_TARGET,
+        steps=_steps(fail=True),
+        created_at=_NOW.isoformat(),
+        video="video.webm",
+        trace="trace.zip",
+    )
     out = package_run(tmp_path / "automated-test", meta=meta, evidence_dir=ev)
 
     assert out.run_dir == tmp_path / "automated-test" / "snow-20260603130500"
@@ -125,8 +164,13 @@ def test_package_run_assembles_the_folder(tmp_path) -> None:
 def test_package_run_tolerates_missing_artifacts(tmp_path) -> None:
     ev = tmp_path / "evidence"
     ev.mkdir()  # empty — no screenshots, no recording
-    meta = build_meta(run_id="snow-x", target=_TARGET, steps=_steps(fail=False),
-                      created_at=_NOW.isoformat(), video="video.webm")
+    meta = build_meta(
+        run_id="snow-x",
+        target=_TARGET,
+        steps=_steps(fail=False),
+        created_at=_NOW.isoformat(),
+        video="video.webm",
+    )
     out = package_run(tmp_path / "automated-test", meta=meta, evidence_dir=ev)
     # still writes report + meta; missing screenshots become None
     assert out.report_md.is_file()

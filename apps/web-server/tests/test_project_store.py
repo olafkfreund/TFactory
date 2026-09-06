@@ -87,7 +87,9 @@ async def test_db_store_insert_and_load(session):
 async def test_db_store_reconcile_updates_and_deletes(session):
     org_id = await _org(session, email="a@x.com")
     store = DbProjectStore(session, org_id)
-    await store.save_all({"p1": {"name": "A", "path": "/a"}, "p2": {"name": "B", "path": "/b"}})
+    await store.save_all(
+        {"p1": {"name": "A", "path": "/a"}, "p2": {"name": "B", "path": "/b"}}
+    )
     # drop p2, rename p1
     await store.save_all({"p1": {"name": "A2", "path": "/a"}})
     loaded = await store.load_all()
@@ -109,8 +111,11 @@ async def test_db_store_is_org_scoped(session):
 
 def test_factory_defaults_to_json(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        ps, "get_settings",
-        lambda: SimpleNamespace(PROJECTS_BACKEND="json", PROJECTS_DATA_DIR=str(tmp_path)),
+        ps,
+        "get_settings",
+        lambda: SimpleNamespace(
+            PROJECTS_BACKEND="json", PROJECTS_DATA_DIR=str(tmp_path)
+        ),
     )
     store = get_project_store()
     assert isinstance(store, JsonProjectStore)
@@ -118,7 +123,9 @@ def test_factory_defaults_to_json(monkeypatch, tmp_path):
 
 def test_factory_db_requires_session_and_org(monkeypatch):
     monkeypatch.setattr(
-        ps, "get_settings", lambda: SimpleNamespace(PROJECTS_BACKEND="db", PROJECTS_DATA_DIR="")
+        ps,
+        "get_settings",
+        lambda: SimpleNamespace(PROJECTS_BACKEND="db", PROJECTS_DATA_DIR=""),
     )
     with pytest.raises(ValueError, match="session \\+ org_id"):
         get_project_store()
@@ -127,7 +134,9 @@ def test_factory_db_requires_session_and_org(monkeypatch):
 @pytest.mark.asyncio
 async def test_factory_db_returns_db_store(monkeypatch, session):
     monkeypatch.setattr(
-        ps, "get_settings", lambda: SimpleNamespace(PROJECTS_BACKEND="db", PROJECTS_DATA_DIR="")
+        ps,
+        "get_settings",
+        lambda: SimpleNamespace(PROJECTS_BACKEND="db", PROJECTS_DATA_DIR=""),
     )
     org_id = await _org(session, email="a@x.com")
     store = get_project_store(session=session, org_id=org_id)

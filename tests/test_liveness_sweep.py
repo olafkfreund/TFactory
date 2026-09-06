@@ -49,16 +49,25 @@ def test_iter_missing_tree_is_empty(tmp_path: Path) -> None:
 
 def test_sweep_flips_stalled_and_leaves_others(tmp_path: Path) -> None:
     stale = _spec(
-        tmp_path, "p1", "stalledSpec",
-        status="generating", updated_at=_iso(_NOW - timedelta(seconds=3600)),
+        tmp_path,
+        "p1",
+        "stalledSpec",
+        status="generating",
+        updated_at=_iso(_NOW - timedelta(seconds=3600)),
     )
     fresh = _spec(
-        tmp_path, "p1", "freshSpec",
-        status="triaging", updated_at=_iso(_NOW - timedelta(seconds=10)),
+        tmp_path,
+        "p1",
+        "freshSpec",
+        status="triaging",
+        updated_at=_iso(_NOW - timedelta(seconds=10)),
     )
     settled = _spec(
-        tmp_path, "p2", "doneSpec",
-        status="triaged", updated_at=_iso(_NOW - timedelta(days=1)),
+        tmp_path,
+        "p2",
+        "doneSpec",
+        status="triaged",
+        updated_at=_iso(_NOW - timedelta(days=1)),
     )
 
     results = sweep(tmp_path, now=_NOW, deadline_seconds=900)
@@ -81,8 +90,11 @@ def test_sweep_empty_workspace_returns_empty(tmp_path: Path) -> None:
 
 def test_sweep_uses_env_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _spec(
-        tmp_path, "p1", "s",
-        status="evaluating", updated_at=_iso(_NOW - timedelta(seconds=5000)),
+        tmp_path,
+        "p1",
+        "s",
+        status="evaluating",
+        updated_at=_iso(_NOW - timedelta(seconds=5000)),
     )
     monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path))
     assert default_workspace_root() == tmp_path
@@ -100,8 +112,11 @@ def test_main_reports_and_exits_zero(
     # main() uses real wall-clock (no now injection), so pin updated_at far in
     # the past — always older than any deadline regardless of when CI runs.
     _spec(
-        tmp_path, "p1", "s",
-        status="planning", updated_at="2020-01-01T00:00:00+00:00",
+        tmp_path,
+        "p1",
+        "s",
+        status="planning",
+        updated_at="2020-01-01T00:00:00+00:00",
     )
     monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path))
     rc = main(["--deadline", "900"])

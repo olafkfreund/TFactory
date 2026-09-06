@@ -35,9 +35,14 @@ GOLDEN_DIR = Path(__file__).parent / "fixtures" / "triage_report"
 
 
 def _cand(
-    *, test_id: str, verdict: str = "accept",
-    cov: float = 0.0, mut: str = "killed", stab: str = "stable",
-    sem: str = "high", reasons: list | None = None,
+    *,
+    test_id: str,
+    verdict: str = "accept",
+    cov: float = 0.0,
+    mut: str = "killed",
+    stab: str = "stable",
+    sem: str = "high",
+    reasons: list | None = None,
     file_suffix: str | None = None,
 ) -> TriageCandidate:
     return TriageCandidate(
@@ -183,7 +188,10 @@ def test_render_json_trailing_newline() -> None:
     report = build_report(
         mode="initial",
         generated_at="2026-05-28T00:00:00+00:00",
-        committed=[], flagged=[], rejected=[], collisions=[],
+        committed=[],
+        flagged=[],
+        rejected=[],
+        collisions=[],
         dedup_input_count=0,
     )
     out = render_json(report)
@@ -198,12 +206,20 @@ def _build_golden_report() -> TriageReport:
     """Construct the exact 4-test scenario captured in the golden file."""
     accept = _cand(
         test_id="ac1-login-expiry",
-        verdict="accept", cov=7.5, mut="killed", stab="stable", sem="high",
+        verdict="accept",
+        cov=7.5,
+        mut="killed",
+        stab="stable",
+        sem="high",
         reasons=["coverage +7.5%; mutation killed; semantic relevance high"],
     )
     flag = _cand(
         test_id="ac2-store-mut",
-        verdict="flag", cov=1.2, mut="no_mutation", stab="stable", sem="medium",
+        verdict="flag",
+        cov=1.2,
+        mut="no_mutation",
+        stab="stable",
+        sem="medium",
         reasons=[
             "mutation probe found nothing to mutate",
             "shallow assertion",
@@ -211,12 +227,20 @@ def _build_golden_report() -> TriageReport:
     )
     reject = _cand(
         test_id="ac3-naive-true",
-        verdict="reject", cov=0.0, mut="survived", stab="stable", sem="low",
+        verdict="reject",
+        cov=0.0,
+        mut="survived",
+        stab="stable",
+        sem="low",
         reasons=["mutation survived — assertion is tautological"],
     )
     duplicate_drop = _cand(
         test_id="ac1-login-expiry-dup",
-        verdict="accept", cov=7.5, mut="killed", stab="stable", sem="high",
+        verdict="accept",
+        cov=7.5,
+        mut="killed",
+        stab="stable",
+        sem="high",
         reasons=["duplicate of ac1-login-expiry"],
     )
     collision = DedupCollision(
@@ -243,16 +267,19 @@ def test_markdown_matches_golden_file() -> None:
     if actual != expected:
         # Provide a diff hint via the assertion message
         import difflib
-        diff = "".join(difflib.unified_diff(
-            expected.splitlines(keepends=True),
-            actual.splitlines(keepends=True),
-            fromfile=str(expected_path),
-            tofile="render_markdown(report)",
-        ))
+
+        diff = "".join(
+            difflib.unified_diff(
+                expected.splitlines(keepends=True),
+                actual.splitlines(keepends=True),
+                fromfile=str(expected_path),
+                tofile="render_markdown(report)",
+            )
+        )
         pytest.fail(
             "render_markdown drifted from golden file. "
             "Regenerate the golden via:\n"
-            "  python -c \"from agents.triage_report import render_markdown; ...\"\n"
+            '  python -c "from agents.triage_report import render_markdown; ..."\n'
             f"Diff:\n{diff}"
         )
 
@@ -292,7 +319,9 @@ def test_markdown_signal_line_formatting() -> None:
         mode="initial",
         generated_at="2026-05-28T00:00:00+00:00",
         committed=[a],
-        flagged=[], rejected=[], collisions=[],
+        flagged=[],
+        rejected=[],
+        collisions=[],
         dedup_input_count=1,
     )
     md = render_markdown(report)
@@ -308,7 +337,10 @@ def test_markdown_empty_section_placeholder() -> None:
     report = build_report(
         mode="initial",
         generated_at="2026-05-28T00:00:00+00:00",
-        committed=[], flagged=[], rejected=[], collisions=[],
+        committed=[],
+        flagged=[],
+        rejected=[],
+        collisions=[],
         dedup_input_count=0,
     )
     md = render_markdown(report)
@@ -330,7 +362,9 @@ def test_markdown_missing_signal_degrades_gracefully() -> None:
         mode="initial",
         generated_at="2026-05-28T00:00:00+00:00",
         committed=[bad],
-        flagged=[], rejected=[], collisions=[],
+        flagged=[],
+        rejected=[],
+        collisions=[],
         dedup_input_count=1,
     )
     md = render_markdown(report)
@@ -346,7 +380,10 @@ def test_markdown_mode_in_header() -> None:
     report = build_report(
         mode="rerun",
         generated_at="2026-05-28T00:00:00+00:00",
-        committed=[], flagged=[], rejected=[], collisions=[],
+        committed=[],
+        flagged=[],
+        rejected=[],
+        collisions=[],
         dedup_input_count=0,
     )
     md = render_markdown(report)
@@ -357,7 +394,10 @@ def test_markdown_trailing_newline() -> None:
     report = build_report(
         mode="initial",
         generated_at="2026-05-28T00:00:00+00:00",
-        committed=[], flagged=[], rejected=[], collisions=[],
+        committed=[],
+        flagged=[],
+        rejected=[],
+        collisions=[],
         dedup_input_count=0,
     )
     md = render_markdown(report)
@@ -367,9 +407,15 @@ def test_markdown_trailing_newline() -> None:
 # ── Task 16 follow-up: evidence-link rendering ─────────────────────────
 
 
-def _make_evidence(spec_dir: Path, test_id: str, *,
-                   screenshots: int = 0, video: bool = False,
-                   trace: bool = False, har: bool = False) -> Path:
+def _make_evidence(
+    spec_dir: Path,
+    test_id: str,
+    *,
+    screenshots: int = 0,
+    video: bool = False,
+    trace: bool = False,
+    har: bool = False,
+) -> Path:
     """Create a synthetic evidence dir for *test_id* under *spec_dir*."""
     evidence_dir = spec_dir / "findings" / "evidence" / test_id
     if screenshots:
@@ -390,24 +436,35 @@ def _make_evidence(spec_dir: Path, test_id: str, *,
 def test_build_report_without_spec_dir_has_empty_evidence_dict(tmp_path: Path) -> None:
     """v0.1 callers don't pass spec_dir — evidence_urls_by_test_id stays empty."""
     report = build_report(
-        mode="initial", generated_at="2026-05-28T00:00:00+00:00",
-        committed=[_cand(test_id="t1")], flagged=[], rejected=[],
-        collisions=[], dedup_input_count=1,
+        mode="initial",
+        generated_at="2026-05-28T00:00:00+00:00",
+        committed=[_cand(test_id="t1")],
+        flagged=[],
+        rejected=[],
+        collisions=[],
+        dedup_input_count=1,
     )
     assert report.evidence_urls_by_test_id == {}
     md = render_markdown(report)
     assert "evidence:" not in md
 
 
-def test_build_report_with_spec_dir_walks_evidence_for_committed(tmp_path: Path) -> None:
+def test_build_report_with_spec_dir_walks_evidence_for_committed(
+    tmp_path: Path,
+) -> None:
     """When spec_dir is passed and findings/evidence/<test_id>/ exists,
     its URLs are wired into the report."""
     spec_dir = tmp_path / "spec-abc"
     _make_evidence(spec_dir, "t1", screenshots=3, video=True, trace=True, har=True)
     report = build_report(
-        mode="initial", generated_at="2026-05-28T00:00:00+00:00",
-        committed=[_cand(test_id="t1")], flagged=[], rejected=[],
-        collisions=[], dedup_input_count=1, spec_dir=spec_dir,
+        mode="initial",
+        generated_at="2026-05-28T00:00:00+00:00",
+        committed=[_cand(test_id="t1")],
+        flagged=[],
+        rejected=[],
+        collisions=[],
+        dedup_input_count=1,
+        spec_dir=spec_dir,
     )
     urls = report.evidence_urls_by_test_id["t1"]
     assert isinstance(urls.get("screenshots"), list)
@@ -425,9 +482,14 @@ def test_render_markdown_includes_evidence_bullets(tmp_path: Path) -> None:
     spec_dir = tmp_path / "spec-xyz"
     _make_evidence(spec_dir, "login-flow", screenshots=2, video=True, har=True)
     report = build_report(
-        mode="initial", generated_at="2026-05-28T00:00:00+00:00",
-        committed=[_cand(test_id="login-flow")], flagged=[], rejected=[],
-        collisions=[], dedup_input_count=1, spec_dir=spec_dir,
+        mode="initial",
+        generated_at="2026-05-28T00:00:00+00:00",
+        committed=[_cand(test_id="login-flow")],
+        flagged=[],
+        rejected=[],
+        collisions=[],
+        dedup_input_count=1,
+        spec_dir=spec_dir,
     )
     md = render_markdown(report)
     assert "📸 2 screenshots" in md
@@ -443,9 +505,14 @@ def test_render_markdown_omits_evidence_when_dir_absent(tmp_path: Path) -> None:
     spec_dir = tmp_path / "spec-xyz"
     spec_dir.mkdir()  # no findings/evidence/ subdir
     report = build_report(
-        mode="initial", generated_at="2026-05-28T00:00:00+00:00",
-        committed=[_cand(test_id="solo")], flagged=[], rejected=[],
-        collisions=[], dedup_input_count=1, spec_dir=spec_dir,
+        mode="initial",
+        generated_at="2026-05-28T00:00:00+00:00",
+        committed=[_cand(test_id="solo")],
+        flagged=[],
+        rejected=[],
+        collisions=[],
+        dedup_input_count=1,
+        spec_dir=spec_dir,
     )
     md = render_markdown(report)
     assert "evidence:" not in md
@@ -461,11 +528,14 @@ def test_evidence_rendered_for_flagged_not_rejected(tmp_path: Path) -> None:
     _make_evidence(spec_dir, "flag1", video=True)
     _make_evidence(spec_dir, "rej1", video=True)
     report = build_report(
-        mode="initial", generated_at="2026-05-28T00:00:00+00:00",
+        mode="initial",
+        generated_at="2026-05-28T00:00:00+00:00",
         committed=[],
         flagged=[_cand(test_id="flag1", verdict="flag")],
         rejected=[_cand(test_id="rej1", verdict="reject")],
-        collisions=[], dedup_input_count=2, spec_dir=spec_dir,
+        collisions=[],
+        dedup_input_count=2,
+        spec_dir=spec_dir,
     )
     md = render_markdown(report)
     # flagged candidate gets evidence
@@ -482,14 +552,24 @@ def test_evidence_dict_deterministic_ordering(tmp_path: Path) -> None:
     spec_dir = tmp_path / "spec-det"
     _make_evidence(spec_dir, "t1", screenshots=3, video=True, trace=True, har=True)
     report_a = build_report(
-        mode="initial", generated_at="2026-05-28T00:00:00+00:00",
-        committed=[_cand(test_id="t1")], flagged=[], rejected=[],
-        collisions=[], dedup_input_count=1, spec_dir=spec_dir,
+        mode="initial",
+        generated_at="2026-05-28T00:00:00+00:00",
+        committed=[_cand(test_id="t1")],
+        flagged=[],
+        rejected=[],
+        collisions=[],
+        dedup_input_count=1,
+        spec_dir=spec_dir,
     )
     report_b = build_report(
-        mode="initial", generated_at="2026-05-28T00:00:00+00:00",
-        committed=[_cand(test_id="t1")], flagged=[], rejected=[],
-        collisions=[], dedup_input_count=1, spec_dir=spec_dir,
+        mode="initial",
+        generated_at="2026-05-28T00:00:00+00:00",
+        committed=[_cand(test_id="t1")],
+        flagged=[],
+        rejected=[],
+        collisions=[],
+        dedup_input_count=1,
+        spec_dir=spec_dir,
     )
     assert render_markdown(report_a) == render_markdown(report_b)
 
@@ -500,9 +580,14 @@ def test_evidence_walks_only_candidates_in_report(tmp_path: Path) -> None:
     spec_dir = tmp_path / "spec-ghost"
     _make_evidence(spec_dir, "ghost", video=True)
     report = build_report(
-        mode="initial", generated_at="2026-05-28T00:00:00+00:00",
-        committed=[_cand(test_id="real")], flagged=[], rejected=[],
-        collisions=[], dedup_input_count=1, spec_dir=spec_dir,
+        mode="initial",
+        generated_at="2026-05-28T00:00:00+00:00",
+        committed=[_cand(test_id="real")],
+        flagged=[],
+        rejected=[],
+        collisions=[],
+        dedup_input_count=1,
+        spec_dir=spec_dir,
     )
     assert "ghost" not in report.evidence_urls_by_test_id
     assert "real" not in report.evidence_urls_by_test_id  # no evidence dir

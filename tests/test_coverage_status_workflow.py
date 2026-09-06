@@ -92,7 +92,7 @@ def _run_status_step(
     fake_gh = bin_dir / "gh"
     fake_gh.write_text(
         "#!/usr/bin/env bash\n"
-        "{ for a in \"$@\"; do printf '%s\\n' \"$a\"; done; "
+        '{ for a in "$@"; do printf \'%s\\n\' "$a"; done; '
         "printf '%s\\n' '--END-OF-CALL--'; } >> \"$GH_CALLS\"\n"
     )
     fake_gh.chmod(0o755)
@@ -172,7 +172,9 @@ def test_a_drop_posts_failure(tmp_path: Path) -> None:
 def test_no_drop_posts_success_with_a_real_percentage(tmp_path: Path) -> None:
     fields = _posted(
         _run_status_step(
-            tmp_path, passed="true", description="Coverage 81.50% (unchanged vs base 81.50%)"
+            tmp_path,
+            passed="true",
+            description="Coverage 81.50% (unchanged vs base 81.50%)",
         )
     )
     assert fields["state"] == "success"

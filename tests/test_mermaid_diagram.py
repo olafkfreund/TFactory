@@ -89,7 +89,11 @@ def test_topology_flags_findings_red() -> None:
     assert "🔴 5 SGs open to 0.0.0.0/0 (high)" in out
     # both findings are in the bad class line
     assert "class " in out and "bad;" in out
-    bad_line = [ln for ln in out.splitlines() if ln.strip().startswith("class ") and ln.strip().endswith("bad;")]
+    bad_line = [
+        ln
+        for ln in out.splitlines()
+        if ln.strip().startswith("class ") and ln.strip().endswith("bad;")
+    ]
     assert bad_line, "expected a 'class ... bad;' line"
 
 
@@ -108,7 +112,11 @@ def test_topology_empty_inventory_is_valid_minimal_graph() -> None:
 
 def test_topology_finding_unknown_scope_attaches_to_account() -> None:
     out = render_cloud_topology(
-        {"provider": "gcp", "account": "p", "findings": [{"severity": "critical", "title": "x", "scope": "nowhere"}]}
+        {
+            "provider": "gcp",
+            "account": "p",
+            "findings": [{"severity": "critical", "title": "x", "scope": "nowhere"}],
+        }
     )
     # finding still rendered + flagged, edge from account
     assert "🔴 x (critical)" in out

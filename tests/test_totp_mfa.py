@@ -55,7 +55,9 @@ def test_unsupported_alg_rejected():
 def test_fill_totp_renders_variant_opts():
     ts = render_auth_setup_steps(
         steps=[{"action": "fill_totp", "selector": "#otp"}],
-        username_env="U", secret_env="S", totp_env="TF_TOTP_SEED",
+        username_env="U",
+        secret_env="S",
+        totp_env="TF_TOTP_SEED",
         totp_opts={"digits": 8, "alg": "sha256", "period": 60},
     )
     assert "digits: 8" in ts and 'alg: "sha256"' in ts and "period: 60" in ts
@@ -77,7 +79,7 @@ def test_fill_totp_renders_runtime_generation():
     )
     # The code is generated at fill time from the seed env var (never a static code).
     assert '__tfTotp(process.env["TF_TOTP_SEED"]' in ts
-    assert '#otp' in ts
+    assert "#otp" in ts
     # __tfTotp is imported from the extracted helper module (#1063), not
     # inlined in the rendered setup — the helper is a plain, CodeQL-scanned
     # .ts file that scaffold_auth_setup() copies alongside auth.setup.ts.
@@ -111,7 +113,9 @@ def test_schema_accepts_totp_entry():
         totp_ref="env:APP_TOTP_SEED",
         as_totp_secret="TF_TOTP_SEED",
     )
-    assert entry.as_totp_secret == "TF_TOTP_SEED" and entry.totp_ref == "env:APP_TOTP_SEED"
+    assert (
+        entry.as_totp_secret == "TF_TOTP_SEED" and entry.totp_ref == "env:APP_TOTP_SEED"
+    )
 
 
 def test_resolver_injects_totp_seed(monkeypatch, tmp_path):
@@ -135,8 +139,11 @@ def test_resolver_injects_totp_seed(monkeypatch, tmp_path):
     monkeypatch.setattr("tfactory_secrets.broker.CredentialBroker", _Broker)
 
     spec = sc.TargetCredentialSpec(
-        name="app", ref="env:PW", as_secret="TF_PASS",
-        totp_ref="env:SEED", as_totp_secret="TF_TOTP_SEED",
+        name="app",
+        ref="env:PW",
+        as_secret="TF_PASS",
+        totp_ref="env:SEED",
+        as_totp_secret="TF_TOTP_SEED",
     )
     creds = sc.resolve_test_target_credentials([spec], tmp_path, tmp_path, "host")
     assert creds.env.get("TF_PASS") == "pw"

@@ -45,7 +45,11 @@ def _accept(test_id="a") -> dict:
     return {
         "test_id": test_id,
         "verdict": "accept",
-        "signals_summary": {"stability": "stable", "mutation": "killed", "ci_parity": "yes"},
+        "signals_summary": {
+            "stability": "stable",
+            "mutation": "killed",
+            "ci_parity": "yes",
+        },
     }
 
 
@@ -77,7 +81,9 @@ def test_policy_default_on_malformed_json(tmp_path):
 
 def test_skips_when_gate_disabled(tmp_path):
     spec = _spec_with(tmp_path, quality_gate={"enabled": False}, verdicts=[_accept()])
-    out = _run_pr_status_side_effect(tmp_path, spec / "findings", {"sha": "x", "repo_slug": "a/b"}, spec)
+    out = _run_pr_status_side_effect(
+        tmp_path, spec / "findings", {"sha": "x", "repo_slug": "a/b"}, spec
+    )
     assert out["skipped"] and "not enabled" in out["reason"]
 
 
@@ -102,7 +108,10 @@ def test_posts_dry_run_when_enabled(tmp_path, monkeypatch):
     monkeypatch.delenv("TFACTORY_PR_STATUS", raising=False)  # default → dry-run
     spec = _spec_with(tmp_path, quality_gate={"enabled": True}, verdicts=[_accept()])
     out = _run_pr_status_side_effect(
-        tmp_path, spec / "findings", {"sha": "abc", "repo_slug": "acme/w", "pr_number": 5}, spec
+        tmp_path,
+        spec / "findings",
+        {"sha": "abc", "repo_slug": "acme/w", "pr_number": 5},
+        spec,
     )
     assert out["skipped"] is False
     assert out["passed"] is True and out["state"] == "success"
@@ -117,7 +126,11 @@ def test_failing_gate_reports_failure_state(tmp_path):
     bad = {
         "test_id": "a",
         "verdict": "accept",
-        "signals_summary": {"stability": "stable", "mutation": "survived", "ci_parity": "yes"},
+        "signals_summary": {
+            "stability": "stable",
+            "mutation": "survived",
+            "ci_parity": "yes",
+        },
     }
     spec = _spec_with(tmp_path, quality_gate={"enabled": True}, verdicts=[bad])
     out = _run_pr_status_side_effect(

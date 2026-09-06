@@ -25,6 +25,7 @@ from spec_sources import (  # noqa: E402
 
 # ── format detection ───────────────────────────────────────────────────
 
+
 def test_detect_gherkin_by_filename():
     assert detect_format("anything", filename="login.feature") is SpecFormat.GHERKIN
 
@@ -48,6 +49,7 @@ def test_detect_markdown_default():
 
 
 # ── markdown ───────────────────────────────────────────────────────────
+
 
 def test_parse_markdown_acceptance_section():
     text = (
@@ -172,7 +174,9 @@ def test_parse_gherkin_one_ac_per_scenario():
     assert spec.source_format is SpecFormat.GHERKIN
     assert spec.title == "User login"
     assert len(spec.criteria) == 2
-    assert spec.criteria[0].text.startswith("valid credentials — given a registered user")
+    assert spec.criteria[0].text.startswith(
+        "valid credentials — given a registered user"
+    )
     assert "session is created" in spec.criteria[0].text
     assert spec.criteria[1].text.startswith("expired token —")
 
@@ -212,6 +216,7 @@ def test_parse_ears_no_shall_raises():
 
 
 # ── ingest + render + write ────────────────────────────────────────────
+
 
 def test_ingest_autodetects_and_normalises():
     spec = ingest(GHERKIN, filename="x.feature")

@@ -485,7 +485,7 @@ def test_runner_images_are_tagged_sha_short_not_a_raw_commit_sha():
     for wf_name, text in sorted(_publishers().items()):
         assert "${{ github.sha }}" not in text, (
             f"{wf_name} tags an image with the raw 40-char `github.sha`. Use "
-            '`sha-$(git rev-parse --short HEAD)`, the shape every other fleet '
+            "`sha-$(git rev-parse --short HEAD)`, the shape every other fleet "
             "image publishes and the only one `fleet-match` can parse (#890)."
         )
         assert 'echo "sha=sha-$(git rev-parse --short HEAD)"' in text, (
@@ -519,6 +519,7 @@ def test_this_repo_no_longer_writes_the_nix_lane_pin():
             f"nix-runner-image.yml writes {var} again. factory-runners owns "
             "this pin; two writers make it flap with no failing check."
         )
-    assert "TFACTORY_NIX_RUNNER_IMAGE" in (
-        _ROOT / "charts" / "tfactory" / "templates" / "deployment.yaml"
-    ).read_text(), "premise changed: the chart no longer sets this env var"
+    assert (
+        "TFACTORY_NIX_RUNNER_IMAGE"
+        in (_ROOT / "charts" / "tfactory" / "templates" / "deployment.yaml").read_text()
+    ), "premise changed: the chart no longer sets this env var"

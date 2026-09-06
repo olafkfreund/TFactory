@@ -499,12 +499,19 @@ class TestDependencyResolution:
         plan = ImplementationPlan(
             feature="Test",
             phases=[
-                Phase(phase=1, name="Setup", subtasks=[
-                    Chunk(id="c1", description="Setup", status=ChunkStatus.PENDING)
-                ]),
-                Phase(phase=2, name="Build", depends_on=[1], subtasks=[
-                    Chunk(id="c2", description="Build")
-                ]),
+                Phase(
+                    phase=1,
+                    name="Setup",
+                    subtasks=[
+                        Chunk(id="c1", description="Setup", status=ChunkStatus.PENDING)
+                    ],
+                ),
+                Phase(
+                    phase=2,
+                    name="Build",
+                    depends_on=[1],
+                    subtasks=[Chunk(id="c2", description="Build")],
+                ),
             ],
         )
 
@@ -519,15 +526,27 @@ class TestDependencyResolution:
         plan = ImplementationPlan(
             feature="Test",
             phases=[
-                Phase(phase=1, name="Setup", subtasks=[
-                    Chunk(id="c1", description="Setup", status=ChunkStatus.COMPLETED)
-                ]),
-                Phase(phase=2, name="Backend", depends_on=[1], subtasks=[
-                    Chunk(id="c2", description="Backend")
-                ]),
-                Phase(phase=3, name="Frontend", depends_on=[1], subtasks=[
-                    Chunk(id="c3", description="Frontend")
-                ]),
+                Phase(
+                    phase=1,
+                    name="Setup",
+                    subtasks=[
+                        Chunk(
+                            id="c1", description="Setup", status=ChunkStatus.COMPLETED
+                        )
+                    ],
+                ),
+                Phase(
+                    phase=2,
+                    name="Backend",
+                    depends_on=[1],
+                    subtasks=[Chunk(id="c2", description="Backend")],
+                ),
+                Phase(
+                    phase=3,
+                    name="Frontend",
+                    depends_on=[1],
+                    subtasks=[Chunk(id="c3", description="Frontend")],
+                ),
             ],
         )
 
@@ -544,15 +563,26 @@ class TestDependencyResolution:
         plan = ImplementationPlan(
             feature="Test",
             phases=[
-                Phase(phase=1, name="Phase1", subtasks=[
-                    Chunk(id="c1", description="C1", status=ChunkStatus.COMPLETED)
-                ]),
-                Phase(phase=2, name="Phase2", subtasks=[
-                    Chunk(id="c2", description="C2", status=ChunkStatus.PENDING)
-                ]),
-                Phase(phase=3, name="Phase3", depends_on=[1, 2], subtasks=[
-                    Chunk(id="c3", description="C3")
-                ]),
+                Phase(
+                    phase=1,
+                    name="Phase1",
+                    subtasks=[
+                        Chunk(id="c1", description="C1", status=ChunkStatus.COMPLETED)
+                    ],
+                ),
+                Phase(
+                    phase=2,
+                    name="Phase2",
+                    subtasks=[
+                        Chunk(id="c2", description="C2", status=ChunkStatus.PENDING)
+                    ],
+                ),
+                Phase(
+                    phase=3,
+                    name="Phase3",
+                    depends_on=[1, 2],
+                    subtasks=[Chunk(id="c3", description="C3")],
+                ),
             ],
         )
 

@@ -64,9 +64,7 @@ DEFAULT_LOOPBACK_URL = "http://localhost:3103"
 
 
 def _loopback_url() -> str:
-    return os.environ.get("TFACTORY_MCP_LOOPBACK_URL", DEFAULT_LOOPBACK_URL).rstrip(
-        "/"
-    )
+    return os.environ.get("TFACTORY_MCP_LOOPBACK_URL", DEFAULT_LOOPBACK_URL).rstrip("/")
 
 
 def _format_json(data: Any) -> dict[str, Any]:
@@ -309,9 +307,7 @@ async def dispatch_tool_call(
         if tool_name == "tfactory.list_tasks":
             project_id = arguments["project_id"]
             return _format_json(
-                await _call_internal(
-                    "GET", f"/api/projects/{project_id}/tasks", key
-                )
+                await _call_internal("GET", f"/api/projects/{project_id}/tasks", key)
             )
         if tool_name == "tfactory.get_task":
             return _format_json(

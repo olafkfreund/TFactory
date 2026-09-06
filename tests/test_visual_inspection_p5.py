@@ -26,7 +26,10 @@ def test_enabled_writes_metadata(tmp_path) -> None:
 def test_disabled_writes_nothing(tmp_path) -> None:
     spec = tmp_path / "specs" / "001"
     spec.mkdir(parents=True)
-    assert write_visual_inspection_meta(spec, {"enabled": False, "target": "snow"}) is False
+    assert (
+        write_visual_inspection_meta(spec, {"enabled": False, "target": "snow"})
+        is False
+    )
     assert not (spec / "context" / "visual_inspection.json").exists()
 
 
@@ -35,4 +38,7 @@ def test_none_and_empty_are_noops(tmp_path) -> None:
     spec.mkdir(parents=True)
     assert write_visual_inspection_meta(spec, None) is False
     assert write_visual_inspection_meta(spec, {}) is False
-    assert not (spec / "context").exists() or not (spec / "context" / "visual_inspection.json").exists()
+    assert (
+        not (spec / "context").exists()
+        or not (spec / "context" / "visual_inspection.json").exists()
+    )

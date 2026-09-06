@@ -33,7 +33,9 @@ FIXTURES_PATH = Path(__file__).parent / "fixtures" / "skills"
 
 
 def _service(tmp_path: Path) -> SkillsService:
-    return SkillsService(skills_base_path=FIXTURES_PATH, cache_path=tmp_path / "skills-cache.json")
+    return SkillsService(
+        skills_base_path=FIXTURES_PATH, cache_path=tmp_path / "skills-cache.json"
+    )
 
 
 def test_the_cache_file_is_json_and_not_a_pickle(tmp_path: Path) -> None:
@@ -116,7 +118,9 @@ def test_a_live_reduce_payload_does_not_execute(tmp_path: Path) -> None:
 
     import pickle  # noqa: PLC0415 - the exploit fixture needs it; the service must not
 
-    payload = pickle.dumps({"version": 2, "base_path": str(FIXTURES_PATH), "index": _Payload()})
+    payload = pickle.dumps(
+        {"version": 2, "base_path": str(FIXTURES_PATH), "index": _Payload()}
+    )
     (tmp_path / "skills-cache.pkl").write_bytes(payload)
     (tmp_path / "skills-cache.json").write_bytes(payload)
 
@@ -124,4 +128,6 @@ def test_a_live_reduce_payload_does_not_execute(tmp_path: Path) -> None:
     service.build_index()
 
     assert not marker.exists(), "the cache path still executes pickle reduce code"
-    assert service.list_categories(), "the index did not rebuild after the poisoned cache"
+    assert service.list_categories(), (
+        "the index did not rebuild after the poisoned cache"
+    )

@@ -29,12 +29,19 @@ if "fastapi" not in sys.modules:
     _fastapi = types.ModuleType("fastapi")
 
     class _APIRouter:
-        def __init__(self, *a, **kw): pass
+        def __init__(self, *a, **kw):
+            pass
+
         def get(self, *a, **kw):
-            def _d(fn): return fn
+            def _d(fn):
+                return fn
+
             return _d
+
         def websocket(self, *a, **kw):
-            def _d(fn): return fn
+            def _d(fn):
+                return fn
+
             return _d
 
     class _HTTPException(Exception):
@@ -44,9 +51,12 @@ if "fastapi" not in sys.modules:
             self.detail = detail
 
     class _Response:
-        def __init__(self, content=b"", media_type: str = "", status_code: int = 200) -> None:
+        def __init__(
+            self, content=b"", media_type: str = "", status_code: int = 200
+        ) -> None:
             self.content = (
-                content if isinstance(content, (bytes, bytearray))
+                content
+                if isinstance(content, (bytes, bytearray))
                 else str(content).encode()
             )
             self.media_type = media_type
@@ -54,10 +64,17 @@ if "fastapi" not in sys.modules:
             self.body = self.content
 
     class _WebSocket:
-        async def accept(self): pass
-        async def send_text(self, _t: str): pass
-        async def receive_text(self) -> str: return ""
-        async def close(self, code: int = 1000, reason: str = ""): pass
+        async def accept(self):
+            pass
+
+        async def send_text(self, _t: str):
+            pass
+
+        async def receive_text(self) -> str:
+            return ""
+
+        async def close(self, code: int = 1000, reason: str = ""):
+            pass
 
     class _WebSocketDisconnect(Exception):
         pass
@@ -97,6 +114,7 @@ from server.routes.tfactory_templates import (  # noqa: E402
 
 class _MockRequest:
     """Minimal request mock that exposes a query_params mapping."""
+
     def __init__(self, **query_params):
         self.query_params = query_params
 
@@ -268,7 +286,9 @@ def test_playwright_template_body_contains_var_placeholders() -> None:
     resp = get_template("playwright", "login-flow.spec.ts.tmpl")
     payload = json.loads(resp.body)
     body = payload["body"]
-    assert "${" in body, "Expected ${var} placeholders in playwright login-flow template"
+    assert "${" in body, (
+        "Expected ${var} placeholders in playwright login-flow template"
+    )
 
 
 def test_playwright_template_body_references_target_base_url() -> None:
@@ -277,11 +297,14 @@ def test_playwright_template_body_references_target_base_url() -> None:
     assert "${target_base_url}" in payload["body"]
 
 
-@pytest.mark.parametrize("fw,tmpl", [
-    ("pytest", "parametrize.py.tmpl"),
-    ("jest", "react-component.test.tsx.tmpl"),
-    ("playwright", "form-submit-validation.spec.ts.tmpl"),
-])
+@pytest.mark.parametrize(
+    "fw,tmpl",
+    [
+        ("pytest", "parametrize.py.tmpl"),
+        ("jest", "react-component.test.tsx.tmpl"),
+        ("playwright", "form-submit-validation.spec.ts.tmpl"),
+    ],
+)
 def test_template_body_is_non_empty(fw: str, tmpl: str) -> None:
     resp = get_template(fw, tmpl)
     payload = json.loads(resp.body)
@@ -303,13 +326,18 @@ def test_get_template_unknown_framework_returns_404() -> None:
     assert exc.value.status_code == 404
 
 
-@pytest.mark.parametrize("fw,tmpl", [
-    ("../etc/passwd", "template.tmpl"),
-    ("pytest", "../../etc/passwd"),
-    ("a/b", "template.tmpl"),
-    ("pytest", "a/b/template.tmpl"),
-])
-def test_get_template_rejects_path_traversal_on_both_segments(fw: str, tmpl: str) -> None:
+@pytest.mark.parametrize(
+    "fw,tmpl",
+    [
+        ("../etc/passwd", "template.tmpl"),
+        ("pytest", "../../etc/passwd"),
+        ("a/b", "template.tmpl"),
+        ("pytest", "a/b/template.tmpl"),
+    ],
+)
+def test_get_template_rejects_path_traversal_on_both_segments(
+    fw: str, tmpl: str
+) -> None:
     with pytest.raises(_HTTPException) as exc:
         get_template(fw, tmpl)
     assert exc.value.status_code == 400

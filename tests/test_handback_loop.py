@@ -48,14 +48,18 @@ def test_stuck_at_cap() -> None:
 
 
 def test_stuck_on_no_progress_same_failures() -> None:
-    d = decide_loop(cycle=1, current_failures={"a", "b"}, previous_failures={"a", "b"}, cap=3)
+    d = decide_loop(
+        cycle=1, current_failures={"a", "b"}, previous_failures={"a", "b"}, cap=3
+    )
     assert d.action == "stuck"
     assert "no progress" in d.reason
 
 
 def test_progress_with_different_failures_is_retest() -> None:
     # fixed 'a' but uncovered 'c' — different set → still making progress.
-    d = decide_loop(cycle=1, current_failures={"b", "c"}, previous_failures={"a", "b"}, cap=3)
+    d = decide_loop(
+        cycle=1, current_failures={"b", "c"}, previous_failures={"a", "b"}, cap=3
+    )
     assert d.action == "retest"
 
 

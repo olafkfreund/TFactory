@@ -57,9 +57,13 @@ async def _run_assessment_bg(req: CloudRunRequest) -> None:
             services=req.services,
             fail_on_severity=req.fail_on_severity,
         )
-        logger.info("cloud assessment stored: %s (%s)", out["assessment_id"], out["verdict"])
+        logger.info(
+            "cloud assessment stored: %s (%s)", out["assessment_id"], out["verdict"]
+        )
     except Exception:  # never let a background failure crash the loop
-        logger.exception("cloud assessment run failed for provider=%s", sanitize_log(req.provider))
+        logger.exception(
+            "cloud assessment run failed for provider=%s", sanitize_log(req.provider)
+        )
 
 
 @router.post("/assessments/run", summary="Launch a cloud check (gate → assessment)")
@@ -67,7 +71,9 @@ async def run_cloud_check(req: CloudRunRequest) -> dict:
     """Run the read-only access/discovery **gate**; if we get in, background the
     assessment and return immediately. The report appears under Cloud Reports."""
     if req.provider not in ("aws", "azure", "gcp"):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"unsupported provider {req.provider!r}")
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, detail=f"unsupported provider {req.provider!r}"
+        )
     gate = await asyncio.to_thread(
         portal_run.preflight,
         req.provider,
@@ -89,6 +95,7 @@ async def run_cloud_check(req: CloudRunRequest) -> dict:
         "status": "running",
     }
 
+
 _DOWNLOAD_MEDIA = {
     "report.md": "text/markdown",
     "remediation.md": "text/markdown",
@@ -107,7 +114,9 @@ def list_cloud_assessments() -> dict:
 def get_cloud_assessment_by_id(assessment_id: str) -> dict:
     data = store.read_assessment(assessment_id)
     if data is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="assessment not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="assessment not found"
+        )
     return data
 
 
@@ -117,10 +126,14 @@ def get_cloud_assessment_by_id(assessment_id: str) -> dict:
 )
 def download_cloud_artifact(assessment_id: str, kind: str):
     if kind not in _DOWNLOAD_MEDIA:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unknown artifact")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="unknown artifact"
+        )
     path = store.download_path(assessment_id, kind)
     if path is None or not Path(path).is_file():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="artifact not available")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="artifact not available"
+        )
     filename = f"cloud-{assessment_id}-{kind}"
     return FileResponse(path, media_type=_DOWNLOAD_MEDIA[kind], filename=filename)
 

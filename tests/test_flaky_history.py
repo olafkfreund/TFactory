@@ -23,6 +23,7 @@ from agents.flaky_history import (  # noqa: E402
 
 # ── flip_rate maths ────────────────────────────────────────────────────
 
+
 def test_flip_rate_zero_for_all_pass():
     h = FlakyHistory("t", (True, True, True, True))
     assert h.flip_rate == 0.0
@@ -66,6 +67,7 @@ def test_threshold_boundary_is_flaky():
 
 # ── NEW classification ─────────────────────────────────────────────────
 
+
 def test_empty_history_is_new():
     h = FlakyHistory("t", ())
     assert h.runs == 0
@@ -79,6 +81,7 @@ def test_single_run_is_new():
 
 
 # ── store IO: load / record ────────────────────────────────────────────
+
 
 def test_load_missing_store_returns_empty(tmp_path):
     h = load_history(tmp_path / "nope.json", "t1")
@@ -141,6 +144,7 @@ def test_corrupt_store_is_tolerated(tmp_path):
 
 # ── as_dict surface (verdicts.json / triage report) ────────────────────
 
+
 def test_as_dict_shape():
     h = FlakyHistory("ac1-login", (True, False, True))
     d = h.as_dict()
@@ -179,8 +183,11 @@ def test_triage_report_surfaces_flip_rate(tmp_path):
             "test_id": "ac1-login",
             "verdict": "flag",
             "reasons": [],
-            "signals_summary": {"coverage_delta_pct": 1.0,
-                                "stability": "stable", "mutation": "killed"},
+            "signals_summary": {
+                "coverage_delta_pct": 1.0,
+                "stability": "stable",
+                "mutation": "killed",
+            },
             "semantic_relevance": "high",
         },
         source="def test_x(): pass\n",
@@ -203,4 +210,3 @@ def test_triage_report_surfaces_flip_rate(tmp_path):
     md = render_markdown(report)
     assert "flaky history: flaky" in md
     assert "flip_rate=1.00 over 4 runs" in md
-

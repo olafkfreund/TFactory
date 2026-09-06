@@ -46,12 +46,14 @@ def _make_runner(returncode: int, findings: list[dict] | None = None, stderr: st
     if findings is None:
         findings = []
     eslint_json = json.dumps([{"filePath": "test.ts", "messages": findings}])
+
     def _runner(cmd, cwd, *, image, timeout):
         return _FakeRunResult(
             returncode=returncode,
             stdout=eslint_json if returncode != 2 else "",
             stderr=stderr,
         )
+
     return _runner
 
 
@@ -62,9 +64,11 @@ def _eslint_msg(rule_id: str, severity: int, line: int, message: str) -> dict:
 def _recording_runner(calls: list, returncode: int = 0, findings: list | None = None):
     findings = findings or []
     eslint_json = json.dumps([{"filePath": "test.ts", "messages": findings}])
+
     def _runner(cmd, cwd, *, image, timeout):
         calls.append({"cmd": cmd, "cwd": cwd, "image": image, "timeout": timeout})
         return _FakeRunResult(returncode=returncode, stdout=eslint_json)
+
     return _runner
 
 
@@ -127,7 +131,9 @@ def test_parse_clean_file_result() -> None:
 
 
 def test_parse_high_finding_extracted() -> None:
-    msg = _eslint_msg("playwright/no-wait-for-timeout", 2, 5, "Don't use waitForTimeout")
+    msg = _eslint_msg(
+        "playwright/no-wait-for-timeout", 2, 5, "Don't use waitForTimeout"
+    )
     raw = json.dumps([{"filePath": "x.ts", "messages": [msg]}])
     findings = _parse_eslint_json(raw, Path("x.ts"))
     assert len(findings) == 1
@@ -146,10 +152,20 @@ def test_parse_medium_finding_extracted() -> None:
 
 def test_parse_multiple_files_merged() -> None:
     """ESLint may report multiple files; all messages collected."""
-    raw = json.dumps([
-        {"filePath": "a.ts", "messages": [_eslint_msg("no-console", 2, 1, "console")]},
-        {"filePath": "b.ts", "messages": [_eslint_msg("playwright/no-wait-for-timeout", 2, 2, "timeout")]},
-    ])
+    raw = json.dumps(
+        [
+            {
+                "filePath": "a.ts",
+                "messages": [_eslint_msg("no-console", 2, 1, "console")],
+            },
+            {
+                "filePath": "b.ts",
+                "messages": [
+                    _eslint_msg("playwright/no-wait-for-timeout", 2, 2, "timeout")
+                ],
+            },
+        ]
+    )
     findings = _parse_eslint_json(raw, Path("a.ts"))
     assert len(findings) == 2
 
@@ -168,7 +184,9 @@ def test_parse_empty_string_returns_empty() -> None:
 
 
 def test_detects_wait_for_timeout_as_high(ts_file: Path, tmp_path: Path) -> None:
-    finding = _eslint_msg("playwright/no-wait-for-timeout", 2, 8, "Don't use waitForTimeout")
+    finding = _eslint_msg(
+        "playwright/no-wait-for-timeout", 2, 8, "Don't use waitForTimeout"
+    )
     runner = _make_runner(returncode=1, findings=[finding])
     report = run_ts_flake_lint(ts_file, tmp_path, runner_fn=runner)
     assert isinstance(report, TSFlakeReport)
@@ -176,7 +194,9 @@ def test_detects_wait_for_timeout_as_high(ts_file: Path, tmp_path: Path) -> None
     assert any(f.rule == "playwright/no-wait-for-timeout" for f in report.findings)
 
 
-def test_detects_set_timeout_with_literal_as_high(ts_file: Path, tmp_path: Path) -> None:
+def test_detects_set_timeout_with_literal_as_high(
+    ts_file: Path, tmp_path: Path
+) -> None:
     finding = _eslint_msg("no-restricted-syntax", 2, 12, "tfactory/no-hardcoded-sleep")
     runner = _make_runner(returncode=1, findings=[finding])
     report = run_ts_flake_lint(ts_file, tmp_path, runner_fn=runner)
@@ -194,7 +214,9 @@ def test_detects_hardcoded_sleep_rule_as_high(ts_file: Path, tmp_path: Path) -> 
 
 
 def test_detects_math_random_as_high(ts_file: Path, tmp_path: Path) -> None:
-    finding = _eslint_msg("tfactory/no-math-random-no-seed", 2, 3, "Math.random without seed")
+    finding = _eslint_msg(
+        "tfactory/no-math-random-no-seed", 2, 3, "Math.random without seed"
+    )
     runner = _make_runner(returncode=1, findings=[finding])
     report = run_ts_flake_lint(ts_file, tmp_path, runner_fn=runner)
     assert report.has_high is True
@@ -210,7 +232,12 @@ def test_detects_console_log_as_medium(ts_file: Path, tmp_path: Path) -> None:
 
 
 def test_detects_non_null_assertion_as_medium(ts_file: Path, tmp_path: Path) -> None:
-    finding = _eslint_msg("@typescript-eslint/no-non-null-assertion", 1, 6, "Forbidden non-null assertion.")
+    finding = _eslint_msg(
+        "@typescript-eslint/no-non-null-assertion",
+        1,
+        6,
+        "Forbidden non-null assertion.",
+    )
     runner = _make_runner(returncode=1, findings=[finding])
     report = run_ts_flake_lint(ts_file, tmp_path, runner_fn=runner)
     # severity=1 means warn; our mapping: @typescript-eslint/no-non-null-assertion → medium
@@ -250,9 +277,14 @@ def test_eslint_exit_1_findings_parsed(ts_file: Path, tmp_path: Path) -> None:
     assert len(report.findings) >= 1
 
 
-def test_eslint_crash_exit_2_returns_medium_error_finding(ts_file: Path, tmp_path: Path) -> None:
+def test_eslint_crash_exit_2_returns_medium_error_finding(
+    ts_file: Path, tmp_path: Path
+) -> None:
     def _crash_runner(cmd, cwd, *, image, timeout):
-        return _FakeRunResult(returncode=2, stdout="", stderr="ESLint config load error")
+        return _FakeRunResult(
+            returncode=2, stdout="", stderr="ESLint config load error"
+        )
+
     report = run_ts_flake_lint(ts_file, tmp_path, runner_fn=_crash_runner)
     assert report.has_medium is True
     assert any("crash" in f.rule or "eslint" in f.rule for f in report.findings)
@@ -262,20 +294,24 @@ def test_runner_image_passed_through(ts_file: Path, tmp_path: Path) -> None:
     calls: list = []
     runner = _recording_runner(calls, returncode=0)
     run_ts_flake_lint(
-        ts_file, tmp_path,
+        ts_file,
+        tmp_path,
         runner_fn=runner,
         runner_image="tfactory-runner-playwright:latest",
     )
     assert calls[0]["image"] == "tfactory-runner-playwright:latest"
 
 
-@pytest.mark.parametrize("rule,eslint_sev,expected_has_high,expected_has_medium", [
-    ("playwright/no-wait-for-timeout", 2, True, False),
-    ("tfactory/no-hardcoded-sleep", 2, True, False),
-    ("tfactory/no-math-random-no-seed", 2, True, False),
-    ("no-console", 2, False, True),
-    ("@typescript-eslint/no-non-null-assertion", 2, False, True),
-])
+@pytest.mark.parametrize(
+    "rule,eslint_sev,expected_has_high,expected_has_medium",
+    [
+        ("playwright/no-wait-for-timeout", 2, True, False),
+        ("tfactory/no-hardcoded-sleep", 2, True, False),
+        ("tfactory/no-math-random-no-seed", 2, True, False),
+        ("no-console", 2, False, True),
+        ("@typescript-eslint/no-non-null-assertion", 2, False, True),
+    ],
+)
 def test_parametrized_rule_classification(
     ts_file: Path,
     tmp_path: Path,
@@ -302,7 +338,9 @@ def test_summary_no_findings() -> None:
 
 
 def test_summary_with_findings() -> None:
-    finding = TSFlakeFinding(rule="playwright/no-wait-for-timeout", severity="high", line=1, message="x")
+    finding = TSFlakeFinding(
+        rule="playwright/no-wait-for-timeout", severity="high", line=1, message="x"
+    )
     report = TSFlakeReport(
         test_file=Path("x.ts"),
         findings=(finding,),

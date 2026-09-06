@@ -41,13 +41,13 @@ from agents.lint_promotion import (
 
 
 def test_time_sleep_synchronous_test_promotes() -> None:
-    source = textwrap.dedent('''
+    source = textwrap.dedent("""
         import time
 
         def test_x():
             time.sleep(0.5)
             assert True
-    ''').lstrip()
+    """).lstrip()
 
     result = flake_risk_lint(source)
     assert any(h.pattern == "time_sleep" for h in result.flagged)
@@ -55,21 +55,23 @@ def test_time_sleep_synchronous_test_promotes() -> None:
     promo = promote_flake_findings(result, source)
     sleep_decision = next(d for d in promo.decisions if d.pattern == "time_sleep")
     assert sleep_decision.promoted is True
-    assert "synchronous" in sleep_decision.reason or "flake-prone" in sleep_decision.reason
+    assert (
+        "synchronous" in sleep_decision.reason or "flake-prone" in sleep_decision.reason
+    )
     assert promo.should_reject is True
 
 
 def test_time_sleep_in_async_test_kept_medium() -> None:
     """`time.sleep` in async-using source: keep medium — may be legitimate
     yield (still antipattern but not auto-rejectable)."""
-    source = textwrap.dedent('''
+    source = textwrap.dedent("""
         import asyncio
         import time
 
         async def test_x():
             time.sleep(0.1)
             await asyncio.sleep(0)
-    ''').lstrip()
+    """).lstrip()
 
     result = flake_risk_lint(source)
     if not any(h.pattern == "time_sleep" for h in result.flagged):
@@ -82,14 +84,14 @@ def test_time_sleep_in_async_test_kept_medium() -> None:
 
 
 def test_time_sleep_with_monkeypatch_clock_kept_medium() -> None:
-    source = textwrap.dedent('''
+    source = textwrap.dedent("""
         import time
 
         def test_x(monkeypatch):
             monkeypatch.setattr("time.sleep", lambda s: None)
             time.sleep(5)
             assert True
-    ''').lstrip()
+    """).lstrip()
 
     result = flake_risk_lint(source)
     if not any(h.pattern == "time_sleep" for h in result.flagged):
@@ -106,20 +108,22 @@ def test_time_sleep_with_monkeypatch_clock_kept_medium() -> None:
 
 def test_datetime_now_in_assert_no_freeze_promotes() -> None:
     """No freeze import + datetime.now() inside an assert → promote."""
-    source = textwrap.dedent('''
+    source = textwrap.dedent("""
         from datetime import datetime
 
         def test_x():
             result = some_function()
             assert result.timestamp == datetime.now()
-    ''').lstrip()
+    """).lstrip()
 
     result = flake_risk_lint(source)
     if not any(h.pattern == "datetime_now_no_freeze" for h in result.flagged):
         pytest.skip("flake_risk_lint didn't flag datetime.now on this shape")
 
     promo = promote_flake_findings(result, source)
-    dt_decision = next(d for d in promo.decisions if d.pattern == "datetime_now_no_freeze")
+    dt_decision = next(
+        d for d in promo.decisions if d.pattern == "datetime_now_no_freeze"
+    )
     assert dt_decision.promoted is True
     assert "assert" in dt_decision.reason
     assert promo.should_reject is True
@@ -127,14 +131,14 @@ def test_datetime_now_in_assert_no_freeze_promotes() -> None:
 
 def test_datetime_now_with_freezegun_kept_medium() -> None:
     """Even if datetime.now is flagged, freezegun import → keep medium."""
-    source = textwrap.dedent('''
+    source = textwrap.dedent("""
         from datetime import datetime
         from freezegun import freeze_time
 
         @freeze_time("2026-01-01")
         def test_x():
             assert datetime.now().year == 2026
-    ''').lstrip()
+    """).lstrip()
 
     result = flake_risk_lint(source)
     # Construct a synthetic medium for this case — flake_risk_lint
@@ -143,37 +147,43 @@ def test_datetime_now_with_freezegun_kept_medium() -> None:
     # promotion rule still defends.
     forced = FlakeRiskResult(
         ok=True,
-        hits=[FlakeRiskHit(
-            pattern="datetime_now_no_freeze",
-            severity="medium",
-            lineno=5,
-            detail="forced",
-            snippet="assert datetime.now().year == 2026",
-        )],
+        hits=[
+            FlakeRiskHit(
+                pattern="datetime_now_no_freeze",
+                severity="medium",
+                lineno=5,
+                detail="forced",
+                snippet="assert datetime.now().year == 2026",
+            )
+        ],
     )
     promo = promote_flake_findings(forced, source)
-    dt_decision = next(d for d in promo.decisions if d.pattern == "datetime_now_no_freeze")
+    dt_decision = next(
+        d for d in promo.decisions if d.pattern == "datetime_now_no_freeze"
+    )
     assert dt_decision.promoted is False
     assert "freezing" in dt_decision.reason
 
 
 def test_datetime_now_used_only_for_logging_kept_medium() -> None:
     """datetime.now() outside any assert → keep medium (probably logging)."""
-    source = textwrap.dedent('''
+    source = textwrap.dedent("""
         from datetime import datetime
 
         def test_x():
             t = datetime.now()
             print(f"started at {t}")
             assert True
-    ''').lstrip()
+    """).lstrip()
 
     result = flake_risk_lint(source)
     if not any(h.pattern == "datetime_now_no_freeze" for h in result.flagged):
         pytest.skip("flake_risk_lint didn't flag this shape")
 
     promo = promote_flake_findings(result, source)
-    dt_decision = next(d for d in promo.decisions if d.pattern == "datetime_now_no_freeze")
+    dt_decision = next(
+        d for d in promo.decisions if d.pattern == "datetime_now_no_freeze"
+    )
     assert dt_decision.promoted is False
     assert "not used in assertions" in dt_decision.reason
 
@@ -184,11 +194,11 @@ def test_datetime_now_used_only_for_logging_kept_medium() -> None:
 def test_high_severity_findings_pass_through_untouched() -> None:
     """A source with a HIGH finding (dict-iteration-order) gets its
     high_count surfaced but no promotion happens."""
-    source = textwrap.dedent('''
+    source = textwrap.dedent("""
         def test_x():
             d = {"a": 1, "b": 2}
             assert list(d.keys()) == ["a", "b"]
-    ''').lstrip()
+    """).lstrip()
 
     result = flake_risk_lint(source)
     assert any(h.severity == "high" for h in result.hits)
@@ -207,13 +217,15 @@ def test_unknown_pattern_kept_medium() -> None:
     """An unrecognised medium pattern defaults to keep-medium."""
     forced = FlakeRiskResult(
         ok=True,
-        hits=[FlakeRiskHit(
-            pattern="some_future_pattern",
-            severity="medium",
-            lineno=10,
-            detail="forced",
-            snippet="x",
-        )],
+        hits=[
+            FlakeRiskHit(
+                pattern="some_future_pattern",
+                severity="medium",
+                lineno=10,
+                detail="forced",
+                snippet="x",
+            )
+        ],
     )
     promo = promote_flake_findings(forced, "def test_x(): pass\n")
     decision = promo.decisions[0]
@@ -226,9 +238,14 @@ def test_syntax_error_source_keeps_all_medium() -> None:
     Don't mass-promote; surface high_count but keep decisions empty."""
     forced = FlakeRiskResult(
         ok=False,
-        hits=[FlakeRiskHit(
-            pattern="time_sleep", severity="medium", lineno=1, detail="x",
-        )],
+        hits=[
+            FlakeRiskHit(
+                pattern="time_sleep",
+                severity="medium",
+                lineno=1,
+                detail="x",
+            )
+        ],
         syntax_error="invalid syntax at line 1",
     )
     promo = promote_flake_findings(forced, "def(:\n")
@@ -249,10 +266,15 @@ def test_promotion_rule_exception_handled() -> None:
 
     forced = FlakeRiskResult(
         ok=True,
-        hits=[FlakeRiskHit(
-            pattern="time_sleep", severity="medium", lineno=3,
-            detail="x", snippet="time.sleep(1)",
-        )],
+        hits=[
+            FlakeRiskHit(
+                pattern="time_sleep",
+                severity="medium",
+                lineno=3,
+                detail="x",
+                snippet="time.sleep(1)",
+            )
+        ],
     )
     original = mod._PROMOTION_RULES["time_sleep"]
     mod._PROMOTION_RULES["time_sleep"] = _bomb
@@ -270,14 +292,14 @@ def test_promotion_rule_exception_handled() -> None:
 
 
 def test_summary_with_high_and_promoted() -> None:
-    source = textwrap.dedent('''
+    source = textwrap.dedent("""
         import time
 
         def test_x():
             d = {"a": 1}
             time.sleep(1)
             assert list(d.keys()) == ["a"]
-    ''').lstrip()
+    """).lstrip()
     result = flake_risk_lint(source)
     promo = promote_flake_findings(result, source)
     summary = promo.summary()
@@ -295,10 +317,16 @@ def test_summary_with_no_findings() -> None:
 
 def test_decision_label() -> None:
     d_promote = PromotionDecision(
-        pattern="x", lineno=1, promoted=True, reason="r",
+        pattern="x",
+        lineno=1,
+        promoted=True,
+        reason="r",
     )
     d_keep = PromotionDecision(
-        pattern="x", lineno=2, promoted=False, reason="r",
+        pattern="x",
+        lineno=2,
+        promoted=False,
+        reason="r",
     )
     assert d_promote.label == "promote"
     assert d_keep.label == "keep_medium"

@@ -40,17 +40,24 @@ _BASE = "/api/tfactory/tasks/001-feat/visual-baselines"
 def test_list_empty_then_accept_then_relist(client) -> None:
     assert client.get(_BASE, params={"target": "web"}).json()["baselines"] == []
 
-    r = client.post(f"{_BASE}/web/homepage.png/accept",
-                    json={"source": "findings/evidence/homepage-actual.png"})
+    r = client.post(
+        f"{_BASE}/web/homepage.png/accept",
+        json={"source": "findings/evidence/homepage-actual.png"},
+    )
     assert r.status_code == 200 and r.json()["accepted"] is True
 
-    snaps = [b["snapshot"] for b in client.get(_BASE, params={"target": "web"}).json()["baselines"]]
+    snaps = [
+        b["snapshot"]
+        for b in client.get(_BASE, params={"target": "web"}).json()["baselines"]
+    ]
     assert snaps == ["homepage.png"]
 
 
 def test_get_baseline_image_bytes(client) -> None:
-    client.post(f"{_BASE}/web/homepage.png/accept",
-                json={"source": "findings/evidence/homepage-actual.png"})
+    client.post(
+        f"{_BASE}/web/homepage.png/accept",
+        json={"source": "findings/evidence/homepage-actual.png"},
+    )
     r = client.get(f"{_BASE}/web/homepage.png")
     assert r.status_code == 200 and r.content.endswith(b"CAPTURED")
 
@@ -60,10 +67,14 @@ def test_get_missing_baseline_404(client) -> None:
 
 
 def test_accept_rejects_path_traversal_source(client) -> None:
-    r = client.post(f"{_BASE}/web/x.png/accept", json={"source": "../../../../etc/passwd"})
+    r = client.post(
+        f"{_BASE}/web/x.png/accept", json={"source": "../../../../etc/passwd"}
+    )
     assert r.status_code == 400
 
 
 def test_unknown_task_404(client) -> None:
-    r = client.get("/api/tfactory/tasks/999-nope/visual-baselines", params={"target": "web"})
+    r = client.get(
+        "/api/tfactory/tasks/999-nope/visual-baselines", params={"target": "web"}
+    )
     assert r.status_code == 404

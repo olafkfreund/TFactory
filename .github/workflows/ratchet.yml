@@ -27,7 +27,18 @@ name: ratchet (code-quality)
 # base), so the largely-untyped legacy backlog does not make adoption PRs red,
 # but net-new type errors on touched files are caught. New files must be clean.
 #
-# SCOPE: apps/backend, apps/web-server and scripts/.
+# SCOPE: apps/backend, apps/web-server and scripts/ for the ratchet; the
+# format gate below covers those three PLUS tests/ (#1285).
+#
+# The format gate used to check only `apps/backend scripts` while its job name
+# implied the repo. 324 files sat behind it -- 105 under apps/web-server, 219
+# under tests/ -- and the three forks disagreed on the scope (AIFactory checked
+# all four directories, PFactory three, this repo two), so contributors who
+# checked the scope their own repo advertises had PRs fail CI on test files.
+# Widened here to match AIFactory, and the job name now states the real scope.
+# Formatting is auto-applied and never reviewed (standards section 3.6), so a
+# wider scope costs nothing to satisfy; the one-off 324-file sweep that made it
+# green is recorded in .git-blame-ignore-revs.
 #
 # scripts/ was added in Factory#597 for one reason: scripts/ratchet_lint.py IS
 # this gate, and it sat outside every ruff and mypy scope this repo has — the
@@ -109,7 +120,7 @@ jobs:
         run: python scripts/ratchet_lint.py --base "${{ steps.base.outputs.ref }}" --package "${PACKAGE_DIR}" --package apps/web-server --package scripts
 
   format-check:
-    name: ruff format --check (apps/backend + scripts)
+    name: ruff format --check (apps/backend + apps/web-server + scripts + tests)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # Formatting is auto-applied, never reviewed (standards section 3.6).
@@ -122,8 +133,8 @@ jobs:
           python-version: "3.12"
       - name: Install ruff (pinned)
         run: pip install "ruff==${RUFF_VERSION}"
-      - name: Ruff format check (apps/backend + scripts)
-        run: ruff format --check apps/backend scripts
+      - name: Ruff format check (apps/backend + apps/web-server + scripts + tests)
+        run: ruff format --check apps/backend apps/web-server scripts tests
 
   config-drift:
     name: shared-baseline drift gate

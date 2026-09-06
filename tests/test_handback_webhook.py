@@ -137,7 +137,9 @@ def _settle_with_new_failure(sd: Path, *, failures: tuple[str, ...]) -> None:
     (sd / "status.json").write_text(json.dumps(status))
 
 
-async def test_failing_verdict_drives_bounded_loop_to_needs_human(tmp_path, monkeypatch):
+async def test_failing_verdict_drives_bounded_loop_to_needs_human(
+    tmp_path, monkeypatch
+):
     """End-to-end (#348): a verdict that keeps failing drives retest →
     retest → terminal needs_human at the cap (2), emitting the RFC-0001
     completion event. The outbound apply-correction POST is covered by

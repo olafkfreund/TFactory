@@ -308,7 +308,9 @@ def test_wait_for_healthy_polls_until_status_matches():
     def _urlopen(req, timeout=None):
         call_count[0] += 1
         if call_count[0] < 3:
-            raise HTTPError(url="", code=503, msg="Service Unavailable", hdrs=None, fp=None)  # type: ignore[arg-type]
+            raise HTTPError(
+                url="", code=503, msg="Service Unavailable", hdrs=None, fp=None
+            )  # type: ignore[arg-type]
         mock_resp = MagicMock()
         mock_resp.status = 200
         mock_resp.__enter__ = lambda s: s
@@ -527,9 +529,7 @@ def test_dispatch_browser_lane_passes_target_url_via_env(tmp_path):
     from tools.runners.docker_runner import DockerRunner, DockerRunResult
 
     target_url = "http://localhost:3000/ready"
-    target = _FakeTarget(
-        wait_for=[_FakeWaitFor(url=target_url, timeout_seconds=60)]
-    )
+    target = _FakeTarget(wait_for=[_FakeWaitFor(url=target_url, timeout_seconds=60)])
 
     # Stub AppRuntime that succeeds without any real docker calls
     class _StubRuntime:
@@ -587,9 +587,7 @@ def test_dispatch_browser_lane_merges_existing_extra_env(tmp_path):
     from tools.runners.docker_runner import DockerRunResult
 
     target_url = "http://localhost:8080/"
-    target = _FakeTarget(
-        wait_for=[_FakeWaitFor(url=target_url)]
-    )
+    target = _FakeTarget(wait_for=[_FakeWaitFor(url=target_url)])
 
     class _StubRuntime:
         def __init__(self, t, r, **kw):
@@ -672,7 +670,9 @@ def test_poll_interval_respected():
         poll_interval=poll_interval,
     )
     with patch("tools.runners.app_runtime.urlrequest.urlopen", _urlopen):
-        with patch("tools.runners.app_runtime.time.sleep", side_effect=sleep_calls.append):
+        with patch(
+            "tools.runners.app_runtime.time.sleep", side_effect=sleep_calls.append
+        ):
             runtime.wait_for_healthy()
 
     # First two failed polls must each be followed by sleep(poll_interval)
@@ -697,7 +697,9 @@ def test_app_runtime_result_defaults():
 
 def test_app_runtime_result_with_health_results():
     """AppRuntimeResult correctly stores health_results."""
-    hr = HealthCheckResult(url="http://x/", last_status=200, last_error=None, healthy=True)
+    hr = HealthCheckResult(
+        url="http://x/", last_status=200, last_error=None, healthy=True
+    )
     r = AppRuntimeResult(started=True, health_results=[hr])
     assert len(r.health_results) == 1
     assert r.health_results[0].url == "http://x/"

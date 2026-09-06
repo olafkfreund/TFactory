@@ -35,14 +35,24 @@ def _aws_runner(*, identity_ok=True, fail=None):
         if "get-caller-identity" in joined:
             if not identity_ok:
                 return _cmd(1, "")
-            return _cmd(0, json.dumps({
-                "Account": "533267307120",
-                "Arn": "arn:aws:iam::533267307120:user/Olaf.Freund",
-            }))
+            return _cmd(
+                0,
+                json.dumps(
+                    {
+                        "Account": "533267307120",
+                        "Arn": "arn:aws:iam::533267307120:user/Olaf.Freund",
+                    }
+                ),
+            )
         if "list-buckets" in joined:
             return _cmd(0, json.dumps([{"Name": f"b{i}"} for i in range(12)]))
         if "get-account-summary" in joined:
-            return _cmd(0, json.dumps({"SummaryMap": {"Users": 18, "Roles": 121, "Policies": 113}}))
+            return _cmd(
+                0,
+                json.dumps(
+                    {"SummaryMap": {"Users": 18, "Roles": 121, "Policies": 113}}
+                ),
+            )
         if "describe-vpcs" in joined:
             return _cmd(0, json.dumps({"Vpcs": [{}, {}, {}]}))
         if "describe-instances" in joined:
@@ -111,13 +121,20 @@ def _azure_runner():
     def run(argv):
         joined = " ".join(argv)
         if "account show" in joined:
-            return _cmd(0, json.dumps({
-                "id": "46b2dfbe-fe9e-4433-b327-b2dc32c8af5e",
-                "name": "Development",
-                "user": {"name": "olaf.freund@outlook.com"},
-            }))
+            return _cmd(
+                0,
+                json.dumps(
+                    {
+                        "id": "46b2dfbe-fe9e-4433-b327-b2dc32c8af5e",
+                        "name": "Development",
+                        "user": {"name": "olaf.freund@outlook.com"},
+                    }
+                ),
+            )
         if "group list" in joined:
-            return _cmd(0, json.dumps([{"name": "rg1"}, {"name": "rg2"}, {"name": "rg3"}]))
+            return _cmd(
+                0, json.dumps([{"name": "rg1"}, {"name": "rg2"}, {"name": "rg3"}])
+            )
         if "storage account list" in joined:
             return _cmd(0, json.dumps([{"name": "sa1"}]))
         if "vm list" in joined:
@@ -153,10 +170,15 @@ def test_access_check_azure_failure() -> None:
 
 def test_assumed_role_arn_name() -> None:
     def run(argv):
-        return _cmd(0, json.dumps({
-            "Account": "1",
-            "Arn": "arn:aws:sts::1:assumed-role/AdminRole/session-123",
-        }))
+        return _cmd(
+            0,
+            json.dumps(
+                {
+                    "Account": "1",
+                    "Arn": "arn:aws:sts::1:assumed-role/AdminRole/session-123",
+                }
+            ),
+        )
 
     r = access_check("aws", runner=run)
     assert r.identity == "AdminRole"
@@ -167,7 +189,10 @@ def test_assumed_role_arn_name() -> None:
 
 def test_discover_builds_inventory() -> None:
     inv = discover(
-        "aws", profile="Calitii", regions=["us-east-1", "eu-west-2"], runner=_aws_runner()
+        "aws",
+        profile="Calitii",
+        regions=["us-east-1", "eu-west-2"],
+        runner=_aws_runner(),
     )
     assert inv["provider"] == "aws"
     assert inv["account"] == "533267307120"

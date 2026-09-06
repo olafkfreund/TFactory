@@ -105,7 +105,9 @@ async def authenticate(authorization_header: str | None) -> AuthenticatedKey:
     """
     raw = _strip_bearer(authorization_header)
     if not raw:
-        raise MCPAuthError("Missing or malformed Authorization header (expected 'Bearer <token>')")
+        raise MCPAuthError(
+            "Missing or malformed Authorization header (expected 'Bearer <token>')"
+        )
 
     digest = _hash_key(raw)
 
@@ -154,7 +156,9 @@ async def _lookup_by_digest(session: AsyncSession, digest: str) -> Authenticated
     try:
         await session.commit()
     except Exception:  # pragma: no cover - defensive
-        logger.debug("Failed to stamp last_used_at for api key %s", authenticated.key_id)
+        logger.debug(
+            "Failed to stamp last_used_at for api key %s", authenticated.key_id
+        )
         await session.rollback()
 
     return authenticated

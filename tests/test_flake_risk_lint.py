@@ -79,11 +79,7 @@ def test_list_of_set_literal_compare_is_rejected() -> None:
 
 def test_list_of_set_variable_compare_is_rejected() -> None:
     """Variable bound to a set literal in the same scope is caught."""
-    src = (
-        "def t():\n"
-        "    s = {1, 2, 3}\n"
-        "    assert list(s) == [1, 2, 3]\n"
-    )
+    src = "def t():\n    s = {1, 2, 3}\n    assert list(s) == [1, 2, 3]\n"
     res = flake_risk_lint(src)
     assert not res.ok
     assert _hits_by_pattern(res, "set_iteration_order")
@@ -183,12 +179,7 @@ def test_random_shuffle_without_seed_is_rejected() -> None:
 
 
 def test_random_WITH_seed_is_NOT_rejected() -> None:
-    src = (
-        "import random\n"
-        "random.seed(42)\n"
-        "def t():\n"
-        "    x = random.choice([1, 2, 3])\n"
-    )
+    src = "import random\nrandom.seed(42)\ndef t():\n    x = random.choice([1, 2, 3])\n"
     res = flake_risk_lint(src)
     assert not _hits_by_pattern(res, "random_no_seed")
 
@@ -271,11 +262,7 @@ def test_kitchen_sink_test_collects_all_patterns() -> None:
 
 
 def test_summary_distinguishes_reject_and_flag() -> None:
-    src = (
-        "import time\n"
-        "def test_x():\n"
-        "    time.sleep(0.1)  # medium only\n"
-    )
+    src = "import time\ndef test_x():\n    time.sleep(0.1)  # medium only\n"
     res = flake_risk_lint(src)
     assert res.ok is True
     assert "1 flag" in res.summary()
@@ -298,9 +285,9 @@ def test_empty_source_is_ok() -> None:
 
 def test_lineno_reported_correctly() -> None:
     src = (
-        "import random\n"        # line 1
-        "\n"                      # line 2
-        "def t():\n"              # line 3
+        "import random\n"  # line 1
+        "\n"  # line 2
+        "def t():\n"  # line 3
         "    x = random.choice([1, 2])\n"  # line 4 ← the hit
     )
     res = flake_risk_lint(src)

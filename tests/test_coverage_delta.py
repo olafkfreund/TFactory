@@ -32,7 +32,9 @@ from agents.coverage_delta import (
 # ── Helpers ────────────────────────────────────────────────────────────
 
 
-def _cobertura(line_rate: float, classes: list[tuple[str, list[tuple[int, int]]]]) -> str:
+def _cobertura(
+    line_rate: float, classes: list[tuple[str, list[tuple[int, int]]]]
+) -> str:
     """Build a minimal Cobertura XML.
 
     Args:
@@ -41,9 +43,7 @@ def _cobertura(line_rate: float, classes: list[tuple[str, list[tuple[int, int]]]
     """
     inner = []
     for filename, lines in classes:
-        line_xml = "".join(
-            f'<line number="{n}" hits="{h}"/>' for n, h in lines
-        )
+        line_xml = "".join(f'<line number="{n}" hits="{h}"/>' for n, h in lines)
         inner.append(
             f'<class filename="{filename}" name="x"><lines>{line_xml}</lines></class>'
         )
@@ -64,10 +64,13 @@ def _cobertura(line_rate: float, classes: list[tuple[str, list[tuple[int, int]]]
 
 
 def test_parse_happy_path(tmp_path: Path) -> None:
-    xml = _cobertura(0.50, [
-        ("app/auth/login.py", [(1, 1), (2, 1), (3, 0)]),
-        ("app/auth/session.py", [(10, 1), (11, 1)]),
-    ])
+    xml = _cobertura(
+        0.50,
+        [
+            ("app/auth/login.py", [(1, 1), (2, 1), (3, 0)]),
+            ("app/auth/session.py", [(10, 1), (11, 1)]),
+        ],
+    )
     p = tmp_path / "coverage.xml"
     p.write_text(xml)
 
@@ -91,7 +94,7 @@ def test_parse_empty_coverage(tmp_path: Path) -> None:
 
 def test_parse_skips_malformed_lines(tmp_path: Path) -> None:
     """A <line> without ``number`` is dropped, the rest survive."""
-    xml = '''<?xml version="1.0"?>
+    xml = """<?xml version="1.0"?>
     <coverage line-rate="0.5">
       <classes>
         <class filename="x.py" name="x"><lines>
@@ -101,7 +104,7 @@ def test_parse_skips_malformed_lines(tmp_path: Path) -> None:
           <line number="4" hits="1"/>
         </lines></class>
       </classes>
-    </coverage>'''
+    </coverage>"""
     p = tmp_path / "coverage.xml"
     p.write_text(xml)
     snap = parse_coverage_xml(p)
@@ -133,11 +136,13 @@ def test_parse_wrong_root_element_raises(tmp_path: Path) -> None:
 def test_delta_zero_when_after_subset_of_baseline() -> None:
     baseline = CoverageSnapshot(
         covered_lines={"x.py": frozenset({1, 2, 3})},
-        line_rate=0.50, total_lines=6,
+        line_rate=0.50,
+        total_lines=6,
     )
     after = CoverageSnapshot(
         covered_lines={"x.py": frozenset({1, 2})},
-        line_rate=0.33, total_lines=6,
+        line_rate=0.33,
+        total_lines=6,
     )
     delta = compute_delta(baseline, after)
     assert delta.new_lines == frozenset()
@@ -151,11 +156,13 @@ def test_delta_zero_when_after_subset_of_baseline() -> None:
 def test_delta_positive_when_new_lines() -> None:
     baseline = CoverageSnapshot(
         covered_lines={"x.py": frozenset({1, 2})},
-        line_rate=0.20, total_lines=10,
+        line_rate=0.20,
+        total_lines=10,
     )
     after = CoverageSnapshot(
         covered_lines={"x.py": frozenset({1, 2, 3, 4, 5})},
-        line_rate=0.50, total_lines=10,
+        line_rate=0.50,
+        total_lines=10,
     )
     delta = compute_delta(baseline, after)
     assert delta.new_lines == frozenset({("x.py", 3), ("x.py", 4), ("x.py", 5)})
@@ -168,14 +175,16 @@ def test_delta_positive_when_new_lines() -> None:
 def test_delta_new_file_counted_separately() -> None:
     baseline = CoverageSnapshot(
         covered_lines={"a.py": frozenset({1})},
-        line_rate=0.20, total_lines=5,
+        line_rate=0.20,
+        total_lines=5,
     )
     after = CoverageSnapshot(
         covered_lines={
             "a.py": frozenset({1}),
             "b.py": frozenset({10, 11}),
         },
-        line_rate=0.60, total_lines=5,
+        line_rate=0.60,
+        total_lines=5,
     )
     delta = compute_delta(baseline, after)
     assert delta.new_lines == frozenset({("b.py", 10), ("b.py", 11)})
@@ -185,10 +194,14 @@ def test_delta_new_file_counted_separately() -> None:
 
 def test_delta_baseline_and_after_totals_recorded() -> None:
     baseline = CoverageSnapshot(
-        covered_lines={"a.py": frozenset({1, 2})}, line_rate=0.4, total_lines=5,
+        covered_lines={"a.py": frozenset({1, 2})},
+        line_rate=0.4,
+        total_lines=5,
     )
     after = CoverageSnapshot(
-        covered_lines={"a.py": frozenset({1, 2, 3})}, line_rate=0.6, total_lines=5,
+        covered_lines={"a.py": frozenset({1, 2, 3})},
+        line_rate=0.6,
+        total_lines=5,
     )
     delta = compute_delta(baseline, after)
     assert delta.baseline_total_covered == 2
@@ -201,20 +214,27 @@ def test_delta_aggregates_across_many_files() -> None:
             "a.py": frozenset({1, 2}),
             "b.py": frozenset({10}),
         },
-        line_rate=0.30, total_lines=10,
+        line_rate=0.30,
+        total_lines=10,
     )
     after = CoverageSnapshot(
         covered_lines={
             "a.py": frozenset({1, 2, 3}),  # +1
-            "b.py": frozenset({10, 11}),   # +1
-            "c.py": frozenset({20, 21}),   # whole new file
+            "b.py": frozenset({10, 11}),  # +1
+            "c.py": frozenset({20, 21}),  # whole new file
         },
-        line_rate=0.60, total_lines=10,
+        line_rate=0.60,
+        total_lines=10,
     )
     delta = compute_delta(baseline, after)
-    assert delta.new_lines == frozenset({
-        ("a.py", 3), ("b.py", 11), ("c.py", 20), ("c.py", 21),
-    })
+    assert delta.new_lines == frozenset(
+        {
+            ("a.py", 3),
+            ("b.py", 11),
+            ("c.py", 20),
+            ("c.py", 21),
+        }
+    )
     assert delta.new_files == 1  # only c.py is new
 
 

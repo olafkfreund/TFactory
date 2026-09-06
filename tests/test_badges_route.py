@@ -38,7 +38,11 @@ def _seed(root: Path, **status_extra):
     (sd / "status.json").write_text(json.dumps(status))
     doc = {
         "verdicts": [{"test_id": "a", "verdict": "accept", "signals_summary": {}}],
-        "confidence_summary": {"accepted_mean": 0.9, "mean": 0.7, "commit_readiness": "high"},
+        "confidence_summary": {
+            "accepted_mean": 0.9,
+            "mean": 0.7,
+            "commit_readiness": "high",
+        },
     }
     (sd / "findings" / "verdicts.json").write_text(json.dumps(doc))
     return sd

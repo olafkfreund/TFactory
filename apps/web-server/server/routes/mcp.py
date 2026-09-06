@@ -58,7 +58,9 @@ def _describe_creds_status(provider: str) -> dict[str, Any]:
             "source": status.source,
         }
     except ImportError:
-        logger.exception("MCP credential framework unavailable for provider %s", provider)
+        logger.exception(
+            "MCP credential framework unavailable for provider %s", provider
+        )
         return {"available": False, "source": "framework-unavailable"}
 
 

@@ -33,9 +33,7 @@ from agents.regression import (  # noqa: E402
 
 # ── helpers ─────────────────────────────────────────────────────────────
 def _outcome(test_id: str, status: TestStatus) -> TestOutcome:
-    return TestOutcome(
-        test_id=test_id, lane="unit", framework="pytest", status=status
-    )
+    return TestOutcome(test_id=test_id, lane="unit", framework="pytest", status=status)
 
 
 def _run(run_id: str, outcomes: dict[str, TestStatus], **kw) -> RegressionRun:
@@ -128,9 +126,7 @@ def test_classify_new_dropped_quarantine_flaky_precedence():
     )
     # new (no baseline) beats flaky
     assert (
-        classify(
-            baseline_status=None, current_status=TestStatus.PASSED, is_flaky=True
-        )
+        classify(baseline_status=None, current_status=TestStatus.PASSED, is_flaky=True)
         is RegressionClass.NEW
     )
     # flaky beats a pass->fail transition (don't alarm on a known flake)

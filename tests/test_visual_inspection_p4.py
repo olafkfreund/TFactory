@@ -53,8 +53,12 @@ def test_create_invokes_runner_in_order(tmp_path) -> None:
         return _Res()
 
     r = write_paths_to_branch(
-        tmp_path, ["automated-test/run1/report.md"], "tfactory/visual-run1",
-        "commit msg", dry_run=False, runner_fn=runner,
+        tmp_path,
+        ["automated-test/run1/report.md"],
+        "tfactory/visual-run1",
+        "commit msg",
+        dry_run=False,
+        runner_fn=runner,
     )
     assert r.ok is True and r.dry_run is False
     assert r.commit_sha == "deadbeef"
@@ -67,5 +71,7 @@ def test_create_invokes_runner_in_order(tmp_path) -> None:
 
 
 def test_missing_repo_dir_errors_on_real_run() -> None:
-    r = write_paths_to_branch("/definitely/not/a/repo", ["a/b.md"], "b", "m", dry_run=False)
+    r = write_paths_to_branch(
+        "/definitely/not/a/repo", ["a/b.md"], "b", "m", dry_run=False
+    )
     assert r.ok is False and "does not exist" in (r.error or "")

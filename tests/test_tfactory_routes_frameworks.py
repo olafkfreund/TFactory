@@ -29,12 +29,19 @@ if "fastapi" not in sys.modules:
     _fastapi = types.ModuleType("fastapi")
 
     class _APIRouter:
-        def __init__(self, *a, **kw): pass
+        def __init__(self, *a, **kw):
+            pass
+
         def get(self, *a, **kw):
-            def _d(fn): return fn
+            def _d(fn):
+                return fn
+
             return _d
+
         def websocket(self, *a, **kw):
-            def _d(fn): return fn
+            def _d(fn):
+                return fn
+
             return _d
 
     class _HTTPException(Exception):
@@ -44,9 +51,12 @@ if "fastapi" not in sys.modules:
             self.detail = detail
 
     class _Response:
-        def __init__(self, content=b"", media_type: str = "", status_code: int = 200) -> None:
+        def __init__(
+            self, content=b"", media_type: str = "", status_code: int = 200
+        ) -> None:
             self.content = (
-                content if isinstance(content, (bytes, bytearray))
+                content
+                if isinstance(content, (bytes, bytearray))
                 else str(content).encode()
             )
             self.media_type = media_type
@@ -54,10 +64,17 @@ if "fastapi" not in sys.modules:
             self.body = self.content
 
     class _WebSocket:
-        async def accept(self): pass
-        async def send_text(self, _t: str): pass
-        async def receive_text(self) -> str: return ""
-        async def close(self, code: int = 1000, reason: str = ""): pass
+        async def accept(self):
+            pass
+
+        async def send_text(self, _t: str):
+            pass
+
+        async def receive_text(self) -> str:
+            return ""
+
+        async def close(self, code: int = 1000, reason: str = ""):
+            pass
 
     class _WebSocketDisconnect(Exception):
         pass
