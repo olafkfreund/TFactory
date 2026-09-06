@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path as FilePath
+from typing import Any
 
 from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, HTTPException, Query
@@ -218,8 +219,10 @@ def _persist_cli_token_to_project(project_id: str) -> bool:
 
 
 async def analyze_issue_with_ai(
-    issue_data: dict, comments: list, project_path: str
-) -> dict:
+    issue_data: dict[str, Any],
+    comments: list[dict[str, Any]],
+    project_path: str,
+) -> dict[str, Any]:
     """
     Analyze a GitHub issue using AI.
 
