@@ -156,7 +156,9 @@ def _ok(_argv):
 
 
 def _fail(_argv):
-    return StepResult(name="x", level="VAL-0", status="failed", returncode=1, reason="boom")
+    return StepResult(
+        name="x", level="VAL-0", status="failed", returncode=1, reason="boom"
+    )
 
 
 def test_run_deploy_lane_all_pass_reaches_dry_run_ceiling():
@@ -207,7 +209,9 @@ def test_build_deploy_verification_never_overclaims_target():
     )
     assert block["target_level"] in ("VAL-2",)
     assert block.get("mode") == "dry-run"
-    assert "VAL-4" not in {lvl["level"] for lvl in block["levels"] if lvl["status"] == "passed"}
+    assert "VAL-4" not in {
+        lvl["level"] for lvl in block["levels"] if lvl["status"] == "passed"
+    }
 
 
 # ── dispatch integration ────────────────────────────────────────────────
@@ -240,8 +244,13 @@ def test_kubectl_step_targets_detected_manifests_not_dot():
     # merge patch, which forces `get secrets` onto the deploy SA's Role. create
     # POSTs with dryRun=All and needs `create` alone -- the SA reads nothing.
     assert kubectl.argv == (
-        "kubectl", "create", "--dry-run=server",
-        "-f", "k8s/base/deploy.yaml", "-f", "k8s/base/svc.yaml",
+        "kubectl",
+        "create",
+        "--dry-run=server",
+        "-f",
+        "k8s/base/deploy.yaml",
+        "-f",
+        "k8s/base/svc.yaml",
     )
     assert "apply" not in kubectl.argv  # apply would re-require namespace-wide get
     assert "." not in kubectl.argv  # never the bare-root read

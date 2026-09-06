@@ -299,7 +299,9 @@ def test_no_provider_http_client_enables_redirects():
             if not (isinstance(func, ast.Attribute) and func.attr == "AsyncClient"):
                 continue
             checked += 1
-            flag = next((kw for kw in node.keywords if kw.arg == "follow_redirects"), None)
+            flag = next(
+                (kw for kw in node.keywords if kw.arg == "follow_redirects"), None
+            )
             assert flag is not None, (
                 f"{module.name}:{node.lineno} states no redirect posture while "
                 "carrying a credential -- the canonical must set follow_redirects=False"

@@ -1,4 +1,5 @@
 """Tax helper (Python side of the polyglot demo)."""
+
 from __future__ import annotations
 
 from decimal import ROUND_HALF_UP, Decimal

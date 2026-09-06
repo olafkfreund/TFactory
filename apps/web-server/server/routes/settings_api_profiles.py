@@ -122,7 +122,9 @@ class ApiProfileUpdate(BaseModel):
         description="Profile name (1-100 characters)",
     )
     baseUrl: str | None = Field(None, min_length=1, description="API endpoint URL")
-    apiKey: str | None = Field(None, min_length=20, description="API key (minimum 20 characters)", repr=False)
+    apiKey: str | None = Field(
+        None, min_length=20, description="API key (minimum 20 characters)", repr=False
+    )
     models: ApiProfileModels | None = Field(None, description="Optional model mappings")
 
 

@@ -31,21 +31,33 @@ if "fastapi" not in sys.modules:
     _fastapi = types.ModuleType("fastapi")
 
     class _APIRouter:
-        def __init__(self, *args, **kwargs): pass
+        def __init__(self, *args, **kwargs):
+            pass
+
         def get(self, *args, **kwargs):
             def _decorator(fn):
                 return fn
+
             return _decorator
+
         def websocket(self, *args, **kwargs):
             def _decorator(fn):
                 return fn
+
             return _decorator
 
     class _WebSocket:
-        async def accept(self): pass
-        async def send_text(self, _t: str): pass
-        async def receive_text(self) -> str: return ""
-        async def close(self, code: int = 1000, reason: str = ""): pass
+        async def accept(self):
+            pass
+
+        async def send_text(self, _t: str):
+            pass
+
+        async def receive_text(self) -> str:
+            return ""
+
+        async def close(self, code: int = 1000, reason: str = ""):
+            pass
 
     class _WebSocketDisconnect(Exception):
         pass
@@ -57,9 +69,12 @@ if "fastapi" not in sys.modules:
             self.detail = detail
 
     class _Response:
-        def __init__(self, content=b"", media_type: str = "", status_code: int = 200) -> None:
+        def __init__(
+            self, content=b"", media_type: str = "", status_code: int = 200
+        ) -> None:
             self.content = (
-                content if isinstance(content, (bytes, bytearray))
+                content
+                if isinstance(content, (bytes, bytearray))
                 else str(content).encode()
             )
             self.media_type = media_type
@@ -126,16 +141,19 @@ def _make_evidence(spec_dir: Path, test_id: str, artifact: str, content: bytes) 
 # ── Content-type helpers ──────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("artifact,expected_ct", [
-    ("screenshot.png", "image/png"),
-    ("video.webm", "video/webm"),
-    ("trace.zip", "application/zip"),
-    ("network.har", "application/json"),
-    ("events.jsonl", "application/json"),
-    ("clip.mp4", "video/mp4"),
-    ("thumb.jpg", "image/jpeg"),
-    ("unknown.bin", "application/octet-stream"),
-])
+@pytest.mark.parametrize(
+    "artifact,expected_ct",
+    [
+        ("screenshot.png", "image/png"),
+        ("video.webm", "video/webm"),
+        ("trace.zip", "application/zip"),
+        ("network.har", "application/json"),
+        ("events.jsonl", "application/json"),
+        ("clip.mp4", "video/mp4"),
+        ("thumb.jpg", "image/jpeg"),
+        ("unknown.bin", "application/octet-stream"),
+    ],
+)
 def test_evidence_content_type(artifact: str, expected_ct: str) -> None:
     assert _evidence_content_type(artifact) == expected_ct
 
@@ -323,6 +341,7 @@ def test_get_evidence_artifact_400_absolute_artifact(workspace_root: Path) -> No
 def test_evidence_endpoint_has_no_post_method() -> None:
     """The function is only registered with @router.get — no POST handler."""
     import server.routes.tfactory_tasks as mod
+
     # The function itself exists; what matters is there's no post_evidence_artifact
     assert hasattr(mod, "get_evidence_artifact")
     assert not hasattr(mod, "post_evidence_artifact")

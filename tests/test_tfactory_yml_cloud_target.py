@@ -59,7 +59,9 @@ def test_scan_defaults() -> None:
 
 
 def test_scan_overrides() -> None:
-    t = _cloud(scan=CloudScanConfig(services=["s3", "iam"], fail_on_severity="critical"))
+    t = _cloud(
+        scan=CloudScanConfig(services=["s3", "iam"], fail_on_severity="critical")
+    )
     assert t.scan.services == ["s3", "iam"]
     assert t.scan.fail_on_severity == "critical"
 

@@ -38,8 +38,12 @@ from agents.triage_dedup import (
 
 
 def _cand(
-    *, test_id: str, source: str, verdict: str = "accept",
-    coverage_pct: float = 0.0, mutation: str = "killed",
+    *,
+    test_id: str,
+    source: str,
+    verdict: str = "accept",
+    coverage_pct: float = 0.0,
+    mutation: str = "killed",
     stability: str = "stable",
 ) -> TriageCandidate:
     return TriageCandidate(
@@ -182,7 +186,7 @@ def test_dedup_whitespace_only_difference_collapses() -> None:
     """Same code, different formatting → one survivor, one
     whitespace-normalised collision."""
     a = "def test_x():\n    assert x == 1\n"
-    b = "def test_x():\n    assert x   ==   1\n"   # extra spaces
+    b = "def test_x():\n    assert x   ==   1\n"  # extra spaces
     c1 = _cand(test_id="a", source=a)
     c2 = _cand(test_id="b", source=b)
     result = dedup_candidates([c1, c2])
@@ -195,10 +199,12 @@ def test_dedup_whitespace_only_difference_collapses() -> None:
 def test_dedup_blank_lines_only_difference_collapses() -> None:
     a = "def test_x():\n    assert 1\n"
     b = "def test_x():\n\n\n    assert 1\n"
-    result = dedup_candidates([
-        _cand(test_id="a", source=a),
-        _cand(test_id="b", source=b),
-    ])
+    result = dedup_candidates(
+        [
+            _cand(test_id="a", source=a),
+            _cand(test_id="b", source=b),
+        ]
+    )
     assert len(result.kept) == 1
     assert result.collisions[0].kind == "whitespace_normalised"
 
@@ -208,10 +214,12 @@ def test_dedup_indent_difference_NOT_collapsed() -> None:
     Must NOT collapse."""
     a = "def test_x():\n    assert 1\n"
     b = "def test_x():\n  assert 1\n"  # 2 spaces vs 4
-    result = dedup_candidates([
-        _cand(test_id="a", source=a),
-        _cand(test_id="b", source=b),
-    ])
+    result = dedup_candidates(
+        [
+            _cand(test_id="a", source=a),
+            _cand(test_id="b", source=b),
+        ]
+    )
     assert len(result.kept) == 2
     assert result.collisions == ()
 
@@ -227,8 +235,8 @@ def test_dedup_byte_and_whitespace_collisions_together() -> None:
     raw_extra_ws = "def test_x():\n    assert  1\n"
 
     c1 = _cand(test_id="a", source=raw)
-    c2 = _cand(test_id="b", source=raw)            # byte-dup of a
-    c3 = _cand(test_id="c", source=raw_extra_ws)   # whitespace-dup of a
+    c2 = _cand(test_id="b", source=raw)  # byte-dup of a
+    c3 = _cand(test_id="c", source=raw_extra_ws)  # whitespace-dup of a
 
     result = dedup_candidates([c1, c2, c3])
     assert len(result.kept) == 1

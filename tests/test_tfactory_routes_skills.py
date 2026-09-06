@@ -28,12 +28,19 @@ if "fastapi" not in sys.modules:
     _fastapi = types.ModuleType("fastapi")
 
     class _APIRouter:
-        def __init__(self, *a, **kw): pass
+        def __init__(self, *a, **kw):
+            pass
+
         def get(self, *a, **kw):
-            def _d(fn): return fn
+            def _d(fn):
+                return fn
+
             return _d
+
         def websocket(self, *a, **kw):
-            def _d(fn): return fn
+            def _d(fn):
+                return fn
+
             return _d
 
     class _HTTPException(Exception):
@@ -43,9 +50,12 @@ if "fastapi" not in sys.modules:
             self.detail = detail
 
     class _Response:
-        def __init__(self, content=b"", media_type: str = "", status_code: int = 200) -> None:
+        def __init__(
+            self, content=b"", media_type: str = "", status_code: int = 200
+        ) -> None:
             self.content = (
-                content if isinstance(content, (bytes, bytearray))
+                content
+                if isinstance(content, (bytes, bytearray))
                 else str(content).encode()
             )
             self.media_type = media_type
@@ -53,10 +63,17 @@ if "fastapi" not in sys.modules:
             self.body = self.content
 
     class _WebSocket:
-        async def accept(self): pass
-        async def send_text(self, _t: str): pass
-        async def receive_text(self) -> str: return ""
-        async def close(self, code: int = 1000, reason: str = ""): pass
+        async def accept(self):
+            pass
+
+        async def send_text(self, _t: str):
+            pass
+
+        async def receive_text(self) -> str:
+            return ""
+
+        async def close(self, code: int = 1000, reason: str = ""):
+            pass
 
     class _WebSocketDisconnect(Exception):
         pass
@@ -154,13 +171,15 @@ def test_list_skills_empty_when_skills_dir_is_empty(
 def test_list_skills_returns_parsed_frontmatter(skills_dir: Path) -> None:
     """Two synthetic SKILL.md files → both returned with frontmatter parsed."""
     _write_skill(
-        skills_dir, "skill-alpha",
+        skills_dir,
+        "skill-alpha",
         description="Alpha skill",
         when_to_use="When A is needed",
         allowed_tools=["Bash", "mcp__some__tool"],
     )
     _write_skill(
-        skills_dir, "skill-beta",
+        skills_dir,
+        "skill-beta",
         description="Beta skill",
         when_to_use="When B is needed",
         allowed_tools=["mcp__beta__tool"],

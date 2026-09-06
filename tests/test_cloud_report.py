@@ -28,7 +28,9 @@ _INV = {
 }
 
 
-def _rec(status="FAIL", severity="High", title="EBS volume is encrypted", region="eu-west-2"):
+def _rec(
+    status="FAIL", severity="High", title="EBS volume is encrypted", region="eu-west-2"
+):
     return {
         "status_code": status,
         "severity": severity,
@@ -52,7 +54,9 @@ def test_findings_paths_layout(tmp_path: Path) -> None:
 
 
 def test_dedup_collapses_duplicates_with_count() -> None:
-    findings = parse_ocsf([_rec() for _ in range(9)] + [_rec(severity="Critical", title="Public bucket")])
+    findings = parse_ocsf(
+        [_rec() for _ in range(9)] + [_rec(severity="Critical", title="Public bucket")]
+    )
     out = dedup_findings_for_diagram(findings, limit=8)
     assert out[0]["severity"] == "critical"  # worst first
     ebs = [f for f in out if "EBS volume is encrypted" in f["title"]][0]
@@ -78,7 +82,9 @@ def test_render_report_has_verdict_inventory_and_checks() -> None:
 
 def test_assess_and_write_creates_all_artifacts(tmp_path: Path) -> None:
     ocsf = [_rec(severity="High"), _rec(severity="Medium"), _rec(status="PASS")]
-    result = assess_and_write(tmp_path, inventory=_INV, ocsf=ocsf, fail_on_severity="high")
+    result = assess_and_write(
+        tmp_path, inventory=_INV, ocsf=ocsf, fail_on_severity="high"
+    )
 
     assert result["verdict"] == "reject"
     p = cloud_findings_paths(tmp_path)
@@ -110,6 +116,9 @@ def test_assess_and_write_accept_when_clean(tmp_path: Path) -> None:
 def test_assess_and_write_respects_gate(tmp_path: Path) -> None:
     # only medium fails; gate=high → flag (not reject)
     result = assess_and_write(
-        tmp_path, inventory=_INV, ocsf=[_rec(severity="Medium")], fail_on_severity="high"
+        tmp_path,
+        inventory=_INV,
+        ocsf=[_rec(severity="Medium")],
+        fail_on_severity="high",
     )
     assert result["verdict"] == "flag"

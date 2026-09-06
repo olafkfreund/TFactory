@@ -61,6 +61,7 @@ from tfactory_yml import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _write_yml(tmp_path: Path, content: str) -> Path:
     """Write content to .tfactory.yml in tmp_path and return the path."""
     path = tmp_path / ".tfactory.yml"
@@ -71,6 +72,7 @@ def _write_yml(tmp_path: Path, content: str) -> Path:
 # ---------------------------------------------------------------------------
 # 1. Round-trip for each target type
 # ---------------------------------------------------------------------------
+
 
 def test_http_target_round_trip():
     """HttpTarget parses from raw dict and round-trips via model_dump."""
@@ -184,47 +186,85 @@ def test_feature_flag_target_round_trip():
 # 2. Missing required fields — one test per target type
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("missing_field,payload", [
-    ("base_url", {"type": "http", "name": "api"}),
-    ("name",     {"type": "http", "base_url": "https://example.com"}),
-])
+
+@pytest.mark.parametrize(
+    "missing_field,payload",
+    [
+        ("base_url", {"type": "http", "name": "api"}),
+        ("name", {"type": "http", "base_url": "https://example.com"}),
+    ],
+)
 def test_http_target_missing_required(missing_field, payload):
     """HttpTarget rejects when a required field is absent."""
     with pytest.raises(Exception):  # pydantic ValidationError or TFactoryYmlError
         TFactoryConfig.model_validate({"version": 1, "targets": [payload]})
 
 
-@pytest.mark.parametrize("missing_field,payload", [
-    ("context",   {"type": "kubernetes", "name": "k", "namespace": "ns",
-                   "auth": {"type": "serviceaccount", "token_file": "/t"}}),
-    ("namespace", {"type": "kubernetes", "name": "k", "context": "ctx",
-                   "auth": {"type": "serviceaccount", "token_file": "/t"}}),
-    ("auth",      {"type": "kubernetes", "name": "k", "context": "ctx", "namespace": "ns"}),
-])
+@pytest.mark.parametrize(
+    "missing_field,payload",
+    [
+        (
+            "context",
+            {
+                "type": "kubernetes",
+                "name": "k",
+                "namespace": "ns",
+                "auth": {"type": "serviceaccount", "token_file": "/t"},
+            },
+        ),
+        (
+            "namespace",
+            {
+                "type": "kubernetes",
+                "name": "k",
+                "context": "ctx",
+                "auth": {"type": "serviceaccount", "token_file": "/t"},
+            },
+        ),
+        (
+            "auth",
+            {"type": "kubernetes", "name": "k", "context": "ctx", "namespace": "ns"},
+        ),
+    ],
+)
 def test_kubernetes_target_missing_required(missing_field, payload):
     """KubernetesTarget rejects when a required field is absent."""
     with pytest.raises(Exception):
         TFactoryConfig.model_validate({"version": 1, "targets": [payload]})
 
 
-@pytest.mark.parametrize("missing_field,payload", [
-    ("compose_file", {"type": "docker_compose", "name": "w", "services": ["app"]}),
-    ("services",     {"type": "docker_compose", "name": "w",
-                      "compose_file": "docker-compose.yml"}),
-    ("name",         {"type": "docker_compose", "compose_file": "dc.yml",
-                      "services": ["app"]}),
-])
+@pytest.mark.parametrize(
+    "missing_field,payload",
+    [
+        ("compose_file", {"type": "docker_compose", "name": "w", "services": ["app"]}),
+        (
+            "services",
+            {
+                "type": "docker_compose",
+                "name": "w",
+                "compose_file": "docker-compose.yml",
+            },
+        ),
+        (
+            "name",
+            {"type": "docker_compose", "compose_file": "dc.yml", "services": ["app"]},
+        ),
+    ],
+)
 def test_docker_compose_target_missing_required(missing_field, payload):
     """DockerComposeTarget rejects when a required field is absent."""
     with pytest.raises(Exception):
         TFactoryConfig.model_validate({"version": 1, "targets": [payload]})
 
 
-@pytest.mark.parametrize("missing_field,payload", [
-    ("flag_key", {"type": "feature_flag", "name": "f", "service": "growthbook"}),
-    ("service",  {"type": "feature_flag", "name": "f", "flag_key": "k"}),
-    ("name",     {"type": "feature_flag", "flag_key": "k", "service": "split"}),
-])
+@pytest.mark.parametrize(
+    "missing_field,payload",
+    [
+        ("flag_key", {"type": "feature_flag", "name": "f", "service": "growthbook"}),
+        ("service", {"type": "feature_flag", "name": "f", "flag_key": "k"}),
+        ("name", {"type": "feature_flag", "flag_key": "k", "service": "split"}),
+    ],
+)
 def test_feature_flag_target_missing_required(missing_field, payload):
     """FeatureFlagTarget rejects when a required field is absent."""
     with pytest.raises(Exception):
@@ -248,21 +288,28 @@ _MTLS = {"type": "mtls", "client_cert": "/cert.pem", "client_key": "/key.pem"}
 _NONE = {"type": "none"}
 
 
-@pytest.mark.parametrize("auth_data,expected_type", [
-    (_BEARER, BearerAuth),
-    (_BASIC, BasicAuth),
-    (_OAUTH2, OAuth2ClientCredentialsAuth),
-    (_SERVICEACCOUNT, ServiceAccountAuth),
-    (_MTLS, MtlsAuth),
-    (_NONE, NoneAuth),
-])
+@pytest.mark.parametrize(
+    "auth_data,expected_type",
+    [
+        (_BEARER, BearerAuth),
+        (_BASIC, BasicAuth),
+        (_OAUTH2, OAuth2ClientCredentialsAuth),
+        (_SERVICEACCOUNT, ServiceAccountAuth),
+        (_MTLS, MtlsAuth),
+        (_NONE, NoneAuth),
+    ],
+)
 def test_auth_types_discriminated(auth_data, expected_type):
     """All six auth types parse correctly via the discriminated union."""
     raw = {
         "version": 1,
         "targets": [
-            {"type": "http", "name": "api", "base_url": "https://api.example.com",
-             "auth": auth_data}
+            {
+                "type": "http",
+                "name": "api",
+                "base_url": "https://api.example.com",
+                "auth": auth_data,
+            }
         ],
     }
     cfg = TFactoryConfig.model_validate(raw)
@@ -274,8 +321,12 @@ def test_auth_type_nonsense_rejected():
     raw = {
         "version": 1,
         "targets": [
-            {"type": "http", "name": "api", "base_url": "https://api.example.com",
-             "auth": {"type": "nonsense_auth", "token": "abc"}}
+            {
+                "type": "http",
+                "name": "api",
+                "base_url": "https://api.example.com",
+                "auth": {"type": "nonsense_auth", "token": "abc"},
+            }
         ],
     }
     with pytest.raises(Exception) as exc_info:
@@ -288,20 +339,28 @@ def test_auth_type_nonsense_rejected():
 # 4. Env-var name validation
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("bad_name", [
-    "not_uppercase",
-    "0LEADING_NUM",
-    "has space",
-    "has-dash",
-    "",
-])
+
+@pytest.mark.parametrize(
+    "bad_name",
+    [
+        "not_uppercase",
+        "0LEADING_NUM",
+        "has space",
+        "has-dash",
+        "",
+    ],
+)
 def test_env_var_name_invalid(bad_name):
     """Bad env-var names are rejected at parse time."""
     raw = {
         "version": 1,
         "targets": [
-            {"type": "http", "name": "api", "base_url": "https://api.example.com",
-             "auth": {"type": "bearer", "token_env": bad_name}}
+            {
+                "type": "http",
+                "name": "api",
+                "base_url": "https://api.example.com",
+                "auth": {"type": "bearer", "token_env": bad_name},
+            }
         ],
     }
     with pytest.raises(Exception) as exc_info:
@@ -309,21 +368,28 @@ def test_env_var_name_invalid(bad_name):
     assert "token_env" in str(exc_info.value) or "env" in str(exc_info.value).lower()
 
 
-@pytest.mark.parametrize("good_name", [
-    "MY_TOKEN",
-    "STAGING_API_TOKEN",
-    "GOOD_NAME_1",
-    "A",
-    "_UNDERSCORE_START",
-    "TOKEN123",
-])
+@pytest.mark.parametrize(
+    "good_name",
+    [
+        "MY_TOKEN",
+        "STAGING_API_TOKEN",
+        "GOOD_NAME_1",
+        "A",
+        "_UNDERSCORE_START",
+        "TOKEN123",
+    ],
+)
 def test_env_var_name_valid(good_name):
     """Valid env-var names are accepted."""
     raw = {
         "version": 1,
         "targets": [
-            {"type": "http", "name": "api", "base_url": "https://api.example.com",
-             "auth": {"type": "bearer", "token_env": good_name}}
+            {
+                "type": "http",
+                "name": "api",
+                "base_url": "https://api.example.com",
+                "auth": {"type": "bearer", "token_env": good_name},
+            }
         ],
     }
     cfg = TFactoryConfig.model_validate(raw)
@@ -334,14 +400,22 @@ def test_env_var_name_valid(good_name):
 # 5. Env-var indirection NOT resolved at parse time
 # ---------------------------------------------------------------------------
 
+
 def test_parse_does_not_resolve_env_vars(monkeypatch):
     """Parsing succeeds even when the referenced env var is not set."""
     monkeypatch.delenv("NONEXISTENT_VAR_THAT_DOESNT_EXIST", raising=False)
     raw = {
         "version": 1,
         "targets": [
-            {"type": "http", "name": "api", "base_url": "https://api.example.com",
-             "auth": {"type": "bearer", "token_env": "NONEXISTENT_VAR_THAT_DOESNT_EXIST"}}
+            {
+                "type": "http",
+                "name": "api",
+                "base_url": "https://api.example.com",
+                "auth": {
+                    "type": "bearer",
+                    "token_env": "NONEXISTENT_VAR_THAT_DOESNT_EXIST",
+                },
+            }
         ],
     }
     # Should not raise — only the name is stored, not the value
@@ -399,6 +473,7 @@ def test_resolve_auth_env_vars_missing_raises(monkeypatch):
 # 6. load_tfactory_yml filesystem behaviour
 # ---------------------------------------------------------------------------
 
+
 def test_load_returns_none_for_missing_file(tmp_path):
     """load_tfactory_yml returns None when .tfactory.yml is not present."""
     result = load_tfactory_yml(tmp_path)
@@ -407,13 +482,16 @@ def test_load_returns_none_for_missing_file(tmp_path):
 
 def test_load_returns_config_for_valid_file(tmp_path):
     """load_tfactory_yml returns TFactoryConfig for a valid file."""
-    _write_yml(tmp_path, """
+    _write_yml(
+        tmp_path,
+        """
         version: 1
         targets:
           - name: api
             type: http
             base_url: https://api.example.com
-    """)
+    """,
+    )
     cfg = load_tfactory_yml(tmp_path)
     assert cfg is not None
     assert isinstance(cfg, TFactoryConfig)
@@ -426,18 +504,23 @@ def test_load_raises_on_malformed_yaml(tmp_path):
     bad.write_text("version: 1\ntargets:\n  - name: [unclosed bracket")
     with pytest.raises(TFactoryYmlError) as exc_info:
         load_tfactory_yml(tmp_path)
-    assert str(tmp_path) in str(exc_info.value) or ".tfactory.yml" in str(exc_info.value)
+    assert str(tmp_path) in str(exc_info.value) or ".tfactory.yml" in str(
+        exc_info.value
+    )
 
 
 def test_load_raises_on_validation_error(tmp_path):
     """load_tfactory_yml raises TFactoryYmlError on Pydantic validation failures."""
-    _write_yml(tmp_path, """
+    _write_yml(
+        tmp_path,
+        """
         version: 1
         targets:
           - name: api
             type: http
             # base_url is required but missing
-    """)
+    """,
+    )
     with pytest.raises(TFactoryYmlError) as exc_info:
         load_tfactory_yml(tmp_path)
     assert exc_info.value.path == tmp_path / ".tfactory.yml"
@@ -466,6 +549,7 @@ def test_load_tfactory_yml_text_invalid_raises():
 # ---------------------------------------------------------------------------
 # 7. Discriminated union edge cases
 # ---------------------------------------------------------------------------
+
 
 def test_unknown_target_type_rejected():
     """An unknown target type is rejected with a useful error message."""
@@ -542,13 +626,18 @@ def test_docker_compose_rejects_empty_services():
 # 8. Default / optional field behaviour
 # ---------------------------------------------------------------------------
 
+
 def test_wait_for_defaults_to_empty_list():
     """DockerComposeTarget.wait_for defaults to []."""
     raw = {
         "version": 1,
         "targets": [
-            {"type": "docker_compose", "name": "w", "compose_file": "dc.yml",
-             "services": ["app"]}
+            {
+                "type": "docker_compose",
+                "name": "w",
+                "compose_file": "dc.yml",
+                "services": ["app"],
+            }
         ],
     }
     cfg = TFactoryConfig.model_validate(raw)
@@ -627,8 +716,12 @@ _TWO_TARGET_CONFIG = {
     "version": 1,
     "targets": [
         {"type": "http", "name": "api", "base_url": "https://api.example.com"},
-        {"type": "docker_compose", "name": "web", "compose_file": "dc.yml",
-         "services": ["app"]},
+        {
+            "type": "docker_compose",
+            "name": "web",
+            "compose_file": "dc.yml",
+            "services": ["app"],
+        },
     ],
 }
 
@@ -686,12 +779,15 @@ def test_default_target_invalid_rejected():
     }
     with pytest.raises(Exception) as exc_info:
         TFactoryConfig.model_validate(raw)
-    assert "default_target" in str(exc_info.value) or "nonexistent" in str(exc_info.value)
+    assert "default_target" in str(exc_info.value) or "nonexistent" in str(
+        exc_info.value
+    )
 
 
 # ---------------------------------------------------------------------------
 # 10. has_env_var_references helper
 # ---------------------------------------------------------------------------
+
 
 def test_has_env_var_references_true():
     """_has_env_var_references detects *_env keys."""
@@ -701,14 +797,17 @@ def test_has_env_var_references_true():
 
 def test_has_env_var_references_false():
     """_has_env_var_references returns False when there are no *_env keys."""
-    raw = {"version": 1, "targets": [{"type": "http", "name": "t",
-                                       "base_url": "https://example.com"}]}
+    raw = {
+        "version": 1,
+        "targets": [{"type": "http", "name": "t", "base_url": "https://example.com"}],
+    }
     assert _has_env_var_references(raw) is False
 
 
 # ---------------------------------------------------------------------------
 # 11. .tfactory.yml.example parses with 4 targets
 # ---------------------------------------------------------------------------
+
 
 def test_example_file_parses(tmp_path):
     """The .tfactory.yml.example in the repo root parses with 4 targets."""
@@ -721,6 +820,7 @@ def test_example_file_parses(tmp_path):
         pytest.skip(".tfactory.yml.example not yet created (created in commit 6)")
 
     import yaml
+
     raw_text = example_path.read_text(encoding="utf-8")
     # Remove YAML comment-only lines that might trip the parser
     raw_data = yaml.safe_load(raw_text)
@@ -741,6 +841,7 @@ def test_example_file_parses(tmp_path):
 # ---------------------------------------------------------------------------
 # 12. OAuth2 auth round-trip
 # ---------------------------------------------------------------------------
+
 
 def test_oauth2_auth_round_trip():
     """OAuth2ClientCredentialsAuth parses and round-trips."""
@@ -796,6 +897,7 @@ def test_oauth2_invalid_client_id_env_rejected():
 # ---------------------------------------------------------------------------
 # 13. Mtls auth optional CA cert
 # ---------------------------------------------------------------------------
+
 
 def test_mtls_auth_with_ca_cert():
     """MtlsAuth accepts optional ca_cert."""

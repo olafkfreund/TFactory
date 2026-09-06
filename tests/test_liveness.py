@@ -92,9 +92,7 @@ def test_active_but_fresh_is_not_stalled(tmp_path: Path) -> None:
 )
 def test_non_active_status_never_stalls(tmp_path: Path, status: str) -> None:
     # Handoff + terminal + already-stalled states are excluded even when stale.
-    _write_status(
-        tmp_path, status=status, updated_at=_iso(_NOW - timedelta(days=1))
-    )
+    _write_status(tmp_path, status=status, updated_at=_iso(_NOW - timedelta(days=1)))
     assert not evaluate_liveness(tmp_path, now=_NOW, deadline_seconds=_DEADLINE).stalled
 
 
@@ -138,7 +136,9 @@ def test_deadline_env_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
 def test_mark_stalled_flips_and_preserves_prior(tmp_path: Path) -> None:
     _write_status(
-        tmp_path, status="evaluating", phase="signals",
+        tmp_path,
+        status="evaluating",
+        phase="signals",
         updated_at=_iso(_NOW - timedelta(seconds=2000)),
     )
     v = evaluate_liveness(tmp_path, now=_NOW, deadline_seconds=_DEADLINE)
@@ -152,12 +152,16 @@ def test_mark_stalled_flips_and_preserves_prior(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("prior", ["planning", "generating"])
-def test_mark_stalled_takes_inline_stages_terminal_failed(tmp_path: Path, prior) -> None:
+def test_mark_stalled_takes_inline_stages_terminal_failed(
+    tmp_path: Path, prior
+) -> None:
     """An inline stage (planning/generating) runs in the control-plane process,
     so a stall is unrecoverable — it goes terminal `failed`, not `stalled`, so it
     leaves the cockpit's LIVE AGENTS instead of lingering as a fake live agent."""
     _write_status(
-        tmp_path, status=prior, phase="x",
+        tmp_path,
+        status=prior,
+        phase="x",
         updated_at=_iso(_NOW - timedelta(seconds=2000)),
     )
     v = evaluate_liveness(tmp_path, now=_NOW, deadline_seconds=_DEADLINE)

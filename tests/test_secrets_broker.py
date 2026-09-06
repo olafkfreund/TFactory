@@ -37,6 +37,7 @@ def cloud_config(monkeypatch, tmp_path):
 
 # ── resolve_ref + egress gate ───────────────────────────────────────────────
 
+
 def test_resolve_ref_local_backend_always_allowed(monkeypatch):
     from tfactory_secrets.broker import CredentialBroker
 
@@ -70,6 +71,7 @@ def test_resolve_ref_nonlocal_blocked_when_egress_off(monkeypatch):
 
 # ── resolve_cloud ───────────────────────────────────────────────────────────
 
+
 def test_resolve_cloud_disabled_by_default():
     from tfactory_secrets.broker import CredentialBroker
 
@@ -89,10 +91,15 @@ def test_resolve_cloud_materialises_file_cred(monkeypatch, cloud_config, tmp_pat
     from tfactory_secrets.broker import CredentialBroker
 
     monkeypatch.setenv("FAKE_GCP_JSON", '{"type":"service_account","x":1}')
-    cloud_config({
-        "gcp": {"ref": "env:FAKE_GCP_JSON",
-                "as": "GOOGLE_APPLICATION_CREDENTIALS", "kind": "file"},
-    })
+    cloud_config(
+        {
+            "gcp": {
+                "ref": "env:FAKE_GCP_JSON",
+                "as": "GOOGLE_APPLICATION_CREDENTIALS",
+                "kind": "file",
+            },
+        }
+    )
 
     b = CredentialBroker(spec_dir=tmp_path, egress_allowed=True)
     status = b.resolve_cloud("gcp")
@@ -128,7 +135,8 @@ def test_resolve_cloud_falls_back_to_ambient(monkeypatch, cloud_config, tmp_path
 
     cloud_config({})  # empty
     monkeypatch.setattr(
-        mc, "get_credential_status",
+        mc,
+        "get_credential_status",
         lambda p: CredentialStatus(True, "ambient:test", {"X": "1"}),
     )
     with CredentialBroker(spec_dir=tmp_path, egress_allowed=True) as b:
@@ -146,7 +154,8 @@ def test_backend_ref_failure_falls_back(monkeypatch, cloud_config, tmp_path):
     monkeypatch.delenv("MISSING_REF_VAR", raising=False)
     cloud_config({"azure": {"ref": "env:MISSING_REF_VAR", "as": "AZURE_TOKEN"}})
     monkeypatch.setattr(
-        mc, "get_credential_status",
+        mc,
+        "get_credential_status",
         lambda p: CredentialStatus(True, "ambient:fallback"),
     )
     with CredentialBroker(spec_dir=tmp_path, egress_allowed=True) as b:
@@ -155,6 +164,7 @@ def test_backend_ref_failure_falls_back(monkeypatch, cloud_config, tmp_path):
 
 
 # ── materialise + wipe ──────────────────────────────────────────────────────
+
 
 def test_materialise_file_mode_and_wipe(tmp_path):
     from tfactory_secrets.broker import CredentialBroker

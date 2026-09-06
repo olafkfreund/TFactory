@@ -70,7 +70,9 @@ class _Runner:
 
 def test_build_command_step_uses_shell(tmp_path):
     r = _Runner()
-    steps = [SimpleNamespace(type="command", command="npm ci && npm run build", cwd=None)]
+    steps = [
+        SimpleNamespace(type="command", command="npm ci && npm run build", cwd=None)
+    ]
     res = run_build_steps(steps, repo_root=tmp_path, runner_fn=r)
     assert res.ok
     argv, cwd = r.calls[0]
@@ -81,7 +83,11 @@ def test_build_command_step_uses_shell(tmp_path):
 
 def test_build_docker_step_argv(tmp_path):
     r = _Runner()
-    steps = [SimpleNamespace(type="docker", dockerfile="Dockerfile", context=".", image="myapp:test")]
+    steps = [
+        SimpleNamespace(
+            type="docker", dockerfile="Dockerfile", context=".", image="myapp:test"
+        )
+    ]
     res = run_build_steps(steps, repo_root=tmp_path, runner_fn=r)
     assert res.ok
     argv, _ = r.calls[0]
@@ -102,7 +108,9 @@ def test_build_stops_on_first_failure(tmp_path):
 
 
 def test_build_unknown_type(tmp_path):
-    res = run_build_steps([SimpleNamespace(type="wat")], repo_root=tmp_path, runner_fn=_Runner())
+    res = run_build_steps(
+        [SimpleNamespace(type="wat")], repo_root=tmp_path, runner_fn=_Runner()
+    )
     assert res.ok is False
     assert "unknown build step type" in res.error
 
@@ -144,7 +152,11 @@ def _target(**kw):
 
 def test_runtime_start_argv_and_target_url():
     r = _DockerRunner()
-    wf = [SimpleNamespace(url="http://localhost:3000/health", expect_status=200, timeout_seconds=30)]
+    wf = [
+        SimpleNamespace(
+            url="http://localhost:3000/health", expect_status=200, timeout_seconds=30
+        )
+    ]
     # Pin the allocated host port so the assertions are deterministic; the
     # declared container port (3000) is bound to this dynamic host port
     # (RFC-0016 #465), and target_url is rewritten to it.
@@ -164,7 +176,9 @@ def test_runtime_start_argv_and_target_url():
 
 
 def test_runtime_start_failure_raises():
-    rt = DockerRunRuntime(_target(), runner_fn=_DockerRunner(run_code=1), clock=lambda: 0.0)
+    rt = DockerRunRuntime(
+        _target(), runner_fn=_DockerRunner(run_code=1), clock=lambda: 0.0
+    )
     with pytest.raises(DockerRunRuntimeError, match="docker run failed"):
         rt.start()
 
@@ -190,14 +204,18 @@ def test_runtime_context_manager_tears_down():
 
 def test_runtime_command_override_appended():
     r = _DockerRunner()
-    rt = DockerRunRuntime(_target(command=["./serve", "--port", "3000"]), runner_fn=r, clock=lambda: 0.0)
+    rt = DockerRunRuntime(
+        _target(command=["./serve", "--port", "3000"]), runner_fn=r, clock=lambda: 0.0
+    )
     rt.start()
     run_argv = next(a for a in r.calls if a[:2] == ["docker", "run"])
     assert run_argv[-3:] == ["./serve", "--port", "3000"]
 
 
 def test_runtime_wait_for_healthy_empty_passes():
-    rt = DockerRunRuntime(_target(wait_for=[]), runner_fn=_DockerRunner(), clock=lambda: 0.0)
+    rt = DockerRunRuntime(
+        _target(wait_for=[]), runner_fn=_DockerRunner(), clock=lambda: 0.0
+    )
     rt.start()
     rt.wait_for_healthy()  # no URLs → trivially healthy
 
@@ -215,8 +233,14 @@ def test_runtime_wait_for_healthy_success(monkeypatch):
             return False
 
     monkeypatch.setattr(mod.urlrequest, "urlopen", lambda *a, **k: _Resp())
-    wf = [SimpleNamespace(url="http://8.8.8.8/health", expect_status=200, timeout_seconds=5)]
-    rt = DockerRunRuntime(_target(wait_for=wf), runner_fn=_DockerRunner(), clock=lambda: 0.0)
+    wf = [
+        SimpleNamespace(
+            url="http://8.8.8.8/health", expect_status=200, timeout_seconds=5
+        )
+    ]
+    rt = DockerRunRuntime(
+        _target(wait_for=wf), runner_fn=_DockerRunner(), clock=lambda: 0.0
+    )
     rt.start()
     rt.wait_for_healthy()  # urlopen returns 200 → healthy
 
@@ -230,8 +254,14 @@ def test_runtime_wait_for_healthy_timeout(monkeypatch):
     monkeypatch.setattr(mod.urlrequest, "urlopen", _boom)
     monkeypatch.setattr(mod.time, "sleep", lambda *_: None)
     clk = iter([0.0, 1.0, 2.0, 99.0])
-    wf = [SimpleNamespace(url="http://8.8.8.8/health", expect_status=200, timeout_seconds=5)]
-    rt = DockerRunRuntime(_target(wait_for=wf), runner_fn=_DockerRunner(), clock=lambda: next(clk))
+    wf = [
+        SimpleNamespace(
+            url="http://8.8.8.8/health", expect_status=200, timeout_seconds=5
+        )
+    ]
+    rt = DockerRunRuntime(
+        _target(wait_for=wf), runner_fn=_DockerRunner(), clock=lambda: next(clk)
+    )
     rt.start()
     with pytest.raises(DockerRunRuntimeError, match="not healthy"):
         rt.wait_for_healthy()

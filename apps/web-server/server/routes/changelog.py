@@ -36,14 +36,22 @@ def _require_safe_git_ref(value: str, label: str) -> str:
 
     Rejects option-like (leading ``-``) and out-of-charset values.
     """
-    if not isinstance(value, str) or value.startswith("-") or not _GIT_REF_RE.fullmatch(value):
+    if (
+        not isinstance(value, str)
+        or value.startswith("-")
+        or not _GIT_REF_RE.fullmatch(value)
+    ):
         raise HTTPException(status_code=400, detail=f"Invalid {label}")
     return value
 
 
 def _require_safe_git_date(value: str, label: str) -> str:
     """Validate a request-supplied git date string against an allow-list."""
-    if not isinstance(value, str) or value.startswith("-") or not _GIT_DATE_RE.fullmatch(value):
+    if (
+        not isinstance(value, str)
+        or value.startswith("-")
+        or not _GIT_DATE_RE.fullmatch(value)
+    ):
         raise HTTPException(status_code=400, detail=f"Invalid {label}")
     return value
 
@@ -51,6 +59,7 @@ def _require_safe_git_date(value: str, label: str) -> str:
 # ============================================
 # Helper Functions
 # ============================================
+
 
 def extract_last_version_from_changelog(content: str) -> str | None:
     """
@@ -74,8 +83,7 @@ def extract_last_version_from_changelog(content: str) -> str | None:
     # The version can be followed by optional date, link reference, or other text
     # Captures the semantic version number (X.Y.Z format, optionally with pre-release/build metadata)
     version_pattern = re.compile(
-        r'^##\s+\[?v?(\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?)\]?',
-        re.MULTILINE
+        r"^##\s+\[?v?(\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?)\]?", re.MULTILINE
     )
 
     match = version_pattern.search(content)
@@ -88,6 +96,7 @@ def extract_last_version_from_changelog(content: str) -> str | None:
 # ============================================
 # Request/Response Models
 # ============================================
+
 
 class DoneTasksRequest(BaseModel):
     tasks: list[dict]
@@ -154,8 +163,11 @@ class SaveImageRequest(BaseModel):
 # Changelog Routes
 # ============================================
 
+
 @router.post("/done-tasks")
-async def get_changelog_done_tasks(projectId: str = Path(...), request: DoneTasksRequest = ...):
+async def get_changelog_done_tasks(
+    projectId: str = Path(...), request: DoneTasksRequest = ...
+):
     """Get completed tasks suitable for changelog."""
     # Filter tasks that are done
     done_tasks = [t for t in request.tasks if t.get("status") == "done"]
@@ -185,48 +197,56 @@ async def load_task_specs(projectId: str = Path(...), request: LoadSpecsRequest 
         if spec_path.exists():
             try:
                 content = spec_path.read_text()
-                specs.append({
-                    "taskId": task_id,
-                    "content": content,
-                    "path": str(spec_path.relative_to(project_path))
-                })
+                specs.append(
+                    {
+                        "taskId": task_id,
+                        "content": content,
+                        "path": str(spec_path.relative_to(project_path)),
+                    }
+                )
             except Exception:
-                logger.exception("Failed to read spec for task %s", sanitize_log(task_id))
-                specs.append({
-                    "taskId": task_id,
-                    "content": None,
-                    "error": "Failed to read spec"
-                })
+                logger.exception(
+                    "Failed to read spec for task %s", sanitize_log(task_id)
+                )
+                specs.append(
+                    {"taskId": task_id, "content": None, "error": "Failed to read spec"}
+                )
         else:
             # Try finding by glob pattern for numeric prefix
             matching = list(specs_dir.glob(f"{safe_id}*/spec.md"))
             if matching:
                 try:
                     content = matching[0].read_text()
-                    specs.append({
-                        "taskId": task_id,
-                        "content": content,
-                        "path": str(matching[0].relative_to(project_path))
-                    })
+                    specs.append(
+                        {
+                            "taskId": task_id,
+                            "content": content,
+                            "path": str(matching[0].relative_to(project_path)),
+                        }
+                    )
                 except Exception:
-                    logger.exception("Failed to read spec for task %s", sanitize_log(task_id))
-                    specs.append({
-                        "taskId": task_id,
-                        "content": None,
-                        "error": "Failed to read spec"
-                    })
+                    logger.exception(
+                        "Failed to read spec for task %s", sanitize_log(task_id)
+                    )
+                    specs.append(
+                        {
+                            "taskId": task_id,
+                            "content": None,
+                            "error": "Failed to read spec",
+                        }
+                    )
             else:
-                specs.append({
-                    "taskId": task_id,
-                    "content": None,
-                    "error": "Spec not found"
-                })
+                specs.append(
+                    {"taskId": task_id, "content": None, "error": "Spec not found"}
+                )
 
     return {"success": True, "data": specs}
 
 
 @router.post("/generate")
-async def generate_changelog(projectId: str = Path(...), request: ChangelogGenerateRequest = ...):
+async def generate_changelog(
+    projectId: str = Path(...), request: ChangelogGenerateRequest = ...
+):
     """Generate changelog using AI."""
     from ..services.changelog_service import get_changelog_service
     from .projects import load_projects
@@ -276,9 +296,7 @@ async def generate_changelog(projectId: str = Path(...), request: ChangelogGener
 
     # Start generation in background
     success = await service.start_generation(
-        project_id=projectId,
-        project_path=project_path,
-        request=request_dict
+        project_id=projectId, project_path=project_path, request=request_dict
     )
 
     if not success:
@@ -288,7 +306,9 @@ async def generate_changelog(projectId: str = Path(...), request: ChangelogGener
 
 
 @router.post("/save")
-async def save_changelog(projectId: str = Path(...), request: ChangelogSaveRequest = ...):
+async def save_changelog(
+    projectId: str = Path(...), request: ChangelogSaveRequest = ...
+):
     """Save generated changelog and update project version files."""
     from .projects import load_projects
 
@@ -318,7 +338,13 @@ async def save_changelog(projectId: str = Path(...), request: ChangelogSaveReque
                         insert_idx += 1
                     break
 
-            new_content = "\n".join(lines[:insert_idx]) + "\n\n" + request.content + "\n\n" + "\n".join(lines[insert_idx:])
+            new_content = (
+                "\n".join(lines[:insert_idx])
+                + "\n\n"
+                + request.content
+                + "\n\n"
+                + "\n".join(lines[insert_idx:])
+            )
         else:
             new_content = request.content
 
@@ -333,10 +359,10 @@ async def save_changelog(projectId: str = Path(...), request: ChangelogSaveReque
             try:
                 with open(package_json) as f:
                     pkg = json.load(f)
-                pkg['version'] = request.version
-                with open(package_json, 'w') as f:
+                pkg["version"] = request.version
+                with open(package_json, "w") as f:
                     json.dump(pkg, f, indent=2)
-                    f.write('\n')  # Add trailing newline
+                    f.write("\n")  # Add trailing newline
                 updated_files.append("package.json")
             except Exception as e:
                 logger.warning(f"Failed to update package.json: {e}")
@@ -351,7 +377,7 @@ async def save_changelog(projectId: str = Path(...), request: ChangelogSaveReque
                     r'(version\s*=\s*)["\']([^"\']+)["\']',
                     f'\\1"{request.version}"',
                     content,
-                    count=1
+                    count=1,
                 )
                 pyproject_toml.write_text(updated)
                 updated_files.append("pyproject.toml")
@@ -363,11 +389,11 @@ async def save_changelog(projectId: str = Path(...), request: ChangelogSaveReque
         for init_py in init_py_paths:
             try:
                 content = init_py.read_text()
-                if '__version__' in content:
+                if "__version__" in content:
                     updated = re.sub(
                         r'(__version__\s*=\s*)["\']([^"\']+)["\']',
                         f'\\1"{request.version}"',
-                        content
+                        content,
                     )
                     init_py.write_text(updated)
                     updated_files.append(str(init_py.relative_to(project_path)))
@@ -380,8 +406,8 @@ async def save_changelog(projectId: str = Path(...), request: ChangelogSaveReque
             "data": {
                 "path": str(changelog_path),
                 "version": request.version,
-                "updatedFiles": updated_files
-            }
+                "updatedFiles": updated_files,
+            },
         }
     except Exception:
         logger.exception("Failed to apply changelog")
@@ -413,12 +439,7 @@ async def read_existing_changelog(projectId: str = Path(...)):
     changelog_path = project_path / "CHANGELOG.md"
 
     if not changelog_path.exists():
-        return {
-            "success": True,
-            "data": {
-                "exists": False
-            }
-        }
+        return {"success": True, "data": {"exists": False}}
 
     try:
         content = changelog_path.read_text()
@@ -426,46 +447,43 @@ async def read_existing_changelog(projectId: str = Path(...)):
 
         return {
             "success": True,
-            "data": {
-                "exists": True,
-                "content": content,
-                "lastVersion": last_version
-            }
+            "data": {"exists": True, "content": content, "lastVersion": last_version},
         }
     except Exception:
         logger.exception("Failed to read existing changelog")
         return {
             "success": True,
-            "data": {
-                "exists": True,
-                "error": "Failed to read changelog"
-            }
+            "data": {"exists": True, "error": "Failed to read changelog"},
         }
 
 
 @router.post("/suggest-version")
-async def suggest_version(projectId: str = Path(...), request: SuggestVersionRequest = ...):
+async def suggest_version(
+    projectId: str = Path(...), request: SuggestVersionRequest = ...
+):
     """Suggest next version based on tasks."""
     return {
         "success": True,
         "data": {
             "suggestedVersion": "1.0.0",
             "currentVersion": "0.0.0",
-            "bumpType": "minor"
-        }
+            "bumpType": "minor",
+        },
     }
 
 
 @router.post("/suggest-version-commits")
-async def suggest_version_from_commits(projectId: str = Path(...), request: SuggestVersionCommitsRequest = ...):
+async def suggest_version_from_commits(
+    projectId: str = Path(...), request: SuggestVersionCommitsRequest = ...
+):
     """Suggest version based on commits."""
     return {
         "success": True,
         "data": {
             "suggestedVersion": "1.0.0",
             "currentVersion": "0.0.0",
-            "bumpType": "minor"
-        }
+            "bumpType": "minor",
+        },
     }
 
 
@@ -492,9 +510,11 @@ async def get_changelog_branches(projectId: str = Path(...)):
             cwd=project_path,
             capture_output=True,
             text=True,
-            timeout=10
+            timeout=10,
         )
-        current_branch = current_result.stdout.strip() if current_result.returncode == 0 else ""
+        current_branch = (
+            current_result.stdout.strip() if current_result.returncode == 0 else ""
+        )
 
         # Get all branches with format: refname:short and whether it's remote
         # Using %(HEAD) to detect current branch as backup
@@ -503,7 +523,7 @@ async def get_changelog_branches(projectId: str = Path(...)):
             cwd=project_path,
             capture_output=True,
             text=True,
-            timeout=10
+            timeout=10,
         )
 
         if result.returncode != 0:
@@ -526,7 +546,9 @@ async def get_changelog_branches(projectId: str = Path(...)):
 
             # Determine if remote and clean up name
             is_remote = branch_name.startswith("origin/")
-            display_name = branch_name.replace("origin/", "") if is_remote else branch_name
+            display_name = (
+                branch_name.replace("origin/", "") if is_remote else branch_name
+            )
             # ref is the actual git-resolvable reference
             git_ref = branch_name  # e.g., "origin/main" for remote, "master" for local
 
@@ -541,18 +563,20 @@ async def get_changelog_branches(projectId: str = Path(...)):
                         "name": display_name,
                         "ref": git_ref,
                         "isRemote": False,
-                        "isCurrent": is_current
+                        "isCurrent": is_current,
                     }
                 # Skip remote duplicates when local already exists
                 continue
 
             seen_names[display_name] = len(branch_objects)
-            branch_objects.append({
-                "name": display_name,
-                "ref": git_ref,
-                "isRemote": is_remote,
-                "isCurrent": is_current
-            })
+            branch_objects.append(
+                {
+                    "name": display_name,
+                    "ref": git_ref,
+                    "isRemote": is_remote,
+                    "isCurrent": is_current,
+                }
+            )
 
         return {"success": True, "data": branch_objects}
     except subprocess.TimeoutExpired:
@@ -583,11 +607,16 @@ async def get_changelog_tags(projectId: str = Path(...)):
         # Format: tagname|date|commit
         # Uses both %(*objectname:short) for annotated tags and %(objectname:short) for lightweight tags
         result = subprocess.run(
-            ["git", "tag", "--sort=-v:refname", "--format=%(refname:short)|%(creatordate:iso-strict)|%(*objectname:short)%(objectname:short)"],
+            [
+                "git",
+                "tag",
+                "--sort=-v:refname",
+                "--format=%(refname:short)|%(creatordate:iso-strict)|%(*objectname:short)%(objectname:short)",
+            ],
             cwd=project_path,
             capture_output=True,
             text=True,
-            timeout=10
+            timeout=10,
         )
 
         if result.returncode != 0:
@@ -627,7 +656,9 @@ async def get_changelog_tags(projectId: str = Path(...)):
 
 
 @router.post("/commits-preview")
-async def get_commits_preview(projectId: str = Path(...), request: CommitsPreviewRequest = ...):
+async def get_commits_preview(
+    projectId: str = Path(...), request: CommitsPreviewRequest = ...
+):
     """Get preview of commits for changelog."""
     import subprocess
 
@@ -649,8 +680,12 @@ async def get_commits_preview(projectId: str = Path(...), request: CommitsPrevie
 
         if mode == "branch-diff":
             # Compare two branches - use ref (git-resolvable) if provided, fall back to name
-            base_branch = options.get("baseBranchRef") or options.get("baseBranch", "main")
-            compare_branch = options.get("compareBranchRef") or options.get("compareBranch", "HEAD")
+            base_branch = options.get("baseBranchRef") or options.get(
+                "baseBranch", "main"
+            )
+            compare_branch = options.get("compareBranchRef") or options.get(
+                "compareBranch", "HEAD"
+            )
             base_branch = _require_safe_git_ref(base_branch, "base branch")
             compare_branch = _require_safe_git_ref(compare_branch, "compare branch")
             cmd.append(f"{base_branch}..{compare_branch}")
@@ -662,7 +697,9 @@ async def get_commits_preview(projectId: str = Path(...), request: CommitsPrevie
                 try:
                     count = int(options.get("count", 20))
                 except (TypeError, ValueError):
-                    raise HTTPException(status_code=400, detail="Invalid commit count") from None
+                    raise HTTPException(
+                        status_code=400, detail="Invalid commit count"
+                    ) from None
                 cmd.extend(["-n", str(count)])
             elif history_type == "since-date":
                 since_date = options.get("sinceDate")
@@ -687,16 +724,15 @@ async def get_commits_preview(projectId: str = Path(...), request: CommitsPrevie
                 cmd.append("--no-merges")
 
         result = subprocess.run(
-            cmd,
-            cwd=project_path,
-            capture_output=True,
-            text=True,
-            timeout=30
+            cmd, cwd=project_path, capture_output=True, text=True, timeout=30
         )
 
         if result.returncode != 0:
             # Check if it's just an empty result (no commits)
-            if "unknown revision" in result.stderr.lower() or "bad revision" in result.stderr.lower():
+            if (
+                "unknown revision" in result.stderr.lower()
+                or "bad revision" in result.stderr.lower()
+            ):
                 return {"success": True, "data": []}
             return {"success": False, "error": result.stderr.strip()}
 
@@ -707,14 +743,16 @@ async def get_commits_preview(projectId: str = Path(...), request: CommitsPrevie
                 continue
             parts = record.split("\x1f")
             if len(parts) >= 5:
-                commits.append({
-                    "hash": parts[0],
-                    "message": parts[1],
-                    "author": parts[2],
-                    "email": parts[3],
-                    "date": parts[4].strip(),
-                    "selected": True  # Default to selected
-                })
+                commits.append(
+                    {
+                        "hash": parts[0],
+                        "message": parts[1],
+                        "author": parts[2],
+                        "email": parts[3],
+                        "date": parts[4].strip(),
+                        "selected": True,  # Default to selected
+                    }
+                )
 
         return {"success": True, "data": commits}
     except HTTPException:
@@ -727,7 +765,9 @@ async def get_commits_preview(projectId: str = Path(...), request: CommitsPrevie
 
 
 @router.post("/images")
-async def save_changelog_image(projectId: str = Path(...), request: SaveImageRequest = ...):
+async def save_changelog_image(
+    projectId: str = Path(...), request: SaveImageRequest = ...
+):
     """
     Save a base64 encoded image to the project's assets directory.
 
@@ -747,7 +787,9 @@ async def save_changelog_image(projectId: str = Path(...), request: SaveImageReq
         # Validate project exists
         projects = load_projects()
         if projectId not in projects:
-            raise HTTPException(status_code=404, detail=f"Project {projectId} not found")
+            raise HTTPException(
+                status_code=404, detail=f"Project {projectId} not found"
+            )
 
         # Get project path
         project_path = FilePath(projects[projectId]["path"])
@@ -764,7 +806,10 @@ async def save_changelog_image(projectId: str = Path(...), request: SaveImageReq
 
         # Validate filename has an extension
         if "." not in filename:
-            return {"success": False, "error": "Filename must include an extension (e.g., .png, .jpg)"}
+            return {
+                "success": False,
+                "error": "Filename must include an extension (e.g., .png, .jpg)",
+            }
 
         # Collapse to a single, literal path component so the request-supplied
         # filename can't escape the assets directory (py/path-injection).
@@ -785,10 +830,7 @@ async def save_changelog_image(projectId: str = Path(...), request: SaveImageReq
             image_bytes = base64.b64decode(image_data_str)
         except Exception:
             logger.exception("Failed to decode base64 image data")
-            return {
-                "success": False,
-                "error": "Failed to decode base64 image data"
-            }
+            return {"success": False, "error": "Failed to decode base64 image data"}
 
         # Validate decoded data is not empty
         if not image_bytes:
@@ -809,8 +851,8 @@ async def save_changelog_image(projectId: str = Path(...), request: SaveImageReq
             "data": {
                 "path": relative_path,
                 "filename": filename,
-                "size": len(image_bytes)
-            }
+                "size": len(image_bytes),
+            },
         }
 
     except HTTPException:
@@ -844,6 +886,7 @@ class InsightsMessageRequest(BaseModel):
 async def detect_insights_providers(projectId: str = Path(...)):
     """Detect all available LLM providers for insights chat."""
     from ..services.insights_providers import detect_all_providers
+
     providers = await detect_all_providers()
     return {
         "success": True,
@@ -900,12 +943,14 @@ async def get_insights_session(projectId: str = Path(...)):
             "modelConfig": session.model_config,
             "createdAt": session.created_at,
             "updatedAt": session.updated_at,
-        }
+        },
     }
 
 
 @insights_router.post("/message")
-async def send_insights_message(projectId: str = Path(...), request: InsightsMessageRequest = ...):
+async def send_insights_message(
+    projectId: str = Path(...), request: InsightsMessageRequest = ...
+):
     """Send a message to insights AI."""
     project_path = _get_project_path(projectId)
     service = get_insights_service()
@@ -972,7 +1017,7 @@ async def clear_insights_session(projectId: str = Path(...)):
                 "messageCount": len(new_session.messages),
                 "createdAt": new_session.created_at,
                 "updatedAt": new_session.updated_at,
-            }
+            },
         }
     except HTTPException:
         # Re-raise HTTP exceptions (like 404 from _get_project_path)
@@ -980,15 +1025,20 @@ async def clear_insights_session(projectId: str = Path(...)):
     except Exception as e:
         # Log error and return 500
         import logging
-        logging.getLogger(__name__).error(f"Failed to clear insights session: {e}", exc_info=True)
+
+        logging.getLogger(__name__).error(
+            f"Failed to clear insights session: {e}", exc_info=True
+        )
         raise HTTPException(
             status_code=500,
-            detail=client_error(logger, "Failed to clear insights session", e)
+            detail=client_error(logger, "Failed to clear insights session", e),
         )
 
 
 @insights_router.post("/create-task")
-async def create_task_from_insights(projectId: str = Path(...), request: CreateTaskRequest = ...):
+async def create_task_from_insights(
+    projectId: str = Path(...), request: CreateTaskRequest = ...
+):
     """Create a task from insights conversation."""
     from .tasks import TaskCreate, create_task
 
@@ -1006,7 +1056,9 @@ async def create_task_from_insights(projectId: str = Path(...), request: CreateT
 
 
 @insights_router.post("/generate-task")
-async def generate_task_from_chat(projectId: str = Path(...), request: GenerateTaskRequest = ...):
+async def generate_task_from_chat(
+    projectId: str = Path(...), request: GenerateTaskRequest = ...
+):
     """Generate a structured task (title + description) from the current chat session."""
     project_path = _get_project_path(projectId)
     service = get_insights_service()
@@ -1048,12 +1100,14 @@ async def new_insights_session(projectId: str = Path(...)):
             "messages": [],
             "createdAt": session.created_at,
             "updatedAt": session.updated_at,
-        }
+        },
     }
 
 
 @insights_router.post("/sessions/{sessionId}/switch")
-async def switch_insights_session(projectId: str = Path(...), sessionId: str = Path(...)):
+async def switch_insights_session(
+    projectId: str = Path(...), sessionId: str = Path(...)
+):
     """Switch to a different insights session."""
     project_path = _get_project_path(projectId)
     service = get_insights_service()
@@ -1082,21 +1136,30 @@ async def switch_insights_session(projectId: str = Path(...), sessionId: str = P
             "modelConfig": session.model_config,
             "createdAt": session.created_at,
             "updatedAt": session.updated_at,
-        }
+        },
     }
 
 
 @insights_router.delete("/sessions/{sessionId}")
-async def delete_insights_session(projectId: str = Path(...), sessionId: str = Path(...)):
+async def delete_insights_session(
+    projectId: str = Path(...), sessionId: str = Path(...)
+):
     """Delete an insights session."""
     project_path = _get_project_path(projectId)
     service = get_insights_service()
     result = service.delete_session(project_path, sessionId)
-    return {"success": result["deleted"], "data": {"switchedTo": result.get("switchedTo")}}
+    return {
+        "success": result["deleted"],
+        "data": {"switchedTo": result.get("switchedTo")},
+    }
 
 
 @insights_router.patch("/sessions/{sessionId}")
-async def rename_insights_session(projectId: str = Path(...), sessionId: str = Path(...), request: RenameSessionRequest = ...):
+async def rename_insights_session(
+    projectId: str = Path(...),
+    sessionId: str = Path(...),
+    request: RenameSessionRequest = ...,
+):
     """Rename an insights session."""
     project_path = _get_project_path(projectId)
     service = get_insights_service()
@@ -1108,7 +1171,7 @@ async def rename_insights_session(projectId: str = Path(...), sessionId: str = P
 async def update_insights_model_config(
     projectId: str = Path(...),
     sessionId: str = Path(...),
-    request: UpdateModelConfigRequest = ...
+    request: UpdateModelConfigRequest = ...,
 ):
     """Update model config for a session."""
     project_path = _get_project_path(projectId)

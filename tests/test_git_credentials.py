@@ -32,6 +32,7 @@ def test_inject_credential_rewrites_https():
     # Security review H1: the URL carries the USERNAME only -- the token is
     # delivered out-of-band via GIT_ASKPASS, never embedded in the URL/argv.
     from server.services.project_workspace_service import _inject_credential
+
     out = _inject_credential("https://github.com/olaf/repo.git", username="oauth2")
     assert out == "https://oauth2@github.com/olaf/repo.git"
     assert "ghp_secret" not in out  # no token anywhere
@@ -40,12 +41,14 @@ def test_inject_credential_rewrites_https():
 def test_inject_credential_leaves_ssh_untouched():
     """SSH URLs auth via keys, not URLs — must not be rewritten."""
     from server.services.project_workspace_service import _inject_credential
+
     url = "git@github.com:olaf/repo.git"
     assert _inject_credential(url, "oauth2") == url
 
 
 def test_inject_credential_handles_nested_paths():
     from server.services.project_workspace_service import _inject_credential
+
     out = _inject_credential("https://gitlab.com/group/sub/repo.git", "oauth2")
     assert out == "https://oauth2@gitlab.com/group/sub/repo.git"
 
@@ -173,6 +176,7 @@ async def test_clone_or_update_without_credential_unchanged(tmp_path):
 
 def test_git_credential_model_exports_and_attributes():
     from server.database import GitCredential
+
     # Required column declarations (Mapped attributes appear as columns
     # on the SQLAlchemy table after Base scans the subclass).
     cols = GitCredential.__table__.columns
@@ -189,9 +193,8 @@ def test_git_credential_model_exports_and_attributes():
     # The token column must be the encrypted (LargeBinary) variant — the
     # EncryptedString TypeDecorator's impl is LargeBinary.
     from sqlalchemy import LargeBinary
+
     token_col = cols["token"]
-    assert isinstance(
-        token_col.type, LargeBinary
-    ) or hasattr(token_col.type, "impl"), (
+    assert isinstance(token_col.type, LargeBinary) or hasattr(token_col.type, "impl"), (
         f"token column must be encrypted-at-rest; got {token_col.type!r}"
     )

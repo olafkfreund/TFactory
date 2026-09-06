@@ -17,7 +17,10 @@ def test_top_level_repo():
 
 
 def test_github_repo_setting():
-    assert project_repo({"settings": {"githubRepo": "olafkfreund/app"}}) == "olafkfreund/app"
+    assert (
+        project_repo({"settings": {"githubRepo": "olafkfreund/app"}})
+        == "olafkfreund/app"
+    )
 
 
 def test_git_repo_setting():

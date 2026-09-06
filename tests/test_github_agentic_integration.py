@@ -35,9 +35,15 @@ def test_infer_provider_github_models():
     """github-models/ prefix routes to openai-compatible."""
     from phase_config import infer_provider_from_model
 
-    assert infer_provider_from_model("github-models/openai/gpt-4.1") == "openai-compatible"
-    assert infer_provider_from_model("github-models/openai/gpt-4o") == "openai-compatible"
-    assert infer_provider_from_model("GITHUB-MODELS/openai/gpt-4.1") == "openai-compatible"
+    assert (
+        infer_provider_from_model("github-models/openai/gpt-4.1") == "openai-compatible"
+    )
+    assert (
+        infer_provider_from_model("github-models/openai/gpt-4o") == "openai-compatible"
+    )
+    assert (
+        infer_provider_from_model("GITHUB-MODELS/openai/gpt-4.1") == "openai-compatible"
+    )
 
 
 def test_strip_provider_prefix_github_models():
@@ -45,7 +51,10 @@ def test_strip_provider_prefix_github_models():
     from phase_config import strip_provider_prefix
 
     assert strip_provider_prefix("github-models/openai/gpt-4.1") == "openai/gpt-4.1"
-    assert strip_provider_prefix("github-models/mistral-ai/mistral-large") == "mistral-ai/mistral-large"
+    assert (
+        strip_provider_prefix("github-models/mistral-ai/mistral-large")
+        == "mistral-ai/mistral-large"
+    )
 
 
 def test_infer_provider_github_models_does_not_affect_other_prefixes():
@@ -62,7 +71,9 @@ def test_get_provider_extra_kwargs_github_models(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "ghp_test_token_abc123")
     from phase_config import get_provider_extra_kwargs
 
-    extra = get_provider_extra_kwargs("openai-compatible", "github-models/openai/gpt-4.1")
+    extra = get_provider_extra_kwargs(
+        "openai-compatible", "github-models/openai/gpt-4.1"
+    )
     assert extra["base_url"] == "https://models.github.ai/inference"
     assert extra["api_key"] == "ghp_test_token_abc123"
     assert extra["model"] == "openai/gpt-4.1"
@@ -77,7 +88,9 @@ def test_get_provider_extra_kwargs_github_models_uses_default_model(monkeypatch)
     import phase_config
 
     importlib.reload(phase_config)
-    extra = phase_config.get_provider_extra_kwargs("openai-compatible", "github-models/")
+    extra = phase_config.get_provider_extra_kwargs(
+        "openai-compatible", "github-models/"
+    )
     assert extra["model"] == "openai/gpt-4o"
 
 
@@ -153,7 +166,9 @@ def test_write_dispatch_metadata_creates_file(tmp_path):
     """_write_dispatch_metadata writes correct JSON structure."""
     from agents.copilot_dispatch import _write_dispatch_metadata, read_dispatch_metadata
 
-    _write_dispatch_metadata(tmp_path, 7, dispatched=True, pr_number=None, timed_out=False)
+    _write_dispatch_metadata(
+        tmp_path, 7, dispatched=True, pr_number=None, timed_out=False
+    )
 
     meta = read_dispatch_metadata(tmp_path)
     assert meta is not None
@@ -170,7 +185,9 @@ def test_write_dispatch_metadata_merges_existing(tmp_path):
 
     from agents.copilot_dispatch import _write_dispatch_metadata
 
-    _write_dispatch_metadata(tmp_path, 3, dispatched=True, pr_number=55, timed_out=False)
+    _write_dispatch_metadata(
+        tmp_path, 3, dispatched=True, pr_number=55, timed_out=False
+    )
 
     final = json.loads(meta_path.read_text())
     assert final["existing_key"] == "keep_me"
@@ -234,7 +251,10 @@ def test_mcp_unknown_task_returns_error(mcp_client):
     data = _post_mcp(
         mcp_client,
         "tools/call",
-        {"name": "tfactory_get_test_plan", "arguments": {"task_id": "nonexistent-task"}},
+        {
+            "name": "tfactory_get_test_plan",
+            "arguments": {"task_id": "nonexistent-task"},
+        },
     )
     content = json.loads(data["result"]["content"][0]["text"])
     assert content["error"] == "task not found"
@@ -251,7 +271,10 @@ def test_mcp_coverage_returns_null_gracefully(mcp_client, tmp_path):
     data = _post_mcp(
         mcp_client,
         "tools/call",
-        {"name": "tfactory_get_coverage", "arguments": {"task_id": "spec-abc", "lane": "unit"}},
+        {
+            "name": "tfactory_get_coverage",
+            "arguments": {"task_id": "spec-abc", "lane": "unit"},
+        },
     )
     content = json.loads(data["result"]["content"][0]["text"])
     assert content["coverage_pct"] is None

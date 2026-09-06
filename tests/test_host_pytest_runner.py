@@ -57,6 +57,7 @@ def test_run_pytest_on_host_executes_and_passes(monkeypatch, tmp_path):
         import pytest_cov  # noqa: F401
     except ImportError:
         import pytest as _pt
+
         _pt.skip("pytest-cov not in test venv", allow_module_level=False)
         return
     # Point the host runner at THIS real venv: its bin/python activates the

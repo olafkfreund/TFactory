@@ -635,7 +635,12 @@ class TestAPIRateLimits:
                     # Find next available profile
                     profiles = data.get("profiles", [])
                     current_index = next(
-                        (i for i, p in enumerate(profiles) if p["id"] == current_profile), 0
+                        (
+                            i
+                            for i, p in enumerate(profiles)
+                            if p["id"] == current_profile
+                        ),
+                        0,
                     )
                     next_index = (current_index + 1) % len(profiles)
                     next_profile = profiles[next_index]["id"]
@@ -650,7 +655,9 @@ class TestAPIRateLimits:
                     if data["activeProfileId"] == current_profile:
                         data["activeProfileId"] = next_profile
 
-                        write_secret_file(mock_claude_profiles, json.dumps(data, indent=2))
+                        write_secret_file(
+                            mock_claude_profiles, json.dumps(data, indent=2)
+                        )
 
                         with result_lock:
                             results.append((request_id, current_profile, next_profile))

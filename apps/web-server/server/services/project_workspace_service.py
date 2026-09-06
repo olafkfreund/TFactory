@@ -311,7 +311,9 @@ async def clone_or_update(
                             )
                         except GitOperationError:
                             pass
-                logger.info("[workspace] pulled latest into %s", sanitize_log(workspace))
+                logger.info(
+                    "[workspace] pulled latest into %s", sanitize_log(workspace)
+                )
                 return workspace
 
             # Fresh clone. ``--`` ends option parsing so a hostile URL/dir starting

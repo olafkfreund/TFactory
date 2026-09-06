@@ -97,14 +97,18 @@ def main():
 
     print("-" * 80)
     print(
-        f"Total: {total_passed}/{total_all} passed ({100*total_passed//total_all}%)"
+        f"Total: {total_passed}/{total_all} passed ({100 * total_passed // total_all}%)"
     )
 
     if all_passed:
-        print("\n✅ All 6 tests passed deterministically (20 runs each = zero failures)")
+        print(
+            "\n✅ All 6 tests passed deterministically (20 runs each = zero failures)"
+        )
         return 0
     else:
-        print(f"\n❌ {total_failed} failures detected - file locking may not be working")
+        print(
+            f"\n❌ {total_failed} failures detected - file locking may not be working"
+        )
         return 1
 
 

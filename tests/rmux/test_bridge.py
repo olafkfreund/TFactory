@@ -65,8 +65,10 @@ def app_with_bridge(tmp_path) -> tuple[FastAPI, SessionRegistry]:
     # the routes without needing a real database or token middleware.
     from server.auth import verify_websocket_token
     from server.database.engine import get_db
+
     async def _no_op_db():
         yield None
+
     app.dependency_overrides[get_db] = _no_op_db
 
     return app, registry
@@ -91,7 +93,9 @@ def primed_session(app_with_bridge, tmp_path) -> str:
             agent_cmd="true",
         )
 
-    asyncio.get_event_loop().run_until_complete(_setup()) if False else asyncio.run(_setup())
+    asyncio.get_event_loop().run_until_complete(_setup()) if False else asyncio.run(
+        _setup()
+    )
     return "rsess-bridge-001"
 
 
@@ -218,9 +222,7 @@ class TestAttachRace:
     so we don't fork 1000 rmux subprocesses.
     """
 
-    def test_one_200_999_409(
-        self, client: TestClient, primed_session: str
-    ) -> None:
+    def test_one_200_999_409(self, client: TestClient, primed_session: str) -> None:
         import concurrent.futures as cf
 
         N = 1000

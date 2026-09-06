@@ -96,7 +96,9 @@ def test_ollama_route_helper_keeps_localhost_working() -> None:
     assert _safe_ollama_base_url("http://localhost:11434") == "http://localhost:11434"
     assert _safe_ollama_base_url(None) == "http://localhost:11434"
     # Path/query/fragment are dropped so the appended /api/... cannot be moved.
-    assert _safe_ollama_base_url("http://127.0.0.1:11434/x#") == "http://127.0.0.1:11434"
+    assert (
+        _safe_ollama_base_url("http://127.0.0.1:11434/x#") == "http://127.0.0.1:11434"
+    )
 
 
 def test_ollama_route_helper_refuses_metadata_and_bad_schemes() -> None:

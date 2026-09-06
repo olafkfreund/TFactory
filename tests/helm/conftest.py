@@ -30,9 +30,7 @@ def _binary_version(name: str) -> str | None:
     """Return the binary's version string or None if it doesn't run."""
     try:
         result = subprocess.run(
-            [name, "version", "--short"]
-            if name == "helm"
-            else [name, "version"],
+            [name, "version", "--short"] if name == "helm" else [name, "version"],
             capture_output=True,
             text=True,
             timeout=5,

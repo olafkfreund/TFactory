@@ -17,8 +17,13 @@ from agents.cloud.runner import (
 )
 
 
-def _target(provider="aws", profile="Calitii", regions=("us-east-1",),
-            services=(), fail_on="high"):
+def _target(
+    provider="aws",
+    profile="Calitii",
+    regions=("us-east-1",),
+    services=(),
+    fail_on="high",
+):
     return SimpleNamespace(
         provider=provider,
         profile=profile,
@@ -28,13 +33,15 @@ def _target(provider="aws", profile="Calitii", regions=("us-east-1",),
 
 
 def _ocsf(status="FAIL", severity="High"):
-    return [{
-        "status_code": status,
-        "severity": severity,
-        "finding_info": {"title": "EBS volume is encrypted", "uid": "x"},
-        "resources": [{"name": "r", "region": "us-east-1"}],
-        "cloud": {"region": "us-east-1"},
-    }]
+    return [
+        {
+            "status_code": status,
+            "severity": severity,
+            "finding_info": {"title": "EBS volume is encrypted", "uid": "x"},
+            "resources": [{"name": "r", "region": "us-east-1"}],
+            "cloud": {"region": "us-east-1"},
+        }
+    ]
 
 
 # ── build_prowler_command (pure) ─────────────────────────────────────────────
@@ -48,7 +55,9 @@ def test_build_prowler_command_basic() -> None:
 
 
 def test_build_prowler_command_services_and_regions() -> None:
-    cmd = build_prowler_command("aws", regions=["us-east-1", "eu-west-2"], services=["iam", "s3"])
+    cmd = build_prowler_command(
+        "aws", regions=["us-east-1", "eu-west-2"], services=["iam", "s3"]
+    )
     assert cmd.count("--service") == 2 and "iam" in cmd and "s3" in cmd
     assert cmd.count("--region") == 2 and "eu-west-2" in cmd
 
@@ -81,7 +90,10 @@ def test_docker_argv_gcp_runs_as_host_uid_with_adc() -> None:
     argv = _docker_argv("gcp", None, "/scr", ["prowler", "gcp"])
     assert "--user" in argv
     assert "CLOUDSDK_CONFIG=/gcloud" in argv
-    assert "GOOGLE_APPLICATION_CREDENTIALS=/gcloud/application_default_credentials.json" in argv
+    assert (
+        "GOOGLE_APPLICATION_CREDENTIALS=/gcloud/application_default_credentials.json"
+        in argv
+    )
     assert any(a.endswith(":/gcloud:ro") for a in argv)
 
 

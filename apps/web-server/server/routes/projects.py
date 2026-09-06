@@ -33,15 +33,25 @@ logger = logging.getLogger(__name__)
 
 # Include project-specific sub-routers
 # These will be available under /api/projects/{projectId}/...
-router.include_router(github.project_router, prefix="/{projectId}/github", tags=["GitHub"])
+router.include_router(
+    github.project_router, prefix="/{projectId}/github", tags=["GitHub"]
+)
 # PR-operation routes extracted from github.py into github_pr (#360); same prefix.
 router.include_router(github_pr.router, prefix="/{projectId}/github", tags=["GitHub"])
-router.include_router(changelog.router, prefix="/{projectId}/changelog", tags=["Changelog"])
-router.include_router(changelog.insights_router, prefix="/{projectId}/insights", tags=["Insights"])
-router.include_router(files.insights_router, prefix="/{projectId}/files/insights", tags=["Files Insights"])
+router.include_router(
+    changelog.router, prefix="/{projectId}/changelog", tags=["Changelog"]
+)
+router.include_router(
+    changelog.insights_router, prefix="/{projectId}/insights", tags=["Insights"]
+)
+router.include_router(
+    files.insights_router, prefix="/{projectId}/files/insights", tags=["Files Insights"]
+)
 router.include_router(context.project_router, prefix="/{projectId}", tags=["Context"])
 router.include_router(git.project_router, prefix="", tags=["Git"])
-router.include_router(git.releases_router, prefix="/{projectId}/releases", tags=["Releases"])
+router.include_router(
+    git.releases_router, prefix="/{projectId}/releases", tags=["Releases"]
+)
 
 
 # --------------------------------------------------------------------------
@@ -72,6 +82,7 @@ class ProjectCreate(BaseModel):
 
     Exactly one of ``path`` or ``gitUrl`` must be provided.
     """
+
     model_config = ConfigDict(populate_by_name=True)
 
     path: str | None = Field(
@@ -118,6 +129,7 @@ class ProjectCreate(BaseModel):
 
 class NotificationSettings(BaseModel):
     """Notification settings model - BUG-1.2-004: Now properly typed."""
+
     onTaskComplete: bool = Field(default=True)
     onTaskFailed: bool = Field(default=True)
     onReviewNeeded: bool = Field(default=True)
@@ -127,6 +139,7 @@ class NotificationSettings(BaseModel):
 
 class ProjectSettings(BaseModel):
     """Project settings model matching frontend expectations."""
+
     model_config = ConfigDict(populate_by_name=True)
 
     model: str = Field(default="claude-sonnet-4-5-20250929")
@@ -170,13 +183,22 @@ class ProjectSettings(BaseModel):
 
 class Project(ProjectBase):
     """Full project model with computed fields."""
+
     model_config = ConfigDict(populate_by_name=True)
 
     id: str = Field(..., description="Unique project ID")
     name: str = Field(..., description="Display name")
-    createdAt: str = Field(..., alias="created_at", description="ISO timestamp when project was added")
-    updatedAt: str = Field(..., alias="updated_at", description="ISO timestamp when project was last updated")
-    autoBuildPath: str | None = Field(None, alias="auto_build_path", description="Path to .tfactory if initialized")
+    createdAt: str = Field(
+        ..., alias="created_at", description="ISO timestamp when project was added"
+    )
+    updatedAt: str = Field(
+        ...,
+        alias="updated_at",
+        description="ISO timestamp when project was last updated",
+    )
+    autoBuildPath: str | None = Field(
+        None, alias="auto_build_path", description="Path to .tfactory if initialized"
+    )
     settings: ProjectSettings = Field(default_factory=ProjectSettings)
 
 
@@ -272,12 +294,12 @@ def project_to_response(project_id: str, project_data: dict) -> dict:
             "onTaskComplete": True,
             "onTaskFailed": True,
             "onReviewNeeded": True,
-            "sound": True
+            "sound": True,
         },
         "graphitiMcpEnabled": False,
         "graphitiMcpUrl": None,
         "mainBranch": None,
-        "useClaudeMd": True
+        "useClaudeMd": True,
     }
     # Merge saved settings from projects.json (written by update_project_settings)
     saved_settings = project_data.get("settings", {})
@@ -285,7 +307,9 @@ def project_to_response(project_id: str, project_data: dict) -> dict:
         # Merge notifications separately to preserve individual keys
         if "notifications" in saved_settings:
             default_settings["notifications"].update(saved_settings["notifications"])
-            saved_settings = {k: v for k, v in saved_settings.items() if k != "notifications"}
+            saved_settings = {
+                k: v for k, v in saved_settings.items() if k != "notifications"
+            }
         default_settings.update(saved_settings)
 
     return {
@@ -295,7 +319,7 @@ def project_to_response(project_id: str, project_data: dict) -> dict:
         "createdAt": project_data.get("created_at", datetime.now().isoformat()),
         "updatedAt": project_data.get("updated_at", datetime.now().isoformat()),
         "autoBuildPath": auto_build_path,
-        "settings": default_settings
+        "settings": default_settings,
     }
 
 
@@ -339,14 +363,13 @@ async def list_projects():
     the frontend api-client.ts adds the {success, data} wrapper automatically.
     """
     projects = load_projects()
-    project_list = [
-        project_to_response(pid, pdata) for pid, pdata in projects.items()
-    ]
+    project_list = [project_to_response(pid, pdata) for pid, pdata in projects.items()]
     return project_list
 
 
 class DiscoveredProject(BaseModel):
     """A discovered project folder."""
+
     name: str
     path: str
     has_git: bool = False
@@ -358,8 +381,11 @@ class DiscoveredProject(BaseModel):
 
 class ScanProjectsRequest(BaseModel):
     """Request model for scanning filesystem for projects."""
+
     basePath: str = Field(..., description="Base directory to scan for projects")
-    maxDepth: int = Field(default=1, ge=1, le=5, description="Maximum scan depth (1-5, default 1)")
+    maxDepth: int = Field(
+        default=1, ge=1, le=5, description="Maximum scan depth (1-5, default 1)"
+    )
 
 
 @router.post("/scan")
@@ -391,13 +417,13 @@ async def scan_for_projects(request: ScanProjectsRequest):
         if not base.exists():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Path does not exist: {request.basePath}"
+                detail=f"Path does not exist: {request.basePath}",
             )
 
         if not base.is_dir():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Path is not a directory: {request.basePath}"
+                detail=f"Path is not a directory: {request.basePath}",
             )
 
         projects = []
@@ -414,34 +440,46 @@ async def scan_for_projects(request: ScanProjectsRequest):
                         continue
 
                     # Skip hidden directories and common non-project dirs
-                    if entry.name.startswith('.') or entry.name in (
-                        'node_modules', '__pycache__', 'venv', '.venv',
-                        'dist', 'build', 'target', '.git', 'eggs', '.eggs',
-                        '.pytest_cache', '.tox', 'htmlcov', 'coverage'
+                    if entry.name.startswith(".") or entry.name in (
+                        "node_modules",
+                        "__pycache__",
+                        "venv",
+                        ".venv",
+                        "dist",
+                        "build",
+                        "target",
+                        ".git",
+                        "eggs",
+                        ".eggs",
+                        ".pytest_cache",
+                        ".tox",
+                        "htmlcov",
+                        "coverage",
                     ):
                         continue
 
                     # Check for project indicators
-                    has_git = (entry / '.git').exists()
-                    has_package = (entry / 'package.json').exists()
-                    has_requirements = (
-                        (entry / 'requirements.txt').exists() or
-                        (entry / 'pyproject.toml').exists()
-                    )
-                    has_magestic_ai = (entry / '.tfactory').exists()
-                    has_claude_md = (entry / 'CLAUDE.md').exists()
+                    has_git = (entry / ".git").exists()
+                    has_package = (entry / "package.json").exists()
+                    has_requirements = (entry / "requirements.txt").exists() or (
+                        entry / "pyproject.toml"
+                    ).exists()
+                    has_magestic_ai = (entry / ".tfactory").exists()
+                    has_claude_md = (entry / "CLAUDE.md").exists()
 
                     # If it looks like a project, add it
                     if has_git or has_package or has_requirements:
-                        projects.append(DiscoveredProject(
-                            name=entry.name,
-                            path=str(entry),
-                            has_git=has_git,
-                            has_package_json=has_package,
-                            has_requirements=has_requirements,
-                            has_magestic_ai=has_magestic_ai,
-                            has_claude_md=has_claude_md,
-                        ))
+                        projects.append(
+                            DiscoveredProject(
+                                name=entry.name,
+                                path=str(entry),
+                                has_git=has_git,
+                                has_package_json=has_package,
+                                has_requirements=has_requirements,
+                                has_magestic_ai=has_magestic_ai,
+                                has_claude_md=has_claude_md,
+                            )
+                        )
                     elif current_depth < request.maxDepth:
                         # Not a project, but scan deeper if we haven't reached max depth
                         scan_directory(entry, current_depth + 1)
@@ -466,7 +504,7 @@ async def scan_for_projects(request: ScanProjectsRequest):
         # Handle unexpected errors
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=client_error(logger, "Failed to scan for projects", e)
+            detail=client_error(logger, "Failed to scan for projects", e),
         )
 
 
@@ -492,6 +530,7 @@ async def add_project(project: ProjectCreate):
             GitOperationError,
             clone_or_update,
         )
+
         # Stored credential lookup (#82 PR-C). When the caller passes
         # gitCredentialId, fetch the (username, token) tuple from the
         # git_credentials table and pass it to the clone service.
@@ -681,15 +720,13 @@ async def check_project_version(project_id: str):
 
     return {
         "success": True,
-        "data": {
-            "isInitialized": magestic_ai_dir.exists(),
-            "updateAvailable": False
-        }
+        "data": {"isInitialized": magestic_ai_dir.exists(), "updateAvailable": False},
     }
 
 
 class NotificationSettingsUpdate(BaseModel):
     """Model for updating notification settings."""
+
     onTaskComplete: bool | None = None
     onTaskFailed: bool | None = None
     onReviewNeeded: bool | None = None
@@ -703,6 +740,7 @@ class ProjectSettingsUpdate(BaseModel):
     BUG-1.2-005: Added notifications field to allow updating notification preferences.
     BUG-1.2-003: Added memoryBackend validation.
     """
+
     model_config = ConfigDict(populate_by_name=True)
 
     model: str | None = None
@@ -723,7 +761,9 @@ class ProjectSettingsUpdate(BaseModel):
     # When true, every NEW task in this project gets ``enableRemoteControl: true``
     # in its task_metadata.  Per-task overrides win — this is just the default
     # when the user creates a task without flipping the wizard toggle.
-    remoteControlByDefault: bool | None = Field(default=None, alias="remote_control_by_default")
+    remoteControlByDefault: bool | None = Field(
+        default=None, alias="remote_control_by_default"
+    )
     # When true, every NEW task in this project gets ``enableDelegation: true``
     # in its task_metadata. Only effective on GitHub projects — V1.5 (#98)
     # extends to GitLab Duo Workflow. Per-task overrides win.
@@ -831,7 +871,7 @@ async def update_project_settings(project_id: str, settings: ProjectSettingsUpda
                         "onTaskComplete": True,
                         "onTaskFailed": True,
                         "onReviewNeeded": True,
-                        "sound": True
+                        "sound": True,
                     }
                 # Merge the update into existing notifications
                 project_data["settings"]["notifications"].update(notifications_update)
@@ -841,17 +881,14 @@ async def update_project_settings(project_id: str, settings: ProjectSettingsUpda
 
         save_projects(projects)
 
-        return {
-            "success": True,
-            "message": "Project settings updated successfully"
-        }
+        return {"success": True, "message": "Project settings updated successfully"}
 
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=client_error(logger, "Failed to update project settings", e)
+            detail=client_error(logger, "Failed to update project settings", e),
         )
 
 
@@ -878,9 +915,11 @@ async def list_project_worktrees(project_id: str):
             cwd=str(project_path),
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=5,
         )
-        base_branch = base_result.stdout.strip() if base_result.returncode == 0 else "main"
+        base_branch = (
+            base_result.stdout.strip() if base_result.returncode == 0 else "main"
+        )
     except Exception:
         base_branch = "main"
 
@@ -891,7 +930,7 @@ async def list_project_worktrees(project_id: str):
             cwd=str(project_path),
             capture_output=True,
             text=True,
-            timeout=10
+            timeout=10,
         )
         if result.returncode != 0:
             return {"worktrees": []}
@@ -923,7 +962,7 @@ async def list_project_worktrees(project_id: str):
 
             # Extract spec name from path (e.g., .tfactory/worktrees/tasks/001-feature)
             # Pattern: tfactory worktrees are in .tfactory/worktrees/tasks/{spec-name}
-            spec_match = re.search(r'/\.tfactory/worktrees/tasks/([^/]+)$', wt_path)
+            spec_match = re.search(r"/\.tfactory/worktrees/tasks/([^/]+)$", wt_path)
             if not spec_match:
                 continue
 
@@ -937,9 +976,13 @@ async def list_project_worktrees(project_id: str):
                     cwd=wt_path,
                     capture_output=True,
                     text=True,
-                    timeout=5
+                    timeout=5,
                 )
-                commit_count = int(commit_result.stdout.strip()) if commit_result.returncode == 0 else 0
+                commit_count = (
+                    int(commit_result.stdout.strip())
+                    if commit_result.returncode == 0
+                    else 0
+                )
 
                 # Get diff stats
                 diff_result = subprocess.run(
@@ -947,7 +990,7 @@ async def list_project_worktrees(project_id: str):
                     cwd=wt_path,
                     capture_output=True,
                     text=True,
-                    timeout=10
+                    timeout=10,
                 )
 
                 files_changed = 0
@@ -957,36 +1000,40 @@ async def list_project_worktrees(project_id: str):
                 if diff_result.returncode == 0 and diff_result.stdout.strip():
                     stat_line = diff_result.stdout.strip()
                     # Parse "X files changed, Y insertions(+), Z deletions(-)"
-                    files_match = re.search(r'(\d+) files? changed', stat_line)
-                    add_match = re.search(r'(\d+) insertions?\(\+\)', stat_line)
-                    del_match = re.search(r'(\d+) deletions?\(-\)', stat_line)
+                    files_match = re.search(r"(\d+) files? changed", stat_line)
+                    add_match = re.search(r"(\d+) insertions?\(\+\)", stat_line)
+                    del_match = re.search(r"(\d+) deletions?\(-\)", stat_line)
 
                     files_changed = int(files_match.group(1)) if files_match else 0
                     additions = int(add_match.group(1)) if add_match else 0
                     deletions = int(del_match.group(1)) if del_match else 0
 
-                enriched_worktrees.append({
-                    "specName": spec_name,
-                    "path": wt_path,
-                    "branch": branch.replace("refs/heads/", ""),
-                    "baseBranch": base_branch,
-                    "commitCount": commit_count,
-                    "filesChanged": files_changed,
-                    "additions": additions,
-                    "deletions": deletions
-                })
+                enriched_worktrees.append(
+                    {
+                        "specName": spec_name,
+                        "path": wt_path,
+                        "branch": branch.replace("refs/heads/", ""),
+                        "baseBranch": base_branch,
+                        "commitCount": commit_count,
+                        "filesChanged": files_changed,
+                        "additions": additions,
+                        "deletions": deletions,
+                    }
+                )
             except Exception:
                 # Still include the worktree with default stats
-                enriched_worktrees.append({
-                    "specName": spec_name,
-                    "path": wt_path,
-                    "branch": branch.replace("refs/heads/", ""),
-                    "baseBranch": base_branch,
-                    "commitCount": 0,
-                    "filesChanged": 0,
-                    "additions": 0,
-                    "deletions": 0
-                })
+                enriched_worktrees.append(
+                    {
+                        "specName": spec_name,
+                        "path": wt_path,
+                        "branch": branch.replace("refs/heads/", ""),
+                        "baseBranch": base_branch,
+                        "commitCount": 0,
+                        "filesChanged": 0,
+                        "additions": 0,
+                        "deletions": 0,
+                    }
+                )
 
         return {"worktrees": enriched_worktrees}
     except Exception:
@@ -1029,8 +1076,13 @@ async def list_project_tasks(project_id: str):
 
 class TaskCreateRequest(BaseModel):
     """Request model for creating a task via project endpoint."""
-    title: str = Field(default="", description="Task title (optional, auto-generated if empty)")
-    description: str = Field(..., min_length=1, description="Task description (required)")
+
+    title: str = Field(
+        default="", description="Task title (optional, auto-generated if empty)"
+    )
+    description: str = Field(
+        ..., min_length=1, description="Task description (required)"
+    )
     metadata: dict | None = Field(default=None, description="Optional task metadata")
 
 
@@ -1056,10 +1108,10 @@ async def create_project_task(project_id: str, task_data: TaskCreateRequest):
     title = task_data.title.strip()
     if not title:
         # Generate title from first line/sentence of description
-        desc_lines = task_data.description.strip().split('\n')
+        desc_lines = task_data.description.strip().split("\n")
         first_line = desc_lines[0].strip()
         # Truncate to reasonable length
-        title = first_line[:80] + ('...' if len(first_line) > 80 else '')
+        title = first_line[:80] + ("..." if len(first_line) > 80 else "")
         if not title:
             title = "New Task"
 
@@ -1109,13 +1161,26 @@ Created via Magestic AI Web UI
         # Copy model-related fields that phase_config.py expects
         # Also include 'mode' for Quick Mode prompt selection and 'requireReviewBeforeCoding' for approval gate
         # Also include selectedSkills so agent_service.py can inject skill context
-        model_fields = ["model", "thinkingLevel", "isAutoProfile", "phaseModels", "phaseThinking", "mode", "requireReviewBeforeCoding", "selectedSkills", "enableRemoteControl", "enableDelegation"]
+        model_fields = [
+            "model",
+            "thinkingLevel",
+            "isAutoProfile",
+            "phaseModels",
+            "phaseThinking",
+            "mode",
+            "requireReviewBeforeCoding",
+            "selectedSkills",
+            "enableRemoteControl",
+            "enableDelegation",
+        ]
         for field in model_fields:
             if field in task_data.metadata:
                 task_metadata[field] = task_data.metadata[field]
 
         if task_metadata:
-            (spec_dir / "task_metadata.json").write_text(json.dumps(task_metadata, indent=2))
+            (spec_dir / "task_metadata.json").write_text(
+                json.dumps(task_metadata, indent=2)
+            )
 
     task = tasks_module.spec_to_task(project_id, spec_dir)
     return tasks_module.task_to_dict(task)
@@ -1159,12 +1224,16 @@ async def get_project_task_logs(project_id: str, spec_id: str):
 
 class ArchiveTasksRequest(BaseModel):
     """Request to archive tasks."""
+
     taskIds: list[str] = Field(..., description="List of task IDs to archive")
-    version: str | None = Field(None, description="Version tag for the archive (e.g., 'v1.2.0')")
+    version: str | None = Field(
+        None, description="Version tag for the archive (e.g., 'v1.2.0')"
+    )
 
 
 class UnarchiveTasksRequest(BaseModel):
     """Request to unarchive tasks."""
+
     taskIds: list[str] = Field(..., description="List of task IDs to unarchive")
 
 

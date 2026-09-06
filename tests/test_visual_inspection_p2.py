@@ -18,17 +18,31 @@ from agents.visual_inspection import (
     store,
 )
 
-_TARGET = {"name": "snow", "platform": "servicenow", "base_url": "https://acme.service-now.com"}
+_TARGET = {
+    "name": "snow",
+    "platform": "servicenow",
+    "base_url": "https://acme.service-now.com",
+}
 
 
 def _meta(fail: bool = True):
     steps = [StepResult(1, "login", "pass", screenshot="screenshots/01-login-pass.png")]
     if fail:
-        steps.append(StepResult(2, "submit", "fail",
-                                screenshot="screenshots/02-submit-fail.png",
-                                error="expected 'Saved' — got 'Required field'"))
-    return build_meta(run_id="snow-20260603130500", target=_TARGET, steps=steps,
-                      created_at="2026-06-03T13:05:00Z")
+        steps.append(
+            StepResult(
+                2,
+                "submit",
+                "fail",
+                screenshot="screenshots/02-submit-fail.png",
+                error="expected 'Saved' — got 'Required field'",
+            )
+        )
+    return build_meta(
+        run_id="snow-20260603130500",
+        target=_TARGET,
+        steps=steps,
+        created_at="2026-06-03T13:05:00Z",
+    )
 
 
 # ── correction plan ──────────────────────────────────────────────────────────
@@ -78,7 +92,9 @@ def test_build_issue_specs_epic_and_child_per_failure() -> None:
 def test_register_dry_run_makes_no_calls() -> None:
     epic, children = build_issue_specs(_meta())
     calls: list = []
-    r = register_issues(epic, children, "o/r", create=False, gh_runner=lambda a: calls.append(a))
+    r = register_issues(
+        epic, children, "o/r", create=False, gh_runner=lambda a: calls.append(a)
+    )
     assert r["dry_run"] is True and r["count"] == 1 and calls == []
 
 

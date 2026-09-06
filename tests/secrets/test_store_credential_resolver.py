@@ -39,8 +39,12 @@ async def test_resolve_decrypts_and_bumps_last_used(fernet_key: str) -> None:
     async with Session() as db:
         db.add(
             TestTargetCredential(
-                id="tc_1", org_id="o1", name="login", kind="form",
-                username="qa@acme.test", secret="s3cr3t-🔐",
+                id="tc_1",
+                org_id="o1",
+                name="login",
+                kind="form",
+                username="qa@acme.test",
+                secret="s3cr3t-🔐",
             )
         )
         await db.commit()

@@ -153,9 +153,15 @@ def _tool_get_test_plan(args: dict[str, Any]) -> dict[str, Any]:
         "lanes": lanes,
         "frameworks": frameworks,
         "endpoints": plan.get("endpoints", {}) if isinstance(plan, dict) else {},
-        "coverage_target": plan.get("coverage_target", 80) if isinstance(plan, dict) else 80,
-        "mutation_scope": plan.get("mutation_scope", []) if isinstance(plan, dict) else [],
-        "security_scope": plan.get("security_scope", []) if isinstance(plan, dict) else [],
+        "coverage_target": plan.get("coverage_target", 80)
+        if isinstance(plan, dict)
+        else 80,
+        "mutation_scope": plan.get("mutation_scope", [])
+        if isinstance(plan, dict)
+        else [],
+        "security_scope": plan.get("security_scope", [])
+        if isinstance(plan, dict)
+        else [],
         "subtask_count": len(subtasks),
     }
 
@@ -225,7 +231,8 @@ def _tool_get_results(args: dict[str, Any]) -> dict[str, Any]:
         return {"error": "no results available yet for this task"}
 
     lane_verdicts = [
-        v for v in (verdicts if isinstance(verdicts, list) else [])
+        v
+        for v in (verdicts if isinstance(verdicts, list) else [])
         if v.get("lane", "unit") == lane
     ]
 
@@ -235,7 +242,8 @@ def _tool_get_results(args: dict[str, Any]) -> dict[str, Any]:
 
     failures = [
         {"test": v.get("test_id", ""), "error": v.get("reason", "")}
-        for v in lane_verdicts if v.get("verdict") == "reject"
+        for v in lane_verdicts
+        if v.get("verdict") == "reject"
     ]
 
     return {
@@ -274,9 +282,7 @@ def _tool_get_spec(args: dict[str, Any]) -> dict[str, Any]:
         return {"error": "spec.md not found for this task"}
 
     ac_lines = [
-        line.strip()
-        for line in spec_md.splitlines()
-        if re.search(r"\bAC#?\d+\b", line)
+        line.strip() for line in spec_md.splitlines() if re.search(r"\bAC#?\d+\b", line)
     ]
 
     return {
@@ -322,7 +328,10 @@ def _tool_report_result(args: dict[str, Any]) -> dict[str, Any]:
 
     logger.info(
         "mcp_copilot: tfactory_report_result task=%s lane=%s passed=%d failed=%d",
-        task_id, lane, passed, failed,
+        task_id,
+        lane,
+        passed,
+        failed,
     )
     return {"accepted": True}
 
@@ -337,7 +346,9 @@ _TOOLS: list[dict[str, Any]] = [
         "description": "Return the test_plan.json for the given TFactory task (lanes, frameworks, coverage target, mutation scope).",
         "inputSchema": {
             "type": "object",
-            "properties": {"task_id": {"type": "string", "description": "TFactory task / spec ID"}},
+            "properties": {
+                "task_id": {"type": "string", "description": "TFactory task / spec ID"}
+            },
             "required": ["task_id"],
         },
     },
@@ -357,7 +368,10 @@ _TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "task_id": {"type": "string"},
-                "lane": {"type": "string", "enum": ["unit", "api", "browser", "integration"]},
+                "lane": {
+                    "type": "string",
+                    "enum": ["unit", "api", "browser", "integration"],
+                },
             },
             "required": ["task_id", "lane"],
         },
@@ -369,7 +383,17 @@ _TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "task_id": {"type": "string"},
-                "lane": {"type": "string", "enum": ["unit", "api", "browser", "integration", "security", "mutation"]},
+                "lane": {
+                    "type": "string",
+                    "enum": [
+                        "unit",
+                        "api",
+                        "browser",
+                        "integration",
+                        "security",
+                        "mutation",
+                    ],
+                },
             },
             "required": ["task_id", "lane"],
         },
@@ -440,15 +464,21 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
 
     def _err(code: int, message: str) -> JSONResponse:
         return JSONResponse(
-            {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {"code": code, "message": message},
+            }
         )
 
     if method == "initialize":
-        return _ok({
-            "protocolVersion": "2024-11-05",
-            "capabilities": {"tools": {}},
-            "serverInfo": {"name": "tfactory", "version": "1.0.0"},
-        })
+        return _ok(
+            {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "tfactory", "version": "1.0.0"},
+            }
+        )
 
     if method == "tools/list":
         return _ok({"tools": _TOOLS})
@@ -471,10 +501,14 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
             )
             return _err(-32603, "Internal error")
 
-        return _ok({
-            "content": [{"type": "text", "text": json.dumps(result_data, indent=2)}],
-            "isError": "error" in result_data,
-        })
+        return _ok(
+            {
+                "content": [
+                    {"type": "text", "text": json.dumps(result_data, indent=2)}
+                ],
+                "isError": "error" in result_data,
+            }
+        )
 
     return _err(-32601, f"Method not found: {method!r}")
 

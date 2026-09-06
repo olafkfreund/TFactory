@@ -84,7 +84,9 @@ def test_all_accept_is_nothing_to_hand_back() -> None:
 
 def test_visual_plan_makes_request_non_empty_even_without_failures() -> None:
     req = build_correction_request(
-        {"verdicts": []}, None, SOURCE,
+        {"verdicts": []},
+        None,
+        SOURCE,
         visual_correction_plan="# Correction plan\n\nButton overlaps footer.",
     )
     assert req.failures == []
@@ -138,7 +140,9 @@ def test_render_is_deterministic_and_complete() -> None:
 
 def test_render_includes_visual_plan_section() -> None:
     req = build_correction_request(
-        {"verdicts": []}, None, SOURCE,
+        {"verdicts": []},
+        None,
+        SOURCE,
         visual_correction_plan="Button overlaps the footer on mobile.",
     )
     md = render_fix_request_md(req)

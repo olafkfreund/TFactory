@@ -43,15 +43,26 @@ _VALID_KINDS = {"form", "api_token", "basic_auth", "totp"}
 class CreateTestCredentialRequest(BaseModel):
     org_id: str = Field(..., description="Organization that owns this credential")
     name: str = Field(
-        ..., min_length=1, max_length=255, description="Label referenced from .tfactory.yml"
+        ...,
+        min_length=1,
+        max_length=255,
+        description="Label referenced from .tfactory.yml",
     )
-    kind: str = Field(default="form", description="form | api_token | basic_auth | totp")
+    kind: str = Field(
+        default="form", description="form | api_token | basic_auth | totp"
+    )
     username: str | None = Field(
-        default=None, description="Plaintext username/identifier (not a secret on its own)."
+        default=None,
+        description="Plaintext username/identifier (not a secret on its own).",
     )
-    secret: SecretStr = Field(..., min_length=1, description="The secret material (password / API token / TOTP seed). Never logged, encrypted at rest, cannot be retrieved after creation.")
+    secret: SecretStr = Field(
+        ...,
+        min_length=1,
+        description="The secret material (password / API token / TOTP seed). Never logged, encrypted at rest, cannot be retrieved after creation.",
+    )
     extra: dict | None = Field(
-        default=None, description="Optional kind-specific fields, e.g. {'otp_period': 30}. Encrypted."
+        default=None,
+        description="Optional kind-specific fields, e.g. {'otp_period': 30}. Encrypted.",
     )
 
 
@@ -130,7 +141,9 @@ async def create_test_credential(
             body.secret.get_secret_value(),
             digits=int(ex.get("totp_digits", ex.get("digits", 6))),
             alg=str(ex.get("totp_algorithm", ex.get("alg", "sha1"))),
-            period=int(ex.get("totp_period", ex.get("otp_period", ex.get("period", 30)))),
+            period=int(
+                ex.get("totp_period", ex.get("otp_period", ex.get("period", 30)))
+            ),
         )
         if not ok:
             raise HTTPException(

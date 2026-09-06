@@ -50,7 +50,11 @@ class CreateGitCredentialRequest(BaseModel):
     name: str = Field(
         ..., min_length=1, max_length=255, description="Human-readable label"
     )
-    token: SecretStr = Field(..., min_length=1, description="The Personal Access Token. Never logged, encrypted at rest, cannot be retrieved after creation.")
+    token: SecretStr = Field(
+        ...,
+        min_length=1,
+        description="The Personal Access Token. Never logged, encrypted at rest, cannot be retrieved after creation.",
+    )
     kind: str = Field(
         default="pat",
         description="Credential kind. V1 supports 'pat' only.",
@@ -187,9 +191,7 @@ async def delete_git_credential(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(GitCredential).where(GitCredential.id == cred_id)
-    )
+    result = await db.execute(select(GitCredential).where(GitCredential.id == cred_id))
     cred = result.scalar_one_or_none()
     if cred is None:
         raise HTTPException(

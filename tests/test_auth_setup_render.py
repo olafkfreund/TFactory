@@ -37,7 +37,9 @@ def test_config_with_auth_adds_setup_project_and_storage_state(tmp_path: Path) -
     assert "@@" not in rendered
 
 
-def test_config_storage_state_only_on_chromium_not_global_or_setup(tmp_path: Path) -> None:
+def test_config_storage_state_only_on_chromium_not_global_or_setup(
+    tmp_path: Path,
+) -> None:
     """Regression: storageState must live ONLY on the chromium project's `use`.
 
     If it sits in the global `use`, the `setup` project inherits it and dies trying
@@ -183,13 +185,17 @@ def test_render_steps_emits_each_action_in_order() -> None:
     assert (
         'await page.locator("#password").fill(process.env["SN_PASSWORD"] ?? "");' in out
     )
-    assert 'await page.locator("#tenant").fill("acme-corp");' in out  # non-secret literal
+    assert (
+        'await page.locator("#tenant").fill("acme-corp");' in out
+    )  # non-secret literal
     assert 'await page.waitForURL("**/dashboard**");' in out
     # storageState save + no placeholder leakage
     assert "storageState({ path: STORAGE_STATE })" in out
     assert "@@" not in out
     # ordering: goto precedes the SSO click precedes the username fill
-    assert out.index("page.goto") < out.index("Login with SSO") < out.index("SN_USERNAME")
+    assert (
+        out.index("page.goto") < out.index("Login with SSO") < out.index("SN_USERNAME")
+    )
 
 
 def test_render_steps_never_inlines_credentials() -> None:
@@ -225,4 +231,4 @@ def test_render_steps_escapes_quotes() -> None:
         username_env="U",
         secret_env="S",
     )
-    assert r'a[title=\"Go\"]' in out  # double-quotes escaped for the TS literal
+    assert r"a[title=\"Go\"]" in out  # double-quotes escaped for the TS literal

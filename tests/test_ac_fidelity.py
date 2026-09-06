@@ -10,22 +10,37 @@ from agents.triager import _write_ac_fidelity
 
 _PLAN = {
     "phases": [
-        {"phase": 1, "name": "AC#1: GET / returns 200 HTML",
-         "subtasks": [{"id": "root-200-unit"}, {"id": "root-200-browser"}]},
-        {"phase": 2, "name": "AC#2: h1 says Hello",
-         "subtasks": [{"id": "h1-browser"}]},
-        {"phase": 3, "name": "AC#3: ping button updates result",
-         "subtasks": [{"id": "ping-browser"}]},
-        {"phase": 4, "name": "AC#4: health returns ok",
-         "subtasks": [{"id": "health-unit"}]},
-        {"phase": 5, "name": "replan-1",
-         "subtasks": [{"id": "root-200-unit-r1"}]},
+        {
+            "phase": 1,
+            "name": "AC#1: GET / returns 200 HTML",
+            "subtasks": [{"id": "root-200-unit"}, {"id": "root-200-browser"}],
+        },
+        {"phase": 2, "name": "AC#2: h1 says Hello", "subtasks": [{"id": "h1-browser"}]},
+        {
+            "phase": 3,
+            "name": "AC#3: ping button updates result",
+            "subtasks": [{"id": "ping-browser"}],
+        },
+        {
+            "phase": 4,
+            "name": "AC#4: health returns ok",
+            "subtasks": [{"id": "health-unit"}],
+        },
+        {"phase": 5, "name": "replan-1", "subtasks": [{"id": "root-200-unit-r1"}]},
     ]
 }
 _VERDICTS = [
-    {"test_id": "root-200-unit", "test_file": "tests/unit/root.py", "verdict": "accept"},
+    {
+        "test_id": "root-200-unit",
+        "test_file": "tests/unit/root.py",
+        "verdict": "accept",
+    },
     {"test_id": "h1-browser", "test_file": "tests/e2e/h1.spec.ts", "verdict": "flag"},
-    {"test_id": "ping-browser", "test_file": "tests/e2e/ping.spec.ts", "verdict": "reject"},
+    {
+        "test_id": "ping-browser",
+        "test_file": "tests/e2e/ping.spec.ts",
+        "verdict": "reject",
+    },
     # AC#4 has NO verdict -> unverified
 ]
 
@@ -33,10 +48,10 @@ _VERDICTS = [
 def test_ledger_grades_each_ac_honestly():
     led = build_ac_ledger(_PLAN, _VERDICTS)
     by = {a["ac_id"]: a for a in led["acceptance"]}
-    assert by["AC#1"]["status"] == "verified"        # has an accept
-    assert by["AC#2"]["status"] == "flagged_only"    # only a flag
-    assert by["AC#3"]["status"] == "unverified"      # only a reject
-    assert by["AC#4"]["status"] == "unverified"      # no test at all
+    assert by["AC#1"]["status"] == "verified"  # has an accept
+    assert by["AC#2"]["status"] == "flagged_only"  # only a flag
+    assert by["AC#3"]["status"] == "unverified"  # only a reject
+    assert by["AC#4"]["status"] == "unverified"  # no test at all
     assert "replan" not in {a["ac_id"] for a in led["acceptance"]}  # replan skipped
 
 
@@ -104,7 +119,9 @@ def test_summary_names_spec_sections_that_were_never_acceptance_criteria():
 def test_markdown_carries_the_caveat_on_a_green_run():
     led = build_ac_ledger(_PLAN, _ALL_ACCEPTED, spec_markdown=_SPEC_MD)
     md = render_markdown(led)
-    assert "2 sections of the spec body were not represented as acceptance criteria" in md
+    assert (
+        "2 sections of the spec body were not represented as acceptance criteria" in md
+    )
     assert "Slug rules" in md and "Out of scope" in md
 
 
@@ -128,7 +145,11 @@ def test_triager_hands_the_ingested_spec_to_the_ledger(tmp_path):
 
 
 def test_replan_suffix_matches_base_ac():
-    plan = {"phases": [{"phase": 1, "name": "AC#1: x", "subtasks": [{"id": "root-200-unit-r1"}]}]}
+    plan = {
+        "phases": [
+            {"phase": 1, "name": "AC#1: x", "subtasks": [{"id": "root-200-unit-r1"}]}
+        ]
+    }
     led = build_ac_ledger(plan, [{"test_id": "root-200-unit", "verdict": "accept"}])
     assert led["acceptance"][0]["status"] == "verified"  # -r1 matched its base verdict
 

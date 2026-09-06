@@ -199,9 +199,7 @@ def test_each_slash_command_references_its_skill(name: str) -> None:
     """Each slash command body must reference its skill by name."""
     path = COMMANDS_DIR / f"{name}.md"
     text = path.read_text()
-    assert name in text, (
-        f"{path}: command body does not reference skill name {name!r}"
-    )
+    assert name in text, f"{path}: command body does not reference skill name {name!r}"
 
 
 # ---------------------------------------------------------------------------

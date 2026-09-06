@@ -48,16 +48,24 @@ def test_specs_built_for_ref_auth_target(tmp_path) -> None:
 
 
 def test_no_specs_for_non_ref_auth(tmp_path) -> None:
-    http = {"name": "api", "type": "http", "base_url": "x",
-            "auth": {"type": "bearer", "token_env": "T"}}
+    http = {
+        "name": "api",
+        "type": "http",
+        "base_url": "x",
+        "auth": {"type": "bearer", "token_env": "T"},
+    }
     _snapshot(tmp_path, [http], _TEST_CREDS)
     assert _test_credential_specs(tmp_path, {"target_name": "api"}) == []
 
 
 def test_no_specs_when_credential_missing(tmp_path) -> None:
     # ref-auth points at a credential name not present in test_credentials
-    t = {"name": "app", "type": "http", "base_url": "x",
-         "auth": {"type": "ref", "ref": "does-not-exist"}}
+    t = {
+        "name": "app",
+        "type": "http",
+        "base_url": "x",
+        "auth": {"type": "ref", "ref": "does-not-exist"},
+    }
     _snapshot(tmp_path, [t], _TEST_CREDS)
     assert _test_credential_specs(tmp_path, {"target_name": "app"}) == []
 
@@ -75,7 +83,9 @@ def test_specs_resolve_through_sandbox_resolver(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("APP_PASSWORD", "s3cret")
     monkeypatch.setenv("APP_USERNAME", "alice")
     # resolver imports egress_enabled from the source module at call time
-    monkeypatch.setattr("tfactory_secrets.egress.egress_enabled", lambda *_a, **_k: True)
+    monkeypatch.setattr(
+        "tfactory_secrets.egress.egress_enabled", lambda *_a, **_k: True
+    )
 
     specs = _test_credential_specs(tmp_path, {"target_name": "app"})
     creds = sc.resolve_test_target_credentials(specs, tmp_path, tmp_path, "host")

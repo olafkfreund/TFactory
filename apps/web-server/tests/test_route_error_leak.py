@@ -65,7 +65,11 @@ def settings_client() -> TestClient:
         (
             "post",
             "/api/settings/api-key",
-            {"keyType": "anthropic", "keyValue": "sk-ant-" + "x" * 40, "saveToEnv": True},
+            {
+                "keyType": "anthropic",
+                "keyValue": "sk-ant-" + "x" * 40,
+                "saveToEnv": True,
+            },
             500,
         ),
         ("put", "/api/settings/tab-state", {"tabs": ["a"]}, 500),

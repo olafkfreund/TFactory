@@ -89,9 +89,7 @@ def _parse_frontmatter(skill_md: Path) -> dict[str, Any] | None:
     try:
         meta = yaml.safe_load(front_raw)
     except yaml.YAMLError as exc:
-        _log.warning(
-            "skills endpoint: malformed YAML in %s: %s", skill_md, exc
-        )
+        _log.warning("skills endpoint: malformed YAML in %s: %s", skill_md, exc)
         return None
 
     if not isinstance(meta, dict):

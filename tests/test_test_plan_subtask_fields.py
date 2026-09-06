@@ -55,7 +55,8 @@ def test_fields_coexist_with_existing_lane_field() -> None:
     explicit non-default lane. Use BROWSER (v0.2 spine) as the
     non-default — was Lane.SAST in v0.1, replaced in Task 0."""
     s = Subtask(
-        id="1", description="x",
+        id="1",
+        description="x",
         lane=Lane.BROWSER,
         target="foo.py::bar",
         rationale="AC#1",
@@ -162,7 +163,8 @@ def test_full_round_trip_at_various_replan_counts(replan_count: int) -> None:
 def test_round_trip_preserves_lane_alongside_new_fields() -> None:
     """The Task 3 lane field and Task 5 fields don't interfere."""
     s = Subtask(
-        id="1", description="x",
+        id="1",
+        description="x",
         lane=Lane.MUTATION,
         target="t.py::f",
         rationale="AC#1",
@@ -232,7 +234,8 @@ def test_accepts_all_polyglot_fields() -> None:
 
 def test_polyglot_fields_coexist_with_lane_and_target() -> None:
     s = Subtask(
-        id="1", description="x",
+        id="1",
+        description="x",
         lane=Lane.BROWSER,
         target="tests/e2e/login.spec.ts::loginTest",
         language="typescript",
@@ -357,7 +360,7 @@ def test_framework_id_matches_framework_field() -> None:
         ("typescript", "jest", "web-unit", "create"),
         ("typescript", "playwright", "web-e2e", "update"),
         ("python", "pytest", "api-unit", "skip"),
-        (None, None, None, "create"),          # v0.1 legacy
+        (None, None, None, "create"),  # v0.1 legacy
     ],
 )
 def test_polyglot_full_round_trip(

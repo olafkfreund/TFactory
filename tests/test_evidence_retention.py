@@ -183,7 +183,9 @@ def test_enforce_retention_unknown_verdict_kept_forever(tmp_path: Path) -> None:
 # ─── Size-cap sweep ───────────────────────────────────────────────────────────
 
 
-def _make_evidence_with_payload(spec_dir: Path, test_id: str, payload_bytes: int) -> Path:
+def _make_evidence_with_payload(
+    spec_dir: Path, test_id: str, payload_bytes: int
+) -> Path:
     ev_dir = spec_dir / "findings" / "evidence" / test_id
     ev_dir.mkdir(parents=True, exist_ok=True)
     (ev_dir / "video.webm").write_bytes(b"x" * payload_bytes)

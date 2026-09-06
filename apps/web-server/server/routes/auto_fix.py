@@ -42,6 +42,7 @@ router = APIRouter()
 
 class AutoFixConfigPayload(BaseModel):
     """Mirrors AutoFixConfig at apps/frontend-web/src/shared/types/github-api.ts:21"""
+
     enabled: bool = False
     labels: list[str] = Field(default_factory=list)
     requireHumanApproval: bool = False
@@ -66,7 +67,9 @@ async def get_auto_fix_config(projectId: str) -> dict[str, Any] | None:
 
 
 @router.put("/{projectId}/auto-fix/config")
-async def save_auto_fix_config(projectId: str, payload: AutoFixConfigPayload) -> dict[str, bool]:
+async def save_auto_fix_config(
+    projectId: str, payload: AutoFixConfigPayload
+) -> dict[str, bool]:
     """Save AutoFixConfig. Returns ``{success: bool}``."""
     ok = auto_fix_service.save_config(projectId, payload.model_dump())
     if not ok:
@@ -102,7 +105,9 @@ async def check_new_issues(projectId: str) -> dict[str, Any]:
         )
         raise HTTPException(status_code=404, detail="Project or resource not found")
     except Exception:
-        logger.exception("[auto_fix] check_new_issues failed project=%s", sanitize_log(projectId))
+        logger.exception(
+            "[auto_fix] check_new_issues failed project=%s", sanitize_log(projectId)
+        )
         raise HTTPException(status_code=500, detail="check failed")
     return result
 
@@ -113,11 +118,14 @@ async def start_auto_fix_one(projectId: str, issueNumber: int) -> dict[str, Any]
     try:
         return await auto_fix_service.start_auto_fix(projectId, issueNumber)
     except ValueError:
-        logger.exception("[auto_fix] start_auto_fix failed project=%s", sanitize_log(projectId))
+        logger.exception(
+            "[auto_fix] start_auto_fix failed project=%s", sanitize_log(projectId)
+        )
         raise HTTPException(status_code=404, detail="Project or resource not found")
     except Exception:
         logger.exception(
             "[auto_fix] start_auto_fix failed project=%s issue=%s",
-            sanitize_log(projectId), sanitize_log(issueNumber),
+            sanitize_log(projectId),
+            sanitize_log(issueNumber),
         )
         raise HTTPException(status_code=500, detail="start failed")

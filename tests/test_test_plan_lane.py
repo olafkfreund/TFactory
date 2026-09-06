@@ -23,7 +23,11 @@ from test_plan.enums import _parse_lane_str
 
 def test_lane_has_five_v02_values() -> None:
     assert {lane.value for lane in Lane} == {
-        "unit", "browser", "api", "integration", "mutation",
+        "unit",
+        "browser",
+        "api",
+        "integration",
+        "mutation",
     }
 
 
@@ -88,21 +92,24 @@ def test_from_dict_rejects_unknown_lane() -> None:
 # ── v0.1 → v0.2 alias compatibility ────────────────────────────────────
 
 
-@pytest.mark.parametrize("legacy_name,expected_lane", [
-    ("functional", Lane.UNIT),
-    ("sast",       Lane.UNIT),
-    ("dast",       Lane.UNIT),
-    ("fuzz",       Lane.UNIT),
-])
+@pytest.mark.parametrize(
+    "legacy_name,expected_lane",
+    [
+        ("functional", Lane.UNIT),
+        ("sast", Lane.UNIT),
+        ("dast", Lane.UNIT),
+        ("fuzz", Lane.UNIT),
+    ],
+)
 def test_v01_alias_maps_with_warning(legacy_name: str, expected_lane: Lane) -> None:
     """v0.1 lane names parse to v0.2 lanes with a DeprecationWarning."""
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         result = _parse_lane_str(legacy_name)
         assert result == expected_lane
-        assert any(
-            issubclass(w.category, DeprecationWarning) for w in caught
-        ), f"no DeprecationWarning emitted for {legacy_name!r}"
+        assert any(issubclass(w.category, DeprecationWarning) for w in caught), (
+            f"no DeprecationWarning emitted for {legacy_name!r}"
+        )
 
 
 def test_v01_alias_through_from_dict() -> None:
@@ -146,4 +153,5 @@ def test_lifecycle_methods_preserve_lane() -> None:
 def test_chunk_alias_is_subtask() -> None:
     """The Chunk backwards-compat alias must continue to exist."""
     from test_plan import Chunk
+
     assert Chunk is Subtask

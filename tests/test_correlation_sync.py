@@ -17,7 +17,11 @@ _SOURCE = {
         "task_id": "demo:001-login",
     }
 }
-_VERDICTS = {"verdicts": [{"test_id": "t_bad", "verdict": "reject", "reasons": ["x"], "lane": "api"}]}
+_VERDICTS = {
+    "verdicts": [
+        {"test_id": "t_bad", "verdict": "reject", "reasons": ["x"], "lane": "api"}
+    ]
+}
 _TRIAGE = {"rejected": [{"test_id": "t_bad", "test_file": "tests/test_x.py"}]}
 
 
@@ -30,7 +34,13 @@ def spec(tmp_path):
 
 def _write_contract(spec, key):
     (spec / "context" / "aifactory_plan.json").write_text(
-        json.dumps({"contract_version": "2", "correlation_key": key, "tfactory": {"lanes": ["unit"]}})
+        json.dumps(
+            {
+                "contract_version": "2",
+                "correlation_key": key,
+                "tfactory": {"lanes": ["unit"]},
+            }
+        )
     )
 
 

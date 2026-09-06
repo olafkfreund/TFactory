@@ -71,7 +71,9 @@ def test_username_ref_maps_to_as_username(
     monkeypatch.setenv("TT_USER", "qa@acme.test")
     out = resolve_test_target_credentials(
         [_spec(as_username="TEST_USERNAME", username_ref="env:TT_USER")],
-        tmp_path, tmp_path, "host",
+        tmp_path,
+        tmp_path,
+        "host",
     )
     assert out.env == {"TEST_PASSWORD": "pw", "TEST_USERNAME": "qa@acme.test"}
 
@@ -87,7 +89,9 @@ def test_multiple_specs_resolve_independently(
             _spec(name="a", ref="env:A_PW", as_secret="A"),
             _spec(name="b", ref="env:B_PW", as_secret="B"),
         ],
-        tmp_path, tmp_path, "host",
+        tmp_path,
+        tmp_path,
+        "host",
     )
     assert out.env == {"A": "a", "B": "b"}
 
@@ -105,7 +109,9 @@ def test_store_ref_is_skipped_not_resolved(
             _spec(name="store", ref="store:tc_123", as_secret="SHOULD_NOT_APPEAR"),
             _spec(name="ok", ref="env:OK_PW", as_secret="OK"),
         ],
-        tmp_path, tmp_path, "host",
+        tmp_path,
+        tmp_path,
+        "host",
     )
     assert "SHOULD_NOT_APPEAR" not in out.env
     assert out.env == {"OK": "ok"}
@@ -122,7 +128,9 @@ def test_unresolvable_ref_is_skipped(
             _spec(name="bad", ref="env:MISSING_PW", as_secret="BAD"),
             _spec(name="good", ref="env:GOOD_PW", as_secret="GOOD"),
         ],
-        tmp_path, tmp_path, "host",
+        tmp_path,
+        tmp_path,
+        "host",
     )
     assert "BAD" not in out.env
     assert out.env == {"GOOD": "good"}

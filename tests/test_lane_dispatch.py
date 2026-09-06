@@ -67,16 +67,20 @@ def test_unknown_lane_raises_lane_not_implemented():
 
 @pytest.mark.parametrize("legacy_lane", ["functional", "sast", "dast", "fuzz"])
 def test_v01_alias_dispatch_emits_deprecation_warning(
-    legacy_lane, monkeypatch, tmp_path,
+    legacy_lane,
+    monkeypatch,
+    tmp_path,
 ):
     """Calling dispatch_lane with a v0.1 name remaps to 'unit' + warns."""
     monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/docker")
+
     def _fake_run(*args, **kwargs):
         cp = MagicMock(spec=subprocess.CompletedProcess)
         cp.returncode = 0
         cp.stdout = ""
         cp.stderr = ""
         return cp
+
     monkeypatch.setattr(subprocess, "run", _fake_run)
 
     r = DockerRunner(image="tfactory-runner-python:latest")
@@ -92,9 +96,9 @@ def test_v01_alias_dispatch_emits_deprecation_warning(
             },
         )
     assert result.lane == "unit"  # remapped
-    assert any(
-        issubclass(w.category, DeprecationWarning) for w in caught
-    ), f"no DeprecationWarning emitted for legacy lane {legacy_lane!r}"
+    assert any(issubclass(w.category, DeprecationWarning) for w in caught), (
+        f"no DeprecationWarning emitted for legacy lane {legacy_lane!r}"
+    )
 
 
 # ── lit lanes require DockerRunner ──────────────────────────────────────
@@ -120,6 +124,7 @@ def test_lit_lane_invokes_docker_runner(lane, monkeypatch, tmp_path):
     monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/docker")
 
     captured: dict = {}
+
     def _fake_run(*args, **kwargs):
         captured["argv"] = args[0]
         cp = MagicMock(spec=subprocess.CompletedProcess)
@@ -214,9 +219,7 @@ class _StubRuntime:
         self.stop()
 
 
-def test_dispatch_browser_lane_returns_browser_dispatch_result(
-    monkeypatch, tmp_path
-):
+def test_dispatch_browser_lane_returns_browser_dispatch_result(monkeypatch, tmp_path):
     """dispatch_browser_lane must return DispatchResult with lane='browser'."""
     monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/docker")
 
@@ -250,9 +253,7 @@ def test_dispatch_browser_lane_returns_browser_dispatch_result(
     assert result.docker_result.returncode == 0
 
 
-def test_dispatch_browser_lane_no_wait_for_skips_target_url(
-    monkeypatch, tmp_path
-):
+def test_dispatch_browser_lane_no_wait_for_skips_target_url(monkeypatch, tmp_path):
     """dispatch_browser_lane with empty wait_for does not inject TFACTORY_TARGET_URL."""
     monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/docker")
     received_extra_env: dict = {}

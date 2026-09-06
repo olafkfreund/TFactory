@@ -48,7 +48,9 @@ async def _drain(client: _Client) -> list[Any]:
 
 
 # The verbatim text from the incident.
-_REAL_MESSAGE = "Failed to authenticate: OAuth session expired and could not be refreshed"
+_REAL_MESSAGE = (
+    "Failed to authenticate: OAuth session expired and could not be refreshed"
+)
 
 
 # ── the classifier must recognise the message the SDK actually emits ──────

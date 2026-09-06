@@ -76,10 +76,10 @@ def test_none_config_tags_nothing() -> None:
 
 def test_mixed_batch_counts_only_ref() -> None:
     subs = [
-        _subtask("t1", "app"),       # ref → tag
-        _subtask("t2", "api"),       # bearer → no
-        _subtask("t3", "app"),       # ref → tag
-        _subtask("t4", None),        # no target → no
+        _subtask("t1", "app"),  # ref → tag
+        _subtask("t2", "api"),  # bearer → no
+        _subtask("t3", "app"),  # ref → tag
+        _subtask("t4", None),  # no target → no
     ]
     n = tag_requires_auth(subs, _fake_config({"app": "ref", "api": "bearer"}))
     assert n == 2
@@ -96,7 +96,9 @@ def _plan(*subtasks):
 def test_apply_loads_config_and_tags(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     import tfactory_yml.parser as parser
 
-    monkeypatch.setattr(parser, "load_tfactory_yml", lambda root: _fake_config({"app": "ref"}))
+    monkeypatch.setattr(
+        parser, "load_tfactory_yml", lambda root: _fake_config({"app": "ref"})
+    )
     st = _subtask("t1", "app")
     n = apply_requires_auth_from_config(_plan(st), tmp_path)
     assert n == 1
@@ -108,14 +110,18 @@ def test_apply_none_project_dir_is_zero() -> None:
     assert apply_requires_auth_from_config(_plan(st), None) == 0
 
 
-def test_apply_no_config_file_is_zero(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_apply_no_config_file_is_zero(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
     import tfactory_yml.parser as parser
 
     monkeypatch.setattr(parser, "load_tfactory_yml", lambda root: None)
     assert apply_requires_auth_from_config(_plan(_subtask("t1", "app")), tmp_path) == 0
 
 
-def test_apply_swallows_config_errors(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_apply_swallows_config_errors(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
     import tfactory_yml.parser as parser
 
     def _boom(root):

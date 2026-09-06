@@ -98,9 +98,14 @@ def test_dry_run_argv_with_repo_slug(tmp_path: Path) -> None:
     )
     result = post_pr_comment(req, dry_run=True)
     assert result.argv == (
-        "gh", "pr", "comment", "42",
-        "-R", "olafkfreund/TFactory",
-        "--body-file", "-",
+        "gh",
+        "pr",
+        "comment",
+        "42",
+        "-R",
+        "olafkfreund/TFactory",
+        "--body-file",
+        "-",
     )
 
 
@@ -109,7 +114,7 @@ def test_dry_run_body_bytes_count(tmp_path: Path) -> None:
     req = PRCommentRequest(
         repo_dir=tmp_path / "repo",
         pr_number=1,
-        body="café",   # 5 bytes (4 ASCII + 2-byte é → wait, 1 byte more)
+        body="café",  # 5 bytes (4 ASCII + 2-byte é → wait, 1 byte more)
     )
     result = post_pr_comment(req, dry_run=True)
     # café = 99 97 102 195 169 = 5 bytes
@@ -120,7 +125,9 @@ def test_dry_run_skips_runner(tmp_path: Path) -> None:
     """Dry-run must not invoke runner_fn at all."""
     runner = _RecordingRunner()
     req = PRCommentRequest(
-        repo_dir=tmp_path / "repo", pr_number=1, body="x",
+        repo_dir=tmp_path / "repo",
+        pr_number=1,
+        body="x",
     )
     post_pr_comment(req, dry_run=True, runner_fn=runner)
     assert runner.calls == []
@@ -129,7 +136,9 @@ def test_dry_run_skips_runner(tmp_path: Path) -> None:
 def test_dry_run_no_comment_url(tmp_path: Path) -> None:
     """Dry-run never sets comment_url since gh wasn't called."""
     req = PRCommentRequest(
-        repo_dir=tmp_path / "repo", pr_number=1, body="x",
+        repo_dir=tmp_path / "repo",
+        pr_number=1,
+        body="x",
     )
     result = post_pr_comment(req, dry_run=True)
     assert result.comment_url == ""
@@ -141,14 +150,17 @@ def test_dry_run_no_comment_url(tmp_path: Path) -> None:
 def test_real_run_success_captures_url(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
-    runner = _RecordingRunner(scripted=[
-        _FakeProc(
-            returncode=0,
-            stdout="https://github.com/olafkfreund/TFactory/pull/9#issuecomment-1234\n",
-        ),
-    ])
+    runner = _RecordingRunner(
+        scripted=[
+            _FakeProc(
+                returncode=0,
+                stdout="https://github.com/olafkfreund/TFactory/pull/9#issuecomment-1234\n",
+            ),
+        ]
+    )
     req = PRCommentRequest(
-        repo_dir=repo, pr_number=9,
+        repo_dir=repo,
+        pr_number=9,
         body="## Triage report\n\nLooks good.\n",
     )
     result = post_pr_comment(req, dry_run=False, runner_fn=runner)
@@ -193,7 +205,9 @@ def test_real_run_passes_body_via_stdin_not_argv(tmp_path: Path) -> None:
 def test_real_run_missing_repo_dir(tmp_path: Path) -> None:
     runner = _RecordingRunner()
     req = PRCommentRequest(
-        repo_dir=tmp_path / "missing", pr_number=1, body="x",
+        repo_dir=tmp_path / "missing",
+        pr_number=1,
+        body="x",
     )
     result = post_pr_comment(req, dry_run=False, runner_fn=runner)
     assert result.ok is False
@@ -205,12 +219,14 @@ def test_real_run_missing_repo_dir(tmp_path: Path) -> None:
 def test_real_run_gh_failure_captures_stderr(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
-    runner = _RecordingRunner(scripted=[
-        _FakeProc(
-            returncode=1,
-            stderr="error: unauthorized; run gh auth login\n",
-        ),
-    ])
+    runner = _RecordingRunner(
+        scripted=[
+            _FakeProc(
+                returncode=1,
+                stderr="error: unauthorized; run gh auth login\n",
+            ),
+        ]
+    )
     req = PRCommentRequest(repo_dir=repo, pr_number=9, body="x")
     result = post_pr_comment(req, dry_run=False, runner_fn=runner)
     assert result.ok is False
@@ -227,7 +243,12 @@ def test_real_run_gh_failure_preserves_argv(tmp_path: Path) -> None:
     req = PRCommentRequest(repo_dir=repo, pr_number=42, body="b")
     result = post_pr_comment(req, dry_run=False, runner_fn=runner)
     assert result.argv == (
-        "gh", "pr", "comment", "42", "--body-file", "-",
+        "gh",
+        "pr",
+        "comment",
+        "42",
+        "--body-file",
+        "-",
     )
 
 
@@ -251,7 +272,9 @@ def test_pr_number_in_argv_is_string(tmp_path: Path) -> None:
     """gh wants the PR number as a string positional. Make sure we
     don't accidentally pass an int (argv must be all str)."""
     req = PRCommentRequest(
-        repo_dir=tmp_path / "repo", pr_number=42, body="x",
+        repo_dir=tmp_path / "repo",
+        pr_number=42,
+        body="x",
     )
     result = post_pr_comment(req, dry_run=True)
     for chunk in result.argv:

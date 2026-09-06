@@ -66,9 +66,9 @@ def _safe_arg(value: str) -> str:
     return value
 
 
-
 class OpenInIDERequest(BaseModel):
     """Request body for opening a path in IDE."""
+
     worktreePath: str
     ide: str
     customPath: str | None = None
@@ -76,6 +76,7 @@ class OpenInIDERequest(BaseModel):
 
 class OpenInTerminalRequest(BaseModel):
     """Request body for opening a path in terminal."""
+
     worktreePath: str
     terminal: str
     customPath: str | None = None
@@ -84,6 +85,7 @@ class OpenInTerminalRequest(BaseModel):
 def get_ide_command(ide: str, path: str, custom_path: str | None = None) -> list[str]:
     """Get the command to open a path in the specified IDE."""
     import platform
+
     system = platform.system()
 
     # Use custom path if provided
@@ -97,63 +99,67 @@ def get_ide_command(ide: str, path: str, custom_path: str | None = None) -> list
         "cursor": ["cursor", path],
         "vscodium": ["codium", path],
         "vscode-insiders": ["code-insiders", path],
-
         # JetBrains IDEs
-        "webstorm": ["webstorm", path] if system != "Darwin" else ["open", "-a", "WebStorm", path],
-        "intellij": ["idea", path] if system != "Darwin" else ["open", "-a", "IntelliJ IDEA", path],
-        "pycharm": ["pycharm", path] if system != "Darwin" else ["open", "-a", "PyCharm", path],
-        "phpstorm": ["phpstorm", path] if system != "Darwin" else ["open", "-a", "PhpStorm", path],
-        "goland": ["goland", path] if system != "Darwin" else ["open", "-a", "GoLand", path],
-        "rider": ["rider", path] if system != "Darwin" else ["open", "-a", "Rider", path],
-        "clion": ["clion", path] if system != "Darwin" else ["open", "-a", "CLion", path],
-        "rubymine": ["rubymine", path] if system != "Darwin" else ["open", "-a", "RubyMine", path],
-        "datagrip": ["datagrip", path] if system != "Darwin" else ["open", "-a", "DataGrip", path],
-
+        "webstorm": ["webstorm", path]
+        if system != "Darwin"
+        else ["open", "-a", "WebStorm", path],
+        "intellij": ["idea", path]
+        if system != "Darwin"
+        else ["open", "-a", "IntelliJ IDEA", path],
+        "pycharm": ["pycharm", path]
+        if system != "Darwin"
+        else ["open", "-a", "PyCharm", path],
+        "phpstorm": ["phpstorm", path]
+        if system != "Darwin"
+        else ["open", "-a", "PhpStorm", path],
+        "goland": ["goland", path]
+        if system != "Darwin"
+        else ["open", "-a", "GoLand", path],
+        "rider": ["rider", path]
+        if system != "Darwin"
+        else ["open", "-a", "Rider", path],
+        "clion": ["clion", path]
+        if system != "Darwin"
+        else ["open", "-a", "CLion", path],
+        "rubymine": ["rubymine", path]
+        if system != "Darwin"
+        else ["open", "-a", "RubyMine", path],
+        "datagrip": ["datagrip", path]
+        if system != "Darwin"
+        else ["open", "-a", "DataGrip", path],
         # Sublime Text
-        "sublime": ["subl", path] if system != "Darwin" else ["open", "-a", "Sublime Text", path],
-
+        "sublime": ["subl", path]
+        if system != "Darwin"
+        else ["open", "-a", "Sublime Text", path],
         # Atom / Pulsar
         "atom": ["atom", path],
         "pulsar": ["pulsar", path],
-
         # Vim/Neovim (terminal-based)
         "vim": ["vim", path],
         "neovim": ["nvim", path],
         "nvim": ["nvim", path],
-
         # Emacs
         "emacs": ["emacs", path],
-
         # Zed
         "zed": ["zed", path] if system != "Darwin" else ["open", "-a", "Zed", path],
-
         # Nova (macOS)
         "nova": ["open", "-a", "Nova", path],
-
         # BBEdit (macOS)
         "bbedit": ["open", "-a", "BBEdit", path],
-
         # TextMate (macOS)
         "textmate": ["open", "-a", "TextMate", path],
-
         # Notepad++ (Windows)
         "notepadpp": ["notepad++", path],
-
         # Visual Studio (Windows)
         "visualstudio": ["devenv", path],
-
         # Fleet
         "fleet": ["fleet", path],
-
         # Lapce
         "lapce": ["lapce", path],
-
         # Helix
         "helix": ["hx", path],
-
         # Kate (Linux/KDE)
         "kate": ["kate", path],
-
         # Geany (Linux)
         "geany": ["geany", path],
     }
@@ -161,9 +167,12 @@ def get_ide_command(ide: str, path: str, custom_path: str | None = None) -> list
     return ide_commands.get(ide, ["code", path])  # Default to VS Code
 
 
-def get_terminal_command(terminal: str, path: str, custom_path: str | None = None) -> list[str]:
+def get_terminal_command(
+    terminal: str, path: str, custom_path: str | None = None
+) -> list[str]:
     """Get the command to open a terminal at the specified path."""
     import platform
+
     system = platform.system()
 
     # Use custom path if provided
@@ -243,10 +252,7 @@ async def open_worktree_in_ide(request: OpenInIDERequest):
 
     # Validate the path exists
     if not Path(worktree_path).exists():
-        return {
-            "success": False,
-            "error": f"Path does not exist: {worktree_path}"
-        }
+        return {"success": False, "error": f"Path does not exist: {worktree_path}"}
 
     try:
         cmd = get_ide_command(ide, worktree_path, custom_path)
@@ -256,26 +262,18 @@ async def open_worktree_in_ide(request: OpenInIDERequest):
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            start_new_session=True
+            start_new_session=True,
         )
 
-        return {
-            "success": True,
-            "data": {
-                "opened": True
-            }
-        }
+        return {"success": True, "data": {"opened": True}}
     except FileNotFoundError:
         return {
             "success": False,
-            "error": f"IDE command not found. Make sure '{ide}' is installed and in your PATH."
+            "error": f"IDE command not found. Make sure '{ide}' is installed and in your PATH.",
         }
     except Exception:
         logger.exception("Failed to open worktree in IDE")
-        return {
-            "success": False,
-            "error": "Failed to open IDE"
-        }
+        return {"success": False, "error": "Failed to open IDE"}
 
 
 @router.post("/worktree/open-in-terminal")
@@ -294,10 +292,7 @@ async def open_worktree_in_terminal(request: OpenInTerminalRequest):
 
     # Validate the path exists
     if not Path(worktree_path).exists():
-        return {
-            "success": False,
-            "error": f"Path does not exist: {worktree_path}"
-        }
+        return {"success": False, "error": f"Path does not exist: {worktree_path}"}
 
     try:
         cmd = get_terminal_command(terminal, worktree_path, custom_path)
@@ -307,26 +302,18 @@ async def open_worktree_in_terminal(request: OpenInTerminalRequest):
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            start_new_session=True
+            start_new_session=True,
         )
 
-        return {
-            "success": True,
-            "data": {
-                "opened": True
-            }
-        }
+        return {"success": True, "data": {"opened": True}}
     except FileNotFoundError:
         return {
             "success": False,
-            "error": f"Terminal command not found. Make sure '{terminal}' is installed and in your PATH."
+            "error": f"Terminal command not found. Make sure '{terminal}' is installed and in your PATH.",
         }
     except Exception:
         logger.exception("Failed to open worktree in terminal")
-        return {
-            "success": False,
-            "error": "Failed to open terminal"
-        }
+        return {"success": False, "error": "Failed to open terminal"}
 
 
 @router.post("/worktree/detect-tools")
@@ -345,11 +332,27 @@ async def detect_worktree_tools():
         {"id": "vscode", "name": "Visual Studio Code", "command": "code"},
         {"id": "cursor", "name": "Cursor", "command": "cursor"},
         {"id": "vscodium", "name": "VSCodium", "command": "codium"},
-        {"id": "vscode-insiders", "name": "VS Code Insiders", "command": "code-insiders"},
+        {
+            "id": "vscode-insiders",
+            "name": "VS Code Insiders",
+            "command": "code-insiders",
+        },
         {"id": "sublime", "name": "Sublime Text", "command": "subl"},
-        {"id": "webstorm", "name": "WebStorm", "command": "webstorm" if system != "Darwin" else None},
-        {"id": "intellij", "name": "IntelliJ IDEA", "command": "idea" if system != "Darwin" else None},
-        {"id": "pycharm", "name": "PyCharm", "command": "pycharm" if system != "Darwin" else None},
+        {
+            "id": "webstorm",
+            "name": "WebStorm",
+            "command": "webstorm" if system != "Darwin" else None,
+        },
+        {
+            "id": "intellij",
+            "name": "IntelliJ IDEA",
+            "command": "idea" if system != "Darwin" else None,
+        },
+        {
+            "id": "pycharm",
+            "name": "PyCharm",
+            "command": "pycharm" if system != "Darwin" else None,
+        },
         {"id": "zed", "name": "Zed", "command": "zed"},
         {"id": "atom", "name": "Atom", "command": "atom"},
         {"id": "pulsar", "name": "Pulsar", "command": "pulsar"},
@@ -362,15 +365,19 @@ async def detect_worktree_tools():
     ]
 
     if system == "Windows":
-        ide_definitions.extend([
-            {"id": "notepadpp", "name": "Notepad++", "command": "notepad++"},
-            {"id": "visualstudio", "name": "Visual Studio", "command": "devenv"},
-        ])
+        ide_definitions.extend(
+            [
+                {"id": "notepadpp", "name": "Notepad++", "command": "notepad++"},
+                {"id": "visualstudio", "name": "Visual Studio", "command": "devenv"},
+            ]
+        )
     elif system == "Linux":
-        ide_definitions.extend([
-            {"id": "kate", "name": "Kate", "command": "kate"},
-            {"id": "geany", "name": "Geany", "command": "geany"},
-        ])
+        ide_definitions.extend(
+            [
+                {"id": "kate", "name": "Kate", "command": "kate"},
+                {"id": "geany", "name": "Geany", "command": "geany"},
+            ]
+        )
 
     # Terminal detection
     terminal_definitions = []
@@ -397,9 +404,17 @@ async def detect_worktree_tools():
         ]
     else:  # Linux
         terminal_definitions = [
-            {"id": "gnome-terminal", "name": "GNOME Terminal", "command": "gnome-terminal"},
+            {
+                "id": "gnome-terminal",
+                "name": "GNOME Terminal",
+                "command": "gnome-terminal",
+            },
             {"id": "konsole", "name": "Konsole", "command": "konsole"},
-            {"id": "xfce4-terminal", "name": "Xfce Terminal", "command": "xfce4-terminal"},
+            {
+                "id": "xfce4-terminal",
+                "name": "Xfce Terminal",
+                "command": "xfce4-terminal",
+            },
             {"id": "terminator", "name": "Terminator", "command": "terminator"},
             {"id": "tilix", "name": "Tilix", "command": "tilix"},
             {"id": "kitty", "name": "Kitty", "command": "kitty"},
@@ -420,12 +435,14 @@ async def detect_worktree_tools():
             if found:
                 installed = True
                 path = found
-        ides.append({
-            "id": ide_def["id"],
-            "name": ide_def["name"],
-            "path": path,
-            "installed": installed
-        })
+        ides.append(
+            {
+                "id": ide_def["id"],
+                "name": ide_def["name"],
+                "path": path,
+                "installed": installed,
+            }
+        )
 
     terminals = []
     for term_def in terminal_definitions:
@@ -442,17 +459,13 @@ async def detect_worktree_tools():
             if Path(app_path).exists():
                 installed = True
                 path = app_path
-        terminals.append({
-            "id": term_def["id"],
-            "name": term_def["name"],
-            "path": path,
-            "installed": installed
-        })
+        terminals.append(
+            {
+                "id": term_def["id"],
+                "name": term_def["name"],
+                "path": path,
+                "installed": installed,
+            }
+        )
 
-    return {
-        "success": True,
-        "data": {
-            "ides": ides,
-            "terminals": terminals
-        }
-    }
+    return {"success": True, "data": {"ides": ides, "terminals": terminals}}

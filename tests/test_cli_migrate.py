@@ -59,7 +59,11 @@ class TestMigrateV01Catalog:
 
         result = run_migrate(ws, "--dry-run")
         assert result.exit_code == 0, result.output
-        assert "dry-run" in result.output.lower() or "dry_run" in result.output.lower() or "Dry-run" in result.output
+        assert (
+            "dry-run" in result.output.lower()
+            or "dry_run" in result.output.lower()
+            or "Dry-run" in result.output
+        )
 
         # No catalog should have been written
         catalog_path = ws / "proj-a" / ".tfactory" / "tests-catalog.json"
@@ -97,7 +101,11 @@ class TestMigrateV01Catalog:
         result = run_migrate(ws)
         assert result.exit_code == 0, result.output
         # Should report nothing to migrate, not crash
-        assert "nothing" in result.output.lower() or "does not exist" in result.output.lower() or "not exist" in result.output.lower()
+        assert (
+            "nothing" in result.output.lower()
+            or "does not exist" in result.output.lower()
+            or "not exist" in result.output.lower()
+        )
 
     def test_handles_spec_with_no_tests_dir(self, tmp_path: Path) -> None:
         ws = tmp_path / "ws"

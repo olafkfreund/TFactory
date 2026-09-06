@@ -63,8 +63,13 @@ def test_build_har_document_empty_entries() -> None:
 
 
 def test_build_har_document_preserves_entries() -> None:
-    entry = {"startedDateTime": "2026-01-01T00:00:00+00:00", "time": 10.0,
-             "request": {}, "response": {}, "timings": {}}
+    entry = {
+        "startedDateTime": "2026-01-01T00:00:00+00:00",
+        "time": 10.0,
+        "request": {},
+        "response": {},
+        "timings": {},
+    }
     doc = _build_har_document([entry])
     assert len(doc["log"]["entries"]) == 1
 

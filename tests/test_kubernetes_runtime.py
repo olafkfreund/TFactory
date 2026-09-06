@@ -89,9 +89,16 @@ def test_port_forward_argv_with_kubeconfig() -> None:
     # port-forwards never clash on a fixed local port (RFC-0016 #465).
     rt = KubernetesRuntime(_target(port=8080), kubeconfig="/kc/config")
     assert rt.port_forward_argv() == [
-        "kubectl", "--kubeconfig", "/kc/config",
-        "--context", "prod-readonly", "-n", "example-app",
-        "port-forward", "service/billing", "0:8080",
+        "kubectl",
+        "--kubeconfig",
+        "/kc/config",
+        "--context",
+        "prod-readonly",
+        "-n",
+        "example-app",
+        "port-forward",
+        "service/billing",
+        "0:8080",
     ]
 
 
@@ -131,10 +138,12 @@ def test_start_resolves_target_url_from_forwarding_line() -> None:
 
 def test_start_parses_kubectl_chosen_port() -> None:
     # local_port=0 → kubectl picks a free port; we must read it from the output.
-    proc = _FakeProc([
-        "Forwarding from 127.0.0.1:54321 -> 8080\n",
-        "Forwarding from [::1]:54321 -> 8080\n",
-    ])
+    proc = _FakeProc(
+        [
+            "Forwarding from 127.0.0.1:54321 -> 8080\n",
+            "Forwarding from [::1]:54321 -> 8080\n",
+        ]
+    )
     popen, _ = _popen_for(proc)
     rt = KubernetesRuntime(_target(port=8080), local_port=0, popen_fn=popen)
     rt.start()
@@ -143,7 +152,9 @@ def test_start_parses_kubectl_chosen_port() -> None:
 
 
 def test_start_raises_when_port_forward_disabled() -> None:
-    rt = KubernetesRuntime(_target(port_forward=False), popen_fn=_popen_for(_FakeProc([]))[0])
+    rt = KubernetesRuntime(
+        _target(port_forward=False), popen_fn=_popen_for(_FakeProc([]))[0]
+    )
     with pytest.raises(KubernetesRuntimeError, match="port_forward=false"):
         rt.start()
 
@@ -161,7 +172,9 @@ def test_start_raises_on_readiness_timeout() -> None:
     clocks = iter([0.0, 100.0, 200.0])
     popen, _ = _popen_for(proc)
     rt = KubernetesRuntime(
-        _target(), popen_fn=popen, clock=lambda: next(clocks),
+        _target(),
+        popen_fn=popen,
+        clock=lambda: next(clocks),
         readiness_timeout_seconds=10.0,
     )
     with pytest.raises(KubernetesRuntimeError, match="did not become ready"):

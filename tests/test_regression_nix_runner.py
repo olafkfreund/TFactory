@@ -120,9 +120,7 @@ def test_run_delegates_to_nix_and_maps(monkeypatch, tmp_path):
         return DockerRunResult(returncode=0)
 
     monkeypatch.setattr(nr, "run_pytest_lane_via_nix", fake_nix)
-    runner = NixJobRunner(
-        spec_dir=tmp_path, project_dir=tmp_path, extra_env={"K": "V"}
-    )
+    runner = NixJobRunner(spec_dir=tmp_path, project_dir=tmp_path, extra_env={"K": "V"})
     out = runner.run(_entry("login"))
     assert out.status is TestStatus.PASSED
     # delegated with the worktree-relative test path resolved under project_dir

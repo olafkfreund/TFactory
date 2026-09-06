@@ -42,7 +42,9 @@ def test_payload_falls_back_to_spec_dir_name_for_task_id() -> None:
 # ── default: no channel opted in → true no-op ───────────────────────────────
 
 
-def test_default_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.delenv("TFACTORY_STAGE_EVENT_SENTINEL", raising=False)
     monkeypatch.delenv("TFACTORY_STAGE_EVENT_WEBHOOK", raising=False)
     emit_stage_event(tmp_path, _STATUS, stage="planner")
@@ -59,7 +61,9 @@ def test_sentinel_appends_one_jsonl_line_per_event(
     monkeypatch.delenv("TFACTORY_STAGE_EVENT_WEBHOOK", raising=False)
 
     emit_stage_event(tmp_path, {**_STATUS, "status": "planning"}, stage="planner")
-    emit_stage_event(tmp_path, {**_STATUS, "status": "generated"}, stage="gen_functional")
+    emit_stage_event(
+        tmp_path, {**_STATUS, "status": "generated"}, stage="gen_functional"
+    )
 
     log = tmp_path / "findings" / "stage_events.jsonl"
     assert log.exists()

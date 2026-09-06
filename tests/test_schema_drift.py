@@ -84,9 +84,20 @@ def _self_signed_https_server(tmp_path: Path) -> http.server.HTTPServer:
     openssl = shutil.which("openssl")
     subprocess.run(  # noqa: S603 - fixed argv, resolved binary, test-only
         [
-            openssl, "req", "-x509", "-newkey", "rsa:2048", "-nodes",
-            "-keyout", str(key), "-out", str(crt), "-days", "1",
-            "-subj", "/CN=localhost",
+            openssl,
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-keyout",
+            str(key),
+            "-out",
+            str(crt),
+            "-days",
+            "1",
+            "-subj",
+            "/CN=localhost",
         ],
         check=True,
         capture_output=True,
@@ -128,7 +139,9 @@ def test_certificate_failure_fails_the_gate(tmp_path):
         pytest.skip("openssl not available")
     srv = _self_signed_https_server(tmp_path)
     try:
-        rc = csd.main(["--canonical", f"https://localhost:{srv.server_address[1]}/x.json"])
+        rc = csd.main(
+            ["--canonical", f"https://localhost:{srv.server_address[1]}/x.json"]
+        )
     finally:
         srv.shutdown()
         srv.server_close()

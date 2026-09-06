@@ -107,26 +107,31 @@ def get_backend() -> Backend:
 
     if name == "fernet":
         from .fernet import FernetBackend
+
         _INSTANCE = FernetBackend.from_env()
         return _INSTANCE
 
     if name == "aws_kms":
         from .aws import AwsKmsBackend
+
         _INSTANCE = AwsKmsBackend.from_env()
         return _INSTANCE
 
     if name == "vault_transit":
         from .vault import VaultTransitBackend
+
         _INSTANCE = VaultTransitBackend.from_env()
         return _INSTANCE
 
     if name == "azure_kv":
         from .azure import AzureKeyVaultBackend
+
         _INSTANCE = AzureKeyVaultBackend.from_env()
         return _INSTANCE
 
     if name == "gcp_kms":
         from .gcp import GcpKmsBackend
+
         _INSTANCE = GcpKmsBackend.from_env()
         return _INSTANCE
 

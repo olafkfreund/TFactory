@@ -67,7 +67,7 @@ def test_parse_coverage_defaults_to_cobertura(tmp_path):
 def test_jacoco_delta_detects_new_lines(tmp_path):
     base = tmp_path / "base.xml"
     after = tmp_path / "after.xml"
-    base.write_text(_JACOCO_HALF)   # line 1 covered
+    base.write_text(_JACOCO_HALF)  # line 1 covered
     after.write_text(_JACOCO_FULL)  # lines 1 + 2 covered
     delta = compute_delta_from_paths(base, after, fmt="jacoco")
     assert delta.has_delta is True

@@ -20,8 +20,16 @@ def test_model_columns_constraint_and_encrypted_type(fernet_key: str) -> None:
 
     cols = TestTargetCredential.__table__.columns
     for name in (
-        "id", "org_id", "name", "kind", "username",
-        "secret", "extra", "created_by", "created_at", "last_used_at",
+        "id",
+        "org_id",
+        "name",
+        "kind",
+        "username",
+        "secret",
+        "extra",
+        "created_by",
+        "created_at",
+        "last_used_at",
     ):
         assert name in cols, f"missing column {name}"
 
@@ -55,15 +63,25 @@ def test_secret_roundtrips_and_is_ciphertext_at_rest(fernet_key: str) -> None:
     with engine.begin() as conn:
         conn.execute(
             table.insert(),
-            {"id": "tc1", "org_id": "o1", "name": "login", "kind": "form", "secret": secret},
+            {
+                "id": "tc1",
+                "org_id": "o1",
+                "name": "login",
+                "kind": "form",
+                "secret": secret,
+            },
         )
         # Typed read decrypts transparently.
         got = conn.execute(select(table.c.secret)).first()
         assert got.secret == secret
         # Raw driver read bypasses the TypeDecorator → ciphertext bytes.
-        raw = conn.exec_driver_sql("SELECT secret FROM test_target_credentials").fetchone()[0]
+        raw = conn.exec_driver_sql(
+            "SELECT secret FROM test_target_credentials"
+        ).fetchone()[0]
 
-    assert isinstance(raw, (bytes, bytearray)), f"expected ciphertext bytes, got {type(raw)}"
+    assert isinstance(raw, (bytes, bytearray)), (
+        f"expected ciphertext bytes, got {type(raw)}"
+    )
     assert secret.encode("utf-8") not in bytes(raw), "plaintext secret leaked at rest"
 
 
@@ -75,5 +93,11 @@ def test_response_model_never_exposes_secret() -> None:
     assert "secret" not in fields, "response model must not expose the secret"
     assert "extra" not in fields, "response model must not expose the extra blob"
     assert {
-        "id", "org_id", "name", "kind", "username", "created_at", "last_used_at",
+        "id",
+        "org_id",
+        "name",
+        "kind",
+        "username",
+        "created_at",
+        "last_used_at",
     } <= fields
