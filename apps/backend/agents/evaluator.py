@@ -51,6 +51,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
+from agents.confidence import add_system_reason, set_system_reasons
 from agents.preflight_static import package_root_rel_paths, requirements_files
 from agents.run_result import RunResultLike
 from agents.verdict_vote import majority_vote
@@ -2605,16 +2606,15 @@ def _unjudged_entry(test_id: str, test_file: str | None) -> dict[str, Any]:
     reason says the verdict was never taken, so a reviewer cannot read this as
     a considered rejection — or, worse, miss it as a silent pass.
     """
-    entry: dict[str, Any] = {
-        "test_id": test_id,
-        "verdict": "reject",
-        "judged": False,
-        "reasons": [
+    entry: dict[str, Any] = {"test_id": test_id, "verdict": "reject", "judged": False}
+    set_system_reasons(
+        entry,
+        [
             "no judge call returned a verdict for this generated test "
             "(all calls omitted it); an unjudged test casts a fail-closed "
             "reject vote rather than dropping out of the merged verdicts"
         ],
-    }
+    )
     if test_file:
         entry["test_file"] = test_file
     return entry
@@ -2670,12 +2670,12 @@ async def _merge_voted_verdicts(
                 else _unjudged_entry(tid, catalog.get(tid))
             )
         if entry.get("verdict") != result.majority:
-            reasons = entry.get("reasons")
-            entry["reasons"] = (list(reasons) if isinstance(reasons, list) else []) + [
+            add_system_reason(
+                entry,
                 f"majority vote {result.split}: {result.majority} overrides this "
                 f"entry's own judge call ({entry.get('verdict')}); crashed or "
-                "missing votes count as reject (fail-closed)"
-            ]
+                "missing votes count as reject (fail-closed)",
+            )
             entry["verdict"] = result.majority
         entry["vote"] = {
             "votes": list(result.votes),

@@ -10,9 +10,31 @@ same markdown, which makes it snapshot-testable and produces clean diffs.
 
 from __future__ import annotations
 
-from .request import CorrectionRequest
+from .request import CorrectionRequest, Failure
 
 __all__ = ["render_fix_request_md"]
+
+_MODEL_LABEL = "Evaluator model's rationale (LLM-authored, not verified)"
+_NO_REASON = "(no reason recorded)"
+
+
+def _reason_md(f: Failure) -> list[str]:
+    """Measured lines and the model's rationale, labelled apart (#1195).
+
+    This used to be one ``Observed:`` line, which presented the judge LLM's
+    interpretation with the authority of a measurement — and the QA Fixer acts
+    on it as instructions.
+    """
+    system = "; ".join(t for t, s in f.reasons if s == "system")
+    model = "; ".join(t for t, s in f.reasons if s == "model")
+    if not f.reasons and f.reason != _NO_REASON:
+        # No reasons list: ``reason`` is the judge's own fallback field
+        # (``reason`` / ``semantic_relevance``), so it is model text too.
+        model = f.reason
+    out = [f"- **Measured:** {system}"] if system else []
+    if model:
+        out.append(f"- **{_MODEL_LABEL}:** {model}")
+    return out or [f"- **Reason:** {_NO_REASON}"]
 
 
 def render_fix_request_md(request: CorrectionRequest) -> str:
@@ -24,6 +46,8 @@ def render_fix_request_md(request: CorrectionRequest) -> str:
         f"> Hand-back from TFactory (epic #182) for AIFactory spec `{task_id}`.",
         "> TFactory's tests surfaced problems in this feature. Fix the code under",
         "> test so the items below pass — do not weaken or delete the tests.",
+        "> Lines marked LLM-authored are the Evaluator model's interpretation,",
+        "> not a measurement — verify them before acting on them.",
         "",
         "## Summary",
         "",
@@ -43,7 +67,7 @@ def render_fix_request_md(request: CorrectionRequest) -> str:
                 "",
                 f"- **Verdict:** {f.verdict}",
                 f"- **Acceptance criterion:** {f.acceptance_criterion or '—'}",
-                f"- **Observed:** {f.reason}",
+                *_reason_md(f),
                 "",
             ]
 

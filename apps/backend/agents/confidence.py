@@ -180,6 +180,52 @@ def _flaky_penalty(summary: dict) -> float:
     return max(FLAKY_PENALTY_FLOOR, 1.0 - flip)
 
 
+# ─── reason provenance (#1195) ───────────────────────────────────────────
+# ``reasons`` mixes the judge LLM's prose with lines deterministic code adds or
+# substitutes below. Hand-back and triage renderers must show which is which —
+# the hand-back printed all of it as "Observed:" and AIFactory's QA Fixer acts
+# on it. ``reasons_source`` is index-aligned with ``reasons``; every
+# deterministic writer goes through these helpers (enforced by
+# tests/test_reason_provenance.py), so an untagged line is the model's.
+
+
+def add_system_reason(verdict: dict[str, Any], text: str) -> None:
+    """Append a deterministic (measured, not model-written) reason line.
+
+    Builds a NEW list rather than appending in place: a verdict is often a
+    shallow copy of a judge's entry (the #649 vote merge), and mutating the
+    shared list would rewrite that judge's own record too.
+    """
+    reasons = verdict.get("reasons")
+    source = [s for _, s in reason_lines(verdict)]
+    verdict["reasons"] = [*(reasons if isinstance(reasons, list) else []), text]
+    verdict["reasons_source"] = [*source, "system"]
+
+
+def set_system_reasons(verdict: dict[str, Any], texts: list[str]) -> None:
+    """Replace every reason with deterministic lines (e.g. the #629 classifier)."""
+    verdict["reasons"] = list(texts)
+    verdict["reasons_source"] = ["system"] * len(texts)
+
+
+def reason_lines(verdict: dict[str, Any]) -> list[tuple[str, str]]:
+    """``(text, "model" | "system")`` per reason line.
+
+    A line with no recorded source is the model's: older runs predate
+    ``reasons_source``, and an opinion shown as a fact is the failure this
+    exists to prevent — a fact shown as an opinion is the cheaper mistake.
+    """
+    reasons = verdict.get("reasons")
+    if not isinstance(reasons, list):
+        return []
+    tags = verdict.get("reasons_source")
+    tags = tags if isinstance(tags, list) else []
+    return [
+        (str(r), "system" if i < len(tags) and tags[i] == "system" else "model")
+        for i, r in enumerate(reasons)
+    ]
+
+
 def apply_flaky_override(verdict: dict) -> bool:
     """Deterministically demote an ``accept`` of a FLAKY test to ``flag``.
 
@@ -198,13 +244,10 @@ def apply_flaky_override(verdict: dict) -> bool:
     if _norm(verdict.get("verdict")) != "accept":
         return False
     verdict["verdict"] = "flag"
-    reasons = verdict.get("reasons")
-    if not isinstance(reasons, list):
-        reasons = []
-        verdict["reasons"] = reasons
-    reasons.append(
+    add_system_reason(
+        verdict,
         f"flaky-history: flip_rate={flaky.get('flip_rate')} over "
-        f"{flaky.get('runs')} runs — demoted accept→flag (#239)"
+        f"{flaky.get('runs')} runs — demoted accept→flag (#239)",
     )
     return True
 
@@ -270,7 +313,7 @@ def apply_consistent_fail_reason(
     detail = failure_info.get("failure_detail")
     if isinstance(detail, str) and detail.strip():
         reason += f" — {detail.strip()}"
-    verdict["reasons"] = [reason]
+    set_system_reasons(verdict, [reason])
     return True
 
 
@@ -295,14 +338,11 @@ def apply_app_not_healthy_override(
     if _norm(verdict.get("verdict")) == "accept":
         return False
     verdict["verdict"] = "not_run"
-    reasons = verdict.get("reasons")
-    if not isinstance(reasons, list):
-        reasons = []
-        verdict["reasons"] = reasons
-    reasons.append(
+    add_system_reason(
+        verdict,
         "app-under-test never became healthy in the verify sandbox — the "
         "endpoint lane did not execute against a running app (infra not_run, "
-        "not an acceptance failure)"
+        "not an acceptance failure)",
     )
     return True
 
