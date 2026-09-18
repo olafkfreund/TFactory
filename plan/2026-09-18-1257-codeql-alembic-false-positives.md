@@ -31,12 +31,12 @@ Paths below are relative to `apps/web-server/`.
    # Alembic reads these via its script loader, never via Python references;
    # listing them as exports tells CodeQL py/unused-global-variable so (#1257).
    __all__ = [
-       "revision",
-       "down_revision",
        "branch_labels",
        "depends_on",
-       "upgrade",
+       "down_revision",
        "downgrade",
+       "revision",
+       "upgrade",
    ]
    ```
 
@@ -90,3 +90,16 @@ with an unused global; the PR's CodeQL run must flag it. Branch deleted after.
 Revert the single commit. `__all__` has no runtime effect on Alembic (it only
 affects `from x import *`, which Alembic never does), so reverting restores
 the previous alerts and nothing else.
+
+## Deviations (recorded during implementation)
+
+- **Step 4:** `downgrade base` is impossible by design (`c6e3b2d4a8f0` is
+  forward-only); the round trip goes to that floor instead.
+- **Step 1/2 — `__all__` order (after first CI run):** the ratchet's shared
+  strict ruff bar (ruff 0.15.17) enforces `RUF022` (sorted `__all__`), which
+  the default local rule set did not. The list is now isort-sorted in the
+  template and all 10 migrations (`ruff check --select RUF022 --fix`). The
+  ratchet must be run locally with the pinned toolchain before pushing:
+  `PATH=<venv with ruff==0.15.17 mypy==1.20.1 + backend/web-server/test reqs>:$PATH
+  python scripts/ratchet_lint.py --base origin/dev --package apps/backend
+  --package apps/web-server --package scripts`.
