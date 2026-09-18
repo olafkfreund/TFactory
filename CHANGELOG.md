@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+## 0.9.27 — Kotlin runs in-cluster, and timestamps reach Postgres (2026-09-18)
+
+- **Kotlin/Gradle verify lane runs in-cluster (Factory#1712, PR #1310).** A
+  Kotlin subtask matched no lane filter, so it was silently dropped and a
+  Kotlin-only plan ended as `evaluated_empty`. Kotlin now runs as a per-task
+  Nix Job (`run_gradle_lane_via_nix`): the module is built in `/tmp`, JUnit
+  reports are merged, and a zero Gradle exit with no report, zero tests or
+  recorded failures is treated as a failure. Kotlin never goes through the
+  pytest Nix batch. Proven live: a minimal module passed 3/3 and, mutated,
+  failed 1/3 with the failing test named.
+- **Every model timestamp is stored as naive UTC (#1308, PR #1309).** Columns
+  are `timestamp without time zone`, and tz-aware values were rejected by
+  asyncpg: minting an API key with an expiry returned HTTP 500,
+  `ApiKey.last_used_at` was never recorded, test-target credential
+  resolution raised, and `EmailAccount.token_expiry` could not be stored.
+  Fixed at the column type (`UTCDateTime`) rather than at each call site.
+- **Re-vendored from the hub (PR #1312):** the Kotlin descriptor, and
+  `job_dispatch.py`, which now rejects a mounted service-account token without
+  an explicit service account.
+- **Runtime Node guards (Factory#1710, PRs #1306, #1307):** Dependabot digest
+  auto-merge applies only to PRs into `dev`, and the image build fails if apk
+  ever installs `nodejs`.
+
 ## 0.9.26 — measured facts and model opinion are told apart, and packed verify workspaces come home (2026-09-18)
 
 - **Unit-lane coverage reaches the verdict (#1258, PR #1296).** Verdicts were
