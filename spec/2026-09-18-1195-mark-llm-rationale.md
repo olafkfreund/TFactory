@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1195
 intent: intent/2026-09-18-1195-mark-llm-rationale.md
 ---
