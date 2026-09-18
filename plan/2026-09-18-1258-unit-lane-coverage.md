@@ -109,3 +109,24 @@ green.
 Revert the commit. The change is confined to post-judge stamping in
 `evaluator.py`; no stored schema, status field or on-disk layout changes, so
 existing workspaces read the same before and after.
+
+## Deviations (recorded during implementation, same commit as the code)
+
+- **Step 4 signature kept.** `_measured_coverage(spec_dir, test_id, stem=None)`
+  instead of `(spec_dir, subtask)`: existing #1024 tests call it with a plain
+  id and run `_stamp_verdict_coverage` with no `test_plan.json`; the
+  subtask-only signature would have broken both. The stamp resolves the
+  subtask, then passes id + stem; with no plan it falls back to the verdict's
+  own `test_id`/`test_file`. Same outcome, smaller change.
+- **Fixture:** reuses the file's existing `_COBERTURA` (2 covered SUT lines)
+  rather than a new 5-line report.
+- **Step 1 confirmed both hypotheses**, and pinned the unexplained `0`: a
+  verdict without `signals_summary` was skipped by the coverage stamp, so the
+  judge's value survived. Covered by
+  `test_missing_signals_summary_cannot_keep_a_judge_zero`.
+- **Step 5 needed two mutations, not one.** Removing the resolver's file
+  fallback fails the lane tests but not the coverage test (the coverage stamp
+  independently derives the stem from `verdict["test_file"]`), so the
+  `_run_artifacts` lookup got its own mutation — which fails the 3 coverage
+  tests. Both observed, both restored.
+- `_lane_by_test_id` deleted: its only caller now uses `_resolve_subtask`.

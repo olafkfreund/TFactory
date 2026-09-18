@@ -727,25 +727,52 @@ def _completed_functional_subtasks(plan: dict) -> list[dict]:
     )
 
 
-def _lane_by_test_id(plan: dict[str, Any]) -> dict[str, str]:
-    """Map every planned subtask id to its lane, from test_plan.json.
+def _norm_rel(path: object) -> str:
+    """Posix form of a relative test path, leading ``./`` stripped."""
+    p = str(path or "").strip().replace("\\", "/")
+    while p.startswith("./"):
+        p = p[2:]
+    return p
 
-    The plan is the authoritative source of a test's lane: the planner assigned
-    it, gen-functional generated against it, and the evaluator dispatched the
-    matching runner from it. The judge LLM is never asked for it.
+
+def _resolve_subtask(plan: dict[str, Any], verdict: dict[str, Any]) -> dict | None:
+    """The plan subtask a verdict is about, or None when that is not certain.
+
+    ``test_id`` is written by the judge LLM and nothing checks it against the
+    ids it was given, so an exact id match alone left every verdict of a run
+    unattributed when the judge paraphrased them (#1258). ``test_file`` is
+    tried next — full relative path, then basename only when no other planned
+    file shares it. Ambiguity returns None: a guessed subtask is the #1018
+    unit-inflation bug in another form.
     """
-    out: dict[str, str] = {}
-    for phase in plan.get("phases") or []:
-        if not isinstance(phase, dict):
-            continue
-        for st in phase.get("subtasks") or []:
-            if not isinstance(st, dict):
-                continue
-            tid = str(st.get("id") or "").strip()
-            lane = str(st.get("lane") or "").strip().lower()
-            if tid and lane:
-                out[tid] = lane
-    return out
+    subtasks = [
+        st
+        for phase in plan.get("phases") or []
+        if isinstance(phase, dict)
+        for st in phase.get("subtasks") or []
+        if isinstance(st, dict)
+    ]
+    tid = str(verdict.get("test_id") or "").strip()
+    for st in subtasks:
+        if tid and str(st.get("id") or "").strip() == tid:
+            return st
+    tfile = _norm_rel(verdict.get("test_file"))
+    if not tfile:
+        return None
+    by_path = {_norm_rel((st.get("files_to_create") or [""])[0]): st for st in subtasks}
+    if tfile in by_path:
+        return by_path[tfile]
+    base = tfile.rsplit("/", 1)[-1]
+    hits = [st for path, st in by_path.items() if path.rsplit("/", 1)[-1] == base]
+    return hits[0] if len(hits) == 1 else None
+
+
+def _read_plan(spec_dir: Path) -> dict[str, Any] | None:
+    try:
+        return json.loads((spec_dir / "test_plan.json").read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        _eval_log.warning("[evaluator] plan unreadable: %s", exc)
+        return None
 
 
 def _stamp_verdict_lanes(spec_dir: Path, doc: dict[str, Any]) -> tuple[int, int]:
@@ -765,19 +792,20 @@ def _stamp_verdict_lanes(spec_dir: Path, doc: dict[str, Any]) -> tuple[int, int]
     than defaulted, so it stays visibly unattributed instead of silently
     inflating the unit lane — the same failure this fixes.
     """
-    try:
-        plan = json.loads((spec_dir / "test_plan.json").read_text())
-    except (OSError, json.JSONDecodeError) as exc:
-        _eval_log.warning("[evaluator] lane stamp skipped, plan unreadable: %s", exc)
+    plan = _read_plan(spec_dir)
+    if plan is None:
         return 0, 0
-    lanes = _lane_by_test_id(plan)
     stamped = unmatched = 0
     for v in doc.get("verdicts") or []:
         if not isinstance(v, dict):
             continue
-        lane = lanes.get(str(v.get("test_id") or "").strip())
+        st = _resolve_subtask(plan, v)
+        lane = str((st or {}).get("lane") or "").strip().lower()
         if lane:
             v["lane"] = lane
+            # Re-key to the plan id so every later reader (triage, val_block,
+            # evidence links) finds it; the judge's paraphrase keys nothing.
+            v["test_id"] = st["id"]
             stamped += 1
         else:
             unmatched += 1
@@ -803,7 +831,9 @@ def _is_test_path(path: str) -> bool:
     )
 
 
-def _measured_coverage(spec_dir: Path, test_id: str) -> tuple[int | None, float | None]:
+def _measured_coverage(
+    spec_dir: Path, test_id: str, stem: str | None = None
+) -> tuple[int | None, float | None]:
     """(covered SUT lines, delta pct) for one test, measured from its coverage.xml.
 
     Returns ``(None, None)`` when no coverage report was captured — "not
@@ -820,9 +850,18 @@ def _measured_coverage(spec_dir: Path, test_id: str) -> tuple[int | None, float 
     today, so it is ``None`` in practice — deliberately left as the honest gap
     rather than reported against an implied-empty baseline, which would inflate
     every test's apparent contribution.
+
+    Looks in ``runs/<test_id>/`` first (``_capturing_coverage``), then in
+    ``_run_artifacts/<stem>/`` — where the host runner persists every run and
+    the only place the Nix batched path's coverage lands, which nothing read
+    (#1258).
     """
-    after = spec_dir / "findings" / "runs" / test_id / "coverage.xml"
-    if not after.is_file():
+    findings = spec_dir / "findings"
+    candidates = [findings / "runs" / test_id / "coverage.xml"]
+    if stem:
+        candidates.append(findings / "_run_artifacts" / stem / "coverage.xml")
+    after = next((c for c in candidates if c.is_file()), None)
+    if after is None:
         return None, None
     try:
         from agents.coverage_delta import parse_coverage_xml  # noqa: PLC0415
@@ -857,16 +896,20 @@ def _stamp_verdict_coverage(spec_dir: Path, doc: dict[str, Any]) -> tuple[int, i
     the guess; where nothing was measured the keys are set to ``None`` so the
     scorer drops them instead of reading a fabricated zero.
     """
+    plan = _read_plan(spec_dir) or {}
     measured = unmeasured = 0
     for v in doc.get("verdicts") or []:
         if not isinstance(v, dict):
             continue
         summary = v.get("signals_summary")
         if not isinstance(summary, dict):
-            continue
-        covered, delta_pct = _measured_coverage(
-            spec_dir, str(v.get("test_id") or "").strip()
-        )
+            # Skipping it let whatever the judge wrote survive (#1258).
+            summary = v["signals_summary"] = {}
+        st = _resolve_subtask(plan, v) or {}
+        test_id = str(st.get("id") or v.get("test_id") or "").strip()
+        test_file = (st.get("files_to_create") or [v.get("test_file") or ""])[0]
+        stem = Path(_norm_rel(test_file)).stem or None
+        covered, delta_pct = _measured_coverage(spec_dir, test_id, stem)
         summary["coverage_new_lines"] = covered
         summary["coverage_delta_pct"] = delta_pct
         if covered is None:
