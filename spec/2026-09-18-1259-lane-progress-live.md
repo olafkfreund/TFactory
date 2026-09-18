@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1259
 intent: intent/2026-09-18-1259-lane-progress-live.md
 ---
