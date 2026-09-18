@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1314
 intent: intent/2026-09-18-1314-model-migration-drift.md
 ---
