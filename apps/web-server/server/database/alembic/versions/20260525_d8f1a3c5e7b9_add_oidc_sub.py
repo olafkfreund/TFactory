@@ -24,6 +24,17 @@ down_revision: Union[str, Sequence[str], None] = "c6e3b2d4a8f0"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
+# Alembic reads these via its script loader, never via Python references;
+# listing them as exports tells CodeQL py/unused-global-variable so (#1257).
+__all__ = [
+    "revision",
+    "down_revision",
+    "branch_labels",
+    "depends_on",
+    "upgrade",
+    "downgrade",
+]
+
 
 def upgrade() -> None:
     # batch_alter_table for SQLite compatibility — SQLite can't add a

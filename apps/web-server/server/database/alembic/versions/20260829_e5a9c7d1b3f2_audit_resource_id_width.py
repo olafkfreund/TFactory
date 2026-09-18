@@ -39,6 +39,17 @@ down_revision: str | None = "d4f6b9e1a3c7"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
+# Alembic reads these via its script loader, never via Python references;
+# listing them as exports tells CodeQL py/unused-global-variable so (#1257).
+__all__ = [
+    "revision",
+    "down_revision",
+    "branch_labels",
+    "depends_on",
+    "upgrade",
+    "downgrade",
+]
+
 
 def upgrade() -> None:
     # batch_alter_table for SQLite portability -- SQLite has no ALTER COLUMN, so

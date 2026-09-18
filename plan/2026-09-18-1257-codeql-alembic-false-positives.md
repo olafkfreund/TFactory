@@ -52,8 +52,13 @@ Paths below are relative to `apps/web-server/`.
    `git status` clean of it.
 4. Migration graph unchanged: run the chain up and down on a scratch SQLite
    DB (`DATABASE_URL` pointed at a temp file; `env.py:37` reads it).
-   → verify by `alembic upgrade head` then `alembic downgrade base` exiting 0,
-   and `alembic heads` showing the same single head as on `dev`.
+   → verify by `alembic upgrade head`, `alembic downgrade c6e3b2d4a8f0`,
+   `alembic upgrade head` all exiting 0, and `alembic heads` showing the same
+   single head as on `dev` (`e5a9c7d1b3f2`).
+   *Deviation (found at execution):* `downgrade base` is impossible by
+   design — `c6e3b2d4a8f0` (encrypt_credentials) is forward-only and raises
+   `NotImplementedError`. The round trip goes down to that floor instead,
+   which exercises every reversible migration.
 5. Lint/format: `ruff check` and `ruff format --check` on the touched files.
    → verify by both exiting 0 (the format gate now covers `apps/web-server`).
 6. Commit (`fix(codeql): declare Alembic identifiers as exports (#1257)`),
@@ -72,7 +77,8 @@ cd apps/web-server
 grep -L "__all__" server/database/alembic/versions/*.py          # expect: no output
 export DATABASE_URL=sqlite+aiosqlite:///$(mktemp -d)/t.db   # env.py:37 reads it
 ../backend/.venv/bin/alembic upgrade head
-../backend/.venv/bin/alembic downgrade base
+../backend/.venv/bin/alembic downgrade c6e3b2d4a8f0   # forward-only floor
+../backend/.venv/bin/alembic upgrade head
 ruff check server/database/alembic && ruff format --check server/database/alembic
 ```
 

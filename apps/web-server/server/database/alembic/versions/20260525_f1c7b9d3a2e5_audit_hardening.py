@@ -21,6 +21,17 @@ down_revision: Union[str, Sequence[str], None] = "e9c4b6a2f8d1"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
+# Alembic reads these via its script loader, never via Python references;
+# listing them as exports tells CodeQL py/unused-global-variable so (#1257).
+__all__ = [
+    "revision",
+    "down_revision",
+    "branch_labels",
+    "depends_on",
+    "upgrade",
+    "downgrade",
+]
+
 
 def upgrade() -> None:
     # audit_logs: retention_until + prev_hash + index on retention_until.
