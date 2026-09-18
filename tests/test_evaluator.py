@@ -662,9 +662,12 @@ def test_advance_kubejob_dispatches_job_and_skips_inpod(
 
     seen: dict = {}
 
-    async def _fake_dispatch(*, job_id, spec_dir, project_dir, correlation_key=None):
+    async def _fake_dispatch(
+        *, job_id, spec_dir, project_dir, correlation_key=None, pack_workspace=False
+    ):
         seen["job_id"] = job_id
         seen["spec_dir"] = spec_dir
+        seen["pack_workspace"] = pack_workspace
         return vd_mod.VerifyDispatch(
             job_id=job_id,
             job_name=vd_mod.verify_job_name(job_id),
@@ -685,6 +688,8 @@ def test_advance_kubejob_dispatches_job_and_skips_inpod(
     gen_functional._advance_to_evaluator(spec_dir, project_dir)
     assert seen["job_id"] == "proj:042"
     assert seen["spec_dir"] == spec_dir
+    # #1160: TFACTORY_PACK_WORKSPACE unset -> the co-mount, unchanged.
+    assert seen["pack_workspace"] is False
 
 
 def test_advance_unset_uses_inpod_path(

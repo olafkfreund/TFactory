@@ -260,6 +260,7 @@ def main(argv: list[str] | None = None) -> int:
     # looks at it. Returns None on the co-mounted path — WORKSPACE_URI is unset
     # there — which is also how we know at the end whether to push anything back.
     from agents.verify_workspace import (  # noqa: PLC0415 - lazy by design
+        mark_pushed_back,
         push_back_workspace,
         restore_workspace,
     )
@@ -318,6 +319,10 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 1
         try:
+            # Vouch for this archive before it is uploaded (#1160): the control
+            # plane restores it only when the marker names THIS job, since the
+            # object key is shared with the dispatch-time pack.
+            mark_pushed_back(spec_dir, args.job_id)
             push_back_workspace(
                 root=packed_root,
                 job_id=args.job_id,
