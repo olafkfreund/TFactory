@@ -908,6 +908,23 @@ async def dispatch_verify_job(  # noqa: PLR0913 - 3 domain args + injectable sea
         )
         return None
 
+    # TFactory#1159. Opt-in per call, NOT read from env here: the operator-facing
+    # TFACTORY_PACK_WORKSPACE toggle is read at the one call site
+    # (gen_functional._pack_workspace_enabled, #1160). Packed BEFORE the dispatch
+    # is recorded so the first worker_ref already says where the workspace went. Fail-open — a None URI (no object store, a
+    # pack error) keeps the RWO co-mount, so a storage gap never strands a verify.
+    workspace_uri = (
+        _pack_workspace_for(
+            job_id=job_id,
+            spec_dir=spec_dir,
+            project_dir=project_dir,
+            sandbox=sandbox,
+            correlation_key=correlation_key,
+        )
+        if pack_workspace
+        else None
+    )
+
     namespace = getattr(sandbox, "namespace", "factory")
     name = verify_job_name(job_id)
     worker_ref = {
@@ -923,6 +940,16 @@ async def dispatch_verify_job(  # noqa: PLR0913 - 3 domain args + injectable sea
         # spec_subpath), which is exactly what the control-plane reaper needs.
         "spec_dir": str(spec_dir),
     }
+    if workspace_uri:
+        # The packed flag the control-plane restore sweep keys on (#1160): the
+        # row's own record, never inferred from the current toggle, so a flip
+        # mid-flight changes nothing for rows already dispatched. project_dir is
+        # what the restore must NOT touch (the worktree sits inside spec_dir).
+        worker_ref |= {
+            "job_id": job_id,
+            "workspace_uri": workspace_uri,
+            "project_dir": str(project_dir),
+        }
 
     # Record the queued row + worker_ref BEFORE applying the Job, so a reaper can
     # find an orphan even if the apply is interrupted (the row, not the cluster,
@@ -945,21 +972,6 @@ async def dispatch_verify_job(  # noqa: PLR0913 - 3 domain args + injectable sea
     spec_subpath = _pvc_subpath(spec_dir, sandbox)
     project_subpath = _pvc_subpath(project_dir, sandbox)
     verify_image = resolve_verify_image(getattr(sandbox, "image", ""))
-    # TFactory#1159. Opt-in per call, NOT read from env here: the operator-facing
-    # TFACTORY_PACK_WORKSPACE toggle is #1160, and a flag that changes behaviour by
-    # merely existing is not a toggle. Fail-open — a None URI (no object store, a
-    # pack error) keeps the RWO co-mount, so a storage gap never strands a verify.
-    workspace_uri = (
-        _pack_workspace_for(
-            job_id=job_id,
-            spec_dir=spec_dir,
-            project_dir=project_dir,
-            sandbox=sandbox,
-            correlation_key=correlation_key,
-        )
-        if pack_workspace
-        else None
-    )
     cfg = VerifyJobConfig(
         job_id=job_id,
         image=verify_image,
@@ -1446,7 +1458,61 @@ async def _probe_job(
     return True, active, succeeded
 
 
-async def reconcile_and_reap_once(*, store: Any = None, probe_fn: Any = None) -> int:
+async def restore_packed_workspaces_once(store: Any, data_root: str) -> int:
+    """Restore every finished packed verify's workspace onto the PVC (#1160).
+
+    A second pass beside the reconcile loop rather than inside it: the loop walks
+    ``recover_in_flight`` — ACTIVE rows only — and a packed Job writes its own
+    terminal row, so the loop never sees the row again once there is something to
+    restore. This walks the spec dirs instead (the liveness sweep's walk), keyed on
+    the ``workspace_uri`` dispatch recorded in ``worker_ref.json``: never inferred
+    from the current toggle. Returns how many were restored. Never raises, and one
+    bad spec never stops the rest.
+    """
+    from agents import verify_workspace as vw  # noqa: PLC0415 - lazy by design
+
+    restored = 0
+    pattern = f"workspaces/*/specs/*/{SPEC_WORKER_REF_FILE}"
+    for ref_path in sorted(Path(data_root).glob(pattern)):
+        spec_dir = ref_path.parent
+        try:
+            ref = json.loads(ref_path.read_text(encoding="utf-8"))
+            uri, job_id = ref.get("workspace_uri"), ref.get("job_id")
+            if not uri or not job_id:
+                continue  # co-mounted dispatch: the Job wrote the PVC directly
+            if vw.restore_outcome(spec_dir, job_id) is not None:
+                continue  # already decided for this job
+            if not is_terminal_record(await store.get(job_id)):
+                continue  # still running: its push-back has not happened yet
+            project_dir = Path(ref.get("project_dir") or spec_dir / ".worktree")
+            ok = await asyncio.to_thread(
+                vw.restore_spec_from_workspace,
+                spec_dir=spec_dir,
+                project_dir=project_dir,
+                job_id=job_id,
+                uri=uri,
+                data_root=data_root,
+            )
+            restored += bool(ok)
+        except Exception:  # noqa: BLE001 - a bad spec must not stop the sweep
+            _log.warning(
+                "[verify-dispatch] workspace restore skipped for %s",
+                spec_dir,
+                exc_info=True,
+            )
+    return restored
+
+
+def _control_plane_data_root() -> str:
+    """The data root the packs were made against (the sandbox's, as at dispatch)."""
+    from agents.nix_env import nix_runner_from_env  # noqa: PLC0415 - lazy by design
+
+    return str(getattr(nix_runner_from_env(), "data_root", _DEFAULT_DATA_ROOT))
+
+
+async def reconcile_and_reap_once(
+    *, store: Any = None, probe_fn: Any = None, data_root: str | None = None
+) -> int:
     """One reconcile + reap pass over active verify k8s-Job rows. Never raises.
 
     Lists the durable active (queued/running) verify rows, and for each one that
@@ -1482,6 +1548,10 @@ async def reconcile_and_reap_once(*, store: Any = None, probe_fn: Any = None) ->
                 )
                 if reaped_rec is not None:
                     reaped += 1
+            # After reconcile/reap, so a Job reaped `stuck` this tick is terminal.
+            await restore_packed_workspaces_once(
+                s, data_root or _control_plane_data_root()
+            )
     except Exception:  # noqa: BLE001 - a bad tick must not crash the loop
         _log.warning("[verify-dispatch] reconcile/reap tick failed", exc_info=True)
     return reaped

@@ -119,3 +119,32 @@ runtime behaviour: no dispatch writes `workspace_uri`, so the sweep finds
 nothing. If the toggle has been enabled, unset it first — rows already
 dispatched packed keep their recorded semantics and are restored by the sweep
 until the revert lands.
+
+## Deviations (recorded during implementation, same commit as the code)
+
+- **Step 3 — pack before recording, not re-record after.** `update_status`
+  re-maps the lifecycle (`has_verdict` defaults True), so a second write just
+  to add `workspace_uri` was a risk. The pack now runs before `worker_ref` is
+  built; the first record carries `job_id`, `workspace_uri` and `project_dir`,
+  and is still written before the Job is applied (what the orphan reaper
+  needs). The co-mounted path's `worker_ref` is byte-identical.
+- **The worktree lives inside the spec dir** (`spec_dir/.worktree`, a linked
+  worktree with a `.git` pointer the Job may rewrite). "Copy only the spec
+  subtree" therefore also skips `project_dir` when it is inside `spec_dir`;
+  `project_dir` is recorded in the packed `worker_ref` for this.
+- **Marker never restored + job-scoped.** The restore puts the spec dir back on
+  the PVC, which the NEXT dispatch packs; a copied marker would then vouch for a
+  Job that never pushed back. The marker must name this `job_id`, and it (with
+  `worker_ref.json` and the sentinel/attempt files) is never copied back.
+- **Sentinel and attempt counter are job-scoped** (`restore_outcome`). They
+  live in the spec dir, which outlives the Job; a rerun of the same spec is a
+  new Job and must not be skipped by the previous one's sentinel. Test:
+  `test_a_rerun_is_not_blocked_by_the_previous_jobs_sentinel` (failed first).
+- **Tests live in `tests/test_verify_workspace.py`**, not a new
+  `test_workspace_restore.py`: they reuse that module's fake S3, `data_root`
+  fixture and real-entrypoint driver, and the repo has no convention for
+  importing fixtures across test modules. Added
+  `test_reconcile_tick_runs_the_restore_sweep` (wiring) and
+  `test_restore_is_idempotent`.
+- `reconcile_and_reap_once` gains an optional `data_root` (tests); production
+  resolves it from `nix_runner_from_env()` exactly as dispatch does.

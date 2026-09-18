@@ -1486,3 +1486,98 @@ def test_nothing_is_forwarded_when_the_pod_has_no_object_store(monkeypatch) -> N
         monkeypatch.delenv(var, raising=False)
 
     assert not [e for e in _provider_env_entries() if e["name"].startswith("S3_")]
+
+
+# ─── #1160: the TFACTORY_PACK_WORKSPACE toggle and the packed flag ────────────
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (None, False),
+        ("", False),
+        ("false", False),
+        ("0", False),
+        ("garbage", False),
+        ("true", True),
+        ("TRUE", True),
+        ("1", True),
+        ("yes", True),
+    ],
+)
+def test_pack_toggle_is_off_unless_explicitly_on(monkeypatch, value, expected):
+    """Unset must stay the co-mount: a toggle that changes behaviour by merely
+    existing is not a toggle."""
+    from agents.gen_functional import _pack_workspace_enabled
+
+    if value is None:
+        monkeypatch.delenv("TFACTORY_PACK_WORKSPACE", raising=False)
+    else:
+        monkeypatch.setenv("TFACTORY_PACK_WORKSPACE", value)
+    assert _pack_workspace_enabled() is expected
+
+
+async def _dispatch_packed(tmp_path, store, monkeypatch, *, packed: bool):
+    spec = tmp_path / "spec"
+    spec.mkdir()
+    uri = "s3://factory-artifacts/tfactory/7/proj:900/workspace/workspace.tar.gz"
+    monkeypatch.setattr(vd, "_pack_workspace_for", lambda **_kw: uri)
+    apply = _RecordingApply()
+    result = await vd.dispatch_verify_job(
+        job_id="proj:900",
+        spec_dir=spec,
+        project_dir=spec / ".worktree",
+        correlation_key=7,
+        sandbox=_FakeSandbox(),
+        store=store,
+        apply_fn=apply,
+        pack_workspace=packed,
+    )
+    assert result is not None
+    return spec, uri, apply.calls[0][1]
+
+
+async def test_packed_dispatch_records_where_the_workspace_went(
+    tmp_path, store, monkeypatch
+):
+    """The sweep finds packed specs by this flag, and it must be the row's own
+    record — never inferred from the toggle, so a flip mid-flight changes nothing
+    for rows already dispatched."""
+    spec, uri, _manifest = await _dispatch_packed(
+        tmp_path, store, monkeypatch, packed=True
+    )
+    on_disk = json.loads((spec / vd.SPEC_WORKER_REF_FILE).read_text())
+    durable = (await store.get("proj:900"))["worker_ref"]
+    for ref in (on_disk, durable):
+        assert ref["workspace_uri"] == uri
+        assert ref["project_dir"] == str(spec / ".worktree")
+        assert ref["job_id"] == "proj:900"
+
+
+async def test_co_mounted_dispatch_records_no_workspace_uri(
+    tmp_path, store, monkeypatch
+):
+    spec, _uri, manifest = await _dispatch_packed(
+        tmp_path, store, monkeypatch, packed=False
+    )
+    on_disk = json.loads((spec / vd.SPEC_WORKER_REF_FILE).read_text())
+    assert "workspace_uri" not in on_disk
+    assert "workspace_uri" not in (await store.get("proj:900"))["worker_ref"]
+    volumes = json.dumps(manifest["spec"]["template"]["spec"].get("volumes", []))
+    assert "tfactory-data" in volumes  # the RWO co-mount is still there
+
+
+async def test_reconcile_tick_runs_the_restore_sweep(store, monkeypatch):
+    """The sweep is only useful if the 15 s tick actually calls it — with the
+    same store and the data root the packs were made against."""
+    calls: list[tuple[object, str]] = []
+
+    async def _sweep(s, data_root):
+        calls.append((s, data_root))
+        return 0
+
+    monkeypatch.setattr(vd, "restore_packed_workspaces_once", _sweep)
+    await vd.reconcile_and_reap_once(
+        store=store, probe_fn=await _probe({}), data_root="/data"
+    )
+    assert calls == [(store, "/data")]
