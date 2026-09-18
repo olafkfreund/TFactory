@@ -818,7 +818,7 @@ def go_environment(spec_dir: Path) -> dict:
     }
 
 
-def kotlin_environment(spec_dir: Path) -> dict:
+def kotlin_environment(spec_dir: Path) -> dict[str, Any]:
     """The Kotlin nix environment for the Gradle verify lane (Factory#1712).
 
     Prefer a contract ``environment`` that declares a Kotlin nix env; otherwise
@@ -832,8 +832,12 @@ def kotlin_environment(spec_dir: Path) -> dict:
     hosts).
     """
     env = environment_from_contract(spec_dir)
-    if is_nix_environment(env) and (env.get("language") or "").lower() == "kotlin":
-        return env  # type: ignore[return-value]  # narrowed by is_nix_environment
+    if (
+        env is not None
+        and is_nix_environment(env)
+        and (env.get("language") or "").lower() == "kotlin"
+    ):
+        return dict(env)
     return {
         "language": "kotlin",
         "toolchain": {},

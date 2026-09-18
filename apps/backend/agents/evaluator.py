@@ -2174,7 +2174,7 @@ def _resolve_go_runner_fn(spec_dir: Path, project_dir: Path):
     return _run
 
 
-def _completed_kotlin_subtasks(plan: dict) -> list[dict]:
+def _completed_kotlin_subtasks(plan: dict[str, Any]) -> list[dict[str, Any]]:
     """Completed unit-lane Kotlin subtasks (Factory#1712).
 
     The pytest filter admits only Python and the Go/Jest filters their own
@@ -2189,7 +2189,9 @@ def _completed_kotlin_subtasks(plan: dict) -> list[dict]:
     )
 
 
-def _resolve_kotlin_runner_fn(spec_dir: Path, project_dir: Path):
+def _resolve_kotlin_runner_fn(
+    spec_dir: Path, _project_dir: Path
+) -> Callable[[Path, Path, int], DockerRunResult]:
     """runner_fn(test_file, project_dir, seed) -> DockerRunResult running the
     Gradle build's tests in the per-task Nix dev shell (Factory#1712).
 
@@ -2198,10 +2200,12 @@ def _resolve_kotlin_runner_fn(spec_dir: Path, project_dir: Path):
     unconfigured sandbox returns a failing result so the gap is visible in the
     stability signal instead of silently passing.
     """
-    from agents.nix_env import run_gradle_lane_via_nix
-    from tools.runners.docker_runner import DockerRunResult
+    # Lazy on purpose: tests patch agents.nix_env.run_gradle_lane_via_nix on the
+    # module, which a top-level `from` import would bind past.
+    from agents.nix_env import run_gradle_lane_via_nix  # noqa: PLC0415
+    from tools.runners.docker_runner import DockerRunResult  # noqa: PLC0415
 
-    def _run(test_file: Path, project_dir_arg: Path, seed: int) -> DockerRunResult:
+    def _run(test_file: Path, project_dir_arg: Path, _seed: int) -> DockerRunResult:
         try:
             hint = Path(test_file).relative_to(spec_dir)
         except ValueError:
