@@ -1307,6 +1307,16 @@ def test_gradle_module_dir_prefers_the_settings_root(tmp_path):
     assert _gradle_module_dir(empty, None) == empty.resolve()
 
 
+def test_gradle_module_dir_falls_back_to_a_build_file_without_a_hint(tmp_path):
+    """A single-project build with no settings file still runs from its module."""
+    from agents.nix_env import _gradle_module_dir
+
+    pd = tmp_path / "proj"
+    (pd / "svc" / "src").mkdir(parents=True)
+    (pd / "svc" / "build.gradle.kts").write_text("")
+    assert _gradle_module_dir(pd, None) == (pd / "svc").resolve()
+
+
 def test_gradle_job_script_runs_and_merges_junit(tmp_path, monkeypatch):
     """Execute the REAL generated script with a fake `gradle` on PATH."""
     import os

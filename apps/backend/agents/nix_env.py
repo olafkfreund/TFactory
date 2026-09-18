@@ -991,11 +991,14 @@ def _gradle_module_dir(project_dir: Path, hint: Path | None) -> Path:
                 for d in chain:
                     if _has(d, names):
                         return d
-    roots = sorted(
-        (m.parent for n in _GRADLE_ROOT_MARKERS for m in pd.rglob(n) if m.is_file()),
-        key=lambda p: len(p.parts),
-    )
-    return roots[0] if roots else pd
+    for names in (_GRADLE_ROOT_MARKERS, _GRADLE_BUILD_MARKERS):
+        roots = sorted(
+            (m.parent for n in names for m in pd.rglob(n) if m.is_file()),
+            key=lambda p: len(p.parts),
+        )
+        if roots:
+            return roots[0]
+    return pd
 
 
 def gradle_job_script(run_dir: str, stage_dir: str, extra_env: dict[str, str]) -> str:
