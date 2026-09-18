@@ -99,3 +99,25 @@ Revert the commit. Generation returns to report-only (#1233); no stored schema
 changes beyond two additive `status.json` counters. Operators can also set
 `TFACTORY_GEN_IMPORT_RETRIES=0` to disable retries without a revert (the
 rewrite remains).
+
+## Deviations (recorded during implementation, same commit as the code)
+
+- **Step 1 confirmed the suspected base bug** (no STOP): on dev, a correct
+  `../../games/tictactoe/game` from the staged test location was recorded as
+  unresolvable while the run reported `generated`.
+- **Structure (to meet the ratchet's strict bar without `noqa`):** the file
+  work (read / rewrite / write / record) is a sync `_import_pass` run via
+  `asyncio.to_thread` (ASYNC240); the retry is a `retry(feedback)` callback
+  closing over the prompt and verbosity, so `_repair_imports` takes 5
+  parameters (PLR0913). `_module_exists` was extracted from
+  `_unresolvable_imports` so the rewrite uses the detector's exact resolution
+  rules (suffixes, index files).
+- The retry prompt is the original prompt plus an `IMPORT FIX REQUIRED`
+  block naming the bad specifiers and the test's path. A retry session that
+  errors keeps the last file; the caller records what is still bad.
+- The evaluator step lives in `_stamp_unresolvable_import_reasons`, called
+  from `_apply_lane_attribution` beside the lane/coverage stamps (the same
+  post-judge deterministic point), and uses #1195's `add_system_reason`.
+- Tests are in a new `tests/test_import_repair.py` (the plan allowed either);
+  they drive the real `run_gen_functional` with the SDK faked.
+- Mutation checks re-run after the refactor: both still caught.

@@ -923,6 +923,43 @@ def _stamp_verdict_coverage(spec_dir: Path, doc: dict[str, Any]) -> tuple[int, i
     return measured, unmeasured
 
 
+_UNRESOLVABLE_SEP = ": unresolvable import "
+
+
+def _stamp_unresolvable_import_reasons(spec_dir: Path, doc: dict[str, Any]) -> int:
+    """Name an unresolvable import as the cause on the verdicts it explains (#1174).
+
+    Gen-Functional records ``"<subtask>: unresolvable import '<spec>'"`` in
+    status.json when a generated test still imports a module that does not
+    exist. That test then fails and reads as a generic flaky/consistent_fail,
+    sending the investigation at test quality instead of at the import. This
+    adds the measured cause as a system reason; the verdict itself is unchanged.
+    Returns how many verdicts were marked.
+    """
+    by_subtask: dict[str, list[str]] = {}
+    for entry in _read_status(spec_dir).get("unresolvable_imports") or []:
+        sid, sep, spec = str(entry).partition(_UNRESOLVABLE_SEP)
+        if sep:
+            by_subtask.setdefault(sid, []).append(spec.strip().strip("'\""))
+    if not by_subtask:
+        return 0
+    plan = _read_plan(spec_dir) or {}
+    marked = 0
+    for v in doc.get("verdicts") or []:
+        if not isinstance(v, dict):
+            continue
+        st = _resolve_subtask(plan, v) or {}
+        specs = by_subtask.get(str(st.get("id") or v.get("test_id") or ""))
+        for spec in specs or []:
+            add_system_reason(
+                v,
+                f"unresolvable import {spec!r} — the generated test imports a "
+                "module that does not exist in the project (#1174)",
+            )
+        marked += bool(specs)
+    return marked
+
+
 def _apply_lane_attribution(spec_dir: Path, verdicts_path: Path) -> None:
     """Read verdicts.json, stamp lanes from the plan, write it back.
 
@@ -939,6 +976,7 @@ def _apply_lane_attribution(spec_dir: Path, verdicts_path: Path) -> None:
         return
     stamped, unmatched = _stamp_verdict_lanes(spec_dir, doc)
     measured, unmeasured = _stamp_verdict_coverage(spec_dir, doc)
+    _stamp_unresolvable_import_reasons(spec_dir, doc)
     with contextlib.suppress(OSError):
         verdicts_path.write_text(json.dumps(doc, indent=2))
     _eval_log.info(

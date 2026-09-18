@@ -37,7 +37,7 @@ import logging as _logging
 import os
 import re
 import traceback
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -782,14 +782,137 @@ def _unresolvable_imports(
             if (pd / "node_modules" / spec.split("/")[0]).exists():
                 continue
             base = pd / spec
-        if any(
-            (base.with_suffix(x) if x else base).is_file() for x in _JS_MODULE_SUFFIXES
-        ):
-            continue
-        if any((base / n).is_file() for n in _JS_INDEX_NAMES):
+        if _module_exists(base):
             continue
         bad.append(spec)
     return bad
+
+
+def _module_exists(base: Path) -> bool:
+    """Whether a JS/TS module specifier's resolved ``base`` names a real module."""
+    if any((base.with_suffix(x) if x else base).is_file() for x in _JS_MODULE_SUFFIXES):
+        return True
+    return any((base / n).is_file() for n in _JS_INDEX_NAMES)
+
+
+def _rewrite_unambiguous_imports(
+    source: str, project_dir: Path, staged: Path, bad: list[str]
+) -> tuple[str, list[tuple[str, str]]]:
+    """Rewrite each bad specifier whose real module is UNAMBIGUOUS (#1174).
+
+    Drops leading path segments until the remainder resolves under
+    ``project_dir`` (``app/games/tictactoe/game`` -> ``games/tictactoe/game``).
+    Exactly one candidate -> the specifier becomes the path relative to where
+    the test RUNS (``staged``), which node, jest and the Docker runner all
+    resolve with no mapper. Zero or several -> left alone: a guessed module is
+    a wrong test that looks right. Only the exact quoted token is replaced.
+    """
+    pd = Path(project_dir)
+    rewrites: list[tuple[str, str]] = []
+    for spec in bad:
+        parts = [s for s in spec.split("/") if s not in ("", ".", "..")]
+        candidates = {
+            "/".join(parts[k:])
+            for k in range(1, len(parts))
+            if _module_exists(pd / "/".join(parts[k:]))
+        }
+        if len(candidates) != 1:
+            continue
+        rel = os.path.relpath(pd / candidates.pop(), Path(staged).parent)
+        new = Path(rel).as_posix()
+        new = new if new.startswith(".") else f"./{new}"
+        for q in ('"', "'"):
+            source = source.replace(f"{q}{spec}{q}", f"{q}{new}{q}")
+        rewrites.append((spec, new))
+    return source, rewrites
+
+
+def _import_retry_budget() -> int:
+    """``TFACTORY_GEN_IMPORT_RETRIES`` (default 1): extra generation sessions
+    for a test whose imports still resolve to nothing after the rewrite."""
+    try:
+        return max(0, int(os.environ.get("TFACTORY_GEN_IMPORT_RETRIES", "1")))
+    except ValueError:
+        return 1
+
+
+def _append_status_list(spec_dir: Path, key: str, entries: list[str]) -> None:
+    if entries:
+        prior = _read_status(spec_dir).get(key) or []
+        _write_status_patch(spec_dir, **{key: [*prior, *entries]})
+
+
+def _import_feedback(bad: list[str], rel: str) -> str:
+    listed = "\n".join(f"- `{s}`" for s in bad)
+    return (
+        "\n\n## IMPORT FIX REQUIRED\n\n"
+        f"The test you wrote at `{rel}` imports module(s) that do not exist in "
+        f"the project:\n{listed}\n\n"
+        "It runs from its own path inside the project checkout, so write each "
+        "import relative to that file and point it at a module that exists "
+        "(look it up; do not invent a path prefix such as `app/`). Keep every "
+        "assertion as it is. Write the file again at the same path.\n"
+    )
+
+
+def _import_pass(
+    spec_dir: Path, project_dir: Path, sid: str, test_path: Path, staged: Path
+) -> list[str] | None:
+    """Read the test, apply the unambiguous rewrites, return what is still bad.
+
+    None when the file is gone (a retry session that did not write it).
+    """
+    if not test_path.exists():
+        return None
+    source = test_path.read_text()
+    bad = _unresolvable_imports(source, project_dir, staged)
+    if bad:
+        source, done = _rewrite_unambiguous_imports(source, project_dir, staged, bad)
+        if done:
+            test_path.write_text(source)
+            _append_status_list(
+                spec_dir,
+                "import_rewrites",
+                [f"{sid}: {old!r} -> {new!r}" for old, new in done],
+            )
+            bad = _unresolvable_imports(source, project_dir, staged)
+    return bad
+
+
+async def _repair_imports(
+    spec_dir: Path,
+    project_dir: Path,
+    subtask: object,
+    rel: str,
+    retry: Callable[[str], Awaitable[str]],
+) -> None:
+    """Rewrite what is unambiguous, retry (bounded) what is not (#1174).
+
+    ``retry(feedback)`` runs one more generation session for this subtask with
+    ``feedback`` appended to its prompt and returns the session status. Never
+    routed to the Planner: #1192 rejected unresolvable imports into a replan and
+    #1194 reverted it for the cost (committed 6 -> 3, 24.7 -> 47.0 min). What
+    still does not resolve after the budget is recorded by the caller, and
+    generation continues (the #1233 behaviour).
+    """
+    staged = Path(project_dir) / rel
+    test_path = Path(spec_dir) / rel
+    sid = str(getattr(subtask, "id", "?"))
+    budget = _import_retry_budget()
+    for attempt in range(budget + 1):
+        bad = await asyncio.to_thread(
+            _import_pass, spec_dir, project_dir, sid, test_path, staged
+        )
+        if not bad or attempt == budget:
+            return
+        await asyncio.to_thread(
+            _append_status_list,
+            spec_dir,
+            "import_retries",
+            [f"{sid}: retry {attempt + 1} for {s!r}" for s in bad],
+        )
+        if await retry(_import_feedback(bad, rel)) == "error":
+            return  # keep the last file; the caller records what is left
 
 
 def _record_unresolvable_imports(
@@ -973,8 +1096,20 @@ async def _generate_one_subtask(
         )
         return "rejected"
 
+    async def _retry(feedback: str) -> str:
+        retry_client = await _resolve_client(spec_dir, project_dir)
+        status, _resp, _err = await _invoke_session(
+            retry_client, prompt + feedback, spec_dir, verbose
+        )
+        return status
+
+    # Imports are judged from where the test RUNS — staged at its authored path
+    # inside the project checkout — not from the spec dir it is written to.
+    await _repair_imports(spec_dir, project_dir, subtask, files[0], _retry)
     source = test_path.read_text()
-    _record_unresolvable_imports(spec_dir, subtask, source, project_dir, test_path)
+    _record_unresolvable_imports(
+        spec_dir, subtask, source, project_dir, Path(project_dir) / files[0]
+    )
     rejection = _source_guardrail_rejection(subtask, source, project_dir)
     if rejection is not None:
         reason, phase = rejection
