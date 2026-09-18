@@ -11,7 +11,6 @@ from datetime import datetime
 
 from sqlalchemy import (
     Boolean,
-    DateTime,
     ForeignKey,
     Index,
     LargeBinary,
@@ -26,6 +25,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 # while making it obvious this is the encrypted-at-rest column type
 # (Epic #26 P2). See apps/web-server/server/crypto/.
 from ..crypto.encrypted_string import EncryptedString as _EncryptedString
+from .column_types import UTCDateTime
 
 
 def _generate_uuid() -> str:
@@ -72,15 +72,15 @@ class User(Base):
     # admin UI to render "Erased on YYYY-MM-DD" placeholders instead
     # of treating the user row as deleted. The audit chain preserves
     # historical user_id references via SHA-256 hashing.
-    gdpr_erased_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    gdpr_erased_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     avatar_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     role: Mapped[str] = mapped_column(String(50), nullable=False, default="user")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now()
+        UTCDateTime, nullable=False, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+        UTCDateTime, nullable=False, server_default=func.now(), onupdate=func.now()
     )
 
     # Relationships
@@ -121,10 +121,10 @@ class Organization(Base):
     plan: Mapped[str] = mapped_column(String(50), nullable=False, default="free")
     settings_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now()
+        UTCDateTime, nullable=False, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+        UTCDateTime, nullable=False, server_default=func.now(), onupdate=func.now()
     )
 
     # Relationships
@@ -176,7 +176,7 @@ class OrgMember(Base):
         String(36), ForeignKey("users.id"), nullable=True
     )
     joined_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now()
+        UTCDateTime, nullable=False, server_default=func.now()
     )
 
     # Relationships
@@ -226,12 +226,12 @@ class OidcRefreshSession(Base):
     jti: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     oidc_sub: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now()
+        UTCDateTime, nullable=False, server_default=func.now()
     )
     last_validated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now()
+        UTCDateTime, nullable=False, server_default=func.now()
     )
-    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
 
     def __repr__(self) -> str:
         return (
@@ -261,13 +261,13 @@ class Project(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     settings_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now()
+        UTCDateTime, nullable=False, server_default=func.now()
     )
     created_by: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("users.id"), nullable=True
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+        UTCDateTime, nullable=False, server_default=func.now(), onupdate=func.now()
     )
 
     # Relationships
@@ -308,10 +308,10 @@ class Task(Base):
         String(36), ForeignKey("users.id"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now()
+        UTCDateTime, nullable=False, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+        UTCDateTime, nullable=False, server_default=func.now(), onupdate=func.now()
     )
 
     # Relationships
@@ -345,10 +345,10 @@ class ApiKey(Base):
     key_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     scopes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now()
+        UTCDateTime, nullable=False, server_default=func.now()
     )
 
     # Relationships
@@ -410,9 +410,9 @@ class GitCredential(Base):
         String(36), ForeignKey("users.id"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now()
+        UTCDateTime, nullable=False, server_default=func.now()
     )
-    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
     organization: Mapped["Organization"] = relationship("Organization")
 
@@ -459,9 +459,9 @@ class TestTargetCredential(Base):
         String(36), ForeignKey("users.id"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now()
+        UTCDateTime, nullable=False, server_default=func.now()
     )
-    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
     organization: Mapped["Organization"] = relationship("Organization")
 
@@ -499,13 +499,13 @@ class EmailAccount(Base):
     # See apps/web-server/server/crypto/ for the at-rest encryption layer.
     access_token: Mapped[str] = mapped_column(_EncryptedString(), nullable=False)
     refresh_token: Mapped[str | None] = mapped_column(_EncryptedString(), nullable=True)
-    token_expiry: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    token_expiry: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     scopes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now()
+        UTCDateTime, nullable=False, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+        UTCDateTime, nullable=False, server_default=func.now(), onupdate=func.now()
     )
 
     # Relationships
@@ -545,10 +545,10 @@ class LLMEndpoint(Base):
     default_model: Mapped[str] = mapped_column(String(255), nullable=False)
     headers_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now()
+        UTCDateTime, nullable=False, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+        UTCDateTime, nullable=False, server_default=func.now(), onupdate=func.now()
     )
 
     user: Mapped["User"] = relationship("User", foreign_keys=[user_id])
@@ -595,14 +595,14 @@ class AuditLog(Base):
     details_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     ip: Mapped[str | None] = mapped_column(String(45), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now()
+        UTCDateTime, nullable=False, server_default=func.now()
     )
     # Epic #26 P5.1 — daily retention job deletes rows where
     # retention_until <= now(). Default policy: 13 months (SOC2 12mo +
     # buffer); set per-row at write time so the policy can vary by
     # action class (login events: short, security events: long).
     retention_until: Mapped[datetime | None] = mapped_column(
-        DateTime, nullable=True, index=True
+        UTCDateTime, nullable=True, index=True
     )
     # Epic #26 P5.2 — Per-row hash chain. SHA-256 of the previous
     # row's content (or the genesis sentinel for the first row).
@@ -663,10 +663,10 @@ class KmsDataKey(Base):
         "wrapped each row.",
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now()
+        UTCDateTime, nullable=False, server_default=func.now()
     )
     rotated_at: Mapped[datetime] = mapped_column(
-        DateTime,
+        UTCDateTime,
         nullable=False,
         server_default=func.now(),
         comment="Updated on every re-wrap (root key rotation). The "
@@ -756,13 +756,13 @@ class JobState(Base):
     # Human-readable failure reason — REQUIRED when failed/stuck (never-overclaim).
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now()
+        UTCDateTime, nullable=False, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+        UTCDateTime, nullable=False, server_default=func.now(), onupdate=func.now()
     )
     # Set when lifecycle_state becomes terminal (done/failed).
-    ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    ended_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
     def __repr__(self) -> str:
         return (
