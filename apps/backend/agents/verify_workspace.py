@@ -400,6 +400,23 @@ def _copy_spec_tree(src: Path, dst: Path, skip_dir: Path | None) -> int:
     return copied
 
 
+def _restore_max_attempts() -> int:
+    """``TFACTORY_WORKSPACE_RESTORE_MAX_ATTEMPTS``, never fatal: a malformed value
+    falls back to the default instead of raising on every tick and leaving the
+    spec never restored. At least 1."""
+    raw = os.environ.get(ENV_RESTORE_MAX_ATTEMPTS)
+    try:
+        return max(1, int(raw)) if raw else _RESTORE_MAX_ATTEMPTS_DEFAULT
+    except ValueError:
+        _log.warning(
+            "[verify-workspace] %s=%r is not an integer; using %d",
+            ENV_RESTORE_MAX_ATTEMPTS,
+            raw,
+            _RESTORE_MAX_ATTEMPTS_DEFAULT,
+        )
+        return _RESTORE_MAX_ATTEMPTS_DEFAULT
+
+
 def restore_spec_from_workspace(
     *,
     spec_dir: Path,
@@ -423,9 +440,7 @@ def restore_spec_from_workspace(
     done = restore_outcome(spec_dir, job_id)
     if done is not None:
         return done
-    limit = int(
-        os.environ.get(ENV_RESTORE_MAX_ATTEMPTS) or _RESTORE_MAX_ATTEMPTS_DEFAULT
-    )
+    limit = _restore_max_attempts()
     try:
         root = Path(data_root).resolve()
         rel = spec_dir.resolve().relative_to(root)

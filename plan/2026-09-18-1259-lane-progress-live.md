@@ -142,3 +142,6 @@ migrating.
 - Extra tests beyond step 1's list: `test_rerun_before_planner_ignores_old_artifacts`,
   `test_artifacts_older_than_the_plan_are_stale`,
   `test_mutation_probe_marks_the_mutation_lane`.
+- **Post-review fix (promotion PR #1304, CodeQL log injection):** the
+  `get_task` overlay's failure log no longer interpolates the request's
+  `spec_id`; the traceback (`exc_info`) carries the diagnostics.

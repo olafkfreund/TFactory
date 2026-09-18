@@ -157,3 +157,9 @@ until the revert lands.
 - `tests/test_evaluator.py`'s fake `dispatch_verify_job` gained
   `pack_workspace=False` (the call now always passes it) and asserts the
   default is `False` — "unset changes nothing" pinned at the call site too.
+- **Post-review fix (promotion PR #1304, Copilot):** the restore's attempt
+  limit was parsed with `int(...)` outside the protected block, so a malformed
+  `TFACTORY_WORKSPACE_RESTORE_MAX_ATTEMPTS` raised on every tick and the spec
+  was never restored. Now `_restore_max_attempts()` falls back to the default
+  with a warning (min 1). Test: `test_a_malformed_attempt_limit_does_not_stop_restores`
+  (failed first with the `ValueError`).
