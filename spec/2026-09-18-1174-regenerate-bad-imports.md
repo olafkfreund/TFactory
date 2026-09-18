@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1174
 intent: intent/2026-09-18-1174-regenerate-bad-imports.md
 ---
