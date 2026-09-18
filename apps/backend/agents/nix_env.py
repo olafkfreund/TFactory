@@ -323,6 +323,11 @@ _SHOTS = "shots"
 _DEPS_TARGET = "/tmp/tf_sut_deps"  # noqa: S108
 _PYTEST_STAGE = ".tf_pytest"  # staged junit/coverage the Nix Job writes back
 _GOTEST_STAGE = ".tf_gotest"  # staged junit/coverage the Go Nix Job writes back
+_GRADLE_STAGE = ".tf_gradle"  # staged merged junit the Gradle Nix Job writes back
+# Gradle writes build/ and .gradle/ INSIDE the module, and /work is read-only to
+# the Job's uid (see _DEPS_TARGET), so the module is copied here and built here.
+_GRADLE_BUILD_DIR = "/tmp/tf_gradle_src"  # noqa: S108 - a path inside the Job
+_GRADLE_USER_HOME = "/tmp/tf_gradle_home"  # noqa: S108 - a path inside the Job
 
 
 def _in_job_pythonpath(scratch: Path, mount: str) -> str:
@@ -949,6 +954,130 @@ def run_gotest_lane_via_nix(
         junit_xml_path=junit if junit.is_file() else None,
         coverage_xml_path=cov if cov.is_file() else None,
         argv=["nix", "develop", f"path:{mount}#default", "--", "go", "test", "./..."],
+    )
+
+
+_GRADLE_ROOT_MARKERS = ("settings.gradle.kts", "settings.gradle")
+_GRADLE_BUILD_MARKERS = ("build.gradle.kts", "build.gradle")
+
+
+def _gradle_module_dir(project_dir: Path, hint: Path | None) -> Path:
+    """Resolve the Gradle build root inside the worktree.
+
+    Gradle runs from the directory holding ``settings.gradle(.kts)`` (the
+    build root), falling back to one holding ``build.gradle(.kts)``. Prefer the
+    build enclosing ``hint``; else the shallowest settings file under the
+    project; else the project root. Always at or below ``project_dir``.
+    """
+    pd = Path(project_dir).resolve()
+
+    def _has(d: Path, names: tuple[str, ...]) -> bool:
+        return any((d / n).is_file() for n in names)
+
+    if hint is not None:
+        start = Path(hint)
+        start = start if start.is_absolute() else pd / start
+        if start.suffix:
+            start = start.parent
+        start = start.resolve()
+        if pd == start or pd in start.parents:
+            chain = [start, *[p for p in start.parents if p == pd or pd in p.parents]]
+            for names in (_GRADLE_ROOT_MARKERS, _GRADLE_BUILD_MARKERS):
+                for d in chain:
+                    if _has(d, names):
+                        return d
+    roots = sorted(
+        (m.parent for n in _GRADLE_ROOT_MARKERS for m in pd.rglob(n) if m.is_file()),
+        key=lambda p: len(p.parts),
+    )
+    return roots[0] if roots else pd
+
+
+def gradle_job_script(run_dir: str, stage_dir: str, extra_env: dict[str, str]) -> str:
+    """The bash the Gradle Nix Job runs; pure, so it can be tested directly.
+
+    The module is copied to a writable path and built there (``/work`` is
+    read-only to the Job's uid). ``set +e`` + the marker line recover Gradle's
+    real exit code. Gradle writes one ``TEST-*.xml`` per class; they are merged
+    under a single ``<testsuites>`` root into ``<stage>/junit.xml`` so the lane
+    result carries one JUnit file, like the Go and pytest lanes.
+    """
+    exports = "".join(f"export {k}={_shquote(str(v))}\n" for k, v in extra_env.items())
+    src, home = _GRADLE_BUILD_DIR, _GRADLE_USER_HOME
+    return (
+        "#!/usr/bin/env bash\nset +e\n"
+        + exports
+        + f"export GRADLE_USER_HOME={home}\n"
+        + f"rm -rf {src} && cp -r {run_dir} {src} && cd {src}\n"
+        + "gradle test --no-daemon --console=plain 2>&1\n"
+        + "echo __GRADLE_EXIT=$?\n"
+        + "{ echo '<?xml version=\"1.0\" encoding=\"UTF-8\"?>'; echo '<testsuites>'; "
+        + "find . -path '*/build/test-results/*' -name 'TEST-*.xml' | sort | "
+        + "while read -r f; do sed '/^<?xml/d' \"$f\"; done; "
+        + f"echo '</testsuites>'; }} > {stage_dir}/junit.xml\n"
+    )
+
+
+def run_gradle_lane_via_nix(
+    spec_dir: Path,
+    project_dir: Path,
+    *,
+    hint: Path | None = None,
+    extra_env: dict[str, str] | None = None,
+    timeout: int = 900,
+) -> DockerRunResult | None:
+    """Run the Gradle build's tests inside the per-task Nix dev shell (Factory#1712).
+
+    The Kotlin/JVM twin of :func:`run_gotest_lane_via_nix`: the toolchain
+    (kotlin, gradle, jdk21) comes from the flake that ``generate_flake`` renders
+    from the vendored ``languages/kotlin.yaml``, via :func:`kotlin_environment`.
+    ``gradle test`` covers the whole build, so there is no single-file staging.
+    Gradle resolves plugins and dependencies at run time; the build-Job egress
+    policy admits Maven Central and the Gradle hosts (measured on #1712).
+    Timeout is 900 s because a cold dependency resolution takes minutes.
+
+    Returns None when the sandbox isn't configured (caller falls back).
+    """
+    mount = _NIX_MOUNT
+    plan = materialize_flake(spec_dir, project_dir, env=kotlin_environment(spec_dir))
+    if plan is None:
+        return None
+    sandbox: ExecutionSandbox | None = nix_runner_from_env()
+    if sandbox is None:
+        _log.info("run_gradle_lane_via_nix: TFACTORY_NIX_RUNNER_IMAGE unset; skipping")
+        return None
+
+    pd = Path(project_dir)
+    module_dir = _gradle_module_dir(pd, hint)
+    rel = (
+        "." if module_dir == pd.resolve() else str(module_dir.relative_to(pd.resolve()))
+    )
+    run_dir = mount if rel == "." else f"{mount}/{rel}"
+
+    stage = pd / _GRADLE_STAGE
+    shutil.rmtree(stage, ignore_errors=True)
+    stage.mkdir(parents=True, exist_ok=True)
+    with contextlib.suppress(OSError):
+        stage.chmod(0o777)  # the Job's non-root uid writes the merged junit here
+
+    (pd / _JOB_SCRIPT).write_text(
+        gradle_job_script(run_dir, f"{mount}/{_GRADLE_STAGE}", extra_env or {}),
+        encoding="utf-8",
+    )
+    job_cmd = f"nix develop path:{mount}#default --command bash {mount}/{_JOB_SCRIPT}"
+    try:
+        res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)
+    finally:
+        (pd / _JOB_SCRIPT).unlink(missing_ok=True)
+
+    junit = stage / "junit.xml"
+    return DockerRunResult(
+        returncode=_parse_exit_marker(res.stdout, "__GRADLE_EXIT="),
+        stdout=res.stdout or "",
+        stderr="",
+        junit_xml_path=junit if junit.is_file() else None,
+        coverage_xml_path=None,
+        argv=["nix", "develop", f"path:{mount}#default", "--", "gradle", "test"],
     )
 
 

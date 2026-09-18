@@ -1213,3 +1213,131 @@ def test_kotlin_flake_follows_the_descriptor_not_a_literal(tmp_path, monkeypatch
     flake = generate_flake(kotlin_environment(spec))
     assert "pkgs.zulu17" in flake
     assert "pkgs.jdk21" not in flake
+
+
+def _kotlin_project(tmp_path: Path) -> tuple[Path, Path, Path]:
+    spec = tmp_path / "specs" / "k1"
+    spec.mkdir(parents=True)
+    project = tmp_path / "proj"
+    mod = project / "lanes" / "kotlin-core"
+    (mod / "src" / "test" / "kotlin").mkdir(parents=True)
+    (mod / "settings.gradle.kts").write_text('rootProject.name = "k"\n')
+    (mod / "build.gradle.kts").write_text("plugins {}\n")
+    test_file = mod / "src" / "test" / "kotlin" / "CalcTest.kt"
+    test_file.write_text("class CalcTest\n")
+    return spec, project, test_file
+
+
+def test_run_gradle_lane_via_nix_noop_when_sandbox_unconfigured(tmp_path, monkeypatch):
+    from agents.nix_env import run_gradle_lane_via_nix
+
+    spec, project, _ = _kotlin_project(tmp_path)
+    monkeypatch.delenv("TFACTORY_NIX_RUNNER_IMAGE", raising=False)
+    assert run_gradle_lane_via_nix(spec, project) is None
+
+
+def test_run_gradle_lane_via_nix_result_shape(tmp_path, monkeypatch):
+    from agents.nix_env import run_gradle_lane_via_nix
+
+    spec, project, test_file = _kotlin_project(tmp_path)
+    captured = {}
+
+    class _FakeSandbox:
+        def run(self, commands, *, workdir=None, timeout=600):
+            captured["commands"] = commands
+            captured["timeout"] = timeout
+            captured["script"] = (Path(workdir) / "_tf_nix_job.sh").read_text()
+            stage = Path(workdir) / ".tf_gradle"
+            (stage / "junit.xml").write_text("<testsuites/>")
+            return JobRunResult(ok=True, exit_code=0, output="BUILD\n__GRADLE_EXIT=0\n")
+
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: _FakeSandbox())
+    res = run_gradle_lane_via_nix(spec, project, hint=test_file, extra_env={"CI": "1"})
+    assert res is not None and res.returncode == 0
+    assert res.junit_xml_path is not None and res.junit_xml_path.is_file()
+    assert res.coverage_xml_path is None
+    assert captured["commands"][0].startswith("nix develop path:/work#default")
+    assert captured["timeout"] == 900
+    flake = (project / "flake.nix").read_text()
+    assert "pkgs.gradle" in flake and "pkgs.jdk21" in flake, flake
+    script = captured["script"]
+    # Built from a writable copy: /work is read-only to the Job's uid.
+    assert "cp -r /work/lanes/kotlin-core /tmp/tf_gradle_src" in script, script
+    assert "export GRADLE_USER_HOME=/tmp/tf_gradle_home" in script, script
+    assert "gradle test --no-daemon --console=plain" in script, script
+    assert "echo __GRADLE_EXIT=$?" in script, script
+    assert "export CI='1'" in script, script
+    assert not (project / "_tf_nix_job.sh").exists()
+
+
+def test_run_gradle_lane_via_nix_missing_marker_is_failure(tmp_path, monkeypatch):
+    from agents.nix_env import run_gradle_lane_via_nix
+
+    spec, project, _ = _kotlin_project(tmp_path)
+
+    class _FakeSandbox:
+        def run(self, commands, *, workdir=None, timeout=600):
+            return JobRunResult(
+                ok=True, exit_code=0, output="killed before the marker\n"
+            )
+
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: _FakeSandbox())
+    res = run_gradle_lane_via_nix(spec, project)
+    assert res is not None and res.returncode == 1
+
+
+def test_gradle_module_dir_prefers_the_settings_root(tmp_path):
+    from agents.nix_env import _gradle_module_dir
+
+    pd = tmp_path / "proj"
+    sub = pd / "app" / "core"
+    (sub / "src").mkdir(parents=True)
+    (pd / "app" / "settings.gradle.kts").write_text("")
+    (sub / "build.gradle.kts").write_text("")
+    # A subproject's own build file does not win over the enclosing build root.
+    assert _gradle_module_dir(pd, sub / "src" / "X.kt") == (pd / "app").resolve()
+    # No hint: the shallowest settings file under the project.
+    assert _gradle_module_dir(pd, None) == (pd / "app").resolve()
+    # Nothing Gradle at all: the project root.
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert _gradle_module_dir(empty, None) == empty.resolve()
+
+
+def test_gradle_job_script_runs_and_merges_junit(tmp_path, monkeypatch):
+    """Execute the REAL generated script with a fake `gradle` on PATH."""
+    import os
+    import subprocess
+
+    from agents import nix_env
+
+    monkeypatch.setattr(nix_env, "_GRADLE_BUILD_DIR", str(tmp_path / "build-src"))
+    monkeypatch.setattr(nix_env, "_GRADLE_USER_HOME", str(tmp_path / "gh"))
+    module = tmp_path / "module"
+    module.mkdir()
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    gradle = fake_bin / "gradle"
+    gradle.write_text(
+        "#!/usr/bin/env bash\n"
+        "mkdir -p build/test-results/test\n"
+        "for c in A B; do printf '%s\\n' '<?xml version=\"1.0\"?>' "
+        '"<testsuite name=\\"$c\\" tests=\\"1\\" failures=\\"0\\"/>" '
+        "> build/test-results/test/TEST-$c.xml; done\n"
+        "exit 1\n"
+    )
+    gradle.chmod(0o755)
+    script = tmp_path / "job.sh"
+    script.write_text(nix_env.gradle_job_script(str(module), str(stage), {}))
+    env = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"}
+    out = subprocess.run(
+        ["bash", str(script)], capture_output=True, text=True, env=env, check=False
+    ).stdout
+    assert nix_env._parse_exit_marker(out, "__GRADLE_EXIT=") == 1
+    import xml.etree.ElementTree as ET
+
+    root = ET.parse(stage / "junit.xml").getroot()
+    assert root.tag == "testsuites"
+    assert sorted(s.get("name") for s in root.findall("testsuite")) == ["A", "B"]
