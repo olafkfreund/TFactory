@@ -389,13 +389,13 @@ def _copy_spec_tree(src: Path, dst: Path, skip_dir: Path | None) -> int:
             dirs[:] = [d for d in dirs if rel_root / d != skip_dir]
         for name in files:
             rel = rel_root / name
-            if rel_root == Path(".") and name in _NEVER_RESTORED:
+            if rel_root == Path() and name in _NEVER_RESTORED:
                 continue
             target = dst / rel
             target.parent.mkdir(parents=True, exist_ok=True)
             tmp = target.with_name(f".{target.name}.tf-restore")
             shutil.copy2(Path(root) / name, tmp, follow_symlinks=False)
-            os.replace(tmp, target)
+            tmp.replace(target)
             copied += 1
     return copied
 
@@ -407,7 +407,6 @@ def restore_spec_from_workspace(
     job_id: str,
     uri: str,
     data_root: str,
-    max_attempts: int | None = None,
 ) -> bool | None:
     """Control plane: bring a packed Job's spec tree back onto the PVC (#1160).
 
@@ -424,7 +423,7 @@ def restore_spec_from_workspace(
     done = restore_outcome(spec_dir, job_id)
     if done is not None:
         return done
-    limit = max_attempts or int(
+    limit = int(
         os.environ.get(ENV_RESTORE_MAX_ATTEMPTS) or _RESTORE_MAX_ATTEMPTS_DEFAULT
     )
     try:

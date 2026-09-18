@@ -611,15 +611,16 @@ def test_a_marker_from_another_job_is_not_trusted(
 
 
 def test_a_fetch_failure_retries_then_gives_up_visibly(
-    fake_s3: _FakeS3, data_root: Path
+    fake_s3: _FakeS3, data_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Never swallowed: no sentinel while retrying, so the next tick tries again;
     a permanently broken object ends visible, not retried forever."""
+    monkeypatch.setenv(vw.ENV_RESTORE_MAX_ATTEMPTS, "3")
     missing = f"s3://{_BUCKET}/tfactory/42/job-1/workspace/workspace.tar.gz"
     for _ in range(2):
-        assert _restore(data_root, missing, max_attempts=3) is None
+        assert _restore(data_root, missing) is None
         assert _sentinel(data_root) is None
-    assert _restore(data_root, missing, max_attempts=3) is False
+    assert _restore(data_root, missing) is False
     s = _sentinel(data_root) or {}
     assert s.get("restored") is False
     assert s.get("error")

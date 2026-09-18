@@ -148,3 +148,12 @@ until the revert lands.
   `test_restore_is_idempotent`.
 - `reconcile_and_reap_once` gains an optional `data_root` (tests); production
   resolves it from `nix_runner_from_env()` exactly as dispatch does.
+- **Follow-up after the local ratchet (second commit):** the strict shared
+  ruff bar flagged the sweep doing blocking filesystem I/O on the event loop
+  (ASYNC240) — the spec-dir walk now runs in `asyncio.to_thread`
+  (`_undecided_packed_specs`), like the restore itself. The
+  `max_attempts` parameter was dropped (PLR0913); the limit is the env var
+  only, and the test sets it. Plus PTH201/PTH105/E501 cleanups.
+- `tests/test_evaluator.py`'s fake `dispatch_verify_job` gained
+  `pack_workspace=False` (the call now always passes it) and asserts the
+  default is `False` — "unset changes nothing" pinned at the call site too.

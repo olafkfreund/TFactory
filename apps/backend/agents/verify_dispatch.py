@@ -911,8 +911,9 @@ async def dispatch_verify_job(  # noqa: PLR0913 - 3 domain args + injectable sea
     # TFactory#1159. Opt-in per call, NOT read from env here: the operator-facing
     # TFACTORY_PACK_WORKSPACE toggle is read at the one call site
     # (gen_functional._pack_workspace_enabled, #1160). Packed BEFORE the dispatch
-    # is recorded so the first worker_ref already says where the workspace went. Fail-open — a None URI (no object store, a
-    # pack error) keeps the RWO co-mount, so a storage gap never strands a verify.
+    # is recorded so the first worker_ref already says where the workspace went.
+    # Fail-open — a None URI (no object store, a pack error) keeps the RWO
+    # co-mount, so a storage gap never strands a verify.
     workspace_uri = (
         _pack_workspace_for(
             job_id=job_id,
@@ -1472,16 +1473,10 @@ async def restore_packed_workspaces_once(store: Any, data_root: str) -> int:
     from agents import verify_workspace as vw  # noqa: PLC0415 - lazy by design
 
     restored = 0
-    pattern = f"workspaces/*/specs/*/{SPEC_WORKER_REF_FILE}"
-    for ref_path in sorted(Path(data_root).glob(pattern)):
-        spec_dir = ref_path.parent
+    # The walk is filesystem I/O; keep it off the event loop, like the restore.
+    for spec_dir, ref in await asyncio.to_thread(_undecided_packed_specs, data_root):
+        uri, job_id = ref["workspace_uri"], ref["job_id"]
         try:
-            ref = json.loads(ref_path.read_text(encoding="utf-8"))
-            uri, job_id = ref.get("workspace_uri"), ref.get("job_id")
-            if not uri or not job_id:
-                continue  # co-mounted dispatch: the Job wrote the PVC directly
-            if vw.restore_outcome(spec_dir, job_id) is not None:
-                continue  # already decided for this job
             if not is_terminal_record(await store.get(job_id)):
                 continue  # still running: its push-back has not happened yet
             project_dir = Path(ref.get("project_dir") or spec_dir / ".worktree")
@@ -1501,6 +1496,33 @@ async def restore_packed_workspaces_once(store: Any, data_root: str) -> int:
                 exc_info=True,
             )
     return restored
+
+
+def _undecided_packed_specs(data_root: str) -> list[tuple[Path, dict[str, Any]]]:
+    """(spec_dir, worker_ref) for packed dispatches whose restore is not decided.
+
+    Co-mounted dispatches carry no ``workspace_uri`` (the Job wrote the PVC
+    directly); a spec whose sentinel names this job is already decided.
+    """
+    from agents import verify_workspace as vw  # noqa: PLC0415 - lazy by design
+
+    out: list[tuple[Path, dict[str, Any]]] = []
+    for ref_path in sorted(
+        Path(data_root).glob(f"workspaces/*/specs/*/{SPEC_WORKER_REF_FILE}")
+    ):
+        try:
+            ref = json.loads(ref_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if (
+            not isinstance(ref, dict)
+            or not ref.get("workspace_uri")
+            or not ref.get("job_id")
+        ):
+            continue
+        if vw.restore_outcome(ref_path.parent, ref["job_id"]) is None:
+            out.append((ref_path.parent, ref))
+    return out
 
 
 def _control_plane_data_root() -> str:
