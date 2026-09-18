@@ -2017,8 +2017,6 @@ def test_a_test_outside_the_project_falls_back_to_its_name(tmp_path):
 
 
 def _unit_plan(spec_dir, *subtasks) -> None:
-    import json
-
     (spec_dir / "test_plan.json").write_text(
         json.dumps({"phases": [{"subtasks": list(subtasks)}]})
     )

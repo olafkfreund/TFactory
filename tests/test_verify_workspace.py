@@ -749,3 +749,18 @@ def test_sweep_ignores_a_co_mounted_dispatch(fake_s3: _FakeS3, data_root: Path) 
 def test_sweep_never_raises(fake_s3: _FakeS3, data_root: Path) -> None:
     _worker_ref(data_root, f"s3://{_BUCKET}/x")
     assert _sweep(data_root, _Rows({}, fail=True)) == 0
+
+
+def test_a_malformed_attempt_limit_does_not_stop_restores(
+    fake_s3: _FakeS3, data_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A typo in TFACTORY_WORKSPACE_RESTORE_MAX_ATTEMPTS must fall back to the
+    default, not raise on every tick and leave the spec never restored."""
+    monkeypatch.setenv(vw.ENV_RESTORE_MAX_ATTEMPTS, "twenty")
+    uri = _pack(data_root)
+    _job_runs(tmp_path, uri)
+
+    assert _restore(data_root, uri) is True
+    assert (data_root / _SPEC_REL / "status.json").read_text() == (
+        '{"status": "triaged"}\n'
+    )
