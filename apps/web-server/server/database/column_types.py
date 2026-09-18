@@ -25,7 +25,11 @@ class UTCDateTime(TypeDecorator[datetime]):
     impl = DateTime  # naive: the stored column type does not change
     cache_ok = True
 
-    def process_bind_param(self, value: datetime | None, dialect: Dialect) -> Any:
+    def process_bind_param(
+        self,
+        value: datetime | None,
+        dialect: Dialect,  # noqa: ARG002 - SQLAlchemy's TypeDecorator signature
+    ) -> Any:
         if value is not None and value.tzinfo is not None:
             return value.astimezone(UTC).replace(tzinfo=None)
         return value

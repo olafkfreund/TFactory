@@ -112,3 +112,16 @@ only brings back the five failing writes; nothing needs migrating either way.
   instants on SQLite, not only failed on Postgres.
 - The web-server tests run pytest-asyncio in strict mode, so the async
   round-trip test carries `@pytest.mark.asyncio` (the directory's convention).
+- **Strict-bar follow-up (second commit):** the ratchet flagged the new code —
+  `ARG002` on `process_bind_param`'s `dialect` (mandated by SQLAlchemy's
+  signature; the one `noqa`), and in the unit test `DTZ001` ×5, `PLC0415` ×2
+  and 2 mypy errors. The test now builds naive values through one
+  `_utc_naive()` helper, imports at module level, annotates the parametrised
+  arguments, uses the typed `Base.metadata.tables["api_keys"]`, and guards the
+  read with `assert row is not None`.
+- **`test_p1_suite_against_postgres` (the full suite run against PG) fails
+  locally on dev as well** (553 failed on unmodified dev vs 554 here; the inner
+  run also dies with `lost sys.stderr` when run directly), so this workstation
+  cannot judge it. It passed in CI on the 0.9.26 promotion (#1304, content =
+  dev). CI's `postgres (P1 acceptance)` job is the judge for that one test on
+  this PR; the four new PG tests and the other 17 PG tests pass locally.
