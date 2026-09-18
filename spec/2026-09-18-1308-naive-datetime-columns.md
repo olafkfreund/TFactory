@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1308
 intent: intent/2026-09-18-1308-naive-datetime-columns.md
 ---
