@@ -512,6 +512,18 @@ def _dispatch_verify_as_job_if_enabled(spec_dir: Path, project_dir: Path) -> boo
         return False
 
 
+def _pack_workspace_enabled() -> bool:
+    """``TFACTORY_PACK_WORKSPACE`` — pack the verify workspace to the object store
+    instead of co-mounting the RWO PVC (#1160).
+
+    Off unless explicitly on: unset keeps today's co-mount, because a toggle that
+    changes behaviour by merely existing is not a toggle. Read here, at the one
+    dispatch call site, not inside ``dispatch_verify_job`` (see the note there).
+    """
+    value = os.environ.get("TFACTORY_PACK_WORKSPACE", "").strip().lower()
+    return value in {"1", "true", "yes"}
+
+
 def _run_dispatch_blocking(
     job_id: str,
     spec_dir: Path,
@@ -533,6 +545,7 @@ def _run_dispatch_blocking(
             spec_dir=spec_dir,
             project_dir=project_dir,
             correlation_key=correlation_key,  # type: ignore[arg-type]
+            pack_workspace=_pack_workspace_enabled(),
         )
         if result is None:
             _gen_log.info(
