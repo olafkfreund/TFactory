@@ -91,3 +91,24 @@ podman stop tf-pg-1308
 
 Revert the commit. Stored data and column types are untouched, so a revert
 only brings back the five failing writes; nothing needs migrating either way.
+
+## Deviations (recorded during implementation, same commit as the code)
+
+- **`column_types.py`, not `types.py`.** A module named `types.py` shadows the
+  standard library's `types` for anything run with that directory as
+  `sys.path[0]` (it broke a script run from `server/database/`). Imports as
+  `server.database.column_types` are unaffected either way; the name just
+  removes the trap.
+- **Step 5 — `alembic check` is non-zero, identically on dev.** It reports
+  pre-existing model/migration drift unrelated to timestamps (server defaults
+  on `git_credentials.kind` / `test_target_credentials.kind`, three `org_id`
+  indexes, two `kms_data_keys` comments, a KMS unique constraint). The
+  operation list with this change is byte-identical to dev's, so the change
+  adds **no** drift — the criterion is "no additional drift". The existing
+  drift is out of scope here (worth its own issue).
+- Step 1 confirmed the failure on real Postgres (all four writers raise the
+  asyncpg `DataError`), and step 2 confirmed SQLite silently drops a non-UTC
+  offset (`12:00+02:00` read back as `12:00`) — so the bug also mis-stored
+  instants on SQLite, not only failed on Postgres.
+- The web-server tests run pytest-asyncio in strict mode, so the async
+  round-trip test carries `@pytest.mark.asyncio` (the directory's convention).
