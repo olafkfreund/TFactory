@@ -130,3 +130,9 @@ existing workspaces read the same before and after.
   `_run_artifacts` lookup got its own mutation — which fails the 3 coverage
   tests. Both observed, both restored.
 - `_lane_by_test_id` deleted: its only caller now uses `_resolve_subtask`.
+- **Typing (after first CI run):** the ratchet's `mypy --strict` gate
+  (mypy 1.20.1, `standards/mypy.ini`) flagged 3 new errors in the added code
+  (bare `dict`, `Any` return from `json.loads`, unnarrowed Optional index).
+  Fixed without behaviour change; the gate must be run locally with the pinned
+  toolchain before pushing (`scripts/ratchet_lint.py --base origin/dev
+  --package apps/backend --package apps/web-server --package scripts`).

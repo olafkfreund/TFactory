@@ -735,7 +735,9 @@ def _norm_rel(path: object) -> str:
     return p
 
 
-def _resolve_subtask(plan: dict[str, Any], verdict: dict[str, Any]) -> dict | None:
+def _resolve_subtask(
+    plan: dict[str, Any], verdict: dict[str, Any]
+) -> dict[str, Any] | None:
     """The plan subtask a verdict is about, or None when that is not certain.
 
     ``test_id`` is written by the judge LLM and nothing checks it against the
@@ -769,10 +771,11 @@ def _resolve_subtask(plan: dict[str, Any], verdict: dict[str, Any]) -> dict | No
 
 def _read_plan(spec_dir: Path) -> dict[str, Any] | None:
     try:
-        return json.loads((spec_dir / "test_plan.json").read_text())
+        plan = json.loads((spec_dir / "test_plan.json").read_text())
     except (OSError, json.JSONDecodeError) as exc:
         _eval_log.warning("[evaluator] plan unreadable: %s", exc)
         return None
+    return plan if isinstance(plan, dict) else None
 
 
 def _stamp_verdict_lanes(spec_dir: Path, doc: dict[str, Any]) -> tuple[int, int]:
@@ -801,7 +804,7 @@ def _stamp_verdict_lanes(spec_dir: Path, doc: dict[str, Any]) -> tuple[int, int]
             continue
         st = _resolve_subtask(plan, v)
         lane = str((st or {}).get("lane") or "").strip().lower()
-        if lane:
+        if st is not None and lane:
             v["lane"] = lane
             # Re-key to the plan id so every later reader (triage, val_block,
             # evidence links) finds it; the judge's paraphrase keys nothing.
