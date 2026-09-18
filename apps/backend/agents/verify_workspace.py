@@ -43,6 +43,7 @@ terminal row exists, so a row that already said ``done`` could not be corrected.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -60,6 +61,19 @@ ENV_WORKSPACE_URI = "WORKSPACE_URI"
 ENV_WORKSPACE_ROOT = "WORKSPACE_ROOT"
 
 _SERVICE = "tfactory"
+
+# #1160 — control-plane restore of a pushed-back workspace.
+PUSHED_BACK_MARKER = ".pushed_back.json"
+RESTORED_SENTINEL = ".workspace_restored"
+_RESTORE_ATTEMPTS = ".workspace_restore_attempts"
+ENV_RESTORE_MAX_ATTEMPTS = "TFACTORY_WORKSPACE_RESTORE_MAX_ATTEMPTS"
+_RESTORE_MAX_ATTEMPTS_DEFAULT = 20  # ≈5 min at the reconcile loop's 15 s tick
+# Never copied back from an archive: the control plane's own bookkeeping, and
+# the marker, which vouches for ONE archive — on the PVC the next dispatch
+# would pack it and it would vouch for a Job that never pushed back.
+_NEVER_RESTORED = frozenset(
+    {"worker_ref.json", PUSHED_BACK_MARKER, RESTORED_SENTINEL, _RESTORE_ATTEMPTS}
+)
 
 
 def _open_store() -> tuple[Any, Any] | None:
@@ -314,3 +328,171 @@ def push_back_workspace(
         uri,
     )
     return uri
+
+
+def mark_pushed_back(spec_dir: Path, job_id: str) -> None:
+    """In-Job, just before ``push_back_workspace``: vouch for the archive (#1160).
+
+    Dispatch and push-back share one object key, so a Job that died before
+    pushing back leaves the PRE-dispatch archive under it. This marker, inside
+    the archive and naming the job, is what tells the control plane the object
+    is this Job's result. The upload is a single put, so a push-back cut short
+    leaves the old object — without this job's marker.
+    """
+    from datetime import UTC, datetime  # noqa: PLC0415 - lazy by design
+
+    (Path(spec_dir) / PUSHED_BACK_MARKER).write_text(
+        json.dumps({"job_id": job_id, "pushed_at": datetime.now(UTC).isoformat()}),
+        encoding="utf-8",
+    )
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _marker_names(path: Path, job_id: str) -> bool:
+    return _read_json(path).get("job_id") == job_id
+
+
+def restore_outcome(spec_dir: Path, job_id: str) -> bool | None:
+    """The recorded restore outcome for THIS job, or None if not yet decided.
+
+    Scoped to the job because the spec dir outlives it: a rerun of the same spec
+    is a new Job, and an earlier job's sentinel must not skip it.
+    """
+    data = _read_json(Path(spec_dir) / RESTORED_SENTINEL)
+    if data.get("job_id") != job_id:
+        return None
+    return bool(data.get("restored"))
+
+
+def _write_sentinel(spec_dir: Path, **fields: Any) -> None:
+    from datetime import UTC, datetime  # noqa: PLC0415 - lazy by design
+
+    fields["at"] = datetime.now(UTC).isoformat()
+    (spec_dir / RESTORED_SENTINEL).write_text(json.dumps(fields), encoding="utf-8")
+
+
+def _copy_spec_tree(src: Path, dst: Path, skip_dir: Path | None) -> int:
+    """Copy ``src`` over ``dst``, per file via a temp sibling + rename, so a reader
+    never sees a half-written ``status.json``. ``skip_dir`` (relative) is left
+    alone entirely — the project worktree, which lives inside the spec dir."""
+    copied = 0
+    for root, dirs, files in os.walk(src):
+        rel_root = Path(root).relative_to(src)
+        if skip_dir is not None:
+            dirs[:] = [d for d in dirs if rel_root / d != skip_dir]
+        for name in files:
+            rel = rel_root / name
+            if rel_root == Path() and name in _NEVER_RESTORED:
+                continue
+            target = dst / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            tmp = target.with_name(f".{target.name}.tf-restore")
+            shutil.copy2(Path(root) / name, tmp, follow_symlinks=False)
+            tmp.replace(target)
+            copied += 1
+    return copied
+
+
+def restore_spec_from_workspace(
+    *,
+    spec_dir: Path,
+    project_dir: Path,
+    job_id: str,
+    uri: str,
+    data_root: str,
+) -> bool | None:
+    """Control plane: bring a packed Job's spec tree back onto the PVC (#1160).
+
+    Returns True when restored, False when there was nothing to restore (the
+    Job never pushed back) or the retry budget is spent, and None when a
+    transient failure should be retried on the next tick. Idempotent: once the
+    sentinel exists, returns its outcome without touching anything.
+
+    Only the spec dir comes back, minus the project worktree inside it: the
+    archive also carries the worktree and the shared base clone, and one Job's
+    copy of either would corrupt them for every other spec.
+    """
+    spec_dir = Path(spec_dir)
+    done = restore_outcome(spec_dir, job_id)
+    if done is not None:
+        return done
+    limit = int(
+        os.environ.get(ENV_RESTORE_MAX_ATTEMPTS) or _RESTORE_MAX_ATTEMPTS_DEFAULT
+    )
+    try:
+        root = Path(data_root).resolve()
+        rel = spec_dir.resolve().relative_to(root)
+        try:
+            skip = Path(project_dir).resolve().relative_to(spec_dir.resolve())
+        except ValueError:
+            skip = None  # the worktree is elsewhere: nothing inside to protect
+        opened = _open_store()
+        if opened is None:
+            raise RuntimeError("S3_ENDPOINT is not set; cannot fetch the workspace")
+        store, _cfg = opened
+
+        from tools.runners.artifact_store import (  # noqa: PLC0415 - lazy by design
+            unpack_workspace,
+        )
+
+        with tempfile.TemporaryDirectory(prefix="tf-restore-") as tmp:
+            unpack_workspace(store, uri, tmp)
+            src = Path(tmp) / rel
+            if not _marker_names(src / PUSHED_BACK_MARKER, job_id):
+                _log.warning(
+                    "[verify-workspace] job_id=%s never pushed its workspace back "
+                    "(no marker for this job in %s); leaving %s as the reaper left it",
+                    job_id,
+                    uri,
+                    spec_dir,
+                )
+                _write_sentinel(
+                    spec_dir,
+                    restored=False,
+                    job_id=job_id,
+                    reason="no push-back: the object is still the dispatch-time pack",
+                )
+                return False
+            copied = _copy_spec_tree(src, spec_dir, skip)
+    except Exception as exc:  # noqa: BLE001 - retried; never swallowed
+        attempts_file = spec_dir / _RESTORE_ATTEMPTS
+        prior = _read_json(attempts_file)
+        attempts = (
+            int(prior.get("attempts") or 0) + 1 if prior.get("job_id") == job_id else 1
+        )
+        attempts_file.write_text(
+            json.dumps({"job_id": job_id, "attempts": attempts}), encoding="utf-8"
+        )
+        _log.error(
+            "[verify-workspace] restoring job_id=%s into %s failed (attempt %d/%d)",
+            job_id,
+            spec_dir,
+            attempts,
+            limit,
+            exc_info=True,
+        )
+        if attempts >= limit:
+            _write_sentinel(
+                spec_dir,
+                restored=False,
+                job_id=job_id,
+                error=str(exc),
+                attempts=attempts,
+            )
+            return False
+        return None
+    _write_sentinel(spec_dir, restored=True, job_id=job_id, files=copied)
+    _log.info(
+        "[verify-workspace] restored %d file(s) for job_id=%s into %s",
+        copied,
+        job_id,
+        spec_dir,
+    )
+    return True
