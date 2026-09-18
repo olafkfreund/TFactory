@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1258
 intent: intent/2026-09-18-1258-judge-coverage-input.md
 ---
