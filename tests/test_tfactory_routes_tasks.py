@@ -395,6 +395,46 @@ def test_get_task_happy_returns_full_status(workspace_root: Path) -> None:
     assert sj["committed_count"] == 4
 
 
+def test_get_task_derives_lane_progress_on_read(workspace_root: Path) -> None:
+    """#1259: status.json said 'pending' while the unit lane had finished;
+    the detail view must report what is on disk, not the stale stored value."""
+    spec_dir = _make_task(
+        workspace_root,
+        project_id="demo",
+        spec_id="050-lanes",
+        status="evaluating",
+        extra_status={"lane_progress": {"unit": "pending", "api": "pending"}},
+    )
+    (spec_dir / "test_plan.json").write_text(
+        json.dumps(
+            {
+                "phases": [
+                    {
+                        "subtasks": [
+                            {
+                                "id": "ac1",
+                                "lane": "unit",
+                                "files_to_create": ["tests/test_ac1.py"],
+                            }
+                        ]
+                    }
+                ]
+            }
+        )
+    )
+    art = spec_dir / "findings" / "_run_artifacts" / "test_ac1"
+    art.mkdir(parents=True)
+    (art / "junit.xml").write_text("<testsuite/>")
+
+    lanes = get_task("050-lanes")["status_json"]["lane_progress"]
+
+    assert lanes["unit"] == "executed"
+    assert lanes["api"] == "pending"  # not in the plan: stored value kept
+    # Read-side only: the stored document is untouched.
+    stored = json.loads((spec_dir / "status.json").read_text())
+    assert stored["lane_progress"]["unit"] == "pending"
+
+
 def test_get_task_404_when_missing(workspace_root: Path) -> None:
     with pytest.raises(_HTTPException) as exc:
         get_task("nonexistent")
