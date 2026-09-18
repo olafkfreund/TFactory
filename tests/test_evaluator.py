@@ -2006,3 +2006,164 @@ def test_a_test_outside_the_project_falls_back_to_its_name(tmp_path):
     outside.write_text("x")
 
     assert _staged_rel(outside, proj) == Path("x.test.js")
+
+
+# ─── #1258: resolve verdicts to plan subtasks, not by the judge's id ─────────
+
+
+def _unit_plan(spec_dir, *subtasks) -> None:
+    import json
+
+    (spec_dir / "test_plan.json").write_text(
+        json.dumps({"phases": [{"subtasks": list(subtasks)}]})
+    )
+
+
+def _unit_subtask(sid: str, path: str) -> dict:
+    return {
+        "id": sid,
+        "lane": "unit",
+        "language": "python",
+        "framework": "pytest",
+        "status": "completed",
+        "files_to_create": [path],
+    }
+
+
+def _write_run_artifact_cov(spec_dir, stem: str, xml: str = _COBERTURA) -> None:
+    """Where the host runner persists coverage (_persist_run_artifact)."""
+    d = spec_dir / "findings" / "_run_artifacts" / stem
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "coverage.xml").write_text(xml)
+
+
+def _judged(test_id: str, test_file: str) -> dict:
+    """A verdict whose id the judge paraphrased, with its fabricated zeros."""
+    return {
+        "verdicts": [
+            {
+                "test_id": test_id,
+                "test_file": test_file,
+                "signals_summary": {"coverage_delta_pct": 0, "coverage_new_lines": 0},
+            }
+        ]
+    }
+
+
+def test_lane_stamped_when_judge_test_id_differs(tmp_path):
+    """#1258: the judge's test_id is not a key. Every verdict in the reported
+    run came back lane=None although all 7 subtasks were planned as unit."""
+    from agents.evaluator import _stamp_verdict_lanes
+
+    _unit_plan(tmp_path, _unit_subtask("ac1-unit", "tests/test_ac1.py"))
+    doc = _judged("test_ac1", "tests/test_ac1.py")
+
+    stamped, unmatched = _stamp_verdict_lanes(tmp_path, doc)
+
+    assert (stamped, unmatched) == (1, 0)
+    assert doc["verdicts"][0]["lane"] == "unit"
+    assert doc["verdicts"][0]["test_id"] == "ac1-unit"
+
+
+def test_coverage_read_from_run_artifacts(tmp_path):
+    """#1258: the 13 coverage.xml files sat under _run_artifacts/<stem>/ and
+    nothing read them, so every verdict kept the judge's zero."""
+    from agents.evaluator import _stamp_verdict_coverage
+
+    _unit_plan(tmp_path, _unit_subtask("ac1-unit", "tests/test_ac1.py"))
+    _write_run_artifact_cov(tmp_path, "test_ac1")
+    doc = _judged("test_ac1", "tests/test_ac1.py")
+
+    measured, unmeasured = _stamp_verdict_coverage(tmp_path, doc)
+
+    assert (measured, unmeasured) == (1, 0)
+    assert doc["verdicts"][0]["signals_summary"]["coverage_new_lines"] == 2
+
+
+def test_unmeasured_resolved_coverage_is_none_not_zero(tmp_path):
+    from agents.evaluator import _stamp_verdict_coverage
+
+    _unit_plan(tmp_path, _unit_subtask("ac1-unit", "tests/test_ac1.py"))
+    doc = _judged("test_ac1", "tests/test_ac1.py")
+
+    _stamp_verdict_coverage(tmp_path, doc)
+
+    s = doc["verdicts"][0]["signals_summary"]
+    assert s["coverage_new_lines"] is None, s
+    assert s["coverage_delta_pct"] is None, s
+
+
+def test_missing_signals_summary_cannot_keep_a_judge_zero(tmp_path):
+    """A verdict with no signals_summary was skipped, so any value the judge
+    put elsewhere survived. The stamp must create the block."""
+    from agents.evaluator import _stamp_verdict_coverage
+
+    _unit_plan(tmp_path, _unit_subtask("ac1-unit", "tests/test_ac1.py"))
+    _write_run_artifact_cov(tmp_path, "test_ac1")
+    doc = {"verdicts": [{"test_id": "ac1-unit"}]}
+
+    _stamp_verdict_coverage(tmp_path, doc)
+
+    assert doc["verdicts"][0]["signals_summary"]["coverage_new_lines"] == 2
+
+
+def test_delta_pct_nonzero_with_baseline(tmp_path):
+    """Mutation check from the issue: a real delta must reach the verdict as a
+    non-zero number — asserting the key exists passes with it pinned at 0."""
+    from agents.evaluator import _stamp_verdict_coverage
+
+    _unit_plan(tmp_path, _unit_subtask("ac1-unit", "tests/test_ac1.py"))
+    _write_run_artifact_cov(tmp_path, "test_ac1")
+    (tmp_path / "findings" / "baseline_coverage.xml").write_text(
+        _COBERTURA.replace('line-rate="0.75"', 'line-rate="0.25"')
+    )
+    doc = _judged("test_ac1", "tests/test_ac1.py")
+
+    _stamp_verdict_coverage(tmp_path, doc)
+
+    pct = doc["verdicts"][0]["signals_summary"]["coverage_delta_pct"]
+    assert pct is not None and pct > 0, pct
+
+
+def test_ambiguous_basename_stays_unattributed(tmp_path):
+    """Two planned files share a basename: guessing one would misattribute."""
+    from agents.evaluator import _stamp_verdict_lanes
+
+    _unit_plan(
+        tmp_path,
+        _unit_subtask("a", "tests/a/test_x.py"),
+        _unit_subtask("b", "tests/b/test_x.py"),
+    )
+    doc = _judged("x", "test_x.py")
+
+    stamped, unmatched = _stamp_verdict_lanes(tmp_path, doc)
+
+    assert (stamped, unmatched) == (0, 1)
+    assert "lane" not in doc["verdicts"][0]
+    assert doc["verdicts"][0]["test_id"] == "x"
+
+
+def test_resolve_subtask_outcomes():
+    from agents.evaluator import _resolve_subtask
+
+    plan = {
+        "phases": [
+            {
+                "subtasks": [
+                    _unit_subtask("ac1", "tests/unit/test_ac1.py"),
+                    _unit_subtask("a", "tests/a/test_x.py"),
+                    _unit_subtask("b", "tests/b/test_x.py"),
+                ]
+            }
+        ]
+    }
+    by_id = _resolve_subtask(plan, {"test_id": "ac1"})
+    by_path = _resolve_subtask(
+        plan, {"test_id": "?", "test_file": "./tests/unit/test_ac1.py"}
+    )
+    by_base = _resolve_subtask(plan, {"test_id": "?", "test_file": "test_ac1.py"})
+    ambiguous = _resolve_subtask(plan, {"test_id": "?", "test_file": "test_x.py"})
+
+    assert by_id["id"] == by_path["id"] == by_base["id"] == "ac1"
+    assert ambiguous is None
+    assert _resolve_subtask(plan, {"test_id": "nope"}) is None
