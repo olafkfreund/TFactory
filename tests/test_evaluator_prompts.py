@@ -224,7 +224,8 @@ def test_block_missing_signals_degrades_gracefully() -> None:
         "test_file": "/x.py",
         "target": "x::y",
         "rationale": "AC#X",
-        # no coverage / stability / mutation / lint_promotion
+        "coverage_na_reason": "browser lane",  # the builder states the lane (#1258)
+        # no stability / mutation / lint_promotion
     }
     block = _format_evaluator_per_test_block(bundle)
     assert "coverage: N/A (browser lane)" in block
@@ -339,7 +340,8 @@ def test_per_test_block_renders_coverage_na_when_none() -> None:
         "test_file": "/ws/spec/tests/test_login.spec.ts",
         "target": "app/login.ts::loginFlow",
         "rationale": "AC#1: login page accessible",
-        "coverage_delta": None,  # explicit None = browser lane
+        "coverage_delta": None,
+        "coverage_na_reason": "browser lane",  # set by the builder (#1258)
         "stability": None,
         "mutation": None,
         "lint_promotion": None,
@@ -431,6 +433,7 @@ def test_full_prompt_assembly_with_mixed_null_and_numeric(
         "target": "app/ui.ts::loginPage",
         "rationale": "AC#1: login page loads",
         "coverage_delta": None,
+        "coverage_na_reason": "browser lane",
     }
     numeric_bundle = {
         "test_id": "unit-test",
@@ -453,3 +456,46 @@ def test_full_prompt_assembly_with_mixed_null_and_numeric(
     # Both test IDs appear
     assert "browser-test" in prompt
     assert "unit-test" in prompt
+
+
+# ── #1258: the coverage line says what was measured, or why it is N/A ──
+
+_BASE = {"test_id": "t", "test_file": "/t.py", "target": "x::y", "rationale": "AC#1"}
+
+
+def test_per_test_block_renders_covered_sut_lines_without_baseline() -> None:
+    block = _format_evaluator_per_test_block({**_BASE, "coverage_covered_lines": 7})
+    assert "coverage: covered_sut_lines=7 (no baseline" in block
+    assert "not new lines" in block
+    assert "browser lane" not in block
+
+
+def test_per_test_block_renders_the_builders_na_reason() -> None:
+    block = _format_evaluator_per_test_block(
+        {**_BASE, "coverage_na_reason": "api lane — no line coverage"}
+    )
+    assert "coverage: N/A (api lane — no line coverage)" in block
+    assert "browser lane" not in block
+
+
+def test_per_test_block_renders_not_measured_when_nothing_is_known() -> None:
+    block = _format_evaluator_per_test_block(dict(_BASE))
+    assert "coverage: not measured (no coverage report for this run)" in block
+    assert "browser lane" not in block
+
+
+def test_per_test_block_baseline_delta_still_wins(coverage_delta) -> None:
+    block = _format_evaluator_per_test_block(
+        {**_BASE, "coverage_delta": coverage_delta, "coverage_covered_lines": 7}
+    )
+    assert "+5.25" in block
+    assert "covered_sut_lines" not in block
+
+
+def test_evaluator_md_states_the_covered_lines_and_not_measured_rules() -> None:
+    from prompts_pkg.prompts import PROMPTS_DIR
+
+    md = (PROMPTS_DIR / "evaluator.md").read_text()
+    assert "covered_sut_lines" in md
+    assert "not measured" in md
+    assert "N/A (browser lane)" in md  # the N/A example stays
