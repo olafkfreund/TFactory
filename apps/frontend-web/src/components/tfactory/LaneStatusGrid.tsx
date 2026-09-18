@@ -112,6 +112,11 @@ export function laneCardState(
   _laneId: LaneId,
   status: string | null,
 ): LaneCardState {
+  // lane_progress values (#1259). statusColor knows task statuses, not these,
+  // and let both fall through to in_flight. Kept here, not in the shared
+  // statusColor, which the task list uses for task statuses.
+  if (status === 'executed') return 'success';
+  if (status === 'error') return 'failure';
   const color = statusColor(status);
   if (color === 'green') return 'success';
   if (color === 'red') return 'failure';

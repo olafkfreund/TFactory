@@ -104,3 +104,41 @@ Revert the commit. The route overlay and the frontend mapping are read-side
 only; `status.json` keeps the same keys and value vocabulary (plus `running`,
 which old frontends already render as in-flight), so no stored data needs
 migrating.
+
+## Deviations (recorded during implementation, same commit as the code)
+
+- **Two rerun guards added** — required by the approved constraint "must not
+  repaint … a dead run as `executed`", which the rules above did not meet: a
+  rerun (`handback/rerun.py`) resets `status` and one lane but leaves
+  `findings/` on disk, so artifact derivation alone would report the previous
+  run's lanes as `executed` before anything ran.
+  1. *Status guard:* while `status` is pre-execution (`pending`, `queued`,
+     `planning`, `planned*`, `generating`, `generated*`, `replan_needed`,
+     `planner_failed`, `gen_functional_failed`), disk evidence is ignored and
+     planned lanes read `pending`. Covers the window before the Planner
+     rewrites the plan.
+  2. *Staleness guard:* verdicts and artifacts count only when their mtime is
+     ≥ `test_plan.json`'s. The Planner/Gen-Functional write that file every
+     run and the Evaluator only reads it (`evaluator.py:2216`), so older
+     evidence belongs to an earlier run.
+  Missing status/plan keeps today's behaviour (the 5 existing
+  `_derive_lane_progress` tests have neither and pass unchanged). Each guard
+  has a dedicated test, and each was mutation-checked to fail it.
+- **Planned lanes are fully derived** (evidence → `executed`/`error`, else
+  `running` while `evaluating`, else `pending`); lanes not in the plan keep
+  the stored value. Verdict lanes also count when there is no plan (existing
+  behaviour).
+- **Evaluator end-of-run write maps `running` → `pending`:** `status.json`
+  still reads `evaluating` at that call, so without it a lane with no evidence
+  would be *stored* as `running` next to `status: evaluated` for every
+  non-portal reader (MCP `task_status`, completion envelope).
+- **Import direction:** `lane_progress` imports `_resolve_subtask`/`_norm_rel`
+  from `agents.evaluator` at module level; the evaluator imports
+  `lane_progress` lazily inside `_derive_lane_progress` (cycle). The route
+  imports it lazily too, like its other `agents.*` imports (~0.14 s once).
+- **Route:** `derive_lane_progress` already merges the stored value, so the
+  overlay is `status_doc["lane_progress"] = live` when not None, equivalent to
+  step 4's `{**stored, **derived}`.
+- Extra tests beyond step 1's list: `test_rerun_before_planner_ignores_old_artifacts`,
+  `test_artifacts_older_than_the_plan_are_stale`,
+  `test_mutation_probe_marks_the_mutation_lane`.

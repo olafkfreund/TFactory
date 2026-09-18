@@ -37,6 +37,11 @@ describe('laneCardState', () => {
     ['triaged_empty', 'warning'],
     ['evaluated_empty', 'warning'],
     ['pending', 'idle'],
+    // lane_progress values (#1259) — executed/error used to fall through to
+    // in_flight, so a finished lane and a broken one both looked "running".
+    ['executed', 'success'],
+    ['error', 'failure'],
+    ['running', 'in_flight'],
   ])('maps %s → %s', (status, expected) => {
     expect(laneCardState('unit', status)).toBe(expected);
   });
