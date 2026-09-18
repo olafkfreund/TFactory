@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1257
 intent: intent/2026-09-18-1257-codeql-alembic-false-positives.md
 ---
