@@ -2,6 +2,54 @@
 
 ## Unreleased
 
+## 0.9.26 — measured facts and model opinion are told apart, and packed verify workspaces come home (2026-09-18)
+
+- **Unit-lane coverage reaches the verdict (#1258, PR #1296).** Verdicts were
+  matched to plan subtasks only by the judge's own `test_id`, which nothing
+  validates, and coverage was read only from `findings/runs/<id>/` while the
+  host runner persists it to `findings/_run_artifacts/<stem>/`. A paraphrased
+  id left every verdict `lane=None` with the judge's fabricated `0`. Verdicts
+  now resolve by id, then test file, then basename only when unique; coverage
+  falls back to the run artifacts; a verdict without `signals_summary` can no
+  longer keep a judge zero.
+- **`lane_progress` reflects lanes that have run (#1259, PR #1297).** It read
+  `pending` for every lane while a run had executed tests on disk. It is now
+  derived from the plan and run artifacts, recomputed on every portal read, and
+  guarded against a rerun's leftover files. The portal lane grid also stops
+  rendering `executed` and `error` both as "in flight".
+- **Model-written rationale is labelled apart from measured facts (#1195, PR
+  #1298).** The handback printed every verdict reason as "Observed:" and
+  AIFactory's QA Fixer acts on it. `reasons` mixes the judge LLM's prose with
+  lines five deterministic writers add; provenance is now recorded where each
+  line is written (`reasons_source`), rendered as **Measured** vs
+  **LLM-authored, not verified** in the handback, triage report and PR
+  comment, and enforced by a test that fails on any bypassing writer. The
+  handback JSON change is additive.
+- **Bad imports in generated tests are repaired without a Planner replan
+  (#1174, PR #1300).** Imports are judged from where the test runs (a correct
+  relative import was being reported), rewritten when exactly one real module
+  matches, otherwise retried once with feedback
+  (`TFACTORY_GEN_IMPORT_RETRIES`, default 1), then recorded — never routed to
+  the replan loop #1194 reverted for its cost. The verdict names an
+  unresolvable import as the cause instead of a generic flaky.
+- **Packed verify workspaces are restored on the control plane; new
+  `TFACTORY_PACK_WORKSPACE` toggle, default off (#1160, PR #1299).** Nothing
+  read a packed Job's pushed-back workspace, so every PVC reader would have
+  shown the spec at its pre-dispatch state. A restore sweep now brings back the
+  spec subtree (never the worktree or the shared base clone) for finished
+  Jobs, trusting an archive only when the Job's own push-back marker names it.
+  Nothing changes until the toggle is set.
+- **Alembic migrations no longer raise permanent CodeQL false positives
+  (#1257, PR #1295).** The four identifiers Alembic reads through its loader
+  are declared in `__all__` in the template and every migration; 40 open
+  `py/unused-global-variable` alerts closed as fixed, with no CodeQL exclusion.
+- **The runtime image takes Node from the official image, not apk (#1301,
+  Factory#1710).** apk's `nodejs` required exactly the image's `GLIBC_2.44`
+  with zero headroom, and the Chainguard base pins glibc exactly, so
+  `apk upgrade` could not follow (#1277). Node now comes from the official
+  image (v26, matching `.nvmrc`; its highest `GLIBC_` need is 2.28), with a
+  build-time drift check against `.nvmrc`. Image size +3.4%.
+
 - **Starting a task with auto-continue off no longer crashes it, after the agent
   has already spawned (#1104).** The human-review gate -- `spec_dir`,
   `require_review`, and the `--force` decision -- sat one indent level too deep,
