@@ -22,11 +22,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from agents.confidence import reason_lines
+
 __all__ = [
     "CorrectionRequest",
     "Failure",
     "build_correction_request",
 ]
+
+# Explains ``failing_tests[].reasons[].source`` inside the payload itself.
+_REASON_PROVENANCE = (
+    "failing_tests[].reasons[].source: 'model' = written by the Evaluator's "
+    "judge LLM (an interpretation, not verified); 'system' = computed by "
+    "TFactory from the run (#1195)"
+)
 
 # The verdict label(s) that signal a feature problem worth handing back.
 _FAILING_VERDICTS = frozenset({"reject"})
@@ -42,6 +51,9 @@ class Failure:
     verdict: str
     reason: str
     acceptance_criterion: str | None = None
+    # (text, "model" | "system") per reason line (#1195). ``reason`` above is
+    # kept byte-identical for AIFactory's current receiver; this is additive.
+    reasons: tuple[tuple[str, str], ...] = ()
 
     def to_dict(self) -> dict:
         return {
@@ -50,6 +62,7 @@ class Failure:
             "lane": self.lane,
             "verdict": self.verdict,
             "reason": self.reason,
+            "reasons": [{"text": t, "source": s} for t, s in self.reasons],
             "acceptance_criterion": self.acceptance_criterion,
         }
 
@@ -87,6 +100,7 @@ class CorrectionRequest:
             "aifactory": dict(self.aifactory or {}),
             "source": self.source_kind,
             "failing_tests": [f.to_dict() for f in self.failures],
+            "reason_provenance": _REASON_PROVENANCE,
             "has_visual_plan": self.visual_plan is not None,
         }
 
@@ -165,6 +179,7 @@ def build_correction_request(
                 lane=entry.get("lane") or entry.get("modality"),
                 verdict=str(entry.get("verdict")),
                 reason=_join_reasons(entry),
+                reasons=tuple(reason_lines(entry)),
                 acceptance_criterion=entry.get("acceptance_criterion")
                 or entry.get("ac"),
             )

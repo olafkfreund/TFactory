@@ -103,3 +103,25 @@ PATH=<ratchet-venv>/bin:$PATH python scripts/ratchet_lint.py --base origin/dev -
 Revert the commit. `reasons` is untouched, `reasons_source` and the JSON
 `reasons[]` are additive, so older readers and AIFactory's receiver are
 unaffected either way; the only visible change reverted is the Markdown labels.
+
+## Deviations (recorded during implementation, same commit as the code)
+
+- **`add_system_reason` builds a new list** instead of appending in place. The
+  #649 vote merge shallow-copies a judge's entry (`entry = dict(candidate)`),
+  so an in-place append would have rewritten that judge's own record and its
+  `dissent` copy. Today's code already built a new list there; the helper keeps
+  that guarantee for every caller. Test:
+  `test_add_system_reason_never_mutates_a_shared_list`. The planned
+  `_reason_list` helper was dropped as a result.
+- **Enforcement scan refinements:** it skips dict literals under a `"dissent"`
+  key (the vote block's verbatim copy of each dissenting judge's own reasons —
+  model text, never rendered as the verdict's reasons), and the allow-list is
+  keyed by path under `agents/` (not bare file name) and includes
+  `handback/request.py::to_dict`, which serialises the provenance.
+- **Render fallbacks:** a verdict with no `reasons` list renders its
+  `reason` fallback string (the judge's `reason` / `semantic_relevance`) as
+  LLM-authored; a verdict with nothing recorded renders a neutral
+  `- **Reason:** (no reason recorded)`. Two tests added.
+- The golden `tests/fixtures/triage_report/expected.md` diff is exactly the 4
+  `reason` lines → `model (LLM-authored)` (its verdicts predate
+  `reasons_source`, so they read as model by rule).
