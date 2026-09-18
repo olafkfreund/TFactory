@@ -19,6 +19,7 @@ from agents.nix_env import (
     run_pytest_lane_via_nix,
 )
 from tools.runners.kube_sandbox import JobRunResult
+from tools.runners.nix_provisioner import generate_flake
 
 _UNIT_ENV = {
     "language": "python",
@@ -1165,3 +1166,50 @@ def test_stale_repo_specs_are_still_excluded(tmp_path):
     staged = {p.name for p in (project / _E2E_STAGE).rglob("*.spec.ts")}
 
     assert staged == {"tictactoe-playable.spec.ts"}
+
+
+# ── Kotlin / Gradle lane (Factory#1712) ─────────────────────────────────────
+
+
+def test_kotlin_environment_synthesizes_language_only(tmp_path):
+    from agents.nix_env import kotlin_environment
+
+    spec = tmp_path / "specs" / "k1"
+    spec.mkdir(parents=True)
+    env = kotlin_environment(spec)
+    assert env["language"] == "kotlin"
+    # No package literals: the descriptor supplies the toolchain via generate_flake.
+    assert env["system_packages"] == []
+    assert env["provisioning"]["method"] == "nix"
+
+
+def test_kotlin_flake_takes_the_toolchain_from_the_vendored_descriptor(tmp_path):
+    from agents.nix_env import kotlin_environment
+    from tools.runners.language_descriptors import nix_attrs_for_language
+
+    spec = tmp_path / "specs" / "k1"
+    spec.mkdir(parents=True)
+    flake = generate_flake(kotlin_environment(spec))
+    attrs = nix_attrs_for_language("kotlin")
+    assert attrs, "vendored kotlin descriptor must declare nix packages"
+    for attr in attrs:
+        assert f"pkgs.{attr}" in flake
+
+
+def test_kotlin_flake_follows_the_descriptor_not_a_literal(tmp_path, monkeypatch):
+    """Swap the descriptor: the flake must change with it (no hard-coded list)."""
+    from agents.nix_env import kotlin_environment
+    from tools.runners import nix_provisioner
+
+    class _FakeDescriptor:
+        nix_packages = ("zulu17", "gradle_7")
+        nix_shell_env: dict[str, str] = {}
+
+    monkeypatch.setattr(
+        nix_provisioner, "_descriptor_for_language", lambda _lang: _FakeDescriptor()
+    )
+    spec = tmp_path / "specs" / "k1"
+    spec.mkdir(parents=True)
+    flake = generate_flake(kotlin_environment(spec))
+    assert "pkgs.zulu17" in flake
+    assert "pkgs.jdk21" not in flake

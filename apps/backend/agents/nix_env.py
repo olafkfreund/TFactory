@@ -813,6 +813,32 @@ def go_environment(spec_dir: Path) -> dict:
     }
 
 
+def kotlin_environment(spec_dir: Path) -> dict:
+    """The Kotlin nix environment for the Gradle verify lane (Factory#1712).
+
+    Prefer a contract ``environment`` that declares a Kotlin nix env; otherwise
+    synthesize one naming only the language. The toolchain is NOT listed here:
+    ``generate_flake`` resolves descriptor-declared languages first and
+    prepends the vendored ``languages/kotlin.yaml`` ``nix.packages`` (kotlin,
+    gradle, jdk21), so the descriptor stays the single source and this cannot
+    drift from it. ``network`` mirrors the descriptor's ``restricted``: Gradle
+    fetches plugins and dependencies at run time. It is metadata for the nix
+    Job (measured on #1712: the build-Job policy admits the Maven and Gradle
+    hosts).
+    """
+    env = environment_from_contract(spec_dir)
+    if is_nix_environment(env) and (env.get("language") or "").lower() == "kotlin":
+        return env  # type: ignore[return-value]  # narrowed by is_nix_environment
+    return {
+        "language": "kotlin",
+        "toolchain": {},
+        "system_packages": [],
+        "verify_commands": ["gradle test --no-daemon --console=plain"],
+        "provisioning": {"method": "nix", "generated": True},
+        "network": "restricted",
+    }
+
+
 def _go_module_dir(project_dir: Path, hint: Path | None) -> Path:
     """Resolve the Go module root (the dir holding ``go.mod``) inside the worktree.
 
