@@ -390,14 +390,16 @@ class GitCredential(Base):
         String(36), primary_key=True, default=_generate_uuid
     )
     org_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("organizations.id"), nullable=False
+        String(36), ForeignKey("organizations.id"), nullable=False, index=True
     )
     # Human-readable label, e.g. "github-deploy-bot" or "gitlab-readonly".
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     # Credential kind. V1: ``pat`` only. ``deploy_key`` and ``github_app``
     # land in later follow-ups; the enum-by-convention keeps the column
     # forward-compatible without a migration.
-    kind: Mapped[str] = mapped_column(String(50), nullable=False, default="pat")
+    kind: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="pat", server_default="pat"
+    )
     # Informational host (no enforcement) — surfaces in the UI so users
     # can tell which credential applies to which project.
     host: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -445,10 +447,12 @@ class TestTargetCredential(Base):
         String(36), primary_key=True, default=_generate_uuid
     )
     org_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("organizations.id"), nullable=False
+        String(36), ForeignKey("organizations.id"), nullable=False, index=True
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    kind: Mapped[str] = mapped_column(String(50), nullable=False, default="form")
+    kind: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="form", server_default="form"
+    )
     # Plaintext username/identifier (not a secret on its own).
     username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # The secret material — password / API token / TOTP seed. Encrypted at rest.
@@ -642,6 +646,9 @@ class KmsDataKey(Base):
     """
 
     __tablename__ = "kms_data_keys"
+    # The migration creates a UNIQUE constraint plus a separate non-unique
+    # index; ``unique=True, index=True`` would render one unique index (#1314).
+    __table_args__ = (Index("ix_kms_data_keys_org_id", "org_id"),)
 
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=_generate_uuid
@@ -651,16 +658,14 @@ class KmsDataKey(Base):
         ForeignKey("organizations.id", ondelete="CASCADE"),
         nullable=False,
         unique=True,
-        index=True,
     )
     wrapped_key: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    # fernet backend: literal ``fernet:default``; aws_kms: the KMS key ARN.
     kms_key_id: Mapped[str] = mapped_column(
         String(255),
         nullable=False,
         comment="Identifier of the KMS root key that wrapped this data key. "
-        "For fernet backend: literal `fernet:default`. For aws_kms: "
-        "the KMS ARN. Lets rotation runbooks know which backend "
-        "wrapped each row.",
+        "Lets rotation runbooks know which backend wrapped each row.",
     )
     created_at: Mapped[datetime] = mapped_column(
         UTCDateTime, nullable=False, server_default=func.now()
@@ -669,9 +674,8 @@ class KmsDataKey(Base):
         UTCDateTime,
         nullable=False,
         server_default=func.now(),
-        comment="Updated on every re-wrap (root key rotation). The "
-        "DataKeyManager polls this column to invalidate its "
-        "in-process LRU cache.",
+        comment="Updated on every re-wrap (root key rotation). "
+        "DataKeyManager polls this to invalidate its LRU cache.",
     )
 
     def __repr__(self) -> str:
