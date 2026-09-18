@@ -43,6 +43,12 @@
   (#1257, PR #1295).** The four identifiers Alembic reads through its loader
   are declared in `__all__` in the template and every migration; 40 open
   `py/unused-global-variable` alerts closed as fixed, with no CodeQL exclusion.
+- **The runtime image takes Node from the official image, not apk (#1301,
+  Factory#1710).** apk's `nodejs` required exactly the image's `GLIBC_2.44`
+  with zero headroom, and the Chainguard base pins glibc exactly, so
+  `apk upgrade` could not follow (#1277). Node now comes from the official
+  image (v26, matching `.nvmrc`; its highest `GLIBC_` need is 2.28), with a
+  build-time drift check against `.nvmrc`. Image size +3.4%.
 
 - **Starting a task with auto-continue off no longer crashes it, after the agent
   has already spawned (#1104).** The human-review gate -- `spec_dir`,
