@@ -115,3 +115,36 @@ def test_kotlin_stability_is_computed_once_for_the_build(
     assert len(bundles) == 3
     # One module-wide stability pass (3 reruns), not 3 per subtask.
     assert len(runs) == 3
+
+
+def test_kotlin_never_goes_through_the_pytest_nix_batch(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Factory#1712 review: in Nix mode the batched path runs pytest. A Kotlin
+    subtask must use its own Gradle runner, never pytest."""
+    spec_dir = tmp_path / "spec"
+    project_dir = tmp_path / "project"
+    rel = "src/test/kotlin/CalcTest.kt"
+    (spec_dir / rel).parent.mkdir(parents=True)
+    (spec_dir / rel).write_text("class CalcTest\n")
+
+    monkeypatch.setattr("agents.evaluator._nix_verify_mode", lambda *a, **k: True)
+
+    def _no_pytest(*a, **k):
+        raise AssertionError("Kotlin was sent to the pytest Nix batch")
+
+    monkeypatch.setattr("agents.evaluator.run_pytest_lane_via_nix", _no_pytest)
+    gradle_runs: list[int] = []
+
+    def _fake(spec, proj, *, hint=None, **k):
+        gradle_runs.append(1)
+        return DockerRunResult(returncode=0, stdout="ok", argv=["gradle"])
+
+    monkeypatch.setattr("agents.nix_env.run_gradle_lane_via_nix", _fake)
+    st = _kotlin_subtask()
+    st["files_to_create"] = [rel]
+    kotlin = _completed_kotlin_subtasks(_plan(st))
+    bundles = _build_all_bundles(spec_dir, project_dir, [], [], [], [], [], kotlin)
+    assert len(bundles) == 1
+    assert gradle_runs, "the Gradle lane must have run"
+    assert bundles[0].stability is not None

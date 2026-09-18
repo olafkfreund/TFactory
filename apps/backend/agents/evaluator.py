@@ -1398,14 +1398,21 @@ def _stability_for_subtask(
     test_file = spec_dir / subtask["files_to_create"][0]
     if not test_file.exists():
         return None
+    framework = str(subtask.get("framework") or "").strip().lower()
+    language = str(subtask.get("language") or "").strip().lower()
+    # The batched Nix path runs pytest, or Jest for framework=jest, and nothing
+    # else. A Go or Kotlin subtask must use its own runner_fn (gotest / gradle
+    # lane); batching it would grade a non-Python test file with pytest
+    # (Factory#1712 review).
+    batchable = framework == "jest" or language in ("", "python")
     try:
-        if _nix_verify_mode(spec_dir, project_dir):
+        if batchable and _nix_verify_mode(spec_dir, project_dir):
             batched = _nix_batched_stability(
                 spec_dir,
                 project_dir,
                 test_file,
                 str(subtask.get("lane") or "unit"),
-                framework=str(subtask.get("framework") or "") or None,
+                framework=framework or None,
             )
             if batched is not None:
                 return batched

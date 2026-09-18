@@ -23,6 +23,7 @@ import itertools
 import json
 import logging
 import os
+import re
 import shlex
 import shutil
 import tempfile
@@ -1007,19 +1008,61 @@ def gradle_job_script(run_dir: str, stage_dir: str, extra_env: dict[str, str]) -
     result carries one JUnit file, like the Go and pytest lanes.
     """
     exports = "".join(f"export {k}={_shquote(str(v))}\n" for k, v in extra_env.items())
-    src, home = _GRADLE_BUILD_DIR, _GRADLE_USER_HOME
+    src, home = _shquote(_GRADLE_BUILD_DIR), _shquote(_GRADLE_USER_HOME)
+    run_q, junit_q = _shquote(run_dir), _shquote(f"{stage_dir}/junit.xml")
     return (
         "#!/usr/bin/env bash\nset +e\n"
         + exports
         + f"export GRADLE_USER_HOME={home}\n"
-        + f"rm -rf {src} && cp -r {run_dir} {src} && cd {src}\n"
+        + f"rm -rf {src} && cp -r {run_q} {src} && cd {src}\n"
         + "gradle test --no-daemon --console=plain 2>&1\n"
         + "echo __GRADLE_EXIT=$?\n"
         + "{ echo '<?xml version=\"1.0\" encoding=\"UTF-8\"?>'; echo '<testsuites>'; "
         + "find . -path '*/build/test-results/*' -name 'TEST-*.xml' | sort | "
         + "while read -r f; do sed '/^<?xml/d' \"$f\"; done; "
-        + f"echo '</testsuites>'; }} > {stage_dir}/junit.xml\n"
+        + f"echo '</testsuites>'; }} > {junit_q}\n"
     )
+
+
+_JUNIT_SUITE_RE = re.compile(r"<testsuite\b[^>]*>")
+_JUNIT_ATTR_RE = re.compile(r'\b(tests|failures|errors)="(\d+)"')
+
+
+def _junit_counts(text: str) -> tuple[int, int] | None:
+    """(tests, failures + errors) summed over every ``<testsuite>``; None if none.
+
+    Read with regexes, not an XML parser: the file is the lane's own merged
+    output, and the whole-repo security gate rejects xml.etree (S314).
+    """
+    suites = _JUNIT_SUITE_RE.findall(text)
+    if not suites:
+        return None
+    tests = bad = 0
+    for tag in suites:
+        attrs = {k: int(v) for k, v in _JUNIT_ATTR_RE.findall(tag)}
+        tests += attrs.get("tests", 0)
+        bad += attrs.get("failures", 0) + attrs.get("errors", 0)
+    return tests, bad
+
+
+def _gradle_evidence_failure(junit: Path) -> str | None:
+    """Why a zero-exit Gradle run is NOT a pass, or None when the evidence holds.
+
+    Gradle exits 0 when no tests were discovered, and with
+    ``ignoreFailures=true`` even when tests failed. A green lane must show real
+    executed tests and no failures in the report (Factory#1712 review).
+    """
+    if not junit.is_file():
+        return "no JUnit report was produced"
+    counts = _junit_counts(junit.read_text(encoding="utf-8", errors="replace"))
+    if counts is None:
+        return "the JUnit report has no <testsuite>"
+    tests, bad = counts
+    if tests == 0:
+        return "gradle ran zero tests"
+    if bad:
+        return f"the JUnit report records {bad} failure(s)/error(s)"
+    return None
 
 
 def run_gradle_lane_via_nix(
@@ -1075,10 +1118,16 @@ def run_gradle_lane_via_nix(
         (pd / _JOB_SCRIPT).unlink(missing_ok=True)
 
     junit = stage / "junit.xml"
+    code = _parse_exit_marker(res.stdout, "__GRADLE_EXIT=")
+    stderr = ""
+    if code == 0:
+        why = _gradle_evidence_failure(junit)
+        if why is not None:
+            code, stderr = 1, f"gradle exited 0 but {why}"
     return DockerRunResult(
-        returncode=_parse_exit_marker(res.stdout, "__GRADLE_EXIT="),
+        returncode=code,
         stdout=res.stdout or "",
-        stderr="",
+        stderr=stderr,
         junit_xml_path=junit if junit.is_file() else None,
         coverage_xml_path=None,
         argv=["nix", "develop", f"path:{mount}#default", "--", "gradle", "test"],

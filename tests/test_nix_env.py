@@ -1248,7 +1248,10 @@ def test_run_gradle_lane_via_nix_result_shape(tmp_path, monkeypatch):
             captured["timeout"] = timeout
             captured["script"] = (Path(workdir) / "_tf_nix_job.sh").read_text()
             stage = Path(workdir) / ".tf_gradle"
-            (stage / "junit.xml").write_text("<testsuites/>")
+            (stage / "junit.xml").write_text(
+                '<testsuites><testsuite name="CalcTest" tests="3" failures="0" '
+                'errors="0"/></testsuites>'
+            )
             return JobRunResult(ok=True, exit_code=0, output="BUILD\n__GRADLE_EXIT=0\n")
 
     monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: _FakeSandbox())
@@ -1262,8 +1265,8 @@ def test_run_gradle_lane_via_nix_result_shape(tmp_path, monkeypatch):
     assert "pkgs.gradle" in flake and "pkgs.jdk21" in flake, flake
     script = captured["script"]
     # Built from a writable copy: /work is read-only to the Job's uid.
-    assert "cp -r /work/lanes/kotlin-core /tmp/tf_gradle_src" in script, script
-    assert "export GRADLE_USER_HOME=/tmp/tf_gradle_home" in script, script
+    assert "cp -r '/work/lanes/kotlin-core' '/tmp/tf_gradle_src'" in script, script
+    assert "export GRADLE_USER_HOME='/tmp/tf_gradle_home'" in script, script
     assert "gradle test --no-daemon --console=plain" in script, script
     assert "echo __GRADLE_EXIT=$?" in script, script
     assert "export CI='1'" in script, script
@@ -1344,3 +1347,76 @@ def test_gradle_job_script_runs_and_merges_junit(tmp_path, monkeypatch):
     assert merged.count("<?xml") == 1, merged
     assert body.startswith("<testsuites>") and body.endswith("</testsuites>"), merged
     assert re.findall(r'<testsuite name="([^"]+)"', merged) == ["A", "B"], merged
+
+
+def _gradle_run_with_report(tmp_path, monkeypatch, report: str | None, marker: int):
+    from agents.nix_env import run_gradle_lane_via_nix
+
+    spec, project, _ = _kotlin_project(tmp_path)
+
+    class _FakeSandbox:
+        def run(self, commands, *, workdir=None, timeout=600):
+            if report is not None:
+                (Path(workdir) / ".tf_gradle" / "junit.xml").write_text(report)
+            return JobRunResult(
+                ok=True, exit_code=0, output=f"__GRADLE_EXIT={marker}\n"
+            )
+
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: _FakeSandbox())
+    return run_gradle_lane_via_nix(spec, project)
+
+
+def test_gradle_exit_zero_with_zero_tests_is_a_failure(tmp_path, monkeypatch):
+    """Gradle exits 0 when it discovers no tests: that is not evidence."""
+    res = _gradle_run_with_report(
+        tmp_path, monkeypatch, '<testsuites><testsuite tests="0"/></testsuites>', 0
+    )
+    assert res is not None and res.returncode == 1
+    assert "zero tests" in res.stderr
+
+
+def test_gradle_exit_zero_with_recorded_failures_is_a_failure(tmp_path, monkeypatch):
+    """ignoreFailures=true: exit 0 while the report records failures."""
+    report = (
+        '<testsuites><testsuite tests="3" failures="1" errors="0"/>'
+        '<testsuite tests="2" failures="0" errors="1"/></testsuites>'
+    )
+    res = _gradle_run_with_report(tmp_path, monkeypatch, report, 0)
+    assert res is not None and res.returncode == 1
+    assert "2 failure(s)/error(s)" in res.stderr
+
+
+def test_gradle_exit_zero_without_a_report_is_a_failure(tmp_path, monkeypatch):
+    res = _gradle_run_with_report(tmp_path, monkeypatch, None, 0)
+    assert res is not None and res.returncode == 1
+    assert "no JUnit report" in res.stderr
+
+
+def test_gradle_job_script_quotes_a_path_with_a_space(tmp_path, monkeypatch):
+    """A module path with a space must stay ONE argument to cp/cd."""
+    import os
+    import subprocess
+
+    from agents import nix_env
+
+    monkeypatch.setattr(nix_env, "_GRADLE_BUILD_DIR", str(tmp_path / "build src"))
+    monkeypatch.setattr(nix_env, "_GRADLE_USER_HOME", str(tmp_path / "g h"))
+    module = tmp_path / "mobile app"
+    module.mkdir()
+    (module / "marker.txt").write_text("x")
+    stage = tmp_path / "st age"
+    stage.mkdir()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    gradle = fake_bin / "gradle"
+    gradle.write_text("#!/usr/bin/env bash\ntest -f marker.txt\n")
+    gradle.chmod(0o755)
+    script = tmp_path / "job.sh"
+    script.write_text(nix_env.gradle_job_script(str(module), str(stage), {}))
+    env = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"}
+    out = subprocess.run(
+        ["bash", str(script)], capture_output=True, text=True, env=env, check=False
+    ).stdout
+    # gradle ran inside the copied module (marker found) and the report landed.
+    assert nix_env._parse_exit_marker(out, "__GRADLE_EXIT=") == 0, out
+    assert (stage / "junit.xml").is_file()
