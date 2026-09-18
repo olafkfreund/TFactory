@@ -292,6 +292,51 @@ async def test_no_completed_subtasks_is_evaluated_empty(
     assert status["verdicts_count"] == 0
 
 
+@pytest.mark.asyncio
+async def test_kotlin_only_plan_is_evaluated_not_empty(
+    spec_dir: Path,
+    project_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Factory#1712: a Kotlin subtask matched no lane filter, so a Kotlin-only
+    plan early-exited as evaluated_empty. It must now run the Gradle lane and be
+    evaluated. Drives the REAL run_evaluator call site, not just the helper."""
+    plan = _make_test_plan(1)
+    st = plan["phases"][0]["subtasks"][0]
+    st.update(
+        {
+            "id": "st-kt",
+            "lane": "unit",
+            "language": "kotlin",
+            "target": "Calc.add",
+            "files_to_create": ["src/test/kotlin/CalcTest.kt"],
+        }
+    )
+    (spec_dir / "test_plan.json").write_text(json.dumps(plan))
+    _write_test_file(spec_dir, "src/test/kotlin/CalcTest.kt")
+
+    from tools.runners.docker_runner import DockerRunResult
+
+    gradle_runs = {"n": 0}
+
+    def _fake_gradle(spec, proj, *, hint=None, **k):
+        gradle_runs["n"] += 1
+        return DockerRunResult(returncode=0, stdout="BUILD SUCCESSFUL", argv=["gradle"])
+
+    monkeypatch.setattr("agents.nix_env.run_gradle_lane_via_nix", _fake_gradle)
+
+    def _write(spec_dir_arg, _prompt):
+        _good_verdicts(["st-kt"], spec_dir_arg / "findings" / "verdicts.json")
+
+    _install_sdk_mocks(monkeypatch, _write)
+    ok = await run_evaluator(spec_dir, project_dir)
+    assert ok is True
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["status"] == "evaluated", status
+    assert status["tests_evaluated"] == 1
+    assert gradle_runs["n"] > 0  # the Gradle lane actually ran
+
+
 # ── Plan loading failures ──────────────────────────────────────────────
 
 

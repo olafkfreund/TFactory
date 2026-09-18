@@ -1398,14 +1398,21 @@ def _stability_for_subtask(
     test_file = spec_dir / subtask["files_to_create"][0]
     if not test_file.exists():
         return None
+    framework = str(subtask.get("framework") or "").strip().lower()
+    language = str(subtask.get("language") or "").strip().lower()
+    # The batched Nix path runs pytest, or Jest for framework=jest, and nothing
+    # else. A Go or Kotlin subtask must use its own runner_fn (gotest / gradle
+    # lane); batching it would grade a non-Python test file with pytest
+    # (Factory#1712 review).
+    batchable = framework == "jest" or language in ("", "python")
     try:
-        if _nix_verify_mode(spec_dir, project_dir):
+        if batchable and _nix_verify_mode(spec_dir, project_dir):
             batched = _nix_batched_stability(
                 spec_dir,
                 project_dir,
                 test_file,
                 str(subtask.get("lane") or "unit"),
-                framework=str(subtask.get("framework") or "") or None,
+                framework=framework or None,
             )
             if batched is not None:
                 return batched
@@ -2174,6 +2181,55 @@ def _resolve_go_runner_fn(spec_dir: Path, project_dir: Path):
     return _run
 
 
+def _completed_kotlin_subtasks(plan: dict[str, Any]) -> list[dict[str, Any]]:
+    """Completed unit-lane Kotlin subtasks (Factory#1712).
+
+    The pytest filter admits only Python and the Go/Jest filters their own
+    languages, so without this lane a Kotlin subtask matched nothing: it was
+    silently dropped, and a Kotlin-only plan fell through to evaluated_empty.
+    """
+    return _filter_completed_subtasks(
+        plan,
+        lambda st: (
+            st.get("lane") in ("unit", "functional") and st.get("language") == "kotlin"
+        ),
+    )
+
+
+def _resolve_kotlin_runner_fn(
+    spec_dir: Path, _project_dir: Path
+) -> Callable[[Path, Path, int], DockerRunResult]:
+    """runner_fn(test_file, project_dir, seed) -> DockerRunResult running the
+    Gradle build's tests in the per-task Nix dev shell (Factory#1712).
+
+    The twin of :func:`_resolve_go_runner_fn`: ``test_file`` is only the
+    build-root hint (``gradle test`` covers the whole build), and an
+    unconfigured sandbox returns a failing result so the gap is visible in the
+    stability signal instead of silently passing.
+    """
+    # Lazy on purpose: tests patch agents.nix_env.run_gradle_lane_via_nix on the
+    # module, which a top-level `from` import would bind past.
+    from agents.nix_env import run_gradle_lane_via_nix  # noqa: PLC0415
+    from tools.runners.docker_runner import DockerRunResult  # noqa: PLC0415
+
+    def _run(test_file: Path, project_dir_arg: Path, _seed: int) -> DockerRunResult:
+        try:
+            hint = Path(test_file).relative_to(spec_dir)
+        except ValueError:
+            hint = Path(test_file)
+        res = run_gradle_lane_via_nix(spec_dir, Path(project_dir_arg), hint=hint)
+        if res is not None:
+            return res
+        return DockerRunResult(
+            returncode=1,
+            stdout="",
+            stderr="kotlin nix lane unavailable: TFACTORY_NIX_RUNNER_IMAGE unset",
+            argv=["nix", "develop", "--", "gradle", "test"],
+        )
+
+    return _run
+
+
 def _build_go_signal_bundle(
     spec_dir: Path, project_dir: Path, subtask: dict, runner_fn, stability=None
 ) -> EvaluatorSignals:
@@ -2462,7 +2518,9 @@ def _persist_run_output(spec_dir: Path, bundles: list[Any]) -> None:
     out.write_text(json.dumps({"tests": entries}, indent=2), encoding="utf-8")
 
 
-def _build_all_bundles(spec_dir, project_dir, unit, browser, api, jest, go) -> list:
+def _build_all_bundles(  # noqa: PLR0913 - one list per lane
+    spec_dir, project_dir, unit, browser, api, jest, go, kotlin=()
+) -> list:
     """Compute the per-test signal bundle for every completed subtask.
 
     runner_fn is the mockable seam — tests pass canned results so Docker isn't
@@ -2537,6 +2595,27 @@ def _build_all_bundles(spec_dir, project_dir, unit, browser, api, jest, go) -> l
                 spec_dir, project_dir, st, go_runner, stability=shared_go_stability
             )
             for st in go
+        ]
+    if kotlin:
+        # Same shape as Go (Factory#1712): stage the generated tests at their
+        # repo paths, then `gradle test` covers the whole build, so stability is
+        # module-wide and computed once. _stage_go_test and
+        # _build_go_signal_bundle have nothing Go-specific but their names.
+        for st in kotlin:
+            _stage_go_test(spec_dir, project_dir, st)
+        kotlin_runner = _resolve_kotlin_runner_fn(spec_dir, project_dir)
+        shared_kotlin_stability = _stability_for_subtask(
+            spec_dir, project_dir, kotlin[0], kotlin_runner
+        )
+        bundles += [
+            _build_go_signal_bundle(
+                spec_dir,
+                project_dir,
+                st,
+                kotlin_runner,
+                stability=shared_kotlin_stability,
+            )
+            for st in kotlin
         ]
     return bundles
 
@@ -2996,12 +3075,14 @@ async def run_evaluator(
         api_completed = _completed_api_subtasks(plan)
         jest_completed = _completed_jest_subtasks(plan)
         go_completed = _completed_go_subtasks(plan)
+        kotlin_completed = _completed_kotlin_subtasks(plan)
         completed = (
             unit_completed
             + browser_completed
             + api_completed
             + jest_completed
             + go_completed
+            + kotlin_completed
         )
 
         # 2. No work — early exit with evaluated_empty.
@@ -3053,6 +3134,7 @@ async def run_evaluator(
             api_completed,
             jest_completed,
             go_completed,
+            kotlin_completed,
         )
 
         # 3b. Persist failing-run output for post-mortem (#1195). The judge
