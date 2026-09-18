@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from agents.confidence import reason_lines
 from agents.triage_dedup import DedupCollision, TriageCandidate
 
 if TYPE_CHECKING:
@@ -443,10 +444,11 @@ def _candidate_md_block(
     if evidence_urls:
         lines.extend(_evidence_md_lines(evidence_urls))
     if show_reasons:
-        reasons = c.verdict.get("reasons") or []
-        if reasons:
-            for r in reasons:
-                lines.append(f"  - reason: {r}")
+        # Labelled per line (#1195): this Markdown is also the PR comment, and
+        # the judge LLM's prose must not read like a measurement.
+        for text, source in reason_lines(c.verdict):
+            label = "measured" if source == "system" else "model (LLM-authored)"
+            lines.append(f"  - {label}: {text}")
     return "\n".join(lines)
 
 

@@ -51,6 +51,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
+from agents.confidence import add_system_reason, set_system_reasons
 from agents.preflight_static import package_root_rel_paths, requirements_files
 from agents.run_result import RunResultLike
 from agents.verdict_vote import majority_vote
@@ -727,25 +728,55 @@ def _completed_functional_subtasks(plan: dict) -> list[dict]:
     )
 
 
-def _lane_by_test_id(plan: dict[str, Any]) -> dict[str, str]:
-    """Map every planned subtask id to its lane, from test_plan.json.
+def _norm_rel(path: object) -> str:
+    """Posix form of a relative test path, leading ``./`` stripped."""
+    p = str(path or "").strip().replace("\\", "/")
+    while p.startswith("./"):
+        p = p[2:]
+    return p
 
-    The plan is the authoritative source of a test's lane: the planner assigned
-    it, gen-functional generated against it, and the evaluator dispatched the
-    matching runner from it. The judge LLM is never asked for it.
+
+def _resolve_subtask(
+    plan: dict[str, Any], verdict: dict[str, Any]
+) -> dict[str, Any] | None:
+    """The plan subtask a verdict is about, or None when that is not certain.
+
+    ``test_id`` is written by the judge LLM and nothing checks it against the
+    ids it was given, so an exact id match alone left every verdict of a run
+    unattributed when the judge paraphrased them (#1258). ``test_file`` is
+    tried next — full relative path, then basename only when no other planned
+    file shares it. Ambiguity returns None: a guessed subtask is the #1018
+    unit-inflation bug in another form.
     """
-    out: dict[str, str] = {}
-    for phase in plan.get("phases") or []:
-        if not isinstance(phase, dict):
-            continue
-        for st in phase.get("subtasks") or []:
-            if not isinstance(st, dict):
-                continue
-            tid = str(st.get("id") or "").strip()
-            lane = str(st.get("lane") or "").strip().lower()
-            if tid and lane:
-                out[tid] = lane
-    return out
+    subtasks = [
+        st
+        for phase in plan.get("phases") or []
+        if isinstance(phase, dict)
+        for st in phase.get("subtasks") or []
+        if isinstance(st, dict)
+    ]
+    tid = str(verdict.get("test_id") or "").strip()
+    for st in subtasks:
+        if tid and str(st.get("id") or "").strip() == tid:
+            return st
+    tfile = _norm_rel(verdict.get("test_file"))
+    if not tfile:
+        return None
+    by_path = {_norm_rel((st.get("files_to_create") or [""])[0]): st for st in subtasks}
+    if tfile in by_path:
+        return by_path[tfile]
+    base = tfile.rsplit("/", 1)[-1]
+    hits = [st for path, st in by_path.items() if path.rsplit("/", 1)[-1] == base]
+    return hits[0] if len(hits) == 1 else None
+
+
+def _read_plan(spec_dir: Path) -> dict[str, Any] | None:
+    try:
+        plan = json.loads((spec_dir / "test_plan.json").read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        _eval_log.warning("[evaluator] plan unreadable: %s", exc)
+        return None
+    return plan if isinstance(plan, dict) else None
 
 
 def _stamp_verdict_lanes(spec_dir: Path, doc: dict[str, Any]) -> tuple[int, int]:
@@ -765,19 +796,20 @@ def _stamp_verdict_lanes(spec_dir: Path, doc: dict[str, Any]) -> tuple[int, int]
     than defaulted, so it stays visibly unattributed instead of silently
     inflating the unit lane — the same failure this fixes.
     """
-    try:
-        plan = json.loads((spec_dir / "test_plan.json").read_text())
-    except (OSError, json.JSONDecodeError) as exc:
-        _eval_log.warning("[evaluator] lane stamp skipped, plan unreadable: %s", exc)
+    plan = _read_plan(spec_dir)
+    if plan is None:
         return 0, 0
-    lanes = _lane_by_test_id(plan)
     stamped = unmatched = 0
     for v in doc.get("verdicts") or []:
         if not isinstance(v, dict):
             continue
-        lane = lanes.get(str(v.get("test_id") or "").strip())
-        if lane:
+        st = _resolve_subtask(plan, v)
+        lane = str((st or {}).get("lane") or "").strip().lower()
+        if st is not None and lane:
             v["lane"] = lane
+            # Re-key to the plan id so every later reader (triage, val_block,
+            # evidence links) finds it; the judge's paraphrase keys nothing.
+            v["test_id"] = st["id"]
             stamped += 1
         else:
             unmatched += 1
@@ -803,7 +835,9 @@ def _is_test_path(path: str) -> bool:
     )
 
 
-def _measured_coverage(spec_dir: Path, test_id: str) -> tuple[int | None, float | None]:
+def _measured_coverage(
+    spec_dir: Path, test_id: str, stem: str | None = None
+) -> tuple[int | None, float | None]:
     """(covered SUT lines, delta pct) for one test, measured from its coverage.xml.
 
     Returns ``(None, None)`` when no coverage report was captured — "not
@@ -820,9 +854,18 @@ def _measured_coverage(spec_dir: Path, test_id: str) -> tuple[int | None, float 
     today, so it is ``None`` in practice — deliberately left as the honest gap
     rather than reported against an implied-empty baseline, which would inflate
     every test's apparent contribution.
+
+    Looks in ``runs/<test_id>/`` first (``_capturing_coverage``), then in
+    ``_run_artifacts/<stem>/`` — where the host runner persists every run and
+    the only place the Nix batched path's coverage lands, which nothing read
+    (#1258).
     """
-    after = spec_dir / "findings" / "runs" / test_id / "coverage.xml"
-    if not after.is_file():
+    findings = spec_dir / "findings"
+    candidates = [findings / "runs" / test_id / "coverage.xml"]
+    if stem:
+        candidates.append(findings / "_run_artifacts" / stem / "coverage.xml")
+    after = next((c for c in candidates if c.is_file()), None)
+    if after is None:
         return None, None
     try:
         from agents.coverage_delta import parse_coverage_xml  # noqa: PLC0415
@@ -857,16 +900,20 @@ def _stamp_verdict_coverage(spec_dir: Path, doc: dict[str, Any]) -> tuple[int, i
     the guess; where nothing was measured the keys are set to ``None`` so the
     scorer drops them instead of reading a fabricated zero.
     """
+    plan = _read_plan(spec_dir) or {}
     measured = unmeasured = 0
     for v in doc.get("verdicts") or []:
         if not isinstance(v, dict):
             continue
         summary = v.get("signals_summary")
         if not isinstance(summary, dict):
-            continue
-        covered, delta_pct = _measured_coverage(
-            spec_dir, str(v.get("test_id") or "").strip()
-        )
+            # Skipping it let whatever the judge wrote survive (#1258).
+            summary = v["signals_summary"] = {}
+        st = _resolve_subtask(plan, v) or {}
+        test_id = str(st.get("id") or v.get("test_id") or "").strip()
+        test_file = (st.get("files_to_create") or [v.get("test_file") or ""])[0]
+        stem = Path(_norm_rel(test_file)).stem or None
+        covered, delta_pct = _measured_coverage(spec_dir, test_id, stem)
         summary["coverage_new_lines"] = covered
         summary["coverage_delta_pct"] = delta_pct
         if covered is None:
@@ -874,6 +921,43 @@ def _stamp_verdict_coverage(spec_dir: Path, doc: dict[str, Any]) -> tuple[int, i
         else:
             measured += 1
     return measured, unmeasured
+
+
+_UNRESOLVABLE_SEP = ": unresolvable import "
+
+
+def _stamp_unresolvable_import_reasons(spec_dir: Path, doc: dict[str, Any]) -> int:
+    """Name an unresolvable import as the cause on the verdicts it explains (#1174).
+
+    Gen-Functional records ``"<subtask>: unresolvable import '<spec>'"`` in
+    status.json when a generated test still imports a module that does not
+    exist. That test then fails and reads as a generic flaky/consistent_fail,
+    sending the investigation at test quality instead of at the import. This
+    adds the measured cause as a system reason; the verdict itself is unchanged.
+    Returns how many verdicts were marked.
+    """
+    by_subtask: dict[str, list[str]] = {}
+    for entry in _read_status(spec_dir).get("unresolvable_imports") or []:
+        sid, sep, spec = str(entry).partition(_UNRESOLVABLE_SEP)
+        if sep:
+            by_subtask.setdefault(sid, []).append(spec.strip().strip("'\""))
+    if not by_subtask:
+        return 0
+    plan = _read_plan(spec_dir) or {}
+    marked = 0
+    for v in doc.get("verdicts") or []:
+        if not isinstance(v, dict):
+            continue
+        st = _resolve_subtask(plan, v) or {}
+        specs = by_subtask.get(str(st.get("id") or v.get("test_id") or ""))
+        for spec in specs or []:
+            add_system_reason(
+                v,
+                f"unresolvable import {spec!r} — the generated test imports a "
+                "module that does not exist in the project (#1174)",
+            )
+        marked += bool(specs)
+    return marked
 
 
 def _apply_lane_attribution(spec_dir: Path, verdicts_path: Path) -> None:
@@ -892,6 +976,7 @@ def _apply_lane_attribution(spec_dir: Path, verdicts_path: Path) -> None:
         return
     stamped, unmatched = _stamp_verdict_lanes(spec_dir, doc)
     measured, unmeasured = _stamp_verdict_coverage(spec_dir, doc)
+    _stamp_unresolvable_import_reasons(spec_dir, doc)
     with contextlib.suppress(OSError):
         verdicts_path.write_text(json.dumps(doc, indent=2))
     _eval_log.info(
@@ -914,46 +999,27 @@ def _derive_lane_progress(spec_dir: Path, verdicts_path: Path) -> dict[str, str]
     constant — including the cockpit's stage badge and this repo's own demo
     runbook, which told operators to check exactly this field.
 
-    Derived from the verdicts rather than stamped at each lane's call site
-    because the five lanes take five different execution paths through
-    ``_build_all_bundles``; one derivation covers all of them and cannot drift
-    lane by lane as those paths change.
-
-    Must run AFTER ``_apply_lane_attribution`` — that is what puts ``lane`` on
-    a verdict at all. Before it, every verdict looks like ``unit``.
+    Derived rather than stamped at each lane's call site because the five
+    lanes take five different execution paths through ``_build_all_bundles``;
+    one derivation covers all of them and cannot drift lane by lane. The rules
+    live in ``agents.lane_progress``, shared with the portal's read path so the
+    stored value and the live one cannot disagree (#1259).
 
     ``error`` stays distinct from ``pending`` deliberately. A lane that tried
     and could not run (no flake, no sandbox) is a different fact from a lane
     nobody asked for, and collapsing the two is what let #1152 read as "nothing
     was requested" when the truth was "the runner is broken". Returns ``None``
-    when no verdict carries a lane, leaving the existing value untouched rather
-    than overwriting it with a guess.
+    when there is nothing to derive, leaving the existing value untouched.
     """
-    try:
-        doc = json.loads(verdicts_path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
-        _eval_log.warning(
-            "[evaluator] lane_progress skipped, verdicts unreadable: %s", exc
-        )
+    from agents.lane_progress import derive_lane_progress  # noqa: PLC0415 — cycle
+
+    progress = derive_lane_progress(spec_dir, verdicts_path)
+    if progress is None:
         return None
-    ran: dict[str, bool] = {}
-    for v in doc.get("verdicts") or []:
-        lane = str(v.get("lane") or "").strip().lower()
-        if not lane:
-            continue
-        summary = v.get("signals_summary")
-        stability = str((summary or {}).get("stability") or "").strip().lower()
-        # Only an explicit stability=error means the runner failed. A verdict
-        # with no stability at all was still produced BY a lane that ran, so it
-        # counts as executed — treating "unknown" as failure would repaint every
-        # healthy run red, which is the same class of bug in the other direction.
-        ran[lane] = ran.get(lane, False) or stability != "error"
-    if not ran:
-        return None
-    progress = dict(_read_status(spec_dir).get("lane_progress") or {})
-    for lane, ok in ran.items():
-        progress[lane] = "executed" if ok else "error"
-    return progress
+    # status.json still reads "evaluating" here, but this is the end of the
+    # run: a lane with no evidence did not run, so storing "running" would
+    # leave every non-portal reader a lane that never finishes.
+    return {k: "pending" if v == "running" else v for k, v in progress.items()}
 
 
 def _framework_coverage_strategy(subtask: dict) -> str | None:
@@ -2578,16 +2644,15 @@ def _unjudged_entry(test_id: str, test_file: str | None) -> dict[str, Any]:
     reason says the verdict was never taken, so a reviewer cannot read this as
     a considered rejection — or, worse, miss it as a silent pass.
     """
-    entry: dict[str, Any] = {
-        "test_id": test_id,
-        "verdict": "reject",
-        "judged": False,
-        "reasons": [
+    entry: dict[str, Any] = {"test_id": test_id, "verdict": "reject", "judged": False}
+    set_system_reasons(
+        entry,
+        [
             "no judge call returned a verdict for this generated test "
             "(all calls omitted it); an unjudged test casts a fail-closed "
             "reject vote rather than dropping out of the merged verdicts"
         ],
-    }
+    )
     if test_file:
         entry["test_file"] = test_file
     return entry
@@ -2643,12 +2708,12 @@ async def _merge_voted_verdicts(
                 else _unjudged_entry(tid, catalog.get(tid))
             )
         if entry.get("verdict") != result.majority:
-            reasons = entry.get("reasons")
-            entry["reasons"] = (list(reasons) if isinstance(reasons, list) else []) + [
+            add_system_reason(
+                entry,
                 f"majority vote {result.split}: {result.majority} overrides this "
                 f"entry's own judge call ({entry.get('verdict')}); crashed or "
-                "missing votes count as reject (fail-closed)"
-            ]
+                "missing votes count as reject (fail-closed)",
+            )
             entry["verdict"] = result.majority
         entry["vote"] = {
             "votes": list(result.votes),

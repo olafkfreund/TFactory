@@ -67,7 +67,8 @@ same way the live ``kube_sandbox.py`` backends already apply Jobs.
 Design (matches apis/concurrency-conventions.md §3 + the proven kube_sandbox shape):
 - restartPolicy Never, backoffLimit 0 (no silent retries — a retry is a new attempt
   with an incremented job-state ``attempt``), ttlSecondsAfterFinished (GC),
-  activeDeadlineSeconds (deadline), automountServiceAccountToken False.
+  activeDeadlineSeconds (deadline), automountServiceAccountToken False unless the
+  Job orchestrates other Jobs (``automount_service_account_token``).
 - The thin nix-base image; the task's commands run via ``nix develop`` against the
   per-task flake co-mounted in the worktree (caller wraps commands; see
   ``nix_develop_wrap``).
@@ -95,7 +96,7 @@ from __future__ import annotations
 import os
 import re
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 # Canonical nix-base image (RFC-0016 #198). Override per env in the consumer.
@@ -172,6 +173,13 @@ class JobSpec:
     namespace: str = "factory"
     nix_develop: bool = True  # wrap commands in `nix develop path:/work#default`
     extra_env: dict[str, str] = field(default_factory=dict)
+    # A Job that itself dispatches Jobs through the k8s API needs a token to
+    # authenticate with; without one `load_incluster_config()` fails and the
+    # client falls back to a kubeconfig that does not exist in a pod
+    # ("Invalid kube-config file. Expected key current-context", AIFactory#1491).
+    # Default False keeps every existing Job tokenless — grant it only to a Job
+    # that genuinely orchestrates, and whose service account is scoped to that.
+    automount_service_account_token: bool = False
 
 
 def _short(job_id: str) -> str:
@@ -209,12 +217,61 @@ def _strip_npx(command: str) -> str:
     return command
 
 
+# Where a packed Job writes store paths the baked image does not already carry.
+# Container-local and ephemeral on purpose: it must not be /work, which is the
+# repo worktree (a store under it would land in `git status` and in the packed
+# workspace).
+WRITABLE_STORE_ROOT = "/tmp/factory-nix-store"  # noqa: S108 — container-local, not shared
+
+
+def _store_args() -> str:
+    """`nix develop` arguments giving the Job a writable store.
+
+    The baked ``-nix`` image copies /nix/store in UNCHOWNED, so it is read-only
+    to the sandbox uid (65532). Nix can read and exec those paths, which is all
+    a WARM build needs — but it cannot write, so a derivation the substrate does
+    not already carry fails outright. In practice that meant exactly one usable
+    language: the warm-up flake bakes python+pytest and nothing else, so a
+    Kotlin task found no JVM and reported `gradle: exit 127` (AIFactory#1491, AIFactory#1492).
+
+    A chroot store fixes it without any privilege: nix writes to
+    ``local?root=<dir>`` as an ordinary user. Measured in-cluster on the real
+    build image under the Job's own NetworkPolicy: a cold `nixpkgs#hello` built
+    and RAN from such a store, and the egress the policy already allows
+    (0.0.0.0/0:443, private ranges excluded) reaches cache.nixos.org.
+
+    The baked store is kept as a substituter so warm paths stay warm: copying an
+    already-present closure from it measured 0.8s, a local file copy rather than
+    the network fetch that TFactory#768 removed.
+
+    ``require-sigs false`` is needed because the image's store carries no
+    per-path signatures for this user to verify. Nix has no per-substituter form
+    of that option, so it applies to the WHOLE invocation, cache.nixos.org
+    included — the honest description of the trade. What limits it: the only
+    substituters in play are that store, which is the image the Job already
+    boots from and therefore trusts completely, and cache.nixos.org over TLS,
+    whose paths are content-addressed, so a substituted path that did not hash
+    to the requested store path would not be accepted as it. The exposure is a
+    substituter able to serve a path for a hash it does not match, which is not
+    reachable from either source here.
+    """
+    return (
+        f'--store "local?root={WRITABLE_STORE_ROOT}" '
+        f'--extra-substituters "local?root=/" '
+        f"--option require-sigs false"
+    )
+
+
 def nix_develop_wrap(commands: list[str]) -> str:
     """Wrap commands to run inside the per-task Nix env. `path:` is mandatory — a
     bare flake ref triggers Nix's git fetcher and breaks on the Job-root vs
     worktree-uid mismatch (RFC-0016 §4.1 gotcha)."""
     joined = " && ".join(_strip_npx(c) for c in commands)
-    return f"nix develop path:/work#default --command bash -c {_shq(joined)}"
+    return (
+        f"mkdir -p {WRITABLE_STORE_ROOT} && "
+        f"nix develop path:/work#default {_store_args()} "
+        f"--command bash -c {_shq(joined)}"
+    )
 
 
 def _shq(s: str) -> str:
@@ -516,7 +573,7 @@ def build_job_manifest(spec: JobSpec) -> dict[str, Any]:
 
     pod_spec: dict[str, Any] = {
         "restartPolicy": "Never",
-        "automountServiceAccountToken": False,
+        "automountServiceAccountToken": spec.automount_service_account_token,
         # #812: non-root enforced by the kubelet (not just the image USER) and
         # the default seccomp profile pinned.
         #
@@ -667,6 +724,41 @@ def _selftest_gcp_creds() -> None:
             os.environ[GCP_CREDS_SECRET_ENV] = saved
 
 
+def _selftest_service_account(spec: JobSpec, ps: dict[str, Any]) -> None:
+    """Identity: the SA, the tokenless default, and the orchestrator opt-in.
+
+    Asserting only the default would let the flag be silently ignored — the Job
+    would keep the permission to create Jobs with no credential to use it.
+    """
+    _require(ps["serviceAccountName"] == "aifactory-sandbox", "SA")
+    _require(ps["automountServiceAccountToken"] is False, "no token automount")
+    manifest = build_job_manifest(replace(spec, automount_service_account_token=True))
+    _require(
+        manifest["spec"]["template"]["spec"]["automountServiceAccountToken"] is True,
+        "automount_service_account_token=True must reach the pod spec — without "
+        "it an orchestrating Job cannot authenticate to the API and dies with "
+        "'Invalid kube-config file' (AIFactory#1491)",
+    )
+    assert_job_policy(manifest)
+
+
+def _check_nix_develop(command: str) -> None:
+    """The per-task nix invocation: the flake ref, and a store it can write to.
+
+    Without a writable store it can only ever use what was baked, which is one
+    warmed language (AIFactory#1492). These four are what make a cold derivation
+    possible without re-fetching the warm ones.
+    """
+    _require("nix develop path:/work#default" in command, "nix develop wrap")
+    _require(f'--store "local?root={WRITABLE_STORE_ROOT}"' in command, "writable chroot store")
+    _require('--extra-substituters "local?root=/"' in command, "baked store kept as a substituter")
+    _require(
+        command.strip().startswith(f"mkdir -p {WRITABLE_STORE_ROOT}"),
+        "store root created before nix is asked to use it",
+    )
+    _require(not WRITABLE_STORE_ROOT.startswith("/work"), "store is outside the worktree")
+
+
 def _selftest() -> None:
     spec = JobSpec(
         service="aifactory",
@@ -685,8 +777,7 @@ def _selftest() -> None:
     assert_job_policy(m)
     _require(name.startswith("factory-aifactory-"), f"name prefix: {name}")
     ps = m["spec"]["template"]["spec"]
-    _require(ps["serviceAccountName"] == "aifactory-sandbox", "SA")
-    _require(ps["automountServiceAccountToken"] is False, "no token automount")
+    _selftest_service_account(spec, ps)
     _require(
         ps["securityContext"]
         == {
@@ -770,7 +861,7 @@ def _selftest() -> None:
         "container securityContext (#812)",
     )
     _require(c["image"] == DEFAULT_NIX_IMAGE, "nix-base image")
-    _require("nix develop path:/work#default" in c["command"][2], "nix develop wrap")
+    _check_nix_develop(c["command"][2])
     _require("go test ./..." in c["command"][2], "task command present")
     mount_paths = {mt["mountPath"] for mt in c["volumeMounts"]}
     _require(mount_paths == {"/work", "/nix/store"}, f"mounts: {mount_paths}")

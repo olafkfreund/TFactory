@@ -279,6 +279,21 @@ def get_task(spec_id: str) -> dict:
         )
 
     status_doc = _read_json(spec_dir / "status.json") or {}
+    # Derived on read so it cannot go stale mid-run (#1259); a failure keeps
+    # the stored value rather than failing the detail view.
+    try:
+        from agents.lane_progress import derive_lane_progress  # noqa: PLC0415
+
+        live = derive_lane_progress(spec_dir)
+    except Exception:  # noqa: BLE001 — additive, never breaks the view
+        # No request value in the message (log injection); the traceback carries
+        # the diagnostics.
+        logger.warning(
+            "lane_progress derivation failed; serving the stored value", exc_info=True
+        )
+        live = None
+    if live is not None:
+        status_doc["lane_progress"] = live
     project_id = spec_dir.parent.parent.name
     return {
         "task_id": status_doc.get("task_id") or spec_id,

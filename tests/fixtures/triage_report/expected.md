@@ -19,14 +19,14 @@ _Mode: initial · Generated at 2026-05-28T15:30:00+00:00_
 
 - **`ac1-login-expiry`** — `tests/test_ac1-login-expiry.py`
   - signals: coverage +7.50%, stability=stable, mutation=killed, semantic=high
-  - reason: coverage +7.5%; mutation killed; semantic relevance high
+  - model (LLM-authored): coverage +7.5%; mutation killed; semantic relevance high
 
 ## Flagged
 
 - **`ac2-store-mut`** — `tests/test_ac2-store-mut.py`
   - signals: coverage +1.20%, stability=stable, mutation=no_mutation, semantic=medium
-  - reason: mutation probe found nothing to mutate
-  - reason: shallow assertion
+  - model (LLM-authored): mutation probe found nothing to mutate
+  - model (LLM-authored): shallow assertion
 
 ## Skipped
 
@@ -36,7 +36,7 @@ _(none)_
 
 - **`ac3-naive-true`** — `tests/test_ac3-naive-true.py`
   - signals: coverage +0.00%, stability=stable, mutation=survived, semantic=low
-  - reason: mutation survived — assertion is tautological
+  - model (LLM-authored): mutation survived — assertion is tautological
 
 ## Dedup Collisions
 
