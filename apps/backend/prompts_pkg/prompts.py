@@ -1529,16 +1529,25 @@ def _format_evaluator_per_test_block(bundle) -> str:
             f"coverage: delta_pct={delta_pct:+.2f}, "
             f"new_lines={new_lines_count}, new_files={new_files}"
         )
+    elif (
+        covered := _format_signal_value(bundle, "coverage_covered_lines", default=None)
+    ) is not None:
+        # No baseline, so no delta — but the lane measured what this test ran
+        # (#1258). Not ``new_lines``: evaluator.md's new_lines=0 rule is about
+        # a baseline delta, a different quantity.
+        coverage_line = (
+            f"coverage: covered_sut_lines={covered} (no baseline, so no delta — "
+            "total subject lines this test executed, not new lines)"
+        )
+    elif (
+        reason := _format_signal_value(bundle, "coverage_na_reason", default=None)
+    ) is not None:
+        # The builder knows the lane can't measure coverage (e.g. browser lane,
+        # Decision 11); evaluator.md skips the coverage rule on any "N/A".
+        coverage_line = f"coverage: N/A ({reason})"
     else:
-        # coverage_delta is None — either the framework explicitly skips
-        # coverage measurement (Browser lane / Playwright, Decision 11) or
-        # the coverage XML was absent for this run.
-        #
-        # In both cases, render "N/A (browser lane)" so the Evaluator LLM
-        # does NOT interpret this as "0% coverage" and issue a spurious
-        # reject.  The evaluator.md verdict-priority section instructs the
-        # LLM to skip the coverage rule when it sees "N/A".
-        coverage_line = "coverage: N/A (browser lane)"
+        # Never render a missing report as 0% — the judge would reject on it.
+        coverage_line = "coverage: not measured (no coverage report for this run)"
 
     stability = _format_signal_value(bundle, "stability", default=None)
     if stability is not None:
