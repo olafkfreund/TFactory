@@ -1336,8 +1336,11 @@ def test_gradle_job_script_runs_and_merges_junit(tmp_path, monkeypatch):
         ["bash", str(script)], capture_output=True, text=True, env=env, check=False
     ).stdout
     assert nix_env._parse_exit_marker(out, "__GRADLE_EXIT=") == 1
-    import xml.etree.ElementTree as ET
+    # Checked textually: no XML parser needed (S314) for our own generated file.
+    import re
 
-    root = ET.parse(stage / "junit.xml").getroot()
-    assert root.tag == "testsuites"
-    assert sorted(s.get("name") for s in root.findall("testsuite")) == ["A", "B"]
+    merged = (stage / "junit.xml").read_text()
+    body = merged.split("\n", 1)[1].strip()  # after the single XML declaration
+    assert merged.count("<?xml") == 1, merged
+    assert body.startswith("<testsuites>") and body.endswith("</testsuites>"), merged
+    assert re.findall(r'<testsuite name="([^"]+)"', merged) == ["A", "B"], merged
