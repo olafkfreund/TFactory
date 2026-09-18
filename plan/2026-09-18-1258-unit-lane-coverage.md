@@ -136,3 +136,5 @@ existing workspaces read the same before and after.
   Fixed without behaviour change; the gate must be run locally with the pinned
   toolchain before pushing (`scripts/ratchet_lint.py --base origin/dev
   --package apps/backend --package apps/web-server --package scripts`).
+- **Post-review fix (promotion PR #1304, CodeQL):** removed a redundant local
+  `import json` in the `_unit_plan` test helper (the module imports it).

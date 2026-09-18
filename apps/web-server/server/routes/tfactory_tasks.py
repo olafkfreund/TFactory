@@ -286,7 +286,11 @@ def get_task(spec_id: str) -> dict:
 
         live = derive_lane_progress(spec_dir)
     except Exception:  # noqa: BLE001 — additive, never breaks the view
-        logger.warning("lane_progress derivation failed for %s", spec_id, exc_info=True)
+        # No request value in the message (log injection); the traceback carries
+        # the diagnostics.
+        logger.warning(
+            "lane_progress derivation failed; serving the stored value", exc_info=True
+        )
         live = None
     if live is not None:
         status_doc["lane_progress"] = live
