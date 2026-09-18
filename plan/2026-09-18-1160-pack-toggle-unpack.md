@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1160
 spec: spec/2026-09-18-1160-pack-toggle-unpack.md
 ---
