@@ -53,6 +53,17 @@ down_revision: Union[str, Sequence[str], None] = "a4c2e9f8b1d3"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
+# Alembic reads these via its script loader, never via Python references;
+# listing them as exports tells CodeQL py/unused-global-variable so (#1257).
+__all__ = [
+    "branch_labels",
+    "depends_on",
+    "down_revision",
+    "downgrade",
+    "revision",
+    "upgrade",
+]
+
 
 # Columns to migrate: (table, column, nullable).
 # ``nullable`` matches the model definition in models.py — True means the
