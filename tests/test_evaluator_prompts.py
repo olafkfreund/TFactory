@@ -499,3 +499,12 @@ def test_evaluator_md_states_the_covered_lines_and_not_measured_rules() -> None:
     assert "covered_sut_lines" in md
     assert "not measured" in md
     assert "N/A (browser lane)" in md  # the N/A example stays
+
+
+def test_evaluator_md_flags_zero_covered_sut_lines_not_rejects() -> None:
+    """covered_sut_lines = 0 → flag; it is not the baseline new_lines=0 reject."""
+    from prompts_pkg.prompts import PROMPTS_DIR
+
+    md = (PROMPTS_DIR / "evaluator.md").read_text()
+    assert "| coverage | covered_sut_lines = 0 | flag |" in md
+    assert "the `new_lines=0` rule does not apply" in md
