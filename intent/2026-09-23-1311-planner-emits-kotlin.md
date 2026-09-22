@@ -92,22 +92,26 @@ Concretely, when this is done:
 - No new hardcoded language list if the same fact is already declared in a
   descriptor. The fleet rule is one engine, no drift.
 
+## Decisions taken (approver, 2026-09-23)
+
+1. **Fix the drift at its source.** Derive the Planner prompt's language and
+   framework vocabulary from the descriptors and the framework registry, and
+   delete each hardcoded list as it is replaced. Onboarding the next language
+   stays a descriptor drop, which is what `lang_registry` already promises.
+   Scoped to the Planner prompt path. Because that path is shared, the spec
+   must show that Python, TypeScript, Go and Java planning are unchanged, by
+   comparing the rendered prompt before and after rather than by assertion.
+2. **Kotlin gets its own framework descriptor** naming the in-cluster Nix
+   Gradle lane. `frameworks/junit/descriptor.yaml` is left alone, so existing
+   Java planning keeps today's answer and this change cannot regress it.
+3. **Kotlin only.** The identical Java gap is filed as #1321. Java has no
+   in-cluster lane, so a Java fix could not be proven the same way; keeping it
+   out is what lets this issue end in a real run.
+4. **Proof is a Kotlin fixture driven through the real Planner**, in-cluster,
+   into the Gradle lane, with a mutation showing the verdict follows the tests
+   rather than being pass-shaped. Reproducible, and can be kept as a
+   regression. A full PARR run is explicitly not required here.
+
 ## Open questions
 
-1. **How far to fix the drift.** The measured cause is that four hardcoded
-   lists in the prompt path duplicate what descriptors already declare. Options:
-   (a) add Kotlin to each list, smallest diff, drift stays and the next
-   language repeats this issue; (b) derive the prompt's language and framework
-   vocabulary from the descriptors and registry, so onboarding a language stays
-   a descriptor drop, as `lang_registry` already promises. My recommendation is
-   (b) scoped to the Planner prompt path only, with (a)'s lists deleted as they
-   are replaced, but it is the larger change and it moves Java's behaviour too.
-2. **Kotlin's framework identity.** Reuse `junit` by widening it to the JVM, or
-   add a `gradle` framework descriptor pointing at the Nix lane? The existing
-   `junit` row names a docker-host image the in-cluster lane does not use.
-3. **Java.** `.java` also maps to nothing today, and `junit`'s lane is the
-   docker-host runner. Do we fix Java in the same change, or record it as a
-   separate issue and keep this one Kotlin-only?
-4. **What counts as the end-to-end proof.** A fixture Kotlin repo driven through
-   the real Planner in-cluster, or a full PARR run from a spec? The former is
-   reproducible in CI; the latter is the honest user-level claim.
+None. The four above were decided at intent review.
