@@ -32,6 +32,12 @@ runtime:
     - "--reporters=default"
     - "--reporters=jest-junit"
 
+
+# Acceptance-criteria command tokens that pin this framework's language (#1311).
+ac_command_tokens:
+  - "jest"
+  - "npm test"
+
 # Manifest signals for Jest detection.
 manifest_signals:
   - "package.json:devDependencies.jest"

@@ -128,6 +128,12 @@ class FrameworkDescriptor:
     # .feature PLUS its step definitions + a World). Gen-Functional then writes
     # every file in ``files_to_create`` as one consistent set, not a single file.
     multi_artifact: bool = False
+    # Acceptance-criteria command substrings that pin this framework's language
+    # (#1311): a spec saying "`gradle test` passes" names Kotlin, "`go test`"
+    # names Go. The Planner prompt derives its AC-token table from these, so the
+    # vocabulary lives with the framework rather than in a second hand-kept map.
+    # Optional: a descriptor with no distinctive command declares none.
+    ac_command_tokens: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         """Validate invariants that can't be expressed as type hints."""

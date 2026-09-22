@@ -33,6 +33,11 @@ runtime:
     - "--reporter=junit"
     - "--coverage"
 
+
+# Acceptance-criteria command tokens that pin this framework's language (#1311).
+ac_command_tokens:
+  - "vitest"
+
 # Manifest signals for Vitest detection.
 # Vitest is frequently configured inside vite.config.ts (the `test` block), so
 # that file is a (lower-confidence) signal in addition to a dedicated config.

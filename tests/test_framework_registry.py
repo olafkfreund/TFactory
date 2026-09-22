@@ -733,3 +733,35 @@ def test_no_manifest_signal_is_claimed_by_two_languages() -> None:
             owners.setdefault(sig, set()).add(desc.language)
     contested = {sig: sorted(langs) for sig, langs in owners.items() if len(langs) > 1}
     assert not contested, f"manifest signals claimed by two languages: {contested}"
+
+
+@pytest.mark.skipif(
+    not _REAL_FRAMEWORKS_DIR.is_dir(),
+    reason=f"frameworks/ directory not found at {_REAL_FRAMEWORKS_DIR}",
+)
+def test_ac_command_tokens_are_optional_and_declared_where_they_exist() -> None:
+    """AC command tokens live on the descriptor, not in a second table (#1311).
+
+    The field is optional and additive: a descriptor that declares no
+    distinctive command (portal-ui) must still load, or adding the field would
+    be a breaking schema change.
+    """
+    registry = load_registry(frameworks_dir=_REAL_FRAMEWORKS_DIR)
+    assert registry["gradle"].ac_command_tokens == ("gradle test", "./gradlew test")
+    assert registry["go-test"].ac_command_tokens == ("go test", "go build")
+    assert registry["pytest"].ac_command_tokens == ("pytest",)
+    # Optional: no field on disk → empty tuple, and the descriptor still loads.
+    assert registry["portal-ui"].ac_command_tokens == ()
+
+
+def test_ac_command_tokens_must_be_a_list_of_str() -> None:
+    """A malformed field is rejected at validation, not silently coerced."""
+    data = copy.deepcopy(_PYTEST_DICT)
+    data["ac_command_tokens"] = "gradle test"  # a bare string, not a list
+    with pytest.raises(FrameworkDescriptorError) as exc:
+        validate_descriptor(data)
+    assert "ac_command_tokens" in str(exc.value)
+
+    data["ac_command_tokens"] = ["gradle test", 7]
+    with pytest.raises(FrameworkDescriptorError):
+        validate_descriptor(data)
