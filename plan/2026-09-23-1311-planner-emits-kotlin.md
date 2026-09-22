@@ -144,6 +144,18 @@ Branch `fix/1311-planner-kotlin` off `dev`, one commit per step.
   `source_extensions`" rather than "remove go-test's `test_path_conventions`";
   it fails two tests, as required.
 
+- **Step 5 — what the prompt diff proves.** The spec said the rendered prompt
+  must differ "only inside the FRAMEWORK REGISTRY block". That cannot hold:
+  step 5's whole purpose is to rewrite the prose that restated the registry, so
+  `planner.md` changes too. The property actually verified is stronger and
+  language-independent: the prose diff is **byte-identical for every language**,
+  and the deterministic DETECTED PROJECT LANGUAGE pin — the block that decides
+  behaviour — is byte-identical for Python, TypeScript and Go, unchanged for
+  Java, and changes only for Kotlin (from "no deterministic language signal" to
+  kotlin + gradle). Captured as tests rather than a one-off diff.
+  The registry rows also gained `detects=` and `ac=`, so every fact the deleted
+  prose stated is still in the prompt, rendered from the descriptors.
+
 ## Tests
 
 ```sh

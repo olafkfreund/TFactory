@@ -172,3 +172,62 @@ def test_registry_block_states_each_framework_s_test_paths() -> None:
 def test_registry_block_stays_small_enough_to_inject() -> None:
     """It is prepended to every planning prompt; a runaway block costs tokens."""
     assert len(prompts._build_framework_registry_block()) < 4000
+
+
+def _pin_block(tmp_path: Any, changed: list[str], ac_text: str = "") -> str:
+    """Render the DETECTED PROJECT LANGUAGE block for a given changed-file set."""
+    spec = tmp_path / "spec"
+    (spec / "context").mkdir(parents=True, exist_ok=True)
+    proj = tmp_path / "proj"
+    proj.mkdir(exist_ok=True)
+    patch = "".join(
+        f"diff --git a/{f} b/{f}\n--- a/{f}\n+++ b/{f}\n@@ -0,0 +1 @@\n+x\n"
+        for f in changed
+    )
+    (spec / "context" / "diff.patch").write_text(patch)
+    (spec / "context" / "aifactory_spec.md").write_text(ac_text or "AC#1: it works.\n")
+    return prompts._build_detected_language_block(spec, proj)
+
+
+@pytest.mark.parametrize(
+    ("changed", "expected_language"),
+    [
+        (["src/app/main.py"], "python"),
+        (["src/index.ts"], "typescript"),
+        (["cmd/server/main.go"], "go"),
+    ],
+)
+def test_existing_languages_still_pin_the_same_way(
+    tmp_path: Any, changed: list[str], expected_language: str
+) -> None:
+    """#1311 must not move an existing language's deterministic pin (#443, #696)."""
+    block = _pin_block(tmp_path, changed)
+    assert f"**{expected_language}** project" in block
+
+
+def test_a_kotlin_diff_now_pins_kotlin_and_names_gradle(tmp_path: Any) -> None:
+    """The behaviour #1311 delivers, at the block the Planner actually reads.
+
+    Before: "No deterministic language signal ... never assume pytest."
+    """
+    block = _pin_block(tmp_path, ["app/src/main/kotlin/Calc.kt"])
+    assert "**kotlin** project" in block
+    assert "framework: gradle" in block
+
+
+def test_java_is_deliberately_unchanged(tmp_path: Any) -> None:
+    """Java's identical hole is #1321; widening it here would be out of scope.
+
+    There is no in-cluster Java lane to prove a Java pin against, so this test
+    records the choice rather than leaving it to drift.
+    """
+    block = _pin_block(tmp_path, ["src/main/java/Calc.java"])
+    assert "No deterministic language signal" in block
+
+
+def test_a_gradle_acceptance_criterion_pins_kotlin_without_any_diff(
+    tmp_path: Any,
+) -> None:
+    """AC commands are the signal when no diff is available (#443's path)."""
+    block = _pin_block(tmp_path, [], ac_text="AC#1: `gradle test` passes.\n")
+    assert "**kotlin** project" in block

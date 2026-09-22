@@ -507,11 +507,18 @@ def _build_framework_registry_block() -> str:
             # points here instead of restating a convention per language, so a
             # new framework arrives with its own paths already stated.
             conventions = ", ".join(desc.test_path_conventions)
+            # The detection vocabulary the prompt's Step 0/Step 3 used to
+            # restate per language (#1311): the deliverable extensions this
+            # language owns, and the AC commands that name it.
+            detects = ", ".join(desc.source_extensions)
+            ac_tokens = ", ".join(f"`{t}`" for t in desc.ac_command_tokens)
             lines.append(
                 f"- {name}: language={desc.language},"
                 f" lanes=[{lane_vals}],"
                 f" image={desc.runtime.image}"
                 + (f", tests={conventions}" if conventions else "")
+                + (f", detects={detects}" if detects else "")
+                + (f", ac={ac_tokens}" if ac_tokens else "")
             )
         return "\n".join(lines) + "\n"
     except Exception:  # noqa: BLE001
