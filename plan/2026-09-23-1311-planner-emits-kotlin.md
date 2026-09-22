@@ -156,6 +156,52 @@ Branch `fix/1311-planner-kotlin` off `dev`, one commit per step.
   The registry rows also gained `detects=` and `ac=`, so every fact the deleted
   prose stated is still in the prompt, rendered from the descriptors.
 
+## Step 6 evidence (live, 2026-09-23)
+
+**The Planner (real LLM session, new prompt) on a Kotlin/Gradle fixture** whose
+spec names two acceptance criteria. Emitted `test_plan.json`:
+
+```
+calc-add-returns-sum:             language=kotlin framework=gradle lane=unit
+   files_to_create: src/test/kotlin/CalcAddTest.kt      verify: gradle test
+calc-divide-rejects-zero-divisor: language=kotlin framework=gradle lane=unit
+   files_to_create: src/test/kotlin/CalcDivideTest.kt   verify: gradle test
+```
+
+`_validate_emitted_plan` on that file, unmodified: `ok = True, error_kind = ''`.
+On `origin/dev` the same fixture renders "No deterministic language signal", and
+`framework: gradle` is rejected as `invalid_framework` (no descriptor).
+
+**The evaluator's own partition, in-cluster** (`_completed_kotlin_subtasks` +
+`_build_all_bundles` in the running pod, dispatching a real Nix Job
+`tfsbx-d68d077911`): both planned subtasks reached the Kotlin lane and returned
+`StabilityVerdict.STABLE`.
+
+**Real counts from the merged JUnit report** (not a bare exit code):
+
+```
+GREEN RETURNCODE 0
+GREEN SUITE name="CalcAddTest"    tests="1" skipped="0" failures="0" errors="0"
+GREEN SUITE name="CalcDivideTest" tests="1" skipped="0" failures="0" errors="0"
+GREEN GRADLE BUILD SUCCESSFUL in 41s
+```
+
+**Mutation** — `assertEquals(5, Calc.add(2, 3))` changed to expect `6`, same
+path re-run. The verdict follows the tests, so the green above is not
+pass-shaped:
+
+```
+MUTANT RETURNCODE 1
+MUTANT SUITE name="CalcAddTest"    tests="1" failures="1"
+MUTANT SUITE name="CalcDivideTest" tests="1" failures="0"
+MUTANT FAILURE_MSG org.opentest4j.AssertionFailedError: expected: <6> but was: <5>
+MUTANT GRADLE CalcAddTest > addsTwoNumbers() FAILED
+MUTANT GRADLE 2 tests completed, 1 failed
+MUTANT GRADLE BUILD FAILED in 40s
+```
+
+Scratch dirs removed from the pod afterwards.
+
 ## Tests
 
 ```sh

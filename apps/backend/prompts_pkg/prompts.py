@@ -547,18 +547,25 @@ _NO_DESCRIPTOR_AC_COMMANDS: tuple[tuple[str, str], ...] = (
 )
 
 
-def _registry_descriptors() -> list[Any]:
-    """Every framework descriptor, or [] if the registry cannot be read.
+def _registry_map() -> dict[str, Any]:
+    """The framework registry as {name: descriptor}, or {} if it cannot be read.
 
-    Never raises: language pinning degrades to the descriptor-less entries
-    rather than breaking planning (same contract as the registry block).
+    The single deferred import of the registry in this module. Never raises:
+    language pinning degrades to the descriptor-less entries below rather than
+    breaking planning.
     """
     try:
-        from framework_registry import load_registry  # deferred: not on hot path
+        # Deferred: keeps this module import-cheap.
+        from framework_registry import load_registry  # noqa: PLC0415
 
-        return list(load_registry().values())
+        return dict(load_registry())
     except Exception:  # noqa: BLE001 — never break planning on a registry read
-        return []
+        return {}
+
+
+def _registry_descriptors() -> list[Any]:
+    """Every framework descriptor, or [] if the registry cannot be read."""
+    return list(_registry_map().values())
 
 
 def _build_ext_language() -> dict[str, str]:
@@ -850,12 +857,7 @@ def _build_detected_language_block(spec_dir: Path, project_dir: Path) -> str:
     """
     header = "## DETECTED PROJECT LANGUAGE"
 
-    try:
-        from framework_registry import load_registry  # deferred: not on hot path
-
-        registry = load_registry()
-    except Exception:  # noqa: BLE001 — never break planning on a registry read
-        registry = {}
+    registry = _registry_map()
 
     # (1) STRONGEST (#696): the files the build actually changed on the ingest
     # source branch (or, failing that, the snapshotter's diff.patch).
