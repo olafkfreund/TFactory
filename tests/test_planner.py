@@ -908,6 +908,8 @@ def _make_polyglot_subtask(
         st["files_to_create"] = [f"tests/e2e/{subtask_id}.spec.ts"]
     elif framework in ("jest", "vitest"):
         st["files_to_create"] = [f"tests/{subtask_id}.test.ts"]
+    elif framework == "gradle":
+        st["files_to_create"] = [f"src/test/kotlin/{subtask_id}Test.kt"]
     if language is not None:
         st["language"] = language
     if framework is not None:
@@ -976,7 +978,80 @@ async def test_validator_accepts_legacy_v01_subtask_without_framework(
     assert status["status"] == "planned"
 
 
+@pytest.mark.asyncio
+async def test_validator_accepts_kotlin_gradle_unit_subtask(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """(kotlin, gradle, unit) is valid — #1311.
+
+    The evaluator already routes ``language == "kotlin"`` to
+    ``run_gradle_lane_via_nix`` (Factory#1712), but the post-emit validator
+    checks (language, framework, lane) against the framework registry. Without
+    ``frameworks/gradle/descriptor.yaml`` this plan is rejected as
+    ``invalid_framework`` and no Kotlin subtask can ever reach the lane.
+    """
+    subtasks = [
+        _make_polyglot_subtask(
+            subtask_id="kt-1", language="kotlin", framework="gradle", lane="unit"
+        ),
+    ]
+    calls = mock_sdk(plans=[_make_polyglot_plan_json(subtasks)])
+    ok = await run_planner(spec_dir, project_dir)
+    assert ok is True
+    assert len(calls) == 1, "a valid Kotlin plan must not trigger a retry"
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["status"] == "planned"
+
+
 # ── Polyglot validator rejection paths ───────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_validator_rejects_kotlin_browser_lane(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """gradle declares only the unit lane → a Kotlin browser subtask is rejected.
+
+    ``languages/kotlin.yaml`` marks browser ``available: false`` with a
+    mandatory RFC-0006 reason; the framework descriptor must not widen it.
+    """
+    bad = _make_polyglot_plan_json(
+        [
+            _make_polyglot_subtask(
+                subtask_id="kt-br", language="kotlin", framework="gradle", lane="browser"
+            )
+        ]
+    )
+    calls = mock_sdk(plans=[bad, _make_valid_plan_json(1)])
+    ok = await run_planner(spec_dir, project_dir)
+    assert ok is True
+    assert len(calls) == 2, "the browser lane must be rejected and retried"
+    assert "invalid_framework" in calls[1]["prompt"] or "RETRY" in calls[1]["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_validator_rejects_kotlin_on_the_java_framework(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """junit is language=java → (kotlin, junit, unit) is a mismatch, not a shortcut.
+
+    frameworks/junit claims ``build.gradle``/``build.gradle.kts`` as manifest
+    signals, so a Kotlin repo can look like Java; the validator must still
+    refuse to file a Kotlin subtask under the Java framework, which would route
+    it to the docker-host runner instead of the in-cluster Nix Gradle lane.
+    """
+    bad = _make_polyglot_plan_json(
+        [
+            _make_polyglot_subtask(
+                subtask_id="kt-junit", language="kotlin", framework="junit", lane="unit"
+            )
+        ]
+    )
+    calls = mock_sdk(plans=[bad, _make_valid_plan_json(1)])
+    ok = await run_planner(spec_dir, project_dir)
+    assert ok is True
+    assert len(calls) == 2, "a language/framework mismatch must be rejected"
+    assert "invalid_framework" in calls[1]["prompt"] or "RETRY" in calls[1]["prompt"]
 
 
 @pytest.mark.asyncio

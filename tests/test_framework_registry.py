@@ -690,3 +690,46 @@ def test_enterprise_framework_templates_exist() -> None:
     }
     assert any(t.endswith(".feature.tmpl") for t in cucumber)
     assert any("steps" in t for t in cucumber) and any("world" in t for t in cucumber)
+
+
+@pytest.mark.skipif(
+    not _REAL_FRAMEWORKS_DIR.is_dir(),
+    reason=f"frameworks/ directory not found at {_REAL_FRAMEWORKS_DIR}",
+)
+def test_gradle_descriptor_declares_the_kotlin_unit_lane_only() -> None:
+    """The Kotlin framework the Planner needs (#1311), with no widened lanes.
+
+    ``languages/kotlin.yaml`` marks browser and integration ``available: false``
+    with mandatory RFC-0006 VAL-0 reasons, and the in-cluster lane
+    (``run_gradle_lane_via_nix``, Factory#1712) runs only ``gradle test``.
+    """
+    desc = get_descriptor("gradle", frameworks_dir=_REAL_FRAMEWORKS_DIR)
+    assert desc.language == "kotlin"
+    assert [ln.value if hasattr(ln, "value") else str(ln) for ln in desc.lanes] == [
+        "unit"
+    ]
+    # No coverage is produced by the Nix Gradle lane; claiming one would
+    # advertise a signal nothing writes.
+    assert desc.coverage_strategy == "skip"
+    assert any("src/test/kotlin" in c for c in desc.test_path_conventions)
+    assert desc.context_block.strip(), "Kotlin generation guidance is the point of #1311"
+
+
+@pytest.mark.skipif(
+    not _REAL_FRAMEWORKS_DIR.is_dir(),
+    reason=f"frameworks/ directory not found at {_REAL_FRAMEWORKS_DIR}",
+)
+def test_no_manifest_signal_is_claimed_by_two_languages() -> None:
+    """A manifest signal naming two languages is discarded as ambiguous (#1311).
+
+    frameworks/junit claims ``build.gradle``/``build.gradle.kts`` for Java. If
+    the Kotlin descriptor claimed them too, the signal would name two languages
+    and be dropped, weakening Java detection rather than adding Kotlin.
+    """
+    registry = load_registry(frameworks_dir=_REAL_FRAMEWORKS_DIR)
+    owners: dict[str, set[str]] = {}
+    for desc in registry.values():
+        for sig in desc.manifest_signals:
+            owners.setdefault(sig, set()).add(desc.language)
+    contested = {sig: sorted(langs) for sig, langs in owners.items() if len(langs) > 1}
+    assert not contested, f"manifest signals claimed by two languages: {contested}"

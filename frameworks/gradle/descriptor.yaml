@@ -1,0 +1,93 @@
+# frameworks/gradle/descriptor.yaml
+#
+# Kotlin / Gradle descriptor (#1311). Makes the in-cluster Kotlin verify lane
+# from Factory#1712 reachable from a planned task: the evaluator already routes
+# `language == "kotlin"` to `run_gradle_lane_via_nix`, and
+# `_validate_framework_consistency` validates every subtask's
+# (language, framework, lane) against THIS registry — so without a descriptor a
+# Kotlin subtask is rejected as `invalid_framework` and can never be emitted.
+#
+# Unit only, on purpose: `tools/runners/languages/kotlin.yaml` (hub canonical
+# `contracts/languages/kotlin.yaml`) marks browser and integration
+# `available: false` with mandatory RFC-0006 VAL-0 reasons. Declaring them here
+# would let the Planner emit a lane nothing can run.
+#
+# `frameworks/junit` is deliberately left alone. It declares `language: java`
+# and claims `build.gradle`/`build.gradle.kts` as manifest signals; this
+# descriptor keeps Kotlin-specific signals so the two never both match (a
+# manifest signal is only trusted when it names exactly one language).
+#
+name: gradle
+language: kotlin
+lanes:
+  - unit
+
+# Gradle 8.x. The proven toolchain (Factory#1712) is gradle-8.14.4 with
+# kotlin-2.x and JDK 21.
+version_range: ">=8.0,<9.0"
+
+runtime:
+  # `runtime.image` is required and non-empty by the descriptor validator. As
+  # with frameworks/go-test, the image is nominal: the unit lane runs
+  # in-cluster as a per-task Nix dev shell (RFC-0005) via TFactory's
+  # `run_gradle_lane_via_nix`, which supplies kotlin+gradle+jdk21 from the
+  # language descriptor's `nix.packages`. There is no container runtime in the
+  # cluster for this lane to use.
+  image: tfactory-runner-kotlin:latest
+  entrypoint:
+    - gradle
+    - "test"
+    - "--no-daemon"
+    - "--console=plain"
+
+# Acceptance-criteria command tokens that pin this framework's language (#1311).
+ac_command_tokens:
+  - "gradle test"
+  - "./gradlew test"
+
+# Kotlin-specific manifest signals only — see the note above about junit.
+manifest_signals:
+  - "settings.gradle.kts"
+  - "build.gradle.kts:kotlin"
+  - "gradle/libs.versions.toml:kotlin"
+
+# Gradle's convention: tests live under the module's src/test/kotlin.
+# `_gradle_module_dir` resolves the enclosing module from one of these paths.
+test_path_conventions:
+  - "src/test/kotlin/**/*Test.kt"
+  - "**/src/test/kotlin/**/*.kt"
+
+# The Nix Gradle lane merges the per-class JUnit XML into one report and
+# collects no coverage (Factory#1712). Claiming jacoco here would advertise a
+# coverage signal nothing produces.
+coverage_strategy: skip
+
+context_block: |
+  You are generating Kotlin tests that run under `gradle test` (JUnit 5).
+
+  Placement:
+    - Tests go under the module's `src/test/kotlin/`, mirroring the package of
+      the code under test (e.g. `src/test/kotlin/com/acme/CalcTest.kt` for
+      `src/main/kotlin/com/acme/Calc.kt`).
+    - One test class per class under test, named `<ClassName>Test`.
+
+  Test structure:
+    - One `@Test fun` per behaviour, named descriptively in backticks
+      (e.g. ``@Test fun `returns empty when input is blank`()``) or in
+      lowerCamelCase (e.g. `returnsEmptyWhenInputBlank`).
+    - Use `@Nested` inner classes when a unit has several behaviours.
+
+  Assertions:
+    - Prefer `kotlin.test` (`assertEquals`, `assertTrue`, `assertFailsWith`) or
+      `org.junit.jupiter.api.Assertions`. Use whichever the module already
+      depends on; do NOT add a new test dependency.
+    - Assert one logical behaviour per test.
+
+  Error paths:
+    - Assert the happy path AND at least one boundary or error case
+      (e.g. `assertFailsWith<IllegalArgumentException> { ... }`).
+
+  Determinism (avoid flaky tests):
+    - Never use `Thread.sleep` for synchronisation.
+    - Do not depend on wall-clock time, locale defaults or map iteration order.
+    - Do not call network services; the lane runs with restricted egress.
