@@ -149,3 +149,26 @@ def test_language_pinning_survives_an_unreadable_registry(
     assert prompts._registry_descriptors() == []
     # Only the descriptor-less entries remain, and nothing raises.
     assert prompts._build_ext_language() == prompts._NO_DESCRIPTOR_EXT_LANGUAGE
+
+
+def test_registry_block_states_each_framework_s_test_paths() -> None:
+    """The prompt's file-naming rule points at the descriptor (#1311).
+
+    Kotlin's row must carry Gradle's conventional path, or the Planner would
+    have to infer where a Kotlin test belongs — and a test written outside
+    ``src/test/kotlin`` is not run by ``gradle test`` at all.
+    """
+    block = prompts._build_framework_registry_block()
+    gradle_row = next(
+        line for line in block.splitlines() if line.startswith("- gradle:")
+    )
+    assert "language=kotlin" in gradle_row
+    assert "src/test/kotlin" in gradle_row
+    # Pre-existing rows keep their language and gain their own conventions.
+    go_row = next(line for line in block.splitlines() if line.startswith("- go-test:"))
+    assert "language=go" in go_row and "*_test.go" in go_row
+
+
+def test_registry_block_stays_small_enough_to_inject() -> None:
+    """It is prepended to every planning prompt; a runaway block costs tokens."""
+    assert len(prompts._build_framework_registry_block()) < 4000

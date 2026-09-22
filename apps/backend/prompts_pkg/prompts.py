@@ -503,10 +503,15 @@ def _build_framework_registry_block() -> str:
             lane_vals = ", ".join(
                 ln.value if hasattr(ln, "value") else str(ln) for ln in desc.lanes
             )
+            # Test path conventions (#1311): the prompt's file-naming rule
+            # points here instead of restating a convention per language, so a
+            # new framework arrives with its own paths already stated.
+            conventions = ", ".join(desc.test_path_conventions)
             lines.append(
                 f"- {name}: language={desc.language},"
                 f" lanes=[{lane_vals}],"
                 f" image={desc.runtime.image}"
+                + (f", tests={conventions}" if conventions else "")
             )
         return "\n".join(lines) + "\n"
     except Exception:  # noqa: BLE001
