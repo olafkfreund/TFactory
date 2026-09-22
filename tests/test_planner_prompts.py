@@ -136,8 +136,13 @@ def test_replan_mentions_one_corrected_subtask() -> None:
 
 def test_initial_size_in_expected_range() -> None:
     p = get_tfactory_planner_prompt(Path("/ws/x"), Path("/p"))
-    # Body ~8 KB + context block; combined should be 5 KB – 15 KB
-    assert 5000 < len(p) < 15000, f"unexpected size: {len(p)}"
+    # Body ~8 KB + context block; combined should be 5 KB – 16 KB.
+    # Ceiling raised from 15 KB in #1311: the FRAMEWORK REGISTRY block now
+    # carries the language vocabulary (detects=/ac=/tests=) that planner.md
+    # used to restate in prose, so the block grew ~330 chars while the prose
+    # shrank — net +358 on a prompt that already sat at 14916. The block has
+    # its own tighter guard in test_planner_language_vocabulary.py.
+    assert 5000 < len(p) < 16000, f"unexpected size: {len(p)}"
 
 
 def test_replan_size_in_expected_range() -> None:

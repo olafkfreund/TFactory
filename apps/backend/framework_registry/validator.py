@@ -54,6 +54,8 @@ _REQUIRED_FIELDS = (
 _OPTIONAL_FIELDS_DEFAULTS: dict[str, Any] = {
     "templates": [],
     "evaluator_hooks": [],
+    "ac_command_tokens": [],
+    "source_extensions": [],
 }
 
 
@@ -264,6 +266,8 @@ def validate_descriptor(data: dict) -> FrameworkDescriptor:
 
     templates = _optional_list_of_str(data, "templates")
     evaluator_hooks = _optional_list_of_str(data, "evaluator_hooks")
+    ac_command_tokens = _optional_list_of_str(data, "ac_command_tokens")
+    source_extensions = _optional_list_of_str(data, "source_extensions")
 
     coverage_strategy = _parse_coverage_strategy(data["coverage_strategy"])  # type: ignore[arg-type]
 
@@ -291,4 +295,6 @@ def validate_descriptor(data: dict) -> FrameworkDescriptor:
         context_block=context_block_raw,
         evaluator_hooks=tuple(evaluator_hooks),
         multi_artifact=bool(data.get("multi_artifact", False)),
+        ac_command_tokens=tuple(ac_command_tokens),
+        source_extensions=tuple(source_extensions),
     )
