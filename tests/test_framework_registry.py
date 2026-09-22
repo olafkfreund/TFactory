@@ -712,7 +712,9 @@ def test_gradle_descriptor_declares_the_kotlin_unit_lane_only() -> None:
     # advertise a signal nothing writes.
     assert desc.coverage_strategy == "skip"
     assert any("src/test/kotlin" in c for c in desc.test_path_conventions)
-    assert desc.context_block.strip(), "Kotlin generation guidance is the point of #1311"
+    assert desc.context_block.strip(), (
+        "Kotlin generation guidance is the point of #1311"
+    )
 
 
 @pytest.mark.skipif(
