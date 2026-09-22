@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1311
 spec: spec/2026-09-23-1311-planner-emits-kotlin.md
 ---
