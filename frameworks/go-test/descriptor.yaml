@@ -40,6 +40,10 @@ ac_command_tokens:
   - "go build"
 
 # Manifest signals the Planner uses to detect a Go module.
+# Deliverable extensions this language owns (#1311) — Go source files.
+source_extensions:
+  - ".go"
+
 manifest_signals:
   - "go.mod"
   - "go.sum"

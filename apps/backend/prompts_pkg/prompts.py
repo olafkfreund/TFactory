@@ -516,35 +516,80 @@ def _build_framework_registry_block() -> str:
         )
 
 
-# Acceptance-criteria *command* tokens → target language (#443): a Go spec says
-# "`go test ./...` passes", a Python one says "pytest", etc. Ordered by
-# priority; first hit wins. Manifest files only corroborate (a repo can carry
-# go.mod AND pyproject.toml — e.g. the polyglot benchmark repo — so a manifest
-# scan alone is ambiguous).
-_AC_COMMAND_LANGUAGE: tuple[tuple[str, str], ...] = (
-    ("go test", "go"),
-    ("go build", "go"),
+# Languages with NO framework descriptor (#1311). Everything else is derived
+# from the registry below, so onboarding a language is a descriptor drop. Rust
+# has no descriptor under frameworks/, so deriving alone would silently lose
+# `.rs` -> rust and regress #443; these entries are exactly what no descriptor
+# can supply today. A test asserts this set and the derived one never overlap,
+# so a language can never be declared in both places.
+_NO_DESCRIPTOR_EXT_LANGUAGE: dict[str, str] = {
+    ".rs": "rust",
+}
+_NO_DESCRIPTOR_AC_COMMANDS: tuple[tuple[str, str], ...] = (
     ("cargo test", "rust"),
     ("cargo build", "rust"),
-    ("pytest", "python"),
-    ("npm test", "typescript"),
-    ("jest", "typescript"),
-    ("vitest", "typescript"),
 )
 
-# Changed-/named-file extensions → target language (#696). The deliverable's
-# language is whatever the build actually touched — on mixed-language repos
-# (go.mod AND pyproject.toml left by earlier polyglot runs) repo markers and
-# even AC command tokens are weaker signals than the source-branch diff.
-_EXT_LANGUAGE: dict[str, str] = {
-    ".py": "python",
-    ".go": "go",
-    ".rs": "rust",
-    ".ts": "typescript",
-    ".tsx": "typescript",
-    ".js": "typescript",
-    ".jsx": "typescript",
-}
+
+def _registry_descriptors() -> list[Any]:
+    """Every framework descriptor, or [] if the registry cannot be read.
+
+    Never raises: language pinning degrades to the descriptor-less entries
+    rather than breaking planning (same contract as the registry block).
+    """
+    try:
+        from framework_registry import load_registry  # deferred: not on hot path
+
+        return list(load_registry().values())
+    except Exception:  # noqa: BLE001 — never break planning on a registry read
+        return []
+
+
+def _build_ext_language() -> dict[str, str]:
+    """Changed-/named-file extensions → target language (#696, derived #1311).
+
+    The deliverable's language is whatever the build actually touched — on
+    mixed-language repos (go.mod AND pyproject.toml left by earlier polyglot
+    runs) repo markers and even AC command tokens are weaker signals than the
+    source-branch diff.
+
+    Built from each descriptor's ``source_extensions``. An extension claimed by
+    two different languages is dropped rather than guessed: an ambiguous signal
+    is worse than no signal here, because a wrong pin sends the Planner to the
+    wrong framework entirely.
+    """
+    owners: dict[str, set[str]] = {}
+    for desc in _registry_descriptors():
+        for ext in desc.source_extensions:
+            owners.setdefault(ext.lower(), set()).add(desc.language)
+    derived = {
+        ext: next(iter(langs)) for ext, langs in owners.items() if len(langs) == 1
+    }
+    return {**_NO_DESCRIPTOR_EXT_LANGUAGE, **derived}
+
+
+def _build_ac_command_language() -> tuple[tuple[str, str], ...]:
+    """Acceptance-criteria *command* tokens → target language (#443, derived #1311).
+
+    A Go spec says "`go test ./...` passes", a Kotlin one "`gradle test`". First
+    hit wins, so longer tokens are ordered first to keep a prefix from shadowing
+    a more specific token. Manifest files only corroborate (a repo can carry
+    go.mod AND pyproject.toml — e.g. the polyglot benchmark repo — so a manifest
+    scan alone is ambiguous).
+    """
+    pairs: list[tuple[str, str]] = [
+        (token.lower(), desc.language)
+        for desc in _registry_descriptors()
+        for token in desc.ac_command_tokens
+    ]
+    pairs.extend(_NO_DESCRIPTOR_AC_COMMANDS)
+    # Deterministic: longest token first, then alphabetical.
+    return tuple(sorted(set(pairs), key=lambda p: (-len(p[0]), p[0])))
+
+
+_AC_COMMAND_LANGUAGE: tuple[tuple[str, str], ...] = _build_ac_command_language()
+
+_EXT_LANGUAGE: dict[str, str] = _build_ext_language()
 
 
 def _language_from_files(files: list[str]) -> str | None:

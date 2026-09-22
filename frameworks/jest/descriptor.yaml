@@ -39,6 +39,13 @@ ac_command_tokens:
   - "npm test"
 
 # Manifest signals for Jest detection.
+# Deliverable extensions this language owns (#1311) — TypeScript/JavaScript source files.
+source_extensions:
+  - ".ts"
+  - ".tsx"
+  - ".js"
+  - ".jsx"
+
 manifest_signals:
   - "package.json:devDependencies.jest"
   - "package.json:dependencies.jest"

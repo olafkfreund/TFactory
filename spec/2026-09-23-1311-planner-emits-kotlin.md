@@ -57,6 +57,11 @@ A framework descriptor for Kotlin, following `frameworks/go-test/descriptor.yaml
 
 `prompts_pkg/prompts.py`:
 
+- **Erratum (implementation, #1311):** deriving from `test_path_conventions`
+  was measured unsafe — it maps `.json` onto the cloud frameworks' language
+  and would mis-pin any `package.json` edit, and it cannot express `.kts`.
+  Descriptors declare an explicit optional `source_extensions` instead; see
+  the plan's deviations. The paragraph below describes the original intent.
 - **`_EXT_LANGUAGE` is derived** from the registry's `test_path_conventions`:
   the suffix of each glob maps to that descriptor's language, and an extension
   claimed by two languages is dropped as ambiguous (`.feature` is claimed by

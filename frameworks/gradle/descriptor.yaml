@@ -45,6 +45,12 @@ ac_command_tokens:
   - "gradle test"
   - "./gradlew test"
 
+# Deliverable extensions this language owns (#1311) — Kotlin source and
+# build-script files.
+source_extensions:
+  - ".kt"
+  - ".kts"
+
 # Kotlin-specific manifest signals only — see the note above about junit.
 manifest_signals:
   - "settings.gradle.kts"

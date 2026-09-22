@@ -134,6 +134,14 @@ class FrameworkDescriptor:
     # vocabulary lives with the framework rather than in a second hand-kept map.
     # Optional: a descriptor with no distinctive command declares none.
     ac_command_tokens: tuple[str, ...] = ()
+    # Deliverable file extensions this framework's language owns (#1311), e.g.
+    # (".kt", ".kts") for Kotlin. The Planner derives its changed-file language
+    # signal from these. Declared explicitly rather than inferred from
+    # ``test_path_conventions``: those globs describe TEST paths, and inferring
+    # from them maps ``.json`` (a cloud framework's findings glob) onto a
+    # language, which would mis-pin any repo that edits a package.json.
+    # Optional: a framework whose language owns no source extension declares none.
+    source_extensions: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         """Validate invariants that can't be expressed as type hints."""

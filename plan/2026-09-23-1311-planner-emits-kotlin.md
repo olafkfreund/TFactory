@@ -126,6 +126,24 @@ Branch `fix/1311-planner-kotlin` off `dev`, one commit per step.
    remaining sibling gap, and update memory with what the measurement showed
    (the validator was already descriptor-driven; the prompt was the only copy).
 
+## Deviations recorded during implementation
+
+- **Step 3 — the derivation source changed.** The spec said to derive
+  `_EXT_LANGUAGE` from each descriptor's `test_path_conventions`. Measured, that
+  is unsafe: those globs describe TEST paths, and the derivation yields
+  `.json -> cloud` (from the cloud frameworks' findings globs), which would
+  mis-pin any repo whose changed files include a `package.json`. It also yields
+  `.java -> java`, moving Java's behaviour, which the approved scope excludes.
+  `.kts` is not derivable from test globs at all.
+  Instead, descriptors declare an explicit optional `source_extensions`, the
+  same additive pattern as `ac_command_tokens` (step 2). The "one engine"
+  property is unchanged — the vocabulary still lives on the descriptor — but it
+  is declared rather than inferred. `frameworks/junit` deliberately declares
+  none, so Java pins exactly as before (`.java -> None`), and #1321 owns that
+  gap. The step 3 mutation is correspondingly "blank Kotlin's
+  `source_extensions`" rather than "remove go-test's `test_path_conventions`";
+  it fails two tests, as required.
+
 ## Tests
 
 ```sh
