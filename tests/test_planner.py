@@ -1018,7 +1018,10 @@ async def test_validator_rejects_kotlin_browser_lane(
     bad = _make_polyglot_plan_json(
         [
             _make_polyglot_subtask(
-                subtask_id="kt-br", language="kotlin", framework="gradle", lane="browser"
+                subtask_id="kt-br",
+                language="kotlin",
+                framework="gradle",
+                lane="browser",
             )
         ]
     )
