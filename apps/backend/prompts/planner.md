@@ -56,8 +56,8 @@ The file must be valid JSON that loads cleanly into the
   "description": "<one sentence, imperative — 'Verify the API returns 401 when ...'>",
   "status": "pending",
   "lane": "<unit|browser|api|integration|mutation>",
-  "language": "<python|typescript|go|rust>",
-  "framework": "<pytest|jest|playwright|go-test>",
+  "language": "<the language= value of a row in the FRAMEWORK REGISTRY above>",
+  "framework": "<that row's framework name>",
   "target_name": "<.tfactory.yml target name, or null if no target declared>",
   "intent": "<create|update|skip>",
   "target": "<repo-relative path>::<symbol>",
@@ -94,13 +94,18 @@ LANGUAGE block injected above is authoritative when present** — honour it. If 
 is absent or inconclusive, derive the language from the acceptance-criteria
 *commands* and the project manifest:
 
-- AC says `go test` / `go build`, or a `go.mod` exists → **`(go, go-test, unit)`**.
-- AC says `cargo test` / `cargo build`, or a `Cargo.toml` exists → **`rust`**.
-- AC says `pytest`, or `pyproject.toml` / `setup.py` exists → **`(python, pytest, unit)`**.
-- AC says `npm test` / `jest` / `vitest`, or `package.json` exists → **`(typescript, jest, unit)`**.
-  Name the test files `.test.js` unless the project actually ships TypeScript
-  (a `tsconfig.json` or `.ts` sources) — a `.test.ts` in a plain-JavaScript
-  project has no transform to run it, and is rejected as `invalid_test_path`.
+- Match the AC's command against the `ac=` tokens in the FRAMEWORK REGISTRY
+  block above; the matching row gives the `(language, framework, lane)` to use.
+  For example an AC saying `gradle test` names that row's language, not Java.
+- Failing that, match the changed files' extensions against each row's
+  `detects=` list.
+- The registry is the whole vocabulary: never invent a language or framework
+  that has no row, and never pair a language with another row's framework — the
+  post-emit validator rejects both.
+- For a TypeScript row, name the test files `.test.js` unless the project
+  actually ships TypeScript (a `tsconfig.json` or `.ts` sources) — a `.test.ts`
+  in a plain-JavaScript project has no transform to run it, and is rejected as
+  `invalid_test_path`.
 
 Set BOTH `language` and `framework` on every subtask to match. **Never leave
 `language` null and never default a non-Python target to pytest** — that emits
@@ -136,14 +141,10 @@ changed files in the diff:
 
 Look at the files changed in `diff.patch`:
 
-- Majority `.py` files → `(python, pytest, unit)` for unit / function tests.
-- Majority `.ts` / `.tsx` files → `(typescript, jest, unit)` for unit /
-  component tests.
-- Majority `.go` files → `(go, go-test, unit)`; tests live in `*_test.go`
-  next to the code.
-- Majority `.rs` files → `rust` (use the registry's Rust unit framework).
-- Mixed → emit separate subtasks per language (pytest for `.py`, Jest for
-  `.ts`, go-test for `.go`).
+- Take the majority extension and find the FRAMEWORK REGISTRY row whose
+  `detects=` list contains it; use that row's `(language, framework, lane)` and
+  write the test at the path its `tests=` conventions describe.
+- Mixed → emit separate subtasks per language, one per matching row.
 - If a TypeScript file is an E2E spec (name pattern `*.spec.ts`,
   `*.e2e.ts`) and there is a Playwright descriptor in the FRAMEWORK
   REGISTRY → use `(typescript, playwright, browser)`.
@@ -179,10 +180,12 @@ If no registry entry satisfies the constraint, default to
 3. **Budget:** hard cap **30 subtasks total**. Prefer breadth over depth.
 4. **`target`** = `<repo-relative path>::<symbol>`. Verify via Glob/Grep.
 5. **`rationale`** — copy AC text verbatim (≤ 200 chars) or `"AC#N: ..."`.
-6. **`files_to_create`** — one file per subtask. pytest → `tests/unit/test_*.py`;
-   jest → `tests/*.test.ts`; playwright → `tests/e2e/*.spec.ts`;
-   go-test → `<pkg>/<name>_test.go` **next to the code under test** (Go requires
-   `_test.go` files to sit in the package they test, not a separate `tests/` dir).
+6. **`files_to_create`** — one file per subtask, at a path matching the
+   `tests=` conventions on that framework's FRAMEWORK REGISTRY row. Two
+   conventions carry a gotcha worth restating: go-test requires
+   `<pkg>/<name>_test.go` **next to the code under test** (not a separate
+   `tests/` dir), and gradle requires the test under the module's
+   `src/test/kotlin/` (a Kotlin file anywhere else is not run by `gradle test`).
 7. **Mixed repos** — emit subtasks in *both* languages when diff touches both.
    Do NOT skip TypeScript subtasks; v0.2 lights multiple lanes.
 8. **No `replan-*` phases** in the initial plan.

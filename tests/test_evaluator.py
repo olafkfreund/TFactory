@@ -2215,3 +2215,83 @@ def test_resolve_subtask_outcomes():
     assert by_id["id"] == by_path["id"] == by_base["id"] == "ac1"
     assert ambiguous is None
     assert _resolve_subtask(plan, {"test_id": "nope"}) is None
+
+
+# ── #1258: the judge's bundle carries measured coverage / why it is N/A ──
+
+
+def _quiet_bundle_helpers(monkeypatch):
+    """Stub the per-signal helpers so a builder can run without a runner."""
+    import agents.evaluator as ev
+
+    for name in (
+        "_stability_for_subtask",
+        "_browser_evidence_stability",
+        "_lint_promotion_for_subtask",
+        "_flaky_history_for_subtask",
+        "_ci_parity_for_subtask",
+    ):
+        monkeypatch.setattr(ev, name, lambda *a, **k: None)
+    return ev
+
+
+def test_pytest_bundle_carries_the_measured_covered_lines(tmp_path, monkeypatch):
+    """The judge must see what the lane measured, not "browser lane" (#1258).
+
+    The report sits where the Nix batched path leaves it — under
+    ``_run_artifacts/<stem>/`` — and was written by the lane run, which
+    happens before the bundle is assembled.
+    """
+    ev = _quiet_bundle_helpers(monkeypatch)
+    d = tmp_path / "findings" / "_run_artifacts" / "test_request_id"
+    d.mkdir(parents=True)
+    (d / "coverage.xml").write_text(_COBERTURA)
+    subtask = {
+        "id": "t1",
+        "framework": "pytest",
+        "files_to_create": ["tests/unit/test_request_id.py"],
+    }
+
+    b = ev._assemble_signals(tmp_path, subtask, None, None)
+
+    assert b.coverage_covered_lines == 2  # SUT lines only, test file excluded
+    assert b.coverage_na_reason is None
+
+
+def test_pytest_bundle_without_a_report_is_not_measured(tmp_path, monkeypatch):
+    ev = _quiet_bundle_helpers(monkeypatch)
+    subtask = {"id": "t1", "framework": "pytest", "files_to_create": ["t.py"]}
+
+    b = ev._assemble_signals(tmp_path, subtask, None, None)
+
+    assert (b.coverage_covered_lines, b.coverage_na_reason) == (None, None)
+
+
+def test_skip_strategy_bundle_says_browser_lane(tmp_path, monkeypatch):
+    ev = _quiet_bundle_helpers(monkeypatch)
+    subtask = {"id": "t1", "framework": "playwright", "files_to_create": ["t.py"]}
+
+    b = ev._assemble_signals(tmp_path, subtask, None, None)
+
+    assert b.coverage_na_reason == "browser lane"
+    assert b.coverage_covered_lines is None
+
+
+@pytest.mark.parametrize(
+    ("builder", "reason"),
+    [
+        ("_build_browser_signal_bundle", "browser lane"),
+        ("_build_api_signal_bundle", "api lane — no line coverage"),
+        ("_build_jest_signal_bundle", "coverage not wired for this lane"),
+        ("_build_go_signal_bundle", "coverage not wired for this lane"),
+    ],
+)
+def test_each_lane_builder_states_why_coverage_is_na(
+    tmp_path, monkeypatch, builder, reason
+):
+    ev = _quiet_bundle_helpers(monkeypatch)
+    subtask = {"id": "t1", "files_to_create": ["t.py"]}
+
+    b = getattr(ev, builder)(tmp_path, tmp_path, subtask, None)
+
+    assert b.coverage_na_reason == reason
