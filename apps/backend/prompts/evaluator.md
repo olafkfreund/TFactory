@@ -119,6 +119,9 @@ strong signal for `reject` (when no other signal contradicts) — the
 test either duplicates existing coverage or asserts nothing
 non-trivial.
 
+`new_lines` needs a baseline snapshot. Without one you get
+`covered_sut_lines` instead — see "Coverage rule" below.
+
 ### 2. 3× stability re-run (pre-computed)
 
 `stability.verdict` is one of:
@@ -217,6 +220,9 @@ source code lines being tested). When you see:
 coverage: N/A (browser lane)
 ```
 
+(or any other `coverage: N/A (<reason>)`, e.g. `N/A (api lane — no line
+coverage)`):
+
 - **DO NOT** factor coverage into the verdict.
 - **DO NOT** penalise the test for "0% coverage" — the number is
   meaningless; there is no coverage to measure.
@@ -227,6 +233,19 @@ When you see a **numeric** coverage value (e.g. `coverage: delta_pct=+5.25,
 new_lines=2, new_files=0`), apply the normal coverage rule: high delta is a
 strong accept signal; `new_lines=0` is a reject signal (unless other
 signals are exceptional).
+
+When you see `coverage: not measured (no coverage report for this run)`, do
+not factor coverage into the verdict and **never** treat it as 0 — nothing
+was measured.
+
+When you see `coverage: covered_sut_lines=N (no baseline, …)`, N is the
+total number of subject (non-test) lines this test executed — **not**
+`new_lines`, so the `new_lines=0` rule does not apply:
+
+- `covered_sut_lines > 0` — evidence the test exercises the subject; weigh it
+  with the other signals.
+- `covered_sut_lines = 0` — the test executed none of the subject's code:
+  **flag** (not reject — weaker evidence than a baseline `new_lines=0`).
 
 ---
 
@@ -242,7 +261,10 @@ conflict, use this priority order (top wins):
 | semantic_relevance | low | reject |
 | lint_promotion.should_reject | true | reject |
 | ci_parity | mocked-subject | flag (downgrade accept → flag) |
-| coverage | N/A (browser lane) | skip coverage rule; use other signals |
+| coverage | N/A (browser lane) or any N/A (…) | skip coverage rule; use other signals |
+| coverage | not measured | skip coverage rule; never read as 0 |
+| coverage | covered_sut_lines = 0 | flag |
+| coverage | covered_sut_lines > 0 | supporting evidence; weigh with others |
 | coverage_delta.new_lines | 0 | reject (unless other signals exceptional) |
 | (all signals green) | — | accept |
 | (any conflict not above) | — | flag |
