@@ -39,9 +39,18 @@ runtime:
     - "--cov"
     - "--cov-report=xml:/scratch/coverage.xml"
 
+
+# Acceptance-criteria command tokens that pin this framework's language (#1311).
+ac_command_tokens:
+  - "pytest"
+
 # Manifest signals the Planner uses to detect pytest in a project.
 # Format: "<filename>:<key-or-section>" — the Planner checks these in order;
 # the first match wins.  Multiple signals increase detection confidence.
+# Deliverable extensions this language owns (#1311) — Python source files.
+source_extensions:
+  - ".py"
+
 manifest_signals:
   - "requirements.txt:pytest"
   - "requirements-dev.txt:pytest"

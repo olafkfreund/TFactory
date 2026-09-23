@@ -58,6 +58,30 @@ def test_alembic_upgrade_idempotent(test_postgres_url: str) -> None:
     )
 
 
+@pytest.mark.postgres
+@pytest.mark.slow
+def test_models_match_migrations(test_postgres_url: str) -> None:
+    """#1314 — the ORM models and the migrations describe the same schema.
+
+    On a database upgraded to head, ``alembic check`` must detect no upgrade
+    operations. Drift here means ``alembic revision --autogenerate`` would try to
+    drop real indexes/defaults/constraints along with whatever change it was
+    meant to capture. Production runs the migrations, so fix the MODELS.
+    """
+    if not alembic_available():
+        pytest.skip("alembic CLI not on PATH")
+
+    env = {"DATABASE_URL": test_postgres_url}
+    upgrade = run_alembic(["upgrade", "head"], env=env)  # idempotent (test above)
+    assert upgrade.returncode == 0, f"upgrade failed: {upgrade.stderr[-1000:]}"
+
+    check = run_alembic(["check"], env=env)
+    assert check.returncode == 0, (
+        "models and migrations disagree — align models.py to the migrations:\n"
+        f"{(check.stdout + check.stderr)[-3000:]}"
+    )
+
+
 def _init_db_subprocess(
     test_postgres_url: str, auto_apply: bool
 ) -> subprocess.CompletedProcess:
