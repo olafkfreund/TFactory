@@ -503,10 +503,26 @@ def _build_framework_registry_block() -> str:
             lane_vals = ", ".join(
                 ln.value if hasattr(ln, "value") else str(ln) for ln in desc.lanes
             )
+            # Test path conventions (#1311): the prompt's file-naming rule
+            # points here instead of restating a convention per language, so a
+            # new framework arrives with its own paths already stated.
+            # Two conventions are enough to show the shape; the full list is
+            # in the descriptor. Keeps the block small — it is prepended to
+            # every planning prompt.
+            conventions = ", ".join(desc.test_path_conventions[:2])
+            # The detection vocabulary the prompt's Step 0/Step 3 used to
+            # restate per language (#1311): the deliverable extensions this
+            # language owns, and the AC commands that name it.
+            detects = ", ".join(desc.source_extensions)
+            ac_tokens = ", ".join(f"`{t}`" for t in desc.ac_command_tokens)
             lines.append(
+                # No image: the Planner picks (language, framework, lane);
+                # the Executor resolves the runtime from the descriptor.
                 f"- {name}: language={desc.language},"
-                f" lanes=[{lane_vals}],"
-                f" image={desc.runtime.image}"
+                f" lanes=[{lane_vals}]"
+                + (f", tests={conventions}" if conventions else "")
+                + (f", detects={detects}" if detects else "")
+                + (f", ac={ac_tokens}" if ac_tokens else "")
             )
         return "\n".join(lines) + "\n"
     except Exception:  # noqa: BLE001
@@ -516,35 +532,87 @@ def _build_framework_registry_block() -> str:
         )
 
 
-# Acceptance-criteria *command* tokens → target language (#443): a Go spec says
-# "`go test ./...` passes", a Python one says "pytest", etc. Ordered by
-# priority; first hit wins. Manifest files only corroborate (a repo can carry
-# go.mod AND pyproject.toml — e.g. the polyglot benchmark repo — so a manifest
-# scan alone is ambiguous).
-_AC_COMMAND_LANGUAGE: tuple[tuple[str, str], ...] = (
-    ("go test", "go"),
-    ("go build", "go"),
+# Languages with NO framework descriptor (#1311). Everything else is derived
+# from the registry below, so onboarding a language is a descriptor drop. Rust
+# has no descriptor under frameworks/, so deriving alone would silently lose
+# `.rs` -> rust and regress #443; these entries are exactly what no descriptor
+# can supply today. A test asserts this set and the derived one never overlap,
+# so a language can never be declared in both places.
+_NO_DESCRIPTOR_EXT_LANGUAGE: dict[str, str] = {
+    ".rs": "rust",
+}
+_NO_DESCRIPTOR_AC_COMMANDS: tuple[tuple[str, str], ...] = (
     ("cargo test", "rust"),
     ("cargo build", "rust"),
-    ("pytest", "python"),
-    ("npm test", "typescript"),
-    ("jest", "typescript"),
-    ("vitest", "typescript"),
 )
 
-# Changed-/named-file extensions → target language (#696). The deliverable's
-# language is whatever the build actually touched — on mixed-language repos
-# (go.mod AND pyproject.toml left by earlier polyglot runs) repo markers and
-# even AC command tokens are weaker signals than the source-branch diff.
-_EXT_LANGUAGE: dict[str, str] = {
-    ".py": "python",
-    ".go": "go",
-    ".rs": "rust",
-    ".ts": "typescript",
-    ".tsx": "typescript",
-    ".js": "typescript",
-    ".jsx": "typescript",
-}
+
+def _registry_map() -> dict[str, Any]:
+    """The framework registry as {name: descriptor}, or {} if it cannot be read.
+
+    The single deferred import of the registry in this module. Never raises:
+    language pinning degrades to the descriptor-less entries below rather than
+    breaking planning.
+    """
+    try:
+        # Deferred: keeps this module import-cheap.
+        from framework_registry import load_registry  # noqa: PLC0415
+
+        return dict(load_registry())
+    except Exception:  # noqa: BLE001 — never break planning on a registry read
+        return {}
+
+
+def _registry_descriptors() -> list[Any]:
+    """Every framework descriptor, or [] if the registry cannot be read."""
+    return list(_registry_map().values())
+
+
+def _build_ext_language() -> dict[str, str]:
+    """Changed-/named-file extensions → target language (#696, derived #1311).
+
+    The deliverable's language is whatever the build actually touched — on
+    mixed-language repos (go.mod AND pyproject.toml left by earlier polyglot
+    runs) repo markers and even AC command tokens are weaker signals than the
+    source-branch diff.
+
+    Built from each descriptor's ``source_extensions``. An extension claimed by
+    two different languages is dropped rather than guessed: an ambiguous signal
+    is worse than no signal here, because a wrong pin sends the Planner to the
+    wrong framework entirely.
+    """
+    owners: dict[str, set[str]] = {}
+    for desc in _registry_descriptors():
+        for ext in desc.source_extensions:
+            owners.setdefault(ext.lower(), set()).add(desc.language)
+    derived = {
+        ext: next(iter(langs)) for ext, langs in owners.items() if len(langs) == 1
+    }
+    return {**_NO_DESCRIPTOR_EXT_LANGUAGE, **derived}
+
+
+def _build_ac_command_language() -> tuple[tuple[str, str], ...]:
+    """Acceptance-criteria *command* tokens → target language (#443, derived #1311).
+
+    A Go spec says "`go test ./...` passes", a Kotlin one "`gradle test`". First
+    hit wins, so longer tokens are ordered first to keep a prefix from shadowing
+    a more specific token. Manifest files only corroborate (a repo can carry
+    go.mod AND pyproject.toml — e.g. the polyglot benchmark repo — so a manifest
+    scan alone is ambiguous).
+    """
+    pairs: list[tuple[str, str]] = [
+        (token.lower(), desc.language)
+        for desc in _registry_descriptors()
+        for token in desc.ac_command_tokens
+    ]
+    pairs.extend(_NO_DESCRIPTOR_AC_COMMANDS)
+    # Deterministic: longest token first, then alphabetical.
+    return tuple(sorted(set(pairs), key=lambda p: (-len(p[0]), p[0])))
+
+
+_AC_COMMAND_LANGUAGE: tuple[tuple[str, str], ...] = _build_ac_command_language()
+
+_EXT_LANGUAGE: dict[str, str] = _build_ext_language()
 
 
 def _language_from_files(files: list[str]) -> str | None:
@@ -789,12 +857,7 @@ def _build_detected_language_block(spec_dir: Path, project_dir: Path) -> str:
     """
     header = "## DETECTED PROJECT LANGUAGE"
 
-    try:
-        from framework_registry import load_registry  # deferred: not on hot path
-
-        registry = load_registry()
-    except Exception:  # noqa: BLE001 — never break planning on a registry read
-        registry = {}
+    registry = _registry_map()
 
     # (1) STRONGEST (#696): the files the build actually changed on the ingest
     # source branch (or, failing that, the snapshotter's diff.patch).
@@ -1529,16 +1592,25 @@ def _format_evaluator_per_test_block(bundle) -> str:
             f"coverage: delta_pct={delta_pct:+.2f}, "
             f"new_lines={new_lines_count}, new_files={new_files}"
         )
+    elif (
+        covered := _format_signal_value(bundle, "coverage_covered_lines", default=None)
+    ) is not None:
+        # No baseline, so no delta — but the lane measured what this test ran
+        # (#1258). Not ``new_lines``: evaluator.md's new_lines=0 rule is about
+        # a baseline delta, a different quantity.
+        coverage_line = (
+            f"coverage: covered_sut_lines={covered} (no baseline, so no delta — "
+            "total subject lines this test executed, not new lines)"
+        )
+    elif (
+        reason := _format_signal_value(bundle, "coverage_na_reason", default=None)
+    ) is not None:
+        # The builder knows the lane can't measure coverage (e.g. browser lane,
+        # Decision 11); evaluator.md skips the coverage rule on any "N/A".
+        coverage_line = f"coverage: N/A ({reason})"
     else:
-        # coverage_delta is None — either the framework explicitly skips
-        # coverage measurement (Browser lane / Playwright, Decision 11) or
-        # the coverage XML was absent for this run.
-        #
-        # In both cases, render "N/A (browser lane)" so the Evaluator LLM
-        # does NOT interpret this as "0% coverage" and issue a spurious
-        # reject.  The evaluator.md verdict-priority section instructs the
-        # LLM to skip the coverage rule when it sees "N/A".
-        coverage_line = "coverage: N/A (browser lane)"
+        # Never render a missing report as 0% — the judge would reject on it.
+        coverage_line = "coverage: not measured (no coverage report for this run)"
 
     stability = _format_signal_value(bundle, "stability", default=None)
     if stability is not None:

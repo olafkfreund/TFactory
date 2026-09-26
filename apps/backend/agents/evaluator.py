@@ -670,12 +670,12 @@ class EvaluatorSignals:
     this test). The prompt helper renders missing signals as
     "not computed" rather than crashing.
 
-    ``coverage_delta`` is explicitly ``None`` (not zero) when the
-    framework's ``coverage_strategy == "skip"`` (Decision 11 — Browser
-    lane).  This prevents the Evaluator prompt from seeing "0% coverage"
-    and issuing a spurious reject for Playwright tests.  A ``None``
-    value is rendered as "N/A (browser lane)" by
-    ``_format_evaluator_per_test_block``.
+    ``coverage_delta`` is only set when a baseline snapshot exists. Without
+    one, ``coverage_covered_lines`` carries what the lane measured (total SUT
+    lines the test executed), and ``coverage_na_reason`` says why coverage does
+    not apply to this lane at all (e.g. "browser lane", Decision 11) — set by
+    the builder that knows the lane, so the judge is never told "browser lane"
+    about a unit test, nor sees "0%" for a lane that cannot measure (#1258).
     """
 
     test_id: str
@@ -688,6 +688,8 @@ class EvaluatorSignals:
     lint_promotion: Any = None  # PromotionResult | None
     flaky_history: Any = None  # FlakyHistory | None  (cross-run flip-rate, #37)
     ci_parity: Any = None  # CIParityResult | None  (env-parity + real-imports, #302)
+    coverage_covered_lines: int | None = None  # measured, no baseline (#1258)
+    coverage_na_reason: str | None = None  # why coverage does not apply (#1258)
 
 
 # ─── Signal-bundle assembly ─────────────────────────────────────────────
@@ -1564,12 +1566,22 @@ def _assemble_signals(
     """Build the EvaluatorSignals bundle from precomputed stability + mutation,
     filling in the cheap host-side signals (coverage/lint/flaky-history/ci-parity).
     """
+    # The lane runs (stability/mutation) already happened, so the lane's own
+    # coverage report exists by now — the judge sees what was measured (#1258).
+    covered, na_reason = None, None
+    if _framework_coverage_strategy(subtask) == "skip":
+        na_reason = "browser lane"
+    else:
+        stem = Path(subtask["files_to_create"][0]).stem or None
+        covered, _ = _measured_coverage(spec_dir, subtask["id"], stem)
     return EvaluatorSignals(
         test_id=subtask["id"],
         test_file=spec_dir / subtask["files_to_create"][0],
         target=subtask.get("target") or "?",
         rationale=subtask.get("rationale") or "?",
         coverage_delta=_coverage_delta_for_subtask(spec_dir, subtask),
+        coverage_covered_lines=covered,
+        coverage_na_reason=na_reason,
         stability=stability,
         mutation=mutation,
         lint_promotion=_lint_promotion_for_subtask(spec_dir, subtask),
@@ -1930,7 +1942,8 @@ def _build_browser_signal_bundle(
         test_file=spec_dir / subtask["files_to_create"][0],
         target=subtask.get("target") or "?",
         rationale=subtask.get("rationale") or "?",
-        coverage_delta=None,  # browser lane — coverage_strategy == "skip"
+        coverage_delta=None,
+        coverage_na_reason="browser lane",  # coverage_strategy == "skip"
         stability=stability,
         mutation=None,  # mutation not run for the browser lane
         lint_promotion=_lint_promotion_for_subtask(spec_dir, subtask),
@@ -1958,7 +1971,9 @@ def _build_api_signal_bundle(
         test_file=spec_dir / subtask["files_to_create"][0],
         target=subtask.get("target") or "?",
         rationale=subtask.get("rationale") or "?",
-        coverage_delta=None,  # api lane hits a running service — no line coverage
+        coverage_delta=None,
+        # the api lane hits a running service out-of-process
+        coverage_na_reason="api lane — no line coverage",
         stability=stability,
         mutation=None,
         lint_promotion=_lint_promotion_for_subtask(spec_dir, subtask),
@@ -2101,6 +2116,7 @@ def _build_jest_signal_bundle(
         target=subtask.get("target") or "?",
         rationale=subtask.get("rationale") or "?",
         coverage_delta=None,
+        coverage_na_reason="coverage not wired for this lane",
         stability=stability,
         mutation=None,
         lint_promotion=_lint_promotion_for_subtask(spec_dir, subtask),
@@ -2251,6 +2267,7 @@ def _build_go_signal_bundle(
         target=subtask.get("target") or "?",
         rationale=subtask.get("rationale") or "?",
         coverage_delta=None,
+        coverage_na_reason="coverage not wired for this lane",
         stability=stability,
         mutation=None,
         lint_promotion=_lint_promotion_for_subtask(spec_dir, subtask),

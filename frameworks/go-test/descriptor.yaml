@@ -33,7 +33,17 @@ runtime:
       -coverprofile=/scratch/cover.out -covermode=atomic ./... ;
       gocover-cobertura < /scratch/cover.out > /scratch/coverage.xml
 
+
+# Acceptance-criteria command tokens that pin this framework's language (#1311).
+ac_command_tokens:
+  - "go test"
+  - "go build"
+
 # Manifest signals the Planner uses to detect a Go module.
+# Deliverable extensions this language owns (#1311) — Go source files.
+source_extensions:
+  - ".go"
+
 manifest_signals:
   - "go.mod"
   - "go.sum"

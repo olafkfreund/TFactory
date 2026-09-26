@@ -113,7 +113,7 @@ env:
   # cannot resolve `/app/portal_testing`, and the two entries this PR deletes
   # would read as uncollected AND unregistered. Factory#848 is why this bump is
   # manual -- check_pin_freshness.py cannot see a fetch-at-pin gate.
-  HUB_PIN_SHA: "56705654f1b1cbe1d242340d26b4724741a4df18"
+  HUB_PIN_SHA: "5477f12a2e8436222b7839b61e07cba9e5aaee03"
 
 jobs:
   collection:
