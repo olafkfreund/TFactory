@@ -329,6 +329,11 @@ _GRADLE_STAGE = ".tf_gradle"  # staged merged junit the Gradle Nix Job writes ba
 # the Job's uid (see _DEPS_TARGET), so the module is copied here and built here.
 _GRADLE_BUILD_DIR = "/tmp/tf_gradle_src"  # noqa: S108 - a path inside the Job
 _GRADLE_USER_HOME = "/tmp/tf_gradle_home"  # noqa: S108 - a path inside the Job
+_MAVEN_STAGE = ".tf_maven"  # staged merged junit the Maven Nix Job writes back
+# Same reason as Gradle: Maven writes target/ inside the module and wants a
+# local repository under $HOME, and /work is read-only to the Job's uid.
+_MAVEN_BUILD_DIR = "/tmp/tf_maven_src"  # noqa: S108 - a path inside the Job
+_MAVEN_REPO_LOCAL = "/tmp/tf_maven_repo"  # noqa: S108 - a path inside the Job
 
 
 def _in_job_pythonpath(scratch: Path, mount: str) -> str:
@@ -849,6 +854,36 @@ def kotlin_environment(spec_dir: Path) -> dict[str, Any]:
     }
 
 
+def java_environment(spec_dir: Path) -> dict[str, Any]:
+    """The Java nix environment for the Maven verify lane (#1321).
+
+    Prefer a contract ``environment`` that declares a Java nix env; otherwise
+    synthesize one naming only the language. The toolchain is NOT listed here:
+    ``generate_flake``'s builtin table already maps ``java -> [jdk21, maven]``
+    (gradle is deliberately absent there — a project wanting it names it in
+    ``system_packages``), so the provisioner stays the single source and this
+    cannot drift from it. That is why this lane needed no hub descriptor.
+
+    ``network`` is restricted for the same reason as Kotlin's: Maven resolves
+    from Central at run time, which the build-Job egress policy admits.
+    """
+    env = environment_from_contract(spec_dir)
+    if (
+        env is not None
+        and is_nix_environment(env)
+        and (env.get("language") or "").lower() == "java"
+    ):
+        return dict(env)
+    return {
+        "language": "java",
+        "toolchain": {},
+        "system_packages": [],
+        "verify_commands": ["mvn -B test"],
+        "provisioning": {"method": "nix", "generated": True},
+        "network": "restricted",
+    }
+
+
 def _go_module_dir(project_dir: Path, hint: Path | None) -> Path:
     """Resolve the Go module root (the dir holding ``go.mod``) inside the worktree.
 
@@ -964,6 +999,7 @@ def run_gotest_lane_via_nix(
 
 _GRADLE_ROOT_MARKERS = ("settings.gradle.kts", "settings.gradle")
 _GRADLE_BUILD_MARKERS = ("build.gradle.kts", "build.gradle")
+_MAVEN_ROOT_MARKERS = ("pom.xml",)
 
 
 def _gradle_module_dir(project_dir: Path, hint: Path | None) -> Path:
@@ -1022,6 +1058,38 @@ def gradle_job_script(run_dir: str, stage_dir: str, extra_env: dict[str, str]) -
         + "echo __GRADLE_EXIT=$?\n"
         + "{ echo '<?xml version=\"1.0\" encoding=\"UTF-8\"?>'; echo '<testsuites>'; "
         + "find . -path '*/build/test-results/*' -name 'TEST-*.xml' | sort | "
+        + "while read -r f; do sed '/^<?xml/d' \"$f\"; done; "
+        + f"echo '</testsuites>'; }} > {junit_q}\n"
+    )
+
+
+def maven_job_script(run_dir: str, stage_dir: str, extra_env: dict[str, str]) -> str:
+    """The bash the Maven Nix Job runs; pure, so it can be tested directly (#1321).
+
+    Sibling of :func:`gradle_job_script`, and deliberately not a generalisation
+    of it: that one is the JVM lane currently proven in production, and adding a
+    second build tool to it would edit a working lane to introduce an unproven
+    one.
+
+    Same five moves, with Maven's paths: copy the module somewhere writable
+    (``/work`` is read-only to the Job's uid), point the local repository at
+    ``/tmp`` because ``$HOME/.m2`` is not writable either, run the build,
+    recover the real exit code through the marker line (``set +e`` plus the pipe
+    would otherwise swallow it), and merge the per-class JUnit XML that Surefire
+    writes to ``target/surefire-reports/`` into one ``<testsuites>`` document —
+    the same shape :func:`_junit_counts` already reads for Gradle, Go and pytest.
+    """
+    exports = "".join(f"export {k}={_shquote(str(v))}\n" for k, v in extra_env.items())
+    src, repo = _shquote(_MAVEN_BUILD_DIR), _shquote(_MAVEN_REPO_LOCAL)
+    run_q, junit_q = _shquote(run_dir), _shquote(f"{stage_dir}/junit.xml")
+    return (
+        "#!/usr/bin/env bash\nset +e\n"
+        + exports
+        + f"rm -rf {src} && cp -r {run_q} {src} && cd {src}\n"
+        + f"mvn -B -Dmaven.repo.local={repo} test 2>&1\n"
+        + "echo __MAVEN_EXIT=$?\n"
+        + "{ echo '<?xml version=\"1.0\" encoding=\"UTF-8\"?>'; echo '<testsuites>'; "
+        + "find . -path '*/target/surefire-reports/*' -name 'TEST-*.xml' | sort | "
         + "while read -r f; do sed '/^<?xml/d' \"$f\"; done; "
         + f"echo '</testsuites>'; }} > {junit_q}\n"
     )
@@ -1134,6 +1202,106 @@ def run_gradle_lane_via_nix(
         junit_xml_path=junit if junit.is_file() else None,
         coverage_xml_path=None,
         argv=["nix", "develop", f"path:{mount}#default", "--", "gradle", "test"],
+    )
+
+
+def _maven_module_dir(project_dir: Path, hint: Path | None) -> Path:
+    """Resolve the Maven module root inside the worktree (#1321).
+
+    Maven runs from the directory holding ``pom.xml``. Prefer the module
+    enclosing ``hint``; else the shallowest ``pom.xml`` under the project (a
+    multi-module build's parent, which reactor-builds its children); else the
+    project root. Always at or below ``project_dir``.
+    """
+    pd = Path(project_dir).resolve()
+
+    if hint is not None:
+        start = Path(hint)
+        start = start if start.is_absolute() else pd / start
+        if start.suffix:
+            start = start.parent
+        start = start.resolve()
+        if pd == start or pd in start.parents:
+            chain = [start, *[q for q in start.parents if q == pd or pd in q.parents]]
+            for d in chain:
+                if any((d / n).is_file() for n in _MAVEN_ROOT_MARKERS):
+                    return d
+
+    roots = sorted(
+        (m.parent for n in _MAVEN_ROOT_MARKERS for m in pd.rglob(n) if m.is_file()),
+        key=lambda q: len(q.parts),
+    )
+    return roots[0] if roots else pd
+
+
+def run_maven_lane_via_nix(
+    spec_dir: Path,
+    project_dir: Path,
+    *,
+    hint: Path | None = None,
+    extra_env: dict[str, str] | None = None,
+    timeout: int = 900,
+) -> DockerRunResult | None:
+    """Run the Maven build's tests inside the per-task Nix dev shell (#1321).
+
+    The Java twin of :func:`run_gradle_lane_via_nix`. The toolchain (jdk21,
+    maven) comes from the flake ``generate_flake`` renders for
+    :func:`java_environment` — the provisioner's builtin table, not a descriptor.
+    ``mvn test`` covers the whole module, so there is no single-file staging.
+    Maven resolves from Central at run time; the build-Job egress policy admits
+    it (measured on Factory#1712). Timeout matches Gradle's 900 s because a cold
+    local repository takes minutes.
+
+    Returns None when the sandbox isn't configured (caller falls back).
+    """
+    mount = _NIX_MOUNT
+    plan = materialize_flake(spec_dir, project_dir, env=java_environment(spec_dir))
+    if plan is None:
+        return None
+    sandbox: ExecutionSandbox | None = nix_runner_from_env()
+    if sandbox is None:
+        _log.info("run_maven_lane_via_nix: TFACTORY_NIX_RUNNER_IMAGE unset; skipping")
+        return None
+
+    pd = Path(project_dir)
+    module_dir = _maven_module_dir(pd, hint)
+    rel = (
+        "." if module_dir == pd.resolve() else str(module_dir.relative_to(pd.resolve()))
+    )
+    run_dir = mount if rel == "." else f"{mount}/{rel}"
+
+    stage = pd / _MAVEN_STAGE
+    shutil.rmtree(stage, ignore_errors=True)
+    stage.mkdir(parents=True, exist_ok=True)
+    with contextlib.suppress(OSError):
+        stage.chmod(0o777)  # the Job's non-root uid writes the merged junit here
+
+    (pd / _JOB_SCRIPT).write_text(
+        maven_job_script(run_dir, f"{mount}/{_MAVEN_STAGE}", extra_env or {}),
+        encoding="utf-8",
+    )
+    job_cmd = f"nix develop path:{mount}#default --command bash {mount}/{_JOB_SCRIPT}"
+    try:
+        res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)
+    finally:
+        (pd / _JOB_SCRIPT).unlink(missing_ok=True)
+
+    junit = stage / "junit.xml"
+    code = _parse_exit_marker(res.stdout, "__MAVEN_EXIT=")
+    stderr = ""
+    if code == 0:
+        # The same evidence rule as Gradle: a zero exit with no report, zero
+        # tests, or recorded failures is not a pass.
+        why = _gradle_evidence_failure(junit)
+        if why is not None:
+            code, stderr = 1, f"maven exited 0 but {why}"
+    return DockerRunResult(
+        returncode=code,
+        stdout=res.stdout or "",
+        stderr=stderr,
+        junit_xml_path=junit if junit.is_file() else None,
+        coverage_xml_path=None,
+        argv=["nix", "develop", f"path:{mount}#default", "--", "mvn", "-B", "test"],
     )
 
 
