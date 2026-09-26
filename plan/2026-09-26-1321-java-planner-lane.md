@@ -119,6 +119,50 @@ Branch `feat/1321-java-maven-lane` off `dev`, one commit per step.
   Caught by the full suite, not by the focused run: the test passed in
   isolation and failed once the whole registry was loaded.
 
+## Steps 7 and 8 evidence (live, 2026-09-26)
+
+**The lane, in-cluster** — the new module loaded in the running pod (no files in
+the pod changed), dispatching a real Nix Job `tfsbx-47e2ef6b01`:
+
+```
+ELAPSED_S 159.2                  <- cold local repository, against a 900s budget
+RETURNCODE 0
+SUITE name="CalcTest" tests="3" errors="0" failures="0"
+MVN [INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0
+MVN [INFO] BUILD SUCCESS
+MVN __MAVEN_EXIT=0
+```
+
+Both spec risks retired by measurement: Surefire wrote where the merge glob
+expects, and 159s leaves the timeout unchanged — no silent widening needed.
+
+**Mutation** — `assertEquals(5, Calc.add(2, 3))` changed to expect `6`:
+
+```
+tests="3" failures="1"
+<failure message="expected: <6> but was: <5>"
+CalcTest.addsTwoNumbers:9 expected: <6> but was: <5>
+MVN __MAVEN_EXIT=1
+```
+
+So the green run is not pass-shaped: the verdict follows the tests, through the
+merged report the evaluator reads. Scratch dirs removed from the pod afterwards.
+
+**The real Planner** on a Java/Maven fixture whose spec names two acceptance
+criteria:
+
+```
+calc-add-returns-sum:             language=java framework=maven lane=unit
+   files: src/test/java/CalcAddTest.java      verify: mvn -B test -Dtest=CalcAddTest
+calc-divide-rejects-zero-divisor: language=java framework=maven lane=unit
+   files: src/test/java/CalcDivideTest.java   verify: mvn -B test -Dtest=CalcDivideTest
+```
+
+`_validate_emitted_plan` on that file, unmodified: `ok = True, error_kind = ''`.
+It chose **maven**, not junit — the concrete payoff of the framework-preference
+fix recorded above, without which the prompt would have named the docker-host
+framework.
+
 ## Tests
 
 ```sh
