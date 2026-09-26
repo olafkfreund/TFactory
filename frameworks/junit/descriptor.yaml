@@ -8,8 +8,12 @@
 #
 name: junit
 language: java
+# The unit lane moved to frameworks/maven in #1321: this descriptor's runtime is
+# `tfactory-runner-java:latest`, a docker-host image the cluster has no runtime
+# for, so a unit subtask filed here could never run. The API lane stays — it is
+# the docker-host substrate's to claim. Two frameworks claiming `java.unit` would
+# also make the Planner's choice ambiguous.
 lanes:
-  - unit
   - api
 
 # JUnit 5 (Jupiter). 5.10+ at v0.x; allow through 5.x.

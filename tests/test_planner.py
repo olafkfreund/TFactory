@@ -910,6 +910,8 @@ def _make_polyglot_subtask(
         st["files_to_create"] = [f"tests/{subtask_id}.test.ts"]
     elif framework == "gradle":
         st["files_to_create"] = [f"src/test/kotlin/{subtask_id}Test.kt"]
+    elif framework == "maven":
+        st["files_to_create"] = [f"src/test/java/{subtask_id}Test.java"]
     if language is not None:
         st["language"] = language
     if framework is not None:
@@ -1003,6 +1005,29 @@ async def test_validator_accepts_kotlin_gradle_unit_subtask(
     assert status["status"] == "planned"
 
 
+@pytest.mark.asyncio
+async def test_validator_accepts_java_maven_unit_subtask(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """(java, maven, unit) is valid — #1321.
+
+    Java had no in-cluster lane, so #1311 deliberately left it unplannable.
+    frameworks/maven gives it one, and the post-emit validator checks every
+    subtask against that registry.
+    """
+    subtasks = [
+        _make_polyglot_subtask(
+            subtask_id="jv-1", language="java", framework="maven", lane="unit"
+        ),
+    ]
+    calls = mock_sdk(plans=[_make_polyglot_plan_json(subtasks)])
+    ok = await run_planner(spec_dir, project_dir)
+    assert ok is True
+    assert len(calls) == 1, "a valid Java plan must not trigger a retry"
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["status"] == "planned"
+
+
 # ── Polyglot validator rejection paths ───────────────────────────────────
 
 
@@ -1033,6 +1058,29 @@ async def test_validator_rejects_kotlin_browser_lane(
 
 
 @pytest.mark.asyncio
+@pytest.mark.asyncio
+async def test_validator_rejects_java_unit_on_junit(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """junit keeps only the api lane (#1321): its runtime is the docker-host image.
+
+    A unit subtask filed there could never run in this cluster, so the validator
+    must refuse it rather than let it through to a lane that does not exist.
+    """
+    bad = _make_polyglot_plan_json(
+        [
+            _make_polyglot_subtask(
+                subtask_id="jv-junit", language="java", framework="junit", lane="unit"
+            )
+        ]
+    )
+    calls = mock_sdk(plans=[bad, _make_valid_plan_json(1)])
+    ok = await run_planner(spec_dir, project_dir)
+    assert ok is True
+    assert len(calls) == 2, "a unit subtask on junit must be rejected and retried"
+    assert "invalid_framework" in calls[1]["prompt"] or "RETRY" in calls[1]["prompt"]
+
+
 async def test_validator_rejects_kotlin_on_the_java_framework(
     spec_dir: Path, project_dir: Path, mock_sdk
 ) -> None:

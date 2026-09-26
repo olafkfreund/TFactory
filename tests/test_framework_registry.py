@@ -767,3 +767,56 @@ def test_ac_command_tokens_must_be_a_list_of_str() -> None:
     data["ac_command_tokens"] = ["gradle test", 7]
     with pytest.raises(FrameworkDescriptorError):
         validate_descriptor(data)
+
+
+@pytest.mark.skipif(
+    not _REAL_FRAMEWORKS_DIR.is_dir(),
+    reason=f"frameworks/ directory not found at {_REAL_FRAMEWORKS_DIR}",
+)
+def test_maven_descriptor_owns_the_java_unit_lane() -> None:
+    """Java's in-cluster lane (#1321), and the only claimant of java.unit."""
+    maven = get_descriptor("maven", frameworks_dir=_REAL_FRAMEWORKS_DIR)
+    assert maven.language == "java"
+    assert [ln.value if hasattr(ln, "value") else str(ln) for ln in maven.lanes] == [
+        "unit"
+    ]
+    assert maven.source_extensions == (".java",)
+    assert "mvn test" in maven.ac_command_tokens
+    # The Nix Maven lane merges Surefire XML and collects no coverage.
+    assert maven.coverage_strategy == "skip"
+    assert any("src/test/java" in c for c in maven.test_path_conventions)
+    assert maven.context_block.strip(), "Java generation guidance is the point"
+
+
+@pytest.mark.skipif(
+    not _REAL_FRAMEWORKS_DIR.is_dir(),
+    reason=f"frameworks/ directory not found at {_REAL_FRAMEWORKS_DIR}",
+)
+def test_junit_no_longer_claims_a_lane_it_cannot_run() -> None:
+    """junit's runtime is the docker-host image; this cluster has no runtime (#1321).
+
+    Two frameworks claiming java.unit would also make the Planner's choice
+    ambiguous, so the unit lane moved to frameworks/maven.
+    """
+    junit = get_descriptor("junit", frameworks_dir=_REAL_FRAMEWORKS_DIR)
+    lanes = [ln.value if hasattr(ln, "value") else str(ln) for ln in junit.lanes]
+    assert lanes == ["api"], lanes
+    assert junit.runtime.image == "tfactory-runner-java:latest"
+
+
+@pytest.mark.skipif(
+    not _REAL_FRAMEWORKS_DIR.is_dir(),
+    reason=f"frameworks/ directory not found at {_REAL_FRAMEWORKS_DIR}",
+)
+def test_exactly_one_framework_claims_each_language_unit_lane() -> None:
+    """A second claimant makes the Planner's (language, framework) choice ambiguous."""
+    registry = load_registry(frameworks_dir=_REAL_FRAMEWORKS_DIR)
+    owners: dict[str, list[str]] = {}
+    for name, desc in registry.items():
+        lanes = [ln.value if hasattr(ln, "value") else str(ln) for ln in desc.lanes]
+        if "unit" in lanes:
+            owners.setdefault(desc.language, []).append(name)
+    contested = {lang: sorted(n) for lang, n in owners.items() if len(n) > 1}
+    # typescript legitimately has jest AND vitest; every other language must not.
+    contested.pop("typescript", None)
+    assert not contested, f"two frameworks claim one unit lane: {contested}"

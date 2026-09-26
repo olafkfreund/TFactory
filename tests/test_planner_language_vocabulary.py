@@ -30,13 +30,18 @@ _PRE_1311_EXT_LANGUAGE: dict[str, str] = {
     ".jsx": "typescript",
 }
 _KOTLIN_ADDITIONS = {".kt": "kotlin", ".kts": "kotlin"}
+# #1321 gave Java an in-cluster lane (frameworks/maven), so .java pins now. It
+# arrived purely from dropping in that descriptor — no edit to prompts.py, which
+# is what the derivation exists for.
+_JAVA_ADDITIONS = {".java": "java"}
 
 
-def test_derived_extension_map_is_the_old_table_plus_kotlin() -> None:
+def test_derived_extension_map_is_the_old_table_plus_kotlin_and_java() -> None:
     """Set equality, not a spot check: nothing was lost in the move to derivation."""
     assert prompts._build_ext_language() == {
         **_PRE_1311_EXT_LANGUAGE,
         **_KOTLIN_ADDITIONS,
+        **_JAVA_ADDITIONS,
     }
 
 
@@ -76,9 +81,8 @@ def test_a_kotlin_deliverable_pins_kotlin() -> None:
         (["src/app.tsx"], "typescript"),
         (["src/legacy.js"], "typescript"),
         (["src/lib.rs"], "rust"),
-        # Java is deliberately untouched by #1311 — the same hole is #1321, and
-        # widening it here would move Java planning without a lane to prove it.
-        (["src/main/java/Calc.java"], None),
+        # Java pins since #1321 gave it a lane to run in (frameworks/maven).
+        (["src/main/java/Calc.java"], "java"),
         # A repo whose only changed file is JSON pins nothing. Deriving from
         # test-path globs would have mapped .json onto the cloud frameworks'
         # language and mis-pinned every package.json edit.
@@ -215,14 +219,20 @@ def test_a_kotlin_diff_now_pins_kotlin_and_names_gradle(tmp_path: Any) -> None:
     assert "framework: gradle" in block
 
 
-def test_java_is_deliberately_unchanged(tmp_path: Any) -> None:
-    """Java's identical hole is #1321; widening it here would be out of scope.
+def test_a_java_diff_now_pins_java_and_names_maven(tmp_path: Any) -> None:
+    """#1321 replaced #1311's deliberate omission with a real lane.
 
-    There is no in-cluster Java lane to prove a Java pin against, so this test
-    records the choice rather than leaving it to drift.
+    Before: "No deterministic language signal ... never assume pytest."
     """
     block = _pin_block(tmp_path, ["src/main/java/Calc.java"])
-    assert "No deterministic language signal" in block
+    assert "**java** project" in block
+    assert "framework: maven" in block
+
+
+def test_a_maven_acceptance_criterion_pins_java(tmp_path: Any) -> None:
+    """An AC written in Maven's terms is a Java signal (#1321)."""
+    block = _pin_block(tmp_path, [], ac_text="AC#1: `mvn -B test` passes.\n")
+    assert "**java** project" in block
 
 
 def test_a_gradle_acceptance_criterion_pins_kotlin_without_any_diff(
