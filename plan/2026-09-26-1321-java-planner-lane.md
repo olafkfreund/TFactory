@@ -102,6 +102,23 @@ Branch `feat/1321-java-maven-lane` off `dev`, one commit per step.
   `invalid_framework` specifically rather than any `RETRY`, so it cannot pass
   vacuously.
 
+- **A defect the reversal introduced, and its fix.** With junit's unit lane
+  restored, `_unit_framework_for_language` — which picks the
+  alphabetically-first claimant — resolved Java to **junit**, whose runtime
+  image this cluster has no container runtime for. That is precisely the
+  "plan something that cannot run" failure this issue exists to remove, so the
+  reversal could not stand on its own.
+  It now prefers a candidate declaring `source_extensions` for the language.
+  That is not a heuristic: the extension map the Planner pins the language from
+  is built from exactly that field, so the framework owning the deliverables is
+  the one the pin already implies. `maven` declares `.java`; `junit` declares
+  none. Alphabetical order remains the tie-break. Measured after the change:
+  java -> maven, and kotlin/typescript/python/go unchanged. Mutating it back to
+  alphabetical fails two tests.
+
+  Caught by the full suite, not by the focused run: the test passed in
+  isolation and failed once the whole registry was loaded.
+
 ## Tests
 
 ```sh
