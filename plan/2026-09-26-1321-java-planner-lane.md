@@ -80,6 +80,28 @@ Branch `feat/1321-java-maven-lane` off `dev`, one commit per step.
 10. **PR → `dev`** with the step 7 and 8 evidence; close #1321; file the Gradle
     follow-up (one line in `_LANG_ATTRS`, hub-side).
 
+## Deviations recorded during implementation
+
+- **Step 5 reversed: `frameworks/junit` KEEPS its unit lane.** The spec had it
+  drop `unit` on the grounds that its docker-host image cannot run here. That is
+  true of this cluster but wrong as a change: behind junit sits a real, tested
+  Java wedge (#237, epic #232) — `agents/lang_java/jacoco_coverage.py`, the PIT
+  mutation probe, and mutation dispatch — and `tests/test_java_lane.py` asserts
+  the lane exists. Removing it broke a working path on the docker-host substrate
+  in order to fix a different one.
+  `frameworks/maven` now adds the **in-cluster** unit lane alongside it. Two
+  claimants is legitimate here for the same reason TypeScript has jest and
+  vitest; the manifest signals (`pom.xml` is maven's alone) disambiguate. The
+  "exactly one framework per unit lane" test allows java as well as typescript,
+  with the reason written in.
+
+- **A test that passed for the wrong reason, replaced.** With junit's unit lane
+  restored, `test_validator_rejects_java_unit_on_junit` could only pass on an
+  unrelated retry — the pairing is valid now. It is replaced by
+  `test_validator_rejects_java_on_a_lane_maven_does_not_offer`, which asserts
+  `invalid_framework` specifically rather than any `RETRY`, so it cannot pass
+  vacuously.
+
 ## Tests
 
 ```sh
