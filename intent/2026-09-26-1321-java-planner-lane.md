@@ -71,7 +71,41 @@ proven by a live run with real test counts and a mutation that flips it.
 - The evaluator partitions on a literal language string; whatever is emitted
   must match exactly, or subtasks are silently dropped again.
 
-## Open questions
+## Revision: the evidence inverts question 1 (2026-09-26, after approval)
+
+Two measurements taken after this intent was approved change the cheap path, so
+recording them here rather than proceeding on a recommendation the evidence no
+longer supports:
+
+1. **The in-cluster Java toolchain already exists, and it is Maven.**
+   `nix_provisioner.py` carries `_LANG_ATTRS["java"] = ["jdk21", "maven"]`, with
+   a comment stating gradle is deliberately excluded: *"a project that wants it
+   names it in system_packages, and buying both build tools unasked is ~200MB of
+   store for nothing."* So a Java nix env needs **no** new hub language
+   descriptor and **no** toolchain change — contrary to problem item 4 above,
+   which is wrong for the builtin languages.
+2. **`nix_provisioner.py` is a vendored hub canonical.** Adding `gradle` to
+   Java's attrs would mean a hub PR plus re-vendoring into four services with
+   pin bumps and drift gates — the expensive path — purely to avoid writing a
+   Maven job script.
+
+**Revised decision: Maven-built Java first**, not Gradle. It needs no toolchain
+change, it matches `frameworks/junit` (whose entrypoint is already `mvn -B test`
+and whose manifest signals lead with `pom.xml`), and it matches how Java
+projects in the wild are shaped. The cost is a `maven_job_script` — but that is
+modelled directly on the proven `gradle_job_script`: run the build, recover the
+real exit code through a marker, and merge the per-class JUnit XML that Surefire
+writes to `target/surefire-reports/TEST-*.xml`, the same shape Gradle writes to
+`build/test-results/test/`.
+
+Gradle-built Java becomes the follow-up, and it is then a one-line toolchain
+question rather than a lane question.
+
+Questions 2, 3 and 4 keep their approved answers, adapted: a separate framework
+descriptor rather than widening `junit`; a thin `java_environment` beside
+`kotlin_environment`; and `junit` must stop claiming a lane it cannot run here.
+
+## Open questions (as approved, before the revision above)
 
 1. **Gradle first, or Maven first?** Reusing the proven Gradle lane for
    Gradle-built Java is much the cheaper path and needs no new job script. But
