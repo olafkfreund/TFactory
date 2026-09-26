@@ -241,3 +241,38 @@ def test_a_gradle_acceptance_criterion_pins_kotlin_without_any_diff(
     """AC commands are the signal when no diff is available (#443's path)."""
     block = _pin_block(tmp_path, [], ac_text="AC#1: `gradle test` passes.\n")
     assert "**kotlin** project" in block
+
+
+def test_a_two_claimant_language_prefers_the_framework_owning_its_extensions() -> None:
+    """Java has junit (docker-host, #237) and maven (in-cluster, #1321).
+
+    Alphabetical order picked junit, whose runtime image this cluster has no
+    container runtime for — a plan that cannot run, the failure #1311 and #1321
+    exist to remove. The framework declaring the language's source_extensions is
+    the one the pin already implies, since the extension map is built from that
+    field.
+    """
+    from framework_registry import load_registry
+
+    registry = load_registry()
+    assert prompts._unit_framework_for_language(registry, "java") == "maven"
+    # Every other language is unaffected by the preference.
+    assert prompts._unit_framework_for_language(registry, "kotlin") == "gradle"
+    assert prompts._unit_framework_for_language(registry, "typescript") == "jest"
+    assert prompts._unit_framework_for_language(registry, "python") == "pytest"
+    assert prompts._unit_framework_for_language(registry, "go") == "go-test"
+
+
+def test_the_preference_falls_back_to_alphabetical(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With no extensions declared, the old deterministic order still applies."""
+
+    class _Desc:
+        def __init__(self, lanes: tuple[str, ...]) -> None:
+            self.language = "elvish"
+            self.lanes = lanes
+            self.source_extensions: tuple[str, ...] = ()
+
+    registry = {"zeta": _Desc(("unit",)), "alpha": _Desc(("unit",))}
+    assert prompts._unit_framework_for_language(registry, "elvish") == "alpha"
