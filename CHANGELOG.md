@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+## 0.9.28 — Kotlin plans reach the Gradle lane, and provider install works again (2026-09-26)
+
+- **The Planner can emit Kotlin subtasks (Factory#1311, PR #1322).** The
+  in-cluster Gradle lane shipped in 0.9.27 but nothing could produce a subtask
+  for it: the prompt admitted only python|typescript|go|rust, `.kt` mapped to no
+  language, and the only JVM framework was `junit: language=java`, so a Kotlin
+  repo read as Java and was dropped. The prompt's language vocabulary is now
+  derived from the framework registry — the same registry the post-emit
+  validator already enforced — and `frameworks/gradle/descriptor.yaml` declares
+  Kotlin's unit lane, test paths and JUnit 5 generation guidance. Proven with a
+  real Planner run: two `(kotlin, gradle, unit)` subtasks that passed the
+  validator unmodified and ran green in-cluster, failing correctly under
+  mutation.
+- **Provider install/update works again for pip-kind runtimes (Factory#2823,
+  PR #1329).** `install_argv` built a pip command, but the runtime image ships
+  no pip (removed in #1284 to clear the vendored-SBOM HIGHs), so the action had
+  been dead for three weeks, failing as a non-zero result nobody surfaces. It
+  now runs through uv against the service interpreter and upgrades **only** the
+  requested package: a bare `--upgrade` moved `starlette` off the pin that
+  fastapi 0.137 broke routing over. A missing uv raises with a named cause.
+- **The judge reports measured coverage, not a lane label (#1258, PR #1317).**
+  Plus a regression test pinning the `covered_sut_lines=0` flag rule.
+- **Models match the migrations, and drift is gated (#1314, PR #1318)** with an
+  `alembic check`.
+- **`ruff format` is now a required check on `dev` and `main`**
+  (Factory#2943). It ran on every PR and blocked nothing, which is how #1322
+  merged red and needed #1323 to repair `dev`.
+- **Hub pins refreshed** to `5477f12a` across verification-core, factory-ui and
+  the test-collection gate (PRs #1325, #1326) — the last had been ~32 days
+  stale, so that gate was running an old checker.
+- **Security:** js-yaml 4.3.2 clears `CVE-2026-84375` (PR #1293); Dependabot
+  bumps for the github-actions group, vitest, browserslist and the base image.
+
 ## 0.9.27 — Kotlin runs in-cluster, and timestamps reach Postgres (2026-09-18)
 
 - **Kotlin/Gradle verify lane runs in-cluster (Factory#1712, PR #1310).** A
