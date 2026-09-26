@@ -1430,3 +1430,179 @@ def test_gradle_job_script_quotes_a_path_with_a_space(tmp_path, monkeypatch):
     # gradle ran inside the copied module (marker found) and the report landed.
     assert nix_env._parse_exit_marker(out, "__GRADLE_EXIT=") == 0, out
     assert (stage / "junit.xml").is_file()
+
+
+# ── Java / Maven verify lane (#1321) ─────────────────────────────────────────
+
+
+def _maven_project(tmp_path: Path) -> tuple[Path, Path, Path]:
+    spec = tmp_path / "specs" / "j1"
+    spec.mkdir(parents=True)
+    project = tmp_path / "proj"
+    mod = project / "services" / "java-core"
+    (mod / "src" / "test" / "java").mkdir(parents=True)
+    (mod / "pom.xml").write_text("<project/>\n")
+    test_file = mod / "src" / "test" / "java" / "CalcTest.java"
+    test_file.write_text("class CalcTest {}\n")
+    return spec, project, test_file
+
+
+def test_java_environment_synthesizes_language_only(tmp_path):
+    """The toolchain comes from the provisioner's table, not from literals here."""
+    from agents.nix_env import java_environment
+
+    env = java_environment(tmp_path / "nope")
+    assert env["language"] == "java"
+    assert env["system_packages"] == []
+    assert env["network"] == "restricted"
+
+
+def test_java_flake_takes_the_toolchain_from_the_provisioner(tmp_path, monkeypatch):
+    """java -> [jdk21, maven] is declared in nix_provisioner, and must arrive here.
+
+    This is why #1321 needed no hub language descriptor: the builtin table
+    already owns Java.
+    """
+    from agents.nix_env import run_maven_lane_via_nix
+
+    spec, project, _ = _maven_project(tmp_path)
+
+    class _FakeSandbox:
+        def run(self, commands, *, workdir=None, timeout=600):
+            stage = Path(workdir) / ".tf_maven"
+            (stage / "junit.xml").write_text(
+                '<testsuites><testsuite name="CalcTest" tests="3" failures="0" '
+                'errors="0"/></testsuites>'
+            )
+            return JobRunResult(ok=True, exit_code=0, output="__MAVEN_EXIT=0\n")
+
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: _FakeSandbox())
+    assert run_maven_lane_via_nix(spec, project) is not None
+    flake = (project / "flake.nix").read_text()
+    assert "pkgs.maven" in flake and "pkgs.jdk21" in flake, flake
+
+
+def test_run_maven_lane_via_nix_noop_when_sandbox_unconfigured(tmp_path, monkeypatch):
+    from agents.nix_env import run_maven_lane_via_nix
+
+    spec, project, _ = _maven_project(tmp_path)
+    monkeypatch.delenv("TFACTORY_NIX_RUNNER_IMAGE", raising=False)
+    assert run_maven_lane_via_nix(spec, project) is None
+
+
+def test_run_maven_lane_via_nix_result_shape(tmp_path, monkeypatch):
+    from agents.nix_env import run_maven_lane_via_nix
+
+    spec, project, test_file = _maven_project(tmp_path)
+    captured = {}
+
+    class _FakeSandbox:
+        def run(self, commands, *, workdir=None, timeout=600):
+            captured["commands"] = commands
+            captured["timeout"] = timeout
+            captured["script"] = (Path(workdir) / "_tf_nix_job.sh").read_text()
+            stage = Path(workdir) / ".tf_maven"
+            (stage / "junit.xml").write_text(
+                '<testsuites><testsuite name="CalcTest" tests="3" failures="0" '
+                'errors="0"/></testsuites>'
+            )
+            return JobRunResult(ok=True, exit_code=0, output="BUILD\n__MAVEN_EXIT=0\n")
+
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: _FakeSandbox())
+    res = run_maven_lane_via_nix(spec, project, hint=test_file, extra_env={"CI": "1"})
+    assert res is not None and res.returncode == 0
+    assert res.junit_xml_path is not None and res.junit_xml_path.is_file()
+    assert res.coverage_xml_path is None
+    assert captured["commands"][0].startswith("nix develop path:/work#default")
+    assert captured["timeout"] == 900
+    script = captured["script"]
+    # Built from a writable copy, with the local repo off a read-only $HOME.
+    assert "cp -r '/work/services/java-core' '/tmp/tf_maven_src'" in script, script
+    assert "-Dmaven.repo.local='/tmp/tf_maven_repo'" in script, script
+    assert "mvn -B " in script and " test 2>&1" in script, script
+    assert "echo __MAVEN_EXIT=$?" in script, script
+    assert "export CI='1'" in script, script
+    assert not (project / "_tf_nix_job.sh").exists()
+
+
+def test_run_maven_lane_via_nix_missing_marker_is_failure(tmp_path, monkeypatch):
+    """A Job killed before the marker must not read as a pass."""
+    from agents.nix_env import run_maven_lane_via_nix
+
+    spec, project, _ = _maven_project(tmp_path)
+
+    class _FakeSandbox:
+        def run(self, commands, *, workdir=None, timeout=600):
+            return JobRunResult(ok=True, exit_code=0, output="killed early\n")
+
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: _FakeSandbox())
+    res = run_maven_lane_via_nix(spec, project)
+    assert res is not None and res.returncode == 1
+
+
+def test_maven_exit_zero_with_no_report_is_a_failure(tmp_path, monkeypatch):
+    """The Gradle evidence rule applies unchanged: no report is not a pass."""
+    from agents.nix_env import run_maven_lane_via_nix
+
+    spec, project, _ = _maven_project(tmp_path)
+
+    class _FakeSandbox:
+        def run(self, commands, *, workdir=None, timeout=600):
+            return JobRunResult(ok=True, exit_code=0, output="__MAVEN_EXIT=0\n")
+
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: _FakeSandbox())
+    res = run_maven_lane_via_nix(spec, project)
+    assert res is not None and res.returncode == 1
+    assert "maven exited 0 but" in res.stderr
+
+
+def test_maven_module_dir_prefers_the_pom_enclosing_the_hint(tmp_path):
+    from agents.nix_env import _maven_module_dir
+
+    pd = tmp_path / "proj"
+    sub = pd / "svc" / "core"
+    (sub / "src").mkdir(parents=True)
+    (pd / "svc" / "pom.xml").write_text("<project/>\n")
+    assert _maven_module_dir(pd, sub / "src" / "X.java") == (pd / "svc").resolve()
+    # No hint: the shallowest pom.xml under the project.
+    assert _maven_module_dir(pd, None) == (pd / "svc").resolve()
+    # Nothing Maven at all: the project root.
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert _maven_module_dir(empty, None) == empty.resolve()
+
+
+def test_maven_job_script_merges_surefire_reports(tmp_path):
+    """Run the script's merge line over real Surefire-shaped files.
+
+    Surefire writes one TEST-*.xml per class to target/surefire-reports/, the
+    same per-class JUnit shape Gradle writes elsewhere — verified against a real
+    `mvn -B test` run before this lane was written.
+    """
+    import subprocess
+
+    from agents.nix_env import maven_job_script
+
+    src = tmp_path / "src"
+    reports = src / "target" / "surefire-reports"
+    reports.mkdir(parents=True)
+    for name in ("ATest", "BTest"):
+        (reports / f"TEST-{name}.xml").write_text(
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            f'<testsuite name="{name}" tests="2" failures="0" errors="0"/>\n'
+        )
+    stage = tmp_path / "stage"
+    stage.mkdir()
+
+    merge = next(
+        line
+        for line in maven_job_script(str(src), str(stage), {}).splitlines()
+        if line.startswith("{ echo")
+    )
+    subprocess.run(  # noqa: S602 - the line under test is the point
+        ["bash", "-c", f"set -e\ncd {src}\n{merge}"], check=True, capture_output=True
+    )
+    merged = (stage / "junit.xml").read_text()
+    assert merged.count("<testsuite ") == 2, merged
+    assert merged.count("<testsuites>") == 1, merged
+    assert merged.count("<?xml") == 1, merged  # the inner declarations are stripped

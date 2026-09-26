@@ -1,0 +1,96 @@
+# frameworks/maven/descriptor.yaml
+#
+# Java / Maven descriptor (#1321). Gives Java the in-cluster unit lane it never
+# had: the evaluator routes `language == "java"` to `run_maven_lane_via_nix`, and
+# `_validate_framework_consistency` validates every subtask against THIS
+# registry — so without a descriptor a Java subtask is rejected as
+# `invalid_framework` and can never be emitted.
+#
+# Why Maven and not Gradle: `nix_provisioner._LANG_ATTRS` already maps
+# `java -> [jdk21, maven]`, and deliberately excludes gradle ("buying both build
+# tools unasked is ~200MB of store for nothing"). That file is a vendored hub
+# canonical, so adding gradle would mean a hub PR plus re-vendoring four
+# services — to avoid writing one job script. Gradle-built Java is the follow-up.
+#
+# `frameworks/junit` keeps the API lane and no longer claims `unit`: its runtime
+# is `tfactory-runner-java:latest`, a docker-host image this cluster has no
+# runtime for, and two frameworks claiming `java.unit` would make the Planner's
+# choice ambiguous.
+#
+name: maven
+language: java
+lanes:
+  - unit
+
+# Maven 3.9.x, the series nixpkgs ships and the fixture was proven against.
+version_range: ">=3.9,<4.0"
+
+runtime:
+  # `runtime.image` is required and non-empty by the descriptor validator. As
+  # with frameworks/go-test and frameworks/gradle, the image is nominal: this
+  # lane runs in-cluster as a per-task Nix dev shell (RFC-0005) via
+  # `run_maven_lane_via_nix`, which gets jdk21+maven from the provisioner. There
+  # is no container runtime in the cluster for this lane to use.
+  image: tfactory-runner-java:latest
+  entrypoint:
+    - mvn
+    - "-B"
+    - "test"
+
+# Acceptance-criteria command tokens that pin this framework's language (#1311).
+ac_command_tokens:
+  - "mvn test"
+  - "mvn -B test"
+  - "./mvnw test"
+
+# Deliverable extensions this language owns (#1311).
+source_extensions:
+  - ".java"
+
+# Java-specific manifest signals. `pom.xml` is Maven's and unambiguous; the
+# bare build.gradle* files are NOT claimed here — frameworks/gradle owns those
+# for Kotlin, and a signal naming two languages is discarded as ambiguous.
+manifest_signals:
+  - "pom.xml"
+  - "pom.xml:junit-jupiter"
+  - "pom.xml:maven-surefire-plugin"
+
+# Maven's convention: tests under src/test/java, run by Surefire.
+test_path_conventions:
+  - "src/test/java/**/*Test.java"
+  - "**/src/test/java/**/*Test.java"
+
+# The Nix Maven lane merges Surefire's per-class JUnit XML and collects no
+# coverage. Claiming jacoco here would advertise a signal nothing produces.
+coverage_strategy: skip
+
+context_block: |
+  You are generating JUnit 5 (Jupiter) tests in Java, run by `mvn test`.
+
+  Placement:
+    - Tests go under the module's `src/test/java/`, mirroring the package of the
+      code under test (e.g. `src/test/java/com/acme/CalcTest.java` for
+      `src/main/java/com/acme/Calc.java`).
+    - One test class per class under test, named `<ClassName>Test` — Surefire
+      only picks up `*Test`, `Test*` or `*Tests` by default.
+
+  Test structure:
+    - One `@Test` method per behaviour, named descriptively
+      (e.g. `void returnsEmptyWhenInputBlank()`).
+    - Package-private class and methods are fine; JUnit 5 does not need `public`.
+    - Use `@Nested` inner classes when a unit has several behaviours.
+
+  Assertions:
+    - `org.junit.jupiter.api.Assertions` (`assertEquals`, `assertTrue`,
+      `assertThrows`, `assertAll`), or AssertJ if the module already depends on
+      it. Do NOT add a new test dependency.
+    - Assert one logical behaviour per test.
+
+  Error paths:
+    - Assert the happy path AND at least one boundary or error case, e.g.
+      `assertThrows(IllegalArgumentException.class, () -> Calc.divide(1, 0))`.
+
+  Determinism (avoid flaky tests):
+    - Never `Thread.sleep` for synchronisation.
+    - Do not depend on wall-clock time, default locale or map iteration order.
+    - Do not call network services; the lane runs with restricted egress.

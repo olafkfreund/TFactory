@@ -2246,6 +2246,55 @@ def _resolve_kotlin_runner_fn(
     return _run
 
 
+def _completed_java_subtasks(plan: dict[str, Any]) -> list[dict[str, Any]]:
+    """Completed unit-lane Java subtasks (#1321).
+
+    Java was in Kotlin's pre-#1712 position: no filter admitted it, so a Java
+    subtask was silently dropped. It stayed that way through #1311 on purpose —
+    there was no in-cluster lane to route it to until frameworks/maven.
+    """
+    return _filter_completed_subtasks(
+        plan,
+        lambda st: (
+            st.get("lane") in ("unit", "functional") and st.get("language") == "java"
+        ),
+    )
+
+
+def _resolve_java_runner_fn(
+    spec_dir: Path, _project_dir: Path
+) -> Callable[[Path, Path, int], DockerRunResult]:
+    """runner_fn(test_file, project_dir, seed) -> DockerRunResult running the
+    Maven module's tests in the per-task Nix dev shell (#1321).
+
+    The Java twin of :func:`_resolve_kotlin_runner_fn`: ``test_file`` is only the
+    module-root hint (``mvn test`` covers the whole module), and an unconfigured
+    sandbox returns a failing result so the gap shows up in the stability signal
+    instead of silently passing.
+    """
+    # Lazy on purpose: tests patch agents.nix_env.run_maven_lane_via_nix on the
+    # module, which a top-level `from` import would bind past.
+    from agents.nix_env import run_maven_lane_via_nix  # noqa: PLC0415
+    from tools.runners.docker_runner import DockerRunResult  # noqa: PLC0415
+
+    def _run(test_file: Path, project_dir_arg: Path, _seed: int) -> DockerRunResult:
+        try:
+            hint = Path(test_file).relative_to(spec_dir)
+        except ValueError:
+            hint = Path(test_file)
+        res = run_maven_lane_via_nix(spec_dir, Path(project_dir_arg), hint=hint)
+        if res is not None:
+            return res
+        return DockerRunResult(
+            returncode=1,
+            stdout="",
+            stderr="java nix lane unavailable: TFACTORY_NIX_RUNNER_IMAGE unset",
+            argv=["nix", "develop", "--", "mvn", "-B", "test"],
+        )
+
+    return _run
+
+
 def _build_go_signal_bundle(
     spec_dir: Path, project_dir: Path, subtask: dict, runner_fn, stability=None
 ) -> EvaluatorSignals:
@@ -2536,7 +2585,7 @@ def _persist_run_output(spec_dir: Path, bundles: list[Any]) -> None:
 
 
 def _build_all_bundles(  # noqa: PLR0913 - one list per lane
-    spec_dir, project_dir, unit, browser, api, jest, go, kotlin=()
+    spec_dir, project_dir, unit, browser, api, jest, go, kotlin=(), java=()
 ) -> list:
     """Compute the per-test signal bundle for every completed subtask.
 
@@ -2633,6 +2682,26 @@ def _build_all_bundles(  # noqa: PLR0913 - one list per lane
                 stability=shared_kotlin_stability,
             )
             for st in kotlin
+        ]
+    if java:
+        # Identical shape to Kotlin (#1321): `mvn test` covers the whole module,
+        # so stability is module-wide and computed once, and the staging and
+        # bundle helpers have nothing language-specific but their names.
+        for st in java:
+            _stage_go_test(spec_dir, project_dir, st)
+        java_runner = _resolve_java_runner_fn(spec_dir, project_dir)
+        shared_java_stability = _stability_for_subtask(
+            spec_dir, project_dir, java[0], java_runner
+        )
+        bundles += [
+            _build_go_signal_bundle(
+                spec_dir,
+                project_dir,
+                st,
+                java_runner,
+                stability=shared_java_stability,
+            )
+            for st in java
         ]
     return bundles
 
@@ -3093,6 +3162,7 @@ async def run_evaluator(
         jest_completed = _completed_jest_subtasks(plan)
         go_completed = _completed_go_subtasks(plan)
         kotlin_completed = _completed_kotlin_subtasks(plan)
+        java_completed = _completed_java_subtasks(plan)
         completed = (
             unit_completed
             + browser_completed
@@ -3100,6 +3170,7 @@ async def run_evaluator(
             + jest_completed
             + go_completed
             + kotlin_completed
+            + java_completed
         )
 
         # 2. No work — early exit with evaluated_empty.
@@ -3152,6 +3223,7 @@ async def run_evaluator(
             jest_completed,
             go_completed,
             kotlin_completed,
+            java_completed,
         )
 
         # 3b. Persist failing-run output for post-mortem (#1195). The judge
