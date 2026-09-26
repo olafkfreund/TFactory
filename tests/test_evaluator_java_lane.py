@@ -153,4 +153,6 @@ def test_java_stability_is_computed_once_for_the_module(
     java = _completed_java_subtasks(_plan(*subs))
     bundles = _build_all_bundles(spec_dir, project_dir, [], [], [], [], [], (), java)
     assert len(bundles) == 3
-    assert len(runs) == 3, "one module-wide stability pass (3 reruns), not 3 per subtask"
+    assert len(runs) == 3, (
+        "one module-wide stability pass (3 reruns), not 3 per subtask"
+    )
