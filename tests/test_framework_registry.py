@@ -792,16 +792,24 @@ def test_maven_descriptor_owns_the_java_unit_lane() -> None:
     not _REAL_FRAMEWORKS_DIR.is_dir(),
     reason=f"frameworks/ directory not found at {_REAL_FRAMEWORKS_DIR}",
 )
-def test_junit_no_longer_claims_a_lane_it_cannot_run() -> None:
-    """junit's runtime is the docker-host image; this cluster has no runtime (#1321).
+def test_java_has_both_a_docker_host_and_an_in_cluster_unit_framework() -> None:
+    """junit keeps its unit lane; maven adds the in-cluster one (#1321).
 
-    Two frameworks claiming java.unit would also make the Planner's choice
-    ambiguous, so the unit lane moved to frameworks/maven.
+    #237's Java wedge (JaCoCo, the PIT mutation probe) sits behind junit and is
+    valid on the docker-host substrate, so removing its lane would break a
+    working path to fix a different one. The two coexist as jest and vitest do,
+    disambiguated by manifest signals: pom.xml is maven's, junit's list also
+    names build.gradle*.
     """
     junit = get_descriptor("junit", frameworks_dir=_REAL_FRAMEWORKS_DIR)
-    lanes = [ln.value if hasattr(ln, "value") else str(ln) for ln in junit.lanes]
-    assert lanes == ["api"], lanes
+    junit_lanes = [ln.value if hasattr(ln, "value") else str(ln) for ln in junit.lanes]
+    assert "unit" in junit_lanes and "api" in junit_lanes, junit_lanes
     assert junit.runtime.image == "tfactory-runner-java:latest"
+
+    maven = get_descriptor("maven", frameworks_dir=_REAL_FRAMEWORKS_DIR)
+    assert [ln.value if hasattr(ln, "value") else str(ln) for ln in maven.lanes] == [
+        "unit"
+    ]
 
 
 @pytest.mark.skipif(
@@ -817,6 +825,9 @@ def test_exactly_one_framework_claims_each_language_unit_lane() -> None:
         if "unit" in lanes:
             owners.setdefault(desc.language, []).append(name)
     contested = {lang: sorted(n) for lang, n in owners.items() if len(n) > 1}
-    # typescript legitimately has jest AND vitest; every other language must not.
-    contested.pop("typescript", None)
+    # Two claimants are legitimate where the substrates differ or the tools are
+    # alternatives: typescript has jest AND vitest; java has junit (docker-host,
+    # #237) AND maven (in-cluster Nix, #1321). Anything else is ambiguity.
+    for allowed in ("typescript", "java"):
+        contested.pop(allowed, None)
     assert not contested, f"two frameworks claim one unit lane: {contested}"

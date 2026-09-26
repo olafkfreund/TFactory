@@ -1058,27 +1058,29 @@ async def test_validator_rejects_kotlin_browser_lane(
 
 
 @pytest.mark.asyncio
-@pytest.mark.asyncio
-async def test_validator_rejects_java_unit_on_junit(
+async def test_validator_rejects_java_on_a_lane_maven_does_not_offer(
     spec_dir: Path, project_dir: Path, mock_sdk
 ) -> None:
-    """junit keeps only the api lane (#1321): its runtime is the docker-host image.
+    """maven declares only the unit lane (#1321), so a browser lane is refused.
 
-    A unit subtask filed there could never run in this cluster, so the validator
-    must refuse it rather than let it through to a lane that does not exist.
+    NOT a test that junit rejects java+unit: junit legitimately keeps its unit
+    lane for the docker-host substrate (#237), so that pairing is valid and a
+    test asserting otherwise would pass only on an unrelated retry.
     """
     bad = _make_polyglot_plan_json(
         [
             _make_polyglot_subtask(
-                subtask_id="jv-junit", language="java", framework="junit", lane="unit"
+                subtask_id="jv-br", language="java", framework="maven", lane="browser"
             )
         ]
     )
     calls = mock_sdk(plans=[bad, _make_valid_plan_json(1)])
     ok = await run_planner(spec_dir, project_dir)
     assert ok is True
-    assert len(calls) == 2, "a unit subtask on junit must be rejected and retried"
-    assert "invalid_framework" in calls[1]["prompt"] or "RETRY" in calls[1]["prompt"]
+    assert len(calls) == 2, "a lane maven does not declare must be rejected"
+    # Specifically invalid_framework: a bare "RETRY" would also match a rejection
+    # for an unrelated reason, which is how the test this replaced passed.
+    assert "invalid_framework" in calls[1]["prompt"], calls[1]["prompt"][:400]
 
 
 async def test_validator_rejects_kotlin_on_the_java_framework(

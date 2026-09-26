@@ -8,12 +8,13 @@
 #
 name: junit
 language: java
-# The unit lane moved to frameworks/maven in #1321: this descriptor's runtime is
-# `tfactory-runner-java:latest`, a docker-host image the cluster has no runtime
-# for, so a unit subtask filed here could never run. The API lane stays — it is
-# the docker-host substrate's to claim. Two frameworks claiming `java.unit` would
-# also make the Planner's choice ambiguous.
+# junit keeps its unit lane: the Java wedge behind it (#237, epic #232 — JaCoCo
+# coverage, the PIT mutation probe, mutation dispatch) is real and tested, and
+# valid on the docker-host substrate. frameworks/maven adds the IN-CLUSTER unit
+# lane (#1321); the two coexist the way jest and vitest do for TypeScript, and
+# the manifest signals (pom.xml vs build.gradle*) disambiguate.
 lanes:
+  - unit
   - api
 
 # JUnit 5 (Jupiter). 5.10+ at v0.x; allow through 5.x.
