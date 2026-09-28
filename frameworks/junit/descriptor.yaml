@@ -8,6 +8,11 @@
 #
 name: junit
 language: java
+# junit keeps its unit lane: the Java wedge behind it (#237, epic #232 — JaCoCo
+# coverage, the PIT mutation probe, mutation dispatch) is real and tested, and
+# valid on the docker-host substrate. frameworks/maven adds the IN-CLUSTER unit
+# lane (#1321); the two coexist the way jest and vitest do for TypeScript, and
+# the manifest signals (pom.xml vs build.gradle*) disambiguate.
 lanes:
   - unit
   - api
