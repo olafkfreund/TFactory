@@ -4,7 +4,7 @@ issue: 1334
 author: olafkfreund
 ---
 
-# Intent: the P2 secrets acceptance gate runs again
+# Intent: the postgres-backed acceptance gates run again, in all three services
 
 ## Problem
 
@@ -47,6 +47,34 @@ CLI therefore cannot open a postgres database in the production image, on
 either SQLAlchemy version. That is a runtime gap in a security tool and gets
 its own issue rather than being folded into this fix.
 
+## The same break exists in three services, not one
+
+Surveyed after the above, because a shared shape is never one repo's (the
+`git grep` is on each repo's default branch):
+
+| Repo | Sites stripping the driver | Jobs currently red from it |
+| --- | --- | --- |
+| TFactory | `tests/secrets/test_p2_column_migration.py` x3 | `secrets (P2 acceptance)` |
+| PFactory | same file, x3 | `secrets (P2 acceptance)` (measured on PR #790, 2026-09-28T12:36: `sqlalchemy==2.1.1`, `psycopg2-binary==2.9.13`, same `import psycopg` traceback) |
+| AIFactory | same file x3, **plus 7 helpers under `tests/postgres/`** | `secrets (P2 acceptance)` and `postgres (P1 acceptance, PG 15 / PG 16)` — the whole schema-migration suite |
+| CFactory | none | none: it declares `psycopg[binary]>=3.2`, so its bare URL resolves to a driver it has |
+
+All three declare `sqlalchemy[asyncio]>=2.0.0` and only `psycopg2-binary` for
+the sync path. CFactory is immune by accident, not by design — it named psycopg
+v3 for other reasons.
+
+So this is one fix shape applied three times, and in AIFactory it clears two
+job families, not one. Dependabot PRs in all three repos are sitting BLOCKED
+behind these reds.
+
+**A third, unrelated red found in the same sweep, filed separately:**
+AIFactory's `backend (ruff + pytest)` fails at
+`docker run quay.io/minio/minio:latest` with
+`unauthorized: access to the requested resource is not authorized`, exit 125.
+The step's own comment says the tests "would just skip" if MinIO never comes
+up, but under `shell: bash -e` a failed pull kills the step instead. Different
+cause, different fix.
+
 ## Proposed outcome
 
 `secrets (P2 acceptance)` is green on `dev` again, and it is green because the
@@ -56,8 +84,11 @@ the same way.
 
 ## Affected users and systems
 
-- `tests/secrets/test_p2_column_migration.py` and `tests/requirements-test.txt`.
-- `.github/workflows/ci.yml`'s `secrets (P2 acceptance)` job.
+- `tests/secrets/test_p2_column_migration.py` in TFactory, PFactory and
+  AIFactory, plus AIFactory's seven `tests/postgres/` helpers, and each repo's
+  `tests/requirements-test.txt`.
+- `.github/workflows/ci.yml`'s `secrets (P2 acceptance)` job in three repos and
+  `postgres (P1 acceptance)` in AIFactory.
 - Possibly `apps/web-server/requirements.txt`, if the SQLAlchemy range is
   capped — which affects the running service, not just tests.
 - Not the production async path: the service uses `postgresql+asyncpg://`
@@ -87,6 +118,11 @@ the same way.
 2. **Make the job required on `dev`?** It protects a security property and it
    has been silently red. My recommendation is yes, in this PR's wake once it
    is green, via the hub's `apply_branch_protection.sh`.
-3. **Add psycopg v3 to the test requirements instead?** Cheaper diff (one line)
+3. **One PR per repo, or a single sweep?** These are four separate repos with
+   strict branch protection, so it is three PRs regardless. My recommendation:
+   land TFactory first (where the issue is filed and the evidence is deepest),
+   then PFactory, then AIFactory — AIFactory is the largest diff and the one
+   with a second, unrelated red in front of it.
+4. **Add psycopg v3 to the test requirements instead?** Cheaper diff (one line)
    but it leaves the URL ambiguous, so the next default change moves it again.
    I recommend against.
