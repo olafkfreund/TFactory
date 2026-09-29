@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1334
 intent: intent/2026-09-28-1334-secrets-sync-driver.md
 ---
