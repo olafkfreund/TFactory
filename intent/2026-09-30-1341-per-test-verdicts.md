@@ -78,6 +78,30 @@ attached to.
 - Proven on the real artefacts from spec `026-myfriends-verify`, which are still
   on disk: 16 tests, 2 of which must reject and 14 of which must not.
 
+## Measured after writing this intent
+
+Question 2 — how a generated test maps to its JUnit entry — is answered by the
+artefacts of the failing run, so the spec does not have to guess:
+
+```
+lane_runs.json:  "open-to-friends-toggle-immediate-effect" -> OpenToFriendsToggleTest.kt
+                 "block-prevents-requests-and-messages..." -> BlockContactPreventionTest.kt
+
+.tf_gradle/junit.xml:
+  <testsuite name="BlockContactPreventionTest" tests="6" failures="2"
+  <testsuite name="OpenToFriendsToggleTest"    tests="7" failures="0"
+```
+
+Every recorded test already carries its `test_file`, and on the JVM the public
+class name **is** the file name — a language rule, not a convention that drifts.
+So the suite name is derivable without the generator emitting anything new, and
+`failures="0"` vs `failures="2"` is exactly the per-test signal the verdict
+needs. On this run that alone separates the 14 that passed from the 2 that
+failed.
+
+Still open for the spec: the equivalent mapping for pytest/jest/go-test (file
+path rather than class name), and questions 1, 3 and 4 below.
+
 ## Open questions
 
 1. **Read the report, or run the test alone?** Reading the merged `junit.xml`
