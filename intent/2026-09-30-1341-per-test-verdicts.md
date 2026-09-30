@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1341
 author: olafkfreund
 ---
@@ -101,6 +101,22 @@ failed.
 
 Still open for the spec: the equivalent mapping for pytest/jest/go-test (file
 path rather than class name), and questions 1, 3 and 4 below.
+
+## Approved answers (2026-09-30)
+
+1. **Read the merged JUnit report**, not run each test alone. The data is
+   already produced; running each alone would multiply a ~50-minute run by the
+   test count.
+2. **Map by the test's own `test_file`.** On the JVM the class name is the file
+   name, so the suite name is derivable with no generator change. Other lanes
+   map by file path in the report; the spec settles each one rather than
+   assuming JVM's rule generalises.
+3. **A test absent from the report is `error`, not `consistent_fail`.** Absence
+   means the class never ran — a compile failure, or a mapping miss — and
+   calling that "its assertions failed" is the same false statement this issue
+   exists to remove.
+4. **`triaged_empty` stops being reachable when rejections exist.** "2 rejected,
+   14 committable" and "nothing happened" must not render identically.
 
 ## Open questions
 
