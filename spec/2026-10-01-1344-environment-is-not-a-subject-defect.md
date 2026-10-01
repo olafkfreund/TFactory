@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1344
 intent: intent/2026-10-01-1344-environment-is-not-a-subject-defect.md
 ---
