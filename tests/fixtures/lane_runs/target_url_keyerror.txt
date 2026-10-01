@@ -1,0 +1,58 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+________________ test_delete_my_account_wrong_owner_returns_403 ________________
+
+    def test_delete_my_account_wrong_owner_returns_403():
+        """DELETE /profiles/me authenticated as person-a but targeting person-b's id
+        must return 403 (AC#2).
+    
+        The criterion states that a caller cannot delete another account by naming its id.
+        We simulate this by sending a DELETE request with a JSON body that names person-b
+        as the target while the JWT authenticates person-a.  The expected result per the
+        criterion is 403.
+        """
+>       base_url = os.environ["TFACTORY_TARGET_URL"]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_delete_account_ownership.py:92: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = environ({'CFACTORY_FRONTEND_PORT_80_TCP_PROTO': 'tcp', 'OLLAMA_BASE_URL': 'http://host.k3d.internal:11434', 'GITHUB_TO...PYTEST_CURRENT_TEST': 'tests/test_delete_account_ownership.py::test_delete_my_account_wrong_owner_returns_403 (call)'})
+key = 'TFACTORY_TARGET_URL'
+
+>   ???
+E   KeyError: 'TFACTORY_TARGET_URL'
+
+<frozen os>:709: KeyError
+_____________ test_delete_my_account_does_not_delete_other_account _____________
+
+    def test_delete_my_account_does_not_delete_other_account():
+        """DELETE /profiles/me authenticated as person-a must leave person-b's account intact.
+    
+        This isolation test verifies that person-a's DELETE /profiles/me call cannot
+        destroy person-b's account, regardless of what person-a supplies in the request.
+        Person-b's profile must still exist and be retrievable after person-a's call.
+        """
+>       base_url = os.environ["TFACTORY_TARGET_URL"]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_delete_account_ownership.py:122: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = environ({'CFACTORY_FRONTEND_PORT_80_TCP_PROTO': 'tcp', 'OLLAMA_BASE_URL': 'http://host.k3d.internal:11434', 'GITHUB_TO..._CURRENT_TEST': 'tests/test_delete_account_ownership.py::test_delete_my_account_does_not_delete_other_account (call)'})
+key = 'TFACTORY_TARGET_URL'
+
+>   ???
+E   KeyError: 'TFACTORY_TARGET_URL'
+
+<frozen os>:709: KeyError
+================================ tests coverage ================================
+_______________ coverage: platform linux, python 3.14.7-final-0 ________________
+
+Coverage XML written to file coverage.xml
+=========================== short test summary info ============================
+FAILED tests/test_delete_account_ownership.py::test_delete_my_account_wrong_owner_returns_403
+FAILED tests/test_delete_account_ownership.py::test_delete_my_account_does_not_delete_other_account
+2 failed in 0.13s
+__PYTEST_EXIT=1
+

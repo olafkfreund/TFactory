@@ -1,0 +1,75 @@
+                                          [100%]
+=================================== FAILURES ===================================
+___________________ test_store_source_file_exists_and_parses ___________________
+
+    def test_store_source_file_exists_and_parses():
+        """store.py must exist at the expected path and be syntactically valid."""
+>       assert _STORE_PATH.exists(), (
+            f"store.py not found at {_STORE_PATH}; cannot verify AC#4"
+        )
+E       AssertionError: store.py not found at /tmp/.worktree/app/api/app/store.py; cannot verify AC#4
+E       assert False
+E        +  where False = exists()
+E        +    where exists = PosixPath('/tmp/.worktree/app/api/app/store.py').exists
+
+tests/test_store_no_inmemory.py:76: AssertionError
+_____________ test_store_no_module_level_dict_holding_entity_data ______________
+
+    def test_store_no_module_level_dict_holding_entity_data():
+        """No module-level dict literal is assigned to an entity-related name.
+    
+        AC#4 requires profiles, connections, messages, blocks and reports to live
+        in Postgres.  A module-level assignment like ``profiles = {}`` would mean
+        data lives only in the process and is lost on restart.
+        """
+>       tree = _parse_store()
+               ^^^^^^^^^^^^^^
+
+tests/test_store_no_inmemory.py:90: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_store_no_inmemory.py:53: in _parse_store
+    source = _STORE_PATH.read_text(encoding="utf-8")
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.14/pathlib/__init__.py:787: in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors, newline=newline) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PosixPath('/tmp/.worktree/app/api/app/store.py'), mode = 'r'
+buffering = -1, encoding = '
+...[13517 chars truncated]...
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PosixPath('/tmp/.worktree/app/api/app/store.py'), mode = 'r'
+buffering = -1, encoding = 'utf-8', errors = None, newline = None
+
+    def open(self, mode='r', buffering=-1, encoding=None,
+             errors=None, newline=None):
+        """
+        Open the file pointed to by this path and return a file object, as
+        the built-in open() function does.
+        """
+        if "b" not in mode:
+            encoding = io.text_encoding(encoding)
+>       return io.open(self, mode, buffering, encoding, errors, newline)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       FileNotFoundError: [Errno 2] No such file or directory: '/tmp/.worktree/app/api/app/store.py'
+
+/usr/lib/python3.14/pathlib/__init__.py:771: FileNotFoundError
+================================ tests coverage ================================
+_______________ coverage: platform linux, python 3.14.7-final-0 ________________
+
+Coverage XML written to file coverage.xml
+=========================== short test summary info ============================
+FAILED tests/test_store_no_inmemory.py::test_store_source_file_exists_and_parses
+FAILED tests/test_store_no_inmemory.py::test_store_no_module_level_dict_holding_entity_data
+FAILED tests/test_store_no_inmemory.py::test_store_no_module_level_list_holding_entity_data
+FAILED tests/test_store_no_inmemory.py::test_store_entity_name_not_a_plain_dict_or_list[blocks]
+FAILED tests/test_store_no_inmemory.py::test_store_entity_name_not_a_plain_dict_or_list[connections]
+FAILED tests/test_store_no_inmemory.py::test_store_entity_name_not_a_plain_dict_or_list[messages]
+FAILED tests/test_store_no_inmemory.py::test_store_entity_name_not_a_plain_dict_or_list[profiles]
+FAILED tests/test_store_no_inmemory.py::test_store_entity_name_not_a_plain_dict_or_list[reports]
+FAILED tests/test_store_no_inmemory.py::test_store_has_no_module_level_plain_dict_at_all
+9 failed in 0.29s
+__PYTEST_EXIT=1
+
