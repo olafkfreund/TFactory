@@ -53,6 +53,50 @@ def test_selects_only_rejects() -> None:
     assert ids == ["t_bad"]  # accept + flag excluded
 
 
+# #1344: the harm this plan exists to prevent. A test that never reached the
+# subject (classified "environment", reclassified not_run by
+# apply_environment_override) must never ride alongside a genuine reject into
+# AIFactory's hand-back. _FAILING_VERDICTS = frozenset({"reject"}) is what
+# excludes not_run — not_run is already not a failure to the renderer or the
+# never-overclaim gate; this is the one place that could silently widen and
+# undo it.
+
+ENV_AND_REJECT_VERDICTS = {
+    "verdicts": [
+        {
+            "test_id": "t_env",
+            "verdict": "not_run",
+            "reasons": ["the lane had no target URL"],
+            "lane": "api",
+        },
+        {
+            "test_id": "t_bad",
+            "verdict": "reject",
+            "reasons": ["assertion failed: expected 200, got 500"],
+            "lane": "api",
+            "acceptance_criterion": "login returns 200 on valid creds",
+        },
+    ]
+}
+
+ENV_AND_REJECT_TRIAGE = {
+    "rejected": [{"test_id": "t_bad", "test_file": "tests/test_login_api.py"}],
+    "tests": [{"test_id": "t_env", "test_file": "tests/test_delete_account.py"}],
+}
+
+
+def test_environment_not_run_never_rides_with_a_genuine_reject() -> None:
+    """The hand-back carries only the reject — the unreached environment
+    failure is suppressed entirely, not merely absent for an unrelated
+    reason (hence asserting the exact count and identity, not just that
+    t_env is missing)."""
+    req = build_correction_request(
+        ENV_AND_REJECT_VERDICTS, ENV_AND_REJECT_TRIAGE, SOURCE
+    )
+    assert len(req.failures) == 1
+    assert req.failures[0].test_id == "t_bad"
+
+
 def test_enriches_file_from_triage_and_maps_fields() -> None:
     req = build_correction_request(VERDICTS, TRIAGE, SOURCE)
     f = req.failures[0]
