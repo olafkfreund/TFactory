@@ -363,6 +363,21 @@ def test_consistent_fail_reason_noop_when_kind_unknown():
     assert v["reasons"] == ["original reason"]
 
 
+def test_consistent_fail_reason_noop_when_kind_environment():
+    """#1344: never write "subject behaviour is wrong" for an environment
+    failure — the test never reached the subject. Today this falls through
+    the same unknown-kind `else` as a non-answer; pinning it here means a
+    future branch added for "environment" can't silently regress into the
+    assertion wording."""
+    v = _verdict(verdict="reject", stability="consistent_fail")
+    v["reasons"] = ["original reason"]
+    changed = apply_consistent_fail_reason(
+        v, {"failure_kind": "environment", "rerun_count": 3}
+    )
+    assert changed is False
+    assert v["reasons"] == ["original reason"]
+
+
 def test_consistent_fail_reason_defaults_rerun_count():
     v = _verdict(verdict="reject", stability="consistent_fail")
     v["reasons"] = []

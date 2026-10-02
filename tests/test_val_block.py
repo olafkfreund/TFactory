@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from agents.confidence import enrich_verdicts
 from agents.val_block import build_verification_block
 
 
@@ -54,6 +55,31 @@ def test_api_not_run_ignored_when_other_api_acs_pass() -> None:
         _v("unit", "accept", 1) + _v("api", "accept", 1) + _v("api", "not_run", 1)
     )
     assert block["achieved_level"] == "VAL-2"
+
+
+def test_environment_failure_keeps_val2_not_run_through_enrich_verdicts() -> None:
+    """#1344: an api-lane test that never contacted the subject (missing
+    TFACTORY_TARGET_URL, classified "environment") must not cap the ceiling
+    as a false AC failure. Goes through the real path — enrich_verdicts
+    applies apply_environment_override and turns the api verdict into
+    not_run — rather than hand-building a not_run verdict, which would test
+    the gate but not the wiring that is supposed to produce it."""
+    doc = {
+        "verdicts": [
+            {"test_id": "unit-0", "lane": "unit", "verdict": "accept"},
+            {"test_id": "api-0", "lane": "api", "verdict": "reject"},
+        ]
+    }
+    enrich_verdicts(
+        doc, failure_kind_by_test_id={"api-0": {"failure_kind": "environment"}}
+    )
+    assert doc["verdicts"][1]["verdict"] == "not_run"  # the override fired
+
+    block = build_verification_block(doc["verdicts"])
+    val2 = next(lv for lv in block["levels"] if lv["level"] == "VAL-2")
+    assert val2["status"] == "not_run"  # not "failed" — never a false AC rejection
+    assert block["achieved_level"] == "VAL-1"  # capped, not falsely raised to VAL-2
+    assert "VAL-2 not_run" in block["claim"]
 
 
 def test_a_failed_level_carries_a_reason_and_gate_flags_no_missing_reason() -> None:
