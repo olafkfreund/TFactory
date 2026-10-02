@@ -88,6 +88,25 @@ created). One commit per step.
    unit-sandbox dependency gap (the 8 `ModuleNotFoundError` failures) as its own
    issue, since this plan deliberately leaves it.
 
+## Deviations recorded during implementation
+
+- **Step 3 was incomplete: it named the function and not its wiring.** As
+  written, step 3 produced `apply_environment_override` and three tests of it
+  in isolation — and nothing that calls it. `apply_app_not_healthy_override`,
+  the sibling it mirrors, is invoked from `enrich_verdicts`
+  (`agents/confidence.py:461`); without the same call the new override never
+  runs in production, and all three of its tests still pass. That is "guard
+  written but not wired" — the identical defect shape as AIFactory#1638, which
+  this session is fixing in parallel.
+
+  Step 3 therefore also adds the call, immediately after
+  `apply_app_not_healthy_override` so the ordering note there still holds, and
+  **a test through `enrich_verdicts`** rather than against the function alone.
+  The wired test is the one that matters: a standalone test passes whether or
+  not anything calls it, which is exactly how this would have shipped.
+
+  Caught by the coder, which is the point of asking before improvising.
+
 ## Tests
 
 ```sh
