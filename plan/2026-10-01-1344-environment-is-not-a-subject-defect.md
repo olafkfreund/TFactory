@@ -107,6 +107,43 @@ created). One commit per step.
 
   Caught by the coder, which is the point of asking before improvising.
 
+- **Step 4's test was vacuous, and my own mutation did not reveal it.** The
+  first version hard-coded `"verdict": "not_run"` in its fixture, so it never
+  touched `classify_pytest_failure`, `apply_environment_override` or
+  `enrich_verdicts`. Measured by the reviewer and confirmed: with **both**
+  production files reverted to `origin/dev`, the module still reported
+  **13 passed**. The plan's claim that it "must fail before step 3 and pass
+  after" was false. What it actually re-tested is
+  `_FAILING_VERDICTS = frozenset({"reject"})`, which `test_selects_only_rejects`
+  already covers.
+
+  The instructive part is why my verification missed it. I mutated
+  `_FAILING_VERDICTS` and the test failed, so I accepted it — but that mutation
+  is orthogonal to the change. "This test can fail" and "this test exercises
+  this change" are different properties, and only the second one was claimed. A
+  mutation of the thing under test, not of a neighbour, is what distinguishes
+  them.
+
+  Rewritten to start both entries as `reject` and run the doc through
+  `enrich_verdicts` with `failure_kind: "environment"`, so the `not_run` is
+  produced by the change. It now fails with the production files reverted and
+  under the wiring mutation.
+
+- **A second production site branches on "this failure was environmental", and
+  step 2 missed it.** `evaluator.py:1461` skips recording flaky-history for
+  `("import", "app_not_healthy")`, under a comment that reads "skip the
+  environmental ones so re-verifying a spec that first reaped does not
+  spuriously flag good tests". `"environment"` was not in that tuple, so a
+  missing-`TFACTORY_TARGET_URL` failure wrote `passed=False` into
+  `test_history.json` for a test that never contacted the subject — and the
+  next real run's `true` then yields `flip_rate=1.00`, which demotes every
+  `accept` to `flag`.
+
+  The same harm this plan exists to remove, in the sibling location, reached by
+  the same `failure_kind`. Added to the tuple with a test; mutation-checked by
+  removing it again. Found by independent review, which is the argument for
+  reviewing with an agent that has not read the plan's reasoning.
+
 ## Tests
 
 ```sh
