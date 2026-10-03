@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- **Java's unit lane runs in-cluster through Maven (Factory#1321, PR #1333).**
+  Java was where Kotlin was before 0.9.28 with one extra gap: `.java` mapped to
+  no language, no acceptance-criteria token named Java, and the only JVM
+  framework (`frameworks/junit`) named a docker-host runner image this cluster
+  has no container runtime for -- so a Java deliverable was unpinned, and
+  pinning it would have planned subtasks that could not execute.
+  `frameworks/maven` now declares Java's in-cluster unit lane, and
+  `run_maven_lane_via_nix` runs it in a per-task Nix Job beside the proven
+  Gradle lane, merging Surefire's per-class JUnit XML and keeping the evidence
+  rule (a zero exit with no report, no tests, or recorded failures is a
+  failure). `frameworks/junit` keeps its unit lane: a real, tested Java wedge
+  sits behind it on the docker-host substrate. Where both claim the lane, the
+  framework declaring `source_extensions` for the language wins -- the same
+  field the language pin is derived from -- so Java resolves to maven, not to
+  the image this cluster cannot run.
+  Proven live: a three-test Maven fixture through a real Nix Job
+  (`tests="3" failures="0"`, 159s cold local repository against a 900s budget),
+  a mutated assertion flipping it to `failures="1"`, and the real Planner
+  emitting `(java, maven, unit)` past the post-emit validator unmodified.
+
 ## 0.9.28 — Kotlin plans reach the Gradle lane, and provider install works again (2026-09-26)
 
 - **The Planner can emit Kotlin subtasks (Factory#1311, PR #1322).** The

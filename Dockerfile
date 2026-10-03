@@ -59,7 +59,7 @@ RUN mkdir -p apps/web-server/static \
 # digest as frontend-build, so both move together in one Dependabot bump.
 FROM docker.io/node:26-bookworm-slim@sha256:c8fedd782bcd1b68d8a7d1ed2577b5f820eba820871323f605292651ff11e3c6 AS node-runtime
 
-FROM cgr.dev/chainguard/python:latest-dev@sha256:2d5551e22013aa1bb69c070398273171941c4a0d80414e7f786db8e6d966bb83 AS runtime
+FROM cgr.dev/chainguard/python:latest-dev@sha256:96cb9c155159daf6b21e70555f244081909ff161c5589112ddf308624c1a1c77 AS runtime
 
 USER root
 
@@ -160,6 +160,46 @@ RUN apk add --no-cache \
         "libexpat1>2.8.1-r1" \
         socat \
         "wget>=1.25.0-r15"
+
+# The apk `npm` package ships an npm whose own VENDORED deps carry HIGH CVEs
+# that the P0 Trivy gate rejects. Measured in the running image:
+# /usr/local/lib/node_modules/npm/node_modules holds brace-expansion 5.0.9 and
+# undici 6.28.0, and Trivy attributes all three findings to exactly that path:
+#
+#   HIGH CVE-2026-102276  brace-expansion 5.0.9 -> 5.0.10   (stack exhaustion)
+#   HIGH CVE-2026-102278  brace-expansion 5.0.9 -> 5.0.11   (uncontrolled recursion)
+#   HIGH CVE-2026-19534   undici 6.28.0 -> 6.28.1           (WebSocket DoS)
+#
+# These are npm's own bundle, not a dependency of this application, so no
+# lockfile of ours can clear them — and no npm release does either. Measured
+# against the registry in AIFactory#1637: 11.19.1, 11.21.0 and 12.2.0 (latest)
+# all still bundle the vulnerable versions. Waiting for a newer npm waits
+# forever.
+#
+# Patched versions of the PACKAGES do exist (brace-expansion 5.0.12, undici
+# 6.28.1); they are simply in no npm tarball. So replace npm's vendored copies
+# rather than allow-listing the CVEs: a .trivyignore entry is for "no known
+# patched version exists", which is false here, and silencing the report would
+# leave the vulnerable code in an image that runs npm against untrusted
+# repository content.
+#
+# Ported verbatim from AIFactory's Dockerfile (#1637, merged), which is the same
+# fix for the same bundle at the same path. If you change one, change both.
+#
+# The asserting `node -e` is load-bearing, not decoration: a `for` loop exits
+# with the status of its LAST iteration, so a brace-expansion failure followed
+# by an undici success would exit 0 and ship an unpatched bundle. The trailing
+# `npm --version` proves npm still runs after the surgery.
+RUN M=/usr/local/lib/node_modules/npm/node_modules \
+ && for p in brace-expansion@5.0.12 undici@6.28.1; do \
+      n="${p%@*}"; \
+      npm pack "$p" --pack-destination /tmp >/dev/null \
+   && rm -rf "$M/$n" && mkdir -p "$M/$n" \
+   && tar xzf /tmp/"$n"-*.tgz -C "$M/$n" --strip-components=1 \
+   && rm -f /tmp/"$n"-*.tgz; \
+    done \
+ && node -e "const want={'brace-expansion':'5.0.12','undici':'6.28.1'}; let bad=0; for (const [n,v] of Object.entries(want)) { const got=require('/usr/local/lib/node_modules/npm/node_modules/'+n+'/package.json').version; console.log(n, got, got===v?'ok':'EXPECTED '+v); if (got!==v) bad=1; } process.exit(bad)" \
+ && npm --version
 
 # Node must come only from the node-runtime COPY above, never from apk: an apk
 # nodejs would be rebuilt against a glibc newer than this base pins and break

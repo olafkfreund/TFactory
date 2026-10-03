@@ -767,3 +767,67 @@ def test_ac_command_tokens_must_be_a_list_of_str() -> None:
     data["ac_command_tokens"] = ["gradle test", 7]
     with pytest.raises(FrameworkDescriptorError):
         validate_descriptor(data)
+
+
+@pytest.mark.skipif(
+    not _REAL_FRAMEWORKS_DIR.is_dir(),
+    reason=f"frameworks/ directory not found at {_REAL_FRAMEWORKS_DIR}",
+)
+def test_maven_descriptor_owns_the_java_unit_lane() -> None:
+    """Java's in-cluster lane (#1321), and the only claimant of java.unit."""
+    maven = get_descriptor("maven", frameworks_dir=_REAL_FRAMEWORKS_DIR)
+    assert maven.language == "java"
+    assert [ln.value if hasattr(ln, "value") else str(ln) for ln in maven.lanes] == [
+        "unit"
+    ]
+    assert maven.source_extensions == (".java",)
+    assert "mvn test" in maven.ac_command_tokens
+    # The Nix Maven lane merges Surefire XML and collects no coverage.
+    assert maven.coverage_strategy == "skip"
+    assert any("src/test/java" in c for c in maven.test_path_conventions)
+    assert maven.context_block.strip(), "Java generation guidance is the point"
+
+
+@pytest.mark.skipif(
+    not _REAL_FRAMEWORKS_DIR.is_dir(),
+    reason=f"frameworks/ directory not found at {_REAL_FRAMEWORKS_DIR}",
+)
+def test_java_has_both_a_docker_host_and_an_in_cluster_unit_framework() -> None:
+    """junit keeps its unit lane; maven adds the in-cluster one (#1321).
+
+    #237's Java wedge (JaCoCo, the PIT mutation probe) sits behind junit and is
+    valid on the docker-host substrate, so removing its lane would break a
+    working path to fix a different one. The two coexist as jest and vitest do,
+    disambiguated by manifest signals: pom.xml is maven's, junit's list also
+    names build.gradle*.
+    """
+    junit = get_descriptor("junit", frameworks_dir=_REAL_FRAMEWORKS_DIR)
+    junit_lanes = [ln.value if hasattr(ln, "value") else str(ln) for ln in junit.lanes]
+    assert "unit" in junit_lanes and "api" in junit_lanes, junit_lanes
+    assert junit.runtime.image == "tfactory-runner-java:latest"
+
+    maven = get_descriptor("maven", frameworks_dir=_REAL_FRAMEWORKS_DIR)
+    assert [ln.value if hasattr(ln, "value") else str(ln) for ln in maven.lanes] == [
+        "unit"
+    ]
+
+
+@pytest.mark.skipif(
+    not _REAL_FRAMEWORKS_DIR.is_dir(),
+    reason=f"frameworks/ directory not found at {_REAL_FRAMEWORKS_DIR}",
+)
+def test_exactly_one_framework_claims_each_language_unit_lane() -> None:
+    """A second claimant makes the Planner's (language, framework) choice ambiguous."""
+    registry = load_registry(frameworks_dir=_REAL_FRAMEWORKS_DIR)
+    owners: dict[str, list[str]] = {}
+    for name, desc in registry.items():
+        lanes = [ln.value if hasattr(ln, "value") else str(ln) for ln in desc.lanes]
+        if "unit" in lanes:
+            owners.setdefault(desc.language, []).append(name)
+    contested = {lang: sorted(n) for lang, n in owners.items() if len(n) > 1}
+    # Two claimants are legitimate where the substrates differ or the tools are
+    # alternatives: typescript has jest AND vitest; java has junit (docker-host,
+    # #237) AND maven (in-cluster Nix, #1321). Anything else is ambiguity.
+    for allowed in ("typescript", "java"):
+        contested.pop(allowed, None)
+    assert not contested, f"two frameworks claim one unit lane: {contested}"

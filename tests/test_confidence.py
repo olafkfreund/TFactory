@@ -14,6 +14,7 @@ from agents.confidence import (
     aggregate_confidence,
     apply_app_not_healthy_override,
     apply_consistent_fail_reason,
+    apply_environment_override,
     compute_confidence,
     enrich_verdicts,
 )
@@ -362,6 +363,21 @@ def test_consistent_fail_reason_noop_when_kind_unknown():
     assert v["reasons"] == ["original reason"]
 
 
+def test_consistent_fail_reason_noop_when_kind_environment():
+    """#1344: never write "subject behaviour is wrong" for an environment
+    failure — the test never reached the subject. Today this falls through
+    the same unknown-kind `else` as a non-answer; pinning it here means a
+    future branch added for "environment" can't silently regress into the
+    assertion wording."""
+    v = _verdict(verdict="reject", stability="consistent_fail")
+    v["reasons"] = ["original reason"]
+    changed = apply_consistent_fail_reason(
+        v, {"failure_kind": "environment", "rerun_count": 3}
+    )
+    assert changed is False
+    assert v["reasons"] == ["original reason"]
+
+
 def test_consistent_fail_reason_defaults_rerun_count():
     v = _verdict(verdict="reject", stability="consistent_fail")
     v["reasons"] = []
@@ -411,3 +427,44 @@ def test_app_not_healthy_never_overrides_a_genuine_accept():
         apply_app_not_healthy_override(v, {"failure_kind": "app_not_healthy"}) is False
     )
     assert v["verdict"] == "accept"
+
+
+# ─── environment override (#1344) ────────────────────────────────────────
+# A test that never reached the subject because its own environment is
+# missing (e.g. the api lane's TFACTORY_TARGET_URL) must not re-enter a
+# hand-back as "the subject's assertions failed" — reclassify to not_run,
+# same pattern as apply_app_not_healthy_override above.
+
+
+def test_environment_override_reclassifies_reject_to_not_run():
+    v = _verdict(verdict="reject")
+    assert apply_environment_override(v, {"failure_kind": "environment"}) is True
+    assert v["verdict"] == "not_run"
+    assert any("no target URL" in r for r in v["reasons"])
+
+
+def test_environment_override_leaves_an_assertion_verdict_untouched():
+    v = _verdict(verdict="reject")
+    assert apply_environment_override(v, {"failure_kind": "assertion"}) is False
+    assert v["verdict"] == "reject"
+
+
+def test_environment_override_never_overrides_a_genuine_accept():
+    v = _verdict(verdict="accept")
+    assert apply_environment_override(v, {"failure_kind": "environment"}) is False
+    assert v["verdict"] == "accept"
+
+
+def test_enrich_verdicts_environment_becomes_not_run():
+    """#1344: enrich_verdicts must call apply_environment_override itself —
+    a standalone test of the function proves nothing about the wiring."""
+    doc = {"verdicts": [_verdict(verdict="reject", stability="consistent_fail")]}
+    enrich_verdicts(
+        doc,
+        failure_kind_by_test_id={
+            "t": {"failure_kind": "environment", "rerun_count": 3}
+        },
+    )
+    v = doc["verdicts"][0]
+    assert v["verdict"] == "not_run"
+    assert any("no target URL" in r for r in v["reasons"])

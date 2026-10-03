@@ -53,6 +53,81 @@ def test_selects_only_rejects() -> None:
     assert ids == ["t_bad"]  # accept + flag excluded
 
 
+# #1344: the harm this plan exists to prevent. A test that never reached the
+# subject (classified "environment", reclassified not_run by
+# apply_environment_override) must never ride alongside a genuine reject into
+# AIFactory's hand-back. _FAILING_VERDICTS = frozenset({"reject"}) is what
+# excludes not_run — not_run is already not a failure to the renderer or the
+# never-overclaim gate; this is the one place that could silently widen and
+# undo it.
+
+# #1344: both entries start as `reject` — the environmental one is turned into
+# `not_run` by enrich_verdicts, NOT hard-coded here. Hard-coding it was the
+# original mistake: the test then passed with the entire change reverted,
+# because it only re-tested _FAILING_VERDICTS. Found by independent review.
+ENV_AND_REJECT_VERDICTS = {
+    "verdicts": [
+        {
+            "test_id": "t_env",
+            "verdict": "reject",
+            "reasons": ["assertion failed"],
+            "lane": "api",
+            "signals_summary": {"stability": "consistent_fail"},
+        },
+        {
+            "test_id": "t_bad",
+            "verdict": "reject",
+            "reasons": ["assertion failed: expected 200, got 500"],
+            "lane": "api",
+            "acceptance_criterion": "login returns 200 on valid creds",
+            "signals_summary": {"stability": "consistent_fail"},
+        },
+    ]
+}
+
+ENV_AND_REJECT_TRIAGE = {
+    "rejected": [
+        {"test_id": "t_bad", "test_file": "tests/test_login_api.py"},
+        {"test_id": "t_env", "test_file": "tests/test_delete_account.py"},
+    ],
+}
+
+
+def test_environment_not_run_never_rides_with_a_genuine_reject() -> None:
+    """A hand-back carries the genuine reject and NOT the unreached test.
+
+    This is the property the whole issue exists for: a build agent must never
+    be asked to fix code the lane never contacted.
+
+    The verdict doc goes through the REAL path — `enrich_verdicts` with a
+    `failure_kind: "environment"` for `t_env` — so the `not_run` it ends up with
+    is produced by the change under test rather than written into the fixture.
+    The first version of this test hard-coded `"verdict": "not_run"` and
+    therefore passed with both production files reverted to origin/dev; it was
+    testing `_FAILING_VERDICTS`, which `test_selects_only_rejects` already
+    covers.
+    """
+    import copy
+
+    from agents.confidence import enrich_verdicts
+
+    doc = enrich_verdicts(
+        copy.deepcopy(ENV_AND_REJECT_VERDICTS),
+        failure_kind_by_test_id={"t_env": {"failure_kind": "environment"}},
+    )
+    # The override fired: this is the change under test doing the work.
+    by_id = {v["test_id"]: v for v in doc["verdicts"]}
+    assert by_id["t_env"]["verdict"] == "not_run", by_id["t_env"]
+    assert by_id["t_bad"]["verdict"] == "reject", by_id["t_bad"]
+
+    req = build_correction_request(doc, ENV_AND_REJECT_TRIAGE, SOURCE)
+
+    # Count AND identity: "the environment one is absent" would also pass on an
+    # empty hand-back.
+    assert len(req.failures) == 1, req.failures
+    assert req.failures[0].test_id == "t_bad", req.failures
+
+
 def test_enriches_file_from_triage_and_maps_fields() -> None:
     req = build_correction_request(VERDICTS, TRIAGE, SOURCE)
     f = req.failures[0]
