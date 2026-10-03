@@ -65,6 +65,14 @@ wired to a field nothing populates on the live path.
 Separately, `agents/health_gate.py:127` `resolve_target_url` has no callers
 anywhere under `apps/` (confirmed: definition and its own docstring only).
 
+**A fifth consumer, found while reviewing this intent.**
+`prompts_pkg/prompts.py:1035` hands the model the path
+`<spec_dir>/context/tfactory_yml.json` annotated "(may not exist)". So the
+prompt tells an agent to look for a file that, on these paths, never exists —
+and the annotation makes its permanent absence read as a normal condition. That
+is the same shape as the rest of this issue: a correct-looking statement about a
+field nothing populates.
+
 ## Proposed outcome
 
 When this is done, a repository with a valid `.tfactory.yml` on the build
