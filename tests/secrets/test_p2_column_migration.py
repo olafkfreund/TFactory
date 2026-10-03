@@ -80,7 +80,12 @@ def _run_alembic(target: str, url: str, fernet_key: str) -> subprocess.Completed
 def _seed_email_account(url: str, plaintext: str) -> str:
     """Insert one EmailAccount row with a plaintext access_token. Returns id."""
     # Sync URL for sync create_engine (the test URL is async-driver-prefixed).
-    sync_url = url.replace("+asyncpg", "")
+    # Name the driver explicitly: a bare "postgresql://" lets SQLAlchemy pick,
+    # and 2.1 changed that default from psycopg2 to psycopg (v3), which is not
+    # installed -- requirements-test.txt provides psycopg2-binary. The floor
+    # `sqlalchemy[asyncio]>=2.0.0` is unbounded, so CI silently moved to 2.1.2
+    # while local stayed on 2.0.51 and the tests passed there.
+    sync_url = url.replace("+asyncpg", "+psycopg2")
     engine = create_engine(sync_url)
     owner_id = str(uuid.uuid4())
     row_id = str(uuid.uuid4())
@@ -129,7 +134,7 @@ def test_migration_backfills_plaintext_to_encrypted(
     from server.database.models import EmailAccount  # noqa: E402
     from sqlalchemy.orm import Session
 
-    sync_url = pg_url.replace("+asyncpg", "")
+    sync_url = pg_url.replace("+asyncpg", "+psycopg2")
     engine = create_engine(sync_url)
     try:
         with Session(engine) as session:
@@ -159,7 +164,7 @@ def test_pg_dump_contains_no_plaintext_credentials(
     result = _run_alembic("head", pg_url, fernet_key)
     assert result.returncode == 0, f"P2.3 alembic failed:\n{result.stderr[-1500:]}"
 
-    sync_url = pg_url.replace("+asyncpg", "")
+    sync_url = pg_url.replace("+asyncpg", "+psycopg2")
     engine = create_engine(sync_url)
     try:
         with engine.connect() as conn:
