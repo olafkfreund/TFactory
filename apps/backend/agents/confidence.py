@@ -347,6 +347,36 @@ def apply_app_not_healthy_override(
     return True
 
 
+def apply_environment_override(
+    verdict: dict[str, Any], failure_info: dict[str, Any] | None
+) -> bool:
+    """Reclassify a reject/flag whose cause is a missing lane env var to
+    ``not_run`` (#1344).
+
+    A ``failure_kind == "environment"`` means the test never contacted the
+    subject because its own environment was missing (e.g. the api lane's
+    ``TFACTORY_TARGET_URL``) — not the subject's assertions failing. Record it
+    as ``not_run`` so it never re-enters a hand-back as "the code under test
+    is wrong" for code that was never reached.
+
+    Never touches a genuine ``accept`` (an unreached test can't be one, but
+    stay defensive). Returns True if the label was changed.
+    """
+    if not isinstance(failure_info, dict):
+        return False
+    if failure_info.get("failure_kind") != "environment":
+        return False
+    if _norm(verdict.get("verdict")) == "accept":
+        return False
+    verdict["verdict"] = "not_run"
+    add_system_reason(
+        verdict,
+        "the lane had no target URL — the test never contacted the subject "
+        "(infra not_run, not an acceptance failure)",
+    )
+    return True
+
+
 def aggregate_confidence(verdicts: list[dict]) -> dict:
     """Run-level rollup over per-verdict confidences.
 
@@ -429,6 +459,10 @@ def enrich_verdicts(
         # reject/flag -> not_run so the gate treats it as lane-not-run, not a
         # false AC failure. Applied after the reason fix so its note survives.
         apply_app_not_healthy_override(v, failure_info)
+        # Same reasoning, different cause: a missing lane env var (#1344) also
+        # means the test never contacted the subject — infra not_run, not a
+        # false AC failure. Applied after the two above for the same reason.
+        apply_environment_override(v, failure_info)
         summary["confidence"] = compute_confidence(v)
     doc["confidence_summary"] = aggregate_confidence(verdicts)
     return doc

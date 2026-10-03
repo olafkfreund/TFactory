@@ -1460,7 +1460,7 @@ def _flaky_history_for_subtask(spec_dir: Path, subtask: dict, stability):
         return None
     if verdict == StabilityVerdict.CONSISTENT_FAIL and getattr(
         stability, "failure_kind", None
-    ) in ("import", "app_not_healthy"):
+    ) in ("import", "app_not_healthy", "environment"):
         return None
 
     try:

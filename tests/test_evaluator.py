@@ -1333,6 +1333,34 @@ def test_flaky_history_skips_environmental_import_fail(tmp_path):
     assert not _history_store(spec_dir).exists()  # nothing recorded
 
 
+def test_flaky_history_skips_a_missing_lane_environment(tmp_path):
+    """#1344: a CONSISTENT_FAIL whose cause is the lane's own missing env var
+    must NOT be recorded either.
+
+    The comment above the skip says "skip the environmental ones"; a missing
+    TFACTORY_TARGET_URL is as environmental as a no-SUT import error, and the
+    test never contacted the subject. Recording `false` for it writes a failure
+    into test_history.json for code that was never exercised, and the next real
+    run's `true` then produces flip_rate=1.00 and flags every good test.
+
+    This is the SECOND production site that branches on "this failure was
+    environmental" — the first is apply_environment_override in confidence.py.
+    Found by independent review after the first was fixed in isolation.
+    """
+    from agents import evaluator
+    from agents.stability_runner import StabilityVerdict
+
+    spec_dir = _spec_dir(tmp_path)
+    stab = _stability_result(
+        StabilityVerdict.CONSISTENT_FAIL,
+        returncode=1,
+        tail="FAILED test_x.py::test_y - KeyError: 'TFACTORY_TARGET_URL'",
+    )
+    assert stab.failure_kind == "environment"
+    assert evaluator._flaky_history_for_subtask(spec_dir, {"id": "t-1"}, stab) is None
+    assert not _history_store(spec_dir).exists()  # nothing recorded
+
+
 def test_flaky_history_skips_runner_error(tmp_path):
     """#787: the stability runner itself raising (verdict ERROR) is
     environmental, not a reliability signal — never record it."""

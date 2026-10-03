@@ -395,6 +395,41 @@ def test_classify_empty_stdout() -> None:
     assert classify_pytest_failure("", 0) == "unknown"
 
 
+# ── classify_pytest_failure: environment (#1344) ───────────────────────
+# A test that never reached the subject because its own environment is
+# missing (e.g. the api lane's TFACTORY_TARGET_URL) used to classify as
+# "assertion" — exit 1 + "FAILED" in the output — and so re-entered
+# hand-backs telling AIFactory "the subject's assertions failed" for code
+# never contacted. These pin the fix against real stdout_tail from run
+# 026's lane_runs.json (tests/fixtures/lane_runs/), not synthesised text.
+
+_TARGET_URL_KEYERROR = (
+    Path(__file__).parent / "fixtures" / "lane_runs" / "target_url_keyerror.txt"
+).read_text(encoding="utf-8")
+
+_WORKTREE_ABSENT = (
+    Path(__file__).parent / "fixtures" / "lane_runs" / "worktree_absent.txt"
+).read_text(encoding="utf-8")
+
+
+def test_classify_environment_missing_target_url() -> None:
+    assert classify_pytest_failure(_TARGET_URL_KEYERROR, 1) == "environment"
+
+
+def test_classify_environment_double_quoted_marker() -> None:
+    """Both quoting styles are literal markers — never a regex over prose."""
+    text = 'E   KeyError: "TFACTORY_TARGET_URL"\n1 failed\n'
+    assert classify_pytest_failure(text, 1) == "environment"
+
+
+def test_classify_worktree_absent_is_not_covered() -> None:
+    """The /tmp/.worktree shape raises a genuine AssertionError on
+    author-chosen text — no marker separates it from a real failure without
+    guessing (#1347 territory). This is the documented gap, pinned here so
+    it can never be mistaken for coverage this plan does not claim."""
+    assert classify_pytest_failure(_WORKTREE_ABSENT, 1) == "assertion"
+
+
 # ── StabilityResult.failure_kind (#629) ────────────────────────────────
 
 
