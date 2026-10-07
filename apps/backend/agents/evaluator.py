@@ -2261,6 +2261,22 @@ def _completed_java_subtasks(plan: dict[str, Any]) -> list[dict[str, Any]]:
     )
 
 
+def _java_build_tool(project_dir: Path) -> str:
+    """'gradle' only when no pom.xml exists anywhere and a Gradle build does (#3151)."""
+    from agents.nix_env import (  # noqa: PLC0415
+        _GRADLE_BUILD_MARKERS,
+        _GRADLE_ROOT_MARKERS,
+    )
+
+    pd = Path(project_dir)
+    if next(pd.rglob("pom.xml"), None) is not None:
+        return "maven"
+    for name in (*_GRADLE_ROOT_MARKERS, *_GRADLE_BUILD_MARKERS):
+        if next(pd.rglob(name), None) is not None:
+            return "gradle"
+    return "maven"
+
+
 def _resolve_java_runner_fn(
     spec_dir: Path, _project_dir: Path
 ) -> Callable[[Path, Path, int], DockerRunResult]:
