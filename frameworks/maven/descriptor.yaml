@@ -6,11 +6,11 @@
 # registry — so without a descriptor a Java subtask is rejected as
 # `invalid_framework` and can never be emitted.
 #
-# Why Maven and not Gradle: `nix_provisioner._LANG_ATTRS` already maps
-# `java -> [jdk21, maven]`, and deliberately excludes gradle ("buying both build
-# tools unasked is ~200MB of store for nothing"). That file is a vendored hub
-# canonical, so adding gradle would mean a hub PR plus re-vendoring four
-# services — to avoid writing one job script. Gradle-built Java is the follow-up.
+# Gradle-built Java (#3151): the Planner still pins (java, maven, unit); the
+# runner picks gradle at run time when the project has no `pom.xml` anywhere and
+# has a Gradle marker. The hub's `nix_provisioner._LANG_ATTRS` table still
+# carries maven only (java -> [jdk21, maven]); gradle is added per task through
+# `system_packages`, so there is no hub change and no re-vendoring.
 #
 # `frameworks/junit` keeps the API lane and no longer claims `unit`: its runtime
 # is `tfactory-runner-java:latest`, a docker-host image this cluster has no
@@ -73,6 +73,8 @@ context_block: |
       `src/main/java/com/acme/Calc.java`).
     - One test class per class under test, named `<ClassName>Test` — Surefire
       only picks up `*Test`, `Test*` or `*Tests` by default.
+    - The same placement and naming apply under a Gradle build
+      (`src/test/java`, `*Test`, JUnit 5).
 
   Test structure:
     - One `@Test` method per behaviour, named descriptively
