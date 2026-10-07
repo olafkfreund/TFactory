@@ -1143,8 +1143,11 @@ def run_gradle_lane_via_nix(
     hint: Path | None = None,
     extra_env: dict[str, str] | None = None,
     timeout: int = 900,
+    env: dict[str, Any] | None = None,
 ) -> DockerRunResult | None:
     """Run the Gradle build's tests inside the per-task Nix dev shell (Factory#1712).
+
+    The env defaults to Kotlin's; Java passes its own (#3151).
 
     The Kotlin/JVM twin of :func:`run_gotest_lane_via_nix`: the toolchain
     (kotlin, gradle, jdk21) comes from the flake that ``generate_flake`` renders
@@ -1157,7 +1160,11 @@ def run_gradle_lane_via_nix(
     Returns None when the sandbox isn't configured (caller falls back).
     """
     mount = _NIX_MOUNT
-    plan = materialize_flake(spec_dir, project_dir, env=kotlin_environment(spec_dir))
+    plan = materialize_flake(
+        spec_dir,
+        project_dir,
+        env=env if env is not None else kotlin_environment(spec_dir),
+    )
     if plan is None:
         return None
     sandbox: ExecutionSandbox | None = nix_runner_from_env()
