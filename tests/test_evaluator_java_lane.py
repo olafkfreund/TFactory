@@ -167,6 +167,7 @@ def _route(tmp_path: Path, monkeypatch, files: list[str], gradle_result=None):
     project_dir = tmp_path / "proj"
     project_dir.mkdir()
     for f in files:
+        (project_dir / f).parent.mkdir(parents=True, exist_ok=True)
         (project_dir / f).write_text("")
     calls: dict[str, dict] = {}
 
@@ -219,3 +220,11 @@ def test_java_gradle_fails_closed_naming_gradle(tmp_path: Path, monkeypatch) -> 
     monkeypatch.setattr("agents.nix_env.run_gradle_lane_via_nix", lambda *a, **k: None)
     res = _resolve_java_runner_fn(spec_dir, proj)(spec_dir / "X.java", proj, 0)
     assert res.returncode == 1 and "gradle" in res.argv
+
+
+def test_java_nested_pom_beside_root_gradle_routes_to_maven(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """ "No pom.xml anywhere" means anywhere, not just the root."""
+    calls, _ = _route(tmp_path, monkeypatch, ["build.gradle", "sub/pom.xml"])
+    assert list(calls) == ["maven"]

@@ -862,7 +862,8 @@ def java_environment(spec_dir: Path, *, gradle: bool = False) -> dict[str, Any]:
     ``generate_flake``'s builtin table already maps ``java -> [jdk21, maven]``
     (a Gradle build gets gradle via ``system_packages`` — ``gradle=True``,
     #3151; Maven-Java's flake is unchanged), so the provisioner stays the
-    single source and this cannot drift from it. That is why this lane needed no hub descriptor.
+    single source and this cannot drift from it. That is why this lane needed
+    no hub descriptor.
 
     ``network`` is restricted for the same reason as Kotlin's: Maven resolves
     from Central at run time, which the build-Job egress policy admits.

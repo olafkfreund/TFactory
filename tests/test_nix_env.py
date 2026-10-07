@@ -1671,3 +1671,6 @@ def test_run_gradle_lane_via_nix_passes_env_to_materialize_flake(tmp_path, monke
     marker = {"language": "java"}
     assert run_gradle_lane_via_nix(spec, project, env=marker) is None
     assert seen["env"] is marker
+    # No env: Kotlin's default, unchanged (#1712).
+    run_gradle_lane_via_nix(spec, project)
+    assert seen["env"]["language"] == "kotlin"
