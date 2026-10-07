@@ -156,3 +156,75 @@ def test_java_stability_is_computed_once_for_the_module(
     assert len(runs) == 3, (
         "one module-wide stability pass (3 reruns), not 3 per subtask"
     )
+
+
+# --- Gradle-built Java routing (#3151) --------------------------------------
+
+
+def _route(tmp_path: Path, monkeypatch, files: list[str], gradle_result=None):
+    """Run the Java runner over a tmp project; return (calls, result)."""
+    spec_dir = tmp_path / "spec"
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    for f in files:
+        (project_dir / f).parent.mkdir(parents=True, exist_ok=True)
+        (project_dir / f).write_text("")
+    calls: dict[str, dict] = {}
+
+    def _rec(name, result):
+        def _fn(spec, proj, *, hint=None, **k):
+            calls[name] = k
+            return result
+
+        return _fn
+
+    ok = DockerRunResult(returncode=0, stdout="ok", argv=[])
+    monkeypatch.setattr("agents.nix_env.run_maven_lane_via_nix", _rec("maven", ok))
+    monkeypatch.setattr(
+        "agents.nix_env.run_gradle_lane_via_nix", _rec("gradle", gradle_result or ok)
+    )
+    runner = _resolve_java_runner_fn(spec_dir, project_dir)
+    return calls, runner(spec_dir / "CalcTest.java", project_dir, 0)
+
+
+def test_java_pom_only_routes_to_maven(tmp_path: Path, monkeypatch) -> None:
+    calls, _ = _route(tmp_path, monkeypatch, ["pom.xml"])
+    assert list(calls) == ["maven"]
+
+
+def test_java_gradle_only_routes_to_gradle_with_java_env(
+    tmp_path: Path, monkeypatch
+) -> None:
+    calls, _ = _route(tmp_path, monkeypatch, ["settings.gradle", "build.gradle"])
+    assert list(calls) == ["gradle"]
+    env = calls["gradle"]["env"]
+    assert env["language"] == "java" and "gradle" in env["system_packages"]
+
+
+def test_java_pom_plus_gradle_routes_to_maven(tmp_path: Path, monkeypatch) -> None:
+    calls, _ = _route(tmp_path, monkeypatch, ["pom.xml", "build.gradle"])
+    assert list(calls) == ["maven"]
+
+
+def test_java_no_build_files_routes_to_maven(tmp_path: Path, monkeypatch) -> None:
+    calls, _ = _route(tmp_path, monkeypatch, [])
+    assert list(calls) == ["maven"]
+
+
+def test_java_gradle_fails_closed_naming_gradle(tmp_path: Path, monkeypatch) -> None:
+    ok = DockerRunResult(returncode=0, stdout="", argv=[])
+    spec_dir, proj = tmp_path / "spec", tmp_path / "proj"
+    proj.mkdir()
+    (proj / "build.gradle").write_text("")
+    monkeypatch.setattr("agents.nix_env.run_maven_lane_via_nix", lambda *a, **k: ok)
+    monkeypatch.setattr("agents.nix_env.run_gradle_lane_via_nix", lambda *a, **k: None)
+    res = _resolve_java_runner_fn(spec_dir, proj)(spec_dir / "X.java", proj, 0)
+    assert res.returncode == 1 and "gradle" in res.argv
+
+
+def test_java_nested_pom_beside_root_gradle_routes_to_maven(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """ "No pom.xml anywhere" means anywhere, not just the root."""
+    calls, _ = _route(tmp_path, monkeypatch, ["build.gradle", "sub/pom.xml"])
+    assert list(calls) == ["maven"]

@@ -854,15 +854,16 @@ def kotlin_environment(spec_dir: Path) -> dict[str, Any]:
     }
 
 
-def java_environment(spec_dir: Path) -> dict[str, Any]:
+def java_environment(spec_dir: Path, *, gradle: bool = False) -> dict[str, Any]:
     """The Java nix environment for the Maven verify lane (#1321).
 
     Prefer a contract ``environment`` that declares a Java nix env; otherwise
     synthesize one naming only the language. The toolchain is NOT listed here:
     ``generate_flake``'s builtin table already maps ``java -> [jdk21, maven]``
-    (gradle is deliberately absent there — a project wanting it names it in
-    ``system_packages``), so the provisioner stays the single source and this
-    cannot drift from it. That is why this lane needed no hub descriptor.
+    (a Gradle build gets gradle via ``system_packages`` — ``gradle=True``,
+    #3151; Maven-Java's flake is unchanged), so the provisioner stays the
+    single source and this cannot drift from it. That is why this lane needed
+    no hub descriptor.
 
     ``network`` is restricted for the same reason as Kotlin's: Maven resolves
     from Central at run time, which the build-Job egress policy admits.
@@ -873,15 +874,23 @@ def java_environment(spec_dir: Path) -> dict[str, Any]:
         and is_nix_environment(env)
         and (env.get("language") or "").lower() == "java"
     ):
-        return dict(env)
-    return {
-        "language": "java",
-        "toolchain": {},
-        "system_packages": [],
-        "verify_commands": ["mvn -B test"],
-        "provisioning": {"method": "nix", "generated": True},
-        "network": "restricted",
-    }
+        out = dict(env)
+    else:
+        out = {
+            "language": "java",
+            "toolchain": {},
+            "system_packages": [],
+            "verify_commands": ["mvn -B test"],
+            "provisioning": {"method": "nix", "generated": True},
+            "network": "restricted",
+        }
+    if gradle:
+        pkgs = list(out.get("system_packages") or [])
+        if "gradle" not in (str(p).lower() for p in pkgs):
+            pkgs.append("gradle")
+        out["system_packages"] = pkgs
+        out["verify_commands"] = ["gradle test --no-daemon --console=plain"]
+    return out
 
 
 def _go_module_dir(project_dir: Path, hint: Path | None) -> Path:
@@ -1136,15 +1145,18 @@ def _gradle_evidence_failure(junit: Path) -> str | None:
     return None
 
 
-def run_gradle_lane_via_nix(
+def run_gradle_lane_via_nix(  # noqa: PLR0913 - explicit keyword-only lane knobs
     spec_dir: Path,
     project_dir: Path,
     *,
     hint: Path | None = None,
     extra_env: dict[str, str] | None = None,
     timeout: int = 900,
+    env: dict[str, Any] | None = None,
 ) -> DockerRunResult | None:
     """Run the Gradle build's tests inside the per-task Nix dev shell (Factory#1712).
+
+    The env defaults to Kotlin's; Java passes its own (#3151).
 
     The Kotlin/JVM twin of :func:`run_gotest_lane_via_nix`: the toolchain
     (kotlin, gradle, jdk21) comes from the flake that ``generate_flake`` renders
@@ -1157,7 +1169,11 @@ def run_gradle_lane_via_nix(
     Returns None when the sandbox isn't configured (caller falls back).
     """
     mount = _NIX_MOUNT
-    plan = materialize_flake(spec_dir, project_dir, env=kotlin_environment(spec_dir))
+    plan = materialize_flake(
+        spec_dir,
+        project_dir,
+        env=env if env is not None else kotlin_environment(spec_dir),
+    )
     if plan is None:
         return None
     sandbox: ExecutionSandbox | None = nix_runner_from_env()

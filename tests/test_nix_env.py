@@ -1606,3 +1606,71 @@ def test_maven_job_script_merges_surefire_reports(tmp_path):
     assert merged.count("<testsuite ") == 2, merged
     assert merged.count("<testsuites>") == 1, merged
     assert merged.count("<?xml") == 1, merged  # the inner declarations are stripped
+
+
+# --- Gradle-built Java (#3151) ----------------------------------------------
+
+
+def test_java_environment_default_is_maven_unchanged(tmp_path):
+    from agents.nix_env import java_environment
+
+    env = java_environment(tmp_path / "nope")
+    assert "gradle" not in env["system_packages"]
+    assert env["verify_commands"] == ["mvn -B test"]
+
+
+def test_java_environment_gradle_lists_gradle_once(tmp_path):
+    from agents.nix_env import java_environment
+
+    env = java_environment(tmp_path / "nope", gradle=True)
+    assert env["language"] == "java"
+    assert env["system_packages"].count("gradle") == 1
+    assert env["verify_commands"][0].startswith("gradle test")
+
+
+def test_java_environment_gradle_no_duplicate_and_contract_not_mutated(
+    tmp_path, monkeypatch
+):
+    from agents.nix_env import java_environment
+
+    contract_env = {
+        "language": "java",
+        "system_packages": ["Gradle"],
+        "verify_commands": ["x"],
+        "provisioning": {"method": "nix"},
+    }
+    snapshot = json.loads(json.dumps(contract_env))
+    monkeypatch.setattr(
+        "agents.nix_env.environment_from_contract", lambda _spec: contract_env
+    )
+    env = java_environment(tmp_path, gradle=True)
+    assert env["system_packages"] == ["Gradle"]
+    assert env["verify_commands"][0].startswith("gradle test")
+    assert contract_env == snapshot
+
+
+def test_java_flake_has_gradle_only_when_asked(tmp_path):
+    from agents.nix_env import java_environment
+
+    spec = tmp_path / "nope"
+    with_gradle = generate_flake(java_environment(spec, gradle=True))
+    assert all(t in with_gradle for t in ("jdk21", "maven", "gradle"))
+    assert "gradle" not in generate_flake(java_environment(spec))
+
+
+def test_run_gradle_lane_via_nix_passes_env_to_materialize_flake(tmp_path, monkeypatch):
+    from agents.nix_env import run_gradle_lane_via_nix
+
+    spec, project, _ = _kotlin_project(tmp_path)
+    seen = {}
+
+    def _capture(spec_dir, project_dir, **kw):
+        seen.update(kw)
+
+    monkeypatch.setattr("agents.nix_env.materialize_flake", _capture)
+    marker = {"language": "java"}
+    assert run_gradle_lane_via_nix(spec, project, env=marker) is None
+    assert seen["env"] is marker
+    # No env: Kotlin's default, unchanged (#1712).
+    run_gradle_lane_via_nix(spec, project)
+    assert seen["env"]["language"] == "kotlin"

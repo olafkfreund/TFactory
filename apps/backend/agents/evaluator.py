@@ -2261,11 +2261,28 @@ def _completed_java_subtasks(plan: dict[str, Any]) -> list[dict[str, Any]]:
     )
 
 
+def _java_build_tool(project_dir: Path) -> str:
+    """'gradle' only when no pom.xml exists anywhere and a Gradle build does (#3151)."""
+    from agents.nix_env import (  # noqa: PLC0415
+        _GRADLE_BUILD_MARKERS,
+        _GRADLE_ROOT_MARKERS,
+    )
+
+    pd = Path(project_dir)
+    if next(pd.rglob("pom.xml"), None) is not None:
+        return "maven"
+    for name in (*_GRADLE_ROOT_MARKERS, *_GRADLE_BUILD_MARKERS):
+        if next(pd.rglob(name), None) is not None:
+            return "gradle"
+    return "maven"
+
+
 def _resolve_java_runner_fn(
-    spec_dir: Path, _project_dir: Path
+    spec_dir: Path, project_dir: Path
 ) -> Callable[[Path, Path, int], DockerRunResult]:
     """runner_fn(test_file, project_dir, seed) -> DockerRunResult running the
-    Maven module's tests in the per-task Nix dev shell (#1321).
+    module's tests in the per-task Nix dev shell: Maven, or Gradle when the
+    project has no pom.xml (#1321, #3151).
 
     The Java twin of :func:`_resolve_kotlin_runner_fn`: ``test_file`` is only the
     module-root hint (``mvn test`` covers the whole module), and an unconfigured
@@ -2274,22 +2291,38 @@ def _resolve_java_runner_fn(
     """
     # Lazy on purpose: tests patch agents.nix_env.run_maven_lane_via_nix on the
     # module, which a top-level `from` import would bind past.
-    from agents.nix_env import run_maven_lane_via_nix  # noqa: PLC0415
+    from agents.nix_env import (  # noqa: PLC0415
+        java_environment,
+        run_gradle_lane_via_nix,
+        run_maven_lane_via_nix,
+    )
     from tools.runners.docker_runner import DockerRunResult  # noqa: PLC0415
+
+    tool = _java_build_tool(project_dir)
 
     def _run(test_file: Path, project_dir_arg: Path, _seed: int) -> DockerRunResult:
         try:
             hint = Path(test_file).relative_to(spec_dir)
         except ValueError:
             hint = Path(test_file)
-        res = run_maven_lane_via_nix(spec_dir, Path(project_dir_arg), hint=hint)
+        if tool == "gradle":
+            res = run_gradle_lane_via_nix(
+                spec_dir,
+                Path(project_dir_arg),
+                hint=hint,
+                env=java_environment(spec_dir, gradle=True),
+            )
+        else:
+            res = run_maven_lane_via_nix(spec_dir, Path(project_dir_arg), hint=hint)
         if res is not None:
             return res
         return DockerRunResult(
             returncode=1,
             stdout="",
             stderr="java nix lane unavailable: TFACTORY_NIX_RUNNER_IMAGE unset",
-            argv=["nix", "develop", "--", "mvn", "-B", "test"],
+            argv=["nix", "develop", "--", "gradle", "test"]
+            if tool == "gradle"
+            else ["nix", "develop", "--", "mvn", "-B", "test"],
         )
 
     return _run
