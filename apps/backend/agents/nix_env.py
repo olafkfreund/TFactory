@@ -1145,7 +1145,7 @@ def _gradle_evidence_failure(junit: Path) -> str | None:
     return None
 
 
-def run_gradle_lane_via_nix(
+def run_gradle_lane_via_nix(  # noqa: PLR0913 - explicit keyword-only lane knobs
     spec_dir: Path,
     project_dir: Path,
     *,
