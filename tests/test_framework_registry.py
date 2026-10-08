@@ -774,7 +774,7 @@ def test_ac_command_tokens_must_be_a_list_of_str() -> None:
     reason=f"frameworks/ directory not found at {_REAL_FRAMEWORKS_DIR}",
 )
 def test_maven_descriptor_owns_the_java_unit_lane() -> None:
-    """Java's in-cluster lane (#1321), and the only claimant of java.unit."""
+    """Java's in-cluster lane (#1321): the java.unit claimant the Planner selects."""
     maven = get_descriptor("maven", frameworks_dir=_REAL_FRAMEWORKS_DIR)
     assert maven.language == "java"
     assert [ln.value if hasattr(ln, "value") else str(ln) for ln in maven.lanes] == [

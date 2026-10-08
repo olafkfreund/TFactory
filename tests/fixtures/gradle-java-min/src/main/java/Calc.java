@@ -1,4 +1,4 @@
-/** Subject under test for the Java/Maven verify lane (#1321). */
+/** Subject under test for the Gradle-built Java verify lane (Factory#3151). */
 public final class Calc {
     private Calc() {}
 

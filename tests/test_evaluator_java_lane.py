@@ -90,13 +90,13 @@ def test_build_all_bundles_runs_java_through_the_maven_lane(
     assert calls[0][1] == Path(rel)
 
 
-def test_java_never_goes_through_the_gradle_or_pytest_lane(
+def test_marker_free_java_never_goes_through_the_gradle_or_pytest_lane(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """The routing mutation guard: Java must use Maven, not Kotlin's runner.
+    """The routing mutation guard: Java WITHOUT Gradle markers uses Maven.
 
-    Pointing the Java partition at run_gradle_lane_via_nix would build Java with
-    Gradle, which the fixture module has no build file for — a failure that would
+    Pointing this marker-free Java partition at run_gradle_lane_via_nix would
+    build it with Gradle, which the fixture module has no build file for — a failure that would
     look like a broken lane rather than a mis-route.
     """
     spec_dir = tmp_path / "spec"

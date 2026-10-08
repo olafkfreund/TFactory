@@ -1644,7 +1644,7 @@ def test_java_environment_gradle_no_duplicate_and_contract_not_mutated(
         "agents.nix_env.environment_from_contract", lambda _spec: contract_env
     )
     env = java_environment(tmp_path, gradle=True)
-    assert env["system_packages"] == ["Gradle"]
+    assert env["system_packages"] == ["gradle"]
     assert env["verify_commands"][0].startswith("gradle test")
     assert contract_env == snapshot
 

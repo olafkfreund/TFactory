@@ -161,7 +161,7 @@ RUN apk add --no-cache \
         socat \
         "wget>=1.25.0-r15"
 
-# The apk `npm` package ships an npm whose own VENDORED deps carry HIGH CVEs
+# The npm copied from the node-runtime stage above ships with VENDORED deps carry HIGH CVEs
 # that the P0 Trivy gate rejects. Measured in the running image:
 # /usr/local/lib/node_modules/npm/node_modules holds brace-expansion 5.0.9 and
 # undici 6.28.0, and Trivy attributes all three findings to exactly that path:
