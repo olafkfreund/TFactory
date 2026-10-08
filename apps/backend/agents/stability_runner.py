@@ -99,6 +99,15 @@ _IMPORT_MARKERS = (
     "cannot import name",
 )
 
+# #1344: a test that never reached the subject because its own environment is
+# missing — e.g. the api lane's TFACTORY_TARGET_URL. Literal markers, both
+# quoting styles, never a regex over prose: inferring cause from prose is the
+# defect this issue exists to fix.
+_ENVIRONMENT_MARKERS = (
+    "KeyError: 'TFACTORY_TARGET_URL'",
+    'KeyError: "TFACTORY_TARGET_URL"',
+)
+
 _ASSERTION_MARKERS = (
     "AssertionError",
     "assert ",
@@ -126,6 +135,9 @@ def classify_pytest_failure(stdout: str, returncode: int) -> str:
           never came up (the verify Job emitted ``__TF_APP_NOT_HEALTHY__``), so
           the endpoint test failed against a down app. Infra, not a wrong
           subject — takes precedence over the connection-error noise below.
+        - ``"environment"`` — the test never reached the subject because its
+          own environment is missing: the text contains
+          ``KeyError: 'TFACTORY_TARGET_URL'`` (either quoting style).
         - ``"import"`` — a collection/import error: the text contains one of
           ``ModuleNotFoundError``, ``ImportError``, ``No module named``,
           ``error during collection``, ``errors during collection``,
@@ -140,6 +152,8 @@ def classify_pytest_failure(stdout: str, returncode: int) -> str:
     text = stdout or ""
     if _APP_NOT_HEALTHY_MARKER in text:
         return "app_not_healthy"
+    if any(marker in text for marker in _ENVIRONMENT_MARKERS):
+        return "environment"
     if returncode == _PYTEST_COLLECTION_ERROR_CODE or any(
         marker in text for marker in _IMPORT_MARKERS
     ):

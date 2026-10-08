@@ -105,7 +105,12 @@ def _cmd_rotate_root(args: argparse.Namespace) -> int:
         )
         return 2
 
-    sync_url = db_url.replace("+asyncpg", "").replace("+aiosqlite", "")
+    # Name the postgres driver explicitly. A bare "postgresql://" lets
+    # SQLAlchemy choose, and 2.1 changed that default from psycopg2 to psycopg
+    # (v3); only psycopg2 is installed, so an operator rotation would fail with
+    # ModuleNotFoundError on a version bump nobody made deliberately. sqlite
+    # keeps its default, which is the stdlib driver.
+    sync_url = db_url.replace("+asyncpg", "+psycopg2").replace("+aiosqlite", "")
     engine = create_engine(sync_url)
 
     # Build OLD backend from the current env (factory cache).

@@ -820,16 +820,33 @@ _SPEC_FILENAME_RE = re.compile(r"[\w./-]+\.\w+")
 
 
 def _unit_framework_for_language(registry: dict, language: str) -> str | None:
-    """Return the registered unit-lane framework for ``language`` (or ``None``)."""
-    for name, desc in sorted(registry.items()):
-        if desc.language != language:
-            continue
-        if any(
+    """Return the registered unit-lane framework for ``language`` (or ``None``).
+
+    Two frameworks can claim one language's unit lane: TypeScript has jest and
+    vitest, and Java has junit (the docker-host wedge, #237) alongside maven
+    (the in-cluster Nix lane, #1321). Alphabetical order would hand Java to
+    junit, whose runtime image this cluster has no container runtime for — a
+    plan that cannot run, which is the failure #1311 and #1321 exist to remove.
+
+    So prefer a candidate that declares ``source_extensions`` for the language.
+    That is not a proxy: the extension map the Planner pinned this language from
+    is built from exactly that field, so the framework owning the deliverables is
+    the one the pin already implies. Alphabetical order remains the tie-break
+    when none declares any.
+    """
+    candidates = [
+        (name, desc)
+        for name, desc in sorted(registry.items())
+        if desc.language == language
+        and any(
             (ln.value if hasattr(ln, "value") else str(ln)) == "unit"
             for ln in desc.lanes
-        ):
+        )
+    ]
+    for name, desc in candidates:
+        if getattr(desc, "source_extensions", ()):
             return name
-    return None
+    return candidates[0][0] if candidates else None
 
 
 def _build_detected_language_block(spec_dir: Path, project_dir: Path) -> str:
