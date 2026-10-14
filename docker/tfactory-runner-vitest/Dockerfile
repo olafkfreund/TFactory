@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # tfactory-runner-vitest — #110
+# Also PFactory's runner (Factory#1003): a change here ships to both factories.
 #
 # Node 22 + Vitest 3 (LTS-ish) + @vitest/coverage-v8 + jsdom +
 # @testing-library/react|dom + TypeScript 5.6, pre-installed globally.

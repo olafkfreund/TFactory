@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # tfactory-runner-cloud — #133 / #137
+# Also PFactory's runner (Factory#1003): a change here ships to both factories.
 #
 # Cloud misconfiguration + IaC assessment runner. Bundles Prowler (the primary
 # CSPM engine — AWS/Azure/GCP/K8s, 500+ CIS checks, OCSF JSON output) and
