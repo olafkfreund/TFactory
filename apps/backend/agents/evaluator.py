@@ -98,6 +98,7 @@ from agents.stability_runner import (
 )
 from agents.workspace_status import (
     anchor_stage_task,
+    notify_terminal,
     now_iso,
     read_status,
     write_status_patch,
@@ -3313,7 +3314,15 @@ def schedule_evaluator(
     """
     if os.environ.get("TFACTORY_AUTO_EVALUATE", "1") == "0":
         return None
-    task = asyncio.create_task(run_evaluator(spec_dir, project_dir, mode=mode))
+
+    async def _run_in_pod() -> bool:
+        ok = await run_evaluator(spec_dir, project_dir, mode=mode)
+        # In-pod there is no Triager after a failed Evaluator, so notify here (#1366).
+        if read_status(spec_dir).get("status") == "evaluator_failed":
+            notify_terminal(spec_dir)
+        return ok
+
+    task = asyncio.create_task(_run_in_pod())
     return anchor_stage_task(
         task,
         _BG_EVALUATOR_TASKS,

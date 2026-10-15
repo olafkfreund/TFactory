@@ -27,7 +27,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from agents.liveness import StallVerdict, check_and_mark
-from agents.workspace_status import now_iso
+from agents.workspace_status import notify_terminal, now_iso
 
 __all__ = [
     "default_workspace_root",
@@ -225,6 +225,7 @@ def reconcile_inline_orphans(
             status_path.write_text(json.dumps(status, indent=2))
         except OSError:
             continue
+        notify_terminal(spec_dir)
         reconciled.append((spec_dir, str(prior)))
     return reconciled
 

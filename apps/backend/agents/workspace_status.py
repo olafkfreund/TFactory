@@ -31,12 +31,29 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 
 __all__ = [
+    "TERMINAL_STATUSES",
     "anchor_stage_task",
+    "notify_terminal",
     "now_iso",
     "read_status",
     "truthy",
     "write_status_patch",
 ]
+
+# Statuses after which no further verify stage runs, so CFactory is notified
+# when one is written (#1366). ``evaluator_failed`` is excluded: in kubejob mode
+# the Triager still runs after it and notifies.
+TERMINAL_STATUSES = frozenset(
+    {
+        "triaged",
+        "triaged_empty",
+        "triager_failed",
+        "failed",
+        "planner_failed",
+        "gen_functional_failed",
+        "generated_empty",
+    }
+)
 
 
 def now_iso() -> str:
@@ -80,6 +97,38 @@ def write_status_patch(spec_dir: Path, stage: str, **fields: object) -> None:
     )
 
     emit_stage_event(spec_dir, status, stage=stage)
+    if fields.get("status") in TERMINAL_STATUSES:
+        notify_terminal(spec_dir)
+
+
+def notify_terminal(spec_dir: Path) -> None:
+    """Send the CFactory completion event for ``spec_dir``'s status; never raises.
+
+    The send is a blocking POST (and an outbox relay pass), so on a thread with a
+    running event loop it goes to the default executor: an unreachable CFactory
+    must not freeze the API and its background loops (#1366). The status is read
+    here, so the event carries the status that was just written.
+    """
+    try:
+        status = read_status(spec_dir)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            _send_completion(spec_dir, status)
+        else:
+            loop.run_in_executor(None, _send_completion, spec_dir, status)
+    except Exception:  # noqa: BLE001 — notification is best-effort
+        _log.debug("terminal notify failed for %s", spec_dir, exc_info=True)
+
+
+def _send_completion(spec_dir: Path, status: dict[str, Any]) -> None:
+    try:
+        # Lazy import: triager imports this module at top-level.
+        from agents.triager import _notify_completion  # noqa: PLC0415
+
+        _notify_completion(spec_dir, status)
+    except Exception:  # noqa: BLE001 — notification is best-effort
+        _log.debug("terminal notify failed for %s", spec_dir, exc_info=True)
 
 
 def anchor_stage_task(
@@ -123,6 +172,8 @@ def anchor_stage_task(
                 status=failed_status,
                 **{f"{stage}_error": f"{stage} task crashed: {exc!r}"[:500]},
             )
+            if failed_status not in TERMINAL_STATUSES:
+                notify_terminal(spec_dir)
         except Exception:  # noqa: BLE001 — the safety net must never re-raise
             _log.exception("failed to record %s crash status", stage)
 
