@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # tfactory-runner-cypress — #110
+# Also PFactory's runner (Factory#1003): a change here ships to both factories.
 #
 # Official Cypress base (cypress/included) bundles Cypress + Electron/Chromium
 # + every OS-level browser dependency, so no multi-GB install step needs

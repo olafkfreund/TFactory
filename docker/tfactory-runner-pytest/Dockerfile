@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # tfactory-runner-pytest — Task 7 (#23), sub-task 7.1
+# Also PFactory's runner (Factory#1003): a change here ships to both factories.
 #
 # Python 3.13 + pytest 8.x + coverage.py + httpx.
 # Renamed / rebuilt from v0.1's docker/runners/python.Dockerfile to match the

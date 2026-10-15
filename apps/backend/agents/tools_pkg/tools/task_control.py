@@ -390,6 +390,12 @@ def _correlation_from_contract(contract: dict[str, Any] | None) -> int | None:
     return None
 
 
+def _handoff_key(contract: object) -> str | None:
+    """A non-empty string ``correlation_key`` from the handoff contract, else None."""
+    key = contract.get("correlation_key") if isinstance(contract, dict) else None
+    return key.strip() if isinstance(key, str) and key.strip() else None
+
+
 def create_spec_ingest_workspace(
     *,
     project_id: str,
@@ -520,8 +526,9 @@ def create_spec_ingest_workspace(
             github_issue = prov.get("github_issue")
         if github_issue is None:
             corr = contract.get("correlation_key")
-            if corr is not None and str(corr).isdigit():
-                github_issue = int(corr)
+            tail = str(corr).rsplit("#", 1)[-1] if corr is not None else ""
+            if tail.isdigit():
+                github_issue = int(tail)
     source = {
         "mode": "spec_ingest",
         "project_id": project_id,
@@ -541,6 +548,10 @@ def create_spec_ingest_workspace(
         ),
         "created_at": _now_iso(),
         "aifactory": {"github_issue": github_issue},
+        # The handoff's declared correlation key (#1775). A build-only contract
+        # has no RFC-0002 markers, so task_contract.json is not written and the
+        # key would otherwise be lost; the readers check it before the issue.
+        "correlation_key": _handoff_key(contract),
         # Tenant scoping (#683): service-local metadata, lazily backfilled —
         # readers treat a missing value as "default".
         "tenant": tenant or "default",
@@ -584,6 +595,10 @@ def create_spec_ingest_workspace(
     if checkout_failed_reason:
         status["source_checkout_error"] = checkout_failed_reason
     _status_file(project_id, spec_id, root).write_text(json.dumps(status, indent=2))
+    if checkout_failed_reason:
+        from agents.workspace_status import notify_terminal  # noqa: PLC0415
+
+        notify_terminal(spec_dir)
 
     planner_scheduled = False
     if schedule and not checkout_failed_reason:
@@ -978,6 +993,23 @@ def create_task_control_tools() -> list:
             return _format_error(
                 f"task {task_id!r} has no status.json — workspace likely corrupted"
             )
+        # Derived on read, like the portal detail view, so it cannot go stale:
+        # after evaluator_failed the stored value is still the creation seed
+        # (#1369, #1259). A failure keeps the stored value.
+        try:
+            from agents.lane_progress import derive_lane_progress  # noqa: PLC0415
+
+            live = derive_lane_progress(_spec_dir(project_id, spec_id))
+        except Exception:  # noqa: BLE001 - additive, never breaks the tool
+            import logging as _lg  # noqa: PLC0415
+
+            _lg.getLogger(__name__).warning(
+                "lane_progress derivation failed; serving the stored value",
+                exc_info=True,
+            )
+            live = None
+        if live is not None:
+            status["lane_progress"] = live
         return _format_json(status)
 
     tools.append(task_status)

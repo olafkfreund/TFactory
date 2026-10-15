@@ -989,3 +989,20 @@ def test_dismiss_marks_status(workspace_root: Path) -> None:
     assert out["ok"] is True and out["dismissed"] is True
     doc = json.loads((spec_dir / "status.json").read_text())
     assert doc["dismissed"] is True and "dismissed_at" in doc
+
+
+def test_summary_row_declares_correlation_key_and_created_at(tmp_path: Path) -> None:
+    """#1775 / CFactory#484: the row carries its key and creation time."""
+    spec_dir = _make_task(
+        tmp_path,
+        project_id="p",
+        spec_id="001-x",
+        extra_status={"created_at": "2026-06-01T10:00:00Z"},
+    )
+    (spec_dir / "context").mkdir()
+    (spec_dir / "context" / "source.json").write_text(
+        json.dumps({"repo_slug": "o/r", "aifactory": {"github_issue": 7}})
+    )
+    row = _summary_row(spec_dir / "status.json")
+    assert row["correlation_key"] == "o/r#7"
+    assert row["created_at"] == "2026-06-01T10:00:00Z"
