@@ -29,6 +29,15 @@ def calls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return seen
 
 
+async def _settled(calls: list[str], n: int = 1) -> list[str]:
+    # On a running loop the send goes to the default executor (#1366).
+    for _ in range(200):
+        if len(calls) >= n:
+            break
+        await asyncio.sleep(0.01)
+    return calls
+
+
 def _spec(tmp_path: Path, status: str) -> Path:
     spec_dir = tmp_path / "workspaces" / "p1" / "specs" / "s1"
     spec_dir.mkdir(parents=True)
@@ -71,7 +80,7 @@ async def test_anchor_crash_notifies_evaluator_failed(
     )
     await asyncio.gather(task, return_exceptions=True)
     await asyncio.sleep(0)
-    assert calls == ["evaluator_failed"]
+    assert await _settled(calls) == ["evaluator_failed"]
 
 
 @pytest.mark.asyncio
@@ -91,7 +100,7 @@ async def test_schedule_evaluator_notifies_on_failure(
     task = ev.schedule_evaluator(spec_dir, tmp_path)
     assert task is not None
     await task
-    assert calls == ["evaluator_failed"]
+    assert await _settled(calls) == ["evaluator_failed"]
 
 
 def test_reaper_notifies_failed(tmp_path: Path, calls: list[str]) -> None:
@@ -132,3 +141,44 @@ def test_notify_terminal_never_raises(
 
     monkeypatch.setattr("agents.triager._notify_completion", raiser)
     notify_terminal(_spec(tmp_path, "failed"))
+
+
+def test_inline_stall_failure_notifies(tmp_path: Path, calls: list[str]) -> None:
+    from datetime import UTC, datetime
+
+    from agents.liveness import StallVerdict, mark_stalled
+
+    spec_dir = _spec(tmp_path, "generating")
+    verdict = StallVerdict(True, "generating", None, 900.0, "idle")
+    assert mark_stalled(spec_dir, verdict, now=datetime.now(UTC))
+    assert calls == ["failed"]
+
+
+def test_job_stage_stall_does_not_notify(tmp_path: Path, calls: list[str]) -> None:
+    from datetime import UTC, datetime
+
+    from agents.liveness import StallVerdict, mark_stalled
+
+    spec_dir = _spec(tmp_path, "evaluating")
+    verdict = StallVerdict(True, "evaluating", None, 900.0, "idle")
+    assert mark_stalled(spec_dir, verdict, now=datetime.now(UTC))
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_notify_runs_off_the_event_loop_thread(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    seen: list[str] = []
+    threads: list[threading.Thread] = []
+
+    def record(_spec_dir: Path, status: dict) -> None:
+        threads.append(threading.current_thread())
+        seen.append(status["status"])
+
+    monkeypatch.setattr("agents.triager._notify_completion", record)
+    write_status_patch(_spec(tmp_path, "planning"), "planner", status="planner_failed")
+    assert await _settled(seen) == ["planner_failed"]
+    assert threads[0] is not threading.current_thread()

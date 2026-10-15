@@ -102,12 +102,31 @@ def write_status_patch(spec_dir: Path, stage: str, **fields: object) -> None:
 
 
 def notify_terminal(spec_dir: Path) -> None:
-    """Send the CFactory completion event for ``spec_dir``'s status; never raises."""
+    """Send the CFactory completion event for ``spec_dir``'s status; never raises.
+
+    The send is a blocking POST (and an outbox relay pass), so on a thread with a
+    running event loop it goes to the default executor: an unreachable CFactory
+    must not freeze the API and its background loops (#1366). The status is read
+    here, so the event carries the status that was just written.
+    """
+    try:
+        status = read_status(spec_dir)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            _send_completion(spec_dir, status)
+        else:
+            loop.run_in_executor(None, _send_completion, spec_dir, status)
+    except Exception:  # noqa: BLE001 — notification is best-effort
+        _log.debug("terminal notify failed for %s", spec_dir, exc_info=True)
+
+
+def _send_completion(spec_dir: Path, status: dict[str, Any]) -> None:
     try:
         # Lazy import: triager imports this module at top-level.
         from agents.triager import _notify_completion  # noqa: PLC0415
 
-        _notify_completion(spec_dir, read_status(spec_dir))
+        _notify_completion(spec_dir, status)
     except Exception:  # noqa: BLE001 — notification is best-effort
         _log.debug("terminal notify failed for %s", spec_dir, exc_info=True)
 

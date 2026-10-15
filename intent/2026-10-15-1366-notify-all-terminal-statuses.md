@@ -20,7 +20,7 @@ item stays pending forever. The statuses that do this today:
 | Status | Written by |
 | --- | --- |
 | `planner_failed` | `agents/planner.py:639,664,687,737,1075,...` |
-| `failed` | planner (`planner.py:875,968`), verify reaper (`verify_dispatch.py:1365`), orphan reconcile (`liveness_sweep.py:216`), checkout failure (`tools_pkg/tools/task_control.py:563`) |
+| `failed` | planner (`planner.py:875,968`), verify reaper (`verify_dispatch.py:1365`), orphan reconcile (`liveness_sweep.py:216`), checkout failure (`tools_pkg/tools/task_control.py:563`), liveness watchdog on a stalled inline stage (`agents/liveness.py:213-230`, added at review) |
 | `gen_functional_failed` | `agents/gen_functional.py:1213,1291,1328,1360` |
 | `generated_empty` | `agents/gen_functional.py:1250` |
 | `evaluator_failed` (in-pod only) | `agents/evaluator.py:2395,2405,2975,3282`, and the crash anchor `workspace_status.py:121-128` |

@@ -84,6 +84,26 @@ spec: spec/2026-10-15-1366-notify-all-terminal-statuses.md
    `tests/test_spec_ingest_workspace.py`. That path is one guarded call
    covered by review; its existing tests still pass.
 
+6. Review deviations (lead review of the PR), recorded with the code:
+   - `apps/backend/agents/liveness.py:mark_stalled`: the watchdog writes
+     terminal `failed` (phase `watchdog_failed_inline`) for a stalled
+     planning/generating stage straight into `status.json`. It now calls
+     `notify_terminal(spec_dir)` after that write. Job-backed stalls stay
+     `stalled` and are not notified. The intent's writer table gains this row.
+   - `apps/backend/agents/workspace_status.py:notify_terminal`: the send is a
+     blocking POST, plus an outbox relay pass. On a thread with a running event
+     loop it now goes to the default executor (`loop.run_in_executor`), so an
+     unreachable CFactory cannot freeze the API loop. Inline planner and
+     gen-functional writes run on it, and so does the anchor's `_on_done`. The
+     status is read before the hand-off, so the event carries the status that
+     was just written. Without a running loop (the reaper's `to_thread`, the
+     startup reconcile thread, sync callers) the send runs inline. In a verify
+     Job, `asyncio.run` waits for the default executor on shutdown, so the
+     event is not lost when the Job exits.
+   - Tests: an inline stall notifies `failed`, a Job-stage stall does not, and
+     the notify runs off the loop thread. The async cases wait for the
+     executor. The first two cases fail on the previous PR head.
+
 ## Tests
 
 ```
