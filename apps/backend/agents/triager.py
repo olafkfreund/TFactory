@@ -727,10 +727,15 @@ def _contract_correlation_key(spec_dir: Path) -> str | None:
 
 def _source_repo(source: dict[str, Any]) -> str | None:
     """The source repo reference from source.json: ``owner/repo`` for GitHub,
-    ``<provider>:<slug>`` otherwise (RFC-0020 §3.5). None when unknown (#1775)."""
+    ``<provider>:<slug>`` otherwise (RFC-0020 §3.5). None when unknown (#1775).
+
+    The PFactory pickup path writes the reference as ``repo`` (no provider
+    split), so it is taken as given, as the completion envelope's ``repo`` does.
+    """
     slug = source.get("repo_slug")
     if not slug:
-        return None
+        repo = source.get("repo")
+        return str(repo) if repo else None
     provider = source.get("provider")
     return f"{provider}:{slug}" if provider and provider != "github" else str(slug)
 

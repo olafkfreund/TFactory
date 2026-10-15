@@ -69,6 +69,12 @@ def test_correlation_is_scoped_to_the_repo(spec, provider, expected):
     assert _correlation_key(spec, {}, source) == expected
 
 
+def test_correlation_reads_the_pfactory_pickup_repo(spec):
+    """The PFactory pickup writes `repo`, not `repo_slug` (integrations/pfactory/run.py)."""
+    source = {"pfactory": True, "issue_number": 7, "repo": "o/r"}
+    assert _correlation_key(spec, {}, source) == "o/r#7"
+
+
 def test_correlation_without_repo_stays_bare(spec):
     assert _correlation_key(spec, {}, {"aifactory": {"github_issue": 7}}) == "7"
 
