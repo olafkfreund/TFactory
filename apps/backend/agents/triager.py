@@ -748,6 +748,10 @@ def _correlation_key(spec_dir: Path, status: dict, source: dict) -> str:
     contract_key = _contract_correlation_key(spec_dir)
     if contract_key:
         return contract_key
+    # A build-only handoff keeps its key in source.json (no task_contract.json).
+    handoff_key = source.get("correlation_key")
+    if isinstance(handoff_key, str) and handoff_key.strip():
+        return handoff_key.strip()
     issue = _correlation_issue_number(status, source)
     if issue is not None:
         repo = _source_repo(source)

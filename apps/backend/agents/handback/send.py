@@ -98,6 +98,9 @@ def _correlation_key_for(spec_dir: Path) -> str | None:
         pass
     try:
         source = json.loads((spec_dir / "context" / "source.json").read_text())
+        handoff_key = source.get("correlation_key")
+        if isinstance(handoff_key, str) and handoff_key.strip():
+            return handoff_key.strip()
         issue = source.get("issue_number") or source.get("correlation_id")
         if issue is None:
             return None

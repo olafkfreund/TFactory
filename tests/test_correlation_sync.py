@@ -135,3 +135,25 @@ def test_handback_artifact_records_key_in_dry_run(spec):
     )
     doc = json.loads((spec / "findings" / "handback_request.json").read_text())
     assert doc["correlation_key"] == "PF-5"
+
+
+def test_build_only_handoff_keeps_its_key(tmp_path):
+    """#1775: AIFactory's build-only contract has no RFC-0002 markers, so no
+    task_contract.json is written; the declared key must still win."""
+    from agents.handback.send import _correlation_key_for as handback_key
+    from agents.tools_pkg.tools.task_control import create_spec_ingest_workspace
+
+    create_spec_ingest_workspace(
+        project_id="proj",
+        spec_id="spec-1",
+        spec_text="# Spec\n\n- AC#1: the widget ships\n",
+        root=tmp_path,
+        schedule=False,
+        contract={"provenance": {"github_issue": 382}, "correlation_key": "o/r#382"},
+    )
+    spec_dir = tmp_path / "workspaces" / "proj" / "specs" / "spec-1"
+    assert not (spec_dir / "context" / "task_contract.json").exists()
+    source = json.loads((spec_dir / "context" / "source.json").read_text())
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert _correlation_key(spec_dir, status, source) == "o/r#382"
+    assert handback_key(spec_dir) == "o/r#382"
