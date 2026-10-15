@@ -448,6 +448,41 @@ async def test_task_status_existing(tools: dict, aifactory_root: Path) -> None:
     assert "lane_progress" in body
 
 
+@pytest.mark.asyncio
+async def test_task_status_lane_progress_is_derived_after_evaluator_failed(
+    tools: dict, workspace: Path, aifactory_root: Path
+) -> None:
+    # #1369: the Evaluator failed before its end-of-run lane write, so the
+    # stored lane_progress is the all-pending seed while the unit lane ran.
+    from agents.lane_progress import derive_lane_progress
+
+    _scaffold_aifactory_spec(aifactory_root, "demo", "001")
+    await tools["project_create"]({"id": "demo", "name": "Demo", "root_path": "/tmp/d"})
+    await tools["task_create_and_run"](
+        {
+            "project_id": "demo",
+            "spec_id": "001",
+            "branch": "f/x",
+            "base_ref": "main",
+            "confirm": True,
+        }
+    )
+    spec_dir = workspace / "workspaces" / "demo" / "specs" / "001"
+    status = json.loads((spec_dir / "status.json").read_text())
+    status.update(status="evaluator_failed", lane_progress={"unit": "pending"})
+    (spec_dir / "status.json").write_text(json.dumps(status))
+    subtask = {"id": "u1", "lane": "unit", "files_to_create": ["tests/test_u1.py"]}
+    (spec_dir / "test_plan.json").write_text(
+        json.dumps({"phases": [{"subtasks": [subtask]}]})
+    )
+    (spec_dir / "findings" / "runs" / "u1").mkdir(parents=True)
+    (spec_dir / "findings" / "runs" / "u1" / "out.txt").write_text("ran")
+
+    body = _payload(await tools["task_status"]({"task_id": "001"}))
+    assert body["lane_progress"] == {"unit": "executed"}
+    assert body["lane_progress"] == derive_lane_progress(spec_dir)
+
+
 # ── task_list ────────────────────────────────────────────────────────────
 
 

@@ -982,6 +982,23 @@ def create_task_control_tools() -> list:
             return _format_error(
                 f"task {task_id!r} has no status.json — workspace likely corrupted"
             )
+        # Derived on read, like the portal detail view, so it cannot go stale:
+        # after evaluator_failed the stored value is still the creation seed
+        # (#1369, #1259). A failure keeps the stored value.
+        try:
+            from agents.lane_progress import derive_lane_progress  # noqa: PLC0415
+
+            live = derive_lane_progress(_spec_dir(project_id, spec_id))
+        except Exception:  # noqa: BLE001 - additive, never breaks the tool
+            import logging as _lg  # noqa: PLC0415
+
+            _lg.getLogger(__name__).warning(
+                "lane_progress derivation failed; serving the stored value",
+                exc_info=True,
+            )
+            live = None
+        if live is not None:
+            status["lane_progress"] = live
         return _format_json(status)
 
     tools.append(task_status)
