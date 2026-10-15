@@ -986,7 +986,7 @@ def create_task_control_tools() -> list:
 
             live = derive_lane_progress(_spec_dir(project_id, spec_id))
         except Exception:  # noqa: BLE001 - additive, never breaks the tool
-            import logging as _lg
+            import logging as _lg  # noqa: PLC0415
 
             _lg.getLogger(__name__).warning(
                 "lane_progress derivation failed; serving the stored value",
