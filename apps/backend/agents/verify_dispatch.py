@@ -71,6 +71,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from agents.workspace_status import TERMINAL_STATUSES
 from tools.runners import job_dispatch
 
 _log = logging.getLogger(__name__)
@@ -1263,7 +1264,9 @@ async def reconcile_verify_job(
 
 # Spec-level statuses that already represent a finished verify. A reap must
 # never clobber one — the Job's own verdict always wins over the reaper's guess.
-_SPEC_TERMINAL_STATUSES = frozenset({"triaged", "failed", "generated_empty"})
+# The shared set (#1366): every one of these has already notified CFactory, so a
+# reap that rewrote it would also send a second completion event.
+_SPEC_TERMINAL_STATUSES = TERMINAL_STATUSES
 
 # A probe_fn predating #1014 returns (exists, active) with no success flag.
 _LEGACY_PROBE_ARITY = 2
@@ -1345,7 +1348,8 @@ async def reap_if_orphaned(
     # handed off, so writing `failed` into the shared status.json would fail a
     # run that is still going — the row is per-Job, the spec is per-run.
     if not job_succeeded:
-        _mark_spec_reaped(record, reason)
+        # Off the loop: the completion notify inside is a blocking POST (#1366).
+        await asyncio.to_thread(_mark_spec_reaped, record, reason)
     return rec
 
 
@@ -1367,6 +1371,9 @@ def _mark_spec_reaped(record: dict[str, Any], reason: str) -> None:
         data["reaped_reason"] = reason
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         _log.warning("[verify-dispatch] reaped spec %s: %s", spec_dir, reason)
+        from agents.workspace_status import notify_terminal  # noqa: PLC0415
+
+        notify_terminal(Path(spec_dir))
     except (OSError, ValueError):
         _log.warning(
             "[verify-dispatch] could not mark spec %s reaped", spec_dir, exc_info=True
