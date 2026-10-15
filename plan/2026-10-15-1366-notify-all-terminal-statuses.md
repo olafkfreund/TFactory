@@ -60,6 +60,13 @@ spec: spec/2026-10-15-1366-notify-all-terminal-statuses.md
    - `apps/backend/agents/tools_pkg/tools/task_control.py` after the
      `status.json` write (`:587`), only `if checkout_failed_reason:`.
    → `pytest tests/test_verify_dispatch.py tests/test_liveness_sweep.py tests/test_web_liveness_sweep.py -q`
+   Deviation (review): the reaper's guard `_SPEC_TERMINAL_STATUSES`
+   (`verify_dispatch.py:1266`) lacked `triager_failed`, `triaged_empty`,
+   `planner_failed`, `gen_functional_failed`, so a reap could rewrite an
+   already-notified verdict to `failed` and notify twice. It now aliases
+   `TERMINAL_STATUSES`. `reap_if_orphaned` calls `_mark_spec_reaped` through
+   `asyncio.to_thread`, so the blocking POST stays off the event loop. The
+   wiring test covers the guard.
    Traps: lazy-import `notify_terminal` inside the function where the module
    avoids top-level agent imports; follow each file's existing style.
 5. `tests/test_terminal_completion_wiring.py` (new): monkeypatch

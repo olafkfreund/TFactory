@@ -102,6 +102,20 @@ def test_reaper_notifies_failed(tmp_path: Path, calls: list[str]) -> None:
     assert calls == ["failed"]
 
 
+@pytest.mark.parametrize(
+    "status", ["triager_failed", "triaged_empty", "planner_failed"]
+)
+def test_reaper_leaves_a_notified_verdict_alone(
+    tmp_path: Path, calls: list[str], status: str
+) -> None:
+    from agents.verify_dispatch import _mark_spec_reaped
+
+    spec_dir = _spec(tmp_path, status)
+    _mark_spec_reaped({"worker_ref": {"spec_dir": str(spec_dir)}}, "gone")
+    assert calls == []
+    assert json.loads((spec_dir / "status.json").read_text())["status"] == status
+
+
 def test_orphan_reconcile_notifies_failed(tmp_path: Path, calls: list[str]) -> None:
     from agents.liveness_sweep import reconcile_inline_orphans
 
