@@ -823,6 +823,7 @@ def reconcile_interrupted_builds() -> list[tuple[str, list[str]]]:
                 wt_dir = get_worktree_spec_dir(project_path, d.name)
                 if wt_dir:
                     phases += close_active_phases(wt_dir, "failed")
+                phases = list(dict.fromkeys(phases))  # main + worktree copy
                 if phases:
                     closed.append((d.name, phases))
         # One bad project (no path, odd dir name) must not stop the others.

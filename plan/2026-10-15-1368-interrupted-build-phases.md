@@ -48,6 +48,10 @@ spec: spec/2026-10-15-1368-interrupted-build-phases.md
      - Wrap each project in `try/except OSError: continue`.
 
    → `ruff check`, plus step 4's test.
+   Implementation note: the per-project `except` also catches `KeyError`,
+   `TypeError` and `HTTPException` (a project with no path, or a name that
+   `safe_component` rejects), and phase names from the main and worktree
+   copies are deduplicated.
    Traps:
    - `datetime` is already imported as `from datetime import datetime`; add
      `UTC` to that import.
