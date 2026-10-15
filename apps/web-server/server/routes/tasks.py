@@ -785,7 +785,10 @@ def close_active_phases(spec_dir: Path, to_status: str) -> list[str]:
     """Move every `active` phase in task_logs.json to `to_status`.
 
     A phase left `active` by a dead build process pins the task at
-    `in_progress` (#1368). Returns the names of the phases changed.
+    `in_progress` (#1368). Resetting to `pending` (recover) also reopens a
+    phase the startup reconcile already failed as `interrupted`, or recover
+    after a restart could not move the task off `human_review`. Returns the
+    names of the phases changed.
     """
     logs_file = spec_dir / "task_logs.json"
     try:
@@ -796,8 +799,12 @@ def close_active_phases(spec_dir: Path, to_status: str) -> list[str]:
         return []
     changed: list[str] = []
     for name, phase in logs["phases"].items():
-        if isinstance(phase, dict) and phase.get("status") == "active":
+        if not isinstance(phase, dict):
+            continue
+        reopen = to_status == "pending" and phase.get("interrupted") is True
+        if phase.get("status") == "active" or reopen:
             phase["status"] = to_status
+            phase.pop("interrupted", None)
             if to_status == "failed":
                 phase["completed_at"] = datetime.now(UTC).isoformat()
                 phase["interrupted"] = True
@@ -813,22 +820,30 @@ def reconcile_interrupted_builds() -> list[tuple[str, list[str]]]:
     for p in load_projects().values():
         try:
             project_path = Path(p["path"])
-            specs_dir = project_path / ".tfactory" / "specs"
-            if not specs_dir.is_dir():
-                continue
-            for d in specs_dir.iterdir():
-                if not d.is_dir():
-                    continue
+            spec_dirs = [
+                d
+                for d in (project_path / ".tfactory" / "specs").iterdir()
+                if d.is_dir()
+            ]
+        except (OSError, KeyError, TypeError):
+            continue  # no path, or no specs dir yet
+        for d in spec_dirs:
+            # One bad spec (unwritable file, odd dir name) must not stop the rest.
+            try:
                 phases = close_active_phases(d, "failed")
                 wt_dir = get_worktree_spec_dir(project_path, d.name)
                 if wt_dir:
                     phases += close_active_phases(wt_dir, "failed")
-                phases = list(dict.fromkeys(phases))  # main + worktree copy
-                if phases:
-                    closed.append((d.name, phases))
-        # One bad project (no path, odd dir name) must not stop the others.
-        except (OSError, KeyError, TypeError, HTTPException):
-            continue
+            except (OSError, HTTPException):
+                import logging  # noqa: PLC0415
+
+                logging.getLogger(__name__).warning(
+                    "#1368: could not close phases of %s", d, exc_info=True
+                )
+                continue
+            phases = list(dict.fromkeys(phases))  # main + worktree copy
+            if phases:
+                closed.append((d.name, phases))
     return closed
 
 

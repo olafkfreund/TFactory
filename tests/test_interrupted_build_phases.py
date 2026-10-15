@@ -94,3 +94,29 @@ def test_recover_resets_active_phase_so_backlog_shows(
 
     assert _phase(main)["status"] == "pending"
     assert load_spec_metadata(main)["status"] == "backlog"
+
+
+def test_recover_after_restart_reopens_the_interrupted_phase(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Restart first (phase -> failed, interrupted), then the user recovers.
+    project, main, _wt = _project(tmp_path)
+    projects = {"p": {"path": str(project)}}
+    monkeypatch.setattr(tasks_mod, "load_projects", lambda: projects)
+    monkeypatch.setattr(execution, "load_projects", lambda: projects)
+    monkeypatch.setattr(
+        execution, "get_agent_service", lambda: SimpleNamespace(running_tasks={})
+    )
+
+    async def _noop(*_a, **_k) -> None:
+        return None
+
+    monkeypatch.setattr(execution, "emit_task_status", _noop)
+    reconcile_interrupted_builds()
+    assert load_spec_metadata(main)["status"] == "human_review"
+    assert reconcile_interrupted_builds() == []  # idempotent
+
+    asyncio.run(execution.recover_task("p:001-x"))
+
+    assert "interrupted" not in _phase(main)
+    assert load_spec_metadata(main)["status"] == "backlog"

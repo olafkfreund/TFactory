@@ -125,3 +125,24 @@ All of these should pass, and the ratchet should report no new violations.
 Revert the commits. Set `APP_INLINE_ORPHAN_RECONCILE_ENABLED=0` to disable the
 startup step without a deploy. Phases that were already closed stay closed,
 which is the correct terminal state.
+
+## Deviations from review (recorded with the code)
+
+- **Restart, then recover.** Startup fails the phase as `interrupted`, so
+  recover's `pending` reset found no `active` phase, and the task stayed at
+  `human_review` / `errors`. `close_active_phases(..., "pending")` now also
+  reopens phases marked `interrupted: true` and drops the marker. Startup stays
+  idempotent: a phase that is already `failed` is not touched again. Covered by
+  `test_recover_after_restart_reopens_the_interrupted_phase`.
+- **Errors per spec.** The startup reconcile catches errors per spec, not per
+  project, so one unwritable `task_logs.json` no longer skips the rest. The
+  spec it skips is logged.
+- **Known limits, unchanged and pre-existing:**
+  - Recover still shows `human_review` when the task logs hold an earlier
+    `completed` coding phase or a genuinely `failed` phase. That is the
+    reader's existing precedence (`load_spec_metadata`), which this plan
+    keeps.
+  - Recover on a build that is still running calls `proc.terminate()` without
+    marking the task stopped, so the process monitor can later finalise the
+    phase as `failed`. That is outside this issue, where the process is
+    already gone, and is noted for the lead.
