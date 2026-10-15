@@ -148,6 +148,16 @@ def _summary_row(status_path: Path) -> dict[str, Any]:
         source_doc.get("aifactory") if isinstance(source_doc, dict) else None
     )
 
+    # Declared key (#1775): CFactory uses it as given. Imported lazily because
+    # agents.triager is heavy; omitted when the backend is not importable.
+    extra: dict[str, Any] = {}
+    try:
+        from agents.triager import _correlation_key  # noqa: PLC0415 - triager is heavy
+
+        extra["correlation_key"] = _correlation_key(spec_dir, status_doc, source_doc)
+    except ImportError:
+        pass
+
     return {
         "task_id": status_doc.get("task_id") or spec_id,
         "project_id": project_id,
@@ -160,9 +170,12 @@ def _summary_row(status_path: Path) -> dict[str, Any]:
         # backfill to "default" at read time.
         "tenant": status_doc.get("tenant") or DEFAULT_TENANT,
         "updated_at": updated_at,
+        # Creation time lets CFactory pick the newest task on a key (#484).
+        "created_at": status_doc.get("created_at") or source_doc.get("created_at"),
         "source": {"aifactory": aifactory_src}
         if isinstance(aifactory_src, dict)
         else {},
+        **extra,
     }
 
 
