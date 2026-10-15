@@ -152,7 +152,7 @@ def _summary_row(status_path: Path) -> dict[str, Any]:
     # agents.triager is heavy; omitted when the backend is not importable.
     extra: dict[str, Any] = {}
     try:
-        from agents.triager import _correlation_key
+        from agents.triager import _correlation_key  # noqa: PLC0415 - triager is heavy
 
         extra["correlation_key"] = _correlation_key(spec_dir, status_doc, source_doc)
     except ImportError:

@@ -101,7 +101,7 @@ def _correlation_key_for(spec_dir: Path) -> str | None:
         issue = source.get("issue_number") or source.get("correlation_id")
         if issue is None:
             return None
-        from agents.triager import _source_repo
+        from agents.triager import _source_repo  # noqa: PLC0415 - triager is heavy
 
         repo = _source_repo(source)
         return f"{repo}#{int(issue)}" if repo else str(int(issue))

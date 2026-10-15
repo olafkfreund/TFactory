@@ -725,7 +725,7 @@ def _contract_correlation_key(spec_dir: Path) -> str | None:
         return None
 
 
-def _source_repo(source: dict) -> str | None:
+def _source_repo(source: dict[str, Any]) -> str | None:
     """The source repo reference from source.json: ``owner/repo`` for GitHub,
     ``<provider>:<slug>`` otherwise (RFC-0020 §3.5). None when unknown (#1775)."""
     slug = source.get("repo_slug")
