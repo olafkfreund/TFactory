@@ -584,6 +584,10 @@ def create_spec_ingest_workspace(
     if checkout_failed_reason:
         status["source_checkout_error"] = checkout_failed_reason
     _status_file(project_id, spec_id, root).write_text(json.dumps(status, indent=2))
+    if checkout_failed_reason:
+        from agents.workspace_status import notify_terminal  # noqa: PLC0415
+
+        notify_terminal(spec_dir)
 
     planner_scheduled = False
     if schedule and not checkout_failed_reason:

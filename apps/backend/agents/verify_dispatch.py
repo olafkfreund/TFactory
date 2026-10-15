@@ -1367,6 +1367,9 @@ def _mark_spec_reaped(record: dict[str, Any], reason: str) -> None:
         data["reaped_reason"] = reason
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         _log.warning("[verify-dispatch] reaped spec %s: %s", spec_dir, reason)
+        from agents.workspace_status import notify_terminal  # noqa: PLC0415
+
+        notify_terminal(Path(spec_dir))
     except (OSError, ValueError):
         _log.warning(
             "[verify-dispatch] could not mark spec %s reaped", spec_dir, exc_info=True
