@@ -61,6 +61,7 @@ export function statusColor(status: string | null): string {
   if (status === 'triaged' || status === 'evaluated') return 'green';
   if (
     status.endsWith('_failed') ||
+    status === 'failed' ||
     status === 'stuck' ||
     status === 'stalled' ||
     status === 'replan_needed'

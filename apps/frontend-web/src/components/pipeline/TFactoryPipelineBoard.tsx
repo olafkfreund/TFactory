@@ -57,13 +57,13 @@ const _norm = (s: string | null): string => (s || '').toLowerCase();
 
 /** Terminal "done" verdict — a clean triage outcome. */
 function isDone(t: TFactoryTaskSummary): boolean {
-  return ['triaged', 'triaged_empty', 'evaluated'].includes(_norm(t.status));
+  return ['triaged', 'triaged_empty', 'generated_empty', 'evaluated'].includes(_norm(t.status));
 }
 
 /** Failure outcome — surfaced as 👎 + red ✗. */
 function isFailed(t: TFactoryTaskSummary): boolean {
   const s = _norm(t.status);
-  return s.endsWith('_failed') || ['stuck', 'stalled', 'replan_needed'].includes(s);
+  return s.endsWith('_failed') || ['failed', 'stuck', 'stalled', 'replan_needed'].includes(s);
 }
 
 /** Which ring a spec sits in, from status (preferred) then phase. */
@@ -75,6 +75,7 @@ function stageOf(t: TFactoryTaskSummary): Stage {
   if (['pending', 'planning', 'idle', 'created'].includes(s)) return 'plan';
   // phase fallback
   const p = _norm(t.phase);
+  if (p === 'verify_job_reaped') return 'report';
   if (p.startsWith('triager') || p.startsWith('evaluator')) return 'report';
   if (p.startsWith('executor')) return 'execute';
   if (p.startsWith('gen_functional') || p.startsWith('gen-functional')) return 'generate';
@@ -104,7 +105,7 @@ function phaseStrip(t: TFactoryTaskSummary): { key: string; label: string; Icon:
   const stateFor = (stage: Stage): PState => {
     const idx = ORDER.indexOf(stage);
     if (act === stage) return 'active';
-    if (done) return 'done';
+    if (done) return idx <= reachedIdx ? 'done' : 'pending';
     if (failed && stage === cur) return 'failed';
     if (idx < reachedIdx) return 'done';
     if (idx === reachedIdx) return failed ? 'failed' : 'active';
