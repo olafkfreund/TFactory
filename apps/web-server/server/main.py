@@ -195,6 +195,29 @@ async def lifespan(app: FastAPI):
         except Exception:  # noqa: BLE001 — a reconcile error must not block boot
             logger.exception("#774 startup reconcile failed (continuing)")
 
+    # Interrupted-build reconcile (#1368): a build subprocess killed by a restart
+    # leaves its phase `active` in task_logs.json, pinning the task at
+    # in_progress. Close those phases as failed. Shares the #774 flag.
+    if settings.INLINE_ORPHAN_RECONCILE_ENABLED:
+        try:
+            from .routes.tasks import reconcile_interrupted_builds  # noqa: PLC0415
+
+            closed = await asyncio.to_thread(reconcile_interrupted_builds)
+            if closed:
+                logger.warning(
+                    "#1368 startup reconcile: closed interrupted build phase(s) "
+                    "in %d task(s): %s",
+                    len(closed),
+                    [f"{spec_id}({','.join(phases)})" for spec_id, phases in closed],
+                )
+            else:
+                logger.info("#1368 startup reconcile: no interrupted build phases")
+        except _STARTUP_BUGS:
+            logger.exception("#1368 startup reconcile is broken — refusing to boot")
+            raise
+        except Exception:  # a reconcile error must not block boot
+            logger.exception("#1368 startup reconcile failed (continuing)")
+
     # Worktree GC (#742): reclaim the per-spec git worktree of terminal specs so
     # they don't accumulate on the workspaces PVC (#781). ON by default; disable
     # with APP_WORKTREE_GC_ENABLED=0.
