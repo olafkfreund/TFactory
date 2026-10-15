@@ -520,8 +520,9 @@ def create_spec_ingest_workspace(
             github_issue = prov.get("github_issue")
         if github_issue is None:
             corr = contract.get("correlation_key")
-            if corr is not None and str(corr).isdigit():
-                github_issue = int(corr)
+            tail = str(corr).rsplit("#", 1)[-1] if corr is not None else ""
+            if tail.isdigit():
+                github_issue = int(tail)
     source = {
         "mode": "spec_ingest",
         "project_id": project_id,
