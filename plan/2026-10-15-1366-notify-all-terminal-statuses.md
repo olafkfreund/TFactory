@@ -72,6 +72,10 @@ spec: spec/2026-10-15-1366-notify-all-terminal-statuses.md
    `planning` spec → one call with `failed`; `notify_terminal` with a raising
    notifier does not raise.
    → run it against `origin/dev` code (stash steps 1-4) to see it fail, then pass.
+   Deviation (implementation): the checkout-failure case is not in this test;
+   producing a checkout failure needs the full contract + clone setup of
+   `tests/test_spec_ingest_workspace.py`. That path is one guarded call
+   covered by review; its existing tests still pass.
 
 ## Tests
 
