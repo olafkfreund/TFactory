@@ -725,16 +725,28 @@ def _contract_correlation_key(spec_dir: Path) -> str | None:
         return None
 
 
+def _source_repo(source: dict) -> str | None:
+    """The source repo reference from source.json: ``owner/repo`` for GitHub,
+    ``<provider>:<slug>`` otherwise (RFC-0020 §3.5). None when unknown (#1775)."""
+    slug = source.get("repo_slug")
+    if not slug:
+        return None
+    provider = source.get("provider")
+    return f"{provider}:{slug}" if provider and provider != "github" else str(slug)
+
+
 def _correlation_key(spec_dir: Path, status: dict, source: dict) -> str:
     """The RFC-0001 shared correlation key. Precedence (#249):
-    RFC-0002 contract ``correlation_key`` → GitHub issue number → synthetic
-    ``tf-<spec_id>`` fallback so it is never null (RFC-0001 §2)."""
+    RFC-0002 contract ``correlation_key`` → ``<repo>#<issue>`` (bare issue when
+    the repo is unknown) → synthetic ``tf-<spec_id>`` fallback so it is never
+    null (RFC-0001 §2)."""
     contract_key = _contract_correlation_key(spec_dir)
     if contract_key:
         return contract_key
     issue = _correlation_issue_number(status, source)
     if issue is not None:
-        return str(issue)
+        repo = _source_repo(source)
+        return f"{repo}#{issue}" if repo else str(issue)
     spec_id = status.get("spec_id") or source.get("spec_id") or spec_dir.name
     return f"tf-{spec_id}"
 
