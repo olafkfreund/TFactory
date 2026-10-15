@@ -885,10 +885,12 @@ def java_environment(spec_dir: Path, *, gradle: bool = False) -> dict[str, Any]:
             "network": "restricted",
         }
     if gradle:
-        pkgs = list(out.get("system_packages") or [])
-        if "gradle" not in (str(p).lower() for p in pkgs):
-            pkgs.append("gradle")
-        out["system_packages"] = pkgs
+        # generate_flake emits names verbatim as pkgs.<name>, so a contract's
+        # "Gradle" must become the real attribute, not be kept beside it.
+        pkgs = [
+            p for p in (out.get("system_packages") or []) if str(p).lower() != "gradle"
+        ]
+        out["system_packages"] = [*pkgs, "gradle"]
         out["verify_commands"] = ["gradle test --no-daemon --console=plain"]
     return out
 

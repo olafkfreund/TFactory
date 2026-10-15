@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.9.29 — Java runs in-cluster through Maven or Gradle, and environment failures stop blaming the subject (2026-10-08)
+
+- **Gradle-built Java runs `gradle test` in-cluster (Factory#3151, PR #1351).**
+  The Planner still pins `(java, maven, unit)`; at run time the Java runner
+  picks gradle only when the project has no `pom.xml` anywhere and does have a
+  Gradle build marker, adding `gradle` to that task's `system_packages` so only
+  Gradle-shaped Java pays its store cost. Every other case runs Maven as before.
+- **A failure that never reached the subject is `not_run` (#1344, PR #1348).**
+  Environmental failures were classified `assertion`, so the handback told
+  AIFactory the subject's behaviour was wrong about code no test had contacted.
+- **CI unblocked (PR #1349):** npm's own vendored brace-expansion and undici are
+  replaced in the image to clear three HIGH CVEs the P0 Trivy gate rejected, and
+  the `secrets` gate is repaired.
+- Docs: the maven descriptor header states how the Planner picks between maven
+  and junit for `java.unit` (PR #1352). Dependabot: base image and
+  github-actions group.
 - **Java's unit lane runs in-cluster through Maven (Factory#1321, PR #1333).**
   Java was where Kotlin was before 0.9.28 with one extra gap: `.java` mapped to
   no language, no acceptance-criteria token named Java, and the only JVM
