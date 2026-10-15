@@ -801,13 +801,22 @@ def close_active_phases(spec_dir: Path, to_status: str) -> list[str]:
     for name, phase in logs["phases"].items():
         if not isinstance(phase, dict):
             continue
-        reopen = to_status == "pending" and phase.get("interrupted") is True
+        # Only a phase still carrying the startup stamp: a re-run that really
+        # failed writes its own completed_at, and must not be hidden.
+        reopen = (
+            to_status == "pending"
+            and phase.get("status") == "failed"
+            and phase.get("interrupted") is True
+            and phase.get("completed_at") == phase.get("interrupted_at")
+        )
         if phase.get("status") == "active" or reopen:
             phase["status"] = to_status
             phase.pop("interrupted", None)
+            phase.pop("interrupted_at", None)
             if to_status == "failed":
                 phase["completed_at"] = datetime.now(UTC).isoformat()
                 phase["interrupted"] = True
+                phase["interrupted_at"] = phase["completed_at"]
             changed.append(name)
     if changed:
         logs_file.write_text(json.dumps(logs, indent=2), encoding="utf-8")

@@ -120,3 +120,34 @@ def test_recover_after_restart_reopens_the_interrupted_phase(
 
     assert "interrupted" not in _phase(main)
     assert load_spec_metadata(main)["status"] == "backlog"
+
+
+def test_recover_does_not_hide_a_real_failure_after_a_rerun(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Restart marks coding interrupted; the user re-runs instead of recovering
+    # and the re-run genuinely fails (end_phase writes a new completed_at).
+    project, main, _wt = _project(tmp_path)
+    projects = {"p": {"path": str(project)}}
+    monkeypatch.setattr(tasks_mod, "load_projects", lambda: projects)
+    monkeypatch.setattr(execution, "load_projects", lambda: projects)
+    monkeypatch.setattr(
+        execution, "get_agent_service", lambda: SimpleNamespace(running_tasks={})
+    )
+
+    async def _noop(*_a, **_k) -> None:
+        return None
+
+    monkeypatch.setattr(execution, "emit_task_status", _noop)
+    reconcile_interrupted_builds()
+    logs = json.loads((main / "task_logs.json").read_text())
+    logs["phases"]["coding"].update(
+        status="failed", completed_at="2099-01-01T00:00:00+00:00"
+    )
+    (main / "task_logs.json").write_text(json.dumps(logs))
+    assert load_spec_metadata(main)["status"] == "human_review"
+
+    asyncio.run(execution.recover_task("p:001-x"))
+
+    assert _phase(main)["status"] == "failed"
+    assert load_spec_metadata(main)["status"] == "human_review"

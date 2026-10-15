@@ -134,6 +134,16 @@ which is the correct terminal state.
   reopens phases marked `interrupted: true` and drops the marker. Startup stays
   idempotent: a phase that is already `failed` is not touched again. Covered by
   `test_recover_after_restart_reopens_the_interrupted_phase`.
+- **A real failure is never reopened (lead review).** Before this change,
+  `interrupted: true` stayed on a phase until a recover cleared it. The task
+  logger's `update_phase_status` rewrites only `status` and `completed_at`.
+  So in the sequence restart, then a re-run that genuinely failed, then
+  Recover, the real failure would have been reopened to `pending` and
+  hidden behind `backlog`. Startup now also stores `interrupted_at`, equal to
+  the `completed_at` it writes. Recover reopens a phase only when it is still
+  `failed`, `interrupted`, and `completed_at == interrupted_at`. A real
+  `end_phase` writes a new `completed_at`, so its failure stays. Covered by
+  `test_recover_does_not_hide_a_real_failure_after_a_rerun`.
 - **Errors per spec.** The startup reconcile catches errors per spec, not per
   project, so one unwritable `task_logs.json` no longer skips the rest. The
   spec it skips is logged.
