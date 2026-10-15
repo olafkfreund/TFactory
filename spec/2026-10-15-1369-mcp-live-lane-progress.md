@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1369
 intent: intent/2026-10-15-1369-mcp-live-lane-progress.md
 ---
