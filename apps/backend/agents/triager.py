@@ -372,7 +372,7 @@ def _read_status(spec_dir: Path) -> dict:
 
 
 # Terminal statuses the Triager can land on. A completion callback fires once
-# the task reaches any of these (see _notify_completion).
+# the task reaches any of these (the shared write_status_patch notifies).
 _TERMINAL_STATUSES = frozenset({"triaged", "triaged_empty", "triager_failed"})
 
 
@@ -424,9 +424,8 @@ def _write_status_patch(spec_dir: Path, **fields: object) -> None:
     write_status_patch(spec_dir, "triager", **fields)
     # Re-read the merged document for the terminal-status callbacks below.
     status = _read_status(spec_dir)
-    # Fire the completion callback exactly once, when the task goes terminal.
+    # Terminal-only hooks (the completion event is sent by write_status_patch).
     if fields.get("status") in _TERMINAL_STATUSES:
-        _notify_completion(spec_dir, status)
         # Best-effort TFactory→AIFactory correction hand-back (#185 / epic #182).
         # Prepares findings/handback_request.{md,json} when the run has failures;
         # sends to AIFactory only with TFACTORY_HANDBACK_SEND=1. Never raises.

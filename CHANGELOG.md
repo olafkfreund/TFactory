@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+## 0.9.30 — terminal states read as terminal everywhere (2026-10-15)
+
+- **Every terminal verify status reaches CFactory (#1366, PR #1372).** The
+  completion event was sent only from the Triager and the handback route, so a
+  run that ended earlier (`planner_failed`, `gen_functional_failed`,
+  `generated_empty`, `evaluator_failed`, or a checkout, reaper or orphan
+  `failed`) stayed pending in CFactory. The shared status writer now sends it
+  for every terminal status, and the notify never raises.
+- **A build interrupted by a restart stops showing `in_progress` (#1368, PR
+  #1375).** At startup, phases still `active` in `task_logs.json` are closed as
+  `failed` with an `interrupted` marker, behind the existing
+  `APP_INLINE_ORPHAN_RECONCILE_ENABLED` switch.
+- **MCP `task_status` derives `lane_progress` on read (#1369, PR #1373),** as
+  the portal already did, so after `evaluator_failed` it no longer reports the
+  all-`pending` value written at creation.
+- **`fix-stuck-tasks.py` never rewrites a terminal or unknown plan status
+  (Factory#3589, PR #1374).** `failed` was missing from its list, so a plan
+  closed as failed was revived as running. An unknown status is now reported
+  and left unchanged.
+- **The pipeline board gives `failed` and `generated_empty` terminal badges
+  (#1367, PR #1371).** `failed` showed as blue "in flight", and a reaped verify
+  now sits in the Report column.
+- CI: factory-github drift runs on every PR (Factory#3585, PR #1370), and the
+  path-filtered job no longer claims to be blocking (Factory#1026, PR #1359).
+  `factory_common` http and url_safety re-vendored from hub `2364589` (PR
+  #1358). Docs: six runner images are shared with PFactory (Factory#1003, PR
+  #1365).
+
 ## 0.9.29 — Java runs in-cluster through Maven or Gradle, and environment failures stop blaming the subject (2026-10-08)
 
 - **Gradle-built Java runs `gradle test` in-cluster (Factory#3151, PR #1351).**

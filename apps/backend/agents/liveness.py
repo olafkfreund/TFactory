@@ -240,6 +240,11 @@ def mark_stalled(spec_dir: Path, verdict: StallVerdict, *, now: datetime) -> boo
         )
     except Exception:
         pass
+    if prior in _INLINE_STALL_STATUSES:
+        # Terminal `failed` written outside write_status_patch: notify CFactory (#1366).
+        from agents.workspace_status import notify_terminal  # noqa: PLC0415
+
+        notify_terminal(spec_dir)
     return True
 
 

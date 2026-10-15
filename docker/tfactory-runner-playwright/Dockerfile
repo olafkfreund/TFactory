@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # tfactory-runner-playwright — Task 7 (#23), sub-task 7.3
+# Also PFactory's runner (Factory#1003): a change here ships to both factories.
 #
 # Official Microsoft Playwright base (noble/Ubuntu 24.04) + @playwright/test 1.49 +
 # TypeScript 5.6. Chromium is the baseline browser; Firefox and WebKit are

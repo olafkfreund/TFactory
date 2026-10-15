@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # tfactory-runner-jest — Task 7 (#23), sub-task 7.2
+# Also PFactory's runner (Factory#1003): a change here ships to both factories.
 #
 # Node 22 + Jest 29 (LTS series) + ts-jest + @types/jest + nyc (coverage) +
 # ESLint 9 + TypeScript 5.6 pre-installed globally.
