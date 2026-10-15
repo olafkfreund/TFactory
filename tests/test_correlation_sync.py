@@ -57,6 +57,29 @@ def test_correlation_falls_back_to_issue_number(spec):
     assert _correlation_key(spec, {"issue_number": 42}, {}) == "42"
 
 
+@pytest.mark.parametrize(
+    ("provider", "expected"),
+    [("github", "o/r#7"), ("gitlab", "gitlab:o/r#7"), (None, "o/r#7")],
+)
+def test_correlation_is_scoped_to_the_repo(spec, provider, expected):
+    """#1775: <repo>#<n>, repo reference per RFC-0020 3.5."""
+    source = {"repo_slug": "o/r", "aifactory": {"github_issue": 7}}
+    if provider:
+        source["provider"] = provider
+    assert _correlation_key(spec, {}, source) == expected
+
+
+def test_correlation_without_repo_stays_bare(spec):
+    assert _correlation_key(spec, {}, {"aifactory": {"github_issue": 7}}) == "7"
+
+
+def test_handback_key_is_scoped_to_the_repo(spec):
+    (spec / "context" / "source.json").write_text(
+        json.dumps({"issue_number": 55, "repo_slug": "o/r", "provider": "gitlab"})
+    )
+    assert _correlation_key_for(spec) == "gitlab:o/r#55"
+
+
 def test_correlation_synthetic_fallback(spec):
     key = _correlation_key(spec, {"spec_id": "001-login"}, {})
     assert key == "tf-001-login"
