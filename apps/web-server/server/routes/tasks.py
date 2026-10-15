@@ -6,7 +6,7 @@ Handles CRUD operations for tasks (specs) within projects.
 
 import json
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, Optional
 
@@ -779,6 +779,56 @@ def load_spec_metadata(spec_dir: Path) -> dict:
             metadata["status"] = "in_progress"
 
     return metadata
+
+
+def close_active_phases(spec_dir: Path, to_status: str) -> list[str]:
+    """Move every `active` phase in task_logs.json to `to_status`.
+
+    A phase left `active` by a dead build process pins the task at
+    `in_progress` (#1368). Returns the names of the phases changed.
+    """
+    logs_file = spec_dir / "task_logs.json"
+    try:
+        logs = json.loads(logs_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(logs, dict) or not isinstance(logs.get("phases"), dict):
+        return []
+    changed: list[str] = []
+    for name, phase in logs["phases"].items():
+        if isinstance(phase, dict) and phase.get("status") == "active":
+            phase["status"] = to_status
+            if to_status == "failed":
+                phase["completed_at"] = datetime.now(UTC).isoformat()
+                phase["interrupted"] = True
+            changed.append(name)
+    if changed:
+        logs_file.write_text(json.dumps(logs, indent=2), encoding="utf-8")
+    return changed
+
+
+def reconcile_interrupted_builds() -> list[tuple[str, list[str]]]:
+    """Startup: fail the active phases of builds the restart killed (#1368)."""
+    closed: list[tuple[str, list[str]]] = []
+    for p in load_projects().values():
+        try:
+            project_path = Path(p["path"])
+            specs_dir = project_path / ".tfactory" / "specs"
+            if not specs_dir.is_dir():
+                continue
+            for d in specs_dir.iterdir():
+                if not d.is_dir():
+                    continue
+                phases = close_active_phases(d, "failed")
+                wt_dir = get_worktree_spec_dir(project_path, d.name)
+                if wt_dir:
+                    phases += close_active_phases(wt_dir, "failed")
+                if phases:
+                    closed.append((d.name, phases))
+        # One bad project (no path, odd dir name) must not stop the others.
+        except (OSError, KeyError, TypeError, HTTPException):
+            continue
+    return closed
 
 
 def project_repo(project_data: dict) -> str | None:
