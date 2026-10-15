@@ -18,7 +18,11 @@ from ..services.agent_service import get_agent_service
 from ..websockets.events import emit_task_status
 from ._specpath import safe_component
 from .projects import load_projects
-from .tasks import sync_worktree_to_main_spec
+from .tasks import (
+    close_active_phases,
+    get_worktree_spec_dir,
+    sync_worktree_to_main_spec,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -629,6 +633,12 @@ async def recover_task(
 
     # Sync from worktree to main spec first to preserve progress
     sync_worktree_to_main_spec(project_path, spec_id)
+
+    # A killed build leaves its phase `active`, which beats the plan status below (#1368)
+    close_active_phases(spec_dir, "pending")
+    wt_spec_dir = get_worktree_spec_dir(project_path, spec_id)
+    if wt_spec_dir:
+        close_active_phases(wt_spec_dir, "pending")
 
     # Reset status in test_plan.json
     plan_file = spec_dir / "test_plan.json"
