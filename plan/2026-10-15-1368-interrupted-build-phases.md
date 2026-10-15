@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1368
 spec: spec/2026-10-15-1368-interrupted-build-phases.md
 ---
