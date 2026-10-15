@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1366
 intent: intent/2026-10-15-1366-notify-all-terminal-statuses.md
 ---
