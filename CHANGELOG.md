@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.9.31 — a verdict names the commit it tested, and correlation keys name their repo (2026-10-17)
+
+- **`GET /api/tfactory/tasks/{spec_id}` returns `source_sha` (AIFactory#1766,
+  PR #1378).** It is the commit the spec worktree was pinned to and verified,
+  read from `context/source.json`, or `null` when unknown. Additive. AIFactory's
+  merge gate compares it to the PR head, so a verdict for an older commit no
+  longer passes a newer one.
+- **Correlation keys are repo-scoped, `<repo>#<n>` (AIFactory#1775, PR #1377).**
+  With no contract key, the completion event and the hand-back fall back to
+  `<repo>#<n>` (prefixed `<provider>:` off GitHub) instead of a bare issue
+  number; a build-only AIFactory contract's `correlation_key` is kept; and
+  `task_control` reads `github_issue` from a qualified key. `/api/tfactory/tasks`
+  rows declare `correlation_key` and `created_at`, so a poll and an event share
+  a key and the newest task owns it (CFactory#484). CFactory accepts both key
+  formats since CFactory#487.
+
 ## 0.9.30 — terminal states read as terminal everywhere (2026-10-15)
 
 - **Every terminal verify status reaches CFactory (#1366, PR #1372).** The
