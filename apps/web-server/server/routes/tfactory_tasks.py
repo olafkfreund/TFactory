@@ -307,12 +307,16 @@ def get_task(spec_id: str) -> dict:
         live = None
     if live is not None:
         status_doc["lane_progress"] = live
+    source_doc = _read_json(spec_dir / "context" / "source.json") or {}
     project_id = spec_dir.parent.parent.name
     return {
         "task_id": status_doc.get("task_id") or spec_id,
         "project_id": project_id,
         "spec_id": spec_id,
         "status_json": status_doc,
+        # The commit the spec's worktree was pinned to, i.e. what was tested.
+        # AIFactory's merge gate compares it to the PR head (AIFactory#1766).
+        "source_sha": source_doc.get("source_sha") or None,
         "artefacts": _artefact_meta(spec_dir),
     }
 
