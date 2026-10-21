@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import secrets
+import sys
 import time
 import uuid
 
@@ -39,15 +40,17 @@ def _build_fernet_backend(b64_key: str):
     return FernetBackend(root_key=base64.urlsafe_b64decode(b64_key.encode()))
 
 
-def _setup_db_with_old_wrapped_keys(old_backend, n_orgs: int = 5):
-    """Build an in-memory SQLite seeded with ``n_orgs`` kms_data_keys rows
+def _setup_db_with_old_wrapped_keys(
+    old_backend, n_orgs: int = 5, db_url: str = "sqlite:///:memory:"
+):
+    """Build a SQLite database seeded with ``n_orgs`` kms_data_keys rows
     each wrapped under the OLD backend. Returns ``(engine, plaintexts)``
     where ``plaintexts[org_id]`` is the original 32-byte data key for
     later round-trip verification.
     """
     from server.database.models import Base, KmsDataKey, Organization, User
 
-    engine = create_engine("sqlite:///:memory:")
+    engine = create_engine(db_url)
     Base.metadata.create_all(engine)
 
     plaintexts: dict[str, bytes] = {}
@@ -86,6 +89,48 @@ def _setup_db_with_old_wrapped_keys(old_backend, n_orgs: int = 5):
         session.commit()
 
     return engine, plaintexts
+
+
+@pytest.mark.secrets
+def test_cli_rotate_root_uses_async_engine(tmp_path, monkeypatch) -> None:
+    old_key = _new_fernet_key()
+    new_key = _new_fernet_key()
+    reimport_crypto({"KMS_BACKEND": "fernet", "KMS_FERNET_KEY": old_key})
+
+    from server.crypto import __main__ as cli
+    from server.database.models import KmsDataKey
+
+    db_file = tmp_path / "rotation.db"
+    engine, plaintexts = _setup_db_with_old_wrapped_keys(
+        _build_fernet_backend(old_key), n_orgs=5, db_url=f"sqlite:///{db_file}"
+    )
+    monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{db_file}")
+    monkeypatch.setenv("KMS_BACKEND", "fernet")
+    monkeypatch.delenv("APP_KMS_BACKEND", raising=False)
+    monkeypatch.setenv("KMS_FERNET_KEY", old_key)
+    monkeypatch.setenv("KMS_FERNET_KEY_NEW", new_key)
+    monkeypatch.setitem(sys.modules, "psycopg2", None)
+    monkeypatch.setitem(sys.modules, "psycopg", None)
+    monkeypatch.setattr(
+        cli,
+        "create_engine",
+        lambda *_args, **_kwargs: pytest.fail("sync engine used"),
+        raising=False,
+    )
+
+    assert (
+        cli.main(["rotate-root", "--new-kms-key-id", "fernet:new", "--batch-size", "2"])
+        == 0
+    )
+
+    new_backend = _build_fernet_backend(new_key)
+    with Session(engine) as session:
+        rows = session.query(KmsDataKey).all()
+        assert len(rows) == len(plaintexts)
+        for row in rows:
+            assert row.kms_key_id == "fernet:new"
+            assert new_backend.decrypt(bytes(row.wrapped_key)) == plaintexts[row.org_id]
+    engine.dispose()
 
 
 @pytest.mark.secrets
