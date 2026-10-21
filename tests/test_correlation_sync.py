@@ -57,6 +57,35 @@ def test_correlation_falls_back_to_issue_number(spec):
     assert _correlation_key(spec, {"issue_number": 42}, {}) == "42"
 
 
+@pytest.mark.parametrize(
+    ("provider", "expected"),
+    [("github", "o/r#7"), ("gitlab", "gitlab:o/r#7"), (None, "o/r#7")],
+)
+def test_correlation_is_scoped_to_the_repo(spec, provider, expected):
+    """#1775: <repo>#<n>, repo reference per RFC-0020 3.5."""
+    source = {"repo_slug": "o/r", "aifactory": {"github_issue": 7}}
+    if provider:
+        source["provider"] = provider
+    assert _correlation_key(spec, {}, source) == expected
+
+
+def test_correlation_reads_the_pfactory_pickup_repo(spec):
+    """The PFactory pickup writes `repo`, not `repo_slug` (integrations/pfactory/run.py)."""
+    source = {"pfactory": True, "issue_number": 7, "repo": "o/r"}
+    assert _correlation_key(spec, {}, source) == "o/r#7"
+
+
+def test_correlation_without_repo_stays_bare(spec):
+    assert _correlation_key(spec, {}, {"aifactory": {"github_issue": 7}}) == "7"
+
+
+def test_handback_key_is_scoped_to_the_repo(spec):
+    (spec / "context" / "source.json").write_text(
+        json.dumps({"issue_number": 55, "repo_slug": "o/r", "provider": "gitlab"})
+    )
+    assert _correlation_key_for(spec) == "gitlab:o/r#55"
+
+
 def test_correlation_synthetic_fallback(spec):
     key = _correlation_key(spec, {"spec_id": "001-login"}, {})
     assert key == "tf-001-login"
@@ -106,3 +135,25 @@ def test_handback_artifact_records_key_in_dry_run(spec):
     )
     doc = json.loads((spec / "findings" / "handback_request.json").read_text())
     assert doc["correlation_key"] == "PF-5"
+
+
+def test_build_only_handoff_keeps_its_key(tmp_path):
+    """#1775: AIFactory's build-only contract has no RFC-0002 markers, so no
+    task_contract.json is written; the declared key must still win."""
+    from agents.handback.send import _correlation_key_for as handback_key
+    from agents.tools_pkg.tools.task_control import create_spec_ingest_workspace
+
+    create_spec_ingest_workspace(
+        project_id="proj",
+        spec_id="spec-1",
+        spec_text="# Spec\n\n- AC#1: the widget ships\n",
+        root=tmp_path,
+        schedule=False,
+        contract={"provenance": {"github_issue": 382}, "correlation_key": "o/r#382"},
+    )
+    spec_dir = tmp_path / "workspaces" / "proj" / "specs" / "spec-1"
+    assert not (spec_dir / "context" / "task_contract.json").exists()
+    source = json.loads((spec_dir / "context" / "source.json").read_text())
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert _correlation_key(spec_dir, status, source) == "o/r#382"
+    assert handback_key(spec_dir) == "o/r#382"
