@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1342
 spec: spec/2026-10-21-1342-liveness-sweep-deadline.md
 ---
