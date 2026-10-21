@@ -31,3 +31,9 @@ spec: spec/2026-10-21-1347-tfactory-yml-worktree-fallback.md
 ## Rollback
 
 Revert the PR; no data or config migration.
+
+## Implementation notes
+
+- The coder (agy) could not write files in this lane (its tool hook rejected
+  every write), so steps 1-3 were done by the session model. No deviation from
+  the steps above.

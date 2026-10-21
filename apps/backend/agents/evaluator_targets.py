@@ -28,6 +28,28 @@ from tools.runners.kubernetes_runtime import KubernetesRuntime
 from tools.runners.sandbox_credentials import TargetCredentialSpec
 
 
+def _load_tfactory_cfg(spec_dir: Path) -> dict | None:
+    """The spec's ``.tfactory.yml`` as a dict, or None.
+
+    The snapshot ``context/tfactory_yml.json`` wins; without it, parse the
+    checkout's ``.worktree/.tfactory.yml`` -- only the task_control path writes
+    the snapshot, so HTTP-ingested and AIFactory-handoff specs have none (#1347).
+    """
+    ctx = spec_dir / "context" / "tfactory_yml.json"
+    if ctx.exists():
+        try:
+            return json.loads(ctx.read_text())
+        except (json.JSONDecodeError, OSError):
+            return None
+    from tfactory_yml import TFactoryYmlError, load_tfactory_yml  # noqa: PLC0415
+
+    try:
+        cfg = load_tfactory_yml(spec_dir / ".worktree")
+    except (TFactoryYmlError, OSError):
+        return None
+    return cfg.model_dump(mode="json") if cfg is not None else None
+
+
 def _browser_target_url(spec_dir: Path, subtask: dict) -> str | None:
     """Resolve the base_url for the subtask's target from the snapshotted
     .tfactory.yml (context/tfactory_yml.json). Falls back to the default
@@ -38,12 +60,8 @@ def _browser_target_url(spec_dir: Path, subtask: dict) -> str | None:
     slash would produce ``//api/...`` (a different path → spurious 404s). A
     bare origin is also valid for Playwright ``page.goto``.
     """
-    ctx = spec_dir / "context" / "tfactory_yml.json"
-    if not ctx.exists():
-        return None
-    try:
-        cfg = json.loads(ctx.read_text())
-    except (json.JSONDecodeError, OSError):
+    cfg = _load_tfactory_cfg(spec_dir)
+    if cfg is None:
         return None
     targets = cfg.get("targets") or []
     want = subtask.get("target_name") or cfg.get("default_target")
@@ -70,12 +88,8 @@ def _resolve_target(spec_dir: Path, subtask: dict) -> dict | None:
     caller can branch on ``type``), preferring the subtask's ``target_name``,
     then the config ``default_target``, then the first target.
     """
-    ctx = spec_dir / "context" / "tfactory_yml.json"
-    if not ctx.exists():
-        return None
-    try:
-        cfg = json.loads(ctx.read_text())
-    except (json.JSONDecodeError, OSError):
+    cfg = _load_tfactory_cfg(spec_dir)
+    if cfg is None:
         return None
     targets = cfg.get("targets") or []
     want = subtask.get("target_name") or cfg.get("default_target")
@@ -159,11 +173,7 @@ def _test_credential_specs(spec_dir: Path, subtask: dict | None) -> list:
     auth = (target or {}).get("auth") or {}
     if auth.get("type") != "ref" or not auth.get("ref"):
         return []
-    ctx = spec_dir / "context" / "tfactory_yml.json"
-    try:
-        cfg = json.loads(ctx.read_text())
-    except (OSError, json.JSONDecodeError, ValueError):
-        return []
+    cfg = _load_tfactory_cfg(spec_dir) or {}
     entry = (cfg.get("test_credentials") or {}).get(auth["ref"])
     if not entry:
         return []

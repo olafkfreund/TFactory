@@ -555,3 +555,13 @@ def test_failure_detail_none_when_not_a_consistent_fail(
         return _FakeRunResult(returncode=0, stdout=_CLEAN_SUCCESS_STDOUT)
 
     assert check_stability(test_file, project_dir, _runner).failure_detail is None
+
+
+def test_classify_environment_nix_build_failure() -> None:
+    """#1343: the lane's Nix env failed to build — no test code ran, so this
+    is the environment, not the subject."""
+    text = (
+        "error: Cannot build '/nix/store/abc-python3-3.13.13-env.drv'.\n"
+        "       Reason: builder failed with exit code 1.\nFAILED\n"
+    )
+    assert classify_pytest_failure(text, 1) == "environment"
