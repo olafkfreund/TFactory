@@ -98,8 +98,16 @@ def _correlation_key_for(spec_dir: Path) -> str | None:
         pass
     try:
         source = json.loads((spec_dir / "context" / "source.json").read_text())
+        handoff_key = source.get("correlation_key")
+        if isinstance(handoff_key, str) and handoff_key.strip():
+            return handoff_key.strip()
         issue = source.get("issue_number") or source.get("correlation_id")
-        return str(int(issue)) if issue is not None else None
+        if issue is None:
+            return None
+        from agents.triager import _source_repo  # noqa: PLC0415 - triager is heavy
+
+        repo = _source_repo(source)
+        return f"{repo}#{int(issue)}" if repo else str(int(issue))
     except (OSError, json.JSONDecodeError, TypeError, ValueError):
         return None
 
