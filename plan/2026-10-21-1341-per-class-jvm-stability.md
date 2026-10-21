@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1341
 spec: spec/2026-10-21-1341-per-class-jvm-stability.md
 ---
