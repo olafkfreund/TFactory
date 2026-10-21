@@ -26,6 +26,7 @@ _BACKEND_PATH = Path(__file__).resolve().parents[3] / "backend"
 if str(_BACKEND_PATH) not in sys.path:
     sys.path.insert(0, str(_BACKEND_PATH))
 
+from agents.liveness import _deadline_seconds  # noqa: E402  (after sys.path insert)
 from agents.liveness_sweep import sweep  # noqa: E402  (after sys.path insert)
 
 logger = logging.getLogger(__name__)
@@ -41,8 +42,19 @@ def run_one_sweep(deadline_seconds: float | None = None) -> list:
     for spec_dir, verdict in stalled:
         logger.warning("liveness: flagged %s as stalled (%s)", spec_dir, verdict.reason)
     if results:
+        deadline = (
+            _deadline_seconds() if deadline_seconds is None else float(deadline_seconds)
+        )
+        max_idle = max(
+            (v.idle_seconds for _, v in results if v.idle_seconds is not None),
+            default=0.0,
+        )
         logger.info(
-            "liveness sweep: %d task(s) checked, %d stalled", len(results), len(stalled)
+            "liveness sweep: %d task(s) checked, %d stalled (deadline %.0fs, max idle %.0fs)",
+            len(results),
+            len(stalled),
+            deadline,
+            max_idle,
         )
     return results
 

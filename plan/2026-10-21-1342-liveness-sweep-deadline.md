@@ -24,3 +24,9 @@ spec: spec/2026-10-21-1342-liveness-sweep-deadline.md
 ## Rollback
 
 Revert the commit; log text only.
+
+## Deviations
+
+- Steps 1-2 were written by agy, but its sandbox mounted the worktree
+  read-only, so it emitted a patch instead; the lead reviewed and applied it
+  unchanged. No change to the code decisions.
