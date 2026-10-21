@@ -372,7 +372,7 @@ def _read_status(spec_dir: Path) -> dict:
 
 
 # Terminal statuses the Triager can land on. A completion callback fires once
-# the task reaches any of these (see _notify_completion).
+# the task reaches any of these (the shared write_status_patch notifies).
 _TERMINAL_STATUSES = frozenset({"triaged", "triaged_empty", "triager_failed"})
 
 
@@ -424,9 +424,8 @@ def _write_status_patch(spec_dir: Path, **fields: object) -> None:
     write_status_patch(spec_dir, "triager", **fields)
     # Re-read the merged document for the terminal-status callbacks below.
     status = _read_status(spec_dir)
-    # Fire the completion callback exactly once, when the task goes terminal.
+    # Terminal-only hooks (the completion event is sent by write_status_patch).
     if fields.get("status") in _TERMINAL_STATUSES:
-        _notify_completion(spec_dir, status)
         # Best-effort TFactory→AIFactory correction hand-back (#185 / epic #182).
         # Prepares findings/handback_request.{md,json} when the run has failures;
         # sends to AIFactory only with TFACTORY_HANDBACK_SEND=1. Never raises.
@@ -726,16 +725,37 @@ def _contract_correlation_key(spec_dir: Path) -> str | None:
         return None
 
 
+def _source_repo(source: dict[str, Any]) -> str | None:
+    """The source repo reference from source.json: ``owner/repo`` for GitHub,
+    ``<provider>:<slug>`` otherwise (RFC-0020 §3.5). None when unknown (#1775).
+
+    The PFactory pickup path writes the reference as ``repo`` (no provider
+    split), so it is taken as given, as the completion envelope's ``repo`` does.
+    """
+    slug = source.get("repo_slug")
+    if not slug:
+        repo = source.get("repo")
+        return str(repo) if repo else None
+    provider = source.get("provider")
+    return f"{provider}:{slug}" if provider and provider != "github" else str(slug)
+
+
 def _correlation_key(spec_dir: Path, status: dict, source: dict) -> str:
     """The RFC-0001 shared correlation key. Precedence (#249):
-    RFC-0002 contract ``correlation_key`` → GitHub issue number → synthetic
-    ``tf-<spec_id>`` fallback so it is never null (RFC-0001 §2)."""
+    RFC-0002 contract ``correlation_key`` → ``<repo>#<issue>`` (bare issue when
+    the repo is unknown) → synthetic ``tf-<spec_id>`` fallback so it is never
+    null (RFC-0001 §2)."""
     contract_key = _contract_correlation_key(spec_dir)
     if contract_key:
         return contract_key
+    # A build-only handoff keeps its key in source.json (no task_contract.json).
+    handoff_key = source.get("correlation_key")
+    if isinstance(handoff_key, str) and handoff_key.strip():
+        return handoff_key.strip()
     issue = _correlation_issue_number(status, source)
     if issue is not None:
-        return str(issue)
+        repo = _source_repo(source)
+        return f"{repo}#{issue}" if repo else str(issue)
     spec_id = status.get("spec_id") or source.get("spec_id") or spec_dir.name
     return f"tf-{spec_id}"
 
