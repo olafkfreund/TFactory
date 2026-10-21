@@ -140,6 +140,10 @@ RUN want="$(tr -dc '0-9.' < /tmp/.nvmrc | cut -d. -f1)" \
 #                        both HIGH, both fixed in 1.38.0-r0.
 #   wget    1.25.0-r14 — CVE-2026-58471 and CVE-2026-58472, both HIGH, both
 #                        fixed in 1.25.0-r15.
+#   curl / libcurl-openssl4 8.22.0-r4 — CVE-2026-92392 (HIGH), fixed in
+#                        8.23.0-r0. Named together: same origin.
+#   ca-certificates-bundle 20260909-r2 — CVE-2026-111943 (HIGH), fixed in
+#                        20260909-r3.
 # Floors rather than == pins, so the build stays green as Wolfi revs further
 # (1.38.0-r1 and later already exist); drop each once the base digest ships it.
 # Verified present in the Wolfi x86_64 APKINDEX, then confirmed against the
@@ -153,7 +157,9 @@ RUN apk add --no-cache \
         "binutils>2.46-r1" \
         bubblewrap \
         ca-certificates \
-        curl \
+        "ca-certificates-bundle>=20260909-r3" \
+        "curl>=8.23.0-r0" \
+        "libcurl-openssl4>=8.23.0-r0" \
         git \
         gh \
         gnupg \
