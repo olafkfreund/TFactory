@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1347
 intent: intent/2026-10-21-1347-tfactory-yml-worktree-fallback.md
 ---
