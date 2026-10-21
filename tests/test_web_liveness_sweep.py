@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -63,6 +65,24 @@ def test_run_one_sweep_empty_workspace(
 ) -> None:
     monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path))
     assert run_one_sweep(deadline_seconds=900) == []
+
+
+def test_run_one_sweep_logs_deadline_and_max_idle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    recent = (datetime.now(UTC) - timedelta(seconds=120)).isoformat(timespec="seconds")
+    _spec(tmp_path, "p1", "s1", status="generating", updated_at=recent)
+    _spec(tmp_path, "p1", "s2", status="triaged", updated_at=_STALE)
+    monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path))
+
+    with caplog.at_level(logging.INFO, logger="server.background.liveness_sweep"):
+        run_one_sweep(deadline_seconds=900)
+
+    assert any(
+        "liveness sweep: 2 task(s) checked, 0 stalled (deadline 900s, max idle " in m
+        and not m.endswith("max idle 0s)")
+        for m in caplog.messages
+    )
 
 
 async def test_loop_runs_then_cancels_cleanly(
