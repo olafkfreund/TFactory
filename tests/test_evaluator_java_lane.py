@@ -249,7 +249,7 @@ _REPORT = """<?xml version="1.0" encoding="UTF-8"?>
 """
 
 
-def _java_bundles(tmp_path: Path, monkeypatch, stems: list[str]):
+def _java_bundles(tmp_path: Path, monkeypatch, stems: list[str], report: str = _REPORT):
     spec_dir = tmp_path / "spec"
     project_dir = tmp_path / "project"
     subs = []
@@ -260,7 +260,7 @@ def _java_bundles(tmp_path: Path, monkeypatch, stems: list[str]):
         (spec_dir / st["files_to_create"][0]).write_text(f"class {stem} {{}}\n")
         subs.append(st)
     junit = tmp_path / "junit.xml"
-    junit.write_text(_REPORT)
+    junit.write_text(report)
 
     def _fake(spec, proj, *, hint=None, **k):
         return DockerRunResult(
@@ -293,6 +293,19 @@ def test_class_missing_from_report_is_error_not_consistent_fail(
     got = _java_bundles(tmp_path, monkeypatch, ["CTest"])
     assert got["st-CTest"].verdict == StabilityVerdict.ERROR
     assert "did not run" in got["st-CTest"].error_message
+
+
+def test_compile_failure_with_empty_report_stays_consistent_fail(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The lanes always write junit.xml; on a compile failure it has no testcases."""
+    from agents.stability_runner import StabilityVerdict
+
+    got = _java_bundles(
+        tmp_path, monkeypatch, ["ATest", "BTest"], "<testsuites>\n</testsuites>\n"
+    )
+    assert got["st-ATest"].verdict == StabilityVerdict.CONSISTENT_FAIL
+    assert got["st-BTest"].verdict == StabilityVerdict.CONSISTENT_FAIL
 
 
 def test_each_maven_module_runs_its_own_stability_pass(

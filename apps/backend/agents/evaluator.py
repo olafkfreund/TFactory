@@ -2444,9 +2444,12 @@ def _jvm_bundles(
             res = runner_fn(test_file, project, seed)
             path = getattr(res, "junit_xml_path", None)
             try:
-                reports.append(Path(path).read_text() if path else None)
+                text = Path(path).read_text() if path else None
             except (OSError, UnicodeError):
-                reports.append(None)
+                text = None
+            # The lanes write an empty <testsuites/> when the build fails to
+            # compile; that run keeps its build-level record, like a missing report.
+            reports.append(text if text and "<testcase" in text else None)
             return res
 
         shared = _stability_for_subtask(

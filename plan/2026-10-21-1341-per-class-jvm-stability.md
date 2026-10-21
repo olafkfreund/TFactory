@@ -59,6 +59,15 @@ Covers #1341 and #1356.
      hints from both modules.
    → verify they fail on origin/dev's evaluator.py and pass after.
 
+## Deviations
+
+- Review round 1: the Maven and Gradle lanes always write `<stage>/junit.xml`,
+  even when the build fails to compile (`<testsuites></testsuites>`). The
+  recording wrapper now stores None for a report with no `<testcase`, so such a
+  run keeps its build-level record (CONSISTENT_FAIL) as decided above, instead
+  of every class becoming ERROR. Test:
+  `test_compile_failure_with_empty_report_stays_consistent_fail`.
+
 ## Tests
 
 `cd apps/backend && pytest ../../tests/test_evaluator_kotlin_lane.py
