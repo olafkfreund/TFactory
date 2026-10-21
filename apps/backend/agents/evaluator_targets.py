@@ -22,13 +22,14 @@ import json
 import os
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 from tools.runners.docker_run_runtime import DockerRunRuntime
 from tools.runners.kubernetes_runtime import KubernetesRuntime
 from tools.runners.sandbox_credentials import TargetCredentialSpec
 
 
-def _load_tfactory_cfg(spec_dir: Path) -> dict | None:
+def _load_tfactory_cfg(spec_dir: Path) -> dict[str, Any] | None:
     """The spec's ``.tfactory.yml`` as a dict, or None.
 
     The snapshot ``context/tfactory_yml.json`` wins; without it, parse the
@@ -38,7 +39,7 @@ def _load_tfactory_cfg(spec_dir: Path) -> dict | None:
     ctx = spec_dir / "context" / "tfactory_yml.json"
     if ctx.exists():
         try:
-            return json.loads(ctx.read_text())
+            return cast("dict[str, Any]", json.loads(ctx.read_text()))
         except (json.JSONDecodeError, OSError):
             return None
     from tfactory_yml import TFactoryYmlError, load_tfactory_yml  # noqa: PLC0415
