@@ -45,7 +45,7 @@ from typing import Iterator
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from .kms import get_backend, reset_backend_cache
-from .rotation import rotate_root
+from .rotation import RotationReport, rotate_root
 
 # Per-backend env var that holds the key reference. The "_NEW" suffix
 # is the convention for rotation.
@@ -118,7 +118,7 @@ def _cmd_rotate_root(args: argparse.Namespace) -> int:
     # Restore factory cache so future code paths see the OLD backend.
     reset_backend_cache()
 
-    async def run_rotation():
+    async def run_rotation() -> RotationReport:
         engine = create_async_engine(db_url)
         try:
             async with engine.connect() as conn:
