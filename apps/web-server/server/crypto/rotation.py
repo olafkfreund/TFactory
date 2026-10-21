@@ -45,7 +45,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from sqlalchemy import select
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.orm import Session
 
 from .kms import Backend
@@ -88,7 +88,7 @@ class RotationReport:
 
 
 def rotate_root(
-    sync_engine: Engine,
+    sync_engine: Engine | Connection,
     *,
     old_backend: Backend,
     new_backend: Backend,
@@ -98,9 +98,8 @@ def rotate_root(
     """Re-wrap every ``kms_data_keys`` row under ``new_backend``.
 
     Parameters:
-      sync_engine: SQLAlchemy sync engine. Rotation is a one-shot ops
-        task, not part of a hot request path, so the sync path is the
-        right tool here.
+      sync_engine: SQLAlchemy sync engine or connection. The CLI passes
+        the sync connection facade supplied by AsyncConnection.run_sync().
       old_backend: ``Backend`` instance configured for the existing
         root. Must be able to ``decrypt()`` every existing wrapped_key.
       new_backend: ``Backend`` instance configured for the new root.

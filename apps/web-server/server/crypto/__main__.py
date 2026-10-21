@@ -36,16 +36,16 @@ operators run a custom Python script using ``rotate_root()`` directly.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import os
 import sys
 from contextlib import contextmanager
 from typing import Iterator
 
-from sqlalchemy import create_engine
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from .kms import get_backend, reset_backend_cache
-from .rotation import rotate_root
-
+from .rotation import RotationReport, rotate_root
 
 # Per-backend env var that holds the key reference. The "_NEW" suffix
 # is the convention for rotation.
@@ -105,14 +105,6 @@ def _cmd_rotate_root(args: argparse.Namespace) -> int:
         )
         return 2
 
-    # Name the postgres driver explicitly. A bare "postgresql://" lets
-    # SQLAlchemy choose, and 2.1 changed that default from psycopg2 to psycopg
-    # (v3); only psycopg2 is installed, so an operator rotation would fail with
-    # ModuleNotFoundError on a version bump nobody made deliberately. sqlite
-    # keeps its default, which is the stdlib driver.
-    sync_url = db_url.replace("+asyncpg", "+psycopg2").replace("+aiosqlite", "")
-    engine = create_engine(sync_url)
-
     # Build OLD backend from the current env (factory cache).
     reset_backend_cache()
     old_backend = get_backend()
@@ -126,13 +118,23 @@ def _cmd_rotate_root(args: argparse.Namespace) -> int:
     # Restore factory cache so future code paths see the OLD backend.
     reset_backend_cache()
 
-    report = rotate_root(
-        engine,
-        old_backend=old_backend,
-        new_backend=new_backend,
-        new_kms_key_id=args.new_kms_key_id,
-        batch_size=args.batch_size,
-    )
+    async def run_rotation() -> RotationReport:
+        engine = create_async_engine(db_url)
+        try:
+            async with engine.connect() as conn:
+                return await conn.run_sync(
+                    lambda sync_conn: rotate_root(
+                        sync_conn,
+                        old_backend=old_backend,
+                        new_backend=new_backend,
+                        new_kms_key_id=args.new_kms_key_id,
+                        batch_size=args.batch_size,
+                    )
+                )
+        finally:
+            await engine.dispose()
+
+    report = asyncio.run(run_rotation())
 
     print(report.summary())
     if report.errors:
