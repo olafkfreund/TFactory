@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1336
 intent: intent/2026-10-21-1336-rotate-root-async-engine.md
 ---
