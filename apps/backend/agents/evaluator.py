@@ -43,6 +43,7 @@ import contextlib
 import json
 import logging as _logging
 import os
+import re
 import shutil
 import traceback
 from collections import Counter
@@ -2361,8 +2362,6 @@ def _build_go_signal_bundle(
 
 def _class_outcome(report: str, stem: str) -> bool | None:
     """Return whether this class passed, or None when it has no testcases."""
-    import re
-
     found = False
     passed = True
     for match in re.finditer(
@@ -2387,7 +2386,7 @@ def _class_outcome(report: str, stem: str) -> bool | None:
 
 
 def _per_class_stability(
-    shared: StabilityResult | None, reports: list[str | None], subtask: dict
+    shared: StabilityResult | None, reports: list[str | None], subtask: dict[str, Any]
 ) -> StabilityResult | None:
     if shared is None or shared.verdict == StabilityVerdict.ERROR:
         return shared
@@ -2424,11 +2423,11 @@ def _per_class_stability(
 def _jvm_bundles(
     spec_dir: Path,
     project_dir: Path,
-    subtasks: Iterable[dict],
-    runner_fn,
-    root_of: Callable[[dict], Path],
+    subtasks: Iterable[dict[str, Any]],
+    runner_fn: Callable[[Path, Path, int], DockerRunResult],
+    root_of: Callable[[dict[str, Any]], Path],
 ) -> list[EvaluatorSignals]:
-    groups: dict[Path, list[dict]] = {}
+    groups: dict[Path, list[dict[str, Any]]] = {}
     for subtask in subtasks:
         groups.setdefault(root_of(subtask), []).append(subtask)
 
@@ -2437,8 +2436,11 @@ def _jvm_bundles(
         reports: list[str | None] = []
 
         def recording_runner(
-            test_file: Path, project: Path, seed: int, reports=reports
-        ):
+            test_file: Path,
+            project: Path,
+            seed: int,
+            reports: list[str | None] = reports,
+        ) -> DockerRunResult:
             res = runner_fn(test_file, project, seed)
             path = getattr(res, "junit_xml_path", None)
             try:
