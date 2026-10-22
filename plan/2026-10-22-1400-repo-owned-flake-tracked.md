@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1400
 spec: spec/2026-10-22-1400-repo-owned-flake-tracked.md
 ---
