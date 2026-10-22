@@ -1261,6 +1261,8 @@ def _nix_batched_stability(
     )
     if res is None:
         return None
+    # #1407: keep junit/coverage where _measured_coverage reads them (both pack modes).
+    _with_durable_artifacts(spec_dir, test_file, res)
     runs = [
         StabilityRun(
             returncode=code, stdout_tail=_clip(tail, _RUN_TAIL_CHARS), stderr_tail=""
@@ -1363,6 +1365,8 @@ def _nix_batched_signals(
     )
     if res is None:
         return None, None
+    # #1407: keep junit/coverage where _measured_coverage reads them (both pack modes).
+    _with_durable_artifacts(spec_dir, test_file, res)
 
     runs = [
         StabilityRun(
