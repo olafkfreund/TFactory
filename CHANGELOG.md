@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.9.36 — Nix lanes keep their junit and coverage (2026-10-23)
+
+### Fixed
+
+- Nix batched pytest lanes now save their `junit.xml` and `coverage.xml` to `findings/_run_artifacts/<stem>/`, packed and unpacked, so the verdict's coverage is measured instead of reading 0. The reports were always written and brought back, but the batched stability and signals passes never kept them. This predates packing. (#1407, #1408)
+
 ## 0.9.35 — a stray generated flake no longer poses as the repo's (2026-10-22)
 
 ### Fixed
