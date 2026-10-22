@@ -287,6 +287,13 @@ def nix_runner_from_env() -> KubeJobSandbox | None:
     from tools.runners.kube_sandbox import KubeJobSandbox
 
     pvc = os.environ.get("TFACTORY_WORKSPACES_PVC")
+    # Packed verify Jobs give nested lanes an object-store workdir, not their PVC.
+    pack_workdir = os.environ.get("TFACTORY_LANE_PACK", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
     ns = os.environ.get("TFACTORY_SANDBOX_NAMESPACE", "factory")
     # RFC-0016 #197: opt-in warm /nix/store PVC so the toolchain closure persists
     # across Nix lane Jobs instead of cold-fetching each run. Absent → no mount,
@@ -309,7 +316,12 @@ def nix_runner_from_env() -> KubeJobSandbox | None:
     if data_root:
         kw["data_root"] = data_root
     return KubeJobSandbox(
-        image, namespace=ns, repo_pvc=pvc, nix_store_pvc=nix_store_pvc, **kw
+        image,
+        namespace=ns,
+        repo_pvc=None if pack_workdir else pvc,
+        nix_store_pvc=nix_store_pvc,
+        pack_workdir=pack_workdir,
+        **kw,
     )
 
 

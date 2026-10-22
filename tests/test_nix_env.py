@@ -1674,3 +1674,26 @@ def test_run_gradle_lane_via_nix_passes_env_to_materialize_flake(tmp_path, monke
     # No env: Kotlin's default, unchanged (#1712).
     run_gradle_lane_via_nix(spec, project)
     assert seen["env"]["language"] == "kotlin"
+
+
+def test_nix_runner_from_env_lane_pack_drops_pvc(monkeypatch):
+    """#1391: inside a packed verify Job the nested lane must not co-mount the
+    RWO workspaces PVC, even if the PVC env leaked through."""
+    from agents.nix_env import nix_runner_from_env
+
+    monkeypatch.setenv("TFACTORY_NIX_RUNNER_IMAGE", "img:latest")
+    monkeypatch.setenv("TFACTORY_WORKSPACES_PVC", "tfactory-data")
+    monkeypatch.setenv("TFACTORY_LANE_PACK", "1")
+    sb = nix_runner_from_env()
+    assert sb is not None and sb.repo_pvc is None and sb.pack_workdir is True
+
+
+def test_nix_runner_from_env_unpacked_keeps_pvc(monkeypatch):
+    from agents.nix_env import nix_runner_from_env
+
+    monkeypatch.setenv("TFACTORY_NIX_RUNNER_IMAGE", "img:latest")
+    monkeypatch.setenv("TFACTORY_WORKSPACES_PVC", "tfactory-data")
+    monkeypatch.delenv("TFACTORY_LANE_PACK", raising=False)
+    sb = nix_runner_from_env()
+    assert sb is not None and sb.repo_pvc == "tfactory-data"
+    assert sb.pack_workdir is False

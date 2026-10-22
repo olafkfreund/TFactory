@@ -762,7 +762,13 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
         "TFACTORY_NIX_IN_IMAGE",
         "TFACTORY_SANDBOX_NAMESPACE",
     ):
-        _nix_val = os.environ.get(_nix_var)
+        # #1391: packed lanes get their workdir by object store; the RWO PVC
+        # would pin them to its node and show them the PVC copy, not our emptyDir.
+        _nix_val = (
+            None
+            if cfg.workspace_uri and _nix_var == "TFACTORY_WORKSPACES_PVC"
+            else os.environ.get(_nix_var)
+        )
         if _nix_val:
             env.append({"name": _nix_var, "value": _nix_val})
     # Forward the triager side-effect flags so the verdict actually surfaces on
@@ -799,13 +805,18 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
     _bash_sandbox = os.environ.get("AIFACTORY_BASH_SANDBOX")
     if _bash_sandbox:
         env.append({"name": "AIFACTORY_BASH_SANDBOX", "value": _bash_sandbox})
-    # This Job mounts the workspaces PVC (data root) at ``cfg.mount`` (/work), NOT
+    # In unpacked mode this Job mounts the workspaces PVC at ``cfg.mount``, NOT
     # at the control plane's /home/nonroot/.tfactory. The nested per-task Nix Job
     # derives its co-mount subPath via pvc_subpath(path, data_root); without the
     # right data root that returns None and the Nix Job mounts nothing — an empty
     # /work where the SUT is unimportable, so every AC rejects (consistent_fail).
     # Tell nix_runner_from_env where the PVC actually is inside THIS Job (#623).
-    env.append({"name": "TFACTORY_DATA_ROOT", "value": cfg.mount})
+    # Packed (#1391): no PVC here, so tell nix_runner_from_env to pack lanes instead.
+    env.append(
+        {"name": "TFACTORY_LANE_PACK", "value": "1"}
+        if cfg.workspace_uri
+        else {"name": "TFACTORY_DATA_ROOT", "value": cfg.mount}
+    )
     # LLM credential (TFactory #466 env round-4): the verify pipeline's evaluator
     # calls create_client → require_auth_token. Without it the Job died
     # ``ValueError: No OAuth token found``. Inject CLAUDE_CODE_OAUTH_TOKEN via the
