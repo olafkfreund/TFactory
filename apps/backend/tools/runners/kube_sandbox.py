@@ -417,6 +417,26 @@ def _collected(
     return JobRunResult(succeeded, 0 if succeeded else 1, output)
 
 
+def _presign_client(store: Any) -> object:
+    """SigV4 presigner for the lane URLs (#1396).
+
+    botocore presigns SigV2 by default, and MinIO 403s that PUT when it carries
+    x-amz-tagging. Built here because artifact_store.py is vendored from the hub.
+    """
+    import boto3  # type: ignore[import-untyped]  # noqa: PLC0415 - packed path only
+    from botocore.config import Config  # type: ignore[import-untyped]  # noqa: PLC0415
+
+    c = store.config
+    return boto3.client(
+        "s3",
+        endpoint_url=c.endpoint,
+        aws_access_key_id=c.access_key,
+        aws_secret_access_key=c.secret_key,
+        region_name=c.region,
+        config=Config(signature_version="s3v4"),
+    )
+
+
 class KubeJobSandbox:
     def __init__(
         self,
@@ -482,12 +502,13 @@ class KubeJobSandbox:
         out_uri = out_ref.uri()
         try:
             client = store._client()
-            in_url = client.generate_presigned_url(  # type: ignore[attr-defined]
+            presigner = _presign_client(store)
+            in_url = presigner.generate_presigned_url(  # type: ignore[attr-defined]
                 "get_object",
                 Params={"Bucket": bucket, "Key": in_key},
                 ExpiresIn=timeout + 600,
             )
-            out_url = client.generate_presigned_url(  # type: ignore[attr-defined]
+            out_url = presigner.generate_presigned_url(  # type: ignore[attr-defined]
                 "put_object",
                 Params={
                     "Bucket": bucket,

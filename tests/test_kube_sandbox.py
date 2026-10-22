@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import os
 
+import pytest
+from tools.runners import kube_sandbox
 from tools.runners.job_dispatch import assert_job_policy
 from tools.runners.kube_sandbox import (
     JobRunResult,
@@ -552,6 +556,7 @@ def test_packed_lane_has_no_pvc_and_collects_results(monkeypatch, tmp_path):
     s3 = _LaneS3()
     monkeypatch.setenv("S3_ENDPOINT", "http://minio.invalid:9000")
     monkeypatch.setattr(ArtifactStore, "_client", lambda self: s3)
+    monkeypatch.setattr(kube_sandbox, "_presign_client", lambda store: s3)
     created: list[dict] = []
     _fake_kube(monkeypatch, s3, created)
     workdir = tmp_path / "_nixrun-abc"
@@ -613,6 +618,7 @@ def test_packed_lane_objects_are_deleted_when_job_create_raises(monkeypatch, tmp
     s3 = _LaneS3()
     monkeypatch.setenv("S3_ENDPOINT", "http://minio.invalid:9000")
     monkeypatch.setattr(ArtifactStore, "_client", lambda self: s3)
+    monkeypatch.setattr(kube_sandbox, "_presign_client", lambda store: s3)
     created: list[dict] = []
     _fake_kube(monkeypatch, s3, created)
     import sys
@@ -651,6 +657,7 @@ def test_packed_lane_reserves_push_back_time_and_tags_output(monkeypatch, tmp_pa
     s3.generate_presigned_url = _spy  # type: ignore[method-assign]
     monkeypatch.setenv("S3_ENDPOINT", "http://minio.invalid:9000")
     monkeypatch.setattr(ArtifactStore, "_client", lambda self: s3)
+    monkeypatch.setattr(kube_sandbox, "_presign_client", lambda store: s3)
     (tmp_path / "sut.py").write_text("x = 1\n")
 
     sb = KubeJobSandbox("img", repo_pvc=None, pack_workdir=True)
@@ -665,3 +672,89 @@ def test_packed_lane_reserves_push_back_time_and_tags_output(monkeypatch, tmp_pa
     # fake URL has no x-amz-tagging query param, so curl must send the header
     assert "x-amz-tagging: role=workspace" in cmds[0]
     assert s3.objects == {}
+
+
+# ─── #1396: the lane push-back PUT must be SigV4 so MinIO accepts it ─────────
+
+
+def test_lane_put_url_is_sigv4_and_signs_the_tagging_header():
+    """botocore presigns SigV2 by default; MinIO 403s that PUT (x-amz-tagging in query)."""
+    from urllib.parse import parse_qs, urlsplit
+
+    pytest.importorskip("boto3")
+    from tools.runners.artifact_store import ArtifactStore, StoreConfig
+
+    env = {
+        "S3_ENDPOINT": "http://minio.invalid:9000",
+        "S3_ACCESS_KEY": "a",
+        "S3_SECRET_KEY": "b",
+    }
+    store = ArtifactStore(StoreConfig.from_env(env))
+    url = kube_sandbox._presign_client(store).generate_presigned_url(
+        "put_object",
+        Params={"Bucket": "b", "Key": "k", "Tagging": "role=workspace"},
+        ExpiresIn=60,
+    )
+    q = parse_qs(urlsplit(url).query)
+    assert q["X-Amz-Algorithm"] == ["AWS4-HMAC-SHA256"]
+    assert "x-amz-tagging" in q["X-Amz-SignedHeaders"][0].split(";")
+    # so the lane script takes the branch that sends the signed header
+    assert "x-amz-tagging=" not in url.lower()
+
+
+@pytest.mark.skipif(
+    not os.environ.get("TF_TEST_MINIO_ENDPOINT"),
+    reason="needs a MinIO: TF_TEST_MINIO_ENDPOINT (+ TF_TEST_MINIO_ACCESS_KEY/SECRET_KEY)",
+)
+def test_packed_lane_push_back_round_trips_against_minio(monkeypatch, tmp_path):
+    """The curl -T push-back the lane script runs, against a real MinIO (#1396)."""
+    import io
+    import shutil
+    import subprocess
+    import tarfile
+    from urllib.parse import unquote, urlsplit
+
+    from tools.runners.artifact_store import ArtifactStore, StoreConfig
+
+    monkeypatch.setenv("S3_ENDPOINT", os.environ["TF_TEST_MINIO_ENDPOINT"])
+    monkeypatch.setenv(
+        "S3_ACCESS_KEY", os.environ.get("TF_TEST_MINIO_ACCESS_KEY", "minioadmin")
+    )
+    monkeypatch.setenv(
+        "S3_SECRET_KEY", os.environ.get("TF_TEST_MINIO_SECRET_KEY", "minioadmin")
+    )
+    cfg = StoreConfig.from_env()
+    client = ArtifactStore(cfg)._client()
+    with contextlib.suppress(Exception):  # bucket may already exist
+        client.create_bucket(Bucket=cfg.bucket)  # type: ignore[attr-defined]
+    (tmp_path / "sut.py").write_text("x = 1\n")
+    sb = KubeJobSandbox("img", repo_pvc=None, pack_workdir=True)
+    cmds, _uri, env, collect, discard = sb._pack_lane(
+        "tfsbx-rt", ["true"], str(tmp_path), 300
+    )
+    try:
+        out_url = next(e["value"] for e in env if e["name"] == "TF_LANE_OUT_URL")
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            data = b"<testsuite/>"
+            info = tarfile.TarInfo(".tf_pytest/junit.xml")
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+        tgz = tmp_path.parent / "tf_lane_out.tgz"
+        tgz.write_bytes(buf.getvalue())
+        header = (
+            ["-H", "x-amz-tagging: role=workspace"]
+            if "x-amz-tagging:" in cmds[0]
+            else []
+        )
+        subprocess.run(
+            [shutil.which("curl") or "curl", "-fsS", *header, "-T", str(tgz), out_url],
+            check=True,
+        )
+        collect()
+        assert (tmp_path / ".tf_pytest" / "junit.xml").read_bytes() == b"<testsuite/>"
+        key = unquote(urlsplit(out_url).path).split(f"/{cfg.bucket}/", 1)[1]
+        tags = client.get_object_tagging(Bucket=cfg.bucket, Key=key)["TagSet"]  # type: ignore[attr-defined]
+        assert {"Key": "role", "Value": "workspace"} in tags
+    finally:
+        discard()
