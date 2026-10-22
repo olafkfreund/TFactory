@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1393
 intent: intent/2026-10-22-1393-packed-lane-hardening.md
 ---
