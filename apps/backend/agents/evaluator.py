@@ -105,6 +105,7 @@ from agents.workspace_status import (
     read_status,
     write_status_patch,
 )
+from tools.runners.lang_registry import UNSUPPORTED_LANGUAGES
 
 _eval_log = _logging.getLogger(__name__)
 
@@ -3290,6 +3291,20 @@ async def run_evaluator(
         # 1. Load the plan + filter to completed subtasks per lane.
         plan = _load_plan_or_fail(spec_dir)
         if plan is None:
+            return False
+
+        unsupported = _filter_completed_subtasks(
+            plan,
+            lambda st: str(st.get("language") or "").lower() in UNSUPPORTED_LANGUAGES,
+        )
+        if unsupported:
+            language = unsupported[0]["language"].lower()
+            _write_status_patch(
+                spec_dir,
+                status="evaluator_failed",
+                phase=f"evaluator_{mode}_unsupported_language",
+                evaluator_error=UNSUPPORTED_LANGUAGES[language],
+            )
             return False
 
         unit_completed = _completed_functional_subtasks(plan)
