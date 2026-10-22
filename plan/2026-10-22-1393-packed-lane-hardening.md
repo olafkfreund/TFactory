@@ -48,3 +48,10 @@ ratchet passes.
 ## Rollback
 
 Revert the PR; packing is off by default.
+
+## Deviations
+
+- Step 1: instead of re-indenting `_run_async` under a new try/finally, the Job
+  body moved unchanged into `_run_job`; `_run_async` packs, awaits `_run_job`,
+  and calls `discard` in its `finally`. Same behaviour, smaller diff.
+  `_collect_lane` now only unpacks; deletion lives in `discard`.

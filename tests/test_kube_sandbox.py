@@ -584,3 +584,83 @@ def test_unpacked_sandbox_keeps_pvc_co_mount_and_no_pack():
     sb = KubeJobSandbox("img", repo_pvc="tfactory-data")
     assert sb.pack_workdir is False
     assert sb.with_manifest_kw(service_account="x").repo_pvc == "tfactory-data"
+
+
+# ─── #1393: packed lanes — not collected, leaked objects, push-back budget ────
+
+
+def test_uncollected_lane_is_never_a_pass_and_classifies_as_environment():
+    from agents.nix_env import _parse_exit_marker, parse_pytest_exits
+    from agents.stability_runner import classify_pytest_failure
+    from tools.runners.kube_sandbox import _collected
+
+    def _lost() -> None:
+        raise RuntimeError("no such key")
+
+    out = "__PYTEST_RUN=0\n1 passed\n__PYTEST_EXIT=0\n__GOTEST_EXIT=0"
+    res = _collected(_lost, True, out)
+    assert not res.ok
+    assert _parse_exit_marker(res.output, "__PYTEST_EXIT=") == 1
+    assert _parse_exit_marker(res.output, "__GOTEST_EXIT=") == 1
+    assert [code for code, _ in parse_pytest_exits(res.output)] == [1]
+    assert classify_pytest_failure(res.output, 1) == "environment"
+
+
+def test_packed_lane_objects_are_deleted_when_job_create_raises(monkeypatch, tmp_path):
+    from tools.runners.artifact_store import ArtifactStore
+
+    s3 = _LaneS3()
+    monkeypatch.setenv("S3_ENDPOINT", "http://minio.invalid:9000")
+    monkeypatch.setattr(ArtifactStore, "_client", lambda self: s3)
+    created: list[dict] = []
+    _fake_kube(monkeypatch, s3, created)
+    import sys
+
+    batch_cls = sys.modules["kubernetes_asyncio"].client.BatchV1Api(None).__class__
+
+    async def _boom(self, ns, manifest):
+        env = manifest["spec"]["template"]["spec"]["containers"][0]["env"]
+        url = next(e["value"] for e in env if e["name"] == "TF_LANE_OUT_URL")
+        s3.objects[url.split("/put_object/", 1)[1]] = b"partial push-back"
+        raise RuntimeError("apiserver down")
+
+    monkeypatch.setattr(batch_cls, "create_namespaced_job", _boom)
+    (tmp_path / "sut.py").write_text("x = 1\n")
+
+    sb = KubeJobSandbox("img", repo_pvc=None, pack_workdir=True)
+    import pytest
+
+    with pytest.raises(RuntimeError, match="apiserver down"):
+        sb.run(["pytest -q"], workdir=str(tmp_path), timeout=6)
+    # both the input archive (the SUT) and the partial output are gone
+    assert s3.objects == {}
+
+
+def test_packed_lane_reserves_push_back_time_and_tags_output(monkeypatch, tmp_path):
+    from tools.runners.artifact_store import ArtifactStore
+
+    s3 = _LaneS3()
+    presigned: list[dict] = []
+    real = s3.generate_presigned_url
+
+    def _spy(op, Params, ExpiresIn):  # noqa: N803 - boto3 names
+        presigned.append({"op": op, **Params})
+        return real(op, Params, ExpiresIn)
+
+    s3.generate_presigned_url = _spy  # type: ignore[method-assign]
+    monkeypatch.setenv("S3_ENDPOINT", "http://minio.invalid:9000")
+    monkeypatch.setattr(ArtifactStore, "_client", lambda self: s3)
+    (tmp_path / "sut.py").write_text("x = 1\n")
+
+    sb = KubeJobSandbox("img", repo_pvc=None, pack_workdir=True)
+    cmds, _uri, _env, _collect, discard = sb._pack_lane(
+        "tfsbx-t", ["pytest -q"], str(tmp_path), 900
+    )
+    discard()
+    assert "timeout -k 10 780 bash -c" in cmds[0]
+    assert cmds[0].index("timeout -k 10") < cmds[0].index("TF_LANE_OUT_URL")
+    put = next(p for p in presigned if p["op"] == "put_object")
+    assert put["Tagging"] == "role=workspace"
+    # fake URL has no x-amz-tagging query param, so curl must send the header
+    assert "x-amz-tagging: role=workspace" in cmds[0]
+    assert s3.objects == {}

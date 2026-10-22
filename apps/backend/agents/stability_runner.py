@@ -104,6 +104,7 @@ _IMPORT_MARKERS = (
 # quoting styles, never a regex over prose: inferring cause from prose is the
 # defect this issue exists to fix.
 _ENVIRONMENT_MARKERS = (
+    "__TF_LANE_NOT_COLLECTED__",
     "KeyError: 'TFACTORY_TARGET_URL'",
     'KeyError: "TFACTORY_TARGET_URL"',
     # #1343: the lane's Nix env failed to build -- no test code ran.

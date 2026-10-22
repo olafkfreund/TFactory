@@ -29,6 +29,8 @@ import concurrent.futures
 import contextlib
 import logging
 import os
+import re
+import shlex
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -404,7 +406,13 @@ def _collected(
         try:
             cleanup()
         except Exception as exc:  # noqa: BLE001 - never grade missing evidence
-            output = f"{output}\n[kube-sandbox] lane results not collected: {exc}"
+            output = re.sub(
+                r"^__[A-Z_]+=", r"[not collected] \g<0>", output, flags=re.MULTILINE
+            )
+            output = (
+                f"{output}\n[kube-sandbox] lane results not collected: {exc}"
+                "\n__TF_LANE_NOT_COLLECTED__"
+            )
             return JobRunResult(False, 1, output.strip())
     return JobRunResult(succeeded, 0 if succeeded else 1, output)
 
@@ -443,7 +451,9 @@ class KubeJobSandbox:
 
     def _pack_lane(
         self, name: str, commands: list[str], workdir: str, timeout: int
-    ) -> tuple[list[str], str, list[dict[str, str]], Callable[[], None]]:
+    ) -> tuple[
+        list[str], str, list[dict[str, str]], Callable[[], None], Callable[[], None]
+    ]:
         from tools.runners.artifact_store import (  # noqa: PLC0415 - packed path only
             ArtifactRef,
             ArtifactStore,
@@ -472,55 +482,65 @@ class KubeJobSandbox:
         out_uri = out_ref.uri()
         try:
             client = store._client()
+            in_url = client.generate_presigned_url(  # type: ignore[attr-defined]
+                "get_object",
+                Params={"Bucket": bucket, "Key": in_key},
+                ExpiresIn=timeout + 600,
+            )
+            out_url = client.generate_presigned_url(  # type: ignore[attr-defined]
+                "put_object",
+                Params={
+                    "Bucket": bucket,
+                    "Key": out_ref.key(),
+                    "Tagging": "role=workspace",
+                },
+                ExpiresIn=timeout + 600,
+            )
             extra_env = [
-                {
-                    "name": env_name,
-                    "value": client.generate_presigned_url(  # type: ignore[attr-defined]
-                        operation,
-                        Params={"Bucket": bucket, "Key": key},
-                        ExpiresIn=timeout + 600,
-                    ),
-                }
-                for env_name, operation, key in (
-                    ("TF_LANE_IN_URL", "get_object", in_key),
-                    ("TF_LANE_OUT_URL", "put_object", out_ref.key()),
-                )
+                {"name": "TF_LANE_IN_URL", "value": in_url},
+                {"name": "TF_LANE_OUT_URL", "value": out_url},
             ]
         except Exception:
             with contextlib.suppress(Exception):  # best-effort cleanup
                 store._client().delete_object(Bucket=bucket, Key=in_key)  # type: ignore[attr-defined]
             raise
         # Push back even when the lane command fails, or its evidence dies with emptyDir.
+        # #1393: the push-back shares activeDeadlineSeconds, so the lane gets less.
+        reserve = min(120, timeout // 4)
+        budget = max(1, timeout - reserve)
+        lane_command = shlex.quote(f"( {' && '.join(commands)} )")
+        tagging_header = (
+            "-H 'x-amz-tagging: role=workspace' "
+            if "x-amz-tagging=" not in out_url.lower()
+            else ""
+        )
         wrapped = (
             'set -e; curl -fsS "$TF_LANE_IN_URL" | tar -xz -C /work; '
-            f"set +e; ( {' && '.join(commands)} ); rc=$?; "
+            f"set +e; timeout -k 10 {budget} bash -c {lane_command}; rc=$?; "
             "find /work -type l -lname '/*' -delete; "
             "tar -czf /tmp/tf_lane_out.tgz -C /work . && "
-            'curl -fsS -T /tmp/tf_lane_out.tgz "$TF_LANE_OUT_URL" || '
+            f'curl -fsS {tagging_header}-T /tmp/tf_lane_out.tgz "$TF_LANE_OUT_URL" || '
             "echo '[kube-sandbox] lane push-back failed'; exit $rc"
         )
 
-        def cleanup() -> None:
-            self._collect_lane(workdir, out_uri, in_key)
+        def collect() -> None:
+            self._collect_lane(workdir, out_uri)
 
-        return [wrapped], uri, extra_env, cleanup
+        def discard() -> None:
+            for key in (in_key, out_ref.key()):
+                with contextlib.suppress(Exception):  # cleanup is best effort
+                    client.delete_object(Bucket=bucket, Key=key)
 
-    def _collect_lane(self, workdir: str, out_uri: str, in_key: str) -> None:
+        return [wrapped], uri, extra_env, collect, discard
+
+    def _collect_lane(self, workdir: str, out_uri: str) -> None:
         from tools.runners.artifact_store import (  # noqa: PLC0415 - packed path only
             ArtifactStore,
-            parse_uri,
             unpack_workspace,
         )
 
         store = ArtifactStore()
-        bucket, out_key = parse_uri(out_uri)
-        try:
-            unpack_workspace(store, out_uri, workdir)
-        finally:
-            # A failed restore must not keep either short-lived lane archive.
-            for key in (in_key, out_key):
-                with contextlib.suppress(Exception):  # cleanup is best effort
-                    store._client().delete_object(Bucket=bucket, Key=key)  # type: ignore[attr-defined]
+        unpack_workspace(store, out_uri, workdir)
 
     def _repo_kw(self, workdir: str | None) -> dict[str, Any]:
         repo_kw: dict[str, Any] = {}
@@ -542,15 +562,34 @@ class KubeJobSandbox:
         name = "tfsbx-" + uuid.uuid4().hex[:10]
         workspace_uri: str | None = None
         extra_env: list[dict[str, str]] = []
-        cleanup: Callable[[], None] | None = None
+        collect: Callable[[], None] | None = None
+        discard: Callable[[], None] | None = None
         if self.pack_workdir and workdir:
             try:
-                commands, workspace_uri, extra_env, cleanup = self._pack_lane(
+                commands, workspace_uri, extra_env, collect, discard = self._pack_lane(
                     name, commands, workdir, timeout
                 )
             except Exception as exc:  # noqa: BLE001 - fail before creating a Job
                 return JobRunResult(False, 1, f"[kube-sandbox] lane pack failed: {exc}")
+        try:
+            return await self._run_job(
+                name, commands, timeout, workdir, workspace_uri, extra_env, collect
+            )
+        finally:
+            # #1393: a raise from create/poll must not leak the lane archives.
+            if discard:
+                discard()
 
+    async def _run_job(  # noqa: PLR0913 - the packed-lane state threaded through
+        self,
+        name: str,
+        commands: list[str],
+        timeout: int,
+        workdir: str | None,
+        workspace_uri: str | None,
+        extra_env: list[dict[str, str]],
+        collect: Callable[[], None] | None,
+    ) -> JobRunResult:
         from kubernetes_asyncio import client, config
 
         try:
@@ -615,7 +654,7 @@ class KubeJobSandbox:
                 )
                 diag = _describe_pod(pod) if pod is not None else "no pod created"
                 output = f"{output}\n[kube-sandbox] {note}; {diag}".strip()
-            return _collected(cleanup, succeeded, output)
+            return _collected(collect, succeeded, output)
         finally:
             try:
                 await batch.delete_namespaced_job(
