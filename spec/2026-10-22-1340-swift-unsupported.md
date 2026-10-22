@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1340
 intent: intent/2026-10-22-1340-swift-unsupported.md
 ---
