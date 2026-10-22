@@ -10,8 +10,27 @@ test runs in milliseconds. A 13-test spec paid ~29 minutes of pure setup.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from agents import nix_env
+
+
+def _commit_flake(proj):
+    """Only a git-TRACKED flake is repo-owned (TFactory#1400)."""
+    import subprocess
+
+    git = [
+        "git",
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "-c",
+        "commit.gpgsign=false",
+    ]
+    subprocess.run([*git, "init", "-q", str(proj)], check=True)
+    subprocess.run([*git, "-C", str(proj), "add", "flake.nix"], check=True)
+    subprocess.run([*git, "-C", str(proj), "commit", "-qm", "flake"], check=True)
 
 
 def _stub(monkeypatch, captured: dict):
@@ -24,7 +43,9 @@ def _stub(monkeypatch, captured: dict):
             captured["script"] = (Path(kw["workdir"]) / nix_env._JOB_SCRIPT).read_text()
             return _Res()
 
-    monkeypatch.setattr(nix_env, "materialize_flake", lambda *a, **k: object())
+    monkeypatch.setattr(
+        nix_env, "materialize_flake", lambda *a, **k: SimpleNamespace(generated=False)
+    )
     monkeypatch.setattr(nix_env, "nix_runner_from_env", lambda: _Sandbox())
 
 
@@ -128,7 +149,10 @@ def test_nix_mode_accepts_a_repo_owned_flake(tmp_path):
         proj.mkdir()
         # No contract -> the old rule said False.
         assert evaluator._nix_verify_mode(spec, proj) is False
+        # TFactory#1400: an UNTRACKED flake is a generated leftover, not the repo's.
         (proj / "flake.nix").write_text("{ }")
+        assert evaluator._nix_verify_mode(spec, proj) is False
+        _commit_flake(proj)
         assert evaluator._nix_verify_mode(spec, proj) is True
     finally:
         os.environ.pop("TFACTORY_NIX_RUNNER_IMAGE", None)
@@ -156,6 +180,7 @@ def test_a_jest_subtask_reaches_the_batched_lane_through_the_real_route(
         proj = tmp_path / "proj"
         proj.mkdir()
         (proj / "flake.nix").write_text("{ }")
+        _commit_flake(proj)
 
         seen: dict = {}
 

@@ -37,3 +37,14 @@ stale-branch checkout. Whole-lane scratch copies for non-pytest lanes rejected (
 ## Rollback
 
 Revert the code commit; artifacts stay.
+
+## Deviations (recorded with the code)
+
+- Steps 1-3 were done by the coder (codex). Review found that `_drop_generated_flake`
+  would delete a TRACKED flake that a `generated` manifest had overwritten. It now
+  removes only files git does not track (and nothing when git cannot run), via a
+  shared `_git_tracks` helper.
+- `run_browser_evidence` also drops the generated flake on its "no specs" early return.
+- Test stubs that replaced `materialize_flake` with `object()` now return
+  `SimpleNamespace(generated=False)`; go/gradle/maven result-shape tests read the flake
+  inside the fake Job (it is removed afterwards).

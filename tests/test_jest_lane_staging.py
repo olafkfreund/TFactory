@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from agents import nix_env
 
@@ -47,7 +48,9 @@ def _stub(monkeypatch, cap):
             cap["written_config"] = jc.read_text() if jc.is_file() else None
             return _Res()
 
-    monkeypatch.setattr(nix_env, "materialize_flake", lambda *a, **k: object())
+    monkeypatch.setattr(
+        nix_env, "materialize_flake", lambda *a, **k: SimpleNamespace(generated=False)
+    )
     monkeypatch.setattr(nix_env, "nix_runner_from_env", lambda: _Sandbox())
 
 

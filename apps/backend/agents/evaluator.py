@@ -83,6 +83,7 @@ from agents.mutation_dispatch import is_mutation_supported, mutant_extension
 from agents.nix_env import (
     detect_serve_command,
     environment_from_contract,
+    flake_is_repo_owned,
     is_nix_environment,
     parse_mut_exits,
     parse_pytest_exits,
@@ -310,7 +311,7 @@ def _nix_verify_mode(spec_dir: Path, project_dir: Path | None = None) -> bool:
     # batched path never entered (TFactory#1187).
     # `is not None` rather than `bool(...)`: the latter does not narrow
     # `Path | None` for mypy --strict, and a second `return` would trip PLR0911.
-    return project_dir is not None and (Path(project_dir) / "flake.nix").is_file()
+    return project_dir is not None and flake_is_repo_owned(project_dir)
 
 
 def _maybe_nix_verify(  # noqa: PLR0913 - explicit api-lane self-serve knobs
