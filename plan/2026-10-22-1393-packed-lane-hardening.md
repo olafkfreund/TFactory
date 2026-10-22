@@ -55,3 +55,7 @@ Revert the PR; packing is off by default.
   body moved unchanged into `_run_job`; `_run_async` packs, awaits `_run_job`,
   and calls `discard` in its `finally`. Same behaviour, smaller diff.
   `_collect_lane` now only unpacks; deletion lives in `discard`.
+- Review fix round 1: the marker-disabling regex in `_collected` is
+  `^__[A-Z0-9_]+=` (was `^__[A-Z_]+=`) so numbered markers such as the deploy
+  lane's `__DEPLOY_STEP_{i}_EXIT=` are disabled too; the uncollected-lane test
+  now covers a deploy marker.

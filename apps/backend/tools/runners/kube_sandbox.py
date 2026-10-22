@@ -407,7 +407,7 @@ def _collected(
             cleanup()
         except Exception as exc:  # noqa: BLE001 - never grade missing evidence
             output = re.sub(
-                r"^__[A-Z_]+=", r"[not collected] \g<0>", output, flags=re.MULTILINE
+                r"^__[A-Z0-9_]+=", r"[not collected] \g<0>", output, flags=re.MULTILINE
             )
             output = (
                 f"{output}\n[kube-sandbox] lane results not collected: {exc}"

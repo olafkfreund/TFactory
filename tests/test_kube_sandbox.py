@@ -597,11 +597,12 @@ def test_uncollected_lane_is_never_a_pass_and_classifies_as_environment():
     def _lost() -> None:
         raise RuntimeError("no such key")
 
-    out = "__PYTEST_RUN=0\n1 passed\n__PYTEST_EXIT=0\n__GOTEST_EXIT=0"
+    out = "__PYTEST_RUN=0\n1 passed\n__PYTEST_EXIT=0\n__GOTEST_EXIT=0\n__DEPLOY_STEP_0_EXIT=0"
     res = _collected(_lost, True, out)
     assert not res.ok
     assert _parse_exit_marker(res.output, "__PYTEST_EXIT=") == 1
     assert _parse_exit_marker(res.output, "__GOTEST_EXIT=") == 1
+    assert _parse_exit_marker(res.output, "__DEPLOY_STEP_0_EXIT=") == 1
     assert [code for code, _ in parse_pytest_exits(res.output)] == [1]
     assert classify_pytest_failure(res.output, 1) == "environment"
 
