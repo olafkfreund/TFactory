@@ -337,6 +337,27 @@ async def test_kotlin_only_plan_is_evaluated_not_empty(
     assert gradle_runs["n"] > 0  # the Gradle lane actually ran
 
 
+@pytest.mark.asyncio
+async def test_swift_only_plan_fails_as_unsupported(
+    spec_dir: Path,
+    project_dir: Path,
+) -> None:
+    plan = _make_test_plan(1)
+    plan["phases"][0]["subtasks"][0].update({"lane": "unit", "language": "Swift"})
+    (spec_dir / "test_plan.json").write_text(json.dumps(plan))
+
+    with patch("agents.evaluator._resolve_evaluator_client") as sdk_client:
+        ok = await run_evaluator(spec_dir, project_dir)
+
+    assert ok is False
+    sdk_client.assert_not_called()
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["status"] == "evaluator_failed"
+    assert status["phase"] == "evaluator_initial_unsupported_language"
+    assert "swift" in status["evaluator_error"]
+    assert "#1340" in status["evaluator_error"]
+
+
 # ── Plan loading failures ──────────────────────────────────────────────
 
 

@@ -111,6 +111,12 @@ def test_unsupported_language_raises():
         get_tool_for_lane("brainfuck", "unit")
 
 
+@pytest.mark.parametrize("manifest", [None, {"verify_commands": ["swift test"]}])
+def test_swift_is_explicitly_unsupported(manifest):
+    with pytest.raises(UnsupportedLanguageError, match="#1340"):
+        get_tool_for_lane("Swift", "unit", manifest=manifest)
+
+
 def test_unknown_lane_returns_none_for_known_language():
     """Unknown lane on known language is a soft None, not an exception."""
     assert get_tool_for_lane("python", "telepathy") is None
@@ -129,17 +135,10 @@ def test_deprecated_v01_lane_returns_none():
 
 
 def test_languages_supporting_lane_mvp_only_for_unit():
-    """MVP unit lanes: the v0.2 pair plus the descriptor-declared languages.
-
-    swift and kotlin joined via tools/runners/languages/*.yaml, and their unit
-    lanes are marked available because they were RUN on this substrate (a
-    minimal SPM package and Gradle module, inside the provisioner-generated
-    Nix shells), not because a table says so.
-    """
+    """MVP unit lanes: the v0.2 pair plus supported descriptor languages."""
     assert set(languages_supporting_lane("unit", mvp_only=True)) == {
         "python",
         "typescript",
-        "swift",
         "kotlin",
     }
 
@@ -155,7 +154,6 @@ def test_languages_supporting_lane_unfiltered_for_unit():
         "python",
         "typescript",
         "java",
-        "swift",
         "kotlin",
     }
 
