@@ -529,7 +529,7 @@ class KubeJobSandbox:
         def discard() -> None:
             for key in (in_key, out_ref.key()):
                 with contextlib.suppress(Exception):  # cleanup is best effort
-                    client.delete_object(Bucket=bucket, Key=key)
+                    client.delete_object(Bucket=bucket, Key=key)  # type: ignore[attr-defined]
 
         return [wrapped], uri, extra_env, collect, discard
 
@@ -584,7 +584,7 @@ class KubeJobSandbox:
         self,
         name: str,
         commands: list[str],
-        timeout: int,
+        deadline_s: int,
         workdir: str | None,
         workspace_uri: str | None,
         extra_env: list[dict[str, str]],
@@ -602,7 +602,7 @@ class KubeJobSandbox:
             self.image,
             commands,
             namespace=self.namespace,
-            timeout=timeout,
+            timeout=deadline_s,
             **({} if workspace_uri else self._repo_kw(workdir)),
             workspace_uri=workspace_uri,
             **self.manifest_kw,
@@ -617,7 +617,7 @@ class KubeJobSandbox:
             await batch.create_namespaced_job(self.namespace, manifest)
             succeeded = False
             terminal = False
-            for _ in range(max(1, timeout // 3)):
+            for _ in range(max(1, deadline_s // 3)):
                 st = (await batch.read_namespaced_job(name, self.namespace)).status
                 if st and st.succeeded:
                     succeeded = terminal = True
