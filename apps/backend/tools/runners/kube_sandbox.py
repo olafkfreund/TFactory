@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextlib
 import logging
 import os
 import uuid
@@ -395,6 +396,19 @@ def pvc_subpath(workdir: str | None, data_root: str = _DEFAULT_DATA_ROOT) -> str
     return norm[len(root) :]
 
 
+def _collected(
+    cleanup: Callable[[], None] | None, succeeded: bool, output: str
+) -> JobRunResult:
+    """Bring a packed lane's results back before grading it (#1391)."""
+    if cleanup:
+        try:
+            cleanup()
+        except Exception as exc:  # noqa: BLE001 - never grade missing evidence
+            output = f"{output}\n[kube-sandbox] lane results not collected: {exc}"
+            return JobRunResult(False, 1, output.strip())
+    return JobRunResult(succeeded, 0 if succeeded else 1, output)
+
+
 class KubeJobSandbox:
     def __init__(
         self,
@@ -473,10 +487,8 @@ class KubeJobSandbox:
                 )
             ]
         except Exception:
-            try:
+            with contextlib.suppress(Exception):  # best-effort cleanup
                 store._client().delete_object(Bucket=bucket, Key=in_key)  # type: ignore[attr-defined]
-            except Exception:  # noqa: BLE001 - best-effort cleanup after presign failure
-                pass
             raise
         # Push back even when the lane command fails, or its evidence dies with emptyDir.
         wrapped = (
@@ -507,10 +519,22 @@ class KubeJobSandbox:
         finally:
             # A failed restore must not keep either short-lived lane archive.
             for key in (in_key, out_key):
-                try:
+                with contextlib.suppress(Exception):  # cleanup is best effort
                     store._client().delete_object(Bucket=bucket, Key=key)  # type: ignore[attr-defined]
-                except Exception:  # noqa: BLE001 - cleanup is best effort
-                    pass
+
+    def _repo_kw(self, workdir: str | None) -> dict:
+        repo_kw: dict = {}
+        if self.repo_pvc:
+            subpath = pvc_subpath(workdir, self.data_root)
+            if subpath is not None:
+                repo_kw = {"repo_pvc": self.repo_pvc, "repo_subpath": subpath}
+            else:
+                logger.info(
+                    "[kube-sandbox] workdir %r outside data root %r; toolchain-only",
+                    workdir,
+                    self.data_root,
+                )
+        return repo_kw
 
     async def _run_async(
         self, commands: list[str], timeout: int, workdir: str | None
@@ -534,17 +558,7 @@ class KubeJobSandbox:
         except Exception:  # noqa: BLE001 - dev/test fallback
             await config.load_kube_config()
 
-        repo_kw: dict = {}
-        if self.repo_pvc and not workspace_uri:
-            subpath = pvc_subpath(workdir, self.data_root)
-            if subpath is not None:
-                repo_kw = {"repo_pvc": self.repo_pvc, "repo_subpath": subpath}
-            else:
-                logger.info(
-                    "[kube-sandbox] workdir %r outside data root %r; toolchain-only",
-                    workdir,
-                    self.data_root,
-                )
+        repo_kw = {} if workspace_uri else self._repo_kw(workdir)
         manifest = build_job_manifest(
             name,
             self.image,
@@ -602,13 +616,7 @@ class KubeJobSandbox:
                 )
                 diag = _describe_pod(pod) if pod is not None else "no pod created"
                 output = f"{output}\n[kube-sandbox] {note}; {diag}".strip()
-            if cleanup:
-                try:
-                    cleanup()
-                except Exception as exc:  # noqa: BLE001 - never grade missing evidence
-                    output = f"{output}\n[kube-sandbox] lane results not collected: {exc}".strip()
-                    return JobRunResult(False, 1, output)
-            return JobRunResult(succeeded, 0 if succeeded else 1, output)
+            return _collected(cleanup, succeeded, output)
         finally:
             try:
                 await batch.delete_namespaced_job(
