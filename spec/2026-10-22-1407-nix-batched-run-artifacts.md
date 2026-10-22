@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1407
 intent: intent/2026-10-22-1407-nix-batched-run-artifacts.md
 ---
