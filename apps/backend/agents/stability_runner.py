@@ -122,6 +122,8 @@ _ASSERTION_MARKERS = (
 # error / collection error, 5 = no tests collected.
 _PYTEST_COLLECTION_ERROR_CODE = 2
 _PYTEST_TEST_FAILURE_CODE = 1
+# #1401: pytest never exits 126/127; only the shell does, so the test never ran.
+_SHELL_NOT_RUN_CODES = (126, 127)
 
 
 def classify_pytest_failure(stdout: str, returncode: int) -> str:
@@ -139,8 +141,8 @@ def classify_pytest_failure(stdout: str, returncode: int) -> str:
           the endpoint test failed against a down app. Infra, not a wrong
           subject — takes precedence over the connection-error noise below.
         - ``"environment"`` — the test never reached the subject because its
-          own environment is missing: the text contains
-          ``KeyError: 'TFACTORY_TARGET_URL'`` (either quoting style).
+          environment was unusable: a known environment marker appeared, or
+          the shell exited 126/127 before the test runner could execute.
         - ``"import"`` — a collection/import error: the text contains one of
           ``ModuleNotFoundError``, ``ImportError``, ``No module named``,
           ``error during collection``, ``errors during collection``,
@@ -156,6 +158,8 @@ def classify_pytest_failure(stdout: str, returncode: int) -> str:
     if _APP_NOT_HEALTHY_MARKER in text:
         return "app_not_healthy"
     if any(marker in text for marker in _ENVIRONMENT_MARKERS):
+        return "environment"
+    if returncode in _SHELL_NOT_RUN_CODES:
         return "environment"
     if returncode == _PYTEST_COLLECTION_ERROR_CODE or any(
         marker in text for marker in _IMPORT_MARKERS
