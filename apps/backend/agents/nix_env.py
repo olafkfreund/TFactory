@@ -2083,8 +2083,8 @@ def _git_tracks(checkout: Path, name: str) -> bool | None:
     Any non-zero exit (untracked, ignored, not a git repo) is "not tracked".
     """
     try:
-        result = subprocess.run(
-            [
+        result = subprocess.run(  # noqa: S603 - fixed git argv
+            [  # noqa: S607 - git from PATH
                 "git",
                 "-c",
                 "safe.directory=*",
