@@ -457,3 +457,130 @@ def test_the_resolved_ttl_reaches_the_manifest(monkeypatch):
     monkeypatch.setenv("TFACTORY_SANDBOX_JOB_TTL", "1800")
     manifest = build_job_manifest("tfsbx-x", "img:tag", ["true"])
     assert manifest["spec"]["ttlSecondsAfterFinished"] == 1800
+
+
+# ─── #1391: packed verify — nested lanes get their workdir by object store ────
+
+
+class _LaneS3:
+    """In-memory boto3 S3 client: just what the packed lane path calls."""
+
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+
+    def put_object(self, *, Bucket, Key, Body, **_extra):  # noqa: N803 - boto3 names
+        self.objects[Key] = Body
+
+    def get_object(self, *, Bucket, Key):  # noqa: N803 - boto3 names
+        import io
+
+        return {"Body": io.BytesIO(self.objects[Key])}
+
+    def delete_object(self, *, Bucket, Key):  # noqa: N803 - boto3 names
+        self.objects.pop(Key, None)
+
+    def generate_presigned_url(self, op, Params, ExpiresIn):  # noqa: N803 - boto3 names
+        return f"https://signed/{op}/{Params['Key']}"
+
+
+def _fake_kube(monkeypatch, s3: _LaneS3, created: list[dict]):
+    """Fake kubernetes_asyncio whose Job 'runs' the lane: it reads the packed
+    workdir, writes a junit file into it, and PUTs the tree to the out URL."""
+    import io
+    import sys
+    import tarfile
+    import types
+
+    from tools.runners.artifact_store import _safe_extract
+
+    class _Batch:
+        async def create_namespaced_job(self, ns, manifest):
+            created.append(manifest)
+            env = {
+                e["name"]: e["value"]
+                for e in manifest["spec"]["template"]["spec"]["containers"][0]["env"]
+            }
+            in_key = env["TF_LANE_IN_URL"].split("/get_object/", 1)[1]
+            out_key = env["TF_LANE_OUT_URL"].split("/put_object/", 1)[1]
+            import tempfile
+            from pathlib import Path
+
+            with tempfile.TemporaryDirectory() as d:
+                _safe_extract(s3.objects[in_key], Path(d))
+                assert (Path(d) / "sut.py").read_text() == "x = 1\n"
+                stage = Path(d) / ".tf_pytest"
+                stage.mkdir()
+                (stage / "junit.xml").write_text("<testsuite/>")
+                buf = io.BytesIO()
+                with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+                    tar.add(d, arcname=".")
+                s3.objects[out_key] = buf.getvalue()
+
+        async def read_namespaced_job(self, name, ns):
+            return types.SimpleNamespace(status=types.SimpleNamespace(succeeded=1))
+
+        async def delete_namespaced_job(self, *a, **k):
+            return None
+
+    class _Core:
+        async def list_namespaced_pod(self, *a, **k):
+            return types.SimpleNamespace(items=[])
+
+    class _Api:
+        async def close(self):
+            return None
+
+    async def _load_kube_config():
+        return None
+
+    def _incluster():
+        raise RuntimeError("not in cluster")
+
+    mod = types.ModuleType("kubernetes_asyncio")
+    mod.client = types.SimpleNamespace(
+        ApiClient=_Api, BatchV1Api=lambda api: _Batch(), CoreV1Api=lambda api: _Core()
+    )
+    mod.config = types.SimpleNamespace(
+        load_incluster_config=_incluster, load_kube_config=_load_kube_config
+    )
+    monkeypatch.setitem(sys.modules, "kubernetes_asyncio", mod)
+
+
+def test_packed_lane_has_no_pvc_and_collects_results(monkeypatch, tmp_path):
+    from tools.runners.artifact_store import ArtifactStore
+
+    s3 = _LaneS3()
+    monkeypatch.setenv("S3_ENDPOINT", "http://minio.invalid:9000")
+    monkeypatch.setattr(ArtifactStore, "_client", lambda self: s3)
+    created: list[dict] = []
+    _fake_kube(monkeypatch, s3, created)
+    workdir = tmp_path / "_nixrun-abc"
+    workdir.mkdir()
+    (workdir / "sut.py").write_text("x = 1\n")
+
+    sb = KubeJobSandbox("img", repo_pvc=None, pack_workdir=True)
+    res = sb.run(["pytest -q"], workdir=str(workdir), timeout=6)
+
+    assert res.ok, res.output
+    pod = created[0]["spec"]["template"]["spec"]
+    assert all("persistentVolumeClaim" not in v for v in pod.get("volumes", []))
+    assert {"name": "repo", "emptyDir": {}} in pod["volumes"]
+    cmd = pod["containers"][0]["command"][2]
+    assert "( pytest -q )" in cmd and "exit $rc" in cmd
+    # the lane's results came back to where the caller reads them
+    assert (workdir / ".tf_pytest" / "junit.xml").read_text() == "<testsuite/>"
+    # both short-lived lane archives are cleaned up
+    assert s3.objects == {}
+
+
+def test_packed_lane_without_object_store_fails_without_a_job(monkeypatch, tmp_path):
+    monkeypatch.delenv("S3_ENDPOINT", raising=False)
+    sb = KubeJobSandbox("img", pack_workdir=True)
+    res = sb.run(["true"], workdir=str(tmp_path), timeout=6)
+    assert not res.ok and "lane pack failed" in res.output
+
+
+def test_unpacked_sandbox_keeps_pvc_co_mount_and_no_pack():
+    sb = KubeJobSandbox("img", repo_pvc="tfactory-data")
+    assert sb.pack_workdir is False
+    assert sb.with_manifest_kw(service_account="x").repo_pvc == "tfactory-data"

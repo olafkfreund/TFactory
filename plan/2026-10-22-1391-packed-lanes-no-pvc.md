@@ -71,3 +71,14 @@ Approved decisions carried from the spec:
 
 Revert the PR. With `TFACTORY_PACK_WORKSPACE` off (the deployed default) none of
 the new code paths run.
+
+## Deviations (recorded with the code)
+
+- Step 3: `_collect_lane` takes the input key as a third argument
+  (`_collect_lane(workdir, out_uri, in_key)`) instead of re-deriving it from the
+  output key, so cleanup never depends on the key layout.
+- Step 4: the kube_sandbox test drives the whole `run()` through a fake
+  `kubernetes_asyncio` whose Job unpacks the input, writes a junit file and
+  uploads the tree, so "results still collected" is checked end to end.
+- Steps 1-3 were written by the coder (codex); step 4 and the step-3 cleanup
+  simplification by the session.
