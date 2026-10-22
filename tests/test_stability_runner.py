@@ -422,6 +422,18 @@ def test_classify_environment_double_quoted_marker() -> None:
     assert classify_pytest_failure(text, 1) == "environment"
 
 
+@pytest.mark.parametrize("returncode", [126, 127])
+def test_classify_shell_failure_before_test_runner(returncode: int) -> None:
+    assert (
+        classify_pytest_failure("python: command not found", returncode)
+        == "environment"
+    )
+
+
+def test_classify_app_not_healthy_precedes_shell_failure() -> None:
+    assert classify_pytest_failure("__TF_APP_NOT_HEALTHY__", 127) == "app_not_healthy"
+
+
 def test_classify_worktree_absent_is_not_covered() -> None:
     """The /tmp/.worktree shape raises a genuine AssertionError on
     author-chosen text — no marker separates it from a real failure without

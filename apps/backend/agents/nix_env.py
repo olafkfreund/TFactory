@@ -7,9 +7,9 @@ project checkout so the lane runner can ``nix develop /work#default -c
 vendored ``nix_provisioner`` (the single source of truth), so the verify env
 matches the build env declared in the same contract — no drift.
 
-If the repo already carries a ``flake.nix`` and ``provisioning.generated`` is
-False, that one is respected (the repo owns its env); we only generate when the
-planner marked the manifest as generated or no flake exists.
+If the repo tracks a ``flake.nix`` and ``provisioning.generated`` is False,
+that one is respected (the repo owns its env); we generate when the planner
+marked the manifest as generated or no tracked flake exists.
 
 This module only PREPARES the flake + commands; actually running them in a
 hermetic sandbox is the Job backend's job (TFactory pods have no container
@@ -19,6 +19,7 @@ runtime — the lane runs as a k8s Job using the tfactory-runner-nix image).
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import itertools
 import json
 import logging
@@ -26,6 +27,7 @@ import os
 import re
 import shlex
 import shutil
+import subprocess
 import tempfile
 import threading
 import time
@@ -651,7 +653,7 @@ def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve kno
             ),
             dirs_exist_ok=True,
         )
-        plan = materialize_flake(spec_dir, scratch, env=env)
+        plan = materialize_flake(spec_dir, scratch, env=env, owner_dir=src)
         if plan is None:
             return None
         pd = scratch
@@ -1006,6 +1008,7 @@ def run_gotest_lane_via_nix(
         res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)
     finally:
         (pd / _JOB_SCRIPT).unlink(missing_ok=True)
+        _drop_generated_flake(plan)
 
     code = _parse_exit_marker(res.stdout, "__GOTEST_EXIT=")
     junit = stage / "junit.xml"
@@ -1217,6 +1220,7 @@ def run_gradle_lane_via_nix(  # noqa: PLR0913 - explicit keyword-only lane knobs
         res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)
     finally:
         (pd / _JOB_SCRIPT).unlink(missing_ok=True)
+        _drop_generated_flake(plan)
 
     junit = stage / "junit.xml"
     code = _parse_exit_marker(res.stdout, "__GRADLE_EXIT=")
@@ -1315,6 +1319,7 @@ def run_maven_lane_via_nix(
         res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)
     finally:
         (pd / _JOB_SCRIPT).unlink(missing_ok=True)
+        _drop_generated_flake(plan)
 
     junit = stage / "junit.xml"
     code = _parse_exit_marker(res.stdout, "__MAVEN_EXIT=")
@@ -1506,6 +1511,7 @@ def run_jest_lane_via_nix(
         res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)
     finally:
         (pd / _JOB_SCRIPT).unlink(missing_ok=True)
+        _drop_generated_flake(plan)
         # Leave the worktree as we found it: a staged copy left behind would be
         # picked up by the NEXT lane as if the repo shipped it.
         if staged is not None:
@@ -1864,6 +1870,7 @@ def run_browser_evidence(
     n_specs = _stage_browser_specs(spec_dir, project_dir)
     if n_specs == 0:
         _log.info("run_browser_evidence: no generated *.spec.ts to run; skipping")
+        _drop_generated_flake(plan)
         return {
             "ok": False,
             "output_tail": "no browser specs",
@@ -1906,6 +1913,7 @@ def run_browser_evidence(
     finally:
         for f in (_JOB_SCRIPT, _PW_CONFIG):
             (Path(project_dir) / f).unlink(missing_ok=True)
+        _drop_generated_flake(plan)
         import shutil as _sh
 
         _sh.rmtree(Path(project_dir) / _E2E_STAGE, ignore_errors=True)
@@ -2071,12 +2079,69 @@ def is_nix_environment(env: dict | None) -> bool:
     return (env.get("provisioning") or {}).get("method") == "nix"
 
 
+def _git_tracks(checkout: Path, name: str) -> bool | None:
+    """Whether git tracks ``name`` in ``checkout``; None when git cannot run.
+
+    Any non-zero exit (untracked, ignored, not a git repo) is "not tracked".
+    """
+    try:
+        result = subprocess.run(  # noqa: S603 - fixed git argv
+            [  # noqa: S607 - git from PATH
+                "git",
+                "-c",
+                "safe.directory=*",
+                "-C",
+                str(checkout),
+                "ls-files",
+                "--error-unmatch",
+                "--",
+                name,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        _log.warning("nix_env: git cannot inspect %s in %s: %s", name, checkout, exc)
+        return None
+    return result.returncode == 0
+
+
+def flake_is_repo_owned(project_dir: Path, owner_dir: Path | None = None) -> bool:
+    """A ``flake.nix`` is the repo's only when git tracks it (TFactory#1400).
+
+    An untracked one is a generated fallback some earlier lane left behind and
+    must not be honoured as committed. ``owner_dir`` is the git checkout to ask
+    when ``project_dir`` is a ``.git``-less scratch copy. If git cannot run at
+    all, fall back to existence rather than overwrite what may be committed.
+    """
+    if not (Path(project_dir) / _FLAKE).exists():
+        return False
+    tracked = _git_tracks(Path(owner_dir or project_dir), _FLAKE)
+    return True if tracked is None else tracked
+
+
+def _drop_generated_flake(plan: NixPlan) -> None:
+    """Remove a generated flake/lock from the checkout once the lane is done.
+
+    Leaves anything git tracks: a ``generated`` manifest may have overwritten a
+    committed flake, and deleting it would dirty the checkout worse.
+    """
+    if not plan.generated:
+        return
+    for name in (_FLAKE, _FLAKE_LOCK):
+        if _git_tracks(plan.flake_dir, name) is False:
+            (plan.flake_dir / name).unlink(missing_ok=True)
+
+
 def materialize_flake(
     spec_dir: Path,
     project_dir: Path,
     *,
     env: dict | None = None,
     fallback_env: dict[str, Any] | None = None,
+    owner_dir: Path | None = None,
 ) -> NixPlan | None:
     """Write ``flake.nix`` into ``project_dir`` from the contract environment.
 
@@ -2106,11 +2171,16 @@ def materialize_flake(
         # (run_browser_evidence builds its own Playwright command). The plan exists
         # to say "there is a usable flake here", which is exactly what the caller
         # needs to decide.
-        if (Path(project_dir) / _FLAKE).exists():
+        if flake_is_repo_owned(project_dir, owner_dir):
+            digest = hashlib.sha256(
+                (Path(project_dir) / _FLAKE).read_bytes()
+            ).hexdigest()[:12]
             _log.info(
-                "nix_env: no contract nix env, honouring repo-owned %s in %s",
+                "nix_env: no contract nix env, honouring repo-owned %s in %s "
+                "origin=git-tracked sha256=%s",
                 _FLAKE,
                 project_dir,
+                digest,
             )
             return NixPlan(
                 flake_dir=Path(project_dir),
@@ -2136,10 +2206,16 @@ def materialize_flake(
 
     m = Manifest.from_contract(env)
     flake_path = Path(project_dir) / _FLAKE
-    repo_has_flake = flake_path.exists()
+    repo_has_flake = flake_is_repo_owned(project_dir, owner_dir)
 
     if repo_has_flake and not m.provisioning_generated:
-        _log.info("nix_env: respecting repo-owned %s (manifest not generated)", _FLAKE)
+        digest = hashlib.sha256(flake_path.read_bytes()).hexdigest()[:12]
+        _log.info(
+            "nix_env: respecting repo-owned %s (manifest not generated) "
+            "origin=git-tracked sha256=%s",
+            _FLAKE,
+            digest,
+        )
     else:
         flake_path.write_text(
             generate_flake(env, project_dir=project_dir), encoding="utf-8"
@@ -2149,7 +2225,11 @@ def materialize_flake(
         lock = generate_lock()
         if lock is not None:
             (Path(project_dir) / _FLAKE_LOCK).write_text(lock, encoding="utf-8")
-        _log.info("nix_env: wrote generated %s for %s", _FLAKE, spec_dir.name)
+        _log.info(
+            "nix_env: wrote generated %s for %s origin=generated",
+            _FLAKE,
+            spec_dir.name,
+        )
 
     return NixPlan(
         flake_dir=Path(project_dir),

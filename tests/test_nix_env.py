@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 from agents.nix_env import (
@@ -37,6 +38,23 @@ _BROWSER_ENV = {
     "provisioning": {"method": "nix", "ref": "flake.nix", "generated": True},
     "network": "restricted",
 }
+
+
+def _commit_flake(project: Path, text: str) -> None:
+    """Write ``flake.nix`` and COMMIT it: only a tracked flake is repo-owned (#1400)."""
+    (project / "flake.nix").write_text(text, encoding="utf-8")
+    git = [
+        "git",
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "-c",
+        "commit.gpgsign=false",
+    ]
+    subprocess.run([*git, "init", "-q", str(project)], check=True)
+    subprocess.run([*git, "-C", str(project), "add", "flake.nix"], check=True)
+    subprocess.run([*git, "-C", str(project), "commit", "-qm", "flake"], check=True)
 
 
 def _write_contract(spec_dir: Path, env: dict | None) -> None:
@@ -488,6 +506,7 @@ def test_run_gotest_lane_via_nix_result_shape(tmp_path, monkeypatch):
             captured["commands"] = commands
             captured["timeout"] = timeout
             captured["script"] = (Path(workdir) / "_tf_nix_job.sh").read_text()
+            captured["flake"] = (Path(workdir) / "flake.nix").read_text()
             # Simulate the Job writing JUnit + Cobertura into the staging dir.
             stage = Path(workdir) / ".tf_gotest"
             stage.mkdir(parents=True, exist_ok=True)
@@ -506,7 +525,7 @@ def test_run_gotest_lane_via_nix_result_shape(tmp_path, monkeypatch):
     # The Job ran the proven `nix develop path:/work#default` recipe.
     assert captured["commands"][0].startswith("nix develop path:/work#default")
     # The synthesized flake carries the go toolchain + tools (PR-A).
-    flake = (project / "flake.nix").read_text()
+    flake = captured["flake"]
     assert "pkgs.go" in flake and "gotestsum" in flake, flake
     # The job cd'd into the module subdir and ran gotestsum over ./... + cobertura.
     script = captured["script"]
@@ -551,7 +570,7 @@ def test_repo_owned_flake_respected_when_not_generated(tmp_path):
     _write_contract(spec, env)
     project = tmp_path / "proj"
     project.mkdir()
-    (project / "flake.nix").write_text("# repo-owned, hand-written\n")
+    _commit_flake(project, "# repo-owned, hand-written\n")
 
     plan = materialize_flake(spec, project, env=env)
     assert plan is not None and plan.generated is False
@@ -843,7 +862,7 @@ def test_materialize_does_not_write_lock_for_repo_owned_flake(tmp_path):
     _write_contract(spec, env)
     project = tmp_path / "proj"
     project.mkdir()
-    (project / "flake.nix").write_text("{ outputs = _: {}; }\n")  # repo-owned
+    _commit_flake(project, "{ outputs = _: {}; }\n")  # repo-owned
 
     materialize_flake(spec, project, env=env)
     assert not (project / "flake.lock").exists()  # we didn't clobber/invent one
@@ -965,7 +984,7 @@ def test_repo_owned_flake_without_contract_env_is_honoured(tmp_path):
     project = tmp_path / "proj"
     project.mkdir()
     committed = '{ description = "repo-owned"; }\n'
-    (project / "flake.nix").write_text(committed, encoding="utf-8")
+    _commit_flake(project, committed)
 
     plan = materialize_flake(spec, project, env=None)
     assert plan is not None, "a committed flake.nix must count as a nix environment"
@@ -1051,7 +1070,7 @@ def test_a_repo_owned_flake_still_beats_the_fallback(tmp_path):
     project = tmp_path / "proj"
     project.mkdir()
     committed = '{ description = "repo-owned"; }\n'
-    (project / "flake.nix").write_text(committed, encoding="utf-8")
+    _commit_flake(project, committed)
 
     plan = materialize_flake(
         spec, project, env=None, fallback_env=_BROWSER_FALLBACK_ENV
@@ -1247,6 +1266,7 @@ def test_run_gradle_lane_via_nix_result_shape(tmp_path, monkeypatch):
             captured["commands"] = commands
             captured["timeout"] = timeout
             captured["script"] = (Path(workdir) / "_tf_nix_job.sh").read_text()
+            captured["flake"] = (Path(workdir) / "flake.nix").read_text()
             stage = Path(workdir) / ".tf_gradle"
             (stage / "junit.xml").write_text(
                 '<testsuites><testsuite name="CalcTest" tests="3" failures="0" '
@@ -1261,7 +1281,7 @@ def test_run_gradle_lane_via_nix_result_shape(tmp_path, monkeypatch):
     assert res.coverage_xml_path is None
     assert captured["commands"][0].startswith("nix develop path:/work#default")
     assert captured["timeout"] == 900
-    flake = (project / "flake.nix").read_text()
+    flake = captured["flake"]
     assert "pkgs.gradle" in flake and "pkgs.jdk21" in flake, flake
     script = captured["script"]
     # Built from a writable copy: /work is read-only to the Job's uid.
@@ -1466,9 +1486,11 @@ def test_java_flake_takes_the_toolchain_from_the_provisioner(tmp_path, monkeypat
     from agents.nix_env import run_maven_lane_via_nix
 
     spec, project, _ = _maven_project(tmp_path)
+    captured = {}
 
     class _FakeSandbox:
         def run(self, commands, *, workdir=None, timeout=600):
+            captured["flake"] = (Path(workdir) / "flake.nix").read_text()
             stage = Path(workdir) / ".tf_maven"
             (stage / "junit.xml").write_text(
                 '<testsuites><testsuite name="CalcTest" tests="3" failures="0" '
@@ -1478,7 +1500,7 @@ def test_java_flake_takes_the_toolchain_from_the_provisioner(tmp_path, monkeypat
 
     monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: _FakeSandbox())
     assert run_maven_lane_via_nix(spec, project) is not None
-    flake = (project / "flake.nix").read_text()
+    flake = captured["flake"]
     assert "pkgs.maven" in flake and "pkgs.jdk21" in flake, flake
 
 
@@ -1697,3 +1719,93 @@ def test_nix_runner_from_env_unpacked_keeps_pvc(monkeypatch):
     sb = nix_runner_from_env()
     assert sb is not None and sb.repo_pvc == "tfactory-data"
     assert sb.pack_workdir is False
+
+
+# ─── TFactory#1400: repo-owned means git-TRACKED ─────────────────────────────
+
+
+def _git_checkout(project: Path) -> None:
+    """A real checkout with one committed file and no flake."""
+    git = [
+        "git",
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "-c",
+        "commit.gpgsign=false",
+    ]
+    project.mkdir(parents=True, exist_ok=True)
+    (project / "README.md").write_text("x\n")
+    subprocess.run([*git, "init", "-q", str(project)], check=True)
+    subprocess.run([*git, "-C", str(project), "add", "README.md"], check=True)
+    subprocess.run([*git, "-C", str(project), "commit", "-qm", "init"], check=True)
+
+
+def test_an_untracked_generated_flake_is_not_honoured_as_repo_owned(tmp_path):
+    """The live bug: a Node-only fallback flake left untracked in the checkout was
+    read as the repo's committed flake, so the pytest lane had no python (exit 127)."""
+    from agents.nix_env import _JEST_FALLBACK_ENV
+
+    spec = tmp_path / "specs" / "1400"
+    spec.mkdir(parents=True)
+    env = {**_UNIT_ENV, "provisioning": {"method": "nix", "generated": False}}
+    project = tmp_path / "proj"
+    _git_checkout(project)
+    node_only = generate_flake(_JEST_FALLBACK_ENV)
+    (project / "flake.nix").write_text(node_only)  # untracked leftover
+
+    plan = materialize_flake(spec, project, env=env)
+    assert plan is not None and plan.generated is True
+    assert (project / "flake.nix").read_text() != node_only
+    assert "python" in (project / "flake.nix").read_text()
+    # Without a contract env it is not a nix env at all.
+    (project / "flake.nix").write_text(node_only)
+    assert materialize_flake(spec, project, env=None) is None
+
+
+def test_a_flake_tracked_in_the_source_is_honoured_in_a_gitless_scratch(tmp_path):
+    """The pytest lane materialises into a .git-less scratch copy: ask the source."""
+    spec = tmp_path / "specs" / "1400"
+    spec.mkdir(parents=True)
+    env = {**_UNIT_ENV, "provisioning": {"method": "nix", "generated": False}}
+    project = tmp_path / "proj"
+    project.mkdir()
+    _commit_flake(project, "# committed\n")
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    (scratch / "flake.nix").write_text("# committed\n")
+
+    plan = materialize_flake(spec, scratch, env=env, owner_dir=project)
+    assert plan is not None and plan.generated is False
+    assert (scratch / "flake.nix").read_text() == "# committed\n"
+
+
+def test_the_jest_fallback_leaves_the_checkout_git_status_clean(tmp_path, monkeypatch):
+    """Generated flakes are lane-transient: present for the Job, gone afterwards."""
+    from agents.nix_env import run_jest_lane_via_nix
+
+    spec = tmp_path / "specs" / "1400"
+    (spec / "tests").mkdir(parents=True)
+    _write_contract(spec, None)
+    test_file = spec / "tests" / "x.test.js"
+    test_file.write_text("// t")
+    project = tmp_path / "proj"
+    _git_checkout(project)
+    seen = {}
+
+    class _FakeSandbox:
+        def run(self, commands, *, workdir=None, timeout=600):
+            seen["flake"] = (Path(workdir) / "flake.nix").read_text()
+            return JobRunResult(ok=True, exit_code=0, output="__PYTEST_EXIT=0\n")
+
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: _FakeSandbox())
+    assert run_jest_lane_via_nix(test_file, project, spec) is not None
+    assert "nodejs" in seen["flake"]  # the Job saw the generated flake
+    status = subprocess.run(
+        ["git", "-C", str(project), "status", "--porcelain"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert status == "", status
