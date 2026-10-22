@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1391
 spec: spec/2026-10-22-1391-packed-lanes-no-pvc.md
 ---
