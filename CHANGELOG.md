@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+## 0.9.32 — security floors, JVM grading per class, and Swift says it is unsupported (2026-10-22)
+
+- **Image security floors (PR #1380).** The runtime image floors `curl`,
+  `libcurl-openssl4` and `ca-certificates-bundle` so the Trivy P0 gate passes
+  on the current base.
+- **`apk del` no longer pretends to remove `py3-pip-wheel` (#1350, PR #1388).**
+  python-3.14 depends on it, so apk refused and exited 0. It now ships
+  deliberately (its CVEs ride base-digest bumps), and the build asserts the pip
+  packages that are removed really are gone.
+- **Swift is explicitly not supported (#1340, PR #1389).** There is no
+  in-cluster Swift lane, so a Swift subtask is now refused with a clear reason
+  instead of looking supported.
+- **JVM tests are graded per class, with one stability pass per build root
+  (#1341, #1356, PR #1383).**
+- **The evaluator finds `.tfactory.yml` in the spec worktree when no snapshot
+  exists (#1347, #1343, PR #1385).**
+- **`rotate-root` runs through the async engine (#1336, #1355, PR #1384).**
+- **The liveness sweep summary names the deadline and max idle (#1342,
+  PR #1386).**
+- Dependency bumps: baked agent-CLI pins (PR #1151), dompurify, source-map-js,
+  brace-expansion, katex and mermaid, vite, vitest, GitHub Actions and CodeQL
+  (PRs #1360-#1364, #1381, #1382, #1387).
+
 ## 0.9.31 — a verdict names the commit it tested, and correlation keys name their repo (2026-10-17)
 
 - **`GET /api/tfactory/tasks/{spec_id}` returns `source_sha` (AIFactory#1766,
