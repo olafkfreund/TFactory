@@ -148,3 +148,42 @@ def test_kotlin_never_goes_through_the_pytest_nix_batch(
     assert len(bundles) == 1
     assert gradle_runs, "the Gradle lane must have run"
     assert bundles[0].stability is not None
+
+
+def test_kotlin_verdict_comes_from_its_own_class_not_the_build_exit(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """#1341: 2 real failures in one class rejected every Kotlin test."""
+    from agents.stability_runner import StabilityVerdict
+
+    spec_dir = tmp_path / "spec"
+    project_dir = tmp_path / "project"
+    subs = []
+    for stem in ("BlockTest", "ContactTest"):
+        st = _kotlin_subtask(f"st-{stem}")
+        st["files_to_create"] = [f"lanes/kotlin-core/src/test/kotlin/{stem}.kt"]
+        (spec_dir / st["files_to_create"][0]).parent.mkdir(parents=True, exist_ok=True)
+        (spec_dir / st["files_to_create"][0]).write_text(f"class {stem}\n")
+        subs.append(st)
+    junit = tmp_path / "junit.xml"
+    junit.write_text(
+        "<testsuites><testsuite tests='3' failures='2'>"
+        '<testcase name="a" classname="demo.BlockTest"><failure/></testcase>'
+        '<testcase name="b" classname="demo.BlockTest"><failure/></testcase>'
+        '<testcase name="c" classname="demo.ContactTest"/>'
+        "</testsuite></testsuites>"
+    )
+
+    def _fake(spec, proj, *, hint=None, **k):
+        return DockerRunResult(
+            returncode=1, stdout="2 failed", junit_xml_path=junit, argv=["gradle"]
+        )
+
+    monkeypatch.setattr("agents.nix_env.run_gradle_lane_via_nix", _fake)
+    kotlin = _completed_kotlin_subtasks(_plan(*subs))
+    bundles = _build_all_bundles(spec_dir, project_dir, [], [], [], [], [], kotlin)
+    got = {b.test_id: b.stability.verdict for b in bundles}
+    assert got == {
+        "st-BlockTest": StabilityVerdict.CONSISTENT_FAIL,
+        "st-ContactTest": StabilityVerdict.STABLE,
+    }

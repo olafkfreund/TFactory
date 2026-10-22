@@ -106,6 +106,8 @@ _IMPORT_MARKERS = (
 _ENVIRONMENT_MARKERS = (
     "KeyError: 'TFACTORY_TARGET_URL'",
     'KeyError: "TFACTORY_TARGET_URL"',
+    # #1343: the lane's Nix env failed to build -- no test code ran.
+    "Cannot build '/nix/store/",
 )
 
 _ASSERTION_MARKERS = (
