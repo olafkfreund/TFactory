@@ -12,7 +12,8 @@ language: java
 # coverage, the PIT mutation probe, mutation dispatch) is real and tested, and
 # valid on the docker-host substrate. frameworks/maven adds the IN-CLUSTER unit
 # lane (#1321); the two coexist the way jest and vitest do for TypeScript, and
-# the manifest signals (pom.xml vs build.gradle*) disambiguate.
+# the Planner picks maven because it declares source_extensions; at run time
+# the build markers (pom.xml vs build.gradle*) choose Maven or Gradle.
 lanes:
   - unit
   - api

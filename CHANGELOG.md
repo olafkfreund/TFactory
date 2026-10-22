@@ -2,6 +2,66 @@
 
 ## Unreleased
 
+## 0.9.31 — a verdict names the commit it tested, and correlation keys name their repo (2026-10-17)
+
+- **`GET /api/tfactory/tasks/{spec_id}` returns `source_sha` (AIFactory#1766,
+  PR #1378).** It is the commit the spec worktree was pinned to and verified,
+  read from `context/source.json`, or `null` when unknown. Additive. AIFactory's
+  merge gate compares it to the PR head, so a verdict for an older commit no
+  longer passes a newer one.
+- **Correlation keys are repo-scoped, `<repo>#<n>` (AIFactory#1775, PR #1377).**
+  With no contract key, the completion event and the hand-back fall back to
+  `<repo>#<n>` (prefixed `<provider>:` off GitHub) instead of a bare issue
+  number; a build-only AIFactory contract's `correlation_key` is kept; and
+  `task_control` reads `github_issue` from a qualified key. `/api/tfactory/tasks`
+  rows declare `correlation_key` and `created_at`, so a poll and an event share
+  a key and the newest task owns it (CFactory#484). CFactory accepts both key
+  formats since CFactory#487.
+
+## 0.9.30 — terminal states read as terminal everywhere (2026-10-15)
+
+- **Every terminal verify status reaches CFactory (#1366, PR #1372).** The
+  completion event was sent only from the Triager and the handback route, so a
+  run that ended earlier (`planner_failed`, `gen_functional_failed`,
+  `generated_empty`, `evaluator_failed`, or a checkout, reaper or orphan
+  `failed`) stayed pending in CFactory. The shared status writer now sends it
+  for every terminal status, and the notify never raises.
+- **A build interrupted by a restart stops showing `in_progress` (#1368, PR
+  #1375).** At startup, phases still `active` in `task_logs.json` are closed as
+  `failed` with an `interrupted` marker, behind the existing
+  `APP_INLINE_ORPHAN_RECONCILE_ENABLED` switch.
+- **MCP `task_status` derives `lane_progress` on read (#1369, PR #1373),** as
+  the portal already did, so after `evaluator_failed` it no longer reports the
+  all-`pending` value written at creation.
+- **`fix-stuck-tasks.py` never rewrites a terminal or unknown plan status
+  (Factory#3589, PR #1374).** `failed` was missing from its list, so a plan
+  closed as failed was revived as running. An unknown status is now reported
+  and left unchanged.
+- **The pipeline board gives `failed` and `generated_empty` terminal badges
+  (#1367, PR #1371).** `failed` showed as blue "in flight", and a reaped verify
+  now sits in the Report column.
+- CI: factory-github drift runs on every PR (Factory#3585, PR #1370), and the
+  path-filtered job no longer claims to be blocking (Factory#1026, PR #1359).
+  `factory_common` http and url_safety re-vendored from hub `2364589` (PR
+  #1358). Docs: six runner images are shared with PFactory (Factory#1003, PR
+  #1365).
+
+## 0.9.29 — Java runs in-cluster through Maven or Gradle, and environment failures stop blaming the subject (2026-10-08)
+
+- **Gradle-built Java runs `gradle test` in-cluster (Factory#3151, PR #1351).**
+  The Planner still pins `(java, maven, unit)`; at run time the Java runner
+  picks gradle only when the project has no `pom.xml` anywhere and does have a
+  Gradle build marker, adding `gradle` to that task's `system_packages` so only
+  Gradle-shaped Java pays its store cost. Every other case runs Maven as before.
+- **A failure that never reached the subject is `not_run` (#1344, PR #1348).**
+  Environmental failures were classified `assertion`, so the handback told
+  AIFactory the subject's behaviour was wrong about code no test had contacted.
+- **CI unblocked (PR #1349):** npm's own vendored brace-expansion and undici are
+  replaced in the image to clear three HIGH CVEs the P0 Trivy gate rejected, and
+  the `secrets` gate is repaired.
+- Docs: the maven descriptor header states how the Planner picks between maven
+  and junit for `java.unit` (PR #1352). Dependabot: base image and
+  github-actions group.
 - **Java's unit lane runs in-cluster through Maven (Factory#1321, PR #1333).**
   Java was where Kotlin was before 0.9.28 with one extra gap: `.java` mapped to
   no language, no acceptance-criteria token named Java, and the only JVM
