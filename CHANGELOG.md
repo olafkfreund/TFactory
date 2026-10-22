@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+## 0.9.33 — packed verify lanes stop riding the RWO PVC (2026-10-22)
+
+Both changes sit behind `TFACTORY_PACK_WORKSPACE`, which stays unset in this
+release, so default behaviour is unchanged. They prepare step 5 of #1160
+(drop `repo_pvc` so verify can run on any node).
+
+- **Packed verify lanes get their workdir through the object store, not the
+  RWO PVC (#1391, PR #1392).** In packed mode the verify Job no longer forwards
+  `TFACTORY_WORKSPACES_PVC`/`TFACTORY_DATA_ROOT` to its per-lane Nix Jobs. Each
+  lane packs its workdir, runs on an emptyDir using two single-object presigned
+  URLs (no S3 credentials in the lane), and its junit, coverage and screenshots
+  are restored into the verify Job's workdir through the safe extractor.
+- **Packed lanes are hardened (#1393, PR #1394).**
+  - Results that never came back are never a pass: the lane's exit markers are
+    neutralised and pytest/jest lanes grade as an infra `not_run`.
+  - Lane objects are always deleted, even when Job creation or polling raises,
+    and the output object carries the workspace lifecycle tag.
+  - The lane command runs under a reserved time budget so the result
+    push-back fits inside the Job deadline.
+
 ## 0.9.32 — security floors, JVM grading per class, and Swift says it is unsupported (2026-10-22)
 
 - **Image security floors (PR #1380).** The runtime image floors `curl`,

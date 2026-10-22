@@ -26,9 +26,13 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextlib
 import logging
 import os
+import re
+import shlex
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -394,6 +398,25 @@ def pvc_subpath(workdir: str | None, data_root: str = _DEFAULT_DATA_ROOT) -> str
     return norm[len(root) :]
 
 
+def _collected(
+    cleanup: Callable[[], None] | None, succeeded: bool, output: str
+) -> JobRunResult:
+    """Bring a packed lane's results back before grading it (#1391)."""
+    if cleanup:
+        try:
+            cleanup()
+        except Exception as exc:  # noqa: BLE001 - never grade missing evidence
+            output = re.sub(
+                r"^__[A-Z0-9_]+=", r"[not collected] \g<0>", output, flags=re.MULTILINE
+            )
+            output = (
+                f"{output}\n[kube-sandbox] lane results not collected: {exc}"
+                "\n__TF_LANE_NOT_COLLECTED__"
+            )
+            return JobRunResult(False, 1, output.strip())
+    return JobRunResult(succeeded, 0 if succeeded else 1, output)
+
+
 class KubeJobSandbox:
     def __init__(
         self,
@@ -402,12 +425,14 @@ class KubeJobSandbox:
         namespace: str = "factory",
         repo_pvc: str | None = None,
         data_root: str = _DEFAULT_DATA_ROOT,
+        pack_workdir: bool = False,
         **manifest_kw,
     ):
         self.image = image
         self.namespace = namespace
         self.repo_pvc = repo_pvc
         self.data_root = data_root
+        self.pack_workdir = pack_workdir
         self.manifest_kw = manifest_kw
 
     def with_manifest_kw(self, **overrides: object) -> KubeJobSandbox:
@@ -419,22 +444,106 @@ class KubeJobSandbox:
             namespace=self.namespace,
             repo_pvc=self.repo_pvc,
             data_root=self.data_root,
+            pack_workdir=self.pack_workdir,
             **{**self.manifest_kw, **overrides},
         )
         return clone
 
-    async def _run_async(
-        self, commands: list[str], timeout: int, workdir: str | None
-    ) -> JobRunResult:
-        from kubernetes_asyncio import client, config
+    def _pack_lane(
+        self, name: str, commands: list[str], workdir: str, timeout: int
+    ) -> tuple[
+        list[str], str, list[dict[str, str]], Callable[[], None], Callable[[], None]
+    ]:
+        from tools.runners.artifact_store import (  # noqa: PLC0415 - packed path only
+            ArtifactRef,
+            ArtifactStore,
+            StoreConfig,
+            pack_workspace,
+            parse_uri,
+        )
 
+        cfg = StoreConfig.from_env()
+        if not cfg.endpoint:
+            raise RuntimeError("S3_ENDPOINT is not set for packed lane")
+        store = ArtifactStore(cfg)
+        uri = pack_workspace(
+            store,
+            ArtifactRef("tfactory", name, "workspace", bucket=cfg.bucket),
+            workdir,
+        )
+        bucket, in_key = parse_uri(uri)
+        out_ref = ArtifactRef(
+            "tfactory",
+            f"{name}-out",
+            "workspace",
+            path="workspace.tar.gz",
+            bucket=bucket,
+        )
+        out_uri = out_ref.uri()
         try:
-            config.load_incluster_config()
-        except Exception:  # noqa: BLE001 - dev/test fallback
-            await config.load_kube_config()
+            client = store._client()
+            in_url = client.generate_presigned_url(  # type: ignore[attr-defined]
+                "get_object",
+                Params={"Bucket": bucket, "Key": in_key},
+                ExpiresIn=timeout + 600,
+            )
+            out_url = client.generate_presigned_url(  # type: ignore[attr-defined]
+                "put_object",
+                Params={
+                    "Bucket": bucket,
+                    "Key": out_ref.key(),
+                    "Tagging": "role=workspace",
+                },
+                ExpiresIn=timeout + 600,
+            )
+            extra_env = [
+                {"name": "TF_LANE_IN_URL", "value": in_url},
+                {"name": "TF_LANE_OUT_URL", "value": out_url},
+            ]
+        except Exception:
+            with contextlib.suppress(Exception):  # best-effort cleanup
+                store._client().delete_object(Bucket=bucket, Key=in_key)  # type: ignore[attr-defined]
+            raise
+        # Push back even when the lane command fails, or its evidence dies with emptyDir.
+        # #1393: the push-back shares activeDeadlineSeconds, so the lane gets less.
+        reserve = min(120, timeout // 4)
+        budget = max(1, timeout - reserve)
+        lane_command = shlex.quote(f"( {' && '.join(commands)} )")
+        tagging_header = (
+            "-H 'x-amz-tagging: role=workspace' "
+            if "x-amz-tagging=" not in out_url.lower()
+            else ""
+        )
+        wrapped = (
+            'set -e; curl -fsS "$TF_LANE_IN_URL" | tar -xz -C /work; '
+            f"set +e; timeout -k 10 {budget} bash -c {lane_command}; rc=$?; "
+            "find /work -type l -lname '/*' -delete; "
+            "tar -czf /tmp/tf_lane_out.tgz -C /work . && "
+            f'curl -fsS {tagging_header}-T /tmp/tf_lane_out.tgz "$TF_LANE_OUT_URL" || '
+            "echo '[kube-sandbox] lane push-back failed'; exit $rc"
+        )
 
-        name = "tfsbx-" + uuid.uuid4().hex[:10]
-        repo_kw: dict = {}
+        def collect() -> None:
+            self._collect_lane(workdir, out_uri)
+
+        def discard() -> None:
+            for key in (in_key, out_ref.key()):
+                with contextlib.suppress(Exception):  # cleanup is best effort
+                    client.delete_object(Bucket=bucket, Key=key)  # type: ignore[attr-defined]
+
+        return [wrapped], uri, extra_env, collect, discard
+
+    def _collect_lane(self, workdir: str, out_uri: str) -> None:
+        from tools.runners.artifact_store import (  # noqa: PLC0415 - packed path only
+            ArtifactStore,
+            unpack_workspace,
+        )
+
+        store = ArtifactStore()
+        unpack_workspace(store, out_uri, workdir)
+
+    def _repo_kw(self, workdir: str | None) -> dict[str, Any]:
+        repo_kw: dict[str, Any] = {}
         if self.repo_pvc:
             subpath = pvc_subpath(workdir, self.data_root)
             if subpath is not None:
@@ -445,22 +554,70 @@ class KubeJobSandbox:
                     workdir,
                     self.data_root,
                 )
+        return repo_kw
+
+    async def _run_async(
+        self, commands: list[str], timeout: int, workdir: str | None
+    ) -> JobRunResult:
+        name = "tfsbx-" + uuid.uuid4().hex[:10]
+        workspace_uri: str | None = None
+        extra_env: list[dict[str, str]] = []
+        collect: Callable[[], None] | None = None
+        discard: Callable[[], None] | None = None
+        if self.pack_workdir and workdir:
+            try:
+                commands, workspace_uri, extra_env, collect, discard = self._pack_lane(
+                    name, commands, workdir, timeout
+                )
+            except Exception as exc:  # noqa: BLE001 - fail before creating a Job
+                return JobRunResult(False, 1, f"[kube-sandbox] lane pack failed: {exc}")
+        try:
+            return await self._run_job(
+                name, commands, timeout, workdir, workspace_uri, extra_env, collect
+            )
+        finally:
+            # #1393: a raise from create/poll must not leak the lane archives.
+            if discard:
+                discard()
+
+    async def _run_job(  # noqa: PLR0913 - the packed-lane state threaded through
+        self,
+        name: str,
+        commands: list[str],
+        deadline_s: int,
+        workdir: str | None,
+        workspace_uri: str | None,
+        extra_env: list[dict[str, str]],
+        collect: Callable[[], None] | None,
+    ) -> JobRunResult:
+        from kubernetes_asyncio import client, config
+
+        try:
+            config.load_incluster_config()
+        except Exception:  # noqa: BLE001 - dev/test fallback
+            await config.load_kube_config()
+
         manifest = build_job_manifest(
             name,
             self.image,
             commands,
             namespace=self.namespace,
-            timeout=timeout,
-            **repo_kw,
+            timeout=deadline_s,
+            **({} if workspace_uri else self._repo_kw(workdir)),
+            workspace_uri=workspace_uri,
             **self.manifest_kw,
         )
+        if extra_env:
+            manifest["spec"]["template"]["spec"]["containers"][0].setdefault(
+                "env", []
+            ).extend(extra_env)
         api = client.ApiClient()
         batch, core = client.BatchV1Api(api), client.CoreV1Api(api)
         try:
             await batch.create_namespaced_job(self.namespace, manifest)
             succeeded = False
             terminal = False
-            for _ in range(max(1, timeout // 3)):
+            for _ in range(max(1, deadline_s // 3)):
                 st = (await batch.read_namespaced_job(name, self.namespace)).status
                 if st and st.succeeded:
                     succeeded = terminal = True
@@ -497,7 +654,7 @@ class KubeJobSandbox:
                 )
                 diag = _describe_pod(pod) if pod is not None else "no pod created"
                 output = f"{output}\n[kube-sandbox] {note}; {diag}".strip()
-            return JobRunResult(succeeded, 0 if succeeded else 1, output)
+            return _collected(collect, succeeded, output)
         finally:
             try:
                 await batch.delete_namespaced_job(

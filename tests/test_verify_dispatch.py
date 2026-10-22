@@ -1135,6 +1135,31 @@ def test_verify_job_sets_data_root_env():
     assert dr is not None and dr["value"] == "/work"  # VerifyJobConfig.mount default
 
 
+def test_packed_verify_job_does_not_forward_pvc_to_nested_lanes(monkeypatch):
+    """#1391: a packed verify Job has no PVC; forwarding the workspaces PVC and
+    data root made its nested lane Jobs co-mount the RWO claim (node-pinned) and
+    read the PVC copy instead of this Job's emptyDir."""
+    monkeypatch.setenv("TFACTORY_NIX_RUNNER_IMAGE", "img:latest")
+    monkeypatch.setenv("TFACTORY_WORKSPACES_PVC", "tfactory-data")
+    ps = build_verify_job_manifest(_cfg(workspace_uri="s3://b/k"))["spec"]["template"][
+        "spec"
+    ]
+    env = {e["name"]: e.get("value") for e in ps["containers"][0]["env"]}
+    assert "TFACTORY_WORKSPACES_PVC" not in env
+    assert "TFACTORY_DATA_ROOT" not in env
+    assert env["TFACTORY_LANE_PACK"] == "1"
+    assert env["TFACTORY_NIX_RUNNER_IMAGE"] == "img:latest"
+
+
+def test_unpacked_verify_job_still_forwards_pvc(monkeypatch):
+    monkeypatch.setenv("TFACTORY_WORKSPACES_PVC", "tfactory-data")
+    ps = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
+    env = {e["name"]: e.get("value") for e in ps["containers"][0]["env"]}
+    assert env["TFACTORY_WORKSPACES_PVC"] == "tfactory-data"
+    assert env["TFACTORY_DATA_ROOT"] == "/work"
+    assert "TFACTORY_LANE_PACK" not in env
+
+
 # ─── #767: a reap must also finish the SPEC, not just the row ─────────────────
 
 
