@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.9.35 — a stray generated flake no longer poses as the repo's (2026-10-22)
+
+### Fixed
+
+- A `flake.nix` counts as repo-owned only when git tracks it. An untracked flake that an earlier fallback generated into the shared checkout was honoured as the repo's own, so verify lanes ran in the wrong devShell (Node-only, no Python). Lanes now delete the generated, untracked flake and lock after the job, and the log names the flake's origin and hash. (#1400, #1403)
+- A lane that exits 126 or 127 (the command was not found or could not run) is graded `not_run` with an environment cause, not a consistent failure the reviewers reject. (#1401, #1402)
+
 ## 0.9.34 — packed lanes can hand their results back (2026-10-22)
 
 ### Fixed
