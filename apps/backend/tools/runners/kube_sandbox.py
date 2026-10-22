@@ -417,14 +417,14 @@ def _collected(
     return JobRunResult(succeeded, 0 if succeeded else 1, output)
 
 
-def _presign_client(store: Any) -> Any:
+def _presign_client(store: Any) -> object:
     """SigV4 presigner for the lane URLs (#1396).
 
     botocore presigns SigV2 by default, and MinIO 403s that PUT when it carries
     x-amz-tagging. Built here because artifact_store.py is vendored from the hub.
     """
-    import boto3  # noqa: PLC0415 - packed path only
-    from botocore.config import Config  # noqa: PLC0415 - ships with boto3
+    import boto3  # type: ignore[import-untyped]  # noqa: PLC0415 - packed path only
+    from botocore.config import Config  # type: ignore[import-untyped]  # noqa: PLC0415
 
     c = store.config
     return boto3.client(
