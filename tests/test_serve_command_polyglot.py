@@ -8,6 +8,8 @@ the repo root and never looked at what the spec targets.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from agents.nix_env import detect_serve_command
 
 
@@ -77,7 +79,9 @@ def test_browser_lane_reads_source_json_from_the_context_dir(tmp_path, monkeypat
 
     monkeypatch.setattr(nix_env, "detect_serve_command", _spy)
     monkeypatch.setattr(nix_env, "_write_pw_config", lambda *a, **k: None)
-    monkeypatch.setattr(nix_env, "materialize_flake", lambda *a, **k: object())
+    monkeypatch.setattr(
+        nix_env, "materialize_flake", lambda *a, **k: SimpleNamespace(generated=False)
+    )
 
     class _Res:
         returncode = 0
