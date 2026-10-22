@@ -43,6 +43,7 @@ import contextlib
 import json
 import logging as _logging
 import os
+import re
 import shutil
 import traceback
 from collections import Counter
@@ -93,6 +94,7 @@ from agents.stability_runner import (
     RERUN_COUNT,
     StabilityResult,
     StabilityRun,
+    StabilityVerdict,
     _clip,
     classify_stability_runs,
 )
@@ -103,6 +105,7 @@ from agents.workspace_status import (
     read_status,
     write_status_patch,
 )
+from tools.runners.lang_registry import UNSUPPORTED_LANGUAGES
 
 _eval_log = _logging.getLogger(__name__)
 
@@ -2358,6 +2361,111 @@ def _build_go_signal_bundle(
     )
 
 
+def _class_outcome(report: str, stem: str) -> bool | None:
+    """Return whether this class passed, or None when it has no testcases."""
+    found = False
+    passed = True
+    for match in re.finditer(
+        r"<testcase\b((?:[^>\"']|\"[^\"]*\"|'[^']*')*?)(?:/\s*>|>(.*?)</testcase\s*>)",
+        report,
+        re.DOTALL,
+    ):
+        attr = re.search(r"\bclassname\s*=\s*(['\"])(.*?)\1", match[1])
+        if not attr:
+            continue
+        classname = attr[2]
+        if not (
+            classname == stem
+            or classname.endswith("." + stem)
+            or classname.rsplit(".", 1)[-1].startswith(stem + "$")
+        ):
+            continue
+        found = True
+        if re.search(r"<(?:failure|error)\b", match[2] or ""):
+            passed = False
+    return passed if found else None
+
+
+def _per_class_stability(
+    shared: StabilityResult | None, reports: list[str | None], subtask: dict[str, Any]
+) -> StabilityResult | None:
+    if shared is None or shared.verdict == StabilityVerdict.ERROR:
+        return shared
+    if len(reports) != len(shared.runs):
+        return shared
+    stem = Path(subtask["files_to_create"][0]).stem
+    runs = []
+    for run, report in zip(shared.runs, reports, strict=True):
+        if report is None:
+            runs.append(run)
+            continue
+        passed = _class_outcome(report, stem)
+        if passed is None:
+            return StabilityResult(
+                verdict=StabilityVerdict.ERROR,
+                runs=shared.runs,
+                seed=shared.seed,
+                rerun_count=shared.rerun_count,
+                error_message=f"{stem} has no results in the JUnit report: this test did not run",
+            )
+        runs.append(
+            StabilityRun(
+                returncode=0 if passed else 1,
+                stdout_tail=(f"FAILED {stem}: this test failed\n" + run.stdout_tail)
+                if not passed
+                else "",
+            )
+        )
+    return classify_stability_runs(
+        runs, seed=shared.seed, rerun_count=shared.rerun_count
+    )
+
+
+def _jvm_bundles(
+    spec_dir: Path,
+    project_dir: Path,
+    subtasks: Iterable[dict[str, Any]],
+    runner_fn: Callable[[Path, Path, int], DockerRunResult],
+    root_of: Callable[[dict[str, Any]], Path],
+) -> list[EvaluatorSignals]:
+    groups: dict[Path, list[dict[str, Any]]] = {}
+    for subtask in subtasks:
+        groups.setdefault(root_of(subtask), []).append(subtask)
+
+    bundles = []
+    for group in groups.values():
+        reports: list[str | None] = []
+
+        def recording_runner(
+            test_file: Path,
+            project: Path,
+            seed: int,
+            reports: list[str | None] = reports,
+        ) -> DockerRunResult:
+            res = runner_fn(test_file, project, seed)
+            path = getattr(res, "junit_xml_path", None)
+            try:
+                text = Path(path).read_text() if path else None
+            except (OSError, UnicodeError):
+                text = None
+            # The lanes write an empty <testsuites/> when the build fails to
+            # compile; that run keeps its build-level record, like a missing report.
+            reports.append(text if text and "<testcase" in text else None)
+            return res
+
+        shared = _stability_for_subtask(
+            spec_dir, project_dir, group[0], recording_runner
+        )
+        for subtask in group:
+            stability = _per_class_stability(shared, reports, subtask)
+            bundles.append(
+                _build_go_signal_bundle(
+                    spec_dir, project_dir, subtask, runner_fn, stability=stability
+                )
+            )
+    return bundles
+
+
 # ─── Verdicts.json validation ───────────────────────────────────────────
 #
 # Extracted to agents.evaluator_verdicts (issue #450). Re-imported below so
@@ -2697,46 +2805,41 @@ def _build_all_bundles(  # noqa: PLR0913 - one list per lane
             for st in go
         ]
     if kotlin:
-        # Same shape as Go (Factory#1712): stage the generated tests at their
-        # repo paths, then `gradle test` covers the whole build, so stability is
-        # module-wide and computed once. _stage_go_test and
-        # _build_go_signal_bundle have nothing Go-specific but their names.
+        # `gradle test` covers a whole build: one 3x pass per build root, and each
+        # subtask graded from its own class in the JUnit report (#1341, #1356).
+        from agents import nix_env  # noqa: PLC0415
+
         for st in kotlin:
             _stage_go_test(spec_dir, project_dir, st)
         kotlin_runner = _resolve_kotlin_runner_fn(spec_dir, project_dir)
-        shared_kotlin_stability = _stability_for_subtask(
-            spec_dir, project_dir, kotlin[0], kotlin_runner
+        bundles += _jvm_bundles(
+            spec_dir,
+            project_dir,
+            kotlin,
+            kotlin_runner,
+            lambda st: nix_env._gradle_module_dir(
+                project_dir, Path(st["files_to_create"][0])
+            ),
         )
-        bundles += [
-            _build_go_signal_bundle(
-                spec_dir,
-                project_dir,
-                st,
-                kotlin_runner,
-                stability=shared_kotlin_stability,
-            )
-            for st in kotlin
-        ]
     if java:
-        # Identical shape to Kotlin (#1321): `mvn test` covers the whole module,
-        # so stability is module-wide and computed once, and the staging and
-        # bundle helpers have nothing language-specific but their names.
+        # Same as Kotlin: one pass per Maven module / Gradle build (#1356).
+        from agents import nix_env  # noqa: PLC0415
+
         for st in java:
             _stage_go_test(spec_dir, project_dir, st)
         java_runner = _resolve_java_runner_fn(spec_dir, project_dir)
-        shared_java_stability = _stability_for_subtask(
-            spec_dir, project_dir, java[0], java_runner
+        resolver = (
+            nix_env._maven_module_dir
+            if _java_build_tool(project_dir) == "maven"
+            else nix_env._gradle_module_dir
         )
-        bundles += [
-            _build_go_signal_bundle(
-                spec_dir,
-                project_dir,
-                st,
-                java_runner,
-                stability=shared_java_stability,
-            )
-            for st in java
-        ]
+        bundles += _jvm_bundles(
+            spec_dir,
+            project_dir,
+            java,
+            java_runner,
+            lambda st: resolver(project_dir, Path(st["files_to_create"][0])),
+        )
     return bundles
 
 
@@ -3188,6 +3291,20 @@ async def run_evaluator(
         # 1. Load the plan + filter to completed subtasks per lane.
         plan = _load_plan_or_fail(spec_dir)
         if plan is None:
+            return False
+
+        unsupported = _filter_completed_subtasks(
+            plan,
+            lambda st: str(st.get("language") or "").lower() in UNSUPPORTED_LANGUAGES,
+        )
+        if unsupported:
+            language = unsupported[0]["language"].lower()
+            _write_status_patch(
+                spec_dir,
+                status="evaluator_failed",
+                phase=f"evaluator_{mode}_unsupported_language",
+                evaluator_error=UNSUPPORTED_LANGUAGES[language],
+            )
             return False
 
         unit_completed = _completed_functional_subtasks(plan)

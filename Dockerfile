@@ -140,6 +140,10 @@ RUN want="$(tr -dc '0-9.' < /tmp/.nvmrc | cut -d. -f1)" \
 #                        both HIGH, both fixed in 1.38.0-r0.
 #   wget    1.25.0-r14 — CVE-2026-58471 and CVE-2026-58472, both HIGH, both
 #                        fixed in 1.25.0-r15.
+#   curl / libcurl-openssl4 8.22.0-r4 — CVE-2026-92392 (HIGH), fixed in
+#                        8.23.0-r0. Named together: same origin.
+#   ca-certificates-bundle 20260909-r2 — CVE-2026-111943 (HIGH), fixed in
+#                        20260909-r3.
 # Floors rather than == pins, so the build stays green as Wolfi revs further
 # (1.38.0-r1 and later already exist); drop each once the base digest ships it.
 # Verified present in the Wolfi x86_64 APKINDEX, then confirmed against the
@@ -153,7 +157,9 @@ RUN apk add --no-cache \
         "binutils>2.46-r1" \
         bubblewrap \
         ca-certificates \
-        curl \
+        "ca-certificates-bundle>=20260909-r3" \
+        "curl>=8.23.0-r0" \
+        "libcurl-openssl4>=8.23.0-r0" \
         git \
         gh \
         gnupg \
@@ -302,9 +308,9 @@ RUN mkdir -p /home/nonroot/.npm-global \
 # because nothing asserted the CLI works. Full path, since PATH is set for the
 # runtime user rather than for RUN.
 RUN npm install -g \
-        @anthropic-ai/claude-code@2.1.238 \
-        @openai/codex@0.149.0 \
-        @google/gemini-cli@0.56.0 \
+        @anthropic-ai/claude-code@2.1.303 \
+        @openai/codex@0.163.0 \
+        @google/gemini-cli@0.64.0 \
  && node /home/nonroot/.npm-global/lib/node_modules/@anthropic-ai/claude-code/install.cjs \
  && /home/nonroot/.npm-global/bin/claude --version \
  && npm cache clean --force \
@@ -340,10 +346,12 @@ RUN /home/projects/MagesticAI/.venv/bin/pip install --no-cache-dir \
  && /home/projects/MagesticAI/.venv/bin/pip uninstall -y pip
 
 # Remove the base image's pip too (same findings, second copy).
-# py3-pip-wheel is ensurepip's bundled wheel — only needed by `python -m venv`,
-# which has already run. Verified: the venv imports its stack fine afterwards.
+# py3-pip-wheel ships deliberately: python-3.14 depends on it, so apk refuses to
+# drop it (warns, exits 0). Its CVEs ride base-digest bumps. The apk info
+# checks fail the build if the removal ever silently no-ops.
 USER root
-RUN apk del --no-cache py3.14-pip py3.14-pip-base py3-pip-wheel
+RUN apk del --no-cache py3.14-pip py3.14-pip-base \
+ && ! apk info -e py3.14-pip && ! apk info -e py3.14-pip-base
 USER nonroot
 
 # Git identity for in-container worktree operations

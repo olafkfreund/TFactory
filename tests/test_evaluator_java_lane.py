@@ -228,3 +228,111 @@ def test_java_nested_pom_beside_root_gradle_routes_to_maven(
     """ "No pom.xml anywhere" means anywhere, not just the root."""
     calls, _ = _route(tmp_path, monkeypatch, ["build.gradle", "sub/pom.xml"])
     assert list(calls) == ["maven"]
+
+
+# --- Per-class verdicts and per-module grouping (#1341, #1356) ---------------
+
+_REPORT = """<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+<testsuite name="com.x.ATest" tests="3" failures="2" errors="0">
+  <testcase name="one" classname="com.x.ATest"><failure message="boom"/></testcase>
+  <testcase name="two -> three" classname="com.x.ATest">
+    <failure message="nope">AssertionFailedError</failure>
+  </testcase>
+  <testcase name="ok" classname="com.x.ATest" time="0.1"/>
+</testsuite>
+<testsuite name="com.x.BTest" tests="2" failures="0" errors="0">
+  <testcase name="b1" classname="com.x.BTest"/>
+  <testcase name="b2" classname="com.x.BTest$Nested"></testcase>
+</testsuite>
+</testsuites>
+"""
+
+
+def _java_bundles(tmp_path: Path, monkeypatch, stems: list[str], report: str = _REPORT):
+    spec_dir = tmp_path / "spec"
+    project_dir = tmp_path / "project"
+    subs = []
+    for stem in stems:
+        st = _java_subtask(f"st-{stem}")
+        st["files_to_create"] = [f"src/test/java/com/x/{stem}.java"]
+        (spec_dir / st["files_to_create"][0]).parent.mkdir(parents=True, exist_ok=True)
+        (spec_dir / st["files_to_create"][0]).write_text(f"class {stem} {{}}\n")
+        subs.append(st)
+    junit = tmp_path / "junit.xml"
+    junit.write_text(report)
+
+    def _fake(spec, proj, *, hint=None, **k):
+        return DockerRunResult(
+            returncode=1, stdout="BUILD FAILURE", junit_xml_path=junit, argv=["mvn"]
+        )
+
+    monkeypatch.setattr("agents.nix_env.run_maven_lane_via_nix", _fake)
+    java = _completed_java_subtasks(_plan(*subs))
+    bundles = _build_all_bundles(spec_dir, project_dir, [], [], [], [], [], (), java)
+    return {b.test_id: b.stability for b in bundles}
+
+
+def test_failures_in_one_class_leave_another_class_passing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """#1341: two failures in ATest must not reject BTest."""
+    from agents.stability_runner import StabilityVerdict
+
+    got = _java_bundles(tmp_path, monkeypatch, ["ATest", "BTest"])
+    assert got["st-BTest"].verdict == StabilityVerdict.STABLE
+    assert got["st-ATest"].verdict == StabilityVerdict.CONSISTENT_FAIL
+    assert "this test failed" in got["st-ATest"].runs[0].stdout_tail
+
+
+def test_class_missing_from_report_is_error_not_consistent_fail(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from agents.stability_runner import StabilityVerdict
+
+    got = _java_bundles(tmp_path, monkeypatch, ["CTest"])
+    assert got["st-CTest"].verdict == StabilityVerdict.ERROR
+    assert "did not run" in got["st-CTest"].error_message
+
+
+def test_compile_failure_with_empty_report_stays_consistent_fail(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The lanes always write junit.xml; on a compile failure it has no testcases."""
+    from agents.stability_runner import StabilityVerdict
+
+    got = _java_bundles(
+        tmp_path, monkeypatch, ["ATest", "BTest"], "<testsuites>\n</testsuites>\n"
+    )
+    assert got["st-ATest"].verdict == StabilityVerdict.CONSISTENT_FAIL
+    assert got["st-BTest"].verdict == StabilityVerdict.CONSISTENT_FAIL
+
+
+def test_each_maven_module_runs_its_own_stability_pass(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """#1356: tests staged in module b must run in module b, not inherit a's."""
+    spec_dir = tmp_path / "spec"
+    project_dir = tmp_path / "project"
+    subs = []
+    for mod in ("a", "b"):
+        (project_dir / mod).mkdir(parents=True)
+        (project_dir / mod / "pom.xml").write_text("<project/>")
+        st = _java_subtask(f"st-{mod}")
+        st["files_to_create"] = [f"{mod}/src/test/java/{mod.upper()}Test.java"]
+        (spec_dir / st["files_to_create"][0]).parent.mkdir(parents=True)
+        (spec_dir / st["files_to_create"][0]).write_text("class T {}\n")
+        subs.append(st)
+
+    hints: list[Path | None] = []
+
+    def _fake(spec, proj, *, hint=None, **k):
+        hints.append(hint)
+        return DockerRunResult(returncode=0, stdout="ok", argv=["mvn"])
+
+    monkeypatch.setattr("agents.nix_env.run_maven_lane_via_nix", _fake)
+    java = _completed_java_subtasks(_plan(*subs))
+    bundles = _build_all_bundles(spec_dir, project_dir, [], [], [], [], [], (), java)
+    assert len(bundles) == 2
+    assert len(hints) == 6
+    assert {Path(h).parts[0] for h in hints} == {"a", "b"}

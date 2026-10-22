@@ -1,6 +1,6 @@
 {
   "name": "tfactory-web",
-  "version": "0.9.31",
+  "version": "0.9.32",
   "type": "module",
   "description": "Web UI for TFactory autonomous coding framework",
   "scripts": {
@@ -45,7 +45,7 @@
     "highlight.js": "^11.11.1",
     "i18next": "^25.7.3",
     "lucide-react": "^0.562.0",
-    "mermaid": "^11.16.1",
+    "mermaid": "^12.2.0",
     "motion": "^12.23.26",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
@@ -82,7 +82,7 @@
     "tsx": "^4.20.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.61.1",
-    "vite": "^7.3.6",
-    "vitest": "^4.1.11"
+    "vite": "^7.3.7",
+    "vitest": "^4.1.12"
   }
 }

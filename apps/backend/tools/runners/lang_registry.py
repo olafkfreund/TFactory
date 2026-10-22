@@ -50,6 +50,17 @@ class ToolSpec:
 # out of scope — see test_plan.enums._V01_LANE_ALIASES.
 _LANE_KEYS = ("unit", "browser", "api", "integration", "mutation")
 
+# TFactory-local refusal: the vendored descriptor stays byte-exact with the hub
+# (drift gate) and its toolchain facts stay true for AIFactory; what is missing
+# is a TFactory lane to run them (#1340).
+UNSUPPORTED_LANGUAGES = {
+    "swift": (
+        "swift is unsupported in TFactory (#1340): no in-cluster Swift lane "
+        "(no run_swift_lane_via_nix or frameworks/swift); a library-only lane "
+        "needs a cluster measurement first"
+    ),
+}
+
 
 _REGISTRY: dict[str, dict[str, ToolSpec | None]] = {
     # ── Python (v0.1 anchor, v0.2 = pytest still primary) ───────────────
@@ -95,7 +106,7 @@ _REGISTRY: dict[str, dict[str, ToolSpec | None]] = {
 
 @lru_cache(maxsize=1)
 def _descriptor_registry() -> dict[str, dict[str, ToolSpec | None]]:
-    """Rows for descriptor-declared languages (swift, kotlin, ...).
+    """Rows for supported descriptor-declared languages (kotlin, ...).
 
     Built from the vendored ``languages/*.yaml`` descriptors (hub canonical
     ``contracts/languages/``; see ``language_descriptors.py``), so onboarding a
@@ -115,9 +126,9 @@ def _descriptor_registry() -> dict[str, dict[str, ToolSpec | None]]:
 
     rows: dict[str, dict[str, ToolSpec | None]] = {}
     for name, descriptor in load_languages().items():
-        if name in _REGISTRY:
+        if name in _REGISTRY or name in UNSUPPORTED_LANGUAGES:
             # The hand-curated static rows stay authoritative for languages
-            # they already describe; descriptors EXTEND the registry.
+            # they already describe; unsupported languages stay excluded.
             continue
         lanes: dict[str, ToolSpec | None] = {}
         for key in _LANE_KEYS:
@@ -198,10 +209,12 @@ def get_tool_for_lane(
     "we genuinely don't know how to verify this", not a static-table gap.
 
     Raises:
-        UnsupportedLanguageError: language absent from the registry AND no
-            manifest verify path to fall back to.
+        UnsupportedLanguageError: language explicitly unsupported, or absent
+            from the registry with no manifest verify path to fall back to.
     """
     lang = language.lower()
+    if lang in UNSUPPORTED_LANGUAGES:
+        raise UnsupportedLanguageError(UNSUPPORTED_LANGUAGES[lang])
     registry = _full_registry()
     if lang not in registry:
         spec = _tool_from_manifest(manifest)
