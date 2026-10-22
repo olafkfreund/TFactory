@@ -18,6 +18,7 @@ from agents.confidence import (
     compute_confidence,
     enrich_verdicts,
 )
+from agents.stability_runner import StabilityResult, StabilityRun, StabilityVerdict
 
 
 def _verdict(verdict="accept", semantic="high", **summary):
@@ -440,7 +441,21 @@ def test_environment_override_reclassifies_reject_to_not_run():
     v = _verdict(verdict="reject")
     assert apply_environment_override(v, {"failure_kind": "environment"}) is True
     assert v["verdict"] == "not_run"
-    assert any("no target URL" in r for r in v["reasons"])
+    assert any("environment was unusable" in r for r in v["reasons"])
+
+
+def test_shell_exit_127_reclassifies_consistent_failure_to_not_run():
+    result = StabilityResult(
+        verdict=StabilityVerdict.CONSISTENT_FAIL,
+        runs=tuple(
+            StabilityRun(returncode=127, stderr_tail="python: command not found")
+            for _ in range(3)
+        ),
+    )
+    v = _verdict(verdict="reject")
+    assert result.failure_kind == "environment"
+    assert apply_environment_override(v, {"failure_kind": result.failure_kind}) is True
+    assert v["verdict"] == "not_run"
 
 
 def test_environment_override_leaves_an_assertion_verdict_untouched():
@@ -467,4 +482,4 @@ def test_enrich_verdicts_environment_becomes_not_run():
     )
     v = doc["verdicts"][0]
     assert v["verdict"] == "not_run"
-    assert any("no target URL" in r for r in v["reasons"])
+    assert any("environment was unusable" in r for r in v["reasons"])
