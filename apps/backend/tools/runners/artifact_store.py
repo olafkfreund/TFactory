@@ -177,6 +177,7 @@ class ArtifactStore:
         if self._s3 is None:
             try:
                 import boto3  # noqa: PLC0415 — lazy import keeps the module dep-free
+                from botocore.config import Config  # noqa: PLC0415 — ships with boto3
             except ImportError as exc:  # pragma: no cover - only without boto3
                 raise RuntimeError(
                     "ArtifactStore transport needs boto3; add it to the consumer image "
@@ -190,6 +191,9 @@ class ArtifactStore:
                 aws_access_key_id=self.config.access_key,
                 aws_secret_access_key=self.config.secret_key,
                 region_name=self.config.region,
+                # #1396: without this, presigned URLs fall back to SigV2, which MinIO
+                # rejects (403) on a PUT carrying x-amz-tagging. Plain calls already use v4.
+                config=Config(signature_version="s3v4"),
             )
         return self._s3
 
