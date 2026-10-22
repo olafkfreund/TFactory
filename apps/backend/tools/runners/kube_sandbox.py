@@ -522,8 +522,8 @@ class KubeJobSandbox:
                 with contextlib.suppress(Exception):  # cleanup is best effort
                     store._client().delete_object(Bucket=bucket, Key=key)  # type: ignore[attr-defined]
 
-    def _repo_kw(self, workdir: str | None) -> dict:
-        repo_kw: dict = {}
+    def _repo_kw(self, workdir: str | None) -> dict[str, Any]:
+        repo_kw: dict[str, Any] = {}
         if self.repo_pvc:
             subpath = pvc_subpath(workdir, self.data_root)
             if subpath is not None:
@@ -558,14 +558,13 @@ class KubeJobSandbox:
         except Exception:  # noqa: BLE001 - dev/test fallback
             await config.load_kube_config()
 
-        repo_kw = {} if workspace_uri else self._repo_kw(workdir)
         manifest = build_job_manifest(
             name,
             self.image,
             commands,
             namespace=self.namespace,
             timeout=timeout,
-            **repo_kw,
+            **({} if workspace_uri else self._repo_kw(workdir)),
             workspace_uri=workspace_uri,
             **self.manifest_kw,
         )
