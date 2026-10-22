@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.9.34 — packed lanes can hand their results back (2026-10-22)
+
+### Fixed
+
+- Packed verify lanes (`TFACTORY_PACK_WORKSPACE=true`) now presign their result upload with SigV4, so `x-amz-tagging` is a signed header the lane script sends. Before, the presign was SigV2 with the tag in the query string, so MinIO answered the upload with 403 and every lane graded `not_run`. A round-trip test runs against MinIO when `TF_TEST_MINIO_ENDPOINT` is set. (#1396, #1398)
+
 ## 0.9.33 — packed verify lanes stop riding the RWO PVC (2026-10-22)
 
 Both changes sit behind `TFACTORY_PACK_WORKSPACE`, which stays unset in this
