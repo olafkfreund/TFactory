@@ -493,6 +493,8 @@ def create_spec_ingest_workspace(
         raise ValueError("spec has no acceptance criteria")
     # ref reaches `git fetch` as a refspec source: no option-shaped or
     # refspec-breaking values from the request body.
+    if ref is not None and source_branch:
+        raise ValueError("send either ref or source_branch, not both (#1416)")
     if ref is not None and not _REF_RE.fullmatch(ref):
         raise ValueError(f"invalid ref {ref!r}: expected a branch, tag or commit")
 

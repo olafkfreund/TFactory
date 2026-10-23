@@ -50,7 +50,6 @@ async def test_unknown_project_with_git_url_clones_and_registers(monkeypatch, tm
         spec_text="## Acceptance Criteria\n- it works",
         git_url="https://github.com/olafkfreund/aifactory-test.git",
         source_branch="aifactory/027-x",
-        ref="v1.2.0",
     )
     out = await ingest_spec(req)
     assert out["task_id"] == "027-x"
@@ -58,7 +57,35 @@ async def test_unknown_project_with_git_url_clones_and_registers(monkeypatch, tm
     assert seen["branch"] == "aifactory/027-x"
     assert seen["project_root"] == str(tmp_path)  # cloned path used as root
     assert seen["source_branch"] == "aifactory/027-x"
-    assert seen["ref"] == "v1.2.0"  # #1404: passed through to ingest
+
+
+@pytest.mark.asyncio
+async def test_ref_with_source_branch_is_400(monkeypatch, tmp_path):
+    """#1416: both fields is a caller error, not a silently dropped ref. The
+    real ingest runs, so this also proves ``ref`` reaches it (#1404)."""
+
+    async def fake_clone(*, git_url, branch, credential):
+        (tmp_path / ".git").mkdir(exist_ok=True)
+        return tmp_path
+
+    monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    monkeypatch.setattr("server.routes.projects.load_projects", lambda: {})
+    monkeypatch.setattr("server.routes.projects.save_projects", lambda p: None)
+    monkeypatch.setattr(
+        "server.services.project_workspace_service.clone_or_update", fake_clone
+    )
+    req = SpecIngestRequest(
+        project_id="olafkfreund-aifactory-test",
+        spec_id="027-x",
+        spec_text="## Acceptance Criteria\n- it works",
+        git_url="https://github.com/olafkfreund/aifactory-test.git",
+        source_branch="aifactory/027-x",
+        ref="v1.2.0",
+    )
+    with pytest.raises(HTTPException) as ei:
+        await ingest_spec(req)
+    assert ei.value.status_code == 400
+    assert "either ref or source_branch" in str(ei.value.detail)
 
 
 @pytest.mark.asyncio
