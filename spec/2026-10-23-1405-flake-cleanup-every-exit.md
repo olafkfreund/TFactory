@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1405
 intent: intent/2026-10-23-1405-flake-cleanup-every-exit.md
 ---
