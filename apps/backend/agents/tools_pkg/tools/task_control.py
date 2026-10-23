@@ -383,9 +383,11 @@ def _default_branch(base_clone: Path) -> tuple[str | None, str]:
         for k, v in os.environ.items()
         if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
     }
+    argv = ["git", "-C", str(base_clone), "ls-remote", "--symref", "origin", "HEAD"]
     try:
-        out = subprocess.run(
-            ["git", "-C", str(base_clone), "ls-remote", "--symref", "origin", "HEAD"],
+        out = subprocess.run(  # noqa: S603 — fixed argv, no request data
+            argv,  # noqa: S607
+            check=False,
             capture_output=True,
             text=True,
             timeout=120,
@@ -955,7 +957,10 @@ def create_task_control_tools() -> list:
                 },
                 "ref": {
                     "type": "string",
-                    "description": "Optional branch, tag or commit to verify; fetched into a per-run worktree. Defaults to the remote's default branch.",
+                    "description": (
+                        "Optional branch, tag or commit to verify; fetched into a "
+                        "per-run worktree. Defaults to the remote's default branch."
+                    ),
                 },
                 "confirm": {
                     "type": "boolean",
