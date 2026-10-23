@@ -58,6 +58,8 @@ def _mutation_subscore(value: object) -> float | None:
         return 0.0
     if v in ("no_mutation", "no mutation", "no_mutant"):
         return 0.5  # nothing to mutate — neutral, not evidence either way
+    if v == "not_run":
+        return None
     if v in ("error", "syntax_error", "timeout"):
         return 0.5
     return None  # missing / unknown → drop from the average

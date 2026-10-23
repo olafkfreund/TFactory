@@ -42,7 +42,7 @@ The JSON document MUST validate against this shape:
         "coverage_delta_pct": 5.2,
         "coverage_new_lines": 7,
         "stability": "stable" | "flaky" | "consistent_fail" | "error",
-        "mutation": "killed" | "survived" | "no_mutation" | "error",
+        "mutation": "killed" | "survived" | "no_mutation" | "not_run" | "error",
         "lint_promotion": "no_findings" | "1 promoted" | "1 high (rejected)",
         "ci_parity": "yes" | "mocked-subject" | "no"
       },
@@ -142,6 +142,8 @@ override if a *very* strong reason from the other signals justifies it.
 - `survived` — mutated test still passed → **reject** (assertion
   is tautological / not actually checking what it claims).
 - `no_mutation` — nothing was mutable (rare; flag).
+- `not_run` — the shell could not execute the mutated test; no evidence that
+  the test caught the mutation (flag, never treat as killed).
 - `error` — probe couldn't run (flag).
 
 `survived` is the single strongest reject signal in the whole

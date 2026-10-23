@@ -17,7 +17,7 @@ Verdict shape (written by the Evaluator)::
         "signals_summary": {
            "coverage_delta_pct": 5.2 | null,
            "stability": "stable"|"flaky"|"consistent_fail"|"error",
-           "mutation": "killed"|"survived"|"no_mutation"|"error",
+           "mutation": "killed"|"survived"|"no_mutation"|"not_run"|"error",
            "ci_parity": "yes"|"mocked-subject"|"no"|"not computed"}}]}
 
 The gate is **opt-in** (``enabled=False`` by default) — consistent with the
