@@ -1715,7 +1715,7 @@ def test_run_gradle_lane_via_nix_passes_env_to_materialize_flake(tmp_path, monke
 
     monkeypatch.setattr("agents.nix_env.materialize_flake", _capture)
     # materialize_flake runs only once a runner exists (#1405).
-    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: object())
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", object)
     marker = {"language": "java"}
     assert run_gradle_lane_via_nix(spec, project, env=marker) is None
     assert seen["env"] is marker
@@ -1884,7 +1884,7 @@ def test_lanes_drop_generated_flake_when_staging_raises(tmp_path, monkeypatch):
 
     proj, lanes = _lane_calls(tmp_path)
     _git_checkout(proj)
-    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: object())
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", object)
     for name, call, attr in lanes:
         if attr:
             monkeypatch.setattr(f"agents.nix_env.{attr}", _boom)
@@ -1904,7 +1904,7 @@ def test_tracked_flake_survives_a_raising_lane(tmp_path, monkeypatch):
     _commit_flake(proj, "{ outputs = _: {}; }\n")
     spec = tmp_path / "spec"
     spec.mkdir()
-    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: object())
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", object)
     monkeypatch.setattr("agents.nix_env._go_module_dir", _boom)
     with pytest.raises(RuntimeError):
         run_gotest_lane_via_nix(spec, proj)
