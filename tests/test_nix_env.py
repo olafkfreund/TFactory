@@ -647,14 +647,40 @@ def test_run_pytest_lane_via_nix_isolates_shared_checkout(tmp_path, monkeypatch)
 
 
 def test_nix_runner_from_env_honors_data_root(monkeypatch):
-    """nix_runner_from_env passes TFACTORY_DATA_ROOT to the sandbox so pvc_subpath
-    resolves co-mounts when the PVC is mounted at a non-default path (#623)."""
+    """nix_runner_from_env preserves the root for relative workspace paths."""
     from agents.nix_env import nix_runner_from_env
 
     monkeypatch.setenv("TFACTORY_NIX_RUNNER_IMAGE", "img:latest")
     monkeypatch.setenv("TFACTORY_DATA_ROOT", "/work")
     sb = nix_runner_from_env()
     assert sb is not None and sb.data_root == "/work"
+
+
+def test_nested_lane_ignores_stale_workspace_pvc(monkeypatch):
+    from agents.nix_env import nix_runner_from_env
+    from tools.runners.kube_sandbox import build_job_manifest
+
+    monkeypatch.setenv("TFACTORY_NIX_RUNNER_IMAGE", "img:latest")
+    monkeypatch.setenv("TFACTORY_WORKSPACES_PVC", "tfactory-data")
+    monkeypatch.setenv("TFACTORY_NIX_STORE_PVC", "tfactory-nix-store")
+    monkeypatch.delenv("TFACTORY_NIX_IN_IMAGE", raising=False)
+    sb = nix_runner_from_env()
+    assert sb is not None
+    manifest = build_job_manifest(
+        "nested",
+        sb.image,
+        ["true"],
+        workspace_uri="s3://bucket/lane.tar.gz",
+        **sb.manifest_kw,
+    )
+    pod = manifest["spec"]["template"]["spec"]
+    claims = {
+        v["persistentVolumeClaim"]["claimName"]
+        for v in pod["volumes"]
+        if "persistentVolumeClaim" in v
+    }
+    assert claims == {"tfactory-nix-store"}
+    assert {"name": "repo", "emptyDir": {}} in pod["volumes"]
 
 
 def test_nix_runner_from_env_default_data_root(monkeypatch):
@@ -674,9 +700,7 @@ def _mounted_pvcs(monkeypatch) -> set[str]:
 
     sb = nix_runner_from_env()
     assert sb is not None
-    m = build_job_manifest(
-        "t", sb.image, ["true"], repo_pvc=sb.repo_pvc, **sb.manifest_kw
-    )
+    m = build_job_manifest("t", sb.image, ["true"], **sb.manifest_kw)
     vols = m["spec"]["template"]["spec"].get("volumes", [])
     return {
         v["persistentVolumeClaim"]["claimName"]
@@ -1690,35 +1714,14 @@ def test_run_gradle_lane_via_nix_passes_env_to_materialize_flake(tmp_path, monke
         seen.update(kw)
 
     monkeypatch.setattr("agents.nix_env.materialize_flake", _capture)
+    # materialize_flake runs only once a runner exists (#1405).
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", object)
     marker = {"language": "java"}
     assert run_gradle_lane_via_nix(spec, project, env=marker) is None
     assert seen["env"] is marker
     # No env: Kotlin's default, unchanged (#1712).
     run_gradle_lane_via_nix(spec, project)
     assert seen["env"]["language"] == "kotlin"
-
-
-def test_nix_runner_from_env_lane_pack_drops_pvc(monkeypatch):
-    """#1391: inside a packed verify Job the nested lane must not co-mount the
-    RWO workspaces PVC, even if the PVC env leaked through."""
-    from agents.nix_env import nix_runner_from_env
-
-    monkeypatch.setenv("TFACTORY_NIX_RUNNER_IMAGE", "img:latest")
-    monkeypatch.setenv("TFACTORY_WORKSPACES_PVC", "tfactory-data")
-    monkeypatch.setenv("TFACTORY_LANE_PACK", "1")
-    sb = nix_runner_from_env()
-    assert sb is not None and sb.repo_pvc is None and sb.pack_workdir is True
-
-
-def test_nix_runner_from_env_unpacked_keeps_pvc(monkeypatch):
-    from agents.nix_env import nix_runner_from_env
-
-    monkeypatch.setenv("TFACTORY_NIX_RUNNER_IMAGE", "img:latest")
-    monkeypatch.setenv("TFACTORY_WORKSPACES_PVC", "tfactory-data")
-    monkeypatch.delenv("TFACTORY_LANE_PACK", raising=False)
-    sb = nix_runner_from_env()
-    assert sb is not None and sb.repo_pvc == "tfactory-data"
-    assert sb.pack_workdir is False
 
 
 # ─── TFactory#1400: repo-owned means git-TRACKED ─────────────────────────────
@@ -1809,3 +1812,100 @@ def test_the_jest_fallback_leaves_the_checkout_git_status_clean(tmp_path, monkey
         check=True,
     ).stdout
     assert status == "", status
+
+
+# --- #1405: a generated flake never outlives the lane, on any exit path ------
+
+
+def _git_checkout(project: Path) -> None:
+    """A committed checkout, so ``git status --porcelain`` starts clean."""
+    project.mkdir(parents=True, exist_ok=True)
+    (project / "README.md").write_text("x\n")
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run([*git, "init", "-q", str(project)], check=True)
+    subprocess.run([*git, "-C", str(project), "add", "."], check=True)
+    subprocess.run(
+        [*git, "-c", "commit.gpgsign=false", "-C", str(project), "commit", "-qm", "i"],
+        check=True,
+    )
+
+
+def _porcelain(project: Path) -> str:
+    return subprocess.run(
+        ["git", "-C", str(project), "status", "--porcelain"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+
+
+def _lane_calls(tmp_path: Path):
+    from agents import nix_env as ne
+
+    spec = tmp_path / "spec"
+    spec.mkdir()
+    proj = tmp_path / "proj"
+    outside = tmp_path / "elsewhere" / "a.test.ts"  # under neither proj nor spec
+    outside.parent.mkdir()
+    outside.write_text("test('x', () => {});\n")
+    # (name, call, attribute to make raise during module lookup / staging)
+    return proj, [
+        ("go", lambda: ne.run_gotest_lane_via_nix(spec, proj), "_go_module_dir"),
+        (
+            "gradle",
+            lambda: ne.run_gradle_lane_via_nix(spec, proj),
+            "_gradle_module_dir",
+        ),
+        ("maven", lambda: ne.run_maven_lane_via_nix(spec, proj), "_maven_module_dir"),
+        ("jest", lambda: ne.run_jest_lane_via_nix(outside, proj, spec), None),
+        (
+            "browser",
+            lambda: ne.run_browser_evidence(spec, proj),
+            "_stage_browser_specs",
+        ),
+    ]
+
+
+def _boom(*_a, **_k):
+    raise RuntimeError("lookup failed")
+
+
+def test_lanes_leave_checkout_clean_without_runner_image(tmp_path, monkeypatch):
+    monkeypatch.delenv("TFACTORY_NIX_RUNNER_IMAGE", raising=False)
+    proj, lanes = _lane_calls(tmp_path)
+    _git_checkout(proj)
+    for name, call, _ in lanes:
+        assert call() is None, name
+        assert _porcelain(proj) == "", (name, _porcelain(proj))
+
+
+def test_lanes_drop_generated_flake_when_staging_raises(tmp_path, monkeypatch):
+    import pytest
+
+    proj, lanes = _lane_calls(tmp_path)
+    _git_checkout(proj)
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", object)
+    for name, call, attr in lanes:
+        if attr:
+            monkeypatch.setattr(f"agents.nix_env.{attr}", _boom)
+        # jest: a test file under neither root makes relative_to raise ValueError
+        with pytest.raises((RuntimeError, ValueError)):
+            call()
+        assert not (proj / "flake.nix").exists(), name
+        assert not (proj / "flake.lock").exists(), name
+
+
+def test_tracked_flake_survives_a_raising_lane(tmp_path, monkeypatch):
+    import pytest
+    from agents.nix_env import run_gotest_lane_via_nix
+
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    _commit_flake(proj, "{ outputs = _: {}; }\n")
+    spec = tmp_path / "spec"
+    spec.mkdir()
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", object)
+    monkeypatch.setattr("agents.nix_env._go_module_dir", _boom)
+    with pytest.raises(RuntimeError):
+        run_gotest_lane_via_nix(spec, proj)
+    assert (proj / "flake.nix").exists()

@@ -487,8 +487,7 @@ def _kube_oracle_runner(
 
     The pods have no container runtime, so the equivalence lane runs the harness
     as an ephemeral Kubernetes Job. The (small) source tree + harness + vectors
-    are embedded base64 in the Job command — for large repos the PVC co-mount
-    path (KubeJobSandbox repo_pvc) is preferred. Lazily imports the kube deps so
+    are embedded base64 in the Job command. Lazily imports the kube deps so
     unit tests that inject a fake runner never need a cluster.
     """
     import base64
