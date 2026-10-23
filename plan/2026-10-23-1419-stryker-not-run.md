@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1419
 spec: spec/2026-10-23-1419-stryker-not-run.md
 ---
