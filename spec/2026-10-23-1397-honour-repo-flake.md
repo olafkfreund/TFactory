@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1397
 intent: intent/2026-10-23-1397-honour-repo-flake.md
 ---
