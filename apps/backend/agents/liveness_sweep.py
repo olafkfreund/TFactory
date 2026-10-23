@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import os
 import shutil
@@ -241,17 +242,15 @@ def _delete_spec_ref(worktree: Path, spec_id: str) -> None:
         if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
     }
     ref = f"refs/tfactory/specs/{spec_id}"
-    try:
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
         subprocess.run(  # noqa: S603 — fixed argv; spec_id is a spec dir name
-            ["git", "-C", str(worktree), "update-ref", "-d", ref],
+            ["git", "-C", str(worktree), "update-ref", "-d", ref],  # noqa: S607 - git from PATH
             check=False,
             capture_output=True,
             timeout=60,
             cwd=str(worktree),
             env=env,
         )
-    except (OSError, subprocess.SubprocessError):
-        pass
 
 
 def gc_terminal_worktrees(
