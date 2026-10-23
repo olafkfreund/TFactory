@@ -188,20 +188,17 @@ def _parse_stryker_report(raw: str) -> tuple[TSMutationVerdict, dict | None]:
         the first mutant and ``report_dict`` is the full parsed report (or
         ``None`` on parse failure).
     """
-    if not raw.strip():
-        return TSMutationVerdict.NOT_RUN, None
-
+    data: Any = None
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
         # Stryker might prefix the JSON with log lines; try to find the JSON block.
         json_start = raw.find("{")
-        if json_start == -1:
-            return TSMutationVerdict.NOT_RUN, None
-        try:
-            data = json.loads(raw[json_start:])
-        except json.JSONDecodeError:
-            return TSMutationVerdict.NOT_RUN, None
+        if json_start != -1:
+            try:
+                data = json.loads(raw[json_start:])
+            except json.JSONDecodeError:
+                data = None
 
     # No report object means Stryker never reported; zero mutants is a real report.
     if not isinstance(data, dict) or "mutants" not in data:
