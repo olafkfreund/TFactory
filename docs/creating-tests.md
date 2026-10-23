@@ -188,7 +188,9 @@ Two things are easy to conflate, so to be precise:
 - **The polished `/handover` entry point is Claude-Code-scoped today.** Other
   tools hand off through the tool-agnostic paths instead: the portal task wizard
   (path 2) or the REST front door (`POST /api/specs/ingest`, which accepts
-  markdown / Gherkin / EARS with no AIFactory required). A remote-MCP
+  markdown / Gherkin / EARS with no AIFactory required; an optional `ref` picks
+  the branch, tag or **full 40-character commit SHA** to verify, defaulting to
+  the remote's default branch, and cannot be sent with `source_branch`). A remote-MCP
   `create_and_run` for other IDEs and a `tfactory handover` CLI are on the
   roadmap, not yet shipped — so for Antigravity / Codex / Cursor today, use the
   portal or the REST ingest, and select the provider via the model string.

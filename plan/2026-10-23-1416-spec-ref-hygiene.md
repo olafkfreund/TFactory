@@ -43,3 +43,8 @@ Approved decisions (from the spec):
 ## Rollback
 
 Revert the PR. Refs left meanwhile are harmless; the old GC just keeps them.
+
+## Deviations
+
+- All four steps were implemented by the session, not a coder agent: the
+  code change is about 15 lines and a handoff would cost more than it saves.

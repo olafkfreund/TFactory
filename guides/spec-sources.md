@@ -90,9 +90,17 @@ the canonical `context/aifactory_spec.md` and a **target-mode** `source.json`
 the pipeline:
 
 - **MCP tool** `task_create_from_spec` — `{project_id, spec_id, spec_text,
-  format?, target_paths?, confirm}`. Preview unless `confirm=true`.
+  format?, target_paths?, ref?, confirm}`. Preview unless `confirm=true`.
 - **HTTP** `POST /api/specs/ingest` — same fields as a JSON body; the portal's
   "New test from spec" upload calls this.
+
+`ref` names the code to verify: a branch, a tag, or a **full 40-character
+commit SHA** (a short SHA cannot be fetched and fails the run as `not_run` /
+`environment`). Without it, TFactory verifies the remote's default branch.
+Either way it fetches the ref into a detached per-run worktree and records
+`source_ref` and `source_sha`; the shared checkout is never switched. The HTTP
+ingest also takes `source_branch` (the AIFactory build handoff); send `ref` or
+`source_branch`, not both — both is a `400`.
 
 ```bash
 curl -H "Authorization: Bearer acw_…" -H "Content-Type: application/json" \

@@ -486,3 +486,32 @@ def test_target_mode_worktree_reclaimed_when_terminal(tmp_path):
 
     assert gc_terminal_worktrees(tmp_path) == [sd]
     assert not (sd / ".worktree").exists()
+
+
+def test_gc_deletes_own_spec_ref_keeps_others(tmp_path):
+    """#1416: reclaiming a terminal spec's worktree also deletes its fetch ref
+    (so its objects can be collected), and never another spec's ref."""
+    from agents.liveness_sweep import gc_terminal_worktrees
+
+    _, proj, _, _ = _stale_shared_clone(tmp_path)
+    _ingest(tmp_path, _MARKDOWN, project_root=str(proj), spec_id="done")
+    _ingest(tmp_path, _MARKDOWN, project_root=str(proj), spec_id="live")
+    sd = _spec_dir(tmp_path, "done")
+    status = json.loads((sd / "status.json").read_text())
+    status["status"] = "triaged"
+    (sd / "status.json").write_text(json.dumps(status))
+
+    def has_ref(spec_id):
+        ref = f"refs/tfactory/specs/{spec_id}"
+        return _git(proj, "rev-parse", "--verify", "-q", ref).returncode == 0
+
+    assert has_ref("done") and has_ref("live")
+    assert gc_terminal_worktrees(tmp_path) == [sd]
+    assert not has_ref("done")
+    assert has_ref("live")
+
+
+def test_ref_with_source_branch_rejected_before_workspace(tmp_path):
+    with pytest.raises(ValueError, match="either ref or source_branch"):
+        _ingest(tmp_path, _MARKDOWN, ref="main", source_branch="aifactory/1")
+    assert not _spec_dir(tmp_path).exists()

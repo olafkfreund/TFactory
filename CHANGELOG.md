@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Spec ingest ref follow-ups (#1416).** Reclaiming a terminal spec's
+  worktree now also deletes its `refs/tfactory/specs/<id>` fetch ref, so its
+  objects can be garbage-collected. An ingest with both `ref` and
+  `source_branch` is rejected with a `400` instead of dropping `ref`. The spec
+  sources guide and the creating-tests doc describe `ref` and say a commit
+  must be a full 40-character SHA.
+
 - **Spec ingest verifies a fetched, recorded ref, never the shared checkout as
   it stands (#1404).** A target-mode ingest (no `source_branch`) used to test
   whatever the project's shared checkout had on disk; live, that was a task
