@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Spec ingest verifies a fetched, recorded ref, never the shared checkout as
+  it stands (#1404).** A target-mode ingest (no `source_branch`) used to test
+  whatever the project's shared checkout had on disk; live, that was a task
+  branch a month old. Ingest now takes an optional `ref` (branch, tag or
+  commit), defaulting to origin's default branch, fetches it, and verifies a
+  detached per-run worktree of that commit, as `source_branch` already did.
+  The shared checkout is not touched. `source_ref` and `source_sha` are
+  recorded in `status.json` and `source.json`, so the verdict's commit is the
+  one verified. A fetch or resolve failure fails the run as `not_run` /
+  `environment`. A git project with no `origin` now fails this way too.
+
 - **Verify always packs its workspace; the repo PVC co-mount is gone (#1160
   PR B).** No verify Job or nested lane Job mounts the workspaces PVC any more
   (the `/nix` warm-store PVC is unchanged). `TFACTORY_PACK_WORKSPACE` is
