@@ -193,7 +193,9 @@ Two equivalent front doors, both **[Implemented]**:
 
 1. HTTP: `POST /api/specs/ingest` (TFactory web-server) with:
    `project_id`, `spec_id`, `spec_text`, optional `format`, `target_paths` (target-mode:
-   name the modules under test), `source_branch` (build branch to check out), `contract`
+   name the modules under test), `source_branch` (build branch to check out), `ref`
+   (branch, tag or commit to verify when there is no `source_branch`; defaults to the
+   remote's default branch — see below), `contract`
    (a full RFC-0002 Task Contract — its `tfactory` and `environment` blocks are
    authoritative), and `git_url` (self-materializing: clone + register an unknown project).
    The auto-pipeline (plan, generate, evaluate, triage) runs on ingest.
@@ -205,6 +207,20 @@ Two equivalent front doors, both **[Implemented]**:
 
 The AIFactory build handoff uses the same `POST /api/specs/ingest` with `git_url` +
 `source_branch` + the signed contract.
+
+Every ingest of a git project verifies a known commit (#1404). TFactory fetches
+`source_branch`, else `ref`, else origin's default branch, resolves it to a commit and
+verifies a detached per-run worktree at `<spec_dir>/.worktree`. The shared project
+checkout is never switched, reset or cleaned. `status.json` and `context/source.json`
+record `source_ref` and `source_sha`; `source_sha` is the commit the task GET reports.
+A ref that cannot be fetched or resolved fails the run at ingest with `status: failed`,
+`verify: not_run`, `failure_kind: environment` and the reason in
+`source_checkout_error`. Only a project root that is not a git repo, with no `ref`,
+is verified as it is on disk. The MCP `task_create_from_spec` tool takes the same `ref`.
+A commit `ref` must be the full 40-character SHA; a short SHA cannot be fetched.
+Sending both `ref` and `source_branch` is rejected with a `400` (#1416). The
+per-run fetch ref `refs/tfactory/specs/<spec_id>` is deleted with the worktree once
+the run is terminal.
 
 ## 8. Skills, and adding more
 

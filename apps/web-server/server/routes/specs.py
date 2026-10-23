@@ -63,7 +63,17 @@ class SpecIngestRequest(BaseModel):
         description=(
             "AIFactory build branch to fetch + check out into the project workspace "
             "before testing, so tests run against the ACTUAL built code (#96). When "
-            "omitted, tests run against whatever is currently checked out."
+            "omitted, `ref` (or the remote's default branch) is verified instead."
+        ),
+    )
+    ref: str | None = Field(
+        default=None,
+        description=(
+            "Branch, tag or commit to verify when there is no source_branch "
+            "(#1404). TFactory fetches it, resolves it to a commit and verifies a "
+            "detached per-run worktree; the shared checkout is never switched. "
+            "Defaults to the remote's default branch. A ref that cannot be fetched "
+            "fails the run as not_run / environment."
         ),
     )
     contract: dict | None = Field(
@@ -309,6 +319,7 @@ async def ingest_spec(
             project_root=project_root,
             contract=req.contract,
             source_branch=req.source_branch,
+            ref=req.ref,
             tenant=resolve_tenant(x_tenant_id, req.tenant),
             repo_ref=req.repo,
         )

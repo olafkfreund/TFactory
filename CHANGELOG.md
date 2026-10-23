@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+## 0.9.38 — verify a known ref, honour the repo flake, and never count a missing tool as a kill (2026-10-23)
+
+### Changed
+
+- **Spec ingest ref follow-ups (#1416).** Reclaiming a terminal spec's
+  worktree now also deletes its `refs/tfactory/specs/<id>` fetch ref, so its
+  objects can be garbage-collected. An ingest with both `ref` and
+  `source_branch` is rejected with a `400` instead of dropping `ref`. The spec
+  sources guide and the creating-tests doc describe `ref` and say a commit
+  must be a full 40-character SHA.
+
+- **Spec ingest verifies a fetched, recorded ref, never the shared checkout as
+  it stands (#1404).** A target-mode ingest (no `source_branch`) used to test
+  whatever the project's shared checkout had on disk; live, that was a task
+  branch a month old. Ingest now takes an optional `ref` (branch, tag or
+  commit), defaulting to origin's default branch, fetches it, and verifies a
+  detached per-run worktree of that commit, as `source_branch` already did.
+  The shared checkout is not touched. `source_ref` and `source_sha` are
+  recorded in `status.json` and `source.json`, so the verdict's commit is the
+  one verified. A fetch or resolve failure fails the run as `not_run` /
+  `environment`. A git project with no `origin` now fails this way too.
+- **A git-tracked repo `flake.nix` puts a contract-less run on Nix (#1397).** The evaluator and the pytest lane now share one check, `has_nix_env`: a contract-declared Nix env, or a `flake.nix` that git tracks. A contract-less run with a committed flake sends its lanes to a Nix Job in the repo devShell instead of falling back to host/docker. An untracked or generated flake never counts.
+
+### Fixed
+
+- **A mutant that never ran is `not_run`, not `killed` (#1415).** In the batched Nix path, `run_mutate_probe` and the Java and Rust probes, an exit of 126 or 127 now gives `not_run`, from the same code list stability uses. A `not_run` mutation drops out of confidence, like having no mutation signal.
+- **A missing Stryker is `not_run`, not `no_mutant` (#1419).** The TypeScript probe returns `not_run` when Stryker exits 126/127 or writes no report. `no_mutant` stays for a real report with zero mutants.
+
 ## 0.9.37 — verify always packs; the repo PVC co-mount is gone (2026-10-23)
 
 ### Changed

@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -274,6 +275,10 @@ def _format_json(data: Any) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+# A branch, tag or commit sha (#1404); no leading "-", no ":" or whitespace.
+_REF_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./@+-]*")
+
+
 def _add_spec_worktree(
     base_clone: Path, worktree: Path, branch: str, spec_id: str
 ) -> tuple[str | None, str]:
@@ -322,7 +327,7 @@ def _add_spec_worktree(
     try:
         if not (base_clone / ".git").exists():
             return (
-                f"source_branch={branch!r} requested but {base_clone} is not a git repo",
+                f"ref {branch!r} requested but {base_clone} is not a git repo",
                 "",
             )
         # Fetch the build branch into a ref scoped to THIS spec, so no two specs
@@ -330,7 +335,12 @@ def _add_spec_worktree(
         # resolve it to the pinned sha the worktree will be added from.
         spec_ref = f"refs/tfactory/specs/{spec_id}"
         fetch = _git("fetch", "--no-tags", "--force", "origin", f"{branch}:{spec_ref}")
-        rp = _git("rev-parse", spec_ref) if fetch.returncode == 0 else fetch
+        # ^{commit} peels an annotated tag to its commit, which is what HEAD lands on.
+        rp = (
+            _git("rev-parse", f"{spec_ref}^{{commit}}")
+            if fetch.returncode == 0
+            else fetch
+        )
         if fetch.returncode != 0 or rp.returncode != 0:
             err = (fetch if fetch.returncode != 0 else rp).stderr.strip()[:200]
             return f"git fetch/resolve of {branch} failed: {err}", ""
@@ -358,13 +368,45 @@ def _add_spec_worktree(
         # means the add didn't land what we fetched — refuse it.
         if head.returncode != 0 or head_sha != target_sha:
             return (
-                f"source_branch={branch!r} worktree not verified: HEAD "
+                f"ref {branch!r} worktree not verified: HEAD "
                 f"{head_sha[:12] or '?'} != fetched {target_sha[:12] or '?'} (#742)",
                 "",
             )
         return None, head_sha
     except Exception as exc:  # noqa: BLE001 — worktree setup must never break ingest
-        return f"source_branch worktree error: {exc}", ""
+        return f"ref {branch!r} worktree error: {exc}", ""
+
+
+def _default_branch(base_clone: Path) -> tuple[str | None, str]:
+    """The remote's default branch name, asked of ``origin`` itself (#1404).
+
+    Returns ``(warning, name)``. The local ``refs/remotes/origin/HEAD`` is not
+    trusted: it is whatever the clone last saw, which is the staleness #1404 is
+    about."""
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
+    }
+    argv = ["git", "-C", str(base_clone), "ls-remote", "--symref", "origin", "HEAD"]
+    try:
+        out = subprocess.run(  # noqa: S603 — fixed argv, no request data
+            argv,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=str(base_clone),
+            env=env,
+        )
+    except Exception as exc:  # noqa: BLE001 — reported as a failed ingest
+        return f"could not ask origin for its default branch: {exc}", ""
+    for line in out.stdout.splitlines():
+        head, _, tail = line.partition("\t")
+        if tail == "HEAD" and head.startswith("ref: refs/heads/"):
+            return None, head.removeprefix("ref: refs/heads/")
+    err = out.stderr.strip()[:200] or "no symbolic HEAD"
+    return f"could not resolve origin's default branch: {err}", ""
 
 
 def _correlation_from_contract(contract: dict[str, Any] | None) -> int | None:
@@ -410,6 +452,7 @@ def create_spec_ingest_workspace(
     source_branch: str | None = None,
     tenant: str = "default",
     repo_ref: str | None = None,
+    ref: str | None = None,
 ) -> dict[str, Any]:
     """Create a TFactory workspace from a raw acceptance-criteria spec.
 
@@ -448,6 +491,12 @@ def create_spec_ingest_workspace(
         raise ValueError(f"could not parse spec: {exc.args[0]}") from exc
     if not spec.criteria:
         raise ValueError("spec has no acceptance criteria")
+    # ref reaches `git fetch` as a refspec source: no option-shaped or
+    # refspec-breaking values from the request body.
+    if ref is not None and source_branch:
+        raise ValueError("send either ref or source_branch, not both (#1416)")
+    if ref is not None and not _REF_RE.fullmatch(ref):
+        raise ValueError(f"invalid ref {ref!r}: expected a branch, tag or commit")
 
     spec_dir.mkdir(parents=True, exist_ok=True)
     for sub in ("context", "tests", "findings", "logs", "memory"):
@@ -490,28 +539,35 @@ def create_spec_ingest_workspace(
     # tests run against the ACTUAL built code (#96) AND concurrent specs can't
     # clobber each other's checkout (#742). The SUT dir the whole pipeline is
     # threaded with becomes the worktree, not the shared clone.
+    #
+    # Target-mode does the same with ``ref`` or, absent one, origin's default
+    # branch (#1404): the shared clone may sit on any leftover branch, so it is
+    # never verified as-is. Only a non-git root with no ref (nothing to fetch)
+    # stays on the on-disk tree.
     source_sha = ""
     checkout_failed_reason: str | None = None
-    sut_dir = Path(project_root).expanduser()  # target-mode: the shared clone
+    base_clone = Path(project_root).expanduser()
+    sut_dir = base_clone  # non-git target-mode: the on-disk tree
     worktree_path: Path | None = None
-    if source_branch:
+    source_ref = source_branch or ref
+    if source_ref is None and (base_clone / ".git").exists():
+        checkout_failed_reason, default = _default_branch(base_clone)
+        source_ref = default or None
+    if source_ref:
         worktree_path = spec_dir / ".worktree"
-        warn, source_sha = _add_spec_worktree(
-            Path(project_root).expanduser(), worktree_path, source_branch, spec_id
+        checkout_failed_reason, source_sha = _add_spec_worktree(
+            base_clone, worktree_path, source_ref, spec_id
         )
-        if warn:
-            # A named build branch that won't materialize means we cannot prove
-            # the tree under test is AIFactory's build. Verifying the wrong code
-            # silently is worse than not verifying (#742/#96) — fail the spec
-            # loudly and skip the planner instead of proceeding on whatever tree
-            # is present. Only the AIFactory handoff passes a source_branch;
-            # target-mode ingests never reach here.
-            warnings.append(warn)
-            checkout_failed_reason = warn
-        else:
-            # From here the pipeline resolves the SUT to this spec's private
-            # worktree — no other spec shares its HEAD.
-            sut_dir = worktree_path
+    if checkout_failed_reason:
+        # A ref that won't materialize means we cannot prove which tree is under
+        # test. Verifying the wrong code silently is worse than not verifying
+        # (#742/#96/#1404) — fail the spec loudly and skip the planner instead
+        # of proceeding on whatever tree is present.
+        warnings.append(checkout_failed_reason)
+    elif worktree_path is not None:
+        # From here the pipeline resolves the SUT to this spec's private
+        # worktree — no other spec shares its HEAD.
+        sut_dir = worktree_path
 
     # source.json: target_paths name the SUT; source_branch records which build
     # was checked out (when supplied). The Triager's PR-status side-effect skips
@@ -536,8 +592,11 @@ def create_spec_ingest_workspace(
         "source_format": spec.source_format.value,
         "target_paths": list(target_paths or []),
         "source_branch": source_branch,
+        # The ref the worktree was fetched from (#1404): source_branch, the
+        # requested ref, or origin's default branch. None for a non-git root.
+        "source_ref": source_ref,
         # The commit the ingest checkout actually landed on ("" when unknown or
-        # no source_branch). Readers compare it to the worktree HEAD before
+        # no ref was fetched). Readers compare it to the worktree HEAD before
         # trusting the tree (#742).
         "source_sha": source_sha,
         # This spec's private git worktree (#742) — the SUT dir every stage
@@ -575,6 +634,9 @@ def create_spec_ingest_workspace(
         "phase": "source_checkout_failed" if checkout_failed_reason else "created",
         "tenant": tenant or "default",
         "lane_progress": dict.fromkeys(_MVP_LANES, "pending"),
+        # What this run verifies (#1404); source_sha is also the verdict commit.
+        "source_ref": source_ref,
+        "source_sha": source_sha,
         "created_at": _now_iso(),
         "updated_at": _now_iso(),
     }
@@ -594,6 +656,8 @@ def create_spec_ingest_workspace(
         status["correlation_key"] = _corr
     if checkout_failed_reason:
         status["source_checkout_error"] = checkout_failed_reason
+        status["verify"] = "not_run"
+        status["failure_kind"] = "environment"
     _status_file(project_id, spec_id, root).write_text(json.dumps(status, indent=2))
     if checkout_failed_reason:
         from agents.workspace_status import notify_terminal  # noqa: PLC0415
@@ -898,6 +962,13 @@ def create_task_control_tools() -> list:
                     "items": {"type": "string"},
                     "description": "Optional repo-relative files/modules under test (target-mode; there's no branch diff)",
                 },
+                "ref": {
+                    "type": "string",
+                    "description": (
+                        "Optional branch, tag or commit to verify; fetched into a "
+                        "per-run worktree. Defaults to the remote's default branch."
+                    ),
+                },
                 "confirm": {
                     "type": "boolean",
                     "default": False,
@@ -947,6 +1018,7 @@ def create_task_control_tools() -> list:
                 fmt=fmt,
                 target_paths=target_paths,
                 project_root=project_entry.get("root_path", "."),
+                ref=args.get("ref"),
             )
         except (FileExistsError, ValueError) as exc:
             return _format_error(str(exc))

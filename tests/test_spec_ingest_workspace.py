@@ -374,3 +374,144 @@ def test_no_contract_means_inference(tmp_path):
     sd = _spec_dir(tmp_path)
     assert not (sd / "context" / "task_contract.json").exists()
     assert read_task_contract(sd) is None
+
+
+# ─── #1404: target-mode verifies a fetched, recorded ref ──────────────────
+
+
+def _stale_shared_clone(tmp_path):
+    """origin on its default branch (with fresh.txt) and a shared clone left on a
+    leftover task branch that predates it — the #1404 live shape."""
+    import subprocess
+
+    origin, base = _origin_with_build(tmp_path)
+    (origin / "fresh.txt").write_text("default head")
+    _git(origin, "add", ".")
+    _git(origin, "commit", "-qm", "fresh")
+    proj = tmp_path / "proj-clone"
+    subprocess.run(["git", "clone", "-q", str(origin), str(proj)], capture_output=True)
+    _git(proj, "checkout", "-q", "aifactory/999")
+    head = _git(origin, "rev-parse", base).stdout.strip()
+    return origin, proj, base, head
+
+
+def _shared_state(proj):
+    return (
+        _git(proj, "rev-parse", "HEAD").stdout,
+        _git(proj, "rev-parse", "--abbrev-ref", "HEAD").stdout,
+        _git(proj, "status", "--porcelain").stdout,
+    )
+
+
+def test_stale_checkout_verifies_default_branch_head(tmp_path):
+    _, proj, base, head = _stale_shared_clone(tmp_path)
+    before = _shared_state(proj)
+
+    result = _ingest(tmp_path, _MARKDOWN, project_root=str(proj))
+
+    sd = _spec_dir(tmp_path)
+    source = json.loads((sd / "context" / "source.json").read_text())
+    status = json.loads((sd / "status.json").read_text())
+    assert result["status"] == "pending", result["warnings"]
+    assert source["worktree"] == str(sd / ".worktree")
+    assert (sd / ".worktree" / "fresh.txt").exists()
+    assert source["source_ref"] == status["source_ref"] == base
+    assert source["source_sha"] == status["source_sha"] == head
+    # The shared checkout is untouched: same HEAD, same branch, clean.
+    assert _shared_state(proj) == before
+
+
+def test_explicit_ref_branch_and_commit_honoured(tmp_path):
+    origin, proj, _, _ = _stale_shared_clone(tmp_path)
+    build = _git(origin, "rev-parse", "aifactory/999").stdout.strip()
+    # Annotated tag: its object sha differs from the commit; must peel (#1414).
+    _git(origin, "tag", "-a", "v1.2.0", "-m", "rel", build)
+    before = _shared_state(proj)
+
+    for spec_id, ref in (
+        ("by-branch", "aifactory/999"),
+        ("by-sha", build),
+        ("by-annotated-tag", "v1.2.0"),
+    ):
+        _ingest(tmp_path, _MARKDOWN, spec_id=spec_id, project_root=str(proj), ref=ref)
+        sd = _spec_dir(tmp_path, spec_id)
+        status = json.loads((sd / "status.json").read_text())
+        assert status["source_ref"] == ref
+        assert status["source_sha"] == build, status.get("source_checkout_error")
+        assert not (sd / ".worktree" / "fresh.txt").exists()
+    assert _shared_state(proj) == before
+
+
+def test_bad_ref_fails_not_run_environment(tmp_path):
+    _, proj, _, _ = _stale_shared_clone(tmp_path)
+    before = _shared_state(proj)
+
+    result = _ingest(tmp_path, _MARKDOWN, project_root=str(proj), ref="no/such-ref")
+
+    status = json.loads((_spec_dir(tmp_path) / "status.json").read_text())
+    assert result["status"] == "failed"
+    assert result["planner_scheduled"] is False
+    assert status["verify"] == "not_run"
+    assert status["failure_kind"] == "environment"
+    assert "no/such-ref" in status["source_checkout_error"]
+    assert _shared_state(proj) == before
+
+
+def test_no_origin_fails_rather_than_verifying_on_disk(tmp_path):
+    proj = tmp_path / "local"
+    proj.mkdir()
+    _git(proj, "init", "-q")
+    result = _ingest(tmp_path, _MARKDOWN, project_root=str(proj))
+    status = json.loads((_spec_dir(tmp_path) / "status.json").read_text())
+    assert result["status"] == "failed"
+    assert status["failure_kind"] == "environment"
+    assert "default branch" in status["source_checkout_error"]
+
+
+def test_option_shaped_ref_rejected_before_workspace(tmp_path):
+    with pytest.raises(ValueError, match="invalid ref"):
+        _ingest(tmp_path, _MARKDOWN, ref="--upload-pack=touch /tmp/x")
+    assert not _spec_dir(tmp_path).exists()
+
+
+def test_target_mode_worktree_reclaimed_when_terminal(tmp_path):
+    from agents.liveness_sweep import gc_terminal_worktrees
+
+    _, proj, _, _ = _stale_shared_clone(tmp_path)
+    _ingest(tmp_path, _MARKDOWN, project_root=str(proj))
+    sd = _spec_dir(tmp_path)
+    status = json.loads((sd / "status.json").read_text())
+    status["status"] = "triaged"
+    (sd / "status.json").write_text(json.dumps(status))
+
+    assert gc_terminal_worktrees(tmp_path) == [sd]
+    assert not (sd / ".worktree").exists()
+
+
+def test_gc_deletes_own_spec_ref_keeps_others(tmp_path):
+    """#1416: reclaiming a terminal spec's worktree also deletes its fetch ref
+    (so its objects can be collected), and never another spec's ref."""
+    from agents.liveness_sweep import gc_terminal_worktrees
+
+    _, proj, _, _ = _stale_shared_clone(tmp_path)
+    _ingest(tmp_path, _MARKDOWN, project_root=str(proj), spec_id="done")
+    _ingest(tmp_path, _MARKDOWN, project_root=str(proj), spec_id="live")
+    sd = _spec_dir(tmp_path, "done")
+    status = json.loads((sd / "status.json").read_text())
+    status["status"] = "triaged"
+    (sd / "status.json").write_text(json.dumps(status))
+
+    def has_ref(spec_id):
+        ref = f"refs/tfactory/specs/{spec_id}"
+        return _git(proj, "rev-parse", "--verify", "-q", ref).returncode == 0
+
+    assert has_ref("done") and has_ref("live")
+    assert gc_terminal_worktrees(tmp_path) == [sd]
+    assert not has_ref("done")
+    assert has_ref("live")
+
+
+def test_ref_with_source_branch_rejected_before_workspace(tmp_path):
+    with pytest.raises(ValueError, match="either ref or source_branch"):
+        _ingest(tmp_path, _MARKDOWN, ref="main", source_branch="aifactory/1")
+    assert not _spec_dir(tmp_path).exists()

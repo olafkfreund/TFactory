@@ -83,14 +83,14 @@ from agents.mutation_dispatch import is_mutation_supported, mutant_extension
 from agents.nix_env import (
     detect_serve_command,
     environment_from_contract,
-    flake_is_repo_owned,
-    is_nix_environment,
+    has_nix_env,
     parse_mut_exits,
     parse_pytest_exits,
     run_jest_lane_via_nix,
     run_pytest_lane_via_nix,
 )
 from agents.stability_runner import (
+    _SHELL_NOT_RUN_CODES,
     DEFAULT_SEED,
     RERUN_COUNT,
     StabilityResult,
@@ -281,9 +281,8 @@ def _nix_verify_mode(spec_dir: Path, project_dir: Path | None = None) -> bool:
     """Whether the pytest lane should run via the Nix k8s Job (RFC-0016 #469).
 
     nixjob is the DEFAULT verify execution path: ON when a Nix runner image is
-    configured (``TFACTORY_NIX_RUNNER_IMAGE``) AND the spec's contract declares a
-    nix environment — the toolchain then comes from the per-task flake, matching
-    the build env with no drift. ``TFACTORY_VERIFY_BACKEND`` overrides:
+    configured (``TFACTORY_NIX_RUNNER_IMAGE``) AND the contract or repo provides
+    a Nix environment. ``TFACTORY_VERIFY_BACKEND`` overrides:
     ``nixjob`` forces it on (even without a contract nix env, e.g. a repo-owned
     flake), ``docker``/``host`` force the legacy runner. If nixjob is selected but
     unavailable at run time, the caller falls back to host/docker — a config gap
@@ -297,21 +296,10 @@ def _nix_verify_mode(spec_dir: Path, project_dir: Path | None = None) -> bool:
     if not os.environ.get("TFACTORY_NIX_RUNNER_IMAGE"):
         return False
     try:
-        if is_nix_environment(environment_from_contract(spec_dir)):
-            return True
+        # One predicate with run_pytest_lane_via_nix so they cannot drift (#1187, #1397).
+        return has_nix_env(spec_dir, project_dir)
     except Exception:  # noqa: BLE001 - any contract-read issue → legacy runner
         return False
-    # A REPO-OWNED flake is just as good a nix env as a contract-declared one.
-    # `plan_nix_env` learned that in #1152 and honours it ("no contract nix env,
-    # honouring repo-owned flake.nix"); this predicate never did. So for every
-    # contract-less card -- which is every spec-ingest and every low/medium
-    # skip_planning card -- nix mode read False and the batching behind it
-    # (#776 pytest, #1188 jest) was dead code. Spec 181 paid 24 separate
-    # `nix develop` entries at ~45s, 71% of a 25-minute lane phase, with the
-    # batched path never entered (TFactory#1187).
-    # `is not None` rather than `bool(...)`: the latter does not narrow
-    # `Path | None` for mypy --strict, and a second `return` would trip PLR0911.
-    return project_dir is not None and flake_is_repo_owned(project_dir)
 
 
 def _maybe_nix_verify(  # noqa: PLR0913 - explicit api-lane self-serve knobs
@@ -1279,21 +1267,26 @@ def _mutation_from_codes(
 ) -> MutationResult | None:
     """Build a MutationResult from batched per-mutant exit codes (#776 Stage 1b).
 
-    Applies the SAME rule as ``run_mutate_probe``: KILLED when the mutant's
-    pytest exit code is non-zero, and the FIRST killed candidate wins outright;
-    if nothing is killed, the first candidate's SURVIVED result is returned. So
-    the verdict is byte-identical to the per-candidate path — the only difference
-    is that every candidate ran in ONE Job instead of one Job each.
+    Applies the same rule as ``run_mutate_probe``: the first KILLED wins;
+    otherwise the first candidate that ran wins, or NOT_RUN if none ran.
     """
     first: MutationResult | None = None
     for (mutated, mutation), code in zip(candidates, codes, strict=False):
-        verdict = MutationVerdict.KILLED if code != 0 else MutationVerdict.SURVIVED
+        if code in _SHELL_NOT_RUN_CODES:
+            verdict = MutationVerdict.NOT_RUN
+        elif code == 0:
+            verdict = MutationVerdict.SURVIVED
+        else:
+            verdict = MutationVerdict.KILLED
         result = MutationResult(
             verdict=verdict, mutation=mutation, mutated_source=mutated
         )
         if verdict == MutationVerdict.KILLED:
             return result
-        if first is None:
+        if first is None or (
+            first.verdict == MutationVerdict.NOT_RUN
+            and verdict != MutationVerdict.NOT_RUN
+        ):
             first = result
     return first
 
