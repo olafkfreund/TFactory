@@ -18,9 +18,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import os
 import shutil
+import subprocess
 import sys
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
@@ -230,6 +232,27 @@ def reconcile_inline_orphans(
     return reconciled
 
 
+def _delete_spec_ref(worktree: Path, spec_id: str) -> None:
+    """Delete ``refs/tfactory/specs/<spec_id>`` (#1416), the per-spec fetch ref
+    ``_add_spec_worktree`` made. Refs are shared by every worktree of a clone,
+    so running from the worktree deletes it in the base clone. Best-effort."""
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
+    }
+    ref = f"refs/tfactory/specs/{spec_id}"
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        subprocess.run(  # noqa: S603 — fixed argv; spec_id is a spec dir name
+            ["git", "-C", str(worktree), "update-ref", "-d", ref],  # noqa: S607 - git from PATH
+            check=False,
+            capture_output=True,
+            timeout=60,
+            cwd=str(worktree),
+            env=env,
+        )
+
+
 def gc_terminal_worktrees(
     workspace_root: Path | None = None,
 ) -> list[Path]:
@@ -245,7 +268,9 @@ def gc_terminal_worktrees(
     working tree (never the base clone's objects); an unreadable / non-terminal /
     worktree-less spec is skipped, never raised on. The base clone's now-stale
     worktree registry entry is cleaned by the next ingest's ``git worktree
-    prune``. Returns the spec dirs whose worktree was removed."""
+    prune``. The spec's own fetch ref is deleted with its worktree (#1416) so
+    its objects can be collected. Returns the spec dirs whose worktree was
+    removed."""
     root = workspace_root or default_workspace_root()
     removed: list[Path] = []
     for spec_dir in iter_spec_dirs(root):
@@ -260,6 +285,8 @@ def gc_terminal_worktrees(
             continue
         if status.get("status") not in _GC_TERMINAL_STATUSES:
             continue
+        if (worktree / ".git").is_file():
+            _delete_spec_ref(worktree, spec_dir.name)
         shutil.rmtree(worktree, ignore_errors=True)
         if not worktree.exists():
             removed.append(spec_dir)

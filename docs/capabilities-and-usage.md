@@ -217,6 +217,10 @@ A ref that cannot be fetched or resolved fails the run at ingest with `status: f
 `verify: not_run`, `failure_kind: environment` and the reason in
 `source_checkout_error`. Only a project root that is not a git repo, with no `ref`,
 is verified as it is on disk. The MCP `task_create_from_spec` tool takes the same `ref`.
+A commit `ref` must be the full 40-character SHA; a short SHA cannot be fetched.
+Sending both `ref` and `source_branch` is rejected with a `400` (#1416). The
+per-run fetch ref `refs/tfactory/specs/<spec_id>` is deleted with the worktree once
+the run is terminal.
 
 ## 8. Skills, and adding more
 
