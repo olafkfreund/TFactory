@@ -206,6 +206,7 @@ _MUTATION_PRIORITY = {
     "killed": 0,
     "no_mutation": 1,
     "error": 2,
+    "not_run": 2,
     "survived": 3,  # shouldn't reach Triager (Evaluator rejects them),
     # but if it slips through, last in rank
 }

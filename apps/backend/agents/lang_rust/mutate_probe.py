@@ -18,11 +18,13 @@ from pathlib import Path
 from typing import Any
 
 from agents._mutation_common import mutate_first_assertion
+from agents.stability_runner import _SHELL_NOT_RUN_CODES
 
 
 class RustMutationVerdict(str, Enum):
     KILLED = "killed"  # mutant failed — assertion is meaningful
     SURVIVED = "survived"  # mutant passed — assertion is tautological / weak
+    NOT_RUN = "not_run"  # shell could not execute the test
     NO_MUTANT = "no_mutant"  # no mutable assertion found
     ERROR = "error"  # runner raised / couldn't classify
 
@@ -66,7 +68,7 @@ def run_rust_mutate_probe(
     """Mutate one assertion in *test_file*, run via *runner_fn*, classify.
 
     ``runner_fn(mutant_path, project_dir) -> result`` returns an object with a
-    ``returncode`` (0 = passed → SURVIVED; non-zero = failed → KILLED). In
+    ``returncode`` (0 = SURVIVED; 126/127 = NOT_RUN; other non-zero = KILLED). In
     production this runs ``cargo test`` in the Rust container.
     """
     try:
@@ -89,5 +91,10 @@ def run_rust_mutate_probe(
             return RustMutateReport(test_file, RustMutationVerdict.ERROR, desc)
 
     rc = getattr(result, "returncode", 1)
-    verdict = RustMutationVerdict.SURVIVED if rc == 0 else RustMutationVerdict.KILLED
+    if rc in _SHELL_NOT_RUN_CODES:
+        verdict = RustMutationVerdict.NOT_RUN
+    elif rc == 0:
+        verdict = RustMutationVerdict.SURVIVED
+    else:
+        verdict = RustMutationVerdict.KILLED
     return RustMutateReport(test_file, verdict, desc)
