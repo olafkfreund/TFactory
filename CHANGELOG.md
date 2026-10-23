@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## 0.9.37 — verify always packs; the repo PVC co-mount is gone (2026-10-23)
+
+### Changed
+
+- **Verify always packs its workspace; the repo PVC co-mount is gone (#1160
+  PR B).** No verify Job or nested lane Job mounts the workspaces PVC any more
+  (the `/nix` warm-store PVC is unchanged). `TFACTORY_PACK_WORKSPACE` is
+  ignored (logged once if still set), and `TFACTORY_WORKSPACES_PVC` is no
+  longer read. A pack failure is no longer fail-open. At dispatch, it
+  records the run `failed` with `verify: not_run`, `failure_kind: environment`
+  and applies no Job, so there is no co-mount and no in-pod fallback. A lane
+  pack or input-fetch failure is classified `environment`, so its verdict is
+  `not_run`. The control-plane restore of the pushed-back workspace is
+  unchanged.
+
+### Fixed
+
+- A generated, untracked `flake.nix`/`flake.lock` is removed on every lane exit path, including the early return when no Nix runner image is set and a failed module-dir lookup or staging. A git-tracked flake is never deleted. (#1405, #1410)
+
 ## 0.9.36 — Nix lanes keep their junit and coverage (2026-10-23)
 
 ### Fixed
