@@ -30,6 +30,7 @@ async def test_unknown_project_with_git_url_clones_and_registers(monkeypatch, tm
     def fake_create_ws(**kw):
         seen["project_root"] = kw.get("project_root")
         seen["source_branch"] = kw.get("source_branch")
+        seen["ref"] = kw.get("ref")
         return {"spec_dir": str(tmp_path)}
 
     # project store empty -> unknown project
@@ -49,6 +50,7 @@ async def test_unknown_project_with_git_url_clones_and_registers(monkeypatch, tm
         spec_text="## Acceptance Criteria\n- it works",
         git_url="https://github.com/olafkfreund/aifactory-test.git",
         source_branch="aifactory/027-x",
+        ref="v1.2.0",
     )
     out = await ingest_spec(req)
     assert out["task_id"] == "027-x"
@@ -56,6 +58,7 @@ async def test_unknown_project_with_git_url_clones_and_registers(monkeypatch, tm
     assert seen["branch"] == "aifactory/027-x"
     assert seen["project_root"] == str(tmp_path)  # cloned path used as root
     assert seen["source_branch"] == "aifactory/027-x"
+    assert seen["ref"] == "v1.2.0"  # #1404: passed through to ingest
 
 
 @pytest.mark.asyncio
