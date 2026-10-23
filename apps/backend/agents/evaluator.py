@@ -90,6 +90,7 @@ from agents.nix_env import (
     run_pytest_lane_via_nix,
 )
 from agents.stability_runner import (
+    _SHELL_NOT_RUN_CODES,
     DEFAULT_SEED,
     RERUN_COUNT,
     StabilityResult,
@@ -1266,21 +1267,26 @@ def _mutation_from_codes(
 ) -> MutationResult | None:
     """Build a MutationResult from batched per-mutant exit codes (#776 Stage 1b).
 
-    Applies the SAME rule as ``run_mutate_probe``: KILLED when the mutant's
-    pytest exit code is non-zero, and the FIRST killed candidate wins outright;
-    if nothing is killed, the first candidate's SURVIVED result is returned. So
-    the verdict is byte-identical to the per-candidate path — the only difference
-    is that every candidate ran in ONE Job instead of one Job each.
+    Applies the same rule as ``run_mutate_probe``: the first KILLED wins;
+    otherwise the first candidate that ran wins, or NOT_RUN if none ran.
     """
     first: MutationResult | None = None
     for (mutated, mutation), code in zip(candidates, codes, strict=False):
-        verdict = MutationVerdict.KILLED if code != 0 else MutationVerdict.SURVIVED
+        if code in _SHELL_NOT_RUN_CODES:
+            verdict = MutationVerdict.NOT_RUN
+        elif code == 0:
+            verdict = MutationVerdict.SURVIVED
+        else:
+            verdict = MutationVerdict.KILLED
         result = MutationResult(
             verdict=verdict, mutation=mutation, mutated_source=mutated
         )
         if verdict == MutationVerdict.KILLED:
             return result
-        if first is None:
+        if first is None or (
+            first.verdict == MutationVerdict.NOT_RUN
+            and verdict != MutationVerdict.NOT_RUN
+        ):
             first = result
     return first
 

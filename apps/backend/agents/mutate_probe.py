@@ -33,8 +33,8 @@ The Evaluator commit-5 wiring will:
      test source via ``mutate_source()``.
   2. Write the mutated source to a tmp path.
   3. Call the runner_fn with the mutated path.
-  4. KILLED (runner exits non-zero) → keep test. SURVIVED (runner
-     exits 0) → reject. ERROR / no mutation applicable → inconclusive.
+  4. KILLED (test fails) → keep test. SURVIVED (test passes) → reject.
+     NOT_RUN / ERROR / no mutation applicable → inconclusive.
 
 #630: a generated test FILE can hold several ``test_*`` functions for the
 same acceptance criterion — e.g. one weak status-only test alongside a
@@ -58,6 +58,7 @@ from enum import Enum
 from pathlib import Path
 
 from agents.run_result import RunResultLike
+from agents.stability_runner import _SHELL_NOT_RUN_CODES
 
 
 class MutationVerdict(str, Enum):
@@ -65,6 +66,7 @@ class MutationVerdict(str, Enum):
 
     KILLED = "killed"  # mutant failed — assertion is meaningful
     SURVIVED = "survived"  # mutant passed — assertion is tautological
+    NOT_RUN = "not_run"  # shell could not execute the test
     NO_MUTATION = "no_mutation"  # nothing to mutate (no assertions found)
     ERROR = "error"  # runner raised, or mutation broke parse
 
@@ -313,9 +315,8 @@ def run_mutate_probe(
     catches that class of mutation, so the file (and the acceptance
     criterion it verifies) is not falsely penalised for a sibling
     function's weak assertions (#630). If nothing is killed, the result
-    is exactly what the original single-mutation probe would have
-    returned (the first function's candidate) — a genuinely weak-only
-    file still SURVIVES.
+    is the first candidate that ran, or NOT_RUN when none ran. A
+    genuinely weak-only file still SURVIVES.
 
     Args:
         test_file: Absolute path to the original generated test file.
@@ -355,7 +356,7 @@ def run_mutate_probe(
         return MutationResult(verdict=MutationVerdict.NO_MUTATION)
 
     def _probe_one(mutated: str, mutation: MutationApplied) -> MutationResult:
-        """Run one mutation candidate through the runner; ERROR/KILLED/SURVIVED.
+        """Run one mutation candidate through the runner.
 
         Closes over ``test_file``/``project_dir``/``runner_fn``/
         ``write_mutant_to``/``seed``/``tail_chars`` — kept as a nested
@@ -386,9 +387,12 @@ def run_mutate_probe(
                 error_message=f"{type(exc).__name__}: {exc}"[:500],
             )
 
-        verdict = (
-            MutationVerdict.KILLED if res.returncode != 0 else MutationVerdict.SURVIVED
-        )
+        if res.returncode in _SHELL_NOT_RUN_CODES:
+            verdict = MutationVerdict.NOT_RUN
+        elif res.returncode == 0:
+            verdict = MutationVerdict.SURVIVED
+        else:
+            verdict = MutationVerdict.KILLED
         return MutationResult(
             verdict=verdict,
             mutation=mutation,
@@ -404,11 +408,13 @@ def run_mutate_probe(
             # Strongest possible signal: some test in this file DOES catch
             # this class of mutation (#630) — no need to probe the rest.
             return candidate_result
-        if first_result is None:
+        if first_result is None or (
+            first_result.verdict == MutationVerdict.NOT_RUN
+            and candidate_result.verdict != MutationVerdict.NOT_RUN
+        ):
             first_result = candidate_result
 
-    # Nothing was killed — report the first function's candidate, exactly
-    # what the pre-#630 single-mutation probe would have returned.
+    # Nothing was killed — report the first candidate that actually ran.
     if first_result is None:  # pragma: no cover — unreachable, candidates non-empty
         raise RuntimeError("run_mutate_probe: no candidate produced a result")
     return first_result

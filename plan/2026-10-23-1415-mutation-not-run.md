@@ -29,11 +29,11 @@ No second code list. TypeScript (Stryker JSON) unchanged.
    `apps/backend/agents/triage_dedup.py` `_MUTATION_PRIORITY`: "not_run": 2.
    `apps/backend/prompts/evaluator.md`: document `not_run`.
    `apps/backend/agents/quality_gate.py` docstring: list not_run.
-4. Regression tests in `apps/backend/tests/test_mutation_not_run_1415.py`.
+4. Regression tests in `tests/test_mutation_not_run_1415.py`.
 
 ## Tests
 
-`cd apps/backend && .venv/bin/pytest tests/test_mutation_not_run_1415.py -q`
+`apps/backend/.venv/bin/pytest tests/test_mutation_not_run_1415.py -q` (repo-root tests/; apps/backend/tests is gitignored)
 plus the existing mutate_probe / evaluator / confidence tests; ruff;
 `python scripts/ratchet_lint.py`.
 
