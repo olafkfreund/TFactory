@@ -13,6 +13,7 @@ from agents.nix_env import (
     collect_screenshots,
     detect_serve_command,
     environment_from_contract,
+    has_nix_env,
     is_nix_environment,
     materialize_flake,
     parse_pytest_exits,
@@ -190,6 +191,49 @@ def test_run_pytest_lane_via_nix_noop_without_nix_env(tmp_path):
     test_file = project / "tests" / "test_x.py"
     test_file.parent.mkdir(parents=True)
     test_file.write_text("def test_x(): assert True\n")
+    assert run_pytest_lane_via_nix(spec, project, test_file) is None
+
+
+def test_run_pytest_lane_via_nix_uses_repo_flake_without_contract_env(
+    tmp_path, monkeypatch
+):
+    spec = tmp_path / "specs" / "027"
+    spec.mkdir(parents=True)
+    project = tmp_path / "proj"
+    project.mkdir()
+    _commit_flake(project, "{ outputs = _: {}; }\n")
+    test_file = project / "test_x.py"
+    test_file.write_text("def test_x(): assert True\n")
+    commands_seen = []
+
+    class _FakeSandbox:
+        def run(self, commands, *, workdir=None, timeout=300):
+            commands_seen.extend(commands)
+            return JobRunResult(ok=True, exit_code=0, output="__PYTEST_EXIT=0\n")
+
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: _FakeSandbox())
+    assert has_nix_env(spec, project) is True
+    assert run_pytest_lane_via_nix(spec, project, test_file) is not None
+    assert commands_seen[0].startswith("nix develop path:/work#default")
+
+
+def test_run_pytest_lane_via_nix_skips_untracked_flake_without_contract_env(
+    tmp_path, monkeypatch
+):
+    spec = tmp_path / "specs" / "027"
+    spec.mkdir(parents=True)
+    project = tmp_path / "proj"
+    project.mkdir()
+    subprocess.run(["git", "init", "-q", str(project)], check=True)
+    (project / "flake.nix").write_text("{ outputs = _: {}; }\n")
+    test_file = project / "test_x.py"
+    test_file.write_text("def test_x(): assert True\n")
+
+    def _unexpected_sandbox():
+        raise AssertionError("sandbox must not be called")
+
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", _unexpected_sandbox)
+    assert has_nix_env(spec, project) is False
     assert run_pytest_lane_via_nix(spec, project, test_file) is None
 
 
