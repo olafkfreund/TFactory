@@ -1,10 +1,7 @@
 """Packed-workspace round trip for the verify Job (RFC-0017 step 3, TFactory #1159).
 
-The verify Job co-mounts the workspaces PVC today. That PVC is RWO ``local-path``,
-so the Job must land on whichever node holds the worktree — the single reason this
-fleet cannot verify across nodes, and the reason concurrency tops out at ~3-4
-tasks. AIFactory's *build* path already runs packed in production
-(``AIFACTORY_PACK_WORKSPACE``); this is the verify side of the same mechanism.
+The verify Job unpacks its workspace from object storage into an ``emptyDir`` so
+it can run on any node. AIFactory's build path uses the same mechanism.
 
 Three moves, all of them thin wrappers over the vendored
 ``tools.runners.artifact_store`` (there is exactly one packer in this fleet and
@@ -21,15 +18,11 @@ this is not it):
 **Why the push-back is the load-bearing half.** ``workdir`` on the packed path is
 an ``emptyDir``: it dies with the Job. Screenshots, junit, coverage and
 ``status.json`` written there are gone unless something explicitly puts them back.
-On the co-mounted path they survived incidentally, because the PVC outlived the
-pod, so nothing in the current code ever had to be deliberate about it. That exact
-omission already cost the AIFactory side one silent data-loss bug — a Job that
-loses its evidence looks identical, at the Job level, to one that worked.
+Before packing, they survived incidentally because the PVC outlived the pod.
+That omission already cost the AIFactory side one silent data-loss bug.
 
-Hence the deliberate asymmetry in the error handling here: ``pack_for_dispatch``
-is **fail-open** (no object store → return ``None`` → the caller keeps today's PVC
-co-mount, nothing is lost), while ``restore_workspace`` and
-``push_back_workspace`` **raise**. On the packed path a failed restore means the
+``pack_for_dispatch`` returns ``None`` on failure; dispatch records a failed verify.
+``restore_workspace`` and ``push_back_workspace`` raise. A failed restore means the
 Job has no spec to verify, and a failed push-back means the run's evidence is
 already gone; both must fail the Job loudly rather than produce a green run with
 nothing behind it.
@@ -79,8 +72,7 @@ _NEVER_RESTORED = frozenset(
 def _open_store() -> tuple[Any, Any] | None:
     """``(ArtifactStore, StoreConfig)`` for the configured endpoint, or None.
 
-    Lazy import: the store pulls boto3, and the co-mounted path must keep working
-    on an image that has neither.
+    Lazy import: the store pulls boto3, and module imports must work without it.
     """
     from tools.runners.artifact_store import (  # noqa: PLC0415 - lazy by design
         ArtifactStore,
@@ -205,16 +197,14 @@ def pack_for_dispatch(
 ) -> str | None:
     """Pack the spec workspace to MinIO; return its ``s3://`` URI, or None.
 
-    Fail-open on purpose: None means "the packed path is not available", and the
-    caller falls back to today's PVC co-mount. Nothing is lost by that — the
-    co-mount is what production runs today.
+    None means the packed path is unavailable, so dispatch fails the verify.
     """
     try:
         opened = _open_store()
         if opened is None:
             _log.info(
                 "[verify-workspace] S3_ENDPOINT unset; not packing job_id=%s "
-                "(dispatch keeps the PVC co-mount)",
+                "(dispatch fails the verify)",
                 job_id,
             )
             return None
@@ -241,10 +231,10 @@ def pack_for_dispatch(
             uri = pack_workspace(
                 store, _workspace_ref(job_id, correlation_key, cfg.bucket), staging
             )
-    except Exception:  # noqa: BLE001 - a pack gap falls back, it never strands
+    except Exception:  # noqa: BLE001 - dispatch handles a pack failure
         _log.warning(
             "[verify-workspace] packing failed for job_id=%s; "
-            "dispatch keeps the PVC co-mount",
+            "dispatch fails the verify",
             job_id,
             exc_info=True,
         )
@@ -258,8 +248,8 @@ def restore_workspace(
 ) -> Path | None:
     """In-Job: unpack ``WORKSPACE_URI`` into ``WORKSPACE_ROOT``. Returns the root.
 
-    None (and no side effects) on the co-mounted path, where neither env is set —
-    that is how the caller tells the two paths apart. Raises on the packed path:
+    None (and no side effects) when neither workspace env var is set. Raises
+    when the URI is set but cannot be restored:
     without the workspace there is no spec to verify, and a Job that carries on
     would report a verdict about an empty tree.
     """

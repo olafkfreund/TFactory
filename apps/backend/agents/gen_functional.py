@@ -32,6 +32,7 @@ v0.1 Task 6 commits (all landed):
 """
 
 import asyncio
+import functools
 import json
 import logging as _logging
 import os
@@ -512,16 +513,9 @@ def _dispatch_verify_as_job_if_enabled(spec_dir: Path, project_dir: Path) -> boo
         return False
 
 
-def _pack_workspace_enabled() -> bool:
-    """``TFACTORY_PACK_WORKSPACE`` — pack the verify workspace to the object store
-    instead of co-mounting the RWO PVC (#1160).
-
-    Off unless explicitly on: unset keeps today's co-mount, because a toggle that
-    changes behaviour by merely existing is not a toggle. Read here, at the one
-    dispatch call site, not inside ``dispatch_verify_job`` (see the note there).
-    """
-    value = os.environ.get("TFACTORY_PACK_WORKSPACE", "").strip().lower()
-    return value in {"1", "true", "yes"}
+@functools.cache
+def _warn_pack_toggle_ignored() -> None:
+    _gen_log.warning("TFACTORY_PACK_WORKSPACE is ignored; verify always packs")
 
 
 def _run_dispatch_blocking(
@@ -536,17 +530,24 @@ def _run_dispatch_blocking(
     running as a Job); ``False`` on fall-back (in-pod should run).
     """
     from agents.verify_dispatch import (  # noqa: PLC0415 - lazy by design
+        VerifyWorkspacePackError,
         dispatch_verify_job,
     )
 
+    if "TFACTORY_PACK_WORKSPACE" in os.environ:
+        _warn_pack_toggle_ignored()
+
     async def _go() -> bool:
-        result = await dispatch_verify_job(
-            job_id=job_id,
-            spec_dir=spec_dir,
-            project_dir=project_dir,
-            correlation_key=correlation_key,  # type: ignore[arg-type]
-            pack_workspace=_pack_workspace_enabled(),
-        )
+        try:
+            result = await dispatch_verify_job(
+                job_id=job_id,
+                spec_dir=spec_dir,
+                project_dir=project_dir,
+                correlation_key=correlation_key,  # type: ignore[arg-type]
+            )
+        except VerifyWorkspacePackError as exc:
+            _gen_log.warning("verify kubejob dispatch failed: %s", exc)
+            return True
         if result is None:
             _gen_log.info(
                 "verify kubejob dispatch fell back to in-pod for job_id=%s", job_id

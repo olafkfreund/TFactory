@@ -647,14 +647,40 @@ def test_run_pytest_lane_via_nix_isolates_shared_checkout(tmp_path, monkeypatch)
 
 
 def test_nix_runner_from_env_honors_data_root(monkeypatch):
-    """nix_runner_from_env passes TFACTORY_DATA_ROOT to the sandbox so pvc_subpath
-    resolves co-mounts when the PVC is mounted at a non-default path (#623)."""
+    """nix_runner_from_env preserves the root for relative workspace paths."""
     from agents.nix_env import nix_runner_from_env
 
     monkeypatch.setenv("TFACTORY_NIX_RUNNER_IMAGE", "img:latest")
     monkeypatch.setenv("TFACTORY_DATA_ROOT", "/work")
     sb = nix_runner_from_env()
     assert sb is not None and sb.data_root == "/work"
+
+
+def test_nested_lane_ignores_stale_workspace_pvc(monkeypatch):
+    from agents.nix_env import nix_runner_from_env
+    from tools.runners.kube_sandbox import build_job_manifest
+
+    monkeypatch.setenv("TFACTORY_NIX_RUNNER_IMAGE", "img:latest")
+    monkeypatch.setenv("TFACTORY_WORKSPACES_PVC", "tfactory-data")
+    monkeypatch.setenv("TFACTORY_NIX_STORE_PVC", "tfactory-nix-store")
+    monkeypatch.delenv("TFACTORY_NIX_IN_IMAGE", raising=False)
+    sb = nix_runner_from_env()
+    assert sb is not None
+    manifest = build_job_manifest(
+        "nested",
+        sb.image,
+        ["true"],
+        workspace_uri="s3://bucket/lane.tar.gz",
+        **sb.manifest_kw,
+    )
+    pod = manifest["spec"]["template"]["spec"]
+    claims = {
+        v["persistentVolumeClaim"]["claimName"]
+        for v in pod["volumes"]
+        if "persistentVolumeClaim" in v
+    }
+    assert claims == {"tfactory-nix-store"}
+    assert {"name": "repo", "emptyDir": {}} in pod["volumes"]
 
 
 def test_nix_runner_from_env_default_data_root(monkeypatch):
@@ -675,7 +701,7 @@ def _mounted_pvcs(monkeypatch) -> set[str]:
     sb = nix_runner_from_env()
     assert sb is not None
     m = build_job_manifest(
-        "t", sb.image, ["true"], repo_pvc=sb.repo_pvc, **sb.manifest_kw
+        "t", sb.image, ["true"], **sb.manifest_kw
     )
     vols = m["spec"]["template"]["spec"].get("volumes", [])
     return {
@@ -1696,29 +1722,6 @@ def test_run_gradle_lane_via_nix_passes_env_to_materialize_flake(tmp_path, monke
     # No env: Kotlin's default, unchanged (#1712).
     run_gradle_lane_via_nix(spec, project)
     assert seen["env"]["language"] == "kotlin"
-
-
-def test_nix_runner_from_env_lane_pack_drops_pvc(monkeypatch):
-    """#1391: inside a packed verify Job the nested lane must not co-mount the
-    RWO workspaces PVC, even if the PVC env leaked through."""
-    from agents.nix_env import nix_runner_from_env
-
-    monkeypatch.setenv("TFACTORY_NIX_RUNNER_IMAGE", "img:latest")
-    monkeypatch.setenv("TFACTORY_WORKSPACES_PVC", "tfactory-data")
-    monkeypatch.setenv("TFACTORY_LANE_PACK", "1")
-    sb = nix_runner_from_env()
-    assert sb is not None and sb.repo_pvc is None and sb.pack_workdir is True
-
-
-def test_nix_runner_from_env_unpacked_keeps_pvc(monkeypatch):
-    from agents.nix_env import nix_runner_from_env
-
-    monkeypatch.setenv("TFACTORY_NIX_RUNNER_IMAGE", "img:latest")
-    monkeypatch.setenv("TFACTORY_WORKSPACES_PVC", "tfactory-data")
-    monkeypatch.delenv("TFACTORY_LANE_PACK", raising=False)
-    sb = nix_runner_from_env()
-    assert sb is not None and sb.repo_pvc == "tfactory-data"
-    assert sb.pack_workdir is False
 
 
 # ─── TFactory#1400: repo-owned means git-TRACKED ─────────────────────────────

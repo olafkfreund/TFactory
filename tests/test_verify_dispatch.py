@@ -83,6 +83,15 @@ async def store():
     await engine.dispose()
 
 
+@pytest.fixture(autouse=True)
+def _fake_workspace_pack(monkeypatch):
+    monkeypatch.setattr(
+        vd,
+        "_pack_workspace_for",
+        lambda **_kw: "s3://factory-artifacts/test/workspace.tar.gz",
+    )
+
+
 class _FakeSandbox:
     """Stand-in for ``KubeJobSandbox`` — carries the coordinates dispatch reads."""
 
@@ -90,7 +99,6 @@ class _FakeSandbox:
         self.namespace = namespace
         self.data_root = data_root
         self.image = _IMAGE
-        self.repo_pvc = "tfactory-data"
         self.nix_store_pvc = "tfactory-nix-store"
 
 
@@ -185,7 +193,7 @@ def _cfg(**kw) -> VerifyJobConfig:
         "image": _RUNTIME_IMAGE,
         "spec_subpath": "workspaces/proj/.tfactory/specs/042",
         "project_subpath": "workspaces/proj",
-        "repo_pvc": "tfactory-data",
+        "workspace_uri": "s3://factory-artifacts/tfactory/test/workspace.tar.gz",
         "nix_store_pvc": "tfactory-nix-store",
         "correlation_key": 482,
         "backend_path": _BACKEND_PATH,
@@ -243,7 +251,7 @@ def test_seed_creds_injected_when_secret_configured(monkeypatch):
 def test_seed_creds_init_container_is_hardened(monkeypatch):
     # #651: the seed-creds initContainer carries the same hardened
     # securityContext as the lane/seed containers (no escalation, drop ALL +
-    # co-mount add-backs).
+    # required capability add-backs).
     monkeypatch.setenv("TFACTORY_VERIFY_CLI_CREDS_SECRET", "factory-cli-creds")
     pod = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
     init = next(c for c in pod["initContainers"] if c["name"] == "seed-creds")
@@ -322,7 +330,7 @@ def test_manifest_propagates_nix_sandbox_env_when_set(monkeypatch):
     ps = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
     env = {e["name"]: e["value"] for e in ps["containers"][0]["env"]}
     assert env["TFACTORY_NIX_RUNNER_IMAGE"] == "ghcr.io/x/tfactory-runner-nix:latest"
-    assert env["TFACTORY_WORKSPACES_PVC"] == "tfactory-data"
+    assert "TFACTORY_WORKSPACES_PVC" not in env
     assert env["TFACTORY_NIX_STORE_PVC"] == "tfactory-nix-store"
 
 
@@ -428,11 +436,17 @@ def test_manifest_uses_tfactory_sandbox_sa_with_token_automount():
     assert ps["automountServiceAccountToken"] is True
 
 
-def test_manifest_mounts_worktree_and_warm_nix_store():
+def test_manifest_mounts_packed_worktree_and_warm_nix_store(monkeypatch):
+    monkeypatch.setenv("TFACTORY_WORKSPACES_PVC", "tfactory-data")
     m = build_verify_job_manifest(_cfg())
     ps = m["spec"]["template"]["spec"]
     vols = {v["name"]: v for v in ps["volumes"]}
-    assert vols["repo"]["persistentVolumeClaim"]["claimName"] == "tfactory-data"
+    assert vols["repo"] == {"name": "repo", "emptyDir": {}}
+    assert {
+        v["persistentVolumeClaim"]["claimName"]
+        for v in vols.values()
+        if "persistentVolumeClaim" in v
+    } == {"tfactory-nix-store"}
     assert (
         vols["nix-store"]["persistentVolumeClaim"]["claimName"] == "tfactory-nix-store"
     )
@@ -747,6 +761,33 @@ async def test_dispatch_propagates_oauth_env_to_applied_job(monkeypatch, store):
     env = _env_of(manifest)
     tok = next(e for e in env if e["name"] == "CLAUDE_CODE_OAUTH_TOKEN")
     assert tok["valueFrom"]["secretKeyRef"]["name"] == "tfactory-claude-oauth"
+
+
+async def test_pack_failure_marks_environment_without_applying(
+    monkeypatch, store, tmp_path
+):
+    spec = _spec_ws(tmp_path)
+    monkeypatch.setattr(vd, "_pack_workspace_for", lambda **_kw: None)
+    apply = _RecordingApply()
+    with pytest.raises(vd.VerifyWorkspacePackError, match="failure_kind=environment"):
+        await vd.dispatch_verify_job(
+            job_id="pack-failed",
+            spec_dir=spec,
+            project_dir=spec / ".worktree",
+            sandbox=_FakeSandbox(),
+            store=store,
+            apply_fn=apply,
+        )
+    assert apply.calls == []
+    row = await store.get("pack-failed")
+    assert row["lifecycle_state"] == "stuck"
+    assert "failure_kind=environment" in row["error"]
+    status = json.loads((spec / "status.json").read_text())
+    assert status["status"] == "failed"
+    assert status["phase"] == "verify_workspace_pack_failed"
+    assert status["verify"] == "not_run"
+    assert status["failure_kind"] == "environment"
+    assert "failure_kind=environment" in status["reaped_reason"]
 
 
 async def test_dispatch_falls_back_when_sandbox_unconfigured(monkeypatch, store):
@@ -1124,14 +1165,11 @@ def test_record_dispatch_succeeds_on_a_foreign_loop(tmp_path, monkeypatch):
     assert asyncio.run(_verdict()) == "done"
 
 
-def test_verify_job_sets_data_root_env():
-    """The verify Job declares TFACTORY_DATA_ROOT = its mount, so the nested Nix
-    sandbox resolves co-mount subPaths against the right PVC root — without it
-    pvc_subpath returns None, the Nix Job mounts nothing, and every AC rejects on
-    an empty /work (#623)."""
+def test_verify_job_sets_workspace_root_env():
+    """The verify Job declares the root used to unpack its workspace."""
     m = build_verify_job_manifest(_cfg())
     env = m["spec"]["template"]["spec"]["containers"][0]["env"]
-    dr = next((e for e in env if e["name"] == "TFACTORY_DATA_ROOT"), None)
+    dr = next((e for e in env if e["name"] == "WORKSPACE_ROOT"), None)
     assert dr is not None and dr["value"] == "/work"  # VerifyJobConfig.mount default
 
 
@@ -1147,17 +1185,8 @@ def test_packed_verify_job_does_not_forward_pvc_to_nested_lanes(monkeypatch):
     env = {e["name"]: e.get("value") for e in ps["containers"][0]["env"]}
     assert "TFACTORY_WORKSPACES_PVC" not in env
     assert "TFACTORY_DATA_ROOT" not in env
-    assert env["TFACTORY_LANE_PACK"] == "1"
-    assert env["TFACTORY_NIX_RUNNER_IMAGE"] == "img:latest"
-
-
-def test_unpacked_verify_job_still_forwards_pvc(monkeypatch):
-    monkeypatch.setenv("TFACTORY_WORKSPACES_PVC", "tfactory-data")
-    ps = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
-    env = {e["name"]: e.get("value") for e in ps["containers"][0]["env"]}
-    assert env["TFACTORY_WORKSPACES_PVC"] == "tfactory-data"
-    assert env["TFACTORY_DATA_ROOT"] == "/work"
     assert "TFACTORY_LANE_PACK" not in env
+    assert env["TFACTORY_NIX_RUNNER_IMAGE"] == "img:latest"
 
 
 # ─── #767: a reap must also finish the SPEC, not just the row ─────────────────
@@ -1513,36 +1542,10 @@ def test_nothing_is_forwarded_when_the_pod_has_no_object_store(monkeypatch) -> N
     assert not [e for e in _provider_env_entries() if e["name"].startswith("S3_")]
 
 
-# ─── #1160: the TFACTORY_PACK_WORKSPACE toggle and the packed flag ────────────
+# ─── #1160: packed dispatch ────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [
-        (None, False),
-        ("", False),
-        ("false", False),
-        ("0", False),
-        ("garbage", False),
-        ("true", True),
-        ("TRUE", True),
-        ("1", True),
-        ("yes", True),
-    ],
-)
-def test_pack_toggle_is_off_unless_explicitly_on(monkeypatch, value, expected):
-    """Unset must stay the co-mount: a toggle that changes behaviour by merely
-    existing is not a toggle."""
-    from agents.gen_functional import _pack_workspace_enabled
-
-    if value is None:
-        monkeypatch.delenv("TFACTORY_PACK_WORKSPACE", raising=False)
-    else:
-        monkeypatch.setenv("TFACTORY_PACK_WORKSPACE", value)
-    assert _pack_workspace_enabled() is expected
-
-
-async def _dispatch_packed(tmp_path, store, monkeypatch, *, packed: bool):
+async def _dispatch_packed(tmp_path, store, monkeypatch):
     spec = tmp_path / "spec"
     spec.mkdir()
     uri = "s3://factory-artifacts/tfactory/7/proj:900/workspace/workspace.tar.gz"
@@ -1556,7 +1559,6 @@ async def _dispatch_packed(tmp_path, store, monkeypatch, *, packed: bool):
         sandbox=_FakeSandbox(),
         store=store,
         apply_fn=apply,
-        pack_workspace=packed,
     )
     assert result is not None
     return spec, uri, apply.calls[0][1]
@@ -1565,12 +1567,8 @@ async def _dispatch_packed(tmp_path, store, monkeypatch, *, packed: bool):
 async def test_packed_dispatch_records_where_the_workspace_went(
     tmp_path, store, monkeypatch
 ):
-    """The sweep finds packed specs by this flag, and it must be the row's own
-    record — never inferred from the toggle, so a flip mid-flight changes nothing
-    for rows already dispatched."""
-    spec, uri, _manifest = await _dispatch_packed(
-        tmp_path, store, monkeypatch, packed=True
-    )
+    """The sweep finds packed specs by the URI in the durable worker ref."""
+    spec, uri, _manifest = await _dispatch_packed(tmp_path, store, monkeypatch)
     on_disk = json.loads((spec / vd.SPEC_WORKER_REF_FILE).read_text())
     durable = (await store.get("proj:900"))["worker_ref"]
     for ref in (on_disk, durable):
@@ -1579,17 +1577,29 @@ async def test_packed_dispatch_records_where_the_workspace_went(
         assert ref["job_id"] == "proj:900"
 
 
-async def test_co_mounted_dispatch_records_no_workspace_uri(
-    tmp_path, store, monkeypatch
-):
-    spec, _uri, manifest = await _dispatch_packed(
-        tmp_path, store, monkeypatch, packed=False
+async def test_false_pack_toggle_still_packs(monkeypatch, store, tmp_path):
+    monkeypatch.setenv("TFACTORY_PACK_WORKSPACE", "false")
+    packed = []
+
+    def _pack(**kwargs):
+        packed.append(kwargs["job_id"])
+        return "s3://factory-artifacts/test/workspace.tar.gz"
+
+    monkeypatch.setattr(vd, "_pack_workspace_for", _pack)
+    spec = tmp_path / "spec"
+    spec.mkdir()
+    apply = _RecordingApply()
+    result = await vd.dispatch_verify_job(
+        job_id="toggle-false",
+        spec_dir=spec,
+        project_dir=spec / ".worktree",
+        sandbox=_FakeSandbox(),
+        store=store,
+        apply_fn=apply,
     )
-    on_disk = json.loads((spec / vd.SPEC_WORKER_REF_FILE).read_text())
-    assert "workspace_uri" not in on_disk
-    assert "workspace_uri" not in (await store.get("proj:900"))["worker_ref"]
-    volumes = json.dumps(manifest["spec"]["template"]["spec"].get("volumes", []))
-    assert "tfactory-data" in volumes  # the RWO co-mount is still there
+    assert result is not None
+    assert packed == ["toggle-false"]
+    assert len(apply.calls) == 1
 
 
 async def test_reconcile_tick_runs_the_restore_sweep(store, monkeypatch):

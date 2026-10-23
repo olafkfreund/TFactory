@@ -20,9 +20,9 @@ split never hard-fails a verify on a config gap.
 Reused seams (no new infra):
   - ``tools.runners.kube_sandbox`` — the proven apply/watch/log/delete lifecycle
     and the pure ``build_job_manifest`` (nix-base image, warm ``/nix`` store PVC,
-    worktree co-mount, ``automountServiceAccountToken: false``, ttl + deadline).
+    packed workspace, ``automountServiceAccountToken: false``, ttl + deadline).
   - ``agents.nix_env.nix_runner_from_env`` — builds the sandbox from the
-    deployment's ``TFACTORY_*`` env (image, workspaces PVC, warm-store PVC, ns).
+    deployment's ``TFACTORY_*`` env (image, warm-store PVC, namespace).
   - The durable Postgres ``job-state`` row (#465/#468) — the Job writes its own
     terminal row; the control plane **reconciles by polling Postgres** so a
     missed completion event never strands a job (concurrency-conventions.md §3).
@@ -477,7 +477,7 @@ def _verify_command(
 ) -> str:
     """The command the Job runs inside ``nix develop`` to perform the verify.
 
-    Runs the orchestration entrypoint against the co-mounted spec + project. The
+    Runs the orchestration entrypoint against the unpacked spec + project. The
     paths are relative to the worktree mount (``/work``) so they resolve inside
     the Job regardless of the host data root.
     """
@@ -516,13 +516,13 @@ class VerifyJobConfig:
 
     A dataclass (mirroring the hub ``job_dispatch.JobSpec``) so the pure builder
     keeps a single parameter and stays within the strict arg cap. Short scalars
-    only — never the contract blob (that lives in the co-mounted worktree)."""
+    only — never the contract blob (that lives in the packed workspace)."""
 
     job_id: str
     image: str
     spec_subpath: str
     project_subpath: str
-    repo_pvc: str | None
+    workspace_uri: str
     namespace: str = "factory"
     service_account: str = "tfactory-sandbox"
     nix_store_pvc: str | None = None
@@ -543,11 +543,6 @@ class VerifyJobConfig:
     # materialized into the project worktree (like the lane path), so the develop
     # ref must point there. Defaults to the project subpath.
     flake_subpath: str | None = None
-    # TFactory#1159: packed-workspace URI. When set, kube_sandbox gives the Job an
-    # ``emptyDir`` at ``mount`` and NO PVC (``workspace_uri`` deliberately wins over
-    # ``repo_pvc``), and the pipeline unpacks this URI into it at startup. Default
-    # None keeps today's RWO co-mount, so this field is inert until a caller packs.
-    workspace_uri: str | None = None
 
 
 # -- file-auth CLI credential seeding (#481) --------------------------------- #
@@ -638,7 +633,7 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
     """Build the k8s Job manifest that runs the verify orchestration. Pure.
 
     Wraps the proven ``kube_sandbox.build_job_manifest`` (warm ``/nix`` store,
-    worktree co-mount, no API-token automount) and then layers the
+    packed workspace, no API-token automount) and then layers the
     orchestration-Job specifics §3 requires that the lane builder does not:
       - the dedicated ``tfactory-sandbox`` service account (the verify Job writes
         its own job-state row + may touch the cluster, unlike a pure lane);
@@ -697,8 +692,6 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
         namespace=cfg.namespace,
         timeout=cfg.timeout,
         ttl_seconds=cfg.ttl_seconds,
-        repo_pvc=cfg.repo_pvc,
-        repo_subpath="",  # mount the data root; the command paths are mount-relative
         workdir=cfg.mount,
         nix_store_pvc=cfg.nix_store_pvc,
         workspace_uri=cfg.workspace_uri,
@@ -734,8 +727,7 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
     # WORKSPACE_URI is set by the sandbox builder; this says where to unpack it.
     # The pipeline needs both, because the --spec/--project arguments are absolute
     # paths under the mount, not relative to some implied cwd (#1159).
-    if cfg.workspace_uri:
-        env.append({"name": "WORKSPACE_ROOT", "value": cfg.mount})
+    env.append({"name": "WORKSPACE_ROOT", "value": cfg.mount})
     # Pass DATABASE_URL through so the Job's terminal write lands in the same
     # Postgres the control plane polls. Only when actually set (dev/SQLite omits).
     db_url = os.environ.get(cfg.database_url_env)
@@ -748,10 +740,9 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
     # without this ``nix_runner_from_env`` returns None inside the Job and the lane
     # silently falls back to the host runner — the RFC-0005 flake env then never
     # runs in the kubejob path. (The mounted SA token lets the nested create Job
-    # authenticate; these tell it what image/PVCs to use.)
+    # authenticate; these tell it what image and Nix store to use.)
     for _nix_var in (
         "TFACTORY_NIX_RUNNER_IMAGE",
-        "TFACTORY_WORKSPACES_PVC",
         "TFACTORY_NIX_STORE_PVC",
         # #623: MUST travel with TFACTORY_NIX_STORE_PVC. nix_runner_from_env runs
         # again inside the dispatched Job; if the flag does not reach it, it reads
@@ -762,13 +753,7 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
         "TFACTORY_NIX_IN_IMAGE",
         "TFACTORY_SANDBOX_NAMESPACE",
     ):
-        # #1391: packed lanes get their workdir by object store; the RWO PVC
-        # would pin them to its node and show them the PVC copy, not our emptyDir.
-        _nix_val = (
-            None
-            if cfg.workspace_uri and _nix_var == "TFACTORY_WORKSPACES_PVC"
-            else os.environ.get(_nix_var)
-        )
+        _nix_val = os.environ.get(_nix_var)
         if _nix_val:
             env.append({"name": _nix_var, "value": _nix_val})
     # Forward the triager side-effect flags so the verdict actually surfaces on
@@ -805,18 +790,6 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
     _bash_sandbox = os.environ.get("AIFACTORY_BASH_SANDBOX")
     if _bash_sandbox:
         env.append({"name": "AIFACTORY_BASH_SANDBOX", "value": _bash_sandbox})
-    # In unpacked mode this Job mounts the workspaces PVC at ``cfg.mount``, NOT
-    # at the control plane's /home/nonroot/.tfactory. The nested per-task Nix Job
-    # derives its co-mount subPath via pvc_subpath(path, data_root); without the
-    # right data root that returns None and the Nix Job mounts nothing — an empty
-    # /work where the SUT is unimportable, so every AC rejects (consistent_fail).
-    # Tell nix_runner_from_env where the PVC actually is inside THIS Job (#623).
-    # Packed (#1391): no PVC here, so tell nix_runner_from_env to pack lanes instead.
-    env.append(
-        {"name": "TFACTORY_LANE_PACK", "value": "1"}
-        if cfg.workspace_uri
-        else {"name": "TFACTORY_DATA_ROOT", "value": cfg.mount}
-    )
     # LLM credential (TFactory #466 env round-4): the verify pipeline's evaluator
     # calls create_client → require_auth_token. Without it the Job died
     # ``ValueError: No OAuth token found``. Inject CLAUDE_CODE_OAUTH_TOKEN via the
@@ -871,13 +844,16 @@ def _shq(s: str) -> str:
 # ── Dispatch (opt-in) ────────────────────────────────────────────────────────
 
 
+class VerifyWorkspacePackError(RuntimeError):
+    """The verify workspace could not be staged; no Job was applied."""
+
+
 async def dispatch_verify_job(  # noqa: PLR0913 - 3 domain args + injectable seams
     *,
     job_id: str,
     spec_dir: Path,
     project_dir: Path,
     correlation_key: str | int | None = None,
-    pack_workspace: bool = False,
     sandbox: Any = None,
     store: Any = None,
     apply_fn: Any = None,
@@ -901,7 +877,7 @@ async def dispatch_verify_job(  # noqa: PLR0913 - 3 domain args + injectable sea
     nix-runner image and get the SUT toolchain from ``nix develop`` there. So the
     entrypoint is a plain ``python -m agents.verify_pipeline`` with the backend on
     PYTHONPATH — mirroring AIFactory's #686/#671 "run the service's own image".
-    The nix-runner ``sandbox`` is still used for the PVC / namespace / data-root
+    The nix-runner ``sandbox`` is still used for the namespace / data-root
     coordinates (and to gate on TFACTORY_NIX_RUNNER_IMAGE so a config gap falls
     back to in-pod cleanly); only the orchestration image differs.
 
@@ -920,23 +896,18 @@ async def dispatch_verify_job(  # noqa: PLR0913 - 3 domain args + injectable sea
         )
         return None
 
-    # TFactory#1159. Opt-in per call, NOT read from env here: the operator-facing
-    # TFACTORY_PACK_WORKSPACE toggle is read at the one call site
-    # (gen_functional._pack_workspace_enabled, #1160). Packed BEFORE the dispatch
-    # is recorded so the first worker_ref already says where the workspace went.
-    # Fail-open — a None URI (no object store, a pack error) keeps the RWO
-    # co-mount, so a storage gap never strands a verify.
-    workspace_uri = (
-        _pack_workspace_for(
-            job_id=job_id,
-            spec_dir=spec_dir,
-            project_dir=project_dir,
-            sandbox=sandbox,
-            correlation_key=correlation_key,
-        )
-        if pack_workspace
-        else None
+    workspace_uri = await asyncio.to_thread(
+        _pack_workspace_for,
+        job_id=job_id,
+        spec_dir=spec_dir,
+        project_dir=project_dir,
+        sandbox=sandbox,
+        correlation_key=correlation_key,
     )
+    if workspace_uri is None:
+        reason = "verify workspace pack failed (failure_kind=environment)"
+        await _fail_unpacked_dispatch(job_id, spec_dir, correlation_key, store, reason)
+        raise VerifyWorkspacePackError(reason)
 
     namespace = getattr(sandbox, "namespace", "factory")
     name = verify_job_name(job_id)
@@ -953,16 +924,11 @@ async def dispatch_verify_job(  # noqa: PLR0913 - 3 domain args + injectable sea
         # spec_subpath), which is exactly what the control-plane reaper needs.
         "spec_dir": str(spec_dir),
     }
-    if workspace_uri:
-        # The packed flag the control-plane restore sweep keys on (#1160): the
-        # row's own record, never inferred from the current toggle, so a flip
-        # mid-flight changes nothing for rows already dispatched. project_dir is
-        # what the restore must NOT touch (the worktree sits inside spec_dir).
-        worker_ref |= {
-            "job_id": job_id,
-            "workspace_uri": workspace_uri,
-            "project_dir": str(project_dir),
-        }
+    worker_ref |= {
+        "job_id": job_id,
+        "workspace_uri": workspace_uri,
+        "project_dir": str(project_dir),
+    }
 
     # Record the queued row + worker_ref BEFORE applying the Job, so a reaper can
     # find an orphan even if the apply is interrupted (the row, not the cluster,
@@ -990,7 +956,6 @@ async def dispatch_verify_job(  # noqa: PLR0913 - 3 domain args + injectable sea
         image=verify_image,
         spec_subpath=spec_subpath,
         project_subpath=project_subpath,
-        repo_pvc=getattr(sandbox, "repo_pvc", None),
         namespace=namespace,
         nix_store_pvc=getattr(sandbox, "nix_store_pvc", None),
         correlation_key=correlation_key,
@@ -1219,6 +1184,36 @@ async def _record_dispatch(
         )
 
 
+async def _fail_unpacked_dispatch(
+    job_id: str,
+    spec_dir: Path,
+    correlation_key: str | int | None,
+    store: Any,
+    reason: str,
+) -> None:
+    """Record an unstaged verify as an environment failure without applying a Job."""
+    record = {"worker_ref": {"spec_dir": str(spec_dir)}}
+    try:
+        async with _store_for(store) as (s, _owned):
+            await s.enqueue(job_id, correlation_key=correlation_key)
+            await s.update_status(job_id, service_status="queued", has_verdict=False)
+            await s.mark_stuck(job_id, reason)
+    except Exception:  # noqa: BLE001 - still fail the spec when the store is down
+        _log.warning(
+            "[verify-dispatch] could not record pack failure for job_id=%s",
+            job_id,
+            exc_info=True,
+        )
+    await asyncio.to_thread(
+        _mark_spec_reaped,
+        record,
+        reason,
+        phase="verify_workspace_pack_failed",
+        verify="not_run",
+        failure_kind="environment",
+    )
+
+
 # The spec-workspace copy of the Job coordinates. The durable Postgres row stays
 # the source of truth (concurrency-conventions.md §3); this is a read-only echo
 # of it for callers that hold a spec dir and nothing else.
@@ -1364,7 +1359,13 @@ async def reap_if_orphaned(
     return rec
 
 
-def _mark_spec_reaped(record: dict[str, Any], reason: str) -> None:
+def _mark_spec_reaped(
+    record: dict[str, Any],
+    reason: str,
+    *,
+    phase: str = "verify_job_reaped",
+    **extra: Any,
+) -> None:
     """Write a terminal status into the reaped Job's workspace, if we can find it."""
     ref = record.get("worker_ref") or {}
     spec_dir = ref.get("spec_dir") if isinstance(ref, dict) else None
@@ -1378,8 +1379,9 @@ def _mark_spec_reaped(record: dict[str, Any], reason: str) -> None:
         if data.get("status") in _SPEC_TERMINAL_STATUSES:
             return  # the Job wrote its own verdict first — never overwrite it
         data["status"] = "failed"
-        data["phase"] = "verify_job_reaped"
+        data["phase"] = phase
         data["reaped_reason"] = reason
+        data.update(extra)
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         _log.warning("[verify-dispatch] reaped spec %s: %s", spec_dir, reason)
         from agents.workspace_status import notify_terminal  # noqa: PLC0415
