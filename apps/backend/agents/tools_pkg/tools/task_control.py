@@ -386,7 +386,7 @@ def _default_branch(base_clone: Path) -> tuple[str | None, str]:
     argv = ["git", "-C", str(base_clone), "ls-remote", "--symref", "origin", "HEAD"]
     try:
         out = subprocess.run(  # noqa: S603 — fixed argv, no request data
-            argv,  # noqa: S607
+            argv,
             check=False,
             capture_output=True,
             text=True,
