@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1416
 spec: spec/2026-10-23-1416-spec-ref-hygiene.md
 ---
