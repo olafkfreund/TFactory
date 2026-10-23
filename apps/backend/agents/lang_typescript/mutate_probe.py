@@ -52,6 +52,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from agents.stability_runner import _SHELL_NOT_RUN_CODES
+
 logger = logging.getLogger(__name__)
 
 
@@ -66,6 +68,7 @@ class TSMutationVerdict(str, Enum):
     NO_MUTANT = "no_mutant"  # no mutable assertion found in the test file
     SYNTAX_ERROR = "syntax_error"  # mutated file has a parse/type error
     TIMEOUT = "timeout"  # Stryker timed out
+    NOT_RUN = "not_run"  # Stryker never ran: exit 126/127 or no report
 
 
 # ─── Result type ──────────────────────────────────────────────────────────────
@@ -186,7 +189,7 @@ def _parse_stryker_report(raw: str) -> tuple[TSMutationVerdict, dict | None]:
         ``None`` on parse failure).
     """
     if not raw.strip():
-        return TSMutationVerdict.NO_MUTANT, None
+        return TSMutationVerdict.NOT_RUN, None
 
     try:
         data = json.loads(raw)
@@ -194,13 +197,16 @@ def _parse_stryker_report(raw: str) -> tuple[TSMutationVerdict, dict | None]:
         # Stryker might prefix the JSON with log lines; try to find the JSON block.
         json_start = raw.find("{")
         if json_start == -1:
-            return TSMutationVerdict.NO_MUTANT, None
+            return TSMutationVerdict.NOT_RUN, None
         try:
             data = json.loads(raw[json_start:])
         except json.JSONDecodeError:
-            return TSMutationVerdict.NO_MUTANT, None
+            return TSMutationVerdict.NOT_RUN, None
 
-    mutants = data.get("mutants", [])
+    # No report object means Stryker never reported; zero mutants is a real report.
+    if not isinstance(data, dict) or "mutants" not in data:
+        return TSMutationVerdict.NOT_RUN, None
+    mutants = data["mutants"]
     if not mutants:
         return TSMutationVerdict.NO_MUTANT, data
 
@@ -363,6 +369,14 @@ def run_ts_mutate_probe(
             return TSMutateReport(
                 test_file=test_file,
                 verdict=TSMutationVerdict.SYNTAX_ERROR,
+                mutated_assertion=mutation_desc,
+                raw_stryker_json=None,
+            )
+
+        if result.returncode in _SHELL_NOT_RUN_CODES:
+            return TSMutateReport(
+                test_file=test_file,
+                verdict=TSMutationVerdict.NOT_RUN,
                 mutated_assertion=mutation_desc,
                 raw_stryker_json=None,
             )

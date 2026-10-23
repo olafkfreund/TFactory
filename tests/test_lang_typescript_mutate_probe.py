@@ -190,9 +190,9 @@ def test_parse_no_mutants_returns_no_mutant() -> None:
     assert verdict == TSMutationVerdict.NO_MUTANT
 
 
-def test_parse_empty_string_returns_no_mutant() -> None:
+def test_parse_empty_string_returns_not_run() -> None:
     verdict, data = _parse_stryker_report("")
-    assert verdict == TSMutationVerdict.NO_MUTANT
+    assert verdict == TSMutationVerdict.NOT_RUN
     assert data is None
 
 
