@@ -288,14 +288,6 @@ def nix_runner_from_env() -> KubeJobSandbox | None:
         return None
     from tools.runners.kube_sandbox import KubeJobSandbox
 
-    pvc = os.environ.get("TFACTORY_WORKSPACES_PVC")
-    # Packed verify Jobs give nested lanes an object-store workdir, not their PVC.
-    pack_workdir = os.environ.get("TFACTORY_LANE_PACK", "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
     ns = os.environ.get("TFACTORY_SANDBOX_NAMESPACE", "factory")
     # RFC-0016 #197: opt-in warm /nix/store PVC so the toolchain closure persists
     # across Nix lane Jobs instead of cold-fetching each run. Absent → no mount,
@@ -306,13 +298,7 @@ def nix_runner_from_env() -> KubeJobSandbox | None:
     nix_store_pvc = (
         None if nix_in_image() else (os.environ.get("TFACTORY_NIX_STORE_PVC") or None)
     )
-    # #623: the data root (workspaces PVC) is NOT always mounted at the control
-    # plane's default /home/nonroot/.tfactory — the verify Job mounts it at /work.
-    # The sandbox derives each Job's co-mount subPath via pvc_subpath(workdir,
-    # data_root); if data_root is wrong, pvc_subpath returns None and the nested
-    # Nix Job co-mounts nothing (empty /work → the SUT is unimportable → every AC
-    # rejects). TFACTORY_DATA_ROOT lets the enclosing context declare where the
-    # PVC actually is; absent → the KubeJobSandbox default is unchanged.
+    # Keep the data root for callers that resolve workspace paths relative to it.
     kw: dict[str, str] = {}
     data_root = os.environ.get("TFACTORY_DATA_ROOT")
     if data_root:
@@ -320,9 +306,7 @@ def nix_runner_from_env() -> KubeJobSandbox | None:
     return KubeJobSandbox(
         image,
         namespace=ns,
-        repo_pvc=None if pack_workdir else pvc,
         nix_store_pvc=nix_store_pvc,
-        pack_workdir=pack_workdir,
         **kw,
     )
 

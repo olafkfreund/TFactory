@@ -2,14 +2,12 @@
 
 TFactory pods have no container runtime (k3d), so the hardened DockerRunner lanes
 cannot spawn anything in-cluster. This backend launches a task's commands as an
-ephemeral **Kubernetes Job** using the `tfactory-runner-nix` image, co-mounting
-the project worktree from the workspaces PVC at `/work`, and running
+ephemeral **Kubernetes Job** using the `tfactory-runner-nix` image, packing
+the project worktree into an emptyDir at `/work`, and running
 `nix develop /work#default -c <commands>` there — the toolchain (incl. the
 playwright browsers) comes from the per-task flake, not the image.
 
-Ported from AIFactory's proven `core/kube_sandbox.py` (RFC-0005 #68). The
-worktree co-mount relies on the Job landing on the same node as the TFactory pod
-that holds the RWO workspaces PVC (true on the single-node k3d cluster).
+Ported from AIFactory's proven `core/kube_sandbox.py` (RFC-0005 #68).
 
 `build_job_manifest()` is pure (no cluster / no client) and unit-tested; the
 async lifecycle (create -> watch -> logs -> delete) uses `kubernetes_asyncio`.
@@ -198,39 +196,22 @@ def build_job_manifest(
     memory: str = "8Gi",
     ttl_seconds: int | None = None,
     timeout: int = 900,
-    repo_pvc: str | None = None,
-    repo_subpath: str | None = None,
     workspace_uri: str | None = None,
     workdir: str = "/work",
-    repo_ro: bool = False,
     network_none: bool = False,
     nix_store_pvc: str | None = None,
     service_account: str | None = None,
 ) -> dict:
     """Pure builder for the per-task Job manifest. No cluster access.
 
-    When ``workspace_uri`` is given (RFC-0017 #190) the Job takes NO PVC at all:
+    When ``workspace_uri`` is given (RFC-0017 #190) the Job takes no workspace PVC:
     ``workdir`` is an ``emptyDir`` and the consumer unpacks the packed workspace
-    from ``WORKSPACE_URI`` into it at startup. This is what makes a verify Job
-    node-agnostic -- the ``repo_pvc`` co-mount below is RWO, so it pins the Job to
-    whichever node holds the worktree, and that pin is the single reason this fleet
-    cannot verify across nodes. AIFactory's build path already runs this way
-    (``AIFACTORY_PACK_WORKSPACE``); this brings verify onto the same footing.
-
-    ``workspace_uri`` WINS over ``repo_pvc`` when both are passed, deliberately: a
-    caller mid-migration that still threads its PVC should get the packed
-    behaviour rather than silently re-pinning itself to a node.
+    from ``WORKSPACE_URI`` into it at startup. Without it, the Job is toolchain-only.
 
     CALLER CONTRACT -- ``emptyDir`` dies with the Job. Screenshots, junit and
     coverage written into ``workdir`` are LOST unless the caller pushes them back
-    (``ARTIFACTS_URI``). On the co-mounted path those files survived incidentally
-    because the PVC outlived the pod; here they do not. Getting this wrong is
-    silent: the Job goes green and the evidence simply is not there.
-
-    When ``repo_pvc`` is given the worktree is co-mounted **rw** by default at
-    ``workdir`` (the browser lane writes screenshots/junit into it, which
-    TFactory collects after the Job). The browser lane needs egress to fetch the
-    nixpkgs binary cache + reach the app, so ``network_none`` is False by default.
+    (``ARTIFACTS_URI``). Getting this wrong is silent: the Job goes green and
+    the evidence simply is not there.
 
     When ``nix_store_pvc`` is given (RFC-0016 #197), the whole ``/nix`` tree is
     served from that warm-store PVC so per-task Nix lane Jobs stop cold-fetching
@@ -284,22 +265,7 @@ def build_job_manifest(
     volumes: list[dict[str, Any]] = []
     mounts: list[dict[str, Any]] = []
     if workspace_uri:
-        # RFC-0017 #190, applied to the verify lane. A packed-workspace Job has NO
-        # PVC co-mount -- that co-mount is exactly what pins the Job to the node
-        # holding the RWO worktree, and it is the only reason this fleet cannot run
-        # verify across nodes. The consumer unpacks WORKSPACE_URI into `workdir` at
-        # startup, so `workdir` must be a WRITABLE node-local target: an emptyDir.
-        #
-        # Checked BEFORE repo_pvc so a caller that passes both gets the packed
-        # behaviour rather than silently re-pinning itself. Passing both is a
-        # migration state, not an error.
-        #
-        # WARNING for callers: emptyDir dies with the Job. Anything the lane writes
-        # into `workdir` -- screenshots, junit, coverage -- is LOST unless it is
-        # explicitly pushed back to ARTIFACTS_URI. On the co-mounted path those
-        # files survived incidentally because the PVC outlived the pod; here they do
-        # not. That difference already cost this fleet one silent data-loss bug on
-        # the AIFactory side.
+        # The consumer unpacks WORKSPACE_URI into this writable emptyDir.
         container["workingDir"] = workdir
         mounts.append({"name": "repo", "mountPath": workdir})
         volumes.append({"name": "repo", "emptyDir": {}})
@@ -307,22 +273,6 @@ def build_job_manifest(
         # than appending to one that does not exist.
         container.setdefault("env", []).append(
             {"name": "WORKSPACE_URI", "value": workspace_uri}
-        )
-    elif repo_pvc:
-        container["workingDir"] = workdir
-        mounts.append(
-            {
-                "name": "repo",
-                "mountPath": workdir,
-                "subPath": repo_subpath,
-                "readOnly": repo_ro,
-            }
-        )
-        volumes.append(
-            {
-                "name": "repo",
-                "persistentVolumeClaim": {"claimName": repo_pvc, "readOnly": repo_ro},
-            }
         )
     if nix_store_pvc:
         mounts.append({"name": "nix-store", "mountPath": "/nix"})
@@ -386,7 +336,7 @@ def build_job_manifest(
 
 
 def pvc_subpath(workdir: str | None, data_root: str = _DEFAULT_DATA_ROOT) -> str | None:
-    """PVC-relative subPath for an absolute ``workdir``, or None when outside it."""
+    """Data-root-relative path for an absolute ``workdir``, or None if outside."""
     if not workdir:
         return None
     root = data_root.rstrip("/") + "/"
@@ -443,16 +393,12 @@ class KubeJobSandbox:
         image: str,
         *,
         namespace: str = "factory",
-        repo_pvc: str | None = None,
         data_root: str = _DEFAULT_DATA_ROOT,
-        pack_workdir: bool = False,
         **manifest_kw,
     ):
         self.image = image
         self.namespace = namespace
-        self.repo_pvc = repo_pvc
         self.data_root = data_root
-        self.pack_workdir = pack_workdir
         self.manifest_kw = manifest_kw
 
     def with_manifest_kw(self, **overrides: object) -> KubeJobSandbox:
@@ -462,9 +408,7 @@ class KubeJobSandbox:
         clone = KubeJobSandbox(
             self.image,
             namespace=self.namespace,
-            repo_pvc=self.repo_pvc,
             data_root=self.data_root,
-            pack_workdir=self.pack_workdir,
             **{**self.manifest_kw, **overrides},
         )
         return clone
@@ -536,7 +480,9 @@ class KubeJobSandbox:
             else ""
         )
         wrapped = (
-            'set -e; curl -fsS "$TF_LANE_IN_URL" | tar -xz -C /work; '
+            'set -e; set -o pipefail; curl -fsS "$TF_LANE_IN_URL" | tar -xz -C /work '
+            "|| { echo '[kube-sandbox] lane input fetch failed'; "
+            "echo __TF_LANE_NOT_COLLECTED__; exit 1; }; set +o pipefail; "
             f"set +e; timeout -k 10 {budget} bash -c {lane_command}; rc=$?; "
             "find /work -type l -lname '/*' -delete; "
             "tar -czf /tmp/tf_lane_out.tgz -C /work . && "
@@ -563,20 +509,6 @@ class KubeJobSandbox:
         store = ArtifactStore()
         unpack_workspace(store, out_uri, workdir)
 
-    def _repo_kw(self, workdir: str | None) -> dict[str, Any]:
-        repo_kw: dict[str, Any] = {}
-        if self.repo_pvc:
-            subpath = pvc_subpath(workdir, self.data_root)
-            if subpath is not None:
-                repo_kw = {"repo_pvc": self.repo_pvc, "repo_subpath": subpath}
-            else:
-                logger.info(
-                    "[kube-sandbox] workdir %r outside data root %r; toolchain-only",
-                    workdir,
-                    self.data_root,
-                )
-        return repo_kw
-
     async def _run_async(
         self, commands: list[str], timeout: int, workdir: str | None
     ) -> JobRunResult:
@@ -585,16 +517,20 @@ class KubeJobSandbox:
         extra_env: list[dict[str, str]] = []
         collect: Callable[[], None] | None = None
         discard: Callable[[], None] | None = None
-        if self.pack_workdir and workdir:
+        if workdir:
             try:
                 commands, workspace_uri, extra_env, collect, discard = self._pack_lane(
                     name, commands, workdir, timeout
                 )
             except Exception as exc:  # noqa: BLE001 - fail before creating a Job
-                return JobRunResult(False, 1, f"[kube-sandbox] lane pack failed: {exc}")
+                return JobRunResult(
+                    False,
+                    1,
+                    f"[kube-sandbox] lane pack failed: {exc}\n__TF_LANE_NOT_COLLECTED__",
+                )
         try:
             return await self._run_job(
-                name, commands, timeout, workdir, workspace_uri, extra_env, collect
+                name, commands, timeout, workspace_uri, extra_env, collect
             )
         finally:
             # #1393: a raise from create/poll must not leak the lane archives.
@@ -606,7 +542,6 @@ class KubeJobSandbox:
         name: str,
         commands: list[str],
         deadline_s: int,
-        workdir: str | None,
         workspace_uri: str | None,
         extra_env: list[dict[str, str]],
         collect: Callable[[], None] | None,
@@ -624,7 +559,6 @@ class KubeJobSandbox:
             commands,
             namespace=self.namespace,
             timeout=deadline_s,
-            **({} if workspace_uri else self._repo_kw(workdir)),
             workspace_uri=workspace_uri,
             **self.manifest_kw,
         )

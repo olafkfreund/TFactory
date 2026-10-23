@@ -728,12 +728,9 @@ def test_advance_kubejob_dispatches_job_and_skips_inpod(
 
     seen: dict = {}
 
-    async def _fake_dispatch(
-        *, job_id, spec_dir, project_dir, correlation_key=None, pack_workspace=False
-    ):
+    async def _fake_dispatch(*, job_id, spec_dir, project_dir, correlation_key=None):
         seen["job_id"] = job_id
         seen["spec_dir"] = spec_dir
-        seen["pack_workspace"] = pack_workspace
         return vd_mod.VerifyDispatch(
             job_id=job_id,
             job_name=vd_mod.verify_job_name(job_id),
@@ -754,8 +751,6 @@ def test_advance_kubejob_dispatches_job_and_skips_inpod(
     gen_functional._advance_to_evaluator(spec_dir, project_dir)
     assert seen["job_id"] == "proj:042"
     assert seen["spec_dir"] == spec_dir
-    # #1160: TFACTORY_PACK_WORKSPACE unset -> the co-mount, unchanged.
-    assert seen["pack_workspace"] is False
 
 
 def test_advance_unset_uses_inpod_path(
@@ -2344,3 +2339,54 @@ def test_each_lane_builder_states_why_coverage_is_na(
     b = getattr(ev, builder)(tmp_path, tmp_path, subtask, None)
 
     assert b.coverage_na_reason == reason
+
+
+def test_dispatch_pack_error_is_handled_without_inpod_fallback(
+    monkeypatch, spec_dir, project_dir
+):
+    from agents import gen_functional
+    from agents import verify_dispatch as vd
+
+    async def _fail(**_kwargs):
+        raise vd.VerifyWorkspacePackError("verify workspace pack failed")
+
+    monkeypatch.setattr(vd, "dispatch_verify_job", _fail)
+    assert gen_functional._run_dispatch_blocking("job-1", spec_dir, project_dir, None)
+
+
+def test_disabled_pack_toggle_is_ignored_once(
+    monkeypatch, spec_dir, project_dir, caplog
+):
+    from agents import gen_functional
+    from agents import verify_dispatch as vd
+
+    calls = []
+
+    async def _dispatch(**kwargs):
+        calls.append(kwargs)
+        return vd.VerifyDispatch(
+            job_id=kwargs["job_id"],
+            job_name="verify-job",
+            namespace="factory",
+            worker_ref={"kind": "k8s-job"},
+        )
+
+    gen_functional._warn_pack_toggle_ignored.cache_clear()
+    monkeypatch.setenv("TFACTORY_PACK_WORKSPACE", "false")
+    monkeypatch.setattr(vd, "dispatch_verify_job", _dispatch)
+    try:
+        for _ in range(2):
+            assert gen_functional._run_dispatch_blocking(
+                "job-1", spec_dir, project_dir, None
+            )
+        assert len(calls) == 2
+        assert all("pack_workspace" not in call for call in calls)
+        assert (
+            sum(
+                "TFACTORY_PACK_WORKSPACE is ignored" in r.message
+                for r in caplog.records
+            )
+            == 1
+        )
+    finally:
+        gen_functional._warn_pack_toggle_ignored.cache_clear()

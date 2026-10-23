@@ -57,23 +57,6 @@ def test_toolchain_only_job_has_no_volume():
     assert m["metadata"]["labels"]["app"] == "tfactory-sandbox"
 
 
-def test_repo_comount_rw_for_browser_lane():
-    m = build_job_manifest(
-        "j2",
-        "img",
-        ["nix develop /work#default -c playwright test"],
-        repo_pvc="tf-workspaces",
-        repo_subpath="workspaces/proj",
-    )
-    c = m["spec"]["template"]["spec"]["containers"][0]
-    assert c["workingDir"] == "/work"
-    vm = c["volumeMounts"][0]
-    assert vm["mountPath"] == "/work" and vm["subPath"] == "workspaces/proj"
-    assert vm["readOnly"] is False  # browser lane writes screenshots back
-    vol = m["spec"]["template"]["spec"]["volumes"][0]
-    assert vol["persistentVolumeClaim"]["claimName"] == "tf-workspaces"
-
-
 def test_pvc_subpath():
     root = "/home/nonroot/.tfactory"
     assert pvc_subpath(f"{root}/workspaces/proj", root) == "workspaces/proj"
@@ -121,8 +104,6 @@ def test_warm_nix_store_mounted_with_seed_init():
         "j5",
         "ghcr.io/olafkfreund/factory-runner-nix:latest",
         ["nix develop path:/work#default -c cargo test"],
-        repo_pvc="tfactory-data",
-        repo_subpath="ws/proj",
         nix_store_pvc="tfactory-nix-store",
     )
     t = m["spec"]["template"]["spec"]
@@ -130,7 +111,7 @@ def test_warm_nix_store_mounted_with_seed_init():
     assert (
         vols["nix-store"]["persistentVolumeClaim"]["claimName"] == "tfactory-nix-store"
     )
-    assert "repo" in vols
+    assert "repo" not in vols
     mounts = {vm["name"]: vm for vm in t["containers"][0]["volumeMounts"]}
     assert mounts["nix-store"]["mountPath"] == "/nix"
     init = t["initContainers"][0]
@@ -142,15 +123,12 @@ def test_warm_nix_store_mounted_with_seed_init():
 def test_job_pod_and_container_are_hardened():
     # #651 (Factory#274 compensating controls): seccomp RuntimeDefault pinned on
     # the pod; no privilege escalation + drop ALL on every container. The root
-    # nix user keeps only the co-mount add-backs (uid-65532 worktree writes +
-    # warm-store seeding); runAsNonRoot is deliberately NOT set — the nix-runner
-    # image builds as root by design.
+    # nix user keeps the required build capabilities; runAsNonRoot is deliberately
+    # NOT set — the nix-runner image builds as root by design.
     m = build_job_manifest(
         "jh",
         "img",
         ["true"],
-        repo_pvc="tfactory-data",
-        repo_subpath="ws/p",
         nix_store_pvc="tfactory-nix-store",
     )
     pod = m["spec"]["template"]["spec"]
@@ -203,8 +181,6 @@ def test_image_pull_policy_reuses_node_cache():
         "jp",
         "img",
         ["true"],
-        repo_pvc="tfactory-data",
-        repo_subpath="ws/p",
         nix_store_pvc="tfactory-nix-store",
     )
     pod = m["spec"]["template"]["spec"]
@@ -305,8 +281,6 @@ def test_lane_job_obeys_the_shared_job_policy():
         "j1",
         "img",
         ["true"],
-        repo_pvc="tfactory-data",
-        repo_subpath="ws/p",
         nix_store_pvc="tfactory-nix-store",
     )
     assert_job_policy(m)
@@ -343,9 +317,7 @@ def test_job_name_stays_a_valid_dns_label():
 
 # ── RFC-0017 #190: packed workspace, no PVC, node-agnostic ────────────────────
 #
-# The repo_pvc co-mount is RWO, so it pins a verify Job to whichever node holds
-# the worktree. That pin is the single reason this fleet cannot verify across
-# nodes. These pin the packed alternative.
+# The packed workspace uses emptyDir, so the lane can run on any node.
 
 
 def test_packed_workspace_uses_emptydir_and_no_pvc():
@@ -367,44 +339,6 @@ def test_packed_workspace_uses_emptydir_and_no_pvc():
     assert c["workingDir"] == "/work"
     env = {e["name"]: e["value"] for e in c.get("env", [])}
     assert env["WORKSPACE_URI"].endswith("workspace.tar.gz"), env
-
-
-def test_packed_workspace_wins_over_repo_pvc():
-    """A caller mid-migration that still threads its PVC must get the packed
-    behaviour, not silently re-pin itself to a node. Passing both is a migration
-    state, not an error — and the failure mode it guards against is invisible:
-    the Job runs fine, it just cannot schedule anywhere else."""
-    m = build_job_manifest(
-        "j-both",
-        "img",
-        ["true"],
-        repo_pvc="tfactory-data",
-        repo_subpath="workspaces/x",
-        workspace_uri="s3://bucket/w.tar.gz",
-    )
-    spec = m["spec"]["template"]["spec"]
-    assert all("persistentVolumeClaim" not in v for v in spec["volumes"]), spec[
-        "volumes"
-    ]
-    repo = [v for v in spec["volumes"] if v["name"] == "repo"]
-    assert repo[0] == {"name": "repo", "emptyDir": {}}, repo[0]
-    mounts = spec["containers"][0]["volumeMounts"]
-    repo_mt = [m2 for m2 in mounts if m2["name"] == "repo"]
-    # subPath belongs to the PVC path; the packed mount must not carry it.
-    assert "subPath" not in repo_mt[0], repo_mt[0]
-
-
-def test_no_workspace_uri_keeps_the_pvc_path_unchanged():
-    """The default must be byte-identical to before, or this change is a
-    regression for every existing caller."""
-    m = build_job_manifest(
-        "j-pvc", "img", ["true"], repo_pvc="tfactory-data", repo_subpath="workspaces/x"
-    )
-    spec = m["spec"]["template"]["spec"]
-    repo = [v for v in spec["volumes"] if v["name"] == "repo"]
-    assert repo[0]["persistentVolumeClaim"]["claimName"] == "tfactory-data", repo[0]
-    env = {e["name"]: e["value"] for e in spec["containers"][0].get("env", [])}
-    assert "WORKSPACE_URI" not in env, env
 
 
 # ── TFactory#1152 fallout: a finished Job's logs outlive the investigation ─────
@@ -563,7 +497,7 @@ def test_packed_lane_has_no_pvc_and_collects_results(monkeypatch, tmp_path):
     workdir.mkdir()
     (workdir / "sut.py").write_text("x = 1\n")
 
-    sb = KubeJobSandbox("img", repo_pvc=None, pack_workdir=True)
+    sb = KubeJobSandbox("img")
     res = sb.run(["pytest -q"], workdir=str(workdir), timeout=6)
 
     assert res.ok, res.output
@@ -579,16 +513,13 @@ def test_packed_lane_has_no_pvc_and_collects_results(monkeypatch, tmp_path):
 
 
 def test_packed_lane_without_object_store_fails_without_a_job(monkeypatch, tmp_path):
+    from agents.stability_runner import classify_pytest_failure
+
     monkeypatch.delenv("S3_ENDPOINT", raising=False)
-    sb = KubeJobSandbox("img", pack_workdir=True)
+    sb = KubeJobSandbox("img")
     res = sb.run(["true"], workdir=str(tmp_path), timeout=6)
     assert not res.ok and "lane pack failed" in res.output
-
-
-def test_unpacked_sandbox_keeps_pvc_co_mount_and_no_pack():
-    sb = KubeJobSandbox("img", repo_pvc="tfactory-data")
-    assert sb.pack_workdir is False
-    assert sb.with_manifest_kw(service_account="x").repo_pvc == "tfactory-data"
+    assert classify_pytest_failure(res.output, res.exit_code) == "environment"
 
 
 # ─── #1393: packed lanes — not collected, leaked objects, push-back budget ────
@@ -634,13 +565,43 @@ def test_packed_lane_objects_are_deleted_when_job_create_raises(monkeypatch, tmp
     monkeypatch.setattr(batch_cls, "create_namespaced_job", _boom)
     (tmp_path / "sut.py").write_text("x = 1\n")
 
-    sb = KubeJobSandbox("img", repo_pvc=None, pack_workdir=True)
+    sb = KubeJobSandbox("img")
     import pytest
 
     with pytest.raises(RuntimeError, match="apiserver down"):
         sb.run(["pytest -q"], workdir=str(tmp_path), timeout=6)
     # both the input archive (the SUT) and the partial output are gone
     assert s3.objects == {}
+
+
+def test_lane_input_fetch_failure_classifies_as_environment(monkeypatch, tmp_path):
+    import subprocess
+
+    from agents.stability_runner import classify_pytest_failure
+    from tools.runners.artifact_store import ArtifactStore
+
+    s3 = _LaneS3()
+    monkeypatch.setenv("S3_ENDPOINT", "http://minio.invalid:9000")
+    monkeypatch.setattr(ArtifactStore, "_client", lambda self: s3)
+    monkeypatch.setattr(kube_sandbox, "_presign_client", lambda store: s3)
+    (tmp_path / "sut.py").write_text("x = 1\n")
+    command, _uri, _env, _collect, discard = KubeJobSandbox("img")._pack_lane(
+        "tfsbx-fetch", ["true"], str(tmp_path), 60
+    )
+    try:
+        result = subprocess.run(
+            ["bash", "-c", command[0]],
+            env={"PATH": os.environ["PATH"], "TF_LANE_IN_URL": "file:///nonexistent"},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        output = result.stdout + result.stderr
+        assert result.returncode != 0
+        assert "lane input fetch failed" in output
+        assert classify_pytest_failure(output, result.returncode) == "environment"
+    finally:
+        discard()
 
 
 def test_packed_lane_reserves_push_back_time_and_tags_output(monkeypatch, tmp_path):
@@ -660,7 +621,7 @@ def test_packed_lane_reserves_push_back_time_and_tags_output(monkeypatch, tmp_pa
     monkeypatch.setattr(kube_sandbox, "_presign_client", lambda store: s3)
     (tmp_path / "sut.py").write_text("x = 1\n")
 
-    sb = KubeJobSandbox("img", repo_pvc=None, pack_workdir=True)
+    sb = KubeJobSandbox("img")
     cmds, _uri, _env, _collect, discard = sb._pack_lane(
         "tfsbx-t", ["pytest -q"], str(tmp_path), 900
     )
@@ -728,7 +689,7 @@ def test_packed_lane_push_back_round_trips_against_minio(monkeypatch, tmp_path):
     with contextlib.suppress(Exception):  # bucket may already exist
         client.create_bucket(Bucket=cfg.bucket)  # type: ignore[attr-defined]
     (tmp_path / "sut.py").write_text("x = 1\n")
-    sb = KubeJobSandbox("img", repo_pvc=None, pack_workdir=True)
+    sb = KubeJobSandbox("img")
     cmds, _uri, env, collect, discard = sb._pack_lane(
         "tfsbx-rt", ["true"], str(tmp_path), 300
     )

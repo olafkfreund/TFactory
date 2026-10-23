@@ -110,10 +110,10 @@ def test_pack_carries_the_spec_tree_and_its_base_clone(
     assert "workspaces/demo-repo/src/app.py" in names
 
 
-def test_pack_is_fail_open_without_an_object_store(
+def test_pack_returns_none_without_an_object_store(
     monkeypatch: pytest.MonkeyPatch, data_root: Path
 ) -> None:
-    """No endpoint -> None -> the caller keeps today's PVC co-mount."""
+    """No endpoint returns None so dispatch can fail the verify."""
     monkeypatch.setattr(vw, "_open_store", lambda: None)
     spec = data_root / "workspaces" / "proj-1" / "specs" / "spec-7"
     assert (
@@ -167,11 +167,6 @@ def test_round_trip_carries_evidence_produced_inside_the_job(
     assert out.joinpath(".worktree", "shots", "login.png").read_text() == "PNG-BYTES"
 
 
-def test_restore_is_a_no_op_on_the_co_mounted_path() -> None:
-    """No WORKSPACE_URI -> None and no side effects, so the PVC path is unchanged."""
-    assert vw.restore_workspace(uri="", root="") is None
-
-
 def test_restore_raises_when_the_workspace_cannot_be_fetched(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -196,12 +191,12 @@ def test_push_back_raises_rather_than_dropping_evidence(
 def _verify_manifest(**kw: Any) -> dict[str, Any]:
     from agents.verify_dispatch import VerifyJobConfig, build_verify_job_manifest
 
+    kw.setdefault("workspace_uri", f"s3://{_BUCKET}/workspace.tar.gz")
     cfg = VerifyJobConfig(
         job_id="job-1",
         image="ghcr.io/x/tfactory:1",
         spec_subpath="workspaces/proj-1/specs/spec-7",
         project_subpath="workspaces/proj-1/specs/spec-7/.worktree",
-        repo_pvc="tfactory-data",
         nix_develop=False,
         **kw,
     )
@@ -224,8 +219,7 @@ def test_packed_verify_job_takes_no_pvc_and_learns_where_to_unpack() -> None:
     uri = f"s3://{_BUCKET}/tfactory/42/job-1/workspace/workspace.tar.gz"
     manifest = _verify_manifest(workspace_uri=uri)
     repo = next(v for v in _pod(manifest)["volumes"] if v["name"] == "repo")
-    # The PVC co-mount is the node pin; a packed Job must not have one even though
-    # repo_pvc is still threaded (the mid-migration shape kube_sandbox guards).
+    # Packed workspaces are mounted from emptyDir.
     assert "persistentVolumeClaim" not in repo
     assert repo["emptyDir"] == {}
     env = _env(manifest)
@@ -233,14 +227,6 @@ def test_packed_verify_job_takes_no_pvc_and_learns_where_to_unpack() -> None:
     # Without the root the pipeline cannot know where the absolute --spec path
     # lives, so it would unpack nowhere and verify an empty tree.
     assert env["WORKSPACE_ROOT"] == "/work"
-
-
-def test_unpacked_verify_job_is_unchanged() -> None:
-    manifest = _verify_manifest()
-    repo = next(v for v in _pod(manifest)["volumes"] if v["name"] == "repo")
-    assert repo["persistentVolumeClaim"]["claimName"] == "tfactory-data"
-    assert "WORKSPACE_URI" not in _env(manifest)
-    assert "WORKSPACE_ROOT" not in _env(manifest)
 
 
 # -- the entrypoint: the Job must actually round-trip its own workspace --------
@@ -735,15 +721,6 @@ def test_sweep_leaves_a_running_job_alone(
     assert _sentinel(data_root) is None
     status = (data_root / _SPEC_REL / "status.json").read_text()
     assert status == '{"status": "planned"}\n'
-
-
-def test_sweep_ignores_a_co_mounted_dispatch(fake_s3: _FakeS3, data_root: Path) -> None:
-    """No workspace_uri on the worker ref = not packed = never fetched."""
-    _worker_ref(data_root, None)
-    rows = _Rows({"job-1": {"lifecycle_state": "done"}})
-    assert _sweep(data_root, rows) == 0
-    assert _sentinel(data_root) is None
-    assert fake_s3.objects == {}
 
 
 def test_sweep_never_raises(fake_s3: _FakeS3, data_root: Path) -> None:
