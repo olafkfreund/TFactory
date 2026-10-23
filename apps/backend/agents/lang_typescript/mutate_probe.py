@@ -371,15 +371,9 @@ def run_ts_mutate_probe(
             )
 
         if result.returncode in _SHELL_NOT_RUN_CODES:
-            return TSMutateReport(
-                test_file=test_file,
-                verdict=TSMutationVerdict.NOT_RUN,
-                mutated_assertion=mutation_desc,
-                raw_stryker_json=None,
-            )
-
-        raw_output = result.stdout or ""
-        verdict, stryker_data = _parse_stryker_report(raw_output)
+            verdict, stryker_data = TSMutationVerdict.NOT_RUN, None
+        else:
+            verdict, stryker_data = _parse_stryker_report(result.stdout or "")
 
         return TSMutateReport(
             test_file=test_file,
