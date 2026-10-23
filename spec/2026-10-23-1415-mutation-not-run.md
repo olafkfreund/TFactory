@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1415
 intent: intent/2026-10-23-1415-mutation-not-run.md
 ---
