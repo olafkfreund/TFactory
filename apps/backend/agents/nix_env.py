@@ -587,10 +587,10 @@ def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve kno
     as infra, not an AC failure.
 
     The toolchain (python + pytest + pytest-cov) comes from the materialized flake
-    (declared in the contract ``environment``), not the image — so the verify env
-    matches the build env with no drift. To keep concurrent runs from clobbering
-    the shared project checkout, the SUT is copied into a per-run scratch dir under
-    the workspaces PVC (#623); the flake + the specific test are materialized there,
+    (declared in the contract or owned by the repo). To keep concurrent runs
+    from clobbering the shared project checkout, the SUT is copied into a
+    per-run scratch dir under the workspaces PVC (#623); the flake and test
+    are materialized there,
     the scratch is co-mounted at ``_NIX_MOUNT`` so ``from <module> import ...``
     resolves like the DockerRunner path, pytest writes junit + coverage into a
     staging dir on the scratch, and we copy those back (off the scratch) as a
@@ -602,7 +602,7 @@ def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve kno
     """
     mount = _NIX_MOUNT
     env = environment_from_contract(spec_dir)
-    if not is_nix_environment(env):
+    if not has_nix_env(spec_dir, project_dir):
         return None
     # Consume the engine purely through the unified seam (#426): this lane works
     # with any ExecutionSandbox the factory returns, not just KubeJobSandbox.
@@ -2122,6 +2122,15 @@ def flake_is_repo_owned(project_dir: Path, owner_dir: Path | None = None) -> boo
         return False
     tracked = _git_tracks(Path(owner_dir or project_dir), _FLAKE)
     return True if tracked is None else tracked
+
+
+def has_nix_env(
+    spec_dir: Path, project_dir: Path | None, owner_dir: Path | None = None
+) -> bool:
+    """Whether a contract or a repo-owned flake provides a Nix environment."""
+    return is_nix_environment(environment_from_contract(spec_dir)) or (
+        project_dir is not None and flake_is_repo_owned(project_dir, owner_dir)
+    )
 
 
 def _drop_generated_flake(plan: NixPlan) -> None:

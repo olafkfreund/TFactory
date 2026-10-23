@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 import textwrap
 from pathlib import Path
 from unittest.mock import patch
@@ -1205,6 +1206,25 @@ def test_nix_verify_mode_off_when_not_nix_env(tmp_path, monkeypatch):
     monkeypatch.delenv("TFACTORY_VERIFY_BACKEND", raising=False)
     spec = _contract_dir(tmp_path, _IMG_ENV)
     assert _nix_verify_mode(spec) is False
+
+
+@pytest.mark.parametrize("tracked", [True, False])
+def test_nix_verify_mode_repo_flake_without_contract_env(
+    tmp_path, monkeypatch, tracked
+):
+    from agents.evaluator import _nix_verify_mode
+
+    monkeypatch.setenv("TFACTORY_NIX_RUNNER_IMAGE", "ghcr.io/x/nix:latest")
+    monkeypatch.delenv("TFACTORY_VERIFY_BACKEND", raising=False)
+    spec = _contract_dir(tmp_path, None)
+    project = tmp_path / "proj"
+    project.mkdir()
+    subprocess.run(["git", "init", "-q", str(project)], check=True)
+    (project / "flake.nix").write_text("{ outputs = _: {}; }\n")
+    if tracked:
+        subprocess.run(["git", "-C", str(project), "add", "flake.nix"], check=True)
+
+    assert _nix_verify_mode(spec, project) is tracked
 
 
 def test_nix_verify_mode_off_without_image(tmp_path, monkeypatch):
