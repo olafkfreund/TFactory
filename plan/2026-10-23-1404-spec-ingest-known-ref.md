@@ -56,6 +56,13 @@ Approved decisions (user: fetch a known ref):
 - Full backend + web-server suites (pre-commit hook), `scripts/ratchet_lint.py`,
   ruff.
 
+## Deviations
+
+- Review fix (PR #1414): `_add_spec_worktree` resolves `rev-parse <spec_ref>^{commit}`
+  so an annotated tag `ref` peels to the tagged commit (the worktree HEAD);
+  without it every annotated tag failed verification. The explicit-ref test
+  now also ingests an annotated tag and checks `source_sha` is the commit.
+
 ## Rollback
 
 Revert the PR. Specs ingested meanwhile keep their `.worktree`; the GC reaps it.

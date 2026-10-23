@@ -335,7 +335,12 @@ def _add_spec_worktree(
         # resolve it to the pinned sha the worktree will be added from.
         spec_ref = f"refs/tfactory/specs/{spec_id}"
         fetch = _git("fetch", "--no-tags", "--force", "origin", f"{branch}:{spec_ref}")
-        rp = _git("rev-parse", spec_ref) if fetch.returncode == 0 else fetch
+        # ^{commit} peels an annotated tag to its commit, which is what HEAD lands on.
+        rp = (
+            _git("rev-parse", f"{spec_ref}^{{commit}}")
+            if fetch.returncode == 0
+            else fetch
+        )
         if fetch.returncode != 0 or rp.returncode != 0:
             err = (fetch if fetch.returncode != 0 else rp).stderr.strip()[:200]
             return f"git fetch/resolve of {branch} failed: {err}", ""

@@ -424,9 +424,15 @@ def test_stale_checkout_verifies_default_branch_head(tmp_path):
 def test_explicit_ref_branch_and_commit_honoured(tmp_path):
     origin, proj, _, _ = _stale_shared_clone(tmp_path)
     build = _git(origin, "rev-parse", "aifactory/999").stdout.strip()
+    # Annotated tag: its object sha differs from the commit; must peel (#1414).
+    _git(origin, "tag", "-a", "v1.2.0", "-m", "rel", build)
     before = _shared_state(proj)
 
-    for spec_id, ref in (("by-branch", "aifactory/999"), ("by-sha", build)):
+    for spec_id, ref in (
+        ("by-branch", "aifactory/999"),
+        ("by-sha", build),
+        ("by-annotated-tag", "v1.2.0"),
+    ):
         _ingest(tmp_path, _MARKDOWN, spec_id=spec_id, project_root=str(proj), ref=ref)
         sd = _spec_dir(tmp_path, spec_id)
         status = json.loads((sd / "status.json").read_text())
