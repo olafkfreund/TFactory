@@ -530,7 +530,7 @@ class KubeJobSandbox:
                 )
         try:
             return await self._run_job(
-                name, commands, timeout, workdir, workspace_uri, extra_env, collect
+                name, commands, timeout, workspace_uri, extra_env, collect
             )
         finally:
             # #1393: a raise from create/poll must not leak the lane archives.
@@ -542,7 +542,6 @@ class KubeJobSandbox:
         name: str,
         commands: list[str],
         deadline_s: int,
-        workdir: str | None,
         workspace_uri: str | None,
         extra_env: list[dict[str, str]],
         collect: Callable[[], None] | None,

@@ -728,9 +728,7 @@ def test_advance_kubejob_dispatches_job_and_skips_inpod(
 
     seen: dict = {}
 
-    async def _fake_dispatch(
-        *, job_id, spec_dir, project_dir, correlation_key=None
-    ):
+    async def _fake_dispatch(*, job_id, spec_dir, project_dir, correlation_key=None):
         seen["job_id"] = job_id
         seen["spec_dir"] = spec_dir
         return vd_mod.VerifyDispatch(
@@ -2384,7 +2382,10 @@ def test_disabled_pack_toggle_is_ignored_once(
         assert len(calls) == 2
         assert all("pack_workspace" not in call for call in calls)
         assert (
-            sum("TFACTORY_PACK_WORKSPACE is ignored" in r.message for r in caplog.records)
+            sum(
+                "TFACTORY_PACK_WORKSPACE is ignored" in r.message
+                for r in caplog.records
+            )
             == 1
         )
     finally:

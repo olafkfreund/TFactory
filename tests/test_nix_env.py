@@ -700,9 +700,7 @@ def _mounted_pvcs(monkeypatch) -> set[str]:
 
     sb = nix_runner_from_env()
     assert sb is not None
-    m = build_job_manifest(
-        "t", sb.image, ["true"], **sb.manifest_kw
-    )
+    m = build_job_manifest("t", sb.image, ["true"], **sb.manifest_kw)
     vols = m["spec"]["template"]["spec"].get("volumes", [])
     return {
         v["persistentVolumeClaim"]["claimName"]
