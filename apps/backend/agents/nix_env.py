@@ -944,49 +944,53 @@ def run_gotest_lane_via_nix(
     """
     mount = _NIX_MOUNT
     env = go_environment(spec_dir)
-    plan = materialize_flake(spec_dir, project_dir, env=env)
-    if plan is None:
-        return None
     sandbox: ExecutionSandbox | None = nix_runner_from_env()
     if sandbox is None:
         _log.info("run_gotest_lane_via_nix: TFACTORY_NIX_RUNNER_IMAGE unset; skipping")
         return None
+    plan = materialize_flake(spec_dir, project_dir, env=env)
+    if plan is None:
+        return None
 
     pd = Path(project_dir)
-    module_dir = _go_module_dir(pd, hint)
-    rel = (
-        "." if module_dir == pd.resolve() else str(module_dir.relative_to(pd.resolve()))
-    )
-    run_dir = mount if rel == "." else f"{mount}/{rel}"
-
-    stage = pd / _GOTEST_STAGE
-    shutil.rmtree(stage, ignore_errors=True)
-    stage.mkdir(parents=True, exist_ok=True)
-    # The Job runs as a non-root uid against the co-mounted worktree; make the
-    # staging dir writable so gotestsum/gocover-cobertura can drop reports there.
-    with contextlib.suppress(OSError):
-        stage.chmod(0o777)
-
-    exports = "".join(
-        f"export {k}={_shquote(str(v))}\n" for k, v in (extra_env or {}).items()
-    )
-    sd = f"{mount}/{_GOTEST_STAGE}"
-    # gotestsum runs `go test ./...` (emitting JUnit) and forwards -coverprofile;
-    # set +e + the marker line recover the real test exit (the wrapper exits 0 so
-    # the Job "succeeds"); gocover-cobertura converts the profile to Cobertura XML.
-    gotest_cmd = (
-        f"cd {run_dir} && "
-        f"gotestsum --junitfile={sd}/junit.xml --format=testname -- "
-        f"-coverprofile={sd}/cover.out -covermode=atomic ./... 2>&1; "
-        f"echo __GOTEST_EXIT=$?; "
-        f"gocover-cobertura < {sd}/cover.out > {sd}/coverage.xml 2>/dev/null || true"
-    )
-    (pd / _JOB_SCRIPT).write_text(
-        "#!/usr/bin/env bash\nset +e\n" + exports + gotest_cmd + "\n",
-        encoding="utf-8",
-    )
-    job_cmd = f"nix develop path:{mount}#default --command bash {mount}/{_JOB_SCRIPT}"
     try:
+        module_dir = _go_module_dir(pd, hint)
+        rel = (
+            "."
+            if module_dir == pd.resolve()
+            else str(module_dir.relative_to(pd.resolve()))
+        )
+        run_dir = mount if rel == "." else f"{mount}/{rel}"
+
+        stage = pd / _GOTEST_STAGE
+        shutil.rmtree(stage, ignore_errors=True)
+        stage.mkdir(parents=True, exist_ok=True)
+        # The Job runs as a non-root uid against the co-mounted worktree; make the
+        # staging dir writable so gotestsum/gocover-cobertura can drop reports there.
+        with contextlib.suppress(OSError):
+            stage.chmod(0o777)
+
+        exports = "".join(
+            f"export {k}={_shquote(str(v))}\n" for k, v in (extra_env or {}).items()
+        )
+        sd = f"{mount}/{_GOTEST_STAGE}"
+        # gotestsum runs `go test ./...` (emitting JUnit) and forwards -coverprofile;
+        # set +e + the marker line recover the real test exit (the wrapper exits 0 so
+        # the Job "succeeds"); gocover-cobertura converts the profile to Cobertura XML.
+        gotest_cmd = (
+            f"cd {run_dir} && "
+            f"gotestsum --junitfile={sd}/junit.xml --format=testname -- "
+            f"-coverprofile={sd}/cover.out -covermode=atomic ./... 2>&1; "
+            f"echo __GOTEST_EXIT=$?; "
+            f"gocover-cobertura < {sd}/cover.out > {sd}/coverage.xml 2>/dev/null || true"
+        )
+        (pd / _JOB_SCRIPT).write_text(
+            "#!/usr/bin/env bash\nset +e\n" + exports + gotest_cmd + "\n",
+            encoding="utf-8",
+        )
+        job_cmd = (
+            f"nix develop path:{mount}#default --command bash {mount}/{_JOB_SCRIPT}"
+        )
         res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)
     finally:
         (pd / _JOB_SCRIPT).unlink(missing_ok=True)
@@ -1168,6 +1172,10 @@ def run_gradle_lane_via_nix(  # noqa: PLR0913 - explicit keyword-only lane knobs
     Returns None when the sandbox isn't configured (caller falls back).
     """
     mount = _NIX_MOUNT
+    sandbox: ExecutionSandbox | None = nix_runner_from_env()
+    if sandbox is None:
+        _log.info("run_gradle_lane_via_nix: TFACTORY_NIX_RUNNER_IMAGE unset; skipping")
+        return None
     plan = materialize_flake(
         spec_dir,
         project_dir,
@@ -1175,30 +1183,30 @@ def run_gradle_lane_via_nix(  # noqa: PLR0913 - explicit keyword-only lane knobs
     )
     if plan is None:
         return None
-    sandbox: ExecutionSandbox | None = nix_runner_from_env()
-    if sandbox is None:
-        _log.info("run_gradle_lane_via_nix: TFACTORY_NIX_RUNNER_IMAGE unset; skipping")
-        return None
 
     pd = Path(project_dir)
-    module_dir = _gradle_module_dir(pd, hint)
-    rel = (
-        "." if module_dir == pd.resolve() else str(module_dir.relative_to(pd.resolve()))
-    )
-    run_dir = mount if rel == "." else f"{mount}/{rel}"
-
-    stage = pd / _GRADLE_STAGE
-    shutil.rmtree(stage, ignore_errors=True)
-    stage.mkdir(parents=True, exist_ok=True)
-    with contextlib.suppress(OSError):
-        stage.chmod(0o777)  # the Job's non-root uid writes the merged junit here
-
-    (pd / _JOB_SCRIPT).write_text(
-        gradle_job_script(run_dir, f"{mount}/{_GRADLE_STAGE}", extra_env or {}),
-        encoding="utf-8",
-    )
-    job_cmd = f"nix develop path:{mount}#default --command bash {mount}/{_JOB_SCRIPT}"
     try:
+        module_dir = _gradle_module_dir(pd, hint)
+        rel = (
+            "."
+            if module_dir == pd.resolve()
+            else str(module_dir.relative_to(pd.resolve()))
+        )
+        run_dir = mount if rel == "." else f"{mount}/{rel}"
+
+        stage = pd / _GRADLE_STAGE
+        shutil.rmtree(stage, ignore_errors=True)
+        stage.mkdir(parents=True, exist_ok=True)
+        with contextlib.suppress(OSError):
+            stage.chmod(0o777)  # the Job's non-root uid writes the merged junit here
+
+        (pd / _JOB_SCRIPT).write_text(
+            gradle_job_script(run_dir, f"{mount}/{_GRADLE_STAGE}", extra_env or {}),
+            encoding="utf-8",
+        )
+        job_cmd = (
+            f"nix develop path:{mount}#default --command bash {mount}/{_JOB_SCRIPT}"
+        )
         res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)
     finally:
         (pd / _JOB_SCRIPT).unlink(missing_ok=True)
@@ -1271,33 +1279,37 @@ def run_maven_lane_via_nix(
     Returns None when the sandbox isn't configured (caller falls back).
     """
     mount = _NIX_MOUNT
-    plan = materialize_flake(spec_dir, project_dir, env=java_environment(spec_dir))
-    if plan is None:
-        return None
     sandbox: ExecutionSandbox | None = nix_runner_from_env()
     if sandbox is None:
         _log.info("run_maven_lane_via_nix: TFACTORY_NIX_RUNNER_IMAGE unset; skipping")
         return None
+    plan = materialize_flake(spec_dir, project_dir, env=java_environment(spec_dir))
+    if plan is None:
+        return None
 
     pd = Path(project_dir)
-    module_dir = _maven_module_dir(pd, hint)
-    rel = (
-        "." if module_dir == pd.resolve() else str(module_dir.relative_to(pd.resolve()))
-    )
-    run_dir = mount if rel == "." else f"{mount}/{rel}"
-
-    stage = pd / _MAVEN_STAGE
-    shutil.rmtree(stage, ignore_errors=True)
-    stage.mkdir(parents=True, exist_ok=True)
-    with contextlib.suppress(OSError):
-        stage.chmod(0o777)  # the Job's non-root uid writes the merged junit here
-
-    (pd / _JOB_SCRIPT).write_text(
-        maven_job_script(run_dir, f"{mount}/{_MAVEN_STAGE}", extra_env or {}),
-        encoding="utf-8",
-    )
-    job_cmd = f"nix develop path:{mount}#default --command bash {mount}/{_JOB_SCRIPT}"
     try:
+        module_dir = _maven_module_dir(pd, hint)
+        rel = (
+            "."
+            if module_dir == pd.resolve()
+            else str(module_dir.relative_to(pd.resolve()))
+        )
+        run_dir = mount if rel == "." else f"{mount}/{rel}"
+
+        stage = pd / _MAVEN_STAGE
+        shutil.rmtree(stage, ignore_errors=True)
+        stage.mkdir(parents=True, exist_ok=True)
+        with contextlib.suppress(OSError):
+            stage.chmod(0o777)  # the Job's non-root uid writes the merged junit here
+
+        (pd / _JOB_SCRIPT).write_text(
+            maven_job_script(run_dir, f"{mount}/{_MAVEN_STAGE}", extra_env or {}),
+            encoding="utf-8",
+        )
+        job_cmd = (
+            f"nix develop path:{mount}#default --command bash {mount}/{_JOB_SCRIPT}"
+        )
         res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)
     finally:
         (pd / _JOB_SCRIPT).unlink(missing_ok=True)
@@ -1403,6 +1415,10 @@ def run_jest_lane_via_nix(
     Returns None when the sandbox isn't configured (caller falls back).
     """
     mount = _NIX_MOUNT
+    sandbox: ExecutionSandbox | None = nix_runner_from_env()
+    if sandbox is None:
+        _log.info("run_jest_lane_via_nix: TFACTORY_NIX_RUNNER_IMAGE unset; skipping")
+        return None
     plan = materialize_flake(
         spec_dir,
         project_dir,
@@ -1411,85 +1427,88 @@ def run_jest_lane_via_nix(
     )
     if plan is None:
         return None
-    sandbox: ExecutionSandbox | None = nix_runner_from_env()
-    if sandbox is None:
-        _log.info("run_jest_lane_via_nix: TFACTORY_NIX_RUNNER_IMAGE unset; skipping")
-        return None
 
     pd = Path(project_dir)
-    # STAGE the spec's test into the worktree at its AUTHORED relative path, the
-    # way `_stage_go_test` does for Go (TFactory#1195). The generated test lives
-    # under `<spec_dir>/tests/...` while the SUT is the co-mounted worktree, so
-    # `relative_to(project_dir)` raised and the old fallback handed jest a BARE
-    # FILENAME -- which matches no test path, so jest reported
-    # "0 matches" and the lane failed even when jest was present. Staging at the
-    # authored path also makes the test's own `../../<module>` import resolve,
-    # because it now sits where it was written to sit.
     staged: Path | None = None
     try:
-        rel = Path(test_file).resolve().relative_to(pd.resolve()).as_posix()
-    except ValueError:
-        rel = Path(test_file).resolve().relative_to(Path(spec_dir).resolve()).as_posix()
-        staged = pd / rel
-        staged.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(test_file, staged)
+        # STAGE the spec's test into the worktree at its AUTHORED relative path, the
+        # way `_stage_go_test` does for Go (TFactory#1195). The generated test lives
+        # under `<spec_dir>/tests/...` while the SUT is the co-mounted worktree, so
+        # `relative_to(project_dir)` raised and the old fallback handed jest a BARE
+        # FILENAME -- which matches no test path, so jest reported
+        # "0 matches" and the lane failed even when jest was present. Staging at the
+        # authored path also makes the test's own `../../<module>` import resolve,
+        # because it now sits where it was written to sit.
+        try:
+            rel = Path(test_file).resolve().relative_to(pd.resolve()).as_posix()
+        except ValueError:
+            rel = (
+                Path(test_file)
+                .resolve()
+                .relative_to(Path(spec_dir).resolve())
+                .as_posix()
+            )
+            staged = pd / rel
+            staged.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(test_file, staged)
 
-    # set +e + the marker recover the real jest exit: the wrapper exits 0 so the
-    # Job "succeeds" and the lane reads the test result, not the pod phase.
-    # `reruns` > 1 repeats the SAME spec in the ONE dev shell (TFactory#1187),
-    # wrapping each pass in the `__PYTEST_RUN=<i>` / `__PYTEST_EXIT=<code>` pair
-    # `parse_pytest_exits` already understands -- the browser lane reuses those
-    # markers for the same reason. Measured: entering `nix develop` costs ~44s
-    # (mean of 6 consecutive entries, +/-3s) while a jest unit test runs in
-    # milliseconds, so a 3-sample stability check paid that cost three times per
-    # spec. Only the samples of ONE spec are batched; per-test isolation is
-    # unchanged.
-    # nixpkgs has NO jest package -- `nodePackages` was removed and a search
-    # returns only editor plugins -- so the per-task flake cannot provide it, and
-    # a repo-owned flake (which wins by design) will not either. The flake does
-    # give us nodejs, so the runner comes from npm. Installed ONCE per lane,
-    # outside the rerun loop, and a failure exits 127 loudly rather than leaving
-    # a shell where `jest` is silently absent: that exact silence is why every
-    # jest test read `consistent_fail` for weeks (TFactory#1195).
-    # Installed LOCALLY. A *global* install gives each package its own tree, so
-    # ts-jest sat at the top level while its peer jest-util was nested under
-    # jest/node_modules/ where ts-jest could not resolve it -- "Cannot find
-    # module 'jest-util'" (TFactory#1195). A local install hoists one flat tree,
-    # making them siblings, and the binary then has a fixed known path -- which
-    # is why no PATH or module-search-path workaround is needed here any more.
-    setup = (
-        f"cd {mount} && "
-        f"if [ ! -x {_JEST_BIN} ]; then "
-        f"npm install --no-save --no-audit --no-fund --silent {_JEST_NPM_PKGS} "
-        '|| { echo "__JEST_SETUP_FAILED: npm install of the jest runner failed"; '
-        "exit 127; }; fi; "
-        # Prove the runner is CALLABLE, not merely installed -- otherwise a
-        # resolution miss surfaces as a bare error on the first rerun line,
-        # which the per-run capture attributes to the test itself.
-        f"[ -x {_JEST_BIN} ] "
-        '|| { echo "__JEST_SETUP_FAILED: jest runner missing after install"; '
-        "exit 127; }"
-    )
-    _write_jest_config(pd)
-    # The local install puts jest, ts-jest and their shared peers in the
-    # worktree's own node_modules, so ordinary resolution finds the transform.
-    one = (
-        f"cd {mount} && "
-        f"{_JEST_BIN} --ci --forceExit --config {_JEST_CONFIG} {_shquote(rel)} 2>&1; "
-        f"echo __PYTEST_EXIT=$?"
-    )
-    jest_cmd = (
-        setup
-        + "\n"
-        + "".join(
-            f"echo __PYTEST_RUN={i}\n{one}\n" for i in range(1, max(1, reruns) + 1)
+        # set +e + the marker recover the real jest exit: the wrapper exits 0 so the
+        # Job "succeeds" and the lane reads the test result, not the pod phase.
+        # `reruns` > 1 repeats the SAME spec in the ONE dev shell (TFactory#1187),
+        # wrapping each pass in the `__PYTEST_RUN=<i>` / `__PYTEST_EXIT=<code>` pair
+        # `parse_pytest_exits` already understands -- the browser lane reuses those
+        # markers for the same reason. Measured: entering `nix develop` costs ~44s
+        # (mean of 6 consecutive entries, +/-3s) while a jest unit test runs in
+        # milliseconds, so a 3-sample stability check paid that cost three times per
+        # spec. Only the samples of ONE spec are batched; per-test isolation is
+        # unchanged.
+        # nixpkgs has NO jest package -- `nodePackages` was removed and a search
+        # returns only editor plugins -- so the per-task flake cannot provide it, and
+        # a repo-owned flake (which wins by design) will not either. The flake does
+        # give us nodejs, so the runner comes from npm. Installed ONCE per lane,
+        # outside the rerun loop, and a failure exits 127 loudly rather than leaving
+        # a shell where `jest` is silently absent: that exact silence is why every
+        # jest test read `consistent_fail` for weeks (TFactory#1195).
+        # Installed LOCALLY. A *global* install gives each package its own tree, so
+        # ts-jest sat at the top level while its peer jest-util was nested under
+        # jest/node_modules/ where ts-jest could not resolve it -- "Cannot find
+        # module 'jest-util'" (TFactory#1195). A local install hoists one flat tree,
+        # making them siblings, and the binary then has a fixed known path -- which
+        # is why no PATH or module-search-path workaround is needed here any more.
+        setup = (
+            f"cd {mount} && "
+            f"if [ ! -x {_JEST_BIN} ]; then "
+            f"npm install --no-save --no-audit --no-fund --silent {_JEST_NPM_PKGS} "
+            '|| { echo "__JEST_SETUP_FAILED: npm install of the jest runner failed"; '
+            "exit 127; }; fi; "
+            # Prove the runner is CALLABLE, not merely installed -- otherwise a
+            # resolution miss surfaces as a bare error on the first rerun line,
+            # which the per-run capture attributes to the test itself.
+            f"[ -x {_JEST_BIN} ] "
+            '|| { echo "__JEST_SETUP_FAILED: jest runner missing after install"; '
+            "exit 127; }"
         )
-    )
-    (pd / _JOB_SCRIPT).write_text(
-        "#!/usr/bin/env bash\nset +e\n" + jest_cmd + "\n", encoding="utf-8"
-    )
-    job_cmd = f"nix develop path:{mount}#default --command bash {mount}/{_JOB_SCRIPT}"
-    try:
+        _write_jest_config(pd)
+        # The local install puts jest, ts-jest and their shared peers in the
+        # worktree's own node_modules, so ordinary resolution finds the transform.
+        one = (
+            f"cd {mount} && "
+            f"{_JEST_BIN} --ci --forceExit --config {_JEST_CONFIG} {_shquote(rel)} 2>&1; "
+            f"echo __PYTEST_EXIT=$?"
+        )
+        jest_cmd = (
+            setup
+            + "\n"
+            + "".join(
+                f"echo __PYTEST_RUN={i}\n{one}\n" for i in range(1, max(1, reruns) + 1)
+            )
+        )
+        (pd / _JOB_SCRIPT).write_text(
+            "#!/usr/bin/env bash\nset +e\n" + jest_cmd + "\n", encoding="utf-8"
+        )
+        job_cmd = (
+            f"nix develop path:{mount}#default --command bash {mount}/{_JOB_SCRIPT}"
+        )
         res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)
     finally:
         (pd / _JOB_SCRIPT).unlink(missing_ok=True)
@@ -1838,59 +1857,60 @@ def run_browser_evidence(
     the gap honestly). Proven live 2026-06-17.
     """
     env = environment_from_contract(spec_dir)
-    plan = materialize_flake(
-        spec_dir, project_dir, env=env, fallback_env=_BROWSER_FALLBACK_ENV
-    )
-    if plan is None:
-        return None
     # Same unified-seam consumption as run_pytest_lane_via_nix (#426).
     sandbox: ExecutionSandbox | None = nix_runner_from_env()
     if sandbox is None:
         _log.info("run_browser_evidence: TFACTORY_NIX_RUNNER_IMAGE unset; skipping")
         return None
-
-    n_specs = _stage_browser_specs(spec_dir, project_dir)
-    if n_specs == 0:
-        _log.info("run_browser_evidence: no generated *.spec.ts to run; skipping")
-        _drop_generated_flake(plan)
-        return {
-            "ok": False,
-            "output_tail": "no browser specs",
-            "serve_command": None,
-            "screenshots": [],
-            "specs": 0,
-        }
-    _write_pw_config(project_dir, port=port)
-
-    # The SUT this spec names. task_control writes source.json into the spec's
-    # CONTEXT dir, not its root (task_control.py:492) -- reading the root found
-    # nothing, so `targets` was always None and the scoping in
-    # detect_serve_command never fired (TFactory#1174). Still tolerant of the
-    # file being absent: detection then stays repo-wide, exactly as before.
-    try:
-        _src = json.loads((Path(spec_dir) / "context" / "source.json").read_text())
-        _targets = [str(t) for t in (_src.get("target_paths") or [])] or None
-    except (OSError, json.JSONDecodeError, TypeError):
-        _targets = None
-    serve = detect_serve_command(project_dir, env, port=port, targets=_targets)
-    # Scope the run to the staged config (NOT the contract's generic
-    # "playwright test", which would also pick up stale repo specs). Export the
-    # URL env the generated specs read.
-    steps = [
-        f"export BASE_URL=http://127.0.0.1:{port}",
-        f"export APP_URL=http://127.0.0.1:{port}",
-        *build_browser_job_command(
-            [f"playwright test --config {_PW_CONFIG}"],
-            serve_command=serve,
-            port=port,
-            shots_dir=_SHOTS,
-        ),
-    ]
-    (Path(project_dir) / _JOB_SCRIPT).write_text(
-        "#!/usr/bin/env bash\nset -e\n" + "\n".join(steps) + "\n", encoding="utf-8"
+    plan = materialize_flake(
+        spec_dir, project_dir, env=env, fallback_env=_BROWSER_FALLBACK_ENV
     )
-    job_cmd = f"nix develop path:{mount}#default --command bash {mount}/{_JOB_SCRIPT}"
+    if plan is None:
+        return None
+
     try:
+        n_specs = _stage_browser_specs(spec_dir, project_dir)
+        if n_specs == 0:
+            _log.info("run_browser_evidence: no generated *.spec.ts to run; skipping")
+            return {
+                "ok": False,
+                "output_tail": "no browser specs",
+                "serve_command": None,
+                "screenshots": [],
+                "specs": 0,
+            }
+        _write_pw_config(project_dir, port=port)
+
+        # The SUT this spec names. task_control writes source.json into the spec's
+        # CONTEXT dir, not its root (task_control.py:492) -- reading the root found
+        # nothing, so `targets` was always None and the scoping in
+        # detect_serve_command never fired (TFactory#1174). Still tolerant of the
+        # file being absent: detection then stays repo-wide, exactly as before.
+        try:
+            _src = json.loads((Path(spec_dir) / "context" / "source.json").read_text())
+            _targets = [str(t) for t in (_src.get("target_paths") or [])] or None
+        except (OSError, json.JSONDecodeError, TypeError):
+            _targets = None
+        serve = detect_serve_command(project_dir, env, port=port, targets=_targets)
+        # Scope the run to the staged config (NOT the contract's generic
+        # "playwright test", which would also pick up stale repo specs). Export the
+        # URL env the generated specs read.
+        steps = [
+            f"export BASE_URL=http://127.0.0.1:{port}",
+            f"export APP_URL=http://127.0.0.1:{port}",
+            *build_browser_job_command(
+                [f"playwright test --config {_PW_CONFIG}"],
+                serve_command=serve,
+                port=port,
+                shots_dir=_SHOTS,
+            ),
+        ]
+        (Path(project_dir) / _JOB_SCRIPT).write_text(
+            "#!/usr/bin/env bash\nset -e\n" + "\n".join(steps) + "\n", encoding="utf-8"
+        )
+        job_cmd = (
+            f"nix develop path:{mount}#default --command bash {mount}/{_JOB_SCRIPT}"
+        )
         res = sandbox.run([job_cmd], workdir=str(project_dir), timeout=900)
     finally:
         for f in (_JOB_SCRIPT, _PW_CONFIG):
