@@ -12,9 +12,7 @@ from server.routes import worktree_tools
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch) -> Any:
     calls: list[Any] = []
-    monkeypatch.setattr(
-        subprocess, "Popen", lambda *a, **k: calls.append(a)
-    )
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: calls.append(a))
     app = FastAPI()
     app.include_router(worktree_tools.router)
     c = TestClient(app)
