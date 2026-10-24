@@ -25,7 +25,7 @@ from server.auth import _is_legacy_api_token, _try_decode_jwt
 from server.error_ref import client_error
 
 from ..config import get_settings
-from ._specpath import safe_join
+from ._specpath import browse_roots, safe_join, within_roots
 
 logger = logging.getLogger(__name__)
 
@@ -236,7 +236,9 @@ async def discover_projects(
     Discover potential project folders in a directory.
     Returns folders that look like projects (have .git, package.json, etc).
     """
-    base = Path(base_path).expanduser().resolve()
+    base = within_roots(
+        base_path, browse_roots(), "browsable directories", expand_user=True
+    )
 
     if not base.exists():
         return {

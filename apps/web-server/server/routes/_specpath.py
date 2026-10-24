@@ -17,8 +17,10 @@ isn't already a bare component, so a traversal attempt fails loudly with HTTP
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
+from collections.abc import Iterable
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -126,3 +128,70 @@ def safe_spec_dir(base: Path, spec_id: str) -> Path:
     malicious component raises.
     """
     return base / ".tfactory" / "specs" / safe_component(spec_id)
+
+
+def contained_path(
+    candidate: object, roots: Iterable[object], what: str, expand_user: bool = False
+) -> Path:
+    """Return *candidate*, resolved, if it lands inside one of *roots*.
+
+    For a request that supplies a whole PATH while the server owns the permitted
+    roots. Resolves first, then tests containment on the resolved form, so ``..``
+    and symlinks cannot escape. Raises ``ValueError`` on a miss. ``exists()`` /
+    ``is_dir()`` do not satisfy it: they say a path is THERE, not ALLOWED.
+    ``expand_user`` expands ``~`` inside the barrier, not before it.
+    """
+    raw = Path(str(candidate))
+    resolved = (raw.expanduser() if expand_user else raw).resolve()
+    for root in roots:
+        try:
+            root_resolved = Path(str(root)).resolve()
+        except (OSError, ValueError):
+            continue
+        if resolved == root_resolved or root_resolved in resolved.parents:
+            return resolved
+    raise ValueError(f"path is outside the {what}")
+
+
+def within_roots(
+    candidate: object, roots: Iterable[object], what: str, expand_user: bool = False
+) -> Path:
+    """:func:`contained_path`, but HTTP 403 (no path echoed) instead of ValueError."""
+    try:
+        return contained_path(candidate, roots, what, expand_user)
+    except ValueError:
+        raise HTTPException(
+            status_code=403, detail=f"Access denied: path is outside the {what}"
+        ) from None
+
+
+def registered_project_roots() -> list[Path]:
+    """Resolved paths of every registered project."""
+    # Function-local: late binding, and routes.projects imports this module.
+    from .projects import load_projects
+
+    roots: list[Path] = []
+    for p in load_projects().values():
+        # A malformed registry entry drops out of the root set, not the request.
+        with contextlib.suppress(OSError, KeyError, TypeError):
+            roots.append(Path(p["path"]).resolve())
+    return roots
+
+
+def browse_roots() -> list[Path]:
+    """Registered projects + ``$HOME`` + ``APP_FILE_BROWSE_ROOTS`` (os.pathsep list).
+
+    For flows pointing at a directory that is not registered yet (scanning for
+    projects to add); registered-only roots would make the first project
+    impossible to add.
+    """
+    roots = registered_project_roots()
+    with contextlib.suppress(OSError, RuntimeError):
+        roots.append(Path.home().resolve())
+    for raw_extra in os.environ.get("APP_FILE_BROWSE_ROOTS", "").split(os.pathsep):
+        extra = raw_extra.strip()
+        if extra:
+            # A typo in the env var must not stop the server starting.
+            with contextlib.suppress(OSError):
+                roots.append(Path(extra).resolve())
+    return roots

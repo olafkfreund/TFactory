@@ -72,3 +72,33 @@ def test_trusted_project_root_rejects_missing_dir(tmp_path):
 
     with pytest.raises(ValueError, match="Project path does not exist"):
         trusted_project_root(str(tmp_path / "nope"))
+
+
+def test_within_roots_inside_returns_resolved(tmp_path):
+    from server.routes._specpath import within_roots
+
+    assert within_roots(tmp_path / "a", [tmp_path], "x") == (tmp_path / "a").resolve()
+
+
+@pytest.mark.parametrize("evil", ["/etc", "a/../../etc"])
+def test_within_roots_outside_is_403_without_path(tmp_path, evil):
+    from server.routes._specpath import within_roots
+
+    cand = evil if evil.startswith("/") else str(tmp_path / evil)
+    with pytest.raises(HTTPException) as exc:
+        within_roots(cand, [tmp_path], "x")
+    assert exc.value.status_code == 403
+    assert "etc" not in exc.value.detail
+
+
+def test_browse_roots_env_and_registry(tmp_path, monkeypatch):
+    from server.routes._specpath import browse_roots
+
+    monkeypatch.setenv("APP_FILE_BROWSE_ROOTS", str(tmp_path))
+    monkeypatch.setattr(
+        "server.routes.projects.load_projects",
+        lambda: {"p": {"path": str(tmp_path / "proj")}, "bad": {}},
+    )
+    roots = browse_roots()
+    assert tmp_path.resolve() in roots
+    assert (tmp_path / "proj").resolve() in roots
