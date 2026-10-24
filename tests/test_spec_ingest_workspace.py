@@ -515,3 +515,67 @@ def test_ref_with_source_branch_rejected_before_workspace(tmp_path):
     with pytest.raises(ValueError, match="either ref or source_branch"):
         _ingest(tmp_path, _MARKDOWN, ref="main", source_branch="aifactory/1")
     assert not _spec_dir(tmp_path).exists()
+
+
+# --- #1427: contract schema gate at ingest ---------------------------------
+
+_VALID_CONTRACT = {
+    "contract_version": "2",
+    "feature": "f",
+    "workflow_type": "feature",
+    "phases": [
+        {
+            "phase": 1,
+            "name": "p",
+            "subtasks": [{"id": "1.1", "description": "d", "status": "pending"}],
+        }
+    ],
+    "tfactory": {"lanes": ["unit"]},
+}
+_MODE = "TFACTORY_CONTRACT_SCHEMA_MODE"
+
+
+def _invalid_contract():
+    # wrong type, so the error path names the field ("<root>: required" would not)
+    return {**_VALID_CONTRACT, "phases": "x"}
+
+
+def test_valid_contract_passes_in_enforce_mode(tmp_path, monkeypatch):
+    monkeypatch.setenv(_MODE, "enforce")
+    result = _ingest(tmp_path, _MARKDOWN, contract=_VALID_CONTRACT)
+    assert (_spec_dir(tmp_path) / "context" / "task_contract.json").exists()
+    assert not any(w.startswith("task contract") for w in result["warnings"])
+
+
+def test_invalid_contract_rejected_in_enforce_mode(tmp_path, monkeypatch):
+    monkeypatch.setenv(_MODE, "enforce")
+    with pytest.raises(ValueError, match="phases"):
+        _ingest(tmp_path, _MARKDOWN, contract=_invalid_contract())
+    assert not _spec_dir(tmp_path).exists()
+
+
+def test_invalid_contract_warned_by_default(tmp_path, monkeypatch):
+    monkeypatch.delenv(_MODE, raising=False)
+    result = _ingest(tmp_path, _MARKDOWN, contract=_invalid_contract())
+    assert (_spec_dir(tmp_path) / "context" / "task_contract.json").exists()
+    assert any("phases" in w for w in result["warnings"])
+
+
+def test_unknown_mode_fails_closed(tmp_path, monkeypatch):
+    monkeypatch.setenv(_MODE, "enforced")
+    with pytest.raises(ValueError, match="phases"):
+        _ingest(tmp_path, _MARKDOWN, contract=_invalid_contract())
+
+
+def test_enforce_without_contract_unchanged(tmp_path, monkeypatch):
+    monkeypatch.setenv(_MODE, "enforce")
+    _ingest(tmp_path, _MARKDOWN)
+    assert not (_spec_dir(tmp_path) / "context" / "task_contract.json").exists()
+
+
+def test_validate_returns_paths_not_values():
+    from agents.task_contract import validate_task_contract
+
+    errors = validate_task_contract({"contract_version": "SECRET"})
+    assert "contract_version: enum" in errors
+    assert not any("SECRET" in e for e in errors)

@@ -91,7 +91,7 @@ Paths are relative to the repo root. Run Python with the main clone's venv:
    - `test_valid_contract_passes_in_enforce_mode`: enforce; persisted; no
      warning starting with `task contract`.
    - `test_invalid_contract_rejected_in_enforce_mode`: enforce; fixture
-     without `phases` → `pytest.raises(ValueError, match="phases")`; spec dir
+     with `phases` set to a string (deviation: a missing key reports `<root>: required`, which names no field) → `pytest.raises(ValueError, match="phases")`; spec dir
      does not exist.
    - `test_invalid_contract_warned_by_default`: env unset
      (`monkeypatch.delenv(..., raising=False)`); same invalid contract is
