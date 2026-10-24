@@ -6,7 +6,6 @@ allowed-tools:
   - mcp__tfactory__task_status
   - mcp__tfactory__task_rerun
   - mcp__tfactory__report_get
-  - mcp__aifactory__task_apply_correction
   - mcp__aifactory__task_status
   - Bash
   - Read
