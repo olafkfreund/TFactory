@@ -16,7 +16,12 @@ _WEB_SERVER = Path(__file__).resolve().parents[1]
 if str(_WEB_SERVER) not in sys.path:
     sys.path.insert(0, str(_WEB_SERVER))
 
-from server.routes._specpath import safe_spec_dir  # noqa: E402
+from server.routes._specpath import (  # noqa: E402
+    browse_roots,
+    safe_spec_dir,
+    trusted_project_root,
+    within_roots,
+)
 
 
 def test_valid_spec_id_builds_expected_path(tmp_path):
@@ -62,27 +67,23 @@ def test_result_stays_within_specs_root(tmp_path):
 
 
 def test_trusted_project_root_resolves_existing_dir(tmp_path):
-    from server.routes._specpath import trusted_project_root
 
     assert trusted_project_root(str(tmp_path)) == tmp_path.resolve()
 
 
 def test_trusted_project_root_rejects_missing_dir(tmp_path):
-    from server.routes._specpath import trusted_project_root
 
     with pytest.raises(ValueError, match="Project path does not exist"):
         trusted_project_root(str(tmp_path / "nope"))
 
 
 def test_within_roots_inside_returns_resolved(tmp_path):
-    from server.routes._specpath import within_roots
 
     assert within_roots(tmp_path / "a", [tmp_path], "x") == (tmp_path / "a").resolve()
 
 
 @pytest.mark.parametrize("evil", ["/etc", "a/../../etc"])
 def test_within_roots_outside_is_403_without_path(tmp_path, evil):
-    from server.routes._specpath import within_roots
 
     cand = evil if evil.startswith("/") else str(tmp_path / evil)
     with pytest.raises(HTTPException) as exc:
@@ -92,7 +93,6 @@ def test_within_roots_outside_is_403_without_path(tmp_path, evil):
 
 
 def test_browse_roots_env_not_registry(tmp_path, monkeypatch):
-    from server.routes._specpath import browse_roots
 
     monkeypatch.setenv("APP_FILE_BROWSE_ROOTS", str(tmp_path))
     monkeypatch.setattr(
@@ -104,9 +104,8 @@ def test_browse_roots_env_not_registry(tmp_path, monkeypatch):
     assert Path("/") not in roots  # a registered "/" must not widen the roots
 
 
-def test_contained_path_unknown_user_is_403():
-    from server.routes._specpath import within_roots
+def test_contained_path_unknown_user_is_403(tmp_path):
 
     with pytest.raises(HTTPException) as exc:
-        within_roots("~nosuchuser_zz/x", [Path("/tmp")], "x", expand_user=True)
+        within_roots("~nosuchuser_zz/x", [tmp_path], "x", expand_user=True)
     assert exc.value.status_code == 403

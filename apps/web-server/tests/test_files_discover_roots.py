@@ -4,9 +4,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
-from server.routes import files
+from server.routes import files, projects  # type: ignore[import-not-found]
 
 
 @pytest.fixture
@@ -18,7 +18,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("APP_FILE_BROWSE_ROOTS", str(root))
     monkeypatch.setattr("server.routes.projects.load_projects", lambda: {})
-    monkeypatch.setattr(files, "_is_app_internal_path", lambda p: False)
+    monkeypatch.setattr(files, "_is_app_internal_path", lambda _p: False)
     app = FastAPI()
     app.include_router(files.router)
     c = TestClient(app)
@@ -38,9 +38,6 @@ def test_outside_roots_403(client: Any) -> None:
 
 @pytest.mark.asyncio
 async def test_scan_outside_roots_403(client: Any) -> None:
-    from fastapi import HTTPException
-    from server.routes import projects
-
     with pytest.raises(HTTPException) as exc:
         await projects.scan_for_projects(projects.ScanProjectsRequest(basePath="/etc"))
     assert exc.value.status_code == 403

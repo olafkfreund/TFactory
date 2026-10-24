@@ -6,13 +6,13 @@ from typing import Any
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from server.routes import worktree_tools
+from server.routes import worktree_tools  # type: ignore[import-not-found]
 
 
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch) -> Any:
     calls: list[Any] = []
-    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **_k: calls.append(a))
     app = FastAPI()
     app.include_router(worktree_tools.router)
     c = TestClient(app)
