@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1430
 intent: intent/2026-10-24-1430-handback-triage-everywhere.md
 ---
