@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1427
 intent: intent/2026-10-24-1427-contract-schema-gate.md
 ---
