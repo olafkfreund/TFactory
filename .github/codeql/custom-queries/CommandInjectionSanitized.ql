@@ -33,7 +33,7 @@ import CommandInjectionFlow::PathGraph
  * `_safe_arg` barrier on an attacker-chosen program name would hide a real RCE,
  * so never land this twin without that refusal.
  *
- * `_require_safe_git_ref` (routes/changelog.py, routes/git.py) returns the
+ * `_require_safe_git_ref` (routes/_specpath.py) returns the
  * value only after refusing a leading `-` and any character outside
  * `[\w./@+-]`; every caller passes it as one element of a list argv with no
  * shell, so it cannot pick the program or inject an option (#1428).

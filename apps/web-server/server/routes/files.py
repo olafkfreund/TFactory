@@ -25,8 +25,12 @@ from server.auth import _is_legacy_api_token, _try_decode_jwt
 from server.error_ref import client_error
 
 from ..config import get_settings
-from ._specpath import browse_roots, safe_join, within_roots
-from .changelog import _require_safe_git_ref
+from ._specpath import (
+    _require_safe_git_ref,
+    browse_roots,
+    safe_join,
+    within_roots,
+)
 
 logger = logging.getLogger(__name__)
 

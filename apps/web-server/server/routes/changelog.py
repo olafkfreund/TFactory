@@ -17,43 +17,11 @@ from pydantic import BaseModel
 from server.error_ref import client_error
 
 from ..services.insights_service import get_insights_service
-from ._specpath import safe_component
+from ._specpath import _require_safe_git_date, _require_safe_git_ref, safe_component
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-
-# Allow-lists for request-supplied values that flow into git subprocess argv.
-# Prevents request-controlled input from being interpreted as a git option or
-# otherwise injected into the command (py/command-line-injection).
-_GIT_REF_RE = re.compile(r"[\w./@-]+")
-_GIT_DATE_RE = re.compile(r"[\w.:+/\s-]+")
-
-
-def _require_safe_git_ref(value: str, label: str) -> str:
-    """Validate a request-supplied git ref/branch/tag against an allow-list.
-
-    Rejects option-like (leading ``-``) and out-of-charset values.
-    """
-    if (
-        not isinstance(value, str)
-        or value.startswith("-")
-        or not _GIT_REF_RE.fullmatch(value)
-    ):
-        raise HTTPException(status_code=400, detail=f"Invalid {label}")
-    return value
-
-
-def _require_safe_git_date(value: str, label: str) -> str:
-    """Validate a request-supplied git date string against an allow-list."""
-    if (
-        not isinstance(value, str)
-        or value.startswith("-")
-        or not _GIT_DATE_RE.fullmatch(value)
-    ):
-        raise HTTPException(status_code=400, detail=f"Invalid {label}")
-    return value
 
 
 # ============================================
