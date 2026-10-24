@@ -43,11 +43,11 @@ this.
 
 ### D3. Baseline to today's open counts
 
-`.github/codeql-baseline.json` becomes `{"critical": 0, "high": 0, "error": 0, "medium": 1}`.
+`.github/codeql-baseline.json` becomes `{"critical": 0, "high": 0, "error": 0, "medium": 0}`.
 These are the counts in `gh api 'repos/olafkfreund/TFactory/code-scanning/alerts?state=open'`,
 bucketed as the hub `scripts/codeql_ratchet.py` does (security severity, else
-rule severity). The one medium is 1910 (`actions/unpinned-tag`, the
-`codeql-ratchet.yml` caller pinned to the hub's `@main`).
+rule severity). Alert 1910 (`actions/unpinned-tag`, the `codeql-ratchet.yml`
+caller on the hub's `@main`) is dismissed, so it does not count.
 
 ## Alternatives rejected
 
@@ -60,7 +60,7 @@ rule severity). The one medium is 1910 (`actions/unpinned-tag`, the
 - **Keep the leading-dash check and only barrier it.** That check is weaker
   than an allow-list, and a barrier on it would be dishonest.
 - **Pin 1910's `@main` to a SHA.** That is a hub-wide caller convention and
-  out of scope; the baseline records it instead.
+  out of scope; 1910 is dismissed.
 
 ## Risks
 

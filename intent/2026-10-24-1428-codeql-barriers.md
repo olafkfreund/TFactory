@@ -31,7 +31,7 @@ so a real one could land without failing the weekly ratchet.
 - `base` on `/diff` gets the same ref allow-list `changelog.py` uses, not just
   a leading-dash check.
 - The baseline matches the open alerts today: critical 0, high 0, error 0,
-  medium 1 (1910, `actions/unpinned-tag` on the ratchet caller's `@main`).
+  medium 0.
 
 ## Affected users and systems
 

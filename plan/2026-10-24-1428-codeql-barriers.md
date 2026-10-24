@@ -19,7 +19,7 @@ Approved decisions, copied from the spec:
   parameter), with a comment on why it is honest: it returns only a value with
   no shell metacharacter and no leading `-`, and every caller passes it as one
   element of a list argv with no shell. Clears 1908.
-- **D3** `.github/codeql-baseline.json` = `{"critical": 0, "high": 0, "error": 0, "medium": 1}`.
+- **D3** `.github/codeql-baseline.json` = `{"critical": 0, "high": 0, "error": 0, "medium": 0}`.
 - Out of scope: barriers for `_require_safe_git_date` / `_validate_ref`, pinning
   the ratchet caller's `@main`, dismissing anything.
 
@@ -56,7 +56,7 @@ All paths below are under `apps/web-server/` unless they start with `.github/`.
    Traps: there is no local CodeQL CLI; the PR's CodeQL check is the real test.
 
 4. `.github/codeql-baseline.json`: set to
-   `{"critical": 0, "high": 0, "error": 0, "medium": 1}` with the same key order
+   `{"critical": 0, "high": 0, "error": 0, "medium": 0}` with the same key order
    and 2-space indent as now.
    → verify: `python3 -m json.tool .github/codeql-baseline.json`
    Traps: none.
@@ -75,6 +75,15 @@ All paths below are under `apps/web-server/` unless they start with `.github/`.
    → verify: `cd apps/web-server && ../backend/.venv/bin/python -m pytest tests/test_codeql_1428_barriers.py -q`
    Traps: worktrees need a git user in the tmp repo (`-c user.email=t@t -c user.name=t`);
    tests run from `apps/web-server`.
+
+## Deviations
+
+- Review of #1429: the baseline's `medium` was 1. Alert 1910 had been
+  dismissed (12:36Z, before the PR), so the true open counts are 0/0/0/0.
+  `medium` is now 0 in the baseline, D3, step 4, the spec and the intent.
+- Review of #1429: step 5's worktree test did not assert that `safe_component`
+  is called, so it passed without D1. It now wraps `git.safe_component` in a
+  spy and asserts the call with the name.
 
 ## Tests
 
