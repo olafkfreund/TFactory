@@ -6,6 +6,7 @@ Pure file IO — seeds context/*.json and asserts the parsed TfactoryProfile.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from agents.task_contract import (
@@ -13,6 +14,7 @@ from agents.task_contract import (
     parse_tfactory_profile,
     read_task_contract,
     read_tfactory_profile,
+    validate_task_contract,
 )
 
 
@@ -132,3 +134,13 @@ def test_plain_plan_without_contract_is_ignored(spec):
         json.dumps({"phases": [], "feature": "x"})
     )
     assert read_task_contract(spec) is None
+
+
+_PROOF_RUN = Path(__file__).resolve().parents[1] / "scripts" / "proof-run-ingest.example.json"
+
+
+def test_proof_run_template_contract_is_schema_valid():
+    # #1431: the hand-copied proof-run body was the sender of "1.0" contracts.
+    contract = json.loads(_PROOF_RUN.read_text())["contract"]
+    assert "contract_version" in contract  # ingest validates and persists it
+    assert validate_task_contract(contract) == []

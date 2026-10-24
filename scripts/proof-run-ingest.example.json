@@ -1,0 +1,23 @@
+{
+  "project_id": "<tfactory-project-id>",
+  "spec_id": "postdeploy-MMDD-<slug>",
+  "spec_text": "# Ordinal\n\n## Acceptance Criteria\n\n1. `ordinal(1)` returns `\"1st\"`.\n2. `ordinal(-1)` raises `ValueError`.\n",
+  "format": "markdown",
+  "target_paths": ["src/app/ordinal.py"],
+  "contract": {
+    "contract_version": "2",
+    "feature": "post-deploy proof run",
+    "workflow_type": "simple",
+    "phases": [
+      {
+        "phase": 1,
+        "name": "verify",
+        "subtasks": [{"id": "1.1", "description": "verify the acceptance criteria"}]
+      }
+    ],
+    "environment": {
+      "language": "python",
+      "provisioning": {"method": "nix", "generated": false}
+    }
+  }
+}
