@@ -80,10 +80,33 @@ failing tests. Summarise: "N failing tests → AIFactory spec `proj:spec`."
 
 ### 4. Confirm, then send
 
-Sending kicks off a paid AIFactory agent run, so it's **confirm-first**. Two
-equivalent paths:
+Sending kicks off a paid AIFactory agent run, so it's **confirm-first**. Use the CLI;
+the MCP tool is a fallback.
 
-**a) Via the AIFactory MCP tool (preferred — symmetric with the handover):**
+**a) Via the TFactory CLI (preferred, sends triage):**
+
+Preview first (dry run, sends nothing):
+
+```bash
+cd apps/backend && python -m agents.handback <spec_dir>
+```
+
+Show the operator the printed payload and target. On a clear yes, send:
+
+```bash
+cd apps/backend && python -m agents.handback <spec_dir> --send
+```
+
+This POSTs to AIFactory's `POST /api/tasks/{task_id}/apply-correction` using the
+`api_url` recorded in `source.json` (default `http://localhost:3101`, override
+with `TFACTORY_AIFACTORY_API_URL`).
+
+**b) Fallback: the AIFactory MCP tool:**
+
+> Fallback only, for when `python -m agents.handback <spec_dir> --send`
+> cannot run here. The AIFactory MCP tool sends the markdown without the
+> `triage` block, so AIFactory will reject it once
+> `APP_REQUIRE_CORRECTION_TRIAGE` is on.
 
 First preview (writes/starts nothing on AIFactory's side):
 
@@ -101,20 +124,10 @@ Show the operator the preview (`would_write`). On a clear yes, call again with
 `confirm=true` — AIFactory writes `QA_FIX_REQUEST.md` onto the original spec and
 runs its QA Fixer.
 
-**b) Local fallback (when the AIFactory MCP server isn't registered):**
-
-```bash
-cd apps/backend && python -m agents.handback <spec_dir> --send
-```
-
-This POSTs to AIFactory's `POST /api/tasks/{task_id}/apply-correction` using the
-`api_url` recorded in `source.json` (default `http://localhost:3101`, override
-with `TFACTORY_AIFACTORY_API_URL`).
-
 ### 5. Report back
 
 One line: the AIFactory `task_id` the correction went to + its returned status
-(e.g. `qa_fixing`). If you want to watch AIFactory finish, poll
+(e.g. `qa_fixing`; the CLI prints it in its JSON result). If you want to watch AIFactory finish, poll
 `mcp__aifactory__task_status`.
 
 ## Closing the loop (re-test after the fix)
@@ -137,8 +150,7 @@ stop at a correction-cycle cap) is the `/tfactory-fixloop` skill (epic #182 P6).
   artifact stays on disk. Start AIFactory's web-server (port 3101) and retry.
 - **Spec not found on AIFactory** (404) → the original spec was deleted/renamed.
   Check `aifactory_task_id` in the json against AIFactory's specs.
-- **AIFactory MCP tool not available** → use the local CLI fallback (4b), or
-  register AIFactory's MCP server (see the companion skill).
+- **AIFactory MCP tool not available** → use the CLI (4a). The MCP tool (4b) is fallback only.
 
 ## Non-goals
 

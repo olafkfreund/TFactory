@@ -281,3 +281,30 @@ def test_skills_directory_contains_all_four_bundles() -> None:
     for name in EXPECTED_SKILLS:
         path = SKILLS_DIR / name / "SKILL.md"
         assert path.is_file(), f"missing skill bundle: {path}"
+
+
+# ---------------------------------------------------------------------------
+# Handback triage (#1430): no skill may send markdown-only as its main path
+# ---------------------------------------------------------------------------
+
+HANDBACK_SEND = "agents.handback <spec_dir> --send"
+_HANDBACK_SKILLS = sorted(SKILLS_DIR.glob("*/SKILL.md")) + sorted(
+    (REPO_ROOT / "companion-skills").glob("*/SKILL.md")
+)
+
+
+@pytest.mark.parametrize("path", _HANDBACK_SKILLS, ids=lambda p: p.parent.name)
+def test_apply_correction_calls_are_marked_fallback(path: Path) -> None:
+    """A skill that calls task_apply_correction must show --send first and
+    warn that the MCP tool sends no triage block."""
+    text = path.read_text()
+    call = text.find("task_apply_correction(")
+    if call < 0:
+        return
+    assert "APP_REQUIRE_CORRECTION_TRIAGE" in text, f"{path}: fallback unmarked"
+    assert 0 <= text.find(HANDBACK_SEND) < call, f"{path}: --send must come first"
+
+
+def test_fixloop_does_not_allow_markdown_only_tool() -> None:
+    fm, _body = _read_skill("tfactory-fixloop")
+    assert "mcp__aifactory__task_apply_correction" not in fm["allowed_tools"]
