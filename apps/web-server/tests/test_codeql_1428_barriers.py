@@ -9,6 +9,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from server.routes import files, git
+from server.routes._specpath import safe_component
 
 
 def _make_repo(path: Path) -> Path:
@@ -27,7 +28,7 @@ def _make_repo(path: Path) -> Path:
             "x",
         ],
     ):
-        subprocess.run(["git", *cmd], cwd=path, check=True)
+        subprocess.run(["git", *cmd], cwd=path, check=True)  # noqa: S603, S607
     return path
 
 
@@ -57,13 +58,12 @@ async def test_worktree_name_barrier(
         "server.config.get_settings", lambda: SimpleNamespace(projects_file=pf)
     )
     seen: list[str] = []
-    real = git.safe_component
 
     def spy(name: str) -> str:
         seen.append(name)
-        return real(name)
+        return safe_component(name)
 
-    monkeypatch.setattr(git, "safe_component", spy)
+    monkeypatch.setattr("server.routes.git.safe_component", spy)
 
     bad = await git.create_worktree("p", git.CreateWorktreeRequest(name="../x"))
     assert bad["success"] is False
