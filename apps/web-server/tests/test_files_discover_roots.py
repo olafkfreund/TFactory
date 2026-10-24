@@ -1,7 +1,6 @@
 """/files/discover must refuse base paths outside the browse roots."""
 
 from pathlib import Path
-from typing import Any
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -10,9 +9,14 @@ from server.routes import files, projects
 
 
 @pytest.fixture
-def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
-    root = tmp_path / "root"
-    (root / "proj" / ".git").mkdir(parents=True)
+def root(tmp_path: Path) -> Path:
+    r = tmp_path / "root"
+    (r / "proj" / ".git").mkdir(parents=True)
+    return r
+
+
+@pytest.fixture
+def client(root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
@@ -21,26 +25,23 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     monkeypatch.setattr(files, "_is_app_internal_path", lambda _p: False)
     app = FastAPI()
     app.include_router(files.router)
-    c = TestClient(app)
-    c.root = root
-    return c
+    return TestClient(app)
 
 
-def test_inside_root_ok(client: Any) -> None:
-    r = client.get("/discover", params={"base_path": str(client.root)})
+def test_inside_root_ok(client: TestClient, root: Path) -> None:
+    r = client.get("/discover", params={"base_path": str(root)})
     assert r.status_code == 200
     assert "proj" in str(r.json())
 
 
-def test_outside_roots_403(client: Any) -> None:
+def test_outside_roots_403(client: TestClient) -> None:
     assert client.get("/discover", params={"base_path": "/etc"}).status_code == 403
 
 
+@pytest.mark.usefixtures("client")
 @pytest.mark.asyncio
-async def test_scan_outside_roots_403(client: Any) -> None:
+async def test_scan_outside_roots_403(root: Path) -> None:
     with pytest.raises(HTTPException) as exc:
         await projects.scan_for_projects(projects.ScanProjectsRequest(basePath="/etc"))
     assert exc.value.status_code == 403
-    await projects.scan_for_projects(
-        projects.ScanProjectsRequest(basePath=str(client.root))
-    )
+    await projects.scan_for_projects(projects.ScanProjectsRequest(basePath=str(root)))
