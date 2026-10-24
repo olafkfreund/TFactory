@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1435
 intent: intent/2026-10-24-1435-gitref-specpath.md
 ---
