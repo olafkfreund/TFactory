@@ -1,5 +1,8 @@
 """customPath must be refused: it let a request choose the program to execute."""
 
+import subprocess
+from typing import Any
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -7,10 +10,10 @@ from server.routes import worktree_tools
 
 
 @pytest.fixture
-def client(monkeypatch):
-    calls: list = []
+def client(monkeypatch: pytest.MonkeyPatch) -> Any:
+    calls: list[Any] = []
     monkeypatch.setattr(
-        worktree_tools.subprocess, "Popen", lambda *a, **k: calls.append(a)
+        subprocess, "Popen", lambda *a, **k: calls.append(a)
     )
     app = FastAPI()
     app.include_router(worktree_tools.router)
@@ -23,7 +26,7 @@ def client(monkeypatch):
     ("url", "key"),
     [("/worktree/open-in-ide", "ide"), ("/worktree/open-in-terminal", "terminal")],
 )
-def test_custom_path_rejected(client, url, key):
+def test_custom_path_rejected(client: Any, url: str, key: str) -> None:
     body = {"worktreePath": "/p", key: "x", "customPath": "/bin/sh"}
     r = client.post(url, json=body)
     assert r.status_code == 400
@@ -31,7 +34,9 @@ def test_custom_path_rejected(client, url, key):
     assert client.popen_calls == []
 
 
-def test_without_custom_path_reject_does_not_fire(client, monkeypatch):
+def test_without_custom_path_reject_does_not_fire(
+    client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr("server.routes.projects.load_projects", lambda: {})
     r = client.post(
         "/worktree/open-in-ide", json={"worktreePath": "/p", "ide": "vscode"}
@@ -40,5 +45,5 @@ def test_without_custom_path_reject_does_not_fire(client, monkeypatch):
     assert r.json()["detail"] == "Path is not within a known project"
 
 
-def test_ide_command_comes_from_table():
+def test_ide_command_comes_from_table() -> None:
     assert worktree_tools.get_ide_command("vscode", "/p") == ["code", "/p"]

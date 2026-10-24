@@ -1,5 +1,8 @@
 """/files/discover must refuse base paths outside the browse roots."""
 
+from pathlib import Path
+from typing import Any
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -7,7 +10,7 @@ from server.routes import files
 
 
 @pytest.fixture
-def client(tmp_path, monkeypatch):
+def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     root = tmp_path / "root"
     (root / "proj" / ".git").mkdir(parents=True)
     home = tmp_path / "home"
@@ -23,18 +26,18 @@ def client(tmp_path, monkeypatch):
     return c
 
 
-def test_inside_root_ok(client):
+def test_inside_root_ok(client: Any) -> None:
     r = client.get("/discover", params={"base_path": str(client.root)})
     assert r.status_code == 200
     assert "proj" in str(r.json())
 
 
-def test_outside_roots_403(client):
+def test_outside_roots_403(client: Any) -> None:
     assert client.get("/discover", params={"base_path": "/etc"}).status_code == 403
 
 
 @pytest.mark.asyncio
-async def test_scan_outside_roots_403(client):
+async def test_scan_outside_roots_403(client: Any) -> None:
     from fastapi import HTTPException
     from server.routes import projects
 
