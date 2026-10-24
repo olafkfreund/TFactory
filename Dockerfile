@@ -144,6 +144,8 @@ RUN want="$(tr -dc '0-9.' < /tmp/.nvmrc | cut -d. -f1)" \
 #                        8.23.0-r0. Named together: same origin.
 #   ca-certificates-bundle 20260909-r2 — CVE-2026-111943 (HIGH), fixed in
 #                        20260909-r3.
+#   libbrotlicommon1 / libbrotlidec1 / libbrotlienc1 1.2.0-r5 — CVE-2026-111497
+#                        (HIGH), fixed in 1.2.0-r7. Named together: same origin.
 # Floors rather than == pins, so the build stays green as Wolfi revs further
 # (1.38.0-r1 and later already exist); drop each once the base digest ships it.
 # Verified present in the Wolfi x86_64 APKINDEX, then confirmed against the
@@ -160,6 +162,9 @@ RUN apk add --no-cache \
         "ca-certificates-bundle>=20260909-r3" \
         "curl>=8.23.0-r0" \
         "libcurl-openssl4>=8.23.0-r0" \
+        "libbrotlicommon1>=1.2.0-r7" \
+        "libbrotlidec1>=1.2.0-r7" \
+        "libbrotlienc1>=1.2.0-r7" \
         git \
         gh \
         gnupg \
@@ -175,6 +180,7 @@ RUN apk add --no-cache \
 #   HIGH CVE-2026-102276  brace-expansion 5.0.9 -> 5.0.10   (stack exhaustion)
 #   HIGH CVE-2026-102278  brace-expansion 5.0.9 -> 5.0.11   (uncontrolled recursion)
 #   HIGH CVE-2026-19534   undici 6.28.0 -> 6.28.1           (WebSocket DoS)
+#   HIGH CVE-2026-109869  undici 6.28.1 -> 6.29.1
 #
 # These are npm's own bundle, not a dependency of this application, so no
 # lockfile of ours can clear them — and no npm release does either. Measured
@@ -183,7 +189,7 @@ RUN apk add --no-cache \
 # forever.
 #
 # Patched versions of the PACKAGES do exist (brace-expansion 5.0.12, undici
-# 6.28.1); they are simply in no npm tarball. So replace npm's vendored copies
+# 6.29.1); they are simply in no npm tarball. So replace npm's vendored copies
 # rather than allow-listing the CVEs: a .trivyignore entry is for "no known
 # patched version exists", which is false here, and silencing the report would
 # leave the vulnerable code in an image that runs npm against untrusted
@@ -197,14 +203,14 @@ RUN apk add --no-cache \
 # by an undici success would exit 0 and ship an unpatched bundle. The trailing
 # `npm --version` proves npm still runs after the surgery.
 RUN M=/usr/local/lib/node_modules/npm/node_modules \
- && for p in brace-expansion@5.0.12 undici@6.28.1; do \
+ && for p in brace-expansion@5.0.12 undici@6.29.1; do \
       n="${p%@*}"; \
       npm pack "$p" --pack-destination /tmp >/dev/null \
    && rm -rf "$M/$n" && mkdir -p "$M/$n" \
    && tar xzf /tmp/"$n"-*.tgz -C "$M/$n" --strip-components=1 \
    && rm -f /tmp/"$n"-*.tgz; \
     done \
- && node -e "const want={'brace-expansion':'5.0.12','undici':'6.28.1'}; let bad=0; for (const [n,v] of Object.entries(want)) { const got=require('/usr/local/lib/node_modules/npm/node_modules/'+n+'/package.json').version; console.log(n, got, got===v?'ok':'EXPECTED '+v); if (got!==v) bad=1; } process.exit(bad)" \
+ && node -e "const want={'brace-expansion':'5.0.12','undici':'6.29.1'}; let bad=0; for (const [n,v] of Object.entries(want)) { const got=require('/usr/local/lib/node_modules/npm/node_modules/'+n+'/package.json').version; console.log(n, got, got===v?'ok':'EXPECTED '+v); if (got!==v) bad=1; } process.exit(bad)" \
  && npm --version
 
 # Node must come only from the node-runtime COPY above, never from apk: an apk
