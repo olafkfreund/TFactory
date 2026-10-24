@@ -136,7 +136,9 @@ def test_plain_plan_without_contract_is_ignored(spec):
     assert read_task_contract(spec) is None
 
 
-_PROOF_RUN = Path(__file__).resolve().parents[1] / "scripts" / "proof-run-ingest.example.json"
+_PROOF_RUN = (
+    Path(__file__).resolve().parents[1] / "scripts" / "proof-run-ingest.example.json"
+)
 
 
 def test_proof_run_template_contract_is_schema_valid():
