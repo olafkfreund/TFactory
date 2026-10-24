@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
-from server.routes import files, projects  # type: ignore[import-not-found]
+from server.routes import files, projects
 
 
 @pytest.fixture
