@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.9.39 — image floors past two HIGH CVEs: undici and brotli (2026-10-24)
+
+### Security
+
+- **npm's vendored undici 6.29.1 and Wolfi brotli 1.2.0-r7 (#1422).** The
+  image's npm bundle shipped undici 6.28.1 (CVE-2026-109869, HIGH); the
+  vendored-deps overlay now pins 6.29.1 and asserts it. The base layer's
+  `libbrotlicommon1`, `libbrotlidec1` and `libbrotlienc1` were 1.2.0-r5
+  (CVE-2026-111497, HIGH); they now have an apk floor of 1.2.0-r7.
+
 ## 0.9.38 — verify a known ref, honour the repo flake, and never count a missing tool as a kill (2026-10-23)
 
 ### Changed
