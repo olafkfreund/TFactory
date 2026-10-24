@@ -142,7 +142,10 @@ def contained_path(
     ``expand_user`` expands ``~`` inside the barrier, not before it.
     """
     raw = Path(str(candidate))
-    resolved = (raw.expanduser() if expand_user else raw).resolve()
+    try:
+        resolved = (raw.expanduser() if expand_user else raw).resolve()
+    except RuntimeError as e:  # unknown ~user, symlink loop: fail closed
+        raise ValueError(f"path is outside the {what}") from e
     for root in roots:
         try:
             root_resolved = Path(str(root)).resolve()
@@ -165,27 +168,13 @@ def within_roots(
         ) from None
 
 
-def registered_project_roots() -> list[Path]:
-    """Resolved paths of every registered project."""
-    # Function-local: late binding, and routes.projects imports this module.
-    from .projects import load_projects
-
-    roots: list[Path] = []
-    for p in load_projects().values():
-        # A malformed registry entry drops out of the root set, not the request.
-        with contextlib.suppress(OSError, KeyError, TypeError):
-            roots.append(Path(p["path"]).resolve())
-    return roots
-
-
 def browse_roots() -> list[Path]:
-    """Registered projects + ``$HOME`` + ``APP_FILE_BROWSE_ROOTS`` (os.pathsep list).
+    """``$HOME`` + ``APP_FILE_BROWSE_ROOTS`` (os.pathsep list).
 
-    For flows pointing at a directory that is not registered yet (scanning for
-    projects to add); registered-only roots would make the first project
-    impossible to add.
+    Registered projects are deliberately NOT roots: ``POST /projects`` accepts any
+    directory, so registering ``/`` would widen the browse set to the whole disk.
     """
-    roots = registered_project_roots()
+    roots: list[Path] = []
     with contextlib.suppress(OSError, RuntimeError):
         roots.append(Path.home().resolve())
     for raw_extra in os.environ.get("APP_FILE_BROWSE_ROOTS", "").split(os.pathsep):

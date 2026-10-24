@@ -91,14 +91,22 @@ def test_within_roots_outside_is_403_without_path(tmp_path, evil):
     assert "etc" not in exc.value.detail
 
 
-def test_browse_roots_env_and_registry(tmp_path, monkeypatch):
+def test_browse_roots_env_not_registry(tmp_path, monkeypatch):
     from server.routes._specpath import browse_roots
 
     monkeypatch.setenv("APP_FILE_BROWSE_ROOTS", str(tmp_path))
     monkeypatch.setattr(
         "server.routes.projects.load_projects",
-        lambda: {"p": {"path": str(tmp_path / "proj")}, "bad": {}},
+        lambda: {"p": {"path": "/"}},
     )
     roots = browse_roots()
     assert tmp_path.resolve() in roots
-    assert (tmp_path / "proj").resolve() in roots
+    assert Path("/") not in roots  # a registered "/" must not widen the roots
+
+
+def test_contained_path_unknown_user_is_403():
+    from server.routes._specpath import within_roots
+
+    with pytest.raises(HTTPException) as exc:
+        within_roots("~nosuchuser_zz/x", [Path("/tmp")], "x", expand_user=True)
+    assert exc.value.status_code == 403

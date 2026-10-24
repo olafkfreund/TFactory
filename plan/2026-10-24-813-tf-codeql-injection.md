@@ -24,10 +24,13 @@ Reference repo: `/mnt/code/Source-home/GitHub/AIFactory`, read it with
   barrier, and exclude stock `py/command-line-injection`. This is honest only
   because D1 removes `customPath`. Never land the twin without D1.
 - **D1-fe** The frontend stops sending `customPath`.
-- **D2** Port `contained_path` / `within_roots` / `browse_roots` (plus a local
-  `registered_project_roots`) into `WS/routes/_specpath.py`. `/files/discover`
+- **D2** Port `contained_path` / `within_roots` / `browse_roots` into `WS/routes/_specpath.py`. `/files/discover`
   calls `within_roots(..., expand_user=True)`, and anything outside the roots
-  gets 403. Roots = registered projects + `$HOME` + `APP_FILE_BROWSE_ROOTS`.
+  gets 403. Roots = `$HOME` + `APP_FILE_BROWSE_ROOTS` (registered projects are NOT roots:
+  `POST /projects` accepts any directory, so registering `/` would bypass the
+  check; review deviation). `POST /projects/scan` gets the same `within_roots`
+  guard, and `contained_path` fails closed (403) on RuntimeError (unknown `~user`,
+  symlink loop).
   The Add Project default folder changes from `'/home'` to `'~'`. Register both
   helpers as path barriers in the ql. Add a one-line `.env.example` entry.
 - **D3** `git.py` worktree name: `re.fullmatch`.

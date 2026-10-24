@@ -31,3 +31,16 @@ def test_inside_root_ok(client):
 
 def test_outside_roots_403(client):
     assert client.get("/discover", params={"base_path": "/etc"}).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_scan_outside_roots_403(client):
+    from fastapi import HTTPException
+    from server.routes import projects
+
+    with pytest.raises(HTTPException) as exc:
+        await projects.scan_for_projects(projects.ScanProjectsRequest(basePath="/etc"))
+    assert exc.value.status_code == 403
+    await projects.scan_for_projects(
+        projects.ScanProjectsRequest(basePath=str(client.root))
+    )
