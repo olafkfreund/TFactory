@@ -15,7 +15,7 @@ import subprocess
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ._specpath import safe_join
 
@@ -57,7 +57,7 @@ def _safe_arg(value: str) -> str:
     """Return ``value`` if it holds no shell metacharacters, else raise 400.
 
     Applied to the request-controlled strings that compose a subprocess command
-    (the worktree path and any custom executable path) so they cannot inject a
+    (the worktree path) so they cannot inject a
     command -- belt-and-suspenders alongside the list-argv / ``shell=False`` form
     already used by ``subprocess.Popen``. Clears ``py/command-line-injection``.
     """
@@ -66,12 +66,25 @@ def _safe_arg(value: str) -> str:
     return value
 
 
+CUSTOM_PATH_DISABLED = (
+    "customPath is no longer accepted: it let the request body choose the "
+    "program the server executes, outside the agent sandbox, for any token "
+    "holder. Use the `ide`/`terminal` name instead. See AIFactory#1267 for the "
+    "operator-side allowlist that would replace it."
+)
+
+
 class OpenInIDERequest(BaseModel):
     """Request body for opening a path in IDE."""
 
     worktreePath: str
     ide: str
-    customPath: str | None = None
+    # Kept in the model ONLY so a client that still sends it gets a 400 that
+    # says why. Dropping the field instead would make pydantic discard it and
+    # the server would launch a different program than the caller asked for,
+    # reporting success -- a silent substitution is a worse bug than the
+    # refusal (AIFactory#1267).
+    customPath: str | None = Field(default=None, description=CUSTOM_PATH_DISABLED)
 
 
 class OpenInTerminalRequest(BaseModel):
@@ -79,18 +92,23 @@ class OpenInTerminalRequest(BaseModel):
 
     worktreePath: str
     terminal: str
-    customPath: str | None = None
+    customPath: str | None = Field(default=None, description=CUSTOM_PATH_DISABLED)
 
 
-def get_ide_command(ide: str, path: str, custom_path: str | None = None) -> list[str]:
-    """Get the command to open a path in the specified IDE."""
+def reject_custom_path(custom_path: str | None) -> None:
+    """Raise 400 if the caller tried to name its own launcher binary."""
+    if custom_path:
+        raise HTTPException(status_code=400, detail=CUSTOM_PATH_DISABLED)
+
+
+def get_ide_command(ide: str, path: str) -> list[str]:
+    """Get the command to open a path in the specified IDE.
+
+    The program always comes from the table, never the request (AIFactory#1267).
+    """
     import platform
 
     system = platform.system()
-
-    # Use custom path if provided
-    if custom_path:
-        return [custom_path, path]
 
     # IDE command mappings
     ide_commands = {
@@ -167,22 +185,14 @@ def get_ide_command(ide: str, path: str, custom_path: str | None = None) -> list
     return ide_commands.get(ide, ["code", path])  # Default to VS Code
 
 
-def get_terminal_command(
-    terminal: str, path: str, custom_path: str | None = None
-) -> list[str]:
-    """Get the command to open a terminal at the specified path."""
+def get_terminal_command(terminal: str, path: str) -> list[str]:
+    """Get the command to open a terminal at the specified path.
+
+    The program always comes from the table, never the request (AIFactory#1267).
+    """
     import platform
 
     system = platform.system()
-
-    # Use custom path if provided
-    if custom_path:
-        if system == "Darwin":
-            return ["open", "-a", custom_path, path]
-        elif system == "Windows":
-            return [custom_path, "/d", path]
-        else:
-            return [custom_path, f"--working-directory={path}"]
 
     # Terminal command mappings by platform
     if system == "Darwin":  # macOS
@@ -246,16 +256,17 @@ async def open_worktree_in_ide(request: OpenInIDERequest):
     # subprocess: containment-check the worktree path (path-injection) and
     # reject shell metacharacters in the values that compose the command
     # (command-line-injection).
+
+    reject_custom_path(request.customPath)
     worktree_path = _safe_arg(_validated_worktree_path(request.worktreePath))
     ide = request.ide
-    custom_path = _safe_arg(request.customPath) if request.customPath else None
 
     # Validate the path exists
     if not Path(worktree_path).exists():
         return {"success": False, "error": f"Path does not exist: {worktree_path}"}
 
     try:
-        cmd = get_ide_command(ide, worktree_path, custom_path)
+        cmd = get_ide_command(ide, worktree_path)
 
         # Launch the IDE (don't wait for it to finish)
         subprocess.Popen(
@@ -286,16 +297,16 @@ async def open_worktree_in_terminal(request: OpenInTerminalRequest):
     # subprocess: containment-check the worktree path (path-injection) and
     # reject shell metacharacters in the values that compose the command
     # (command-line-injection).
+    reject_custom_path(request.customPath)
     worktree_path = _safe_arg(_validated_worktree_path(request.worktreePath))
     terminal = request.terminal
-    custom_path = _safe_arg(request.customPath) if request.customPath else None
 
     # Validate the path exists
     if not Path(worktree_path).exists():
         return {"success": False, "error": f"Path does not exist: {worktree_path}"}
 
     try:
-        cmd = get_terminal_command(terminal, worktree_path, custom_path)
+        cmd = get_terminal_command(terminal, worktree_path)
 
         # Launch the terminal (don't wait for it to finish)
         subprocess.Popen(
