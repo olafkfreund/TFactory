@@ -516,7 +516,9 @@ def create_spec_ingest_workspace(
                 import logging as _lg
 
                 _lg.getLogger(__name__).warning(
-                    "task contract fails schema for %r: %r", spec_id, errors
+                    "task contract fails schema for %r: %d error(s)",
+                    spec_id,
+                    len(errors),
                 )
                 warnings.append(f"task contract fails schema (warn mode): {detail}")
             else:  # enforce, and any unknown value fails closed
