@@ -26,6 +26,7 @@ from server.error_ref import client_error
 
 from ..config import get_settings
 from ._specpath import browse_roots, safe_join, within_roots
+from .changelog import _require_safe_git_ref
 
 logger = logging.getLogger(__name__)
 
@@ -835,14 +836,10 @@ async def get_git_diff(
         )
 
     # `base` and `path` are request-controlled and flow into the git argv as
-    # positionals. Reject an option-like (leading ``-``) base so it cannot be
-    # read as a git flag, and pass `path` after a ``--`` pathspec separator
-    # (py/command-line-injection).
-    if base.startswith("-"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Base ref must not start with '-'",
-        )
+    # positionals. The ref allow-list (which also refuses a leading ``-``)
+    # replaces the old dash check, and `path` goes after a ``--`` pathspec
+    # separator (py/command-line-injection).
+    base = _require_safe_git_ref(base, "base ref")
 
     try:
         cmd = ["git", "diff", "--name-status", base]

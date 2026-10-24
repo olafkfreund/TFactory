@@ -40,6 +40,7 @@ shouldn't be able to drive itself recursively.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -47,6 +48,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from agents.task_contract import validate_task_contract
 from agents.workspace_status import now_iso as _now_iso
 from repo_ref import project_of, provider_of
 
@@ -467,7 +469,9 @@ def create_spec_ingest_workspace(
 
     Raises:
         FileExistsError: the spec_dir already exists.
-        ValueError: the spec can't be parsed or has no acceptance criteria.
+        ValueError: the spec can't be parsed or has no acceptance criteria, or
+            the contract fails the schema in enforce mode
+            (``TFACTORY_CONTRACT_SCHEMA_MODE``; default ``warn``, #1427).
     """
     from spec_sources import SpecFormat, SpecSourceError, ingest, write_spec_markdown
 
@@ -497,6 +501,27 @@ def create_spec_ingest_workspace(
         raise ValueError("send either ref or source_branch, not both (#1416)")
     if ref is not None and not _REF_RE.fullmatch(ref):
         raise ValueError(f"invalid ref {ref!r}: expected a branch, tag or commit")
+
+    # #1427: same marker predicate as the persist below. Field paths and
+    # validator names only, never contract values (#718).
+    if isinstance(contract, dict) and (
+        "tfactory" in contract or "contract_version" in contract
+    ):
+        errors = validate_task_contract(contract)
+        if errors:
+            detail = "; ".join(errors)
+            mode = (
+                os.environ.get("TFACTORY_CONTRACT_SCHEMA_MODE", "warn").strip().lower()
+            )
+            if mode == "warn":
+                logging.getLogger(__name__).warning(
+                    "task contract fails schema for %r: %d error(s)",
+                    spec_id,
+                    len(errors),
+                )
+                warnings.append(f"task contract fails schema (warn mode): {detail}")
+            else:  # enforce, and any unknown value fails closed
+                raise ValueError(f"task contract fails schema: {detail}")
 
     spec_dir.mkdir(parents=True, exist_ok=True)
     for sub in ("context", "tests", "findings", "logs", "memory"):

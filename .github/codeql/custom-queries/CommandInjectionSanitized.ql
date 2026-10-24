@@ -32,11 +32,16 @@ import CommandInjectionFlow::PathGraph
  * (`customPath`) is refused with HTTP 400 before any of this (Factory#813); a
  * `_safe_arg` barrier on an attacker-chosen program name would hide a real RCE,
  * so never land this twin without that refusal.
+ *
+ * `_require_safe_git_ref` (routes/changelog.py, routes/git.py) returns the
+ * value only after refusing a leading `-` and any character outside
+ * `[\w./@+-]`; every caller passes it as one element of a list argv with no
+ * shell, so it cannot pick the program or inject an option (#1428).
  */
 class ArgvSanitizer extends CommandInjection::Sanitizer {
   ArgvSanitizer() {
     exists(DataFlow::CallCfgNode call, string name |
-      name in ["_safe_arg"] and
+      name in ["_safe_arg", "_require_safe_git_ref"] and
       (
         call.getFunction().asExpr().(Name).getId() = name or
         call.getFunction().asExpr().(Attribute).getName() = name
@@ -47,7 +52,7 @@ class ArgvSanitizer extends CommandInjection::Sanitizer {
     // The body of the validator IS the check: barrier its first parameter so
     // the regex inside the helper does not re-fire the alert it exists to clear.
     exists(Function f |
-      f.getName() in ["_safe_arg"] and
+      f.getName() in ["_safe_arg", "_require_safe_git_ref"] and
       this.(DataFlow::ParameterNode).getParameter() = f.getArg(0)
     )
   }

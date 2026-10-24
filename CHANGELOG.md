@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+## 0.9.41 — check the task contract at ingest, and keep CodeQL at zero (2026-10-24)
+
+### Added
+
+- **Spec ingest checks the task contract against its schema (#1427, #1433).**
+  `POST /api/specs` validates an incoming RFC-0002 task contract against the
+  vendored JSON schema before the spec dir is created. Errors name the field
+  path and validator, never the contract's values. `TFACTORY_CONTRACT_SCHEMA_MODE`
+  is `warn` by default (log and continue) or `enforce` (reject with `400`); an
+  unknown value enforces. Warn is the default because 7 of the 14 stored
+  contracts fail today (#1431 tracks fixing the sender and then flipping the
+  default). A request with no contract is unchanged. New dependency:
+  `jsonschema>=4.18`.
+- **Weekly CodeQL ratchet (Factory#813, #1426).** A scheduled workflow fails
+  when open critical, high, error or medium CodeQL alerts exceed
+  `.github/codeql-baseline.json`, which is now 0 for all four.
+
+### Security
+
+- **Two CodeQL injection alerts no longer re-open (#1428, #1429).** Worktree
+  create routes the name through `safe_component`. `GET /files/{id}/diff`
+  checks `base` against the same git ref allow-list as the changelog routes,
+  so a `base` with `~` or `^` (e.g. `HEAD~1`) now gets a `400`. The
+  command-injection CodeQL query trusts that allow-list.
+
 ## 0.9.40 — no custom launch program, and project browsing stays under your roots (2026-10-24)
 
 ### Security

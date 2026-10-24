@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 
 from server.error_ref import InputRejectedError, client_error
 
-from ._specpath import safe_join
+from ._specpath import safe_component, safe_join
 
 # Single source of truth for the gh-CLI wrapper lives in github.py (its heaviest
 # user); re-exported here so existing `from .git import run_gh_command` resolves.
@@ -1232,6 +1232,7 @@ async def create_worktree(projectId: str, request: CreateWorktreeRequest):
             "success": False,
             "error": "Worktree name must contain only letters, numbers, dashes, and underscores",
         }
+    name = safe_component(name)  # path-injection barrier CodeQL recognises
 
     # Determine base branch
     if request.baseBranch:
