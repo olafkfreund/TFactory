@@ -24,8 +24,9 @@ import json
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
-import jsonschema
+import jsonschema  # type: ignore[import-untyped]
 from agents.access_scope import map_access_for_tfactory
 
 # Lanes TFactory recognises from the contract. "security" is accepted but
@@ -49,7 +50,7 @@ def _contract_validator() -> jsonschema.Draft202012Validator:
     )
 
 
-def validate_task_contract(contract: dict) -> list[str]:
+def validate_task_contract(contract: dict[str, Any]) -> list[str]:
     """Schema errors as sorted ``"<path>: <validator>"``; ``[]`` is valid.
 
     Never uses ``error.message``: it quotes contract values (#1427).

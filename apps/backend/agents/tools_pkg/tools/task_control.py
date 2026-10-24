@@ -40,6 +40,7 @@ shouldn't be able to drive itself recursively.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -47,6 +48,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from agents.task_contract import validate_task_contract
 from agents.workspace_status import now_iso as _now_iso
 from repo_ref import project_of, provider_of
 
@@ -471,7 +473,6 @@ def create_spec_ingest_workspace(
             the contract fails the schema in enforce mode
             (``TFACTORY_CONTRACT_SCHEMA_MODE``; default ``warn``, #1427).
     """
-    from agents.task_contract import validate_task_contract
     from spec_sources import SpecFormat, SpecSourceError, ingest, write_spec_markdown
 
     warnings: list[str] = []
@@ -513,9 +514,7 @@ def create_spec_ingest_workspace(
                 os.environ.get("TFACTORY_CONTRACT_SCHEMA_MODE", "warn").strip().lower()
             )
             if mode == "warn":
-                import logging as _lg
-
-                _lg.getLogger(__name__).warning(
+                logging.getLogger(__name__).warning(
                     "task contract fails schema for %r: %d error(s)",
                     spec_id,
                     len(errors),
