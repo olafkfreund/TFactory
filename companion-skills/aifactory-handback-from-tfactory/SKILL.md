@@ -38,8 +38,9 @@ The receiver this skill drives ships in AIFactory itself (issue
 `olafkfreund/AIFactory#317`): the REST route
 `POST /api/tasks/{task_id}/apply-correction` and the MCP tool
 `task_apply_correction`. Make sure AIFactory's web-server is running (port
-3101) and — for the MCP path — that AIFactory's own MCP server is registered in
-your Claude Code MCP config so `mcp__aifactory__task_apply_correction` resolves.
+3101). The preferred send is the TFactory CLI, run on the TFactory host (below).
+Registering AIFactory's own MCP server in your Claude Code MCP config, so
+`mcp__aifactory__task_apply_correction` resolves, is only needed for the fallback.
 
 ## When to use
 
@@ -61,7 +62,27 @@ operator paste the `handback_request.md` contents.
 From `handback_request.json`, read `aifactory_task_id` — it's
 `<project_id>:<spec_id>` for the AIFactory spec to fix.
 
-### 3. Preview, then apply
+### 3. Preview, then send
+
+Run in the TFactory checkout's `apps/backend` (sends `triage`, `manifest_hash`
+and `correlation_key`). Preview first, dry run:
+
+```bash
+python -m agents.handback <spec_dir>
+```
+
+Show the operator the printed payload and target. On a clear yes:
+
+```bash
+python -m agents.handback <spec_dir> --send
+```
+
+**Fallback: the AIFactory MCP tool**
+
+> Fallback only, for when `python -m agents.handback <spec_dir> --send`
+> cannot run here. The AIFactory MCP tool sends the markdown without the
+> `triage` block, so AIFactory will reject it once
+> `APP_REQUIRE_CORRECTION_TRIAGE` is on.
 
 ```
 mcp__aifactory__task_apply_correction(
@@ -85,7 +106,8 @@ re-run TFactory to verify the fix: `mcp__tfactory__task_rerun(task_id=...)`.
 
 - **Spec not found (404)** → the `aifactory_task_id` doesn't match a current
   spec; check it was handed over from this project.
-- **MCP tool missing** → register AIFactory's MCP server, or run the apply from
-  the TFactory side: `cd apps/backend && python -m agents.handback <spec_dir> --send`.
+- **`--send` cannot run** (no TFactory checkout on this host) → use the MCP
+  fallback in step 3, which AIFactory rejects once
+  `APP_REQUIRE_CORRECTION_TRIAGE` is on; register AIFactory's MCP server first.
 - **Fixer needs creds** → the QA Fixer runs a real provider; ensure AIFactory's
   LLM provider is configured.

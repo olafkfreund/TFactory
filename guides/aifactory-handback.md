@@ -68,8 +68,10 @@ On the AIFactory side, the receiver writes `QA_FIX_REQUEST.md` into
 ```
 
 It reads the prepared request, previews the target spec + failing tests, and on
-your confirmation sends via the AIFactory MCP tool `task_apply_correction`
-(`confirm=false` preview → `confirm=true`).
+your confirmation sends with `python -m agents.handback <spec_dir> --send`
+(after a dry-run preview), which includes `triage`. The MCP tool
+`task_apply_correction` is a markdown-only fallback that AIFactory rejects once
+`APP_REQUIRE_CORRECTION_TRIAGE` is on.
 
 ### B. The local CLI (no AIFactory MCP needed)
 
