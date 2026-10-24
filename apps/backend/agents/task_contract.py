@@ -14,15 +14,19 @@ block from the snapshotted context — in precedence order:
   3. ``context/source.json`` → ``contract`` / ``task_contract`` key
 
 It parses the consumed subset only (tolerant: unknown keys ignored), so a
-schema bump that adds fields never breaks ingest.
+schema bump that adds fields never breaks ingest. Ingest additionally validates
+the incoming contract against the vendored schema (#1427).
 """
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
+import jsonschema  # type: ignore[import-untyped]
 from agents.access_scope import map_access_for_tfactory
 
 # Lanes TFactory recognises from the contract. "security" is accepted but
@@ -31,6 +35,32 @@ from agents.access_scope import map_access_for_tfactory
 _KNOWN_LANES = frozenset(
     {"unit", "api", "browser", "integration", "security", "mutation"}
 )
+
+_SCHEMA_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "contracts"
+    / "task-contract-v2.schema.json"
+)
+
+
+@lru_cache(maxsize=1)
+def _contract_validator() -> jsonschema.Draft202012Validator:
+    return jsonschema.Draft202012Validator(
+        json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
+    )
+
+
+def validate_task_contract(contract: dict[str, Any]) -> list[str]:
+    """Schema errors as sorted ``"<path>: <validator>"``; ``[]`` is valid.
+
+    Never uses ``error.message``: it quotes contract values (#1427).
+    """
+    return sorted(
+        {
+            f"{'/'.join(map(str, e.absolute_path)) or '<root>'}: {e.validator}"
+            for e in _contract_validator().iter_errors(contract)
+        }
+    )
 
 
 @dataclass(frozen=True)

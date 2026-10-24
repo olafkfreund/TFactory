@@ -11,6 +11,8 @@ click>=8.0.0
 
 # YAML generation for .tfactory.yml scaffolding
 PyYAML>=6.0.0
+# RFC-0002 contract schema gate at ingest (#1427)
+jsonschema>=4.18
 # anthropic — pinned explicitly for Message Batches API access (Issue #11).
 # claude-agent-sdk does not expose batch primitives, so apps/backend/core/batch.py
 # drops to the raw client. Without this pin we'd silently resolve to whatever

@@ -340,7 +340,9 @@ async def ingest_spec(
         # inner exception into it (#718 fixed that at the source instead of
         # here). Marked, not redacted, so a caller who sent an unparseable
         # spec still gets the fixable "no acceptance criteria" / "could not
-        # parse" detail rather than a bare reference id.
+        # parse" detail rather than a bare reference id. The #1427 contract
+        # schema gate also raises here (field paths and validator names from
+        # the caller's own contract).
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             detail=client_error(
