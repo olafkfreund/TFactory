@@ -1227,7 +1227,7 @@ async def create_worktree(projectId: str, request: CreateWorktreeRequest):
     if not name:
         return {"success": False, "error": "Worktree name cannot be empty"}
 
-    if not re.match(r"^[a-zA-Z0-9_-]+$", name):
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+", name):
         return {
             "success": False,
             "error": "Worktree name must contain only letters, numbers, dashes, and underscores",

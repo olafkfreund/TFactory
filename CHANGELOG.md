@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## 0.9.40 — no custom launch program, and project browsing stays under your roots (2026-10-24)
+
+### Security
+
+- **Open in IDE / terminal no longer takes a custom program (Factory#813,
+  #1424).** `customPath` on the worktree open-in-IDE and open-in-terminal
+  routes is refused with a `400`; the program always comes from the fixed IDE
+  and terminal tables. The frontend stops sending it, so a saved custom IDE or
+  terminal path is ignored instead of failing every open. A CodeQL twin query
+  replaces stock `py/command-line-injection`, with `_safe_arg` as its barrier.
+- **Project browsing and scan are confined to browse roots (Factory#813,
+  #1424).** `/files/discover` and `POST /projects/scan` now answer `403` for a
+  path outside `$HOME` and the new `APP_FILE_BROWSE_ROOTS` (an `os.pathsep`
+  list). Registered projects do not widen the roots. An unresolvable path
+  (unknown `~user`, symlink loop) fails closed. The Add Project dialog now
+  starts at `~` instead of `/home`.
+
 ## 0.9.39 — image floors past two HIGH CVEs: undici and brotli (2026-10-24)
 
 ### Security

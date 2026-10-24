@@ -25,7 +25,7 @@ MemoryBackendType = Literal["graphiti", "file"]
 
 from ..config import get_settings
 from . import changelog, context, files, git, github, github_pr
-from ._specpath import safe_component
+from ._specpath import browse_roots, safe_component, within_roots
 
 router = APIRouter()
 
@@ -412,7 +412,9 @@ async def scan_for_projects(request: ScanProjectsRequest):
     """
     try:
         # Validate and resolve base path
-        base = Path(request.basePath).expanduser().resolve()
+        base = within_roots(
+            request.basePath, browse_roots(), "browsable directories", expand_user=True
+        )
 
         if not base.exists():
             raise HTTPException(

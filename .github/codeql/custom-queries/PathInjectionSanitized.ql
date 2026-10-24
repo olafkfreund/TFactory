@@ -37,6 +37,9 @@ import PathInjectionFlow::PathGraph
  * deliberately-accepted project root (issue #664: the five
  * terminal_worktree_service alerts were project-root flows, which
  * safe_component was never on).
+ *
+ * contained_path / within_roots confine a whole request path to server-owned
+ * roots (registered projects, $HOME, APP_FILE_BROWSE_ROOTS) (Factory#813).
  */
 class SpecPathSanitizer extends PathInjection::Sanitizer {
   SpecPathSanitizer() {
@@ -45,7 +48,8 @@ class SpecPathSanitizer extends PathInjection::Sanitizer {
     exists(DataFlow::CallCfgNode call, string name |
       name in [
           "safe_component", "safe_spec_dir", "safe_join", "safe_slug",
-          "get_next_spec_id", "trusted_project_root"
+          "get_next_spec_id", "trusted_project_root", "contained_path",
+          "within_roots"
         ] and
       (
         call.getFunction().asExpr().(Name).getId() = name or
@@ -58,7 +62,7 @@ class SpecPathSanitizer extends PathInjection::Sanitizer {
     // parameter so the resolve()/is_dir() probes inside the helper do not
     // re-fire the very alerts the barrier exists to clear.
     exists(Function f |
-      f.getName() = "trusted_project_root" and
+      f.getName() in ["trusted_project_root", "contained_path", "within_roots"] and
       this.(DataFlow::ParameterNode).getParameter() = f.getArg(0)
     )
   }

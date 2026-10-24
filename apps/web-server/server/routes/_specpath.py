@@ -17,8 +17,10 @@ isn't already a bare component, so a traversal attempt fails loudly with HTTP
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
+from collections.abc import Iterable
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -126,3 +128,59 @@ def safe_spec_dir(base: Path, spec_id: str) -> Path:
     malicious component raises.
     """
     return base / ".tfactory" / "specs" / safe_component(spec_id)
+
+
+def contained_path(
+    candidate: object, roots: Iterable[object], what: str, expand_user: bool = False
+) -> Path:
+    """Return *candidate*, resolved, if it lands inside one of *roots*.
+
+    For a request that supplies a whole PATH while the server owns the permitted
+    roots. Resolves first, then tests containment on the resolved form, so ``..``
+    and symlinks cannot escape. Raises ``ValueError`` on a miss. ``exists()`` /
+    ``is_dir()`` do not satisfy it: they say a path is THERE, not ALLOWED.
+    ``expand_user`` expands ``~`` inside the barrier, not before it.
+    """
+    raw = Path(str(candidate))
+    try:
+        resolved = (raw.expanduser() if expand_user else raw).resolve()
+    except RuntimeError as e:  # unknown ~user, symlink loop: fail closed
+        raise ValueError(f"path is outside the {what}") from e
+    for root in roots:
+        try:
+            root_resolved = Path(str(root)).resolve()
+        except (OSError, ValueError):
+            continue
+        if resolved == root_resolved or root_resolved in resolved.parents:
+            return resolved
+    raise ValueError(f"path is outside the {what}")
+
+
+def within_roots(
+    candidate: object, roots: Iterable[object], what: str, expand_user: bool = False
+) -> Path:
+    """:func:`contained_path`, but HTTP 403 (no path echoed) instead of ValueError."""
+    try:
+        return contained_path(candidate, roots, what, expand_user)
+    except ValueError:
+        raise HTTPException(
+            status_code=403, detail=f"Access denied: path is outside the {what}"
+        ) from None
+
+
+def browse_roots() -> list[Path]:
+    """``$HOME`` + ``APP_FILE_BROWSE_ROOTS`` (os.pathsep list).
+
+    Registered projects are deliberately NOT roots: ``POST /projects`` accepts any
+    directory, so registering ``/`` would widen the browse set to the whole disk.
+    """
+    roots: list[Path] = []
+    with contextlib.suppress(OSError, RuntimeError):
+        roots.append(Path.home().resolve())
+    for raw_extra in os.environ.get("APP_FILE_BROWSE_ROOTS", "").split(os.pathsep):
+        extra = raw_extra.strip()
+        if extra:
+            # A typo in the env var must not stop the server starting.
+            with contextlib.suppress(OSError):
+                roots.append(Path(extra).resolve())
+    return roots
