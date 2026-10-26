@@ -28,8 +28,10 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from tools.runners.net_guard import assert_safe_target_url
+from workspaces.snapshotter import _default_api_url
 
 from .render import render_fix_request_md
 from .request import CorrectionRequest
@@ -112,6 +114,21 @@ def _correlation_key_for(spec_dir: Path) -> str | None:
         return None
 
 
+def _auth_headers(api_url: str) -> dict[str, str]:
+    """Bearer token for AIFactory's ``require_task_access("member")`` route (#1445).
+
+    ``APP_API_TOKEN`` is the shared factory credential the pod already mounts;
+    TFactory has no other AIFactory call to borrow a chain from. ``api_url`` is
+    read back from ``source.json`` on disk, so the token rides only to the
+    configured AIFactory origin (``TFACTORY_AIFACTORY_API_URL``), never elsewhere.
+    """
+    token = os.environ.get("APP_API_TOKEN")
+    target, configured = urlsplit(api_url), urlsplit(_default_api_url())
+    if not token or target[:2] != configured[:2]:  # (scheme, netloc)
+        return {}
+    return {"Authorization": f"Bearer {token}"}
+
+
 def default_sender(payload: dict) -> dict:
     """POST the fix-request to AIFactory's apply-correction route (P3).
 
@@ -134,8 +151,9 @@ def default_sender(payload: dict) -> dict:
     # scripts pass; the two other writers of source.json never set it, and
     # ``POST /api/specs/{p}/{s}/pr`` -- the one route that edits the file --
     # rewrites exactly ``pr_number`` and ``repo_slug``. So this is
-    # defence-in-depth on a value read back off disk, not a live SSRF. No
-    # credential rides on the request either: the only header is Content-Type.
+    # defence-in-depth on a value read back off disk, not a live SSRF. The
+    # bearer token (#1445) is attached only when ``api_url`` matches the
+    # configured AIFactory origin; see ``_auth_headers``.
     #
     # Both flags on, because the shipped default IS loopback and an AIFactory
     # on the cluster network is RFC-1918. What the check still buys, and the
@@ -161,9 +179,8 @@ def default_sender(payload: dict) -> dict:
             "manifest_hash": payload.get("manifest_hash"),
         }
     ).encode()
-    req = urllib.request.Request(
-        url, data=body, method="POST", headers={"Content-Type": "application/json"}
-    )
+    headers = {"Content-Type": "application/json", **_auth_headers(api_url)}
+    req = urllib.request.Request(url, data=body, method="POST", headers=headers)
     with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 - checked above
         raw = resp.read().decode() or "{}"
     return json.loads(raw)

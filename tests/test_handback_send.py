@@ -131,6 +131,39 @@ def test_default_sender_forwards_callback_fields(monkeypatch) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("token", "api_url", "expected"),
+    [
+        ("tok", "http://localhost:3101", "Bearer tok"),
+        (None, "http://localhost:3101", None),
+        # The token never leaves the configured origin.
+        ("tok", "http://127.0.0.1:3101", None),
+    ],
+    ids=["token", "no_token", "foreign_origin"],
+)
+def test_default_sender_auth_header(monkeypatch, token, api_url, expected) -> None:
+    """#1445: the bearer token rides only to the configured AIFactory origin."""
+    import io
+
+    from agents.handback import send as send_mod
+
+    monkeypatch.delenv("APP_API_TOKEN", raising=False)
+    if token:
+        monkeypatch.setenv("APP_API_TOKEN", token)
+    monkeypatch.setenv("TFACTORY_AIFACTORY_API_URL", "http://localhost:3101")
+    seen = {}
+
+    def fake_urlopen(req, timeout=0):
+        seen["auth"] = req.get_header("Authorization")
+        return io.BytesIO(b"{}")
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    send_mod.default_sender(
+        {"api_url": api_url, "task_id": "x", "fix_request_md": "m", "confirm": True}
+    )
+    assert seen["auth"] == expected
+
+
 def test_not_confirmed_does_not_send_even_if_not_dry_run(tmp_path) -> None:
     calls = []
     res = send_correction(
