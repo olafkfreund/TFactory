@@ -2,9 +2,21 @@
 
 ## Unreleased
 
-- **Task-contract schema enforcement is now the default (#1431).** Spec ingest
-  rejects invalid contracts before creating a workspace. Set
-  `TFACTORY_CONTRACT_SCHEMA_MODE=warn` to log and continue instead.
+## 0.9.43 — task-contract schema enforced by default (2026-10-26)
+
+### Changed
+
+- **Behaviour change: task-contract schema enforcement is now the default
+  (#1431, #1442).** `TFACTORY_CONTRACT_SCHEMA_MODE` defaults to `enforce`:
+  spec ingest rejects a contract that fails the vendored schema with a `400`
+  before creating a workspace. Set `TFACTORY_CONTRACT_SCHEMA_MODE=warn` to log
+  and continue instead. An unknown value still enforces; a request with no
+  contract is unchanged.
+
+### Docs
+
+- **Intent, spec and plan for contract signature verification (#1432, #1441).**
+  No code.
 
 ## 0.9.42 — a schema-valid proof-run contract, and triage on every handback (2026-10-26)
 
