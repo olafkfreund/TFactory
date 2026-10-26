@@ -1616,3 +1616,39 @@ async def test_reconcile_tick_runs_the_restore_sweep(store, monkeypatch):
         store=store, probe_fn=await _probe({}), data_root="/data"
     )
     assert calls == [(store, "/data")]
+
+
+# Factory#1959 slice 1: the model-provider credentials a dispatched verify Job
+# receives. Removing one is a later gateway slice; adding one needs a decision.
+# Update this set deliberately, never to make the test pass.
+_PINNED_JOB_PROVIDER_CREDS = frozenset(
+    {
+        "ANTHROPIC_AUTH_TOKEN",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "OPENAI_API_KEY",
+        "OPENAI_COMPATIBLE_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "OLLAMA_API_KEY",
+    }
+)
+
+
+@pytest.mark.parametrize("secret_name", ["", "tfactory-verify-provider"])
+def test_verify_job_provider_credentials_are_pinned(monkeypatch, secret_name):
+    # Both paths: resolved values from the pod env, and secretKeyRef.
+    for var in (
+        *vd._SDK_PASSTHROUGH_ENV,
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_API_KEY",
+    ):
+        monkeypatch.setenv(var, "dummy")
+    monkeypatch.delenv("TFACTORY_VERIFY_OAUTH_SECRET_NAME", raising=False)
+    monkeypatch.setenv("TFACTORY_VERIFY_PROVIDER_SECRET_NAME", secret_name)
+    env = _env_of(build_verify_job_manifest(_cfg()))
+    creds = {
+        e["name"]
+        for e in env
+        if e["name"].endswith(("_API_KEY", "_AUTH_TOKEN", "_OAUTH_TOKEN"))
+    }
+    assert creds == _PINNED_JOB_PROVIDER_CREDS
