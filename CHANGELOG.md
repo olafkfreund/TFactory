@@ -2,6 +2,62 @@
 
 ## Unreleased
 
+## 0.9.41 — check the task contract at ingest, and keep CodeQL at zero (2026-10-24)
+
+### Added
+
+- **Spec ingest checks the task contract against its schema (#1427, #1433).**
+  `POST /api/specs` validates an incoming RFC-0002 task contract against the
+  vendored JSON schema before the spec dir is created. Errors name the field
+  path and validator, never the contract's values. `TFACTORY_CONTRACT_SCHEMA_MODE`
+  is `warn` by default (log and continue) or `enforce` (reject with `400`); an
+  unknown value enforces. Warn is the default because 7 of the 14 stored
+  contracts fail today (#1431 tracks fixing the sender and then flipping the
+  default). A request with no contract is unchanged. New dependency:
+  `jsonschema>=4.18`.
+- **Weekly CodeQL ratchet (Factory#813, #1426).** A scheduled workflow fails
+  when open critical, high, error or medium CodeQL alerts exceed
+  `.github/codeql-baseline.json`, which is now 0 for all four.
+
+### Security
+
+- **Two CodeQL injection alerts no longer re-open (#1428, #1429).** Worktree
+  create routes the name through `safe_component`. `GET /files/{id}/diff`
+  checks `base` against the same git ref allow-list as the changelog routes,
+  so a `base` with `~` or `^` (e.g. `HEAD~1`) now gets a `400`. The
+  command-injection CodeQL query trusts that allow-list.
+
+## 0.9.40 — no custom launch program, and project browsing stays under your roots (2026-10-24)
+
+### Security
+
+- **Open in IDE / terminal no longer takes a custom program (Factory#813,
+  #1424).** `customPath` on the worktree open-in-IDE and open-in-terminal
+  routes is refused with a `400`; the program always comes from the fixed IDE
+  and terminal tables. The frontend stops sending it, so a saved custom IDE or
+  terminal path is ignored instead of failing every open. A CodeQL twin query
+  replaces stock `py/command-line-injection`, with `_safe_arg` as its barrier.
+- **Project browsing and scan are confined to browse roots (Factory#813,
+  #1424).** `/files/discover` and `POST /projects/scan` now answer `403` for a
+  path outside `$HOME` and the new `APP_FILE_BROWSE_ROOTS` (an `os.pathsep`
+  list). Registered projects do not widen the roots. An unresolvable path
+  (unknown `~user`, symlink loop) fails closed. The Add Project dialog now
+  starts at `~` instead of `/home`.
+
+## 0.9.39 — image floors past two HIGH CVEs: undici and brotli (2026-10-24)
+
+### Security
+
+- **npm's vendored undici 6.29.1 and Wolfi brotli 1.2.0-r7 (#1422).** The
+  image's npm bundle shipped undici 6.28.1 (CVE-2026-109869, HIGH); the
+  vendored-deps overlay now pins 6.29.1 and asserts it. The base layer's
+  `libbrotlicommon1`, `libbrotlidec1` and `libbrotlienc1` were 1.2.0-r5
+  (CVE-2026-111497, HIGH); they now have an apk floor of 1.2.0-r7.
+
+## 0.9.38 — verify a known ref, honour the repo flake, and never count a missing tool as a kill (2026-10-23)
+
+### Changed
+
 - **Spec ingest ref follow-ups (#1416).** Reclaiming a terminal spec's
   worktree now also deletes its `refs/tfactory/specs/<id>` fetch ref, so its
   objects can be garbage-collected. An ingest with both `ref` and
@@ -19,6 +75,16 @@
   recorded in `status.json` and `source.json`, so the verdict's commit is the
   one verified. A fetch or resolve failure fails the run as `not_run` /
   `environment`. A git project with no `origin` now fails this way too.
+- **A git-tracked repo `flake.nix` puts a contract-less run on Nix (#1397).** The evaluator and the pytest lane now share one check, `has_nix_env`: a contract-declared Nix env, or a `flake.nix` that git tracks. A contract-less run with a committed flake sends its lanes to a Nix Job in the repo devShell instead of falling back to host/docker. An untracked or generated flake never counts.
+
+### Fixed
+
+- **A mutant that never ran is `not_run`, not `killed` (#1415).** In the batched Nix path, `run_mutate_probe` and the Java and Rust probes, an exit of 126 or 127 now gives `not_run`, from the same code list stability uses. A `not_run` mutation drops out of confidence, like having no mutation signal.
+- **A missing Stryker is `not_run`, not `no_mutant` (#1419).** The TypeScript probe returns `not_run` when Stryker exits 126/127 or writes no report. `no_mutant` stays for a real report with zero mutants.
+
+## 0.9.37 — verify always packs; the repo PVC co-mount is gone (2026-10-23)
+
+### Changed
 
 - **Verify always packs its workspace; the repo PVC co-mount is gone (#1160
   PR B).** No verify Job or nested lane Job mounts the workspaces PVC any more
@@ -31,6 +97,132 @@
   `not_run`. The control-plane restore of the pushed-back workspace is
   unchanged.
 
+### Fixed
+
+- A generated, untracked `flake.nix`/`flake.lock` is removed on every lane exit path, including the early return when no Nix runner image is set and a failed module-dir lookup or staging. A git-tracked flake is never deleted. (#1405, #1410)
+
+## 0.9.36 — Nix lanes keep their junit and coverage (2026-10-23)
+
+### Fixed
+
+- Nix batched pytest lanes now save their `junit.xml` and `coverage.xml` to `findings/_run_artifacts/<stem>/`, packed and unpacked, so the verdict's coverage is measured instead of reading 0. The reports were always written and brought back, but the batched stability and signals passes never kept them. This predates packing. (#1407, #1408)
+
+## 0.9.35 — a stray generated flake no longer poses as the repo's (2026-10-22)
+
+### Fixed
+
+- A `flake.nix` counts as repo-owned only when git tracks it. An untracked flake that an earlier fallback generated into the shared checkout was honoured as the repo's own, so verify lanes ran in the wrong devShell (Node-only, no Python). Lanes now delete the generated, untracked flake and lock after the job, and the log names the flake's origin and hash. (#1400, #1403)
+- A lane that exits 126 or 127 (the command was not found or could not run) is graded `not_run` with an environment cause, not a consistent failure the reviewers reject. (#1401, #1402)
+
+## 0.9.34 — packed lanes can hand their results back (2026-10-22)
+
+### Fixed
+
+- Packed verify lanes (`TFACTORY_PACK_WORKSPACE=true`) now presign their result upload with SigV4, so `x-amz-tagging` is a signed header the lane script sends. Before, the presign was SigV2 with the tag in the query string, so MinIO answered the upload with 403 and every lane graded `not_run`. A round-trip test runs against MinIO when `TF_TEST_MINIO_ENDPOINT` is set. (#1396, #1398)
+
+## 0.9.33 — packed verify lanes stop riding the RWO PVC (2026-10-22)
+
+Both changes sit behind `TFACTORY_PACK_WORKSPACE`, which stays unset in this
+release, so default behaviour is unchanged. They prepare step 5 of #1160
+(drop `repo_pvc` so verify can run on any node).
+
+- **Packed verify lanes get their workdir through the object store, not the
+  RWO PVC (#1391, PR #1392).** In packed mode the verify Job no longer forwards
+  `TFACTORY_WORKSPACES_PVC`/`TFACTORY_DATA_ROOT` to its per-lane Nix Jobs. Each
+  lane packs its workdir, runs on an emptyDir using two single-object presigned
+  URLs (no S3 credentials in the lane), and its junit, coverage and screenshots
+  are restored into the verify Job's workdir through the safe extractor.
+- **Packed lanes are hardened (#1393, PR #1394).**
+  - Results that never came back are never a pass: the lane's exit markers are
+    neutralised and pytest/jest lanes grade as an infra `not_run`.
+  - Lane objects are always deleted, even when Job creation or polling raises,
+    and the output object carries the workspace lifecycle tag.
+  - The lane command runs under a reserved time budget so the result
+    push-back fits inside the Job deadline.
+
+## 0.9.32 — security floors, JVM grading per class, and Swift says it is unsupported (2026-10-22)
+
+- **Image security floors (PR #1380).** The runtime image floors `curl`,
+  `libcurl-openssl4` and `ca-certificates-bundle` so the Trivy P0 gate passes
+  on the current base.
+- **`apk del` no longer pretends to remove `py3-pip-wheel` (#1350, PR #1388).**
+  python-3.14 depends on it, so apk refused and exited 0. It now ships
+  deliberately (its CVEs ride base-digest bumps), and the build asserts the pip
+  packages that are removed really are gone.
+- **Swift is explicitly not supported (#1340, PR #1389).** There is no
+  in-cluster Swift lane, so a Swift subtask is now refused with a clear reason
+  instead of looking supported.
+- **JVM tests are graded per class, with one stability pass per build root
+  (#1341, #1356, PR #1383).**
+- **The evaluator finds `.tfactory.yml` in the spec worktree when no snapshot
+  exists (#1347, #1343, PR #1385).**
+- **`rotate-root` runs through the async engine (#1336, #1355, PR #1384).**
+- **The liveness sweep summary names the deadline and max idle (#1342,
+  PR #1386).**
+- Dependency bumps: baked agent-CLI pins (PR #1151), dompurify, source-map-js,
+  brace-expansion, katex and mermaid, vite, vitest, GitHub Actions and CodeQL
+  (PRs #1360-#1364, #1381, #1382, #1387).
+
+## 0.9.31 — a verdict names the commit it tested, and correlation keys name their repo (2026-10-17)
+
+- **`GET /api/tfactory/tasks/{spec_id}` returns `source_sha` (AIFactory#1766,
+  PR #1378).** It is the commit the spec worktree was pinned to and verified,
+  read from `context/source.json`, or `null` when unknown. Additive. AIFactory's
+  merge gate compares it to the PR head, so a verdict for an older commit no
+  longer passes a newer one.
+- **Correlation keys are repo-scoped, `<repo>#<n>` (AIFactory#1775, PR #1377).**
+  With no contract key, the completion event and the hand-back fall back to
+  `<repo>#<n>` (prefixed `<provider>:` off GitHub) instead of a bare issue
+  number; a build-only AIFactory contract's `correlation_key` is kept; and
+  `task_control` reads `github_issue` from a qualified key. `/api/tfactory/tasks`
+  rows declare `correlation_key` and `created_at`, so a poll and an event share
+  a key and the newest task owns it (CFactory#484). CFactory accepts both key
+  formats since CFactory#487.
+
+## 0.9.30 — terminal states read as terminal everywhere (2026-10-15)
+
+- **Every terminal verify status reaches CFactory (#1366, PR #1372).** The
+  completion event was sent only from the Triager and the handback route, so a
+  run that ended earlier (`planner_failed`, `gen_functional_failed`,
+  `generated_empty`, `evaluator_failed`, or a checkout, reaper or orphan
+  `failed`) stayed pending in CFactory. The shared status writer now sends it
+  for every terminal status, and the notify never raises.
+- **A build interrupted by a restart stops showing `in_progress` (#1368, PR
+  #1375).** At startup, phases still `active` in `task_logs.json` are closed as
+  `failed` with an `interrupted` marker, behind the existing
+  `APP_INLINE_ORPHAN_RECONCILE_ENABLED` switch.
+- **MCP `task_status` derives `lane_progress` on read (#1369, PR #1373),** as
+  the portal already did, so after `evaluator_failed` it no longer reports the
+  all-`pending` value written at creation.
+- **`fix-stuck-tasks.py` never rewrites a terminal or unknown plan status
+  (Factory#3589, PR #1374).** `failed` was missing from its list, so a plan
+  closed as failed was revived as running. An unknown status is now reported
+  and left unchanged.
+- **The pipeline board gives `failed` and `generated_empty` terminal badges
+  (#1367, PR #1371).** `failed` showed as blue "in flight", and a reaped verify
+  now sits in the Report column.
+- CI: factory-github drift runs on every PR (Factory#3585, PR #1370), and the
+  path-filtered job no longer claims to be blocking (Factory#1026, PR #1359).
+  `factory_common` http and url_safety re-vendored from hub `2364589` (PR
+  #1358). Docs: six runner images are shared with PFactory (Factory#1003, PR
+  #1365).
+
+## 0.9.29 — Java runs in-cluster through Maven or Gradle, and environment failures stop blaming the subject (2026-10-08)
+
+- **Gradle-built Java runs `gradle test` in-cluster (Factory#3151, PR #1351).**
+  The Planner still pins `(java, maven, unit)`; at run time the Java runner
+  picks gradle only when the project has no `pom.xml` anywhere and does have a
+  Gradle build marker, adding `gradle` to that task's `system_packages` so only
+  Gradle-shaped Java pays its store cost. Every other case runs Maven as before.
+- **A failure that never reached the subject is `not_run` (#1344, PR #1348).**
+  Environmental failures were classified `assertion`, so the handback told
+  AIFactory the subject's behaviour was wrong about code no test had contacted.
+- **CI unblocked (PR #1349):** npm's own vendored brace-expansion and undici are
+  replaced in the image to clear three HIGH CVEs the P0 Trivy gate rejected, and
+  the `secrets` gate is repaired.
+- Docs: the maven descriptor header states how the Planner picks between maven
+  and junit for `java.unit` (PR #1352). Dependabot: base image and
+  github-actions group.
 - **Java's unit lane runs in-cluster through Maven (Factory#1321, PR #1333).**
   Java was where Kotlin was before 0.9.28 with one extra gap: `.java` mapped to
   no language, no acceptance-criteria token named Java, and the only JVM
