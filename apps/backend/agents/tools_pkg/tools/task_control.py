@@ -48,6 +48,11 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from agents.contract_signature import (
+    apply_overlay,
+    check_repo_binding,
+    verify_contract_signature,
+)
 from agents.task_contract import validate_task_contract
 from agents.workspace_status import now_iso as _now_iso
 from repo_ref import project_of, provider_of
@@ -455,6 +460,8 @@ def create_spec_ingest_workspace(
     tenant: str = "default",
     repo_ref: str | None = None,
     ref: str | None = None,
+    signed_contract: dict[str, Any] | None = None,
+    clone_url: str | None = None,
 ) -> dict[str, Any]:
     """Create a TFactory workspace from a raw acceptance-criteria spec.
 
@@ -471,7 +478,10 @@ def create_spec_ingest_workspace(
         FileExistsError: the spec_dir already exists.
         ValueError: the spec can't be parsed or has no acceptance criteria, or
             the contract fails the schema in enforce mode
-            (``TFACTORY_CONTRACT_SCHEMA_MODE``; default ``enforce``, #1427).
+            (``TFACTORY_CONTRACT_SCHEMA_MODE``; default ``enforce``, #1427), or
+            its PFactory Ed25519 signature or repo binding is invalid in
+            enforce mode (``TFACTORY_CONTRACT_SIGNATURE_MODE``; default
+            ``warn``, #1432).
     """
     from spec_sources import SpecFormat, SpecSourceError, ingest, write_spec_markdown
 
@@ -507,6 +517,15 @@ def create_spec_ingest_workspace(
     if isinstance(contract, dict) and (
         "tfactory" in contract or "contract_version" in contract
     ):
+        # #1432: verify the PFactory signature on `signed_contract` (else on
+        # `contract`), then bind it to the repo the request names. Only a
+        # verified signed copy replaces `contract`, plus AIFactory's overlay.
+        verified = signed_contract if isinstance(signed_contract, dict) else contract
+        sig_errors = verify_contract_signature(verified)
+        if not sig_errors:
+            sig_errors = check_repo_binding(verified, [repo_ref, clone_url])
+            if isinstance(signed_contract, dict):
+                contract = apply_overlay(signed_contract, contract)
         errors = validate_task_contract(contract)
         if errors:
             detail = "; ".join(errors)
@@ -524,6 +543,20 @@ def create_spec_ingest_workspace(
                 warnings.append(f"task contract fails schema (warn mode): {detail}")
             else:  # enforce, and any unknown value fails closed
                 raise ValueError(f"task contract fails schema: {detail}")
+        if sig_errors:
+            codes = ", ".join(sig_errors)
+            sig_mode = (
+                os.environ.get("TFACTORY_CONTRACT_SIGNATURE_MODE", "warn")
+                .strip()
+                .lower()
+            )
+            if sig_mode == "warn":
+                logging.getLogger(__name__).warning(
+                    "task contract signature invalid for %r: %s", spec_id, codes
+                )
+                warnings.append(f"task contract signature invalid (warn mode): {codes}")
+            else:  # enforce, and any unknown value fails closed
+                raise ValueError(f"task contract signature invalid: {codes}")
 
     spec_dir.mkdir(parents=True, exist_ok=True)
     for sub in ("context", "tests", "findings", "logs", "memory"):

@@ -249,6 +249,32 @@ Flipping to `enforce` is not part of this plan. It waits until warn mode is
 clean and the spec's open question is answered: do proof runs (the #1431
 template) get a PFactory-signed contract, or send none?
 
+## Deviations during implementation
+
+- Step 1: the golden `test_only_seed` is the published RFC 8032 §7.1 TEST 1
+  secret key, not a newly generated seed, because no key may be generated in
+  this wave. The fixture also carries `public_key` and a `_note`. The contract
+  is hand-built in the v2 shape; it is not a schema-valid contract, so the
+  TFactory ingest tests use their own small valid contract signed with the same
+  seed.
+- Step 2: the PFactory Ed25519 block is a helper, `_attach_pubkey_signature`.
+  `sign_pubkey` and the helper carry full type arguments for the mypy ratchet.
+- Step 3: the capture is the helper `_signed_snapshot` (the alternative the
+  step allows). The new `payload["signed_contract"]` line has a
+  `type: ignore[assignment]`, because `payload` is inferred as `dict[str, str]`.
+- Step 4: the keyring authority is `approval.approved_by`, lowercased (spec).
+  `apply_overlay` ignores a forwarded or signed `execution`/`provenance` that
+  is not a dict, so it can't raise a 500 on a malformed caller payload.
+- Step 5: `_contract_gate` was not needed. The schema check runs before the
+  signature gate, so a contract that fails both raises the schema error first in
+  enforce mode. `test_spec_ingest_workspace.py::test_valid_contract_passes_in_enforce_mode`
+  now matches only the schema warning, since an unsigned contract also warns.
+- Step 5 (review fix): the route passes `clone_url=entry.get("clonedFrom") or
+  req.git_url`, not `req.git_url or entry.get("clonedFrom")`. The registered
+  project's `clonedFrom` is what `_ensure_project_clone` actually clones, so a
+  caller's `git_url` naming the signed repo must not mask another project's
+  origin. `test_route_binds_registered_clone_not_caller_git_url` covers it.
+
 ## Tests
 
 - PFactory: `pytest tests/test_contract_pubkey_signing.py tests/test_contract_parallel_signing.py -q`, all passing.

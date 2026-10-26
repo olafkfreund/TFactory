@@ -14,6 +14,7 @@ route); no per-route dependency is needed. Errors map to HTTP codes:
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, Header, HTTPException, status
@@ -83,6 +84,15 @@ class SpecIngestRequest(BaseModel):
             "When present its `tfactory` block (lanes/frameworks/ac_to_code_map) is "
             "the AUTHORITATIVE test profile; persisted to context/task_contract.json. "
             "Absent → tests are inferred from spec_text."
+        ),
+    )
+    signed_contract: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "The PFactory-signed contract exactly as signed, before AIFactory's "
+            "overlay (#1432). When present its Ed25519 `approval.pubkey_signature` "
+            "is verified (`TFACTORY_CONTRACT_SIGNATURE_MODE`) and, if valid, it "
+            "replaces `contract` plus the overlay."
         ),
     )
     tenant: str | None = Field(
@@ -322,6 +332,8 @@ async def ingest_spec(
             ref=req.ref,
             tenant=resolve_tenant(x_tenant_id, req.tenant),
             repo_ref=req.repo,
+            signed_contract=req.signed_contract,
+            clone_url=entry.get("clonedFrom") or req.git_url,
         )
     except FileExistsError as exc:
         # The message names spec_dir's server-side path -- redact rather than
