@@ -32,6 +32,15 @@ only (#718). factory-gitops sets no value, so the cluster enforces after release
    → verify: `git grep -n "default \`\`warn\`\`\|warn\` today" -- apps docs` is empty.
    Traps: do not edit older CHANGELOG sections or the 2026-10-24 artifacts; they are history.
 
+## Deviations
+
+- Step 1 (coder): three older tests in `tests/test_spec_ingest_workspace.py`
+  (`test_contract_persisted_for_authoritative_profile`,
+  `test_contract_phase_models_written_to_task_metadata`,
+  `test_no_phase_models_no_task_metadata`) sent a minimal contract that fails the
+  schema. They now build on `_VALID_CONTRACT`, so they keep testing persistence
+  under the new default.
+
 ## Tests
 
 `tests/test_spec_ingest_workspace.py` passes; the renamed default test fails on

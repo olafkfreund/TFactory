@@ -471,7 +471,7 @@ def create_spec_ingest_workspace(
         FileExistsError: the spec_dir already exists.
         ValueError: the spec can't be parsed or has no acceptance criteria, or
             the contract fails the schema in enforce mode
-            (``TFACTORY_CONTRACT_SCHEMA_MODE``; default ``warn``, #1427).
+            (``TFACTORY_CONTRACT_SCHEMA_MODE``; default ``enforce``, #1427).
     """
     from spec_sources import SpecFormat, SpecSourceError, ingest, write_spec_markdown
 
@@ -511,7 +511,9 @@ def create_spec_ingest_workspace(
         if errors:
             detail = "; ".join(errors)
             mode = (
-                os.environ.get("TFACTORY_CONTRACT_SCHEMA_MODE", "warn").strip().lower()
+                os.environ.get("TFACTORY_CONTRACT_SCHEMA_MODE", "enforce")
+                .strip()
+                .lower()
             )
             if mode == "warn":
                 logging.getLogger(__name__).warning(
