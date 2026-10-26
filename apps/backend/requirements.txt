@@ -60,3 +60,6 @@ boto3>=1.35.0
 # "No module named 'pytest'" and the planner replan-loops (#613 / #609).
 pytest>=8.3.0
 pytest-cov>=5.0.0
+
+# Ed25519 contract signature verify (#1432)
+cryptography>=42

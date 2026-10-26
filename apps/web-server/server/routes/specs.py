@@ -85,6 +85,15 @@ class SpecIngestRequest(BaseModel):
             "Absent → tests are inferred from spec_text."
         ),
     )
+    signed_contract: dict | None = Field(
+        default=None,
+        description=(
+            "The PFactory-signed contract exactly as signed, before AIFactory's "
+            "overlay (#1432). When present its Ed25519 `approval.pubkey_signature` "
+            "is verified (`TFACTORY_CONTRACT_SIGNATURE_MODE`) and, if valid, it "
+            "replaces `contract` plus the overlay."
+        ),
+    )
     tenant: str | None = Field(
         default=None,
         description=(
@@ -322,6 +331,8 @@ async def ingest_spec(
             ref=req.ref,
             tenant=resolve_tenant(x_tenant_id, req.tenant),
             repo_ref=req.repo,
+            signed_contract=req.signed_contract,
+            clone_url=req.git_url or entry.get("clonedFrom"),
         )
     except FileExistsError as exc:
         # The message names spec_dir's server-side path -- redact rather than
