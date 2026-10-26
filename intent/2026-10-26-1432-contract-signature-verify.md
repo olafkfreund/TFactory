@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1432
 author: olafkfreund
 predecessor: intent/2026-10-24-1427-contract-schema-gate.md
