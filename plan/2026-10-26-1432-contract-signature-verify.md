@@ -1,5 +1,5 @@
 ---
-status: approved
+status: draft
 issue: 1432
 spec: spec/2026-10-26-1432-contract-signature-verify.md
 ---
@@ -28,9 +28,11 @@ spec: spec/2026-10-26-1432-contract-signature-verify.md
   contract has `approval` and is not held. `contract` itself is unchanged.
 - **TFactory:** verify `signed_contract` if present, else `contract`. When
   `signed_contract` is valid, persist and use it, plus the overlay taken from
-  `contract` (`provenance.github_issue` set only if missing, `correlation_key`
-  set only if missing). `execution.phase_models` then come only from the
-  signed copy: the unsigned `contract` may not add or change a key. Reason
+  `contract` (`execution.phase_models` merged with signed keys winning, so
+  the overlay may only add keys the signed copy does not set,
+  `provenance.github_issue` set only if missing, `correlation_key` set only if
+  missing). A caller choosing a weak verify model this way is an accepted
+  risk (spec Risks). Reason
   codes are `unsigned`, `unknown_kid`, `retired_kid`, `bad_alg`,
   `bad_signature`, `malformed`, `repo_mismatch` and `repo_unbound`. Never log
   values or keys.
@@ -139,9 +141,10 @@ TFactory, then gitops. Every step is backward compatible on its own.
      returns `["malformed"]`, an `InvalidSignature` returns
      `["bad_signature"]`, and a valid signature returns `[]`.
    - `apply_overlay(signed, forwarded) -> dict` deep-copies `signed` and
-     applies the two add-only rules from the decisions above
-     (`provenance.github_issue`, `correlation_key`). It never reads
-     `forwarded["execution"]`.
+     applies the three add-only rules from the decisions above
+     (`execution.phase_models` with signed keys winning,
+     `provenance.github_issue`, `correlation_key`). It copies nothing else
+     from `forwarded`.
    - `check_repo_binding(contract, request_repos) -> list[str]`:
      `["repo_unbound"]` when `provenance.repo` is missing or `request_repos`
      has no non-empty value, `["repo_mismatch"]` when any present value names
@@ -199,9 +202,10 @@ TFactory, then gitops. Every step is backward compatible on its own.
      (both the `authority/kid` and the bare `kid` form), a missing
      `pubkey_signature` gives `unsigned`, `alg: "rsa"` gives `bad_alg`, and
      bad base64 gives `malformed`.
-   - `apply_overlay`: `github_issue` and `correlation_key` are only added when
-     missing, and other forwarded fields are dropped, including
-     `execution.phase_models`.
+   - `apply_overlay`: signed `phase_models` keys keep their signed values,
+     forwarded keys the signed copy does not set are added, `github_issue` and
+     `correlation_key` are only added when missing, and other forwarded fields
+     are dropped.
    - `check_repo_binding`: a match (`owner/name`, an https URL with `.git`, a
      `git@` URL, different case) gives `[]`, another repo gives
      `repo_mismatch`, and a missing `provenance.repo` or no request repo gives
@@ -212,9 +216,10 @@ TFactory, then gitops. Every step is backward compatible on its own.
      `ValueError`. A valid `signed_contract` with an overlaid `contract` writes
      the signed `tfactory` block to `task_contract.json` and gives no warning.
      A valid `signed_contract` without `phase_models`, with a forwarded
-     `contract` that adds `execution.phase_models`, writes no
-     `task_metadata.json`; with signed `phase_models`, a forwarded extra key
-     does not reach `task_metadata.json`. A valid signature with another
+     `contract` that adds `execution.phase_models`, writes those models to
+     `task_metadata.json`; with signed `phase_models`, a forwarded value for a
+     signed key does not reach `task_metadata.json`, and a forwarded new key
+     does. A valid signature with another
      `repo_ref` warns `repo_mismatch` in warn mode and raises in enforce mode.
      A valid signature whose swapped contract fails the schema gives the
      schema warning. A contract without markers is not checked, and a
@@ -251,8 +256,8 @@ template) get a PFactory-signed contract, or send none?
 - TFactory: `pytest tests/test_contract_signature.py tests/test_spec_ingest_workspace.py tests/test_task_contract.py -q`, all passing. `python scripts/check_schema_drift.py` still passes because the schema is not changed.
 - Regression proof: put back the TFactory ingest without the verifier call,
   and the enforce-mode tamper test fails. Without the repo check, the enforce
-  `repo_mismatch` test fails. With `phase_models` in the overlay, the
-  phase-models test fails.
+  `repo_mismatch` test fails. If the overlay lets a forwarded
+  `phase_models` value replace a signed one, the phase-models test fails.
 
 ## Rollback
 
