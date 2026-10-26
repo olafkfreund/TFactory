@@ -333,7 +333,7 @@ async def ingest_spec(
             tenant=resolve_tenant(x_tenant_id, req.tenant),
             repo_ref=req.repo,
             signed_contract=req.signed_contract,
-            clone_url=req.git_url or entry.get("clonedFrom"),
+            clone_url=entry.get("clonedFrom") or req.git_url,
         )
     except FileExistsError as exc:
         # The message names spec_dir's server-side path -- redact rather than

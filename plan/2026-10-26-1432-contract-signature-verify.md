@@ -269,6 +269,11 @@ template) get a PFactory-signed contract, or send none?
   signature gate, so a contract that fails both raises the schema error first in
   enforce mode. `test_spec_ingest_workspace.py::test_valid_contract_passes_in_enforce_mode`
   now matches only the schema warning, since an unsigned contract also warns.
+- Step 5 (review fix): the route passes `clone_url=entry.get("clonedFrom") or
+  req.git_url`, not `req.git_url or entry.get("clonedFrom")`. The registered
+  project's `clonedFrom` is what `_ensure_project_clone` actually clones, so a
+  caller's `git_url` naming the signed repo must not mask another project's
+  origin. `test_route_binds_registered_clone_not_caller_git_url` covers it.
 
 ## Tests
 

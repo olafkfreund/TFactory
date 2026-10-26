@@ -354,3 +354,39 @@ def test_build_only_contract_without_markers_still_routes_models(tmp_path, monke
     monkeypatch.setenv(SIG_MODE, "enforce")
     _ingest(tmp_path, contract={"execution": {"phase_models": {"coding": "ollama:x"}}})
     assert _models(tmp_path) == {"coding": "ollama:x"}
+
+
+@pytest.mark.asyncio
+async def test_route_binds_registered_clone_not_caller_git_url(tmp_path, monkeypatch):
+    # Signed for repo o/r, but project_id names a project cloned from b/b. A caller
+    # git_url of o/r must not mask that: the registered clonedFrom is what runs.
+    web = Path(__file__).parent.parent / "apps" / "web-server"
+    monkeypatch.syspath_prepend(str(web))
+    pytest.importorskip("fastapi")
+    from agents.tools_pkg.tools import task_control
+    from server.routes import projects as projects_store
+    from server.routes import specs
+
+    monkeypatch.setattr(
+        projects_store,
+        "load_projects",
+        lambda: {"pb": {"name": "pb", "clonedFrom": "https://github.com/b/b.git"}},
+    )
+
+    async def fake_clone(entry, resolved_id, *, source_branch):
+        return str(tmp_path)
+
+    monkeypatch.setattr(specs, "_ensure_project_clone", fake_clone)
+    real = task_control.create_spec_ingest_workspace
+    monkeypatch.setattr(
+        task_control,
+        "create_spec_ingest_workspace",
+        lambda **kw: real(root=tmp_path, schedule=False, **kw),
+    )
+    signed = _sign(_BASE)
+    req = specs.SpecIngestRequest(
+        project_id="pb", spec_id="s1", spec_text=MD, repo="o/r",
+        git_url="https://github.com/o/r.git", contract=signed, signed_contract=signed,
+    )  # fmt: skip
+    result = await specs.ingest_spec(req, x_tenant_id=None)
+    assert "repo_mismatch" in _sig_warnings(result)[0]
