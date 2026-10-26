@@ -1087,9 +1087,8 @@ def _deliver_completion(payload: CompletionEnvelope) -> None:
     try:
         import urllib.request
 
-        from agents.completion_outbox import (
-            _auth_headers,  # noqa: PLC0415 — inside the best-effort try
-        )
+        # Lazy, inside the best-effort try: an import failure must not raise.
+        from agents.completion_outbox import _auth_headers  # noqa: PLC0415
 
         timeout = float(os.environ.get("TFACTORY_COMPLETION_WEBHOOK_TIMEOUT", "5"))
         req = urllib.request.Request(
