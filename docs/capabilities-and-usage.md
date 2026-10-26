@@ -201,7 +201,7 @@ Two equivalent front doors, both **[Implemented]**:
    The auto-pipeline (plan, generate, evaluate, triage) runs on ingest.
    For a post-deploy proof run or a hand-made ingest, start from
    `scripts/proof-run-ingest.example.json`. A `contract` must pass the vendored task-contract
-   schema (`TFACTORY_CONTRACT_SCHEMA_MODE`: `warn` today, `enforce` later).
+   schema (`TFACTORY_CONTRACT_SCHEMA_MODE`: `enforce` by default; `warn` logs and continues).
 2. MCP: TFactory's MCP server exposes `task_create_from_spec` (the no-AIFactory front
    door), `task_create_and_run`, `task_status`, `task_rerun`, `report_get`,
    `project_create/list`. PFactory's MCP server exposes `plan_ingest`/`plan_process`/
