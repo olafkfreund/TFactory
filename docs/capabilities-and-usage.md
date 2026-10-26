@@ -202,6 +202,10 @@ Two equivalent front doors, both **[Implemented]**:
    For a post-deploy proof run or a hand-made ingest, start from
    `scripts/proof-run-ingest.example.json`. A `contract` must pass the vendored task-contract
    schema (`TFACTORY_CONTRACT_SCHEMA_MODE`: `enforce` by default; `warn` logs and continues).
+   Its PFactory Ed25519 signature (`signed_contract`, else `contract`) is checked against
+   the `TFACTORY_CONTRACT_PUBKEY_<AUTHORITY>__<KID>` keys and the signed `provenance.repo`
+   must match the request repo; `TFACTORY_CONTRACT_SIGNATURE_MODE` is `warn` by default
+   (`enforce` rejects), and `TFACTORY_CONTRACT_RETIRED_KIDS` revokes a kid.
 2. MCP: TFactory's MCP server exposes `task_create_from_spec` (the no-AIFactory front
    door), `task_create_and_run`, `task_status`, `task_rerun`, `report_get`,
    `project_create/list`. PFactory's MCP server exposes `plan_ingest`/`plan_process`/
