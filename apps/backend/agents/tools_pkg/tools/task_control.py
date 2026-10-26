@@ -460,7 +460,7 @@ def create_spec_ingest_workspace(
     tenant: str = "default",
     repo_ref: str | None = None,
     ref: str | None = None,
-    signed_contract: dict | None = None,
+    signed_contract: dict[str, Any] | None = None,
     clone_url: str | None = None,
 ) -> dict[str, Any]:
     """Create a TFactory workspace from a raw acceptance-criteria spec.

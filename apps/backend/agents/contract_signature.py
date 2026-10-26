@@ -29,12 +29,12 @@ def _canonical(obj: Any) -> str:
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
-def _plan_core(contract: dict) -> dict:
+def _plan_core(contract: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in contract.items() if k != "approval"}
 
 
 def _signing_bytes(
-    contract: dict,
+    contract: dict[str, Any],
     approved_by: str,
     approval_timestamp: str,
     contract_version: str,
@@ -75,23 +75,44 @@ def retired(env: Mapping[str, str] | None = None) -> set[str]:
     }
 
 
+def _envelope(contract: Any) -> tuple[dict[str, Any], str, str, str] | str:
+    """``(approval, authority, kid, sig_b64)``, or the reason code it is unusable."""
+    approval = contract.get("approval") if isinstance(contract, dict) else None
+    if not isinstance(approval, dict):
+        return "unsigned"
+    sig = approval.get("pubkey_signature")
+    if not isinstance(sig, dict):
+        return "unsigned"
+    if sig.get("alg") != "ed25519":
+        return "bad_alg"
+    kid, sig_b64, authority = (
+        sig.get("kid"),
+        sig.get("sig"),
+        approval.get("approved_by"),
+    )
+    if not (
+        isinstance(kid, str)
+        and kid
+        and isinstance(sig_b64, str)
+        and sig_b64
+        and isinstance(authority, str)
+        and authority
+    ):
+        return "malformed"
+    return approval, authority, kid, sig_b64
+
+
 def verify_contract_signature(
     contract: Any, env: Mapping[str, str] | None = None
 ) -> list[str]:
     """Reason codes; ``[]`` means the Ed25519 signature is valid."""
-    approval = contract.get("approval") if isinstance(contract, dict) else None
-    sig = approval.get("pubkey_signature") if isinstance(approval, dict) else None
-    if not isinstance(sig, dict):
-        return ["unsigned"]
-    if sig.get("alg") != "ed25519":
-        return ["bad_alg"]
-    kid, sig_b64 = sig.get("kid"), sig.get("sig")
-    authority = approval.get("approved_by")
-    if not all(isinstance(v, str) and v for v in (kid, sig_b64, authority)):
-        return ["malformed"]
+    parsed = _envelope(contract)
+    if isinstance(parsed, str):
+        return [parsed]
+    approval, authority, kid, sig_b64 = parsed
     # Lowercase only for lookup; the verified bytes carry the kid as signed.
     ref = f"{authority.lower()}/{kid.lower()}"
-    if ref in retired(env) or kid.lower() in retired(env):
+    if retired(env) & {ref, kid.lower()}:
         return ["retired_kid"]
     raw = load_pubkeys(env).get(ref)
     if raw is None:
@@ -114,13 +135,13 @@ def verify_contract_signature(
     return []
 
 
-def _sub(d: dict, key: str) -> dict:
+def _sub(d: dict[str, Any], key: str) -> dict[str, Any]:
     """``d[key]`` when it is a dict, else ``{}`` (the forwarded copy is untrusted)."""
     v = d.get(key)
     return v if isinstance(v, dict) else {}
 
 
-def apply_overlay(signed: dict, forwarded: Any) -> dict:
+def apply_overlay(signed: dict[str, Any], forwarded: Any) -> dict[str, Any]:
     """``signed`` plus the three add-only fields AIFactory overlays; nothing else."""
     out = copy.deepcopy(signed)
     if not isinstance(forwarded, dict):
