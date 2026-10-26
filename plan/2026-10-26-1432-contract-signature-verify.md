@@ -1,5 +1,5 @@
 ---
-status: approved
+status: draft
 issue: 1432
 spec: spec/2026-10-26-1432-contract-signature-verify.md
 ---
@@ -15,7 +15,11 @@ spec: spec/2026-10-26-1432-contract-signature-verify.md
   approval_timestamp, plan_contract_version, kid=<ed kid>)`, which is the
   canonical JSON (`sort_keys=True, separators=(",", ":"), ensure_ascii=False`,
   UTF-8) of the contract minus `approval`, then `|`-joined metadata. The
-  Ed25519 kid is required.
+  Ed25519 kid is required. This is Python's `json.dumps` output, not JCS:
+  raw UTF-8 for non-ASCII, float `repr`, `NaN` allowed. A non-Python signer
+  must reproduce it byte for byte, checked by the golden vector. The kid is
+  lowercased at signing (PFactory `signing.py:109`). TFactory lowercases it
+  only for the keyring lookup, never inside the verified bytes.
 - **Envelope:** `approval.pubkey_signature = {"alg": "ed25519", "kid": ..., "sig": <base64>}`.
   It is optional. PFactory adds it only when it also HMAC-signs and an
   Ed25519 key is configured.
@@ -24,10 +28,21 @@ spec: spec/2026-10-26-1432-contract-signature-verify.md
   contract has `approval` and is not held. `contract` itself is unchanged.
 - **TFactory:** verify `signed_contract` if present, else `contract`. When
   `signed_contract` is valid, persist and use it, plus the overlay taken from
-  `contract` (`execution.phase_models` merged with signed values winning,
-  `provenance.github_issue` set only if missing, `correlation_key` set only if
-  missing). Reason codes are `unsigned`, `unknown_kid`, `retired_kid`,
-  `bad_alg`, `bad_signature` and `malformed`. Never log values or keys.
+  `contract` (`provenance.github_issue` set only if missing, `correlation_key`
+  set only if missing). `execution.phase_models` then come only from the
+  signed copy: the unsigned `contract` may not add or change a key. Reason
+  codes are `unsigned`, `unknown_kid`, `retired_kid`, `bad_alg`,
+  `bad_signature`, `malformed`, `repo_mismatch` and `repo_unbound`. Never log
+  values or keys.
+- **Repo binding:** after the signature verifies, the signed
+  `provenance.repo` must name the same `owner/name` as every repo the request
+  carries (`repo`, and `git_url` or the registered project's `clonedFrom`).
+  Mismatch is `repo_mismatch`; a missing side is `repo_unbound`. Same mode as
+  the signature. The signature proves who wrote the contract and the test
+  profile. It does not prove the build branch or the acceptance criteria,
+  which come from the unsigned `spec_text`.
+- **Schema check:** the #1427 validation runs on the persisted contract
+  (`signed_contract` plus the overlay) after the swap.
 - **Mode:** `TFACTORY_CONTRACT_SIGNATURE_MODE`, `warn` by default. Unknown
   values fail closed, the same as `TFACTORY_CONTRACT_SCHEMA_MODE`. Enforce
   rejects `unsigned` too. This work ships warn only.
@@ -72,10 +87,20 @@ TFactory, then gitops. Every step is backward compatible on its own.
      no Ed25519 signature is added.
    - `PFactory: apps/backend/requirements.txt`: add `cryptography>=42`. It is
      already installed through a transitive dependency.
+   - The Ed25519 setup is optional and must never break the HMAC fast path.
+     Wrap the whole Ed25519 block (the `key_from_env` call, whose `ValueError`
+     covers ambiguous or bad kids, and `sign_pubkey`, whose
+     `from_private_bytes` raises `ValueError` on a bad seed, plus
+     `binascii.Error` on bad base64) in `try/except (ValueError,
+     binascii.Error)`. On failure, log a warning naming the exception type
+     only, never the seed, and emit the contract without `pubkey_signature`.
+     The HMAC `signature` that `attach_signature` already set is untouched.
    - Tests: `PFactory: tests/test_contract_pubkey_signing.py` (new) covers the
      golden vector, that the HMAC `signature` is identical with and without the
-     Ed25519 env, that nothing is added without the env, and that a kid-less
-     key adds no Ed25519 signature.
+     Ed25519 env, that nothing is added without the env, that a kid-less
+     key adds no Ed25519 signature, and that a bad seed (wrong length, bad
+     base64) and an ambiguous kid each log a warning and emit the HMAC-signed
+     contract with no `pubkey_signature`.
    → verify: `cd apps/backend && .venv/bin/python -m pytest ../../tests/test_contract_pubkey_signing.py ../../tests/test_contract_parallel_signing.py -q`, plus `ruff` and `scripts/ratchet_lint.py`.
    Traps: never log the seed. `signing.py` must stay a mirror of AIFactory's
    `_signing_bytes`, so do not touch that function.
@@ -113,8 +138,16 @@ TFactory, then gitops. Every step is backward compatible on its own.
      key not in the keyring returns `["unknown_kid"]`, a base64 or key error
      returns `["malformed"]`, an `InvalidSignature` returns
      `["bad_signature"]`, and a valid signature returns `[]`.
-   - `apply_overlay(signed, forwarded) -> dict` applies the three add-only
-     rules from the decisions above.
+   - `apply_overlay(signed, forwarded) -> dict` deep-copies `signed` and
+     applies the two add-only rules from the decisions above
+     (`provenance.github_issue`, `correlation_key`). It never reads
+     `forwarded["execution"]`.
+   - `check_repo_binding(contract, request_repos) -> list[str]`:
+     `["repo_unbound"]` when `provenance.repo` is missing or `request_repos`
+     has no non-empty value, `["repo_mismatch"]` when any present value names
+     another `owner/name`, else `[]`. Normalise with `repo_ref.project_of`,
+     then for a URL (`://` or the `git@host:` form) keep only the path, strip
+     a leading `/` and a trailing `.git`, and lowercase.
    - `TFactory: apps/backend/requirements.txt`: add `cryptography>=42`. It is
      already present at 49.0.0 through a transitive dependency.
    → verify: step 6 tests.
@@ -124,26 +157,36 @@ TFactory, then gitops. Every step is backward compatible on its own.
 5. **TFactory ingest wiring.**
    - `TFactory: apps/web-server/server/routes/specs.py:79-86`: add
      `signed_contract: dict | None = Field(default=None, description=...)`
-     after `contract`, and pass `signed_contract=req.signed_contract` in the
-     call at lines 313-325.
+     after `contract`, and pass `signed_contract=req.signed_contract` and
+     `clone_url=req.git_url or entry.get("clonedFrom")` in the call at lines
+     313-325. `repo_ref=req.repo` is already passed.
    - `TFactory: apps/backend/agents/tools_pkg/tools/task_control.py`:
-     add the parameter `signed_contract: dict | None = None` (line 455).
-     Inside the marker block (lines 505-522), after the schema check, run
-     `sig_errors = verify_contract_signature(signed_contract if isinstance(signed_contract, dict) else contract)`.
-     When it is empty and `signed_contract` is a dict, set
-     `contract = apply_overlay(signed_contract, contract)`. When it is not
-     empty, apply `TFACTORY_CONTRACT_SIGNATURE_MODE` exactly as the schema
-     mode block does: `warn` logs `"task contract signature invalid for %r: %s"`
-     with the codes and appends to `warnings`, and anything else raises
-     `ValueError("task contract signature invalid: <codes>")`.
+     add the parameters `signed_contract: dict | None = None` and
+     `clone_url: str | None = None` (line 455).
+     Inside the marker block (lines 505-522), in this order:
+     1. `sig_errors = verify_contract_signature(signed_contract if isinstance(signed_contract, dict) else contract)`.
+     2. When it is empty, add (with `verified` the dict just checked)
+        `check_repo_binding(verified, [repo_ref, clone_url])` to `sig_errors`.
+     3. When the signature verified and `signed_contract` is a dict, set
+        `contract = apply_overlay(signed_contract, contract)`.
+     4. Run the existing #1427 schema check on that `contract`, so it
+        validates the persisted contract after the swap.
+     5. When `sig_errors` is not empty, apply
+        `TFACTORY_CONTRACT_SIGNATURE_MODE` exactly as the schema mode block
+        does: `warn` logs `"task contract signature invalid for %r: %s"` with
+        the codes and appends to `warnings`, and anything else raises
+        `ValueError("task contract signature invalid: <codes>")`.
      Extend the docstring "Raises" note (line 474).
    - Do the same for `docs/capabilities-and-usage.md:204`: add one sentence on
      `TFACTORY_CONTRACT_SIGNATURE_MODE` and the `TFACTORY_CONTRACT_PUBKEY_*` vars.
    → verify: step 6 tests, plus `ruff check` and `scripts/ratchet_lint.py`
    on the touched files.
    Traps: the swapped `contract` must be in place before the
-   `task_contract.json` write (line 540) and before the `phase_models` read.
-   Keep both behind the existing marker predicate. A statement-count lint may
+   `task_contract.json` write (line 540) and before the `phase_models` read
+   (lines 548-561). The swap happens inside the marker predicate, but the
+   `phase_models` read stays **outside** it on purpose: build-only contracts
+   carry no markers and still route models (see the comment at lines
+   635-637). Do not move that read into the marker block. A statement-count lint may
    bite `create_spec_ingest_workspace`. If it does, move the mode handling for
    both gates into one `_contract_gate(errors, label, env_var, warnings)`
    helper.
@@ -156,15 +199,26 @@ TFactory, then gitops. Every step is backward compatible on its own.
      (both the `authority/kid` and the bare `kid` form), a missing
      `pubkey_signature` gives `unsigned`, `alg: "rsa"` gives `bad_alg`, and
      bad base64 gives `malformed`.
-   - `apply_overlay`: the signed `phase_models` values win, `github_issue` and
-     `correlation_key` are only added when missing, and other forwarded fields
-     are dropped.
+   - `apply_overlay`: `github_issue` and `correlation_key` are only added when
+     missing, and other forwarded fields are dropped, including
+     `execution.phase_models`.
+   - `check_repo_binding`: a match (`owner/name`, an https URL with `.git`, a
+     `git@` URL, different case) gives `[]`, another repo gives
+     `repo_mismatch`, and a missing `provenance.repo` or no request repo gives
+     `repo_unbound`.
    - Ingest, through `create_spec_ingest_workspace` like
      `tests/test_spec_ingest_workspace.py:51`. In warn mode a tampered contract
      still ingests and gives one warning. In enforce mode it raises
      `ValueError`. A valid `signed_contract` with an overlaid `contract` writes
      the signed `tfactory` block to `task_contract.json` and gives no warning.
-     A contract without markers is not checked.
+     A valid `signed_contract` without `phase_models`, with a forwarded
+     `contract` that adds `execution.phase_models`, writes no
+     `task_metadata.json`; with signed `phase_models`, a forwarded extra key
+     does not reach `task_metadata.json`. A valid signature with another
+     `repo_ref` warns `repo_mismatch` in warn mode and raises in enforce mode.
+     A valid signature whose swapped contract fails the schema gives the
+     schema warning. A contract without markers is not checked, and a
+     build-only contract without markers still writes `task_metadata.json`.
    → verify: `cd apps/backend && .venv/bin/python -m pytest ../../tests/test_contract_signature.py ../../tests/test_spec_ingest_workspace.py ../../tests/test_task_contract.py -q`.
    Traps: set the env with `monkeypatch.setenv` or `env=`, never by changing
    `os.environ` directly.
@@ -173,9 +227,9 @@ TFactory, then gitops. Every step is backward compatible on its own.
    - Make the key pair. The private half goes into `factory-secrets` as
      `PFACTORY_CONTRACT_SIGNING_KEY__2026q4` through
      `agenix -e`, non-interactively without a tty, and never echoed.
-   - `factory-gitops: apps/pfactory/manifests/manifests.yaml:277`: add a
+   - `factory-gitops: apps/pfactory/manifests/manifests.yaml:283`: add a
      `secretKeyRef` env for it, plus `PFACTORY_CONTRACT_SIGNING_KID: "2026q4"`.
-   - `factory-gitops: apps/tfactory/manifests/manifests.yaml:463`: add
+   - `factory-gitops: apps/tfactory/manifests/manifests.yaml:467`: add
      `{ name: TFACTORY_CONTRACT_PUBKEY_PFACTORY__2026Q4, value: "<base64 public key>" }`.
      Leave `TFACTORY_CONTRACT_SIGNATURE_MODE` unset, which means warn.
    - `factory-gitops: docs/secrets-management.md:44`: add the new key to the
@@ -187,7 +241,8 @@ TFactory, then gitops. Every step is backward compatible on its own.
    private key in a `value:`.
 
 Flipping to `enforce` is not part of this plan. It waits until warn mode is
-clean and the intent's open question on hand-posted contracts is answered.
+clean and the spec's open question is answered: do proof runs (the #1431
+template) get a PFactory-signed contract, or send none?
 
 ## Tests
 
@@ -195,7 +250,9 @@ clean and the intent's open question on hand-posted contracts is answered.
 - AIFactory: `pytest apps/backend/pfactory/test_tfactory_client_issue.py -q`, all passing.
 - TFactory: `pytest tests/test_contract_signature.py tests/test_spec_ingest_workspace.py tests/test_task_contract.py -q`, all passing. `python scripts/check_schema_drift.py` still passes because the schema is not changed.
 - Regression proof: put back the TFactory ingest without the verifier call,
-  and the enforce-mode tamper test fails.
+  and the enforce-mode tamper test fails. Without the repo check, the enforce
+  `repo_mismatch` test fails. With `phase_models` in the overlay, the
+  phase-models test fails.
 
 ## Rollback
 
