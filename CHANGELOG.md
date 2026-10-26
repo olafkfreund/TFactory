@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+## 0.9.44 — contract signature verification (warn), authenticated handback and completion events (2026-10-26)
+
+### Added
+
+- **Contract signature verification, warn mode (#1432, #1444).** Spec ingest
+  verifies PFactory's Ed25519 `approval.pubkey_signature` (over
+  `signed_contract`, or `contract` when there is none) and checks that the
+  signed `provenance.repo` matches the request's `repo` and its `git_url` /
+  `clonedFrom`. New env vars: `TFACTORY_CONTRACT_SIGNATURE_MODE` (default
+  `warn`: a failure is logged as `task contract signature invalid for ...`
+  and ingest continues; `enforce` rejects; an unknown value fails closed),
+  `TFACTORY_CONTRACT_PUBKEY_<AUTHORITY>__<KID>` (the keyring) and
+  `TFACTORY_CONTRACT_RETIRED_KIDS` (revoked keys). With no keys configured,
+  every contract warns `unsigned` and still ingests. Ingest takes an optional
+  `signed_contract` field. `cryptography>=42` is now a direct dependency.
+
+### Changed
+
+- **Behaviour change: handback sends AIFactory a bearer token (#1445,
+  #1446).** `default_sender` sends `Authorization: Bearer $APP_API_TOKEN` to
+  AIFactory's apply-correction route, only when the target has the scheme and
+  host of `TFACTORY_AIFACTORY_API_URL`. Sending stays off by default
+  (`TFACTORY_HANDBACK_SEND`). No new env var.
+- **Behaviour change: completion events to CFactory carry `APP_API_TOKEN`
+  (CFactory#501, #1448).** The completion outbox and the triager's direct
+  POST send `Authorization: Bearer $APP_API_TOKEN` to `/api/events`, only to
+  the configured completion-webhook origin. Without the token nothing
+  changes. No new env var.
+- **Baked agent-CLI pins bumped (#1439):** claude-code 2.1.310, gemini-cli
+  0.65.0, codex 0.164.0.
+
+### Tests
+
+- **Provider credentials reaching dispatched Jobs are pinned (Factory#1959,
+  #1447).** Test only; no runtime change.
+
 ## 0.9.43 — task-contract schema enforced by default (2026-10-26)
 
 ### Changed
