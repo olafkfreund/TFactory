@@ -17,6 +17,8 @@ if str(_WEB_SERVER) not in sys.path:
     sys.path.insert(0, str(_WEB_SERVER))
 
 from server.routes._specpath import (  # noqa: E402
+    _require_safe_git_date,
+    _require_safe_git_ref,
     browse_roots,
     safe_spec_dir,
     trusted_project_root,
@@ -109,3 +111,19 @@ def test_contained_path_unknown_user_is_403(tmp_path):
     with pytest.raises(HTTPException) as exc:
         within_roots("~nosuchuser_zz/x", [tmp_path], "x", expand_user=True)
     assert exc.value.status_code == 403
+
+
+def test_git_ref_allow_list():
+    assert _require_safe_git_ref("HEAD") == "HEAD"
+    assert _require_safe_git_ref("v1.0.0+build") == "v1.0.0+build"
+    for bad in ("-x", "a;b", "HEAD~1"):
+        with pytest.raises(HTTPException) as exc:
+            _require_safe_git_ref(bad)
+        assert exc.value.status_code == 400
+
+
+def test_git_date_allow_list():
+    assert _require_safe_git_date("2026-10-24", "since") == "2026-10-24"
+    with pytest.raises(HTTPException) as exc:
+        _require_safe_git_date("-1", "since")
+    assert exc.value.status_code == 400
