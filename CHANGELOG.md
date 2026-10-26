@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Task-contract schema enforcement is now the default (#1431).** Spec ingest
+  rejects invalid contracts before creating a workspace. Set
+  `TFACTORY_CONTRACT_SCHEMA_MODE=warn` to log and continue instead.
+
 - **Spec ingest ref follow-ups (#1416).** Reclaiming a terminal spec's
   worktree now also deletes its `refs/tfactory/specs/<id>` fetch ref, so its
   objects can be garbage-collected. An ingest with both `ref` and
