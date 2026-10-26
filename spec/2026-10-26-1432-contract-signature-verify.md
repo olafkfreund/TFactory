@@ -1,5 +1,5 @@
 ---
-status: approved
+status: draft
 issue: 1432
 intent: intent/2026-10-26-1432-contract-signature-verify.md
 ---
@@ -101,10 +101,10 @@ In `create_spec_ingest_workspace` (`task_control.py:503-540`), next to the
    the signed values winning, `provenance.github_issue` set only if missing,
    and `correlation_key` set only if missing. Any other difference in
    `contract` is ignored. The authoritative `tfactory` block therefore always
-   comes from signed bytes.
-   `execution.phase_models` are **not** part of the overlay: when
-   `signed_contract` verifies, they come only from the signed copy, and the
-   unsigned `contract` may not add or change a key.
+   comes from signed bytes. For `execution.phase_models`, a key the signed
+   copy sets always keeps its signed value; the unsigned `contract` may only
+   add keys the signed copy does not set. This keeps AIFactory's build-model
+   routing, which it writes after PFactory signs.
 3. **Repo binding.** After the signature verifies, TFactory compares the
    signed `provenance.repo` with the repo the request runs against: the
    request's `repo` and its clone URL (`git_url`, or the registered project's
@@ -211,12 +211,12 @@ This is the scheme `trusted_plan` already uses (#323/#401):
   contract was approved for. Within that repo, the caller can still pair the
   signed profile with another branch or other acceptance criteria. Expiry and
   a single-use nonce are out of scope.
-- **Phase models are lost on signed handoffs.** AIFactory writes
-  `execution.phase_models` after PFactory signs, when a build ran on a
-  non-default provider. Because only the signed copy counts, a verified
-  handoff routes TFactory's lanes to its default models, not the build's.
-  The unsigned path (an old AIFactory, or warn mode with a bad signature)
-  keeps today's behaviour.
+- **The caller picks a weak verify model (accepted).** The overlay may add
+  `execution.phase_models` keys the signed copy does not set, so the ingest
+  caller can route verify lanes to a weaker model. This is accepted: the
+  caller is an authenticated service that already controls the unsigned
+  `spec_text` and acceptance criteria, so choosing the verify model gives it
+  no new power. Keys the signed copy sets cannot be changed.
 - **Hosts:** TFactory and PFactory pods on the k3d cluster. There is no host-level change.
 
 ## Open questions
@@ -230,8 +230,8 @@ This is the scheme `trusted_plan` already uses (#323/#401):
 - TFactory unit tests (`tests/test_contract_signature.py`): valid, tampered
   `tfactory` block, unknown kid, retired kid, missing `pubkey_signature`,
   wrong alg, bad base64, the golden vector, the overlay merge, `repo_mismatch`
-  and `repo_unbound`, and that the unsigned `contract` cannot add a
-  `phase_models` key once `signed_contract` verifies. There are ingest tests
+  and `repo_unbound`, and that the unsigned `contract` can add a
+  `phase_models` key but cannot change one the signed copy sets. There are ingest tests
   in both modes, and one where the swapped contract fails the schema check.
 - PFactory test: the golden vector, the HMAC envelope is byte-identical with
   and without the Ed25519 key, `key_from_env` with the new prefix, and that a
