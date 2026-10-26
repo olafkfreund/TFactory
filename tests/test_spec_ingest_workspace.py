@@ -305,8 +305,8 @@ def test_contract_persisted_for_authoritative_profile(tmp_path):
     from agents.task_contract import parse_tfactory_profile, read_task_contract
 
     contract = {
+        **_VALID_CONTRACT,
         "feature": "GET /api/health",
-        "contract_version": "2",
         "tfactory": {
             "lanes": ["unit", "api"],
             "frameworks": {"unit": "pytest", "api": "pytest"},
@@ -332,7 +332,7 @@ def test_contract_phase_models_written_to_task_metadata(tmp_path):
     import json as _json
 
     contract = {
-        "contract_version": "2",
+        **_VALID_CONTRACT,
         "execution": {
             "phase_models": {
                 "spec": "openai-compatible:gpt-oss:120b",
@@ -360,7 +360,7 @@ def test_no_phase_models_no_task_metadata(tmp_path):
         tmp_path,
         _MARKDOWN,
         target_paths=["app/main.py"],
-        contract={"contract_version": "2", "tfactory": {"lanes": ["unit"]}},
+        contract=_VALID_CONTRACT,
     )
     assert not (_spec_dir(tmp_path) / "task_metadata.json").exists()
 
@@ -554,8 +554,15 @@ def test_invalid_contract_rejected_in_enforce_mode(tmp_path, monkeypatch):
     assert not _spec_dir(tmp_path).exists()
 
 
-def test_invalid_contract_warned_by_default(tmp_path, monkeypatch):
+def test_invalid_contract_rejected_by_default(tmp_path, monkeypatch):
     monkeypatch.delenv(_MODE, raising=False)
+    with pytest.raises(ValueError, match="phases"):
+        _ingest(tmp_path, _MARKDOWN, contract=_invalid_contract())
+    assert not _spec_dir(tmp_path).exists()
+
+
+def test_invalid_contract_warned_in_warn_mode(tmp_path, monkeypatch):
+    monkeypatch.setenv(_MODE, "warn")
     result = _ingest(tmp_path, _MARKDOWN, contract=_invalid_contract())
     assert (_spec_dir(tmp_path) / "context" / "task_contract.json").exists()
     assert any("phases" in w for w in result["warnings"])
