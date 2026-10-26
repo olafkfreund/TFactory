@@ -544,7 +544,9 @@ def test_valid_contract_passes_in_enforce_mode(tmp_path, monkeypatch):
     monkeypatch.setenv(_MODE, "enforce")
     result = _ingest(tmp_path, _MARKDOWN, contract=_VALID_CONTRACT)
     assert (_spec_dir(tmp_path) / "context" / "task_contract.json").exists()
-    assert not any(w.startswith("task contract fails schema") for w in result["warnings"])
+    assert not any(
+        w.startswith("task contract fails schema") for w in result["warnings"]
+    )
 
 
 def test_invalid_contract_rejected_in_enforce_mode(tmp_path, monkeypatch):

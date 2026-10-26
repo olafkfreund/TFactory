@@ -14,6 +14,7 @@ route); no per-route dependency is needed. Errors map to HTTP codes:
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, Header, HTTPException, status
@@ -85,7 +86,7 @@ class SpecIngestRequest(BaseModel):
             "Absent → tests are inferred from spec_text."
         ),
     )
-    signed_contract: dict | None = Field(
+    signed_contract: dict[str, Any] | None = Field(
         default=None,
         description=(
             "The PFactory-signed contract exactly as signed, before AIFactory's "
