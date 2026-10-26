@@ -1,5 +1,5 @@
 ---
-status: approved
+status: draft
 issue: 1432
 intent: intent/2026-10-26-1432-contract-signature-verify.md
 ---
@@ -32,7 +32,17 @@ canonical(contract minus "approval") | approved_by | approval_timestamp | plan_c
   changes neither signature.
 - `kid` is the Ed25519 key id, which is separate from the HMAC kid. It is
   required for the new signature. A signature without a kid is invalid, so
-  every key can be revoked.
+  every key can be revoked. PFactory already lowercases the kid when it signs
+  (`signing.py:109`), so the signed bytes carry it as signed. TFactory
+  lowercases the kid only to look it up in the keyring, never inside the
+  bytes it verifies.
+
+The canonical form is whatever Python's `json.dumps(sort_keys=True,
+separators=(",", ":"), ensure_ascii=False)` produces. That is not RFC 8785
+(JCS): non-ASCII text is emitted as raw UTF-8 bytes, floats use Python's
+`repr`, and `NaN`/`Infinity` are allowed. Both signers and the verifier are
+Python today. Any non-Python signer must reproduce exactly these bytes, and
+the golden vector is the test it has to pass.
 
 TFactory keeps its own copy of `_canonical` and `_signing_bytes` (about 15
 lines) in a new module. TFactory does not import from PFactory. A shared
@@ -92,7 +102,23 @@ In `create_spec_ingest_workspace` (`task_control.py:503-540`), next to the
    and `correlation_key` set only if missing. Any other difference in
    `contract` is ignored. The authoritative `tfactory` block therefore always
    comes from signed bytes.
-3. Failure: `TFACTORY_CONTRACT_SIGNATURE_MODE`, with the same semantics as
+   `execution.phase_models` are **not** part of the overlay: when
+   `signed_contract` verifies, they come only from the signed copy, and the
+   unsigned `contract` may not add or change a key.
+3. **Repo binding.** After the signature verifies, TFactory compares the
+   signed `provenance.repo` with the repo the request runs against: the
+   request's `repo` and its clone URL (`git_url`, or the registered project's
+   `clonedFrom` when the project already exists). Every value that is present
+   must name the same `owner/name`, compared case-insensitively after
+   `repo_ref.project_of`, and for a URL after dropping the host and a `.git`
+   suffix. A mismatch gives the code `repo_mismatch`. A signed contract with no
+   `provenance.repo`, or a request with no repo at all, gives `repo_unbound`.
+   Both codes go through the signature mode below: warn logs them, enforce
+   rejects.
+4. **Schema check on the result.** The #1427 schema validation runs on the
+   contract that is persisted, which is `signed_contract` plus the overlay
+   after the swap, not on the forwarded `contract`.
+5. Failure: `TFACTORY_CONTRACT_SIGNATURE_MODE`, with the same semantics as
    `TFACTORY_CONTRACT_SCHEMA_MODE`. `warn` (the default) logs the reason
    codes, appends `task contract signature invalid (warn mode): <codes>` to
    `warnings`, and keeps today's behaviour (`contract` is persisted). `enforce`,
@@ -100,8 +126,20 @@ In `create_spec_ingest_workspace` (`task_control.py:503-540`), next to the
    it into a 400. It is a separate variable so the two gates can be flipped
    on their own. Enforce rejects `unsigned` as well, otherwise stripping
    `approval` would bypass the gate.
-4. Contracts without RFC-0002 markers, and the MCP ingest path that sends no
+6. Contracts without RFC-0002 markers, and the MCP ingest path that sends no
    contract (`task_control.py:1039`), are not affected.
+
+### What the signature proves, and what it does not
+
+The signature proves who wrote the contract and its `tfactory` test profile,
+and that neither changed after PFactory approved them. With the repo binding,
+it also ties them to one repo. It does **not** prove:
+
+- **Which build branch is tested.** `source_branch` and `ref` are request
+  fields, outside the signed bytes.
+- **The acceptance criteria.** TFactory parses them from the request's
+  unsigned `spec_text` (`task_control.py:485`), not from the contract.
+- **Freshness.** See the replay risk below.
 
 ### 5. Key distribution: the existing gitops env path, no new service
 
@@ -109,12 +147,12 @@ In `create_spec_ingest_workspace` (`task_control.py:503-540`), next to the
   `PFACTORY_CONTRACT_SIGNING_KEY__<KID>`, the base64 of the 32-byte raw Ed25519
   private key. It lives in `factory-secrets` through agenix, the same path as
   `AIFACTORY_TRUSTED_PLAN_KEY_PFACTORY` (factory-gitops
-  `apps/pfactory/manifests/manifests.yaml:277`). Only PFactory mounts it.
+  `apps/pfactory/manifests/manifests.yaml:283`). Only PFactory mounts it.
 - **Public key (TFactory):**
   `TFACTORY_CONTRACT_PUBKEY_<AUTHORITY>__<KID>`, the base64 of the 32-byte raw
   public key. It is not secret, so it is a plain `value:` in TFactory's env
   list in factory-gitops `apps/tfactory/manifests/manifests.yaml` (next to
-  `TFACTORY_AUTO_PLAN`, line 463). It is reviewable in git and needs no secret
+  `TFACTORY_AUTO_PLAN`, line 467). It is reviewable in git and needs no secret
   mount. The authority matches `approval.approved_by`, case-insensitively.
 - The key pair is made once with `cryptography` (or `openssl genpkey -algorithm ed25519`),
   and only the private half goes through `agenix -e`.
@@ -166,19 +204,39 @@ This is the scheme `trusted_plan` already uses (#323/#401):
 - **Enforce breaks hand-posted contracts** (the #1431 proof-run template).
   This is the intent's open question, and flipping to enforce waits on it.
   This lane only ships warn mode.
-- **No expiry:** a valid signed contract can be replayed to ingest again.
-  The `spec_id` uniqueness (409 on an existing spec_dir) limits this. Expiry is
-  out of scope.
+- **Replay.** A valid signed contract can be sent again, with any build
+  branch and any `spec_text`. The `spec_id` 409 does not limit this: the
+  caller chooses `spec_id` (`specs.py:310`, checked at `task_control.py:480`),
+  so a fresh id always works. The repo binding limits a replay to the repo the
+  contract was approved for. Within that repo, the caller can still pair the
+  signed profile with another branch or other acceptance criteria. Expiry and
+  a single-use nonce are out of scope.
+- **Phase models are lost on signed handoffs.** AIFactory writes
+  `execution.phase_models` after PFactory signs, when a build ran on a
+  non-default provider. Because only the signed copy counts, a verified
+  handoff routes TFactory's lanes to its default models, not the build's.
+  The unsigned path (an old AIFactory, or warn mode with a bad signature)
+  keeps today's behaviour.
 - **Hosts:** TFactory and PFactory pods on the k3d cluster. There is no host-level change.
+
+## Open questions
+
+- Deferred until the enforce flip: do proof runs (the #1431 template) get a
+  PFactory-signed contract, or do they send no contract? Warn mode does not
+  need the answer.
 
 ## Verification
 
 - TFactory unit tests (`tests/test_contract_signature.py`): valid, tampered
   `tfactory` block, unknown kid, retired kid, missing `pubkey_signature`,
-  wrong alg, bad base64, the golden vector, and the overlay merge. There are
-  ingest tests in both modes.
+  wrong alg, bad base64, the golden vector, the overlay merge, `repo_mismatch`
+  and `repo_unbound`, and that the unsigned `contract` cannot add a
+  `phase_models` key once `signed_contract` verifies. There are ingest tests
+  in both modes, and one where the swapped contract fails the schema check.
 - PFactory test: the golden vector, the HMAC envelope is byte-identical with
-  and without the Ed25519 key, and `key_from_env` with the new prefix.
+  and without the Ed25519 key, `key_from_env` with the new prefix, and that a
+  bad Ed25519 key or kid setup logs a warning and still emits the HMAC
+  signature without `pubkey_signature`.
 - AIFactory test: `signed_contract` equals the stored contract when the overlay
   changed `contract`, and is absent when held or unsigned.
 - After release in warn mode: a PARR run ends with a stored contract and no
