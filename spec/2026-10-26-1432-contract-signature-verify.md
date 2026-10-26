@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1432
 intent: intent/2026-10-26-1432-contract-signature-verify.md
 ---
