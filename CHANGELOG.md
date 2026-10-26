@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## 0.9.42 — a schema-valid proof-run contract, and triage on every handback (2026-10-26)
+
+### Fixed
+
+- **Proof-run ingest template sends a schema-valid task contract (#1431, #1438).**
+  A checked-in ingest template carries a contract that passes the vendored
+  RFC-0002 schema (`contract_version` "2", feature, workflow_type, phases), and
+  a test validates it. This is the first half of #1431; flipping
+  `TFACTORY_CONTRACT_SCHEMA_MODE` to `enforce` follows.
+- **Every handback path sends triage (#1430, #1436).** The three markdown-only
+  handback skills now run `python -m agents.handback <spec_dir> --send`, which
+  sends triage, `manifest_hash` and `correlation_key`. The MCP
+  `task_apply_correction` call stays only as a marked fallback.
+
+### Changed
+
+- **Git ref and date validators live in `_specpath` (#1435, #1437).** No
+  behaviour change.
+
 ## 0.9.41 — check the task contract at ingest, and keep CodeQL at zero (2026-10-24)
 
 ### Added
