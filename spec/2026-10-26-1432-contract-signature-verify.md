@@ -1,5 +1,5 @@
 ---
-status: approved
+status: draft
 issue: 1432
 intent: intent/2026-10-26-1432-contract-signature-verify.md
 ---
@@ -194,6 +194,11 @@ This is the scheme `trusted_plan` already uses (#323/#401):
 
 ## Risks
 
+- **Contracts without markers skip verification.** The check runs only when
+  the forwarded `contract` has a `tfactory` block or `contract_version`. A
+  forwarded contract without them skips verification and `signed_contract` is
+  dropped. That is acceptable in warn mode. It must be settled before the
+  enforce flip.
 - **Canonicalisation drift** between the TFactory and PFactory copies makes
   every signature fail. The golden vector in both test suites guards against it, and
   warn mode makes the failure visible before enforce.
