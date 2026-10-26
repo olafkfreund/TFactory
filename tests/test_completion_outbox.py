@@ -213,6 +213,7 @@ def test_outbox_enabled_truthy(monkeypatch, val):
 
 def test_default_deliver_posts_with_idempotency_header(tmp_path, monkeypatch):
     monkeypatch.setenv("TFACTORY_COMPLETION_WEBHOOK", "http://sink.example/hook")
+    monkeypatch.setenv("APP_API_TOKEN", "shared-token")
     captured = {}
 
     class FakeResp:
@@ -238,7 +239,19 @@ def test_default_deliver_posts_with_idempotency_header(tmp_path, monkeypatch):
     assert ok is True
     # Header keys are capitalized by urllib (Idempotency-key).
     assert captured["headers"].get("Idempotency-key") == "evt-9"
+    assert captured["headers"].get("Authorization") == "Bearer shared-token"
     assert json.loads(captured["body"]) == {"id": "evt-9", "status": "triaged"}
+
+
+def test_auth_headers_only_for_configured_origin(monkeypatch):
+    monkeypatch.setenv("TFACTORY_COMPLETION_WEBHOOK", " https://sink.example/hook ")
+    monkeypatch.setenv("APP_API_TOKEN", "shared-token")
+    assert ob._auth_headers("https://sink.example/other") == {
+        "Authorization": "Bearer shared-token"
+    }
+    assert ob._auth_headers("https://other.example/hook") == {}
+    monkeypatch.delenv("APP_API_TOKEN")
+    assert ob._auth_headers("https://sink.example/hook") == {}
 
 
 def test_default_deliver_no_sink_returns_false(monkeypatch):

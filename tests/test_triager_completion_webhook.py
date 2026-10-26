@@ -65,6 +65,7 @@ def test_webhook_opt_in_posts_payload(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("TFACTORY_COMPLETION_WEBHOOK", "http://hook.test/notify")
+    monkeypatch.setenv("APP_API_TOKEN", "shared-token")
     _seed_status(tmp_path)
 
     captured: dict = {}
@@ -77,6 +78,7 @@ def test_webhook_opt_in_posts_payload(
         captured["url"] = req.full_url
         captured["method"] = req.get_method()
         captured["body"] = json.loads(req.data.decode("utf-8"))
+        captured["headers"] = req.headers
         captured["timeout"] = timeout
         return _Resp()
 
@@ -90,6 +92,7 @@ def test_webhook_opt_in_posts_payload(
     assert captured["body"]["task_id"] == "042"
     assert captured["body"]["status"] == "triager_failed"
     assert captured["body"]["phase"] == "boom"
+    assert captured["headers"].get("Authorization") == "Bearer shared-token"
 
 
 def test_webhook_failure_is_swallowed(

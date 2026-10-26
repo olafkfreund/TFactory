@@ -1087,11 +1087,13 @@ def _deliver_completion(payload: CompletionEnvelope) -> None:
     try:
         import urllib.request
 
+        from agents.completion_outbox import _auth_headers
+
         timeout = float(os.environ.get("TFACTORY_COMPLETION_WEBHOOK_TIMEOUT", "5"))
         req = urllib.request.Request(
             url,
             data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", **_auth_headers(url)},
             method="POST",
         )
         urllib.request.urlopen(req, timeout=timeout).close()  # noqa: S310

@@ -46,6 +46,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from agents.workspace_status import truthy as _truthy
 
@@ -72,6 +73,21 @@ _DEFAULT_MAX_ATTEMPTS = 20
 def outbox_enabled() -> bool:
     """True when the outbox relay path is opted in (``TFACTORY_COMPLETION_OUTBOX``)."""
     return _truthy(os.environ.get(_ENV_OUTBOX_ENABLED))
+
+
+def _auth_headers(url: str) -> dict[str, str]:
+    """Send the shared token only to the configured completion webhook origin."""
+    token = os.environ.get("APP_API_TOKEN")
+    target, configured = (
+        urlsplit(url),
+        urlsplit((os.environ.get("TFACTORY_COMPLETION_WEBHOOK") or "").strip()),
+    )
+    if not token or (target.scheme, target.netloc) != (
+        configured.scheme,
+        configured.netloc,
+    ):
+        return {}
+    return {"Authorization": f"Bearer {token}"}
 
 
 def _now() -> datetime:
@@ -353,6 +369,7 @@ def _default_deliver(envelope: dict, entry_id: str) -> bool:
         headers={
             "Content-Type": "application/json",
             "Idempotency-Key": entry_id,
+            **_auth_headers(url),
         },
         method="POST",
     )
