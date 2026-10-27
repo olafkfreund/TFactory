@@ -1,6 +1,6 @@
 {
   "name": "tfactory-web",
-  "version": "0.9.44",
+  "version": "0.9.45",
   "type": "module",
   "description": "Web UI for TFactory autonomous coding framework",
   "scripts": {
