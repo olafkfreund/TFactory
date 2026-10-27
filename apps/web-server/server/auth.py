@@ -122,8 +122,8 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
     Authentication strategy (tried in order):
     1. If the token is a valid JWT access token, populate
        ``request.state.user`` with the decoded claims and allow the request.
-    2. If the token matches the legacy ``settings.API_TOKEN``, set
-       ``request.state.user = None`` (backward compatible) and allow.
+    2. If the token matches the legacy ``settings.API_TOKEN``, set the
+       default service principal (``is_service``) and allow.
     3. If the token is a user-minted ``acw_`` API key carrying the
        ``api:full`` scope, resolve it to its owner and allow (issue #305).
        Narrower keys (e.g. ``mcp:read``) are rejected here so they stay
@@ -192,6 +192,7 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
                 "id": "default",
                 "email": "default@localhost",
                 "role": "admin",
+                "is_service": True,
             }
             return await call_next(request)
 
@@ -249,6 +250,7 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
                 "id": "default",
                 "email": None,
                 "role": "user",
+                "is_service": True,
             }
             return await call_next(request)
 
@@ -276,6 +278,8 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
                     "id": key.user_id,
                     "email": None,
                     "role": "user",
+                    "api_key_id": key.key_id,
+                    "org_id": key.org_id,
                 }
                 return await call_next(request)
 
