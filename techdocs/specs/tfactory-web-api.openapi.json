@@ -1628,7 +1628,7 @@
           "Audit"
         ],
         "summary": "Stream audit logs as JSON (NDJSON) or CSV",
-        "description": "Stream the audit log.\n\n- ``format=json`` returns NDJSON (one JSON object per line).\n- ``format=csv`` returns RFC 4180 CSV with a header row.\nEach row includes ``prev_hash`` so an external verifier can\nre-check the chain against the exported dump (see\n``python -m server.audit verify-chain``).\n\nPermission gate: any authenticated user can export their own\naudit trail. Filtering by ``org_id`` requires the caller to be\na member of that org (enforced by the route's depend chain\nwhen called via the gateway \u2014 for now we keep the gate light,\nmatching the existing /api/orgs/{org_id}/audit route).",
+        "description": "Stream the audit log.\n\n- ``format=json`` returns NDJSON (one JSON object per line).\n- ``format=csv`` returns RFC 4180 CSV with a header row.\nEach row includes ``prev_hash`` so an external verifier can\nre-check the chain against the exported dump (see\n``python -m server.audit verify-chain``).\n\nPermission gate: a service principal (the legacy API token, or\nauth-disabled dev) may export anything. Otherwise ``org_id`` is required\nand the caller must be an admin (or owner) of that org; an API key only\nfor its own org. No role claim on the token is trusted; membership is\nread from the DB.",
         "operationId": "export_audit_logs_api_audit_export_get",
         "parameters": [
           {
