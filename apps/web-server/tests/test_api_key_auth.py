@@ -126,15 +126,16 @@ class _FakeResult:
 
 
 class _FakeSession:
-    """Minimal async session stub: one execute() result + commit/rollback."""
+    """Minimal async session stub: the key row, then the owner's OrgMember role
+    (read by ``cap_by_owner_role``, #1450), plus commit/rollback."""
 
-    def __init__(self, row):
-        self._row = row
+    def __init__(self, row, role="member"):
+        self._results = [row, role]
         self.committed = False
         self.rolled_back = False
 
     async def execute(self, _stmt):
-        return _FakeResult(self._row)
+        return _FakeResult(self._results.pop(0))
 
     async def commit(self):
         self.committed = True
