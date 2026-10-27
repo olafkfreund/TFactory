@@ -74,3 +74,9 @@ As above; with the flag off the full suite is unchanged.
 Revert the PR. With the flag on (S6), set it `false` in gitops first.
 
 ## Deviations
+
+- Steps 1-2: PFactory #945's naive-UTC writes for `expires_at`/`last_used_at`
+  are not copied. TF's `UTCDateTime` column type (#1308) already strips the
+  offset on every write, so the PF Postgres expiry test is not ported either.
+- Step 2: TF's REST middleware rejects a capped key with 403 (PF: 401); TF has
+  no deactivated-owner check, so PF's deactivated-owner test is not copied.

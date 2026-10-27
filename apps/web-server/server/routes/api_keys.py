@@ -181,10 +181,7 @@ async def create_api_key(
     # Compute expiration if requested
     expires_at: datetime | None = None
     if body.expires_in_days is not None:
-        # Naive UTC: the column is a naive DateTime and asyncpg rejects aware values.
-        expires_at = (datetime.now(UTC) + timedelta(days=body.expires_in_days)).replace(
-            tzinfo=None
-        )
+        expires_at = datetime.now(UTC) + timedelta(days=body.expires_in_days)
 
     # Serialize scopes as comma-separated string for storage
     scopes_str: str | None = None
