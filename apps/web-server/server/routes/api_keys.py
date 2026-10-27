@@ -13,14 +13,16 @@ import secrets
 from datetime import UTC, datetime, timedelta
 
 from factory_common.logsafe import sanitize_log
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import ApiKey, OrgMember, User
 from ..database.engine import get_db
+from ..mcp_remote.auth import MCP_READ_SCOPE
 from .auth_routes import get_current_user
+from .organizations import _role_level
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +134,7 @@ class CreateApiKeyResponse(ApiKeyResponse):
 )
 async def create_api_key(
     body: CreateApiKeyRequest,
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -155,13 +158,33 @@ async def create_api_key(
             detail="You are not a member of this organization",
         )
 
+    # A key must not mint keys, or a read-only key could escalate itself.
+    principal = getattr(request.state, "user", None)
+    if isinstance(principal, dict) and principal.get("api_key_id"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="API keys cannot be created with an API key",
+        )
+
+    # Below member (viewer or unknown role) only mcp:read may be granted.
+    if _role_level(membership.role) < _role_level("member") and set(
+        body.scopes or ()
+    ) - {MCP_READ_SCOPE}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Scopes beyond 'mcp:read' require the 'member' org role",
+        )
+
     # Generate a secure random key with the acw_ prefix
     raw_key = f"{KEY_PREFIX}{secrets.token_urlsafe(32)}"
 
     # Compute expiration if requested
     expires_at: datetime | None = None
     if body.expires_in_days is not None:
-        expires_at = datetime.now(UTC) + timedelta(days=body.expires_in_days)
+        # Naive UTC: the column is a naive DateTime and asyncpg rejects aware values.
+        expires_at = (datetime.now(UTC) + timedelta(days=body.expires_in_days)).replace(
+            tzinfo=None
+        )
 
     # Serialize scopes as comma-separated string for storage
     scopes_str: str | None = None
