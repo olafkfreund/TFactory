@@ -132,6 +132,12 @@ class Settings(BaseSettings):
     INBOUND_HANDBACK_ENABLED: bool = False
     INBOUND_HANDBACK_SECRET: str = Field(default="", repr=False)
 
+    # Task-route RBAC (#1450) — per-org role check (`member`) on the task
+    # write routes. OFF by default = shadow mode: the decision is computed and a
+    # would-deny is logged + audited, but the response is never changed. Flip on
+    # (APP_RBAC_ENFORCE_TASK_ROUTES=1) once the shadow log shows no false denies.
+    RBAC_ENFORCE_TASK_ROUTES: bool = False
+
     class Config:
         env_file = ".env"
         env_prefix = "APP_"

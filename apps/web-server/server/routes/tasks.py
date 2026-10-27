@@ -11,10 +11,11 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from factory_common.logsafe import sanitize_log
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from ._specpath import safe_component, safe_spec_dir
+from .project_authz import require_task_access
 from .projects import load_projects
 
 router = APIRouter()
@@ -1358,7 +1359,11 @@ class TaskStatusUpdate(BaseModel):
     force: bool = False  # Skip validation (e.g., after successful merge)
 
 
-@router.patch("/{task_id}/status", response_model=Task)
+@router.patch(
+    "/{task_id}/status",
+    dependencies=[Depends(require_task_access("member"))],
+    response_model=Task,
+)
 async def update_task_status(task_id: str, update: TaskStatusUpdate):
     """Update a task's status (for kanban drag-and-drop)."""
     if ":" not in task_id:
@@ -1408,8 +1413,16 @@ async def update_task_status(task_id: str, update: TaskStatusUpdate):
     return spec_to_task(project_id, spec_dir)
 
 
-@router.put("/{task_id}", response_model=Task)
-@router.patch("/{task_id}", response_model=Task)
+@router.put(
+    "/{task_id}",
+    dependencies=[Depends(require_task_access("member"))],
+    response_model=Task,
+)
+@router.patch(
+    "/{task_id}",
+    dependencies=[Depends(require_task_access("member"))],
+    response_model=Task,
+)
 async def update_task(task_id: str, update: TaskUpdate):
     """Update a task's metadata (supports both PUT and PATCH)."""
     if ":" not in task_id:
@@ -1550,7 +1563,11 @@ async def update_task(task_id: str, update: TaskUpdate):
     return spec_to_task(project_id, spec_dir)
 
 
-@router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{task_id}",
+    dependencies=[Depends(require_task_access("member"))],
+    status_code=status.HTTP_204_NO_CONTENT,
+)
 async def delete_task(task_id: str):
     """Delete a task (removes its spec directory).
 
