@@ -75,7 +75,11 @@ def _relocated(tmp_path: Path, *, sibling: bool) -> Path:
 def _assert_broken(wt: Path) -> None:
     broken = _git("rev-parse", "HEAD", cwd=wt)
     assert broken.returncode != 0
-    assert "not a git repository" in broken.stderr
+    # git >= 2.56 says "gitfile does not point to a valid repository" instead.
+    assert any(
+        m in broken.stderr
+        for m in ("not a git repository", "does not point to a valid repository")
+    ), broken.stderr
 
 
 def _assert_repaired(wt: Path) -> None:
