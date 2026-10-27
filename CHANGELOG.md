@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## 0.9.45 — audit export gated on org admin or service principal (2026-10-27)
+
+### Changed
+
+- **Behaviour change: `GET /api/audit/export` is gated (#1451, #1452).** With
+  `org_id`, the caller needs `admin`/`owner` in that org (read from the DB
+  `OrgMember` row, never a JWT role); an `acw_` API key may export only its
+  own org. Without `org_id`, only a service principal (the legacy
+  `APP_API_TOKEN`, or `DISABLE_AUTH` dev) may export. Anyone else gets a
+  `403`. The auth middleware now marks those principals `is_service`. No new
+  env var.
+
+### Tests
+
+- **Worktree repair test accepts the git 2.56 broken-gitfile message (#1453,
+  #1454).** Test only; no runtime change.
+
 ## 0.9.44 — contract signature verification (warn), authenticated handback and completion events (2026-10-26)
 
 ### Added
