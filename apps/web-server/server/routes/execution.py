@@ -9,7 +9,7 @@ import logging
 from pathlib import Path
 
 from factory_common.logsafe import sanitize_log
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from server.error_ref import client_error
@@ -17,6 +17,7 @@ from server.error_ref import client_error
 from ..services.agent_service import get_agent_service
 from ..websockets.events import emit_task_status
 from ._specpath import safe_component
+from .project_authz import require_task_access
 from .projects import load_projects
 from .tasks import (
     close_active_phases,
@@ -116,7 +117,7 @@ async def is_task_running(task_id: str):
     }
 
 
-@router.post("/{task_id}/start")
+@router.post("/{task_id}/start", dependencies=[Depends(require_task_access("member"))])
 async def start_task(task_id: str, request: StartTaskRequest, raw_request: Request):
     """Start execution of a task.
 
@@ -553,7 +554,7 @@ async def start_task(task_id: str, request: StartTaskRequest, raw_request: Reque
     }
 
 
-@router.post("/{task_id}/stop")
+@router.post("/{task_id}/stop", dependencies=[Depends(require_task_access("member"))])
 async def stop_task(task_id: str):
     """Stop a running task."""
     agent_service = get_agent_service()
@@ -582,7 +583,9 @@ async def stop_task(task_id: str):
     }
 
 
-@router.post("/{task_id}/recover")
+@router.post(
+    "/{task_id}/recover", dependencies=[Depends(require_task_access("member"))]
+)
 async def recover_task(
     task_id: str, request: RecoverTaskRequest = RecoverTaskRequest()
 ):

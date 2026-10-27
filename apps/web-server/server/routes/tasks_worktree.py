@@ -21,11 +21,12 @@ import subprocess
 from pathlib import Path
 
 from factory_common.logsafe import sanitize_log
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from ..paths import get_data_dir, get_data_file
 from ._specpath import safe_component, safe_spec_dir
+from .project_authz import require_task_access
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -402,7 +403,10 @@ async def get_worktree_merge_preview(task_id: str):
     }
 
 
-@router.post("/{task_id}/worktree/resolve-conflicts")
+@router.post(
+    "/{task_id}/worktree/resolve-conflicts",
+    dependencies=[Depends(require_task_access("member"))],
+)
 async def resolve_worktree_conflicts(
     task_id: str, options: ConflictResolveOptions = None
 ):
@@ -720,7 +724,10 @@ async def resolve_worktree_conflicts(
     }
 
 
-@router.post("/{task_id}/worktree/resolve-uncommitted")
+@router.post(
+    "/{task_id}/worktree/resolve-uncommitted",
+    dependencies=[Depends(require_task_access("member"))],
+)
 async def resolve_uncommitted_conflicts(task_id: str):
     """
     Resolve conflicts between uncommitted local changes and task branch changes using AI.
@@ -999,7 +1006,10 @@ async def resolve_uncommitted_conflicts(task_id: str):
     }
 
 
-@router.post("/{task_id}/worktree/resolve-git-merge")
+@router.post(
+    "/{task_id}/worktree/resolve-git-merge",
+    dependencies=[Depends(require_task_access("member"))],
+)
 async def resolve_git_merge_conflicts(task_id: str):
     """
     Resolve files with git merge conflict markers using AI.
@@ -1301,7 +1311,10 @@ def _clean_conflict_markers(content: str) -> str:
     return cleaned
 
 
-@router.post("/{task_id}/worktree/abort-merge")
+@router.post(
+    "/{task_id}/worktree/abort-merge",
+    dependencies=[Depends(require_task_access("member"))],
+)
 async def abort_worktree_merge(task_id: str):
     """
     Abort a failed merge in the worktree or main project.
@@ -1436,7 +1449,10 @@ async def abort_worktree_merge(task_id: str):
         }
 
 
-@router.post("/{task_id}/worktree/create-pr")
+@router.post(
+    "/{task_id}/worktree/create-pr",
+    dependencies=[Depends(require_task_access("member"))],
+)
 async def create_pr_from_task(task_id: str, options: CreatePRFromTaskOptions = None):
     """
     Push the worktree branch and create a GitHub Pull Request.
@@ -1768,7 +1784,9 @@ async def create_pr_from_task(task_id: str, options: CreatePRFromTaskOptions = N
     }
 
 
-@router.post("/{task_id}/worktree/merge")
+@router.post(
+    "/{task_id}/worktree/merge", dependencies=[Depends(require_task_access("member"))]
+)
 async def merge_worktree(task_id: str, options: WorktreeMergeOptions = None):
     """
     Merge the worktree branch into the base branch.
@@ -2311,7 +2329,9 @@ async def get_worktree_diff(task_id: str):
     }
 
 
-@router.post("/{task_id}/worktree/discard")
+@router.post(
+    "/{task_id}/worktree/discard", dependencies=[Depends(require_task_access("member"))]
+)
 async def discard_worktree(task_id: str):
     """
     Discard/delete the worktree for a task.
