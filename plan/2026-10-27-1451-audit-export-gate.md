@@ -36,3 +36,9 @@ As above; the new tests fail with the dev versions of `auth.py`/`audit.py`.
 ## Rollback
 
 Revert the PR.
+
+## Deviations
+
+- Added `test_acw_key_principal_carries_its_org` (lead review): it drives the real
+  `TokenAuthMiddleware` with a stubbed `acw_` key and checks `api_key_id`/`org_id`
+  reach `request.state.user`. It fails with the dev `auth.py`.

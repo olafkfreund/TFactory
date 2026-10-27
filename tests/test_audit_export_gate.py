@@ -145,3 +145,33 @@ def test_legacy_token_is_marked_service(monkeypatch):
     c = TestClient(app)
     r = c.get("/api/whoami", headers={"Authorization": "Bearer legacy-token-for-test"})
     assert r.json()["is_service"] is True
+
+
+def test_acw_key_principal_carries_its_org(monkeypatch):
+    # The key-to-org check reads ``org_id`` that only the real middleware sets.
+    from server import config
+    from server.auth import TokenAuthMiddleware
+    from server.mcp_remote import auth as mcp_auth
+
+    async def _authenticate(header):
+        return mcp_auth.AuthenticatedKey(
+            key_id="k1",
+            scopes=frozenset({mcp_auth.REST_API_SCOPE}),
+            user_id="u1",
+            org_id="A",
+        )
+
+    settings = config.get_settings()
+    monkeypatch.setattr(settings, "DISABLE_AUTH", False)
+    monkeypatch.setattr(mcp_auth, "authenticate", _authenticate)
+    app = FastAPI()
+    app.add_middleware(TokenAuthMiddleware)
+
+    @app.get("/api/whoami")
+    async def whoami(request: Request):
+        return request.state.user
+
+    r = TestClient(app).get("/api/whoami", headers={"Authorization": "Bearer acw_x"})
+    assert r.json()["api_key_id"] == "k1"
+    assert r.json()["org_id"] == "A"
+    assert "is_service" not in r.json()
