@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1451
 intent: intent/2026-10-27-1451-audit-export-gate.md
 ---
