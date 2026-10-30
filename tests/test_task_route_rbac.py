@@ -68,6 +68,7 @@ def env(tmp_path, monkeypatch):
     """execution router on SQLite: org A has viewer-a, member-a."""
     from server.config import get_settings
     from server.database.models import Base, Organization, OrgMember, User
+    from server.rmux import bridge
     from server.routes import execution, project_authz
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -91,6 +92,7 @@ def env(tmp_path, monkeypatch):
 
     app = FastAPI()
     app.include_router(execution.router, prefix="/api/tasks")
+    app.include_router(bridge.router)
 
     rollbacks: list[bool] = []
 
@@ -106,6 +108,7 @@ def env(tmp_path, monkeypatch):
             yield session
 
     app.dependency_overrides[project_authz.get_db] = _db
+    app.dependency_overrides[bridge.get_db] = _db
 
     @app.middleware("http")
     async def _principal(request: Request, call_next):
@@ -126,10 +129,11 @@ def env(tmp_path, monkeypatch):
 
     audits: list[dict] = []
 
-    async def _audit(**kw):
+    async def _audit(*_args, **kw):
         audits.append(kw)
 
     monkeypatch.setattr("server.services.audit_service.log_audit_event_bg", _audit)
+    monkeypatch.setattr(bridge, "log_audit_event", _audit)
 
     class Env:
         pass
@@ -295,3 +299,31 @@ def test_every_project_task_route_carries_project_access_dependency():
             missing.append((method, path, role))
     assert not missing
     assert len(EXPECTED_PROJECT_ROUTES) == 5
+
+
+def test_console_attach_audit_records_request_state_actor(env, tmp_path):
+    from server.rmux import bridge
+    from server.rmux.session import SessionState
+
+    state = SessionState(
+        spec_id="s1",
+        session_name="tfactory-task-s1",
+        fifo_path=tmp_path / "s1.fifo",
+        project_id="p1",
+    )
+    env.monkeypatch.setattr(
+        bridge,
+        "get_registry",
+        lambda: type("_R", (), {"get_state": staticmethod(lambda _sid: state)})(),
+    )
+    r = env.client.post(
+        "/api/tasks/p1:s1/agent-console/attach",
+        headers={"X-Test-Principal": "member-a", "X-Test-Key-Org": "A"},
+        json={"connection_id": "conn-1"},
+    )
+    assert r.status_code == 200
+    assert len(env.audits) == 1
+    assert env.audits[0]["action"] == "console.attach"
+    assert env.audits[0]["user_id"] == "member-a"
+    assert env.audits[0]["org_id"] == "A"
+    assert env.audits[0]["resource_id"] == "s1"
