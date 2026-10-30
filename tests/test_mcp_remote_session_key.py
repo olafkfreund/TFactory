@@ -11,7 +11,6 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import anyio
-
 from fastapi import FastAPI, HTTPException, Request
 from httpx import ASGITransport, AsyncClient
 from mcp.types import LATEST_PROTOCOL_VERSION
