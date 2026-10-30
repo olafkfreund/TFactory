@@ -14,6 +14,7 @@ Three concerns:
 
 from __future__ import annotations
 
+import importlib
 import json
 import sys
 from pathlib import Path
@@ -41,6 +42,15 @@ from server.mcp_remote.tools import (
     dispatch_tool_call,
     get_tool_definitions,
 )
+
+tools_mod = importlib.import_module("server.mcp_remote.tools")
+
+
+@pytest.fixture(autouse=True)
+def _stub_authz(monkeypatch):
+    monkeypatch.setattr(tools_mod, "_authorize_call", AsyncMock())
+    monkeypatch.setattr(tools_mod, "_visible_org_ids", AsyncMock(return_value=None))
+
 
 # ── Feature flag ────────────────────────────────────────────────────
 
@@ -190,7 +200,7 @@ async def test_read_tool_blocked_without_read_scope(no_scope_key):
 
 async def test_write_tool_blocked_with_only_read_scope(read_only_key):
     result = await dispatch_tool_call(
-        "tfactory.start_task", {"task_id": "t1"}, read_only_key
+        "tfactory.start_task", {"task_id": "p1:001"}, read_only_key
     )
     assert result.get("isError") is True
     assert "mcp:write" in result["content"][0]["text"]
@@ -213,15 +223,15 @@ async def test_write_tool_blocked_with_only_read_scope(read_only_key):
         ),
         (
             "tfactory.get_task",
-            {"task_id": "t1"},
+            {"task_id": "p1:001"},
             "GET",
-            "/api/tasks/t1",
+            "/api/tasks/p1:001",
         ),
         (
             "tfactory.get_worktree_diff",
-            {"task_id": "t1"},
+            {"task_id": "p1:001"},
             "GET",
-            "/api/tasks/t1/worktree/diff",
+            "/api/tasks/p1:001/worktree/diff",
         ),
     ],
 )
@@ -248,27 +258,27 @@ async def test_read_tools_hit_correct_endpoint(
     [
         (
             "tfactory.start_task",
-            {"task_id": "t1"},
+            {"task_id": "p1:001"},
             "POST",
-            "/api/tasks/t1/start",
+            "/api/tasks/p1:001/start",
         ),
         (
             "tfactory.stop_task",
-            {"task_id": "t1"},
+            {"task_id": "p1:001"},
             "POST",
-            "/api/tasks/t1/stop",
+            "/api/tasks/p1:001/stop",
         ),
         (
             "tfactory.approve_plan",
-            {"task_id": "t1"},
+            {"task_id": "p1:001"},
             "POST",
-            "/api/tasks/t1/approve-plan",
+            "/api/tasks/p1:001/approve-plan",
         ),
         (
             "tfactory.merge_pr",
-            {"task_id": "t1", "merge_method": "squash"},
+            {"task_id": "p1:001", "merge_method": "squash"},
             "POST",
-            "/api/tasks/t1/worktree/merge",
+            "/api/tasks/p1:001/worktree/merge",
         ),
     ],
 )
@@ -292,7 +302,7 @@ async def test_merge_pr_passes_merge_method(write_key):
     with patch("server.mcp_remote.tools._call_internal", mock_call):
         await dispatch_tool_call(
             "tfactory.merge_pr",
-            {"task_id": "t1", "merge_method": "squash"},
+            {"task_id": "p1:001", "merge_method": "squash"},
             write_key,
         )
 
