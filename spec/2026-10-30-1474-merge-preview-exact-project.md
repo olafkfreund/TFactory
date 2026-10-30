@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1474
 intent: intent/2026-10-30-1474-merge-preview-exact-project.md
 ---
