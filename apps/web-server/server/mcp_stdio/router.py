@@ -201,7 +201,7 @@ async def proxy_list_tasks(
     status: str | None = Query(default=None),
     key=Depends(require_acw_scope(MCP_READ_SCOPE)),
 ):
-    from ..routes.tasks import TaskList, list_tasks
+    from server.routes.tasks import TaskList, list_tasks
 
     foreign = _foreign_projects(key)
     res = await list_tasks(project_id=project_id, status=status)
@@ -211,7 +211,7 @@ async def proxy_list_tasks(
 
 @router.get("/tasks/running")
 async def proxy_get_running_tasks(key=Depends(require_acw_scope(MCP_READ_SCOPE))):
-    from ..routes.execution import RunningTasksResponse, get_running_tasks
+    from server.routes.execution import RunningTasksResponse, get_running_tasks
 
     foreign = _foreign_projects(key)
     res = await get_running_tasks()
