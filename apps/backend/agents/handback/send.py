@@ -86,8 +86,10 @@ def _correlation_key_for(spec_dir: Path) -> str | None:
     """RFC-0001 correlation key for the hand-back (#249).
 
     Precedence mirrors the Triager's completion-event key: RFC-0002 contract
-    ``correlation_key`` → ``issue_number`` from source.json → None (AIFactory
-    falls back to the echoed ``tfactory_task_id``). Best-effort; never raises.
+    ``correlation_key`` → ``<repo>#<issue>`` from source.json, or synthetic
+    ``tf-<spec_id>`` when the repo is unknown (never a bare number, #1467);
+    None when there is no source.json (AIFactory falls back to the echoed
+    ``tfactory_task_id``). Best-effort; never raises.
     """
     try:
         from agents.task_contract import read_task_contract
@@ -109,7 +111,9 @@ def _correlation_key_for(spec_dir: Path) -> str | None:
         from agents.triager import _source_repo  # noqa: PLC0415 - triager is heavy
 
         repo = _source_repo(source)
-        return f"{repo}#{int(issue)}" if repo else str(int(issue))
+        if repo:
+            return f"{repo}#{int(issue)}"
+        return f"tf-{source.get('spec_id') or spec_dir.name}"
     except (OSError, json.JSONDecodeError, TypeError, ValueError):
         return None
 
