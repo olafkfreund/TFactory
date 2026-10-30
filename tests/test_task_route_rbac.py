@@ -33,6 +33,7 @@ EXPECTED = [
         ("tasks_logs", "POST", f"/{{task_id}}/logs/{p}", "viewer")
         for p in ("watch", "unwatch")
     ],
+    ("tasks_views", "GET", "/{task_id}/agent-console/sse", "viewer"),
     *[
         ("tasks_plan", "POST", f"/{{task_id}}/{p}", "member")
         for p in ("approve-plan", "reject-plan")
@@ -270,7 +271,7 @@ def test_every_task_write_route_carries_member_dependency():
         if not ok:
             missing.append((module, method, path, role))
     assert not missing
-    assert len(EXPECTED) == 20
+    assert len(EXPECTED) == 21
 
 
 def test_every_project_task_route_carries_project_access_dependency():
