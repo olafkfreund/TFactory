@@ -1,7 +1,8 @@
 """Tool implementations for the Remote HTTP+SSE MCP server.
 
 Each tool is a thin wrapper that:
-  1. Checks the caller's scope (mcp:read or mcp:write)
+  1. Checks the caller's scope (mcp:read or mcp:write) and authorizes the
+     key's owner against the target project (#1456), as stdio does (#1458)
   2. Calls the matching REST endpoint via loopback HTTP
   3. Returns a JSON-RPC ``content[]`` envelope
 
@@ -42,9 +43,18 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from typing import Any
 
 import httpx
+from fastapi import HTTPException
+from sqlalchemy import select
+
+from server.config import get_settings
+from server.database.engine import get_db
+from server.database.models import OrgMember
+from server.routes.project_authz import authorize_project_for_user
+from server.routes.projects import load_projects
 
 from .auth import (
     MCP_READ_SCOPE,
@@ -65,6 +75,87 @@ DEFAULT_LOOPBACK_URL = "http://localhost:3103"
 
 def _loopback_url() -> str:
     return os.environ.get("TFACTORY_MCP_LOOPBACK_URL", DEFAULT_LOOPBACK_URL).rstrip("/")
+
+
+# No ``/``, ``?``, ``#``, ``%`` or leading ``.``: the id is interpolated into
+# the loopback path, and ``a:1/../b:2`` would reach task ``b:2`` (#1456).
+_SAFE_ID = re.compile(r"[\w:-][\w.:-]*")
+
+
+def _principal(key: AuthenticatedKey) -> dict[str, Any]:
+    """Principal dict for ``authorize_project_for_user`` (#1456)."""
+    if not key.user_id:
+        return {"id": "default", "is_service": True}
+    return {
+        "id": key.user_id,
+        "api_key_id": key.key_id,
+        "org_id": key.org_id,
+    }
+
+
+async def _authorize_call(
+    tool_name: str,
+    arguments: dict[str, Any],
+    key: AuthenticatedKey,
+    minimum_role: str,
+) -> None:
+    """Authorize the key's owner for the project the tool acts on (#1456).
+
+    The loopback runs as the service principal, which REST never org-checks,
+    so this is the only org check a remote tool call gets. The target is the
+    argument the tool proxies, never any other one the caller sent.
+    """
+    if tool_name == "tfactory.list_projects":
+        return
+    arg = "project_id" if tool_name == "tfactory.list_tasks" else "task_id"
+    if arg not in arguments:
+        return  # the tool's KeyError reports the missing argument
+    value = arguments[arg]
+    if (
+        not isinstance(value, str)
+        or not _SAFE_ID.fullmatch(value)
+        or (arg == "task_id" and ":" not in value)
+    ):
+        raise MCPAuthError(f"invalid {arg}")
+    async for db in get_db():
+        try:
+            await authorize_project_for_user(
+                _principal(key), value.partition(":")[0], db, minimum_role
+            )
+        except HTTPException as exc:
+            raise MCPAuthError(f"{tool_name} denied: {exc.detail}") from exc
+        return
+    raise MCPAuthError("Authorization is temporarily unavailable")
+
+
+async def _visible_org_ids(key: AuthenticatedKey) -> set[str] | None:
+    """Org ids the key may list; ``None`` means all (service key / auth off)."""
+    if not key.user_id or get_settings().DISABLE_AUTH:
+        return None
+    if not key.org_id:
+        return set()
+    async for db in get_db():
+        row = (
+            await db.execute(
+                select(OrgMember.id).where(
+                    OrgMember.org_id == key.org_id,
+                    OrgMember.user_id == key.user_id,
+                )
+            )
+        ).scalar_one_or_none()
+        return {key.org_id} if row is not None else set()
+    raise MCPAuthError("Authorization is temporarily unavailable")
+
+
+async def _list_projects(key: AuthenticatedKey) -> list[dict[str, Any]]:
+    listed: list[dict[str, Any]] = await _call_internal("GET", "/api/projects", key)
+    allowed = await _visible_org_ids(key)
+    if allowed is None:
+        return listed
+    projects = load_projects()
+    return [
+        p for p in listed if projects.get(p.get("id", ""), {}).get("org_id") in allowed
+    ]
 
 
 def _format_json(data: Any) -> dict[str, Any]:
@@ -93,8 +184,6 @@ async def _call_internal(
     Returns the parsed JSON body, raising on any HTTP error so the
     caller's ``dispatch_tool_call`` ``except`` block formats it.
     """
-    from ..config import get_settings
-
     settings = get_settings()
     headers = dict(kwargs.pop("headers", {}) or {})
     headers["Authorization"] = f"Bearer {settings.API_TOKEN}"
@@ -298,12 +387,18 @@ async def dispatch_tool_call(
 
     try:
         require_scope(key, required_scope)
+        await _authorize_call(
+            tool_name,
+            arguments,
+            key,
+            "viewer" if required_scope == MCP_READ_SCOPE else "member",
+        )
     except MCPAuthError as exc:
         return _format_error(str(exc))
 
     try:
         if tool_name == "tfactory.list_projects":
-            return _format_json(await _call_internal("GET", "/api/projects", key))
+            return _format_json(await _list_projects(key))
         if tool_name == "tfactory.list_tasks":
             project_id = arguments["project_id"]
             return _format_json(
