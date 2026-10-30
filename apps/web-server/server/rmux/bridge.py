@@ -108,6 +108,10 @@ def _resolve_state_or_404(spec_id: str) -> SessionState:
         # Try the suffix half — some frontend routes pass the
         # ``project_id:spec_id`` form
         state = registry.get_state(spec_id.split(":", 1)[1])
+    # Registry keys are bare spec ids: a ``pA:<pB-spec>`` id must not reach
+    # pB's session after being authorized against pA.
+    if state is not None and state.project_id not in (None, spec_id.split(":", 1)[0]):
+        state = None
     if state is None:
         raise HTTPException(
             status_code=404,

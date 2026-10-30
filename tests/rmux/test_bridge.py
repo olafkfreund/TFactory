@@ -337,3 +337,68 @@ class TestAttachRbac:
             ) as ws:
                 ws.receive_json()
         assert exc.value.code == 4003
+
+
+class TestCrossProjectSpec:
+    """A spec id is authorized by its project prefix, so the prefix must
+    match the project the session was created for (#1458 review)."""
+
+    def test_member_of_pa_cannot_reach_pb_session(
+        self, app_with_bridge, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from server.config import get_settings
+
+        app, registry = app_with_bridge
+        asyncio.run(
+            registry.create_for_task(
+                spec_id="spec-b",
+                worktree_path=tmp_path,
+                agent_cmd="true",
+                project_id="pB",
+            )
+        )
+        monkeypatch.setattr(get_settings(), "DISABLE_AUTH", False)
+        monkeypatch.setattr(get_settings(), "RBAC_ENFORCE_TASK_ROUTES", True)
+
+        async def _allow(user, project_id, db, minimum_role="viewer"):
+            assert project_id == "pA"  # caller is a member of pA only
+            return "org-a"
+
+        monkeypatch.setattr(
+            "server.routes.project_authz.authorize_project_for_user", _allow
+        )
+
+        async def _member_a(_ws):
+            return {"id": "member-a", "role": "user"}
+
+        monkeypatch.setattr("server.rmux.bridge.authenticate_websocket", _member_a)
+        c = TestClient(app)
+        for path in ("attach", "detach"):
+            r = c.post(
+                f"/api/tasks/pA:spec-b/agent-console/{path}",
+                json={"connection_id": "conn-x"},
+            )
+            assert r.status_code == 404
+        assert registry.get_state("spec-b").attached_connection_id is None
+        from starlette.websockets import WebSocketDisconnect
+
+        with pytest.raises(WebSocketDisconnect) as exc:
+            with c.websocket_connect("/api/tasks/pA:spec-b/agent-console/ws") as ws:
+                ws.receive_json()
+        assert exc.value.code == 4004
+
+    def test_matching_project_prefix_attaches(self, app_with_bridge, tmp_path) -> None:
+        app, registry = app_with_bridge
+        asyncio.run(
+            registry.create_for_task(
+                spec_id="spec-b",
+                worktree_path=tmp_path,
+                agent_cmd="true",
+                project_id="pB",
+            )
+        )
+        r = TestClient(app).post(
+            "/api/tasks/pB:spec-b/agent-console/attach",
+            json={"connection_id": "conn-b"},
+        )
+        assert r.status_code == 200

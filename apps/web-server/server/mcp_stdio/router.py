@@ -32,7 +32,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database.engine import get_db
 from ..mcp_remote.auth import AuthenticatedKey
-from ..routes.project_authz import ProjectAccessChecker, _audit_authz_denial
+from ..routes.project_authz import (
+    ProjectAccessChecker,
+    _audit_authz_denial,
+    _enforcing,
+)
 from ..services.audit_service import (
     ACTION_MCP_PROJECT_CREATE,
     ACTION_MCP_TASK_APPROVE_PLAN,
@@ -217,7 +221,12 @@ async def _authorize_key(
         if key.org_id:
             from server.routes.projects import load_projects  # noqa: PLC0415
 
-            project = load_projects().get(project_id) if project_id else None
+            try:
+                project = load_projects().get(project_id) if project_id else None
+            except Exception:
+                if _enforcing():
+                    raise
+                project = None  # shadow mode fails open, like check()
             project_org_id = project.get("org_id") if project else None
             # Not behind the flag: an org-A key must never act on org B
             # (cannot fire until projects carry org_id).

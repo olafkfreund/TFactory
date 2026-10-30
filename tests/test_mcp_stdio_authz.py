@@ -157,3 +157,17 @@ def test_legacy_admin_token_calls_handler(env):
     assert r.status_code == 200
     assert env.calls == ["p1:s1"]
     assert [a["action"] for a in env.audits] == ["mcp.task.stop"]
+
+
+def test_project_lookup_failure_fails_open_in_shadow(env):
+    def _boom():
+        raise RuntimeError("projects.json unreadable")
+
+    env.monkeypatch.setattr("server.routes.projects.load_projects", _boom)
+    env.set_key(user_id="member-a", org_id="B")
+    r = env.client.post(
+        "/api/mcp-stdio/tasks/p1:s1/stop",
+        headers={"Authorization": "Bearer acw_org_b"},
+    )
+    assert r.status_code == 200
+    assert env.calls == ["p1:s1"]

@@ -101,3 +101,19 @@ Approved decisions (from the spec):
 
 Revert the PR. The flag is off, so only the cross-org mcp_stdio refusal
 changes behaviour, and it cannot fire until projects carry `org_id`.
+
+## Deviations (lead's review of #1465)
+
+- Step 3: the rmux registry is keyed by bare spec id and `_resolve_state_or_404`
+  falls back to the suffix, so `pA:<pB-spec>` was authorized against pA and
+  reached pB's session. `SessionState` now records `project_id`
+  (`create_for_task` / `create_if_enabled` take it; `agent_service` passes
+  the task id's project prefix) and `_resolve_state_or_404` returns 404 when
+  the requested prefix differs. This applies whatever the flag says: it is
+  resource resolution, not role policy. Regression test:
+  `tests/rmux/test_bridge.py::TestCrossProjectSpec`.
+- Step 4: `_authorize_key`'s `load_projects()` failure fails open in shadow
+  mode (raises when enforcing), like `check`.
+- Follow-up issue (not in this PR): `GET /{task_id}/agent-console/sse`
+  (`routes/tasks_views.py`) has no project check, and the console audit rows
+  read `request.state.user_id/org_id`, which the middleware never sets.
