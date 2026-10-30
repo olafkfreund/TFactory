@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1458
 spec: spec/2026-10-30-1458-rbac-task-route-gaps.md
 coders:
