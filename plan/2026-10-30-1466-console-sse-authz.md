@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1466
 spec: spec/2026-10-30-1466-console-sse-authz.md
 coders:   # the user asked for agy as a team member this wave
