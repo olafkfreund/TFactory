@@ -30,3 +30,11 @@ Pytest above green; ruff clean.
 ## Rollback
 
 Revert the PR commit.
+
+## Deviations
+
+- Step 1 also updated two fixtures that relied on the bare key:
+  `tests/test_docs_emit_341.py` (`test_maybe_emit_docs_publishes_when_enabled`
+  now gives the source a repo and looks up `o/r#99`) and
+  `tests/test_triager_completion_webhook.py` (renamed to
+  `test_correlation_key_is_repo_scoped_issue_when_present`, expects `o/r#412`).

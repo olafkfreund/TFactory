@@ -122,7 +122,9 @@ def test_maybe_emit_docs_publishes_when_enabled(tmp_path: Path, monkeypatch):
     (spec_dir / "findings").mkdir(parents=True)
     (spec_dir / "context").mkdir(parents=True)
     (spec_dir / "findings" / "triage_report.json").write_text(json.dumps(TRIAGE))
-    (spec_dir / "context" / "source.json").write_text(json.dumps({"issue_number": 99}))
+    (spec_dir / "context" / "source.json").write_text(
+        json.dumps({"issue_number": 99, "repo_slug": "o/r"})
+    )
 
     docs_dir = tmp_path / "docs-out"
     monkeypatch.setenv("TFACTORY_DOCS_EMIT", "1")
@@ -132,6 +134,6 @@ def test_maybe_emit_docs_publishes_when_enabled(tmp_path: Path, monkeypatch):
     assert results is not None
     assert any(r["status"] == "written" for r in results)
 
-    # The issue number (99) is the correlation key (no contract present).
+    # <repo>#<issue> is the correlation key (no contract present).
     resolver = PlanDocsResolver.from_dir(docs_dir)
-    assert resolver.resolve("99") is not None
+    assert resolver.resolve("o/r#99") is not None

@@ -742,9 +742,9 @@ def _source_repo(source: dict[str, Any]) -> str | None:
 
 def _correlation_key(spec_dir: Path, status: dict, source: dict) -> str:
     """The RFC-0001 shared correlation key. Precedence (#249):
-    RFC-0002 contract ``correlation_key`` → ``<repo>#<issue>`` (bare issue when
-    the repo is unknown) → synthetic ``tf-<spec_id>`` fallback so it is never
-    null (RFC-0001 §2)."""
+    RFC-0002 contract ``correlation_key`` → ``<repo>#<issue>`` (only when the
+    repo is known; a bare issue number is never emitted, #1467) → synthetic
+    ``tf-<spec_id>`` fallback so it is never null (RFC-0001 §2)."""
     contract_key = _contract_correlation_key(spec_dir)
     if contract_key:
         return contract_key
@@ -753,9 +753,9 @@ def _correlation_key(spec_dir: Path, status: dict, source: dict) -> str:
     if isinstance(handoff_key, str) and handoff_key.strip():
         return handoff_key.strip()
     issue = _correlation_issue_number(status, source)
-    if issue is not None:
-        repo = _source_repo(source)
-        return f"{repo}#{issue}" if repo else str(issue)
+    repo = _source_repo(source)
+    if issue is not None and repo:
+        return f"{repo}#{issue}"
     spec_id = status.get("spec_id") or source.get("spec_id") or spec_dir.name
     return f"tf-{spec_id}"
 
