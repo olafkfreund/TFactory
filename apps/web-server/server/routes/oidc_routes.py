@@ -34,7 +34,7 @@ from ..config import get_settings
 from ..database import User
 from ..database.engine import get_db
 from ..database.models import OidcRefreshSession
-from ..oidc import get_oauth_client, is_oidc_enabled
+from ..oidc import authorize_access_token, get_oauth_client, is_oidc_enabled
 from ..oidc.provisioning import jit_provision_user
 from ..oidc.userinfo_cache import get_cached, invalidate
 from ..oidc.userinfo_cache import put as cache_put
@@ -167,7 +167,7 @@ async def oidc_callback(request: Request, db: AsyncSession = Depends(get_db)):
 
     oauth = get_oauth_client()
     try:
-        token = await oauth.oidc.authorize_access_token(request)
+        token = await authorize_access_token(oauth.oidc, request)
     except Exception as exc:  # authlib's specific exceptions vary by version
         logger.warning(
             "OIDC callback rejected: %s: %s",
