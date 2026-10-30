@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Security: joserfc floor `>=1.7.5`** in
+  `apps/web-server/requirements.txt`, past CVE-2026-119283 (HIGH,
+  GHSA-jpxq-7h8p-2q76), which fails the Trivy P0 gate. joserfc arrives through
+  Authlib, which uses it to verify OIDC ID tokens. Not reachable here: the
+  flaw is in `joserfc.jwe.decrypt_json` (JWE General JSON), and the OIDC
+  client only verifies compact JWS through `joserfc.jwt.decode`.
+
 - **Security: Authlib floor raised to `>=1.9.1`** in
   `apps/web-server/requirements.txt`, past CVE-2026-96760 (CRITICAL),
   CVE-2026-114615 and CVE-2026-114616. The image already resolves the latest
