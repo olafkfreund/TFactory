@@ -19,6 +19,8 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from server.db_pool import pool_kwargs
+
 from .models import Base
 from ..paths import get_data_dir
 
@@ -64,6 +66,7 @@ engine = create_async_engine(
     echo=False,
     pool_pre_ping=True,
     connect_args=_connect_args_for(DATABASE_URL),
+    **pool_kwargs(DATABASE_URL, "DB", 2, 2),
 )
 
 logger.info(
