@@ -311,11 +311,8 @@ def test_console_attach_audit_records_request_state_actor(env, tmp_path):
         fifo_path=tmp_path / "s1.fifo",
         project_id="p1",
     )
-    env.monkeypatch.setattr(
-        bridge,
-        "get_registry",
-        lambda: type("_R", (), {"get_state": staticmethod(lambda _sid: state)})(),
-    )
+    registry = type("_R", (), {"get_state": staticmethod(lambda _sid: state)})()
+    env.monkeypatch.setattr(bridge, "get_registry", lambda: registry)
     r = env.client.post(
         "/api/tasks/p1:s1/agent-console/attach",
         headers={"X-Test-Principal": "member-a", "X-Test-Key-Org": "A"},
