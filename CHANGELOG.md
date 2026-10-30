@@ -2,6 +2,64 @@
 
 ## Unreleased
 
+## 0.9.47 — RBAC read paths, remote MCP authz, OIDC claims, DB pool caps (2026-10-30)
+
+### Changed
+
+- **Behaviour change: worktree diff/status need `project_id:spec_id` (#1466,
+  #1472).** `GET /api/tasks/{task_id}/worktree/diff` and `/worktree/status`
+  now match the project by exact id; a bare spec id gets `400` and there is
+  no cross-project spec scan. Callers passing a bare spec id must send
+  `project_id:spec_id`.
+- **Behaviour change: MCP/REST read-path RBAC (#1466, #1472).** The stdio MCP
+  read proxies (`/tasks/{id}`, `/status`, `/logs`, `/worktree/diff`) check the
+  key at `viewer` (`_authorized_key` now takes a minimum role; writes stay at
+  `member`). A cross-org key gets `403` always. An org-scoped `acw_` key on an
+  unknown project gets `404` always. A project registry read error now returns
+  `503` for org-scoped keys, lists included (previously failed open in shadow
+  mode). The list proxies (`/projects`, `/tasks`, `/tasks/running`) filter out
+  other orgs' projects. `GET /api/tasks/{task_id}/agent-console/sse` now needs
+  `viewer`, and `console.attach`/`console.detach` audit rows record the actor.
+  Same-org role checks stay in shadow mode behind `RBAC_ENFORCE_TASK_ROUTES`
+  (still off).
+- **Task-route RBAC gaps closed before S6 (#1458, #1465).** Project task
+  create/archive/unarchive and agent-console attach/detach need `member`; logs
+  watch/unwatch and the console WebSocket need `viewer` (log watch was
+  `member`); stdio MCP write proxies check the key's principal at `member`.
+  All in shadow mode behind `RBAC_ENFORCE_TASK_ROUTES`, except the stdio MCP
+  cross-org check, which always denies (`403`). The authz check releases its
+  pooled connection on every path. Agent-console attach/detach/WebSocket
+  return `404` when the project prefix does not match the session's project.
+- **Behaviour change: repo-scoped correlation key (#1467, #1468).** A task with
+  an issue but no known repo now gets the synthetic `tf-<spec_id>` key instead
+  of a bare issue number (triager completion and hand-back). Contract/handoff
+  keys and `<repo>#<n>` are unchanged. A task already in flight under a bare
+  number continues on a new CFactory card.
+- **Postgres pool caps (#1469, #1471).** Main engine 2 + 2 per pod (was
+  5 + 10), per-dispatch verify engine 1 + 0 (was 5 + 10), checkout timeout
+  10 s (was 30 s). **New env vars** (optional, defaults as listed):
+  `DB_POOL_SIZE`, `DB_MAX_OVERFLOW`, `VERIFY_DB_POOL_SIZE`,
+  `VERIFY_DB_MAX_OVERFLOW`, `DB_POOL_TIMEOUT`. SQLite is unaffected.
+
+### Security
+
+- **Remote MCP authorizes the calling key per tool call (#1456, #1470).** Tool
+  calls check the key's owner against the target project (`viewer` for
+  `mcp:read`, `member` for `mcp:write`, always enforced); `list_projects`
+  returns only the key's org; each SSE session is bound to the key that opened
+  it (`403` otherwise). Ported to the mcp 2.x lowlevel API
+  (`apps/web-server/requirements.txt` pins `mcp>=2.0`); tool calls no longer
+  fail with "missing auth context". Remote MCP stays off by default
+  (`TFACTORY_MCP_REMOTE_ENABLED`). Once enabled, projects without `org_id`
+  refuse owned keys.
+- **OIDC ID-token claims enforced (#1460, #1464).** The callback rejects an ID
+  token whose `iss` is not `APP_OIDC_ISSUER_URL` (trailing slash accepted),
+  whose `aud` lacks the client id, that has no `exp`, or that is not signed
+  RS/ES/PS 256–512, whatever discovery advertises. Azure AD v1 issuers must
+  switch to the v2.0 endpoint.
+- **`postcss-selector-parser` override `^6.1.5` (#1473, Dependabot #71)**, and
+  `@tailwindcss/typography` 0.5.20. Frontend build only.
+
 ## 0.9.46 — task-route RBAC (shadow mode) and API-key scope caps (2026-10-30)
 
 ### Added

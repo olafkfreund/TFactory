@@ -25,9 +25,18 @@ UI-driven actions in the audit log.
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi import Request as FastAPIRequest
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from server.database.engine import get_db
+from server.routes.project_authz import (
+    ProjectAccessChecker,
+    _audit_authz_denial,
+)
 
 from ..mcp_remote.auth import AuthenticatedKey
 from ..services.audit_service import (
@@ -105,33 +114,133 @@ async def _audit_mcp_write(
 # =============================================================================
 
 
+def _key_projects(key: AuthenticatedKey | _LegacyAdminKey) -> dict[str, Any] | None:
+    """The project map for an org-scoped key; None when the key has no org to check.
+
+    Fails closed (503): an unreadable registry must not let an org key through.
+    """
+    if isinstance(key, _LegacyAdminKey) or not key.org_id:
+        return None
+    from server.routes.projects import load_projects  # noqa: PLC0415
+
+    try:
+        projects: dict[str, Any] = load_projects()
+        return projects
+    except Exception:  # noqa: BLE001 - any registry error fails closed
+        raise HTTPException(503, "Project registry unavailable") from None
+
+
+def _foreign_ids(key: AuthenticatedKey, projects: dict[str, Any]) -> set[str]:
+    return {
+        pid
+        for pid, p in projects.items()
+        if isinstance(p, dict) and p.get("org_id") and p.get("org_id") != key.org_id
+    }
+
+
+def _foreign_projects(key: AuthenticatedKey | _LegacyAdminKey) -> set[str]:
+    projects = _key_projects(key)
+    if projects is None or isinstance(key, _LegacyAdminKey):
+        return set()
+    return _foreign_ids(key, projects)
+
+
+async def _authorize_key(
+    key: AuthenticatedKey | _LegacyAdminKey,
+    project_id: str,
+    db: AsyncSession,
+    minimum_role: str = "member",
+) -> None:
+    if isinstance(key, _LegacyAdminKey):
+        user = {"id": "default", "is_service": True}
+    else:
+        user = {
+            "id": key.user_id,
+            "role": "user",
+            "api_key_id": key.key_id,
+            "org_id": key.org_id,
+        }
+        # Not behind the flag: an org-A key must never reach org B, nor an
+        # unknown project (a handler may resolve it elsewhere).
+        projects = _key_projects(key)
+        if projects is not None and project_id not in projects:
+            await _audit_authz_denial(
+                "authz.task.denied", user, project_id, minimum_role, "Project not found"
+            )
+            raise HTTPException(404, "Project not found")
+        if projects is not None and project_id in _foreign_ids(key, projects):
+            detail = "This API key is scoped to another organization"
+            await _audit_authz_denial(
+                "authz.task.denied", user, project_id, minimum_role, detail
+            )
+            raise HTTPException(403, detail)
+
+    await ProjectAccessChecker(minimum_role).check(user, project_id, db)
+
+
+def _authorized_key(
+    scope: str,
+    minimum_role: str = "member",
+) -> Callable[..., Awaitable[AuthenticatedKey | _LegacyAdminKey]]:
+    """``require_acw_scope`` plus the project-org check for the task the
+    route acts on (``task_id`` path param, else the ``project_id`` query)."""
+    scoped = require_acw_scope(scope)
+
+    async def _dep(
+        request: FastAPIRequest,
+        db: Annotated[AsyncSession, Depends(get_db)],
+    ) -> AuthenticatedKey | _LegacyAdminKey:
+        key: AuthenticatedKey | _LegacyAdminKey = await scoped(
+            request
+        )  # 401/403 before any project lookup
+        task_id = request.path_params.get("task_id")
+        project_id = (
+            task_id.split(":", 1)[0]
+            if task_id
+            else request.query_params.get("project_id", "")
+        )
+        await _authorize_key(key, project_id, db, minimum_role)
+        return key
+
+    return _dep
+
+
 @router.get("/projects")
-async def proxy_list_projects(_=Depends(require_acw_scope(MCP_READ_SCOPE))):
+async def proxy_list_projects(key=Depends(require_acw_scope(MCP_READ_SCOPE))):
     from ..routes.projects import list_projects
 
-    return await list_projects()
+    foreign = _foreign_projects(key)
+    return [p for p in await list_projects() if p.get("id") not in foreign]
 
 
 @router.get("/tasks")
 async def proxy_list_tasks(
     project_id: str | None = Query(default=None),
     status: str | None = Query(default=None),
-    _=Depends(require_acw_scope(MCP_READ_SCOPE)),
+    key=Depends(require_acw_scope(MCP_READ_SCOPE)),
 ):
-    from ..routes.tasks import list_tasks
+    from server.routes.tasks import TaskList, list_tasks
 
-    return await list_tasks(project_id=project_id, status=status)
+    foreign = _foreign_projects(key)
+    res = await list_tasks(project_id=project_id, status=status)
+    tasks = [t for t in res.tasks if t.project_id not in foreign]
+    return TaskList(tasks=tasks, total=len(tasks))
 
 
 @router.get("/tasks/running")
-async def proxy_get_running_tasks(_=Depends(require_acw_scope(MCP_READ_SCOPE))):
-    from ..routes.execution import get_running_tasks
+async def proxy_get_running_tasks(key=Depends(require_acw_scope(MCP_READ_SCOPE))):
+    from server.routes.execution import RunningTasksResponse, get_running_tasks
 
-    return await get_running_tasks()
+    foreign = _foreign_projects(key)
+    res = await get_running_tasks()
+    tasks = [t for t in res.tasks if t.split(":", 1)[0] not in foreign]
+    return RunningTasksResponse(tasks=tasks, count=len(tasks))
 
 
 @router.get("/tasks/{task_id}")
-async def proxy_get_task(task_id: str, _=Depends(require_acw_scope(MCP_READ_SCOPE))):
+async def proxy_get_task(
+    task_id: str, _=Depends(_authorized_key(MCP_READ_SCOPE, "viewer"))
+):
     from ..routes.tasks import get_task
 
     return await get_task(task_id)
@@ -139,7 +248,7 @@ async def proxy_get_task(task_id: str, _=Depends(require_acw_scope(MCP_READ_SCOP
 
 @router.get("/tasks/{task_id}/status")
 async def proxy_get_task_status(
-    task_id: str, _=Depends(require_acw_scope(MCP_READ_SCOPE))
+    task_id: str, _=Depends(_authorized_key(MCP_READ_SCOPE, "viewer"))
 ):
     from ..routes.execution import get_task_status
 
@@ -150,7 +259,7 @@ async def proxy_get_task_status(
 async def proxy_get_task_logs(
     task_id: str,
     tail: int = Query(default=100),
-    _=Depends(require_acw_scope(MCP_READ_SCOPE)),
+    _=Depends(_authorized_key(MCP_READ_SCOPE, "viewer")),
 ):
     from ..routes.tasks import get_task_logs
 
@@ -159,7 +268,7 @@ async def proxy_get_task_logs(
 
 @router.get("/tasks/{task_id}/worktree/diff")
 async def proxy_get_worktree_diff(
-    task_id: str, _=Depends(require_acw_scope(MCP_READ_SCOPE))
+    task_id: str, _=Depends(_authorized_key(MCP_READ_SCOPE, "viewer"))
 ):
     from ..routes.tasks import get_worktree_diff
 
@@ -203,7 +312,7 @@ async def proxy_create_and_run_task(
     project_id: str = Query(...),
     title: str = Query(...),
     description: str = Query(...),
-    key=Depends(require_acw_scope(TASK_WRITE_SCOPE)),
+    key=Depends(_authorized_key(TASK_WRITE_SCOPE)),
 ):
     from ..routes.execution import StartTaskRequest, create_and_run_task
 
@@ -227,7 +336,7 @@ async def proxy_create_and_run_task(
 async def proxy_start_task(
     task_id: str,
     request: FastAPIRequest,
-    key=Depends(require_acw_scope(TASK_WRITE_SCOPE)),
+    key=Depends(_authorized_key(TASK_WRITE_SCOPE)),
 ):
     from ..routes.execution import StartTaskRequest, start_task
 
@@ -247,7 +356,7 @@ async def proxy_start_task(
 async def proxy_stop_task(
     task_id: str,
     request: FastAPIRequest,
-    key=Depends(require_acw_scope(TASK_WRITE_SCOPE)),
+    key=Depends(_authorized_key(TASK_WRITE_SCOPE)),
 ):
     from ..routes.execution import stop_task
 
@@ -266,7 +375,7 @@ async def proxy_stop_task(
 async def proxy_recover_task(
     task_id: str,
     request: FastAPIRequest,
-    key=Depends(require_acw_scope(TASK_WRITE_SCOPE)),
+    key=Depends(_authorized_key(TASK_WRITE_SCOPE)),
 ):
     from ..routes.execution import RecoverTaskRequest, recover_task
 
@@ -286,7 +395,7 @@ async def proxy_recover_task(
 async def proxy_approve_plan(
     task_id: str,
     request: FastAPIRequest,
-    key=Depends(require_acw_scope(TASK_WRITE_SCOPE)),
+    key=Depends(_authorized_key(TASK_WRITE_SCOPE)),
 ):
     from ..routes.tasks import ApprovePlanRequest, approve_plan
 
@@ -311,7 +420,7 @@ async def proxy_approve_plan(
 async def proxy_create_pr(
     task_id: str,
     request: FastAPIRequest,
-    key=Depends(require_acw_scope(TASK_MERGE_SCOPE)),
+    key=Depends(_authorized_key(TASK_MERGE_SCOPE)),
 ):
     from ..routes.tasks import CreatePRFromTaskOptions, create_pr_from_task
 
@@ -333,7 +442,7 @@ async def proxy_create_pr(
 async def proxy_merge_worktree(
     task_id: str,
     request: FastAPIRequest,
-    key=Depends(require_acw_scope(TASK_MERGE_SCOPE)),
+    key=Depends(_authorized_key(TASK_MERGE_SCOPE)),
 ):
     from ..routes.tasks import WorktreeMergeOptions, merge_worktree
 

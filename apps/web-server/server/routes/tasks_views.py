@@ -14,11 +14,12 @@ import json
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from server.error_ref import client_error
 
 from ._specpath import safe_spec_dir
+from .project_authz import require_task_access
 from .projects import load_projects
 
 router = APIRouter()
@@ -76,7 +77,10 @@ async def get_qa_report(task_id: str):
     }
 
 
-@router.get("/{task_id}/agent-console/sse")
+@router.get(
+    "/{task_id}/agent-console/sse",
+    dependencies=[Depends(require_task_access("viewer"))],
+)
 async def stream_agent_console(task_id: str):
     """Server-Sent Events stream of the running agent's console output.
 

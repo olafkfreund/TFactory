@@ -45,7 +45,7 @@ def _reset_registry_between_tests():
 
 
 @pytest.fixture
-def app_with_bridge(tmp_path) -> tuple[FastAPI, SessionRegistry]:
+def app_with_bridge(tmp_path, monkeypatch) -> tuple[FastAPI, SessionRegistry]:
     """Minimal FastAPI app mounting the bridge router with auth + DB
     dependencies overridden so we can drive it via TestClient without
     booting the whole web-server."""
@@ -63,13 +63,15 @@ def app_with_bridge(tmp_path) -> tuple[FastAPI, SessionRegistry]:
 
     # Override the auth + DB dependencies so the test client can call
     # the routes without needing a real database or token middleware.
-    from server.auth import verify_websocket_token
+    from server.config import get_settings
     from server.database.engine import get_db
 
     async def _no_op_db():
         yield None
 
     app.dependency_overrides[get_db] = _no_op_db
+    # Attach semantics, not authz: skip the RBAC check (TestAttachRbac re-enables it).
+    monkeypatch.setattr(get_settings(), "DISABLE_AUTH", True)
 
     return app, registry
 
@@ -244,3 +246,159 @@ class TestAttachRace:
         assert ok == 1, f"expected exactly 1× 200, got {ok}"
         assert conflict == N - 1, f"expected {N - 1}× 409, got {conflict}"
         assert other == 0, f"unexpected non-{{200,409}} responses: {other}"
+
+
+# ---------------------------------------------------------------------------
+# RBAC: enforced vs shadow on attach
+# ---------------------------------------------------------------------------
+
+
+class TestAttachRbac:
+    @staticmethod
+    def _configure_rbac(
+        app_with_bridge,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        enforce: bool,
+    ) -> TestClient:
+        from fastapi import HTTPException, Request, status
+        from server.config import get_settings
+
+        app, _ = app_with_bridge
+
+        @app.middleware("http")
+        async def _set_viewer(request: Request, call_next):
+            request.state.user = {"id": "viewer-a", "role": "user"}
+            return await call_next(request)
+
+        settings = get_settings()
+        monkeypatch.setattr(settings, "DISABLE_AUTH", False)
+        monkeypatch.setattr(settings, "RBAC_ENFORCE_TASK_ROUTES", enforce)
+        monkeypatch.setattr(
+            "server.routes.projects.load_projects",
+            lambda: {"p1": {"org_id": "org-a"}},
+        )
+
+        async def _deny_viewer(user, project_id, db, minimum_role="viewer"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This action requires at least 'member' role",
+            )
+
+        monkeypatch.setattr(
+            "server.routes.project_authz.authorize_project_for_user",
+            _deny_viewer,
+        )
+
+        async def _no_op_audit(**_kw):
+            return None
+
+        monkeypatch.setattr(
+            "server.services.audit_service.log_audit_event_bg",
+            _no_op_audit,
+        )
+        return TestClient(app)
+
+    def test_enforced_viewer_attach_returns_403(
+        self, app_with_bridge, primed_session: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        c = self._configure_rbac(app_with_bridge, monkeypatch, enforce=True)
+        r = c.post(
+            f"/api/tasks/p1:{primed_session}/agent-console/attach",
+            json={"connection_id": "conn-viewer"},
+        )
+        assert r.status_code == 403
+
+    def test_shadow_viewer_attach_returns_200(
+        self, app_with_bridge, primed_session: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        c = self._configure_rbac(app_with_bridge, monkeypatch, enforce=False)
+        r = c.post(
+            f"/api/tasks/p1:{primed_session}/agent-console/attach",
+            json={"connection_id": "conn-viewer"},
+        )
+        assert r.status_code == 200
+        assert r.json()["status"] == "attached"
+
+    def test_enforced_stranger_ws_closes_4003(
+        self, app_with_bridge, primed_session: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from starlette.websockets import WebSocketDisconnect
+
+        c = self._configure_rbac(app_with_bridge, monkeypatch, enforce=True)
+
+        async def _stranger(_ws):
+            return {"id": "stranger", "role": "user"}
+
+        monkeypatch.setattr("server.rmux.bridge.authenticate_websocket", _stranger)
+        with pytest.raises(WebSocketDisconnect) as exc:
+            with c.websocket_connect(
+                f"/api/tasks/p1:{primed_session}/agent-console/ws"
+            ) as ws:
+                ws.receive_json()
+        assert exc.value.code == 4003
+
+
+class TestCrossProjectSpec:
+    """A spec id is authorized by its project prefix, so the prefix must
+    match the project the session was created for (#1458 review)."""
+
+    def test_member_of_pa_cannot_reach_pb_session(
+        self, app_with_bridge, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from server.config import get_settings
+
+        app, registry = app_with_bridge
+        asyncio.run(
+            registry.create_for_task(
+                spec_id="spec-b",
+                worktree_path=tmp_path,
+                agent_cmd="true",
+                project_id="pB",
+            )
+        )
+        monkeypatch.setattr(get_settings(), "DISABLE_AUTH", False)
+        monkeypatch.setattr(get_settings(), "RBAC_ENFORCE_TASK_ROUTES", True)
+
+        async def _allow(user, project_id, db, minimum_role="viewer"):
+            assert project_id == "pA"  # caller is a member of pA only
+            return "org-a"
+
+        monkeypatch.setattr(
+            "server.routes.project_authz.authorize_project_for_user", _allow
+        )
+
+        async def _member_a(_ws):
+            return {"id": "member-a", "role": "user"}
+
+        monkeypatch.setattr("server.rmux.bridge.authenticate_websocket", _member_a)
+        c = TestClient(app)
+        for path in ("attach", "detach"):
+            r = c.post(
+                f"/api/tasks/pA:spec-b/agent-console/{path}",
+                json={"connection_id": "conn-x"},
+            )
+            assert r.status_code == 404
+        assert registry.get_state("spec-b").attached_connection_id is None
+        from starlette.websockets import WebSocketDisconnect
+
+        with pytest.raises(WebSocketDisconnect) as exc:
+            with c.websocket_connect("/api/tasks/pA:spec-b/agent-console/ws") as ws:
+                ws.receive_json()
+        assert exc.value.code == 4004
+
+    def test_matching_project_prefix_attaches(self, app_with_bridge, tmp_path) -> None:
+        app, registry = app_with_bridge
+        asyncio.run(
+            registry.create_for_task(
+                spec_id="spec-b",
+                worktree_path=tmp_path,
+                agent_cmd="true",
+                project_id="pB",
+            )
+        )
+        r = TestClient(app).post(
+            "/api/tasks/pB:spec-b/agent-console/attach",
+            json={"connection_id": "conn-b"},
+        )
+        assert r.status_code == 200

@@ -40,3 +40,34 @@ def test_all_worktree_routes_registered_at_same_paths():
     }
     missing = {(p, m) for (p, m) in _EXPECTED if (p, m) not in have}
     assert not missing, f"worktree routes not registered: {missing}"
+
+
+def _projects(tmp_path, monkeypatch):
+    import json
+
+    proj = tmp_path / "p1"
+    (proj / ".tfactory" / "specs" / "s1").mkdir(parents=True)
+    (proj / ".tfactory" / "worktrees" / "tasks" / "s1").mkdir(parents=True)
+    (tmp_path / "projects.json").write_text(json.dumps({"p1": {"path": str(proj)}}))
+    monkeypatch.setattr(tasks_worktree, "get_data_dir", lambda: tmp_path)
+
+
+def test_status_and_diff_need_exact_project(tmp_path, monkeypatch):
+    """#1466: a bare id or unknown prefix must not find p1's spec by scanning."""
+    import asyncio
+
+    import pytest
+    from fastapi import HTTPException
+
+    _projects(tmp_path, monkeypatch)
+    for handler in (
+        tasks_worktree.get_worktree_status,
+        tasks_worktree.get_worktree_diff,
+    ):
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(handler("s1"))
+        assert exc.value.status_code == 400
+    status = asyncio.run(tasks_worktree.get_worktree_status("nope:s1"))
+    assert status == {"success": True, "data": {"exists": False}}
+    diff = asyncio.run(tasks_worktree.get_worktree_diff("nope:s1"))
+    assert diff == {"success": False, "error": "Project not found for task nope:s1"}

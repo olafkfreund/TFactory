@@ -14,25 +14,32 @@ _WEB_SERVER_DIR = Path(__file__).parent.parent / "apps" / "web-server"
 if str(_WEB_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_WEB_SERVER_DIR))
 
-# (module, method, path) — the 20 task write routes that carry the dependency.
+# (module, method, path, role) — the 20 task write routes that carry the dependency.
 _W = "/{task_id}/worktree/"
 EXPECTED = [
-    *[("execution", "POST", f"/{{task_id}}/{p}") for p in ("start", "stop", "recover")],
-    ("tasks", "PATCH", "/{task_id}/status"),
-    ("tasks", "PUT", "/{task_id}"),
-    ("tasks", "PATCH", "/{task_id}"),
-    ("tasks", "DELETE", "/{task_id}"),
     *[
-        ("tasks_clarifications", "POST", f"/{{task_id}}/{p}")
+        ("execution", "POST", f"/{{task_id}}/{p}", "member")
+        for p in ("start", "stop", "recover")
+    ],
+    ("tasks", "PATCH", "/{task_id}/status", "member"),
+    ("tasks", "PUT", "/{task_id}", "member"),
+    ("tasks", "PATCH", "/{task_id}", "member"),
+    ("tasks", "DELETE", "/{task_id}", "member"),
+    *[
+        ("tasks_clarifications", "POST", f"/{{task_id}}/{p}", "member")
         for p in ("clarifications", "clarifications/answers")
     ],
-    *[("tasks_logs", "POST", f"/{{task_id}}/logs/{p}") for p in ("watch", "unwatch")],
     *[
-        ("tasks_plan", "POST", f"/{{task_id}}/{p}")
+        ("tasks_logs", "POST", f"/{{task_id}}/logs/{p}", "viewer")
+        for p in ("watch", "unwatch")
+    ],
+    ("tasks_views", "GET", "/{task_id}/agent-console/sse", "viewer"),
+    *[
+        ("tasks_plan", "POST", f"/{{task_id}}/{p}", "member")
         for p in ("approve-plan", "reject-plan")
     ],
     *[
-        ("tasks_worktree", "POST", _W + p)
+        ("tasks_worktree", "POST", _W + p, "member")
         for p in (
             "resolve-conflicts",
             "resolve-uncommitted",
@@ -45,6 +52,14 @@ EXPECTED = [
     ],
 ]
 
+EXPECTED_PROJECT_ROUTES = [
+    ("POST", "/{project_id}/tasks", "member"),
+    ("POST", "/{project_id}/tasks/{spec_id}/logs/watch", "viewer"),
+    ("POST", "/{project_id}/tasks/{spec_id}/logs/unwatch", "viewer"),
+    ("POST", "/{project_id}/tasks/archive", "member"),
+    ("POST", "/{project_id}/tasks/unarchive", "member"),
+]
+
 PROJECTS = {"p1": {"org_id": "A"}, "legacy": {}}
 
 
@@ -53,6 +68,7 @@ def env(tmp_path, monkeypatch):
     """execution router on SQLite: org A has viewer-a, member-a."""
     from server.config import get_settings
     from server.database.models import Base, Organization, OrgMember, User
+    from server.rmux import bridge
     from server.routes import execution, project_authz
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -76,12 +92,23 @@ def env(tmp_path, monkeypatch):
 
     app = FastAPI()
     app.include_router(execution.router, prefix="/api/tasks")
+    app.include_router(bridge.router)
+
+    rollbacks: list[bool] = []
 
     async def _db():
         async with session_local() as session:
+            orig_rollback = session.rollback
+
+            async def _tracked_rollback():
+                rollbacks.append(True)
+                return await orig_rollback()
+
+            monkeypatch.setattr(session, "rollback", _tracked_rollback)
             yield session
 
     app.dependency_overrides[project_authz.get_db] = _db
+    app.dependency_overrides[bridge.get_db] = _db
 
     @app.middleware("http")
     async def _principal(request: Request, call_next):
@@ -102,10 +129,11 @@ def env(tmp_path, monkeypatch):
 
     audits: list[dict] = []
 
-    async def _audit(**kw):
+    async def _audit(*_args, **kw):
         audits.append(kw)
 
     monkeypatch.setattr("server.services.audit_service.log_audit_event_bg", _audit)
+    monkeypatch.setattr(bridge, "log_audit_event", _audit)
 
     class Env:
         pass
@@ -113,6 +141,7 @@ def env(tmp_path, monkeypatch):
     e = Env()
     e.settings = settings
     e.audits = audits
+    e.rollbacks = rollbacks
     e.client = TestClient(app)
     e.monkeypatch = monkeypatch
 
@@ -214,24 +243,84 @@ def test_shadow_allowed_writes_no_audit(env):
     assert env.audits == []
 
 
+def test_session_rolled_back_after_allowed_member_call(env):
+    _enforce(env)
+    env.call("member-a")
+    assert env.rollbacks == [True]
+
+
+def test_session_rolled_back_on_enforced_deny(env):
+    _enforce(env)
+    assert env.call("viewer-a").status_code == 403
+    assert env.rollbacks == [True]
+
+
 def test_every_task_write_route_carries_member_dependency():
     import importlib
 
     from server.routes.project_authz import TaskAccessChecker
 
     missing = []
-    for module, method, path in EXPECTED:
+    for module, method, path, role in EXPECTED:
         router = importlib.import_module(f"server.routes.{module}").router
         found = [r for r in router.routes if r.path == path and method in r.methods]
         ok = bool(found) and all(
             any(
                 isinstance(d.dependency, TaskAccessChecker)
-                and d.dependency.minimum_role == "member"
+                and d.dependency.minimum_role == role
                 for d in r.dependencies
             )
             for r in found
         )
         if not ok:
-            missing.append((module, method, path))
+            missing.append((module, method, path, role))
     assert not missing
-    assert len(EXPECTED) == 20
+    assert len(EXPECTED) == 21
+
+
+def test_every_project_task_route_carries_project_access_dependency():
+    from server.routes import projects
+    from server.routes.project_authz import ProjectAccessChecker
+
+    missing = []
+    for method, path, role in EXPECTED_PROJECT_ROUTES:
+        found = [
+            r for r in projects.router.routes if r.path == path and method in r.methods
+        ]
+        ok = bool(found) and all(
+            any(
+                isinstance(d.dependency, ProjectAccessChecker)
+                and d.dependency.minimum_role == role
+                for d in r.dependencies
+            )
+            for r in found
+        )
+        if not ok:
+            missing.append((method, path, role))
+    assert not missing
+    assert len(EXPECTED_PROJECT_ROUTES) == 5
+
+
+def test_console_attach_audit_records_request_state_actor(env, tmp_path):
+    from server.rmux import bridge
+    from server.rmux.session import SessionState
+
+    state = SessionState(
+        spec_id="s1",
+        session_name="tfactory-task-s1",
+        fifo_path=tmp_path / "s1.fifo",
+        project_id="p1",
+    )
+    registry = type("_R", (), {"get_state": staticmethod(lambda _sid: state)})()
+    env.monkeypatch.setattr(bridge, "get_registry", lambda: registry)
+    r = env.client.post(
+        "/api/tasks/p1:s1/agent-console/attach",
+        headers={"X-Test-Principal": "member-a", "X-Test-Key-Org": "A"},
+        json={"connection_id": "conn-1"},
+    )
+    assert r.status_code == 200
+    assert len(env.audits) == 1
+    assert env.audits[0]["action"] == "console.attach"
+    assert env.audits[0]["user_id"] == "member-a"
+    assert env.audits[0]["org_id"] == "A"
+    assert env.audits[0]["resource_id"] == "s1"

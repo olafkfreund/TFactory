@@ -197,11 +197,12 @@ class ProjectAccessChecker:
     def __init__(self, minimum_role: str = "viewer") -> None:
         self.minimum_role = minimum_role
 
-    async def _authorize(
-        self, project_id: str, request: Request, db: AsyncSession
+    async def check(
+        self,
+        user: dict[str, Any] | None,
+        project_id: str | None,
+        db: AsyncSession,
     ) -> dict[str, Any]:
-        user = getattr(request.state, "user", None)
-
         # Auth disabled (dev mode) → allow, like the middleware.
         if _auth_disabled():
             return (
@@ -212,7 +213,14 @@ class ProjectAccessChecker:
 
         enforce = _enforcing()
         try:
-            await authorize_project_for_user(user, project_id, db, self.minimum_role)
+            try:
+                await authorize_project_for_user(
+                    user, project_id, db, self.minimum_role
+                )
+            finally:
+                # Release the pooled connection before the handler/audit runs.
+                with contextlib.suppress(Exception):
+                    await db.rollback()
         except HTTPException as exc:
             uid = user.get("id") if isinstance(user, dict) else None
             if enforce:
@@ -229,10 +237,6 @@ class ProjectAccessChecker:
                     sanitize_log(exc.detail),
                 )
             if not enforce or exc.status_code == status.HTTP_403_FORBIDDEN:
-                # Hand the request's connection back before the audit write
-                # takes a second one; authorization precedes any write.
-                with contextlib.suppress(Exception):
-                    await db.rollback()
                 await _audit_authz_denial(
                     action, user, project_id, self.minimum_role, exc.detail
                 )
@@ -248,6 +252,11 @@ class ProjectAccessChecker:
                 sanitize_log(type(exc).__name__),
             )
         return cast("dict[str, Any]", user)
+
+    async def _authorize(
+        self, project_id: str, request: Request, db: AsyncSession
+    ) -> dict[str, Any]:
+        return await self.check(getattr(request.state, "user", None), project_id, db)
 
     async def __call__(
         self,

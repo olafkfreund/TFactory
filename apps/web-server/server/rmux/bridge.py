@@ -50,8 +50,10 @@ from fastapi import (
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..auth import verify_websocket_token
-from ..database.engine import get_db
+from server.auth import WebSocketAuthError, authenticate_websocket
+from server.database.engine import async_session_factory, get_db
+from server.routes.project_authz import ProjectAccessChecker
+
 from ..services.audit_service import log_audit_event
 from .session import SessionState, get_registry
 from .wrapper import RmuxError
@@ -107,6 +109,10 @@ def _resolve_state_or_404(spec_id: str) -> SessionState:
         # Try the suffix half — some frontend routes pass the
         # ``project_id:spec_id`` form
         state = registry.get_state(spec_id.split(":", 1)[1])
+    # Registry keys are bare spec ids: a ``pA:<pB-spec>`` id must not reach
+    # pB's session after being authorized against pA.
+    if state is not None and state.project_id not in (None, spec_id.split(":", 1)[0]):
+        state = None
     if state is None:
         raise HTTPException(
             status_code=404,
@@ -157,14 +163,18 @@ async def attach(
     The audit row binds (user_id, org_id, ip, connection_id, spec_id)
     so an investigator can answer "who attached when?" for any session.
     """
+    await ProjectAccessChecker("member").check(
+        getattr(request.state, "user", None), spec_id.split(":", 1)[0], db
+    )
     state = _resolve_state_or_404(spec_id)
     cid = body.connection_id
 
     # Audit-relevant metadata — pulled from middleware-set request state
     # rather than the body so a malicious client can't lie about who
     # they are.  Mirror existing audit callsites in routes/audit.py.
-    user_id = getattr(request.state, "user_id", None)
-    org_id = getattr(request.state, "org_id", None)
+    user = getattr(request.state, "user", None) or {}
+    user_id = user.get("id")
+    org_id = user.get("org_id")
     client_ip = request.client.host if request.client else None
 
     async with state.lock:
@@ -218,11 +228,15 @@ async def detach(
     disconnect cleanup path can be fire-and-forget — that case is
     benign (race between client close and explicit detach).
     """
+    await ProjectAccessChecker("member").check(
+        getattr(request.state, "user", None), spec_id.split(":", 1)[0], db
+    )
     state = _resolve_state_or_404(spec_id)
     cid = body.connection_id
 
-    user_id = getattr(request.state, "user_id", None)
-    org_id = getattr(request.state, "org_id", None)
+    user = getattr(request.state, "user", None) or {}
+    user_id = user.get("id")
+    org_id = user.get("org_id")
     client_ip = request.client.host if request.client else None
 
     released = False
@@ -251,6 +265,26 @@ async def detach(
 # ---------------------------------------------------------------------------
 
 
+async def _authorize_ws(websocket: WebSocket, spec_id: str) -> bool:
+    """Authenticate the socket and run the viewer check; close it on failure."""
+    try:
+        user = await authenticate_websocket(websocket)
+    except WebSocketAuthError:
+        return False  # already closed with 4001
+    if user is None:  # legacy token or auth disabled
+        user = {"id": "default", "is_service": True}
+    try:
+        async with async_session_factory() as db:
+            await ProjectAccessChecker("viewer").check(
+                user, spec_id.split(":", 1)[0], db
+            )
+    except HTTPException:
+        await websocket.accept()
+        await websocket.close(code=4003, reason="forbidden")
+        return False
+    return True
+
+
 @router.websocket("/{spec_id}/agent-console/ws")
 async def agent_console_ws(websocket: WebSocket, spec_id: str):
     """Stream pane bytes FIFO→browser; accept browser keys when attached.
@@ -265,11 +299,10 @@ async def agent_console_ws(websocket: WebSocket, spec_id: str):
         Otherwise silently dropped (with a debug log) — read-only
         viewers MUST NOT be able to type by accident.
 
-    Auth: ``verify_websocket_token`` is the same gate ``terminal.py``
-    uses.  Adding org-membership check is a v1.1 follow-up (when we add
-    cross-org pane sharing).
+    Auth: ``authenticate_websocket`` resolves the caller identity, and
+    ``ProjectAccessChecker("viewer")`` checks project org membership.
     """
-    if not await verify_websocket_token(websocket):
+    if not await _authorize_ws(websocket, spec_id):
         return
 
     try:
