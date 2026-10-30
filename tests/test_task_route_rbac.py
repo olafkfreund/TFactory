@@ -77,8 +77,17 @@ def env(tmp_path, monkeypatch):
     app = FastAPI()
     app.include_router(execution.router, prefix="/api/tasks")
 
+    rollbacks: list[bool] = []
+
     async def _db():
         async with session_local() as session:
+            orig_rollback = session.rollback
+
+            async def _tracked_rollback():
+                rollbacks.append(True)
+                return await orig_rollback()
+
+            monkeypatch.setattr(session, "rollback", _tracked_rollback)
             yield session
 
     app.dependency_overrides[project_authz.get_db] = _db
@@ -113,6 +122,7 @@ def env(tmp_path, monkeypatch):
     e = Env()
     e.settings = settings
     e.audits = audits
+    e.rollbacks = rollbacks
     e.client = TestClient(app)
     e.monkeypatch = monkeypatch
 
@@ -212,6 +222,18 @@ def test_shadow_would_deny_is_audited_and_logged(env, caplog):
 def test_shadow_allowed_writes_no_audit(env):
     env.call("member-a")
     assert env.audits == []
+
+
+def test_session_rolled_back_after_allowed_member_call(env):
+    _enforce(env)
+    env.call("member-a")
+    assert env.rollbacks == [True]
+
+
+def test_session_rolled_back_on_enforced_deny(env):
+    _enforce(env)
+    assert env.call("viewer-a").status_code == 403
+    assert env.rollbacks == [True]
 
 
 def test_every_task_write_route_carries_member_dependency():
