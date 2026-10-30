@@ -53,8 +53,8 @@ def test_correlation_prefers_contract_key(spec):
     assert _correlation_key(spec, {"issue_number": 9}, {}) == "PF-123"
 
 
-def test_correlation_falls_back_to_issue_number(spec):
-    assert _correlation_key(spec, {"issue_number": 42}, {}) == "42"
+def test_correlation_without_repo_falls_back_to_synthetic(spec):
+    assert _correlation_key(spec, {"issue_number": 42}, {}) == f"tf-{spec.name}"
 
 
 @pytest.mark.parametrize(
@@ -75,8 +75,9 @@ def test_correlation_reads_the_pfactory_pickup_repo(spec):
     assert _correlation_key(spec, {}, source) == "o/r#7"
 
 
-def test_correlation_without_repo_stays_bare(spec):
-    assert _correlation_key(spec, {}, {"aifactory": {"github_issue": 7}}) == "7"
+def test_correlation_without_repo_is_synthetic(spec):
+    key = _correlation_key(spec, {}, {"aifactory": {"github_issue": 7}})
+    assert key == f"tf-{spec.name}"
 
 
 def test_handback_key_is_scoped_to_the_repo(spec):
@@ -101,7 +102,7 @@ def test_handback_key_from_contract(spec):
 
 def test_handback_key_from_source_issue(spec):
     (spec / "context" / "source.json").write_text(json.dumps({"issue_number": 55}))
-    assert _correlation_key_for(spec) == "55"
+    assert _correlation_key_for(spec) == f"tf-{spec.name}"
 
 
 def test_handback_key_none_when_absent(spec):
