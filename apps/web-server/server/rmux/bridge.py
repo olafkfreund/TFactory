@@ -50,9 +50,10 @@ from fastapi import (
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..auth import WebSocketAuthError, authenticate_websocket
-from ..database.engine import async_session_factory, get_db
-from ..routes.project_authz import ProjectAccessChecker
+from server.auth import WebSocketAuthError, authenticate_websocket
+from server.database.engine import async_session_factory, get_db
+from server.routes.project_authz import ProjectAccessChecker
+
 from ..services.audit_service import log_audit_event
 from .session import SessionState, get_registry
 from .wrapper import RmuxError
@@ -262,6 +263,26 @@ async def detach(
 # ---------------------------------------------------------------------------
 
 
+async def _authorize_ws(websocket: WebSocket, spec_id: str) -> bool:
+    """Authenticate the socket and run the viewer check; close it on failure."""
+    try:
+        user = await authenticate_websocket(websocket)
+    except WebSocketAuthError:
+        return False  # already closed with 4001
+    if user is None:  # legacy token or auth disabled
+        user = {"id": "default", "is_service": True}
+    try:
+        async with async_session_factory() as db:
+            await ProjectAccessChecker("viewer").check(
+                user, spec_id.split(":", 1)[0], db
+            )
+    except HTTPException:
+        await websocket.accept()
+        await websocket.close(code=4003, reason="forbidden")
+        return False
+    return True
+
+
 @router.websocket("/{spec_id}/agent-console/ws")
 async def agent_console_ws(websocket: WebSocket, spec_id: str):
     """Stream pane bytes FIFO→browser; accept browser keys when attached.
@@ -279,21 +300,7 @@ async def agent_console_ws(websocket: WebSocket, spec_id: str):
     Auth: ``authenticate_websocket`` resolves the caller identity, and
     ``ProjectAccessChecker("viewer")`` checks project org membership.
     """
-    try:
-        user = await authenticate_websocket(websocket)
-    except WebSocketAuthError:
-        return
-    if user is None:
-        user = {"id": "default", "is_service": True}
-
-    try:
-        async with async_session_factory() as db:
-            await ProjectAccessChecker("viewer").check(
-                user, spec_id.split(":", 1)[0], db
-            )
-    except HTTPException:
-        await websocket.accept()
-        await websocket.close(code=4003, reason="forbidden")
+    if not await _authorize_ws(websocket, spec_id):
         return
 
     try:

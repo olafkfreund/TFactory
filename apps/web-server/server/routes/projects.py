@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from server.error_ref import client_error
+from server.routes.project_authz import ProjectAccessChecker
 
 # --------------------------------------------------------------------------
 # Type Definitions for Validation
@@ -26,7 +27,6 @@ MemoryBackendType = Literal["graphiti", "file"]
 from ..config import get_settings
 from . import changelog, context, files, git, github, github_pr
 from ._specpath import browse_roots, safe_component, within_roots
-from .project_authz import ProjectAccessChecker
 
 router = APIRouter()
 

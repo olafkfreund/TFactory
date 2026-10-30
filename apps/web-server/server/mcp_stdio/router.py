@@ -25,18 +25,21 @@ UI-driven actions in the audit log.
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi import Request as FastAPIRequest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..database.engine import get_db
-from ..mcp_remote.auth import AuthenticatedKey
-from ..routes.project_authz import (
+from server.database.engine import get_db
+from server.routes.project_authz import (
     ProjectAccessChecker,
     _audit_authz_denial,
     _enforcing,
 )
+
+from ..mcp_remote.auth import AuthenticatedKey
 from ..services.audit_service import (
     ACTION_MCP_PROJECT_CREATE,
     ACTION_MCP_TASK_APPROVE_PLAN,
@@ -240,18 +243,42 @@ async def _authorize_key(
     await ProjectAccessChecker("member").check(user, project_id, db)
 
 
+def _authorized_key(
+    scope: str,
+) -> Callable[..., Awaitable[AuthenticatedKey | _LegacyAdminKey]]:
+    """``require_acw_scope`` plus the project-org check for the task the
+    route acts on (``task_id`` path param, else the ``project_id`` query)."""
+    scoped = require_acw_scope(scope)
+
+    async def _dep(
+        request: FastAPIRequest,
+        db: Annotated[AsyncSession, Depends(get_db)],
+    ) -> AuthenticatedKey | _LegacyAdminKey:
+        key: AuthenticatedKey | _LegacyAdminKey = await scoped(
+            request
+        )  # 401/403 before any project lookup
+        task_id = request.path_params.get("task_id")
+        project_id = (
+            task_id.split(":", 1)[0]
+            if task_id
+            else request.query_params.get("project_id", "")
+        )
+        await _authorize_key(key, project_id, db)
+        return key
+
+    return _dep
+
+
 @router.post("/tasks/create-and-run")
 async def proxy_create_and_run_task(
     request: FastAPIRequest,
     project_id: str = Query(...),
     title: str = Query(...),
     description: str = Query(...),
-    key=Depends(require_acw_scope(TASK_WRITE_SCOPE)),
-    db: AsyncSession = Depends(get_db),
+    key=Depends(_authorized_key(TASK_WRITE_SCOPE)),
 ):
     from ..routes.execution import StartTaskRequest, create_and_run_task
 
-    await _authorize_key(key, project_id, db)
     body = await _read_json_body(request)
     result = await create_and_run_task(
         project_id, title, description, StartTaskRequest(**body)
@@ -272,12 +299,10 @@ async def proxy_create_and_run_task(
 async def proxy_start_task(
     task_id: str,
     request: FastAPIRequest,
-    key=Depends(require_acw_scope(TASK_WRITE_SCOPE)),
-    db: AsyncSession = Depends(get_db),
+    key=Depends(_authorized_key(TASK_WRITE_SCOPE)),
 ):
     from ..routes.execution import StartTaskRequest, start_task
 
-    await _authorize_key(key, task_id.split(":", 1)[0], db)
     body = await _read_json_body(request)
     result = await start_task(task_id, StartTaskRequest(**body), request)
     await _audit_mcp_write(
@@ -294,12 +319,10 @@ async def proxy_start_task(
 async def proxy_stop_task(
     task_id: str,
     request: FastAPIRequest,
-    key=Depends(require_acw_scope(TASK_WRITE_SCOPE)),
-    db: AsyncSession = Depends(get_db),
+    key=Depends(_authorized_key(TASK_WRITE_SCOPE)),
 ):
     from ..routes.execution import stop_task
 
-    await _authorize_key(key, task_id.split(":", 1)[0], db)
     result = await stop_task(task_id)
     await _audit_mcp_write(
         key,
@@ -315,12 +338,10 @@ async def proxy_stop_task(
 async def proxy_recover_task(
     task_id: str,
     request: FastAPIRequest,
-    key=Depends(require_acw_scope(TASK_WRITE_SCOPE)),
-    db: AsyncSession = Depends(get_db),
+    key=Depends(_authorized_key(TASK_WRITE_SCOPE)),
 ):
     from ..routes.execution import RecoverTaskRequest, recover_task
 
-    await _authorize_key(key, task_id.split(":", 1)[0], db)
     body = await _read_json_body(request)
     result = await recover_task(task_id, RecoverTaskRequest(**body))
     await _audit_mcp_write(
@@ -337,12 +358,10 @@ async def proxy_recover_task(
 async def proxy_approve_plan(
     task_id: str,
     request: FastAPIRequest,
-    key=Depends(require_acw_scope(TASK_WRITE_SCOPE)),
-    db: AsyncSession = Depends(get_db),
+    key=Depends(_authorized_key(TASK_WRITE_SCOPE)),
 ):
     from ..routes.tasks import ApprovePlanRequest, approve_plan
 
-    await _authorize_key(key, task_id.split(":", 1)[0], db)
     body = await _read_json_body(request)
     result = await approve_plan(task_id, ApprovePlanRequest(**body))
     await _audit_mcp_write(
@@ -364,12 +383,10 @@ async def proxy_approve_plan(
 async def proxy_create_pr(
     task_id: str,
     request: FastAPIRequest,
-    key=Depends(require_acw_scope(TASK_MERGE_SCOPE)),
-    db: AsyncSession = Depends(get_db),
+    key=Depends(_authorized_key(TASK_MERGE_SCOPE)),
 ):
     from ..routes.tasks import CreatePRFromTaskOptions, create_pr_from_task
 
-    await _authorize_key(key, task_id.split(":", 1)[0], db)
     body = await _read_json_body(request)
     result = await create_pr_from_task(
         task_id, CreatePRFromTaskOptions(**body) if body else None
@@ -388,12 +405,10 @@ async def proxy_create_pr(
 async def proxy_merge_worktree(
     task_id: str,
     request: FastAPIRequest,
-    key=Depends(require_acw_scope(TASK_MERGE_SCOPE)),
-    db: AsyncSession = Depends(get_db),
+    key=Depends(_authorized_key(TASK_MERGE_SCOPE)),
 ):
     from ..routes.tasks import WorktreeMergeOptions, merge_worktree
 
-    await _authorize_key(key, task_id.split(":", 1)[0], db)
     body = await _read_json_body(request)
     result = await merge_worktree(
         task_id, WorktreeMergeOptions(**body) if body else None
