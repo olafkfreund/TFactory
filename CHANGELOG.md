@@ -32,6 +32,9 @@
   `apps/web-server/requirements.txt`, past CVE-2026-96760 (CRITICAL),
   CVE-2026-114615 and CVE-2026-114616. The image already resolved the latest
   release; not reachable in this code (ID tokens are verified with joserfc).
+- **Image: `py3-pip-wheel>=26.2.2-r1` floor (#1463)** past CVE-2026-114613
+  (HIGH), a memory leak in the msgpack 1.2.1 vendored by the base image's pip
+  wheel. Image only; no runtime change.
 
 ### CI
 
