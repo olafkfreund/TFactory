@@ -85,10 +85,10 @@ def env(tmp_path, monkeypatch):
             yield session
 
     settings = SimpleNamespace(DISABLE_AUTH=False, RBAC_ENFORCE_TASK_ROUTES=False)
-    monkeypatch.setattr(tools_mod, "get_db", _db, raising=False)
-    monkeypatch.setattr(tools_mod, "get_settings", lambda: settings, raising=False)
+    monkeypatch.setattr(tools_mod, "get_db", _db)
+    monkeypatch.setattr(tools_mod, "get_settings", lambda: settings)
     monkeypatch.setattr(project_authz_mod, "get_settings", lambda: settings)
-    monkeypatch.setattr(tools_mod, "load_projects", lambda: PROJECTS, raising=False)
+    monkeypatch.setattr(tools_mod, "load_projects", lambda: PROJECTS)
     monkeypatch.setattr(projects_mod, "load_projects", lambda: PROJECTS)
 
     async def _fake_call_internal(
