@@ -237,17 +237,17 @@ def test_envelope_has_rfc0001_core_fields(
     assert isinstance(env["correlation_key"], str)  # never null, always a string
 
 
-def test_correlation_key_is_issue_number_when_present(
+def test_correlation_key_is_repo_scoped_issue_when_present(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("TFACTORY_COMPLETION_SENTINEL", "1")
     _seed_status(tmp_path)
     ctx = tmp_path / "context"
     ctx.mkdir(parents=True, exist_ok=True)
-    (ctx / "source.json").write_text(json.dumps({"issue_number": 412}))
+    (ctx / "source.json").write_text(json.dumps({"issue_number": 412, "repo": "o/r"}))
     _write_status_patch(tmp_path, status="triaged")
     env = _completed_envelope(tmp_path)
-    assert env["correlation_key"] == "412"
+    assert env["correlation_key"] == "o/r#412"
     assert env["correlation"]["issue_number"] == 412
 
 
