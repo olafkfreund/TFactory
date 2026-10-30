@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1456
 intent: intent/2026-10-30-1456-mcp-remote-authz.md
 ---
