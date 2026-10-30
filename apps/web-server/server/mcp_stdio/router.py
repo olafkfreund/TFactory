@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi import Request as FastAPIRequest
@@ -36,7 +36,6 @@ from server.database.engine import get_db
 from server.routes.project_authz import (
     ProjectAccessChecker,
     _audit_authz_denial,
-    _enforcing,
 )
 
 from ..mcp_remote.auth import AuthenticatedKey
@@ -115,22 +114,35 @@ async def _audit_mcp_write(
 # =============================================================================
 
 
-def _foreign_projects(key: AuthenticatedKey | _LegacyAdminKey) -> set[str]:
+def _key_projects(key: AuthenticatedKey | _LegacyAdminKey) -> dict[str, Any] | None:
+    """The project map for an org-scoped key; None when the key has no org to check.
+
+    Fails closed (503): an unreadable registry must not let an org key through.
+    """
     if isinstance(key, _LegacyAdminKey) or not key.org_id:
-        return set()
+        return None
     from server.routes.projects import load_projects  # noqa: PLC0415
 
     try:
-        projects = load_projects()
-    except Exception:
-        if _enforcing():
-            raise
-        return set()  # shadow mode fails open, like check()
+        projects: dict[str, Any] = load_projects()
+        return projects
+    except Exception:  # noqa: BLE001 - any registry error fails closed
+        raise HTTPException(503, "Project registry unavailable") from None
+
+
+def _foreign_ids(key: AuthenticatedKey, projects: dict[str, Any]) -> set[str]:
     return {
         pid
         for pid, p in projects.items()
         if isinstance(p, dict) and p.get("org_id") and p.get("org_id") != key.org_id
     }
+
+
+def _foreign_projects(key: AuthenticatedKey | _LegacyAdminKey) -> set[str]:
+    projects = _key_projects(key)
+    if projects is None or isinstance(key, _LegacyAdminKey):
+        return set()
+    return _foreign_ids(key, projects)
 
 
 async def _authorize_key(
@@ -148,9 +160,15 @@ async def _authorize_key(
             "api_key_id": key.key_id,
             "org_id": key.org_id,
         }
-        # Not behind the flag: an org-A key must never act on org B
-        # (cannot fire until projects carry org_id).
-        if project_id in _foreign_projects(key):
+        # Not behind the flag: an org-A key must never reach org B, nor an
+        # unknown project (a handler may resolve it elsewhere).
+        projects = _key_projects(key)
+        if projects is not None and project_id not in projects:
+            await _audit_authz_denial(
+                "authz.task.denied", user, project_id, minimum_role, "Project not found"
+            )
+            raise HTTPException(404, "Project not found")
+        if projects is not None and project_id in _foreign_ids(key, projects):
             detail = "This API key is scoped to another organization"
             await _audit_authz_denial(
                 "authz.task.denied", user, project_id, minimum_role, detail

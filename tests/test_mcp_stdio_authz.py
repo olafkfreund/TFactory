@@ -199,18 +199,32 @@ def test_legacy_admin_token_calls_handler(env):
     assert [a["action"] for a in env.audits] == ["mcp.task.stop"]
 
 
-def test_project_lookup_failure_fails_open_in_shadow(env):
+def test_project_lookup_failure_fails_closed_for_org_key(env):
     def _boom():
         raise RuntimeError("projects.json unreadable")
 
     env.monkeypatch.setattr("server.routes.projects.load_projects", _boom)
-    env.set_key(user_id="member-a", org_id="B")
-    r = env.client.post(
-        "/api/mcp-stdio/tasks/p1:s1/stop",
-        headers={"Authorization": "Bearer acw_org_b"},
+    env.set_key(user_id="member-a", org_id="A")
+    headers = {"Authorization": "Bearer acw_org_a"}
+    assert (
+        env.client.post("/api/mcp-stdio/tasks/p1:s1/stop", headers=headers).status_code
+        == 503
     )
-    assert r.status_code == 200
-    assert env.calls == ["p1:s1"]
+    assert env.client.get("/api/mcp-stdio/projects", headers=headers).status_code == 503
+    assert env.calls == []
+
+
+@pytest.mark.parametrize("task_id", ["nope:s1", "s1"])
+def test_org_key_on_unknown_project_denied_even_with_flag_off(env, task_id):
+    # get_worktree_diff once scanned every project for a bare/unknown-prefix spec.
+    env.set_key(user_id="viewer-a", org_id="A")
+    r = env.client.get(
+        f"/api/mcp-stdio/tasks/{task_id}/worktree/diff",
+        headers={"Authorization": "Bearer acw_viewer_a"},
+    )
+    assert r.status_code == 404
+    assert env.calls == []
+    assert [a["action"] for a in env.audits] == ["authz.task.denied"]
 
 
 @pytest.mark.parametrize("suffix", ["logs", "worktree/diff"])
