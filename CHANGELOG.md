@@ -2,12 +2,33 @@
 
 ## Unreleased
 
-- **Security: joserfc floor `>=1.7.5`** in
-  `apps/web-server/requirements.txt`, past CVE-2026-119283 (HIGH,
-  GHSA-jpxq-7h8p-2q76), which fails the Trivy P0 gate. joserfc arrives through
-  Authlib, which uses it to verify OIDC ID tokens. Not reachable here: the
-  flaw is in `joserfc.jwe.decrypt_json` (JWE General JSON), and the OIDC
-  client only verifies compact JWS through `joserfc.jwt.decode`.
+## 0.9.48 — project-scoped synthetic correlation key, merge preview by exact project id (2026-10-30)
+
+### Changed
+
+- **Behaviour change: the synthetic correlation key is project-scoped
+  (AIFactory#1972, #1477).** It is now `tf-<project_id>:<spec_id>` (was
+  `tf-<spec_id>`), because spec ids repeat across projects. The project id
+  comes from `status.json` or `source.json`; only the
+  `workspaces/<project_id>/specs/<spec_id>` layout falls back to the directory
+  name. With no project id, or a key over 128 characters, TFactory logs a
+  warning, sets no key (never truncates) and does not send the completion
+  event; the hand-back mirror and the docs emit skip as well. Contract,
+  handoff and `<repo>#<n>` keys are unchanged. Existing `tf-` work items stay
+  as history (none in flight).
+- **Behaviour change: worktree merge preview needs `project_id:spec_id`
+  (#1474, #1478).** `GET /api/tasks/{task_id}/worktree/merge-preview` matches
+  the project by exact id, like `/worktree/diff` and `/worktree/status`; a
+  bare spec id gets `400`. This also fixes the web UI's merge preview, which
+  already sent `project_id:spec_id` and could not be resolved.
+
+### Security
+
+- **joserfc floor `>=1.7.5` (#1476)** in `apps/web-server/requirements.txt`,
+  past CVE-2026-119283 (HIGH, GHSA-jpxq-7h8p-2q76), which failed the Trivy P0
+  gate. Not reachable here: the flaw is in `joserfc.jwe.decrypt_json` (JWE
+  General JSON), and the OIDC client only verifies compact JWS through
+  `joserfc.jwt.decode`.
 
 ## 0.9.47 — RBAC read paths, remote MCP authz, OIDC claims, DB pool caps (2026-10-30)
 
