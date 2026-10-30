@@ -183,6 +183,11 @@ Secret is named.
 | `TFACTORY_VERIFY_PROVIDER_SECRET_NAME` | unset | No | — | Secret name from which non-Claude provider keys are sourced via `secretKeyRef` (key = lower-kebab of the var, e.g. `OPENAI_API_KEY` -> `openai-api-key`). When unset, keys forward as resolved pod-env values. | `agents/verify_dispatch.py` |
 | `TFACTORY_VERIFY_CLI_CREDS_SECRET` | unset | No | — | Secret name holding CLI credentials mounted into the verify Job. | `agents/verify_dispatch.py` |
 | `DATABASE_URL` | unset | No | — | Database URL forwarded into the verify Job when the pipeline's terminal store write needs it. | `agents/verify_dispatch.py` |
+| `DB_POOL_SIZE` | `2` | No | — | Main Postgres engine pool size; ignored for SQLite. | `server/db_pool.py` |
+| `DB_MAX_OVERFLOW` | `2` | No | — | Main Postgres engine overflow connections; ignored for SQLite. | `server/db_pool.py` |
+| `VERIFY_DB_POOL_SIZE` | `1` | No | — | Per-dispatch verify Postgres engine pool size; ignored for SQLite. | `server/db_pool.py` |
+| `VERIFY_DB_MAX_OVERFLOW` | `0` | No | — | Per-dispatch verify Postgres engine overflow connections; ignored for SQLite. | `server/db_pool.py` |
+| `DB_POOL_TIMEOUT` | `10` seconds | No | — | Connection checkout timeout for both Postgres engines; ignored for SQLite. | `server/db_pool.py` |
 
 > Note: `ANTHROPIC_API_KEY` is intentionally **never** forwarded into the verify
 > Job — this prevents silent API billing when OAuth is the intended auth path.
