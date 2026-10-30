@@ -22,7 +22,6 @@ def env(tmp_path, monkeypatch):
     """mcp_stdio router on SQLite: org A has viewer-a and member-a."""
     import server.mcp_stdio.router  # noqa: F401
     from server.config import get_settings
-    from server.database.engine import get_db
     from server.database.models import Base, Organization, OrgMember, User
     from server.mcp_remote.auth import AuthenticatedKey
     from server.mcp_stdio.auth import TASK_WRITE_SCOPE
@@ -55,7 +54,9 @@ def env(tmp_path, monkeypatch):
         async with session_local() as session:
             yield session
 
-    app.dependency_overrides[get_db] = _db
+    # Override the router's own reference: other tests reload
+    # server.database.engine, so a fresh import is a different function.
+    app.dependency_overrides[proxy_router_mod.get_db] = _db
 
     settings = get_settings()
     monkeypatch.setattr(settings, "DISABLE_AUTH", False)
