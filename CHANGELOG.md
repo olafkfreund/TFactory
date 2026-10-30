@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+## 0.9.46 — task-route RBAC (shadow mode) and API-key scope caps (2026-10-30)
+
+### Added
+
+- **Task-route role checks, shadow mode (#1450, #1457).** The 20 task-keyed
+  write routes under `/api/tasks/{task_id}` (start/stop/recover, status and
+  task edits, delete, clarifications, log watch, plan approve/reject, worktree
+  actions) now require `member` in the project's org. New env var
+  `RBAC_ENFORCE_TASK_ROUTES` (`APP_RBAC_ENFORCE_TASK_ROUTES`), default **off =
+  shadow mode**: a would-be denial is logged and audited as
+  `authz.task.would_deny` and the handler runs unchanged; lookup errors fail
+  open. With it on, denials return `403` and are audited as
+  `authz.task.denied`. Do not enable it before RBAC slice S6: TFactory
+  projects have no `org_id` yet, so enforcing now would lock every human out.
+
+### Changed
+
+- **Behaviour change: `acw_` API-key scope caps (#1450, #1457).** At mint, an
+  `acw_` principal cannot mint keys (`403`), and a caller below `member` may
+  request only `mcp:read` (`403` otherwise). At auth, a key's scopes are
+  capped by its owner's *current* role in the key's org; with no membership
+  the key has no scopes (REST returns `403`). Applies to remote MCP and the
+  REST `acw_` path. Prod had 0 `api_keys` rows when this shipped.
+
+### Security
+
+- **Authlib floor raised to `>=1.9.1` (#1459)** in
+  `apps/web-server/requirements.txt`, past CVE-2026-96760 (CRITICAL),
+  CVE-2026-114615 and CVE-2026-114616. The image already resolved the latest
+  release; not reachable in this code (ID tokens are verified with joserfc).
+
+### CI
+
+- **GitHub Actions bumps (#1461):** setup-python 7.1.0, setup-uv 10.3.2,
+  codeql-action 4.39.1, docker/login-action 4.7.0.
+
 ## 0.9.45 — audit export gated on org admin or service principal (2026-10-27)
 
 ### Changed
