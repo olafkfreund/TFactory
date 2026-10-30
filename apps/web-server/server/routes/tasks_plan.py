@@ -16,9 +16,10 @@ import logging
 from pathlib import Path
 
 from factory_common.logsafe import sanitize_log
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from ._specpath import safe_spec_dir
+from .project_authz import require_task_access
 from .projects import load_projects
 from .tasks import ApprovePlanRequest, RejectPlanRequest
 
@@ -26,7 +27,9 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-@router.post("/{task_id}/approve-plan")
+@router.post(
+    "/{task_id}/approve-plan", dependencies=[Depends(require_task_access("member"))]
+)
 async def approve_plan(
     task_id: str, request: ApprovePlanRequest = ApprovePlanRequest()
 ):
@@ -178,7 +181,9 @@ async def approve_plan(
     }
 
 
-@router.post("/{task_id}/reject-plan")
+@router.post(
+    "/{task_id}/reject-plan", dependencies=[Depends(require_task_access("member"))]
+)
 async def reject_plan(task_id: str, request: RejectPlanRequest = RejectPlanRequest()):
     """Reject a task's plan and send the planner back to iterate.
 

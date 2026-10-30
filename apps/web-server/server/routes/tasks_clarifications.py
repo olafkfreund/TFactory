@@ -13,9 +13,10 @@ from __future__ import annotations
 import json
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from ._specpath import safe_component
+from .project_authz import require_task_access
 from .tasks import (
     ClarificationAnswersRequest,
     ClarificationQuestion,
@@ -29,7 +30,11 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-@router.post("/{task_id}/clarifications", response_model=ClarificationResponse)
+@router.post(
+    "/{task_id}/clarifications",
+    dependencies=[Depends(require_task_access("member"))],
+    response_model=ClarificationResponse,
+)
 async def generate_clarifications(task_id: str):
     """Generate clarification questions for a task using an LLM."""
     from ..services.clarification_service import generate_clarification_questions
@@ -58,7 +63,11 @@ async def generate_clarifications(task_id: str):
     )
 
 
-@router.post("/{task_id}/clarifications/answers", response_model=Task)
+@router.post(
+    "/{task_id}/clarifications/answers",
+    dependencies=[Depends(require_task_access("member"))],
+    response_model=Task,
+)
 async def submit_clarification_answers(
     task_id: str, request: ClarificationAnswersRequest
 ):

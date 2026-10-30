@@ -23,13 +23,15 @@ from __future__ import annotations
 import hashlib
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from server.database.models import ApiKey, OrgMember
+from server.routes.organizations import _role_level
+
 from ..database.engine import get_db
-from ..database.models import ApiKey
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +98,7 @@ async def authenticate(authorization_header: str | None) -> AuthenticatedKey:
     - Non-Bearer scheme
     - Unknown key (hash doesn't match any row)
     - Expired key (``expires_at`` in the past)
+    - Key with no scopes left after capping by its owner's current org role
 
     On success the key's ``last_used_at`` is stamped (best-effort).
 
@@ -118,6 +121,29 @@ async def authenticate(authorization_header: str | None) -> AuthenticatedKey:
     raise MCPAuthError("Database session not available")
 
 
+async def cap_by_owner_role(
+    session: AsyncSession, row: ApiKey, scopes: frozenset[str]
+) -> frozenset[str]:
+    """Cap stored scopes by the owner's CURRENT role in the key's org (#1450).
+
+    Same mapping as the mint cap in ``routes/api_keys.py``: below ``member``
+    only ``mcp:read`` survives, no membership leaves nothing. A demotion or
+    removal therefore takes effect on the next call.
+    """
+    role = (
+        await session.execute(
+            select(OrgMember.role).where(
+                OrgMember.org_id == row.org_id, OrgMember.user_id == row.user_id
+            )
+        )
+    ).scalar_one_or_none()
+    if role is None:
+        return frozenset()
+    if _role_level(role) < _role_level("member"):
+        return scopes & {MCP_READ_SCOPE}
+    return scopes
+
+
 async def _lookup_by_digest(session: AsyncSession, digest: str) -> AuthenticatedKey:
     """DB query helper — separated for unit-test stubbing."""
     # ApiKey stores hashes as ``<8-char-preview>$<sha256-hex>`` (see
@@ -137,12 +163,16 @@ async def _lookup_by_digest(session: AsyncSession, digest: str) -> Authenticated
     if row.expires_at is not None:
         expires_at = row.expires_at
         if expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=timezone.utc)
-        if expires_at <= datetime.now(timezone.utc):
+            expires_at = expires_at.replace(tzinfo=UTC)
+        if expires_at <= datetime.now(UTC):
             raise MCPAuthError("API key has expired")
 
     scopes_raw = row.scopes or ""
     scopes = frozenset(s.strip() for s in scopes_raw.split(",") if s.strip())
+    if row.user_id:
+        scopes = await cap_by_owner_role(session, row, scopes)
+        if not scopes:
+            raise MCPAuthError("API key has no scopes for its owner's current role")
     authenticated = AuthenticatedKey(
         key_id=str(row.id),
         scopes=scopes,
@@ -152,7 +182,7 @@ async def _lookup_by_digest(session: AsyncSession, digest: str) -> Authenticated
 
     # Stamp last-used for the audit trail surfaced in Settings. Best-effort:
     # a write failure must never turn a valid key into an auth error.
-    row.last_used_at = datetime.now(timezone.utc)
+    row.last_used_at = datetime.now(UTC)
     try:
         await session.commit()
     except Exception:  # pragma: no cover - defensive

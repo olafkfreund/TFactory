@@ -18,8 +18,9 @@ from datetime import datetime
 from pathlib import Path
 
 from factory_common.logsafe import sanitize_log
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
+from .project_authz import require_task_access
 from .projects import load_projects
 
 router = APIRouter()
@@ -171,7 +172,9 @@ async def get_task_logs(task_id: str):
     return result
 
 
-@router.post("/{task_id}/logs/watch")
+@router.post(
+    "/{task_id}/logs/watch", dependencies=[Depends(require_task_access("member"))]
+)
 async def watch_task_logs(task_id: str):
     """Start watching task logs (stub endpoint for frontend compatibility).
 
@@ -181,7 +184,9 @@ async def watch_task_logs(task_id: str):
     return {"success": True, "message": "Log watching handled via WebSocket"}
 
 
-@router.post("/{task_id}/logs/unwatch")
+@router.post(
+    "/{task_id}/logs/unwatch", dependencies=[Depends(require_task_access("member"))]
+)
 async def unwatch_task_logs(task_id: str):
     """Stop watching task logs (stub endpoint for frontend compatibility).
 
