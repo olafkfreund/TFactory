@@ -743,18 +743,32 @@ def _source_repo(source: dict[str, Any]) -> str | None:
 _MAX_KEY_LEN = 128  # AIFactory/CFactory correlation_key column width
 
 
-def _synthetic_key(spec_dir: Path, spec_id: str) -> str | None:
+def _synthetic_key(
+    spec_dir: Path, spec_id: str, status: dict[str, Any], source: dict[str, Any]
+) -> str | None:
     """``tf-<project_id>:<spec_id>`` (#1972, AIFactory#1972).
 
-    Spec ids repeat across projects, so the project id (TFactory layout
-    ``workspaces/<project_id>/specs/<spec_id>``) scopes the key. Over the
-    128-char column: log and return None, never truncate.
+    Spec ids repeat across projects, so the project id scopes the key. It comes
+    from ``status.json`` or ``source.json`` first; only the workspaces layout
+    (``workspaces/<project_id>/specs/<spec_id>``) may fall back to the
+    directory name. Any other layout (a registered project's
+    ``<path>/.tfactory/specs/<id>``, a worktree copy) with no id gives no key,
+    never ``tf-.tfactory:<id>``. Also None over the 128-char column: never
+    truncate. Logs carry no ids (untrusted text, no sanitizer in the backend).
     """
-    key = f"tf-{spec_dir.parent.parent.name}:{spec_id}"
+    project_id = status.get("project_id") or source.get("project_id")
+    if not project_id:
+        specs = spec_dir.parent
+        if specs.name == "specs" and specs.parent.parent.name == "workspaces":
+            project_id = specs.parent.name
+    if not project_id:
+        _triage_log.warning("no project id for a synthetic correlation key; none set")
+        return None
+    key = f"tf-{project_id}:{spec_id}"
     if len(key) > _MAX_KEY_LEN:
         _triage_log.warning(
-            "synthetic correlation key for %r exceeds %d chars; sending none",
-            spec_id,
+            "synthetic correlation key is %d chars (max %d); none set",
+            len(key),
             _MAX_KEY_LEN,
         )
         return None
@@ -778,7 +792,7 @@ def _correlation_key(spec_dir: Path, status: dict, source: dict) -> str | None:
     if issue is not None and repo:
         return f"{repo}#{issue}"
     spec_id = status.get("spec_id") or source.get("spec_id") or spec_dir.name
-    return _synthetic_key(spec_dir, spec_id)
+    return _synthetic_key(spec_dir, spec_id, status, source)
 
 
 def _completion_result_summary(status: dict) -> dict[str, Any]:
@@ -839,8 +853,9 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> CompletionEnvelo
 
     envelope: CompletionEnvelope = {
         # RFC-0001 core: the six required fields (Factory#4). `correlation_key`
-        # is the shared key (issue#, synthetic `tf-<spec_id>` fallback) so the
-        # CFactory collector can thread this event into a WorkItem.
+        # is the shared key (issue#, synthetic `tf-<project_id>:<spec_id>`
+        # fallback; None only when no scoped key can be built, and then the
+        # event is not sent) so CFactory can thread it into a WorkItem.
         "correlation_key": _correlation_key(spec_dir, status, source),
         "service": "tfactory",
         "task_id": status.get("task_id") or spec_dir.name,
@@ -1082,6 +1097,10 @@ def _deliver_completion(payload: CompletionEnvelope) -> None:
     (at-least-once, #281) when ``TFACTORY_COMPLETION_OUTBOX`` is set, else a direct
     best-effort POST. Shared by the terminal notifier and the running-cost usage
     snapshot. Best-effort: every failure is swallowed."""
+    if not payload.get("correlation_key"):
+        # CFactory requires the key: sending would retry for a day, then abandon.
+        _triage_log.warning("completion event has no correlation key; not sent")
+        return
     url = _completion_webhook_url()
     if not url:
         return

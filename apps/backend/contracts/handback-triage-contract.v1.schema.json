@@ -56,7 +56,7 @@
     },
     "correlation_key": {
       "type": ["string", "null"],
-      "description": "Shared RFC-0001 correlation key (#249): issue# | tf-<spec_id>. Threads the hand-back and its re-test/completion events together."
+      "description": "Shared RFC-0001 correlation key (#249): <repo>#<issue> | tf-<project_id>:<spec_id> (AIFactory#1972). Threads the hand-back and its re-test/completion events together."
     }
   }
 }
