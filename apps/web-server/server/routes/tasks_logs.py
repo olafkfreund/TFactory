@@ -173,7 +173,7 @@ async def get_task_logs(task_id: str):
 
 
 @router.post(
-    "/{task_id}/logs/watch", dependencies=[Depends(require_task_access("member"))]
+    "/{task_id}/logs/watch", dependencies=[Depends(require_task_access("viewer"))]
 )
 async def watch_task_logs(task_id: str):
     """Start watching task logs (stub endpoint for frontend compatibility).
@@ -185,7 +185,7 @@ async def watch_task_logs(task_id: str):
 
 
 @router.post(
-    "/{task_id}/logs/unwatch", dependencies=[Depends(require_task_access("member"))]
+    "/{task_id}/logs/unwatch", dependencies=[Depends(require_task_access("viewer"))]
 )
 async def unwatch_task_logs(task_id: str):
     """Stop watching task logs (stub endpoint for frontend compatibility).
