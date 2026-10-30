@@ -154,7 +154,8 @@ def _summary_row(status_path: Path) -> dict[str, Any]:
     try:
         from agents.triager import _correlation_key  # noqa: PLC0415 - triager is heavy
 
-        extra["correlation_key"] = _correlation_key(spec_dir, status_doc, source_doc)
+        if key := _correlation_key(spec_dir, status_doc, source_doc):
+            extra["correlation_key"] = key
     except ImportError:
         pass
 

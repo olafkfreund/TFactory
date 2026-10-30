@@ -72,7 +72,7 @@ class CompletionEnvelope(TypedDict, total=False):
     """
 
     # RFC-0001 core (Factory#4) — always present in practice.
-    correlation_key: str
+    correlation_key: str | None  # None only for an over-long synthetic key (#1972)
     service: str
     task_id: str
     status: str | None

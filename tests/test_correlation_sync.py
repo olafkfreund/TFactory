@@ -27,9 +27,10 @@ _TRIAGE = {"rejected": [{"test_id": "t_bad", "test_file": "tests/test_x.py"}]}
 
 @pytest.fixture
 def spec(tmp_path):
-    (tmp_path / "context").mkdir()
-    (tmp_path / "findings").mkdir()
-    return tmp_path
+    d = tmp_path / "workspaces" / "demo" / "specs" / "001-login"
+    (d / "context").mkdir(parents=True)
+    (d / "findings").mkdir()
+    return d
 
 
 def _write_contract(spec, key):
@@ -54,7 +55,7 @@ def test_correlation_prefers_contract_key(spec):
 
 
 def test_correlation_without_repo_falls_back_to_synthetic(spec):
-    assert _correlation_key(spec, {"issue_number": 42}, {}) == f"tf-{spec.name}"
+    assert _correlation_key(spec, {"issue_number": 42}, {}) == f"tf-demo:{spec.name}"
 
 
 @pytest.mark.parametrize(
@@ -77,7 +78,7 @@ def test_correlation_reads_the_pfactory_pickup_repo(spec):
 
 def test_correlation_without_repo_is_synthetic(spec):
     key = _correlation_key(spec, {}, {"aifactory": {"github_issue": 7}})
-    assert key == f"tf-{spec.name}"
+    assert key == f"tf-demo:{spec.name}"
 
 
 def test_handback_key_is_scoped_to_the_repo(spec):
@@ -89,7 +90,7 @@ def test_handback_key_is_scoped_to_the_repo(spec):
 
 def test_correlation_synthetic_fallback(spec):
     key = _correlation_key(spec, {"spec_id": "001-login"}, {})
-    assert key == "tf-001-login"
+    assert key == "tf-demo:001-login"
 
 
 # ─── handback correlation_key_for ────────────────────────────────────────
@@ -102,7 +103,7 @@ def test_handback_key_from_contract(spec):
 
 def test_handback_key_from_source_issue(spec):
     (spec / "context" / "source.json").write_text(json.dumps({"issue_number": 55}))
-    assert _correlation_key_for(spec) == f"tf-{spec.name}"
+    assert _correlation_key_for(spec) == f"tf-demo:{spec.name}"
 
 
 def test_handback_key_none_when_absent(spec):
@@ -158,3 +159,59 @@ def test_build_only_handoff_keeps_its_key(tmp_path):
     status = json.loads((spec_dir / "status.json").read_text())
     assert _correlation_key(spec_dir, status, source) == "o/r#382"
     assert handback_key(spec_dir) == "o/r#382"
+
+
+def _spec_in(tmp_path, project, spec_id):
+    d = tmp_path / "workspaces" / project / "specs" / spec_id
+    (d / "context").mkdir(parents=True)
+    return d
+
+
+def _src(d, **extra):
+    (d / "context" / "source.json").write_text(json.dumps({"issue_number": 5, **extra}))
+
+
+def test_synthetic_key_differs_across_projects(tmp_path):
+    # #1972: spec ids repeat across projects; the synthetic key must not.
+    a, b = _spec_in(tmp_path, "p1", "003-x"), _spec_in(tmp_path, "p2", "003-x")
+    assert _correlation_key(a, {}, {}) == "tf-p1:003-x"
+    assert _correlation_key(b, {}, {}) == "tf-p2:003-x"
+    _src(a)
+    _src(b)
+    assert _correlation_key_for(a) == "tf-p1:003-x"
+    assert _correlation_key_for(b) == "tf-p2:003-x"
+
+
+def test_project_id_from_status_or_source_beats_the_layout(tmp_path):
+    # Registered project (<path>/.tfactory/specs/<sid>) and a worktree copy.
+    reg = tmp_path / "proj" / ".tfactory" / "specs" / "003-x"
+    wt = tmp_path / "wt" / "deep" / "003-x"
+    for d in (reg, wt):
+        (d / "context").mkdir(parents=True)
+    assert _correlation_key(reg, {"project_id": "p9"}, {}) == "tf-p9:003-x"
+    assert _correlation_key(wt, {}, {"project_id": "p8"}) == "tf-p8:003-x"
+    (reg / "status.json").write_text(json.dumps({"project_id": "p9"}))
+    _src(reg)
+    assert _correlation_key_for(reg) == "tf-p9:003-x"
+    _src(wt, project_id="p8")
+    assert _correlation_key_for(wt) == "tf-p8:003-x"
+
+
+def test_no_project_id_outside_the_workspaces_layout_gives_no_key(tmp_path, caplog):
+    reg = tmp_path / "proj" / ".tfactory" / "specs" / "003-x"
+    (reg / "context").mkdir(parents=True)
+    _src(reg)
+    with caplog.at_level("WARNING"):
+        assert _correlation_key(reg, {}, {}) is None
+        assert _correlation_key_for(reg) is None
+    assert ".tfactory" not in caplog.text
+
+
+def test_overlong_synthetic_key_is_none(tmp_path, caplog):
+    d = _spec_in(tmp_path, "p1", "s" * 130)
+    _src(d)
+    with caplog.at_level("WARNING"):
+        assert _correlation_key(d, {}, {}) is None
+        assert _correlation_key_for(d) is None
+    assert "max 128" in caplog.text
+    assert "s" * 20 not in caplog.text  # length only, no ids
