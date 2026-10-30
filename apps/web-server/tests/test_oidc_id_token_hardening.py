@@ -18,6 +18,13 @@ from server.oidc.client import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _drop_cached_client():
+    # The client is built from this test's env; don't leak it to later tests.
+    yield
+    reset_oauth_client_cache()
+
+
 def _authorize(monkeypatch, claims=None, *, alg="RS256", discovery_issuer=None):
     issuer = "https://issuer.example/realms/test"
     client_id = "test-client"
