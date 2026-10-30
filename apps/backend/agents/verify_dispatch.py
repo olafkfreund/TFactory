@@ -1118,6 +1118,7 @@ def _fresh_store_engine() -> tuple[Any, Any]:
     deps best-effort), and ``warn_unused_ignores`` never trips either way.
     """
     eng: Any = _import_engine_module()
+    db_pool: Any = _import_db_pool_module()
     sa_async: Any = _import_sqlalchemy_async()
 
     # _resolve_database_url / _connect_args_for are module-level helpers in
@@ -1129,6 +1130,7 @@ def _fresh_store_engine() -> tuple[Any, Any]:
         echo=False,
         pool_pre_ping=True,
         connect_args=eng._connect_args_for(url),
+        **db_pool.pool_kwargs(url, "VERIFY_DB", 1, 0),
     )
     factory = sa_async.async_sessionmaker(engine, expire_on_commit=False)
     return engine, factory
@@ -1145,6 +1147,13 @@ def _import_engine_module() -> Any:
     import importlib  # noqa: PLC0415 - lazy by design
 
     return importlib.import_module("server.database.engine")
+
+
+def _import_db_pool_module() -> Any:
+    """Lazily import the web-server's pool settings behind an ``Any`` seam."""
+    import importlib  # noqa: PLC0415 - lazy by design
+
+    return importlib.import_module("server.db_pool")
 
 
 def _import_sqlalchemy_async() -> Any:
