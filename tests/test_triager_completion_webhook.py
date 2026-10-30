@@ -261,7 +261,7 @@ def test_correlation_key_synthetic_fallback_without_issue(
     )
     _write_status_patch(tmp_path, status="triaged")
     env = _completed_envelope(tmp_path)
-    assert env["correlation_key"] == "tf-spec-099"  # synthetic, never null
+    assert env["correlation_key"] == f"tf-{tmp_path.parent.parent.name}:spec-099"
     assert env["correlation"]["issue_number"] is None
 
 

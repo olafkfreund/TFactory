@@ -54,7 +54,10 @@ def test_correlation_prefers_contract_key(spec):
 
 
 def test_correlation_without_repo_falls_back_to_synthetic(spec):
-    assert _correlation_key(spec, {"issue_number": 42}, {}) == f"tf-{spec.name}"
+    assert (
+        _correlation_key(spec, {"issue_number": 42}, {})
+        == f"tf-{spec.parent.parent.name}:{spec.name}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -77,7 +80,7 @@ def test_correlation_reads_the_pfactory_pickup_repo(spec):
 
 def test_correlation_without_repo_is_synthetic(spec):
     key = _correlation_key(spec, {}, {"aifactory": {"github_issue": 7}})
-    assert key == f"tf-{spec.name}"
+    assert key == f"tf-{spec.parent.parent.name}:{spec.name}"
 
 
 def test_handback_key_is_scoped_to_the_repo(spec):
@@ -89,7 +92,7 @@ def test_handback_key_is_scoped_to_the_repo(spec):
 
 def test_correlation_synthetic_fallback(spec):
     key = _correlation_key(spec, {"spec_id": "001-login"}, {})
-    assert key == "tf-001-login"
+    assert key == f"tf-{spec.parent.parent.name}:001-login"
 
 
 # ─── handback correlation_key_for ────────────────────────────────────────
@@ -102,7 +105,7 @@ def test_handback_key_from_contract(spec):
 
 def test_handback_key_from_source_issue(spec):
     (spec / "context" / "source.json").write_text(json.dumps({"issue_number": 55}))
-    assert _correlation_key_for(spec) == f"tf-{spec.name}"
+    assert _correlation_key_for(spec) == f"tf-{spec.parent.parent.name}:{spec.name}"
 
 
 def test_handback_key_none_when_absent(spec):
@@ -158,3 +161,29 @@ def test_build_only_handoff_keeps_its_key(tmp_path):
     status = json.loads((spec_dir / "status.json").read_text())
     assert _correlation_key(spec_dir, status, source) == "o/r#382"
     assert handback_key(spec_dir) == "o/r#382"
+
+
+def _spec_in(tmp_path, project, spec_id):
+    d = tmp_path / "workspaces" / project / "specs" / spec_id
+    (d / "context").mkdir(parents=True)
+    return d
+
+
+def test_synthetic_key_differs_across_projects(tmp_path):
+    # #1972: spec ids repeat across projects; the synthetic key must not.
+    a, b = _spec_in(tmp_path, "p1", "003-x"), _spec_in(tmp_path, "p2", "003-x")
+    assert _correlation_key(a, {}, {}) == "tf-p1:003-x"
+    assert _correlation_key(b, {}, {}) == "tf-p2:003-x"
+    for d in (a, b):
+        (d / "context" / "source.json").write_text(json.dumps({"issue_number": 5}))
+    assert _correlation_key_for(a) == "tf-p1:003-x"
+    assert _correlation_key_for(b) == "tf-p2:003-x"
+
+
+def test_overlong_synthetic_key_is_none(tmp_path, caplog):
+    d = _spec_in(tmp_path, "p1", "s" * 130)
+    (d / "context" / "source.json").write_text(json.dumps({"issue_number": 5}))
+    with caplog.at_level("WARNING"):
+        assert _correlation_key(d, {}, {}) is None
+        assert _correlation_key_for(d) is None
+    assert "exceeds" in caplog.text

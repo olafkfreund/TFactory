@@ -740,11 +740,32 @@ def _source_repo(source: dict[str, Any]) -> str | None:
     return f"{provider}:{slug}" if provider and provider != "github" else str(slug)
 
 
-def _correlation_key(spec_dir: Path, status: dict, source: dict) -> str:
+_MAX_KEY_LEN = 128  # AIFactory/CFactory correlation_key column width
+
+
+def _synthetic_key(spec_dir: Path, spec_id: str) -> str | None:
+    """``tf-<project_id>:<spec_id>`` (#1972, AIFactory#1972).
+
+    Spec ids repeat across projects, so the project id (TFactory layout
+    ``workspaces/<project_id>/specs/<spec_id>``) scopes the key. Over the
+    128-char column: log and return None, never truncate.
+    """
+    key = f"tf-{spec_dir.parent.parent.name}:{spec_id}"
+    if len(key) > _MAX_KEY_LEN:
+        _triage_log.warning(
+            "synthetic correlation key for %r exceeds %d chars; sending none",
+            spec_id,
+            _MAX_KEY_LEN,
+        )
+        return None
+    return key
+
+
+def _correlation_key(spec_dir: Path, status: dict, source: dict) -> str | None:
     """The RFC-0001 shared correlation key. Precedence (#249):
     RFC-0002 contract ``correlation_key`` → ``<repo>#<issue>`` (only when the
     repo is known; a bare issue number is never emitted, #1467) → synthetic
-    ``tf-<spec_id>`` fallback so it is never null (RFC-0001 §2)."""
+    ``tf-<project_id>:<spec_id>`` (:func:`_synthetic_key`; None if too long)."""
     contract_key = _contract_correlation_key(spec_dir)
     if contract_key:
         return contract_key
@@ -757,7 +778,7 @@ def _correlation_key(spec_dir: Path, status: dict, source: dict) -> str:
     if issue is not None and repo:
         return f"{repo}#{issue}"
     spec_id = status.get("spec_id") or source.get("spec_id") or spec_dir.name
-    return f"tf-{spec_id}"
+    return _synthetic_key(spec_dir, spec_id)
 
 
 def _completion_result_summary(status: dict) -> dict[str, Any]:

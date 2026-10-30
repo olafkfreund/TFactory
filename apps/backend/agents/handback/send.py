@@ -108,12 +108,15 @@ def _correlation_key_for(spec_dir: Path) -> str | None:
         issue = source.get("issue_number") or source.get("correlation_id")
         if issue is None:
             return None
-        from agents.triager import _source_repo  # noqa: PLC0415 - triager is heavy
+        from agents.triager import (  # noqa: PLC0415 - triager is heavy
+            _source_repo,
+            _synthetic_key,
+        )
 
         repo = _source_repo(source)
         if repo:
             return f"{repo}#{int(issue)}"
-        return f"tf-{source.get('spec_id') or spec_dir.name}"
+        return _synthetic_key(spec_dir, source.get("spec_id") or spec_dir.name)
     except (OSError, json.JSONDecodeError, TypeError, ValueError):
         return None
 
