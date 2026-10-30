@@ -25,9 +25,19 @@ UI-driven actions in the audit log.
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi import Request as FastAPIRequest
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from server.database.engine import get_db
+from server.routes.project_authz import (
+    ProjectAccessChecker,
+    _audit_authz_denial,
+    _enforcing,
+)
 
 from ..mcp_remote.auth import AuthenticatedKey
 from ..services.audit_service import (
@@ -197,13 +207,75 @@ async def proxy_add_project(
 # =============================================================================
 
 
+async def _authorize_key(
+    key: AuthenticatedKey | _LegacyAdminKey,
+    project_id: str,
+    db: AsyncSession,
+) -> None:
+    if isinstance(key, _LegacyAdminKey):
+        user = {"id": "default", "is_service": True}
+    else:
+        user = {
+            "id": key.user_id,
+            "role": "user",
+            "api_key_id": key.key_id,
+            "org_id": key.org_id,
+        }
+        if key.org_id:
+            from server.routes.projects import load_projects  # noqa: PLC0415
+
+            try:
+                project = load_projects().get(project_id) if project_id else None
+            except Exception:
+                if _enforcing():
+                    raise
+                project = None  # shadow mode fails open, like check()
+            project_org_id = project.get("org_id") if project else None
+            # Not behind the flag: an org-A key must never act on org B
+            # (cannot fire until projects carry org_id).
+            if project_org_id and project_org_id != key.org_id:
+                detail = "This API key is scoped to another organization"
+                await _audit_authz_denial(
+                    "authz.task.denied", user, project_id, "member", detail
+                )
+                raise HTTPException(403, detail)
+
+    await ProjectAccessChecker("member").check(user, project_id, db)
+
+
+def _authorized_key(
+    scope: str,
+) -> Callable[..., Awaitable[AuthenticatedKey | _LegacyAdminKey]]:
+    """``require_acw_scope`` plus the project-org check for the task the
+    route acts on (``task_id`` path param, else the ``project_id`` query)."""
+    scoped = require_acw_scope(scope)
+
+    async def _dep(
+        request: FastAPIRequest,
+        db: Annotated[AsyncSession, Depends(get_db)],
+    ) -> AuthenticatedKey | _LegacyAdminKey:
+        key: AuthenticatedKey | _LegacyAdminKey = await scoped(
+            request
+        )  # 401/403 before any project lookup
+        task_id = request.path_params.get("task_id")
+        project_id = (
+            task_id.split(":", 1)[0]
+            if task_id
+            else request.query_params.get("project_id", "")
+        )
+        await _authorize_key(key, project_id, db)
+        return key
+
+    return _dep
+
+
 @router.post("/tasks/create-and-run")
 async def proxy_create_and_run_task(
     request: FastAPIRequest,
     project_id: str = Query(...),
     title: str = Query(...),
     description: str = Query(...),
-    key=Depends(require_acw_scope(TASK_WRITE_SCOPE)),
+    key=Depends(_authorized_key(TASK_WRITE_SCOPE)),
 ):
     from ..routes.execution import StartTaskRequest, create_and_run_task
 
@@ -227,7 +299,7 @@ async def proxy_create_and_run_task(
 async def proxy_start_task(
     task_id: str,
     request: FastAPIRequest,
-    key=Depends(require_acw_scope(TASK_WRITE_SCOPE)),
+    key=Depends(_authorized_key(TASK_WRITE_SCOPE)),
 ):
     from ..routes.execution import StartTaskRequest, start_task
 
@@ -247,7 +319,7 @@ async def proxy_start_task(
 async def proxy_stop_task(
     task_id: str,
     request: FastAPIRequest,
-    key=Depends(require_acw_scope(TASK_WRITE_SCOPE)),
+    key=Depends(_authorized_key(TASK_WRITE_SCOPE)),
 ):
     from ..routes.execution import stop_task
 
@@ -266,7 +338,7 @@ async def proxy_stop_task(
 async def proxy_recover_task(
     task_id: str,
     request: FastAPIRequest,
-    key=Depends(require_acw_scope(TASK_WRITE_SCOPE)),
+    key=Depends(_authorized_key(TASK_WRITE_SCOPE)),
 ):
     from ..routes.execution import RecoverTaskRequest, recover_task
 
@@ -286,7 +358,7 @@ async def proxy_recover_task(
 async def proxy_approve_plan(
     task_id: str,
     request: FastAPIRequest,
-    key=Depends(require_acw_scope(TASK_WRITE_SCOPE)),
+    key=Depends(_authorized_key(TASK_WRITE_SCOPE)),
 ):
     from ..routes.tasks import ApprovePlanRequest, approve_plan
 
@@ -311,7 +383,7 @@ async def proxy_approve_plan(
 async def proxy_create_pr(
     task_id: str,
     request: FastAPIRequest,
-    key=Depends(require_acw_scope(TASK_MERGE_SCOPE)),
+    key=Depends(_authorized_key(TASK_MERGE_SCOPE)),
 ):
     from ..routes.tasks import CreatePRFromTaskOptions, create_pr_from_task
 
@@ -333,7 +405,7 @@ async def proxy_create_pr(
 async def proxy_merge_worktree(
     task_id: str,
     request: FastAPIRequest,
-    key=Depends(require_acw_scope(TASK_MERGE_SCOPE)),
+    key=Depends(_authorized_key(TASK_MERGE_SCOPE)),
 ):
     from ..routes.tasks import WorktreeMergeOptions, merge_worktree
 
