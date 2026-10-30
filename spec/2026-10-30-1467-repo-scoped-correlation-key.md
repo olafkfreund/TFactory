@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1467
 intent: intent/2026-10-30-1467-repo-scoped-correlation-key.md
 ---
