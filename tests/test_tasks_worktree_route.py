@@ -71,3 +71,24 @@ def test_status_and_diff_need_exact_project(tmp_path, monkeypatch):
     assert status == {"success": True, "data": {"exists": False}}
     diff = asyncio.run(tasks_worktree.get_worktree_diff("nope:s1"))
     assert diff == {"success": False, "error": "Project not found for task nope:s1"}
+
+
+def test_merge_preview_needs_exact_project(tmp_path, monkeypatch):
+    """#1474: merge preview requires an exact project id."""
+    import asyncio
+
+    import pytest
+    from fastapi import HTTPException
+
+    _projects(tmp_path, monkeypatch)
+    (tmp_path / "p1" / ".tfactory" / "worktrees" / "tasks" / "s1").rmdir()
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(tasks_worktree.get_worktree_merge_preview("s1"))
+    assert exc.value.status_code == 400
+
+    missing = asyncio.run(tasks_worktree.get_worktree_merge_preview("nope:s1"))
+    assert missing == {"success": False, "error": "Task nope:s1 not found"}
+
+    found = asyncio.run(tasks_worktree.get_worktree_merge_preview("p1:s1"))
+    assert found == {"success": False, "error": "No worktree found for this task"}
