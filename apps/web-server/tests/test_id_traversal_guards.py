@@ -112,10 +112,13 @@ def test_templates_segment_rejects_traversal(evil):
 
 
 @pytest.mark.parametrize("evil", TRAVERSALS)
-def test_mcp_copilot_find_spec_dir_rejects_traversal(evil):
-    # This one answers ``None`` rather than raising -- it is a lookup, not a
-    # 4xx boundary -- but it must still refuse to look.
-    assert mcp_copilot._find_spec_dir(evil) is None
+def test_mcp_copilot_resolve_spec_dir_rejects_traversal(evil):
+    with pytest.raises(HTTPException) as exc:
+        mcp_copilot._resolve_spec_dir(f"{evil}:spec")
+    assert exc.value.status_code == 400
+    with pytest.raises(HTTPException) as exc:
+        mcp_copilot._resolve_spec_dir(f"proj:{evil}")
+    assert exc.value.status_code == 400
 
 
 # ─── the two that were already hand-patched: pin them ─────────────────────────
