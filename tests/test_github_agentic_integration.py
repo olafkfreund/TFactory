@@ -125,6 +125,8 @@ async def test_copilot_dispatch_missing_token(monkeypatch, tmp_path):
     with pytest.raises(CopilotDispatchError, match="GITHUB_TOKEN"):
         await dispatch_test_writing(
             spec_dir=tmp_path,
+            project_id="proj-1",
+            spec_id="spec-2",
             repo_full_name="owner/repo",
             task_description="Add login tests",
             lanes=["unit"],
@@ -132,6 +134,41 @@ async def test_copilot_dispatch_missing_token(monkeypatch, tmp_path):
             ac_map={},
             issue_number=1,
         )
+
+
+def test_copilot_dispatch_issue_and_prompt_include_task_id(monkeypatch, tmp_path):
+    """#1487: issue body and prompt carry the project_id:spec_id the MCP tools take."""
+    from agents.copilot_dispatch import _assign_copilot, _build_prompt, _ensure_issue
+    from server.routes import mcp_copilot
+
+    task_id = "proj-1:spec-2"
+    # The id passes the MCP route's own check and resolves to the spec dir.
+    spec_dir = tmp_path / "workspaces" / "proj-1" / "specs" / "spec-2"
+    spec_dir.mkdir(parents=True)
+    (spec_dir / "status.json").write_text("{}")
+    monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path))
+    assert mcp_copilot._resolve_spec_dir(task_id) == spec_dir
+
+    issue_result = MagicMock(
+        returncode=0, stdout="https://github.com/owner/repo/issues/42\n"
+    )
+    with patch(
+        "agents.copilot_dispatch.subprocess.run", return_value=issue_result
+    ) as mock_run:
+        num = _ensure_issue("owner/repo", "Add login tests", task_id)
+        assert num == 42
+        issue_args = mock_run.call_args[0][0]
+        issue_body = issue_args[issue_args.index("--body") + 1]
+        assert task_id in issue_body
+        assert "task_id" in issue_body
+
+    prompt = _build_prompt(task_id, ["unit"], {"unit": "pytest"}, {})
+    assert f'task_id="{task_id}"' in prompt
+
+    with patch("agents.copilot_dispatch.subprocess.run") as mock_run:
+        _assign_copilot("owner/repo", 42, prompt)
+        comment_args = mock_run.call_args_list[0][0][0]
+        assert comment_args[comment_args.index("--body") + 1] == prompt
 
 
 @pytest.mark.asyncio
@@ -199,16 +236,17 @@ def test_write_dispatch_metadata_merges_existing(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+_TEST_MCP_TOKEN = "test-mcp-token"
+
+
 @pytest.fixture()
 def mcp_client(tmp_path, monkeypatch):
     """Return a TestClient for the mcp_copilot router with a tmp workspace."""
-    import importlib
-
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
     monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path))
-    monkeypatch.delenv("COPILOT_MCP_TFACTORY_TOKEN", raising=False)
+    monkeypatch.setenv("COPILOT_MCP_TFACTORY_TOKEN", _TEST_MCP_TOKEN)
 
     # Force fresh import so _workspace_root() picks up the monkeypatched env
     sys.modules.pop("server.routes.mcp_copilot", None)
@@ -216,7 +254,7 @@ def mcp_client(tmp_path, monkeypatch):
 
     app = FastAPI()
     app.include_router(mod.router)
-    return TestClient(app)
+    return TestClient(app, headers={"Authorization": f"Bearer {_TEST_MCP_TOKEN}"})
 
 
 def _post_mcp(client, method: str, params: dict | None = None) -> dict:
@@ -253,7 +291,7 @@ def test_mcp_unknown_task_returns_error(mcp_client):
         "tools/call",
         {
             "name": "tfactory_get_test_plan",
-            "arguments": {"task_id": "nonexistent-task"},
+            "arguments": {"task_id": "proj:nonexistent-task"},
         },
     )
     content = json.loads(data["result"]["content"][0]["text"])
@@ -273,7 +311,7 @@ def test_mcp_coverage_returns_null_gracefully(mcp_client, tmp_path):
         "tools/call",
         {
             "name": "tfactory_get_coverage",
-            "arguments": {"task_id": "spec-abc", "lane": "unit"},
+            "arguments": {"task_id": "proj:spec-abc", "lane": "unit"},
         },
     )
     content = json.loads(data["result"]["content"][0]["text"])
@@ -293,7 +331,7 @@ def test_mcp_report_result_writes_metadata(mcp_client, tmp_path):
         {
             "name": "tfactory_report_result",
             "arguments": {
-                "task_id": "spec-xyz",
+                "task_id": "proj:spec-xyz",
                 "lane": "unit",
                 "passed": 10,
                 "failed": 0,
@@ -325,7 +363,24 @@ def test_mcp_unknown_method_returns_error(mcp_client):
     assert data["error"]["code"] == -32601
 
 
-def _make_mcp_client(monkeypatch, tmp_path, *, token: str | None):
+def test_mcp_bare_task_id_returns_400(mcp_client):
+    """tools/call with a bare task_id (no colon) returns HTTP 400."""
+    resp = mcp_client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "tfactory_get_test_plan",
+                "arguments": {"task_id": "bare-task-id"},
+            },
+        },
+    )
+    assert resp.status_code == 400
+
+
+def _make_mcp_client(monkeypatch, tmp_path, *, token: str | None = _TEST_MCP_TOKEN):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
@@ -341,6 +396,16 @@ def _make_mcp_client(monkeypatch, tmp_path, *, token: str | None):
     app = FastAPI()
     app.include_router(mod.router)
     return TestClient(app, raise_server_exceptions=False)
+
+
+def test_mcp_token_unset_returns_503(monkeypatch, tmp_path):
+    """When COPILOT_MCP_TFACTORY_TOKEN is unset, POST /mcp initialize returns 503."""
+    client = _make_mcp_client(monkeypatch, tmp_path, token=None)
+    resp = client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+    )
+    assert resp.status_code == 503
 
 
 def test_mcp_bearer_auth_rejects_wrong_token(monkeypatch, tmp_path):

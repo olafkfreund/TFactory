@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+## 0.9.49 — worktree resolve by exact project id, Copilot MCP fails closed (2026-10-31)
+
+### Changed
+
+- **Behaviour change: worktree resolve writes need `project_id:spec_id`
+  (#1479, #1484).** `POST /api/tasks/{task_id}/worktree/resolve-uncommitted`
+  and `/worktree/resolve-git-merge` match the project by exact id, like
+  `/worktree/diff`, `/worktree/status` and `/worktree/merge-preview`; a bare
+  spec id gets `400` and there is no scan across projects. The web UI already
+  sends `project_id:spec_id`.
+- **Worktree reads have a viewer check (#1479, #1484).**
+  `GET .../worktree/merge-preview`, `/worktree/status` and `/worktree/diff`
+  now require `viewer` on the task, in shadow mode behind
+  `RBAC_ENFORCE_TASK_ROUTES` (still off) like the other task routes.
+- **Copilot dispatch carries the task id (#1487, #1489).** The issue body and
+  the `@copilot` prompt now contain `project_id:spec_id` and name it as the
+  `task_id` for `tfactory_get_test_plan`, `tfactory_get_spec` and
+  `tfactory_get_ac_map`. `dispatch_test_writing` takes required `project_id`
+  and `spec_id` keyword arguments.
+
+### Security
+
+- **Behaviour change: the Copilot MCP endpoint fails closed (#1480, #1485).**
+  `/mcp` answers `503` on every request when `COPILOT_MCP_TFACTORY_TOKEN` is
+  unset or blank (the route stays mounted). Prod does not set the token, so
+  `/mcp` answers `503` in prod; this is intended. The bearer is compared with
+  `hmac.compare_digest`; a wrong or missing bearer still gets `401`. Tools take
+  `task_id` as `project_id:spec_id` (bare or unsafe id → `400`); the scan
+  across every project is gone.
+- **uv floor `>=0.13.6-r1` (#1486)** in the Docker image, past
+  CVE-2026-111943 (HIGH), which failed the Trivy P0 gate.
+
+No new env vars.
+
 ## 0.9.48 — project-scoped synthetic correlation key, merge preview by exact project id (2026-10-30)
 
 ### Changed

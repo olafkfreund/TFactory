@@ -74,6 +74,8 @@ class CopilotDispatchError(RuntimeError):
 async def dispatch_test_writing(
     *,
     spec_dir: Path,
+    project_id: str,
+    spec_id: str,
     repo_full_name: str,
     task_description: str,
     lanes: list[str],
@@ -90,6 +92,8 @@ async def dispatch_test_writing(
     Args:
         spec_dir: Path to the workspace spec directory (holds
             ``test_task_metadata.json``).
+        project_id: TFactory project identifier.
+        spec_id: TFactory spec identifier.
         repo_full_name: ``owner/repo`` string.
         task_description: Human-readable description of what to test.
         lanes: Lane names to generate (e.g. ``["unit", "api"]``).
@@ -106,11 +110,16 @@ async def dispatch_test_writing(
             error occurs before the poll begins.
     """
     _require_github_token()
+    task_id = f"{project_id}:{spec_id}"
 
     if issue_number is None:
-        issue_number = _ensure_issue(repo_full_name, task_description)
+        issue_number = _ensure_issue(repo_full_name, task_description, task_id)
 
-    _assign_copilot(repo_full_name, issue_number, lanes, frameworks, ac_map)
+    _assign_copilot(
+        repo_full_name,
+        issue_number,
+        _build_prompt(task_id, lanes, frameworks, ac_map),
+    )
     _write_dispatch_metadata(
         spec_dir, issue_number, dispatched=True, pr_number=None, timed_out=False
     )
@@ -166,7 +175,7 @@ def _require_github_token() -> str:
     return token
 
 
-def _ensure_issue(repo_full_name: str, title: str) -> int:
+def _ensure_issue(repo_full_name: str, title: str, task_id: str) -> int:
     """Create a GitHub issue for the TFactory task and return its number."""
     result = subprocess.run(
         [
@@ -178,7 +187,11 @@ def _ensure_issue(repo_full_name: str, title: str) -> int:
             "--title",
             title,
             "--body",
-            f"TFactory test-writing task dispatched to Copilot.\n\nLabel: `{_TFACTORY_LABEL}`",
+            (
+                "TFactory test-writing task dispatched to Copilot.\n\n"
+                f"Label: `{_TFACTORY_LABEL}`\n"
+                f"MCP `task_id`: `{task_id}`"
+            ),
             "--label",
             _TFACTORY_LABEL,
         ],
@@ -199,15 +212,13 @@ def _ensure_issue(repo_full_name: str, title: str) -> int:
         ) from exc
 
 
-def _assign_copilot(
-    repo_full_name: str,
-    issue_number: int,
+def _build_prompt(
+    task_id: str,
     lanes: list[str],
     frameworks: dict[str, str],
     ac_map: dict[str, list[str]],
-) -> None:
-    """Assign copilot-swe-agent and post a detailed test-suite prompt comment."""
-    # Build a rich prompt comment so Copilot knows exactly what to write
+) -> str:
+    """Build a rich prompt comment so Copilot knows exactly what to write."""
     lanes_str = ", ".join(lanes) if lanes else "unit"
     fw_lines = "\n".join(f"  - {lane}: {fw}" for lane, fw in frameworks.items())
     ac_lines = (
@@ -215,16 +226,21 @@ def _assign_copilot(
         or "  (no AC map provided)"
     )
 
-    prompt_body = (
+    return (
         f"@copilot Please write the TFactory test suite for this task.\n\n"
+        f"**Task ID (`task_id`):** `{task_id}`\n\n"
         f"**Lanes:** {lanes_str}\n\n"
         f"**Frameworks:**\n{fw_lines}\n\n"
         f"**Acceptance-criteria → source-file map:**\n{ac_lines}\n\n"
         "Use the TFactory MCP server tools (`tfactory_get_test_plan`, "
-        "`tfactory_get_spec`, `tfactory_get_ac_map`) to get full context "
+        "`tfactory_get_spec`, `tfactory_get_ac_map`) with "
+        f'`task_id="{task_id}"` to get full context '
         "before writing any test file."
     )
 
+
+def _assign_copilot(repo_full_name: str, issue_number: int, prompt_body: str) -> None:
+    """Assign copilot-swe-agent and post the test-suite prompt comment."""
     # Post the prompt as a comment (Copilot picks it up from @copilot mentions)
     subprocess.run(
         [
