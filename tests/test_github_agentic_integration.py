@@ -199,16 +199,17 @@ def test_write_dispatch_metadata_merges_existing(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+_TEST_MCP_TOKEN = "test-mcp-token"
+
+
 @pytest.fixture()
 def mcp_client(tmp_path, monkeypatch):
     """Return a TestClient for the mcp_copilot router with a tmp workspace."""
-    import importlib
-
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
     monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path))
-    monkeypatch.delenv("COPILOT_MCP_TFACTORY_TOKEN", raising=False)
+    monkeypatch.setenv("COPILOT_MCP_TFACTORY_TOKEN", _TEST_MCP_TOKEN)
 
     # Force fresh import so _workspace_root() picks up the monkeypatched env
     sys.modules.pop("server.routes.mcp_copilot", None)
@@ -216,7 +217,7 @@ def mcp_client(tmp_path, monkeypatch):
 
     app = FastAPI()
     app.include_router(mod.router)
-    return TestClient(app)
+    return TestClient(app, headers={"Authorization": f"Bearer {_TEST_MCP_TOKEN}"})
 
 
 def _post_mcp(client, method: str, params: dict | None = None) -> dict:
@@ -253,7 +254,7 @@ def test_mcp_unknown_task_returns_error(mcp_client):
         "tools/call",
         {
             "name": "tfactory_get_test_plan",
-            "arguments": {"task_id": "nonexistent-task"},
+            "arguments": {"task_id": "proj:nonexistent-task"},
         },
     )
     content = json.loads(data["result"]["content"][0]["text"])
@@ -273,7 +274,7 @@ def test_mcp_coverage_returns_null_gracefully(mcp_client, tmp_path):
         "tools/call",
         {
             "name": "tfactory_get_coverage",
-            "arguments": {"task_id": "spec-abc", "lane": "unit"},
+            "arguments": {"task_id": "proj:spec-abc", "lane": "unit"},
         },
     )
     content = json.loads(data["result"]["content"][0]["text"])
@@ -293,7 +294,7 @@ def test_mcp_report_result_writes_metadata(mcp_client, tmp_path):
         {
             "name": "tfactory_report_result",
             "arguments": {
-                "task_id": "spec-xyz",
+                "task_id": "proj:spec-xyz",
                 "lane": "unit",
                 "passed": 10,
                 "failed": 0,
@@ -325,7 +326,24 @@ def test_mcp_unknown_method_returns_error(mcp_client):
     assert data["error"]["code"] == -32601
 
 
-def _make_mcp_client(monkeypatch, tmp_path, *, token: str | None):
+def test_mcp_bare_task_id_returns_400(mcp_client):
+    """tools/call with a bare task_id (no colon) returns HTTP 400."""
+    resp = mcp_client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "tfactory_get_test_plan",
+                "arguments": {"task_id": "bare-task-id"},
+            },
+        },
+    )
+    assert resp.status_code == 400
+
+
+def _make_mcp_client(monkeypatch, tmp_path, *, token: str | None = _TEST_MCP_TOKEN):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
@@ -341,6 +359,16 @@ def _make_mcp_client(monkeypatch, tmp_path, *, token: str | None):
     app = FastAPI()
     app.include_router(mod.router)
     return TestClient(app, raise_server_exceptions=False)
+
+
+def test_mcp_token_unset_returns_503(monkeypatch, tmp_path):
+    """When COPILOT_MCP_TFACTORY_TOKEN is unset, POST /mcp initialize returns 503."""
+    client = _make_mcp_client(monkeypatch, tmp_path, token=None)
+    resp = client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+    )
+    assert resp.status_code == 503
 
 
 def test_mcp_bearer_auth_rejects_wrong_token(monkeypatch, tmp_path):
