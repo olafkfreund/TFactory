@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1487
 intent: intent/2026-10-31-1487-copilot-dispatch-task-id.md
 ---
