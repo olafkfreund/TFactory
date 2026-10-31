@@ -14,7 +14,7 @@ _WEB_SERVER_DIR = Path(__file__).parent.parent / "apps" / "web-server"
 if str(_WEB_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_WEB_SERVER_DIR))
 
-# (module, method, path, role) — the 20 task write routes that carry the dependency.
+# (module, method, path, role) — task routes that carry the dependency.
 _W = "/{task_id}/worktree/"
 EXPECTED = [
     *[
@@ -49,6 +49,10 @@ EXPECTED = [
             "merge",
             "discard",
         )
+    ],
+    *[
+        ("tasks_worktree", "GET", _W + p, "viewer")
+        for p in ("merge-preview", "status", "diff")
     ],
 ]
 
@@ -243,6 +247,30 @@ def test_shadow_allowed_writes_no_audit(env):
     assert env.audits == []
 
 
+def test_shadow_worktree_routes_log_would_deny_for_other_org(env, tmp_path):
+    from server.routes import tasks_worktree
+
+    env.client.app.include_router(tasks_worktree.router, prefix="/api/tasks")
+    env.monkeypatch.setattr(tasks_worktree, "get_data_dir", lambda: tmp_path / "empty")
+
+    for method, path in (
+        ("GET", "merge-preview"),
+        ("GET", "status"),
+        ("GET", "diff"),
+        ("POST", "resolve-uncommitted"),
+        ("POST", "resolve-git-merge"),
+    ):
+        response = env.client.request(
+            method,
+            f"/api/tasks/p1:s1/worktree/{path}",
+            headers={"X-Test-Principal": "stranger"},
+        )
+        assert response.status_code == 200
+        assert [audit["action"] for audit in env.audits] == ["authz.task.would_deny"]
+        assert env.audits[0]["resource_id"] == "p1"
+        env.audits.clear()
+
+
 def test_session_rolled_back_after_allowed_member_call(env):
     _enforce(env)
     env.call("member-a")
@@ -275,7 +303,7 @@ def test_every_task_write_route_carries_member_dependency():
         if not ok:
             missing.append((module, method, path, role))
     assert not missing
-    assert len(EXPECTED) == 21
+    assert len(EXPECTED) == 24
 
 
 def test_every_project_task_route_carries_project_access_dependency():
