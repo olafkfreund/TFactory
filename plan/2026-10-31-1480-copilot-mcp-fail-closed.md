@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1480
 spec: spec/2026-10-31-1480-copilot-mcp-fail-closed.md
 coders:   # the user asked for agy as a team member this wave
