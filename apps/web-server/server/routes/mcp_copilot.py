@@ -22,7 +22,7 @@ Register in repo Settings → Copilot → MCP servers::
       }
     }
 
-Tools exposed
+Tools exposed (all ``task_id`` arguments take ``project_id:spec_id``)
 -------------
 ``tfactory_get_test_plan``   — ``test_plan.json`` for a task
 ``tfactory_get_ac_map``      — AC-id → source-file mapping
@@ -35,15 +35,15 @@ Environment variables
 ---------------------
 ``COPILOT_MCP_TFACTORY_TOKEN``
     Required.  Bearer token that Copilot sends with every request.
-    Requests without a valid token get a 401 response.
-    If the variable is unset the endpoint is effectively open (the
-    server logs a warning on startup).
+    Requests without a valid token get a 401 response; if the variable
+    is unset or blank the endpoint fails closed with a 503 response.
 ``TFACTORY_WORKSPACE_ROOT``
     Optional override for the workspace root (default ``~/.tfactory``).
 """
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import os
@@ -71,18 +71,19 @@ _BEARER_RE = re.compile(r"^Bearer\s+(.+)$", re.IGNORECASE)
 
 
 def _check_auth(request: Request) -> None:
-    """Validate the Bearer token.  Raises 401 if invalid or missing."""
+    """Validate the Bearer token.  Raises 503 if unconfigured, 401 if invalid or missing."""
     expected = os.environ.get("COPILOT_MCP_TFACTORY_TOKEN", "").strip()
     if not expected:
-        # Token not configured — warn once, allow through (dev convenience)
-        logger.warning(
-            "COPILOT_MCP_TFACTORY_TOKEN is not set; MCP endpoint is unauthenticated"
+        raise HTTPException(
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Copilot MCP endpoint is not configured",
         )
-        return
 
     auth_header = request.headers.get("Authorization", "")
     match = _BEARER_RE.match(auth_header)
-    if not match or match.group(1) != expected:
+    if not match or not hmac.compare_digest(
+        match.group(1).encode("utf-8"), expected.encode("utf-8")
+    ):
         raise HTTPException(
             status_code=http_status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing Bearer token",
@@ -99,19 +100,17 @@ def _workspace_root() -> Path:
     return Path(env).expanduser() if env else Path.home() / ".tfactory"
 
 
-def _find_spec_dir(task_id: str) -> Path | None:
-    """Locate the spec_dir for *task_id* across all projects."""
-    if not is_safe_slug(task_id):
-        return None
-    workspaces = _workspace_root() / "workspaces"
-    if not workspaces.exists():
-        return None
-    for project_dir in workspaces.iterdir():
-        if not project_dir.is_dir():
-            continue
-        candidate = project_dir / "specs" / task_id
-        if (candidate / "status.json").exists():
-            return candidate
+def _resolve_spec_dir(task_id: str) -> Path | None:
+    """Locate the spec_dir for *task_id* (``project_id:spec_id``)."""
+    project_id, sep, spec_id = task_id.partition(":")
+    if not sep or not is_safe_slug(project_id) or not is_safe_slug(spec_id):
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail="task_id must be 'project_id:spec_id' with safe slugs",
+        )
+    candidate = _workspace_root() / "workspaces" / project_id / "specs" / spec_id
+    if (candidate / "status.json").exists():
+        return candidate
     return None
 
 
@@ -131,7 +130,7 @@ def _read_json(path: Path) -> dict | list | None:
 
 def _tool_get_test_plan(args: dict[str, Any]) -> dict[str, Any]:
     task_id = str(args.get("task_id", "")).strip()
-    spec_dir = _find_spec_dir(task_id)
+    spec_dir = _resolve_spec_dir(task_id)
     if spec_dir is None:
         return {"error": "task not found"}
 
@@ -168,7 +167,7 @@ def _tool_get_test_plan(args: dict[str, Any]) -> dict[str, Any]:
 
 def _tool_get_ac_map(args: dict[str, Any]) -> dict[str, Any]:
     task_id = str(args.get("task_id", "")).strip()
-    spec_dir = _find_spec_dir(task_id)
+    spec_dir = _resolve_spec_dir(task_id)
     if spec_dir is None:
         return {"error": "task not found"}
 
@@ -190,7 +189,7 @@ def _tool_get_ac_map(args: dict[str, Any]) -> dict[str, Any]:
 def _tool_get_coverage(args: dict[str, Any]) -> dict[str, Any]:
     task_id = str(args.get("task_id", "")).strip()
     lane = str(args.get("lane", "unit")).strip()
-    spec_dir = _find_spec_dir(task_id)
+    spec_dir = _resolve_spec_dir(task_id)
     if spec_dir is None:
         return {"error": "task not found"}
 
@@ -222,7 +221,7 @@ def _tool_get_coverage(args: dict[str, Any]) -> dict[str, Any]:
 def _tool_get_results(args: dict[str, Any]) -> dict[str, Any]:
     task_id = str(args.get("task_id", "")).strip()
     lane = str(args.get("lane", "unit")).strip()
-    spec_dir = _find_spec_dir(task_id)
+    spec_dir = _resolve_spec_dir(task_id)
     if spec_dir is None:
         return {"error": "task not found"}
 
@@ -260,7 +259,7 @@ def _tool_get_results(args: dict[str, Any]) -> dict[str, Any]:
 
 def _tool_get_spec(args: dict[str, Any]) -> dict[str, Any]:
     task_id = str(args.get("task_id", "")).strip()
-    spec_dir = _find_spec_dir(task_id)
+    spec_dir = _resolve_spec_dir(task_id)
     if spec_dir is None:
         return {"error": "task not found"}
 
@@ -294,7 +293,7 @@ def _tool_get_spec(args: dict[str, Any]) -> dict[str, Any]:
 
 def _tool_report_result(args: dict[str, Any]) -> dict[str, Any]:
     task_id = str(args.get("task_id", "")).strip()
-    spec_dir = _find_spec_dir(task_id)
+    spec_dir = _resolve_spec_dir(task_id)
     if spec_dir is None:
         return {"error": "task not found"}
 
@@ -340,15 +339,18 @@ def _tool_report_result(args: dict[str, Any]) -> dict[str, Any]:
 # Tool registry
 # ---------------------------------------------------------------------------
 
+_TASK_ID_PROP: dict[str, str] = {
+    "type": "string",
+    "description": "TFactory task identifier in 'project_id:spec_id' form",
+}
+
 _TOOLS: list[dict[str, Any]] = [
     {
         "name": "tfactory_get_test_plan",
         "description": "Return the test_plan.json for the given TFactory task (lanes, frameworks, coverage target, mutation scope).",
         "inputSchema": {
             "type": "object",
-            "properties": {
-                "task_id": {"type": "string", "description": "TFactory task / spec ID"}
-            },
+            "properties": {"task_id": _TASK_ID_PROP},
             "required": ["task_id"],
         },
     },
@@ -357,7 +359,7 @@ _TOOLS: list[dict[str, Any]] = [
         "description": "Return the acceptance-criteria → source-file mapping for a task.",
         "inputSchema": {
             "type": "object",
-            "properties": {"task_id": {"type": "string"}},
+            "properties": {"task_id": _TASK_ID_PROP},
             "required": ["task_id"],
         },
     },
@@ -367,7 +369,7 @@ _TOOLS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "task_id": {"type": "string"},
+                "task_id": _TASK_ID_PROP,
                 "lane": {
                     "type": "string",
                     "enum": ["unit", "api", "browser", "integration"],
@@ -382,7 +384,7 @@ _TOOLS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "task_id": {"type": "string"},
+                "task_id": _TASK_ID_PROP,
                 "lane": {
                     "type": "string",
                     "enum": [
@@ -403,7 +405,7 @@ _TOOLS: list[dict[str, Any]] = [
         "description": "Return the spec.md and acceptance criteria for a task so the agent understands what to test.",
         "inputSchema": {
             "type": "object",
-            "properties": {"task_id": {"type": "string"}},
+            "properties": {"task_id": _TASK_ID_PROP},
             "required": ["task_id"],
         },
     },
@@ -413,7 +415,7 @@ _TOOLS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "task_id": {"type": "string"},
+                "task_id": _TASK_ID_PROP,
                 "lane": {"type": "string"},
                 "passed": {"type": "integer"},
                 "failed": {"type": "integer"},
@@ -494,6 +496,8 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
 
         try:
             result_data = handler(tool_args)
+        except HTTPException:
+            raise
         except Exception:
             logger.exception(
                 "mcp_copilot: tool %r raised unexpected error",
