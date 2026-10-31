@@ -92,3 +92,23 @@ def test_merge_preview_needs_exact_project(tmp_path, monkeypatch):
 
     found = asyncio.run(tasks_worktree.get_worktree_merge_preview("p1:s1"))
     assert found == {"success": False, "error": "No worktree found for this task"}
+
+
+def test_resolve_writes_need_exact_project(tmp_path, monkeypatch):
+    import asyncio
+
+    import pytest
+    from fastapi import HTTPException
+
+    _projects(tmp_path, monkeypatch)
+    for handler in (
+        tasks_worktree.resolve_uncommitted_conflicts,
+        tasks_worktree.resolve_git_merge_conflicts,
+    ):
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(handler("s1"))
+        assert exc.value.status_code == 400
+        assert asyncio.run(handler("nope:s1")) == {
+            "success": False,
+            "error": "Task nope:s1 not found",
+        }
