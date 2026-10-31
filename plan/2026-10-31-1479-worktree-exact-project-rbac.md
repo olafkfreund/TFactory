@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1479
 spec: spec/2026-10-31-1479-worktree-exact-project-rbac.md
 coders:   # the lead named Codex as coder for this lane
