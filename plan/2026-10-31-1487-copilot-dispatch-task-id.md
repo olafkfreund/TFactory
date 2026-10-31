@@ -26,6 +26,14 @@ the issue body and the `@copilot` prompt both contain it and name it as the
    → verify by `cd apps/backend && .venv/bin/python -m pytest ../../tests/test_github_agentic_integration.py -q`
    Traps: never `git add -A` (the `.venv` symlink); ruff on apps/backend.
 
+## Deviations
+
+- Step 1: a sixth `task_id` arg on `_assign_copilot` tripped the CI ratchet
+  (PLR0913, max 5 args). Prompt building moved to
+  `_build_prompt(task_id, lanes, frameworks, ac_map) -> str`, and
+  `_assign_copilot(repo_full_name, issue_number, prompt_body)` now only posts
+  and assigns. Same prompt text. The test calls both.
+
 ## Tests
 
 `pytest tests/test_github_agentic_integration.py` green; ruff clean.

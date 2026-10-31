@@ -138,7 +138,7 @@ async def test_copilot_dispatch_missing_token(monkeypatch, tmp_path):
 
 def test_copilot_dispatch_issue_and_prompt_include_task_id(monkeypatch, tmp_path):
     """#1487: issue body and prompt carry the project_id:spec_id the MCP tools take."""
-    from agents.copilot_dispatch import _assign_copilot, _ensure_issue
+    from agents.copilot_dispatch import _assign_copilot, _build_prompt, _ensure_issue
     from server.routes import mcp_copilot
 
     task_id = "proj-1:spec-2"
@@ -162,12 +162,13 @@ def test_copilot_dispatch_issue_and_prompt_include_task_id(monkeypatch, tmp_path
         assert task_id in issue_body
         assert "task_id" in issue_body
 
+    prompt = _build_prompt(task_id, ["unit"], {"unit": "pytest"}, {})
+    assert f'task_id="{task_id}"' in prompt
+
     with patch("agents.copilot_dispatch.subprocess.run") as mock_run:
-        _assign_copilot("owner/repo", 42, ["unit"], {"unit": "pytest"}, {}, task_id)
+        _assign_copilot("owner/repo", 42, prompt)
         comment_args = mock_run.call_args_list[0][0][0]
-        comment_body = comment_args[comment_args.index("--body") + 1]
-        assert task_id in comment_body
-        assert "task_id" in comment_body
+        assert comment_args[comment_args.index("--body") + 1] == prompt
 
 
 @pytest.mark.asyncio

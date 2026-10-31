@@ -115,7 +115,11 @@ async def dispatch_test_writing(
     if issue_number is None:
         issue_number = _ensure_issue(repo_full_name, task_description, task_id)
 
-    _assign_copilot(repo_full_name, issue_number, lanes, frameworks, ac_map, task_id)
+    _assign_copilot(
+        repo_full_name,
+        issue_number,
+        _build_prompt(task_id, lanes, frameworks, ac_map),
+    )
     _write_dispatch_metadata(
         spec_dir, issue_number, dispatched=True, pr_number=None, timed_out=False
     )
@@ -208,16 +212,13 @@ def _ensure_issue(repo_full_name: str, title: str, task_id: str) -> int:
         ) from exc
 
 
-def _assign_copilot(
-    repo_full_name: str,
-    issue_number: int,
+def _build_prompt(
+    task_id: str,
     lanes: list[str],
     frameworks: dict[str, str],
     ac_map: dict[str, list[str]],
-    task_id: str,
-) -> None:
-    """Assign copilot-swe-agent and post a detailed test-suite prompt comment."""
-    # Build a rich prompt comment so Copilot knows exactly what to write
+) -> str:
+    """Build a rich prompt comment so Copilot knows exactly what to write."""
     lanes_str = ", ".join(lanes) if lanes else "unit"
     fw_lines = "\n".join(f"  - {lane}: {fw}" for lane, fw in frameworks.items())
     ac_lines = (
@@ -225,7 +226,7 @@ def _assign_copilot(
         or "  (no AC map provided)"
     )
 
-    prompt_body = (
+    return (
         f"@copilot Please write the TFactory test suite for this task.\n\n"
         f"**Task ID (`task_id`):** `{task_id}`\n\n"
         f"**Lanes:** {lanes_str}\n\n"
@@ -237,6 +238,9 @@ def _assign_copilot(
         "before writing any test file."
     )
 
+
+def _assign_copilot(repo_full_name: str, issue_number: int, prompt_body: str) -> None:
+    """Assign copilot-swe-agent and post the test-suite prompt comment."""
     # Post the prompt as a comment (Copilot picks it up from @copilot mentions)
     subprocess.run(
         [
