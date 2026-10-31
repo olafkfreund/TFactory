@@ -144,6 +144,8 @@ RUN want="$(tr -dc '0-9.' < /tmp/.nvmrc | cut -d. -f1)" \
 #                        8.23.0-r0. Named together: same origin.
 #   ca-certificates-bundle 20260909-r2 — CVE-2026-111943 (HIGH), fixed in
 #                        20260909-r3.
+#   uv 0.12.22-r0 — CVE-2026-111943 (HIGH, same Go x509 denylist), fixed in
+#                        0.13.6-r1. Agents launch MCP servers with uvx.
 #   libbrotlicommon1 / libbrotlidec1 / libbrotlienc1 1.2.0-r5 — CVE-2026-111497
 #                        (HIGH), fixed in 1.2.0-r7. Named together: same origin.
 #   py3-pip-wheel 26.2.1-r2 — CVE-2026-114613 (HIGH), msgpack map-deserialization
@@ -164,6 +166,7 @@ RUN apk add --no-cache \
         bubblewrap \
         ca-certificates \
         "ca-certificates-bundle>=20260909-r3" \
+        "uv>=0.13.6-r1" \
         "curl>=8.23.0-r0" \
         "libcurl-openssl4>=8.23.0-r0" \
         "libbrotlicommon1>=1.2.0-r7" \
