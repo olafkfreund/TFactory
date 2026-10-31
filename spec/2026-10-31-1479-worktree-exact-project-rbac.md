@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1479
 intent: intent/2026-10-31-1479-worktree-exact-project-rbac.md
 ---
