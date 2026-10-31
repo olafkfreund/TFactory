@@ -54,3 +54,16 @@ Approved decisions (from the spec; port of PFactory PR #982 with its review fixe
 ## Rollback
 
 Revert the PR; boot migrations go back to unlocked. No schema or data change.
+
+## Deviations
+
+- Step 1: agy also deleted the unused `from .models import Base`; the lead
+  restored it (out of scope; same two pre-existing ruff findings as `origin/dev`).
+  The lead added PFactory's one-line comment on `SET lock_timeout`.
+- Step 2a: agy moved the existing local `asyncio`/`sqlalchemy`/`urlparse`
+  imports in `test_p1_alembic.py` to module level (no redundant local imports).
+  The alembic `Config`/`ScriptDirectory` imports stay local to the new test so
+  the module still collects where alembic is absent (`alembic_available()` skips).
+- Step 2a result: Postgres 18 locally, the concurrency test fails 5/5 with
+  `engine.py` from `origin/dev` (`UniqueViolationError` on `alembic_version`)
+  and passes 5/5 with the fix; the whole file passes (8 tests).
