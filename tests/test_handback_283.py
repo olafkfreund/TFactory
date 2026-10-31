@@ -115,19 +115,21 @@ def test_mark_stuck_emits_needs_human_completion(tmp_path: Path, monkeypatch) ->
         sys.path.insert(0, str(ws))
     from server.routes.handback import _mark_stuck
 
+    spec = tmp_path / "workspaces" / "demo" / "specs" / "001-login"  # scoped key
+    spec.mkdir(parents=True)
     monkeypatch.setenv("TFACTORY_COMPLETION_SENTINEL", "1")
     monkeypatch.delenv("TFACTORY_COMPLETION_WEBHOOK", raising=False)
-    (tmp_path / "status.json").write_text(
+    (spec / "status.json").write_text(
         json.dumps({"task_id": "demo:001-login", "status": "evaluating"})
     )
 
-    _mark_stuck(tmp_path, "reached the correction-cycle cap (2)")
+    _mark_stuck(spec, "reached the correction-cycle cap (2)")
 
-    status = json.loads((tmp_path / "status.json").read_text())
+    status = json.loads((spec / "status.json").read_text())
     assert status["status"] == "stuck"  # backward-compat preserved
     assert status["needs_human"] is True
     # Terminal completion event fired (sentinel) with the needs_human phase.
-    env = json.loads((tmp_path / "findings" / "COMPLETED.json").read_text())
+    env = json.loads((spec / "findings" / "COMPLETED.json").read_text())
     assert env["service"] == "tfactory"
     assert env["phase"] == "needs_human"
     assert isinstance(env["correlation_key"], str)

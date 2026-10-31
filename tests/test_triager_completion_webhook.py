@@ -19,6 +19,7 @@ import json
 from pathlib import Path
 
 import pytest
+from agents import triager
 from agents.triager import _write_status_patch
 
 
@@ -255,14 +256,34 @@ def test_correlation_key_synthetic_fallback_without_issue(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("TFACTORY_COMPLETION_SENTINEL", "1")
-    (tmp_path / "findings").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "status.json").write_text(
+    spec = tmp_path / "workspaces" / "proj-a" / "specs" / "spec-099"
+    (spec / "findings").mkdir(parents=True)
+    (spec / "status.json").write_text(
         json.dumps({"task_id": "042", "spec_id": "spec-099", "status": "triaging"})
     )
-    _write_status_patch(tmp_path, status="triaged")
-    env = _completed_envelope(tmp_path)
-    assert env["correlation_key"] == "tf-spec-099"  # synthetic, never null
+    _write_status_patch(spec, status="triaged")
+    env = _completed_envelope(spec)
+    assert env["correlation_key"] == "tf-proj-a:spec-099"
     assert env["correlation"]["issue_number"] is None
+
+
+def test_keyless_completion_is_not_sent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # #1972: CFactory requires the key; a None key is skipped, not retried.
+    import urllib.request
+
+    monkeypatch.setenv("TFACTORY_COMPLETION_WEBHOOK", "http://hook.test/c")
+    posts: list[object] = []
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: posts.append(a))
+    spec = tmp_path / "proj" / ".tfactory" / "specs" / "spec-1"  # no project id
+    (spec / "findings").mkdir(parents=True)
+    status = {"task_id": "1", "spec_id": "spec-1", "status": "triaged"}
+    with caplog.at_level("WARNING"):
+        triager._notify_completion(spec, status)
+        triager.emit_usage_snapshot(spec, {**status, "usage": {"total_tokens": 5}})
+    assert posts == []
+    assert "no correlation key" in caplog.text
 
 
 @pytest.mark.parametrize(

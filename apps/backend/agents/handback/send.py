@@ -87,7 +87,8 @@ def _correlation_key_for(spec_dir: Path) -> str | None:
 
     Precedence mirrors the Triager's completion-event key: RFC-0002 contract
     ``correlation_key`` → ``<repo>#<issue>`` from source.json, or synthetic
-    ``tf-<spec_id>`` when the repo is unknown (never a bare number, #1467);
+    ``tf-<project_id>:<spec_id>`` when the repo is unknown (never a bare number,
+    #1467; None if no project-scoped key can be built, #1972);
     None when there is no source.json (AIFactory falls back to the echoed
     ``tfactory_task_id``). Best-effort; never raises.
     """
@@ -108,12 +109,21 @@ def _correlation_key_for(spec_dir: Path) -> str | None:
         issue = source.get("issue_number") or source.get("correlation_id")
         if issue is None:
             return None
-        from agents.triager import _source_repo  # noqa: PLC0415 - triager is heavy
+        from agents.triager import (  # noqa: PLC0415 - triager is heavy
+            _source_repo,
+            _synthetic_key,
+        )
+        from agents.workspace_status import read_status  # noqa: PLC0415
 
         repo = _source_repo(source)
         if repo:
             return f"{repo}#{int(issue)}"
-        return f"tf-{source.get('spec_id') or spec_dir.name}"
+        return _synthetic_key(
+            spec_dir,
+            source.get("spec_id") or spec_dir.name,
+            read_status(spec_dir),
+            source,
+        )
     except (OSError, json.JSONDecodeError, TypeError, ValueError):
         return None
 

@@ -50,6 +50,8 @@ def maybe_emit_docs(spec_dir: Path, status: dict[str, Any]) -> list[dict] | None
         from agents.triager import _correlation_key
 
         correlation_key = _correlation_key(spec_dir, status, source)
+        if correlation_key is None:
+            return None  # over-long synthetic key (#1972): nothing to thread on
         spec_id = status.get("spec_id") or source.get("spec_id") or spec_dir.name
         component_ref = triage.get("component_ref")
 
