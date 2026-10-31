@@ -1,10 +1,16 @@
 """P1.3 / P1.4 — Alembic baseline migration + idempotent upgrade + autoApply modes."""
 
+import asyncio
 import os
 import subprocess
+import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from tests.postgres.helpers import (
     WEB_SERVER_ROOT,
@@ -83,22 +89,30 @@ def test_models_match_migrations(test_postgres_url: str) -> None:
 
 
 def _init_db_subprocess(
-    test_postgres_url: str, auto_apply: bool
+    test_postgres_url: str,
+    auto_apply: bool,
+    barrier_dir: Path | None = None,
 ) -> subprocess.CompletedProcess:
     """Invoke server.database.engine.init_db() in a fresh subprocess.
 
     Subprocess isolation keeps each test's module state clean (DATABASE_URL
     is read at module import time inside engine.py).
     """
-    import sys
-
-    code = (
-        "import asyncio, sys, os; "
-        "sys.path.insert(0, 'apps/web-server'); "
-        "from server.database.engine import init_db; "
-        "asyncio.run(init_db()); "
-        "print('init_db OK')"
-    )
+    code = """
+import asyncio, os, pathlib, sys, time
+sys.path.insert(0, 'apps/web-server')
+from server.database.engine import init_db
+barrier = os.environ.get('INIT_DB_BARRIER')
+if barrier:
+    pathlib.Path(barrier, str(os.getpid())).touch()
+    deadline = time.monotonic() + 30
+    while len(list(pathlib.Path(barrier).iterdir())) < 2:
+        if time.monotonic() >= deadline:
+            raise TimeoutError('Timed out waiting for init_db barrier')
+        time.sleep(0.01)
+asyncio.run(init_db())
+print('init_db OK')
+"""
     env = os.environ.copy()
     env.update(
         {
@@ -110,6 +124,8 @@ def _init_db_subprocess(
             "GRAPHITI_ENABLED": "false",
         }
     )
+    if barrier_dir is not None:
+        env["INIT_DB_BARRIER"] = str(barrier_dir)
     repo_root = Path(__file__).resolve().parents[2]
     return subprocess.run(
         [sys.executable, "-c", code],
@@ -123,10 +139,6 @@ def _init_db_subprocess(
 
 def _drop_schema(test_postgres_url: str) -> None:
     """Drop + recreate the `public` schema, leaving the DB empty."""
-    import asyncio
-
-    from sqlalchemy import text
-    from sqlalchemy.ext.asyncio import create_async_engine
 
     async def _drop():
         eng = create_async_engine(test_postgres_url)
@@ -157,6 +169,53 @@ def test_app_boot_with_autoapply_true_runs_migrations(test_postgres_url: str) ->
         f"--- stderr ---\n{result.stderr[-2000:]}"
     )
     assert "init_db OK" in result.stdout, "init_db did not complete cleanly"
+
+
+@pytest.mark.postgres
+@pytest.mark.slow
+def test_concurrent_init_db_applies_migrations_once(
+    test_postgres_url: str, tmp_path: Path
+) -> None:
+    """#1488 — two processes running init_db() concurrently on an empty
+    Postgres serialize via pg_advisory_lock and both exit 0 with schema at head."""
+    _drop_schema(test_postgres_url)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(_init_db_subprocess, test_postgres_url, True, tmp_path)
+            for _ in range(2)
+        ]
+        results = [f.result() for f in futures]
+
+    for idx, res in enumerate(results):
+        assert res.returncode == 0, (
+            f"worker {idx} exit {res.returncode}\n"
+            f"--- stdout ---\n{res.stdout}\n"
+            f"--- stderr ---\n{res.stderr[-2000:]}"
+        )
+
+    async def _read_versions() -> list[str]:
+        eng = create_async_engine(test_postgres_url)
+        try:
+            async with eng.connect() as conn:
+                rows = await conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                )
+                return [r[0] for r in rows.fetchall()]
+        finally:
+            await eng.dispose()
+
+    # Local: alembic may be absent where this module is only collected.
+    from alembic.config import Config  # noqa: PLC0415
+    from alembic.script import ScriptDirectory  # noqa: PLC0415
+
+    cfg = Config(str(WEB_SERVER_ROOT / "alembic.ini"))
+    cfg.set_main_option(
+        "script_location",
+        str(WEB_SERVER_ROOT / "server" / "database" / "alembic"),
+    )
+    expected_head = ScriptDirectory.from_config(cfg).get_current_head()
+    assert asyncio.run(_read_versions()) == [expected_head]
 
 
 @pytest.mark.postgres
@@ -196,12 +255,6 @@ def test_alembic_succeeds_without_create_extension_privilege(
     """
     if not alembic_available():
         pytest.skip("alembic Python package not importable")
-
-    import asyncio
-    from urllib.parse import urlparse, urlunparse
-
-    from sqlalchemy import text
-    from sqlalchemy.ext.asyncio import create_async_engine
 
     APP_ROLE = "tfactory_app_p1_5"
     APP_PASSWORD = "p1_5_test_pw"
