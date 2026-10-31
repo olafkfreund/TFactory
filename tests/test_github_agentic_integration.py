@@ -125,6 +125,8 @@ async def test_copilot_dispatch_missing_token(monkeypatch, tmp_path):
     with pytest.raises(CopilotDispatchError, match="GITHUB_TOKEN"):
         await dispatch_test_writing(
             spec_dir=tmp_path,
+            project_id="proj-1",
+            spec_id="spec-2",
             repo_full_name="owner/repo",
             task_description="Add login tests",
             lanes=["unit"],
@@ -132,6 +134,41 @@ async def test_copilot_dispatch_missing_token(monkeypatch, tmp_path):
             ac_map={},
             issue_number=1,
         )
+
+
+def test_copilot_dispatch_issue_and_prompt_include_task_id(monkeypatch, tmp_path):
+    """#1487: issue body and prompt carry the project_id:spec_id the MCP tools take."""
+    from agents.copilot_dispatch import _assign_copilot, _build_prompt, _ensure_issue
+    from server.routes import mcp_copilot
+
+    task_id = "proj-1:spec-2"
+    # The id passes the MCP route's own check and resolves to the spec dir.
+    spec_dir = tmp_path / "workspaces" / "proj-1" / "specs" / "spec-2"
+    spec_dir.mkdir(parents=True)
+    (spec_dir / "status.json").write_text("{}")
+    monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path))
+    assert mcp_copilot._resolve_spec_dir(task_id) == spec_dir
+
+    issue_result = MagicMock(
+        returncode=0, stdout="https://github.com/owner/repo/issues/42\n"
+    )
+    with patch(
+        "agents.copilot_dispatch.subprocess.run", return_value=issue_result
+    ) as mock_run:
+        num = _ensure_issue("owner/repo", "Add login tests", task_id)
+        assert num == 42
+        issue_args = mock_run.call_args[0][0]
+        issue_body = issue_args[issue_args.index("--body") + 1]
+        assert task_id in issue_body
+        assert "task_id" in issue_body
+
+    prompt = _build_prompt(task_id, ["unit"], {"unit": "pytest"}, {})
+    assert f'task_id="{task_id}"' in prompt
+
+    with patch("agents.copilot_dispatch.subprocess.run") as mock_run:
+        _assign_copilot("owner/repo", 42, prompt)
+        comment_args = mock_run.call_args_list[0][0][0]
+        assert comment_args[comment_args.index("--body") + 1] == prompt
 
 
 @pytest.mark.asyncio
