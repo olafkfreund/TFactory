@@ -493,7 +493,7 @@ provider config.
 | `APP_SKILLS_PATH` | `.claude/skills` | No | — | Directory of Claude skills the portal exposes. | `server/services/skills_service.py` |
 | `TFACTORY_SKILLS_DIR` | derived | No | — | Override the skills directory (tests inject a tmp dir); falls back to the resolved default. | `server/routes/tfactory_skills.py` |
 | `METRICS_SCRAPE_TOKEN` | unset | No | `[secret]` | Bearer token required to scrape `/metrics`. Empty leaves the endpoint open (behind auth). | `server/observability/metrics.py` |
-| `COPILOT_MCP_TFACTORY_TOKEN` | unset | For Copilot MCP | `[secret]` | Bearer token the GitHub Copilot MCP endpoint requires. | `server/routes/mcp_copilot.py` |
+| `COPILOT_MCP_TFACTORY_TOKEN` | unset | For Copilot MCP | `[secret]` | Bearer token the GitHub Copilot MCP endpoint (`/mcp`) requires. When unset or blank, `/mcp` fails closed with HTTP 503. | `server/routes/mcp_copilot.py` |
 | `TFACTORY_MCP_REMOTE_ENABLED` | off | No | Default OFF | Enable the remote MCP server transport. | `server/mcp_remote/__init__.py` |
 | `TFACTORY_MCP_LOOPBACK_URL` | built-in default | No | — | Loopback base URL the remote MCP tools call back into. | `server/mcp_remote/tools.py` |
 | `TFACTORY_MULTI_TENANT` | off | No | Default OFF | Enable multi-tenant mode; honours the `X-Tenant-Id` header. | `server/routes/_tenancy.py` |
