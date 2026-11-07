@@ -367,15 +367,14 @@ async def verify_websocket_token(websocket: WebSocket) -> bool:
 
 async def _ws_acw_principal(token: str) -> dict | None:
     """Resolve a user-minted ``acw_`` API key for WebSocket authentication (#312)."""
-    from .mcp_remote.auth import REST_API_SCOPE, authenticate
-
     try:
-        key = await authenticate(f"Bearer {token}")
-    except Exception:
-        return None
+        from .mcp_remote.auth import REST_API_SCOPE, authenticate
 
-    # shortcut: ownerless keys rejected on WS; revisit with Phase 4 scope enforcement
-    if key is None or not key.has_scope(REST_API_SCOPE) or not key.user_id:
+        key = await authenticate(f"Bearer {token}")
+        # shortcut: ownerless keys rejected on WS; revisit with Phase 4 scope enforcement
+        if key is None or not key.has_scope(REST_API_SCOPE) or not key.user_id:
+            return None
+    except Exception:
         return None
 
     return {
