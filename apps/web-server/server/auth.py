@@ -365,16 +365,17 @@ async def verify_websocket_token(websocket: WebSocket) -> bool:
     return False
 
 
-async def _ws_acw_principal(token: str) -> dict | None:
+async def _ws_acw_principal(token: str) -> dict[str, object] | None:
     """Resolve a user-minted ``acw_`` API key for WebSocket authentication (#312)."""
     try:
-        from .mcp_remote.auth import REST_API_SCOPE, authenticate
+        # Lazy, as on the REST path: the DB-backed module pulls in ORM models.
+        from .mcp_remote.auth import REST_API_SCOPE, authenticate  # noqa: PLC0415
 
         key = await authenticate(f"Bearer {token}")
         # shortcut: ownerless keys rejected on WS; revisit with Phase 4 scope enforcement
         if key is None or not key.has_scope(REST_API_SCOPE) or not key.user_id:
             return None
-    except Exception:
+    except Exception:  # noqa: BLE001 — any validator failure denies WS auth (4001)
         return None
 
     return {
