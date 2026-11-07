@@ -152,6 +152,8 @@ RUN want="$(tr -dc '0-9.' < /tmp/.nvmrc | cut -d. -f1)" \
 #                        leak in pip's vendored msgpack 1.2.1; fixed in 26.2.2-r1
 #                        (vendors 1.2.3). python-3.14 depends on it, so it cannot
 #                        be apk-deleted with the other pip packages below.
+#   libexpat1 2.8.5-r0 — CVE-2026-113351 and CVE-2026-115506, both HIGH, both
+#                        fixed in 2.10.0-r0.
 # Floors rather than == pins, so the build stays green as Wolfi revs further
 # (1.38.0-r1 and later already exist); drop each once the base digest ships it.
 # Verified present in the Wolfi x86_64 APKINDEX, then confirmed against the
@@ -173,6 +175,7 @@ RUN apk add --no-cache \
         "libbrotlidec1>=1.2.0-r7" \
         "libbrotlienc1>=1.2.0-r7" \
         "py3-pip-wheel>=26.2.2-r1" \
+        "libexpat1>=2.10.0-r0" \
         git \
         gh \
         gnupg \
