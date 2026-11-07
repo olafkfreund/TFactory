@@ -365,6 +365,28 @@ async def verify_websocket_token(websocket: WebSocket) -> bool:
     return False
 
 
+async def _ws_acw_principal(token: str) -> dict | None:
+    """Resolve a user-minted ``acw_`` API key for WebSocket authentication (#312)."""
+    from .mcp_remote.auth import REST_API_SCOPE, authenticate
+
+    try:
+        key = await authenticate(f"Bearer {token}")
+    except Exception:
+        return None
+
+    # shortcut: ownerless keys rejected on WS; revisit with Phase 4 scope enforcement
+    if key is None or not key.has_scope(REST_API_SCOPE) or not key.user_id:
+        return None
+
+    return {
+        "id": key.user_id,
+        "email": None,
+        "role": "user",
+        "api_key_id": key.key_id,
+        "org_id": key.org_id,
+    }
+
+
 async def authenticate_websocket(websocket: WebSocket) -> dict | None:
     """Authenticate a WebSocket connection and return user info.
 
@@ -402,6 +424,13 @@ async def authenticate_websocket(websocket: WebSocket) -> dict | None:
     # Fall back to legacy token — no user info available
     if _is_legacy_api_token(token):
         return None
+
+    if token.startswith("acw_"):
+        principal = await _ws_acw_principal(token)
+        if principal is None:
+            await websocket.close(code=4001, reason="Unauthorized")
+            raise WebSocketAuthError("Invalid token")
+        return principal
 
     await websocket.close(code=4001, reason="Unauthorized")
     raise WebSocketAuthError("Invalid token")
