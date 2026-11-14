@@ -40,6 +40,8 @@ def seeded(monkeypatch):
     for name in ("OPENAI_API_KEY", "CODEX_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
         monkeypatch.setenv(name, f"sentinel-{name.lower()}-value")
     monkeypatch.setenv("COPILOT_GITHUB_TOKEN", "sentinel-copilot-value")
+    monkeypatch.delenv("TFACTORY_AGENT_ENV_EXTRA", raising=False)
+    monkeypatch.delenv("GITHUB_PERSONAL_ACCESS_TOKEN", raising=False)
     monkeypatch.setenv("HOME", str(Path(os.environ.get("TMPDIR", "/tmp"))))
 
 
@@ -314,7 +316,7 @@ def test_orchestrator_subprocess_env(monkeypatch, tmp_path):
     orch._compose_file = tmp_path / "docker-compose.yml"
     orch._start_docker_compose(5)
     orch._stop_docker_compose()
-    assert len(seen) >= 3
+    assert len(seen) == 5  # three version probes, up, down
     for env in seen:
         _assert_clean(env, claude_token=False)
 
