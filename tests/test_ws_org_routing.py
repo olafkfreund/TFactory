@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import sys
 from pathlib import Path
@@ -20,7 +21,6 @@ if str(_ROOT / "apps" / "backend") not in sys.path:
     sys.path.insert(0, str(_ROOT / "apps" / "backend"))
 
 from server import auth  # noqa: E402
-from server.database import engine  # noqa: E402
 from server.mcp_remote import auth as mcp_auth  # noqa: E402
 from server.routes import (  # noqa: E402
     cli_accounts,
@@ -34,6 +34,12 @@ from server.services.notification_service import NotificationService  # noqa: E4
 from server.websockets import events  # noqa: E402
 
 _real_ws_acw_principal = auth._ws_acw_principal
+
+
+def _engine():
+    # Resolved at run time: other tests swap server.database.engine in sys.modules,
+    # so an import-time handle goes stale (as in tests/test_ws_acw_auth.py).
+    return importlib.import_module("server.database.engine")
 
 
 @pytest.fixture
@@ -84,7 +90,7 @@ def socket_app(monkeypatch):
         await original_send(ws, message)
 
     monkeypatch.setattr(WebSocket, "send_text", record_send)
-    monkeypatch.setattr(engine, "async_session_factory", Session)
+    monkeypatch.setattr(_engine(), "async_session_factory", Session)
     monkeypatch.setattr(events, "authenticate_websocket", authenticate)
     monkeypatch.setattr(events, "get_settings", lambda: setting)
     monkeypatch.setattr(project_authz, "get_settings", lambda: setting)
@@ -514,7 +520,7 @@ def test_key_socket_ignores_shadow_mode_and_follows_membership(socket_app, monke
         _emit(client, "own-org", {"projectId": "p-a"})
         assert key.receive_json()["type"] == "own-org"
         # The membership lookup now fails: the next re-check empties the socket's orgs.
-        monkeypatch.setattr(engine, "async_session_factory", _no_database)
+        monkeypatch.setattr(_engine(), "async_session_factory", _no_database)
         key.send_text("wake the receive loop")
         socket = next(iter(events._clients.values()))
         _wait_for_no_orgs(client, socket)
