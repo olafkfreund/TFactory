@@ -486,3 +486,36 @@ def test_cli_and_github_emitters_route_by_principal(socket_app, monkeypatch):
         )
         assert service_ws.receive_json()["type"] == "github:auth-complete"
         assert len(sent["jwt-owner"]) == 2
+
+
+def _no_database():
+    raise RuntimeError("membership lookup unavailable")
+
+
+def _wait_for_no_orgs(client, socket):
+    for _ in range(200):
+        if not socket.org_ids:
+            return
+        client.portal.call(asyncio.sleep, 0.01)
+    raise AssertionError("memberships were not reloaded")
+
+
+def test_key_socket_ignores_shadow_mode_and_follows_membership(socket_app, monkeypatch):
+    app, setting = socket_app[:2]
+    monkeypatch.setattr(events, "_KEY_RECHECK_SECONDS", 0)
+    monkeypatch.setattr(
+        events, "_ws_acw_principal", AsyncMock(return_value={"id": "owner"})
+    )
+    setting.RBAC_ENFORCE_TASK_ROUTES = False
+    with TestClient(app) as client, _connect(client, "acw_a") as key:
+        # Shadow mode never widens a key socket: B's event is skipped.
+        _emit(client, "other-org", {"projectId": "p-b"})
+        _emit(client, "unresolved", {"specId": "001-x"})
+        _emit(client, "own-org", {"projectId": "p-a"})
+        assert key.receive_json()["type"] == "own-org"
+        # The membership lookup now fails: the next re-check empties the socket's orgs.
+        monkeypatch.setattr(engine, "async_session_factory", _no_database)
+        key.send_text("wake the receive loop")
+        socket = next(iter(events._clients.values()))
+        _wait_for_no_orgs(client, socket)
+        assert not events._may_receive(socket, "A")
