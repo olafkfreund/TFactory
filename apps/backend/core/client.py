@@ -208,6 +208,10 @@ from core.auth import (
     prefer_refreshable_credentials,
     require_auth_token,
 )
+from core.child_env import (  # noqa: E402 - late like the imports around it
+    get_agent_env_blanks,
+    without_host_secrets,
+)
 from prompts_pkg.project_context import (
     detect_infra_markers,
     detect_project_capabilities,
@@ -392,6 +396,8 @@ def _externalize_secret_env(
     """
     secret_env = cfg.pop("env", None)
     if isinstance(secret_env, dict) and secret_env:
+        # Drop values that are a copy of a denied host secret (e.g. GITHUB_TOKEN).
+        secret_env = without_host_secrets(secret_env)
         sink.update({k: str(v) for k, v in secret_env.items()})
     return cfg
 
@@ -967,7 +973,10 @@ def create_client(
         "max_turns": 1000,
         "cwd": str(project_dir.resolve()),
         "settings": str(settings_file.resolve()),
-        "env": sdk_env,  # Pass ANTHROPIC_BASE_URL etc. to subprocess
+        "env": {
+            **get_agent_env_blanks(),
+            **sdk_env,
+        },  # Pass ANTHROPIC_BASE_URL etc. to subprocess
         "permission_mode": "bypassPermissions",  # Bypass all permission prompts for headless execution
         "max_buffer_size": 10
         * 1024
