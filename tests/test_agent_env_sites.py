@@ -271,8 +271,9 @@ def test_evaluator_host_venv_pip_env(monkeypatch, tmp_path):
     monkeypatch.setattr("venv.create", lambda *a, **k: None)
     monkeypatch.setattr(ev, "_HOST_VENVS", {})
     (tmp_path / "pyproject.toml").write_text("")
+    (tmp_path / "requirements.txt").write_text("")
     ev._ensure_host_venv(tmp_path)
-    assert len(seen) >= 2
+    assert len(seen) == 5  # pytest, -r requirements.txt, three -e passes
     for env in seen:
         _assert_clean(env, claude_token=False)
 

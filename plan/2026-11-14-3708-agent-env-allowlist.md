@@ -140,3 +140,10 @@ Revert the squash commit. The helper is additive; no data or schema changes.
 - Step 6: `insights_service.generate_task_from_chat` has no test of its own
   (it needs a chat session); its change is the same line the clarification
   and Claude insights tests cover.
+- Final review: `core/mcp_credentials.py` `_probe_github` now reads the
+  dedicated `GITHUB_PERSONAL_ACCESS_TOKEN` before the pod `GITHUB_TOKEN`
+  (an operator `tokenEnv` still comes first). Without that, the dedicated
+  token the spec asks operators to set was never used while the pod token
+  existed. `get_agent_env_blanks` also blanks credential-shaped names the
+  allow pattern admits (`NIX_GITHUB_TOKEN`), and `without_host_secrets`
+  ignores values shorter than 8 characters.
