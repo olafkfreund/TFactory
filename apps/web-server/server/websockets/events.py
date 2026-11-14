@@ -18,13 +18,13 @@ from typing import Any
 from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from ..auth import (
+from server.auth import (
     WebSocketAuthError,
     _ws_acw_principal,
     _ws_extract_token,
     authenticate_websocket,
 )
-from ..config import get_settings
+from server.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ router = APIRouter()
 
 def load_projects() -> dict[str, dict[str, Any]]:
     """Load the project registry (lazy import to avoid circular dependencies)."""
-    from ..routes.projects import load_projects as _load_projects  # noqa: PLC0415
+    from server.routes.projects import load_projects as _load_projects  # noqa: PLC0415
 
     return _load_projects()
 
@@ -146,14 +146,14 @@ def _may_receive(
     return True
 
 
-async def broadcast_event(event_type: str, payload: dict):
+async def broadcast_event(event_type: str, payload: dict[str, Any]) -> None:
     """Broadcast an event to all connected clients (legacy behavior)."""
     await _deliver_local_to_org(
         _event_org(payload) or SERVICE_ONLY_ORG, event_type, payload, shadow=True
     )
 
 
-async def send_to_user(user_id: str, event_type: str, payload: dict):
+async def send_to_user(user_id: str, event_type: str, payload: dict[str, Any]) -> None:
     """Send an event to a specific user (all their connections)."""
     message = json.dumps({"type": event_type, "payload": payload})
     disconnected: list[WebSocket] = []
@@ -189,12 +189,14 @@ async def _deliver_local_to_org(
         _unregister_client(ws)
 
 
-async def send_to_org(org_id: str, event_type: str, payload: dict):
+async def send_to_org(org_id: str, event_type: str, payload: dict[str, Any]) -> None:
     """Send an event only to members of a specific organization."""
     await _deliver_local_to_org(org_id, event_type, payload)
 
 
-async def emit_org_less(principal: object, event_type: str, payload: dict):
+async def emit_org_less(
+    principal: object, event_type: str, payload: dict[str, Any]
+) -> None:
     """Send an event that has no org to the human who started it, else to service clients."""
     if (
         isinstance(principal, dict)
@@ -219,7 +221,7 @@ def update_client_orgs(user_id: str, org_ids: set[str]) -> None:
 
 
 @router.websocket("/ws/events")
-async def events_websocket(websocket: WebSocket):
+async def events_websocket(websocket: WebSocket):  # noqa: PLR0912 - socket lifecycle
     """WebSocket endpoint for global events."""
     await websocket.accept()
 
