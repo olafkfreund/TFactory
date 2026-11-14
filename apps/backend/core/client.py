@@ -208,7 +208,10 @@ from core.auth import (
     prefer_refreshable_credentials,
     require_auth_token,
 )
-from core.child_env import get_agent_env_blanks, without_host_secrets
+from core.child_env import (  # noqa: E402 - late like the imports around it
+    get_agent_env_blanks,
+    without_host_secrets,
+)
 from prompts_pkg.project_context import (
     detect_infra_markers,
     detect_project_capabilities,
