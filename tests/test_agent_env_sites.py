@@ -316,3 +316,51 @@ def test_orchestrator_subprocess_env(monkeypatch, tmp_path):
     assert len(seen) >= 3
     for env in seen:
         _assert_clean(env, claude_token=False)
+
+
+def test_orchestrator_local_service_popen_env(monkeypatch, tmp_path):
+    from services.orchestrator import ServiceConfig, ServiceOrchestrator
+
+    seen: list = []
+
+    def fake_popen(argv, **kwargs):
+        seen.append(kwargs.get("env"))
+        raise OSError("captured")
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    orch = ServiceOrchestrator(tmp_path)
+    orch._services = [ServiceConfig(name="app", startup_command="true")]
+    orch._start_local_services(1)
+    assert seen
+    _assert_clean(seen[0], claude_token=False)
+
+
+def test_orchestrator_compose_keeps_docker_connection(monkeypatch, tmp_path):
+    from services.orchestrator import ServiceOrchestrator
+
+    monkeypatch.setenv("DOCKER_HOST", "tcp://docker:2376")
+    monkeypatch.setenv("DOCKER_TLS_VERIFY", "1")
+    seen: list = []
+
+    def fake_run(argv, **kwargs):
+        seen.append((argv, kwargs.get("env")))
+        return subprocess.CompletedProcess(argv, 1, "", "")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert ServiceOrchestrator(tmp_path)._get_docker_compose_cmd() is None
+    assert [argv[0] for argv, _ in seen] == ["docker", "docker-compose"]
+    for _, env in seen:
+        _assert_clean(env, claude_token=False)
+        assert env["DOCKER_HOST"] == "tcp://docker:2376"
+        assert env["DOCKER_TLS_VERIFY"] == "1"
+
+
+def test_executor_grep_env(spawn, tmp_path):
+    from tools.executor import ToolExecutor
+
+    try:
+        asyncio.run(ToolExecutor(tmp_path).execute("Grep", {"pattern": "x"}))
+    except _Captured:
+        pass
+    assert spawn
+    _assert_clean(spawn[0], claude_token=False)

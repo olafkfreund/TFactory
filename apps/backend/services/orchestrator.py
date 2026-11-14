@@ -30,6 +30,14 @@ from typing import Any
 
 from core.child_env import child_env
 
+# How the docker client finds its daemon: addresses and paths, not credentials.
+_DOCKER_KEEP = (
+    "DOCKER_HOST",
+    "DOCKER_TLS_VERIFY",
+    "DOCKER_CERT_PATH",
+    "DOCKER_CONTEXT",
+)
+
 # =============================================================================
 # DATA CLASSES
 # =============================================================================
@@ -310,7 +318,7 @@ class ServiceOrchestrator:
                 capture_output=True,
                 text=True,
                 timeout=timeout,
-                env=child_env(keep=("DOCKER_HOST",)),
+                env=child_env(keep=_DOCKER_KEEP),
             )
 
             if proc.returncode != 0:
@@ -383,7 +391,7 @@ class ServiceOrchestrator:
                     cwd=self.project_dir,
                     capture_output=True,
                     timeout=60,
-                    env=child_env(keep=("DOCKER_HOST",)),
+                    env=child_env(keep=_DOCKER_KEEP),
                 )
         except Exception:
             pass
@@ -409,7 +417,7 @@ class ServiceOrchestrator:
                 ["docker", "compose", "version"],
                 capture_output=True,
                 timeout=5,
-                env=child_env(keep=("DOCKER_HOST",)),
+                env=child_env(keep=_DOCKER_KEEP),
             )
             if proc.returncode == 0:
                 return ["docker", "compose", "-f", str(self._compose_file)]
@@ -422,7 +430,7 @@ class ServiceOrchestrator:
                 ["docker-compose", "version"],
                 capture_output=True,
                 timeout=5,
-                env=child_env(keep=("DOCKER_HOST",)),
+                env=child_env(keep=_DOCKER_KEEP),
             )
             if proc.returncode == 0:
                 return ["docker-compose", "-f", str(self._compose_file)]

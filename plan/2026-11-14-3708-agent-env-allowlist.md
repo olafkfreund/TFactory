@@ -134,8 +134,9 @@ Revert the squash commit. The helper is additive; no data or schema changes.
 - Step 2: `without_host_secrets` is called inside `_externalize_secret_env`
   (the one place a catalog `env` enters `sdk_env`), not at its call site.
 - Step 5: the `docker compose` calls in `services/orchestrator.py` keep
-  `DOCKER_HOST` (an address, not a credential) so a remote docker daemon
-  still works; the project's startup command keeps nothing.
+  `DOCKER_HOST`, `DOCKER_TLS_VERIFY`, `DOCKER_CERT_PATH` and
+  `DOCKER_CONTEXT` (addresses and paths, not credentials) so a remote or
+  TLS docker daemon still works; the project's startup command keeps nothing.
 - Step 6: `insights_service.generate_task_from_chat` has no test of its own
   (it needs a chat session); its change is the same line the clarification
   and Claude insights tests cover.
