@@ -39,6 +39,7 @@ from collections.abc import AsyncGenerator, AsyncIterator
 from pathlib import Path
 from typing import Any
 
+from core.child_env import child_env
 from providers import BaseLLMProvider
 from providers._gemini_cli import get_gemini_binary
 from providers.gemini import _emit_sunset_warning  # Issue #22
@@ -141,6 +142,7 @@ class GeminiAgenticProvider(BaseLLMProvider):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
+                env=child_env(keep=("GEMINI_API_KEY", "GOOGLE_API_KEY")),
             )
 
             prompt_bytes = self._pending_prompt.encode("utf-8")

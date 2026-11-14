@@ -188,9 +188,9 @@ class ClaudeProvider(ProviderStrategy):
         # Scrub ANTHROPIC_API_KEY (OAuth-only policy — see core/auth.py).
         # The Claude CLI we spawn here would happily use the direct-API
         # key if it inherited one; we want OAuth via CLAUDE_CODE_OAUTH_TOKEN.
-        from ...utils.subprocess_env import make_subprocess_env
+        from ...utils.subprocess_env import CLAUDE_KEEP, child_env
 
-        env = make_subprocess_env()
+        env = child_env(keep=CLAUDE_KEEP)
         env["PYTHONUNBUFFERED"] = "1"
         env.pop("CLAUDECODE", None)
 

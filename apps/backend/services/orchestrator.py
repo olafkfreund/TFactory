@@ -28,6 +28,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from core.child_env import child_env
+
 # =============================================================================
 # DATA CLASSES
 # =============================================================================
@@ -308,6 +310,7 @@ class ServiceOrchestrator:
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                env=child_env(keep=("DOCKER_HOST",)),
             )
 
             if proc.returncode != 0:
@@ -346,6 +349,7 @@ class ServiceOrchestrator:
                         else self.project_dir,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
+                        env=child_env(),
                     )
                     self._processes[service.name] = proc
                     result.services_started.append(service.name)
@@ -379,6 +383,7 @@ class ServiceOrchestrator:
                     cwd=self.project_dir,
                     capture_output=True,
                     timeout=60,
+                    env=child_env(keep=("DOCKER_HOST",)),
                 )
         except Exception:
             pass
@@ -404,6 +409,7 @@ class ServiceOrchestrator:
                 ["docker", "compose", "version"],
                 capture_output=True,
                 timeout=5,
+                env=child_env(keep=("DOCKER_HOST",)),
             )
             if proc.returncode == 0:
                 return ["docker", "compose", "-f", str(self._compose_file)]
@@ -416,6 +422,7 @@ class ServiceOrchestrator:
                 ["docker-compose", "version"],
                 capture_output=True,
                 timeout=5,
+                env=child_env(keep=("DOCKER_HOST",)),
             )
             if proc.returncode == 0:
                 return ["docker-compose", "-f", str(self._compose_file)]

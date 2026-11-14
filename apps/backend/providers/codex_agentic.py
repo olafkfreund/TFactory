@@ -30,13 +30,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import re
 import shutil
 from collections.abc import AsyncGenerator, AsyncIterator
 from pathlib import Path
 from typing import Any
 
+from core.child_env import child_env
 from providers import BaseLLMProvider
 from providers.types import AssistantMessage, TextBlock
 
@@ -166,7 +166,7 @@ class CodexAgenticProvider(BaseLLMProvider):
         untouched. With no API key, fall back to the inherited environment so a
         Codex-enabled ChatGPT plan still works.
         """
-        env = dict(os.environ)
+        env = child_env(keep=("OPENAI_API_KEY", "CODEX_API_KEY"))
         api_key = env.get("OPENAI_API_KEY", "").strip()
         if not api_key:
             return env
