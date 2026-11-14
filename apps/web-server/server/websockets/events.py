@@ -11,16 +11,31 @@ compatible).
 import asyncio
 import json
 import logging
+import time
 from dataclasses import dataclass, field
+from typing import Any
 
 from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from ..auth import WebSocketAuthError, authenticate_websocket
+from ..auth import (
+    WebSocketAuthError,
+    _ws_acw_principal,
+    _ws_extract_token,
+    authenticate_websocket,
+)
+from ..config import get_settings
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def load_projects() -> dict[str, dict[str, Any]]:
+    """Load the project registry (lazy import to avoid circular dependencies)."""
+    from ..routes.projects import load_projects as _load_projects  # noqa: PLC0415
+
+    return _load_projects()
 
 
 # ---------------------------------------------------------------------------
@@ -35,6 +50,7 @@ class ConnectedClient:
     websocket: WebSocket
     user_id: str | None = None
     org_ids: set[str] = field(default_factory=set)
+    key_org_id: str | None = None
 
 
 # Active WebSocket connections — keyed by WebSocket object for fast lookup
@@ -43,6 +59,10 @@ _clients: dict[WebSocket, ConnectedClient] = {}
 # Legacy set kept for backward compatibility with code that still
 # references ``active_connections`` directly.
 active_connections: set[WebSocket] = set()
+SERVICE_ONLY_ORG = ""
+_ORG_CACHE_SECONDS = 30.0
+_KEY_RECHECK_SECONDS = 300.0
+_org_cache: dict[str, tuple[float, str | None]] = {}
 
 
 def _register_client(ws: WebSocket, user_info: dict | None) -> ConnectedClient:
@@ -50,6 +70,7 @@ def _register_client(ws: WebSocket, user_info: dict | None) -> ConnectedClient:
     client = ConnectedClient(
         websocket=ws,
         user_id=user_info["id"] if user_info else None,
+        key_org_id=(user_info or {}).get("org_id"),
     )
     _clients[ws] = client
     active_connections.add(ws)
@@ -67,19 +88,69 @@ def _unregister_client(ws: WebSocket) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _event_org(payload: dict[str, Any]) -> str | None:
+    try:
+        pid = payload.get("projectId")
+        if not pid:
+            task_id = payload.get("taskId")
+            pid = (
+                task_id.split(":", 1)[0]
+                if isinstance(task_id, str) and ":" in task_id
+                else None
+            )
+        if not isinstance(pid, str) or not pid:
+            return None
+        cached = _org_cache.get(pid)
+        now = time.monotonic()
+        if cached is not None and now - cached[0] < _ORG_CACHE_SECONDS:
+            return cached[1]
+        org = load_projects().get(pid, {}).get("org_id") or None
+        _org_cache[pid] = (now, org)
+        return org
+    except Exception:  # noqa: BLE001 - unreadable registry must fail closed
+        return None
+
+
+def _payload_org(payload: dict[str, Any]) -> str | None:
+    data = payload.get("data")
+    return payload.get("org_id") or (
+        data.get("org_id") if isinstance(data, dict) else None
+    )
+
+
+def _jwt_strict() -> bool:
+    return bool(get_settings().RBAC_ENFORCE_TASK_ROUTES)
+
+
+def _may_receive(
+    client: ConnectedClient, org: str | None, shadow: bool = False
+) -> bool:
+    """``shadow`` marks a former broadcast: JWT sockets keep it until REST enforces.
+
+    Explicit ``send_to_org`` sends are members-only in every mode.
+    """
+    if client.user_id is None:
+        return True
+    if client.key_org_id is not None:
+        # Also needs live membership: a failed lookup or a removed owner gets nothing.
+        return org is not None and org == client.key_org_id and org in client.org_ids
+    strict_ok = org is not None and org in client.org_ids
+    if not shadow or _jwt_strict():
+        return strict_ok
+    if not strict_ok:
+        logger.debug(
+            "ws would drop %s for user %s",
+            sanitize_log(org),
+            sanitize_log(client.user_id),
+        )
+    return True
+
+
 async def broadcast_event(event_type: str, payload: dict):
     """Broadcast an event to all connected clients (legacy behavior)."""
-    message = json.dumps({"type": event_type, "payload": payload})
-    disconnected: list[WebSocket] = []
-
-    for ws in list(active_connections):
-        try:
-            await ws.send_text(message)
-        except Exception:
-            disconnected.append(ws)
-
-    for ws in disconnected:
-        _unregister_client(ws)
+    await _deliver_local_to_org(
+        _event_org(payload) or SERVICE_ONLY_ORG, event_type, payload, shadow=True
+    )
 
 
 async def send_to_user(user_id: str, event_type: str, payload: dict):
@@ -88,7 +159,9 @@ async def send_to_user(user_id: str, event_type: str, payload: dict):
     disconnected: list[WebSocket] = []
 
     for ws, client in list(_clients.items()):
-        if client.user_id == user_id:
+        if client.user_id == user_id and (
+            client.key_org_id is None or _payload_org(payload) == client.key_org_id
+        ):
             try:
                 await ws.send_text(message)
             except Exception:
@@ -96,6 +169,48 @@ async def send_to_user(user_id: str, event_type: str, payload: dict):
 
     for ws in disconnected:
         _unregister_client(ws)
+
+
+async def _deliver_local_to_org(
+    org_id: str, event_type: str, payload: dict[str, Any], shadow: bool = False
+) -> None:
+    """Send an event to members of an org connected to this server."""
+    message = json.dumps({"type": event_type, "payload": payload})
+    disconnected: list[WebSocket] = []
+
+    for ws, client in list(_clients.items()):
+        if _may_receive(client, org_id or None, shadow):
+            try:
+                await ws.send_text(message)
+            except Exception:
+                disconnected.append(ws)
+
+    for ws in disconnected:
+        _unregister_client(ws)
+
+
+async def send_to_org(org_id: str, event_type: str, payload: dict):
+    """Send an event only to members of a specific organization."""
+    await _deliver_local_to_org(org_id, event_type, payload)
+
+
+async def emit_org_less(principal: object, event_type: str, payload: dict):
+    """Send an event that has no org to the human who started it, else to service clients."""
+    if (
+        isinstance(principal, dict)
+        and principal.get("id")
+        and not principal.get("is_service")
+    ):
+        await send_to_user(str(principal["id"]), event_type, payload)
+    else:
+        await send_to_org(SERVICE_ONLY_ORG, event_type, payload)
+
+
+def update_client_orgs(user_id: str, org_ids: set[str]) -> None:
+    """Update the org memberships for all connections of a given user."""
+    for client in _clients.values():
+        if client.user_id == user_id:
+            client.org_ids = org_ids
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +230,10 @@ async def events_websocket(websocket: WebSocket):
         return
 
     client = _register_client(websocket, user_info)
+    key_token = _ws_extract_token(websocket) if client.key_org_id else None
+    if not key_token or not key_token.startswith("acw_"):
+        key_token = None
+    last_key_check = time.monotonic()
 
     # If authenticated user, load their org memberships for routing
     if user_info and user_info.get("id"):
@@ -129,6 +248,8 @@ async def events_websocket(websocket: WebSocket):
                     select(OrgMember.org_id).where(OrgMember.user_id == user_info["id"])
                 )
                 client.org_ids = {row[0] for row in result.all()}
+                if user_info.get("org_id"):
+                    client.org_ids &= {user_info["org_id"]}
         except Exception:
             logger.debug("Could not load org memberships for WS client", exc_info=True)
 
@@ -136,6 +257,15 @@ async def events_websocket(websocket: WebSocket):
         # Keep connection alive and listen for pings
         while True:
             try:
+                if (
+                    key_token
+                    and time.monotonic() - last_key_check >= _KEY_RECHECK_SECONDS
+                ):
+                    if await _ws_acw_principal(key_token) is None:
+                        await websocket.close(code=4001)
+                        break
+                    last_key_check = time.monotonic()
+
                 data = await asyncio.wait_for(websocket.receive_text(), timeout=30)
 
                 # Handle ping/pong
@@ -234,7 +364,9 @@ async def emit_profile_switch(task_id: str, switch_data: dict):
     await broadcast_event("task:profile-switch", {"taskId": task_id, **switch_data})
 
 
-async def emit_task_logs_stream(spec_id: str, chunk: dict):
+async def emit_task_logs_stream(
+    spec_id: str, chunk: dict, project_id: str | None = None
+):
     """Emit a task log chunk for real-time streaming to open task detail modals.
 
     This event streams individual log entries as they're added to task_logs.json,
@@ -262,7 +394,10 @@ async def emit_task_logs_stream(spec_id: str, chunk: dict):
         f"[WebSocket] Emitting task-logs:stream - specId: {sanitize_log(spec_id)}, "
         f"type: {sanitize_log(chunk_type)}, content: {sanitize_log(content_preview)}..."
     )
-    await broadcast_event("task-logs:stream", {"specId": spec_id, "chunk": chunk})
+    payload: dict[str, Any] = {"specId": spec_id, "chunk": chunk}
+    if project_id:
+        payload["projectId"] = project_id
+    await broadcast_event("task-logs:stream", payload)
 
 
 async def emit_subtask_update(
