@@ -29,6 +29,8 @@ from types import TracebackType
 from urllib import request as urlrequest
 from urllib.error import HTTPError, URLError
 
+from core.child_env import child_env
+
 
 class LocalServeRuntimeError(Exception):
     """Raised when the serve command fails to start or become healthy."""
@@ -107,6 +109,7 @@ class LocalServeRuntime:
             start_new_session=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            env=child_env(),
         )
 
     def stop(self) -> None:
