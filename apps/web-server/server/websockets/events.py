@@ -160,7 +160,7 @@ async def send_to_user(user_id: str, event_type: str, payload: dict[str, Any]) -
 
     for ws, client in list(_clients.items()):
         if client.user_id == user_id and (
-            client.key_org_id is None or _payload_org(payload) == client.key_org_id
+            client.key_org_id is None or _may_receive(client, _payload_org(payload))
         ):
             try:
                 await ws.send_text(message)
@@ -232,7 +232,7 @@ async def events_websocket(websocket: WebSocket):  # noqa: PLR0912 - socket life
         return
 
     client = _register_client(websocket, user_info)
-    key_token = _ws_extract_token(websocket) if client.key_org_id else None
+    key_token = _ws_extract_token(websocket)
     if not key_token or not key_token.startswith("acw_"):
         key_token = None
     last_key_check = time.monotonic()

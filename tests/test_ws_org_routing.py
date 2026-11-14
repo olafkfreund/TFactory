@@ -254,6 +254,14 @@ def test_user_events_require_matching_org_for_key(socket_app):
         assert key.receive_json()["payload"]["data"]["org_id"] == "A"
         assert [m["type"] for m in sent["acw_a"]] == ["notification:new"]
 
+        # Membership gone (failed lookup or removal): the key socket gets nothing.
+        events.update_client_orgs("owner", set())
+        client.portal.call(
+            events.send_to_user, "owner", "dropped", {"data": {"org_id": "A"}}
+        )
+        assert sent["jwt-owner"][-1]["type"] == "dropped"
+        assert [m["type"] for m in sent["acw_a"]] == ["notification:new"]
+
 
 def test_notify_org_overrides_untrusted_data(socket_app, monkeypatch):
     app, _, _ = socket_app
@@ -352,9 +360,10 @@ def test_event_org_cache_expiry_and_reassignment(monkeypatch):
     [None, RuntimeError("validator unavailable")],
     ids=["revoked", "raising_validator"],
 )
-def test_key_revocation_closes_socket(socket_app, monkeypatch, second_outcome):
+@pytest.mark.parametrize("org", ["A", None])
+def test_key_revocation_closes_socket(socket_app, monkeypatch, second_outcome, org):
     app, _, _ = socket_app
-    key = mcp_auth.AuthenticatedKey("key-id", frozenset({"api:full"}), "owner", "A")
+    key = mcp_auth.AuthenticatedKey("key-id", frozenset({"api:full"}), "owner", org)
     monkeypatch.setattr(
         mcp_auth,
         "authenticate",
