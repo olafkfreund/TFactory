@@ -106,6 +106,7 @@ from agents.workspace_status import (
     read_status,
     write_status_patch,
 )
+from core.child_env import child_env
 from tools.runners.lang_registry import UNSUPPORTED_LANGUAGES
 
 _eval_log = _logging.getLogger(__name__)
@@ -396,6 +397,7 @@ def _ensure_host_venv(project_dir: Path) -> Path:
         text=True,
         timeout=600,
         check=False,
+        env=child_env(),
     )
     # #759: a monorepo declares its deps below the root — this repo has no root
     # requirements.txt or pyproject.toml at all, only apps/web-server/ and
@@ -411,6 +413,7 @@ def _ensure_host_venv(project_dir: Path) -> Path:
             text=True,
             timeout=600,
             check=False,
+            env=child_env(),
         )
     # Install the SUT itself when it ships a pyproject.toml (best-effort). The
     # bare install pulls in the project's runtime deps AND registers the package
@@ -430,6 +433,7 @@ def _ensure_host_venv(project_dir: Path) -> Path:
                 text=True,
                 timeout=600,
                 check=False,
+                env=child_env(),
             )
     _HOST_VENVS[key] = vdir
     return vdir
@@ -467,7 +471,7 @@ def _run_pytest_on_host(
         root = str(scratch_root if rel == "." else scratch_root / rel)
         if root not in pythonpath.split(os.pathsep):
             pythonpath = f"{root}{os.pathsep}{pythonpath}"
-    env = {**os.environ, **extra_env, "PYTHONPATH": pythonpath}
+    env = child_env(extra={**extra_env, "PYTHONPATH": pythonpath})
     res = subprocess.run(
         ["sh", "-c", cmd], capture_output=True, text=True, timeout=300, env=env
     )

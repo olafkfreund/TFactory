@@ -114,13 +114,6 @@ RUN want="$(tr -dc '0-9.' < /tmp/.nvmrc | cut -d. -f1)" \
 #                   (test_trivy_no_high_critical). Constraint, not =2.46-r2, so
 #                   the build stays green when Wolfi revs the package further;
 #                   drop this once the base digest ships the fix (Dependabot).
-#   libexpat1     — the :latest-dev base bundles libexpat1 2.8.1-r1, which
-#                   carries CVE-2026-56131/56407/56408 (HIGH; use-after-free +
-#                   integer overflows, fixed in 2.8.2-r0). The pinned snapshot
-#                   lags so `apk upgrade` can't reach it; force a build-newer rev
-#                   to clear the P0.8 Trivy gate. Constraint (not =2.8.2-r0) so
-#                   the build stays green as Wolfi revs further; drop once the
-#                   base digest ships the fix (Dependabot).
 #   bubblewrap    — OS-level bash sandbox for agent commands. Without it the
 #                   Claude Agent SDK logs "Sandbox disabled: ... bubblewrap
 #                   (bwrap) not installed" and runs commands with NO filesystem
@@ -152,6 +145,8 @@ RUN want="$(tr -dc '0-9.' < /tmp/.nvmrc | cut -d. -f1)" \
 #                        leak in pip's vendored msgpack 1.2.1; fixed in 26.2.2-r1
 #                        (vendors 1.2.3). python-3.14 depends on it, so it cannot
 #                        be apk-deleted with the other pip packages below.
+#   libexpat1 2.8.5-r0 — CVE-2026-113351 and CVE-2026-115506, both HIGH, both
+#                        fixed in 2.10.0-r0.
 # Floors rather than == pins, so the build stays green as Wolfi revs further
 # (1.38.0-r1 and later already exist); drop each once the base digest ships it.
 # Verified present in the Wolfi x86_64 APKINDEX, then confirmed against the
@@ -173,10 +168,10 @@ RUN apk add --no-cache \
         "libbrotlidec1>=1.2.0-r7" \
         "libbrotlienc1>=1.2.0-r7" \
         "py3-pip-wheel>=26.2.2-r1" \
+        "libexpat1>=2.10.0-r0" \
         git \
         gh \
         gnupg \
-        "libexpat1>2.8.1-r1" \
         socat \
         "wget>=1.25.0-r15"
 
@@ -322,9 +317,9 @@ RUN mkdir -p /home/nonroot/.npm-global \
 # because nothing asserted the CLI works. Full path, since PATH is set for the
 # runtime user rather than for RUN.
 RUN npm install -g \
-        @anthropic-ai/claude-code@2.1.310 \
-        @openai/codex@0.164.0 \
-        @google/gemini-cli@0.65.0 \
+        @anthropic-ai/claude-code@2.1.319 \
+        @openai/codex@0.167.0 \
+        @google/gemini-cli@0.67.0 \
  && node /home/nonroot/.npm-global/lib/node_modules/@anthropic-ai/claude-code/install.cjs \
  && /home/nonroot/.npm-global/bin/claude --version \
  && npm cache clean --force \
