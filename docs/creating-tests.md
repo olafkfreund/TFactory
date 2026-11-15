@@ -40,7 +40,7 @@ line:
 When the work comes from a GitHub issue, it is the same contract: PFactory emits a
 **governed issue** whose acceptance criteria are the oracle, and the
 [RFC-0001 correlation key](https://github.com/olafkfreund/Factory/blob/main/docs/rfc/0001-correlation-key-and-completion-event.md)
-(the issue number) threads the work across the line. Each criterion must map to a
+(repo-scoped, `<repo>#<n>`) threads the work across the line. Each criterion must map to a
 child of the work — a criterion with no covering test is reported, not hidden.
 
 ### `.tfactory.yml` — the test-target parameters

@@ -47,7 +47,7 @@ whole Factory.
 The key idea is a single `correlation_key`: the GitHub issue number, carried end
 to end, with a synthetic `tf-<spec_id>` fallback so it is **never null**. One key
 threads a unit of work from plan to build to verify. That's what lets
-[CFactory](https://github.com/olafkfreund/CFactory) watch one contract instead
+[CFactory](https://cfactory.freundcloud.com/) watch one contract instead
 of four, and it's why the event is a real envelope now, not a flat blob:
 
 ```

@@ -7,7 +7,7 @@ nav_order: 6
 
 # Tasks
 
-> **Status: delivered — shipped through v0.9.x (current release v0.9.3, June
+> **Status: delivered — shipped through v0.9.x (current release v0.9.49, October
 > 2026).** TFactory is a live, governed node in the
 > [Factory](https://factory.freundcloud.com/) line. This page summarises what
 > was built; the live status board is [Progress]({{ '/progress/' | relative_url }})
