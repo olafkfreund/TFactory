@@ -13,7 +13,7 @@ this says so plainly rather than implying it.
 
 ## 1. What TFactory is
 
-TFactory is the verification stage of the PARR pipeline (Plan, Act, Review, Run). It
+TFactory is the verification stage of the Factory line (the PARR pipeline). It
 takes a spec (or an AIFactory build handoff) and autonomously generates tests, runs them
 in an isolated sandbox, grades each test, and emits a ranked triage report plus a
 completion event. **[Implemented]**
@@ -25,7 +25,7 @@ flowchart LR
     I[Spec / AIFactory handoff<br/>+ optional RFC-0002 contract] --> P[Planner<br/>lane-tagged test_plan.json]
     P --> G[Gen-Functional<br/>generate test code per subtask]
     G --> E[Executor<br/>run each lane in a sandbox]
-    E --> V[Evaluator<br/>grade each test on 6 signals]
+    E --> V[Evaluator<br/>grade each test on 5 signals]
     V --> T[Triager<br/>dedup, rank, commit/flag/reject]
     T --> C[Completion event -> CFactory + AIFactory handback]
 ```
@@ -47,14 +47,15 @@ are evidence, not blind commits.
 | jest, vitest | TypeScript | unit | Implemented |
 | playwright | TypeScript | browser (screenshots, video, trace) | Implemented |
 | cypress | TypeScript | browser | Implemented |
-| junit | Java | unit, api (JaCoCo + PIT) | Partial (runner + hooks present) |
+| junit (Maven, or `gradle test`) | Java | unit in-cluster, api; mutation with PIT | Implemented for unit; other lanes partial |
+| Gradle | Kotlin | unit, in a per-task Nix Job | Implemented |
 | cloud-discover, cloud-prowler | cloud | integration | Implemented (CSPM, read-only) |
 | Go, Rust | — | — | Absent |
+| Swift | — | — | Refused ("no in-cluster Swift lane") |
 | C#/.NET | — | — | RFC-only |
 
 ### Quality signals (the verdict) [Implemented]
-Coverage delta, 3x stability, mutation (Python AST / TS Stryker / Java PIT), flake-lint,
-LLM semantic relevance, CI-parity, plus cross-run flaky-history. Verdict per test:
+Five signals feed the confidence score (`agents/confidence.py`): mutation (Python AST / TS Stryker / Java PIT), stability (3x re-run), semantic relevance (LLM), coverage delta and lint promotion. CI-parity and cross-run flaky-history are checked alongside. Verdict per test:
 accept / flag / reject (`agents/evaluator.py`, `stability_runner.py`, `mutate_probe.py`,
 `flaky_history.py`).
 
@@ -97,21 +98,16 @@ achieved (or failed) on that evidence, and the Job is torn down on every path
 `automountServiceAccountToken` is false. Proven live (Factory#257) with a real
 cross-node Job on the factory cluster, full teardown included.
 
-### Verify execution model [Partial — in-pod default; Job-native in progress]
-Two execution paths exist for the verify pipeline:
-- **In-pod (default, live):** the Evaluator runs each lane inside the
-  long-lived service pod. Where there is no container runtime (e.g. a k3d pod),
-  a **host-venv pytest fallback** stages the system-under-test into a scratch
-  worktree and runs pytest in a host virtualenv, collecting JUnit XML + coverage
-  — so the verdict comes from a real execution, not a skipped run. **[Implemented]**
-- **Job-native (RFC-0016/0017, in progress):** run the whole verify pipeline as
-  a per-task Kubernetes Job in a contract-declared Nix toolchain that matches the
-  build env with no drift. The mechanism and its blocking fixes are merged (the
-  Job runs on the TFactory image, #479; LLM credentials injected into the Job
-  env, #480), but **the production default is still the in-pod path** — the
-  default flip (#466/#469) is gated behind `TFACTORY_NIX_RUNNER_IMAGE`, falls
-  back to in-pod when absent, and was **reverted pending re-validation**. It is
-  not live yet.
+### Verify execution model [Implemented — Job-native]
+Verify runs as an ephemeral Kubernetes Job per task (the reference deployment sets `TFACTORY_VERIFY_EXEC=kubejob`; see [RFC-0017](https://factory.freundcloud.com/rfc/job-native-scale-out/), *Implemented*), in a contract-declared Nix
+toolchain that matches the build environment, and the Job is torn down on every
+path. Verify packs its workspace through the object store, and a pack failure
+is recorded as `not_run` / `environment`
+([v0.9.33](https://github.com/olafkfreund/TFactory/releases/tag/v0.9.33)).
+Where there is no container runtime, a **host-venv pytest fallback** stages the
+system-under-test into a scratch worktree and runs pytest in a host virtualenv,
+collecting JUnit XML + coverage, so the verdict comes from a real execution and
+not a skipped run. **[Implemented]**
 
 ## 3. Authentication and MFA
 
@@ -297,7 +293,7 @@ against a stale copy.
 ## 10. Summary — what to trust today
 
 - Solid and live: spec/handoff ingest, plan + generate + run + grade + triage, unit/api/
-  browser lanes for Python/TypeScript (Java partial), the 6-signal verdict, testing live
+  browser lanes for Python/TypeScript (Java and Kotlin unit lanes in-cluster), the five-signal verdict, testing live
   Dev/UAT targets with vault-backed auth, k8s/compose targets, cloud CSPM, the RFC-0005 Nix
   per-task toolchain with real browser screenshots, and MCP/HTTP handover.
 - Partial / opt-in: ephemeral cloud targets, air-gapped operation,
