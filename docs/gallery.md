@@ -91,8 +91,7 @@ than rounded up.</figcaption>
 
 ![The Logs tab — phase-by-phase agent logs]({{ '/static/img/gallery/11-task-logs.png' | relative_url }})
 
-<figcaption>Logs. The phase-by-phase record of the five agents running the
-pipeline.</figcaption>
+<figcaption>Logs. The phase-by-phase record of the five pipeline stages.</figcaption>
 
 </figure>
 

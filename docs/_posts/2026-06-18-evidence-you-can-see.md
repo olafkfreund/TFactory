@@ -34,7 +34,7 @@ CI log:
 ![The Evidence tab — browser-lane recordings and screenshots]({{ '/static/img/screenshots/portal-evidence-recordings.png' | relative_url }})
 
 The same evidence appears on the finished task in the
-[CFactory](https://github.com/olafkfreund/CFactory) cockpit, so the one-pane view
+[CFactory](https://cfactory.freundcloud.com/) cockpit, so the one-pane view
 over the whole Factory line shows the proof too.
 
 ### How we proved it
