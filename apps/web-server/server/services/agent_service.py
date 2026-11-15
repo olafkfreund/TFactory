@@ -186,8 +186,9 @@ class TaskLogWriter:
         TaskPhase.QA_FIXING: "validation",
     }
 
-    def __init__(self, spec_dir: Path):
+    def __init__(self, spec_dir: Path, project_id: str | None = None):
         self.spec_dir = spec_dir
+        self.project_id = project_id
         self.log_file = spec_dir / "task_logs.json"
         self._current_tool: str | None = None
         self._tool_start_time: str | None = None
@@ -341,7 +342,11 @@ class TaskLogWriter:
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                asyncio.create_task(emit_task_logs_stream(spec_id, stream_chunk))
+                asyncio.create_task(
+                    emit_task_logs_stream(
+                        spec_id, stream_chunk, project_id=self.project_id
+                    )
+                )
         except RuntimeError:
             # No event loop running, skip WebSocket emit
             pass
@@ -3534,12 +3539,13 @@ class AgentService:
             / spec_id
         )
         worktree_spec_dir.mkdir(parents=True, exist_ok=True)
-        log_writer = TaskLogWriter(worktree_spec_dir)
+        project_id = task_id.split(":", 1)[0] if ":" in task_id else None
+        log_writer = TaskLogWriter(worktree_spec_dir, project_id=project_id)
 
         # Also write to main spec dir for immediate visibility
         main_spec_dir = project_path / ".tfactory" / "specs" / spec_id
         main_spec_dir.mkdir(parents=True, exist_ok=True)
-        main_log_writer = TaskLogWriter(main_spec_dir)
+        main_log_writer = TaskLogWriter(main_spec_dir, project_id=project_id)
 
         # Store log writers for cleanup
         self._task_log_writers[task_id] = (log_writer, main_log_writer)
