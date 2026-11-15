@@ -25,7 +25,7 @@ flowchart TD
     P --> I["Gen-Integration"]
     P --> M["Gen-Mutation"]
 
-    U --> X["Executor<br/>(sandboxed per subtask · .tfactory.yml target addressing;<br/>browser lane in a Nix k8s Job, RFC-0005 Tier A)"]
+    U --> X["Executor<br/>(Job-native: per-task Nix toolchain in an ephemeral k8s Job · .tfactory.yml target addressing)"]
     B --> X
     A --> X
     I --> X
@@ -129,7 +129,7 @@ TFactory/
 │   ├── backend/                  # Python 3.12, Claude Agent SDK
 │   │   ├── agents/
 │   │   │   ├── memory_manager.py        # Graphiti + file fallback
-│   │   │   ├── planner.py               # ← Task 5 will rewrite
+│   │   │   ├── planner.py               # test planner
 │   │   │   ├── session.py
 │   │   │   ├── utils.py
 │   │   │   └── tools_pkg/
@@ -288,7 +288,11 @@ AIFactory spec can change without breaking in-flight TFactory work.
                   `gh pr comment <pr>` with the report body
 ```
 
-## Runner stack (Task 4)
+## Runner stack (historical: the original Docker runner)
+
+> Verification now runs as a per-task Nix toolchain in an ephemeral Kubernetes Job
+> (RFC-0005 Tier A). The diagram below shows the original Docker-based runner, kept
+> as a record of how the lanes were first dispatched.
 
 ```
                 ┌──────────────────────┐
@@ -333,10 +337,12 @@ of truth.
 |---|---|---|---|---|---|
 | **Python** | pytest | playwright-python | httpx+pytest | testcontainers | mutmut |
 | **TypeScript** | jest | playwright | supertest | testcontainers-node | stryker |
-| Java / .NET | — | — | — | — | — (v0.3+) |
-| Go / Rust / Ruby | — | — | — | — | — (v0.4+) |
+| **Java** | JUnit 5 (Maven, or `gradle test`) | — | JUnit 5 | — | PIT |
+| **Kotlin** | Gradle, in a per-task Nix Job | — | — | — | — |
+| C# / Go / Rust / Ruby | — | — | — | — | — (no lane yet) |
+| Swift | refused: "no in-cluster Swift lane" | — | — | — | — |
 
-All five lanes are lit for Python and TypeScript.
+Python and TypeScript have all five lanes in the registry; Java and Kotlin unit tests run in-cluster ([v0.9.27](https://github.com/olafkfreund/TFactory/releases/tag/v0.9.27), [v0.9.29](https://github.com/olafkfreund/TFactory/releases/tag/v0.9.29)).
 [`lang_registry.py`](https://github.com/olafkfreund/TFactory/blob/main/apps/backend/tools/runners/lang_registry.py)
 holds the live source.
 

@@ -30,14 +30,14 @@ nav_order: 1
 
 {% include pipeline-diagram.html %}
 
-> **Part of the [Factory family](https://factory.freundcloud.com/)** — a governed, verified, observable autonomous software factory. [PFactory](https://pfactory.freundcloud.com/) plans, [AIFactory](https://aifactory.freundcloud.com/) builds, **TFactory** verifies, [CFactory](https://github.com/olafkfreund/CFactory) watches over all four. See **[Why Factory](https://factory.freundcloud.com/why/)**.
+> **Part of the [Factory family](https://factory.freundcloud.com/)** — a governed, verified, observable autonomous software factory. [PFactory](https://pfactory.freundcloud.com/) plans, [AIFactory](https://aifactory.freundcloud.com/) builds, **TFactory** verifies, [CFactory](https://cfactory.freundcloud.com/) watches over all four. See **[Why Factory](https://factory.freundcloud.com/why/)**.
 
 ## How it works
 
 <ul class="feature-row">
   <li class="feature-row__card reveal" style="--reveal-delay: 0ms">
     <h3>Spec-aware handover</h3>
-    <p>A Claude Code session in your AIFactory repo runs <code>/handover-to-tfactory</code>, or any tool posts acceptance criteria through the MCP control plane. TFactory snapshots the signed contract and the deployed URL, runs five agents, and returns a verdicts report.</p>
+    <p>A Claude Code session in your AIFactory repo runs <code>/handover-to-tfactory</code>, or any tool posts acceptance criteria through the MCP control plane. TFactory snapshots the signed contract and the deployed URL, runs the five-stage pipeline (Planner, Gen-Functional, Executor, Evaluator, Triager), and returns a verdicts report.</p>
   </li>
   <li class="feature-row__card reveal" style="--reveal-delay: 80ms">
     <h3>Two-layer guardrails</h3>
@@ -75,7 +75,7 @@ reviewer can watch the test execute and look at the page it produced:
 
 The whole pipeline — Plan, Generate, Execute, Report — is a live view in the
 portal, and the same evidence appears on the finished task in the
-[CFactory](https://github.com/olafkfreund/CFactory) cockpit:
+[CFactory](https://cfactory.freundcloud.com/) cockpit:
 
 ![The TFactory pipeline view — Plan, Generate, Execute, Report]({{ '/static/img/screenshots/portal-pipeline.png' | relative_url }})
 
@@ -203,5 +203,5 @@ Full walkthrough in the [repo README](https://github.com/olafkfreund/TFactory/bl
 
 - **Epic and sub-issues** — [github.com/olafkfreund/TFactory/issues](https://github.com/olafkfreund/TFactory/issues)
 - **Source** — [github.com/olafkfreund/TFactory](https://github.com/olafkfreund/TFactory)
-- **Sister project (upstream)** — [github.com/olafkfreund/AIFactory](https://github.com/olafkfreund/AIFactory)
+- **The rest of the suite** — [PFactory](https://pfactory.freundcloud.com/) plans, [AIFactory](https://aifactory.freundcloud.com/) builds, [CFactory](https://cfactory.freundcloud.com/) watches, [Factory](https://factory.freundcloud.com/) is the program site
 - **License** — [MIT OR GPL-3.0](https://github.com/olafkfreund/TFactory/blob/main/LICENSE)

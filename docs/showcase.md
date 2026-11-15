@@ -340,6 +340,6 @@ end-to-end time on a developer laptop: ~6-8 minutes.
 
 <div class="reveal" markdown="1">
 
-→ [v0.2.0 release notes](/CHANGELOG/#v020--enterprise-test-framework-spine-2026-05-29) &nbsp; · &nbsp; → [Status by lane](/#status-by-lane)
+→ [v0.2.0 release notes](https://github.com/olafkfreund/TFactory/blob/main/CHANGELOG.md) &nbsp; · &nbsp; → [Status by lane](/#status-by-lane)
 
 </div>

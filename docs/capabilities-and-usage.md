@@ -13,7 +13,7 @@ this says so plainly rather than implying it.
 
 ## 1. What TFactory is
 
-TFactory is the verification stage of the PARR pipeline (Plan, Act, Review, Run). It
+TFactory is the verification stage of the Factory line (the PARR pipeline). It
 takes a spec (or an AIFactory build handoff) and autonomously generates tests, runs them
 in an isolated sandbox, grades each test, and emits a ranked triage report plus a
 completion event. **[Implemented]**
@@ -25,7 +25,7 @@ flowchart LR
     I[Spec / AIFactory handoff<br/>+ optional RFC-0002 contract] --> P[Planner<br/>lane-tagged test_plan.json]
     P --> G[Gen-Functional<br/>generate test code per subtask]
     G --> E[Executor<br/>run each lane in a sandbox]
-    E --> V[Evaluator<br/>grade each test on 6 signals]
+    E --> V[Evaluator<br/>grade each test on 5 signals]
     V --> T[Triager<br/>dedup, rank, commit/flag/reject]
     T --> C[Completion event -> CFactory + AIFactory handback]
 ```
@@ -53,8 +53,7 @@ are evidence, not blind commits.
 | C#/.NET | — | — | RFC-only |
 
 ### Quality signals (the verdict) [Implemented]
-Coverage delta, 3x stability, mutation (Python AST / TS Stryker / Java PIT), flake-lint,
-LLM semantic relevance, CI-parity, plus cross-run flaky-history. Verdict per test:
+Five signals feed the confidence score (`agents/confidence.py`): mutation (Python AST / TS Stryker / Java PIT), stability (3x re-run), semantic relevance (LLM), coverage delta and lint promotion. CI-parity and cross-run flaky-history are checked alongside. Verdict per test:
 accept / flag / reject (`agents/evaluator.py`, `stability_runner.py`, `mutate_probe.py`,
 `flaky_history.py`).
 
@@ -297,7 +296,7 @@ against a stale copy.
 ## 10. Summary — what to trust today
 
 - Solid and live: spec/handoff ingest, plan + generate + run + grade + triage, unit/api/
-  browser lanes for Python/TypeScript (Java partial), the 6-signal verdict, testing live
+  browser lanes for Python/TypeScript (Java and Kotlin unit lanes in-cluster), the five-signal verdict, testing live
   Dev/UAT targets with vault-backed auth, k8s/compose targets, cloud CSPM, the RFC-0005 Nix
   per-task toolchain with real browser screenshots, and MCP/HTTP handover.
 - Partial / opt-in: ephemeral cloud targets, air-gapped operation,

@@ -8,11 +8,31 @@ nav_order: 8
 # Progress
 
 > Live delivery snapshot, updated by hand as merges land — last refresh
-> **2026-06-21** (TFactory **v0.9.3**, shipped). Recent milestones and the
+> **2026-11-15** (TFactory **v0.9.49**, shipped). Recent milestones and the
 > dated historical record are kept below. Full detail per release in the
 > [changelog](https://github.com/olafkfreund/TFactory/blob/main/CHANGELOG.md).
 
-## Current status — v0.9.3 (shipped)
+## Since August — v0.9.26 to v0.9.49
+
+Current release: [v0.9.49](https://github.com/olafkfreund/TFactory/releases/tag/v0.9.49)
+(2026-10-31), the last of 24 releases from
+[v0.9.26](https://github.com/olafkfreund/TFactory/releases/tag/v0.9.26)
+(2026-09-18). Nothing was tagged between v0.9.25 (2026-07-22) and v0.9.26.
+The write-up is
+[What shipped, August to November]({{ '/blog/2026/11/15/what-shipped-august-to-november/' | relative_url }}).
+
+- **Shipped:** verdicts that separate measured facts from LLM text; Kotlin and
+  Java unit lanes in-cluster; verify on a pinned commit in a detached worktree;
+  schema-checked contract ingest; role checks on task routes in shadow mode.
+- **Next (in progress on `dev`):** boot-migration lock, scoped API keys on
+  WebSockets, an allowlisted environment for agent child processes.
+  See [#1491](https://github.com/olafkfreund/TFactory/pull/1491),
+  [#1496](https://github.com/olafkfreund/TFactory/pull/1496),
+  [#1501](https://github.com/olafkfreund/TFactory/pull/1501).
+
+The sections below are the dated record up to v0.9.3 (2026-06-21).
+
+## Status at v0.9.3 (historical)
 
 TFactory is in production as a **governed node in the
 [Factory](https://factory.freundcloud.com/) line**: PFactory plans, AIFactory
