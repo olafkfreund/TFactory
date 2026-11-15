@@ -5,7 +5,9 @@ permalink: /showcase/
 nav_order: 5.5
 ---
 
-# v0.2.0 in action — a live demo
+# v0.2.0 in action — archived demo write-up
+
+> **Archived.** This is the v0.2.0 write-up from May 2026. The `tfactory-demo` repository and its live demo site have been retired, so the embedded demo, screenshots, video and download links that used to be here are gone. The text and the triage report below are kept as a record. For what TFactory does today see the [progress page]({{ '/progress/' | relative_url }}) and [what shipped, August to November]({{ '/blog/2026/11/15/what-shipped-august-to-november/' | relative_url }}).
 
 <div class="reveal" markdown="1">
 
@@ -24,24 +26,11 @@ on the AIFactory PR.
 
 <div class="reveal" markdown="1">
 
-**Try it live — embedded right here:**
-
-<iframe
-  src="https://olafkfreund.github.io/tfactory-demo/"
-  title="TFactory v0.2.0 demo SUT"
-  width="100%"
-  height="540"
-  loading="lazy"
-  style="border: 1px solid #2a2a2a; border-radius: 8px; background: #1a1a1a;"
-  sandbox="allow-scripts allow-same-origin">
-</iframe>
-
 > Pick a **category**, pick a **tone**, click **Generate**, then click
 > **Generate** again with the same dropdowns — you'll see the same text
 > appear (that's the seeded cache bug TFactory's AC#5 test catches).
 
-- **Open in a new tab:** [olafkfreund.github.io/tfactory-demo/](https://olafkfreund.github.io/tfactory-demo/)
-- **Source:** [github.com/olafkfreund/tfactory-demo](https://github.com/olafkfreund/tfactory-demo)
+- The demo site and source repository (`tfactory-demo`) are retired.
 
 The system-under-test is intentionally tiny: a Vite + React single-page
 app with two dropdowns (category, tone), a **Generate** button, a
@@ -92,7 +81,7 @@ against the demo app. The time-lapse below was captured from
 
 <figure class="reveal" markdown="1">
 
-![Portal phases during the pipeline run](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac5-different-text/test-failed-1.png)
+(screenshot not retained)
 
 *The TFactory portal's LaneStatusGrid lighting up phase-by-phase
 as the Planner → Gen-Functional → Executor → Evaluator → Triager
@@ -100,7 +89,7 @@ pipeline runs end-to-end against the demo app.*
 
 </figure>
 
-[Watch the full MP4 →](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac5-different-text/video.webm)
+Watch the full MP4 →
 
 ## What got generated
 
@@ -112,7 +101,7 @@ criterion. They landed on a feature branch via the Triager's
 `git_writer` (run in **write mode** for the demo, opt-in via
 `TFACTORY_TRIAGER_GIT_WRITE=1`):
 
-→ [See the generated tests on the demo PR](https://github.com/olafkfreund/tfactory-demo/tree/main/tests/e2e)
+→ See the generated tests on the demo PR
 
 The files:
 
@@ -149,11 +138,7 @@ This is the most visual artefact: the recording of AC#5 watching the
 second *Generate* call miss the cache, recompute, and overshoot the
 50ms budget.
 
-<video controls preload="metadata" style="max-width: 100%; border-radius: 6px;">
-  <source src="https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac5-different-text/video.webm" type="video/mp4">
-  Your browser does not support embedded video.
-  [Download the MP4](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac5-different-text/video.webm) instead.
-</video>
+*(The recording is no longer available.)*
 
 </div>
 
@@ -168,11 +153,11 @@ assertion failure (or at the final passing state for AC#1-4):
 
 | AC | Result | Screenshot |
 |---|---|---|
-| **AC#1** Generate produces non-empty text | pass | ![AC#1](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac1-generate-non-empty/test-finished-1.png) |
-| **AC#2** Greeting category vocabulary | pass | ![AC#2](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac2-greeting-vocab/test-finished-1.png) |
-| **AC#3** Snarky tone vocabulary | pass | ![AC#3](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac3-snarky-vocab/test-finished-1.png) |
-| **AC#4** Clear empties output | pass | ![AC#4](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac4-clear-empty/test-finished-1.png) |
-| **AC#5** Two clicks → different text | **fail (seeded bug)** | ![AC#5](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac5-different-text/test-failed-1.png) |
+| **AC#1** Generate produces non-empty text | pass | (screenshot not retained) |
+| **AC#2** Greeting category vocabulary | pass | (screenshot not retained) |
+| **AC#3** Snarky tone vocabulary | pass | (screenshot not retained) |
+| **AC#4** Clear empties output | pass | (screenshot not retained) |
+| **AC#5** Two clicks → different text | **fail (seeded bug)** | (screenshot not retained) |
 
 </div>
 
@@ -185,10 +170,10 @@ assertion failure (or at the final passing state for AC#1-4):
 The Triager attaches the full evidence bundle as PR-comment-linked
 downloads — re-runnable locally with `npx playwright show-trace`:
 
-- **AC#5 trace.zip:** [download](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac5-different-text/trace.zip) — Playwright trace; open in https://trace.playwright.dev/
-- **AC#5 video.webm:** [download](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac5-different-text/video.webm) — full screen recording of the failing case
-- **Planner output (test_plan.json):** [download](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/test_plan.json) — the 5-subtask plan the Planner agent emitted from spec.md
-- **Triage report (raw markdown):** [download](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/triage_report.md)
+- **AC#5 trace.zip:** download — Playwright trace; open in https://trace.playwright.dev/
+- **AC#5 video.webm:** download — full screen recording of the failing case
+- **Planner output (test_plan.json):** download — the 5-subtask plan the Planner agent emitted from spec.md
+- **Triage report (raw markdown):** download
 
 </div>
 
@@ -227,22 +212,22 @@ comment when `TFACTORY_TRIAGER_PR_COMMENT=1` is set.
 - **`generate-produces-non-empty-text`** — `tests/e2e/generate-produces-non-empty-text.spec.ts`
   - signals: stability=stable (1/1 run), coverage=N/A (browser lane), semantic=high
   - intent: CREATE new tests/e2e/generate-produces-non-empty-text.spec.ts
-  - evidence: [screenshot](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac1-generate-non-empty/test-finished-1.png)
+  - evidence: screenshot
 
 - **`greeting-category-vocabulary`** — `tests/e2e/greeting-category-vocabulary.spec.ts`
   - signals: stability=stable, coverage=N/A, semantic=high
   - intent: CREATE new tests/e2e/greeting-category-vocabulary.spec.ts
-  - evidence: [screenshot](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac2-greeting-vocab/test-finished-1.png)
+  - evidence: screenshot
 
 - **`snarky-tone-vocabulary`** — `tests/e2e/snarky-tone-vocabulary.spec.ts`
   - signals: stability=stable, coverage=N/A, semantic=high
   - intent: CREATE new tests/e2e/snarky-tone-vocabulary.spec.ts
-  - evidence: [screenshot](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac3-snarky-vocab/test-finished-1.png)
+  - evidence: screenshot
 
 - **`clear-empties-output`** — `tests/e2e/clear-empties-output.spec.ts`
   - signals: stability=stable, coverage=N/A, semantic=high
   - intent: CREATE new tests/e2e/clear-empties-output.spec.ts
-  - evidence: [screenshot](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac4-clear-empty/test-finished-1.png)
+  - evidence: screenshot
 
 ## Rejected (reject — surfaced for human review)
 
@@ -250,7 +235,7 @@ comment when `TFACTORY_TRIAGER_PR_COMMENT=1` is set.
   - **VERDICT: REJECT** — test ran cleanly and correctly identified a real bug in the SUT
   - signals: stability=stable (deterministic failure), coverage=N/A, semantic=high (test logic is sound; the SUT has a defect)
   - reason: AC#5 expected two consecutive Generate clicks to produce *different* text. The SUT's `src/generate.ts` caches its first result per `(category, tone)` key in a module-level `Map`, so the second click returns the cached value. Test correctly detected this.
-  - evidence: [screenshot](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac5-different-text/test-failed-1.png) · [video.webm](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac5-different-text/video.webm) · [trace.zip](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/ac5-different-text/trace.zip)
+  - evidence: screenshot · video.webm · trace.zip
   - **operator action required:** fix the `src/generate.ts` cache bug, then re-run; the test will then accept.
 
 ## What this demonstrates about TFactory v0.2.0
@@ -271,9 +256,8 @@ comment when `TFACTORY_TRIAGER_PR_COMMENT=1` is set.
 ## Reproduce
 
 ```bash
-# Live SUT: https://olafkfreund.github.io/tfactory-demo/
-# Source:   https://github.com/olafkfreund/tfactory-demo
-docker run --rm   --network=bridge   -v /path/to/tfactory-demo:/repo:ro   -v /path/to/scratch:/scratch   -e TFACTORY_TARGET_URL=https://olafkfreund.github.io/tfactory-demo/   -e NODE_PATH=/usr/lib/node_modules   tfactory-runner-playwright:latest   sh -c "cd /tmp && cp -r /repo/playwright.config.ts /repo/tests . && NODE_PATH=/usr/lib/node_modules npx playwright test"
+# Live SUT and source: retired (tfactory-demo)
+docker run --rm   --network=bridge   -v /path/to/tfactory-demo:/repo:ro   -v /path/to/scratch:/scratch   -e TFACTORY_TARGET_URL=<demo-url>   -e NODE_PATH=/usr/lib/node_modules   tfactory-runner-playwright:latest   sh -c "cd /tmp && cp -r /repo/playwright.config.ts /repo/tests . && NODE_PATH=/usr/lib/node_modules npx playwright test"
 
 # Expected: 4 passed + 1 failed (AC#5 — the seeded cache bug).
 ```
@@ -291,7 +275,7 @@ end-to-end time on a developer laptop: ~6-8 minutes.
 1. **Clone both repos.**
    ```bash
    git clone https://github.com/olafkfreund/TFactory
-   git clone https://github.com/olafkfreund/tfactory-demo
+   git clone <your demo repo>
    ```
 
 2. **Install dependencies.**

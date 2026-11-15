@@ -251,16 +251,16 @@ The full pipeline runs end-to-end in production across all five lanes. The
 historical v0.2.0 showcase — five Playwright tests generated from a five-AC user
 story, with evidence captured — remains published at
 [`/showcase/`]({{ '/showcase/' | relative_url }}) running against
-[olafkfreund/tfactory-demo](https://github.com/olafkfreund/tfactory-demo).
+`tfactory-demo` (retired).
 
 ## v0.2.0 demo + showcase
 
 A live end-to-end run published at [`/showcase/`]({{ '/showcase/' | relative_url }}):
 
-- **System under test:** [olafkfreund.github.io/tfactory-demo/](https://olafkfreund.github.io/tfactory-demo/) (Vite + React)
+- **System under test:** `tfactory-demo` (Vite + React; retired)
 - **5 Playwright tests** generated from the 5-AC user story; **4 pass, 1 fails** (AC#5 surfaces a seeded cache bug)
 - **Evidence captured:** 5 screenshots + AC#5 video.webm + AC#5 trace.zip
-- **Planner output:** real [test_plan.json](https://raw.githubusercontent.com/olafkfreund/tfactory-demo/main/showcase-evidence/test_plan.json) emitted via the Claude subscription (no API keys)
+- **Planner output:** real `test_plan.json` emitted via the Claude subscription (no API keys)
 - **Tag:** [`v0.2.0-demo`](https://github.com/olafkfreund/TFactory/releases/tag/v0.2.0-demo) anchors the showcase commit (`be52f9b`)
 
 ## Health signals

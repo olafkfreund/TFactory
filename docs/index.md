@@ -16,8 +16,8 @@ nav_order: 1
     your PR.
   </p>
   <p>
-    <a class="hero__cta hero__cta--primary" href="{{ '/showcase/' | relative_url }}">
-      See the demo
+    <a class="hero__cta hero__cta--primary" href="{{ '/blog/2026/11/15/what-shipped-august-to-november/' | relative_url }}">
+      What shipped since August
     </a>
     &nbsp;
     <a class="hero__cta hero__cta--ghost" href="{{ '/design-plan/' | relative_url }}">
@@ -37,7 +37,7 @@ nav_order: 1
 <ul class="feature-row">
   <li class="feature-row__card reveal" style="--reveal-delay: 0ms">
     <h3>Spec-aware handover</h3>
-    <p>A Claude Code session in your AIFactory repo runs <code>/handover-to-tfactory</code>, or any tool posts acceptance criteria through the MCP control plane. TFactory snapshots the signed contract and the deployed URL, runs the five-stage pipeline (Planner, Gen-Functional, Executor, Evaluator, Triager), and returns a verdicts report.</p>
+    <p>A Claude Code session in your AIFactory repo runs <code>/handover-to-tfactory</code>, or any tool posts acceptance criteria through the MCP control plane. TFactory snapshots the signed contract and the deployed URL, runs the five-stage pipeline (Planner, Generators, Executor, Evaluator, Triager), and returns a verdicts report.</p>
   </li>
   <li class="feature-row__card reveal" style="--reveal-delay: 80ms">
     <h3>Two-layer guardrails</h3>
@@ -171,7 +171,7 @@ Full walkthrough in the [repo README](https://github.com/olafkfreund/TFactory/bl
   </li>
   <li class="feature-row__card reveal" style="--reveal-delay: 140ms">
     <h3><a href="{{ '/showcase/' | relative_url }}">Showcase</a></h3>
-    <p>The pipeline in action, with real captured evidence.</p>
+    <p>An archived v0.2.0 write-up of the pipeline in action.</p>
   </li>
   <li class="feature-row__card reveal" style="--reveal-delay: 210ms">
     <h3><a href="{{ '/technical-spec/' | relative_url }}">Technical spec</a></h3>

@@ -64,7 +64,7 @@ task.
 | **Mutation**    | **5** | mutmut, cosmic-ray, Stryker | Active |
 
 The framework descriptor registry (`framework_registry/`) catalogs
-80 frameworks across the five lanes; `.tfactory.yml` configures targets
+framework descriptors (15 `frameworks/*/descriptor.yaml` on `main`) across the five lanes; `.tfactory.yml` configures targets
 (HTTP / kubernetes / docker_compose / feature_flag) for each lane.
 The tests-catalog (`tests_catalog/`) persists cross-run continuity via
 `tests-catalog.json` committed alongside generated tests.
@@ -139,7 +139,7 @@ TFactory/
 │   │   │       │   ├── progress.py      # in-agent: status updates
 │   │   │       │   ├── qa.py            # in-agent: validation
 │   │   │       │   ├── subtask.py       # in-agent: subtask state
-│   │   │       │   └── task_control.py  # MVP MCP surface (7 tools)
+│   │   │       │   └── task_control.py  # MCP task-control surface
 │   │   │       └── http_client.py
 │   │   ├── mcp_server/
 │   │   │   └── tfactory_server.py       # stdio MCP entrypoint
@@ -348,7 +348,7 @@ holds the live source.
 
 ## MCP surface (Task 2)
 
-Seven tools exposed over stdio to Claude Code via
+Tools exposed over stdio to Claude Code via
 [`.mcp.json`](https://github.com/olafkfreund/TFactory/blob/main/.mcp.json) and
 [`scripts/start-tfactory-mcp.sh`](https://github.com/olafkfreund/TFactory/blob/main/scripts/start-tfactory-mcp.sh):
 
@@ -362,7 +362,7 @@ Seven tools exposed over stdio to Claude Code via
 | `report_get` | Fetch report md / json | read-only |
 | `task_rerun` | Re-execute one lane (functional only at MVP) | bump rerun_count + reset lane state |
 
-All seven defined in
+All defined in
 [`task_control.py`](https://github.com/olafkfreund/TFactory/blob/main/apps/backend/agents/tools_pkg/tools/task_control.py).
 
 ## Subtask lane + timing on the task API

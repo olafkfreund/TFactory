@@ -36,7 +36,7 @@ mutation.
 
 **What it tests:** a deployed Vite + React SPA. TFactory writes Playwright
 tests that drive the UI against the live
-[demo site](https://olafkfreund.github.io/tfactory-demo/) and assert on the
+demo site (retired) and assert on the
 output panel.
 
 **Result:** **4 accept + 1 reject.** AC#5 ("two consecutive Generate clicks

@@ -111,7 +111,7 @@ only on `dev` is at the end, under "In progress".
 - OIDC ID-token claims (`iss`, `aud`, `exp`, algorithm) are enforced
   ([v0.9.47](https://github.com/olafkfreund/TFactory/releases/tag/v0.9.47),
   [#1464](https://github.com/olafkfreund/TFactory/pull/1464)), and
-  `GET /api/audit/export` needs org admin
+  `GET /api/audit/export` needs org admin or owner (or a service principal)
   ([v0.9.45](https://github.com/olafkfreund/TFactory/releases/tag/v0.9.45),
   [#1452](https://github.com/olafkfreund/TFactory/pull/1452)).
 - Several worktree routes now need `project_id:spec_id`, and a bare spec id no
@@ -134,6 +134,28 @@ only on `dev` is at the end, under "In progress".
 - CVE-gate fixes that failed the Trivy P0 gate, most recently uv
   ([v0.9.49](https://github.com/olafkfreund/TFactory/releases/tag/v0.9.49),
   [#1486](https://github.com/olafkfreund/TFactory/pull/1486)).
+
+## Reliability and operations
+
+- A build interrupted by a restart no longer shows `in_progress`: phases left
+  `active` are closed as `failed`, behind `APP_INLINE_ORPHAN_RECONCILE_ENABLED`
+  ([v0.9.30](https://github.com/olafkfreund/TFactory/releases/tag/v0.9.30),
+  [#1375](https://github.com/olafkfreund/TFactory/pull/1375)).
+- Minting an API key with an expiry no longer returns HTTP 500
+  ([v0.9.27](https://github.com/olafkfreund/TFactory/releases/tag/v0.9.27),
+  [#1309](https://github.com/olafkfreund/TFactory/pull/1309)).
+- Postgres pool caps were cut to 2+2 per pod, down from 5+10
+  ([v0.9.47](https://github.com/olafkfreund/TFactory/releases/tag/v0.9.47),
+  [#1471](https://github.com/olafkfreund/TFactory/pull/1471)).
+- `lane_progress` is derived from plan and run artifacts on every portal read
+  ([v0.9.26](https://github.com/olafkfreund/TFactory/releases/tag/v0.9.26),
+  [#1297](https://github.com/olafkfreund/TFactory/pull/1297)), and the pipeline
+  board shows terminal `failed` and `generated_empty` badges
+  ([v0.9.30](https://github.com/olafkfreund/TFactory/releases/tag/v0.9.30),
+  [#1371](https://github.com/olafkfreund/TFactory/pull/1371)).
+- `ruff format` is a required check on `dev` and `main`
+  ([v0.9.28](https://github.com/olafkfreund/TFactory/releases/tag/v0.9.28),
+  [#1318](https://github.com/olafkfreund/TFactory/pull/1318)).
 
 ## In progress
 
