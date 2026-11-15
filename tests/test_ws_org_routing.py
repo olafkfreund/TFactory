@@ -525,3 +525,9 @@ def test_key_socket_ignores_shadow_mode_and_follows_membership(socket_app, monke
         socket = next(iter(events._clients.values()))
         _wait_for_no_orgs(client, socket)
         assert not events._may_receive(socket, "A")
+
+
+def test_org_bound_key_without_owner_is_not_a_service_client():
+    client = events.ConnectedClient(websocket=None, user_id=None, key_org_id="A")
+    assert not events._may_receive(client, "B")
+    assert not events._may_receive(client, None, shadow=True)
