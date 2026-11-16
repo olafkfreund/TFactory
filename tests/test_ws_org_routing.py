@@ -8,7 +8,7 @@ import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import FastAPI, HTTPException, Request, WebSocket
@@ -510,7 +510,9 @@ def test_key_socket_ignores_shadow_mode_and_follows_membership(socket_app, monke
     app, setting = socket_app[:2]
     monkeypatch.setattr(events, "_KEY_RECHECK_SECONDS", 0)
     monkeypatch.setattr(
-        events, "_ws_acw_principal", AsyncMock(return_value={"id": "owner"})
+        events,
+        "_ws_acw_principal",
+        AsyncMock(return_value={"id": "owner", "org_id": "A", "api_key_id": "key"}),
     )
     setting.RBAC_ENFORCE_TASK_ROUTES = False
     with TestClient(app) as client, _connect(client, "acw_a") as key:
@@ -531,3 +533,136 @@ def test_org_bound_key_without_owner_is_not_a_service_client():
     client = events.ConnectedClient(websocket=None, user_id=None, key_org_id="A")
     assert not events._may_receive(client, "B")
     assert not events._may_receive(client, None, shadow=True)
+
+
+def test_jwt_membership_is_reloaded_on_open_socket(socket_app, monkeypatch):
+    app, _, sent = socket_app
+    monkeypatch.setattr(events, "_KEY_RECHECK_SECONDS", 0)
+
+    class RemovedMembership:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+        async def execute(self, _stmt):
+            return SimpleNamespace(all=lambda: [])
+
+    with TestClient(app) as client, _connect(client, "jwt-a") as ws:
+        socket = next(iter(events._clients.values()))
+        assert socket.org_ids == {"A"}
+        monkeypatch.setattr(_engine(), "async_session_factory", RemovedMembership)
+        ws.send_text("wake")
+        _wait_for_no_orgs(client, socket)
+        client.portal.call(events.send_to_org, "A", "removed", {})
+        assert sent.get("jwt-a", []) == []
+
+
+def test_key_recheck_uses_fresh_principal(socket_app, monkeypatch):
+    app, _, _ = socket_app
+    monkeypatch.setattr(events, "_KEY_RECHECK_SECONDS", 0)
+    monkeypatch.setattr(
+        events,
+        "_ws_acw_principal",
+        AsyncMock(return_value={"id": "other", "org_id": "B", "api_key_id": "key"}),
+    )
+    with TestClient(app) as client, _connect(client, "acw_a") as ws:
+        socket = next(iter(events._clients.values()))
+        ws.send_text("wake")
+        for _ in range(200):
+            if socket.user_id == "other" and socket.org_ids == {"B"}:
+                break
+            client.portal.call(asyncio.sleep, 0.01)
+        assert socket.key_org_id == "B"
+        assert socket.user_id == "other"
+        assert socket.org_ids == {"B"}
+
+
+def test_jwt_without_subject_closes_4001(monkeypatch):
+    ws = MagicMock()
+    ws.headers = {"authorization": "Bearer jwt"}
+    ws.query_params = {}
+    ws.close = AsyncMock()
+    monkeypatch.setattr(auth, "_try_decode_jwt", lambda _: {"type": "access"})
+    monkeypatch.setattr(
+        auth, "get_settings", lambda: SimpleNamespace(DISABLE_AUTH=False)
+    )
+    with pytest.raises(auth.WebSocketAuthError, match="no subject"):
+        asyncio.run(auth.authenticate_websocket(ws))
+    ws.close.assert_awaited_once_with(code=4001, reason="Unauthorized")
+
+
+@pytest.mark.parametrize("service", [False, True])
+@pytest.mark.parametrize("route", ["cli", "terminal", "github"])
+def test_login_start_routes_capture_request_principal(
+    monkeypatch, tmp_path, service, route
+):
+    principal = {"id": "default" if service else "owner", "is_service": service}
+    request = Request({"type": "http"})
+    request.state.user = principal
+
+    if route in {"cli", "terminal"}:
+        captured = []
+        emitter = MagicMock()
+
+        def poll(_mtime, _loop, worker_principal):
+            emitter("codex", True, _loop, worker_principal)
+
+        monkeypatch.setattr(cli_accounts, "_poll_codex_token", poll)
+
+        class Thread:
+            def __init__(self, *, target, args=(), daemon=False):
+                captured.append((target, args))
+
+            def start(self):
+                if captured[-1][0] is poll:
+                    captured[-1][0](*captured[-1][1])
+
+        monkeypatch.setattr(cli_accounts.threading, "Thread", Thread)
+        monkeypatch.setitem(
+            cli_accounts.CLI_CONFIG["codex"], "credentials_file", tmp_path / "missing"
+        )
+        if route == "terminal":
+            from server.pty import manager as pty_manager
+
+            monkeypatch.setattr(cli_accounts, "_detect_cli_version", lambda _: "1")
+            monkeypatch.setattr(
+                pty_manager,
+                "get_pty_manager",
+                lambda: SimpleNamespace(create_session=lambda **_: "terminal"),
+            )
+            asyncio.run(cli_accounts.start_cli_login_terminal("codex", request))
+        else:
+            asyncio.run(cli_accounts.start_cli_login("codex", request))
+        assert emitter.call_args.args[-1] is principal
+    else:
+        proc = SimpleNamespace(
+            stderr=SimpleNamespace(
+                readline=AsyncMock(
+                    side_effect=[
+                        b"First, copy your one-time code: ABCD-EFGH\n",
+                        b"open https://github.com/login/device\n",
+                    ]
+                )
+            ),
+            stdout=None,
+        )
+        emitter = AsyncMock()
+
+        async def monitor(_proc, worker_principal):
+            await emitter(worker_principal, "github:auth-complete", {"success": True})
+
+        monkeypatch.setattr(github_auth.shutil, "which", lambda _: "/usr/bin/gh")
+        monkeypatch.setattr(
+            github_auth.asyncio, "create_subprocess_exec", AsyncMock(return_value=proc)
+        )
+        monkeypatch.setattr(github_auth, "_monitor_gh_auth", monitor)
+        monkeypatch.setattr(github_auth, "_gh_auth_proc", None)
+
+        async def run():
+            await github_auth.start_github_auth(request)
+            await asyncio.sleep(0)
+
+        asyncio.run(run())
+        assert emitter.await_args.args[0] is principal
