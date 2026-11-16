@@ -48,7 +48,9 @@ def test_create_invokes_runner_in_order(tmp_path) -> None:
         stdout = "deadbeef"
         stderr = ""
 
-    def runner(argv, *, cwd, stdin=None):
+    def runner(argv, *, cwd, stdin=None, env=None):
+        if argv[:4] == ["git", "config", "-z", "--includes"]:
+            return _Res()
         calls.append(argv)
         return _Res()
 
@@ -66,7 +68,7 @@ def test_create_invokes_runner_in_order(tmp_path) -> None:
     assert len(calls) == 4
     assert calls[0][3:6] == ["checkout", "-B", "tfactory/visual-run1"]
     assert calls[1][3] == "add"
-    assert calls[2][3] == "commit"
+    assert calls[2][3:5] == ["-c", "commit.gpgSign=false"]
     assert calls[3][3] == "rev-parse"
 
 
