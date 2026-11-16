@@ -1121,7 +1121,9 @@ async def _generate_one_subtask(
             )
             subtask.fail("SDK session returned status=error")
             return "skipped"
-        if step == "assert" and test_path.exists():
+        if step == "assert":
+            if not test_path.exists():
+                break  # no draft: skip wiring, the no-write rejection below applies
             locked = _code_values(test_path.read_text(), subtask)
 
     # Did the agent actually write the file?

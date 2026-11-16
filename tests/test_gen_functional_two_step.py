@@ -221,3 +221,14 @@ def test_default_step_prompt_is_unchanged(spec: Path, project: Path) -> None:
     desc = _resolve_framework_descriptor(st)
     single = get_tfactory_gen_functional_prompt(spec, project, st, desc)
     assert "diff.patch" in single and "WIRING STEP" not in single
+
+
+async def test_an_assertion_step_that_writes_nothing_never_reaches_wiring(
+    spec: Path, project: Path, sdk
+) -> None:
+    prompts = sdk(None)
+
+    assert await run_gen_functional(spec, project) is False
+
+    assert len(prompts) == 1 and "WIRING STEP" not in prompts[0]
+    assert _replan(spec) is not None
