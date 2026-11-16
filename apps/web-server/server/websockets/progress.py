@@ -173,7 +173,9 @@ async def all_progress_websocket(websocket: WebSocket):
                     }
                 )
             # a finished task leaves running_tasks before its last event is processed: re-authorize
-            elif progress.task_id in allowed or await access.readable([progress.task_id]):
+            elif progress.task_id in allowed or await access.readable(
+                [progress.task_id]
+            ):
                 await websocket.send_json(
                     {
                         "type": "progress",
