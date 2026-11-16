@@ -389,6 +389,46 @@ def _env_to_secret_key(var: str) -> str:
     return var.lower().replace("_", "-")
 
 
+# Factory#1959 stage 2: with TFACTORY_MODEL_GATEWAY_URL set the Job reaches the
+# OpenAI-compatible plane only through the model gateway, so the direct
+# OpenAI-compatible and Ollama keys and the direct base URL are not forwarded
+# (literal or Secret reference). OPENAI_API_KEY stays: the Codex provider seeds
+# its auth from it and cannot use the gateway (plane C, owner decision in #1959).
+_ENV_GATEWAY_URL = "TFACTORY_MODEL_GATEWAY_URL"
+_ENV_GATEWAY_TOKEN = "TFACTORY_MODEL_GATEWAY_TOKEN"  # noqa: S105 - env var name
+_GATEWAY_TOKEN_SECRET_KEY = "model-gateway-token"  # noqa: S105 - Secret key name
+_GATEWAY_REPLACED: frozenset[str] = frozenset(
+    {
+        "OPENAI_COMPATIBLE_API_KEY",
+        "OPENAI_COMPATIBLE_BASE_URL",
+        "OLLAMA_API_KEY",
+    }
+)
+
+
+def _gateway_env_entries(gateway_url: str, secret_name: str) -> list[dict[str, Any]]:
+    """Base URL (origin; the provider appends /v1) and client token for the Job."""
+    out: list[dict[str, Any]] = [
+        {"name": "OPENAI_COMPATIBLE_BASE_URL", "value": gateway_url}
+    ]
+    if secret_name:
+        out.append(
+            {
+                "name": "OPENAI_COMPATIBLE_API_KEY",
+                "valueFrom": {
+                    "secretKeyRef": {
+                        "name": secret_name,
+                        "key": _GATEWAY_TOKEN_SECRET_KEY,
+                        "optional": True,
+                    }
+                },
+            }
+        )
+    elif token := os.environ.get(_ENV_GATEWAY_TOKEN, "").strip():
+        out.append({"name": "OPENAI_COMPATIBLE_API_KEY", "value": token})
+    return out
+
+
 def _provider_env_entries() -> list[dict[str, Any]]:
     """Provider/runtime env entries to forward to the verify Job, when set.
 
@@ -405,8 +445,11 @@ def _provider_env_entries() -> list[dict[str, Any]]:
     emitted; ``ANTHROPIC_API_KEY`` is never in the set (no silent API billing).
     """
     secret_name = os.environ.get(_ENV_PROVIDER_SECRET_NAME, "").strip()
+    gateway_url = os.environ.get(_ENV_GATEWAY_URL, "").strip().rstrip("/")
     out: list[dict[str, Any]] = []
     for var in _SDK_PASSTHROUGH_ENV:
+        if gateway_url and var in _GATEWAY_REPLACED:
+            continue
         is_secret = var in _PROVIDER_SECRET_ENV
         # Secrets can come from the env-Secret even if not literally set on the
         # pod; non-secrets only forward when present on the pod env.
@@ -427,6 +470,8 @@ def _provider_env_entries() -> list[dict[str, Any]]:
         val = os.environ.get(var)
         if val:
             out.append({"name": var, "value": val})
+    if gateway_url:
+        out.extend(_gateway_env_entries(gateway_url, secret_name))
     return out
 
 

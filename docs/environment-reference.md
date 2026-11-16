@@ -184,6 +184,8 @@ Secret is named.
 | `TFACTORY_VERIFY_OAUTH_SECRET_NAME` | unset | No | — | Kubernetes Secret name holding the Claude OAuth token for the verify Job. | `agents/verify_dispatch.py` |
 | `TFACTORY_VERIFY_OAUTH_SECRET_KEY` | `oauth-token` | No | — | Key within the OAuth Secret. | `agents/verify_dispatch.py` |
 | `TFACTORY_VERIFY_PROVIDER_SECRET_NAME` | unset | No | — | Secret name from which non-Claude provider keys are sourced via `secretKeyRef` (key = lower-kebab of the var, e.g. `OPENAI_API_KEY` -> `openai-api-key`). When unset, keys forward as resolved pod-env values. | `agents/verify_dispatch.py` |
+| `TFACTORY_MODEL_GATEWAY_URL` | unset | No | — | Model gateway origin (no `/v1`), Factory#1959. Set = verify Jobs get `OPENAI_COMPATIBLE_BASE_URL` = this and no direct `OPENAI_COMPATIBLE_API_KEY` or `OLLAMA_API_KEY` (`OPENAI_API_KEY` stays: Codex needs it). Covers the env-var fallback of the OpenAI-compatible provider only; saved endpoints, Codex, Gemini are unchanged. Unset = off. | `agents/verify_dispatch.py` |
+| `TFACTORY_MODEL_GATEWAY_TOKEN` | unset | If gateway URL set | — | Gateway client token, sent to Jobs as `OPENAI_COMPATIBLE_API_KEY`. With `TFACTORY_VERIFY_PROVIDER_SECRET_NAME` set it is read from that Secret key `model-gateway-token` instead. Missing = Job calls get 401, no fallback. | `agents/verify_dispatch.py` |
 | `TFACTORY_VERIFY_CLI_CREDS_SECRET` | unset | No | — | Secret name holding CLI credentials mounted into the verify Job. | `agents/verify_dispatch.py` |
 | `DATABASE_URL` | unset | No | — | Database URL forwarded into the verify Job when the pipeline's terminal store write needs it. | `agents/verify_dispatch.py` |
 | `DB_POOL_SIZE` | `2` | No | — | Main Postgres engine pool size; ignored for SQLite. | `server/db_pool.py` |
