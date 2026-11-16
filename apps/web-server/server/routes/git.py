@@ -62,7 +62,7 @@ def run_git_command(args: list[str], cwd: str) -> dict:
             text=True,
             cwd=cwd,
             timeout=30,
-            env=git_env(keep=GITHUB_KEEP),
+            env=git_env(keep=(*GITHUB_KEEP, "SSH_AUTH_SOCK")),
         )
         if result.returncode != 0:
             return {"success": False, "error": result.stderr.strip()}

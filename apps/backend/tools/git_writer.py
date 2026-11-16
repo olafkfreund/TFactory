@@ -36,6 +36,9 @@ from typing import Protocol
 
 from core.child_env import GITHUB_KEEP, git_env, merge_driver_pins
 
+# Remote git needs the gh token and, for ssh origins, the agent socket.
+_REMOTE_KEEP = (*GITHUB_KEEP, "SSH_AUTH_SOCK")
+
 _REMOTE_PINS = (
     "-c",
     "core.gitProxy=",
@@ -238,7 +241,7 @@ def _resolve_branch(
                 runner,
                 _pinned(fetch_argv, list(_REMOTE_PINS)),
                 request.repo_dir,
-                keep=GITHUB_KEEP,
+                keep=_REMOTE_KEEP,
             )
             if res.returncode != 0:
                 return GitWriteResult(
@@ -455,7 +458,7 @@ def write_tests_to_branch(
                 runner,
                 _pinned(push_argv, list(_REMOTE_PINS)),
                 request.repo_dir,
-                keep=GITHUB_KEEP,
+                keep=_REMOTE_KEEP,
             )
             if res.returncode != 0:
                 return GitWriteResult(
@@ -535,8 +538,10 @@ def write_paths_to_branch(
         argv_log.append(argv)
         if not dry_run:
             command = _pinned(argv, pins)
-            if "commit" in argv:
+            if argv[3] == "commit":
                 command = _pinned(argv, [*pins, *_commit_pin(runner, repo_dir)])
+                if _sign_enabled():
+                    command.append("-S")
             res = _run(runner, command, repo_dir)
             if res.returncode != 0:
                 return GitWriteResult(
