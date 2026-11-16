@@ -2874,7 +2874,10 @@ async def _judge_once(
     # A guardrail halt or token ceiling stops the judge: whatever it wrote before
     # the stop is not a vote (fail-closed deny, like any other session error).
     info = result[2] if isinstance(result, tuple) and result[2:] else {}
-    if isinstance(info, dict) and info.get("type") in {"guardrail_halt", "token_ceiling"}:
+    if isinstance(info, dict) and info.get("type") in {
+        "guardrail_halt",
+        "token_ceiling",
+    }:
         return None, "evaluator_session_error", str(info.get("message", ""))[:500]
     ok, err, _count = _validate_verdicts(verdicts_path)
     if not ok:

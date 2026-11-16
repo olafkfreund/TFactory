@@ -645,7 +645,11 @@ async def run_agent_session(
     over = ceiling_exceeded(spec_dir)
     if over:
         logger.warning("Run stopped: %s", over)
-        return "error", over, {"type": "token_ceiling", "message": over, "exception_type": ""}
+        return (
+            "error",
+            over,
+            {"type": "token_ceiling", "message": over, "exception_type": ""},
+        )
     try:
         # Send the query
         debug("session", "Sending query to Claude SDK...")

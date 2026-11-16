@@ -64,7 +64,11 @@ def is_qa_approved(spec_dir: Path) -> bool:
 def _stopped(err: dict[str, object]) -> str | None:
     """The typed reason when a session was stopped by the guardrail or ceiling (#1510)."""
     kind = err.get("type") if isinstance(err, dict) else None
-    return str(err.get("message", kind)) if kind in {"guardrail_halt", "token_ceiling"} else None
+    return (
+        str(err.get("message", kind))
+        if kind in {"guardrail_halt", "token_ceiling"}
+        else None
+    )
 
 
 def should_run_qa(spec_dir: Path) -> bool:
