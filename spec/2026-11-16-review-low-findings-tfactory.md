@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1511
 intent: intent/2026-11-16-review-low-findings-tfactory.md
 ---
