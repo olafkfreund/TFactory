@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+## 0.10.1 — Review fixes: run guard, verify Job limits, project .env URLs (2026-11-16)
+
+### Fixed
+
+- **Run guard false halts:** the same-tool halt now counts failures per tool
+  and input signature, so eight different failing Bash calls no longer stop a
+  session (a true loop of identical calls still halts at eight). The token
+  ceiling now bounds a single run, not the task's lifetime (#1525, #1526).
+- **Run limits reach the verify Job:** the act guardrail, run token ceiling,
+  max-turns and guardrail settings are forwarded to the verify Job (#1515,
+  #1524).
+- **Scoped assertion lock:** only the criterion's literals are locked, not
+  every draft constant (#1516, #1524).
+
+### Security
+
+- **Project `.env` URL redirectors** load only when the host holds no matching
+  credential (including the `OPENAI_API_KEY` fallback), and `GRAPHITI_MCP_URL`
+  is removed from the allowlist (#1506, #1524).
+
 ## 0.10.0 — WebSocket and terminal access control, agent sandbox hardening, verify through the model gateway (2026-11-16)
 
 ### Added
