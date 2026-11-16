@@ -24,6 +24,17 @@ _FACTORY_GIT_KEYS = frozenset(
     {"GIT_PROVIDER", "GIT_TOKEN", "GIT_BASE_URL", "GIT_ORG", "GIT_PROJECT", "GIT_REPO"}
 )
 
+# Endpoint redirectors (#1506): a committed URL would send a host-held credential
+# to an attacker, so each loads only while the host holds none of its credentials.
+_URL_KEY_CREDENTIALS = {
+    "OLLAMA_BASE_URL": ("OLLAMA_API_KEY",),
+    "OLLAMA_CLOUD_BASE_URL": ("OLLAMA_API_KEY",),
+    "OPENAI_COMPATIBLE_BASE_URL": ("OPENAI_COMPATIBLE_API_KEY", "OPENAI_API_KEY"),
+    "AZURE_OPENAI_ENDPOINT": ("AZURE_OPENAI_API_KEY",),
+    "AZURE_OPENAI_BASE_URL": ("AZURE_OPENAI_API_KEY",),
+    "GIT_BASE_URL": ("GIT_TOKEN", "GITHUB_TOKEN"),
+}
+
 PROJECT_ENV_KEYS = frozenset(
     {
         # routes/context.py settings
@@ -70,7 +81,6 @@ PROJECT_ENV_KEYS = frozenset(
         "OPENAI_MODEL",
         # core/client.py
         "USE_CLAUDE_MD",
-        "GRAPHITI_MCP_URL",
         "CONTEXT7_ENABLED",
         "PLAYWRIGHT_MCP_ENABLED",
         "PUPPETEER_MCP_ENABLED",
@@ -94,6 +104,7 @@ def load_project_env_file(env_file: Path, env: dict[str, str]) -> None:
     if not env_file.exists():
         return
     ignored: list[str] = []
+    host_held = {k for k, v in env.items() if v}  # before the file adds anything
     try:
         with env_file.open() as f:
             for raw in f:
@@ -102,7 +113,9 @@ def load_project_env_file(env_file: Path, env: dict[str, str]) -> None:
                     continue
                 k, v = line.split("=", 1)
                 k = k.strip()
-                if not is_project_env_key(k):
+                if not is_project_env_key(k) or any(
+                    c in host_held for c in _URL_KEY_CREDENTIALS.get(k, ())
+                ):
                     ignored.append(k)
                 elif k not in env:
                     env[k] = v.strip().strip('"').strip("'")
