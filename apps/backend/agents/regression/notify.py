@@ -16,22 +16,22 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from .diff import RegressionDiff
+from .models import RegressionRun
 
 logger = logging.getLogger(__name__)
 
-Sender = Callable[[str, dict], None]
+Sender = Callable[[str, dict[str, str]], None]
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *args, **kwargs):  # noqa: ANN002, ANN003
-        raise urllib.error.HTTPError(
-            args[0].full_url, args[3], "redirect refused", args[4], None
-        )
+    def redirect_request(self, *args: Any, **kwargs: Any) -> None:  # noqa: ARG002
+        return None  # urllib then raises HTTPError for the 3xx instead of following
 
 
-def _post(url: str, body: dict) -> None:
+def _post(url: str, body: dict[str, str]) -> None:
     from agents.handback.send import _auth_headers  # noqa: PLC0415 - heavy imports
     from tools.runners.net_guard import assert_safe_target_url  # noqa: PLC0415
 
@@ -59,17 +59,16 @@ def _head(repo_root: Path) -> str:
 
 
 def notify_aifactory(
+    run: RegressionRun,
+    diff: RegressionDiff,
     *,
     spec_dir: Path | None,
     repo_root: Path,
-    project_id: str,
-    commit: str | None,
-    run_id: str,
-    diff: RegressionDiff,
     sender: Sender | None = None,
 ) -> bool:
     """POST the failing run to AIFactory; True when a request was sent."""
     public = (os.environ.get("TFACTORY_PUBLIC_URL") or "").rstrip("/")
+    commit = run.commit
     if not (
         diff.has_regressions and commit and spec_dir and public.startswith("https://")
     ):
@@ -86,7 +85,7 @@ def notify_aifactory(
             f"{api_url}/api/tasks/{task_id}/post-merge-regression",
             {
                 "merge_sha": commit,
-                "run_url": f"{public}/api/projects/{project_id}/regression?run={run_id}",
+                "run_url": f"{public}/api/projects/{run.project_id}/regression?run={run.run_id}",
             },
         )
         return True

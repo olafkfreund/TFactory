@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -17,6 +16,7 @@ if str(_BACKEND) not in sys.path:
 
 from agents.regression import notify  # noqa: E402
 from agents.regression.diff import RegressionClass, RegressionDiff  # noqa: E402
+from agents.regression.models import RegressionRun  # noqa: E402
 
 
 def _diff(regressed: bool) -> RegressionDiff:
@@ -63,17 +63,10 @@ def env(tmp_path, monkeypatch):
 
 def _call(env, sender, **over):
     repo, spec, sha = env
-    kw = {
-        "spec_dir": spec,
-        "repo_root": repo,
-        "project_id": "proj",
-        "commit": sha,
-        "run_id": "r1",
-        "diff": _diff(True),
-        "sender": sender,
-        **over,
-    }
-    return notify.notify_aifactory(**kw)
+    commit = over.pop("commit", sha)
+    run = RegressionRun(run_id="r1", project_id="proj", ran_at="t", commit=commit)
+    kw = {"spec_dir": spec, "repo_root": repo, "sender": sender, **over}
+    return notify.notify_aifactory(run, kw.pop("diff", _diff(True)), **kw)
 
 
 def test_sends_once_on_regression(env):
@@ -117,8 +110,11 @@ def test_sender_error_does_not_raise(env):
     assert _call(env, boom) is False
 
 
-def test_redirect_refused():
-    with pytest.raises(urllib.error.HTTPError):
+def test_redirect_not_followed():
+    req = urllib.request.Request("http://a/x")
+    assert (
         notify._NoRedirect().redirect_request(
-            urllib.request.Request("http://a/x"), None, 302, "Found", {}, "http://evil/"
+            req, None, 302, "Found", {}, "http://evil/"
         )
+        is None
+    )

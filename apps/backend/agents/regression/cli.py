@@ -117,12 +117,10 @@ def main(
     active_runner = runner if runner is not None else _default_runner(args)
     run, diff = run_regression(request, active_runner)
     notify_aifactory(
+        run,
+        diff,
         spec_dir=Path(args.spec_dir) if args.spec_dir else None,
         repo_root=request.repo_root,
-        project_id=request.project_id,
-        commit=run.commit,
-        run_id=run.run_id,
-        diff=diff,
     )
     sys.stdout.write(
         f"regression {run.run_id}: {run.totals['total']} test(s), "

@@ -76,12 +76,5 @@ def run_for_project(
         flaky_store_path=config.flaky_store_path,
     )
     run, diff = run_regression(request, runner or _runner_for(config))
-    notify_aifactory(
-        spec_dir=config.spec_dir,
-        repo_root=config.repo_root,
-        project_id=config.project_id,
-        commit=run.commit,
-        run_id=run.run_id,
-        diff=diff,
-    )
+    notify_aifactory(run, diff, spec_dir=config.spec_dir, repo_root=config.repo_root)
     return run, diff
