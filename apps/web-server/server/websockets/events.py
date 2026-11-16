@@ -35,8 +35,10 @@ router = APIRouter()
 def load_projects() -> dict[str, dict[str, Any]]:
     """Load the project registry (lazy import to avoid circular dependencies)."""
     # import_module, not ``from``: a static import here closes a cycle.
-    projects = importlib.import_module("server.routes.projects")
-    return projects.load_projects()
+    loaded: dict[str, dict[str, Any]] = importlib.import_module(
+        "server.routes.projects"
+    ).load_projects()
+    return loaded
 
 
 # ---------------------------------------------------------------------------
