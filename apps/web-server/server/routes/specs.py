@@ -44,6 +44,11 @@ except Exception:  # pragma: no cover — SDK-less env: lazy import will report 
 router = APIRouter(prefix="/api/specs", tags=["Spec Ingestion"])
 
 
+# Provenance labels land in source.json and the completion event: bound and
+# keep them to a plain charset (no control chars, quotes or newlines).
+_PROVENANCE_RE = r"^[\w.:@/+\- ]+$"
+
+
 class SpecIngestRequest(BaseModel):
     project_id: str = Field(..., description="Registered project id")
     spec_id: str = Field(
@@ -126,6 +131,8 @@ class SpecIngestRequest(BaseModel):
     )
     originator: str | None = Field(
         default=None,
+        max_length=128,
+        pattern=_PROVENANCE_RE,
         description=(
             "Who asked for the work (Factory#1960), as the sending service "
             "recorded it. Stored on the spec and echoed in the completion event."
@@ -133,6 +140,8 @@ class SpecIngestRequest(BaseModel):
     )
     agent_identity: str | None = Field(
         default=None,
+        max_length=128,
+        pattern=_PROVENANCE_RE,
         description=(
             "The agent identity that built what is verified (Factory#1960), e.g. "
             "'agent:aifactory/<key id>'. Stored on the spec and echoed in the "
