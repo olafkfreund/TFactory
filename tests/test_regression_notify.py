@@ -71,7 +71,8 @@ def _call(env, sender, **over):
 
 def test_sends_once_on_regression(env):
     got = []
-    assert _call(env, lambda u, b: got.append((u, b))) is True
+    sent = _call(env, lambda u, b: got.append((u, b)))
+    assert sent is True
     assert got == [
         (
             "http://a:3101/api/tasks/p:001/post-merge-regression",
@@ -94,27 +95,28 @@ def test_sends_once_on_regression(env):
 )
 def test_skipped(env, over):
     got = []
-    assert _call(env, lambda u, b: got.append(1), **over) is False
+    sent = _call(env, lambda u, b: got.append(1), **over)
+    assert sent is False
     assert got == []
 
 
 def test_skipped_without_https_url(env, monkeypatch):
     monkeypatch.setenv("TFACTORY_PUBLIC_URL", "http://tf.example")
-    assert _call(env, lambda u, b: pytest.fail("sent")) is False
+    sent = _call(env, lambda u, b: pytest.fail("sent"))
+    assert sent is False
 
 
 def test_sender_error_does_not_raise(env):
     def boom(u, b):
         raise OSError("down")
 
-    assert _call(env, boom) is False
+    sent = _call(env, boom)
+    assert sent is False
 
 
 def test_redirect_not_followed():
     req = urllib.request.Request("http://a/x")
-    assert (
-        notify._NoRedirect().redirect_request(
-            req, None, 302, "Found", {}, "http://evil/"
-        )
-        is None
+    result = notify._NoRedirect().redirect_request(
+        req, None, 302, "Found", {}, "http://evil/"
     )
+    assert result is None
