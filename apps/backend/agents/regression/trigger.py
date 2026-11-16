@@ -80,7 +80,7 @@ def run_for_project(
         spec_dir=config.spec_dir,
         repo_root=config.repo_root,
         project_id=config.project_id,
-        commit=config.commit,
+        commit=run.commit,
         run_id=run.run_id,
         diff=diff,
     )

@@ -120,7 +120,7 @@ def main(
         spec_dir=Path(args.spec_dir) if args.spec_dir else None,
         repo_root=request.repo_root,
         project_id=request.project_id,
-        commit=request.commit,
+        commit=run.commit,
         run_id=run.run_id,
         diff=diff,
     )
