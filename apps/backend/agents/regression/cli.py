@@ -25,6 +25,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .nix_runner import NixJobRunner
+from .notify import notify_aifactory
 from .orchestrator import RegressionRequest, run_regression
 from .runner import RegressionRunner
 from .store import regression_dir
@@ -115,6 +116,14 @@ def main(
     request = build_request(args, run_id=run_id, ran_at=ran_at)
     active_runner = runner if runner is not None else _default_runner(args)
     run, diff = run_regression(request, active_runner)
+    notify_aifactory(
+        spec_dir=Path(args.spec_dir) if args.spec_dir else None,
+        repo_root=request.repo_root,
+        project_id=request.project_id,
+        commit=request.commit,
+        run_id=run.run_id,
+        diff=diff,
+    )
     sys.stdout.write(
         f"regression {run.run_id}: {run.totals['total']} test(s), "
         f"{len(diff.regressions)} regression(s), "
