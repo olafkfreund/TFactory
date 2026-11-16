@@ -201,6 +201,10 @@ def build_job_manifest(
     network_none: bool = False,
     nix_store_pvc: str | None = None,
     service_account: str | None = None,
+    # #1507 / AIFactory#1425: a LIMIT only (request pinned to 0: nodes advertise more
+    # allocatable than they have). Mirrors the hub job_dispatch default, which
+    # TFactory never calls, so without this no lane Job was bounded.
+    ephemeral_storage_limit: str = "4Gi",
 ) -> dict:
     """Pure builder for the per-task Job manifest. No cluster access.
 
@@ -239,8 +243,17 @@ def build_job_manifest(
         "imagePullPolicy": "IfNotPresent",
         "command": ["bash", "-c", command],
         "resources": {
-            "requests": {"cpu": cpus, "memory": memory},
-            "limits": {"cpu": cpus, "memory": memory},
+            "requests": {
+                "cpu": cpus,
+                "memory": memory,
+                # Explicit 0: k8s copies an omitted request from the limit.
+                "ephemeral-storage": "0",
+            },
+            "limits": {
+                "cpu": cpus,
+                "memory": memory,
+                "ephemeral-storage": ephemeral_storage_limit,
+            },
         },
         "securityContext": dict(CONTAINER_SECURITY_CONTEXT),
     }
