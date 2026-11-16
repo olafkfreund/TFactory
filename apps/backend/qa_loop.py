@@ -61,6 +61,12 @@ def is_qa_approved(spec_dir: Path) -> bool:
     return _qa_signoff(spec_dir).get("status") == "approved"
 
 
+def _stopped(err: dict[str, object]) -> str | None:
+    """The typed reason when a session was stopped by the guardrail or ceiling (#1510)."""
+    kind = err.get("type") if isinstance(err, dict) else None
+    return str(err.get("message", kind)) if kind in {"guardrail_halt", "token_ceiling"} else None
+
+
 def should_run_qa(spec_dir: Path) -> bool:
     """
     True when the build is finished but QA has not yet approved it.
@@ -220,7 +226,7 @@ async def run_qa_validation_loop(
         )
         if status == "error":
             print(f"\n⚠️  QA reviewer error: {err.get('message', 'unknown error')}")
-            return is_qa_approved(spec_dir)
+            return _stopped(err) is None and is_qa_approved(spec_dir)
 
         if is_qa_approved(spec_dir):
             return True
@@ -236,6 +242,6 @@ async def run_qa_validation_loop(
         )
         if fix_status == "error":
             print(f"\n⚠️  QA fixer error: {fix_err.get('message', 'unknown error')}")
-            return is_qa_approved(spec_dir)
+            return _stopped(fix_err) is None and is_qa_approved(spec_dir)
 
     return is_qa_approved(spec_dir)
