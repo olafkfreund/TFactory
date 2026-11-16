@@ -2,6 +2,7 @@
 
 import logging
 import time
+from typing import Any
 
 from factory_common.logsafe import sanitize_log
 from fastapi import WebSocket
@@ -25,11 +26,11 @@ class TaskSocketAccess:
         self.websocket = websocket
         self.project_id, separator, spec_id = task_id.partition(":")
         self.valid_task_id = bool(separator and self.project_id and spec_id)
-        self.principal = None
-        self.key_token = None
+        self.principal: dict[str, Any] | None = None
+        self.key_token: str | None = None
         self.last_key_check = time.monotonic()
 
-    async def _authorize(self, principal: dict) -> None:
+    async def _authorize(self, principal: dict[str, Any]) -> None:
         async with async_session_factory() as db:
             await authorize_project_for_user(principal, self.project_id, db)
 

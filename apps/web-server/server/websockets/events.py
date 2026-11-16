@@ -282,8 +282,9 @@ async def events_websocket(websocket: WebSocket):
                             await websocket.close(code=4001)
                             break
                         user_info = principal
-                        client.key_org_id = principal.get("org_id")
-                        client.user_id = principal.get("id")
+                        org_id, uid = principal.get("org_id"), principal.get("id")
+                        client.key_org_id = str(org_id) if org_id else None
+                        client.user_id = str(uid) if uid else None
                     last_key_check = time.monotonic()
                     await _load_org_ids(client, user_info)
 
