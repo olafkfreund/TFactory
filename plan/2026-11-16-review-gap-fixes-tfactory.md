@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1507
 spec: spec/2026-11-16-review-gap-fixes-tfactory.md
 coders:
