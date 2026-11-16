@@ -34,6 +34,20 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
+from core.child_env import GITHUB_KEEP, git_env, merge_driver_pins
+
+# Remote git needs the gh token and, for ssh origins, the agent socket.
+_REMOTE_KEEP = (*GITHUB_KEEP, "SSH_AUTH_SOCK")
+
+_REMOTE_PINS = (
+    "-c",
+    "core.gitProxy=",
+    "-c",
+    "remote.origin.uploadpack=git-upload-pack",
+    "-c",
+    "remote.origin.receivepack=git-receive-pack",
+)
+
 
 def _sign_enabled() -> bool:
     """Opt-in GPG-signed commits via TFACTORY_TRIAGER_GIT_SIGN (#242)."""
@@ -145,6 +159,7 @@ def _default_runner_fn(
     *,
     cwd: Path,
     stdin: str | None = None,
+    env: dict[str, str] | None = None,
 ) -> _SubprocessResultLike:
     """Default runner_fn that ACTUALLY shells out. Only used outside
     tests; commit 5's wiring passes this through unchanged."""
@@ -156,17 +171,54 @@ def _default_runner_fn(
         input=stdin if stdin is not None else None,
         capture_output=True,
         text=True,
+        errors="surrogateescape",
         check=False,
+        env=env,
     )
 
 
-def _resolve_branch(
+def _run(
+    runner: Callable[..., _SubprocessResultLike],
+    argv: tuple[str, ...] | list[str],
+    cwd: Path,
+    *,
+    keep: tuple[str, ...] = (),
+) -> _SubprocessResultLike:
+    return runner(list(argv), cwd=cwd, env=git_env(keep=keep))
+
+
+def _write_pins(runner: Callable[..., _SubprocessResultLike], cwd: Path) -> list[str]:
+    def probe(argv: list[str]) -> tuple[int, str]:
+        result = _run(runner, argv, cwd)
+        return result.returncode, result.stdout
+
+    return merge_driver_pins(cwd, run=probe)
+
+
+def _pinned(argv: tuple[str, ...] | list[str], pins: list[str]) -> list[str]:
+    return [*argv[:3], *pins, *argv[3:]]
+
+
+def _commit_pin(runner: Callable[..., _SubprocessResultLike], cwd: Path) -> list[str]:
+    if not _sign_enabled():
+        return ["-c", "commit.gpgSign=false"]
+    result = _run(
+        runner,
+        ["git", "-C", str(cwd), "config", "--global", "--get", "gpg.program"],
+        cwd,
+    )
+    program = (result.stdout or "").strip() if result.returncode == 0 else ""
+    return ["-c", f"gpg.program={program or 'gpg'}"]
+
+
+def _resolve_branch(  # noqa: PLR0913 - one more pin list than the call is worth a type
     request: GitWriteRequest,
     *,
     push: bool,
     dry_run: bool,
     runner: Callable[..., _SubprocessResultLike],
     argv_log: list[tuple[str, ...]],
+    pins: list[str],
 ) -> GitWriteResult | None:
     """Get the clone onto ``request.branch``. Returns an error result on failure,
     else None (having appended argvs + run them). See write_tests_to_branch."""
@@ -185,7 +237,12 @@ def _resolve_branch(
         )
         argv_log.append(fetch_argv)
         if not dry_run:
-            res = runner(list(fetch_argv), cwd=request.repo_dir)
+            res = _run(
+                runner,
+                _pinned(fetch_argv, list(_REMOTE_PINS)),
+                request.repo_dir,
+                keep=_REMOTE_KEEP,
+            )
             if res.returncode != 0:
                 return GitWriteResult(
                     ok=False,
@@ -214,7 +271,7 @@ def _resolve_branch(
         )
         argv_log.append(verify_argv)
         if not dry_run:
-            res = runner(list(verify_argv), cwd=request.repo_dir)
+            res = _run(runner, verify_argv, request.repo_dir)
             if res.returncode != 0:
                 return GitWriteResult(
                     ok=False,
@@ -226,7 +283,7 @@ def _resolve_branch(
         checkout_argv = ("git", "-C", str(request.repo_dir), "checkout", request.branch)
     argv_log.append(checkout_argv)
     if not dry_run:
-        res = runner(list(checkout_argv), cwd=request.repo_dir)
+        res = _run(runner, _pinned(checkout_argv, pins), request.repo_dir)
         if res.returncode != 0:
             return GitWriteResult(
                 ok=False,
@@ -289,10 +346,15 @@ def write_tests_to_branch(
             error=str(exc),
         )
 
+    try:
+        pins = _write_pins(runner, request.repo_dir) if not dry_run else []
+    except RuntimeError as exc:
+        return GitWriteResult(ok=False, dry_run=False, error=str(exc))
+
     # 2-3. Resolve + checkout the target branch (fetch + `checkout -B` on the
     # push path; verify + checkout on the local-only path). See _resolve_branch.
     branch_err = _resolve_branch(
-        request, push=push, dry_run=dry_run, runner=runner, argv_log=argv_log
+        request, push=push, dry_run=dry_run, runner=runner, argv_log=argv_log, pins=pins
     )
     if branch_err is not None:
         return branch_err
@@ -328,7 +390,7 @@ def write_tests_to_branch(
     )
     argv_log.append(add_argv)
     if not dry_run:
-        res = runner(list(add_argv), cwd=request.repo_dir)
+        res = _run(runner, _pinned(add_argv, pins), request.repo_dir)
         if res.returncode != 0:
             return GitWriteResult(
                 ok=False,
@@ -357,7 +419,11 @@ def write_tests_to_branch(
         ]
     argv_log.append(tuple(commit_argv))
     if not dry_run:
-        res = runner(commit_argv, cwd=request.repo_dir)
+        res = _run(
+            runner,
+            _pinned(commit_argv, [*pins, *_commit_pin(runner, request.repo_dir)]),
+            request.repo_dir,
+        )
         if res.returncode != 0:
             return GitWriteResult(
                 ok=False,
@@ -388,7 +454,12 @@ def write_tests_to_branch(
         )
         argv_log.append(push_argv)
         if not dry_run:
-            res = runner(list(push_argv), cwd=request.repo_dir)
+            res = _run(
+                runner,
+                _pinned(push_argv, list(_REMOTE_PINS)),
+                request.repo_dir,
+                keep=_REMOTE_KEEP,
+            )
             if res.returncode != 0:
                 return GitWriteResult(
                     ok=False,
@@ -408,7 +479,7 @@ def write_tests_to_branch(
     )
     argv_log.append(rev_parse_argv)
     if not dry_run:
-        res = runner(list(rev_parse_argv), cwd=request.repo_dir)
+        res = _run(runner, rev_parse_argv, request.repo_dir)
         if res.returncode == 0:
             sha = (res.stdout or "").strip()
 
@@ -453,6 +524,11 @@ def write_paths_to_branch(
     if not rels:
         return GitWriteResult(ok=False, dry_run=dry_run, error="no paths to commit")
 
+    try:
+        pins = _write_pins(runner, repo_dir) if not dry_run else []
+    except RuntimeError as exc:
+        return GitWriteResult(ok=False, dry_run=False, error=str(exc))
+
     steps = [
         ("git", "-C", str(repo_dir), "checkout", "-B", branch),
         ("git", "-C", str(repo_dir), "add", "--", *rels),
@@ -461,7 +537,12 @@ def write_paths_to_branch(
     for argv in steps:
         argv_log.append(argv)
         if not dry_run:
-            res = runner(list(argv), cwd=repo_dir)
+            command = _pinned(argv, pins)
+            if argv[3] == "commit":
+                command = _pinned(argv, [*pins, *_commit_pin(runner, repo_dir)])
+                if _sign_enabled():
+                    command.append("-S")
+            res = _run(runner, command, repo_dir)
             if res.returncode != 0:
                 return GitWriteResult(
                     ok=False,
@@ -474,7 +555,7 @@ def write_paths_to_branch(
     argv_log.append(sha_argv)
     sha = ""
     if not dry_run:
-        res = runner(list(sha_argv), cwd=repo_dir)
+        res = _run(runner, sha_argv, repo_dir)
         sha = (res.stdout or "").strip()
 
     return GitWriteResult(
