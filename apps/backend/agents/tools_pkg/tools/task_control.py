@@ -462,6 +462,8 @@ def create_spec_ingest_workspace(
     ref: str | None = None,
     signed_contract: dict[str, Any] | None = None,
     clone_url: str | None = None,
+    originator: str | None = None,
+    agent_identity: str | None = None,
 ) -> dict[str, Any]:
     """Create a TFactory workspace from a raw acceptance-criteria spec.
 
@@ -682,6 +684,9 @@ def create_spec_ingest_workspace(
         # phase meant.
         "provider": provider_of(repo_ref),
         "repo_slug": project_of(repo_ref) or None,
+        # Factory#1960: handed on by the sender, echoed in the completion event.
+        "originator": originator or None,
+        "agent_identity": agent_identity or None,
     }
     (context_dir / "source.json").write_text(json.dumps(source, indent=2))
 

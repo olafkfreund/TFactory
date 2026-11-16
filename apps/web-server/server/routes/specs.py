@@ -124,6 +124,21 @@ class SpecIngestRequest(BaseModel):
             "means GitHub, which is what it always meant."
         ),
     )
+    originator: str | None = Field(
+        default=None,
+        description=(
+            "Who asked for the work (Factory#1960), as the sending service "
+            "recorded it. Stored on the spec and echoed in the completion event."
+        ),
+    )
+    agent_identity: str | None = Field(
+        default=None,
+        description=(
+            "The agent identity that built what is verified (Factory#1960), e.g. "
+            "'agent:aifactory/<key id>'. Stored on the spec and echoed in the "
+            "completion event."
+        ),
+    )
 
 
 class PrAttachRequest(BaseModel):
@@ -334,6 +349,8 @@ async def ingest_spec(
             repo_ref=req.repo,
             signed_contract=req.signed_contract,
             clone_url=entry.get("clonedFrom") or req.git_url,
+            originator=req.originator,
+            agent_identity=req.agent_identity,
         )
     except FileExistsError as exc:
         # The message names spec_dir's server-side path -- redact rather than

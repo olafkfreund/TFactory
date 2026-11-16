@@ -219,6 +219,29 @@ def test_envelope_has_normalized_header(
     assert env["task_id"] == "042" and env["status"] == "triaged"
 
 
+def test_envelope_echoes_originator_and_agent_identity_or_null(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Factory#1960: read from context/source.json; both keys always present."""
+    monkeypatch.setenv("TFACTORY_COMPLETION_SENTINEL", "1")
+    _seed_status(tmp_path)
+    _write_status_patch(tmp_path, status="triaged")
+    env = _completed_envelope(tmp_path)
+    assert (env["originator"], env["agent_identity"]) == (None, None)
+    (tmp_path / "context").mkdir()
+    (tmp_path / "context" / "source.json").write_text(
+        json.dumps(
+            {"originator": "github:octocat", "agent_identity": "agent:aifactory/k1"}
+        )
+    )
+    _write_status_patch(tmp_path, status="triaged")
+    env = _completed_envelope(tmp_path)
+    assert (env["originator"], env["agent_identity"]) == (
+        "github:octocat",
+        "agent:aifactory/k1",
+    )
+
+
 # ─── RFC-0001 conformance (#211) ────────────────────────────────────────
 
 # #471 cutover: ``time`` (CloudEvents) replaced the legacy ``updated_at`` as the
