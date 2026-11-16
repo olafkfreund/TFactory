@@ -39,6 +39,7 @@ from agents.completion_envelope import (
     CompletionEnvelope,
     CompletionEvidence,
 )
+from agents.run_guard import ceiling_exceeded
 from agents.workspace_status import (
     anchor_stage_task,
     now_iso,
@@ -850,6 +851,10 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> CompletionEnvelo
         "rejected": int(status.get("rejected_count") or 0),
     }
     outcome, halt_reason = _status_verdict(status_value, evidence, status)
+    # Token ceiling (#1510): stopped for cost, whatever verdicts it wrote.
+    ceiling = ceiling_exceeded(spec_dir)
+    if ceiling:
+        outcome, halt_reason = "failure", ceiling
 
     envelope: CompletionEnvelope = {
         # RFC-0001 core: the six required fields (Factory#4). `correlation_key`

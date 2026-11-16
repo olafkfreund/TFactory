@@ -225,3 +225,21 @@ def test_loop_reviewer_error_bails(spec_dir, monkeypatch):
         )
     )
     assert approved is False
+
+
+def test_loop_halted_reviewer_never_approves(spec_dir, monkeypatch):
+    """#1510: approval written before a guardrail halt or token ceiling is not a pass."""
+    _write_plan(spec_dir)
+    write = _signoff_writer(spec_dir, "approved")
+
+    async def halted(project_dir, sd, model, verbose):
+        await write(project_dir, sd, model, verbose)
+        return "error", "m", {"type": "token_ceiling", "message": "token_ceiling: x"}
+
+    monkeypatch.setattr(qa_loop, "_run_qa_reviewer", halted)
+    approved = asyncio.run(
+        qa_loop.run_qa_validation_loop(
+            project_dir=spec_dir, spec_dir=spec_dir, model="sonnet"
+        )
+    )
+    assert approved is False
