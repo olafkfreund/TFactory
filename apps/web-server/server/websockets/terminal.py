@@ -6,20 +6,21 @@ and PTY processes on the server.
 """
 
 import asyncio
+import contextlib
 import json
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from ..auth import (
+from server.auth import (
     WebSocketAuthError,
     _ws_acw_principal,
     _ws_extract_token,
     authenticate_websocket,
 )
-from ..pty.access import may_use
-from ..pty.manager import get_pty_manager
-from ..pty.session import PTYSession, create_pty_reader
+from server.pty.access import may_use
+from server.pty.manager import get_pty_manager
+from server.pty.session import PTYSession, create_pty_reader
 
 router = APIRouter()
 _RECHECK_SECONDS = 5.0
@@ -37,7 +38,7 @@ async def _watch(
         if token and token.startswith("acw_") and user and user.get("api_key_id"):
             try:
                 user = await _ws_acw_principal(token)
-            except Exception:  # a failing validator counts as revoked
+            except Exception:  # noqa: BLE001 - a failing validator counts as revoked
                 user = None
             if user is None:
                 await websocket.close(code=4001)
@@ -62,7 +63,7 @@ async def terminal_websocket(websocket: WebSocket, terminal_id: str):
         user = await authenticate_websocket(websocket)
     except WebSocketAuthError:
         return
-    except Exception:  # unreadable auth state fails closed
+    except Exception:  # noqa: BLE001 - unreadable auth state fails closed
         await websocket.close(code=4003)
         return
 
@@ -193,10 +194,8 @@ async def terminal_websocket(websocket: WebSocket, terminal_id: str):
         except asyncio.CancelledError:
             pass
         if watch_task is not None:
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await watch_task
-            except asyncio.CancelledError:
-                pass
 
         # Check if terminal exited
         if not session.is_alive():
