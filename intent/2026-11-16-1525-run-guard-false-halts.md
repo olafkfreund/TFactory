@@ -11,7 +11,7 @@ author: olafkfreund
 The run guard ported in TFactory#1515 and PFactory#1013 (`agents/run_guard.py`) halts healthy runs in two ways:
 
 1. `same_tool_failure` counts consecutive failures per tool NAME. Eight failing Bash calls with different commands halt the session, although failing test runs are normal iteration in test generation. AIFactory's original (#2033) shares the by-name counter but builds a fresh controller per turn; the ports keep one per client, so the counter spans the whole session.
-2. TFactory's token ceiling reads the cumulative usage persisted in `status.json`, which is never reset on a re-run. A task that crossed 10M tokens once can never be verified again. PFactory has the same flaw: `PlanSession.usage` accumulates across `process()` re-runs and `record_usage` checks the cumulative total.
+2. TFactory's token ceiling reads the cumulative usage persisted in `status.json`, which is never reset on a re-run. A task that crossed 10M tokens once can never be verified again unless the ceiling is raised or its usage cleared by hand. PFactory has the same flaw: `PlanSession.usage` accumulates across `process()` re-runs and `record_usage` checks the cumulative total.
 
 TFactory#1524 now forwards the guardrail env into verify Jobs, so both defects are about to be live.
 
