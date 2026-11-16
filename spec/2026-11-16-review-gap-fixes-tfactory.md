@@ -13,7 +13,7 @@ Add `ephemeral_storage_limit: str = "4Gi"` to `kube_sandbox.build_job_manifest` 
 ## Alternatives rejected
 
 - Call the hub builder: it has a different shape (no workspace_uri, nix store PVC, service account); a rewrite is far larger.
-- Add a request too: nodes over-advertise allocatable storage (AIFactory#1425), so a request would admit builds against a pool that does not exist.
+- Request = limit: nodes over-advertise allocatable storage (AIFactory#1425), so a request would admit builds against a pool that does not exist.
 
 ## Risks
 

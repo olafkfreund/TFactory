@@ -20,7 +20,7 @@ TFactory verify orchestration Job and nix/playwright lane Jobs.
 
 ## Constraints
 
-Limit only, no request (AIFactory#1425). Existing cpu/memory requests == limits unchanged. Overridable by parameter.
+Limit only, request pinned to 0 (AIFactory#1425). Existing cpu/memory requests == limits unchanged. Overridable by parameter.
 
 ## Open questions
 

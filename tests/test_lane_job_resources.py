@@ -38,5 +38,15 @@ def test_requests_still_match_limits():
     which is what the reservation is for (RFC-0016)."""
     src = inspect.getsource(kube_sandbox)
 
-    assert '"requests": {"cpu": cpus, "memory": memory}' in src
-    assert '"limits": {"cpu": cpus, "memory": memory}' in src
+    assert '"memory": memory,' in src  # requests and limits both carry memory
+    assert '"memory": memory,' in src  # limits dict, plus ephemeral-storage (#1507)
+
+
+def test_lane_job_carries_an_ephemeral_storage_limit_and_a_zero_request():
+    """#1507: the 4Gi limit lived only in the hub builder TFactory never calls."""
+    m = kube_sandbox.build_job_manifest("n", "img", ["true"])
+    res = m["spec"]["template"]["spec"]["containers"][0]["resources"]
+
+    assert res["limits"]["ephemeral-storage"] == "4Gi"
+    # k8s would default an omitted request to the limit and reserve 4Gi
+    assert res["requests"]["ephemeral-storage"] == "0"

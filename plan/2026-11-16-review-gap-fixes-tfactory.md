@@ -10,7 +10,7 @@ reviewers:
 
 # Plan: ephemeral-storage limit in kube_sandbox
 
-Approved decisions: add `ephemeral_storage_limit="4Gi"` to `kube_sandbox.build_job_manifest`, limit only, no request, default 4Gi, no caller changes.
+Approved decisions: add `ephemeral_storage_limit="4Gi"` to `kube_sandbox.build_job_manifest`, limit 4Gi, request pinned "0", no caller changes.
 
 ## Steps
 
