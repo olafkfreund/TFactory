@@ -39,6 +39,7 @@ import os
 import re
 import traceback
 from collections.abc import Awaitable, Callable
+from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -1054,7 +1055,7 @@ def _two_step_enabled() -> bool:
     )
 
 
-def _code_values(source: str, subtask: object) -> set:
+def _code_values(source: str, subtask: object) -> set[Decimal]:
     from agents.criterion_literals import code_values  # noqa: PLC0415 - lazy
 
     return code_values(source, getattr(subtask, "language", None))
@@ -1098,7 +1099,7 @@ async def _generate_one_subtask(
         and not getattr(framework_descriptor, "multi_artifact", False)
         and _two_step_enabled()
     )
-    locked: set | None = None
+    locked: set[Decimal] | None = None
     for step in ("assert", "wire") if two_step else ("single",):
         prompt = get_tfactory_gen_functional_prompt(
             spec_dir,
