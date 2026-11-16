@@ -6,6 +6,7 @@ Assertions are on sentinel VALUES, not names (#3708).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import subprocess
 import sys
@@ -361,9 +362,7 @@ def test_orchestrator_compose_keeps_docker_connection(monkeypatch, tmp_path):
 def test_executor_grep_env(spawn, tmp_path):
     from tools.executor import ToolExecutor
 
-    try:
+    with contextlib.suppress(_Captured):
         asyncio.run(ToolExecutor(tmp_path).execute("Grep", {"pattern": "x"}))
-    except _Captured:
-        pass
     assert spawn
     _assert_clean(spawn[0], claude_token=False)

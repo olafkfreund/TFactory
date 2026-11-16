@@ -1656,8 +1656,6 @@ def test_verify_job_provider_credentials_are_pinned(monkeypatch, secret_name):
 
 # ── Factory#1959 stage 2: the verify Job reaches models through the gateway ───
 
-_DIRECT = ("OPENAI_API_KEY", "OPENAI_COMPATIBLE_API_KEY", "OLLAMA_API_KEY")
-
 
 def _gateway_env(monkeypatch, *, secret_name=None, gateway=True, token="gw-tok"):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-direct")

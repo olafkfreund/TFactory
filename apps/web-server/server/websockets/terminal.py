@@ -192,8 +192,7 @@ async def terminal_websocket(websocket: WebSocket, terminal_id: str):
         with contextlib.suppress(asyncio.CancelledError):
             await reader_task
         if watch_task is not None:
-            with contextlib.suppress(asyncio.CancelledError):
-                await watch_task
+            await asyncio.wait([watch_task])
 
         # Check if terminal exited
         if not session.is_alive():
