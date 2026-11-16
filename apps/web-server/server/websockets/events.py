@@ -9,6 +9,7 @@ compatible).
 """
 
 import asyncio
+import importlib
 import json
 import logging
 import time
@@ -33,9 +34,11 @@ router = APIRouter()
 
 def load_projects() -> dict[str, dict[str, Any]]:
     """Load the project registry (lazy import to avoid circular dependencies)."""
-    from server.routes.projects import load_projects as _load_projects  # noqa: PLC0415
-
-    return _load_projects()
+    # import_module, not ``from``: a static import here closes a cycle.
+    loaded: dict[str, dict[str, Any]] = importlib.import_module(
+        "server.routes.projects"
+    ).load_projects()
+    return loaded
 
 
 # ---------------------------------------------------------------------------

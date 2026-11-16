@@ -1,5 +1,6 @@
 """Caps and read-time expiry for file-backed session memory."""
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -39,7 +40,8 @@ def windows() -> tuple[int, int]:
         if 0 < demote < expire:
             return demote, expire
     except ValueError:
-        pass
+        # Malformed override: fall through to the defaults.
+        return DEMOTE_DAYS, EXPIRE_DAYS
     return DEMOTE_DAYS, EXPIRE_DAYS
 
 
@@ -110,7 +112,8 @@ def gotchas_context(
     expired = False
     for entry, body, heading_time in entries:
         last = heading_time
-        try:
+        # An unparseable confirmed timestamp keeps the heading time.
+        with contextlib.suppress(ValueError):
             value = confirmed.get(_key(body))
             if isinstance(value, str):
                 last = max(
@@ -119,8 +122,6 @@ def gotchas_context(
                         UTC
                     ),
                 )
-        except ValueError:
-            pass
         age = now - last
         if age >= timedelta(days=expire_days):
             expired = True
