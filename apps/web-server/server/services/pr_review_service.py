@@ -24,6 +24,8 @@ from pathlib import Path
 
 from factory_common.logsafe import sanitize_log
 
+from server.utils.project_env import load_project_env_file
+
 from ..config import get_settings
 from ..websockets.events import broadcast_event
 
@@ -268,7 +270,7 @@ class PRReviewService:
         _load_env_file(backend_path / ".env", env)
 
         # Load project-level .tfactory/.env for project settings
-        _load_env_file(project_path / ".tfactory" / ".env", env)
+        load_project_env_file(project_path / ".tfactory" / ".env", env)
 
         # Initialize execution log writer
         # Coerce to int to strip any path-traversal taint (a PR number is an integer).
