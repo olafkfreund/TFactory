@@ -237,3 +237,22 @@ def ceiling_exceeded(spec_dir: Path | str) -> str | None:
     if total > ceiling:
         return f"token_ceiling: run used {total} tokens, ceiling {ceiling}"
     return None
+
+
+async def guardrail_failure_hook(
+    input_data: dict[str, Any],
+    tool_use_id: str | None = None,  # noqa: ARG001 - SDK hook contract
+    context: Any = None,  # noqa: ARG001 - SDK hook contract
+) -> dict[str, Any]:
+    """PostToolUseFailure: the SDK sends a failed tool call here, not to PostToolUse."""
+    if not guardrail_enabled() or input_data.get("is_interrupt"):
+        return {}
+    try:
+        s = _sess(input_data)
+        if s:
+            s.ctl.after_call(
+                input_data.get("tool_name", ""), input_data.get("tool_input"), ok=False
+            )
+    except Exception:  # noqa: BLE001
+        logger.debug("guardrail failure hook failed", exc_info=True)
+    return {}
