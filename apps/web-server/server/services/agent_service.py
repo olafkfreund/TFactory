@@ -20,9 +20,10 @@ from pathlib import Path
 
 from factory_common.logsafe import sanitize_log
 
+from server.utils.project_env import load_project_env_file
+
 from ..config import get_settings
 from ..routes._specpath import safe_component
-from server.utils.project_env import load_project_env_file
 from ..utils.subprocess_env import make_subprocess_env
 from ..websockets.events import (
     emit_subtask_update,

@@ -108,7 +108,9 @@ def load_project_env_file(env_file: Path, env: dict[str, str]) -> None:
                     env[k] = v.strip().strip('"').strip("'")
     except (OSError, UnicodeDecodeError) as e:
         logger.warning(
-            "Failed to load project env file %s: %s", sanitize_log(env_file), sanitize_log(e)
+            "Failed to load project env file %s: %s",
+            sanitize_log(env_file),
+            sanitize_log(e),
         )
     if ignored:
         logger.warning(
