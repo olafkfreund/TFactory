@@ -18,16 +18,11 @@ import logging
 import os
 import threading
 import time
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
-from agents.run_guard import (
-    guardrail_failure_hook,
-    guardrail_posttool_hook,
-    guardrail_pretool_hook,
-    max_turns,
-    register_session,
-)
+from agents.run_guard import Guard, max_turns
 
 logger = logging.getLogger(__name__)
 
@@ -968,7 +963,7 @@ def create_client(
     )
 
     # Build options dict, conditionally including output_format
-    register_session(project_dir, spec_dir)  # fresh guardrail controller per client
+    guard = Guard()  # anti-loop guardrail, one controller per client
 
     options_kwargs: dict[str, Any] = {
         "model": model,
@@ -978,10 +973,10 @@ def create_client(
         "hooks": {
             "PreToolUse": [
                 HookMatcher(matcher="Bash", hooks=[bash_security_hook]),
-                HookMatcher(hooks=[guardrail_pretool_hook]),  # type: ignore[list-item]
+                HookMatcher(hooks=[guard.pre]),  # type: ignore[list-item]
             ],
-            "PostToolUse": [HookMatcher(hooks=[guardrail_posttool_hook])],  # type: ignore[list-item]
-            "PostToolUseFailure": [HookMatcher(hooks=[guardrail_failure_hook])],  # type: ignore[list-item]
+            "PostToolUse": [HookMatcher(hooks=[guard.post])],  # type: ignore[list-item]
+            "PostToolUseFailure": [HookMatcher(hooks=[guard.failure])],  # type: ignore[list-item]
         },
         "max_turns": max_turns(),
         "cwd": str(project_dir.resolve()),
@@ -1072,4 +1067,7 @@ def create_client(
     # remote-control.
     prefer_refreshable_credentials()
 
-    return ClaudeSDKClient(options=ClaudeAgentOptions(**options_kwargs))
+    client = ClaudeSDKClient(options=ClaudeAgentOptions(**options_kwargs))
+    with suppress(AttributeError):  # a stand-in client without __dict__ (tests)
+        client._run_guard = guard  # type: ignore[attr-defined]
+    return client

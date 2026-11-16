@@ -2867,10 +2867,15 @@ async def _judge_once(
     verdicts_path.unlink(missing_ok=True)
     try:
         client = await _resolve_evaluator_client(spec_dir, project_dir)
-        await _invoke_session(client, prompt, spec_dir, verbose)
+        result = await _invoke_session(client, prompt, spec_dir, verbose)
     except Exception as exc:  # noqa: BLE001 — surface in status
         _eval_log.error("evaluator session raised: %s\n%s", exc, traceback.format_exc())
         return None, "evaluator_session_error", str(exc)[:500]
+    # A guardrail halt or token ceiling stops the judge: whatever it wrote before
+    # the stop is not a vote (fail-closed deny, like any other session error).
+    info = result[2] if isinstance(result, tuple) and result[2:] else {}
+    if isinstance(info, dict) and info.get("type") in {"guardrail_halt", "token_ceiling"}:
+        return None, "evaluator_session_error", str(info.get("message", ""))[:500]
     ok, err, _count = _validate_verdicts(verdicts_path)
     if not ok:
         return None, "evaluator_invalid_verdicts", err

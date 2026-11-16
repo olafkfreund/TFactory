@@ -43,7 +43,7 @@ from usage import record_in_status, usage_from_obj
 
 from .base import sanitize_error_message
 from .memory_manager import save_session_memory
-from .run_guard import ceiling_exceeded, clear_halt, guard_halt
+from .run_guard import ceiling_exceeded, guard_halt
 from .utils import (
     find_subtask_in_plan,
     get_commit_count,
@@ -646,7 +646,6 @@ async def run_agent_session(
     if over:
         logger.warning("Run stopped: %s", over)
         return "error", over, {"type": "token_ceiling", "message": over, "exception_type": ""}
-    clear_halt(spec_dir)  # a guardrail halt belongs to one session
     try:
         # Send the query
         debug("session", "Sending query to Claude SDK...")
@@ -658,7 +657,7 @@ async def run_agent_session(
         async for msg in safe_receive_messages(client, caller="session"):
             msg_type = type(msg).__name__
             state.message_count += 1
-            if not interrupted and guard_halt(spec_dir):
+            if not interrupted and guard_halt(client):
                 # Anti-loop halt: interrupt once, then keep draining so the
                 # final ResultMessage (usage) is still seen.
                 interrupted = True
@@ -708,7 +707,7 @@ async def run_agent_session(
 
         print("\n" + "-" * 70 + "\n")
 
-        halt, kind = guard_halt(spec_dir), "guardrail_halt"
+        halt, kind = guard_halt(client), "guardrail_halt"
         if not halt:
             halt, kind = ceiling_exceeded(spec_dir), "token_ceiling"
         if halt:
