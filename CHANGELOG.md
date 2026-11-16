@@ -2,6 +2,52 @@
 
 ## Unreleased
 
+## 0.10.0 — WebSocket and terminal access control, agent sandbox hardening, verify through the model gateway (2026-11-16)
+
+### Added
+
+- **Verify Jobs can route through the model gateway, behind a flag**
+  (Factory#1959, #1520).
+- **A failing post-merge regression run is reported to AIFactory's revert
+  route** (#1517).
+- **Agent run guardrails:** anti-loop guardrail, a run token ceiling and a
+  configurable max-turns setting (#1510, #1515).
+- **Memory:** an exact-repeat gate on memory writers (RFC-0021 Phase 1, #1497),
+  per-session-type caps, `last_confirmed_at` and demotion (Phase 2, #1514).
+- **Originator and agent identity** carried from ingest to the completion event
+  (#1513).
+- **Scoped `acw_` API keys are accepted on WebSocket** (Factory#312, #1496).
+- Docs site refreshed for August-November 2026 (#1503).
+
+### Security
+
+- **WebSockets are confined to the caller's orgs:** `/ws/events` (#1500),
+  per-task sockets with fresh memberships (#1509) and `/ws/logs` and
+  `/ws/progress` (#1512).
+- **Terminal PTY sessions are bound to their owner and project** (#1518).
+- **Agent sandbox:** agent children get an allowlisted environment (#1501),
+  project `.env` keys loaded into the runner env are allowlisted (#1506), the
+  shared `agent_sandbox` package is adopted and git calls are pinned (#1511),
+  runner secrets are stripped and the server is non-dumpable (#1519).
+- Base-image and dependency floors: libexpat1 `2.10.0-r0` (#1498).
+
+### Fixed
+
+- **Boot migrations are serialised with a Postgres advisory lock** (#1488,
+  #1491).
+- **Chart:** alembic hook Job for `migrations.autoApply=false` (#1493).
+- **Memory:** session files are never overwritten and the novelty gate edge
+  cases are hardened (#1508).
+- **Functional test generation** writes assertions from the criterion before
+  the diff (#1502, #1516).
+
+### Changed
+
+- Cleared open CodeQL alerts on the new code: unused globals, empty excepts, lazy imports read as cycles (#1522).
+- Baked agent-CLI pins bumped: claude-code 2.1.319, gemini-cli 0.67.0,
+  codex 0.167.0 (#1494); github-actions group bumped (#1499); `artifact_store`
+  re-vendored with `get_bytes(max_bytes=)` (#1507).
+
 ## 0.9.49 — worktree resolve by exact project id, Copilot MCP fails closed (2026-10-31)
 
 ### Changed
