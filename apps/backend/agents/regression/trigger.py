@@ -20,6 +20,7 @@ from .cli import now_run_id
 from .diff import RegressionDiff
 from .models import RegressionRun
 from .nix_runner import NixJobRunner
+from .notify import notify_aifactory
 from .orchestrator import RegressionRequest, run_regression
 from .runner import RegressionRunner
 from .store import regression_dir
@@ -74,4 +75,6 @@ def run_for_project(
         lanes=config.lanes,
         flaky_store_path=config.flaky_store_path,
     )
-    return run_regression(request, runner or _runner_for(config))
+    run, diff = run_regression(request, runner or _runner_for(config))
+    notify_aifactory(run, diff, spec_dir=config.spec_dir, repo_root=config.repo_root)
+    return run, diff
