@@ -43,6 +43,7 @@
 
 ### Changed
 
+- Cleared open CodeQL alerts on the new code: unused globals, empty excepts, lazy imports read as cycles (#1522).
 - Baked agent-CLI pins bumped: claude-code 2.1.319, gemini-cli 0.67.0,
   codex 0.167.0 (#1494); github-actions group bumped (#1499); `artifact_store`
   re-vendored with `get_bytes(max_bytes=)` (#1507).
