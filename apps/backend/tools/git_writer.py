@@ -211,7 +211,7 @@ def _commit_pin(runner: Callable[..., _SubprocessResultLike], cwd: Path) -> list
     return ["-c", f"gpg.program={program or 'gpg'}"]
 
 
-def _resolve_branch(
+def _resolve_branch(  # noqa: PLR0913 - one more pin list than the call is worth a type
     request: GitWriteRequest,
     *,
     push: bool,

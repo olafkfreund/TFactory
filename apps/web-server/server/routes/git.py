@@ -56,8 +56,9 @@ def run_git_command(args: list[str], cwd: str) -> dict:
             args = ["diff", "--no-ext-diff", "--no-textconv", *args[1:]]
         elif args and args[0] in {"show", "log"}:
             args = [args[0], "--no-ext-diff", "--no-textconv", *args[1:]]
+        cmd = ["git", *pins, *args]
         result = subprocess.run(
-            ["git", *pins, *args],
+            cmd,
             capture_output=True,
             text=True,
             cwd=cwd,
