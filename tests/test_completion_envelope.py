@@ -251,6 +251,8 @@ def test_envelope_serialized_shape_is_unchanged(tmp_path, monkeypatch):
         "pr_number",
         "result",
         "usage",
+        "originator",
+        "agent_identity",
         "emitted_at",
         # #282 CloudEvents-core + idempotency + trace
         "id",

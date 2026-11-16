@@ -886,6 +886,9 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> CompletionEnvelo
         # RFC-0001 v1.1 §3.1 additive usage block (#224). Zeros when the run did
         # no LLM work; summed across sessions + handback retries via status.json.
         "usage": usage_block_from_status(spec_dir),
+        # Factory#1960: who asked, and which agent identity built it (nullable).
+        "originator": source.get("originator") or None,
+        "agent_identity": source.get("agent_identity") or None,
         "emitted_at": _now_iso(),
         # Additive #282 (parity with AIFactory #466). Per-event idempotency id +
         # CloudEvents-core + W3C trace context, all riding alongside the legacy
