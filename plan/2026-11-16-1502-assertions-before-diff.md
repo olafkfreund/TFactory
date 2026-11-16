@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1502
 spec: spec/2026-11-16-1502-assertions-before-diff.md
 coders:
