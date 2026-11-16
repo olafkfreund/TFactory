@@ -1055,12 +1055,6 @@ def _two_step_enabled() -> bool:
     )
 
 
-def criterion_literals(text: str):
-    from agents.criterion_literals import criterion_literals as _cl  # noqa: PLC0415
-
-    return _cl(text)
-
-
 def _code_values(source: str, subtask: object) -> set[Decimal]:
     from agents.criterion_literals import code_values  # noqa: PLC0415 - lazy
 
@@ -1133,6 +1127,10 @@ async def _generate_one_subtask(
                 break  # no draft: skip wiring, the no-write rejection below applies
             # Only the criterion's own values are locked: the draft also holds
             # guessed ids, ports and timeouts that wiring must be free to fix (#1516).
+            from agents.criterion_literals import (  # noqa: PLC0415 - lazy
+                criterion_literals,
+            )
+
             locked = _code_values(test_path.read_text(), subtask) & set(
                 criterion_literals(_criterion_text(subtask))
             )

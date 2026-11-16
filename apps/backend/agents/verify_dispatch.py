@@ -273,6 +273,15 @@ _PROVIDER_SECRET_ENV: frozenset[str] = frozenset(
 _ENV_PROVIDER_SECRET_NAME = "TFACTORY_VERIFY_PROVIDER_SECRET_NAME"  # noqa: S105 - env var name
 
 
+# Run limits read by run_guard inside the Job's agent session (#1515).
+_RUN_LIMIT_PREFIXES = (
+    "TFACTORY_ACT_GUARDRAIL",
+    "TFACTORY_RUN_TOKEN_CEILING",
+    "TFACTORY_MAX_TURNS",
+    "TFACTORY_GUARDRAIL_",
+)
+
+
 def resolve_verify_image(fallback_image: str) -> str:
     """Resolve the image for the verify-orchestration Job (TFactory #466).
 
@@ -841,16 +850,8 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
     # Fourth instance (#1515): the run limits are read in run_guard inside the
     # agent session, i.e. in this Job, so an operator override must travel too.
     for _guard_name, _guard_val in sorted(os.environ.items()):
-        if _guard_val and _guard_name.startswith("TFACTORY_GUARDRAIL_"):
+        if _guard_val and _guard_name.startswith(_RUN_LIMIT_PREFIXES):
             env.append({"name": _guard_name, "value": _guard_val})
-    for _guard_var in (
-        "TFACTORY_ACT_GUARDRAIL",
-        "TFACTORY_RUN_TOKEN_CEILING",
-        "TFACTORY_MAX_TURNS",
-    ):
-        _guard_val = os.environ.get(_guard_var)
-        if _guard_val:
-            env.append({"name": _guard_var, "value": _guard_val})
     _bash_sandbox = os.environ.get("AIFACTORY_BASH_SANDBOX")
     if _bash_sandbox:
         env.append({"name": "AIFACTORY_BASH_SANDBOX", "value": _bash_sandbox})

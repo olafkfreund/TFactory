@@ -113,9 +113,9 @@ def load_project_env_file(env_file: Path, env: dict[str, str]) -> None:
                     continue
                 k, v = line.split("=", 1)
                 k = k.strip()
-                if not is_project_env_key(k):
-                    ignored.append(k)
-                elif any(c in host_held for c in _URL_KEY_CREDENTIALS.get(k, ())):
+                if not is_project_env_key(k) or any(
+                    c in host_held for c in _URL_KEY_CREDENTIALS.get(k, ())
+                ):
                     ignored.append(k)
                 elif k not in env:
                     env[k] = v.strip().strip('"').strip("'")
