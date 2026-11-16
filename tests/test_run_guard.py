@@ -41,14 +41,22 @@ def test_repeated_failure_blocks_then_tool_failure_halts(monkeypatch):
         _run(guard.post(err))
     assert _run(guard.pre(_call()))["decision"] == "block"
     assert g.guard_halt(_Holder(guard)) is None  # one call blocked, session not halted
-    for i in range(3):  # different args: same tool keeps failing -> halt
-        _run(
-            guard.post(
-                {**_call(args={"f": str(i)}), "tool_response": {"is_error": True}}
-            )
-        )
+    for _ in range(1):  # blocked repeats count: the 8th attempt halts the session
+        assert _run(guard.pre(_call()))["decision"] == "block"
+        assert g.guard_halt(_Holder(guard)) is None
+    assert _run(guard.pre(_call()))["decision"] == "block"
     assert g.guard_halt(_Holder(guard)).startswith("same_tool_failure")
-    assert _run(guard.pre(_call(args={"f": "new"})))["decision"] == "block"
+
+
+def test_distinct_failing_calls_never_halt(monkeypatch):
+    """Failing test runs with different commands are normal iteration (#1525)."""
+    monkeypatch.delenv(P + "ACT_GUARDRAIL", raising=False)
+    guard = g.Guard()
+    for i in range(20):
+        c = _call("Bash", {"command": f"pytest t{i}.py"})
+        assert _run(guard.pre(c)) == {}
+        _run(guard.post({**c, "tool_response": {"is_error": True}}))
+    assert g.guard_halt(_Holder(guard)) is None
 
 
 class _Holder:
@@ -66,8 +74,11 @@ def test_failure_hook_counts_failed_calls(monkeypatch):
         _run(guard.failure({**_call(), "error": "boom"}))
     assert _run(guard.pre(_call()))["decision"] == "block"
     _run(guard.failure({**_call(), "error": "x", "is_interrupt": True}))  # not counted
-    for i in range(8):
+    for i in range(8):  # different args: no halt
         _run(guard.failure({**_call(args={"f": str(i)}), "error": "x"}))
+    assert g.guard_halt(_Holder(guard)) is None
+    for _ in range(3):  # the blocked repeats of the identical call halt it
+        _run(guard.pre(_call()))
     assert g.guard_halt(_Holder(guard)).startswith("same_tool_failure")
 
 
@@ -132,6 +143,19 @@ def test_ceiling_exceeded_reads_persisted_usage(tmp_path, monkeypatch):
     assert g.ceiling_exceeded(tmp_path) is None
 
 
+def test_ceiling_ignores_usage_from_earlier_runs(tmp_path, monkeypatch):
+    """A task that crossed the ceiling once can be verified again (#1525)."""
+    from usage import RunUsage, record_in_status
+
+    monkeypatch.setenv(P + "RUN_TOKEN_CEILING", "100")
+    record_in_status(tmp_path, RunUsage(input_tokens=500))  # an earlier run
+    assert g.ceiling_exceeded(tmp_path) is None  # first check of this run
+    record_in_status(tmp_path, RunUsage(input_tokens=60))
+    assert g.ceiling_exceeded(tmp_path) is None
+    record_in_status(tmp_path, RunUsage(input_tokens=60))
+    assert "run used 120 tokens" in g.ceiling_exceeded(tmp_path)
+
+
 # ── run_agent_session wiring ──────────────────────────────────────────────
 
 
@@ -172,6 +196,7 @@ async def test_session_over_ceiling_sends_no_query(tmp_path, monkeypatch):
     from usage import RunUsage, record_in_status
 
     monkeypatch.setenv(P + "RUN_TOKEN_CEILING", "100")
+    assert g.ceiling_exceeded(tmp_path) is None  # this run's baseline
     record_in_status(tmp_path, RunUsage(input_tokens=500))
     client = _Client([ResultMessage(1)])
     status, reason, info = await run_agent_session(
@@ -221,6 +246,7 @@ def test_triager_envelope_and_pipeline_fail_over_ceiling(tmp_path, monkeypatch):
     from usage import RunUsage, record_in_status
 
     monkeypatch.setenv(P + "RUN_TOKEN_CEILING", "100")
+    assert g.ceiling_exceeded(tmp_path) is None  # this run's baseline
     record_in_status(tmp_path, RunUsage(input_tokens=500))
     status = {"status": "triaged", "verdicts_count": 3, "accepted_count": 3}
     env = _build_completion_envelope(tmp_path, status)
