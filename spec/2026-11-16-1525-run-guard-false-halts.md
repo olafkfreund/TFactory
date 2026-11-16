@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1525
 intent: intent/2026-11-16-1525-run-guard-false-halts.md
 ---
