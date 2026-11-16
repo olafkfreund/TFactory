@@ -9,6 +9,7 @@ Public paths (no auth required): /api/auth/*, /api/health, static assets, etc.
 """
 
 import hmac
+import importlib
 import logging
 from functools import lru_cache
 
@@ -369,11 +370,11 @@ async def _ws_acw_principal(token: str) -> dict[str, object] | None:
     """Resolve a user-minted ``acw_`` API key for WebSocket authentication (#312)."""
     try:
         # Lazy, as on the REST path: the DB-backed module pulls in ORM models.
-        from .mcp_remote.auth import REST_API_SCOPE, authenticate  # noqa: PLC0415
+        mcp_auth = importlib.import_module("server.mcp_remote.auth")
 
-        key = await authenticate(f"Bearer {token}")
+        key = await mcp_auth.authenticate(f"Bearer {token}")
         # shortcut: ownerless keys rejected on WS; revisit with Phase 4 scope enforcement
-        if key is None or not key.has_scope(REST_API_SCOPE) or not key.user_id:
+        if key is None or not key.has_scope(mcp_auth.REST_API_SCOPE) or not key.user_id:
             return None
     except Exception:  # noqa: BLE001 — any validator failure denies WS auth (4001)
         return None
@@ -415,6 +416,9 @@ async def authenticate_websocket(websocket: WebSocket) -> dict | None:
     # Try JWT — returns user info
     jwt_payload = _try_decode_jwt(token)
     if jwt_payload is not None:
+        if not jwt_payload.get("sub"):
+            await websocket.close(code=4001, reason="Unauthorized")
+            raise WebSocketAuthError("Token has no subject")
         return {
             "id": jwt_payload.get("sub"),
             "email": jwt_payload.get("email"),

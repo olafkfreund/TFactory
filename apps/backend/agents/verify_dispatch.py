@@ -273,6 +273,23 @@ _PROVIDER_SECRET_ENV: frozenset[str] = frozenset(
 _ENV_PROVIDER_SECRET_NAME = "TFACTORY_VERIFY_PROVIDER_SECRET_NAME"  # noqa: S105 - env var name
 
 
+# Run limits read by run_guard inside the Job's agent session (#1515).
+_RUN_LIMIT_PREFIXES = (
+    "TFACTORY_ACT_GUARDRAIL",
+    "TFACTORY_RUN_TOKEN_CEILING",
+    "TFACTORY_MAX_TURNS",
+    "TFACTORY_GUARDRAIL_",
+)
+
+
+def _run_limit_env() -> list[dict[str, str]]:
+    return [
+        {"name": n, "value": v}
+        for n, v in sorted(os.environ.items())
+        if v and n.startswith(_RUN_LIMIT_PREFIXES)
+    ]
+
+
 def resolve_verify_image(fallback_image: str) -> str:
     """Resolve the image for the verify-orchestration Job (TFactory #466).
 
@@ -389,6 +406,52 @@ def _env_to_secret_key(var: str) -> str:
     return var.lower().replace("_", "-")
 
 
+# Factory#1959 stage 2: with TFACTORY_MODEL_GATEWAY_URL set the Job reaches the
+# OpenAI-compatible plane only through the model gateway, so the direct
+# OpenAI-compatible and Ollama keys and the direct base URL are not forwarded
+# (literal or Secret reference). OPENAI_API_KEY stays: the Codex provider seeds
+# its auth from it and cannot use the gateway (plane C, owner decision in #1959).
+_ENV_GATEWAY_URL = "TFACTORY_MODEL_GATEWAY_URL"
+_ENV_GATEWAY_TOKEN = "TFACTORY_MODEL_GATEWAY_TOKEN"  # noqa: S105 - env var name
+_GATEWAY_TOKEN_SECRET_KEY = "model-gateway-token"  # noqa: S105 - Secret key name
+_NO_TOKEN = "gateway-token-not-configured"  # noqa: S105 - placeholder, not a secret
+_GATEWAY_REPLACED: frozenset[str] = frozenset(
+    {
+        "OPENAI_COMPATIBLE_API_KEY",
+        "OPENAI_COMPATIBLE_BASE_URL",
+        "OLLAMA_API_KEY",
+    }
+)
+
+
+def _gateway_env_entries(gateway_url: str, secret_name: str) -> list[dict[str, Any]]:
+    """Base URL (origin; the provider appends /v1) and client token for the Job."""
+    out: list[dict[str, Any]] = [
+        {"name": "OPENAI_COMPATIBLE_BASE_URL", "value": gateway_url}
+    ]
+    if secret_name:
+        out.append(
+            {
+                "name": "OPENAI_COMPATIBLE_API_KEY",
+                "valueFrom": {
+                    "secretKeyRef": {
+                        "name": secret_name,
+                        "key": _GATEWAY_TOKEN_SECRET_KEY,
+                        # Required: a Job that starts without it would let the
+                        # provider fall back to OPENAI_API_KEY.
+                        "optional": False,
+                    }
+                },
+            }
+        )
+    else:
+        # Never omit the key: phase_config falls back to OPENAI_API_KEY. A
+        # placeholder makes the gateway answer 401 instead.
+        token = os.environ.get(_ENV_GATEWAY_TOKEN, "").strip() or _NO_TOKEN
+        out.append({"name": "OPENAI_COMPATIBLE_API_KEY", "value": token})
+    return out
+
+
 def _provider_env_entries() -> list[dict[str, Any]]:
     """Provider/runtime env entries to forward to the verify Job, when set.
 
@@ -405,8 +468,11 @@ def _provider_env_entries() -> list[dict[str, Any]]:
     emitted; ``ANTHROPIC_API_KEY`` is never in the set (no silent API billing).
     """
     secret_name = os.environ.get(_ENV_PROVIDER_SECRET_NAME, "").strip()
+    gateway_url = os.environ.get(_ENV_GATEWAY_URL, "").strip().rstrip("/")
     out: list[dict[str, Any]] = []
     for var in _SDK_PASSTHROUGH_ENV:
+        if gateway_url and var in _GATEWAY_REPLACED:
+            continue
         is_secret = var in _PROVIDER_SECRET_ENV
         # Secrets can come from the env-Secret even if not literally set on the
         # pod; non-secrets only forward when present on the pod env.
@@ -427,6 +493,8 @@ def _provider_env_entries() -> list[dict[str, Any]]:
         val = os.environ.get(var)
         if val:
             out.append({"name": var, "value": val})
+    if gateway_url:
+        out.extend(_gateway_env_entries(gateway_url, secret_name))
     return out
 
 
@@ -787,6 +855,9 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
     # confined than the control plane it inherits from (it additionally has
     # RuntimeDefault seccomp, dropped caps, a per-task NetworkPolicy and an
     # ephemeral filesystem), so nothing is weakened to make lanes runnable.
+    # Fourth instance (#1515): the run limits are read in run_guard inside the
+    # agent session, i.e. in this Job, so an operator override must travel too.
+    env.extend(_run_limit_env())
     _bash_sandbox = os.environ.get("AIFACTORY_BASH_SANDBOX")
     if _bash_sandbox:
         env.append({"name": "AIFACTORY_BASH_SANDBOX", "value": _bash_sandbox})

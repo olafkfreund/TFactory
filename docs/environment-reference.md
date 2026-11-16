@@ -110,6 +110,9 @@ correction bundle back to AIFactory, then re-verify, up to a cycle cap.
 | `TFACTORY_HANDBACK_PREPARE` | on | No | Default ON | Prepare the handback bundle on a failing verdict. Disable with a falsy value. | `agents/handback/trigger.py` |
 | `TFACTORY_HANDBACK_SEND` | off | No | Default OFF `[write]` | Actually send the handback to AIFactory (triggers a re-build). Opt in with `1`. | `agents/handback/trigger.py` |
 | `TFACTORY_HANDBACK_MAX_CYCLES` | `2` | No | — | Correction-cycle cap for the handback loop. Values `<= 0` fall back to the default. | `agents/handback/loop.py` |
+| `TFACTORY_ACT_GUARDRAIL` | on | No | — | Anti-loop guardrail on agent tool calls (`agents/run_guard.py`). On by default; `off`, `0`, `false` or `no` disables. Thresholds: `TFACTORY_GUARDRAIL_REPEAT_FAIL` (5), `TFACTORY_GUARDRAIL_TOOL_FAIL_HALT` (8), `TFACTORY_GUARDRAIL_NOPROGRESS` (5). | `agents/run_guard.py` |
+| `TFACTORY_RUN_TOKEN_CEILING` | `10000000` | No | — | Per-task token ceiling (input + output, the spec's persisted usage). Over it, no further session starts and the completion event is `failure` with `halt_reason: token_ceiling: ...`. `0` disables. | `agents/run_guard.py`, `agents/session.py` |
+| `TFACTORY_MAX_TURNS` | `1000` | No | — | SDK `max_turns` for each agent session. | `core/client.py` |
 
 ---
 
@@ -181,6 +184,8 @@ Secret is named.
 | `TFACTORY_VERIFY_OAUTH_SECRET_NAME` | unset | No | — | Kubernetes Secret name holding the Claude OAuth token for the verify Job. | `agents/verify_dispatch.py` |
 | `TFACTORY_VERIFY_OAUTH_SECRET_KEY` | `oauth-token` | No | — | Key within the OAuth Secret. | `agents/verify_dispatch.py` |
 | `TFACTORY_VERIFY_PROVIDER_SECRET_NAME` | unset | No | — | Secret name from which non-Claude provider keys are sourced via `secretKeyRef` (key = lower-kebab of the var, e.g. `OPENAI_API_KEY` -> `openai-api-key`). When unset, keys forward as resolved pod-env values. | `agents/verify_dispatch.py` |
+| `TFACTORY_MODEL_GATEWAY_URL` | unset | No | — | Model gateway origin (no `/v1`), Factory#1959. Set = verify Jobs get `OPENAI_COMPATIBLE_BASE_URL` = this and no direct `OPENAI_COMPATIBLE_API_KEY` or `OLLAMA_API_KEY` (`OPENAI_API_KEY` stays: Codex needs it). Covers the env-var fallback of the OpenAI-compatible provider only; saved endpoints, Codex, Gemini are unchanged. Unset = off. | `agents/verify_dispatch.py` |
+| `TFACTORY_MODEL_GATEWAY_TOKEN` | unset | If gateway URL set | — | Gateway client token, sent to Jobs as `OPENAI_COMPATIBLE_API_KEY`. With `TFACTORY_VERIFY_PROVIDER_SECRET_NAME` set it is read from that Secret key `model-gateway-token` instead. Missing = Job calls get 401 (placeholder token); a missing Secret key fails the Job start. | `agents/verify_dispatch.py` |
 | `TFACTORY_VERIFY_CLI_CREDS_SECRET` | unset | No | — | Secret name holding CLI credentials mounted into the verify Job. | `agents/verify_dispatch.py` |
 | `DATABASE_URL` | unset | No | — | Database URL forwarded into the verify Job when the pipeline's terminal store write needs it. | `agents/verify_dispatch.py` |
 | `DB_POOL_SIZE` | `2` | No | — | Main Postgres engine pool size; ignored for SQLite. | `server/db_pool.py` |

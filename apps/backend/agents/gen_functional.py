@@ -39,6 +39,7 @@ import os
 import re
 import traceback
 from collections.abc import Awaitable, Callable
+from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -1045,6 +1046,21 @@ def _source_guardrail_rejection(
     return None
 
 
+def _two_step_enabled() -> bool:
+    """``TFACTORY_GEN_TWO_STEP=0`` (or false/off) restores one session (#1502)."""
+    return os.environ.get("TFACTORY_GEN_TWO_STEP", "1").lower() not in (
+        "0",
+        "false",
+        "off",
+    )
+
+
+def _code_values(source: str, subtask: object) -> set[Decimal]:
+    from agents.criterion_literals import code_values  # noqa: PLC0415 - lazy
+
+    return code_values(source, getattr(subtask, "language", None))
+
+
 async def _generate_one_subtask(
     spec_dir: Path,
     project_dir: Path,
@@ -1075,26 +1091,49 @@ async def _generate_one_subtask(
     # legacy prompt + DeprecationWarning.
     framework_descriptor = _resolve_framework_descriptor(subtask)
 
-    prompt = get_tfactory_gen_functional_prompt(
-        spec_dir,
-        project_dir,
-        subtask,
-        framework_descriptor=framework_descriptor,
+    # #1502: two steps. The assertion step never sees the diff; the wiring step
+    # does, for imports/signatures/fixtures only, and may not change the values.
+    two_step = (
+        framework_descriptor is not None
+        and len(files) == 1
+        and not getattr(framework_descriptor, "multi_artifact", False)
+        and _two_step_enabled()
     )
-    client = await _resolve_client(spec_dir, project_dir)
-    session_status, _response, _err = await _invoke_session(
-        client,
-        prompt,
-        spec_dir,
-        verbose,
-    )
-    if session_status == "error":
-        _gen_log.warning(
-            "gen_functional: session error on subtask %s — skipping",
-            subtask.id,
+    locked: set[Decimal] | None = None
+    for step in ("assert", "wire") if two_step else ("single",):
+        prompt = get_tfactory_gen_functional_prompt(
+            spec_dir,
+            project_dir,
+            subtask,
+            framework_descriptor=framework_descriptor,
+            step=step,
         )
-        subtask.fail("SDK session returned status=error")
-        return "skipped"
+        client = await _resolve_client(spec_dir, project_dir)
+        session_status, _response, _err = await _invoke_session(
+            client,
+            prompt,
+            spec_dir,
+            verbose,
+        )
+        if session_status == "error":
+            _gen_log.warning(
+                "gen_functional: session error on subtask %s — skipping",
+                subtask.id,
+            )
+            subtask.fail("SDK session returned status=error")
+            return "skipped"
+        if step == "assert":
+            if not test_path.exists():
+                break  # no draft: skip wiring, the no-write rejection below applies
+            # Only the criterion's own values are locked: the draft also holds
+            # guessed ids, ports and timeouts that wiring must be free to fix (#1516).
+            from agents.criterion_literals import (  # noqa: PLC0415 - lazy
+                criterion_literals,
+            )
+
+            locked = _code_values(test_path.read_text(), subtask) & set(
+                criterion_literals(_criterion_text(subtask))
+            )
 
     # Did the agent actually write the file?
     if not test_path.exists():
@@ -1121,6 +1160,23 @@ async def _generate_one_subtask(
     # inside the project checkout — not from the spec dir it is written to.
     await _repair_imports(spec_dir, project_dir, subtask, files[0], _retry)
     source = test_path.read_text()
+    if locked and not locked <= _code_values(source, subtask):
+        gone = sorted(locked - _code_values(source, subtask))
+        _reject_subtask_for_replan(
+            spec_dir,
+            project_dir,
+            plan,
+            plan_file,
+            subtask,
+            test_path=test_path,
+            reason=(
+                "an expected value written from the criterion before the diff "
+                f"was shown is missing from the final test: {[str(v) for v in gone]}"
+            ),
+            phase="gen_functional_assertions_changed",
+            tests_generated=tests_generated,
+        )
+        return "rejected"
     _record_unresolvable_imports(
         spec_dir, subtask, source, project_dir, Path(project_dir) / files[0]
     )

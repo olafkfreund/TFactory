@@ -45,10 +45,14 @@ class _RecordingRunner:
 
     def __init__(self, scripted: list[_FakeProc] | None = None):
         self.calls: list[tuple[list[str], Path, str | None]] = []
+        self.envs: list[dict[str, str]] = []
         self._scripted = list(scripted or [])
 
-    def __call__(self, argv, *, cwd, stdin=None):
+    def __call__(self, argv, *, cwd, stdin=None, env=None):
+        if argv[:4] == ["git", "config", "-z", "--includes"]:
+            return _FakeProc(returncode=0)
         self.calls.append((list(argv), cwd, stdin))
+        self.envs.append(env)
         if self._scripted:
             return self._scripted.pop(0)
         return _FakeProc(returncode=0)
@@ -482,3 +486,79 @@ def test_unsigned_commit_has_no_dash_s(tmp_path: Path, monkeypatch) -> None:
     result = write_tests_to_branch(req, dry_run=True)
     commit_argv = next(a for a in result.argv_log if "commit" in a)
     assert "-S" not in commit_argv
+
+
+def test_real_push_pins_remote_programs_and_keeps_github_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "sentinel-github-token")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    runner = _RecordingRunner()
+    req = GitWriteRequest(repo, "branch", (("tests/x.py", "x"),), "msg")
+    result = write_tests_to_branch(req, dry_run=False, runner_fn=runner, push=True)
+    assert result.ok
+    for argv, _, _ in runner.calls:
+        if "fetch" in argv or "push" in argv:
+            assert "core.gitProxy=" in argv
+            assert "remote.origin.uploadpack=git-upload-pack" in argv
+            assert "remote.origin.receivepack=git-receive-pack" in argv
+    assert runner.envs[0]["GITHUB_TOKEN"] == "sentinel-github-token"
+
+
+def test_real_unsigned_commit_disables_repo_signing(tmp_path, monkeypatch):
+    monkeypatch.delenv("TFACTORY_TRIAGER_GIT_SIGN", raising=False)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    runner = _RecordingRunner()
+    req = GitWriteRequest(repo, "branch", (("tests/x.py", "x"),), "msg")
+    assert write_tests_to_branch(req, dry_run=False, runner_fn=runner).ok
+    argv = next(argv for argv, _, _ in runner.calls if "commit" in argv)
+    assert "commit.gpgSign=false" in argv
+    assert "-S" not in argv
+
+
+def test_real_signed_commit_pins_global_program(tmp_path, monkeypatch):
+    monkeypatch.setenv("TFACTORY_TRIAGER_GIT_SIGN", "1")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    class SigningRunner(_RecordingRunner):
+        def __call__(self, argv, *, cwd, stdin=None, env=None):
+            if "--global" in argv:
+                return _FakeProc(0, stdout="/usr/bin/gpg\n")
+            return super().__call__(argv, cwd=cwd, stdin=stdin, env=env)
+
+    runner = SigningRunner()
+    req = GitWriteRequest(repo, "branch", (("tests/x.py", "x"),), "msg")
+    assert write_tests_to_branch(req, dry_run=False, runner_fn=runner).ok
+    argv = next(argv for argv, _, _ in runner.calls if "commit" in argv)
+    assert "gpg.program=/usr/bin/gpg" in argv
+    assert "-S" in argv
+
+
+def test_signing_env_passes_only_when_signing_on(tmp_path, monkeypatch):
+    monkeypatch.setenv("GNUPGHOME", "/sentinel-gnupg")
+    monkeypatch.setenv("GPG_TTY", "/dev/pts/9")
+    for on in ("1", ""):
+        monkeypatch.setenv("TFACTORY_TRIAGER_GIT_SIGN", on)
+        repo = tmp_path / f"repo{on or 'off'}"
+        repo.mkdir()
+        runner = _RecordingRunner()
+        req = GitWriteRequest(repo, "branch", (("tests/x.py", "x"),), "msg")
+        assert write_tests_to_branch(req, dry_run=False, runner_fn=runner).ok
+        assert runner.envs
+        for env in runner.envs:
+            assert ("GNUPGHOME" in env) is bool(on)
+            assert ("GPG_TTY" in env) is bool(on)
+
+
+def test_config_probe_failure_prevents_write(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def runner(argv, *, cwd, stdin=None, env=None):
+        return _FakeProc(1, stderr="config failed")
+
+    req = GitWriteRequest(repo, "branch", (("tests/x.py", "x"),), "msg")
+    result = write_tests_to_branch(req, dry_run=False, runner_fn=runner)
+    assert not result.ok
+    assert not (repo / "tests/x.py").exists()

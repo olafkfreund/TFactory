@@ -9,6 +9,7 @@ compatible).
 """
 
 import asyncio
+import importlib
 import json
 import logging
 import time
@@ -33,9 +34,11 @@ router = APIRouter()
 
 def load_projects() -> dict[str, dict[str, Any]]:
     """Load the project registry (lazy import to avoid circular dependencies)."""
-    from server.routes.projects import load_projects as _load_projects  # noqa: PLC0415
-
-    return _load_projects()
+    # import_module, not ``from``: a static import here closes a cycle.
+    loaded: dict[str, dict[str, Any]] = importlib.import_module(
+        "server.routes.projects"
+    ).load_projects()
+    return loaded
 
 
 # ---------------------------------------------------------------------------
@@ -273,14 +276,19 @@ async def events_websocket(websocket: WebSocket):
         while True:
             try:
                 if (
-                    key_token
+                    client.user_id
                     and time.monotonic() - last_key_check >= _KEY_RECHECK_SECONDS
                 ):
-                    if await _ws_acw_principal(key_token) is None:
-                        await websocket.close(code=4001)
-                        break
+                    if key_token:
+                        principal = await _ws_acw_principal(key_token)
+                        if principal is None or not principal.get("id"):
+                            await websocket.close(code=4001)
+                            break
+                        user_info = principal
+                        org_id = principal.get("org_id")
+                        client.key_org_id = str(org_id) if org_id else None
+                        client.user_id = str(principal["id"])
                     last_key_check = time.monotonic()
-                    # A key socket also follows its owner's current membership.
                     await _load_org_ids(client, user_info)
 
                 data = await asyncio.wait_for(websocket.receive_text(), timeout=30)

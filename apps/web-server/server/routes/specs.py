@@ -44,6 +44,11 @@ except Exception:  # pragma: no cover — SDK-less env: lazy import will report 
 router = APIRouter(prefix="/api/specs", tags=["Spec Ingestion"])
 
 
+# Provenance labels land in source.json and the completion event: bound and
+# keep them to a plain charset (no control chars, quotes or newlines).
+_PROVENANCE_RE = r"^[\w.:@/+\- ]+$"
+
+
 class SpecIngestRequest(BaseModel):
     project_id: str = Field(..., description="Registered project id")
     spec_id: str = Field(
@@ -122,6 +127,25 @@ class SpecIngestRequest(BaseModel):
             "verdict goes to the right host — the PR-comment step is gh-CLI-driven "
             "and is skipped, with the report written to disk, off GitHub. Absent "
             "means GitHub, which is what it always meant."
+        ),
+    )
+    originator: str | None = Field(
+        default=None,
+        max_length=128,
+        pattern=_PROVENANCE_RE,
+        description=(
+            "Who asked for the work (Factory#1960), as the sending service "
+            "recorded it. Stored on the spec and echoed in the completion event."
+        ),
+    )
+    agent_identity: str | None = Field(
+        default=None,
+        max_length=128,
+        pattern=_PROVENANCE_RE,
+        description=(
+            "The agent identity that built what is verified (Factory#1960), e.g. "
+            "'agent:aifactory/<key id>'. Stored on the spec and echoed in the "
+            "completion event."
         ),
     )
 
@@ -334,6 +358,8 @@ async def ingest_spec(
             repo_ref=req.repo,
             signed_contract=req.signed_contract,
             clone_url=entry.get("clonedFrom") or req.git_url,
+            originator=req.originator,
+            agent_identity=req.agent_identity,
         )
     except FileExistsError as exc:
         # The message names spec_dir's server-side path -- redact rather than

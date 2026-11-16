@@ -97,3 +97,53 @@ async def test_unknown_project_without_git_url_still_404(monkeypatch):
     with pytest.raises(HTTPException) as ei:
         await ingest_spec(req)
     assert ei.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_ingest_forwards_originator_and_agent_identity(monkeypatch, tmp_path):
+    """Factory#1960: the route hands both to the workspace writer."""
+    seen = {}
+
+    def fake_create_ws(**kw):
+        seen.update(kw)
+        return {"spec_dir": str(tmp_path)}
+
+    monkeypatch.setattr(
+        "server.routes.projects.load_projects",
+        lambda: {"proj": {"name": "proj", "path": str(tmp_path)}},
+    )
+    monkeypatch.setattr(
+        "agents.tools_pkg.tools.task_control.create_spec_ingest_workspace",
+        fake_create_ws,
+    )
+
+    async def fake_ensure(entry, pid, source_branch=None):
+        return tmp_path
+
+    monkeypatch.setattr("server.routes.specs._ensure_project_clone", fake_ensure)
+    await ingest_spec(
+        SpecIngestRequest(
+            project_id="proj",
+            spec_id="s1",
+            spec_text="## Acceptance Criteria\n- it works",
+            originator="github:octocat",
+            agent_identity="agent:aifactory/k1",
+        )
+    )
+    assert seen["originator"] == "github:octocat"
+    assert seen["agent_identity"] == "agent:aifactory/k1"
+
+
+@pytest.mark.parametrize("field", ["originator", "agent_identity"])
+@pytest.mark.parametrize("bad", ["x" * 129, "a\nb", "a\n", 'a"b', ""])
+def test_provenance_fields_reject_unbounded_or_odd_values(field, bad):
+    """Factory#1960 review: provenance is bounded and charset-limited."""
+    from pydantic import ValidationError
+
+    base = {
+        "project_id": "p",
+        "spec_id": "s",
+        "spec_text": "## Acceptance Criteria\n- x",
+    }
+    with pytest.raises(ValidationError):
+        SpecIngestRequest(**base, **{field: bad})

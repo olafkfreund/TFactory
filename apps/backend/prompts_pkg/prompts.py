@@ -1414,11 +1414,23 @@ def _import_root_block(project_dir: Path) -> str:
     )
 
 
+# #1502: appended to the generic prompt for the second (wiring) step.
+_WIRING_STEP_BLOCK = (
+    "\n\n## WIRING STEP\n\n"
+    "A first draft of the test already exists at the path above. It was written "
+    "from the criterion alone, so its expected values are FIXED: do not change, "
+    "add or remove any expected value. Read the diff and the target now, only to "
+    "fix imports, call signatures and fixtures. Write the file back at the same "
+    "path.\n"
+)
+
+
 def get_tfactory_gen_functional_prompt(
     spec_dir: Path,
     project_dir: Path,
     subtask,
     framework_descriptor=None,
+    step: str = "single",
 ) -> str:
     """Assemble the per-subtask Gen-Functional prompt — Task 6 (#22).
 
@@ -1508,6 +1520,13 @@ def get_tfactory_gen_functional_prompt(
     else:
         write_instruction = f"- write the file at: `{spec_dir / write_path}`"
 
+    # #1502: the assertion step is not shown the diff path at all.
+    diff_line = (
+        ""
+        if step == "assert"
+        else f"- `{spec_dir / 'context' / 'diff.patch'}` (may not exist)\n"
+    )
+
     # SUBTASK CONTEXT block (shared by both the v0.1 and v0.2 paths).
     context = (
         "## SUBTASK CONTEXT (TFactory Gen-Functional)\n\n"
@@ -1525,7 +1544,7 @@ def get_tfactory_gen_functional_prompt(
         f"- project_dir: `{project_dir}` (read-only via Glob/Grep)\n\n"
         "Snapshot files Task 3 populated:\n\n"
         f"- `{spec_dir / 'context' / 'aifactory_spec.md'}`\n"
-        f"- `{spec_dir / 'context' / 'diff.patch'}` (may not exist)\n"
+        f"{diff_line}"
         f"- `{spec_dir / 'test_plan.json'}` (the full Planner output)\n\n"
         "---\n\n"
     )
@@ -1555,13 +1574,17 @@ def get_tfactory_gen_functional_prompt(
         f"## FRAMEWORK CONTEXT ({framework_name})\n\n{context_block_text}\n\n---\n\n"
     )
 
-    prompt_file = PROMPTS_DIR / "gen_functional.md"
+    prompt_file = PROMPTS_DIR / (
+        "gen_functional_assertions.md" if step == "assert" else "gen_functional.md"
+    )
     if not prompt_file.exists():
         raise FileNotFoundError(
-            f"gen_functional.md missing at {prompt_file}. "
+            f"{prompt_file.name} missing at {prompt_file}. "
             "TFactory's Task 6 (#22) commit 1 authors this prompt; check the working tree."
         )
     body = prompt_file.read_text()
+    if step == "wire":
+        body += _WIRING_STEP_BLOCK
 
     # Final assembly: SUBTASK CONTEXT → FRAMEWORK CONTEXT → generic body
     return context + framework_context + body

@@ -24,6 +24,9 @@ from pathlib import Path
 
 from factory_common.logsafe import sanitize_log
 
+from server.utils.project_env import load_project_env_file
+from server.utils.subprocess_env import RUNNER_STRIP
+
 from ..config import get_settings
 from ..websockets.events import broadcast_event
 
@@ -81,7 +84,7 @@ def _load_env_file(env_file: Path, env: dict) -> None:
                     k, v = line.split("=", 1)
                     k = k.strip()
                     v = v.strip().strip('"').strip("'")
-                    if k not in env:
+                    if k not in env and k.upper() not in RUNNER_STRIP:
                         env[k] = v
     except Exception as e:
         logger.warning(f"Failed to load env file {env_file}: {e}")
@@ -268,7 +271,7 @@ class PRReviewService:
         _load_env_file(backend_path / ".env", env)
 
         # Load project-level .tfactory/.env for project settings
-        _load_env_file(project_path / ".tfactory" / ".env", env)
+        load_project_env_file(project_path / ".tfactory" / ".env", env)
 
         # Initialize execution log writer
         # Coerce to int to strip any path-traversal taint (a PR number is an integer).
