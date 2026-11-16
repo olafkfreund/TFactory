@@ -1710,10 +1710,13 @@ def test_gateway_flag_with_secret_never_forwards_a_direct_key(monkeypatch) -> No
     ref = by["OPENAI_COMPATIBLE_API_KEY"]["valueFrom"]["secretKeyRef"]
     assert (ref["name"], ref["key"]) == ("factory-secrets", "model-gateway-token")
     assert "value" not in by["OPENAI_COMPATIBLE_API_KEY"]
+    assert ref["optional"] is False
 
 
-def test_gateway_flag_without_a_token_omits_the_key(monkeypatch) -> None:
+def test_gateway_flag_without_a_token_never_falls_back_to_a_direct_key(
+    monkeypatch,
+) -> None:
     _gateway_env(monkeypatch, token="")
     by = _by_name()
-    assert "OPENAI_COMPATIBLE_API_KEY" not in by
+    assert by["OPENAI_COMPATIBLE_API_KEY"]["value"] == "gateway-token-not-configured"
     assert by["OPENAI_COMPATIBLE_BASE_URL"]["value"] == "http://gw.gateway.svc:8080"

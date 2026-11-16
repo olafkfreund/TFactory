@@ -397,6 +397,7 @@ def _env_to_secret_key(var: str) -> str:
 _ENV_GATEWAY_URL = "TFACTORY_MODEL_GATEWAY_URL"
 _ENV_GATEWAY_TOKEN = "TFACTORY_MODEL_GATEWAY_TOKEN"  # noqa: S105 - env var name
 _GATEWAY_TOKEN_SECRET_KEY = "model-gateway-token"  # noqa: S105 - Secret key name
+_NO_TOKEN = "gateway-token-not-configured"  # noqa: S105 - placeholder, not a secret
 _GATEWAY_REPLACED: frozenset[str] = frozenset(
     {
         "OPENAI_COMPATIBLE_API_KEY",
@@ -419,12 +420,17 @@ def _gateway_env_entries(gateway_url: str, secret_name: str) -> list[dict[str, A
                     "secretKeyRef": {
                         "name": secret_name,
                         "key": _GATEWAY_TOKEN_SECRET_KEY,
-                        "optional": True,
+                        # Required: a Job that starts without it would let the
+                        # provider fall back to OPENAI_API_KEY.
+                        "optional": False,
                     }
                 },
             }
         )
-    elif token := os.environ.get(_ENV_GATEWAY_TOKEN, "").strip():
+    else:
+        # Never omit the key: phase_config falls back to OPENAI_API_KEY. A
+        # placeholder makes the gateway answer 401 instead.
+        token = os.environ.get(_ENV_GATEWAY_TOKEN, "").strip() or _NO_TOKEN
         out.append({"name": "OPENAI_COMPATIBLE_API_KEY", "value": token})
     return out
 
