@@ -221,6 +221,24 @@ def test_gherkin_creates_workspace(tmp_path):
     assert status["mode"] == "spec_ingest" and status["status"] == "pending"
 
 
+def test_originator_and_agent_identity_land_in_source_json(tmp_path):
+    """Factory#1960: handed on when sent, null otherwise."""
+    _ingest(
+        tmp_path,
+        _MARKDOWN,
+        originator="github:octocat",
+        agent_identity="agent:aifactory/k1",
+    )
+    source = json.loads((_spec_dir(tmp_path) / "context" / "source.json").read_text())
+    assert source["originator"] == "github:octocat"
+    assert source["agent_identity"] == "agent:aifactory/k1"
+    _ingest(tmp_path, _MARKDOWN, spec_id="spec2")
+    source = json.loads(
+        (_spec_dir(tmp_path, "spec2") / "context" / "source.json").read_text()
+    )
+    assert source["originator"] is None and source["agent_identity"] is None
+
+
 def test_markdown_format(tmp_path):
     result = _ingest(tmp_path, _MARKDOWN)
     assert result["source_format"] == "markdown"

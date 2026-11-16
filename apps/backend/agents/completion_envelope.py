@@ -92,6 +92,8 @@ class CompletionEnvelope(TypedDict, total=False):
     pr_number: int | None
     result: dict[str, Any]
     usage: dict[str, Any]
+    originator: str | None  # Factory#1960
+    agent_identity: str | None  # Factory#1960
     emitted_at: str
     # #282 CloudEvents-core + idempotency id + W3C trace context.
     id: str
