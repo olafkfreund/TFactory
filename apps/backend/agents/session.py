@@ -43,6 +43,7 @@ from usage import record_in_status, usage_from_obj
 
 from .base import sanitize_error_message
 from .memory_manager import save_session_memory
+from .run_guard import ceiling_exceeded, clear_halt, guard_halt
 from .utils import (
     find_subtask_in_plan,
     get_commit_count,
@@ -639,6 +640,13 @@ async def run_agent_session(
     task_logger = get_task_logger(spec_dir)
     state = _StreamState()
 
+    # Token ceiling: a task already over it sends no further paid query, whichever
+    # caller (generation, evaluator vote, triager) asks.
+    over = ceiling_exceeded(spec_dir)
+    if over:
+        logger.warning("Run stopped: %s", over)
+        return "error", over, {"type": "token_ceiling", "message": over, "exception_type": ""}
+    clear_halt(spec_dir)  # a guardrail halt belongs to one session
     try:
         # Send the query
         debug("session", "Sending query to Claude SDK...")
@@ -646,9 +654,18 @@ async def run_agent_session(
         debug_success("session", "Query sent successfully")
 
         debug("session", "Starting to receive response stream...")
+        interrupted = False
         async for msg in safe_receive_messages(client, caller="session"):
             msg_type = type(msg).__name__
             state.message_count += 1
+            if not interrupted and guard_halt(spec_dir):
+                # Anti-loop halt: interrupt once, then keep draining so the
+                # final ResultMessage (usage) is still seen.
+                interrupted = True
+                try:
+                    await client.interrupt()
+                except Exception:  # noqa: BLE001 - best effort
+                    logger.debug("guardrail interrupt failed", exc_info=True)
             debug_detailed(
                 "session",
                 f"Received message #{state.message_count}",
@@ -690,6 +707,13 @@ async def run_agent_session(
         )
 
         print("\n" + "-" * 70 + "\n")
+
+        halt, kind = guard_halt(spec_dir), "guardrail_halt"
+        if not halt:
+            halt, kind = ceiling_exceeded(spec_dir), "token_ceiling"
+        if halt:
+            logger.warning("Agent halted: %s", halt)
+            return "error", halt, {"type": kind, "message": halt, "exception_type": ""}
 
         # Check if build is complete
         if is_build_complete(spec_dir):

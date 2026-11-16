@@ -110,6 +110,9 @@ correction bundle back to AIFactory, then re-verify, up to a cycle cap.
 | `TFACTORY_HANDBACK_PREPARE` | on | No | Default ON | Prepare the handback bundle on a failing verdict. Disable with a falsy value. | `agents/handback/trigger.py` |
 | `TFACTORY_HANDBACK_SEND` | off | No | Default OFF `[write]` | Actually send the handback to AIFactory (triggers a re-build). Opt in with `1`. | `agents/handback/trigger.py` |
 | `TFACTORY_HANDBACK_MAX_CYCLES` | `2` | No | — | Correction-cycle cap for the handback loop. Values `<= 0` fall back to the default. | `agents/handback/loop.py` |
+| `TFACTORY_ACT_GUARDRAIL` | on | No | — | Anti-loop guardrail on agent tool calls (`agents/run_guard.py`). On by default; `off`, `0`, `false` or `no` disables. Thresholds: `TFACTORY_GUARDRAIL_REPEAT_FAIL` (5), `TFACTORY_GUARDRAIL_TOOL_FAIL_HALT` (8), `TFACTORY_GUARDRAIL_NOPROGRESS` (5). | `agents/run_guard.py` |
+| `TFACTORY_RUN_TOKEN_CEILING` | `10000000` | No | — | Per-task token ceiling (input + output, the spec's persisted usage). Over it, no further session starts and the completion event is `failure` with `halt_reason: token_ceiling: ...`. `0` disables. | `agents/run_guard.py`, `agents/session.py` |
+| `TFACTORY_MAX_TURNS` | `1000` | No | — | SDK `max_turns` for each agent session. | `core/client.py` |
 
 ---
 
