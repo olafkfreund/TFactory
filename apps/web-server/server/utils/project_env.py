@@ -86,7 +86,7 @@ def is_project_env_key(key: str) -> bool:
     )
 
 
-def load_project_env_file(env_file: Path, env: dict) -> None:
+def load_project_env_file(env_file: Path, env: dict[str, str]) -> None:
     """Load allowlisted ``KEY=VALUE`` pairs from a project .env without overwriting.
 
     Other keys are ignored and logged by name, never by value.
@@ -108,9 +108,7 @@ def load_project_env_file(env_file: Path, env: dict) -> None:
                     env[k] = v.strip().strip('"').strip("'")
     except (OSError, UnicodeDecodeError) as e:
         logger.warning(
-            "Failed to load project env file %s: %s",
-            sanitize_log(env_file),
-            sanitize_log(e),
+            "Failed to load project env file %s: %s", sanitize_log(env_file), sanitize_log(e)
         )
     if ignored:
         logger.warning(

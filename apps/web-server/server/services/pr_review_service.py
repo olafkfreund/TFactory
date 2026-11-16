@@ -25,7 +25,7 @@ from pathlib import Path
 from factory_common.logsafe import sanitize_log
 
 from ..config import get_settings
-from ..utils.project_env import load_project_env_file
+from server.utils.project_env import load_project_env_file
 from ..websockets.events import broadcast_event
 
 
