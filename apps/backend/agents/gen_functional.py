@@ -1125,7 +1125,15 @@ async def _generate_one_subtask(
         if step == "assert":
             if not test_path.exists():
                 break  # no draft: skip wiring, the no-write rejection below applies
-            locked = _code_values(test_path.read_text(), subtask)
+            # Only the criterion's own values are locked: the draft also holds
+            # guessed ids, ports and timeouts that wiring must be free to fix (#1516).
+            from agents.criterion_literals import (  # noqa: PLC0415 - lazy
+                criterion_literals,
+            )
+
+            locked = _code_values(test_path.read_text(), subtask) & set(
+                criterion_literals(_criterion_text(subtask))
+            )
 
     # Did the agent actually write the file?
     if not test_path.exists():

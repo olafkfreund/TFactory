@@ -47,8 +47,8 @@ def _make_spec(tmp_path: Path, **extra) -> Path:
     (d / "status.json").write_text(json.dumps({"status": "planned"}))
     subtask = {
         "id": "s0",
-        # No number here, so only the lock (not #888) can catch a rewrite.
-        "description": "the order total is the signed amount",
+        # The criterion states 11.76 so the lock covers it.
+        "description": "the order total is 11.76",
         "status": "pending",
         "lane": "unit",
         "language": "python",
@@ -232,3 +232,22 @@ async def test_an_assertion_step_that_writes_nothing_never_reaches_wiring(
 
     assert len(prompts) == 1 and "WIRING STEP" not in prompts[0]
     assert _replan(spec) is not None
+
+
+_GUESSED = (
+    "import shop\n\n\ndef test_total():\n"
+    "    assert shop.total(order_id=1, timeout=5) == 11.76\n"
+)
+_WIRED_FIXES_GUESS = (
+    "import shop\n\n\ndef test_total():\n    assert shop.total() == 11.76\n"
+)
+
+
+async def test_wiring_may_change_guessed_literals_that_are_not_the_criterion(
+    spec: Path, project: Path, sdk
+) -> None:
+    """#1516: ids/ports/timeouts the assertion step guessed are not locked."""
+    sdk(_GUESSED, _WIRED_FIXES_GUESS)
+
+    assert await run_gen_functional(spec, project) is True
+    assert _replan(spec) is None

@@ -1718,3 +1718,20 @@ def test_gateway_flag_without_a_token_never_falls_back_to_a_direct_key(
     by = _by_name()
     assert by["OPENAI_COMPATIBLE_API_KEY"]["value"] == "gateway-token-not-configured"
     assert by["OPENAI_COMPATIBLE_BASE_URL"]["value"] == "http://gw.gateway.svc:8080"
+
+
+def test_run_limits_reach_the_dispatched_job(monkeypatch):
+    """#1515: run_guard reads these inside the Job, so the Job env must carry them."""
+    for k, v in {
+        "TFACTORY_ACT_GUARDRAIL": "off",
+        "TFACTORY_RUN_TOKEN_CEILING": "0",
+        "TFACTORY_MAX_TURNS": "50",
+        "TFACTORY_GUARDRAIL_REPEAT_FAIL": "9",
+    }.items():
+        monkeypatch.setenv(k, v)
+    ps = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
+    env = {e["name"]: e["value"] for e in ps["containers"][0]["env"]}
+    assert env["TFACTORY_ACT_GUARDRAIL"] == "off"
+    assert env["TFACTORY_RUN_TOKEN_CEILING"] == "0"
+    assert env["TFACTORY_MAX_TURNS"] == "50"
+    assert env["TFACTORY_GUARDRAIL_REPEAT_FAIL"] == "9"
