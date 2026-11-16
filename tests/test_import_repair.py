@@ -21,6 +21,7 @@ _TEST_REL = "tests/unit/game.test.js"
 
 @pytest.fixture(autouse=True)
 def _no_auto_chain(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TFACTORY_GEN_TWO_STEP", "0")  # these count single sessions
     monkeypatch.setenv("TFACTORY_AUTO_PLAN", "0")
     monkeypatch.setenv("TFACTORY_AUTO_EVALUATE", "0")
 
