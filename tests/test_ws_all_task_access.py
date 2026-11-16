@@ -207,3 +207,126 @@ async def test_refresh_deadline_drops_newly_denied_message(endpoint, monkeypatch
     assert not service.callbacks
     if name == "progress":
         assert sent[-1]["running_tasks"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("task_id,delivered", [("own:one", True), ("other:two", False)])
+async def test_final_event_after_task_stops(endpoint, monkeypatch, task_id, delivered):
+    _, name, _, _, service, _, _ = endpoint
+    module = logs if name == "logs" else progress
+    event_type = "log" if name == "logs" else "progress"
+    clock = SimpleNamespace(now=0.0)
+    sent = []
+
+    class Socket:
+        async def accept(self):
+            pass
+
+        async def send_json(self, message):
+            sent.append(message)
+            if message["type"] == "heartbeat":
+                raise WebSocketDisconnect()
+
+    monkeypatch.setattr(task_access, "_ws_extract_token", lambda _: None)
+    calls = 0
+
+    async def wait_for(pending, timeout):
+        nonlocal calls
+        pending.close()
+        calls += 1
+        if calls == 1:
+            clock.now = 5.1
+            service.tasks.remove(task_id)
+            if name == "logs":
+                return TaskLog(task_id, "final")
+            return TaskProgress(task_id, TaskPhase.CODING, "final")
+        clock.now = 10.2
+        raise TimeoutError
+
+    monkeypatch.setattr(
+        module,
+        "asyncio",
+        SimpleNamespace(
+            Queue=asyncio.Queue,
+            get_running_loop=lambda: SimpleNamespace(time=lambda: clock.now),
+            wait_for=wait_for,
+        ),
+    )
+    handler = (
+        module.all_logs_websocket if name == "logs" else module.all_progress_websocket
+    )
+    await handler(Socket())
+    events = [message for message in sent if message["type"] == event_type]
+    assert bool(events) is delivered
+    if delivered:
+        assert events[0]["task_id"] == task_id
+
+
+@pytest.mark.asyncio
+async def test_event_during_slow_lookup_is_not_lost(endpoint, monkeypatch):
+    _, name, _, _, service, _, _ = endpoint
+    module = logs if name == "logs" else progress
+    event_type = "log" if name == "logs" else "progress"
+    service.tasks = ["own:one"]
+    clock = SimpleNamespace(now=0.0)
+    sent = []
+
+    class Socket:
+        async def accept(self):
+            pass
+
+        async def send_json(self, message):
+            sent.append(message)
+            if message["type"] == event_type:
+                raise WebSocketDisconnect()
+
+    monkeypatch.setattr(task_access, "_ws_extract_token", lambda _: None)
+    original_readable = task_access.AllTaskSocketAccess.readable
+    lookups = 0
+
+    async def slow_readable(self, task_ids):
+        nonlocal lookups
+        lookups += 1
+        if lookups == 2:
+            await asyncio.sleep(0)
+            callback = service.callbacks.get("own:one")
+            assert callback is not None
+            event = (
+                TaskLog("own:one", "during lookup")
+                if name == "logs"
+                else TaskProgress("own:one", TaskPhase.CODING, "during lookup")
+            )
+            await callback(event)
+        return await original_readable(self, task_ids)
+
+    monkeypatch.setattr(task_access.AllTaskSocketAccess, "readable", slow_readable)
+    calls = 0
+
+    async def wait_for(pending, timeout):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            pending.close()
+            clock.now = 5.1
+            raise TimeoutError
+        return await pending
+
+    monkeypatch.setattr(
+        module,
+        "asyncio",
+        SimpleNamespace(
+            Queue=asyncio.Queue,
+            get_running_loop=lambda: SimpleNamespace(time=lambda: clock.now),
+            wait_for=wait_for,
+        ),
+    )
+    handler = (
+        module.all_logs_websocket if name == "logs" else module.all_progress_websocket
+    )
+    await handler(Socket())
+    assert [message["type"] for message in sent] == [
+        "connected",
+        "heartbeat",
+        event_type,
+    ]
+    assert not service.callbacks
