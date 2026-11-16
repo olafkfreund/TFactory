@@ -42,6 +42,7 @@ import os
 import sys
 from pathlib import Path
 
+from agents.run_guard import ceiling_exceeded
 from agents.utils import repair_linked_worktree
 from tools.runners.job_tracing import init_agent_tracing
 
@@ -114,7 +115,7 @@ async def run_verify_pipeline(
     if final_status not in _TERMINAL_STATUSES:
         emit_usage_snapshot(spec_dir, read_status(spec_dir))
 
-    ok = eval_ok and triage_ok
+    ok = eval_ok and triage_ok and ceiling_exceeded(spec_dir) is None
     return ok, final_status
 
 
@@ -310,6 +311,9 @@ def main(argv: list[str] | None = None) -> int:
     # verdict written first could no longer be corrected by a `return 1` here —
     # the run stayed green with its evidence gone. The failure is carried into
     # `_record_terminal` as error_override, which records `stuck` + the reason.
+    # A task over the token ceiling is recorded `stuck` with that reason even when
+    # its last vote wrote valid verdicts, so the job row agrees with the event.
+    ceiling_error = ceiling_exceeded(spec_dir)
     push_back_error: str | None = None
     if packed_root is not None:
         if not args.job_id:
@@ -342,7 +346,7 @@ def main(argv: list[str] | None = None) -> int:
                 final_status=final_status,
                 spec_dir=spec_dir,
                 correlation_key=args.correlation_key,
-                error_override=push_back_error,
+                error_override=push_back_error or ceiling_error,
             )
         )
     else:
@@ -352,7 +356,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Exit non-zero on a hard failure so the Job is marked failed even if the
     # durable write was skipped (the reaper then reaps on the k8s-side signal).
-    return 1 if push_back_error else (0 if ok else 1)
+    return 1 if (push_back_error or ceiling_error) else (0 if ok else 1)
 
 
 def _record_terminal_now(
