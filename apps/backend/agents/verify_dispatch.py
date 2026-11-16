@@ -282,6 +282,14 @@ _RUN_LIMIT_PREFIXES = (
 )
 
 
+def _run_limit_env() -> list[dict[str, str]]:
+    return [
+        {"name": n, "value": v}
+        for n, v in sorted(os.environ.items())
+        if v and n.startswith(_RUN_LIMIT_PREFIXES)
+    ]
+
+
 def resolve_verify_image(fallback_image: str) -> str:
     """Resolve the image for the verify-orchestration Job (TFactory #466).
 
@@ -849,9 +857,7 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
     # ephemeral filesystem), so nothing is weakened to make lanes runnable.
     # Fourth instance (#1515): the run limits are read in run_guard inside the
     # agent session, i.e. in this Job, so an operator override must travel too.
-    for _guard_name, _guard_val in sorted(os.environ.items()):
-        if _guard_val and _guard_name.startswith(_RUN_LIMIT_PREFIXES):
-            env.append({"name": _guard_name, "value": _guard_val})
+    env.extend(_run_limit_env())
     _bash_sandbox = os.environ.get("AIFACTORY_BASH_SANDBOX")
     if _bash_sandbox:
         env.append({"name": "AIFACTORY_BASH_SANDBOX", "value": _bash_sandbox})
