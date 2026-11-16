@@ -39,6 +39,7 @@ from agents.completion_envelope import (
     CompletionEnvelope,
     CompletionEvidence,
 )
+from agents.run_guard import ceiling_exceeded
 from agents.workspace_status import (
     anchor_stage_task,
     now_iso,
@@ -850,6 +851,10 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> CompletionEnvelo
         "rejected": int(status.get("rejected_count") or 0),
     }
     outcome, halt_reason = _status_verdict(status_value, evidence, status)
+    # Token ceiling (#1510): stopped for cost, whatever verdicts it wrote.
+    ceiling = ceiling_exceeded(spec_dir)
+    if ceiling:
+        outcome, halt_reason = "failure", ceiling
 
     envelope: CompletionEnvelope = {
         # RFC-0001 core: the six required fields (Factory#4). `correlation_key`
@@ -881,6 +886,9 @@ def _build_completion_envelope(spec_dir: Path, status: dict) -> CompletionEnvelo
         # RFC-0001 v1.1 §3.1 additive usage block (#224). Zeros when the run did
         # no LLM work; summed across sessions + handback retries via status.json.
         "usage": usage_block_from_status(spec_dir),
+        # Factory#1960: who asked, and which agent identity built it (nullable).
+        "originator": source.get("originator") or None,
+        "agent_identity": source.get("agent_identity") or None,
         "emitted_at": _now_iso(),
         # Additive #282 (parity with AIFactory #466). Per-event idempotency id +
         # CloudEvents-core + W3C trace context, all riding alongside the legacy

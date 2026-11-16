@@ -8,8 +8,8 @@ import asyncio
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from ..auth import verify_websocket_token
 from ..services.agent_service import TaskProgress, get_agent_service
+from .task_access import AllTaskSocketAccess, TaskSocketAccess
 
 router = APIRouter()
 
@@ -32,7 +32,8 @@ async def task_progress_websocket(websocket: WebSocket, task_id: str):
         "data": {} (optional additional data)
     }
     """
-    if not await verify_websocket_token(websocket):
+    access = TaskSocketAccess(websocket, task_id)
+    if not await access.connect():
         return
 
     await websocket.accept()
@@ -59,6 +60,8 @@ async def task_progress_websocket(websocket: WebSocket, task_id: str):
         )
 
         while True:
+            if not await access.recheck():
+                return
             try:
                 progress = await asyncio.wait_for(message_queue.get(), timeout=30.0)
 
@@ -77,7 +80,7 @@ async def task_progress_websocket(websocket: WebSocket, task_id: str):
                     }
                 )
 
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # Send heartbeat
                 await websocket.send_json(
                     {
@@ -99,7 +102,8 @@ async def all_progress_websocket(websocket: WebSocket):
     Connect to receive real-time progress from all running tasks.
     Useful for a unified progress dashboard.
     """
-    if not await verify_websocket_token(websocket):
+    access = AllTaskSocketAccess(websocket)
+    if not await access.connect():
         return
 
     await websocket.accept()
@@ -107,39 +111,71 @@ async def all_progress_websocket(websocket: WebSocket):
     agent_service = get_agent_service()
     message_queue: asyncio.Queue[TaskProgress] = asyncio.Queue()
     unregister_callbacks: list[callable] = []
+    allowed: set[str] = set()
 
     async def progress_callback(progress: TaskProgress):
         await message_queue.put(progress)
 
-    async def update_subscriptions():
-        """Update subscriptions to match running tasks."""
+    async def refresh_subscriptions() -> bool:
+        nonlocal allowed
+        if not await access.recheck():
+            return False
+        fresh = await access.readable(agent_service.get_running_tasks())
         for unregister in unregister_callbacks:
             unregister()
         unregister_callbacks.clear()
-
-        for task_id in agent_service.get_running_tasks():
+        allowed = fresh
+        for task_id in allowed:
             unregister = agent_service.register_progress_callback(
                 task_id, progress_callback
             )
             unregister_callbacks.append(unregister)
+        return True
 
     try:
-        await update_subscriptions()
+        if not await refresh_subscriptions():
+            return
 
         await websocket.send_json(
             {
                 "type": "connected",
-                "running_tasks": agent_service.get_running_tasks(),
+                "running_tasks": [
+                    task
+                    for task in agent_service.get_running_tasks()
+                    if task in allowed
+                ],
                 "message": "Connected to unified progress stream",
             }
         )
 
-        last_task_check = asyncio.get_event_loop().time()
+        loop = asyncio.get_running_loop()
+        last_refresh = loop.time()
 
         while True:
             try:
-                progress = await asyncio.wait_for(message_queue.get(), timeout=5.0)
-
+                timeout = max(0.0, 5.0 - (loop.time() - last_refresh))
+                progress = await asyncio.wait_for(message_queue.get(), timeout=timeout)
+            except TimeoutError:
+                progress = None
+            if loop.time() - last_refresh >= 5.0:
+                if not await refresh_subscriptions():
+                    return
+                last_refresh = loop.time()
+            if progress is None:
+                await websocket.send_json(
+                    {
+                        "type": "heartbeat",
+                        "running_tasks": [
+                            task
+                            for task in agent_service.get_running_tasks()
+                            if task in allowed
+                        ],
+                    }
+                )
+            # a finished task leaves running_tasks before its last event is processed: re-authorize
+            elif progress.task_id in allowed or await access.readable(
+                [progress.task_id]
+            ):
                 await websocket.send_json(
                     {
                         "type": "progress",
@@ -152,19 +188,6 @@ async def all_progress_websocket(websocket: WebSocket):
                         "subtask_total": progress.subtask_total,
                         "percentage": progress.percentage,
                         "data": progress.data,
-                    }
-                )
-
-            except asyncio.TimeoutError:
-                current_time = asyncio.get_event_loop().time()
-                if current_time - last_task_check > 5.0:
-                    await update_subscriptions()
-                    last_task_check = current_time
-
-                await websocket.send_json(
-                    {
-                        "type": "heartbeat",
-                        "running_tasks": agent_service.get_running_tasks(),
                     }
                 )
 

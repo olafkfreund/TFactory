@@ -11,11 +11,15 @@ from __future__ import annotations
 import asyncio
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "apps" / "web-server"))
 
 from server.routes import terminal  # noqa: E402
 
+_SERVICE = SimpleNamespace(
+    state=SimpleNamespace(user={"id": "default", "is_service": True})
+)
 _SECRET = "/srv/secret-root/tenant-42/.tfactory/terminal-sessions/terminal_a.json"
 
 
@@ -40,7 +44,9 @@ def test_unlink_failure_reports_a_count_not_the_exception_or_path(
 
     monkeypatch.setattr(Path, "unlink", _boom)
 
-    body = str(asyncio.run(terminal.clear_terminal_sessions(project=str(tmp_path))))
+    body = str(
+        asyncio.run(terminal.clear_terminal_sessions(_SERVICE, project=str(tmp_path)))
+    )
 
     assert "warnings" in body, f"the failure should still be reported: {body}"
     assert _SECRET not in body, body

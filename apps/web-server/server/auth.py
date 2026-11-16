@@ -9,6 +9,7 @@ Public paths (no auth required): /api/auth/*, /api/health, static assets, etc.
 """
 
 import hmac
+import importlib
 import logging
 from functools import lru_cache
 
@@ -365,6 +366,28 @@ async def verify_websocket_token(websocket: WebSocket) -> bool:
     return False
 
 
+async def _ws_acw_principal(token: str) -> dict[str, object] | None:
+    """Resolve a user-minted ``acw_`` API key for WebSocket authentication (#312)."""
+    try:
+        # Lazy, as on the REST path: the DB-backed module pulls in ORM models.
+        mcp_auth = importlib.import_module("server.mcp_remote.auth")
+
+        key = await mcp_auth.authenticate(f"Bearer {token}")
+        # shortcut: ownerless keys rejected on WS; revisit with Phase 4 scope enforcement
+        if key is None or not key.has_scope(mcp_auth.REST_API_SCOPE) or not key.user_id:
+            return None
+    except Exception:  # noqa: BLE001 — any validator failure denies WS auth (4001)
+        return None
+
+    return {
+        "id": key.user_id,
+        "email": None,
+        "role": "user",
+        "api_key_id": key.key_id,
+        "org_id": key.org_id,
+    }
+
+
 async def authenticate_websocket(websocket: WebSocket) -> dict | None:
     """Authenticate a WebSocket connection and return user info.
 
@@ -393,6 +416,9 @@ async def authenticate_websocket(websocket: WebSocket) -> dict | None:
     # Try JWT — returns user info
     jwt_payload = _try_decode_jwt(token)
     if jwt_payload is not None:
+        if not jwt_payload.get("sub"):
+            await websocket.close(code=4001, reason="Unauthorized")
+            raise WebSocketAuthError("Token has no subject")
         return {
             "id": jwt_payload.get("sub"),
             "email": jwt_payload.get("email"),
@@ -402,6 +428,13 @@ async def authenticate_websocket(websocket: WebSocket) -> dict | None:
     # Fall back to legacy token — no user info available
     if _is_legacy_api_token(token):
         return None
+
+    if token.startswith("acw_"):
+        principal = await _ws_acw_principal(token)
+        if principal is None:
+            await websocket.close(code=4001, reason="Unauthorized")
+            raise WebSocketAuthError("Invalid token")
+        return principal
 
     await websocket.close(code=4001, reason="Unauthorized")
     raise WebSocketAuthError("Invalid token")

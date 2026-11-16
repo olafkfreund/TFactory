@@ -62,7 +62,7 @@ class _Runner:
         self.calls = []
         self._codes = list(codes or [])
 
-    def __call__(self, argv, *, cwd, capture_output, text):
+    def __call__(self, argv, *, cwd, capture_output, text, env=None):
         self.calls.append((list(argv), cwd))
         rc = self._codes.pop(0) if self._codes else 0
         return SimpleNamespace(returncode=rc, stdout="", stderr="boom" if rc else "")

@@ -18,8 +18,11 @@ import logging
 import os
 import threading
 import time
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
+
+from agents.run_guard import Guard, max_turns
 
 logger = logging.getLogger(__name__)
 
@@ -208,6 +211,10 @@ from core.auth import (
     prefer_refreshable_credentials,
     require_auth_token,
 )
+from core.child_env import (  # noqa: E402 - late like the imports around it
+    get_agent_env_blanks,
+    without_host_secrets,
+)
 from prompts_pkg.project_context import (
     detect_infra_markers,
     detect_project_capabilities,
@@ -392,6 +399,8 @@ def _externalize_secret_env(
     """
     secret_env = cfg.pop("env", None)
     if isinstance(secret_env, dict) and secret_env:
+        # Drop values that are a copy of a denied host secret (e.g. GITHUB_TOKEN).
+        secret_env = without_host_secrets(secret_env)
         sink.update({k: str(v) for k, v in secret_env.items()})
     return cfg
 
@@ -954,6 +963,8 @@ def create_client(
     )
 
     # Build options dict, conditionally including output_format
+    guard = Guard()  # anti-loop guardrail, one controller per client
+
     options_kwargs: dict[str, Any] = {
         "model": model,
         "system_prompt": base_prompt,
@@ -962,12 +973,18 @@ def create_client(
         "hooks": {
             "PreToolUse": [
                 HookMatcher(matcher="Bash", hooks=[bash_security_hook]),
+                HookMatcher(hooks=[guard.pre]),  # type: ignore[list-item]
             ],
+            "PostToolUse": [HookMatcher(hooks=[guard.post])],  # type: ignore[list-item]
+            "PostToolUseFailure": [HookMatcher(hooks=[guard.failure])],  # type: ignore[list-item]
         },
-        "max_turns": 1000,
+        "max_turns": max_turns(),
         "cwd": str(project_dir.resolve()),
         "settings": str(settings_file.resolve()),
-        "env": sdk_env,  # Pass ANTHROPIC_BASE_URL etc. to subprocess
+        "env": {
+            **get_agent_env_blanks(),
+            **sdk_env,
+        },  # Pass ANTHROPIC_BASE_URL etc. to subprocess
         "permission_mode": "bypassPermissions",  # Bypass all permission prompts for headless execution
         "max_buffer_size": 10
         * 1024
@@ -1050,4 +1067,7 @@ def create_client(
     # remote-control.
     prefer_refreshable_credentials()
 
-    return ClaudeSDKClient(options=ClaudeAgentOptions(**options_kwargs))
+    client = ClaudeSDKClient(options=ClaudeAgentOptions(**options_kwargs))
+    with suppress(AttributeError):  # a stand-in client without __dict__ (tests)
+        client._run_guard = guard  # type: ignore[attr-defined]
+    return client

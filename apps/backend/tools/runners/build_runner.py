@@ -16,6 +16,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from core.child_env import child_env
+
 
 @dataclass
 class BuildStepResult:
@@ -74,7 +76,9 @@ def run_build_steps(
             result.ok = False
             result.error = str(exc)
             return result
-        cp = runner(argv, cwd=str(cwd), capture_output=True, text=True)
+        # docker steps keep the full env: the docker client needs DOCKER_HOST etc.
+        env = child_env() if step.type == "command" else None
+        cp = runner(argv, cwd=str(cwd), capture_output=True, text=True, env=env)
         sr = BuildStepResult(
             ok=cp.returncode == 0,
             argv=tuple(argv),

@@ -11,6 +11,7 @@ import subprocess
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
+from core.child_env import GITHUB_KEEP, git_env
 from factory_common.logsafe import sanitize_log
 from factory_common.url_safety import (
     assert_safe_outbound_url,
@@ -39,8 +40,30 @@ logger = logging.getLogger(__name__)
 def run_git_command(args: list[str], cwd: str) -> dict:
     """Run a git command and return result."""
     try:
+        pins: list[str] = []
+        if args and args[0] in {"fetch", "pull", "push"}:
+            pins += [
+                "-c",
+                "core.gitProxy=",
+                "-c",
+                "remote.origin.uploadpack=git-upload-pack",
+                "-c",
+                "remote.origin.receivepack=git-receive-pack",
+            ]
+        if args and args[0] == "commit":
+            pins += ["-c", "commit.gpgSign=false"]
+        if args and args[0] == "diff":
+            args = ["diff", "--no-ext-diff", "--no-textconv", *args[1:]]
+        elif args and args[0] in {"show", "log"}:
+            args = [args[0], "--no-ext-diff", "--no-textconv", *args[1:]]
+        cmd = ["git", *pins, *args]
         result = subprocess.run(
-            ["git"] + args, capture_output=True, text=True, cwd=cwd, timeout=30
+            cmd,
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+            timeout=30,
+            env=git_env(keep=(*GITHUB_KEEP, "SSH_AUTH_SOCK")),
         )
         if result.returncode != 0:
             return {"success": False, "error": result.stderr.strip()}

@@ -1652,3 +1652,69 @@ def test_verify_job_provider_credentials_are_pinned(monkeypatch, secret_name):
         if e["name"].endswith(("_API_KEY", "_AUTH_TOKEN", "_OAUTH_TOKEN"))
     }
     assert creds == _PINNED_JOB_PROVIDER_CREDS
+
+
+# ── Factory#1959 stage 2: the verify Job reaches models through the gateway ───
+
+
+def _gateway_env(monkeypatch, *, secret_name=None, gateway=True, token="gw-tok"):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-direct")
+    monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "direct-compat")
+    monkeypatch.setenv("OPENAI_COMPATIBLE_BASE_URL", "https://ollama.com")
+    monkeypatch.setenv("OLLAMA_API_KEY", "oll-direct")
+    monkeypatch.setenv("GEMINI_API_KEY", "gem")
+    for var, val in (
+        (
+            "TFACTORY_MODEL_GATEWAY_URL",
+            "http://gw.gateway.svc:8080/" if gateway else None,
+        ),
+        ("TFACTORY_MODEL_GATEWAY_TOKEN", token),
+        ("TFACTORY_VERIFY_PROVIDER_SECRET_NAME", secret_name),
+    ):
+        if val:
+            monkeypatch.setenv(var, val)
+        else:
+            monkeypatch.delenv(var, raising=False)
+
+
+def _by_name():
+    from agents.verify_dispatch import _provider_env_entries
+
+    return {e["name"]: e for e in _provider_env_entries()}
+
+
+def test_gateway_flag_off_keeps_the_direct_provider_env(monkeypatch) -> None:
+    _gateway_env(monkeypatch, gateway=False)
+    by = _by_name()
+    assert by["OPENAI_COMPATIBLE_BASE_URL"]["value"] == "https://ollama.com"
+    assert by["OPENAI_API_KEY"]["value"] == "sk-direct"
+    assert by["OLLAMA_API_KEY"]["value"] == "oll-direct"
+
+
+def test_gateway_flag_replaces_direct_keys_with_the_gateway(monkeypatch) -> None:
+    _gateway_env(monkeypatch)
+    by = _by_name()
+    assert by["OPENAI_API_KEY"]["value"] == "sk-direct"  # Codex keeps its key
+    assert "OLLAMA_API_KEY" not in by
+    assert by["OPENAI_COMPATIBLE_BASE_URL"]["value"] == "http://gw.gateway.svc:8080"
+    assert by["OPENAI_COMPATIBLE_API_KEY"]["value"] == "gw-tok"
+    assert by["GEMINI_API_KEY"]["value"] == "gem"  # other planes untouched
+
+
+def test_gateway_flag_with_secret_never_forwards_a_direct_key(monkeypatch) -> None:
+    _gateway_env(monkeypatch, secret_name="factory-secrets")
+    by = _by_name()
+    assert "OLLAMA_API_KEY" not in by
+    ref = by["OPENAI_COMPATIBLE_API_KEY"]["valueFrom"]["secretKeyRef"]
+    assert (ref["name"], ref["key"]) == ("factory-secrets", "model-gateway-token")
+    assert "value" not in by["OPENAI_COMPATIBLE_API_KEY"]
+    assert ref["optional"] is False
+
+
+def test_gateway_flag_without_a_token_never_falls_back_to_a_direct_key(
+    monkeypatch,
+) -> None:
+    _gateway_env(monkeypatch, token="")
+    by = _by_name()
+    assert by["OPENAI_COMPATIBLE_API_KEY"]["value"] == "gateway-token-not-configured"
+    assert by["OPENAI_COMPATIBLE_BASE_URL"]["value"] == "http://gw.gateway.svc:8080"
