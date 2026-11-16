@@ -31,7 +31,8 @@ A blocked call never reaches the tool, so without counting blocked attempts the 
 ## Risks
 
 - TFactory baseline is per process: a long-lived process re-verifying one spec dir keeps its first baseline. Verify runs as a Job, so accepted (code comment marks the limit).
-- A loop alternating two failing calls never reaches 8 on one signature; it is bounded by `max_turns` and the ceiling.
+- If the SDK also routes a blocked call to the failure hook it counts twice and the halt comes a little earlier; harmless.
+- Codex checked the PFactory design against a stale local clone; the PFactory worktree is off origin/dev and is the source of truth (the `TokenCeilingError` path in `plan/service.py` is unchanged).
 
 ## Verification
 
