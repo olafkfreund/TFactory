@@ -21,6 +21,7 @@ from pathlib import Path
 from factory_common.logsafe import sanitize_log
 
 from server.utils.project_env import load_project_env_file
+from server.utils.subprocess_env import RUNNER_STRIP
 
 from ..config import get_settings
 from ..routes._specpath import safe_component
@@ -3048,7 +3049,7 @@ class AgentService:
                             key = key.strip()
                             value = value.strip()
                             # Don't override existing env vars
-                            if key not in env:
+                            if key not in env and key.upper() not in RUNNER_STRIP:
                                 env[key] = value
                 logger.info("[AgentService] Loaded backend .env for spec creation")
             except Exception as e:
@@ -3319,7 +3320,7 @@ class AgentService:
                             key = key.strip()
                             value = value.strip()
                             # Don't override existing env vars
-                            if key not in env:
+                            if key not in env and key.upper() not in RUNNER_STRIP:
                                 env[key] = value
                 logger.info(
                     f"[AgentService] Loaded backend .env from {backend_env_file}"
