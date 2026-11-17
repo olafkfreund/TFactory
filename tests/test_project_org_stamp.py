@@ -21,11 +21,10 @@ MEMBERS = [("solo", "A", "member"), ("multi", "A", "member"), ("multi", "B", "me
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-
     from server.database.models import Base, Organization, OrgMember, User
     from server.routes import project_authz as pa
     from server.routes import projects
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 't.db'}")
     session_local = async_sessionmaker(engine, expire_on_commit=False)
@@ -79,7 +78,9 @@ def test_add_project_stamps_creator_org_and_is_visible_under_enforce(env, tmp_pa
     body = projects.ProjectCreate(path=str(tmp_path / "proj"))
     out = env.run(lambda db: projects.add_project(body, req, db))
     assert env.store[out["id"]]["org_id"] == "A"
-    env.run(lambda db: env.pa.authorize_project_for_user({"id": "solo"}, out["id"], db))  # no 403
+    env.run(
+        lambda db: env.pa.authorize_project_for_user({"id": "solo"}, out["id"], db)
+    )  # no 403
 
 
 def test_unstamped_project_is_403_for_non_service(env, tmp_path):
@@ -89,7 +90,9 @@ def test_unstamped_project_is_403_for_non_service(env, tmp_path):
     out = asyncio.run(projects.create_project(body))  # service caller: no org
     assert "org_id" not in env.store[out["id"]]
     with pytest.raises(HTTPException) as exc:
-        env.run(lambda db: env.pa.authorize_project_for_user({"id": "solo"}, out["id"], db))
+        env.run(
+            lambda db: env.pa.authorize_project_for_user({"id": "solo"}, out["id"], db)
+        )
     assert exc.value.status_code == 403
 
 
@@ -99,8 +102,12 @@ def test_clone_register_stamps_org(env, tmp_path, monkeypatch):
     async def fake_clone(**_kw):
         return tmp_path
 
-    monkeypatch.setattr("server.services.project_workspace_service.clone_or_update", fake_clone)
+    monkeypatch.setattr(
+        "server.services.project_workspace_service.clone_or_update", fake_clone
+    )
     pdata, pid = asyncio.run(
-        specs._clone_and_register_project("https://x/y.git", branch=None, name="y", org_id="A")
+        specs._clone_and_register_project(
+            "https://x/y.git", branch=None, name="y", org_id="A"
+        )
     )
     assert pdata["org_id"] == "A" and env.store[pid]["org_id"] == "A"

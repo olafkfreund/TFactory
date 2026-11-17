@@ -301,11 +301,15 @@ async def creator_org(user: dict[str, Any] | None, db: AsyncSession) -> str | No
         return str(user["org_id"])
     orgs: list[str] = []
     if user.get("id"):
-        rows = await db.execute(select(OrgMember.org_id).where(OrgMember.user_id == user["id"]))
+        rows = await db.execute(
+            select(OrgMember.org_id).where(OrgMember.user_id == user["id"])
+        )
         orgs = [str(o) for o in rows.scalars().all()]
     if len(orgs) == 1:
         return orgs[0]
     logger.warning(
-        "project.org_unstamped principal=%s orgs=%d", sanitize_log(user.get("id")), len(orgs)
+        "project.org_unstamped principal=%s orgs=%d",
+        sanitize_log(user.get("id")),
+        len(orgs),
     )
     return None

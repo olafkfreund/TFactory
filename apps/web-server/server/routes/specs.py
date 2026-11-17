@@ -331,7 +331,10 @@ async def ingest_spec(
             else None
         )  # #1036
         entry, resolved_id = await _clone_and_register_project(
-            req.git_url, branch=req.source_branch, name=str(req.project_id), org_id=org_id
+            req.git_url,
+            branch=req.source_branch,
+            name=str(req.project_id),
+            org_id=org_id,
         )
     if entry is None:
         raise HTTPException(

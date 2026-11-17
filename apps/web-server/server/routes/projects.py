@@ -524,7 +524,9 @@ async def add_project(
     return await create_project(project, org_id)
 
 
-async def create_project(project: ProjectCreate, org_id: str | None = None) -> dict[str, Any]:
+async def create_project(
+    project: ProjectCreate, org_id: str | None = None
+) -> dict[str, Any]:
     """Add a new project. Two paths (#82 PR-A):
 
     1. **Local path** (``path`` set) — register an existing directory
