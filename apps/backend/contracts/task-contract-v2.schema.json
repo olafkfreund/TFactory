@@ -143,6 +143,16 @@
           "additionalProperties": { "type": "string" },
           "description": "Per-phase model overrides keyed by spec|planning|coding|qa|qa_fixer."
         },
+        "route": {
+          "type": "string",
+          "enum": ["local", "cheap", "balanced", "frontier"],
+          "description": "Run-level capability class (RFC-0014, apis/model-catalog.json `class`), additive next to `model`. A gateway resolves the class to a model; consumers that cannot ignore it and keep using `model`/`phase_models`. Distinct from `routing.class` (a scorer verdict)."
+        },
+        "phase_routes": {
+          "type": "object",
+          "additionalProperties": { "type": "string", "enum": ["local", "cheap", "balanced", "frontier"] },
+          "description": "Per-phase capability class, keyed like phase_models (spec|planning|coding|qa|qa_fixer|test_gen). Additive: phase_models is unchanged and still honoured; a consumer that resolves routes prefers the route when present (Factory#1959 stage 3)."
+        },
         "phase_thinking": {
           "type": "object",
           "additionalProperties": { "type": "string", "enum": ["none", "low", "medium", "high"] }
