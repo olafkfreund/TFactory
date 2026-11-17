@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.11.0 — Memory ranking, scratchpad dead ends and promotion gates (2026-11-17)
+
+### Added
+
+- **Memory:** retrieval ranking, a scratchpad for dead ends and promotion gates
+  (RFC-0021, Factory#3765, #3766, #3767, #1540).
+
 ## 0.10.3 — Sandbox env re-vendor (2026-11-17)
 
 ### Changed
