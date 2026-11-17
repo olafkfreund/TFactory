@@ -40,6 +40,12 @@ class _FakeProc:
     stderr: str = ""
 
 
+@pytest.fixture(autouse=True)
+def _stub_baseline_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The fake runner works on non-git directories; the real check has its own tests (#3737)."""
+    monkeypatch.setattr("agent_sandbox.check_git_metadata", lambda *_a, **_k: None)
+
+
 class _RecordingRunner:
     """Records every runner_fn call; returns scripted results."""
 
@@ -50,14 +56,6 @@ class _RecordingRunner:
 
     def __call__(self, argv, *, cwd, stdin=None, env=None):
         if argv[:4] == ["git", "config", "-z", "--includes"]:
-            return _FakeProc(returncode=0)
-        # The git metadata baseline check (#3737) reads the repo layout and config.
-        if argv[:3] == ["git", "rev-parse", "--path-format=absolute"] or argv[:4] == [
-            "git",
-            "config",
-            "--list",
-            "--show-scope",
-        ]:
             return _FakeProc(returncode=0)
         self.calls.append((list(argv), cwd, stdin))
         self.envs.append(env)

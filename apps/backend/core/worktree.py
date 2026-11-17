@@ -381,10 +381,7 @@ class WorktreeManager:
 
         try:
             ensure_baseline_dir()
-            record_baseline(
-                self.project_dir,
-                run=lambda a: ((r := self._run_git(a[1:])).returncode, r.stdout),
-            )
+            record_baseline(self.project_dir)
             record_worktree_baseline(worktree_path)
         except RuntimeError as exc:
             raise WorktreeError(
