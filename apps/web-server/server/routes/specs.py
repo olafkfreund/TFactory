@@ -25,6 +25,7 @@ from server.database.engine import get_db
 from server.error_ref import InputRejectedError, client_error
 
 from ._specpath import safe_component
+from .project_authz import creator_org
 from ._tenancy import resolve_tenant
 
 logger = logging.getLogger(__name__)
@@ -324,8 +325,6 @@ async def ingest_spec(
         # build branch) and register it, reusing the same clone path /api/projects
         # uses. This makes the AIFactory->TFactory handoff work for ANY built
         # project without manual pre-registration (was: 404 on every such handoff).
-        from .project_authz import creator_org
-
         org_id = (
             await creator_org(getattr(request.state, "user", None), db)
             if request is not None
