@@ -72,6 +72,17 @@ class PickupDecision:
     labels: tuple[str, ...] = field(default_factory=tuple)
 
 
+def _as_int_or_none(value: Any) -> int | None:
+    """An int, or a decimal-string id (Factory#3774), else None (a key like PROJ-1)."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isascii() and value.isdigit():
+        return int(value)
+    return None
+
+
 def _norm_labels(labels: Iterable[Any]) -> set[str]:
     """Lower-case, strip, and drop non-strings from a label collection."""
     return {lbl.strip().lower() for lbl in (labels or ()) if isinstance(lbl, str)}
@@ -163,7 +174,7 @@ def classify_issue(issue: Any) -> PickupDecision:
     return classify_labels(
         labels,
         source="issue",
-        issue_number=number if isinstance(number, int) else None,
+        issue_number=_as_int_or_none(number),
         taxonomy_version=taxonomy_version,
     )
 
@@ -200,7 +211,7 @@ def classify_requirements(requirements: dict) -> PickupDecision:
     meta = (requirements or {}).get("metadata") or {}
     plan_id = meta.get("plan_id") or meta.get("planId")
     issue_number = meta.get("githubIssueNumber") or meta.get("github_issue_number")
-    issue_number = issue_number if isinstance(issue_number, int) else None
+    issue_number = _as_int_or_none(issue_number)
     taxonomy_version = meta.get("taxonomy")
 
     # Path A: a mirrored label list — reuse the label gate verbatim.

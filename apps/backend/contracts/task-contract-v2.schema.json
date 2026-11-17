@@ -23,7 +23,7 @@
       "properties": {
         "source": { "type": "string", "description": "Emitting system, e.g. 'pfactory'." },
         "session_id": { "type": "string" },
-        "issue_number": { "type": "integer" },
+        "issue_number": { "type": ["integer", "string"], "description": "Work-item identifier (Factory#3774): a decimal string, or an integer read as its decimal form, or a tracker key such as PROJ-123." },
         "repo": { "type": "string", "description": "owner/name of the target repo." },
         "base_ref": { "type": "string", "description": "RFC-0010 reconnaissance: the branch/tag the plan was built against, e.g. 'main'." },
         "baseline_commit": { "type": "string", "description": "RFC-0010 reconnaissance: the resolved commit SHA the RepoMap was built from. Lets AIFactory/TFactory anchor to the exact tree the human approved and detect drift." },

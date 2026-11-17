@@ -245,7 +245,7 @@ async def post_pr_comment(
     if github._use_provider_api(projectId):
         try:
             provider = github._get_project_provider(projectId)
-            comment_id = await provider.add_comment(prNumber, request.body)
+            comment_id = await provider.add_comment(str(prNumber), request.body)
             return {"success": True, "data": {"commentId": comment_id}}
         except Exception:
             logger.exception("Failed to post comment to PR #%s", sanitize_log(prNumber))

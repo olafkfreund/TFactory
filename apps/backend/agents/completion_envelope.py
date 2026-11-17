@@ -44,7 +44,7 @@ _TRACEPARENT_RE = re.compile(r"^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2
 class CompletionCorrelation(TypedDict, total=False):
     """RFC-0001 §4 optional chain block (upstream/downstream links)."""
 
-    issue_number: int | None
+    issue_number: int | str | None
     spec_id: str | None
     branch: str | None
     pr_number: int | None

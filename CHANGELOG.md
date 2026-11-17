@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.11.4 — String work-item identifier and Docker CVE floor (2026-11-17)
+
+### Changed
+
+- **Contracts:** work-item identifier is a string; `provenance.issue_number`
+  synced from the hub schema; factory-github re-vendored
+  (Factory#3774, #1556, #1557).
+
+### Security
+
+- **Docker:** Python 3.14 floor for CVE-2026-119170 (#1555).
+
 ## 0.11.3 — Memory cross-process lock and pool merge (2026-11-17)
 
 ### Fixed
