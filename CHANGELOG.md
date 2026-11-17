@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.11.1 — Sandbox git baseline and project org stamp (2026-11-17)
+
+### Added
+
+- **Sandbox:** git metadata baseline and remote program refusal
+  (Factory#3737, #1539).
+
+### Fixed
+
+- **RBAC:** new projects are stamped with the creator's org_id (#1537, #1538).
+
 ## 0.11.0 — Memory ranking, scratchpad dead ends and promotion gates (2026-11-17)
 
 ### Added
