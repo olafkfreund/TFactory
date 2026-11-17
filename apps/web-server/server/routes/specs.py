@@ -25,8 +25,8 @@ from server.database.engine import get_db
 from server.error_ref import InputRejectedError, client_error
 
 from ._specpath import safe_component
-from .project_authz import creator_org
 from ._tenancy import resolve_tenant
+from .project_authz import creator_org
 
 logger = logging.getLogger(__name__)
 

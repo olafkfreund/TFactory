@@ -15,8 +15,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from server.error_ref import client_error
 from server.database.engine import get_db
+from server.error_ref import client_error
 from server.routes.project_authz import ProjectAccessChecker, creator_org
 
 # --------------------------------------------------------------------------
@@ -608,9 +608,8 @@ async def create_project(project: ProjectCreate, org_id: str | None = None) -> d
         "name": project.name or project_path.name,
         "created_at": now,
         "updated_at": now,
+        **({"org_id": org_id} if org_id else {}),
     }
-    if org_id:
-        project_data["org_id"] = org_id
     # Clone-mode (#82 PR-A) — persist the source URL + branch so the
     # Auto-Fix pull-on-poll hook (PR-B) can fast-forward the workspace
     # before each poll cycle. Local-mode projects don't carry these.

@@ -305,5 +305,7 @@ async def creator_org(user: dict[str, Any] | None, db: AsyncSession) -> str | No
         orgs = [str(o) for o in rows.scalars().all()]
     if len(orgs) == 1:
         return orgs[0]
-    logger.warning("project.org_unstamped principal=%s orgs=%d", sanitize_log(user.get("id")), len(orgs))
+    logger.warning(
+        "project.org_unstamped principal=%s orgs=%d", sanitize_log(user.get("id")), len(orgs)
+    )
     return None
