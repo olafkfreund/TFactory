@@ -19,6 +19,7 @@ computed and a would-deny is logged and audited, but the request proceeds.
 from __future__ import annotations
 
 import contextlib
+import importlib
 import logging
 from typing import Any, cast
 
@@ -143,7 +144,8 @@ async def authorize_project_for_user(
         check_project_access(user, None, None, minimum_role)
         return None
 
-    from server.routes.projects import load_projects  # noqa: PLC0415 - cycle
+    # Resolved at call time: projects.py imports this module, so a static import is a cycle.
+    load_projects = importlib.import_module("server.routes.projects").load_projects
 
     project = load_projects().get(project_id) if project_id else None
     org_id = project.get("org_id") if project else None
