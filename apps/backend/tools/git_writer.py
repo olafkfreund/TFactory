@@ -39,6 +39,9 @@ from core.child_env import GITHUB_KEEP, git_env, merge_driver_pins
 # Remote git needs the gh token and, for ssh origins, the agent socket.
 _REMOTE_KEEP = (*GITHUB_KEEP, "SSH_AUTH_SOCK")
 
+# Only with TFACTORY_TRIAGER_GIT_SIGN: the variables gpg / ssh signing needs.
+_SIGN_KEEP = ("GNUPGHOME", "GPG_TTY", "GPG_AGENT_INFO", "SSH_AUTH_SOCK")
+
 _REMOTE_PINS = (
     "-c",
     "core.gitProxy=",
@@ -184,6 +187,8 @@ def _run(
     *,
     keep: tuple[str, ...] = (),
 ) -> _SubprocessResultLike:
+    if _sign_enabled():  # the allowlist drops these, which breaks gpg/ssh signing
+        keep = (*keep, *_SIGN_KEEP)
     return runner(list(argv), cwd=cwd, env=git_env(keep=keep))
 
 

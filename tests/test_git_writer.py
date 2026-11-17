@@ -535,6 +535,22 @@ def test_real_signed_commit_pins_global_program(tmp_path, monkeypatch):
     assert "-S" in argv
 
 
+def test_signing_env_passes_only_when_signing_on(tmp_path, monkeypatch):
+    monkeypatch.setenv("GNUPGHOME", "/sentinel-gnupg")
+    monkeypatch.setenv("GPG_TTY", "/dev/pts/9")
+    for on in ("1", ""):
+        monkeypatch.setenv("TFACTORY_TRIAGER_GIT_SIGN", on)
+        repo = tmp_path / f"repo{on or 'off'}"
+        repo.mkdir()
+        runner = _RecordingRunner()
+        req = GitWriteRequest(repo, "branch", (("tests/x.py", "x"),), "msg")
+        assert write_tests_to_branch(req, dry_run=False, runner_fn=runner).ok
+        assert runner.envs
+        for env in runner.envs:
+            assert ("GNUPGHOME" in env) is bool(on)
+            assert ("GPG_TTY" in env) is bool(on)
+
+
 def test_config_probe_failure_prevents_write(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

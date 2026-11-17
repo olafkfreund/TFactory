@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.10.2 — Git signing env, ingest provenance bounds, verify Job storage limit, CLI pins (2026-11-17)
+
+### Fixed
+
+- **Review git writer signing env** is set explicitly, and ingest provenance
+  fields are bounded and validated (#1511, #1529).
+- **Verify and lane Jobs carry an ephemeral-storage limit** (#1507, #1530).
+
+### Changed
+
+- **Baked agent-CLI pins bumped:** claude-code 2.1.325, gemini-cli 0.68.0,
+  codex 0.169.0 (#1505).
+- Hub shared packages re-vendored (Factory#3745, #1531).
+
 ## 0.10.1 — Review fixes: run guard, verify Job limits, project .env URLs (2026-11-16)
 
 ### Fixed

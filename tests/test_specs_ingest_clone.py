@@ -132,3 +132,18 @@ async def test_ingest_forwards_originator_and_agent_identity(monkeypatch, tmp_pa
     )
     assert seen["originator"] == "github:octocat"
     assert seen["agent_identity"] == "agent:aifactory/k1"
+
+
+@pytest.mark.parametrize("field", ["originator", "agent_identity"])
+@pytest.mark.parametrize("bad", ["x" * 129, "a\nb", "a\n", 'a"b', ""])
+def test_provenance_fields_reject_unbounded_or_odd_values(field, bad):
+    """Factory#1960 review: provenance is bounded and charset-limited."""
+    from pydantic import ValidationError
+
+    base = {
+        "project_id": "p",
+        "spec_id": "s",
+        "spec_text": "## Acceptance Criteria\n- x",
+    }
+    with pytest.raises(ValidationError):
+        SpecIngestRequest(**base, **{field: bad})

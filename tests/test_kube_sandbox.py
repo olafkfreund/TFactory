@@ -77,8 +77,12 @@ def test_resources_carry_requests_and_limits():
     # verify Jobs piles onto one node and oversubscribes it.
     m = build_job_manifest("jr", "img", ["true"], cpus="3", memory="6Gi")
     res = m["spec"]["template"]["spec"]["containers"][0]["resources"]
-    assert res["requests"] == {"cpu": "3", "memory": "6Gi"}
-    assert res["limits"] == {"cpu": "3", "memory": "6Gi"}
+    assert res["requests"] == {"cpu": "3", "memory": "6Gi", "ephemeral-storage": "0"}
+    assert res["limits"] == {
+        "cpu": "3",
+        "memory": "6Gi",
+        "ephemeral-storage": "4Gi",  # #1507
+    }
 
 
 def test_resources_default_requests_present():
