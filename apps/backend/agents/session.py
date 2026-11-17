@@ -22,6 +22,7 @@ from core.error_utils import (
 )
 from debug import debug, debug_detailed, debug_error, debug_section, debug_success
 from insight_extractor import extract_session_insights
+from memory import pool
 from progress import (
     count_subtasks_detailed,
     is_build_complete,
@@ -201,7 +202,8 @@ async def post_session_processing(
 
         # Save session memory (Graphiti=primary, file-based=fallback)
         try:
-            save_success, storage_type = await save_session_memory(
+            save_success, storage_type = await _save_memory(
+                source_spec_dir,
                 spec_dir=spec_dir,
                 project_dir=project_dir,
                 subtask_id=subtask_id,
@@ -269,7 +271,8 @@ async def post_session_processing(
 
         # Save failed session memory (to track what didn't work)
         try:
-            await save_session_memory(
+            await _save_memory(
+                source_spec_dir,
                 spec_dir=spec_dir,
                 project_dir=project_dir,
                 subtask_id=subtask_id,
@@ -315,7 +318,8 @@ async def post_session_processing(
 
         # Save failed session memory (to track what didn't work)
         try:
-            await save_session_memory(
+            await _save_memory(
+                source_spec_dir,
                 spec_dir=spec_dir,
                 project_dir=project_dir,
                 subtask_id=subtask_id,
@@ -597,6 +601,13 @@ def _handle_result_message(
     # ResultMessage.usage is cumulative for the session; keep the latest so we
     # record each session exactly once (#224).
     state.session_usage = usage_from_obj(msg) or state.session_usage
+
+
+async def _save_memory(source_spec_dir: Path | None, **kwargs: Any) -> tuple[bool, str]:
+    """Save session memory, then merge it into the project's pool (#3795)."""
+    result = await save_session_memory(**kwargs)
+    pool.sync(kwargs["spec_dir"], source_spec_dir)
+    return result
 
 
 async def run_agent_session(

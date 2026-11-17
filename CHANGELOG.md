@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.11.3 — Memory cross-process lock and pool merge (2026-11-17)
+
+### Fixed
+
+- **Memory:** cross-process lock, pool merge, Graphiti caps and project pool
+  (#389, #1548).
+
 ## 0.11.2 — Provider protocol callers, contract sync, sandbox pin (2026-11-17)
 
 ### Changed
