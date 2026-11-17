@@ -39,6 +39,7 @@ __all__ = [
     "TaskAccessChecker",
     "authorize_project_for_user",
     "check_project_access",
+    "creator_org",
     "is_service_principal",
     "require_task_access",
 ]
@@ -284,3 +285,25 @@ class TaskAccessChecker(ProjectAccessChecker):
 def require_task_access(minimum_role: str = "viewer") -> TaskAccessChecker:
     """Factory for the task-scoped access dependency (``task_id`` param)."""
     return TaskAccessChecker(minimum_role)
+
+
+async def creator_org(user: dict[str, Any] | None, db: AsyncSession) -> str | None:
+    """The org to stamp on a project this principal creates (#1036).
+
+    An org-scoped key: its org. A human: their org when they belong to exactly
+    one. The service principal has no org and nothing here resolves a single-org
+    default, so it, and a human in several orgs, get None and a log line; an
+    org-less project is 403 for non-service callers until an org is set.
+    """
+    if _auth_disabled() or is_service_principal(user) or not isinstance(user, dict):
+        return None
+    if user.get("api_key_id") and user.get("org_id"):
+        return str(user["org_id"])
+    orgs: list[str] = []
+    if user.get("id"):
+        rows = await db.execute(select(OrgMember.org_id).where(OrgMember.user_id == user["id"]))
+        orgs = [str(o) for o in rows.scalars().all()]
+    if len(orgs) == 1:
+        return orgs[0]
+    logger.warning("project.org_unstamped principal=%s orgs=%d", sanitize_log(user.get("id")), len(orgs))
+    return None

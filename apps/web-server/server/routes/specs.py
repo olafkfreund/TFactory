@@ -17,9 +17,11 @@ import logging
 from typing import Any
 
 from factory_common.logsafe import sanitize_log
-from fastapi import APIRouter, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from server.database.engine import get_db
 from server.error_ref import InputRejectedError, client_error
 
 from ._specpath import safe_component
@@ -166,7 +168,7 @@ class PrAttachRequest(BaseModel):
 
 
 async def _clone_and_register_project(
-    git_url: str, *, branch: str | None, name: str
+    git_url: str, *, branch: str | None, name: str, org_id: str | None = None
 ) -> tuple[dict, str]:
     """Clone ``git_url`` (at ``branch``) into the TFactory workspace and register it.
 
@@ -202,6 +204,8 @@ async def _clone_and_register_project(
         "updated_at": now,
         "clonedFrom": git_url,
     }
+    if org_id:
+        pdata["org_id"] = org_id
     if branch:
         pdata["clonedBranch"] = branch
     projects[pid] = pdata
@@ -292,6 +296,8 @@ async def _ensure_project_clone(
 async def ingest_spec(
     req: SpecIngestRequest,
     x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
+    request: Request = None,  # type: ignore[assignment]  # None only on direct calls
+    db: AsyncSession = Depends(get_db),  # noqa: B008
 ) -> dict:
     # Imported lazily so the route module loads even in environments where the
     # backend package isn't importable until runtime path setup.
@@ -318,8 +324,15 @@ async def ingest_spec(
         # build branch) and register it, reusing the same clone path /api/projects
         # uses. This makes the AIFactory->TFactory handoff work for ANY built
         # project without manual pre-registration (was: 404 on every such handoff).
+        from .project_authz import creator_org
+
+        org_id = (
+            await creator_org(getattr(request.state, "user", None), db)
+            if request is not None
+            else None
+        )  # #1036
         entry, resolved_id = await _clone_and_register_project(
-            req.git_url, branch=req.source_branch, name=str(req.project_id)
+            req.git_url, branch=req.source_branch, name=str(req.project_id), org_id=org_id
         )
     if entry is None:
         raise HTTPException(
