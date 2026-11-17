@@ -715,13 +715,18 @@ def _get_project_provider(projectId: str):
         return get_provider(ProviderType.GITHUB, repo=repo_name, **kwargs)
 
 
+def _frontend_issue_number(number: str) -> int | str:
+    """The UI keys issues by number: keep a decimal id numeric (Factory#3774)."""
+    return int(number) if number.isascii() and number.isdigit() else number
+
+
 def _map_provider_issue(issue, repo_full_name: str = "") -> dict:
     """Map IssueData from GitProvider to frontend shape."""
     from datetime import datetime
 
     return {
-        "id": issue.number,
-        "number": issue.number,
+        "id": _frontend_issue_number(issue.number),
+        "number": _frontend_issue_number(issue.number),
         "title": issue.title,
         "body": issue.body,
         "state": issue.state.lower(),
@@ -809,7 +814,7 @@ async def _get_provider_issue_comments(provider, issueNumber: int) -> list[dict]
     comments, as before.
     """
     try:
-        found = await provider.fetch_comments(issueNumber)
+        found = await provider.fetch_comments(str(issueNumber))
     except Exception:
         try:
             found = await provider.fetch_pr_comments(issueNumber)
@@ -1040,7 +1045,7 @@ async def get_project_github_issue(projectId: str, issueNumber: int):
     if _use_provider_api(projectId):
         try:
             provider = _get_project_provider(projectId)
-            issue = await provider.fetch_issue(issueNumber)
+            issue = await provider.fetch_issue(str(issueNumber))
             return {"success": True, "data": _map_provider_issue(issue, provider.repo)}
         except Exception:
             logger.exception("GitHub issue operation failed")
@@ -1149,9 +1154,9 @@ async def investigate_github_issue(
         if _use_provider_api(projectId):
             try:
                 provider = _get_project_provider(projectId)
-                issue_obj = await provider.fetch_issue(issueNumber)
+                issue_obj = await provider.fetch_issue(str(issueNumber))
                 issue_data = {
-                    "number": issue_obj.number,
+                    "number": _frontend_issue_number(issue_obj.number),
                     "title": issue_obj.title,
                     "body": issue_obj.body,
                     "state": issue_obj.state,
@@ -1390,7 +1395,7 @@ async def close_github_issue(projectId: str, issueNumber: int):
     if _use_provider_api(projectId):
         try:
             provider = _get_project_provider(projectId)
-            success = await provider.close_issue(issueNumber)
+            success = await provider.close_issue(str(issueNumber))
             return {"success": success}
         except Exception:
             logger.exception("GitHub issue operation failed")

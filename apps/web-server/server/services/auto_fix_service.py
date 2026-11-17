@@ -138,7 +138,7 @@ def _upsert_queue_item(project_id: str, item: dict[str, Any]) -> None:
     _set_queue(project_id, queue)
 
 
-def _existing_issue_numbers(project_path: Path) -> set[int]:
+def _existing_issue_numbers(project_path: Path) -> set[str]:
     """Scan ``.tfactory/specs/`` for already-imported issue numbers.
 
     Spec dirs follow the pattern ``NNN-gh{ISSUE}-{slug}`` where ISSUE
@@ -147,7 +147,7 @@ def _existing_issue_numbers(project_path: Path) -> set[int]:
     specs_dir = project_path / ".tfactory" / "specs"
     if not specs_dir.exists():
         return set()
-    out: set[int] = set()
+    out: set[str] = set()
     for d in specs_dir.iterdir():
         if not d.is_dir():
             continue
@@ -168,10 +168,7 @@ def _existing_issue_numbers(project_path: Path) -> set[int]:
                 else:
                     break
             if digits:
-                try:
-                    out.add(int(digits))
-                except ValueError:
-                    pass
+                out.add(str(int(digits)))  # decimal form, matches IssueData.number
                 break
     return out
 
@@ -297,7 +294,11 @@ def _write_spec_dir(
     specs_dir = project_path / ".tfactory" / "specs"
     specs_dir.mkdir(parents=True, exist_ok=True)
 
-    issue_number = int(issue["number"])
+    from runners.github.providers.protocol import as_issue_int
+
+    # Spec dir names and the delegation maps are integer-keyed until the column
+    # migration lands (Factory#3774): a non-numeric key is rejected here.
+    issue_number = as_issue_int(issue["number"])
     title = issue.get("title", f"Issue #{issue_number}")
     body = issue.get("body", "") or ""
     labels = issue.get("labels", []) or []
@@ -422,7 +423,7 @@ def _read_task_metadata(spec_dir: Path) -> dict[str, Any]:
     return out
 
 
-async def start_auto_fix(project_id: str, issue_number: int) -> dict[str, Any]:
+async def start_auto_fix(project_id: str, issue_number: int | str) -> dict[str, Any]:
     """Import a single issue → write spec → start the agent (or delegate).
 
     Idempotent on the spec side: if the issue is already imported, the
@@ -444,6 +445,10 @@ async def start_auto_fix(project_id: str, issue_number: int) -> dict[str, Any]:
     settings = projects[project_id].get("settings") or {}
     provider_type = (settings.get("gitProvider") or "github").lower()
 
+    from runners.github.providers.protocol import as_issue_int
+
+    issue_number = as_issue_int(issue_number)  # IssueData.number is a str now
+
     # Find or create the spec dir
     spec_id: str | None = None
     specs_dir = project_path / ".tfactory" / "specs"
@@ -460,7 +465,7 @@ async def start_auto_fix(project_id: str, issue_number: int) -> dict[str, Any]:
     if spec_id is None:
         # Fetch the issue and create the spec
         provider = _provider_for(project_id)
-        iss = await provider.fetch_issue(issue_number)
+        iss = await provider.fetch_issue(str(issue_number))
         issue_dict = {
             "number": iss.number,
             "title": iss.title,

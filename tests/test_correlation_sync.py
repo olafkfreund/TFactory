@@ -215,3 +215,26 @@ def test_overlong_synthetic_key_is_none(tmp_path, caplog):
         assert _correlation_key_for(d) is None
     assert "max 128" in caplog.text
     assert "s" * 20 not in caplog.text  # length only, no ids
+
+
+# ─── Factory#3774: string work-item identifier ───────────────────────────
+
+
+@pytest.mark.parametrize("issue", [5, "5", " 5 "])
+def test_correlation_key_parity_int_and_decimal_string(spec, issue):
+    """`o/r#5` for 5 and "5", through the real origin-key function."""
+    source = {"repo_slug": "o/r", "issue_number": issue}
+    assert _correlation_key(spec, {}, source) == "o/r#5"
+
+
+def test_correlation_key_carries_a_tracker_key(spec):
+    source = {"repo_slug": "o/r", "issue_number": "PROJ-123"}
+    assert _correlation_key(spec, {}, source) == "o/r#PROJ-123"
+
+
+def test_handback_key_parity_int_and_decimal_string(spec):
+    for issue in (55, "55"):
+        (spec / "context" / "source.json").write_text(
+            json.dumps({"issue_number": issue, "repo_slug": "o/r"})
+        )
+        assert _correlation_key_for(spec) == "o/r#55"

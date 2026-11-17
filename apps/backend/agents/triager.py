@@ -685,8 +685,8 @@ def _outcome_for_status(status_value: str | None) -> str:
     return "failure"
 
 
-def _correlation_issue_number(status: dict, source: dict) -> int | None:
-    """The GitHub issue number threading the PARR spine end-to-end.
+def _correlation_issue_number(status: dict, source: dict) -> int | str | None:
+    """The issue identifier threading the PARR spine end-to-end.
 
     Read from status.json or source.json (populated by the PFactory pickup
     contract, #193). Returns None until a run carries one.
@@ -703,10 +703,16 @@ def _correlation_issue_number(status: dict, source: dict) -> int | None:
                 raw = ai.get("github_issue")
         if raw is None:
             continue
-        try:
-            return int(raw)
-        except (TypeError, ValueError):
+        # Factory#3774: a decimal id stays an int on the wire (unchanged bytes);
+        # a tracker key such as PROJ-123 is carried as the string it is.
+        if isinstance(raw, bool):
             return None
+        if isinstance(raw, int):
+            return raw
+        text = str(raw).strip()
+        if text.isascii() and text.isdigit():
+            return int(text)
+        return text or None
     return None
 
 

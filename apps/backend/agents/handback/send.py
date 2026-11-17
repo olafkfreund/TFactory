@@ -117,7 +117,7 @@ def _correlation_key_for(spec_dir: Path) -> str | None:
 
         repo = _source_repo(source)
         if repo:
-            return f"{repo}#{int(issue)}"
+            return f"{repo}#{str(issue).strip()}"
         return _synthetic_key(
             spec_dir,
             source.get("spec_id") or spec_dir.name,
