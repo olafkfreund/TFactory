@@ -238,3 +238,9 @@ def test_handback_key_parity_int_and_decimal_string(spec):
             json.dumps({"issue_number": issue, "repo_slug": "o/r"})
         )
         assert _correlation_key_for(spec) == "o/r#55"
+
+
+def test_handback_and_completion_keys_agree_on_padded_ids(spec):
+    source = {"issue_number": "007", "repo_slug": "o/r"}
+    (spec / "context" / "source.json").write_text(json.dumps(source))
+    assert _correlation_key_for(spec) == _correlation_key(spec, {}, source) == "o/r#7"

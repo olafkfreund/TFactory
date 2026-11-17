@@ -110,6 +110,7 @@ def _correlation_key_for(spec_dir: Path) -> str | None:
         if issue is None:
             return None
         from agents.triager import (  # noqa: PLC0415 - triager is heavy
+            _correlation_issue_number,
             _source_repo,
             _synthetic_key,
         )
@@ -117,7 +118,8 @@ def _correlation_key_for(spec_dir: Path) -> str | None:
 
         repo = _source_repo(source)
         if repo:
-            return f"{repo}#{str(issue).strip()}"
+            # Same normalisation as the completion event (007 -> 7, PROJ-1 kept).
+            return f"{repo}#{_correlation_issue_number({}, {'issue_number': issue})}"
         return _synthetic_key(
             spec_dir,
             source.get("spec_id") or spec_dir.name,
