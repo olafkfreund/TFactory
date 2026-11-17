@@ -294,11 +294,9 @@ def _write_spec_dir(
     specs_dir = project_path / ".tfactory" / "specs"
     specs_dir.mkdir(parents=True, exist_ok=True)
 
-    from runners.github.providers.protocol import as_issue_int
-
-    # Spec dir names and the delegation maps are integer-keyed until the column
-    # migration lands (Factory#3774): a non-numeric key is rejected here.
-    issue_number = as_issue_int(issue["number"])
+    # Spec dir names are integer-keyed until a column migration (Factory#3774):
+    # a non-numeric key raises ValueError here.
+    issue_number = int(issue["number"])
     title = issue.get("title", f"Issue #{issue_number}")
     body = issue.get("body", "") or ""
     labels = issue.get("labels", []) or []
@@ -445,9 +443,7 @@ async def start_auto_fix(project_id: str, issue_number: int | str) -> dict[str, 
     settings = projects[project_id].get("settings") or {}
     provider_type = (settings.get("gitProvider") or "github").lower()
 
-    from runners.github.providers.protocol import as_issue_int
-
-    issue_number = as_issue_int(issue_number)  # IssueData.number is a str now
+    issue_number = int(issue_number)  # IssueData.number is a str; non-numeric raises
 
     # Find or create the spec dir
     spec_id: str | None = None
