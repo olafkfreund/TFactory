@@ -356,6 +356,12 @@ def pytest_runtest_setup(item):
 
 
 @pytest.fixture(autouse=True)
+def _git_baseline_dir(tmp_path_factory, monkeypatch):
+    """Git metadata baselines (Factory#3737) never touch the real home."""
+    monkeypatch.setenv("FACTORY_GIT_BASELINE_DIR", str(tmp_path_factory.mktemp("git-baselines")))
+
+
+@pytest.fixture(autouse=True)
 def _single_judge_vote(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TFACTORY_VERDICT_VOTES", "1")
 

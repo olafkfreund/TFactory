@@ -23,6 +23,9 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from agent_sandbox import record_baseline, record_worktree_baseline
+from core.child_env import ensure_baseline_dir
+
 logger = logging.getLogger(__name__)
 
 
@@ -375,6 +378,18 @@ class WorktreeManager:
             raise WorktreeError(
                 f"Failed to create worktree for {spec_name}: {result.stderr}"
             )
+
+        try:
+            ensure_baseline_dir()
+            record_baseline(
+                self.project_dir,
+                run=lambda a: ((r := self._run_git(a[1:])).returncode, r.stdout),
+            )
+            record_worktree_baseline(worktree_path)
+        except RuntimeError as exc:
+            raise WorktreeError(
+                f"could not record the git metadata baseline: {exc}"
+            ) from exc
 
         print(f"Created worktree: {worktree_path.name} on branch {branch_name}")
         logger.info(
