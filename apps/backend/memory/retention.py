@@ -109,7 +109,8 @@ def _last_confirmed(
                 datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC),
             )
     except ValueError:
-        pass
+        # An unparseable confirmation stamp keeps the entry's own time.
+        logger.debug("ignoring unparseable last_confirmed value")
     return last
 
 
