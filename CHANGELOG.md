@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.10.3 — Sandbox env re-vendor (2026-11-17)
+
+### Changed
+
+- Hub `agent_sandbox` env.py re-vendored, pinned to hub b3844b8
+  (Factory#3737, #1532).
+
 ## 0.10.2 — Git signing env, ingest provenance bounds, verify Job storage limit, CLI pins (2026-11-17)
 
 ### Fixed
