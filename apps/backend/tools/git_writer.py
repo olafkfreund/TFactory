@@ -197,7 +197,7 @@ def _write_pins(runner: Callable[..., _SubprocessResultLike], cwd: Path) -> list
         result = _run(runner, argv, cwd)
         return result.returncode, result.stdout
 
-    return merge_driver_pins(cwd, run=probe)
+    return merge_driver_pins(cwd, run=probe, baseline=True)
 
 
 def _pinned(argv: tuple[str, ...] | list[str], pins: list[str]) -> list[str]:

@@ -8,14 +8,16 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from server.database.engine import get_db
 from server.error_ref import client_error
-from server.routes.project_authz import ProjectAccessChecker
+from server.routes.project_authz import ProjectAccessChecker, creator_org
 
 # --------------------------------------------------------------------------
 # Type Definitions for Validation
@@ -512,7 +514,19 @@ async def scan_for_projects(request: ScanProjectsRequest):
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
-async def add_project(project: ProjectCreate):
+async def add_project(
+    project: ProjectCreate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+) -> dict[str, Any]:
+    """Register a project, stamped with the creating principal's org (#1036)."""
+    org_id = await creator_org(getattr(request.state, "user", None), db)
+    return await create_project(project, org_id)
+
+
+async def create_project(
+    project: ProjectCreate, org_id: str | None = None
+) -> dict[str, Any]:
     """Add a new project. Two paths (#82 PR-A):
 
     1. **Local path** (``path`` set) — register an existing directory
@@ -596,6 +610,7 @@ async def add_project(project: ProjectCreate):
         "name": project.name or project_path.name,
         "created_at": now,
         "updated_at": now,
+        **({"org_id": org_id} if org_id else {}),
     }
     # Clone-mode (#82 PR-A) — persist the source URL + branch so the
     # Auto-Fix pull-on-poll hook (PR-B) can fast-forward the workspace
