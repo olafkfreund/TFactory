@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.11.2 — Provider protocol callers, contract sync, sandbox pin (2026-11-17)
+
+### Changed
+
+- **GitHub:** service callers use the provider protocol; factory-github
+  re-vendored (RFC-0022 2b, #1547).
+- **Contracts:** `execution.route` and `phase_routes` synced from the hub
+  schema (Factory#3801, #1549).
+- **Sandbox:** agent_sandbox `.hub-sha` pinned to hub fa47f57
+  (Factory#3737, #1546).
+
 ## 0.11.1 — Sandbox git baseline and project org stamp (2026-11-17)
 
 ### Added
