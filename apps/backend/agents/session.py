@@ -603,7 +603,9 @@ def _handle_result_message(
     state.session_usage = usage_from_obj(msg) or state.session_usage
 
 
-async def _save_memory(source_spec_dir: Path | None, **kwargs):
+async def _save_memory(
+    source_spec_dir: Path | None, **kwargs: Any
+) -> tuple[bool, str]:
     """Save session memory, then merge it into the project's pool (#3795)."""
     result = await save_session_memory(**kwargs)
     pool.sync(kwargs["spec_dir"], source_spec_dir)
