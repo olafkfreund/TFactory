@@ -5,9 +5,8 @@ Two layers are covered:
 1. ``TokenAuthMiddleware`` Strategy 3 — an ``acw_`` key authenticates on
    ``/api/*`` only when it carries the ``api:full`` scope; narrower keys are
    rejected with 403, preserving the MCP-only guard.
-2. ``mcp_remote.auth._lookup_by_digest`` — rejects expired keys, stamps
-   ``last_used_at``, and no longer references a non-existent ``is_active``
-   column (the latent AttributeError bug this issue fixes).
+2. ``mcp_remote.auth._lookup_by_digest`` — rejects expired keys and inactive
+   owners, stamps ``last_used_at``, and does not read ``is_active`` on the key.
 
 No real database or HTTP server is touched: the middleware test monkeypatches
 the key validator, and the lookup test drives a stub async session.
@@ -16,7 +15,7 @@ the key validator, and the lookup test drives a stub async session.
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -37,7 +36,6 @@ from server.mcp_remote.auth import (  # noqa: E402
     MCPAuthError,
     _lookup_by_digest,
 )
-
 
 # ---------------------------------------------------------------------------
 # Middleware Strategy 3
@@ -126,13 +124,16 @@ class _FakeResult:
 
 
 class _FakeSession:
-    """Minimal async session stub: the key row, then the owner's OrgMember role
-    (read by ``cap_by_owner_role``, #1450), plus commit/rollback."""
+    """Key row, owner, current org role, and transaction methods."""
 
-    def __init__(self, row, role="member"):
+    def __init__(self, row, role="member", owner_active=True, owner_missing=False):
         self._results = [row, role]
+        self.owner = None if owner_missing else SimpleNamespace(is_active=owner_active)
         self.committed = False
         self.rolled_back = False
+
+    async def get(self, _model, _user_id):
+        return self.owner
 
     async def execute(self, _stmt):
         return _FakeResult(self._results.pop(0))
@@ -144,12 +145,12 @@ class _FakeSession:
         self.rolled_back = True
 
 
-def _row(*, expires_at=None, scopes="api:full"):
+def _row(*, expires_at=None, scopes="api:full", user_id="user-1"):
     # Deliberately NO is_active attribute — accessing one would raise
     # AttributeError, which is exactly the bug #305 removes.
     return SimpleNamespace(
         id="key-1",
-        user_id="user-1",
+        user_id=user_id,
         org_id="org-1",
         key_hash="acw_test$deadbeef",
         scopes=scopes,
@@ -170,6 +171,22 @@ async def test_lookup_valid_key_stamps_last_used():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("owner_active, owner_missing", [(False, False), (True, True)])
+async def test_lookup_rejects_deactivated_owner(owner_active, owner_missing):
+    session = _FakeSession(
+        _row(), owner_active=owner_active, owner_missing=owner_missing
+    )
+    with pytest.raises(MCPAuthError, match="API key owner is deactivated"):
+        await _lookup_by_digest(session, "deadbeef")
+
+
+@pytest.mark.asyncio
+async def test_lookup_ownerless_key_still_works():
+    key = await _lookup_by_digest(_FakeSession(_row(user_id=None)), "deadbeef")
+    assert key.user_id is None
+
+
+@pytest.mark.asyncio
 async def test_lookup_unknown_key_raises():
     session = _FakeSession(None)
     with pytest.raises(MCPAuthError, match="Invalid API key"):
@@ -178,7 +195,7 @@ async def test_lookup_unknown_key_raises():
 
 @pytest.mark.asyncio
 async def test_lookup_expired_key_raises():
-    past = datetime.now(timezone.utc) - timedelta(days=1)
+    past = datetime.now(UTC) - timedelta(days=1)
     session = _FakeSession(_row(expires_at=past))
     with pytest.raises(MCPAuthError, match="expired"):
         await _lookup_by_digest(session, "deadbeef")
@@ -186,7 +203,7 @@ async def test_lookup_expired_key_raises():
 
 @pytest.mark.asyncio
 async def test_lookup_unexpired_key_ok():
-    future = datetime.now(timezone.utc) + timedelta(days=1)
+    future = datetime.now(UTC) + timedelta(days=1)
     session = _FakeSession(_row(expires_at=future))
     key = await _lookup_by_digest(session, "deadbeef")
     assert key.key_id == "key-1"
