@@ -54,10 +54,10 @@ def parse_tap(text: str) -> TapCounts:
     return TapCounts(passed, failed, skipped)
 
 
-def shell_verdict(
-    bats_exit: int | None, shellcheck_exit: int | None, counts: TapCounts
-) -> tuple[int, str]:
-    """Apply lane exit precedence before interpreting TAP skips."""
+def _tool_problem(
+    bats_exit: int | None, shellcheck_exit: int | None
+) -> tuple[int, str] | None:
+    """A lane that did not run, or a tool error: both beat any TAP evidence."""
     if bats_exit in (126, 127) or shellcheck_exit in (126, 127):
         return (bats_exit if bats_exit in (126, 127) else shellcheck_exit), (
             "bats or shellcheck unavailable: lane did not run"
@@ -66,6 +66,16 @@ def shell_verdict(
         return 1, "missing exit marker"
     if bats_exit not in (0, 1) or shellcheck_exit not in (0, 1):
         return 1, "tool error"
+    return None
+
+
+def shell_verdict(
+    bats_exit: int | None, shellcheck_exit: int | None, counts: TapCounts
+) -> tuple[int, str]:
+    """Apply lane exit precedence before interpreting TAP skips."""
+    problem = _tool_problem(bats_exit, shellcheck_exit)
+    if problem is not None:
+        return problem
     if counts.failed or bats_exit == 1:
         return 1, "bats reported failures"
     if shellcheck_exit == 1:
