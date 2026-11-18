@@ -43,25 +43,35 @@ def test_failed_zero_and_ignored_outputs():
 def test_targets_from_workspace_paths_only():
     output = """\
      Running /work/member/tests/foo.rs (target/debug/deps/foo-123)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
      Running tests/bar.rs (target/debug/deps/bar-123)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
      Running unittests src/lib.rs (target/debug/deps/member-123)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
    Doc-tests member
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 """
     assert cargo_ran_targets(output) == {"tests/foo.rs", "tests/bar.rs"}
     assert (
-        cargo_ran_targets("Running tests/helpers/x.rs (target/debug/deps/x)") == set()
+        cargo_ran_targets(
+            "Running tests/helpers/x.rs (target/debug/deps/x)\n"
+            "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured\n"
+        )
+        == set()
     )
 
 
 def test_cargo_job_script_copies_crate_and_preserves_exit():
-    script = cargo_job_script("/work/my crate", {"TOKEN": "a'b"})
+    script = cargo_job_script("/work/my root", "services/api", {"TOKEN": "a'b"})
     assert script.startswith("#!/usr/bin/env bash\nset +e\n")
     assert "export TOKEN='a'\"'\"'b'\n" in script
     assert (
-        "rm -rf '/tmp/tf_cargo_src' && cp -r '/work/my crate' '/tmp/tf_cargo_src' && cd '/tmp/tf_cargo_src'\n"
-        in script
+        "rm -rf '/tmp/tf_cargo_src' && mkdir -p '/tmp/tf_cargo_src' "
+        "&& cp -r '/work/my root/.' '/tmp/tf_cargo_src' "
+        "&& cd '/tmp/tf_cargo_src/services/api'\n" in script
     )
+    root = cargo_job_script("/work", ".", {})
+    assert "&& cd '/tmp/tf_cargo_src'\n" in root
     assert "export CARGO_HOME='/tmp/tf_cargo_home'\n" in script
     assert "export CARGO_TARGET_DIR='/tmp/tf_cargo_target'\n" in script
     assert "cargo test --workspace --no-fail-fast 2>&1\n" in script
@@ -157,3 +167,23 @@ def test_rust_environment_prefers_a_contract_rust_env(tmp_path, monkeypatch):
     monkeypatch.setattr(nix_env, "environment_from_contract", lambda _d: None)
     env = nix_rust_lane.rust_environment(tmp_path)
     assert env["language"] == "rust" and env["network"] == "restricted"
+
+
+def test_a_target_of_only_ignored_tests_is_not_evidence():
+    """Cargo prints `Running tests/x.rs` even when every test is #[ignore]d."""
+    out = """\
+     Running unittests src/lib.rs (target/debug/deps/demo-1)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+     Running tests/skipped.rs (target/debug/deps/skipped-1)
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out
+     Running tests/empty.rs (target/debug/deps/empty-1)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+     Running tests/real.rs (target/debug/deps/real-1)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+"""
+    assert cargo_ran_targets(out) == {"tests/real.rs"}
+    failing = (
+        "     Running tests/bad.rs (target/debug/deps/bad-1)\n"
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured\n"
+    )
+    assert cargo_ran_targets(failing) == {"tests/bad.rs"}

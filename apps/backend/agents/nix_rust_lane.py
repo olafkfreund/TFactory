@@ -8,6 +8,7 @@ tested there (``/work`` is read-only to the Job's uid).
 from __future__ import annotations
 
 import contextlib
+import itertools
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
@@ -38,6 +39,7 @@ _RESULT_RE = re.compile(
     r"(?m)^\s*test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored;"
 )
 _TARGET_RE = re.compile(r"(?m)^\s*Running (?:.*[/\\])?(tests/[^/\\\s()]+\.rs)\s+\(")
+_RUNNING_RE = re.compile(r"(?m)^\s*(?:Running|Doc-tests)\b")
 _WORKSPACE_RE = re.compile(r"(?m)^\s*\[workspace\]\s*(?:#.*)?$")
 
 
@@ -51,8 +53,23 @@ def parse_cargo_test_output(text: str) -> CargoCounts:
 
 
 def cargo_ran_targets(text: str) -> set[str]:
-    """Return integration-test files Cargo says it actually ran."""
-    return set(_TARGET_RE.findall(text))
+    """Return integration-test files in which Cargo executed at least one test.
+
+    Cargo prints ``Running tests/<name>.rs`` even for a target whose tests are
+    all ``#[ignore]``d or that holds none, so the launch line alone is not
+    evidence: the target's own ``test result`` line must show a pass or a fail.
+    Known limit: workspace members with the same ``tests/<name>.rs`` share one
+    key, because Cargo's output carries no package name.
+    """
+    starts = [m.start() for m in _RUNNING_RE.finditer(text)] + [len(text)]
+    ran: set[str] = set()
+    for begin, end in itertools.pairwise(starts):
+        segment = text[begin:end]
+        target = _TARGET_RE.match(segment)
+        counts = parse_cargo_test_output(segment)
+        if target and counts.passed + counts.failed > 0:
+            ran.add(target.group(1))
+    return ran
 
 
 def cargo_verdict(exit_code: int, counts: CargoCounts) -> tuple[int, str]:
@@ -68,17 +85,23 @@ def cargo_verdict(exit_code: int, counts: CargoCounts) -> tuple[int, str]:
     return 1, "cargo ran zero tests"
 
 
-def cargo_job_script(run_dir: str, extra_env: dict[str, str]) -> str:
-    """Build a Job script that copies the read-only crate before testing."""
+def cargo_job_script(root_dir: str, rel: str, extra_env: dict[str, str]) -> str:
+    """Build a Job script that copies the whole read-only project, then tests.
+
+    The project root is copied, not just the crate, so a path dependency such as
+    ``../../libs/common`` still resolves; the script then ``cd``s into ``rel``
+    (the crate directory relative to the root, ``.`` for the root itself).
+    """
     exports = "".join(
         f"export {key}={_shquote(str(value))}\n" for key, value in extra_env.items()
     )
     src = _shquote(_CARGO_SRC_DIR)
-    run_q = _shquote(run_dir)
+    root_q = _shquote(f"{root_dir}/.")
+    cd_q = _shquote(f"{_CARGO_SRC_DIR}/{rel}" if rel != "." else _CARGO_SRC_DIR)
     return (
         "#!/usr/bin/env bash\nset +e\n"
         + exports
-        + f"rm -rf {src} && cp -r {run_q} {src} && cd {src}\n"
+        + f"rm -rf {src} && mkdir -p {src} && cp -r {root_q} {src} && cd {cd_q}\n"
         + f"export CARGO_HOME={_shquote(_CARGO_HOME)}\n"
         + f"export CARGO_TARGET_DIR={_shquote(_CARGO_TARGET_DIR)}\n"
         + "cargo test --workspace --no-fail-fast 2>&1\n"
@@ -184,9 +207,8 @@ def run_cargo_lane_via_nix(
             if crate_dir == pd.resolve()
             else str(crate_dir.relative_to(pd.resolve()))
         )
-        run_dir = mount if rel == "." else f"{mount}/{rel}"
         (pd / nix_env._JOB_SCRIPT).write_text(
-            cargo_job_script(run_dir, extra_env or {}), encoding="utf-8"
+            cargo_job_script(mount, rel, extra_env or {}), encoding="utf-8"
         )
         job_cmd = f"nix develop path:{mount}#default --command bash {mount}/{nix_env._JOB_SCRIPT}"
         res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)
