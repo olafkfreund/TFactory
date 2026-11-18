@@ -90,42 +90,24 @@ git add CHANGELOG.md
 git commit --amend --no-edit
 ```
 
-### Step 3: Push and Create PR
+### Step 3: PR to `dev`, then promote to `main`
 
 ```bash
-# Push your branch
 git push origin your-branch
-
-# Create PR to develop (or main for releases)
-gh pr create --base develop --title "Release v1.1.0"
+gh pr create --base dev --title "Release v1.1.0"
 ```
 
-### Step 4: Merge and Tag
+Feature work lands on `dev`; `main` only receives promotion merges from `dev`
+(see CONTRIBUTING.md).
 
-After the PR is approved and merged:
+### Step 4: Merge to `main` (tag and release are automatic)
 
-```bash
-# Create a git tag
-git checkout develop
-git pull origin develop
-git tag -a v1.1.0 -m "Release v1.1.0"
-git push origin v1.1.0
-```
-
-### Step 5: Create GitHub Release
-
-```bash
-# Create release using GitHub CLI
-gh release create v1.1.0 \
-  --title "v1.1.0 - Release Title" \
-  --notes-file CHANGELOG.md
-```
-
-Or create the release manually via GitHub UI:
-1. Go to [Releases](https://github.com/olafkfreund/TFactory/releases)
-2. Click "Create a new release"
-3. Select the tag
-4. Add release notes from CHANGELOG.md
+Do not tag by hand. When the root `package.json` version changes on `main`,
+`.github/workflows/release.yml` requires a `## <version>` entry in
+`CHANGELOG.md`, an unused tag and non-empty notes, then creates the annotated tag
+`v<version>` and the GitHub release, builds and cosign-signs the images and
+attaches SBOMs. A push to `main` also runs `deploy.yml` (see the
+`tfactory-deploy-runbook` skill in `.claude/skills/` for verify and rollback).
 
 ---
 
@@ -175,18 +157,13 @@ Each version entry in `CHANGELOG.md` should follow this format:
 ## Quick Reference
 
 ```bash
-# Full release workflow
 node scripts/bump-version.js minor
 # Edit CHANGELOG.md
 git add CHANGELOG.md
 git commit --amend --no-edit
 git push origin your-branch
-gh pr create --base develop --title "Release v1.1.0"
-# After merge:
-git checkout develop && git pull
-git tag -a v1.1.0 -m "Release v1.1.0"
-git push origin v1.1.0
-gh release create v1.1.0 --title "v1.1.0" --notes-file CHANGELOG.md
+gh pr create --base dev --title "Release v1.1.0"
+# After promotion to main, release.yml tags and publishes; nothing else to run.
 ```
 
 ---
@@ -213,19 +190,10 @@ node scripts/bump-version.js 1.1.0
 
 ### Tag already exists
 
-If a tag already exists for a version:
-
-```bash
-# Delete local tag
-git tag -d v1.1.0
-
-# Delete remote tag (if pushed)
-git push origin :refs/tags/v1.1.0
-
-# Create new tag
-git tag -a v1.1.0 -m "Release v1.1.0"
-git push origin v1.1.0
-```
+`release.yml` fails with "Tag v<version> already exists on origin". Bump the
+version again (`node scripts/bump-version.js <new-version>`); only delete the
+remote tag (`git push origin :refs/tags/v<version>`) if it was created in error,
+and then a new version change on `main` is needed to re-run the release.
 
 ### Need to update release notes after publishing
 
