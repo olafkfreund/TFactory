@@ -97,6 +97,7 @@ from agents.stability_runner import (
     StabilityRun,
     StabilityVerdict,
     _clip,
+    all_skipped,
     classify_stability_runs,
 )
 from agents.workspace_status import (
@@ -245,7 +246,11 @@ def _parse_marker_exit(stdout: str | None, prefix: str, default: int) -> int:
                     prefix,
                     len(line),
                 )
-    return code
+    return (
+        125
+        if prefix == "__PYTEST_EXIT=" and code == 0 and all_skipped(stdout or "")
+        else code
+    )
 
 
 # ── Host-execution fallback (no container runtime, e.g. k3d pods) ──────────
