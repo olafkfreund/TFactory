@@ -18,6 +18,7 @@ import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from fastapi import FastAPI
@@ -126,13 +127,19 @@ class _FakeResult:
 class _FakeSession:
     """Key row, owner, current org role, and transaction methods."""
 
-    def __init__(self, row, role="member", owner_active=True, owner_missing=False):
+    def __init__(
+        self,
+        row: Any,
+        role: str = "member",
+        owner_active: bool = True,
+        owner_missing: bool = False,
+    ) -> None:
         self._results = [row, role]
         self.owner = None if owner_missing else SimpleNamespace(is_active=owner_active)
         self.committed = False
         self.rolled_back = False
 
-    async def get(self, _model, _user_id):
+    async def get(self, _model: Any, _user_id: Any) -> Any:
         return self.owner
 
     async def execute(self, _stmt):
@@ -145,7 +152,9 @@ class _FakeSession:
         self.rolled_back = True
 
 
-def _row(*, expires_at=None, scopes="api:full", user_id="user-1"):
+def _row(
+    *, expires_at: Any = None, scopes: str = "api:full", user_id: str | None = "user-1"
+) -> SimpleNamespace:
     # Deliberately NO is_active attribute — accessing one would raise
     # AttributeError, which is exactly the bug #305 removes.
     return SimpleNamespace(
@@ -172,7 +181,9 @@ async def test_lookup_valid_key_stamps_last_used():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("owner_active, owner_missing", [(False, False), (True, True)])
-async def test_lookup_rejects_deactivated_owner(owner_active, owner_missing):
+async def test_lookup_rejects_deactivated_owner(
+    owner_active: bool, owner_missing: bool
+) -> None:
     session = _FakeSession(
         _row(), owner_active=owner_active, owner_missing=owner_missing
     )
@@ -181,7 +192,7 @@ async def test_lookup_rejects_deactivated_owner(owner_active, owner_missing):
 
 
 @pytest.mark.asyncio
-async def test_lookup_ownerless_key_still_works():
+async def test_lookup_ownerless_key_still_works() -> None:
     key = await _lookup_by_digest(_FakeSession(_row(user_id=None)), "deadbeef")
     assert key.user_id is None
 
