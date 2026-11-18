@@ -303,6 +303,30 @@ print('OK:', list(r))
 
 ---
 
+## Shell (`bats`) and skip semantics
+
+`frameworks/bats` makes `(shell, bats, unit)` a valid Planner subtask (#1581), so
+a bash project gets `tests/**/*.bats` suites instead of pytest wrappers that
+shell out. The Evaluator runs `bats --tap` over every `.bats` file and
+`shellcheck -x -S warning` over the project's `.sh`/`.bash` files (tests
+excluded) in the per-task Nix dev shell:
+
+- **Tools:** when the repo owns a git-tracked `flake.nix` the lane runs inside
+  its `devShells.default`, which must provide `bats` and `shellcheck`; with no
+  flake a shell is generated from `languages/shell.yaml` (TFactory-local for
+  now; promoting it to the Factory hub is a follow-up).
+- **Exit codes:** a missing tool is 126 (`not_run`), every test skipped is 125
+  (`not_run`), zero tests is a failure, any failure or shellcheck finding beats
+  a skip, and a missing exit marker fails closed.
+- **Skips elsewhere:** a pytest run in which every test skipped (exit 0, nothing
+  passed) is now 125 as well, so a skipped test is never a pass, a surviving
+  mutant or a rejected test: it is `not_run`.
+- **Mutation** is not measured for shell.
+- **Manifest fallback:** when a contract's `environment.verify_commands` names a
+  command for a language **absent from the registry**, `get_tool_for_lane`
+  synthesises a tool from it. A registered language such as shell does not use
+  it, and the Planner still requires a registered framework for any subtask.
+
 ## File layout
 
 ```

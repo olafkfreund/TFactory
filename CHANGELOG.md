@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Added
+
+- **Shell lane:** `frameworks/bats` and an in-cluster bats + shellcheck unit lane
+  (the project's own flake devShell when it has one), so a bash project gets
+  `.bats` tests instead of pytest wrappers (#1581).
+
+### Fixed
+
+- An all-skipped pytest run is `not_run` (exit 125), not a pass or a surviving
+  mutant, on the Nix, host and Docker runners (#1581).
+
 ## 0.11.7 — Plan-Slug trailers in gitops bump (2026-11-18)
 
 ### Changed

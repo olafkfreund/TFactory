@@ -339,6 +339,7 @@ of truth.
 | **TypeScript** | jest | playwright | supertest | testcontainers-node | stryker |
 | **Java** | JUnit 5 (Maven, or `gradle test`) | — | JUnit 5 | — | PIT |
 | **Kotlin** | Gradle, in a per-task Nix Job | — | — | — | — |
+| **Shell** | bats + shellcheck, in a per-task Nix Job | — | — | — | — |
 | C# / Go / Rust / Ruby | — | — | — | — | — (no lane yet) |
 | Swift | refused: "no in-cluster Swift lane" | — | — | — | — |
 

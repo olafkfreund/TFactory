@@ -49,6 +49,7 @@ are evidence, not blind commits.
 | cypress | TypeScript | browser | Implemented |
 | junit (Maven, or `gradle test`) | Java | unit in-cluster, api; mutation with PIT | Implemented for unit; other lanes partial |
 | Gradle | Kotlin | unit, in a per-task Nix Job | Implemented |
+| bats (+ shellcheck) | shell | unit, in a per-task Nix Job (mutation not measured) | Implemented |
 | cloud-discover, cloud-prowler | cloud | integration | Implemented (CSPM, read-only) |
 | Go, Rust | — | — | Absent |
 | Swift | — | — | Refused ("no in-cluster Swift lane") |
