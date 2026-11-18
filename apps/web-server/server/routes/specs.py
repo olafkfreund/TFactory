@@ -352,9 +352,12 @@ async def ingest_spec(
     # #1574: a GitHub `repo` selects the checkout. It, `git_url` and the project's
     # recorded origin must name the same repository, so a matching ref can never
     # verify unrelated code.
+    # A signed contract keeps the older meaning: `repo` is recorded and bound to
+    # the signature, and the registered clone is what runs (AIFactory handoffs).
     repo_slug = _github_slug(req.repo)
+    select_repo = bool(repo_slug) and not (req.contract or req.signed_contract)
     git_url = req.git_url
-    if repo_slug:
+    if select_repo:
         if git_url and (_github_slug(git_url) or "").lower() != repo_slug.lower():
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST, detail="git_url does not match repo"
@@ -392,12 +395,12 @@ async def ingest_spec(
         origin = entry.get("clonedFrom")
         recorded = _github_slug(origin)
         # An origin we cannot read as this repo is a mismatch, never "absent".
-        if repo_slug and origin and (recorded or "").lower() != repo_slug.lower():
+        if select_repo and origin and (recorded or "").lower() != repo_slug.lower():
             raise HTTPException(
                 status.HTTP_409_CONFLICT, detail="repo does not match project"
             )
 
-        if repo_slug and not self_registered:
+        if select_repo and not self_registered:
             # The registered path may be another pod's workspace: check out the
             # named repo itself (same URL, same dir, idempotent).
             from ..services.project_workspace_service import clone_or_update
@@ -428,7 +431,7 @@ async def ingest_spec(
 
     # Only a checkout whose origin we just set from the validated URL may get the
     # token: a registered project's own directory has an origin we did not check.
-    cluster_clone = bool(repo_slug or self_registered)
+    cluster_clone = bool(select_repo or self_registered)
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     # The per-spec fetch runs after clone_or_update dropped its askpass helper;
     # give it the same credential, via env only (never argv or git config).
