@@ -3219,6 +3219,8 @@ async def _run_evaluator_session(
                     # The underlying exception line (#892) — so the reason names
                     # the missing module instead of just its bucket.
                     "failure_detail": getattr(stability, "failure_detail", None),
+                    # pytest exit 2 = collection error: the test never executed.
+                    "returncode": stability.runs[0].returncode,
                 }
         doc = json.loads(verdicts_path.read_text())
         enrich_verdicts(doc, flaky_by_test_id, failure_kind_by_test_id)

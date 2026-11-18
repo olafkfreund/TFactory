@@ -482,9 +482,12 @@ def enrich_verdicts(
         failure_info = (
             failure_kind_by_test_id.get(test_id) if test_id is not None else None
         )
+        # Only pytest exit 2 (collection error) proves the test never executed;
+        # an exit-1 ImportError was raised while a test ran.
         if (
             isinstance(failure_info, dict)
             and failure_info.get("failure_kind") == "import"
+            and failure_info.get("returncode") == 2
         ):
             summary["failure_kind"] = "import"
         apply_consistent_fail_reason(v, failure_info)

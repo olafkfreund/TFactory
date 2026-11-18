@@ -493,6 +493,7 @@ def test_enrich_verdicts_missing_harness_import_becomes_not_run():
         failure_kind_by_test_id={
             "t": {
                 "failure_kind": "import",
+                "returncode": 2,
                 "failure_detail": "ModuleNotFoundError: No module named 'requests'",
             }
         },
@@ -511,6 +512,7 @@ def test_enrich_verdicts_subject_import_stays_reject():
         failure_kind_by_test_id={
             "t": {
                 "failure_kind": "import",
+                "returncode": 2,
                 "failure_detail": "ModuleNotFoundError: No module named 'app'",
             }
         },
@@ -535,3 +537,18 @@ def test_harness_import_override_never_touches_accept():
     )
     assert v["verdict"] == "accept"
     assert "reasons" not in v
+
+
+def test_runtime_import_error_exit_1_is_not_stamped_as_never_executed():
+    doc = {"verdicts": [_verdict(verdict="reject", stability="consistent_fail")]}
+    enrich_verdicts(
+        doc,
+        failure_kind_by_test_id={
+            "t": {
+                "failure_kind": "import",
+                "returncode": 1,
+                "failure_detail": "ImportError: cannot import name 'x'",
+            }
+        },
+    )
+    assert "failure_kind" not in doc["verdicts"][0]["signals_summary"]
