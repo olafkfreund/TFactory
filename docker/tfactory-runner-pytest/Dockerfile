@@ -74,6 +74,7 @@ RUN pip install --no-cache-dir \
     "pytest-mock==3.14.*" \
     "pytest-timeout==2.3.*" \
     "httpx==0.28.*" \
+    "requests==2.32.*" \
     "coverage==7.6.*"
 
 # ── Filesystem layout ─────────────────────────────────────────────────────
