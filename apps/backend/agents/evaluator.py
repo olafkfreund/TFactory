@@ -2155,19 +2155,90 @@ def _completed_go_subtasks(plan: dict) -> list[dict]:
     )
 
 
+_GO_TOP_LEVEL_RE = re.compile(
+    r"^(?:func\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)|(?:type|var|const)\s+([A-Za-z_]\w*))",
+    re.MULTILINE,
+)
+
+
+def _go_top_level_names(text: str, *, funcs_only: bool = False) -> set[str]:
+    """Top-level Go identifiers declared in ``text`` (regex, not a parser).
+
+    shortcut: grouped ``var (...)``/``const (...)`` members are not seen, and
+    methods are skipped; upgrade to ``go/parser`` if collisions slip through.
+    """
+    names: set[str] = set()
+    for m in _GO_TOP_LEVEL_RE.finditer(text):
+        if m.group(1) and not re.match(r"func\s+\(", m.group(0)):
+            names.add(m.group(1))
+        elif m.group(2) and not funcs_only:
+            names.add(m.group(2))
+    return names
+
+
 def _stage_go_test(spec_dir: Path, project_dir: Path, subtask: dict) -> None:
     """Copy a Go subtask's generated ``_test.go`` files from the workspace into
     the worktree at their repo-relative paths, so ``go test ./...`` (which runs
-    over the co-mounted worktree) sees them next to the code they exercise."""
+    over the co-mounted worktree) sees them next to the code they exercise.
+
+    TFactory#1577: never overwrite or edit an existing file, write only
+    ``*_test.go`` under the project, and when a generated top-level name is
+    already declared in the package, rename it (``TFGen`` prefix) in a
+    ``*_tfgen_test.go`` copy so the package still compiles.
+    """
     import shutil as _sh
 
+    is_go = subtask.get("language") == "go"
+    root = Path(project_dir).resolve()
     for rel in subtask.get("files_to_create") or []:
         src = spec_dir / rel
-        if not src.exists():
+        # Java/Kotlin share this helper: the Go-only rules apply to Go subtasks.
+        if (is_go and not rel.endswith("_test.go")) or not src.exists():
             continue
-        dst = Path(project_dir) / rel
+        dst = (root / rel).resolve()
+        if not dst.is_relative_to(root):
+            continue
         dst.parent.mkdir(parents=True, exist_ok=True)
-        _sh.copy2(src, dst)
+        if not is_go:
+            _sh.copy2(src, dst)
+            continue
+        gen = src.read_text(errors="replace")
+        if dst.exists() and dst.read_text(errors="replace") == gen:
+            continue  # already staged by an earlier call
+        alt = dst.with_name(dst.name[: -len("_test.go")] + "_tfgen_test.go")
+        existing: set[str] = set()
+        for f in dst.parent.glob("*.go"):
+            if f != alt:
+                existing |= _go_top_level_names(f.read_text(errors="replace"))
+        clash = _go_top_level_names(gen) & existing
+        if not dst.exists() and not clash:
+            _sh.copy2(src, dst)
+            continue
+        if alt.is_symlink() or not alt.resolve().is_relative_to(root):
+            continue
+        if clash:
+            gen = _rename_go_names(gen, clash, existing | _go_top_level_names(gen))
+        alt.write_text(gen)
+
+
+_GO_LITERAL_OR_NAME = r"\"(?:\\.|[^\"\\\n])*\"|`[^`]*`|'(?:\\.|[^'\\\n])+'|//[^\n]*"
+
+
+def _rename_go_names(text: str, clash: set[str], taken: set[str]) -> str:
+    """Rename declared names (and their references) to unique ``TFGen`` names,
+    leaving string/rune literals, comments and ``x.name`` selectors alone."""
+    mapping: dict[str, str] = {}
+    for name in sorted(clash):
+        new = re.sub(r"^(Test|Benchmark|Example|Fuzz)", r"\1TFGen", name, count=1)
+        if new == name:
+            new = "tfgen_" + name
+        while new in taken:
+            new += "_"
+        taken.add(new)
+        mapping[name] = new
+    names = "|".join(re.escape(n) for n in mapping)
+    pat = re.compile(rf"({_GO_LITERAL_OR_NAME})|(?<![\w.])({names})\b")
+    return pat.sub(lambda m: m.group(1) or mapping[m.group(2)], text)
 
 
 def _resolve_go_runner_fn(spec_dir: Path, project_dir: Path):

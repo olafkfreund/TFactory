@@ -1720,21 +1720,23 @@ def _jest_plan_json(test_file: str) -> str:
 
 
 @pytest.mark.asyncio
-async def test_typescript_test_path_rejected_in_a_javascript_project(
+async def test_typescript_test_path_normalised_in_a_javascript_project(
     spec_dir: Path, project_dir: Path, mock_sdk
 ) -> None:
-    """Spec 161: a JS tic-tac-toe got `tests/*.test.ts`, which nothing can run."""
+    """TFactory#1579: a .ts test in a JS-only project becomes .js, no replan."""
     _write_javascript_project(project_dir)
-    calls = mock_sdk(
-        plans=[
-            _jest_plan_json("tests/move-places-mark.test.ts"),
-            _make_valid_plan_json(1),
-        ]
-    )
+    calls = mock_sdk(plans=[_jest_plan_json("tests/move-places-mark.test.ts")])
     ok = await run_planner(spec_dir, project_dir)
     assert ok is True
-    assert len(calls) == 2  # the .ts path was rejected and replanned
-    assert "invalid_test_path" in calls[1]["prompt"] or "RETRY" in calls[1]["prompt"]
+    assert len(calls) == 1
+    saved = json.loads((spec_dir / "test_plan.json").read_text())
+    files = [
+        f
+        for ph in saved["phases"]
+        for st in ph["subtasks"]
+        for f in st.get("files_to_create", [])
+    ]
+    assert files == ["tests/move-places-mark.test.js"]
 
 
 @pytest.mark.asyncio

@@ -109,6 +109,55 @@ def test_stage_go_test_skips_missing_source(tmp_path: Path) -> None:
     assert not (project_dir / "scenarios").exists()
 
 
+def _go_collision_setup(tmp_path: Path):
+    spec_dir, project_dir = tmp_path / "spec", tmp_path / "project"
+    project_dir.mkdir()
+    (project_dir / "main_test.go").write_text(
+        "package main\n\nfunc TestFormatLine(t *testing.T) {}\n"
+    )
+    (spec_dir).mkdir()
+    return spec_dir, project_dir
+
+
+def test_stage_go_test_renames_colliding_identifiers(tmp_path: Path) -> None:
+    """TFactory#1577: a generated TestFormatLine must not redeclare main_test.go's."""
+    spec_dir, project_dir = _go_collision_setup(tmp_path)
+    (spec_dir / "format_line_test.go").write_text(
+        "package main\n\nfunc TestFormatLine(t *testing.T) { helper() }\n"
+        "func helper() {}\n"
+    )
+    st = {"language": "go", "files_to_create": ["format_line_test.go"]}
+    _stage_go_test(spec_dir, project_dir, st)
+    _stage_go_test(spec_dir, project_dir, st)  # idempotent
+    assert "TestFormatLine(t" in (project_dir / "main_test.go").read_text()
+    out = (project_dir / "format_line_tfgen_test.go").read_text()
+    assert "TestTFGenFormatLine" in out and "func TestFormatLine" not in out
+    assert not (project_dir / "format_line_test.go").exists()
+
+
+def test_stage_go_test_never_overwrites_or_escapes(tmp_path: Path) -> None:
+    spec_dir, project_dir = _go_collision_setup(tmp_path)
+    (spec_dir / "main_test.go").write_text("package main\n\nfunc TestOther() {}\n")
+    (spec_dir / "flake.nix").write_text("{}")
+    st = {
+        "language": "go",
+        "files_to_create": ["main_test.go", "flake.nix", "../evil_test.go"],
+    }
+    _stage_go_test(spec_dir, project_dir, st)
+    assert "TestFormatLine" in (project_dir / "main_test.go").read_text()
+    assert (project_dir / "main_tfgen_test.go").is_file()
+    assert not (project_dir / "flake.nix").exists()
+
+
+def test_rename_go_names_leaves_literals_and_selectors() -> None:
+    from agents.evaluator import _rename_go_names
+
+    src = 'func format() {}\nfunc TestA(t *testing.T) { format(); x.format(); _ = "format" }\n'
+    out = _rename_go_names(src, {"format"}, {"format"})
+    assert out.startswith("func tfgen_format() {}")
+    assert 'tfgen_format(); x.format(); _ = "format"' in out
+
+
 # ── _resolve_go_runner_fn ──────────────────────────────────────────────
 
 
