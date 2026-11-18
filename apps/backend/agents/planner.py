@@ -1044,6 +1044,11 @@ async def run_planner(
     if _planner_blocked(spec_dir, project_dir):
         return False
 
+    from agents.services_gate import halt_if_services_declared
+
+    if halt_if_services_declared(spec_dir, project_dir):
+        return True
+
     if mode == "replan":
         return await _run_planner_replan(spec_dir, project_dir, verbose)
 
