@@ -222,6 +222,11 @@ def _validate_emitted_plan(
         )
         return True, "", plan
 
+    # TFactory#1579: a .ts test planned into a JS-only project is rewritten to .js
+    # (saved back, since downstream reads test_plan.json) rather than rejected.
+    if _normalise_js_test_paths(plan, registry, project_dir):
+        plan.save(plan_file)
+
     # Looped rather than two `if not ok: return` blocks so adding a validator
     # does not grow the return count past the strict bar (PLR0911).
     checks: tuple[tuple[Callable[[Any, Any], tuple[bool, str]], str], ...] = (
@@ -338,6 +343,30 @@ def _project_is_plain_javascript(project_dir: Path) -> bool:
     except OSError:
         return False
     return has_js
+
+
+def _normalise_js_test_paths(plan: Any, registry: Any, project_dir: Path) -> bool:
+    """Rewrite ``.ts``/``.tsx`` test paths to ``.js``/``.jsx`` in a plain-JavaScript
+    project, for frameworks that offer a JavaScript convention (TFactory#1579:
+    the planner emitted .ts twice and died). True when anything changed."""
+    if not _project_is_plain_javascript(project_dir):
+        return False
+    changed = False
+    for phase in plan.phases:
+        for st in phase.subtasks:
+            desc = registry.get(st.framework) if st.framework else None
+            if desc is None or not any(
+                pat.endswith((".js", ".jsx"))
+                for pat in desc.test_path_conventions or []
+            ):
+                continue
+            new = [
+                re.sub(r"\.ts(x?)$", r".js\1", rel) for rel in st.files_to_create or []
+            ]
+            if new != (st.files_to_create or []):
+                st.files_to_create = new
+                changed = True
+    return changed
 
 
 def _validate_test_paths(
@@ -1213,7 +1242,9 @@ _RETRY_REMINDERS = {
         "workspace, NOT next to the code under test -- a Playwright spec goes "
         "under `tests/e2e/`, a pytest file under `tests/`, regardless of "
         "where the target lives. Re-emit the plan with every "
-        "`files_to_create` path matching its framework's conventions."
+        "`files_to_create` path matching its framework's conventions. If the "
+        "detail says the project ships JavaScript and no TypeScript, EVERY test "
+        "file must be JavaScript (`.js`/`.jsx`, never `.ts`/`.tsx`)."
     ),
 }
 
