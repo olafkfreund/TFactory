@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.11.8 — Missing runner image is a not-run, not a rejection (2026-11-18)
+
+### Fixed
+
+- **Verify:** docker exit 125 (runner image missing) is now a lane `not_run`
+  like exit 126/127, instead of `consistent_fail` rejecting every test and
+  handing AIFactory a handback that blames correct code (#1573, #1575).
+
 ## 0.11.7 — Plan-Slug trailers in gitops bump (2026-11-18)
 
 ### Changed
