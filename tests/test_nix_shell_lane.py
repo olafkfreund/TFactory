@@ -5,7 +5,6 @@ from pathlib import Path
 import pytest
 from agents.nix_shell_lane import (
     TapCounts,
-    _shell_project_dir,
     bats_job_script,
     parse_tap,
     shell_verdict,
@@ -73,19 +72,6 @@ def test_bats_job_script():
     assert "echo __BATS_EXIT=$?" in script
     assert "echo __SHELLCHECK_EXIT=$?" in script
     assert "echo __SHELLCHECK_EXIT=0" in script
-
-
-def test_shell_project_dir_uses_nearest_enclosing_flake(tmp_path):
-    project = tmp_path / "project"
-    nested = project / "module" / "tests"
-    nested.mkdir(parents=True)
-    (project / "flake.nix").touch()
-    (nested.parent / "flake.nix").touch()
-
-    assert _shell_project_dir(project, nested / "sample.bats") == nested.parent
-    assert _shell_project_dir(project, Path("elsewhere/test.bats")) == project
-    assert _shell_project_dir(project, tmp_path / "outside/test.bats") == project
-    assert _shell_project_dir(project, None) == project
 
 
 class _FakeSandbox:

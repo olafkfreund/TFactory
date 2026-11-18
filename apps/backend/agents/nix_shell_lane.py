@@ -119,26 +119,6 @@ def bats_job_script(run_dir: str, extra_env: dict[str, str]) -> str:
     )
 
 
-def _shell_project_dir(project_dir: Path, hint: Path | None) -> Path:
-    """Use the nearest enclosing flake, constrained to the project root."""
-    root = Path(project_dir).resolve()
-    if hint is None:
-        return root
-    start = Path(hint)
-    start = start if start.is_absolute() else root / start
-    if start.suffix:
-        start = start.parent
-    start = start.resolve()
-    if start != root and root not in start.parents:
-        return root
-    for directory in (start, *start.parents):
-        if (directory / "flake.nix").is_file():
-            return directory
-        if directory == root:
-            break
-    return root
-
-
 def shell_environment(spec_dir: Path, project_dir: Path) -> dict[str, Any]:
     """The nix environment for the shell lane.
 
@@ -172,13 +152,12 @@ def run_bats_lane_via_nix(
     spec_dir: Path,
     project_dir: Path,
     *,
-    hint: Path | None = None,
     extra_env: dict[str, str] | None = None,
     timeout: int = 600,
 ) -> DockerRunResult | None:
     """Run the project's bats suite and shellcheck in the per-task Nix shell.
 
-    Twin of ``run_cargo_lane_via_nix``: the whole project is one unit (bats and
+    Twin of ``run_cargo_lane_via_nix``: the whole project root is one unit (bats and
     shellcheck both read it as a tree), and :func:`shell_verdict` turns the two
     exit markers plus the TAP counts into one exit code.
 
@@ -199,11 +178,11 @@ def run_bats_lane_via_nix(
 
     pd = Path(project_dir)
     try:
-        root = _shell_project_dir(pd, hint)
-        rel = "." if root == pd.resolve() else str(root.relative_to(pd.resolve()))
-        run_dir = mount if rel == "." else f"{mount}/{rel}"
+        # Always the project root: the flake (repo-owned or generated) is
+        # materialized there, so entering a nested directory's own flake would
+        # never match the devShell `nix develop` enters.
         (pd / nix_env._JOB_SCRIPT).write_text(
-            bats_job_script(run_dir, extra_env or {}), encoding="utf-8"
+            bats_job_script(mount, extra_env or {}), encoding="utf-8"
         )
         job_cmd = f"nix develop path:{mount}#default --command bash {mount}/{nix_env._JOB_SCRIPT}"
         res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)

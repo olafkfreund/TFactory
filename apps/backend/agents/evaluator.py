@@ -2356,23 +2356,17 @@ def _resolve_shell_runner_fn(
     """runner_fn(test_file, project_dir, seed) -> DockerRunResult running the
     bats suite and shellcheck in the per-task Nix dev shell (#1581).
 
-    ``test_file`` is only the project-root hint; an unconfigured sandbox returns
-    a failing result so the gap is visible in the stability signal instead of
-    silently passing.
+    The lane always works at the project root (``test_file`` is unused); an
+    unconfigured sandbox returns a failing result so the gap is visible in the
+    stability signal instead of silently passing.
     """
     # Lazy on purpose: tests patch agents.nix_shell_lane.run_bats_lane_via_nix
     # on the module, which a top-level `from` import would bind past.
     from agents import nix_shell_lane  # noqa: PLC0415
     from tools.runners.docker_runner import DockerRunResult  # noqa: PLC0415
 
-    def _run(test_file: Path, project_dir_arg: Path, _seed: int) -> DockerRunResult:
-        try:
-            hint = Path(test_file).relative_to(spec_dir)
-        except ValueError:
-            hint = Path(test_file)
-        res = nix_shell_lane.run_bats_lane_via_nix(
-            spec_dir, Path(project_dir_arg), hint=hint
-        )
+    def _run(_test_file: Path, project_dir_arg: Path, _seed: int) -> DockerRunResult:
+        res = nix_shell_lane.run_bats_lane_via_nix(spec_dir, Path(project_dir_arg))
         if res is not None:
             return res
         return DockerRunResult(
@@ -2391,25 +2385,15 @@ def _shell_bundles(
     subtasks: Iterable[dict[str, Any]],
     runner_fn: Callable[[Path, Path, int], DockerRunResult],
 ) -> list[EvaluatorSignals]:
-    """One 3x stability pass per project root, shared by its shell subtasks:
-    bats and shellcheck read the whole tree, so every subtask in it has the
+    """ONE 3x stability pass for the whole project, shared by every shell
+    subtask: bats and shellcheck read the whole tree, so every subtask has the
     identical result (the Go ``shared_go_stability`` pattern)."""
-    from agents.nix_shell_lane import _shell_project_dir  # noqa: PLC0415
-
-    groups: dict[Path, list[dict[str, Any]]] = {}
-    for st in subtasks:
-        root = _shell_project_dir(project_dir, Path(st["files_to_create"][0]))
-        groups.setdefault(root, []).append(st)
-    bundles = []
-    for group in groups.values():
-        shared = _stability_for_subtask(spec_dir, project_dir, group[0], runner_fn)
-        bundles += [
-            _build_go_signal_bundle(
-                spec_dir, project_dir, st, runner_fn, stability=shared
-            )
-            for st in group
-        ]
-    return bundles
+    group = list(subtasks)
+    shared = _stability_for_subtask(spec_dir, project_dir, group[0], runner_fn)
+    return [
+        _build_go_signal_bundle(spec_dir, project_dir, st, runner_fn, stability=shared)
+        for st in group
+    ]
 
 
 def _completed_java_subtasks(plan: dict[str, Any]) -> list[dict[str, Any]]:
