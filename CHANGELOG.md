@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.11.7 — Plan-Slug trailers in gitops bump (2026-11-18)
+
+### Changed
+
+- **CD:** carry Plan-Slug trailers into the factory-gitops image bump commit
+  (#1568, #1570).
+
+### Docs
+
+- Add the tfactory-deploy-runbook skill and align RELEASE.md with the
+  workflows (#1958, #1569).
+
 ## 0.11.6 — WebSocket handler fix and Bitbucket provider (2026-11-18)
 
 ### Fixed
