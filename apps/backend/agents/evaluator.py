@@ -3338,7 +3338,7 @@ async def run_evaluator(
         if not completed:
             # Completed test-bearing subtasks that no lane admits are infra, not
             # "no work" (#1580): fail closed instead of a quiet evaluated_empty.
-            unadmitted = _filter_completed_subtasks(plan, lambda st: True)
+            unadmitted = _filter_completed_subtasks(plan, lambda _st: True)
             if unadmitted:
                 tuples = sorted(
                     {
