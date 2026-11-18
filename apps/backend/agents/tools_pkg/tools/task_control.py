@@ -39,6 +39,7 @@ shouldn't be able to drive itself recursively.
 
 from __future__ import annotations
 
+import importlib
 import json
 import logging
 import os
@@ -47,6 +48,7 @@ import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from agents.contract_signature import (
     apply_overlay,
@@ -255,6 +257,20 @@ def _locate_local(args: dict[str, Any]) -> tuple[tuple[str, str] | None, str | N
 # ---------------------------------------------------------------------------
 
 
+_REPO_DESC = (
+    "GitHub repo to verify, owner/name or https URL. The cluster TFactory "
+    "(TFACTORY_API_URL) clones it itself and checks out the ref; the project's "
+    "local root_path is not used."
+)
+_SPEC_TEXT_DESC = (
+    "Cluster mode only: the acceptance-criteria text of the spec (the cluster "
+    "TFactory cannot read the AIFactory pod's spec dir)"
+)
+_PID_DESC = (
+    "Optional project id or name; needed when the same spec id exists in two projects"
+)
+
+
 def _cluster_mode() -> bool:
     return bool(os.environ.get("TFACTORY_API_URL", "").strip())
 
@@ -271,14 +287,11 @@ def _portal_url(task_id: str) -> str:
 
 
 def _spec_task_path(located: tuple[str, str]) -> str:
-    from urllib.parse import quote
-
     return "/api/spec-tasks/{}/{}".format(*(quote(s, safe="") for s in located))
 
 
 async def _api(method: str, path: str, **kwargs: Any) -> Any:
-    from agents.tools_pkg import http_client
-
+    http_client = importlib.import_module("agents.tools_pkg.http_client")
     return await http_client.request(method, path, **kwargs)
 
 
@@ -302,6 +315,92 @@ async def _remote_locate(
             "pass project_id to pick one"
         )
     return (hits[0]["project_id"], task_id), None
+
+
+async def _cluster_create(args: dict[str, Any], *, from_spec: bool) -> dict[str, Any]:
+    """Cluster branch of both creation tools: preview first, then one ingest POST."""
+    project_id, spec_id = args["project_id"], args["spec_id"]
+    confirm = bool(args.get("confirm", False))
+    tree = "cluster_clone" if args.get("repo") else "cluster_project"
+    if from_spec:
+        ref = args.get("ref") or args.get("branch")
+        spec_text = args["spec_text"]
+        extra: dict[str, Any] = {
+            "format": args.get("format"),
+            "target_paths": args.get("target_paths") or [],
+            "ref": ref,
+        }
+    else:
+        spec_text = args.get("spec_text") or ""
+        if not spec_text:
+            return _format_error(
+                "cluster mode needs spec_text: the cluster TFactory cannot read "
+                "the AIFactory spec dir. Pass the acceptance criteria as spec_text."
+            )
+        extra = {"source_branch": args["branch"]}
+    if not confirm:
+        return _format_json(
+            {
+                "preview": True,
+                "would_create": f"{project_id}:{spec_id} on {tree}",
+                "repo": args.get("repo"),
+                "branch": args.get("branch"),
+                "ref": args.get("ref"),
+                "tree": tree,
+                "hint": "Re-run with confirm=true to create the task.",
+            }
+        )
+    payload = {
+        "project_id": project_id,
+        "spec_id": spec_id,
+        "spec_text": spec_text,
+        "repo": args.get("repo"),
+        "pr_number": args.get("pr_number"),
+        **extra,
+    }
+    try:
+        return _format_json(await _remote_ingest(payload, tree))
+    except Exception as exc:  # noqa: BLE001 - MCPHTTPError et al: one line
+        return _format_error(str(exc))
+
+
+async def _cluster_get(args: dict[str, Any], report: str | None) -> dict[str, Any]:
+    """Cluster branch of task_status (``report`` None) and report_get."""
+    task_id = args["task_id"]
+    try:
+        located, err = await _remote_locate(args)
+        if located is None:
+            return _format_error(err or f"unknown task_id: {task_id!r}")
+        res = await _api(
+            "GET",
+            _spec_task_path(located),
+            params={"report": report} if report else None,
+        )
+    except Exception as exc:  # noqa: BLE001 - MCPHTTPError et al: one line
+        return _format_error(str(exc))
+    if report:
+        body = {
+            "task_id": task_id,
+            "project_id": res["project_id"],
+            "format": report,
+            "body": res["report"]["body"],
+        }
+    else:
+        body = {
+            **res["status_json"],
+            "project_id": res["project_id"],
+            "source": res["source"],
+            "portal_url": _portal_url(task_id),
+        }
+    return _format_json({**body, "tree": "cluster"})
+
+
+async def _cluster_list(path: str, params: dict[str, Any] | None = None) -> Any:
+    """GET a listing from the cluster: the parsed body, or an error envelope."""
+    try:
+        return await _api("GET", path, params=params)
+    except Exception as exc:  # noqa: BLE001 - MCPHTTPError et al: one line
+        return _format_error(str(exc))
 
 
 def _verify_args_error(args: dict[str, Any]) -> str | None:
@@ -945,7 +1044,7 @@ def create_task_control_tools() -> list:
                 },
                 "repo": {
                     "type": "string",
-                    "description": "GitHub repo to verify, owner/name or https URL. The cluster TFactory (TFACTORY_API_URL) clones it itself and checks out the ref; the project's local root_path is not used.",
+                    "description": _REPO_DESC,
                 },
                 "pr_number": {
                     "type": "integer",
@@ -953,7 +1052,7 @@ def create_task_control_tools() -> list:
                 },
                 "spec_text": {
                     "type": "string",
-                    "description": "Cluster mode only: the acceptance-criteria text of the spec (the cluster TFactory cannot read the AIFactory pod's spec dir)",
+                    "description": _SPEC_TEXT_DESC,
                 },
                 "confirm": {
                     "type": "boolean",
@@ -993,40 +1092,7 @@ def create_task_control_tools() -> list:
         if err := _verify_args_error(args):
             return _format_error(err)
         if _cluster_mode():
-            if not args.get("spec_text"):
-                return _format_error(
-                    "cluster mode needs spec_text: the cluster TFactory cannot read "
-                    "the AIFactory spec dir. Pass the acceptance criteria as spec_text."
-                )
-            tree = "cluster_clone" if args.get("repo") else "cluster_project"
-            if not confirm:
-                return _format_json(
-                    {
-                        "preview": True,
-                        "would_create": f"{project_id}:{spec_id} on {tree}",
-                        "branch": branch,
-                        "base_ref": base_ref,
-                        "repo": args.get("repo"),
-                        "tree": tree,
-                        "hint": "Re-run with confirm=true to create the task.",
-                    }
-                )
-            try:
-                return _format_json(
-                    await _remote_ingest(
-                        {
-                            "project_id": project_id,
-                            "spec_id": spec_id,
-                            "spec_text": args["spec_text"],
-                            "source_branch": branch,
-                            "repo": args.get("repo"),
-                            "pr_number": args.get("pr_number"),
-                        },
-                        tree,
-                    )
-                )
-            except Exception as exc:  # noqa: BLE001 - MCPHTTPError et al: one line
-                return _format_error(str(exc))
+            return await _cluster_create(args, from_spec=False)
 
         projects = _load_projects()
         project_entry = next(
@@ -1220,7 +1286,7 @@ def create_task_control_tools() -> list:
                 },
                 "repo": {
                     "type": "string",
-                    "description": "GitHub repo to verify, owner/name or https URL. The cluster TFactory (TFACTORY_API_URL) clones it itself and checks out the ref; the project's local root_path is not used.",
+                    "description": _REPO_DESC,
                 },
                 "pr_number": {
                     "type": "integer",
@@ -1251,36 +1317,7 @@ def create_task_control_tools() -> list:
             return _format_error(err)
         ref = args.get("ref") or args.get("branch")
         if _cluster_mode():
-            tree = "cluster_clone" if args.get("repo") else "cluster_project"
-            if not confirm:
-                return _format_json(
-                    {
-                        "preview": True,
-                        "would_create": f"{project_id}:{spec_id} on {tree}",
-                        "repo": args.get("repo"),
-                        "ref": ref,
-                        "tree": tree,
-                        "hint": "Re-run with confirm=true to ingest the spec + start the pipeline.",
-                    }
-                )
-            try:
-                return _format_json(
-                    await _remote_ingest(
-                        {
-                            "project_id": project_id,
-                            "spec_id": spec_id,
-                            "spec_text": spec_text,
-                            "format": fmt,
-                            "target_paths": target_paths,
-                            "ref": ref,
-                            "repo": args.get("repo"),
-                            "pr_number": args.get("pr_number"),
-                        },
-                        tree,
-                    )
-                )
-            except Exception as exc:  # noqa: BLE001 - MCPHTTPError et al: one line
-                return _format_error(str(exc))
+            return await _cluster_create(args, from_spec=True)
 
         projects = _load_projects()
         project_entry = next(
@@ -1349,7 +1386,7 @@ def create_task_control_tools() -> list:
                 "task_id": {"type": "string", "description": "TFactory task ID"},
                 "project_id": {
                     "type": "string",
-                    "description": "Optional project id or name; needed when the same spec id exists in two projects",
+                    "description": _PID_DESC,
                 },
             },
             "required": ["task_id"],
@@ -1358,22 +1395,7 @@ def create_task_control_tools() -> list:
     async def task_status(args: dict[str, Any]) -> dict[str, Any]:
         task_id = args["task_id"]
         if _cluster_mode():
-            try:
-                located, err = await _remote_locate(args)
-                if err:
-                    return _format_error(err)
-                res = await _api("GET", _spec_task_path(located))
-            except Exception as exc:  # noqa: BLE001 - MCPHTTPError et al: one line
-                return _format_error(str(exc))
-            return _format_json(
-                {
-                    **res["status_json"],
-                    "project_id": res["project_id"],
-                    "source": res["source"],
-                    "tree": "cluster",
-                    "portal_url": _portal_url(task_id),
-                }
-            )
+            return await _cluster_get(args, None)
         located, err = _locate_local(args)
         if err:
             return _format_error(err)
@@ -1436,21 +1458,12 @@ def create_task_control_tools() -> list:
         limit = int(args.get("limit", 50))
 
         if _cluster_mode():
-            try:
-                res = await _api(
-                    "GET",
-                    "/api/spec-tasks",
-                    params={
-                        k: v
-                        for k, v in (
-                            ("project_id", project_filter),
-                            ("status", status_filter),
-                        )
-                        if v
-                    },
-                )
-            except Exception as exc:  # noqa: BLE001 - MCPHTTPError et al: one line
-                return _format_error(str(exc))
+            params = {"project_id": project_filter, "status": status_filter}
+            res = await _cluster_list(
+                "/api/spec-tasks", {k: v for k, v in params.items() if v}
+            )
+            if res.get("isError"):
+                return dict(res)
             rows = res.get("tasks", [])[:limit]
             return _format_json({"count": len(rows), "tasks": rows, "tree": "cluster"})
 
@@ -1502,10 +1515,9 @@ def create_task_control_tools() -> list:
     )
     async def project_list(args: dict[str, Any]) -> dict[str, Any]:
         if _cluster_mode():
-            try:
-                projects = await _api("GET", "/api/projects")
-            except Exception as exc:  # noqa: BLE001 - MCPHTTPError et al: one line
-                return _format_error(str(exc))
+            projects = await _cluster_list("/api/projects")
+            if not isinstance(projects, list):
+                return dict(projects)  # the error envelope
             return _format_json(
                 {"count": len(projects), "projects": projects, "tree": "cluster"}
             )
@@ -1583,7 +1595,7 @@ def create_task_control_tools() -> list:
                 "task_id": {"type": "string", "description": "TFactory task ID"},
                 "project_id": {
                     "type": "string",
-                    "description": "Optional project id or name; needed when the same spec id exists in two projects",
+                    "description": _PID_DESC,
                 },
                 "format": {
                     "type": "string",
@@ -1601,24 +1613,7 @@ def create_task_control_tools() -> list:
         if fmt not in ("md", "json"):
             return _format_error(f"format must be 'md' or 'json'; got {fmt!r}")
         if _cluster_mode():
-            try:
-                located, err = await _remote_locate(args)
-                if err:
-                    return _format_error(err)
-                res = await _api(
-                    "GET", _spec_task_path(located), params={"report": fmt}
-                )
-            except Exception as exc:  # noqa: BLE001 - MCPHTTPError et al: one line
-                return _format_error(str(exc))
-            return _format_json(
-                {
-                    "task_id": task_id,
-                    "project_id": res["project_id"],
-                    "format": fmt,
-                    "body": res["report"]["body"],
-                    "tree": "cluster",
-                }
-            )
+            return await _cluster_get(args, fmt)
         located, err = _locate_local(args)
         if err:
             return _format_error(err)
@@ -1663,7 +1658,7 @@ def create_task_control_tools() -> list:
                 "task_id": {"type": "string", "description": "TFactory task ID"},
                 "project_id": {
                     "type": "string",
-                    "description": "Optional project id or name; needed when the same spec id exists in two projects",
+                    "description": _PID_DESC,
                 },
                 "lane": {
                     "type": "string",

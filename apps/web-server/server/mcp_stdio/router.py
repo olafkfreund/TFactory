@@ -24,6 +24,7 @@ UI-driven actions in the audit log.
 
 from __future__ import annotations
 
+import importlib
 import json
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, Literal
@@ -33,6 +34,10 @@ from fastapi import Request as FastAPIRequest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.database.engine import get_db
+from server.routes import projects as projects_routes
+from server.routes import specs as specs_routes
+from server.routes import tfactory_tasks as tfactory_tasks_routes
+from server.routes._specpath import safe_component
 from server.routes.project_authz import (
     ProjectAccessChecker,
     _audit_authz_denial,
@@ -335,9 +340,7 @@ async def proxy_create_and_run_task(
 
 
 def _resolve_project(ref: str) -> str | None:
-    from server.routes.projects import load_projects
-
-    projects = load_projects()
+    projects = projects_routes.load_projects()
     if ref in projects:
         return ref
     return next(
@@ -345,22 +348,29 @@ def _resolve_project(ref: str) -> str | None:
     )
 
 
+_Key = AuthenticatedKey | _LegacyAdminKey
+_ReadKey = Annotated[_Key, Depends(require_acw_scope(MCP_READ_SCOPE))]
+_WriteKey = Annotated[_Key, Depends(require_acw_scope(TASK_WRITE_SCOPE))]
+_Db = Annotated[AsyncSession, Depends(get_db)]
+_Tenant = Annotated[str | None, Header(alias="X-Tenant-Id")]
+
+
 @router.post("/specs/ingest")
 async def proxy_ingest_spec(
     req: SpecIngestRequest,
     request: FastAPIRequest,
-    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
-    key=Depends(require_acw_scope(TASK_WRITE_SCOPE)),
-    db: AsyncSession = Depends(get_db),
-):
-    from server.routes.specs import ingest_spec
-
+    key: _WriteKey,
+    db: _Db,
+    x_tenant_id: _Tenant = None,
+) -> dict[str, Any]:
     resolved_id = _resolve_project(req.project_id)
     if resolved_id is not None:
         await _authorize_key(key, resolved_id, db, "member")
     elif isinstance(key, AuthenticatedKey) and key.org_id:
         raise HTTPException(404, "Project not found")
-    result = await ingest_spec(req, x_tenant_id=x_tenant_id, request=request, db=db)
+    result = await specs_routes.ingest_spec(
+        req, x_tenant_id=x_tenant_id, request=request, db=db
+    )
     await _audit_mcp_write(
         key,
         ACTION_MCP_TASK_CREATE_AND_RUN,
@@ -374,14 +384,12 @@ async def proxy_ingest_spec(
 
 @router.get("/spec-tasks")
 async def proxy_list_spec_tasks(
+    key: _ReadKey,
+    db: _Db,
     project_id: str | None = Query(default=None),
     status: str | None = Query(default=None),
-    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
-    key=Depends(require_acw_scope(MCP_READ_SCOPE)),
-    db: AsyncSession = Depends(get_db),
-):
-    from server.routes.tfactory_tasks import list_tasks
-
+    x_tenant_id: _Tenant = None,
+) -> dict[str, Any]:
     resolved_id = None
     if project_id is not None:
         resolved_id = _resolve_project(project_id)
@@ -394,7 +402,7 @@ async def proxy_list_spec_tasks(
     known = _key_projects(key)
     rows = [
         row
-        for row in list_tasks(x_tenant_id=x_tenant_id)["tasks"]
+        for row in tfactory_tasks_routes.list_tasks(x_tenant_id=x_tenant_id)["tasks"]
         if row["project_id"] not in foreign
         and (known is None or row["project_id"] in known)
         and (resolved_id is None or row["project_id"] == resolved_id)
@@ -407,34 +415,36 @@ async def proxy_list_spec_tasks(
 async def proxy_get_spec_task(
     project_id: str,
     spec_id: str,
+    key: _ReadKey,
+    db: _Db,
     report: Literal["md", "json"] | None = Query(default=None),
-    key=Depends(require_acw_scope(MCP_READ_SCOPE)),
-    db: AsyncSession = Depends(get_db),
-):
-    from agents.tools_pkg.tools.task_control import _spec_dir
-
-    from server.routes._specpath import safe_component
-    from server.routes.tfactory_tasks import _read_json
-
+) -> dict[str, Any]:
     resolved_id = _resolve_project(project_id)
     if resolved_id is None:
         raise HTTPException(404, "Project not found")
     await _authorize_key(key, resolved_id, db, "viewer")
-    spec_dir = _spec_dir(safe_component(resolved_id), safe_component(spec_id))
+    spec_dir = (
+        tfactory_tasks_routes._resolve_workspace_root()
+        / "workspaces"
+        / safe_component(resolved_id)
+        / "specs"
+        / safe_component(spec_id)
+    )
     status_path = spec_dir / "status.json"
     if not status_path.is_file():
         raise HTTPException(404, "Task not found")
-    status_doc = _read_json(status_path) or {}
+    status_doc = tfactory_tasks_routes._read_json(status_path) or {}
     try:
-        from agents.lane_progress import derive_lane_progress
-
-        live = derive_lane_progress(spec_dir)
-    except Exception:  # noqa: BLE001 - preserve stored progress if derivation fails
+        lane_progress = importlib.import_module("agents.lane_progress")
+        live = lane_progress.derive_lane_progress(spec_dir)
+    except Exception:  # noqa: BLE001 - keep the stored progress if derivation fails
         live = None
     if live is not None:
         status_doc["lane_progress"] = live
-    source_doc = _read_json(spec_dir / "context" / "source.json") or {}
-    result = {
+    source_doc = (
+        tfactory_tasks_routes._read_json(spec_dir / "context" / "source.json") or {}
+    )
+    result: dict[str, Any] = {
         "task_id": status_doc.get("task_id") or spec_id,
         "project_id": resolved_id,
         "spec_id": spec_id,

@@ -321,6 +321,53 @@ async def _ensure_project_clone(
     return path
 
 
+def _repo_binding(req: SpecIngestRequest) -> tuple[str, str | None]:
+    """``(repo_slug, git_url)`` for a request that lets ``repo`` select the checkout.
+
+    ``repo_slug`` is ``""`` when it does not (#1574): no GitHub ``repo``, or a signed
+    contract, which keeps the older meaning (``repo`` is recorded and bound to the
+    signature, the registered clone is what runs: AIFactory handoffs). Otherwise
+    ``repo``, ``git_url`` and the project's origin must all name one repository, so
+    a matching ref can never verify unrelated code.
+    """
+    slug = _github_slug(req.repo) or ""
+    if not slug or req.contract or req.signed_contract:
+        return "", req.git_url
+    if req.git_url and (_github_slug(req.git_url) or "").lower() != slug.lower():
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, detail="git_url does not match repo"
+        )
+    return slug, req.git_url or f"https://github.com/{slug}.git"
+
+
+def _check_origin(entry: dict[str, Any], repo_slug: str) -> None:
+    """409 unless the project's recorded origin is ``repo_slug`` (unreadable = no)."""
+    origin = entry.get("clonedFrom")
+    if (
+        repo_slug
+        and origin
+        and (_github_slug(origin) or "").lower() != repo_slug.lower()
+    ):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, detail="repo does not match project"
+        )
+
+
+async def _clone_named_repo(git_url: str) -> str:
+    """Check out the named repo itself (same URL, same dir, idempotent)."""
+    from server.services.project_workspace_service import (  # noqa: PLC0415
+        clone_or_update,
+    )
+
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    cloned = await clone_or_update(
+        git_url=git_url,
+        branch=None,
+        credential=("x-access-token", token) if token else None,
+    )
+    return str(cloned.resolve())
+
+
 @router.post(
     "/ingest", summary="Create a TFactory task from a raw spec (no AIFactory branch)"
 )
@@ -349,20 +396,7 @@ async def ingest_spec(
             if data.get("name") == req.project_id:
                 entry, resolved_id = data, pid
                 break
-    # #1574: a GitHub `repo` selects the checkout. It, `git_url` and the project's
-    # recorded origin must name the same repository, so a matching ref can never
-    # verify unrelated code.
-    # A signed contract keeps the older meaning: `repo` is recorded and bound to
-    # the signature, and the registered clone is what runs (AIFactory handoffs).
-    repo_slug = _github_slug(req.repo)
-    select_repo = bool(repo_slug) and not (req.contract or req.signed_contract)
-    git_url = req.git_url
-    if select_repo:
-        if git_url and (_github_slug(git_url) or "").lower() != repo_slug.lower():
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST, detail="git_url does not match repo"
-            )
-        git_url = git_url or f"https://github.com/{repo_slug}.git"
+    repo_slug, git_url = _repo_binding(req)
     self_registered = False
     try:
         if entry is None and git_url:
@@ -391,30 +425,10 @@ async def ingest_spec(
                     "(and no git_url provided to self-register it)"
                 ),
             )
-
-        origin = entry.get("clonedFrom")
-        recorded = _github_slug(origin)
-        # An origin we cannot read as this repo is a mismatch, never "absent".
-        if select_repo and origin and (recorded or "").lower() != repo_slug.lower():
-            raise HTTPException(
-                status.HTTP_409_CONFLICT, detail="repo does not match project"
-            )
-
-        if select_repo and not self_registered:
-            # The registered path may be another pod's workspace: check out the
-            # named repo itself (same URL, same dir, idempotent).
-            from ..services.project_workspace_service import clone_or_update
-
-            token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-            project_root = str(
-                (
-                    await clone_or_update(
-                        git_url=git_url,
-                        branch=None,
-                        credential=("x-access-token", token) if token else None,
-                    )
-                ).resolve()
-            )
+        _check_origin(entry, repo_slug)
+        if repo_slug and git_url and not self_registered:
+            # The registered path may be another pod's workspace.
+            project_root = await _clone_named_repo(git_url)
         else:
             # The project is registered, but its on-disk clone may have been
             # recycled (pod/PVC restart) — re-materialize it before the planner
@@ -431,11 +445,11 @@ async def ingest_spec(
 
     # Only a checkout whose origin we just set from the validated URL may get the
     # token: a registered project's own directory has an origin we did not check.
-    cluster_clone = bool(select_repo or self_registered)
+    cluster_clone = bool(repo_slug or self_registered)
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     # The per-spec fetch runs after clone_or_update dropped its askpass helper;
     # give it the same credential, via env only (never argv or git config).
-    git_auth = (
+    git_auth: contextlib.AbstractContextManager[dict[str, str]] = (
         _git_askpass_env("x-access-token", token)
         if cluster_clone and token
         else contextlib.nullcontext({})
