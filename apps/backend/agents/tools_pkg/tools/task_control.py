@@ -287,7 +287,12 @@ _REF_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./@+-]*")
 
 
 def _add_spec_worktree(
-    base_clone: Path, worktree: Path, branch: str, spec_id: str
+    base_clone: Path,
+    worktree: Path,
+    branch: str,
+    spec_id: str,
+    *,
+    git_env: dict[str, str] | None = None,
 ) -> tuple[str | None, str]:
     """Materialize ``branch`` as this spec's OWN git worktree at ``worktree`` off
     the shared ``base_clone`` — so concurrent specs each get an independent HEAD
@@ -320,6 +325,7 @@ def _add_spec_worktree(
         for k, v in os.environ.items()
         if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
     }
+    _git_env.update(git_env or {})
 
     def _git(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess:
         return subprocess.run(
@@ -384,7 +390,9 @@ def _add_spec_worktree(
         return f"ref {branch!r} worktree error: {exc}", ""
 
 
-def _default_branch(base_clone: Path) -> tuple[str | None, str]:
+def _default_branch(
+    base_clone: Path, *, git_env: dict[str, str] | None = None
+) -> tuple[str | None, str]:
     """The remote's default branch name, asked of ``origin`` itself (#1404).
 
     Returns ``(warning, name)``. The local ``refs/remotes/origin/HEAD`` is not
@@ -395,6 +403,7 @@ def _default_branch(base_clone: Path) -> tuple[str | None, str]:
         for k, v in os.environ.items()
         if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
     }
+    env.update(git_env or {})
     argv = ["git", "-C", str(base_clone), "ls-remote", "--symref", "origin", "HEAD"]
     try:
         out = subprocess.run(  # noqa: S603 — fixed argv, no request data
@@ -464,6 +473,8 @@ def create_spec_ingest_workspace(
     clone_url: str | None = None,
     originator: str | None = None,
     agent_identity: str | None = None,
+    pr_number: int | None = None,
+    git_env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Create a TFactory workspace from a raw acceptance-criteria spec.
 
@@ -608,28 +619,32 @@ def create_spec_ingest_workspace(
     # stays on the on-disk tree.
     source_sha = ""
     checkout_failed_reason: str | None = None
+    source_tree_empty = False
     base_clone = Path(project_root).expanduser()
     sut_dir = base_clone  # non-git target-mode: the on-disk tree
     worktree_path: Path | None = None
     source_ref = source_branch or ref
     if source_ref is None and (base_clone / ".git").exists():
-        checkout_failed_reason, default = _default_branch(base_clone)
+        checkout_failed_reason, default = _default_branch(base_clone, git_env=git_env)
         source_ref = default or None
     if source_ref:
         worktree_path = spec_dir / ".worktree"
         checkout_failed_reason, source_sha = _add_spec_worktree(
-            base_clone, worktree_path, source_ref, spec_id
+            base_clone, worktree_path, source_ref, spec_id, git_env=git_env
         )
-    if checkout_failed_reason:
-        # A ref that won't materialize means we cannot prove which tree is under
-        # test. Verifying the wrong code silently is worse than not verifying
-        # (#742/#96/#1404) — fail the spec loudly and skip the planner instead
-        # of proceeding on whatever tree is present.
-        warnings.append(checkout_failed_reason)
-    elif worktree_path is not None:
+    if not checkout_failed_reason and worktree_path is not None:
         # From here the pipeline resolves the SUT to this spec's private
         # worktree — no other spec shares its HEAD.
         sut_dir = worktree_path
+    if not checkout_failed_reason and (
+        not sut_dir.is_dir()
+        or not any(entry.name != ".git" for entry in sut_dir.iterdir())
+    ):
+        checkout_failed_reason = "source tree is empty or missing: nothing to verify"
+        source_tree_empty = True
+    if checkout_failed_reason:
+        # An unresolved ref or empty tree cannot be verified safely.
+        warnings.append(checkout_failed_reason)
 
     # source.json: target_paths name the SUT; source_branch records which build
     # was checked out (when supplied). The Triager's PR-status side-effect skips
@@ -654,6 +669,7 @@ def create_spec_ingest_workspace(
         "source_format": spec.source_format.value,
         "target_paths": list(target_paths or []),
         "source_branch": source_branch,
+        "pr_number": pr_number,
         # The ref the worktree was fetched from (#1404): source_branch, the
         # requested ref, or origin's default branch. None for a non-git root.
         "source_ref": source_ref,
@@ -696,7 +712,13 @@ def create_spec_ingest_workspace(
         "spec_id": spec_id,
         "mode": "spec_ingest",
         "status": "failed" if checkout_failed_reason else "pending",
-        "phase": "source_checkout_failed" if checkout_failed_reason else "created",
+        "phase": (
+            "source_tree_empty"
+            if source_tree_empty
+            else "source_checkout_failed"
+            if checkout_failed_reason
+            else "created"
+        ),
         "tenant": tenant or "default",
         "lane_progress": dict.fromkeys(_MVP_LANES, "pending"),
         # What this run verifies (#1404); source_sha is also the verdict commit.
@@ -760,6 +782,8 @@ def create_spec_ingest_workspace(
         "status": "failed" if checkout_failed_reason else "pending",
         "planner_scheduled": planner_scheduled,
         "warnings": warnings,
+        "source_sha": source_sha,
+        "repo_slug": project_of(repo_ref) or None,
     }
 
 
