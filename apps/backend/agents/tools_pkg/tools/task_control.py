@@ -395,6 +395,17 @@ async def _cluster_get(args: dict[str, Any], report: str | None) -> dict[str, An
     return _format_json({**body, "tree": "cluster"})
 
 
+async def _cluster_task_list(
+    project_id: str | None, status: str | None, limit: int
+) -> dict[str, Any]:
+    params = {"project_id": project_id, "status": status}
+    res = await _cluster_list("/api/spec-tasks", {k: v for k, v in params.items() if v})
+    if res.get("isError"):
+        return dict(res)
+    rows = res.get("tasks", [])[:limit]
+    return _format_json({"count": len(rows), "tasks": rows, "tree": "cluster"})
+
+
 async def _cluster_list(path: str, params: dict[str, Any] | None = None) -> Any:
     """GET a listing from the cluster: the parsed body, or an error envelope."""
     try:
@@ -1089,10 +1100,12 @@ def create_task_control_tools() -> list:
         # workspace so the browser lane records + packages an automated-test/ run.
         visual_inspection = args.get("visual_inspection") or {}
 
-        if err := _verify_args_error(args):
-            return _format_error(err)
-        if _cluster_mode():
-            return await _cluster_create(args, from_spec=False)
+        if (err := _verify_args_error(args)) or _cluster_mode():
+            return (
+                _format_error(err)
+                if err
+                else await _cluster_create(args, from_spec=False)
+            )
 
         projects = _load_projects()
         project_entry = next(
@@ -1313,11 +1326,13 @@ def create_task_control_tools() -> list:
         target_paths = args.get("target_paths") or []
         confirm = bool(args.get("confirm", False))
 
-        if err := _verify_args_error(args):
-            return _format_error(err)
         ref = args.get("ref") or args.get("branch")
-        if _cluster_mode():
-            return await _cluster_create(args, from_spec=True)
+        if (err := _verify_args_error(args)) or _cluster_mode():
+            return (
+                _format_error(err)
+                if err
+                else await _cluster_create(args, from_spec=True)
+            )
 
         projects = _load_projects()
         project_entry = next(
@@ -1397,8 +1412,8 @@ def create_task_control_tools() -> list:
         if _cluster_mode():
             return await _cluster_get(args, None)
         located, err = _locate_local(args)
-        if err:
-            return _format_error(err)
+        if located is None:
+            return _format_error(err or "unknown task_id")
         project_id, spec_id = located
         status = _load_status(project_id, spec_id)
         if status is None:
@@ -1458,14 +1473,7 @@ def create_task_control_tools() -> list:
         limit = int(args.get("limit", 50))
 
         if _cluster_mode():
-            params = {"project_id": project_filter, "status": status_filter}
-            res = await _cluster_list(
-                "/api/spec-tasks", {k: v for k, v in params.items() if v}
-            )
-            if res.get("isError"):
-                return dict(res)
-            rows = res.get("tasks", [])[:limit]
-            return _format_json({"count": len(rows), "tasks": rows, "tree": "cluster"})
+            return await _cluster_task_list(project_filter, status_filter, limit)
 
         results: list[dict[str, Any]] = []
         workspaces_root = _workspace_root() / "workspaces"
@@ -1615,8 +1623,8 @@ def create_task_control_tools() -> list:
         if _cluster_mode():
             return await _cluster_get(args, fmt)
         located, err = _locate_local(args)
-        if err:
-            return _format_error(err)
+        if located is None:
+            return _format_error(err or "unknown task_id")
         project_id, spec_id = located
         spec_dir = _spec_dir(project_id, spec_id)
         filename = "triage_report.md" if fmt == "md" else "triage_report.json"
@@ -1685,8 +1693,8 @@ def create_task_control_tools() -> list:
                 "create a new task instead"
             )
         located, err = _locate_local(args)
-        if err:
-            return _format_error(err)
+        if located is None:
+            return _format_error(err or "unknown task_id")
         project_id, spec_id = located
         # Reset the lane + status and re-fire the pipeline via the shared core
         # (also used by the inbound AIFactory completion webhook, epic #182).
