@@ -130,9 +130,10 @@ def test_stage_go_test_renames_colliding_identifiers(tmp_path: Path) -> None:
     _stage_go_test(spec_dir, project_dir, st)
     _stage_go_test(spec_dir, project_dir, st)  # idempotent
     assert "TestFormatLine(t" in (project_dir / "main_test.go").read_text()
-    out = (project_dir / "format_line_tfgen_test.go").read_text()
+    out = (project_dir / "format_line_test.go").read_text()
     assert "TestTFGenFormatLine" in out and "func TestFormatLine" not in out
-    assert not (project_dir / "format_line_test.go").exists()
+    # the workspace copy is renamed too, so promotion ships what was evaluated
+    assert out == (spec_dir / "format_line_test.go").read_text()
 
 
 def test_stage_go_test_never_overwrites_or_escapes(tmp_path: Path) -> None:
@@ -145,7 +146,7 @@ def test_stage_go_test_never_overwrites_or_escapes(tmp_path: Path) -> None:
     }
     _stage_go_test(spec_dir, project_dir, st)
     assert "TestFormatLine" in (project_dir / "main_test.go").read_text()
-    assert (project_dir / "main_tfgen_test.go").is_file()
+    assert (project_dir / "main_tfgen1_test.go").is_file()
     assert not (project_dir / "flake.nix").exists()
 
 

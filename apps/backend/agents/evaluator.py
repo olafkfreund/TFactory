@@ -2169,7 +2169,11 @@ def _go_top_level_names(text: str, *, funcs_only: bool = False) -> set[str]:
     """
     names: set[str] = set()
     for m in _GO_TOP_LEVEL_RE.finditer(text):
-        if m.group(1) and not re.match(r"func\s+\(", m.group(0)):
+        if (
+            m.group(1)
+            and m.group(1) != "init"
+            and not re.match(r"func\s+\(", m.group(0))
+        ):
             names.add(m.group(1))
         elif m.group(2) and not funcs_only:
             names.add(m.group(2))
@@ -2205,20 +2209,23 @@ def _stage_go_test(spec_dir: Path, project_dir: Path, subtask: dict) -> None:
         gen = src.read_text(errors="replace")
         if dst.exists() and dst.read_text(errors="replace") == gen:
             continue  # already staged by an earlier call
-        alt = dst.with_name(dst.name[: -len("_test.go")] + "_tfgen_test.go")
         existing: set[str] = set()
         for f in dst.parent.glob("*.go"):
-            if f != alt:
-                existing |= _go_top_level_names(f.read_text(errors="replace"))
+            existing |= _go_top_level_names(f.read_text(errors="replace"))
         clash = _go_top_level_names(gen) & existing
-        if not dst.exists() and not clash:
-            _sh.copy2(src, dst)
-            continue
-        if alt.is_symlink() or not alt.resolve().is_relative_to(root):
-            continue
         if clash:
+            # Rewrite the workspace copy too, so what is evaluated is what the
+            # triager later promotes (it reads the workspace file).
             gen = _rename_go_names(gen, clash, existing | _go_top_level_names(gen))
-        alt.write_text(gen)
+            src.write_text(gen)
+        target = dst
+        stem = dst.name[: -len("_test.go")]
+        n = 0
+        while target.exists() and target.read_text(errors="replace") != gen:
+            n += 1  # never overwrite a differing file: pick an unused name
+            target = dst.with_name(f"{stem}_tfgen{n}_test.go")
+        if not target.is_symlink() and target.resolve().is_relative_to(root):
+            target.write_text(gen)
 
 
 _GO_LITERAL_OR_NAME = r"\"(?:\\.|[^\"\\\n])*\"|`[^`]*`|'(?:\\.|[^'\\\n])+'|//[^\n]*"
