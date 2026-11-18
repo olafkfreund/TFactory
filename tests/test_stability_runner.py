@@ -422,12 +422,18 @@ def test_classify_environment_double_quoted_marker() -> None:
     assert classify_pytest_failure(text, 1) == "environment"
 
 
-@pytest.mark.parametrize("returncode", [126, 127])
+@pytest.mark.parametrize("returncode", [125, 126, 127])
 def test_classify_shell_failure_before_test_runner(returncode: int) -> None:
     assert (
         classify_pytest_failure("python: command not found", returncode)
         == "environment"
     )
+
+
+def test_classify_docker_image_missing_is_environment() -> None:
+    """#1573: `docker run` exits 125 when the runner image is missing."""
+    out = "Unable to find image 'tfactory-runner-pytest:latest' locally\n"
+    assert classify_pytest_failure(out, 125) == "environment"
 
 
 def test_classify_app_not_healthy_precedes_shell_failure() -> None:
