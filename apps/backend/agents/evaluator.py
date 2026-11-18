@@ -3220,7 +3220,9 @@ async def _run_evaluator_session(
                     # the missing module instead of just its bucket.
                     "failure_detail": getattr(stability, "failure_detail", None),
                     # pytest exit 2 = collection error: the test never executed.
-                    "returncode": stability.runs[0].returncode,
+                    "returncode": getattr(
+                        getattr(stability, "runs", [None])[0], "returncode", None
+                    ),
                 }
         doc = json.loads(verdicts_path.read_text())
         enrich_verdicts(doc, flaky_by_test_id, failure_kind_by_test_id)
@@ -3371,7 +3373,7 @@ async def run_evaluator(
     from agents.utils import repair_linked_worktree  # noqa: PLC0415 - lazy by design
 
     repair_linked_worktree(project_dir)
-    from agents.services_gate import halt_if_services_declared
+    from agents.services_gate import halt_if_services_declared  # noqa: PLC0415 - lazy by design
 
     if halt_if_services_declared(spec_dir, project_dir):
         return True

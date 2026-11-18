@@ -15,7 +15,9 @@ def halt_if_services_declared(spec_dir: Path, project_dir: Path) -> bool:
         if config is not None:
             names = [service.name for service in config.services]
         else:
-            from agents.evaluator_targets import _load_tfactory_cfg
+            from agents.evaluator_targets import (  # noqa: PLC0415 - avoids a cycle
+                _load_tfactory_cfg,
+            )
 
             snapshot = _load_tfactory_cfg(spec_dir)
             if snapshot is None and (
@@ -28,7 +30,7 @@ def halt_if_services_declared(spec_dir: Path, project_dir: Path) -> bool:
                 if snapshot
                 else []
             )
-    except Exception:
+    except Exception:  # noqa: BLE001 - an unreadable config must not break verify
         _log.warning(
             "services gate: unable to read config for %s", project_dir, exc_info=True
         )

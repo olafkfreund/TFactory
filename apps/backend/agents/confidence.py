@@ -29,6 +29,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+_PYTEST_COLLECTION_ERROR = 2  # pytest exit code: collection error, test never ran
+
 # ─── Weights ────────────────────────────────────────────────────────────
 # Sum to 1.0. Mutation is weighted highest because a SURVIVED mutant is the
 # strongest evidence an assertion is tautological; semantic/coverage are
@@ -487,7 +489,7 @@ def enrich_verdicts(
         if (
             isinstance(failure_info, dict)
             and failure_info.get("failure_kind") == "import"
-            and failure_info.get("returncode") == 2
+            and failure_info.get("returncode") == _PYTEST_COLLECTION_ERROR
         ):
             summary["failure_kind"] = "import"
         apply_consistent_fail_reason(v, failure_info)

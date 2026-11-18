@@ -1002,7 +1002,7 @@ def _planner_blocked(spec_dir: Path, project_dir: Path) -> bool:
     return False
 
 
-async def run_planner(
+async def run_planner(  # noqa: PLR0911 - early-exit guards
     spec_dir: Path,
     project_dir: Path,
     mode: Literal["initial", "replan"] = "initial",
@@ -1044,7 +1044,7 @@ async def run_planner(
     if _planner_blocked(spec_dir, project_dir):
         return False
 
-    from agents.services_gate import halt_if_services_declared
+    from agents.services_gate import halt_if_services_declared  # noqa: PLC0415 - lazy by design
 
     if halt_if_services_declared(spec_dir, project_dir):
         return True

@@ -1254,7 +1254,7 @@ async def run_gen_functional(
         _gen_log.error("gen_functional: spec_dir %s does not exist", spec_dir)
         return False
 
-    from agents.services_gate import halt_if_services_declared
+    from agents.services_gate import halt_if_services_declared  # noqa: PLC0415 - lazy by design
 
     if halt_if_services_declared(spec_dir, project_dir):
         return True

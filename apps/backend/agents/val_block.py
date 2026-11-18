@@ -271,16 +271,21 @@ def build_verification_block(
         "levels": levels,
     }
     out = _qualify_claim_with_flags(normalize_verification(block), verdicts)
-    # Fail closed (#1583): zero executed tests is an explicit verdict class, never
-    # a level. A genuine VAL-3 run is independent evidence and is left alone.
-    if not any_ran and not (val3 is not None and getattr(val3, "ran", False)):
-        cls = "infra" if verdicts else "evaluated_empty"
-        out["verdict_class"] = cls
-        out["claim"] = (
-            f"NOT VERIFIED ({cls}): no test executed"
-            + (" (collection/environment errors, not code defects)" if verdicts else "")
-            + f". {out.get('claim', '')}"
-        ).strip()
+    val3_ran = val3 is not None and getattr(val3, "ran", False)
+    return out if any_ran or val3_ran else _fail_closed(out, bool(verdicts))
+
+
+def _fail_closed(out: dict[str, Any], have_verdicts: bool) -> dict[str, Any]:
+    """Zero executed tests is an explicit verdict class, never a level (#1583).
+
+    A genuine VAL-3 run is independent evidence and is left alone by the caller.
+    """
+    cls = "infra" if have_verdicts else "evaluated_empty"
+    out["verdict_class"] = cls
+    note = " (collection/environment errors, not code defects)" if have_verdicts else ""
+    out["claim"] = (
+        f"NOT VERIFIED ({cls}): no test executed{note}. {out.get('claim', '')}".strip()
+    )
     return out
 
 
