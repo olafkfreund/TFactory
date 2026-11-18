@@ -1,12 +1,23 @@
-"""Pure helpers for the Rust cargo-test Nix lane."""
+"""The Rust cargo-test Nix lane (#1578): pure helpers plus the Job runner.
+
+rustc and cargo come from ``nix_provisioner``'s builtin ``rust`` table, so the
+lane needs no toolchain descriptor; the crate is copied to a writable path and
+tested there (``/work`` is read-only to the Job's uid).
+"""
 
 from __future__ import annotations
 
+import contextlib
 import re
 from pathlib import Path
-from typing import NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
+from agents import nix_env
 from agents.nix_env import _shquote
+from tools.runners.docker_runner import DockerRunResult
+
+if TYPE_CHECKING:
+    from agents.execution_sandbox import ExecutionSandbox
 
 
 class CargoCounts(NamedTuple):
@@ -99,3 +110,93 @@ def _cargo_crate_dir(project_dir: Path, hint: Path | None) -> Path:
         key=lambda directory: (len(directory.parts), str(directory)),
     )
     return manifests[0] if manifests else project
+
+
+def rust_environment(spec_dir: Path) -> dict[str, Any]:
+    """The Rust nix environment for the cargo verify lane.
+
+    Prefer a contract ``environment`` that declares a Rust nix env; otherwise
+    synthesize one naming only the language (the provisioner's builtin table
+    supplies rustc + cargo). ``network`` is restricted: cargo resolves crates
+    at run time.
+    """
+    env = nix_env.environment_from_contract(spec_dir)
+    if (
+        env is not None
+        and nix_env.is_nix_environment(env)
+        and (env.get("language") or "").lower() == "rust"
+    ):
+        return dict(env)
+    return {
+        "language": "rust",
+        "toolchain": {},
+        "system_packages": [],
+        "verify_commands": ["cargo test --workspace --no-fail-fast"],
+        "provisioning": {"method": "nix", "generated": True},
+        "network": "restricted",
+    }
+
+
+def run_cargo_lane_via_nix(
+    spec_dir: Path,
+    project_dir: Path,
+    *,
+    hint: Path | None = None,
+    extra_env: dict[str, str] | None = None,
+    timeout: int = 900,
+) -> DockerRunResult | None:
+    """Run the crate's tests inside the per-task Nix dev shell (#1578).
+
+    The Rust twin of ``run_maven_lane_via_nix``: ``cargo test --workspace``
+    covers the whole crate, so there is no single-file staging. The exit code
+    is cargo's, tightened by :func:`cargo_verdict` (a zero exit with zero tests
+    is not a pass; only ignored tests is not run). Timeout is 900 s: a cold
+    crate download takes minutes.
+
+    Returns None when the sandbox isn't configured (caller falls back).
+    """
+    mount = nix_env._NIX_MOUNT
+    sandbox: ExecutionSandbox | None = nix_env.nix_runner_from_env()
+    if sandbox is None:
+        nix_env._log.info(
+            "run_cargo_lane_via_nix: TFACTORY_NIX_RUNNER_IMAGE unset; skipping"
+        )
+        return None
+    plan = nix_env.materialize_flake(
+        spec_dir, project_dir, env=rust_environment(spec_dir)
+    )
+    if plan is None:
+        return None
+
+    pd = Path(project_dir)
+    try:
+        crate_dir = _cargo_crate_dir(pd, hint)
+        rel = (
+            "."
+            if crate_dir == pd.resolve()
+            else str(crate_dir.relative_to(pd.resolve()))
+        )
+        run_dir = mount if rel == "." else f"{mount}/{rel}"
+        (pd / nix_env._JOB_SCRIPT).write_text(
+            cargo_job_script(run_dir, "", extra_env or {}), encoding="utf-8"
+        )
+        job_cmd = f"nix develop path:{mount}#default --command bash {mount}/{nix_env._JOB_SCRIPT}"
+        res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)
+    finally:
+        with contextlib.suppress(OSError):
+            (pd / nix_env._JOB_SCRIPT).unlink(missing_ok=True)
+        nix_env._drop_generated_flake(plan)
+
+    stdout = res.stdout or ""
+    code, why = cargo_verdict(
+        nix_env._parse_exit_marker(stdout, "__CARGO_EXIT="),
+        parse_cargo_test_output(stdout),
+    )
+    return DockerRunResult(
+        returncode=code,
+        stdout=stdout,
+        stderr=why,
+        junit_xml_path=None,
+        coverage_xml_path=None,
+        argv=["nix", "develop", f"path:{mount}#default", "--", "cargo", "test"],
+    )

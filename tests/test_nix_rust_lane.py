@@ -101,3 +101,59 @@ def test_crate_dir_fallback_stays_in_project(tmp_path: Path):
     nested.mkdir()
     (nested / "Cargo.toml").write_text("[package]\nname = 'nested'\n")
     assert _cargo_crate_dir(project, outside / "src/lib.rs") == nested
+
+
+class _FakeSandbox:
+    def __init__(self, stdout: str):
+        self.stdout = stdout
+        self.commands: list[list[str]] = []
+
+    def run(self, commands, *, workdir=None, timeout=300):
+        from types import SimpleNamespace
+
+        self.commands = list(commands)
+        return SimpleNamespace(stdout=self.stdout, returncode=0)
+
+
+def test_run_cargo_lane_returns_none_without_a_sandbox(tmp_path, monkeypatch):
+    from agents import nix_rust_lane
+
+    monkeypatch.delenv("TFACTORY_NIX_RUNNER_IMAGE", raising=False)
+    assert nix_rust_lane.run_cargo_lane_via_nix(tmp_path, tmp_path) is None
+
+
+def test_run_cargo_lane_applies_the_evidence_rule(tmp_path, monkeypatch):
+    from agents import nix_env, nix_rust_lane
+
+    zero = (
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured\n__CARGO_EXIT=0\n"
+    )
+    sandbox = _FakeSandbox(zero)
+    monkeypatch.setattr(nix_env, "nix_runner_from_env", lambda: sandbox)
+    (tmp_path / "Cargo.toml").write_text("[package]\nname = 'demo'\n")
+    res = nix_rust_lane.run_cargo_lane_via_nix(tmp_path, tmp_path)
+    assert res is not None
+    assert res.returncode == 1 and "zero tests" in res.stderr
+    assert "nix develop path:/work#default --command bash" in sandbox.commands[0]
+    assert not (tmp_path / nix_env._JOB_SCRIPT).exists()  # script cleaned up
+    assert not (tmp_path / "flake.nix").exists()  # generated flake dropped
+
+
+def test_run_cargo_lane_passes_on_real_tests(tmp_path, monkeypatch):
+    from agents import nix_env, nix_rust_lane
+
+    ok = "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured\n__CARGO_EXIT=0\n"
+    monkeypatch.setattr(nix_env, "nix_runner_from_env", lambda: _FakeSandbox(ok))
+    res = nix_rust_lane.run_cargo_lane_via_nix(tmp_path, tmp_path)
+    assert res is not None and res.returncode == 0
+
+
+def test_rust_environment_prefers_a_contract_rust_env(tmp_path, monkeypatch):
+    from agents import nix_env, nix_rust_lane
+
+    contract = {"language": "rust", "provisioning": {"method": "nix"}, "x": 1}
+    monkeypatch.setattr(nix_env, "environment_from_contract", lambda _d: contract)
+    assert nix_rust_lane.rust_environment(tmp_path)["x"] == 1
+    monkeypatch.setattr(nix_env, "environment_from_contract", lambda _d: None)
+    env = nix_rust_lane.rust_environment(tmp_path)
+    assert env["language"] == "rust" and env["network"] == "restricted"
