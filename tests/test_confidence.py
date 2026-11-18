@@ -15,6 +15,7 @@ from agents.confidence import (
     apply_app_not_healthy_override,
     apply_consistent_fail_reason,
     apply_environment_override,
+    apply_harness_import_override,
     compute_confidence,
     enrich_verdicts,
 )
@@ -483,3 +484,54 @@ def test_enrich_verdicts_environment_becomes_not_run():
     v = doc["verdicts"][0]
     assert v["verdict"] == "not_run"
     assert any("environment was unusable" in r for r in v["reasons"])
+
+
+def test_enrich_verdicts_missing_harness_import_becomes_not_run():
+    doc = {"verdicts": [_verdict(verdict="reject", stability="consistent_fail")]}
+    enrich_verdicts(
+        doc,
+        failure_kind_by_test_id={
+            "t": {
+                "failure_kind": "import",
+                "failure_detail": "ModuleNotFoundError: No module named 'requests'",
+            }
+        },
+    )
+    v = doc["verdicts"][0]
+    assert v["verdict"] == "not_run"
+    assert v["signals_summary"]["failure_kind"] == "import"
+    assert "collection failed" in v["reasons"][0]
+    assert "library 'requests' is missing" in v["reasons"][1]
+
+
+def test_enrich_verdicts_subject_import_stays_reject():
+    doc = {"verdicts": [_verdict(verdict="reject", stability="consistent_fail")]}
+    enrich_verdicts(
+        doc,
+        failure_kind_by_test_id={
+            "t": {
+                "failure_kind": "import",
+                "failure_detail": "ModuleNotFoundError: No module named 'app'",
+            }
+        },
+    )
+    v = doc["verdicts"][0]
+    assert v["verdict"] == "reject"
+    assert v["signals_summary"]["failure_kind"] == "import"
+    assert len(v["reasons"]) == 1
+
+
+def test_harness_import_override_never_touches_accept():
+    v = _verdict(verdict="accept")
+    assert (
+        apply_harness_import_override(
+            v,
+            {
+                "failure_kind": "import",
+                "failure_detail": "No module named 'requests'",
+            },
+        )
+        is False
+    )
+    assert v["verdict"] == "accept"
+    assert "reasons" not in v

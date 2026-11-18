@@ -118,6 +118,13 @@ def _level_for_verdict(v: dict[str, Any]) -> str | None:
     return _LANE_LEVEL.get(lane)
 
 
+def _never_executed(v: Any) -> bool:
+    if not isinstance(v, dict):
+        return False
+    summary = v.get("signals_summary")
+    return isinstance(summary, dict) and summary.get("failure_kind") == "import"
+
+
 def _level_status(verdicts: list[str]) -> str:
     """passed only if a lane ran and every verdict is a pass; else failed/not_run.
 
@@ -151,7 +158,12 @@ def build_verification_block(
     levels[], claim, _gate}`` — ``achieved_level`` is recomputed from what truly
     ran, so it can never overclaim.
     """
-    verdicts = verdicts or []
+    # A test that failed at collection (stamped `failure_kind: import`) never
+    # executed, so its verdict -- even a `flag` -- proves nothing (#1583).
+    verdicts = [
+        {**v, "verdict": "not_run"} if _never_executed(v) else v
+        for v in (verdicts or [])
+    ]
     by_level: dict[str, list[str]] = {}
     for v in verdicts:
         if not isinstance(v, dict):
@@ -258,7 +270,18 @@ def build_verification_block(
         "achieved_level": effective_target,
         "levels": levels,
     }
-    return _qualify_claim_with_flags(normalize_verification(block), verdicts)
+    out = _qualify_claim_with_flags(normalize_verification(block), verdicts)
+    # Fail closed (#1583): zero executed tests is an explicit verdict class, never
+    # a level. A genuine VAL-3 run is independent evidence and is left alone.
+    if not any_ran and not (val3 is not None and getattr(val3, "ran", False)):
+        cls = "infra" if verdicts else "evaluated_empty"
+        out["verdict_class"] = cls
+        out["claim"] = (
+            f"NOT VERIFIED ({cls}): no test executed"
+            + (" (collection/environment errors, not code defects)" if verdicts else "")
+            + f". {out.get('claim', '')}"
+        ).strip()
+    return out
 
 
 def read_verification_block(
