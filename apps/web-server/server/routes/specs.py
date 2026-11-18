@@ -13,7 +13,10 @@ route); no per-route dependency is needed. Errors map to HTTP codes:
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import os
+import re
 from typing import Any
 
 from factory_common.logsafe import sanitize_log
@@ -23,6 +26,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.database.engine import get_db
 from server.error_ref import InputRejectedError, client_error
+from server.services.project_workspace_service import (
+    GitOperationError,
+    _git_askpass_env,
+)
 
 from ._specpath import safe_component
 from ._tenancy import resolve_tenant
@@ -132,6 +139,14 @@ class SpecIngestRequest(BaseModel):
             "means GitHub, which is what it always meant."
         ),
     )
+    pr_number: int | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "The PR the build opened (#1574). Recorded in source.json so the "
+            "verdict can be posted back without a later attach call."
+        ),
+    )
     originator: str | None = Field(
         default=None,
         max_length=128,
@@ -151,6 +166,20 @@ class SpecIngestRequest(BaseModel):
             "completion event."
         ),
     )
+
+
+_GITHUB_SLUG_RE = re.compile(
+    r"^(?:https://github\.com/)?([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?$"
+)
+
+
+def _github_slug(value: str | None) -> str | None:
+    """``owner/name`` of a GitHub repo given as ``owner/name`` or its https URL.
+
+    ``None`` for anything else (provider-qualified refs, other hosts, ssh URLs).
+    """
+    match = _GITHUB_SLUG_RE.match((value or "").strip())
+    return match.group(1) if match else None
 
 
 class PrAttachRequest(BaseModel):
@@ -319,37 +348,89 @@ async def ingest_spec(
             if data.get("name") == req.project_id:
                 entry, resolved_id = data, pid
                 break
-    if entry is None and req.git_url:
-        # Self-materializing handoff (RFC-0007 / PARR seam): the project isn't
-        # pre-registered, but the payload carries a clone URL — clone it (at the
-        # build branch) and register it, reusing the same clone path /api/projects
-        # uses. This makes the AIFactory->TFactory handoff work for ANY built
-        # project without manual pre-registration (was: 404 on every such handoff).
-        org_id = (
-            await creator_org(getattr(request.state, "user", None), db)
-            if request is not None
-            else None
-        )  # #1036
-        entry, resolved_id = await _clone_and_register_project(
-            req.git_url,
-            branch=req.source_branch,
-            name=str(req.project_id),
-            org_id=org_id,
-        )
-    if entry is None:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND,
-            detail=(
-                f"unknown project_id: {req.project_id!r} "
-                "(and no git_url provided to self-register it)"
-            ),
-        )
+    # #1574: a GitHub `repo` selects the checkout. It, `git_url` and the project's
+    # recorded origin must name the same repository, so a matching ref can never
+    # verify unrelated code.
+    repo_slug = _github_slug(req.repo)
+    git_url = req.git_url
+    if repo_slug:
+        if git_url and (_github_slug(git_url) or "").lower() != repo_slug.lower():
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, detail="git_url does not match repo"
+            )
+        git_url = git_url or f"https://github.com/{repo_slug}.git"
+    self_registered = False
+    try:
+        if entry is None and git_url:
+            # Self-materializing handoff (RFC-0007 / PARR seam): the project isn't
+            # pre-registered, but the payload carries a clone URL — clone it (at
+            # the build branch) and register it, reusing the same clone path
+            # /api/projects uses. This makes the AIFactory->TFactory handoff work
+            # for ANY built project without manual pre-registration.
+            org_id = (
+                await creator_org(getattr(request.state, "user", None), db)
+                if request is not None
+                else None
+            )  # #1036
+            entry, resolved_id = await _clone_and_register_project(
+                git_url,
+                branch=req.source_branch,
+                name=str(req.project_id),
+                org_id=org_id,
+            )
+            self_registered = True
+        if entry is None:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND,
+                detail=(
+                    f"unknown project_id: {req.project_id!r} "
+                    "(and no git_url provided to self-register it)"
+                ),
+            )
 
-    # The project is registered, but its on-disk clone may have been recycled
-    # (pod/PVC restart) — re-materialize it before the planner resolves it as a
-    # working dir, or the planner fails with planner_initial_exception (#539).
-    project_root = await _ensure_project_clone(
-        entry, resolved_id, source_branch=req.source_branch
+        recorded = _github_slug(entry.get("clonedFrom"))
+        if repo_slug and recorded and recorded.lower() != repo_slug.lower():
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, detail="repo does not match project"
+            )
+
+        if repo_slug and not self_registered:
+            # The registered path may be another pod's workspace: check out the
+            # named repo itself (same URL, same dir, idempotent).
+            from ..services.project_workspace_service import clone_or_update
+
+            token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+            project_root = str(
+                (
+                    await clone_or_update(
+                        git_url=git_url,
+                        branch=None,
+                        credential=("x-access-token", token) if token else None,
+                    )
+                ).resolve()
+            )
+        else:
+            # The project is registered, but its on-disk clone may have been
+            # recycled (pod/PVC restart) — re-materialize it before the planner
+            # resolves it as a working dir, or it fails (#539).
+            project_root = await _ensure_project_clone(
+                entry, resolved_id, source_branch=req.source_branch
+            )
+    except GitOperationError as exc:
+        # Fixed message: git's stderr can carry the remote URL and credentials.
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            detail=client_error(logger, "could not clone repository", exc),
+        ) from exc
+
+    cluster_clone = bool(repo_slug or req.git_url)
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    # The per-spec fetch runs after clone_or_update dropped its askpass helper;
+    # give it the same credential, via env only (never argv or git config).
+    git_auth = (
+        _git_askpass_env("x-access-token", token)
+        if cluster_clone and token
+        else contextlib.nullcontext({})
     )
 
     # Both ids become path segments under workspaces/<project_id>/specs/<spec_id>
@@ -359,23 +440,26 @@ async def ingest_spec(
     safe_spec_id = safe_component(req.spec_id)
 
     try:
-        result = create_spec_ingest_workspace(
-            project_id=safe_project_id,
-            spec_id=safe_spec_id,
-            spec_text=req.spec_text,
-            fmt=req.format,
-            target_paths=req.target_paths or [],
-            project_root=project_root,
-            contract=req.contract,
-            source_branch=req.source_branch,
-            ref=req.ref,
-            tenant=resolve_tenant(x_tenant_id, req.tenant),
-            repo_ref=req.repo,
-            signed_contract=req.signed_contract,
-            clone_url=entry.get("clonedFrom") or req.git_url,
-            originator=req.originator,
-            agent_identity=req.agent_identity,
-        )
+        with git_auth as git_env:
+            result = create_spec_ingest_workspace(
+                project_id=safe_project_id,
+                spec_id=safe_spec_id,
+                spec_text=req.spec_text,
+                fmt=req.format,
+                target_paths=req.target_paths or [],
+                project_root=project_root,
+                contract=req.contract,
+                source_branch=req.source_branch,
+                ref=req.ref,
+                tenant=resolve_tenant(x_tenant_id, req.tenant),
+                repo_ref=repo_slug or req.repo,
+                signed_contract=req.signed_contract,
+                clone_url=entry.get("clonedFrom") or git_url,
+                originator=req.originator,
+                agent_identity=req.agent_identity,
+                pr_number=req.pr_number,
+                git_env=git_env,
+            )
     except FileExistsError as exc:
         # The message names spec_dir's server-side path -- redact rather than
         # mark: unlike VisualBaselineError/provider_runtime's KeyError above,
@@ -403,7 +487,13 @@ async def ingest_spec(
             ),
         ) from exc
 
-    return {"task_id": req.spec_id, "project_id": req.project_id, **result}
+    return {
+        "task_id": req.spec_id,
+        "project_id": req.project_id,
+        **result,
+        "workspace_project_id": safe_project_id,
+        "tree": "cluster_clone" if cluster_clone else "local",
+    }
 
 
 @router.post(
