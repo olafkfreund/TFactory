@@ -122,8 +122,10 @@ _ASSERTION_MARKERS = (
 # error / collection error, 5 = no tests collected.
 _PYTEST_COLLECTION_ERROR_CODE = 2
 _PYTEST_TEST_FAILURE_CODE = 1
-# #1401: pytest never exits 126/127; only the shell does, so the test never ran.
-_SHELL_NOT_RUN_CODES = (126, 127)
+# #1401, #1573: pytest never exits 125-127. 126/127 come from the shell, 125 from
+# `docker run` failing before the container starts (e.g. runner image missing).
+# Either way the test never ran.
+_SHELL_NOT_RUN_CODES = (125, 126, 127)
 
 
 def classify_pytest_failure(stdout: str, returncode: int) -> str:
