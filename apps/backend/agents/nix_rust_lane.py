@@ -20,6 +20,14 @@ if TYPE_CHECKING:
     from agents.execution_sandbox import ExecutionSandbox
 
 
+# Paths INSIDE the Job container: /tmp is the one place its non-root uid can
+# write (the co-mounted /work is read-only to it), so the crate is copied and
+# built here. S108 is about host temp files; these never touch the host.
+_CARGO_SRC_DIR = "/tmp/tf_cargo_src"  # noqa: S108
+_CARGO_HOME = "/tmp/tf_cargo_home"  # noqa: S108
+_CARGO_TARGET_DIR = "/tmp/tf_cargo_target"  # noqa: S108
+
+
 class CargoCounts(NamedTuple):
     passed: int
     failed: int
@@ -60,19 +68,19 @@ def cargo_verdict(exit_code: int, counts: CargoCounts) -> tuple[int, str]:
     return 1, "cargo ran zero tests"
 
 
-def cargo_job_script(run_dir: str, stage_dir: str, extra_env: dict[str, str]) -> str:
+def cargo_job_script(run_dir: str, extra_env: dict[str, str]) -> str:
     """Build a Job script that copies the read-only crate before testing."""
     exports = "".join(
         f"export {key}={_shquote(str(value))}\n" for key, value in extra_env.items()
     )
-    src = _shquote("/tmp/tf_cargo_src")
+    src = _shquote(_CARGO_SRC_DIR)
     run_q = _shquote(run_dir)
     return (
         "#!/usr/bin/env bash\nset +e\n"
         + exports
         + f"rm -rf {src} && cp -r {run_q} {src} && cd {src}\n"
-        + f"export CARGO_HOME={_shquote('/tmp/tf_cargo_home')}\n"
-        + f"export CARGO_TARGET_DIR={_shquote('/tmp/tf_cargo_target')}\n"
+        + f"export CARGO_HOME={_shquote(_CARGO_HOME)}\n"
+        + f"export CARGO_TARGET_DIR={_shquote(_CARGO_TARGET_DIR)}\n"
         + "cargo test --workspace --no-fail-fast 2>&1\n"
         + "echo __CARGO_EXIT=$?\n"
     )
@@ -178,7 +186,7 @@ def run_cargo_lane_via_nix(
         )
         run_dir = mount if rel == "." else f"{mount}/{rel}"
         (pd / nix_env._JOB_SCRIPT).write_text(
-            cargo_job_script(run_dir, "", extra_env or {}), encoding="utf-8"
+            cargo_job_script(run_dir, extra_env or {}), encoding="utf-8"
         )
         job_cmd = f"nix develop path:{mount}#default --command bash {mount}/{nix_env._JOB_SCRIPT}"
         res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)
