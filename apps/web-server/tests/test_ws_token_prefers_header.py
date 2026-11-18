@@ -58,13 +58,15 @@ def test_non_bearer_header_falls_through_to_query() -> None:
 
 def test_query_use_warns_once(caplog: pytest.LogCaptureFixture) -> None:
     auth_mod._warn_ws_query_token_once.cache_clear()
+    sentinel = "secret-sentinel-never-log"
     with caplog.at_level("WARNING"):
-        auth_mod._ws_extract_token(_ws(query="a"))
+        auth_mod._ws_extract_token(_ws(query=sentinel))
         auth_mod._ws_extract_token(_ws(query="b"))
     warnings = [r for r in caplog.records if "DEPRECATED" in r.getMessage()]
     assert len(warnings) == 1, (
         "the deprecation notice must be emitted once, not per call"
     )
+    assert sentinel not in caplog.text
 
 
 def test_header_use_does_not_warn(caplog: pytest.LogCaptureFixture) -> None:

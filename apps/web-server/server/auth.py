@@ -376,7 +376,8 @@ async def _ws_acw_principal(token: str) -> dict[str, object] | None:
         # shortcut: ownerless keys rejected on WS; revisit with Phase 4 scope enforcement
         if key is None or not key.has_scope(mcp_auth.REST_API_SCOPE) or not key.user_id:
             return None
-    except Exception:  # noqa: BLE001 — any validator failure denies WS auth (4001)
+    except Exception as exc:  # noqa: BLE001 — any validator failure denies WS auth (4001)
+        logger.warning("WS key validation failed: %s", type(exc).__name__)
         return None
 
     return {

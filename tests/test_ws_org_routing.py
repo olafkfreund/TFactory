@@ -367,7 +367,9 @@ def test_event_org_cache_expiry_and_reassignment(monkeypatch):
     ids=["revoked", "raising_validator"],
 )
 @pytest.mark.parametrize("org", ["A", None])
-def test_key_revocation_closes_socket(socket_app, monkeypatch, second_outcome, org):
+def test_key_revocation_closes_socket(
+    socket_app, monkeypatch, caplog, second_outcome, org
+):
     app, _, _ = socket_app
     key = mcp_auth.AuthenticatedKey("key-id", frozenset({"api:full"}), "owner", org)
     monkeypatch.setattr(
@@ -388,6 +390,9 @@ def test_key_revocation_closes_socket(socket_app, monkeypatch, second_outcome, o
             ws.receive_text()
         assert getattr(exc.value, "code", None) == 4001
     assert not events._clients
+    if isinstance(second_outcome, Exception):
+        assert "WS key validation failed: RuntimeError" in caplog.text
+        assert "acw_a" not in caplog.text
 
 
 def test_task_log_writer_stream_carries_project_id_and_routes_by_org(
@@ -506,7 +511,9 @@ def _wait_for_no_orgs(client, socket):
     raise AssertionError("memberships were not reloaded")
 
 
-def test_key_socket_ignores_shadow_mode_and_follows_membership(socket_app, monkeypatch):
+def test_key_socket_ignores_shadow_mode_and_follows_membership(
+    socket_app, monkeypatch, caplog
+):
     app, setting = socket_app[:2]
     monkeypatch.setattr(events, "_KEY_RECHECK_SECONDS", 0)
     monkeypatch.setattr(
@@ -521,12 +528,83 @@ def test_key_socket_ignores_shadow_mode_and_follows_membership(socket_app, monke
         _emit(client, "unresolved", {"specId": "001-x"})
         _emit(client, "own-org", {"projectId": "p-a"})
         assert key.receive_json()["type"] == "own-org"
-        # The membership lookup now fails: the next re-check empties the socket's orgs.
+        # A failed recheck closes the key socket and unregisters it.
         monkeypatch.setattr(_engine(), "async_session_factory", _no_database)
         key.send_text("wake the receive loop")
+        with pytest.raises(Exception) as exc:
+            key.receive_text()
+        assert getattr(exc.value, "code", None) == 1011
+        assert not events._clients
+    assert "Could not load org memberships for WS client: RuntimeError" in caplog.text
+    assert "acw_a" not in caplog.text
+
+
+def test_initial_membership_failure_closes_key_and_keeps_jwt(
+    socket_app, monkeypatch, caplog
+):
+    app, _, _ = socket_app
+    monkeypatch.setattr(_engine(), "async_session_factory", _no_database)
+    with TestClient(app) as client:
+        with _connect(client, "acw_a") as key:
+            with pytest.raises(Exception) as exc:
+                key.receive_text()
+            assert getattr(exc.value, "code", None) == 1011
+        assert not events._clients
+
+        with _connect(client, "jwt-a") as jwt:
+            socket = next(iter(events._clients.values()))
+            assert socket.org_ids == set()
+            assert socket.websocket in events._clients
+    assert not events._clients
+    assert "Could not load org memberships for WS client: RuntimeError" in caplog.text
+    assert "acw_a" not in caplog.text
+
+
+def test_jwt_recheck_failure_keeps_socket_open(socket_app, monkeypatch):
+    app, _, _ = socket_app
+    monkeypatch.setattr(events, "_KEY_RECHECK_SECONDS", 0)
+    with TestClient(app) as client, _connect(client, "jwt-a") as jwt:
         socket = next(iter(events._clients.values()))
+        assert socket.org_ids == {"A"}
+        monkeypatch.setattr(_engine(), "async_session_factory", _no_database)
+        jwt.send_text("wake")
         _wait_for_no_orgs(client, socket)
-        assert not events._may_receive(socket, "A")
+        assert socket.websocket in events._clients
+
+
+def test_empty_membership_and_legacy_socket_stay_open(socket_app, monkeypatch):
+    app, _, _ = socket_app
+
+    class EmptyMembership:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+        async def execute(self, _stmt):
+            return SimpleNamespace(all=lambda: [])
+
+    monkeypatch.setattr(_engine(), "async_session_factory", EmptyMembership)
+    with (
+        TestClient(app) as client,
+        _connect(client, "jwt-a") as jwt,
+        _connect(client, "shared") as legacy,
+    ):
+        assert all(socket.org_ids == set() for socket in events._clients.values())
+        jwt_socket = next(
+            socket for socket in events._clients.values() if socket.user_id
+        )
+        legacy_socket = next(
+            socket for socket in events._clients.values() if not socket.user_id
+        )
+        assert (
+            client.portal.call(events._load_org_ids, jwt_socket, {"id": "a-only"})
+            is True
+        )
+        assert client.portal.call(events._load_org_ids, legacy_socket, None) is True
+        assert jwt_socket.websocket in events._clients
+        assert legacy_socket.websocket in events._clients
 
 
 def test_org_bound_key_without_owner_is_not_a_service_client():
