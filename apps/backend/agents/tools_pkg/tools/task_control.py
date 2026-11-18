@@ -1399,6 +1399,7 @@ def create_task_control_tools() -> list:
             live = None
         if live is not None:
             status["lane_progress"] = live
+        status["tree"] = "local"
         return _format_json(status)
 
     tools.append(task_status)
@@ -1641,6 +1642,7 @@ def create_task_control_tools() -> list:
                 "format": fmt,
                 "path": str(report_path),
                 "body": report_path.read_text(),
+                "tree": "local",
             }
         )
 
