@@ -140,6 +140,7 @@ def test_languages_supporting_lane_mvp_only_for_unit():
         "python",
         "typescript",
         "kotlin",
+        "shell",
     }
 
 
@@ -155,6 +156,7 @@ def test_languages_supporting_lane_unfiltered_for_unit():
         "typescript",
         "java",
         "kotlin",
+        "shell",
     }
 
 

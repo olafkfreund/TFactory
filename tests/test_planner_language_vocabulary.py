@@ -34,6 +34,8 @@ _KOTLIN_ADDITIONS = {".kt": "kotlin", ".kts": "kotlin"}
 # arrived purely from dropping in that descriptor — no edit to prompts.py, which
 # is what the derivation exists for.
 _JAVA_ADDITIONS = {".java": "java"}
+# #1581 gave shell an in-cluster lane (frameworks/bats).
+_SHELL_ADDITIONS = {".sh": "shell", ".bash": "shell", ".bats": "shell"}
 
 
 def test_derived_extension_map_is_the_old_table_plus_kotlin_and_java() -> None:
@@ -42,6 +44,7 @@ def test_derived_extension_map_is_the_old_table_plus_kotlin_and_java() -> None:
         **_PRE_1311_EXT_LANGUAGE,
         **_KOTLIN_ADDITIONS,
         **_JAVA_ADDITIONS,
+        **_SHELL_ADDITIONS,
     }
 
 
@@ -81,6 +84,8 @@ def test_a_kotlin_deliverable_pins_kotlin() -> None:
         (["src/app.tsx"], "typescript"),
         (["src/legacy.js"], "typescript"),
         (["src/lib.rs"], "rust"),
+        # Shell pins since #1581 gave it a lane to run in (frameworks/bats).
+        (["bin/backup-rotate.sh"], "shell"),
         # Java pins since #1321 gave it a lane to run in (frameworks/maven).
         (["src/main/java/Calc.java"], "java"),
         # A repo whose only changed file is JSON pins nothing. Deriving from

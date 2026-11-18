@@ -831,3 +831,54 @@ def test_exactly_one_framework_claims_each_language_unit_lane() -> None:
     for allowed in ("typescript", "java"):
         contested.pop(allowed, None)
     assert not contested, f"two frameworks claim one unit lane: {contested}"
+
+
+@pytest.mark.skipif(
+    not _REAL_FRAMEWORKS_DIR.is_dir(),
+    reason=f"frameworks/ directory not found at {_REAL_FRAMEWORKS_DIR}",
+)
+def test_bats_descriptor_owns_the_shell_unit_lane() -> None:
+    """Shell's in-cluster unit lane (#1581): the claimant the Planner selects."""
+    bats = get_descriptor("bats", frameworks_dir=_REAL_FRAMEWORKS_DIR)
+    assert bats.language == "shell"
+    assert [ln.value if hasattr(ln, "value") else str(ln) for ln in bats.lanes] == [
+        "unit"
+    ]
+    assert {".sh", ".bash", ".bats"} <= set(bats.source_extensions)
+    assert "shellcheck" in bats.ac_command_tokens
+    assert bats.coverage_strategy == "skip"
+    assert "pytest wrappers" in bats.context_block
+
+
+@pytest.mark.skipif(
+    not _REAL_FRAMEWORKS_DIR.is_dir(),
+    reason=f"frameworks/ directory not found at {_REAL_FRAMEWORKS_DIR}",
+)
+def test_planner_accepts_a_shell_unit_subtask_and_rejects_a_py_wrapper(
+    tmp_path: Path,
+) -> None:
+    """The validators let (shell, bats, unit) through and refuse a pytest wrapper."""
+    from types import SimpleNamespace
+
+    from agents.planner import _validate_framework_consistency, _validate_test_paths
+
+    registry = load_registry(_REAL_FRAMEWORKS_DIR)
+
+    def plan(path: str) -> SimpleNamespace:
+        st = SimpleNamespace(
+            id="st-sh",
+            language="shell",
+            framework="bats",
+            lane="unit",
+            files_to_create=[path],
+        )
+        return SimpleNamespace(phases=[SimpleNamespace(subtasks=[st])])
+
+    ok_plan = plan("tests/backup_rotate.bats")
+    assert _validate_framework_consistency(ok_plan, registry) == (True, "")
+    assert _validate_test_paths(ok_plan, registry, tmp_path) == (True, "")
+    ok, detail = _validate_test_paths(
+        plan("tests/unit/test_shellcheck_clean.py"), registry, tmp_path
+    )
+    assert not ok
+    assert "test_shellcheck_clean.py" in detail

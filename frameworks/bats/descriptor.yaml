@@ -1,0 +1,76 @@
+# frameworks/bats/descriptor.yaml
+#
+# Shell / bats descriptor (#1581). Makes the in-cluster shell lane reachable
+# from a planned task: the Evaluator routes `language == "shell"` to
+# `run_bats_lane_via_nix` (agents/nix_shell_lane.py), and
+# `_validate_framework_consistency` validates every subtask's
+# (language, framework, lane) against THIS registry. Without it the Planner
+# emitted pytest wrappers that shelled out to bats/shellcheck and skipped when
+# the tools were absent.
+#
+# Unit only: see languages/shell.yaml for the lanes that are honestly
+# unavailable. A shell project has no distinctive manifest file, so none is
+# claimed (detection is by extension and AC command token).
+name: bats
+language: shell
+lanes:
+  - unit
+
+version_range: ">=1.8,<2.0"
+
+runtime:
+  # Nominal, as for frameworks/gradle: the lane runs in-cluster as a per-task
+  # Nix dev shell (RFC-0005) supplying bats and shellcheck.
+  image: tfactory-runner-shell:latest
+  entrypoint:
+    - bats
+    - "--tap"
+    - "-r"
+    - "tests"
+
+ac_command_tokens:
+  - "bats tests"
+  - "bats test/"
+  - "shellcheck"
+
+source_extensions:
+  - ".sh"
+  - ".bash"
+  - ".bats"
+
+manifest_signals: []
+
+test_path_conventions:
+  - "tests/**/*.bats"
+  - "test/**/*.bats"
+  - "**/tests/**/*.bats"
+
+coverage_strategy: skip
+
+context_block: |
+  You are generating shell tests that run under `bats` (Bash Automated Testing
+  System) in TAP mode. Write `.bats` files, NOT pytest wrappers that shell out.
+
+  Placement:
+    - Tests go under `tests/` (or `test/`) as `<script>.bats`.
+    - Load the script under test with `source` from a path relative to
+      `"${BATS_TEST_DIRNAME}"` (e.g. `source "${BATS_TEST_DIRNAME}/../bin/rotate.sh"`),
+      or call it with `run`.
+
+  Test structure:
+    - One `@test "describes the behaviour" { ... }` per behaviour.
+    - Use `setup()` / `teardown()` with `"${BATS_TEST_TMPDIR}"` for scratch
+      files; never write into the repository.
+    - Use `run <command>` and assert on `$status` and `$output`.
+
+  Assertions:
+    - Plain `[ "$status" -eq 0 ]` and `[ "$output" = "expected" ]` tests; do
+      not add bats-assert or bats-support unless the repo already loads them.
+    - Assert the happy path AND at least one failure path (non-zero status).
+    - A static-analysis acceptance criterion ("shellcheck clean") is verified by
+      the lane itself, which runs `shellcheck` over the project's scripts: do
+      not write a test that invokes shellcheck.
+
+  Never `skip` a test because a tool is missing: the lane provides bats and
+  shellcheck, and a skipped test is reported as not run, not as a pass.
+  Determinism: no `sleep` for synchronisation, no network, no wall-clock.
