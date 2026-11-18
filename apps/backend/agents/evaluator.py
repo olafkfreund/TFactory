@@ -2335,6 +2335,83 @@ def _resolve_kotlin_runner_fn(
     return _run
 
 
+def _completed_shell_subtasks(plan: dict[str, Any]) -> list[dict[str, Any]]:
+    """Completed unit-lane shell subtasks (#1581).
+
+    Without this lane a shell subtask matched no filter and was dropped (the
+    generated pytest wrappers were the only way to test a script, and they
+    skipped when bats or shellcheck were absent).
+    """
+    return _filter_completed_subtasks(
+        plan,
+        lambda st: (
+            st.get("lane") in ("unit", "functional") and st.get("language") == "shell"
+        ),
+    )
+
+
+def _resolve_shell_runner_fn(
+    spec_dir: Path, _project_dir: Path
+) -> Callable[[Path, Path, int], DockerRunResult]:
+    """runner_fn(test_file, project_dir, seed) -> DockerRunResult running the
+    bats suite and shellcheck in the per-task Nix dev shell (#1581).
+
+    ``test_file`` is only the project-root hint; an unconfigured sandbox returns
+    a failing result so the gap is visible in the stability signal instead of
+    silently passing.
+    """
+    # Lazy on purpose: tests patch agents.nix_shell_lane.run_bats_lane_via_nix
+    # on the module, which a top-level `from` import would bind past.
+    from agents import nix_shell_lane  # noqa: PLC0415
+    from tools.runners.docker_runner import DockerRunResult  # noqa: PLC0415
+
+    def _run(test_file: Path, project_dir_arg: Path, _seed: int) -> DockerRunResult:
+        try:
+            hint = Path(test_file).relative_to(spec_dir)
+        except ValueError:
+            hint = Path(test_file)
+        res = nix_shell_lane.run_bats_lane_via_nix(
+            spec_dir, Path(project_dir_arg), hint=hint
+        )
+        if res is not None:
+            return res
+        return DockerRunResult(
+            returncode=1,
+            stdout="",
+            stderr="shell nix lane unavailable: TFACTORY_NIX_RUNNER_IMAGE unset",
+            argv=["nix", "develop", "--", "bats", "--tap"],
+        )
+
+    return _run
+
+
+def _shell_bundles(
+    spec_dir: Path,
+    project_dir: Path,
+    subtasks: Iterable[dict[str, Any]],
+    runner_fn: Callable[[Path, Path, int], DockerRunResult],
+) -> list[EvaluatorSignals]:
+    """One 3x stability pass per project root, shared by its shell subtasks:
+    bats and shellcheck read the whole tree, so every subtask in it has the
+    identical result (the Go ``shared_go_stability`` pattern)."""
+    from agents.nix_shell_lane import _shell_project_dir  # noqa: PLC0415
+
+    groups: dict[Path, list[dict[str, Any]]] = {}
+    for st in subtasks:
+        root = _shell_project_dir(project_dir, Path(st["files_to_create"][0]))
+        groups.setdefault(root, []).append(st)
+    bundles = []
+    for group in groups.values():
+        shared = _stability_for_subtask(spec_dir, project_dir, group[0], runner_fn)
+        bundles += [
+            _build_go_signal_bundle(
+                spec_dir, project_dir, st, runner_fn, stability=shared
+            )
+            for st in group
+        ]
+    return bundles
+
+
 def _completed_java_subtasks(plan: dict[str, Any]) -> list[dict[str, Any]]:
     """Completed unit-lane Java subtasks (#1321).
 
@@ -2812,7 +2889,7 @@ def _persist_run_output(spec_dir: Path, bundles: list[Any]) -> None:
 
 
 def _build_all_bundles(  # noqa: PLR0913 - one list per lane
-    spec_dir, project_dir, unit, browser, api, jest, go, kotlin=(), java=()
+    spec_dir, project_dir, unit, browser, api, jest, go, kotlin=(), java=(), shell=()
 ) -> list:
     """Compute the per-test signal bundle for every completed subtask.
 
@@ -2924,6 +3001,17 @@ def _build_all_bundles(  # noqa: PLR0913 - one list per lane
             java,
             java_runner,
             lambda st: resolver(project_dir, Path(st["files_to_create"][0])),
+        )
+    if shell:
+        # bats and shellcheck cover a whole project: stage every generated
+        # .bats first, then one shared 3x pass per project root (#1581).
+        for st in shell:
+            _stage_go_test(spec_dir, project_dir, st)
+        bundles += _shell_bundles(
+            spec_dir,
+            project_dir,
+            shell,
+            _resolve_shell_runner_fn(spec_dir, project_dir),
         )
     return bundles
 
@@ -3407,6 +3495,7 @@ async def run_evaluator(
         go_completed = _completed_go_subtasks(plan)
         kotlin_completed = _completed_kotlin_subtasks(plan)
         java_completed = _completed_java_subtasks(plan)
+        shell_completed = _completed_shell_subtasks(plan)
         completed = (
             unit_completed
             + browser_completed
@@ -3415,6 +3504,7 @@ async def run_evaluator(
             + go_completed
             + kotlin_completed
             + java_completed
+            + shell_completed
         )
 
         # 2. No work — early exit with evaluated_empty.
@@ -3468,6 +3558,7 @@ async def run_evaluator(
             go_completed,
             kotlin_completed,
             java_completed,
+            shell_completed,
         )
 
         # 3b. Persist failing-run output for post-mortem (#1195). The judge
