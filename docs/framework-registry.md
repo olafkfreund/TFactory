@@ -285,6 +285,29 @@ a percentage, preventing browser tests from being scored as low-value.
 
 ---
 
+## Rust (`cargo-test`) and the manifest `verify_commands` fallback
+
+`frameworks/cargo-test` makes `(rust, cargo-test, unit)` a valid Planner subtask
+(#1578). The Evaluator runs `cargo test --workspace --no-fail-fast` in the
+per-task Nix dev shell (rustc and cargo come from the provisioner's builtin
+`rust` table; crates are fetched at run time, so the lane is
+`network: restricted`).
+
+- **Test paths:** top-level `tests/<name>.rs` only. Cargo runs each as its own
+  integration-test target; a nested `tests/helpers/x.rs` is a module Cargo never
+  executes, so the validator rejects it.
+- **Evidence rule:** a zero exit with zero tests is a failure, only-ignored tests
+  is `not_run`, and a subtask counts only when cargo printed
+  `Running tests/<name>.rs` for its own file.
+- **Mutation** is not measured for Rust (as for Go and the JVM lanes).
+
+The manifest fallback: when a contract's `environment.verify_commands` names a
+command for a language that is **absent from the registry**, `get_tool_for_lane`
+synthesises a tool from it instead of refusing. It does not apply to a
+registered language such as Rust, and the Planner still requires a registered
+framework for any subtask, so it is a path for unregistered languages, not a way
+around lane registration.
+
 ## Testing the registry
 
 ```bash

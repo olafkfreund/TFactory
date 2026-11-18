@@ -50,7 +50,8 @@ are evidence, not blind commits.
 | junit (Maven, or `gradle test`) | Java | unit in-cluster, api; mutation with PIT | Implemented for unit; other lanes partial |
 | Gradle | Kotlin | unit, in a per-task Nix Job | Implemented |
 | cloud-discover, cloud-prowler | cloud | integration | Implemented (CSPM, read-only) |
-| Go, Rust | — | — | Absent |
+| cargo test | Rust | unit, in a per-task Nix Job (mutation not measured) | Implemented |
+| Go | — | — | Absent |
 | Swift | — | — | Refused ("no in-cluster Swift lane") |
 | C#/.NET | — | — | RFC-only |
 
