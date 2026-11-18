@@ -47,3 +47,4 @@ Revert the PR. All new behaviour is additive or behind `TFACTORY_API_URL` / a ne
 ## Deviations
 
 - Final Codex review (round 1) led to follow-up edits in the same commit as the code: token attached only for a checkout we set up from the validated URL; unreadable recorded origin is a 409; tenant header forwarded and org-scoped list limited to registered projects; local from_spec records `pr_number`; `tree` values extended to `cluster_project` and `cluster` (spec updated).
+- CI (`tests/test_contract_signature.py::test_route_binds_registered_clone_not_caller_git_url`, and the lint ratchet) showed that a contract-bearing handoff must keep the old meaning of `repo`: the new checkout selection and 409/400 checks apply only to requests without a contract (spec updated). The cluster branches of the MCP tools moved into module helpers and the proxy routes use `Annotated` dependencies, to keep the ruff and mypy ratchet at no net-new violations.
