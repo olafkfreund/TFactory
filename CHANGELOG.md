@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.11.6 — WebSocket handler fix and Bitbucket provider (2026-11-18)
+
+### Fixed
+
+- **Frontend:** keep WebSocket handlers across reconnects (#1564, #1565).
+
+### Changed
+
+- **Runners:** vendor the Bitbucket code provider from the hub
+  (Factory#3776, #1561).
+
 ## 0.11.5 — WebSocket key-owner check (2026-11-18)
 
 ### Fixed
