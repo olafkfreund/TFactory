@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1574
 intent: intent/2026-11-18-1574-tf-verify-branch.md
 ---
