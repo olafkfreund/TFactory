@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.11.5 — WebSocket key-owner check (2026-11-18)
+
+### Fixed
+
+- **WebSocket:** check the API key owner is active; log WS key and
+  org-lookup failures (#312, #1560).
+
 ## 0.11.4 — String work-item identifier and Docker CVE floor (2026-11-17)
 
 ### Changed

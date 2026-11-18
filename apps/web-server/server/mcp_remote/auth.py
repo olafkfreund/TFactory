@@ -28,7 +28,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from server.database.models import ApiKey, OrgMember
+from server.database.models import ApiKey, OrgMember, User
 from server.routes.organizations import _role_level
 
 from ..database.engine import get_db
@@ -98,13 +98,14 @@ async def authenticate(authorization_header: str | None) -> AuthenticatedKey:
     - Non-Bearer scheme
     - Unknown key (hash doesn't match any row)
     - Expired key (``expires_at`` in the past)
+    - Missing or inactive key owner
     - Key with no scopes left after capping by its owner's current org role
 
     On success the key's ``last_used_at`` is stamped (best-effort).
 
     Scope enforcement is the CALLER's job — this function only proves
-    the key exists and is unexpired. Use ``require_scope()`` after to
-    gate specific tools.
+    the key exists, is unexpired, and has an active owner when one is set.
+    Use ``require_scope()`` after to gate specific tools.
     """
     raw = _strip_bearer(authorization_header)
     if not raw:
@@ -166,6 +167,11 @@ async def _lookup_by_digest(session: AsyncSession, digest: str) -> Authenticated
             expires_at = expires_at.replace(tzinfo=UTC)
         if expires_at <= datetime.now(UTC):
             raise MCPAuthError("API key has expired")
+
+    if row.user_id:
+        owner = await session.get(User, row.user_id)
+        if owner is None or not owner.is_active:
+            raise MCPAuthError("API key owner is deactivated")
 
     scopes_raw = row.scopes or ""
     scopes = frozenset(s.strip() for s in scopes_raw.split(",") if s.strip())

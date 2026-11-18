@@ -226,10 +226,10 @@ def update_client_orgs(user_id: str, org_ids: set[str]) -> None:
 
 async def _load_org_ids(
     client: ConnectedClient, user_info: dict[str, Any] | None
-) -> None:
+) -> bool:
     """Load the user's org memberships for routing; a failed lookup leaves none."""
     if not (user_info and user_info.get("id")):
-        return
+        return True
     try:
         from sqlalchemy import select
 
@@ -244,13 +244,17 @@ async def _load_org_ids(
             if user_info.get("org_id"):
                 org_ids &= {user_info["org_id"]}
             client.org_ids = org_ids
-    except Exception:
+        return True
+    except Exception as exc:
         client.org_ids = set()
-        logger.debug("Could not load org memberships for WS client", exc_info=True)
+        logger.warning(
+            "Could not load org memberships for WS client: %s", type(exc).__name__
+        )
+        return False
 
 
 @router.websocket("/ws/events")
-async def events_websocket(websocket: WebSocket):
+async def events_websocket(websocket: WebSocket):  # noqa: PLR0912 - already branchy; #312 adds guards
     """WebSocket endpoint for global events."""
     await websocket.accept()
 
@@ -269,9 +273,12 @@ async def events_websocket(websocket: WebSocket):
         key_token = None
     last_key_check = time.monotonic()
 
-    await _load_org_ids(client, user_info)
-
     try:
+        if not await _load_org_ids(client, user_info) and (user_info or {}).get(
+            "api_key_id"
+        ):
+            await websocket.close(code=1011)
+            return
         # Keep connection alive and listen for pings
         while True:
             try:
@@ -289,7 +296,11 @@ async def events_websocket(websocket: WebSocket):
                         client.key_org_id = str(org_id) if org_id else None
                         client.user_id = str(principal["id"])
                     last_key_check = time.monotonic()
-                    await _load_org_ids(client, user_info)
+                    if not await _load_org_ids(client, user_info) and (
+                        user_info or {}
+                    ).get("api_key_id"):
+                        await websocket.close(code=1011)
+                        break
 
                 data = await asyncio.wait_for(websocket.receive_text(), timeout=30)
 
