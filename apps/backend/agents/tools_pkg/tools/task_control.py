@@ -1315,6 +1315,7 @@ def create_task_control_tools() -> list:
                 target_paths=target_paths,
                 project_root=project_entry.get("root_path", "."),
                 ref=ref,
+                pr_number=args.get("pr_number"),
             )
         except (FileExistsError, ValueError) as exc:
             return _format_error(str(exc))

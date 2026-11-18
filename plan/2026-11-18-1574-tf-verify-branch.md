@@ -43,3 +43,7 @@ All decisions are those of the approved spec (`spec/2026-11-18-1574-tf-verify-br
 ## Rollback
 
 Revert the PR. All new behaviour is additive or behind `TFACTORY_API_URL` / a new `repo` parameter. The one default-path change is the empty-tree failure for a spec ingest; reverting restores the old behaviour. No data migration.
+
+## Deviations
+
+- Final Codex review (round 1) led to follow-up edits in the same commit as the code: token attached only for a checkout we set up from the validated URL; unreadable recorded origin is a 409; tenant header forwarded and org-scoped list limited to registered projects; local from_spec records `pr_number`; `tree` values extended to `cluster_project` and `cluster` (spec updated).

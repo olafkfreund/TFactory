@@ -19,11 +19,12 @@ Two halves: a cluster side that can clone and verify a named repo and ref, and a
    - Known project plus GitHub `repo`: the checkout root is `clone_or_update(repo_url)` with no branch (same URL, same dir, idempotent), never the registered project's `path`. The ref is then fetched by the existing per-spec worktree code, so tags and commits work.
    - Credentials: `clone_or_update` hides its askpass helper after the clone, but the per-spec `git fetch` runs later. `create_spec_ingest_workspace` gets an optional `git_env` that `_add_spec_worktree` and `_default_branch` merge into their hermetic git env. The route builds it with the existing `_git_askpass_env("x-access-token", token)` around the call, from `GITHUB_TOKEN`/`GH_TOKEN`. The token is never in argv, config or logs.
    - A clone failure (`GitOperationError`) raises before a task exists: the route answers 502 with a fixed message (no git stderr). This is still early and before any LLM call, but it creates no task record. An unresolvable ref after a good clone is the `source_checkout_failed` task.
-   - The response adds `tree` (`cluster_clone` when `repo`/`git_url` selected the root, else `local`), `repo_slug`, `source_sha` and `workspace_project_id` (the resolved id the workspace lives under).
+   - The token is attached only when the checkout origin was set from the validated URL (`repo`, or a self-registered `git_url`), never for a registered project's own directory, whose origin was not checked. A recorded origin that cannot be read as the named repo is a 409, not absent.
+   - The response adds `tree` (`cluster_clone` when `repo` or a self-registered `git_url` selected the root, else `local`), `repo_slug`, `source_sha` and `workspace_project_id` (the resolved id the workspace lives under).
 3. New routes on `mcp_stdio/router.py` (the proxy `http_client.request` already rewrites `/api/*` to). Each is scope-gated and org-authorised like its neighbours, and writes audit:
    - Authorisation: the existing `_authorized_key` reads only a `task_id` path param or a `project_id` query param, so the new handlers resolve the project (id or name) to its canonical id first, then call `_authorize_key(key, resolved_id, db, role)` themselves, and only then touch the filesystem. Ids pass `safe_component`.
    - `POST /api/mcp-stdio/specs/ingest` (`task:write`): delegates to `ingest_spec`. A known project goes through `_authorize_key`; an org-scoped key naming an unknown project gets 404 (fail closed, no org-less self-registration); a service/legacy key may self-register. Audited as `mcp.task.create_and_run`.
-   - `GET /api/mcp-stdio/spec-tasks?project_id=&status=` (`mcp:read`): rows for the tasks in the workspace, foreign-org projects filtered out. `project_id` accepts an id or a name.
+   - `GET /api/mcp-stdio/spec-tasks?project_id=&status=` (`mcp:read`): rows for the tasks in the workspace, forwarding `X-Tenant-Id`; foreign-org projects filtered out, and an org-scoped key sees only registered projects. `project_id` accepts an id or a name.
    - `GET /api/mcp-stdio/spec-tasks/{project_id}/{spec_id}?report=md|json` (`mcp:read`, viewer): `status.json` content with derived lane progress, `source_sha`, `repo_slug`, `source_branch`, `pr_number`, and the report body when requested. The lookup is by project id plus spec id, which is the #1583 fix on this path.
 
 ### MCP side (`task_control.py`)
@@ -34,7 +35,7 @@ Two halves: a cluster side that can clone and verify a named repo and ref, and a
 - `project_list`, `task_list`, `task_status`, `report_get` use the cluster routes in cluster mode. `project_create` stays local (out of scope).
 - `task_status`, `report_get` and `task_rerun` accept `project_id`. Locally, `_find_task` checks only that project when given; with no `project_id` and the spec id in more than one project it returns an ambiguity error listing the project ids, instead of the first match. In cluster mode `task_rerun` returns a clear not-available error (no proxy route; out of scope).
 - `portal_url` is `TFACTORY_PORTAL_URL`, else `TFACTORY_API_URL`, else the current localhost value, plus `/tasks/{id}`.
-- Responses carry `tree` (`local` or `cluster_clone`).
+- Responses carry `tree`: `local`, `cluster_clone` (a `repo` was cloned), `cluster_project` (cluster, registered project), or `cluster` (status, report and project reads).
 
 ## Alternatives rejected
 

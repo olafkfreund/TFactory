@@ -169,7 +169,8 @@ class SpecIngestRequest(BaseModel):
 
 
 _GITHUB_SLUG_RE = re.compile(
-    r"^(?:https://github\.com/)?([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?$"
+    r"^(?:https://github\.com/|git@github\.com:)?"
+    r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?$"
 )
 
 
@@ -388,8 +389,10 @@ async def ingest_spec(
                 ),
             )
 
-        recorded = _github_slug(entry.get("clonedFrom"))
-        if repo_slug and recorded and recorded.lower() != repo_slug.lower():
+        origin = entry.get("clonedFrom")
+        recorded = _github_slug(origin)
+        # An origin we cannot read as this repo is a mismatch, never "absent".
+        if repo_slug and origin and (recorded or "").lower() != repo_slug.lower():
             raise HTTPException(
                 status.HTTP_409_CONFLICT, detail="repo does not match project"
             )
@@ -423,7 +426,9 @@ async def ingest_spec(
             detail=client_error(logger, "could not clone repository", exc),
         ) from exc
 
-    cluster_clone = bool(repo_slug or req.git_url)
+    # Only a checkout whose origin we just set from the validated URL may get the
+    # token: a registered project's own directory has an origin we did not check.
+    cluster_clone = bool(repo_slug or self_registered)
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     # The per-spec fetch runs after clone_or_update dropped its askpass helper;
     # give it the same credential, via env only (never argv or git config).

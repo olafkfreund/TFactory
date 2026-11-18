@@ -250,3 +250,40 @@ async def test_route_token_passed_only_in_environment(route_env, monkeypatch, ca
     assert token not in seen["clone"]["git_url"]
     assert seen["clone"]["credential"] == ("x-access-token", token)
     assert token not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_route_unreadable_recorded_origin_is_409(route_env):
+    seen, projects = route_env
+    projects["p"]["clonedFrom"] = "git@gitlab.com:owner/name.git"
+    with pytest.raises(HTTPException) as conflict:
+        await specs.ingest_spec(
+            specs.SpecIngestRequest(
+                project_id="p", spec_id="s", spec_text=SPEC, repo="owner/name"
+            )
+        )
+    assert conflict.value.status_code == 409
+    assert "workspace" not in seen
+
+
+@pytest.mark.asyncio
+async def test_route_registered_project_without_repo_gets_no_token(
+    route_env, monkeypatch
+):
+    seen, _ = route_env
+
+    async def ensure(*a, **kw):
+        return "/registered"
+
+    monkeypatch.setattr(specs, "_ensure_project_clone", ensure)
+    monkeypatch.setenv("GITHUB_TOKEN", "private-token-value")
+    result = await specs.ingest_spec(
+        specs.SpecIngestRequest(
+            project_id="p",
+            spec_id="s",
+            spec_text=SPEC,
+            git_url="https://github.com/owner/name.git",
+        )
+    )
+    assert "GIT_ASKPASS" not in seen["workspace"]["git_env"]
+    assert result["tree"] == "local"

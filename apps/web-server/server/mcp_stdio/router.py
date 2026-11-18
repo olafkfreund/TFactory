@@ -376,6 +376,7 @@ async def proxy_ingest_spec(
 async def proxy_list_spec_tasks(
     project_id: str | None = Query(default=None),
     status: str | None = Query(default=None),
+    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
     key=Depends(require_acw_scope(MCP_READ_SCOPE)),
     db: AsyncSession = Depends(get_db),
 ):
@@ -388,10 +389,14 @@ async def proxy_list_spec_tasks(
             raise HTTPException(404, "Project not found")
         await _authorize_key(key, resolved_id, db, "viewer")
     foreign = _foreign_projects(key)
+    # An org-scoped key sees only projects that are registered and not foreign:
+    # a workspace whose registration is gone is nobody's to list.
+    known = _key_projects(key)
     rows = [
         row
-        for row in list_tasks(x_tenant_id=None)["tasks"]
+        for row in list_tasks(x_tenant_id=x_tenant_id)["tasks"]
         if row["project_id"] not in foreign
+        and (known is None or row["project_id"] in known)
         and (resolved_id is None or row["project_id"] == resolved_id)
         and (status is None or row["status"] == status)
     ]
