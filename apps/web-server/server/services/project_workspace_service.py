@@ -293,12 +293,27 @@ async def clone_or_update(
                             cwd=workspace,
                             timeout=timeout_seconds,
                         )
-                    await _run_git(
-                        ["pull", "--ff-only"],
-                        cwd=workspace,
-                        timeout=timeout_seconds,
-                        extra_env=cred_env,
-                    )
+                        await _run_git(
+                            ["pull", "--ff-only"],
+                            cwd=workspace,
+                            timeout=timeout_seconds,
+                            extra_env=cred_env,
+                        )
+                    else:
+                        # No ref requested: never pull whatever is checked out (it
+                        # may be a branch deleted upstream, #1594); sit detached
+                        # on the remote default tip instead.
+                        await _run_git(
+                            ["remote", "set-head", "origin", "--auto"],
+                            cwd=workspace,
+                            timeout=timeout_seconds,
+                            extra_env=cred_env,
+                        )
+                        await _run_git(
+                            ["checkout", "--detach", "--force", "origin/HEAD"],
+                            cwd=workspace,
+                            timeout=timeout_seconds,
+                        )
                 finally:
                     if credential is not None:
                         # Restore origin to the bare URL so even the username
