@@ -549,9 +549,22 @@ def _resolve_runner_fn(
             # ``/scratch/src`` first so src-layout packages import inside the
             # container; ``/scratch`` covers flat layouts. A missing path is
             # simply ignored by the interpreter.
+            # #1637: with spec targets, the root that holds them leads, so a
+            # same-named package elsewhere (``src/app``) cannot shadow the SUT.
+            _targets = _api_targets(spec_dir, Path(project_dir_arg))
+            _lead = (
+                [
+                    "/scratch" if rel == "." else f"/scratch/{rel}"
+                    for rel in package_root_rel_paths(scratch, _targets)[:1]
+                ]
+                if _targets
+                else []
+            )
             extra_env = {
                 "PYTHONHASHSEED": str(seed),
-                "PYTHONPATH": f"/scratch/src{os.pathsep}/scratch",
+                "PYTHONPATH": os.pathsep.join(
+                    [*_lead, "/scratch/src", "/scratch"]
+                ),
             }
             if target_url:
                 extra_env["TFACTORY_TARGET_URL"] = target_url
