@@ -11,7 +11,7 @@ intent: intent/2026-11-19-1594-workspace-stale-branch.md
 In `clone_or_update` (apps/web-server/server/services/project_workspace_service.py), existing-clone path, after `fetch --prune origin`:
 
 - `branch` given: unchanged (`checkout <branch>` then `pull --ff-only`).
-- `branch` is None: `remote set-head origin --auto` (refresh origin/HEAD), then `checkout --detach --force origin/HEAD`. No pull on the stale current branch; the clone sits detached on the remote default tip.
+- `branch` is None: `remote set-head origin --auto` (refresh origin/HEAD), then `checkout --force -B <default> origin/<default>` (default from `symbolic-ref --short refs/remotes/origin/HEAD`). No pull on the stale current branch; the local default branch is reset onto the remote tip, as the old pull did for a clone on the default branch.
 
 Callers: specs.py:220 and :310 pass a branch (unchanged); specs.py:363 (`_clone_named_repo`), projects.py:558 (`project.branch` may be None) and auto_fix_service.py:593 (`clonedBranch` may be None) hit the new path; for them the clone was made on the default branch, so the result is the same tip, now robust to a deleted branch. The per-spec ref is fetched later by the ingest flow, so `_clone_named_repo` needs no PR-ref fetch.
 
@@ -23,7 +23,7 @@ Callers: specs.py:220 and :310 pass a branch (unchanged); specs.py:363 (`_clone_
 
 ## Risks
 
-Detached HEAD on shared workspaces for no-branch callers; the forced checkout discards uncommitted workspace edits (workspaces are cache clones). A remote with no HEAD makes `set-head` fail and raises GitOperationError as any git failure does.
+The forced checkout discards uncommitted workspace edits (workspaces are cache clones). A remote with no HEAD makes `set-head` fail and raises GitOperationError as any git failure does.
 
 ## Verification
 

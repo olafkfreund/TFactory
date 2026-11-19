@@ -230,7 +230,7 @@ async def test_clone_or_update_no_branch_skips_checkout(tmp_path):
 
     async def fake_create_subprocess_exec(*args, **kw):
         captured.append(list(args))
-        return _mock_proc(returncode=0)
+        return _mock_proc(returncode=0, stdout=b"origin/main\n")
 
     with patch("asyncio.create_subprocess_exec", new=fake_create_subprocess_exec):
         await svc.clone_or_update(
@@ -242,7 +242,7 @@ async def test_clone_or_update_no_branch_skips_checkout(tmp_path):
     cmd_names = [c[1] for c in captured]
     assert "fetch" in cmd_names
     assert "pull" not in cmd_names  # #1594: never pull the stale current branch
-    assert ["checkout", "--detach", "--force", "origin/HEAD"] in [
+    assert ["checkout", "--force", "-B", "main", "origin/main"] in [
         c[1:] for c in captured
     ]
 
@@ -374,3 +374,4 @@ async def test_no_branch_refresh_survives_upstream_deleted_branch(tmp_path):
 
     assert result == ws
     assert git("rev-parse", "HEAD", cwd=ws) == git("rev-parse", "main", cwd=bare)
+    assert git("rev-parse", "main", cwd=ws) == git("rev-parse", "main", cwd=bare)

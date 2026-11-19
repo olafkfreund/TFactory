@@ -301,16 +301,29 @@ async def clone_or_update(
                         )
                     else:
                         # No ref requested: never pull whatever is checked out (it
-                        # may be a branch deleted upstream, #1594); sit detached
-                        # on the remote default tip instead.
+                        # may be a branch deleted upstream, #1594). Reset the local
+                        # default branch onto the remote default tip instead.
                         await _run_git(
                             ["remote", "set-head", "origin", "--auto"],
                             cwd=workspace,
                             timeout=timeout_seconds,
                             extra_env=cred_env,
                         )
+                        remote_head = (
+                            await _run_git(
+                                ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+                                cwd=workspace,
+                                timeout=timeout_seconds,
+                            )
+                        ).strip()
                         await _run_git(
-                            ["checkout", "--detach", "--force", "origin/HEAD"],
+                            [
+                                "checkout",
+                                "--force",
+                                "-B",
+                                remote_head.removeprefix("origin/"),
+                                remote_head,
+                            ],
                             cwd=workspace,
                             timeout=timeout_seconds,
                         )
