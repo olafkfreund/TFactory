@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.13.1 — Verify status ingest, contract-less API services, safe multi-replica reconciler (2026-11-19)
+
+### Fixed
+
+- **Verify:** task status is ingested from the Job result, contract-less api services start, and a node subdir is served from its own directory (#1597, #1582, #1609, #1611).
+- **Web server:** the inline-stage reconciler is owner-aware, so multiple replicas no longer reap each other's running stages (#1599, #1612).
+
 ## 0.13.0 — Services and self-served SUT in the verify Job (2026-11-19)
 
 ### Added
