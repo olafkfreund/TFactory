@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.13.4 — Verify api lane app selection, literal gate params (2026-11-19)
+
+### Fixed
+
+- **Verify:** the api lane serves the python app nearest the spec targets, with requests installed (#1582, #1633).
+- **Verify:** literal gate layout params, a verify-running status, and API-lane DB isolation (#1630, #1631, #1632, #1634).
+
 ## 0.13.3 — Triager Go paths, status identity guard, verify Job env (2026-11-19)
 
 ### Fixed
