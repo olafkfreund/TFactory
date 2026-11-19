@@ -195,7 +195,7 @@ def test_contractless_api_repo_with_services_runs_in_the_job(tmp_path, monkeypat
 
 def test_contractless_unit_lane_still_uses_the_host_runner(tmp_path, monkeypatch):
     spec, project, test = _cloud_layout(tmp_path)
-    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: _Sandbox())
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", _Sandbox)
     assert run_pytest_lane_via_nix(spec, project, test, lane="unit") is None
 
 
