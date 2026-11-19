@@ -155,9 +155,7 @@ def test_cli_model_outranks_the_policy(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _set(monkeypatch, {"tiers": {"mid": QWEN}, "stages": {"qa": "mid"}})
-    assert phase_config.get_phase_model(tmp_path, "qa", "haiku") == (
-        "claude-haiku-5-5"
-    )
+    assert phase_config.get_phase_model(tmp_path, "qa", "haiku") == ("claude-haiku-5-5")
 
 
 def test_a_stage_the_policy_does_not_map_keeps_its_default(

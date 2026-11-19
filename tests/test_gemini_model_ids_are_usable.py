@@ -39,7 +39,9 @@ CATALOGS = (
 )
 
 # Only the families the real Antigravity CLI introduced (3.6 / 3.7).
-ID_RE = re.compile(r"""["'](gemini-(?:3\.[678]-(?:flash|pro)|4-[a-z]+)[a-z0-9.-]*)["']""")
+ID_RE = re.compile(
+    r"""["'](gemini-(?:3\.[678]-(?:flash|pro)|4-[a-z]+)[a-z0-9.-]*)["']"""
+)
 
 
 def _catalog_ids() -> dict[Path, set[str]]:
