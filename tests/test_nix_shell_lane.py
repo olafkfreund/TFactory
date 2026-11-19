@@ -168,3 +168,11 @@ def test_run_bats_lane_reason_has_full_counts_and_failing_files(tmp_path, monkey
     assert (
         "2 passed, 1 failed, 0 skipped; failing files: ./test/flake.bats" in res.stderr
     )
+
+
+def test_file_results_keeps_tool_errors_and_per_file_output():
+    from agents.nix_shell_lane import file_output
+
+    out = "boom\n__BATS_FILE_EXIT=2 ./a.bats\nnot ok 1 x\n__BATS_FILE_EXIT=1 ./b.bats\n"
+    assert file_results(out) == {"./a.bats": 2, "./b.bats": 1}
+    assert file_output(out) == {"./a.bats": "boom", "./b.bats": "not ok 1 x"}

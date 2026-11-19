@@ -180,3 +180,41 @@ def test_shell_file_without_result_is_error(tmp_path: Path, monkeypatch) -> None
     assert bundles[0].stability.error_message == (
         "tests/rotate.bats has no bats result: this test did not run"
     )
+
+
+def test_bats_tool_error_fails_every_file_and_evidence_is_per_file(
+    tmp_path: Path, monkeypatch
+) -> None:
+    spec_dir, project_dir = tmp_path / "spec", tmp_path / "project"
+    _stage(spec_dir, "tests/a.bats", "tests/b.bats", "tests/c.bats")
+    stdout = (
+        "ModuleNotFoundError in b\n__BATS_FILE_EXIT=2 ./tests/b.bats\n"
+        "ok 1 a\n__BATS_FILE_EXIT=0 ./tests/a.bats\n"
+        "ok 1 c\n__BATS_FILE_EXIT=0 ./tests/c.bats\n"
+        "__BATS_EXIT=2\n__SHELLCHECK_EXIT=0\n"
+    )
+    monkeypatch.setattr(
+        "agents.nix_shell_lane.run_bats_lane_via_nix",
+        lambda *a, **k: DockerRunResult(returncode=1, stdout=stdout, argv=["bats"]),
+    )
+    shell = [_shell_subtask(n, f"tests/{n}.bats") for n in ("a", "b")]
+    bundles = _build_all_bundles(
+        spec_dir, project_dir, [], [], [], [], [], (), (), shell
+    )
+    assert all(b.stability.verdict == StabilityVerdict.CONSISTENT_FAIL for b in bundles)
+
+    # Two failing files keep their own evidence.
+    stdout = (
+        "not ok 1 x\nAssertionError in a\n__BATS_FILE_EXIT=1 ./tests/a.bats\n"
+        "ModuleNotFoundError in b\nnot ok 1 y\n__BATS_FILE_EXIT=1 ./tests/b.bats\n"
+        "__BATS_EXIT=1\n__SHELLCHECK_EXIT=0\n"
+    )
+    monkeypatch.setattr(
+        "agents.nix_shell_lane.run_bats_lane_via_nix",
+        lambda *a, **k: DockerRunResult(returncode=1, stdout=stdout, argv=["bats"]),
+    )
+    bundles = _build_all_bundles(
+        spec_dir, project_dir, [], [], [], [], [], (), (), shell
+    )
+    tail = bundles[0].stability.runs[0].stdout_tail
+    assert "AssertionError in a" in tail and "ModuleNotFoundError" not in tail

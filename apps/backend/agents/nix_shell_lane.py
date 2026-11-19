@@ -93,21 +93,34 @@ def shell_verdict(
 _FILE_EXIT = re.compile(r"^__BATS_FILE_EXIT=(\d+) (.+)$")
 
 
-def file_results(stdout: str) -> dict[str, int]:
-    """Per-file verdict (0 pass, 1 fail, 125 all skipped) from the full stdout.
-
-    Each file's TAP precedes its ``__BATS_FILE_EXIT`` marker line.
-    """
-    out: dict[str, int] = {}
+def _split_files(stdout: str) -> list[tuple[str, int, str]]:
+    """(path, bats exit, that file's own output); output precedes its marker."""
+    out: list[tuple[str, int, str]] = []
     seg: list[str] = []
     for line in stdout.splitlines():
         m = _FILE_EXIT.match(line)
         if m is None:
             seg.append(line)
             continue
-        out[m[2]] = shell_verdict(int(m[1]), 0, parse_tap("\n".join(seg)))[0]
+        out.append((m[2], int(m[1]), "\n".join(seg)))
         seg = []
     return out
+
+
+def file_results(stdout: str) -> dict[str, int]:
+    """Per-file verdict (0 pass, 1 fail, 125 all skipped) from the full stdout.
+
+    A bats tool error (exit above 1) is kept as is so callers can fail the lane.
+    """
+    return {
+        p: rc if rc > 1 else shell_verdict(rc, 0, parse_tap(text))[0]
+        for p, rc, text in _split_files(stdout)
+    }
+
+
+def file_output(stdout: str) -> dict[str, str]:
+    """Each file's own bats output, so one file's failure evidence is not another's."""
+    return {p: text for p, _rc, text in _split_files(stdout)}
 
 
 def bats_job_script(run_dir: str, extra_env: dict[str, str]) -> str:

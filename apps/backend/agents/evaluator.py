@@ -2372,6 +2372,7 @@ def _resolve_shell_runner_fn(
                 (
                     nix_shell_lane.file_results(res.stdout or ""),
                     "__SHELLCHECK_EXIT=0" in (res.stdout or "").splitlines(),
+                    nix_shell_lane.file_output(res.stdout or ""),
                 )
             )
             return res
@@ -2388,7 +2389,7 @@ def _resolve_shell_runner_fn(
 
 def _per_file_stability(
     shared: StabilityResult | None,
-    lane_runs: list[tuple[dict[str, int], bool]],
+    lane_runs: list[tuple[dict[str, int], bool, dict[str, str]]],
     subtask: dict[str, Any],
 ) -> StabilityResult | None:
     if shared is None or shared.verdict == StabilityVerdict.ERROR:
@@ -2397,14 +2398,19 @@ def _per_file_stability(
         return shared
     rel = Path(subtask["files_to_create"][0]).as_posix()
     runs = []
-    for run, (files, shellcheck_ok) in zip(shared.runs, lane_runs, strict=True):
-        if not shellcheck_ok or run.returncode in (126, 127):
+    for run, (files, shellcheck_ok, outputs) in zip(
+        shared.runs, lane_runs, strict=True
+    ):
+        # A shellcheck failure or a bats tool error (exit above 1) fails the lane.
+        if (
+            not shellcheck_ok
+            or run.returncode in (126, 127)
+            or any(c not in (0, 1, 125) for c in files.values())
+        ):
             runs.append(run)
             continue
-        code = next(
-            (code for path, code in files.items() if path.removeprefix("./") == rel),
-            None,
-        )
+        key = next((p for p in files if p.removeprefix("./") == rel), None)
+        code = files.get(key) if key is not None else None
         if code is None:
             return StabilityResult(
                 verdict=StabilityVerdict.ERROR,
@@ -2416,9 +2422,10 @@ def _per_file_stability(
         runs.append(
             StabilityRun(
                 returncode=code,
-                stdout_tail=(f"FAILED {rel}: this test file failed\n" + run.stdout_tail)
+                stdout_tail=f"FAILED {rel}: this test file failed\n" + outputs[key]
                 if code == 1
                 else "",
+                stderr_tail=run.stderr_tail if code == 1 else "",
             )
         )
     return classify_stability_runs(
