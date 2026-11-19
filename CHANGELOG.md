@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.12.2 — Workspace refresh no longer breaks on a deleted branch (2026-11-19)
+
+### Fixed
+
+- **Ingest:** `POST /api/specs/ingest` with `repo` no longer returns 502 when the shared workspace clone sits on a branch deleted upstream; a no-branch refresh now resets the local default branch onto the remote default tip instead of `git pull --ff-only` (#1594).
+
 ## 0.12.1 — Zero executed tests cannot claim a VAL level (2026-11-19)
 
 ### Fixed

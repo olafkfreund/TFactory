@@ -12,6 +12,7 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -229,7 +230,7 @@ async def test_clone_or_update_no_branch_skips_checkout(tmp_path):
 
     async def fake_create_subprocess_exec(*args, **kw):
         captured.append(list(args))
-        return _mock_proc(returncode=0)
+        return _mock_proc(returncode=0, stdout=b"origin/main\n")
 
     with patch("asyncio.create_subprocess_exec", new=fake_create_subprocess_exec):
         await svc.clone_or_update(
@@ -240,8 +241,10 @@ async def test_clone_or_update_no_branch_skips_checkout(tmp_path):
 
     cmd_names = [c[1] for c in captured]
     assert "fetch" in cmd_names
-    assert "pull" in cmd_names
-    assert "checkout" not in cmd_names
+    assert "pull" not in cmd_names  # #1594: never pull the stale current branch
+    assert ["checkout", "--force", "-B", "main", "origin/main"] in [
+        c[1:] for c in captured
+    ]
 
 
 @pytest.mark.asyncio
@@ -327,3 +330,48 @@ async def test_clone_lock_is_per_workspace(tmp_path):
     b = pws._clone_lock_for(tmp_path / "p1")
     c = pws._clone_lock_for(tmp_path / "p2")
     assert a is b and a is not c  # same path → same lock; different path → distinct
+
+
+@pytest.mark.asyncio
+async def test_no_branch_refresh_survives_upstream_deleted_branch(tmp_path):
+    """#1594: workspace checked out on a branch deleted upstream must refresh."""
+    import subprocess
+
+    from server.services import project_workspace_service as svc
+
+    def git(*a, cwd):
+        env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "t",
+            "GIT_AUTHOR_EMAIL": "t@t",
+            "GIT_COMMITTER_NAME": "t",
+            "GIT_COMMITTER_EMAIL": "t@t",
+        }
+        return subprocess.run(
+            ["git", *a], cwd=cwd, env=env, check=True, capture_output=True, text=True
+        ).stdout.strip()
+
+    bare = tmp_path / "remote.git"
+    seed = tmp_path / "seed"
+    git("init", "-q", "--bare", "-b", "main", str(bare), cwd=tmp_path)
+    git("clone", "-q", str(bare), str(seed), cwd=tmp_path)
+    git("commit", "-q", "--allow-empty", "-m", "one", cwd=seed)
+    git("push", "-q", "origin", "HEAD:main", cwd=seed)
+    git("push", "-q", "origin", "HEAD:refs/heads/gone", cwd=seed)
+
+    root = tmp_path / "ws"
+    root.mkdir()
+    ws = root / "me-repo"
+    git("clone", "-q", "--branch", "gone", str(bare), str(ws), cwd=tmp_path)
+    git("push", "-q", "origin", "--delete", "gone", cwd=seed)
+    git("commit", "-q", "--allow-empty", "-m", "two", cwd=seed)
+    git("push", "-q", "origin", "HEAD:main", cwd=seed)
+
+    # Origin stays the local bare repo (fetch uses it); the URL only passes validation.
+    result = await svc.clone_or_update(
+        git_url="https://example.test/me/repo.git", slug="me-repo", root=root
+    )
+
+    assert result == ws
+    assert git("rev-parse", "HEAD", cwd=ws) == git("rev-parse", "main", cwd=bare)
+    assert git("rev-parse", "main", cwd=ws) == git("rev-parse", "main", cwd=bare)

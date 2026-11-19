@@ -207,6 +207,47 @@ def _clone_lock_for(workspace: Path) -> asyncio.Lock:
     return _clone_locks.setdefault(str(workspace), asyncio.Lock())
 
 
+async def _update_checkout(
+    workspace: Path,
+    branch: str | None,
+    timeout_seconds: float,
+    cred_env: dict[str, str],
+) -> None:
+    """Bring an existing clone (already fetched) up to date.
+
+    A requested branch is checked out and fast-forwarded. With none, the local
+    default branch is reset onto the remote default tip: never pull whatever is
+    checked out, it may be a branch deleted upstream (#1594).
+    """
+    if branch:
+        await _run_git(["checkout", branch], cwd=workspace, timeout=timeout_seconds)
+        await _run_git(
+            ["pull", "--ff-only"],
+            cwd=workspace,
+            timeout=timeout_seconds,
+            extra_env=cred_env,
+        )
+        return
+    await _run_git(
+        ["remote", "set-head", "origin", "--auto"],
+        cwd=workspace,
+        timeout=timeout_seconds,
+        extra_env=cred_env,
+    )
+    remote_head = (
+        await _run_git(
+            ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+            cwd=workspace,
+            timeout=timeout_seconds,
+        )
+    ).strip()
+    await _run_git(
+        ["checkout", "--force", "-B", remote_head.removeprefix("origin/"), remote_head],
+        cwd=workspace,
+        timeout=timeout_seconds,
+    )
+
+
 async def clone_or_update(
     git_url: str,
     branch: str | None = None,
@@ -287,18 +328,7 @@ async def clone_or_update(
                         timeout=timeout_seconds,
                         extra_env=cred_env,
                     )
-                    if branch:
-                        await _run_git(
-                            ["checkout", branch],
-                            cwd=workspace,
-                            timeout=timeout_seconds,
-                        )
-                    await _run_git(
-                        ["pull", "--ff-only"],
-                        cwd=workspace,
-                        timeout=timeout_seconds,
-                        extra_env=cred_env,
-                    )
+                    await _update_checkout(workspace, branch, timeout_seconds, cred_env)
                 finally:
                     if credential is not None:
                         # Restore origin to the bare URL so even the username
