@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1617
 intent: intent/2026-11-19-1617-tf-flake-ratelimit.md
 ---
