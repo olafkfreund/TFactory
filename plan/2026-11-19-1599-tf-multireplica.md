@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1599
 spec: spec/2026-11-19-1599-tf-multireplica.md
 coders:
