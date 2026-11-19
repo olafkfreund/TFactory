@@ -612,3 +612,129 @@ def test_third_party_missing_attribute_still_fails(tmp_path: Path) -> None:
     check_import(imp, project_dir=_monorepo(tmp_path))
     assert imp.failed is True, imp.reason
     assert imp.skipped is False, "a real hallucination must not be excused"
+
+
+def _two_app_checkout(tmp_path: Path) -> Path:
+    """aifactory-demo PR #624: an unrelated ``src/app`` beside the SUT's own."""
+    (tmp_path / "src" / "app").mkdir(parents=True)
+    (tmp_path / "src" / "app" / "__init__.py").write_text("")
+    (tmp_path / "src" / "app" / "models.py").write_text("class Link: ...\n")
+    sut = tmp_path / "services" / "notes-api" / "app"
+    sut.mkdir(parents=True)
+    (sut / "__init__.py").write_text("")
+    (sut / "models.py").write_text("class NoteIn: ...\n")
+    return tmp_path
+
+
+def test_same_named_package_in_two_roots_accepts_name_in_either(
+    tmp_path: Path,
+) -> None:
+    proj = _two_app_checkout(tmp_path)
+    res = preflight_check("from app.models import NoteIn\n", project_dir=proj)
+    assert res.ok, res.summary()
+
+
+def test_same_named_package_in_two_roots_still_rejects_name_in_neither(
+    tmp_path: Path,
+) -> None:
+    proj = _two_app_checkout(tmp_path)
+    res = preflight_check("from app.models import Nope\n", project_dir=proj)
+    assert not res.ok
+
+
+def test_same_named_package_at_checkout_root_and_in_subdir(tmp_path: Path) -> None:
+    # The CWD (checkout root) outranks PYTHONPATH, so a root-level copy must not
+    # mask the subdir copy on retry.
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "__init__.py").write_text("")
+    (tmp_path / "app" / "models.py").write_text("class Other: ...\n")
+    sub = tmp_path / "services" / "api" / "app"
+    sub.mkdir(parents=True)
+    (sub / "__init__.py").write_text("")
+    (sub / "models.py").write_text("class NoteIn: ...\n")
+    res = preflight_check("from app.models import NoteIn\n", project_dir=tmp_path)
+    assert res.ok, res.summary()
+
+
+def test_broken_sibling_does_not_hide_a_later_valid_copy(tmp_path: Path) -> None:
+    for rel, body in (
+        ("a/app", "class Other: ...\n"),
+        ("b/app", "raise RuntimeError('broken')\n"),
+        ("c/app", "class NoteIn: ...\n"),
+    ):
+        d = tmp_path / rel
+        d.mkdir(parents=True)
+        (d / "__init__.py").write_text("")
+        (d / "models.py").write_text(body)
+    res = preflight_check("from app.models import NoteIn\n", project_dir=tmp_path)
+    assert res.ok, res.summary()
+
+
+def test_hung_sibling_does_not_hide_a_later_valid_copy(tmp_path: Path) -> None:
+    for rel, body in (
+        ("a/app", "class Other: ...\n"),
+        ("b/app", "import time\ntime.sleep(60)\n"),
+        ("c/app", "class NoteIn: ...\n"),
+    ):
+        d = tmp_path / rel
+        d.mkdir(parents=True)
+        (d / "__init__.py").write_text("")
+        (d / "models.py").write_text(body)
+    res = preflight_check(
+        "from app.models import NoteIn\n",
+        project_dir=tmp_path,
+        timeout_per_import_sec=2,
+    )
+    assert res.ok, res.summary()
+
+
+def test_execution_roots_prefer_the_root_holding_the_targets(tmp_path: Path) -> None:
+    # #1637 / aifactory-demo #624: unit test `from app.main import app` resolved
+    # src/app (no /notes route) because src came first on the Job's PYTHONPATH.
+    from agents.nix_env import _in_job_pythonpath
+
+    proj = _two_app_checkout(tmp_path)
+    targets = ["services/notes-api/app/models.py"]
+    assert package_root_rel_paths(proj, targets)[0] == "services/notes-api"
+    assert package_root_rel_paths(proj)[0] == "src"  # no targets: order unchanged
+    assert _in_job_pythonpath(proj, "/work", targets).startswith(
+        "/work/services/notes-api:"
+    )
+    assert _in_job_pythonpath(proj, "/work").startswith("/work/src:")
+
+
+def test_host_runner_puts_the_targeted_root_first(tmp_path: Path, monkeypatch) -> None:
+    import agents.evaluator as ev
+
+    proj = _two_app_checkout(tmp_path)
+    seen: dict = {}
+
+    class _R:
+        stdout, stderr, returncode = "__PYTEST_EXIT=0\n", "", 0
+
+    monkeypatch.setattr(ev, "_ensure_host_venv", lambda _p: tmp_path / "venv")
+    monkeypatch.setattr(
+        "subprocess.run", lambda *a, **k: seen.update(env=k["env"]) or _R()
+    )
+    ev._run_pytest_on_host(
+        proj, proj / "t.py", {}, proj, ["services/notes-api/app/models.py"]
+    )
+    first = seen["env"]["PYTHONPATH"].split(os.pathsep)[0]
+    assert first == str(proj / "services" / "notes-api")
+
+
+def test_host_runner_target_in_src_keeps_src_first(tmp_path: Path, monkeypatch) -> None:
+    import agents.evaluator as ev
+
+    proj = _two_app_checkout(tmp_path)
+    seen: dict = {}
+
+    class _R:
+        stdout, stderr, returncode = "__PYTEST_EXIT=0\n", "", 0
+
+    monkeypatch.setattr(ev, "_ensure_host_venv", lambda _p: tmp_path / "venv")
+    monkeypatch.setattr(
+        "subprocess.run", lambda *a, **k: seen.update(env=k["env"]) or _R()
+    )
+    ev._run_pytest_on_host(proj, proj / "t.py", {}, proj, ["src/app/models.py"])
+    assert seen["env"]["PYTHONPATH"].split(os.pathsep)[0] == str(proj / "src")

@@ -1886,7 +1886,7 @@ def test_host_runner_result_paths_survive_the_caller_cleanup(tmp_path, monkeypat
     monkeypatch.setattr(E, "_host_runner_mode", lambda *a, **k: True)
     monkeypatch.setattr(E, "_stage_sut_into_scratch", lambda *a, **k: None)
 
-    def _fake_host_run(scratch, tf, extra_env, project_dir_arg):
+    def _fake_host_run(scratch, tf, extra_env, project_dir_arg, targets=None):
         # Exactly what the real one does: write into the caller's scratch dir
         # and hand back paths into it.
         from tools.runners.docker_runner import DockerRunResult
