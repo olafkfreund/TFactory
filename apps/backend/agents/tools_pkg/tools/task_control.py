@@ -374,7 +374,7 @@ async def _cluster_get(args: dict[str, Any], report: str | None) -> dict[str, An
         res = await _api(
             "GET",
             _spec_task_path(located),
-            params={"report": report} if report else None,
+            **({"params": {"report": report}} if report else {}),
         )
     except Exception as exc:  # noqa: BLE001 - MCPHTTPError et al: one line
         return _format_error(str(exc))
@@ -409,7 +409,7 @@ async def _cluster_task_list(
 async def _cluster_list(path: str, params: dict[str, Any] | None = None) -> Any:
     """GET a listing from the cluster: the parsed body, or an error envelope."""
     try:
-        return await _api("GET", path, params=params)
+        return await _api("GET", path, **({"params": params} if params else {}))
     except Exception as exc:  # noqa: BLE001 - MCPHTTPError et al: one line
         return _format_error(str(exc))
 
