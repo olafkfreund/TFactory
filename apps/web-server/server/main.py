@@ -8,6 +8,7 @@ Main entry point for the web server that provides:
 """
 
 import asyncio
+import contextlib
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -180,15 +181,15 @@ async def lifespan(app: FastAPI):
     app.state.instance_tasks = []
     try:
         _add_backend_to_path()
-        from agents.liveness_sweep import beat
+        from agents.liveness_sweep import beat  # noqa: PLC0415
 
         beat()
-        from .background.instance_heartbeat import heartbeat_loop
+        from .background.instance_heartbeat import heartbeat_loop  # noqa: PLC0415
 
         app.state.instance_tasks.append(
             asyncio.create_task(heartbeat_loop(settings.INSTANCE_HEARTBEAT_SECONDS))
         )
-    except Exception:  # noqa: BLE001 — a heartbeat error must not block boot
+    except Exception:  # a heartbeat error must not block boot
         logger.exception("#1599 instance heartbeat could not start (continuing)")
 
     # Inline-orphan startup reconcile (#774): the planner/gen_functional stages
@@ -219,7 +220,7 @@ async def lifespan(app: FastAPI):
             logger.exception("#774 startup reconcile failed (continuing)")
 
     if settings.INLINE_ORPHAN_RECONCILE_ENABLED:
-        from .background.instance_heartbeat import reconcile_loop
+        from .background.instance_heartbeat import reconcile_loop  # noqa: PLC0415
 
         app.state.instance_tasks.append(
             asyncio.create_task(reconcile_loop(settings.INSTANCE_HEARTBEAT_SECONDS * 2))
@@ -330,7 +331,7 @@ async def lifespan(app: FastAPI):
     # keeps running meanwhile. Leftovers are failed with an accurate reason.
     try:
         _add_backend_to_path()
-        from agents.liveness_sweep import drain_own_inline_stages
+        from agents.liveness_sweep import drain_own_inline_stages  # noqa: PLC0415
 
         left = await asyncio.to_thread(
             drain_own_inline_stages, timeout=settings.SHUTDOWN_DRAIN_SECONDS
@@ -341,14 +342,12 @@ async def lifespan(app: FastAPI):
                 len(left),
                 [d.name for d in left],
             )
-    except Exception:  # noqa: BLE001 — never block shutdown
+    except Exception:  # never block shutdown
         logger.exception("#1599 shutdown wait failed")
     for t in getattr(app.state, "instance_tasks", []):
         t.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await t
-        except asyncio.CancelledError:
-            pass
 
     vr_task = getattr(app.state, "verify_reconcile_task", None)
     if vr_task is not None:
@@ -381,10 +380,10 @@ def _other_replica_alive() -> bool:
     """True when a peer replica's heartbeat is fresh (#1599); fail-safe to True."""
     try:
         _add_backend_to_path()
-        from agents.liveness_sweep import other_instance_alive
+        from agents.liveness_sweep import other_instance_alive  # noqa: PLC0415
 
         return other_instance_alive()
-    except Exception:  # noqa: BLE001 — unsure means assume a peer is live
+    except Exception:  # unsure means assume a peer is live
         logger.exception("#1599 peer-liveness check failed; assuming a peer is live")
         return True
 

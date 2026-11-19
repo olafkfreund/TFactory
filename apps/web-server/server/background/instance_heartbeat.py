@@ -33,7 +33,7 @@ async def heartbeat_loop(interval_seconds: float) -> None:
             try:
                 await asyncio.to_thread(beat)
                 await asyncio.to_thread(purge_old_instances)
-            except Exception:  # noqa: BLE001 - a missed beat must not kill the loop
+            except Exception:
                 logger.exception("#1599 instance heartbeat failed")
             await asyncio.sleep(interval_seconds)
     except asyncio.CancelledError:
@@ -53,7 +53,7 @@ async def reconcile_loop(interval_seconds: float) -> None:
                         len(failed),
                         [f"{d.name}({prior})" for d, prior in failed],
                     )
-            except Exception:  # noqa: BLE001 - a bad tick must not kill the loop
+            except Exception:
                 logger.exception("#1599 inline reconcile tick failed")
     except asyncio.CancelledError:
         raise

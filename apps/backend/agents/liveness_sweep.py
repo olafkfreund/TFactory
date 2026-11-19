@@ -155,7 +155,7 @@ def purge_old_instances(
     return removed
 
 
-def drain_own_inline_stages(
+def drain_own_inline_stages(  # noqa: PLR0913 - sleep/monotonic are test seams
     root: Path | None = None,
     *,
     timeout: float,
@@ -330,7 +330,7 @@ def job_active_probe(spec_dir: Path) -> Callable[[], bool] | None:
     return _active
 
 
-def reconcile_inline_orphans(
+def reconcile_inline_orphans(  # noqa: PLR0912 - owner/legacy/CAS branches
     workspace_root: Path | None = None,
     *,
     now: datetime | None = None,
