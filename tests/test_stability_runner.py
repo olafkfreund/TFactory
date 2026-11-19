@@ -27,10 +27,35 @@ from agents.stability_runner import (
     StabilityResult,
     StabilityRun,
     StabilityVerdict,
+    all_skipped,
     check_stability,
     classify_pytest_failure,
     error_detail,
 )
+
+
+@pytest.mark.parametrize(
+    ("summary", "expected"),
+    [
+        ("=== 2 skipped in 0.01s ===", True),
+        ("1 skipped", True),
+        ("1 passed", False),
+        ("1 passed, 2 skipped in 0.01s", False),
+        ("1 failed, 2 skipped", False),
+        ("1 error, 2 skipped", False),
+        ("1 errors, 2 skipped", False),
+        ("1 xfailed, 2 skipped", False),
+        ("1 xpassed, 2 skipped", False),
+        ("0 skipped", False),
+    ],
+)
+def test_all_skipped(summary, expected):
+    assert all_skipped(summary) is expected
+
+
+def test_all_skipped_exit_is_environment():
+    assert classify_pytest_failure("1 skipped in 0.01s", 125) == "environment"
+
 
 # ── Fake DockerRunResult ───────────────────────────────────────────────
 

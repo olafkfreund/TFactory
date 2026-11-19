@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## 0.12.0 — Rust and shell lanes, branch verify over MCP (2026-11-19)
+
+### Added
+
+- **Verify:** verify a cluster-built branch over MCP via `repo`/`branch`/`pr_number` (#1574, #1587).
+- **Shell lane:** `frameworks/bats` and an in-cluster bats + shellcheck unit lane
+  (the project's own flake devShell when it has one), so a bash project gets
+  `.bats` tests instead of pytest wrappers (#1581).
+- **Rust lane:** `frameworks/cargo-test` and an in-cluster `cargo test` unit lane,
+  so the Planner can emit Rust subtasks and the Evaluator runs them in the
+  per-task Nix shell (#1578).
+
+### Fixed
+
+- An all-skipped pytest run is `not_run` (exit 125), not a pass or a surviving
+  mutant, on the Nix, host and Docker runners (#1581).
+- Completed subtasks that no lane admits fail closed instead of `evaluated_empty` (#1580, #1585).
+- **Verify:** Go test-name collisions and `.ts` paths in JS-only repos (#1577, #1579, #1584).
+
 ## 0.11.8 — Missing runner image is a not-run, not a rejection (2026-11-18)
 
 ### Fixed

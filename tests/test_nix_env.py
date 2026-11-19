@@ -9,6 +9,7 @@ from pathlib import Path
 from agents.nix_env import (
     _NIX_JOB_LOCK,
     _nix_dispatch_gate,
+    _parse_pytest_exit,
     build_browser_job_command,
     collect_screenshots,
     detect_serve_command,
@@ -842,6 +843,19 @@ def test_parse_pytest_exits_legacy_single_run_round_trips():
     assert parse_pytest_exits("boom\n__PYTEST_EXIT=1\n")[0][0] == 1
 
 
+def test_all_skipped_pytest_exits_are_not_run():
+    output = "1 skipped in 0.01s\n__PYTEST_EXIT=0\n"
+    assert _parse_pytest_exit(output) == 125
+    assert _parse_pytest_exit("1 passed\n__PYTEST_EXIT=0\n") == 0
+    assert _parse_pytest_exit("1 skipped\n__PYTEST_EXIT=1\n") == 1
+    assert parse_pytest_exits(output)[0][0] == 125
+    batched = (
+        "__PYTEST_RUN=1\n1 skipped in 0.01s\n__PYTEST_EXIT=0\n"
+        "__PYTEST_RUN=2\n1 passed, 1 skipped in 0.01s\n__PYTEST_EXIT=0\n"
+    )
+    assert [code for code, _ in parse_pytest_exits(batched)] == [125, 0]
+
+
 def _fake_sandbox_capturing_script(captured, output):
     class _FS:
         def run(self, commands, *, workdir=None, timeout=300):
@@ -948,6 +962,17 @@ def test_parse_mut_exits_recovers_each_mutants_code():
         "__MUT_RUN=3\nfailed\n__MUT_EXIT=1\n"
     )
     assert parse_mut_exits(out) == [1, 0, 1]
+
+
+def test_parse_mut_exits_checks_each_mutants_body():
+    from agents.nix_env import parse_mut_exits
+
+    output = (
+        "__MUT_RUN=1\n1 skipped in 0.01s\n__MUT_EXIT=0\n"
+        "__MUT_RUN=2\n1 passed, 1 skipped in 0.01s\n__MUT_EXIT=0\n"
+        "__MUT_RUN=3\n1 skipped in 0.01s\n__MUT_EXIT=1\n"
+    )
+    assert parse_mut_exits(output) == [125, 0, 1]
 
 
 def test_parse_mut_exits_missing_marker_is_failure():

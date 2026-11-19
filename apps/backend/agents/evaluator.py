@@ -97,6 +97,7 @@ from agents.stability_runner import (
     StabilityRun,
     StabilityVerdict,
     _clip,
+    all_skipped,
     classify_stability_runs,
 )
 from agents.workspace_status import (
@@ -245,7 +246,11 @@ def _parse_marker_exit(stdout: str | None, prefix: str, default: int) -> int:
                     prefix,
                     len(line),
                 )
-    return code
+    return (
+        125
+        if prefix == "__PYTEST_EXIT=" and code == 0 and all_skipped(stdout or "")
+        else code
+    )
 
 
 # ── Host-execution fallback (no container runtime, e.g. k3d pods) ──────────
@@ -2155,19 +2160,97 @@ def _completed_go_subtasks(plan: dict) -> list[dict]:
     )
 
 
+_GO_TOP_LEVEL_RE = re.compile(
+    r"^(?:func\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)|(?:type|var|const)\s+([A-Za-z_]\w*))",
+    re.MULTILINE,
+)
+
+
+def _go_top_level_names(text: str, *, funcs_only: bool = False) -> set[str]:
+    """Top-level Go identifiers declared in ``text`` (regex, not a parser).
+
+    shortcut: grouped ``var (...)``/``const (...)`` members are not seen, and
+    methods are skipped; upgrade to ``go/parser`` if collisions slip through.
+    """
+    names: set[str] = set()
+    for m in _GO_TOP_LEVEL_RE.finditer(text):
+        if (
+            m.group(1)
+            and m.group(1) != "init"
+            and not re.match(r"func\s+\(", m.group(0))
+        ):
+            names.add(m.group(1))
+        elif m.group(2) and not funcs_only:
+            names.add(m.group(2))
+    return names
+
+
 def _stage_go_test(spec_dir: Path, project_dir: Path, subtask: dict) -> None:
     """Copy a Go subtask's generated ``_test.go`` files from the workspace into
     the worktree at their repo-relative paths, so ``go test ./...`` (which runs
-    over the co-mounted worktree) sees them next to the code they exercise."""
+    over the co-mounted worktree) sees them next to the code they exercise.
+
+    TFactory#1577: never overwrite or edit an existing file, write only
+    ``*_test.go`` under the project, and when a generated top-level name is
+    already declared in the package, rename it (``TFGen`` prefix) in a
+    ``*_tfgen_test.go`` copy so the package still compiles.
+    """
     import shutil as _sh
 
+    is_go = subtask.get("language") == "go"
+    root = Path(project_dir).resolve()
     for rel in subtask.get("files_to_create") or []:
         src = spec_dir / rel
-        if not src.exists():
+        # Java/Kotlin share this helper: the Go-only rules apply to Go subtasks.
+        if (is_go and not rel.endswith("_test.go")) or not src.exists():
             continue
-        dst = Path(project_dir) / rel
+        dst = (root / rel).resolve()
+        if not dst.is_relative_to(root):
+            continue
         dst.parent.mkdir(parents=True, exist_ok=True)
-        _sh.copy2(src, dst)
+        if not is_go:
+            _sh.copy2(src, dst)
+            continue
+        gen = src.read_text(errors="replace")
+        if dst.exists() and dst.read_text(errors="replace") == gen:
+            continue  # already staged by an earlier call
+        existing: set[str] = set()
+        for f in dst.parent.glob("*.go"):
+            existing |= _go_top_level_names(f.read_text(errors="replace"))
+        clash = _go_top_level_names(gen) & existing
+        if clash:
+            # Rewrite the workspace copy too, so what is evaluated is what the
+            # triager later promotes (it reads the workspace file).
+            gen = _rename_go_names(gen, clash, existing | _go_top_level_names(gen))
+            src.write_text(gen)
+        target = dst
+        stem = dst.name[: -len("_test.go")]
+        n = 0
+        while target.exists() and target.read_text(errors="replace") != gen:
+            n += 1  # never overwrite a differing file: pick an unused name
+            target = dst.with_name(f"{stem}_tfgen{n}_test.go")
+        if not target.is_symlink() and target.resolve().is_relative_to(root):
+            target.write_text(gen)
+
+
+_GO_LITERAL_OR_NAME = r"\"(?:\\.|[^\"\\\n])*\"|`[^`]*`|'(?:\\.|[^'\\\n])+'|//[^\n]*"
+
+
+def _rename_go_names(text: str, clash: set[str], taken: set[str]) -> str:
+    """Rename declared names (and their references) to unique ``TFGen`` names,
+    leaving string/rune literals, comments and ``x.name`` selectors alone."""
+    mapping: dict[str, str] = {}
+    for name in sorted(clash):
+        new = re.sub(r"^(Test|Benchmark|Example|Fuzz)", r"\1TFGen", name, count=1)
+        if new == name:
+            new = "tfgen_" + name
+        while new in taken:
+            new += "_"
+        taken.add(new)
+        mapping[name] = new
+    names = "|".join(re.escape(n) for n in mapping)
+    pat = re.compile(rf"({_GO_LITERAL_OR_NAME})|(?<![\w.])({names})\b")
+    return pat.sub(lambda m: m.group(1) or mapping[m.group(2)], text)
 
 
 def _resolve_go_runner_fn(spec_dir: Path, project_dir: Path):
@@ -2250,6 +2333,184 @@ def _resolve_kotlin_runner_fn(
         )
 
     return _run
+
+
+def _completed_shell_subtasks(plan: dict[str, Any]) -> list[dict[str, Any]]:
+    """Completed unit-lane shell subtasks (#1581).
+
+    Without this lane a shell subtask matched no filter and was dropped (the
+    generated pytest wrappers were the only way to test a script, and they
+    skipped when bats or shellcheck were absent).
+    """
+    return _filter_completed_subtasks(
+        plan,
+        lambda st: (
+            st.get("lane") in ("unit", "functional") and st.get("language") == "shell"
+        ),
+    )
+
+
+def _resolve_shell_runner_fn(
+    spec_dir: Path, _project_dir: Path
+) -> Callable[[Path, Path, int], DockerRunResult]:
+    """runner_fn(test_file, project_dir, seed) -> DockerRunResult running the
+    bats suite and shellcheck in the per-task Nix dev shell (#1581).
+
+    The lane always works at the project root (``test_file`` is unused); an
+    unconfigured sandbox returns a failing result so the gap is visible in the
+    stability signal instead of silently passing.
+    """
+    # Lazy on purpose: tests patch agents.nix_shell_lane.run_bats_lane_via_nix
+    # on the module, which a top-level `from` import would bind past.
+    from agents import nix_shell_lane  # noqa: PLC0415
+    from tools.runners.docker_runner import DockerRunResult  # noqa: PLC0415
+
+    def _run(_test_file: Path, project_dir_arg: Path, _seed: int) -> DockerRunResult:
+        res = nix_shell_lane.run_bats_lane_via_nix(spec_dir, Path(project_dir_arg))
+        if res is not None:
+            return res
+        return DockerRunResult(
+            returncode=1,
+            stdout="",
+            stderr="shell nix lane unavailable: TFACTORY_NIX_RUNNER_IMAGE unset",
+            argv=["nix", "develop", "--", "bats", "--tap"],
+        )
+
+    return _run
+
+
+def _shell_bundles(
+    spec_dir: Path,
+    project_dir: Path,
+    subtasks: Iterable[dict[str, Any]],
+    runner_fn: Callable[[Path, Path, int], DockerRunResult],
+) -> list[EvaluatorSignals]:
+    """ONE 3x stability pass for the whole project, shared by every shell
+    subtask: bats and shellcheck read the whole tree, so every subtask has the
+    identical result (the Go ``shared_go_stability`` pattern)."""
+    group = list(subtasks)
+    shared = _stability_for_subtask(spec_dir, project_dir, group[0], runner_fn)
+    return [
+        _build_go_signal_bundle(spec_dir, project_dir, st, runner_fn, stability=shared)
+        for st in group
+    ]
+
+
+def _completed_rust_subtasks(plan: dict[str, Any]) -> list[dict[str, Any]]:
+    """Completed unit-lane Rust subtasks (#1578).
+
+    Every other filter admits one language, so without this lane a Rust subtask
+    matched nothing: it was silently dropped, and a Rust-only plan fell through
+    to evaluated_empty.
+    """
+    return _filter_completed_subtasks(
+        plan,
+        lambda st: (
+            st.get("lane") in ("unit", "functional") and st.get("language") == "rust"
+        ),
+    )
+
+
+def _resolve_rust_runner_fn(
+    spec_dir: Path, _project_dir: Path
+) -> Callable[[Path, Path, int], DockerRunResult]:
+    """runner_fn(test_file, project_dir, seed) -> DockerRunResult running the
+    crate's tests in the per-task Nix dev shell (#1578).
+
+    The twin of :func:`_resolve_kotlin_runner_fn`: ``test_file`` is only the
+    crate-root hint (``cargo test --workspace`` covers the whole crate), and an
+    unconfigured sandbox returns a failing result so the gap is visible in the
+    stability signal instead of silently passing.
+    """
+    # Lazy on purpose: tests patch agents.nix_rust_lane.run_cargo_lane_via_nix
+    # on the module, which a top-level `from` import would bind past.
+    from agents import nix_rust_lane  # noqa: PLC0415
+    from tools.runners.docker_runner import DockerRunResult  # noqa: PLC0415
+
+    def _run(test_file: Path, project_dir_arg: Path, _seed: int) -> DockerRunResult:
+        try:
+            hint = Path(test_file).relative_to(spec_dir)
+        except ValueError:
+            hint = Path(test_file)
+        res = nix_rust_lane.run_cargo_lane_via_nix(
+            spec_dir, Path(project_dir_arg), hint=hint
+        )
+        if res is not None:
+            return res
+        return DockerRunResult(
+            returncode=1,
+            stdout="",
+            stderr="rust nix lane unavailable: TFACTORY_NIX_RUNNER_IMAGE unset",
+            argv=["nix", "develop", "--", "cargo", "test"],
+        )
+
+    return _run
+
+
+def _per_target_stability(
+    shared: StabilityResult | None, outputs: list[str], subtask: dict[str, Any]
+) -> StabilityResult | None:
+    """A Rust subtask counts only if cargo actually ran its ``tests/<name>.rs``.
+
+    ``cargo test`` is crate-wide, so other tests' passes must not vouch for a
+    generated file Cargo never compiled (the JVM per-class check, #1341).
+    """
+    if shared is None or shared.verdict == StabilityVerdict.ERROR:
+        return shared
+    if len(outputs) != len(shared.runs):
+        return shared
+    from agents.nix_rust_lane import cargo_ran_targets  # noqa: PLC0415
+
+    target = "/".join(Path(subtask["files_to_create"][0]).parts[-2:])
+    if all(target in cargo_ran_targets(out) for out in outputs):
+        return shared
+    return StabilityResult(
+        verdict=StabilityVerdict.ERROR,
+        runs=shared.runs,
+        seed=shared.seed,
+        rerun_count=shared.rerun_count,
+        error_message=f"{target} was not run by cargo: this test did not run",
+    )
+
+
+def _rust_bundles(
+    spec_dir: Path,
+    project_dir: Path,
+    subtasks: Iterable[dict[str, Any]],
+    runner_fn: Callable[[Path, Path, int], DockerRunResult],
+) -> list[EvaluatorSignals]:
+    from agents.nix_rust_lane import _cargo_crate_dir  # noqa: PLC0415
+
+    groups: dict[Path, list[dict[str, Any]]] = {}
+    for st in subtasks:
+        root = _cargo_crate_dir(project_dir, Path(st["files_to_create"][0]))
+        groups.setdefault(root, []).append(st)
+
+    bundles = []
+    for group in groups.values():
+        outputs: list[str] = []
+
+        def recording_runner(
+            test_file: Path,
+            project: Path,
+            seed: int,
+            outputs: list[str] = outputs,
+        ) -> DockerRunResult:
+            res = runner_fn(test_file, project, seed)
+            outputs.append(getattr(res, "stdout", "") or "")
+            return res
+
+        shared = _stability_for_subtask(
+            spec_dir, project_dir, group[0], recording_runner
+        )
+        for st in group:
+            stability = _per_target_stability(shared, outputs, st)
+            bundles.append(
+                _build_go_signal_bundle(
+                    spec_dir, project_dir, st, runner_fn, stability=stability
+                )
+            )
+    return bundles
 
 
 def _completed_java_subtasks(plan: dict[str, Any]) -> list[dict[str, Any]]:
@@ -2728,8 +2989,18 @@ def _persist_run_output(spec_dir: Path, bundles: list[Any]) -> None:
     out.write_text(json.dumps({"tests": entries}, indent=2), encoding="utf-8")
 
 
-def _build_all_bundles(  # noqa: PLR0913 - one list per lane
-    spec_dir, project_dir, unit, browser, api, jest, go, kotlin=(), java=()
+def _build_all_bundles(  # noqa: PLR0912, PLR0913 - one branch and list per lane
+    spec_dir,
+    project_dir,
+    unit,
+    browser,
+    api,
+    jest,
+    go,
+    kotlin=(),
+    java=(),
+    shell=(),
+    rust=(),
 ) -> list:
     """Compute the per-test signal bundle for every completed subtask.
 
@@ -2841,6 +3112,25 @@ def _build_all_bundles(  # noqa: PLR0913 - one list per lane
             java,
             java_runner,
             lambda st: resolver(project_dir, Path(st["files_to_create"][0])),
+        )
+    if shell:
+        # bats and shellcheck cover a whole project: stage every generated
+        # .bats first, then one shared 3x pass per project root (#1581).
+        for st in shell:
+            _stage_go_test(spec_dir, project_dir, st)
+        bundles += _shell_bundles(
+            spec_dir,
+            project_dir,
+            shell,
+            _resolve_shell_runner_fn(spec_dir, project_dir),
+        )
+    if rust:
+        # `cargo test --workspace` covers a whole crate: one 3x pass per crate
+        # root, each subtask graded on its own tests/<name>.rs target (#1578).
+        for st in rust:
+            _stage_go_test(spec_dir, project_dir, st)
+        bundles += _rust_bundles(
+            spec_dir, project_dir, rust, _resolve_rust_runner_fn(spec_dir, project_dir)
         )
     return bundles
 
@@ -3324,6 +3614,8 @@ async def run_evaluator(
         go_completed = _completed_go_subtasks(plan)
         kotlin_completed = _completed_kotlin_subtasks(plan)
         java_completed = _completed_java_subtasks(plan)
+        shell_completed = _completed_shell_subtasks(plan)
+        rust_completed = _completed_rust_subtasks(plan)
         completed = (
             unit_completed
             + browser_completed
@@ -3332,10 +3624,35 @@ async def run_evaluator(
             + go_completed
             + kotlin_completed
             + java_completed
+            + shell_completed
+            + rust_completed
         )
 
         # 2. No work — early exit with evaluated_empty.
         if not completed:
+            # Completed test-bearing subtasks that no lane admits are infra, not
+            # "no work" (#1580): fail closed instead of a quiet evaluated_empty.
+            unadmitted = _filter_completed_subtasks(plan, lambda _st: True)
+            if unadmitted:
+                tuples = sorted(
+                    {
+                        f"{st.get('language')}/{st.get('framework')}/{st.get('lane')}"
+                        for st in unadmitted
+                    }
+                )
+                # The pipeline triages after a failed evaluator; a stale file
+                # from an earlier run must not become this run's verdicts.
+                (spec_dir / "findings" / "verdicts.json").unlink(missing_ok=True)
+                _write_status_patch(
+                    spec_dir,
+                    status="evaluator_failed",
+                    phase=f"evaluator_{mode}_no_lane_for_completed_subtasks",
+                    evaluator_error=(
+                        f"{len(unadmitted)} completed subtask(s) match no evaluator "
+                        f"lane (language/framework/lane): {', '.join(tuples)}"
+                    ),
+                )
+                return False
             _write_empty_verdicts(spec_dir, mode)
             return True
 
@@ -3385,6 +3702,8 @@ async def run_evaluator(
             go_completed,
             kotlin_completed,
             java_completed,
+            shell_completed,
+            rust_completed,
         )
 
         # 3b. Persist failing-run output for post-mortem (#1195). The judge

@@ -1,0 +1,49 @@
+# Language descriptor: shell / bash (#1581, TFactory-local).
+#
+# Unlike kotlin.yaml and swift.yaml this file is NOT vendored from the Factory
+# hub contracts/languages/: it lives only in TFactory for now (the drift gate
+# registers files by name, so an extra local descriptor is not drift).
+# Follow-up: promote it to the hub so every consumer shares one definition.
+# Schema: see language_descriptors.py.
+#
+# Both nix attrs were evaluated against DEFAULT_NIXPKGS 567a49d1:
+# bats-1.12.0, shellcheck-0.11.0. A repo that owns a flake devShell uses that
+# instead (TFactory's shell lane respects a repo-owned flake.nix and then the
+# tools must come from its devShell); this descriptor only feeds the GENERATED
+# flake for a repo that has none.
+name: shell
+aliases: [shell, bash, sh]
+detect_weight: 1
+proof_command: bats --version
+# bats and shellcheck read local files only.
+network: none
+nix:
+  packages: [bats, shellcheck]
+lanes:
+  unit:
+    available: true
+    tool: bats
+    command: bats --tap -r tests
+    notes: >-
+      the lane also runs shellcheck over the project's scripts; findings fail
+      the lane. A run in which every test is skipped is not_run, never a pass.
+  browser:
+    available: false
+    reason: >-
+      shell has no UI surface; a web UI served by a script is exercised by the
+      TypeScript browser lane (playwright).
+  api:
+    available: false
+    reason: >-
+      no shell API-test runner is provisioned; HTTP checks of a shell-served
+      app belong to the Python or TypeScript api lane.
+  integration:
+    available: false
+    reason: >-
+      no container runtime in the TFactory verify Job, and bats has no
+      integration harness of its own.
+  mutation:
+    available: false
+    reason: >-
+      no shell mutation tool is provisioned; the Evaluator reports mutation as
+      not measured for shell.

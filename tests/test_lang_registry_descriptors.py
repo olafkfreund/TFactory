@@ -78,3 +78,28 @@ def test_negative_control_unwired_descriptors_refuse_kotlin(monkeypatch) -> None
     monkeypatch.setattr(lang_registry, "_descriptor_registry", lambda: {})
     with pytest.raises(UnsupportedLanguageError):
         get_tool_for_lane("kotlin", "unit")
+
+
+def test_shell_unit_lane_registered_from_the_local_descriptor() -> None:
+    """#1581: bats is the shell unit lane; every other lane says why it is off."""
+    unit = get_tool_for_lane("shell", "unit")
+    assert unit is not None and unit.binary == "bats"
+    for lane in ("browser", "api", "integration", "mutation"):
+        assert get_tool_for_lane("shell", lane) is None
+        assert unavailable_lane_reason("shell", lane), f"shell.{lane} needs a reason"
+    assert unavailable_lane_reason("shell", "unit") is None
+
+
+def test_shell_aliases_resolve_to_the_same_descriptor() -> None:
+    from tools.runners.language_descriptors import resolve_language
+
+    names = {resolve_language(a).name for a in ("shell", "bash", "sh")}
+    assert names == {"shell"}
+
+
+def test_generated_flake_for_shell_carries_bats_and_shellcheck() -> None:
+    """generate_flake fails closed for an unknown language; shell is now known."""
+    from tools.runners.nix_provisioner import generate_flake
+
+    flake = generate_flake({"language": "shell", "verify_commands": ["bats tests"]})
+    assert "pkgs.bats" in flake and "pkgs.shellcheck" in flake
