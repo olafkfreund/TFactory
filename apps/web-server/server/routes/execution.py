@@ -172,11 +172,18 @@ def _ingest_status(task_id: str, path: Path | None = None) -> dict[str, str]:
     path = path or _ingest_path(task_id)
     if path is None:
         return {}
+    spec_id = task_id.partition(":")[2] or task_id
     try:
         data = json.loads(path.read_text())
     except (OSError, ValueError):
         return {}
     if not isinstance(data, dict):
+        return {}
+    # A status.json that names another task must never answer for this one (#1597).
+    if any(
+        isinstance(data.get(k), str) and data[k] != spec_id
+        for k in ("task_id", "spec_id")
+    ):
         return {}
     # Only strings are usable downstream (set membership, response model).
     return {k: v for k, v in data.items() if isinstance(v, str)}

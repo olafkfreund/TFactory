@@ -426,8 +426,7 @@ async def test_test_file_missing_skipped_gracefully(
     project_dir: Path,
 ) -> None:
     """Verdicts reference a file that doesn't exist on disk →
-    candidate gets empty source, git_writer skips it but the
-    report still records the verdict."""
+    candidate is rejected and the report records why."""
     (spec_dir / "findings" / "verdicts.json").write_text(json.dumps(_make_verdicts(2)))
     # Write ONLY test_0.py; test_1.py is missing
     (spec_dir / "tests" / "test_0.py").write_text("def test_x(): assert True\n")
@@ -435,7 +434,14 @@ async def test_test_file_missing_skipped_gracefully(
     ok = await run_triager(spec_dir, project_dir)
     assert ok is True
     status = json.loads((spec_dir / "status.json").read_text())
-    assert status["committed_count"] == 2  # both verdicts kept (status-wise)
+    assert status["committed_count"] == 1
+    assert status["rejected_count"] == 1
+    report = json.loads((spec_dir / "findings" / "triage_report.json").read_text())
+    assert report["rejected"][0]["test_id"] == "st1"
+    assert (
+        "test source not found or empty at tests/test_1.py"
+        in report["rejected"][0]["verdict"]["reasons"]
+    )
     # git_writer only sees test_0.py because test_1.py had no source
     gw = status["git_writer"]
     assert gw["skipped"] is False
