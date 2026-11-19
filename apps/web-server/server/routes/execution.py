@@ -6,12 +6,15 @@ Handles starting, stopping, and monitoring task execution.
 
 import json
 import logging
+import os
 from pathlib import Path
 
 from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from server.database.engine import get_db
 from server.error_ref import client_error
 
 from ..services.agent_service import get_agent_service
@@ -93,15 +96,70 @@ async def get_running_tasks():
     return RunningTasksResponse(tasks=running, count=len(running))
 
 
-@router.get("/{task_id}/status", response_model=TaskExecutionStatus)
-async def get_task_status(task_id: str):
-    """Get execution status for a specific task."""
-    agent_service = get_agent_service()
-    is_running = agent_service.is_running(task_id)
+async def _status_access(
+    task_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+) -> None:
+    """Project-level read access, for ``project:spec`` ids only (#1597).
 
+    A bare spec id has no project to authorize against and keeps the old
+    (workspace-free) answer, so it skips the check.
+    """
+    if ":" in task_id:
+        await require_task_access("viewer")(task_id, request, db)
+
+
+def _ingest_status(task_id: str) -> dict[str, str]:
+    """The persisted ``status.json`` of a spec-ingest task, or ``{}`` (#1597).
+
+    Ingest tasks run in-process / as k8s Jobs and never join ``running_tasks``;
+    their truth is the spec workspace. Only the ``project:spec`` form is read.
+    """
+    project_id, sep, spec_id = task_id.partition(":")
+    if not sep:
+        return {}
+    root = Path(os.environ.get("TFACTORY_WORKSPACE_ROOT") or Path.home() / ".tfactory")
+    path = (
+        root.expanduser()
+        / "workspaces"
+        / safe_component(project_id)
+        / "specs"
+        / safe_component(spec_id)
+        / "status.json"
+    )
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    # Only strings are usable downstream (set membership, response model).
+    return {k: v for k, v in data.items() if isinstance(v, str)}
+
+
+@router.get(
+    "/{task_id}/status",
+    response_model=TaskExecutionStatus,
+    dependencies=[Depends(_status_access)],
+)
+async def get_task_status(task_id: str) -> TaskExecutionStatus:
+    """Get execution status for a specific task.
+
+    Combines the in-process registry with the spec workspace's ``status.json``
+    (#1597): a running spec-ingest task is in the latter only.
+    """
+    from agents.liveness import ACTIVE_STATUSES  # noqa: PLC0415
+
+    persisted = _ingest_status(task_id)
+    is_running = get_agent_service().is_running(task_id) or (
+        persisted.get("status") in ACTIVE_STATUSES
+    )
     return TaskExecutionStatus(
         task_id=task_id,
         is_running=is_running,
+        phase=persisted.get("phase"),
+        message=persisted.get("failed_reason") or persisted.get("reaped_reason"),
     )
 
 

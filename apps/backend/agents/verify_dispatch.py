@@ -1498,6 +1498,8 @@ async def _probe_job(
 ) -> tuple[bool, bool, bool]:
     """Return ``(job_exists, job_active, job_succeeded)``. Fail-safe.
 
+    A present Job remains active until a succeeded pod or a True Complete/Failed
+    condition proves it finished; an unset ``status.active`` is not evidence.
     ``job_succeeded`` matters because ``active=False`` alone conflates two
     opposite outcomes: a Job killed at its deadline, and a Job that finished its
     stage cleanly and dispatched the next one. Reaping treated both as death and
@@ -1554,8 +1556,16 @@ async def _probe_job(
         )
         return True, True, False
     st = getattr(job, "status", None)
-    active = bool(getattr(st, "active", 0)) if st is not None else False
-    succeeded = bool(getattr(st, "succeeded", 0)) if st is not None else False
+    conditions = getattr(st, "conditions", None) or ()
+    succeeded = (getattr(st, "succeeded", None) or 0) > 0 or any(
+        getattr(c, "type", None) == "Complete" and getattr(c, "status", None) == "True"
+        for c in conditions
+    )
+    failed = any(
+        getattr(c, "type", None) == "Failed" and getattr(c, "status", None) == "True"
+        for c in conditions
+    )
+    active = not (succeeded or failed)
     return True, active, succeeded
 
 
