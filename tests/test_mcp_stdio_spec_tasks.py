@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import sys
 from pathlib import Path
@@ -15,13 +16,12 @@ _WEB = Path(__file__).parent.parent / "apps" / "web-server"
 if str(_WEB) not in sys.path:
     sys.path.insert(0, str(_WEB))
 
-import server.mcp_stdio.router  # noqa: E402, F401
 from server.config import get_settings  # noqa: E402
 from server.database.models import Base, Organization, OrgMember, User  # noqa: E402
 from server.mcp_remote.auth import AuthenticatedKey  # noqa: E402
 from server.mcp_stdio.auth import MCP_READ_SCOPE, TASK_WRITE_SCOPE  # noqa: E402
 
-proxy = sys.modules["server.mcp_stdio.router"]
+proxy = importlib.import_module("server.mcp_stdio.router")
 from server.services.audit_service import ACTION_MCP_TASK_CREATE_AND_RUN  # noqa: E402
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
 
