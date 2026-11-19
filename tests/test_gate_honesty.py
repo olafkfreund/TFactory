@@ -304,6 +304,8 @@ def test_services_gate_refuses_a_run_that_needs_services(
 ) -> None:
     """#1582: declared postgres/redis cannot be provisioned, so stop with infra."""
     monkeypatch.setattr("agents.workspace_status.notify_terminal", lambda *_: None)
+    monkeypatch.delenv("TFACTORY_NIX_RUNNER_IMAGE", raising=False)
+    monkeypatch.delenv("TFACTORY_VERIFY_BACKEND", raising=False)
     from agents.services_gate import halt_if_services_declared
 
     (tmp_path / ".tfactory.yml").write_text(
