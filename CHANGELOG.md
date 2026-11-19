@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.13.5 — Preflight same-named package roots (2026-11-19)
+
+### Fixed
+
+- **Preflight:** try every same-named package root before rejecting a missing attribute, and the runner PYTHONPATH covers them (#1637, #1638).
+
 ## 0.13.4 — Verify api lane app selection, literal gate params (2026-11-19)
 
 ### Fixed
