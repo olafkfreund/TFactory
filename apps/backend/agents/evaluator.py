@@ -82,6 +82,7 @@ from agents.mutate_probe import (
 from agents.mutation_dispatch import is_mutation_supported, mutant_extension
 from agents.nix_env import (
     _API_SELF_SERVE_PORT,
+    _api_targets,
     api_services_fallback_env,
     detect_api_serve_command,
     detect_serve_command,
@@ -448,7 +449,11 @@ def _ensure_host_venv(project_dir: Path) -> Path:
 
 
 def _run_pytest_on_host(
-    scratch: Path, test_file: Path, extra_env: dict, project_dir: Path
+    scratch: Path,
+    test_file: Path,
+    extra_env: dict,
+    project_dir: Path,
+    targets: list[str] | None = None,
 ):
     """Run one pytest file on the host (no container) — same result shape as the
     DockerRunner path. Used when no container runtime is available."""
@@ -468,17 +473,19 @@ def _run_pytest_on_host(
         "echo __PYTEST_EXIT=$?"
     )
     scratch_root = Path(scratch).resolve()
-    pythonpath = str(scratch_root)
-    src_dir = scratch_root / "src"
-    if src_dir.is_dir():
-        pythonpath = f"{src_dir}{os.pathsep}{pythonpath}"
-    # #756: a monorepo keeps its packages below both of those (e.g.
+    # #756: a monorepo keeps its packages below ``src`` and the root (e.g.
     # apps/web-server/server), so without the real roots pytest cannot collect
-    # and every AC reports an import error against correct code.
-    for rel in package_root_rel_paths(scratch_root):
-        root = str(scratch_root if rel == "." else scratch_root / rel)
-        if root not in pythonpath.split(os.pathsep):
-            pythonpath = f"{root}{os.pathsep}{pythonpath}"
+    # and every AC reports an import error against correct code. The first entry
+    # wins on a same-named package (#1637), so the target-holding root leads.
+    roots = [
+        str(scratch_root if rel == "." else scratch_root / rel)
+        for rel in package_root_rel_paths(scratch_root, targets)
+    ]
+    src_dir = scratch_root / "src"
+    for fallback in (str(src_dir) if src_dir.is_dir() else "", str(scratch_root)):
+        if fallback and fallback not in roots:
+            roots.append(fallback)
+    pythonpath = os.pathsep.join(roots)
     env = child_env(extra={**extra_env, "PYTHONPATH": pythonpath})
     res = subprocess.run(
         ["sh", "-c", cmd], capture_output=True, text=True, timeout=300, env=env
@@ -542,9 +549,20 @@ def _resolve_runner_fn(
             # ``/scratch/src`` first so src-layout packages import inside the
             # container; ``/scratch`` covers flat layouts. A missing path is
             # simply ignored by the interpreter.
+            # #1637: with spec targets, the root that holds them leads, so a
+            # same-named package elsewhere (``src/app``) cannot shadow the SUT.
+            _targets = _api_targets(spec_dir, Path(project_dir_arg))
+            _lead = (
+                [
+                    "/scratch" if rel == "." else f"/scratch/{rel}"
+                    for rel in package_root_rel_paths(scratch, _targets)[:1]
+                ]
+                if _targets
+                else []
+            )
             extra_env = {
                 "PYTHONHASHSEED": str(seed),
-                "PYTHONPATH": f"/scratch/src{os.pathsep}/scratch",
+                "PYTHONPATH": os.pathsep.join([*_lead, "/scratch/src", "/scratch"]),
             }
             if target_url:
                 extra_env["TFACTORY_TARGET_URL"] = target_url
@@ -620,7 +638,11 @@ def _resolve_runner_fn(
                         spec_dir,
                         test_file,
                         _run_pytest_on_host(
-                            scratch, test_file, extra_env, project_dir_arg
+                            scratch,
+                            test_file,
+                            extra_env,
+                            project_dir_arg,
+                            _api_targets(spec_dir, Path(project_dir_arg)),
                         ),
                     )
                 finally:
