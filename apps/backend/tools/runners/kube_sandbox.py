@@ -30,7 +30,7 @@ import os
 import re
 import shlex
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -205,6 +205,7 @@ def build_job_manifest(
     # allocatable than they have). Mirrors the hub job_dispatch default, which
     # TFactory never calls, so without this no lane Job was bounded.
     ephemeral_storage_limit: str = "4Gi",
+    services: Sequence[tuple[str, str | None]] = (),
 ) -> dict:
     """Pure builder for the per-task Job manifest. No cluster access.
 
@@ -311,6 +312,58 @@ def build_job_manifest(
                 "securityContext": dict(CONTAINER_SECURITY_CONTEXT),
             }
         ]
+    for service, version in services:
+        if service not in ("postgres", "redis"):
+            raise ValueError(f"unsupported sidecar service: {service}")
+        tag = (
+            version
+            if version and re.fullmatch(r"[A-Za-z0-9._-]+", version)
+            else ("16" if service == "postgres" else "7")
+        )
+        user = 70 if service == "postgres" else 999
+        env_name = f"TFACTORY_SIDECAR_{service.upper()}_IMAGE"
+        sidecar: dict[str, Any] = {
+            "name": service,
+            "image": os.environ.get(env_name) or f"{service}:{tag}-alpine",
+            "imagePullPolicy": "IfNotPresent",
+            "restartPolicy": "Always",
+            "securityContext": {
+                "runAsNonRoot": True,
+                "runAsUser": user,
+                "allowPrivilegeEscalation": False,
+                "capabilities": {"drop": ["ALL"]},
+            },
+            # postgres' default shared_buffers is 128MB: a 128Mi limit would OOM it.
+            "resources": {
+                "requests": {"cpu": "50m", "memory": "128Mi"},
+                "limits": {
+                    "cpu": "500m",
+                    "memory": "512Mi" if service == "postgres" else "128Mi",
+                },
+            },
+        }
+        if service == "postgres":
+            sidecar["env"] = [
+                {"name": "PGDATA", "value": "/pgdata/data"},
+                {"name": "POSTGRES_USER", "value": "app"},
+                {"name": "POSTGRES_PASSWORD", "value": "app"},
+                {"name": "POSTGRES_DB", "value": "app"},
+            ]
+            sidecar["args"] = ["-c", "listen_addresses=127.0.0.1"]
+            sidecar["volumeMounts"] = [
+                {"name": "postgres-data", "mountPath": "/pgdata"}
+            ]
+            volumes.append({"name": "postgres-data", "emptyDir": {}})
+        else:
+            sidecar["args"] = [
+                "--bind",
+                "127.0.0.1",
+                "--save",
+                "",
+                "--appendonly",
+                "no",
+            ]
+        pod_spec.setdefault("initContainers", []).append(sidecar)
     if mounts:
         container["volumeMounts"] = mounts
     if volumes:
