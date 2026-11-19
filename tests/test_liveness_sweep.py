@@ -3,16 +3,23 @@
 from __future__ import annotations
 
 import json
+import os
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 from agents.liveness_sweep import (
+    beat,
     default_workspace_root,
+    drain_own_inline_stages,
     iter_spec_dirs,
     main,
+    other_instance_alive,
+    reconcile_inline_orphans,
     sweep,
 )
+from agents.workspace_status import INSTANCE_ID, write_status_patch
 
 _NOW = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
 
@@ -130,10 +137,20 @@ def test_main_reports_and_exits_zero(
 
 
 def test_reconcile_fails_inline_stranded_specs(tmp_path: Path) -> None:
-    from agents.liveness_sweep import reconcile_inline_orphans
-
-    gen = _spec(tmp_path, "p1", "s-gen", status="generating", updated_at=_iso(_NOW))
-    plan = _spec(tmp_path, "p1", "s-plan", status="planning", updated_at=_iso(_NOW))
+    gen = _spec(
+        tmp_path,
+        "p1",
+        "s-gen",
+        status="generating",
+        updated_at=_iso(_NOW - timedelta(seconds=901)),
+    )
+    plan = _spec(
+        tmp_path,
+        "p1",
+        "s-plan",
+        status="planning",
+        updated_at=_iso(_NOW - timedelta(seconds=901)),
+    )
 
     failed = reconcile_inline_orphans(tmp_path, now=_NOW)
 
@@ -176,6 +193,139 @@ def test_reconcile_skips_missing_or_corrupt_status(tmp_path: Path) -> None:
     (bad / "status.json").write_text("{not json")  # corrupt → skipped, not raised
 
     assert reconcile_inline_orphans(tmp_path, now=_NOW) == []
+
+
+@pytest.mark.parametrize("stage", ["planning", "generating"])
+def test_reconcile_keeps_other_live_stage(tmp_path: Path, stage: str) -> None:
+    spec = _spec(tmp_path, "p", "s", status=stage, owner_instance="A")
+    beat(tmp_path, "A")
+    os.utime(tmp_path / "instances" / "A", (_NOW.timestamp(), _NOW.timestamp()))
+    assert reconcile_inline_orphans(tmp_path, now=_NOW, instance_id="B") == []
+    assert json.loads((spec / "status.json").read_text())["status"] == stage
+
+
+@pytest.mark.parametrize("heartbeat", ["stale", "missing"])
+def test_reconcile_fails_dead_owner(tmp_path: Path, heartbeat: str) -> None:
+    spec = _spec(tmp_path, "p", "s", status="planning", owner_instance="A")
+    if heartbeat == "stale":
+        beat(tmp_path, "A")
+        old = (_NOW - timedelta(seconds=61)).timestamp()
+        os.utime(tmp_path / "instances" / "A", (old, old))
+    assert reconcile_inline_orphans(tmp_path, now=_NOW, instance_id="B") == [
+        (spec, "planning")
+    ]
+    status = json.loads((spec / "status.json").read_text())
+    assert status["phase"] == "control_plane_restart"
+
+
+def test_reconcile_keeps_own_and_fresh_legacy_stages(tmp_path: Path) -> None:
+    own = _spec(tmp_path, "p", "own", status="planning", owner_instance="A")
+    legacy = _spec(tmp_path, "p", "legacy", status="generating", updated_at=_iso(_NOW))
+    assert reconcile_inline_orphans(tmp_path, now=_NOW, instance_id="A") == []
+    assert json.loads((own / "status.json").read_text())["status"] == "planning"
+    assert json.loads((legacy / "status.json").read_text())["status"] == "generating"
+
+
+def test_reconcile_aborts_when_owner_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import agents.liveness_sweep as sweep_module
+
+    spec = _spec(tmp_path, "p", "s", status="planning", owner_instance="A")
+    original = sweep_module.instance_alive
+
+    def owner_changed(*args: object, **kwargs: object) -> bool:
+        (spec / "status.json").write_text(
+            json.dumps({"status": "planning", "owner_instance": "C"})
+        )
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(sweep_module, "instance_alive", owner_changed)
+    assert reconcile_inline_orphans(tmp_path, now=_NOW, instance_id="B") == []
+    assert json.loads((spec / "status.json").read_text())["owner_instance"] == "C"
+
+
+def test_status_patch_stamps_inline_owner_only(tmp_path: Path) -> None:
+    spec = _spec(tmp_path, "p", "s", status="pending")
+    write_status_patch(spec, "planner", status="planning")
+    assert (
+        json.loads((spec / "status.json").read_text())["owner_instance"] == INSTANCE_ID
+    )
+    other = _spec(tmp_path, "p", "other", status="pending")
+    write_status_patch(other, "planner", status="planned")
+    assert "owner_instance" not in json.loads((other / "status.json").read_text())
+
+
+def test_drain_returns_when_own_stage_finishes(tmp_path: Path) -> None:
+    spec = _spec(tmp_path, "p", "s", status="planning", owner_instance="A")
+    beat(tmp_path, "A")
+
+    def finish(_seconds: float) -> None:
+        (spec / "status.json").write_text(
+            json.dumps({"status": "planned", "owner_instance": "A"})
+        )
+
+    assert (
+        drain_own_inline_stages(tmp_path, timeout=10, instance_id="A", sleep=finish)
+        == []
+    )
+    assert not (tmp_path / "instances" / "A").exists()
+
+
+def test_drain_fails_leftover_after_timeout(tmp_path: Path) -> None:
+    spec = _spec(tmp_path, "p", "s", status="generating", owner_instance="A")
+    beat(tmp_path, "A")
+    ticks = iter([0.0, 0.0, 3.0])
+    assert drain_own_inline_stages(
+        tmp_path,
+        timeout=2,
+        instance_id="A",
+        sleep=lambda _: None,
+        monotonic=lambda: next(ticks),
+    ) == [spec]
+    status = json.loads((spec / "status.json").read_text())
+    assert status["status"] == "failed"
+    assert status["phase"] == "control_plane_restart"
+    assert "shut down mid-generating" in status["failed_reason"]
+    assert not (tmp_path / "instances" / "A").exists()
+
+
+def test_other_instance_alive(tmp_path: Path) -> None:
+    beat(tmp_path, "A")
+    os.utime(tmp_path / "instances" / "A", (_NOW.timestamp(), _NOW.timestamp()))
+    assert other_instance_alive(tmp_path, now=_NOW, instance_id="B")
+    assert not other_instance_alive(tmp_path, now=_NOW, instance_id="A")
+
+
+def test_blocked_reconcile_does_not_block_beat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import agents.liveness_sweep as sweep_module
+
+    _spec(tmp_path, "p", "s", status="planning", owner_instance="A")
+    entered = threading.Event()
+    release = threading.Event()
+
+    def slow_alive(*_args: object, **_kwargs: object) -> bool:
+        entered.set()
+        assert release.wait(2)
+        return True
+
+    monkeypatch.setattr(sweep_module, "instance_alive", slow_alive)
+    thread = threading.Thread(
+        target=reconcile_inline_orphans,
+        args=(tmp_path,),
+        kwargs={"now": _NOW, "instance_id": "B"},
+    )
+    thread.start()
+    try:
+        assert entered.wait(2)
+        beat(tmp_path, "B")
+        assert (tmp_path / "instances" / "B").is_file()
+    finally:
+        release.set()
+        thread.join(2)
+    assert not thread.is_alive()
 
 
 # ── gc_terminal_worktrees (#742) ────────────────────────────────────────────

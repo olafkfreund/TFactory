@@ -20,22 +20,35 @@ import argparse
 import asyncio
 import contextlib
 import json
+import math
 import os
 import shutil
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
 from agents.liveness import StallVerdict, check_and_mark
-from agents.workspace_status import notify_terminal, now_iso
+from agents.workspace_status import (
+    INLINE_STATUSES,
+    INSTANCE_ID,
+    notify_terminal,
+    now_iso,
+)
 
 __all__ = [
+    "beat",
     "default_workspace_root",
+    "drain_own_inline_stages",
     "gc_terminal_worktrees",
+    "instance_alive",
+    "instance_dir",
     "iter_spec_dirs",
     "job_active_probe",
+    "other_instance_alive",
+    "purge_old_instances",
     "reconcile_inline_orphans",
     "sweep",
 ]
@@ -60,12 +73,152 @@ _GC_TERMINAL_STATUSES = frozenset(
     }
 )
 
-# Inline stages that run in the control-plane process itself (not a k8s Job),
-# so a pod roll/OOM/drain mid-run leaves no Job and no worker_ref for the #767
-# reaper to see. These are the only statuses the startup reconcile fails.
-_INLINE_ORPHAN_STATUSES = frozenset({"planning", "generating"})
-
 _DEFAULT_ROOT = Path.home() / ".tfactory"
+
+
+def _stale_seconds() -> float:
+    try:
+        value = float(os.environ.get("TFACTORY_INSTANCE_STALE_SECONDS", "60"))
+        return value if math.isfinite(value) and value > 0 else 60.0
+    except ValueError:
+        return 60.0
+
+
+def _legacy_seconds() -> float:
+    try:
+        value = float(os.environ.get("TFACTORY_LEGACY_ORPHAN_SECONDS", "900"))
+        return value if math.isfinite(value) and value > 0 else 900.0
+    except ValueError:
+        return 900.0
+
+
+def instance_dir(root: Path) -> Path:
+    return root / "instances"
+
+
+def beat(root: Path | None = None, instance_id: str = INSTANCE_ID) -> None:
+    directory = instance_dir(root or default_workspace_root())
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / instance_id).touch()
+
+
+def instance_alive(
+    root: Path, instance_id: str, *, now: datetime, stale: float | None = None
+) -> bool:
+    try:
+        path = instance_dir(root) / instance_id
+        return path.is_file() and now.timestamp() - path.stat().st_mtime < (
+            _stale_seconds() if stale is None else stale
+        )
+    except OSError:
+        return False
+
+
+def other_instance_alive(
+    root: Path | None = None,
+    *,
+    now: datetime | None = None,
+    stale: float | None = None,
+    instance_id: str = INSTANCE_ID,
+) -> bool:
+    base = root or default_workspace_root()
+    when = now or datetime.now(UTC)
+    try:
+        return any(
+            path.name != instance_id
+            and instance_alive(base, path.name, now=when, stale=stale)
+            for path in instance_dir(base).iterdir()
+        )
+    except OSError:
+        return False
+
+
+def purge_old_instances(
+    root: Path | None = None, *, now: datetime | None = None, max_age: float = 86400.0
+) -> int:
+    directory = instance_dir(root or default_workspace_root())
+    when = (now or datetime.now(UTC)).timestamp()
+    removed = 0
+    try:
+        paths = list(directory.iterdir())
+    except OSError:
+        return 0
+    for path in paths:
+        if path.name == INSTANCE_ID:
+            continue
+        try:
+            if path.is_file() and when - path.stat().st_mtime > max_age:
+                path.unlink()
+                removed += 1
+        except OSError:
+            continue
+    return removed
+
+
+def drain_own_inline_stages(
+    root: Path | None = None,
+    *,
+    timeout: float,
+    poll: float = 2.0,
+    instance_id: str = INSTANCE_ID,
+    sleep: Callable[[float], None] = time.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> list[Path]:
+    base = root or default_workspace_root()
+    deadline = monotonic() + timeout
+    failed: list[Path] = []
+    try:
+        while True:
+            active = []
+            for spec_dir in iter_spec_dirs(base):
+                try:
+                    status = json.loads((spec_dir / "status.json").read_text())
+                except (json.JSONDecodeError, OSError):
+                    continue
+                if (
+                    isinstance(status, dict)
+                    and status.get("status") in INLINE_STATUSES
+                    and status.get("owner_instance") == instance_id
+                ):
+                    active.append((spec_dir, status["status"]))
+            if not active:
+                break
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                for spec_dir, prior in active:
+                    status_path = spec_dir / "status.json"
+                    try:
+                        status = json.loads(status_path.read_text())
+                    except (json.JSONDecodeError, OSError):
+                        continue
+                    if (
+                        not isinstance(status, dict)
+                        or status.get("status") != prior
+                        or status.get("owner_instance") != instance_id
+                    ):
+                        continue
+                    status.update(
+                        status="failed",
+                        orphaned_from=prior,
+                        phase="control_plane_restart",
+                        failed_reason=(
+                            f"shut down mid-{prior}; the in-process stage did not finish "
+                            "within the grace period (#1599)"
+                        ),
+                        updated_at=now_iso(),
+                    )
+                    try:
+                        status_path.write_text(json.dumps(status, indent=2))
+                    except OSError:
+                        continue
+                    notify_terminal(spec_dir)
+                    failed.append(spec_dir)
+                break
+            sleep(min(poll, remaining))
+    finally:
+        with contextlib.suppress(OSError):
+            (instance_dir(base) / instance_id).unlink()
+    return failed
 
 
 def default_workspace_root() -> Path:
@@ -181,8 +334,11 @@ def reconcile_inline_orphans(
     workspace_root: Path | None = None,
     *,
     now: datetime | None = None,
+    instance_id: str = INSTANCE_ID,
+    stale_seconds: float | None = None,
+    legacy_seconds: float | None = None,
 ) -> list[tuple[Path, str]]:
-    """Fail specs stranded in an INLINE stage by a control-plane restart (#774).
+    """Fail inline stages whose owner is gone or whose legacy status is old.
 
     The planner and gen_functional stages run in the control-plane process, not a
     k8s Job, so a pod roll / OOM / node drain mid-generation kills the in-flight
@@ -190,18 +346,15 @@ def reconcile_inline_orphans(
     spec sits at ``planning`` / ``generating`` forever, indistinguishable from
     "still working".
 
-    Run this ONCE at web-server startup. Under the ReadWriteOnce workspaces PVC a
-    fresh pod acquires the volume only after the previous holder has released it
-    (is gone), and it has launched no generation of its own yet — so any spec
-    still in an inline active status was necessarily orphaned by the pod that
-    died. Job-backed stages (``evaluating`` / ``triaging``) are excluded on
-    purpose: their Jobs survive a control-plane roll and the #767 reaper owns
-    them; failing them here would clobber a live verify.
+    Skip stages owned by this process or a process with a fresh heartbeat.
+    Ownerless legacy stages get a grace period based on ``updated_at``.
+    Job-backed stages are excluded; the #767 reaper owns them.
 
     Best-effort and fail-safe: an unreadable / non-inline spec is skipped, never
     raised on. Returns the ``(spec_dir, prior_status)`` pairs it failed.
     """
     root = workspace_root or default_workspace_root()
+    when = now or datetime.now(UTC)
     when_iso = now.isoformat(timespec="seconds") if now is not None else now_iso()
     reconciled: list[tuple[Path, str]] = []
     for spec_dir in iter_spec_dirs(root):
@@ -213,18 +366,44 @@ def reconcile_inline_orphans(
         if not isinstance(status, dict):
             continue
         prior = status.get("status")
-        if prior not in _INLINE_ORPHAN_STATUSES:
+        if prior not in INLINE_STATUSES:
             continue
-        status["status"] = "failed"
-        status["orphaned_from"] = prior
-        status["phase"] = "control_plane_restart"
-        status["failed_reason"] = (
+        owner = status.get("owner_instance")
+        if owner == instance_id:
+            continue
+        if owner:
+            if instance_alive(root, owner, now=when, stale=stale_seconds):
+                continue
+        else:
+            try:
+                updated = datetime.fromisoformat(status["updated_at"])
+                if when.timestamp() - updated.timestamp() < (
+                    _legacy_seconds() if legacy_seconds is None else legacy_seconds
+                ):
+                    continue
+            except (KeyError, TypeError, ValueError):
+                pass
+        # A stage may have changed owner while the heartbeat was checked.
+        try:
+            current = json.loads(status_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        if (
+            not isinstance(current, dict)
+            or current.get("status") != prior
+            or current.get("owner_instance") != owner
+        ):
+            continue
+        current["status"] = "failed"
+        current["orphaned_from"] = prior
+        current["phase"] = "control_plane_restart"
+        current["failed_reason"] = (
             f"control plane restarted mid-{prior}; the in-process stage had no "
             "Job to reconcile (#774)"
         )
-        status["updated_at"] = when_iso
+        current["updated_at"] = when_iso
         try:
-            status_path.write_text(json.dumps(status, indent=2))
+            status_path.write_text(json.dumps(current, indent=2))
         except OSError:
             continue
         notify_terminal(spec_dir)

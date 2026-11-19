@@ -41,7 +41,9 @@ async def _settled(calls: list[str], n: int = 1) -> list[str]:
 def _spec(tmp_path: Path, status: str) -> Path:
     spec_dir = tmp_path / "workspaces" / "p1" / "specs" / "s1"
     spec_dir.mkdir(parents=True)
-    (spec_dir / "status.json").write_text(json.dumps({"status": status}))
+    (spec_dir / "status.json").write_text(
+        json.dumps({"status": status, "updated_at": "2020-01-01T00:00:00+00:00"})
+    )
     return spec_dir
 
 
