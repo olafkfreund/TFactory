@@ -544,6 +544,19 @@ def test_real_pytest_descriptor() -> None:
     not _REAL_FRAMEWORKS_DIR.is_dir(),
     reason=f"frameworks/ directory not found at {_REAL_FRAMEWORKS_DIR}",
 )
+def test_pytest_api_lane_guides_db_isolation() -> None:
+    """#1632: API-lane tests create their own data and keep AC assertions."""
+    block = get_descriptor("pytest", frameworks_dir=_REAL_FRAMEWORKS_DIR).context_block
+    assert "TFACTORY_TARGET_URL" in block
+    assert "unique identifiers" in block
+    assert "never an assumed empty or fixed" in block
+    assert "Pagination, ordering and stats criteria stay required" in block
+
+
+@pytest.mark.skipif(
+    not _REAL_FRAMEWORKS_DIR.is_dir(),
+    reason=f"frameworks/ directory not found at {_REAL_FRAMEWORKS_DIR}",
+)
 def test_real_playwright_descriptor() -> None:
     """The real Playwright descriptor has coverage_strategy=skip (Decision 11)."""
     desc = get_descriptor("playwright", frameworks_dir=_REAL_FRAMEWORKS_DIR)
