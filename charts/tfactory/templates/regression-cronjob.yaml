@@ -43,6 +43,7 @@ spec:
             app.kubernetes.io/part-of: tfactory
         spec:
           restartPolicy: Never
+          enableServiceLinks: false
           serviceAccountName: {{ include "tfactory.serviceAccountName" . }}
           # The run creates ephemeral Nix-lane Jobs via the in-cluster API.
           automountServiceAccountToken: {{ .Values.rbac.jobSandbox.enabled }}
