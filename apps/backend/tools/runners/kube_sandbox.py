@@ -206,6 +206,9 @@ def build_job_manifest(
     # TFactory never calls, so without this no lane Job was bounded.
     ephemeral_storage_limit: str = "4Gi",
     services: Sequence[tuple[str, str | None]] = (),
+    # TFactory#1617: (Secret name, key) of a GitHub token handed to nix as
+    # access-tokens, so unlocked flake inputs do not hit the anonymous API limit.
+    nix_github_secret: tuple[str, str] | None = None,
 ) -> dict:
     """Pure builder for the per-task Job manifest. No cluster access.
 
@@ -276,6 +279,22 @@ def build_job_manifest(
     }
     if service_account:
         pod_spec["serviceAccountName"] = service_account
+    if nix_github_secret:
+        # secretKeyRef keeps the token out of the manifest; $(VAR) is expanded by
+        # the kubelet from the entry above it, so the order matters.
+        name_, key_ = nix_github_secret
+        container.setdefault("env", []).extend(
+            [
+                {
+                    "name": "TF_NIX_GITHUB_TOKEN",
+                    "valueFrom": {"secretKeyRef": {"name": name_, "key": key_}},
+                },
+                {
+                    "name": "NIX_CONFIG",
+                    "value": "access-tokens = github.com=$(TF_NIX_GITHUB_TOKEN)",
+                },
+            ]
+        )
     volumes: list[dict[str, Any]] = []
     mounts: list[dict[str, Any]] = []
     if workspace_uri:

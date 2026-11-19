@@ -225,7 +225,10 @@ def _validate_emitted_plan(
 
     # TFactory#1579: a .ts test planned into a JS-only project is rewritten to .js
     # (saved back, since downstream reads test_plan.json) rather than rejected.
-    if _normalise_js_test_paths(plan, registry, project_dir):
+    # TFactory#1616: a framework with exactly one lane (jest: unit) declared on
+    # another lane is unambiguous, so the lane is rewritten rather than rejected.
+    changed = _normalise_js_test_paths(plan, registry, project_dir)
+    if _normalise_single_lane(plan, registry) or changed:
         plan.save(plan_file)
 
     # Looped rather than two `if not ok: return` blocks so adding a validator
@@ -344,6 +347,26 @@ def _project_is_plain_javascript(project_dir: Path) -> bool:
     except OSError:
         return False
     return has_js
+
+
+def _normalise_single_lane(plan: Any, registry: Any) -> bool:
+    """Move an 'api'-lane subtask onto its unit-only framework's unit lane
+    (TFactory#1616: the planner put jest on lane 'api' twice and died). Other
+    wrong lanes (a browser lane on kotlin) stay rejected. True when changed."""
+    from test_plan.enums import Lane  # noqa: PLC0415 - lazy, as elsewhere here
+
+    changed = False
+    for phase in plan.phases:
+        for st in phase.subtasks:
+            desc = registry.get(st.framework) if st.framework else None
+            if (
+                desc is not None
+                and tuple(desc.lanes) == (Lane.UNIT,)
+                and st.lane == Lane.API
+            ):
+                st.lane = Lane.UNIT
+                changed = True
+    return changed
 
 
 def _normalise_js_test_paths(plan: Any, registry: Any, project_dir: Path) -> bool:

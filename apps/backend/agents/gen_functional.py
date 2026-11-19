@@ -692,6 +692,49 @@ def _reject_subtask_for_replan(
     return False
 
 
+_LITERAL_PHASE = "gen_functional_criterion_literal_rejected"
+_LITERAL_WAIVE_AFTER = 2
+
+
+def _waive_repeated_literal_rejection(
+    spec_dir: Path, subtask: object, rejection: tuple[str, str]
+) -> bool:
+    """TFactory#1619: stop replanning a subtask lineage the literal gate keeps rejecting.
+
+    The gate compares source literals, so a value the test derives (a padded
+    width, ``limit + 1``) or one borrowed from another case in the criterion is
+    rejected forever and burns the global replan budget. After
+    ``_LITERAL_WAIVE_AFTER`` rejections of the same lineage (``x``, ``x-r1``,
+    ``x-r2`` ...) the test is kept and the waiver recorded; the verdict and the
+    AC-fidelity ledger still grade it.
+    """
+    if rejection[1] != _LITERAL_PHASE:
+        return False
+    sid = getattr(subtask, "id", "") or ""
+    lineage = re.sub(r"(-r\d+)+$", "", sid)
+    prior = [
+        r
+        for r in _read_status(spec_dir).get("replan_reasons") or []
+        if r.get("phase") == _LITERAL_PHASE
+        and re.sub(r"(-r\d+)+$", "", r.get("subtask_id") or "") == lineage
+    ]
+    if len(prior) < _LITERAL_WAIVE_AFTER:
+        return False
+    warning = (
+        f"{sid}: criterion-literal gate waived after {len(prior)} identical "
+        f"rejections ({rejection[0][:120]}) (#1619)"
+    )
+    _gen_log.warning(warning)
+    _write_status_patch(
+        spec_dir,
+        gen_functional_warnings=[
+            *(_read_status(spec_dir).get("gen_functional_warnings") or []),
+            warning,
+        ],
+    )
+    return True
+
+
 def _criterion_text(subtask: object) -> str:
     """The criterion this subtask claims, as the Planner carried it.
 
@@ -969,13 +1012,16 @@ def _record_unresolvable_imports(
     _write_status_patch(
         spec_dir,
         unresolvable_imports=record,
-        gen_functional_warnings=record,
+        gen_functional_warnings=[
+            *(_read_status(spec_dir).get("gen_functional_warnings") or []),
+            *entries,
+        ],
     )
     return bad
 
 
 def _source_guardrail_rejection(
-    subtask: object, source: str, project_dir: Path
+    subtask: object, source: str, project_dir: Path, *, waive_literal: bool = False
 ) -> tuple[str, str] | None:
     """First guardrail to reject the generated source: ``(reason, phase)``.
 
@@ -1019,7 +1065,7 @@ def _source_guardrail_rejection(
     # its own value instead. If a number the criterion states is absent from the
     # test's CODE (comments and docstrings excluded) the criterion was
     # reinterpreted, not tested — route it to a human.
-    drift = _criterion_literal_check(subtask, source)
+    drift = None if waive_literal else _criterion_literal_check(subtask, source)
     if drift is not None and not drift.ok:
         return (
             "criterion-literal drift: the criterion states "
@@ -1181,6 +1227,13 @@ async def _generate_one_subtask(
         spec_dir, subtask, source, project_dir, Path(project_dir) / files[0]
     )
     rejection = _source_guardrail_rejection(subtask, source, project_dir)
+    if rejection is not None and _waive_repeated_literal_rejection(
+        spec_dir, subtask, rejection
+    ):
+        # Only the literal gate is waived; authority etc. still run.
+        rejection = _source_guardrail_rejection(
+            subtask, source, project_dir, waive_literal=True
+        )
     if rejection is not None:
         reason, phase = rejection
         _reject_subtask_for_replan(

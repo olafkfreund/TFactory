@@ -69,9 +69,9 @@ def _find_verdict(vby: dict, subtask_id: str) -> dict | None:
     """Match a subtask to its verdict by id, tolerating replan suffixes (-r1)."""
     if subtask_id in vby:
         return vby[subtask_id]
-    base = re.sub(r"-r\d+$", "", subtask_id)
+    base = re.sub(r"(-r\d+)+$", "", subtask_id)
     for tid, v in vby.items():
-        if tid == base or re.sub(r"-r\d+$", "", tid) == base:
+        if tid == base or re.sub(r"(-r\d+)+$", "", tid) == base:
             return v
     return None
 
