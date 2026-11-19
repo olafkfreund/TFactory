@@ -219,7 +219,7 @@ def _node_subdir_serve(pd: Path, targets: list[str] | None, port: int) -> str | 
     return None
 
 
-def detect_serve_command(
+def detect_serve_command(  # noqa: PLR0911 - one return per serve family, each scoped by _serves()
     project_dir: Path,
     env: dict | None = None,
     *,
