@@ -207,6 +207,34 @@ def _clone_lock_for(workspace: Path) -> asyncio.Lock:
     return _clone_locks.setdefault(str(workspace), asyncio.Lock())
 
 
+async def _reset_to_remote_default(
+    workspace: Path, timeout: float, cred_env: dict[str, str]
+) -> None:
+    """Reset the local default branch onto the fetched remote default tip.
+
+    Never pulls whatever is checked out: that may be a branch deleted upstream
+    (#1594).
+    """
+    await _run_git(
+        ["remote", "set-head", "origin", "--auto"],
+        cwd=workspace,
+        timeout=timeout,
+        extra_env=cred_env,
+    )
+    remote_head = (
+        await _run_git(
+            ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+            cwd=workspace,
+            timeout=timeout,
+        )
+    ).strip()
+    await _run_git(
+        ["checkout", "--force", "-B", remote_head.removeprefix("origin/"), remote_head],
+        cwd=workspace,
+        timeout=timeout,
+    )
+
+
 async def clone_or_update(
     git_url: str,
     branch: str | None = None,
@@ -300,32 +328,8 @@ async def clone_or_update(
                             extra_env=cred_env,
                         )
                     else:
-                        # No ref requested: never pull whatever is checked out (it
-                        # may be a branch deleted upstream, #1594). Reset the local
-                        # default branch onto the remote default tip instead.
-                        await _run_git(
-                            ["remote", "set-head", "origin", "--auto"],
-                            cwd=workspace,
-                            timeout=timeout_seconds,
-                            extra_env=cred_env,
-                        )
-                        remote_head = (
-                            await _run_git(
-                                ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
-                                cwd=workspace,
-                                timeout=timeout_seconds,
-                            )
-                        ).strip()
-                        await _run_git(
-                            [
-                                "checkout",
-                                "--force",
-                                "-B",
-                                remote_head.removeprefix("origin/"),
-                                remote_head,
-                            ],
-                            cwd=workspace,
-                            timeout=timeout_seconds,
+                        await _reset_to_remote_default(
+                            workspace, timeout_seconds, cred_env
                         )
                 finally:
                     if credential is not None:
