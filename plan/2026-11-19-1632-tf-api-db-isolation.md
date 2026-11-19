@@ -14,7 +14,7 @@ Approved spec decision: prompt guidance in the pytest descriptor's API-lane bloc
 
 ## Steps
 
-3. frameworks/pytest/descriptor.yaml (API lane block, after the "Do not assume a fixed request/response schema" bullet): add an isolation bullet group (unique uuid identifiers per test; create own data and assert pagination/ordering/stats against it, relative order and before/after deltas, never an assumed empty or fixed dataset; clean up via the SUT API in a fixture finalizer when a delete endpoint exists; never connect to the database directly; assumes no concurrent writers). Test in tests/test_framework_registry.py: the loaded pytest context block contains the guidance and TFACTORY_TARGET_URL. → verify: `pytest tests/test_framework_registry.py -q`.
+3. frameworks/pytest/descriptor.yaml (API lane block, after the "Do not assume a fixed request/response schema" bullet): add an isolation bullet group (unique uuid identifiers per test; create own data and assert pagination/ordering/stats against it, relative order and before/after deltas, never an assumed empty or fixed dataset; clean up via the SUT API in a fixture finalizer when a delete endpoint exists; never connect to the database directly; assumes no concurrent writers). Test in tests/test_framework_registry.py next to the real-descriptor test (~line 533): the loaded pytest context block contains the guidance and TFACTORY_TARGET_URL. → verify: `pytest tests/test_framework_registry.py -q`.
    Traps: YAML block scalar indentation; descriptor validator must still pass.
 
 ## Tests
