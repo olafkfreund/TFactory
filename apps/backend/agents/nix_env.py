@@ -450,6 +450,51 @@ def _services_prelude(services: list[tuple[str, str | None]]) -> str:
     return out
 
 
+def _serve_prelude(serve_command: str, url: str, mount: str) -> str:
+    """Start the SUT and report its state and log if it never accepts a connection."""
+    probe = (
+        f"curl -sS --connect-timeout 2 --max-time 3 -o /dev/null {url}/ >/dev/null 2>&1"
+    )
+    return (
+        f"export TFACTORY_TARGET_URL={url}\n"
+        f"export APP_URL={url}\n"
+        f"cd {mount}\n"
+        f"{serve_command} >/tmp/tf_app.log 2>&1 &\n"
+        "TF_SUT_PID=$!\n"
+        "end=$((SECONDS+60))\n"
+        f"while [ $SECONDS -lt $end ]; do {probe} && break; "
+        'kill -0 "$TF_SUT_PID" 2>/dev/null || break; sleep 1; done\n'
+        f"{probe} || {{\n"
+        'if kill -0 "$TF_SUT_PID" 2>/dev/null; then '
+        'state="still running, not accepting connections"; '
+        'else state="process exited"; fi\n'
+        f'echo "{_APP_NOT_HEALTHY_MARKER} SUT did not accept a connection '
+        f'on {url}; see /tmp/tf_app.log ($state)"\n'
+        "echo __TF_APP_LOG_BEGIN__\n"
+        "tail -n 20 /tmp/tf_app.log\n"
+        "echo __TF_APP_LOG_END__\n"
+        "TF_NOT_HEALTHY=1\n"
+        "}\n"
+    )
+
+
+def _unhealthy_reason(stdout: str, cap: int = 450) -> str:
+    """The marker lines plus the SUT log block the Job printed, tail-capped (#1618)."""
+    keep: list[str] = []
+    in_log = False
+    for line in stdout.splitlines():
+        if line.startswith("__TF_APP_LOG_BEGIN__"):
+            in_log = True
+        elif line.startswith("__TF_APP_LOG_END__"):
+            in_log = False
+        elif (in_log or line.startswith(_APP_NOT_HEALTHY_MARKER)) and (
+            line not in keep
+        ):
+            keep.append(line)
+    # The tail matters: a traceback ends with the exception.
+    return "\n".join(keep)[-cap:]
+
+
 def _guard_serve(svc_prelude: str, serve_prelude: str) -> str:
     """Do not boot the SUT against a dead sidecar."""
     if svc_prelude and serve_prelude:
@@ -870,22 +915,11 @@ def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve kno
         # export TFACTORY_TARGET_URL before pytest, so the endpoint test reaches
         # the running app. Readiness = "accepts a connection" (curl WITHOUT -f):
         # a bare FastAPI has no `/` route, so requiring a 2xx would hang a healthy
-        # app on its 404. ponytail: fixed 30s poll; raise only if slow apps show up.
+        # app on its 404.
         serve_prelude = ""
         if serve_command:
             url = f"http://127.0.0.1:{serve_port}"
-            serve_prelude = (
-                f"export TFACTORY_TARGET_URL={url}\n"
-                f"export APP_URL={url}\n"
-                f"cd {mount}\n"
-                f"{serve_command} >/tmp/tf_app.log 2>&1 &\n"
-                f"for i in $(seq 1 30); do "
-                f"curl -sS -o /dev/null {url}/ >/dev/null 2>&1 && break; sleep 1; "
-                f"done\n"
-                f"curl -sS -o /dev/null {url}/ >/dev/null 2>&1 || "
-                f'{{ echo "{_APP_NOT_HEALTHY_MARKER} SUT did not accept a connection '
-                f'on {url}; see /tmp/tf_app.log"; TF_NOT_HEALTHY=1; }}\n'
-            )
+            serve_prelude = _serve_prelude(serve_command, url, mount)
         svc_prelude = _services_prelude(services)
         serve_prelude = _guard_serve(svc_prelude, serve_prelude)
         # TFactory#1152: the browser lane runs Playwright, not pytest, but through
@@ -946,14 +980,16 @@ def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve kno
             _log.warning(
                 "run_pytest_lane_via_nix: SUT never became healthy for %s — the "
                 "api test ran against a down app (infra, not an AC failure). "
-                "tail=%r",
+                "reason=%r",
                 Path(spec_dir).name,
-                stdout[-300:],
+                _unhealthy_reason(stdout, 1500) or stdout[-300:],
             )
             # The marker is echoed BEFORE pytest, so a long pytest traceback can
             # push it out of check_stability's 500-char stdout_tail. Re-append it
             # at the very end so the failure_kind classifier still sees it and
             # buckets this as an infra not_run rather than an AC failure.
+            reason = _unhealthy_reason(stdout)
+            stdout += f"\n{reason}\n" if reason else ""
             stdout += f"\n{_APP_NOT_HEALTHY_MARKER} (SUT boot failed)\n"
 
         # Copy the small junit/coverage OFF the PVC scratch so the returned paths
