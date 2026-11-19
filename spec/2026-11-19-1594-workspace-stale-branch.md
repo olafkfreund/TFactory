@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1594
 intent: intent/2026-11-19-1594-workspace-stale-branch.md
 ---
