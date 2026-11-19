@@ -8,7 +8,7 @@ author: olafkfreund
 
 ## Problem
 
-KEDA scaled deploy/tfactory 1->2 under parallel load (2026-11-19 06:40 UTC). The new pod's startup reconciler (`liveness_sweep.reconcile_inline_orphans`, #774) failed every spec in `planning`/`generating` as `control_plane_restart`, assuming "any inline stage was orphaned by the pod that died". Those stages were running in the OTHER, healthy pod. Three tasks died. The same happens on every RollingUpdate (maxSurge 1: old and new pod overlap). The ScaledObject comment that TFactory is safe above 1 replica since #465 is wrong for in-process stages. A stopgap caps replicas at 1 (factory-gitops#406).
+KEDA scaled deploy/tfactory 1->2 under parallel load (2026-11-19 06:40 UTC). The new pod's startup reconciler (`liveness_sweep.reconcile_inline_orphans`, #774) failed every spec in `planning`/`generating` as `control_plane_restart`, assuming "any inline stage was orphaned by the pod that died". Those stages were running in the OTHER, healthy pod. Three tasks died. The same happens on a RollingUpdate (maxSurge 1) whenever a planning/generating stage is active while old and new pod overlap. Failing the spec also makes it terminal, so the startup worktree GC then deletes the live stage's `.worktree` (the vanished worktree seen on the issue). The ScaledObject comment that TFactory is safe above 1 replica since #465 is wrong for in-process stages. A stopgap caps replicas at 1 (factory-gitops#406).
 
 A SIGTERM on the other side is also lossy: a scaled-down or rolled pod exits with in-process stages still running and the default 30 s grace, so they are lost and only noticed by the next reconciler or the stall watchdog.
 
@@ -30,4 +30,4 @@ A SIGTERM on the other side is also lossy: a scaled-down or rolled pod exits wit
 
 ## Open questions
 
-Decision (owner delegation 2026-11-19): take the recommended option, a per-process id plus a heartbeat file, over a Postgres lease table (needs a migration and is heavier). Specs with no owner recorded (written by an older release) keep the old startup behaviour once, at boot only.
+Decision (owner delegation 2026-11-19): take the recommended option, a per-process id plus a heartbeat file, over a Postgres lease table (needs a migration and is heavier). Specs with no owner recorded (written by an older release, possibly a healthy old replica during rollout) are failed only when their `updated_at` is older than a legacy window, never on sight. The second startup reconciler with the same flaw, `reconcile_interrupted_builds` (#1368, routes/tasks.py), is in scope: it runs only when no other live instance heartbeats.
