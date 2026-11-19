@@ -3425,6 +3425,29 @@ async def run_evaluator(
 
         # 2. No work — early exit with evaluated_empty.
         if not completed:
+            # Completed test-bearing subtasks that no lane admits are infra, not
+            # "no work" (#1580): fail closed instead of a quiet evaluated_empty.
+            unadmitted = _filter_completed_subtasks(plan, lambda _st: True)
+            if unadmitted:
+                tuples = sorted(
+                    {
+                        f"{st.get('language')}/{st.get('framework')}/{st.get('lane')}"
+                        for st in unadmitted
+                    }
+                )
+                # The pipeline triages after a failed evaluator; a stale file
+                # from an earlier run must not become this run's verdicts.
+                (spec_dir / "findings" / "verdicts.json").unlink(missing_ok=True)
+                _write_status_patch(
+                    spec_dir,
+                    status="evaluator_failed",
+                    phase=f"evaluator_{mode}_no_lane_for_completed_subtasks",
+                    evaluator_error=(
+                        f"{len(unadmitted)} completed subtask(s) match no evaluator "
+                        f"lane (language/framework/lane): {', '.join(tuples)}"
+                    ),
+                )
+                return False
             _write_empty_verdicts(spec_dir, mode)
             return True
 
