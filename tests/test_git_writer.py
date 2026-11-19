@@ -171,8 +171,7 @@ def test_push_path_fetches_checkout_b_and_pushes(tmp_path: Path) -> None:
         "-C",
         str(repo),
         "checkout",
-        "-B",
-        "aifactory/055-feat",
+        "--detach",
         "FETCH_HEAD",
     )
     # push carries the scoped gh credential helper so it authenticates
@@ -185,7 +184,7 @@ def test_push_path_fetches_checkout_b_and_pushes(tmp_path: Path) -> None:
         "credential.https://github.com.helper=!gh auth git-credential",
         "push",
         "origin",
-        "aifactory/055-feat",
+        "HEAD:refs/heads/aifactory/055-feat",
     )
 
 
@@ -568,3 +567,54 @@ def test_config_probe_failure_prevents_write(tmp_path):
     result = write_tests_to_branch(req, dry_run=False, runner_fn=runner)
     assert not result.ok
     assert not (repo / "tests/x.py").exists()
+
+
+def test_push_delivers_when_branch_checked_out_in_other_worktree(
+    tmp_path: Path,
+) -> None:
+    """#1598: the project clone holds the PR branch; delivery from a second
+    worktree must still commit and push it, leaving the clone's branch alone."""
+
+    def git(cwd: Path, *a: str) -> str:
+        return subprocess.run(
+            [
+                "git",
+                "-C",
+                str(cwd),
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@x",
+                "-c",
+                "commit.gpgsign=false",
+                *a,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    bare = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "clone", "-q", str(bare), str(clone)], check=True)
+    git(clone, "checkout", "-q", "-b", "feat")
+    (clone / "a.txt").write_text("a\n")
+    git(clone, "add", "a.txt")
+    git(clone, "commit", "-qm", "init")
+    git(clone, "push", "-q", "origin", "feat")
+    before = git(clone, "rev-parse", "feat")
+    wt = tmp_path / "wt"
+    git(clone, "worktree", "add", "-q", "--detach", str(wt))
+
+    req = GitWriteRequest(
+        repo_dir=wt,
+        branch="feat",
+        files=(("tests/test_a.py", "def test_a(): pass\n"),),
+        commit_msg="tfactory: add 1 generated test",
+    )
+    result = write_tests_to_branch(req, dry_run=False, push=True)
+
+    assert result.ok, result.error
+    assert git(clone, "rev-parse", "feat") == before
+    assert "tests/test_a.py" in git(bare, "ls-tree", "-r", "--name-only", "feat")
