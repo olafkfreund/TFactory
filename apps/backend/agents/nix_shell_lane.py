@@ -90,6 +90,39 @@ def shell_verdict(
     return 0, ""
 
 
+_FILE_EXIT = re.compile(r"^__BATS_FILE_EXIT=(\d+) (.+)$")
+
+
+def _split_files(stdout: str) -> list[tuple[str, int, str]]:
+    """(path, bats exit, that file's own output); output precedes its marker."""
+    out: list[tuple[str, int, str]] = []
+    seg: list[str] = []
+    for line in stdout.splitlines():
+        m = _FILE_EXIT.match(line)
+        if m is None:
+            seg.append(line)
+            continue
+        out.append((m[2], int(m[1]), "\n".join(seg)))
+        seg = []
+    return out
+
+
+def file_results(stdout: str) -> dict[str, int]:
+    """Per-file verdict (0 pass, 1 fail, 125 all skipped) from the full stdout.
+
+    A bats tool error (exit above 1) is kept as is so callers can fail the lane.
+    """
+    return {
+        p: rc if rc > 1 else shell_verdict(rc, 0, parse_tap(text))[0]
+        for p, rc, text in _split_files(stdout)
+    }
+
+
+def file_output(stdout: str) -> dict[str, str]:
+    """Each file's own bats output, so one file's failure evidence is not another's."""
+    return {p: text for p, _rc, text in _split_files(stdout)}
+
+
 def bats_job_script(run_dir: str, extra_env: dict[str, str]) -> str:
     """Build a Job script that checks tools and runs against a writable copy."""
     exports = "".join(f"export {k}={_shquote(str(v))}\n" for k, v in extra_env.items())
@@ -111,7 +144,13 @@ def bats_job_script(run_dir: str, extra_env: dict[str, str]) -> str:
         + "-type f -name '*.bats' -print0 | sort -z)\n"
         + "if [ ${#bats_files[@]} -eq 0 ]; then\n"
         + "  echo 'no .bats files'\n  echo __BATS_EXIT=1\n"
-        + 'else\n  bats --tap "${bats_files[@]}" 2>&1\n  echo __BATS_EXIT=$?\nfi\n'
+        # One bats per file: a file that fails (e.g. needs nix/network) must
+        # not hide the results of the others. Worst exit wins.
+        + 'else\n  worst=0\n  for f in "${bats_files[@]}"; do\n'
+        + '    bats --tap "$f" 2>&1\n    rc=$?\n'
+        + '    echo "__BATS_FILE_EXIT=$rc $f"\n'
+        + '    [ "$rc" -gt "$worst" ] && worst=$rc\n  done\n'
+        + "  echo __BATS_EXIT=$worst\nfi\n"
         + "mapfile -d '' -t shell_files < <(find . -type d "
         + "\\( -name .git -o -name tests -o -name test \\) -prune -o "
         + "-type f \\( -name '*.sh' -o -name '*.bash' \\) -print0 | sort -z)\n"
@@ -202,6 +241,12 @@ def run_bats_lane_via_nix(
     code, why = shell_verdict(
         markers["__BATS_EXIT="], markers["__SHELLCHECK_EXIT="], parse_tap(stdout)
     )
+    if why:
+        # Counts come from the full TAP, not the clipped tail kept per run.
+        c = parse_tap(stdout)
+        bad = sorted(p for p, v in file_results(stdout).items() if v == 1)
+        why += f" ({c.passed} passed, {c.failed} failed, {c.skipped} skipped"
+        why += f"; failing files: {', '.join(bad)})" if bad else ")"
     return DockerRunResult(
         returncode=code,
         stdout=stdout,
