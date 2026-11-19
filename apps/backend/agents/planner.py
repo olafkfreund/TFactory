@@ -42,6 +42,7 @@ from phase_config import DEFAULT_PHASE_MODELS, get_phase_model, resolve_model_id
 
 from .auth_tagging import apply_requires_auth_from_config
 from .followup_planner import run_followup_planner  # noqa: F401 — back-compat re-export
+from .nix_env import playwright_test_dir
 from .workspace_status import now_iso, read_status, write_status_patch
 
 _planner_log = _logging.getLogger(__name__ + ".tfactory")
@@ -369,26 +370,10 @@ def _normalise_js_test_paths(plan: Any, registry: Any, project_dir: Path) -> boo
     return changed
 
 
-def _playwright_test_dir(project_dir: Path) -> str | None:
-    """``testDir`` from the repo's ``playwright.config.*``, repo-relative, or None.
-    A regex read, not a JS parse: only the plain ``testDir: './x'`` literal is
-    understood (TFactory#1579); anything computed falls back to the conventions."""
-    for ext in ("ts", "js", "mjs", "cjs", "mts"):
-        cfg = project_dir / f"playwright.config.{ext}"
-        if cfg.is_file():
-            try:
-                m = re.search(r"testDir\s*:\s*['\"]([^'\"]+)['\"]", cfg.read_text())
-            except OSError:
-                return None
-            d = os.path.normpath(m.group(1)) if m else ""
-            return None if d.startswith(("..", "/")) or d in ("", ".") else d
-    return None
-
-
 def _matches_conventions(desc: Any, rel: str, project_dir: Path) -> bool:
     if any(_glob_matches(pat, rel) for pat in desc.test_path_conventions):
         return True
-    td = _playwright_test_dir(project_dir) if desc.name == "playwright" else None
+    td = playwright_test_dir(project_dir) if desc.name == "playwright" else None
     return bool(td) and any(
         _glob_matches(f"{td}/**/*.spec.{ext}", rel) for ext in ("ts", "js")
     )

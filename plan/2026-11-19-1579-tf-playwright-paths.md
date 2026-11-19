@@ -16,9 +16,9 @@ Carries the spec design unchanged: Add .spec.js globs to frameworks/playwright/d
 
 1. frameworks/playwright/descriptor.yaml:48-51: add three .spec.js globs -> verify by tests/test_framework_registry.py
    Traps: none
-2. apps/backend/agents/planner.py _validate_test_paths: add _playwright_test_dir and _matches_conventions -> verify by tests/test_planner.py
+2. apps/backend/agents/planner.py _validate_test_paths: add _matches_conventions; playwright_test_dir lives in nix_env.py (shared with staging, avoids a lazy import) -> verify by tests/test_planner.py
    Traps: ruff PLR0911 (do not add returns to _validate_test_paths)
-3. apps/backend/agents/nix_env.py _stage_browser_specs: glob *.spec.js too -> verify by tests/test_browser_verdict_signal.py, tests/test_nix_env.py
+3. apps/backend/agents/nix_env.py _stage_browser_specs: glob *.spec.js too and stage the playwright.config testDir tree (deviation from first draft, per Codex review) -> verify by tests/test_browser_verdict_signal.py, tests/test_nix_env.py
    Traps: none
 
 ## Tests

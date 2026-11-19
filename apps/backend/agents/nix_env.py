@@ -1395,6 +1395,22 @@ def _write_jest_config(project_dir: Path) -> Path:
     return path
 
 
+def playwright_test_dir(project_dir: Path) -> str | None:
+    """``testDir`` from the repo's ``playwright.config.*``, repo-relative, or None.
+    A regex read, not a JS parse: only the plain ``testDir: './x'`` literal is
+    understood (TFactory#1579); anything computed falls back to the conventions."""
+    for ext in ("ts", "js", "mjs", "cjs", "mts"):
+        cfg = project_dir / f"playwright.config.{ext}"
+        if cfg.is_file():
+            try:
+                m = re.search(r"testDir\s*:\s*['\"]([^'\"]+)['\"]", cfg.read_text())
+            except OSError:
+                return None
+            d = os.path.normpath(m.group(1)) if m else ""
+            return None if d.startswith(("..", "/")) or d in ("", ".") else d
+    return None
+
+
 def _nearest_vitest_package(project_dir: Path, rel: str) -> str | None:
     """Repo-relative dir of the NEAREST package.json above ``rel`` when it
     declares vitest, else None (TFactory#1600: a ``ts/daterange/`` subpackage
@@ -1851,9 +1867,7 @@ def _stage_browser_specs(spec_dir: Path, project_dir: Path) -> int:
     tests_root = Path(spec_dir) / "tests"
     # A repo whose playwright.config sets testDir elsewhere has its specs planned
     # there (TFactory#1579); stage that tree too, keeping the path below its root.
-    from agents.planner import _playwright_test_dir
-
-    td = _playwright_test_dir(Path(project_dir))
+    td = playwright_test_dir(Path(project_dir))
     roots = [tests_root] + ([Path(spec_dir) / td] if td else [])
     n = 0
     for tests_root, src in sorted(
