@@ -33,6 +33,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
@@ -1441,6 +1442,7 @@ async def test_probe_reports_a_deadline_killed_job_as_not_succeeded(monkeypatch)
     class _Status:
         active = 0
         succeeded = 0
+        conditions = [SimpleNamespace(type="Failed", status="True")]
 
     class _Job:
         status = _Status()
