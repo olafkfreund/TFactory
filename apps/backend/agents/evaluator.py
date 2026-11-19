@@ -3550,7 +3550,7 @@ def _maybe_run_equivalence_lane(spec_dir: Path, project_dir: Path) -> None:
         )
 
 
-def _finish_without_completed(spec_dir: Path, plan: dict, mode: str) -> bool:
+def _finish_without_completed(spec_dir: Path, plan: dict[str, Any], mode: str) -> bool:
     """No lane admitted any completed subtask: fail closed on unadmitted ones, else empty."""
     # Completed test-bearing subtasks that no lane admits are infra, not
     # "no work" (#1580): fail closed instead of a quiet evaluated_empty.
