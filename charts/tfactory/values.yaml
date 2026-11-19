@@ -148,6 +148,12 @@ rbac:
     # (Factory#1018), which publishes to a different repo and rewrites nothing
     # here: this pin is hand-managed now, so bump it when that lane rebuilds.
     nixRunnerImage: "ghcr.io/olafkfreund/factory-runner-nix:sha-9604bd3@sha256:28c94cf7552f81dcf24c556ae74a5220b84eb1ebe9e9bb6e58d67c346d143e1e"
+    # TFactory#1617: name of a Secret (same namespace as the lane Jobs) holding a
+    # GitHub token, handed to nix as `access-tokens` so unlocked flake inputs do not
+    # hit the anonymous API rate limit. Empty = off. Use a token with NO scopes:
+    # lane Jobs run generated test code that can read its own environment.
+    nixGithubSecret: ""
+    nixGithubSecretKey: "github-token"
 
 # Factory#550. OFF by default, and that is a decision rather than an oversight.
 # `replicaCount` is pinned to 1 above, and `minAvailable: 1` over a single

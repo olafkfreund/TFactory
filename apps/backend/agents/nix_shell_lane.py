@@ -128,7 +128,7 @@ def bats_job_script(run_dir: str, extra_env: dict[str, str]) -> str:
     exports = "".join(f"export {k}={_shquote(str(v))}\n" for k, v in extra_env.items())
     run_q = _shquote(run_dir)
     return (
-        "#!/usr/bin/env bash\nset +e\n"
+        "#!/usr/bin/env bash\nset +e\necho __TF_JOB_STARTED__\n"
         + exports
         + "missing=0\n"
         + "command -v bats >/dev/null 2>&1 || { echo 'bats is missing'; missing=1; }\n"
@@ -159,6 +159,15 @@ def bats_job_script(run_dir: str, extra_env: dict[str, str]) -> str:
         + 'else\n  shellcheck -x -S warning "${shell_files[@]}" 2>&1\n'
         + "  echo __SHELLCHECK_EXIT=$?\nfi\n"
     )
+
+
+def _nix_failure_reason(stdout: str) -> str:
+    errors = " | ".join(
+        line.strip() for line in stdout.splitlines() if "error:" in line
+    )
+    return (
+        "nix environment failed before tests ran: " + (errors or stdout[-400:].strip())
+    )[:400]
 
 
 def shell_environment(spec_dir: Path, project_dir: Path) -> dict[str, Any]:
@@ -234,6 +243,16 @@ def run_bats_lane_via_nix(
         nix_env._drop_generated_flake(plan)
 
     stdout = res.stdout or ""
+    argv = ["nix", "develop", f"path:{mount}#default", "--", "bats", "--tap"]
+    if "__TF_JOB_STARTED__" not in stdout.splitlines():
+        return DockerRunResult(
+            returncode=125,
+            stdout=stdout,
+            stderr=_nix_failure_reason(stdout),
+            junit_xml_path=None,
+            coverage_xml_path=None,
+            argv=argv,
+        )
     markers: dict[str, int | None] = {}
     for prefix in ("__BATS_EXIT=", "__SHELLCHECK_EXIT="):
         has = any(ln.startswith(prefix) for ln in stdout.splitlines())
@@ -253,5 +272,5 @@ def run_bats_lane_via_nix(
         stderr=why,
         junit_xml_path=None,
         coverage_xml_path=None,
-        argv=["nix", "develop", f"path:{mount}#default", "--", "bats", "--tap"],
+        argv=argv,
     )

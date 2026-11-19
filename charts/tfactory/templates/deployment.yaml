@@ -188,6 +188,12 @@ spec:
               value: {{ include "tfactory.fullname" . }}-workspaces
             - name: TFACTORY_NIX_RUNNER_IMAGE
               value: {{ .Values.rbac.jobSandbox.nixRunnerImage | quote }}
+            {{- if .Values.rbac.jobSandbox.nixGithubSecret }}
+            - name: TFACTORY_NIX_GITHUB_SECRET
+              value: {{ .Values.rbac.jobSandbox.nixGithubSecret | quote }}
+            - name: TFACTORY_NIX_GITHUB_SECRET_KEY
+              value: {{ .Values.rbac.jobSandbox.nixGithubSecretKey | quote }}
+            {{- end }}
             {{- end }}
             {{- if .Values.mcpCredentials.enabled }}
             # MCP credentials — env-var-only providers.  File-based
