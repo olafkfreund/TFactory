@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.13.6 — Claude 5.5, GPT-6 and Gemini 4 models, CLI update fix (2026-11-19)
+
+### Added
+
+- **Models:** enable the Claude 5.5, GPT-6 and Gemini 4 model families for Claude, Codex and agy (#1641, #1643).
+
+### Fixed
+
+- **CLI accounts:** CLI Update/Install writes into a writable prefix and surfaces real errors (#1642, #1644).
+
 ## 0.13.5 — Preflight same-named package roots (2026-11-19)
 
 ### Fixed
