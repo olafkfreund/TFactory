@@ -15,7 +15,7 @@ Decision from the spec: set `enableServiceLinks: false` in every builder that cr
 ## Steps
 
 1. apps/backend/tools/runners/kube_sandbox.py:264 pod_spec: add `"enableServiceLinks": False` → tests/test_kube_sandbox.py
-2. apps/backend/tools/runners/job_dispatch.py:606 pod_spec: same → tests/test_job_service_links.py
+2. DEVIATION: job_dispatch.py is vendored byte-exact from the Factory hub (drift gate), so it is NOT edited here. Its build Jobs are not TFactory verify Jobs; the field belongs in the hub canonical (follow-up in Factory).
 3. portal_testing/dispatch.py:345 pod spec: same → tests/test_job_service_links.py
 4. charts/tfactory/templates/regression-cronjob.yaml:45 and job-migrations.yaml:47: add `enableServiceLinks: false` (Codex finding) → tests/test_job_service_links.py
    Traps: ratchet_lint.py for apps/backend and apps/web-server; commit with --no-verify (unrelated mcp collection error).

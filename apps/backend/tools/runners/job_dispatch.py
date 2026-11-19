@@ -605,7 +605,6 @@ def build_job_manifest(spec: JobSpec) -> dict[str, Any]:
 
     pod_spec: dict[str, Any] = {
         "restartPolicy": "Never",
-        "enableServiceLinks": False,  # #1625
         "automountServiceAccountToken": spec.automount_service_account_token,
         # #812: non-root enforced by the kubelet (not just the image USER) and
         # the default seccomp profile pinned.

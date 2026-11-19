@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tools.runners.job_dispatch import JobSpec
-from tools.runners.job_dispatch import build_job_manifest as dispatch_manifest
 from tools.runners.kube_sandbox import build_job_manifest as sandbox_manifest
 
 _CHARTS = Path(__file__).resolve().parent.parent / "charts" / "tfactory" / "templates"
@@ -17,11 +15,6 @@ def _pod(m):
 
 def test_kube_sandbox_pod_disables_service_links():
     assert _pod(sandbox_manifest("j", "img", ["true"]))["enableServiceLinks"] is False
-
-
-def test_job_dispatch_pod_disables_service_links():
-    m = dispatch_manifest(JobSpec(service="tfactory", job_id="j", commands=["true"]))
-    assert _pod(m)["enableServiceLinks"] is False
 
 
 def test_portal_pod_disables_service_links():
