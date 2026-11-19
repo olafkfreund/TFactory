@@ -2148,6 +2148,9 @@ export default defineConfig({{
     (Path(project_dir) / _PW_CONFIG).write_text(cfg, encoding="utf-8")
 
 
+_MAX_SPEC_TARGETS = 20
+
+
 def _spec_text_targets(spec_dir: Path, project_dir: Path) -> list[str]:
     """Infer existing repo scripts named in the ingested spec."""
     try:
@@ -2168,7 +2171,7 @@ def _spec_text_targets(spec_dir: Path, project_dir: Path) -> list[str]:
             continue
         if target not in targets:
             targets.append(target)
-            if len(targets) == 20:
+            if len(targets) == _MAX_SPEC_TARGETS:
                 break
     return targets
 

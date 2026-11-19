@@ -438,9 +438,10 @@ async def test_test_file_missing_skipped_gracefully(
     assert status["rejected_count"] == 1
     report = json.loads((spec_dir / "findings" / "triage_report.json").read_text())
     assert report["rejected"][0]["test_id"] == "st1"
-    assert "test source not found or empty at tests/test_1.py" in report["rejected"][0][
-        "verdict"
-    ]["reasons"]
+    assert (
+        "test source not found or empty at tests/test_1.py"
+        in report["rejected"][0]["verdict"]["reasons"]
+    )
     # git_writer only sees test_0.py because test_1.py had no source
     gw = status["git_writer"]
     assert gw["skipped"] is False

@@ -1238,21 +1238,22 @@ def _build_candidates(spec_dir: Path, verdicts: list) -> list:
             # Skip malformed entries — the Evaluator's validator should have
             # caught them, but be defensive.
             continue
-        source, test_file = _resolve_test_source(spec_dir, test_file)
+        source, found_file = _resolve_test_source(spec_dir, test_file)
+        verdict = v
         if v.get("verdict") in ("accept", "flag") and not source.strip():
-            v = {
+            verdict = {
                 **v,
                 "verdict": "reject",
                 "reasons": [
                     *(v.get("reasons") or []),
-                    f"test source not found or empty at {test_file}",
+                    f"test source not found or empty at {found_file}",
                 ],
             }
         candidates.append(
             TriageCandidate(
                 test_id=tid,
-                test_file=test_file,
-                verdict=v,
+                test_file=found_file,
+                verdict=verdict,
                 source=source,
             )
         )
