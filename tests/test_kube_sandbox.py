@@ -887,3 +887,45 @@ def test_packed_lane_push_back_round_trips_against_minio(monkeypatch, tmp_path):
         assert {"Key": "role", "Value": "workspace"} in tags
     finally:
         discard()
+
+
+def test_nix_github_secret_is_a_secret_ref_never_a_literal():
+    """#1617: nix gets access-tokens from a Secret; the token is not in the manifest."""
+    c = build_job_manifest(
+        "j1617", "img", ["true"], nix_github_secret=("gh-nix", "token")
+    )["spec"]["template"]["spec"]["containers"][0]
+    names = [e["name"] for e in c["env"]]
+    # the kubelet expands $(VAR) only from an entry listed before it
+    assert names.index("TF_NIX_GITHUB_TOKEN") < names.index("NIX_CONFIG")
+    env = {e["name"]: e for e in c["env"]}
+    assert env["TF_NIX_GITHUB_TOKEN"]["valueFrom"]["secretKeyRef"] == {
+        "name": "gh-nix",
+        "key": "token",
+    }
+    assert env["NIX_CONFIG"]["value"] == (
+        "access-tokens = github.com=$(TF_NIX_GITHUB_TOKEN)"
+    )
+
+
+def test_no_nix_github_secret_adds_no_env():
+    c = build_job_manifest("j1617b", "img", ["true"])["spec"]["template"]["spec"][
+        "containers"
+    ][0]
+    assert "env" not in c
+
+
+def test_nix_runner_from_env_reads_the_github_secret(monkeypatch):
+    from agents.nix_env import nix_runner_from_env
+
+    monkeypatch.setenv("TFACTORY_NIX_RUNNER_IMAGE", "img")
+    monkeypatch.delenv("TFACTORY_NIX_GITHUB_SECRET", raising=False)
+    monkeypatch.delenv("TFACTORY_NIX_GITHUB_SECRET_KEY", raising=False)
+    sb = nix_runner_from_env()
+    assert sb is not None and "nix_github_secret" not in sb.manifest_kw
+    monkeypatch.setenv("TFACTORY_NIX_GITHUB_SECRET", "gh-nix")
+    sb = nix_runner_from_env()
+    assert sb is not None
+    assert sb.manifest_kw["nix_github_secret"] == ("gh-nix", "github-token")
+    monkeypatch.setenv("TFACTORY_NIX_GITHUB_SECRET_KEY", "pat")
+    sb = nix_runner_from_env()
+    assert sb is not None and sb.manifest_kw["nix_github_secret"] == ("gh-nix", "pat")

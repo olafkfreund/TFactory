@@ -356,10 +356,17 @@ def nix_runner_from_env() -> KubeJobSandbox | None:
         None if nix_in_image() else (os.environ.get("TFACTORY_NIX_STORE_PVC") or None)
     )
     # Keep the data root for callers that resolve workspace paths relative to it.
-    kw: dict[str, str] = {}
+    kw: dict[str, Any] = {}
     data_root = os.environ.get("TFACTORY_DATA_ROOT")
     if data_root:
         kw["data_root"] = data_root
+    # TFactory#1617: authenticated nix fetches; off until the Secret is named.
+    gh_secret = os.environ.get("TFACTORY_NIX_GITHUB_SECRET")
+    if gh_secret:
+        kw["nix_github_secret"] = (
+            gh_secret,
+            os.environ.get("TFACTORY_NIX_GITHUB_SECRET_KEY") or "github-token",
+        )
     return KubeJobSandbox(
         image,
         namespace=ns,
