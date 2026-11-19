@@ -2240,7 +2240,7 @@ def _browser_targets(
 
 
 def detect_api_serve_command(
-    spec_dir: Path, project_dir: Path, env: dict | None = None, *, port: int
+    spec_dir: Path, project_dir: Path, env: dict[str, Any] | None = None, *, port: int
 ) -> str | None:
     """Serve command for an api lane: the app nearest the spec targets, else repo-wide.
 
@@ -2555,7 +2555,7 @@ def _drop_generated_flake(plan: NixPlan) -> None:
             (plan.flake_dir / name).unlink(missing_ok=True)
 
 
-def materialize_flake(
+def materialize_flake(  # noqa: PLR0913 - keyword-only lane knobs, one per caller need
     spec_dir: Path,
     project_dir: Path,
     *,
