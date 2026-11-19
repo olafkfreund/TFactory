@@ -7,6 +7,7 @@ from agents.nix_shell_lane import (
     TapCounts,
     bats_job_script,
     parse_tap,
+    file_results,
     shell_verdict,
 )
 
@@ -66,10 +67,12 @@ def test_bats_job_script():
     assert "-name tests -o -name test" in script
     assert "-name '*.bats'" in script
     assert "-name '*.sh' -o -name '*.bash'" in script
-    assert 'bats --tap "${bats_files[@]}" 2>&1' in script
+    assert 'for f in "${bats_files[@]}"' in script  # one bats per file
+    assert 'bats --tap "$f" 2>&1' in script
+    assert 'echo "__BATS_FILE_EXIT=$rc $f"' in script
+    assert "echo __BATS_EXIT=$worst" in script
     assert 'shellcheck -x -S warning "${shell_files[@]}" 2>&1' in script
     assert "no .bats files" in script
-    assert "echo __BATS_EXIT=$?" in script
     assert "echo __SHELLCHECK_EXIT=$?" in script
     assert "echo __SHELLCHECK_EXIT=0" in script
 
@@ -139,3 +142,27 @@ def test_shell_environment_respects_a_repo_owned_flake(tmp_path, monkeypatch):
     monkeypatch.setattr(nix_env, "flake_is_repo_owned", lambda _p, _o=None: False)
     env = nix_shell_lane.shell_environment(tmp_path, tmp_path)
     assert env["provisioning"]["generated"] is True and env["language"] == "shell"
+
+
+def test_file_results_isolates_each_file():
+    out = (
+        "1..1\nnot ok 1 nix flake show\n__BATS_FILE_EXIT=1 ./test/flake.bats\n"
+        "ok 1 rotates\n__BATS_FILE_EXIT=0 ./test/rotate.bats\n"
+        "ok 1 a # skip x\n__BATS_FILE_EXIT=0 ./test/s.bats\n"
+    )
+    assert file_results(out) == {
+        "./test/flake.bats": 1,
+        "./test/rotate.bats": 0,
+        "./test/s.bats": 125,
+    }
+
+
+def test_run_bats_lane_reason_has_full_counts_and_failing_files(tmp_path, monkeypatch):
+    out = (
+        "not ok 1 nix\n__BATS_FILE_EXIT=1 ./test/flake.bats\n"
+        "ok 1 a\nok 2 b\n__BATS_FILE_EXIT=0 ./test/a.bats\n"
+        "__BATS_EXIT=1\n__SHELLCHECK_EXIT=0\n"
+    )
+    res = _run_with(tmp_path, monkeypatch, out)
+    assert res.returncode == 1
+    assert "2 passed, 1 failed, 0 skipped; failing files: ./test/flake.bats" in res.stderr

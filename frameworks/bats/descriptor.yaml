@@ -73,4 +73,9 @@ context_block: |
 
   Never `skip` a test because a tool is missing: the lane provides bats and
   shellcheck, and a skipped test is reported as not run, not as a pass.
+  No nix, no network: the lane runs in a sandbox with neither a nix daemon nor
+  network access. Never write a test that runs `nix` (flake show, develop,
+  build, eval), `curl`, `wget`, `git clone`, or installs packages: it fails
+  there and, being a test file of its own, is rejected. Check flake.nix or other
+  config files statically instead (`grep`, `[ -f ... ]`).
   Determinism: no `sleep` for synchronisation, no network, no wall-clock.
