@@ -136,7 +136,7 @@ async def test_clone_or_update_existing_dir_sets_origin_for_fetch(tmp_path):
     cmd_names = [c[1] for c in captured]
     assert cmd_names.count("clone") == 0  # update path, not fresh clone
     assert "fetch" in cmd_names
-    assert "pull" in cmd_names
+    assert "pull" not in cmd_names  # no branch: reset to origin default (#1594)
     # Two ``remote set-url`` calls: one to inject, one to sanitize.
     set_url_calls = [c for c in captured if c[1:3] == ["remote", "set-url"]]
     assert len(set_url_calls) == 2
