@@ -18,13 +18,17 @@ logger = logging.getLogger(__name__)
 
 # Model shorthand to full model ID mapping
 MODEL_ID_MAP: dict[str, str] = {
-    "opus": "claude-opus-4-8",
+    "opus": "claude-opus-5-5",  # current Opus
+    "fable": "claude-fable-5-2",  # most capable; thinking always on
+    "opus-4.8": "claude-opus-4-8",  # legacy alias — kept for users who pinned 4.8
     "opus-4.7": "claude-opus-4-7",  # legacy alias — kept for users who pinned 4.7
     "opus-1m": "claude-opus-4-6",  # legacy alias — kept for users who pinned 4.6 + 1M beta
     "opus-4.5": "claude-opus-4-5-20251101",
-    "sonnet": "claude-sonnet-5",  # current Sonnet (near-Opus coding, 1M ctx)
-    "sonnet-4.6": "claude-sonnet-4-6",  # previous Sonnet — kept for pinning
-    "haiku": "claude-haiku-4-5-20251001",
+    "sonnet": "claude-sonnet-5-5",  # current Sonnet (1M ctx)
+    "sonnet-5": "claude-sonnet-5",  # legacy alias
+    "sonnet-4.6": "claude-sonnet-4-6",  # legacy alias — kept for pinning
+    "haiku": "claude-haiku-5-5",  # current Haiku
+    "haiku-4.5": "claude-haiku-4-5-20251001",  # legacy alias
 }
 
 # Model shorthand to required SDK beta headers
@@ -44,7 +48,7 @@ THINKING_BUDGET_MAP: dict[str, int | None] = {
 
 # Default phase configuration (fallback, matches 'Balanced' profile)
 DEFAULT_PHASE_MODELS: dict[str, str] = {
-    # Default to Opus 4.8 (current flagship) for all stages — highest-capability
+    # Default to Opus 5.5 (current Opus) for all stages — highest-capability
     # coding/agentic model. Override per-task via the contract `phase_models`.
     "spec": "opus",
     "planning": "opus",
@@ -174,6 +178,11 @@ _OPUS_47_ID: str = "claude-opus-4-7"
 _OPUS_48_ID: str = "claude-opus-4-8"
 # Opus tiers that use the SDK-native adaptive/interleaved-thinking shapes.
 _SDK_NATIVE_ADAPTIVE_OPUS: frozenset[str] = frozenset({_OPUS_47_ID, _OPUS_48_ID})
+# 5.x ids reject `budget_tokens` (HTTP 400): adaptive only, any explicit budget
+# is ignored. Kept apart from the set above so the interleaved beta is unchanged.
+_ADAPTIVE_ONLY_5X: frozenset[str] = frozenset(
+    {"claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-2"}
+)
 
 INTERLEAVED_THINKING_AGENT_TYPES: frozenset[str] = frozenset({"planner", "coder"})
 INTERLEAVED_THINKING_BETA: str = "interleaved-thinking-2025-05-14"
@@ -205,6 +214,8 @@ def thinking_config_for(
     Returns:
         Thinking config dict or None.
     """
+    if model_id in _ADAPTIVE_ONLY_5X:
+        return {"type": "adaptive"} if thinking_level != "none" else None
     if explicit_budget is not None and explicit_budget > 0:
         return {"type": "enabled", "budget_tokens": explicit_budget}
     if model_id in _SDK_NATIVE_ADAPTIVE_OPUS and thinking_level != "none":

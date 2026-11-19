@@ -67,6 +67,11 @@ _MIN_CACHE_TOKENS: dict[str, int] = {
     "claude-opus-4-6": 4096,
     "claude-opus-4-7": 4096,
     "claude-opus-4-8": 4096,
+    # 5.x floors: conservative 4096 (no verified lower figure).
+    "claude-opus-5-5": 4096,
+    "claude-sonnet-5-5": 4096,
+    "claude-haiku-5-5": 4096,
+    "claude-fable-5-2": 4096,
 }
 
 # Conservative fallback for unknown models — chosen low so the warning is
