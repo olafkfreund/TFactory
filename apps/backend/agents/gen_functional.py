@@ -710,7 +710,8 @@ def _waive_repeated_literal_rejection(
     """
     if rejection[1] != _LITERAL_PHASE:
         return False
-    lineage = re.sub(r"(-r\d+)+$", "", getattr(subtask, "id", "") or "")
+    sid = getattr(subtask, "id", "") or ""
+    lineage = re.sub(r"(-r\d+)+$", "", sid)
     prior = [
         r
         for r in _read_status(spec_dir).get("replan_reasons") or []
@@ -720,7 +721,7 @@ def _waive_repeated_literal_rejection(
     if len(prior) < _LITERAL_WAIVE_AFTER:
         return False
     warning = (
-        f"{subtask.id}: criterion-literal gate waived after {len(prior)} identical "
+        f"{sid}: criterion-literal gate waived after {len(prior)} identical "
         f"rejections ({rejection[0][:120]}) (#1619)"
     )
     _gen_log.warning(warning)
