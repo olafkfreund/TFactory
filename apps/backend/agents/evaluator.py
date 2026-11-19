@@ -82,6 +82,7 @@ from agents.mutate_probe import (
 from agents.mutation_dispatch import is_mutation_supported, mutant_extension
 from agents.nix_env import (
     _API_SELF_SERVE_PORT,
+    _api_targets,
     api_services_fallback_env,
     detect_api_serve_command,
     detect_serve_command,
@@ -448,7 +449,11 @@ def _ensure_host_venv(project_dir: Path) -> Path:
 
 
 def _run_pytest_on_host(
-    scratch: Path, test_file: Path, extra_env: dict, project_dir: Path
+    scratch: Path,
+    test_file: Path,
+    extra_env: dict,
+    project_dir: Path,
+    targets: list[str] | None = None,
 ):
     """Run one pytest file on the host (no container) — same result shape as the
     DockerRunner path. Used when no container runtime is available."""
@@ -475,7 +480,8 @@ def _run_pytest_on_host(
     # #756: a monorepo keeps its packages below both of those (e.g.
     # apps/web-server/server), so without the real roots pytest cannot collect
     # and every AC reports an import error against correct code.
-    for rel in package_root_rel_paths(scratch_root):
+    # First entry wins on a same-named package, so prepend last-to-first.
+    for rel in reversed(package_root_rel_paths(scratch_root, targets)):
         root = str(scratch_root if rel == "." else scratch_root / rel)
         if root not in pythonpath.split(os.pathsep):
             pythonpath = f"{root}{os.pathsep}{pythonpath}"
@@ -620,7 +626,11 @@ def _resolve_runner_fn(
                         spec_dir,
                         test_file,
                         _run_pytest_on_host(
-                            scratch, test_file, extra_env, project_dir_arg
+                            scratch,
+                            test_file,
+                            extra_env,
+                            project_dir_arg,
+                            _api_targets(spec_dir, Path(project_dir_arg)),
                         ),
                     )
                 finally:

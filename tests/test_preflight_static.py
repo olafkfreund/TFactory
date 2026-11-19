@@ -686,3 +686,38 @@ def test_hung_sibling_does_not_hide_a_later_valid_copy(tmp_path: Path) -> None:
         timeout_per_import_sec=2,
     )
     assert res.ok, res.summary()
+
+
+def test_execution_roots_prefer_the_root_holding_the_targets(tmp_path: Path) -> None:
+    # #1637 / aifactory-demo #624: unit test `from app.main import app` resolved
+    # src/app (no /notes route) because src came first on the Job's PYTHONPATH.
+    from agents.nix_env import _in_job_pythonpath
+
+    proj = _two_app_checkout(tmp_path)
+    targets = ["services/notes-api/app/models.py"]
+    assert package_root_rel_paths(proj, targets)[0] == "services/notes-api"
+    assert package_root_rel_paths(proj)[0] == "src"  # no targets: order unchanged
+    assert _in_job_pythonpath(proj, "/work", targets).startswith(
+        "/work/services/notes-api:"
+    )
+    assert _in_job_pythonpath(proj, "/work").startswith("/work/src:")
+
+
+def test_host_runner_puts_the_targeted_root_first(tmp_path: Path, monkeypatch) -> None:
+    import agents.evaluator as ev
+
+    proj = _two_app_checkout(tmp_path)
+    seen: dict = {}
+
+    class _R:
+        stdout, stderr, returncode = "__PYTEST_EXIT=0\n", "", 0
+
+    monkeypatch.setattr(ev, "_ensure_host_venv", lambda _p: tmp_path / "venv")
+    monkeypatch.setattr(
+        "subprocess.run", lambda *a, **k: seen.update(env=k["env"]) or _R()
+    )
+    ev._run_pytest_on_host(
+        proj, proj / "t.py", {}, proj, ["services/notes-api/app/models.py"]
+    )
+    first = seen["env"]["PYTHONPATH"].split(os.pathsep)[0]
+    assert first == str(proj / "services" / "notes-api")

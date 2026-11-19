@@ -298,7 +298,9 @@ def package_roots_for(project_dir: Path, module: str) -> list[str]:
     return roots
 
 
-def package_root_rel_paths(root: Path) -> list[str]:
+def package_root_rel_paths(
+    root: Path, targets: list[str] | None = None
+) -> list[str]:
     """Repo-relative dirs that must be importable for this tree's packages.
 
     The execution-time counterpart of ``package_roots_for``. That one answers
@@ -318,6 +320,11 @@ def package_root_rel_paths(root: Path) -> list[str]:
     ``root`` (``"."`` for a package sitting at the top). Nested packages are
     skipped — only the outermost one needs to be on the path, and adding inner
     ones invites shadowing.
+
+    The FIRST entry wins when two roots provide the same package name (#1637:
+    ``src/app`` vs ``services/notes-api/app``). With ``targets`` (the spec's
+    files), a root that contains a target moves ahead of the rest, deepest match
+    first; without targets the order is unchanged.
     """
     rels: list[str] = []
     # Bounded the same way as package_roots_for: top level, or one/two down.
@@ -332,7 +339,20 @@ def package_root_rel_paths(root: Path) -> list[str]:
             parent = str(rel.parent)
             if parent not in rels:
                 rels.append(parent)
-    return rels
+
+    def _depth(rel: str) -> int:
+        base = () if rel == "." else Path(rel).parts
+        return max(
+            (
+                len(base)
+                for t in targets or []
+                if Path(str(t)).parts[: len(base)] == base
+                and len(Path(str(t)).parts) > len(base)
+            ),
+            default=-1,
+        )
+
+    return sorted(rels, key=lambda r: -_depth(r)) if targets else rels
 
 
 def requirements_files(root: Path, *, limit: int = 5) -> list[Path]:

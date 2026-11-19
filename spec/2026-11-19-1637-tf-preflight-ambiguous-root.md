@@ -13,7 +13,7 @@ In `check_import`, factor the subprocess run into `_probe(order)`. If the first 
 ## Alternatives rejected
 
 - Prefer the root containing the subtask's target file: needs plumbing through `preflight_check` and the target may be a test path, not the SUT. Trying all roots needs no new input.
-- Execution time (`package_root_rel_paths`, evaluator, `nix_env._in_job_pythonpath`): ordering is arbitrary without a target, and the api lane serves via `--app-dir` (#1582, #1633), so HTTP tests do not import `app`. Out of scope; reported in the PR.
+- Execution time roots: initially left out (no target plumbing); added later as plan step 3 using the #1633 `_api_targets` helper.
 
 ## Risks
 

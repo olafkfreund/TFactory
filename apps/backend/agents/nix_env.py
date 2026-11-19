@@ -440,7 +440,9 @@ _MAVEN_BUILD_DIR = "/tmp/tf_maven_src"  # noqa: S108 - a path inside the Job
 _MAVEN_REPO_LOCAL = "/tmp/tf_maven_repo"  # noqa: S108 - a path inside the Job
 
 
-def _in_job_pythonpath(scratch: Path, mount: str) -> str:
+def _in_job_pythonpath(
+    scratch: Path, mount: str, targets: list[str] | None = None
+) -> str:
     """PYTHONPATH for the in-Job pytest run, as a colon-joined string.
 
     `<mount>/src` + `<mount>` cover flat and src-layout repos and miss a
@@ -454,7 +456,7 @@ def _in_job_pythonpath(scratch: Path, mount: str) -> str:
     """
     roots = [
         f"{mount}/{rel}" if rel != "." else mount
-        for rel in package_root_rel_paths(scratch)
+        for rel in package_root_rel_paths(scratch, targets)
     ]
     roots += [p for p in (f"{mount}/src", mount) if p not in roots]
     return ":".join(roots)
@@ -946,8 +948,9 @@ def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve kno
         # repo with no requirements.txt gets a byte-identical export.
         _reqs = requirements_files(scratch)
         _prefix = f"{_DEPS_TARGET}:" if _reqs else ""
+        _pypath = _in_job_pythonpath(scratch, mount, _api_targets(spec_dir, pd))
         srcpath = (
-            f'export PYTHONPATH="{_prefix}{_in_job_pythonpath(scratch, mount)}'
+            f'export PYTHONPATH="{_prefix}{_pypath}'
             f'${{PYTHONPATH:+:$PYTHONPATH}}"\n'
         )
         # #764: install the SUT's own requirements into the Job. The flake's
