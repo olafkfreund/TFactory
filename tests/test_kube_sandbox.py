@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+from copy import deepcopy
 
 import pytest
 from tools.runners import kube_sandbox
@@ -100,6 +101,169 @@ def test_no_warm_nix_store_by_default():
     t = m["spec"]["template"]["spec"]
     assert "initContainers" not in t
     assert "volumes" not in t
+
+
+def test_postgres_and_redis_are_native_sidecars_after_seed():
+    manifest = build_job_manifest(
+        "j1",
+        "img",
+        ["true"],
+        nix_store_pvc="warm",
+        services=[("postgres", None), ("redis", "8")],
+    )
+    pod = manifest["spec"]["template"]["spec"]
+    assert [c["name"] for c in pod["initContainers"]] == [
+        "seed-nix-store",
+        "postgres",
+        "redis",
+    ]
+    postgres, redis = pod["initContainers"][1:]
+    assert postgres["image"] == "postgres:16-alpine"
+    assert redis["image"] == "redis:8-alpine"
+    assert postgres["restartPolicy"] == redis["restartPolicy"] == "Always"
+    assert postgres["securityContext"] == {
+        "runAsNonRoot": True,
+        "runAsUser": 70,
+        "allowPrivilegeEscalation": False,
+        "capabilities": {"drop": ["ALL"]},
+    }
+    assert redis["securityContext"]["runAsUser"] == 999
+    assert redis["securityContext"]["capabilities"] == {"drop": ["ALL"]}
+    assert postgres["resources"]["limits"] == {"cpu": "500m", "memory": "512Mi"}
+    assert postgres["env"] == [
+        {"name": "PGDATA", "value": "/pgdata/data"},
+        {"name": "POSTGRES_USER", "value": "app"},
+        {"name": "POSTGRES_PASSWORD", "value": "app"},
+        {"name": "POSTGRES_DB", "value": "app"},
+    ]
+    assert postgres["args"] == ["-c", "listen_addresses=127.0.0.1"]
+    assert postgres["volumeMounts"] == [
+        {"name": "postgres-data", "mountPath": "/pgdata"}
+    ]
+    assert {v["name"]: v for v in pod["volumes"]}["postgres-data"] == {
+        "name": "postgres-data",
+        "emptyDir": {},
+    }
+    assert redis["args"] == ["--bind", "127.0.0.1", "--save", "", "--appendonly", "no"]
+
+
+def test_sidecar_image_version_validation_and_override(monkeypatch):
+    monkeypatch.setenv("TFACTORY_SIDECAR_POSTGRES_IMAGE", "mirror/postgres:custom")
+    manifest = build_job_manifest(
+        "j1", "img", ["true"], services=[("postgres", "17"), ("redis", "7;bad")]
+    )
+    postgres, redis = manifest["spec"]["template"]["spec"]["initContainers"]
+    assert postgres["image"] == "mirror/postgres:custom"
+    assert redis["image"] == "redis:7-alpine"
+    monkeypatch.delenv("TFACTORY_SIDECAR_POSTGRES_IMAGE")
+    postgres = build_job_manifest("j1", "img", ["true"], services=[("postgres", "17")])[
+        "spec"
+    ]["template"]["spec"]["initContainers"][0]
+    assert postgres["image"] == "postgres:17-alpine"
+
+
+@pytest.mark.parametrize("mode", ["plain", "workspace", "warm-store"])
+def test_no_services_preserves_literal_manifest_baseline(mode):
+    expected = {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {
+            "name": "j1",
+            "namespace": "factory",
+            "labels": {"app": "tfactory-sandbox"},
+        },
+        "spec": {
+            "ttlSecondsAfterFinished": 180,
+            "backoffLimit": 0,
+            "activeDeadlineSeconds": 900,
+            "template": {
+                "metadata": {
+                    "labels": {
+                        "app": "tfactory-sandbox",
+                        "factory.io/service": "tfactory",
+                        "factory.io/kind": "task",
+                        "job-name": "j1",
+                    }
+                },
+                "spec": {
+                    "restartPolicy": "Never",
+                    "automountServiceAccountToken": False,
+                    "imagePullSecrets": [{"name": "ghcr-pull"}],
+                    "securityContext": {"seccompProfile": {"type": "RuntimeDefault"}},
+                    "containers": [
+                        {
+                            "name": "lane",
+                            "image": "img",
+                            "imagePullPolicy": "IfNotPresent",
+                            "command": ["bash", "-c", "true"],
+                            "resources": {
+                                "requests": {
+                                    "cpu": "2",
+                                    "memory": "8Gi",
+                                    "ephemeral-storage": "0",
+                                },
+                                "limits": {
+                                    "cpu": "2",
+                                    "memory": "8Gi",
+                                    "ephemeral-storage": "4Gi",
+                                },
+                            },
+                            "securityContext": {
+                                "allowPrivilegeEscalation": False,
+                                "privileged": False,
+                                "capabilities": {
+                                    "drop": ["ALL"],
+                                    "add": [
+                                        "CHOWN",
+                                        "DAC_OVERRIDE",
+                                        "FOWNER",
+                                        "SETUID",
+                                        "SETGID",
+                                        "KILL",
+                                    ],
+                                },
+                            },
+                        }
+                    ],
+                },
+            },
+        },
+    }
+    kwargs = {}
+    pod = expected["spec"]["template"]["spec"]
+    lane = pod["containers"][0]
+    if mode == "workspace":
+        kwargs["workspace_uri"] = "s3://bucket/workspace.tgz"
+        lane["workingDir"] = "/work"
+        lane["volumeMounts"] = [{"name": "repo", "mountPath": "/work"}]
+        lane["env"] = [{"name": "WORKSPACE_URI", "value": kwargs["workspace_uri"]}]
+        pod["volumes"] = [{"name": "repo", "emptyDir": {}}]
+    elif mode == "warm-store":
+        kwargs["nix_store_pvc"] = "warm"
+        lane["volumeMounts"] = [{"name": "nix-store", "mountPath": "/nix"}]
+        pod["volumes"] = [
+            {"name": "nix-store", "persistentVolumeClaim": {"claimName": "warm"}}
+        ]
+        pod["initContainers"] = [
+            {
+                "name": "seed-nix-store",
+                "image": "img",
+                "imagePullPolicy": "IfNotPresent",
+                "command": [
+                    "sh",
+                    "-c",
+                    "if [ ! -e /warm/store ]; then cp -a /nix/. /warm/ && echo 'seeded warm nix store'; else echo 'warm nix store already populated'; fi",
+                ],
+                "volumeMounts": [{"name": "nix-store", "mountPath": "/warm"}],
+                "securityContext": deepcopy(lane["securityContext"]),
+            }
+        ]
+    assert (
+        build_job_manifest(
+            "j1", "img", ["true"], ttl_seconds=180, services=(), **kwargs
+        )
+        == expected
+    )
 
 
 def test_warm_nix_store_mounted_with_seed_init():
