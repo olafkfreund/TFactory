@@ -8,7 +8,7 @@ intent: intent/2026-11-19-1625-tf-service-links.md
 
 ## Design
 
-Add `"enableServiceLinks": False` to the pod spec in the three builders that create TFactory Jobs: `apps/backend/tools/runners/kube_sandbox.py`, `apps/backend/tools/runners/job_dispatch.py`, `portal_testing/dispatch.py`. `verify_dispatch` reuses the kube_sandbox builder, so it is covered.
+Add `"enableServiceLinks": False` to the pod spec in the three builders that create TFactory Jobs: `apps/backend/tools/runners/kube_sandbox.py`, `apps/backend/tools/runners/job_dispatch.py`, `portal_testing/dispatch.py`, plus `enableServiceLinks: false` in the chart templates `regression-cronjob.yaml` and `job-migrations.yaml` (Codex review finding). `verify_dispatch` reuses the kube_sandbox builder, so it is covered.
 
 ## Alternatives rejected
 

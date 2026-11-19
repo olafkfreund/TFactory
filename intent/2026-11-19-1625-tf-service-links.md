@@ -16,7 +16,7 @@ No TFactory Job pod receives service-link env vars; the SUT sees only the env TF
 
 ## Affected users and systems
 
-Every Job built by `kube_sandbox.build_job_manifest` (verify lanes, and `verify_dispatch` which reuses it), `job_dispatch.build_job_manifest` (build Jobs), and `portal_testing/dispatch.py`.
+Every Job built by `kube_sandbox.build_job_manifest` (verify lanes, and `verify_dispatch` which reuses it), `job_dispatch.build_job_manifest` (build Jobs), `portal_testing/dispatch.py`, and the chart Jobs `regression-cronjob.yaml` and `job-migrations.yaml`.
 
 ## Constraints
 
