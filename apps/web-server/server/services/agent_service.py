@@ -1859,7 +1859,18 @@ class AgentService:
                 _fb_is_non_claude = (
                     _fb_model
                     and not _fb_model.startswith("claude-")
-                    and _fb_model not in ("haiku", "sonnet", "opus", "opus-1m")
+                    and _fb_model
+                    not in (
+                        "haiku",
+                        "sonnet",
+                        "opus",
+                        "opus-1m",
+                        "fable",  # shorthands from phase_config.MODEL_ID_MAP (#1641)
+                        "opus-4.8",
+                        "sonnet-5",
+                        "sonnet-4.6",
+                        "haiku-4.5",
+                    )
                 )
                 logger.info(
                     f"[AgentService] Fallback check: model={_fb_model!r}, attempt={_fb_attempt}, is_non_claude={_fb_is_non_claude}, cmd={'yes' if cmd else 'no'}, env={'yes' if env else 'no'}"
