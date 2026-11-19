@@ -347,7 +347,7 @@ async def lifespan(app: FastAPI):
     for t in getattr(app.state, "instance_tasks", []):
         t.cancel()
         with contextlib.suppress(asyncio.CancelledError):
-            await t
+            _ = await t
 
     vr_task = getattr(app.state, "verify_reconcile_task", None)
     if vr_task is not None:

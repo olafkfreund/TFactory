@@ -400,6 +400,7 @@ def reconcile_inline_orphans(  # noqa: PLR0912 - owner/legacy/CAS branches
                 ):
                     continue
             except (KeyError, TypeError, ValueError):
+                # unreadable updated_at: fall through and treat the stage as stale
                 pass
         # A stage may have changed owner while the heartbeat was checked.
         try:
