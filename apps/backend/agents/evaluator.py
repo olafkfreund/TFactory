@@ -82,6 +82,7 @@ from agents.mutate_probe import (
 from agents.mutation_dispatch import is_mutation_supported, mutant_extension
 from agents.nix_env import (
     _API_SELF_SERVE_PORT,
+    _api_targets,
     api_services_fallback_env,
     detect_serve_command,
     environment_from_contract,
@@ -588,6 +589,7 @@ def _resolve_runner_fn(
                         Path(project_dir_arg),
                         environment_from_contract(spec_dir),
                         port=_API_SELF_SERVE_PORT,
+                        targets=_api_targets(spec_dir, Path(project_dir_arg)),
                     )
                 except Exception:  # noqa: BLE001 - detection is best-effort
                     serve_command = None
