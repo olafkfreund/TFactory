@@ -12,6 +12,7 @@ from pathlib import Path
 from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.database.engine import get_db
 from server.error_ref import client_error
@@ -98,7 +99,7 @@ async def get_running_tasks():
 async def _status_access(
     task_id: str,
     request: Request,
-    db=Depends(get_db),  # noqa: B008
+    db: AsyncSession = Depends(get_db),  # noqa: B008
 ) -> None:
     """Project-level read access, for ``project:spec`` ids only (#1597).
 
@@ -109,7 +110,7 @@ async def _status_access(
         await require_task_access("viewer")(task_id, request, db)
 
 
-def _ingest_status(task_id: str) -> dict:
+def _ingest_status(task_id: str) -> dict[str, str]:
     """The persisted ``status.json`` of a spec-ingest task, or ``{}`` (#1597).
 
     Ingest tasks run in-process / as k8s Jobs and never join ``running_tasks``;
@@ -142,7 +143,7 @@ def _ingest_status(task_id: str) -> dict:
     response_model=TaskExecutionStatus,
     dependencies=[Depends(_status_access)],
 )
-async def get_task_status(task_id: str):
+async def get_task_status(task_id: str) -> TaskExecutionStatus:
     """Get execution status for a specific task.
 
     Combines the in-process registry with the spec workspace's ``status.json``
