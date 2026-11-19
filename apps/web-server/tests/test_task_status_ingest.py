@@ -100,3 +100,9 @@ def test_denied_caller_gets_nothing_and_bare_id_skips_check(ex, tmp_path):
         r = c.get("/api/tasks/p1:s1/status")
         assert r.status_code == 403 and "secret-phase" not in r.text
         assert c.get("/api/tasks/s1/status").status_code == 200
+
+
+def test_wrongly_typed_fields_fall_back_instead_of_crashing(ex, tmp_path):
+    _spec(tmp_path, "p1", "s1", status=[], phase={"a": 1}, failed_reason=3)
+    r = _status(ex, "p1:s1")
+    assert (r.is_running, r.phase, r.message) == (False, None, None)

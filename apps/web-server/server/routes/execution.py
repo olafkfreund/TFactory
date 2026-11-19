@@ -131,7 +131,10 @@ def _ingest_status(task_id: str) -> dict:
         data = json.loads(path.read_text())
     except (OSError, ValueError):
         return {}
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        return {}
+    # Only strings are usable downstream (set membership, response model).
+    return {k: v for k, v in data.items() if isinstance(v, str)}
 
 
 @router.get(
