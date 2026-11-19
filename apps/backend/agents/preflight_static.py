@@ -505,7 +505,10 @@ def check_import(
         # root is also the CWD, which outranks PYTHONPATH on ``sys.path``.
         if proc.returncode == _EXIT_MISSING_ATTR:
             for alt in pkg_roots[1:]:
-                retry = _probe([alt, *(r for r in pkg_roots if r != alt)], cwd=alt)
+                try:
+                    retry = _probe([alt, *(r for r in pkg_roots if r != alt)], cwd=alt)
+                except subprocess.TimeoutExpired:
+                    continue  # a hung sibling must not hide a later valid copy
                 if retry.returncode == 0:
                     proc = retry
                     break

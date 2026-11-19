@@ -668,3 +668,21 @@ def test_broken_sibling_does_not_hide_a_later_valid_copy(tmp_path: Path) -> None
         (d / "models.py").write_text(body)
     res = preflight_check("from app.models import NoteIn\n", project_dir=tmp_path)
     assert res.ok, res.summary()
+
+
+def test_hung_sibling_does_not_hide_a_later_valid_copy(tmp_path: Path) -> None:
+    for rel, body in (
+        ("a/app", "class Other: ...\n"),
+        ("b/app", "import time\ntime.sleep(60)\n"),
+        ("c/app", "class NoteIn: ...\n"),
+    ):
+        d = tmp_path / rel
+        d.mkdir(parents=True)
+        (d / "__init__.py").write_text("")
+        (d / "models.py").write_text(body)
+    res = preflight_check(
+        "from app.models import NoteIn\n",
+        project_dir=tmp_path,
+        timeout_per_import_sec=2,
+    )
+    assert res.ok, res.summary()
