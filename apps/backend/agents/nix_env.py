@@ -1395,6 +1395,28 @@ def _write_jest_config(project_dir: Path) -> Path:
     return path
 
 
+def _nearest_vitest_package(project_dir: Path, rel: str) -> str | None:
+    """Repo-relative dir of the NEAREST package.json above ``rel`` when it
+    declares vitest, else None (TFactory#1600: a ``ts/daterange/`` subpackage
+    with its own vitest was run under root jest, "Cannot find module 'vitest'").
+    Only the nearest manifest counts: it is the one the test resolves against."""
+    root = Path(project_dir).resolve()
+    d = (root / rel).parent
+    while d == root or root in d.parents:
+        pkg = d / "package.json"
+        if pkg.is_file():
+            try:
+                data = json.loads(pkg.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return None
+            deps = {**data.get("dependencies", {}), **data.get("devDependencies", {})}
+            if "vitest" in deps:
+                return d.relative_to(root).as_posix()
+            return None
+        d = d.parent
+    return None
+
+
 def run_jest_lane_via_nix(
     test_file: Path,
     project_dir: Path,
@@ -1491,14 +1513,35 @@ def run_jest_lane_via_nix(
             '|| { echo "__JEST_SETUP_FAILED: jest runner missing after install"; '
             "exit 127; }"
         )
-        _write_jest_config(pd)
-        # The local install puts jest, ts-jest and their shared peers in the
-        # worktree's own node_modules, so ordinary resolution finds the transform.
-        one = (
-            f"cd {mount} && "
-            f"{_JEST_BIN} --ci --forceExit --config {_JEST_CONFIG} {_shquote(rel)} 2>&1; "
-            f"echo __PYTEST_EXIT=$?"
-        )
+        vt_dir = _nearest_vitest_package(pd, rel)
+        if vt_dir is not None:
+            # TFactory#1600: the package declares vitest, so install ITS deps
+            # (lockfile-exact when there is one) and run vitest from its dir.
+            # shortcut: npm only; pnpm/yarn lockfiles fall back to `npm install`.
+            pkg = _shquote(f"{mount}/{vt_dir}" if vt_dir != "." else mount)
+            sub = _shquote(Path(rel).relative_to(vt_dir).as_posix())
+            setup = (
+                f"cd {pkg} && "
+                "if [ -f package-lock.json ]; then npm ci --no-audit --no-fund --silent; "
+                "else npm install --no-audit --no-fund --silent; fi "
+                '|| { echo "__JEST_SETUP_FAILED: npm install of the package failed"; '
+                "exit 127; }; "
+                '[ -x ./node_modules/.bin/vitest ] || { echo "__JEST_SETUP_FAILED: '
+                'vitest missing after install"; exit 127; }'
+            )
+            one = (
+                f"cd {pkg} && ./node_modules/.bin/vitest run {sub} 2>&1; "
+                f"echo __PYTEST_EXIT=$?"
+            )
+        else:
+            _write_jest_config(pd)
+            # The local install puts jest, ts-jest and their shared peers in the
+            # worktree's own node_modules, so ordinary resolution finds the transform.
+            one = (
+                f"cd {mount} && "
+                f"{_JEST_BIN} --ci --forceExit --config {_JEST_CONFIG} {_shquote(rel)} 2>&1; "
+                f"echo __PYTEST_EXIT=$?"
+            )
         jest_cmd = (
             setup
             + "\n"
@@ -1806,8 +1849,16 @@ def _stage_browser_specs(spec_dir: Path, project_dir: Path) -> int:
     shutil.rmtree(dest, ignore_errors=True)
     dest.mkdir(parents=True, exist_ok=True)
     tests_root = Path(spec_dir) / "tests"
+    # A repo whose playwright.config sets testDir elsewhere has its specs planned
+    # there (TFactory#1579); stage that tree too, keeping the path below its root.
+    from agents.planner import _playwright_test_dir
+
+    td = _playwright_test_dir(Path(project_dir))
+    roots = [tests_root] + ([Path(spec_dir) / td] if td else [])
     n = 0
-    for src in sorted(tests_root.rglob("*.spec.ts")):
+    for tests_root, src in sorted(
+        (r, f) for r in roots for g in ("*.spec.ts", "*.spec.js") for f in r.rglob(g)
+    ):
         # Preserve the path BELOW ``tests/`` rather than flattening to the file
         # name. The stage dir stands in for ``tests``, so a spec authored at
         # ``tests/e2e/x.spec.ts`` lands at ``.tf_e2e/e2e/x.spec.ts`` and keeps
@@ -1881,7 +1932,9 @@ def run_browser_evidence(
     try:
         n_specs = _stage_browser_specs(spec_dir, project_dir)
         if n_specs == 0:
-            _log.info("run_browser_evidence: no generated *.spec.ts to run; skipping")
+            _log.info(
+                "run_browser_evidence: no generated *.spec.{ts,js} to run; skipping"
+            )
             return {
                 "ok": False,
                 "output_tail": "no browser specs",

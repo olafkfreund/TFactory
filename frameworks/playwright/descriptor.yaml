@@ -49,6 +49,9 @@ test_path_conventions:
   - "tests/e2e/**/*.spec.ts"
   - "e2e/**/*.spec.ts"
   - "tests/**/*.spec.ts"
+  - "tests/e2e/**/*.spec.js"
+  - "e2e/**/*.spec.js"
+  - "tests/**/*.spec.js"
 
 # Template filenames — populated in Task 12 (#28).
 templates:

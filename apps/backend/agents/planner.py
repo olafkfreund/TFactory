@@ -369,6 +369,31 @@ def _normalise_js_test_paths(plan: Any, registry: Any, project_dir: Path) -> boo
     return changed
 
 
+def _playwright_test_dir(project_dir: Path) -> str | None:
+    """``testDir`` from the repo's ``playwright.config.*``, repo-relative, or None.
+    A regex read, not a JS parse: only the plain ``testDir: './x'`` literal is
+    understood (TFactory#1579); anything computed falls back to the conventions."""
+    for ext in ("ts", "js", "mjs", "cjs", "mts"):
+        cfg = project_dir / f"playwright.config.{ext}"
+        if cfg.is_file():
+            try:
+                m = re.search(r"testDir\s*:\s*['\"]([^'\"]+)['\"]", cfg.read_text())
+            except OSError:
+                return None
+            d = os.path.normpath(m.group(1)) if m else ""
+            return None if d.startswith(("..", "/")) or d in ("", ".") else d
+    return None
+
+
+def _matches_conventions(desc: Any, rel: str, project_dir: Path) -> bool:
+    if any(_glob_matches(pat, rel) for pat in desc.test_path_conventions):
+        return True
+    td = _playwright_test_dir(project_dir) if desc.name == "playwright" else None
+    return bool(td) and any(
+        _glob_matches(f"{td}/**/*.spec.{ext}", rel) for ext in ("ts", "js")
+    )
+
+
 def _validate_test_paths(
     plan: Any, registry: Any, project_dir: Path
 ) -> tuple[bool, str]:
@@ -410,9 +435,7 @@ def _validate_test_paths(
                         f"(framework {st.framework!r} conventions: "
                         f"{list(desc.test_path_conventions)})"
                     )
-                if not any(
-                    _glob_matches(pat, rel) for pat in desc.test_path_conventions
-                ):
+                if not _matches_conventions(desc, rel, project_dir):
                     return False, (
                         f"subtask {st.id!r}: files_to_create entry {rel!r} does not "
                         f"match any test_path_conventions of framework "
