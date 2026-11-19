@@ -1768,3 +1768,52 @@ async def test_typescript_test_path_accepted_in_a_typescript_project(
     assert len(calls) == 1
     status = json.loads((spec_dir / "status.json").read_text())
     assert status["status"] == "planned"
+
+
+# ── TFactory#1579 (reopened): playwright accepts .spec.js and the repo's testDir ──
+
+
+def _pw_plan_json(test_file: str) -> str:
+    st = _make_polyglot_subtask(
+        subtask_id="pw-1", language="typescript", framework="playwright", lane="browser"
+    )
+    st["files_to_create"] = [test_file]
+    return _make_polyglot_plan_json([st])
+
+
+@pytest.mark.asyncio
+async def test_playwright_spec_js_accepted_in_a_javascript_project(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    _write_javascript_project(project_dir)
+    calls = mock_sdk(plans=[_pw_plan_json("tests/e2e/submit-score.spec.js")])
+    assert await run_planner(spec_dir, project_dir) is True
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_playwright_spec_under_configured_testdir_accepted(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    _write_javascript_project(project_dir)
+    (project_dir / "playwright.config.js").write_text(
+        "module.exports = { testDir: './scoreboard/pw' };\n"
+    )
+    calls = mock_sdk(plans=[_pw_plan_json("scoreboard/pw/ui/submit.spec.js")])
+    assert await run_planner(spec_dir, project_dir) is True
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_playwright_spec_outside_testdir_still_rejected(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    _write_javascript_project(project_dir)
+    (project_dir / "playwright.config.js").write_text(
+        "module.exports = { testDir: './scoreboard/pw' };\n"
+    )
+    calls = mock_sdk(
+        plans=[_pw_plan_json("other/x.spec.js"), _pw_plan_json("other/x.spec.js")]
+    )
+    assert await run_planner(spec_dir, project_dir) is False
+    assert "invalid_test_path" in calls[1]["prompt"]

@@ -182,3 +182,62 @@ def test_our_config_is_removed_and_repo_files_untouched(tmp_path, monkeypatch):
 
     assert not (wt / nix_env._JEST_CONFIG).exists(), "our config was left behind"
     assert (wt / "jest.config.js").read_text() == "// the repo's own"
+
+
+# ── TFactory#1600: a subpackage that declares vitest runs vitest, not root jest ──
+
+
+def _vitest_pkg(spec, tf, wt):
+    sub = wt / "ts" / "daterange"
+    (sub / "src").mkdir(parents=True)
+    (sub / "package.json").write_text('{"devDependencies": {"vitest": "^1"}}')
+    (sub / "package-lock.json").write_text("{}")
+    rel = spec / "ts" / "daterange" / "src"
+    rel.mkdir(parents=True)
+    t = rel / "d.test.ts"
+    t.write_text("// generated")
+    return t
+
+
+def test_vitest_subpackage_installs_its_deps_and_runs_vitest(tmp_path, monkeypatch):
+    spec, tf, wt = _spec(tmp_path)
+    t = _vitest_pkg(spec, tf, wt)
+    cap: dict = {}
+    _stub(monkeypatch, cap)
+
+    nix_env.run_jest_lane_via_nix(t, wt, spec)
+    script = cap["script"]
+
+    assert "/work/ts/daterange" in script or "ts/daterange" in script, script
+    assert "npm ci" in script and "vitest run" in script, script
+    assert "/jest --ci" not in script, script
+    assert "__JEST_SETUP_FAILED" in script and "exit 127" in script, script
+
+
+def test_vitest_declared_only_in_a_far_package_is_ignored(tmp_path, monkeypatch):
+    """Only the NEAREST package.json counts."""
+    spec, tf, wt = _spec(tmp_path)
+    (wt / "package.json").write_text('{"devDependencies": {"vitest": "^1"}}')
+    (wt / "tests" / "unit").mkdir(parents=True)
+    (wt / "tests" / "unit" / "package.json").write_text("{}")
+    cap: dict = {}
+    _stub(monkeypatch, cap)
+
+    nix_env.run_jest_lane_via_nix(tf, wt, spec)
+
+    assert "/jest --ci" in cap["script"], cap["script"]
+
+
+def test_browser_specs_under_configured_testdir_and_js_are_staged(tmp_path):
+    """TFactory#1579: .spec.js and a playwright.config testDir tree are staged."""
+    spec, wt = tmp_path / "spec", tmp_path / "spec" / ".worktree"
+    (spec / "tests" / "e2e").mkdir(parents=True)
+    (spec / "tests" / "e2e" / "a.spec.js").write_text("//")
+    (spec / "pw" / "ui").mkdir(parents=True)
+    (spec / "pw" / "ui" / "b.spec.ts").write_text("//")
+    wt.mkdir()
+    (wt / "playwright.config.js").write_text("module.exports={testDir:'./pw'}")
+
+    assert nix_env._stage_browser_specs(spec, wt) == 2
+    assert (wt / nix_env._E2E_STAGE / "e2e" / "a.spec.js").is_file()
+    assert (wt / nix_env._E2E_STAGE / "ui" / "b.spec.ts").is_file()

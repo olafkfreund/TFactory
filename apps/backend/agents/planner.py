@@ -42,6 +42,7 @@ from phase_config import DEFAULT_PHASE_MODELS, get_phase_model, resolve_model_id
 
 from .auth_tagging import apply_requires_auth_from_config
 from .followup_planner import run_followup_planner  # noqa: F401 — back-compat re-export
+from .nix_env import playwright_test_dir
 from .workspace_status import now_iso, read_status, write_status_patch
 
 _planner_log = _logging.getLogger(__name__ + ".tfactory")
@@ -369,6 +370,15 @@ def _normalise_js_test_paths(plan: Any, registry: Any, project_dir: Path) -> boo
     return changed
 
 
+def _matches_conventions(desc: Any, rel: str, project_dir: Path) -> bool:
+    if any(_glob_matches(pat, rel) for pat in desc.test_path_conventions):
+        return True
+    td = playwright_test_dir(project_dir) if desc.name == "playwright" else None
+    return bool(td) and any(
+        _glob_matches(f"{td}/**/*.spec.{ext}", rel) for ext in ("ts", "js")
+    )
+
+
 def _validate_test_paths(
     plan: Any, registry: Any, project_dir: Path
 ) -> tuple[bool, str]:
@@ -410,9 +420,7 @@ def _validate_test_paths(
                         f"(framework {st.framework!r} conventions: "
                         f"{list(desc.test_path_conventions)})"
                     )
-                if not any(
-                    _glob_matches(pat, rel) for pat in desc.test_path_conventions
-                ):
+                if not _matches_conventions(desc, rel, project_dir):
                     return False, (
                         f"subtask {st.id!r}: files_to_create entry {rel!r} does not "
                         f"match any test_path_conventions of framework "
