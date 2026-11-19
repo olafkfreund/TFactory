@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1642
 intent: intent/2026-11-19-1642-cli-update-prefix.md
 ---
