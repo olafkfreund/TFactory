@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1616
 intent: intent/2026-11-19-1616-tf-planner-framework.md
 ---
