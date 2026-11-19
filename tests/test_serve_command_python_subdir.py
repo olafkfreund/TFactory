@@ -94,3 +94,14 @@ def test_hand_written_or_browser_flake_is_left_alone(tmp_path):
     project = _flake_repo(tmp_path / "g", f"# {_GENERATED_MARKER}\n")
     plan = materialize_flake(_spec(tmp_path), project, fallback_env=fb)
     assert plan is not None and not plan.generated  # browser lane: not opted in
+
+
+def test_single_app_repo_with_test_only_targets_still_serves_its_app(tmp_path):
+    # Codex review: targets that name only tests must not disable root detection.
+    from agents.nix_env import detect_api_serve_command
+
+    (tmp_path / "src" / "app").mkdir(parents=True)
+    (tmp_path / "src" / "app" / "main.py").write_text("app = 1\n")
+    spec = _spec(tmp_path, source={"target_paths": ["tests/test_api.py"]})
+    cmd = detect_api_serve_command(spec, tmp_path, port=8200)
+    assert cmd is not None and "uvicorn app.main:app" in cmd

@@ -203,10 +203,8 @@ def _drive_runner(tmp_path, monkeypatch, *, network, target_url):
 
     monkeypatch.setattr("agents.evaluator._maybe_nix_verify", _fake_nix_verify)
     monkeypatch.setattr(
-        "agents.evaluator.detect_serve_command",
-        lambda pd, env, port=8099, targets=None: (
-            f"python -m uvicorn app.main:app --port {port}"
-        ),
+        "agents.evaluator.detect_api_serve_command",
+        lambda sd, pd, env, port=8099: f"python -m uvicorn app.main:app --port {port}",
     )
     monkeypatch.setattr(
         "agents.evaluator.environment_from_contract", lambda spec_dir: {}

@@ -129,10 +129,8 @@ def api_services_fallback_env(
     from agents.services_gate import required_services  # noqa: PLC0415 - lazy
 
     # A uvicorn-served python app needs the Job too (requests, SUT), services or not.
-    serve = detect_serve_command(
-        Path(project_dir),
-        port=_API_SELF_SERVE_PORT,
-        targets=_api_targets(spec_dir, Path(project_dir)),
+    serve = detect_api_serve_command(
+        spec_dir, Path(project_dir), port=_API_SELF_SERVE_PORT
     )
     if required_services(spec_dir, project_dir) or "uvicorn" in (serve or ""):
         return _API_SERVICES_FALLBACK_ENV
@@ -590,11 +588,8 @@ def _resolve_serve(  # noqa: PLR0913 - the lane's own knobs, passed through
         and "TFACTORY_TARGET_URL" not in (extra_env or {})
         and not _has_external_target(spec_dir)
     ):
-        cmd = detect_serve_command(
-            Path(project_dir),
-            env,
-            port=_API_SELF_SERVE_PORT,
-            targets=_api_targets(spec_dir, Path(project_dir)),
+        cmd = detect_api_serve_command(
+            spec_dir, Path(project_dir), env, port=_API_SELF_SERVE_PORT
         )
         return cmd, _API_SELF_SERVE_PORT
     return serve_command, serve_port
@@ -2242,6 +2237,22 @@ def _browser_targets(
         # No readable source.json: fall back to scripts named in the spec text.
         pass
     return _spec_text_targets(spec_dir, project_dir, text_exts) or None
+
+
+def detect_api_serve_command(
+    spec_dir: Path, project_dir: Path, env: dict | None = None, *, port: int
+) -> str | None:
+    """Serve command for an api lane: the app nearest the spec targets, else repo-wide.
+
+    Targets only ever pick a sub-app. A single-app repo whose spec names just its
+    tests (``tests/test_api.py``) must still serve its root app, so a miss with
+    targets retries without them (as the api lane did before #1582).
+    """
+    pd = Path(project_dir)
+    targets = _api_targets(spec_dir, pd)
+    return (
+        detect_serve_command(pd, env, port=port, targets=targets) if targets else None
+    ) or detect_serve_command(pd, env, port=port)
 
 
 def _api_targets(spec_dir: Path, project_dir: Path) -> list[str] | None:
