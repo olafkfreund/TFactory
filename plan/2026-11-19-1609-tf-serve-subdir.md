@@ -11,7 +11,7 @@ reviewers:
 
 # Plan: Serve the node app nearest the spec targets (#1609)
 
-Approved decisions (spec): nix_env.py `_node_subdir_serve`: for each target, walk its parent directories (plain `[\w][\w.-]*` path parts only: the command is interpolated into the Job's bash script, Codex review) from the deepest, return the first with server.js or index.js. Called first inside the non-static branch of detect_serve_command, so python and root npm detection are unchanged when no node entry is near a target. The env-prefix form needs no shell metacharacter. Rejected: running the subdir package.json `start` (needs `cd`/`&&`, which the safe-command rule forbids) and skipping root `npm start` for unrelated apps (not needed once the right app is found; noted as follow-up).
+Approved decisions (spec): nix_env.py `_node_subdir_serve`: for each target, walk its parent directories (plain `[\w][\w.-]*` path parts only: the command is interpolated into the Job's bash script, Codex review) from the deepest, return the first with server.js or index.js whose text contains `listen` (a browser entry such as React src/index.js is not a server, final Codex review). Called first inside the non-static branch of detect_serve_command, so python and root npm detection are unchanged when no node entry is near a target. The env-prefix form needs no shell metacharacter. Rejected: running the subdir package.json `start` (needs `cd`/`&&`, which the safe-command rule forbids) and skipping root `npm start` for unrelated apps (not needed once the right app is found; noted as follow-up).
 
 ## Steps
 

@@ -11,7 +11,9 @@ def _demo(tmp_path):
         '{"scripts": {"start": "uvicorn src.app.main:app --reload"}}'
     )
     (tmp_path / "scoreboard").mkdir()
-    (tmp_path / "scoreboard" / "server.js").write_text("// node:http\n")
+    (tmp_path / "scoreboard" / "server.js").write_text(
+        "http.createServer().listen(3100)\n"
+    )
     return tmp_path
 
 
@@ -45,3 +47,9 @@ def test_directory_names_that_could_inject_shell_are_ignored(tmp_path):
         (tmp_path / name).mkdir()
         (tmp_path / name / "server.js").write_text("")
         assert detect_serve_command(tmp_path, targets=[f"{name}/server.js"]) is None
+
+
+def test_browser_entry_point_is_not_a_server(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "index.js").write_text("ReactDOM.render(App)\n")
+    assert detect_serve_command(tmp_path, targets=["src/App.js"]) is None

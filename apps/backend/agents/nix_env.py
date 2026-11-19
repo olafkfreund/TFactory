@@ -214,7 +214,9 @@ def _node_subdir_serve(pd: Path, targets: list[str] | None, port: int) -> str | 
             continue
         for n in range(len(parts), 0, -1):
             for entry in ("server.js", "index.js"):
-                if (pd.joinpath(*parts[:n]) / entry).is_file():
+                f = pd.joinpath(*parts[:n]) / entry
+                # "listen" separates a server from a browser entry (React src/index.js).
+                if f.is_file() and "listen" in f.read_text(errors="ignore"):
                     return f"PORT={port} node {'/'.join(parts[:n])}/{entry}"
     return None
 

@@ -177,3 +177,12 @@ def test_wrongly_typed_fields_fall_back_instead_of_crashing(
     _spec(tmp_path, "p1", "s1", status=[], phase={"a": 1}, failed_reason=3)
     r = _status(ex, "p1:s1")
     assert (r.is_running, r.phase, r.message) == (False, None, None)
+
+
+def test_glob_characters_in_a_bare_id_match_nothing(
+    ex: ModuleType, tmp_path: Path
+) -> None:
+    _spec(tmp_path, "a", "s1", status="generating", phase="p")
+    with patch.object(ex, "load_projects", return_value={"a": {}}):
+        assert _status(ex, "s*").phase is None
+        assert _status(ex, "s1").phase == "p"

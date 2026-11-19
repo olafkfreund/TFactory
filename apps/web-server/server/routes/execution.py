@@ -123,10 +123,11 @@ def _ingest_path(task_id: str) -> Path | None:
     if not sep:
         spec = safe_component(task_id)
         known = load_projects()
+        # Literal join, not a glob: safe_component permits * ? [ in an id.
         hits = [
             p
-            for p in root.glob(f"*/specs/{spec}/status.json")
-            if p.is_file() and p.parents[2].name in known
+            for d in (root.iterdir() if root.is_dir() else [])
+            if d.name in known and (p := d / "specs" / spec / "status.json").is_file()
         ]
         return hits[0] if len(hits) == 1 else None
     path = (
@@ -156,17 +157,19 @@ async def _status_access(
         path = _ingest_path(task_id)
         if path is None:
             return
+        # The handler reads this same path: no second lookup after the await.
+        request.state.ingest_path = path
         task_id = f"{path.parents[2].name}:{task_id}"
     await require_task_access("viewer")(task_id, request, db)
 
 
-def _ingest_status(task_id: str) -> dict[str, str]:
+def _ingest_status(task_id: str, path: Path | None = None) -> dict[str, str]:
     """The persisted ``status.json`` of a spec-ingest task, or ``{}`` (#1597).
 
     Ingest tasks run in-process / as k8s Jobs and never join ``running_tasks``;
     their truth is the spec workspace.
     """
-    path = _ingest_path(task_id)
+    path = path or _ingest_path(task_id)
     if path is None:
         return {}
     try:
@@ -184,7 +187,10 @@ def _ingest_status(task_id: str) -> dict[str, str]:
     response_model=TaskExecutionStatus,
     dependencies=[Depends(_status_access)],
 )
-async def get_task_status(task_id: str) -> TaskExecutionStatus:
+async def get_task_status(
+    task_id: str,
+    request: Request = None,  # type: ignore[assignment]
+) -> TaskExecutionStatus:
     """Get execution status for a specific task.
 
     Combines the in-process registry with the spec workspace's ``status.json``
@@ -192,7 +198,8 @@ async def get_task_status(task_id: str) -> TaskExecutionStatus:
     """
     from agents.liveness import ACTIVE_STATUSES  # noqa: PLC0415
 
-    persisted = _ingest_status(task_id)
+    path = getattr(getattr(request, "state", None), "ingest_path", None)
+    persisted = _ingest_status(task_id, path)
     is_running = get_agent_service().is_running(task_id) or (
         persisted.get("status") in ACTIVE_STATUSES
     )
