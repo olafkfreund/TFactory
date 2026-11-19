@@ -1254,6 +1254,13 @@ async def run_gen_functional(
         _gen_log.error("gen_functional: spec_dir %s does not exist", spec_dir)
         return False
 
+    from agents.services_gate import (  # noqa: PLC0415 - lazy by design
+        halt_if_services_declared,
+    )
+
+    if halt_if_services_declared(spec_dir, project_dir):
+        return True
+
     try:
         _write_status_patch(
             spec_dir,

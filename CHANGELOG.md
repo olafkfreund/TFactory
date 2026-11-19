@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.12.1 — Zero executed tests cannot claim a VAL level (2026-11-19)
+
+### Fixed
+
+- **Verify:** a run that executed zero tests (collection error, nothing run) can no longer claim a VAL level (#1583).
+- **Verify:** a spec that declares sidecar services halts early instead of running tests that cannot pass; provisioning services is still open (#1582, #1586).
+
 ## 0.12.0 — Rust and shell lanes, branch verify over MCP (2026-11-19)
 
 ### Added

@@ -26,7 +26,10 @@ scorecard (#240).
 
 from __future__ import annotations
 
+import re
 from typing import Any
+
+_PYTEST_COLLECTION_ERROR = 2  # pytest exit code: collection error, test never ran
 
 # ─── Weights ────────────────────────────────────────────────────────────
 # Sum to 1.0. Mutation is weighted highest because a SURVIVED mutant is the
@@ -377,6 +380,33 @@ def apply_environment_override(
     return True
 
 
+def apply_harness_import_override(
+    verdict: dict[str, Any], failure_info: dict[str, Any] | None
+) -> bool:
+    """Mark missing test harness libraries as infrastructure failures."""
+    if (
+        not isinstance(failure_info, dict)
+        or failure_info.get("failure_kind") != "import"
+    ):
+        return False
+    detail = failure_info.get("failure_detail")
+    if not isinstance(detail, str) or _norm(verdict.get("verdict")) == "accept":
+        return False
+    match = re.search(
+        r"No module named '(requests|httpx|pytest|pytest_cov|pytest_asyncio|coverage)(\.|')",
+        detail,
+    )
+    if not match:
+        return False
+    verdict["verdict"] = "not_run"
+    add_system_reason(
+        verdict,
+        f"the lane's test harness library '{match.group(1)}' is missing in the "
+        "sandbox — the test never executed (infra not_run, not an acceptance failure)",
+    )
+    return True
+
+
 def aggregate_confidence(verdicts: list[dict]) -> dict:
     """Run-level rollup over per-verdict confidences.
 
@@ -454,6 +484,14 @@ def enrich_verdicts(
         failure_info = (
             failure_kind_by_test_id.get(test_id) if test_id is not None else None
         )
+        # Only pytest exit 2 (collection error) proves the test never executed;
+        # an exit-1 ImportError was raised while a test ran.
+        if (
+            isinstance(failure_info, dict)
+            and failure_info.get("failure_kind") == "import"
+            and failure_info.get("returncode") == _PYTEST_COLLECTION_ERROR
+        ):
+            summary["failure_kind"] = "import"
         apply_consistent_fail_reason(v, failure_info)
         # Infra override (app never booted) wins over the categorical verdict:
         # reject/flag -> not_run so the gate treats it as lane-not-run, not a
@@ -463,6 +501,7 @@ def enrich_verdicts(
         # means the test never contacted the subject — infra not_run, not a
         # false AC failure. Applied after the two above for the same reason.
         apply_environment_override(v, failure_info)
+        apply_harness_import_override(v, failure_info)
         summary["confidence"] = compute_confidence(v)
     doc["confidence_summary"] = aggregate_confidence(verdicts)
     return doc

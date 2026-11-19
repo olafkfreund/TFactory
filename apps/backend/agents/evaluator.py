@@ -3431,6 +3431,10 @@ async def _run_evaluator_session(
                     # The underlying exception line (#892) — so the reason names
                     # the missing module instead of just its bucket.
                     "failure_detail": getattr(stability, "failure_detail", None),
+                    # pytest exit 2 = collection error: the test never executed.
+                    "returncode": getattr(
+                        getattr(stability, "runs", [None])[0], "returncode", None
+                    ),
                 }
         doc = json.loads(verdicts_path.read_text())
         enrich_verdicts(doc, flaky_by_test_id, failure_kind_by_test_id)
@@ -3546,6 +3550,35 @@ def _maybe_run_equivalence_lane(spec_dir: Path, project_dir: Path) -> None:
         )
 
 
+def _finish_without_completed(spec_dir: Path, plan: dict[str, Any], mode: str) -> bool:
+    """No lane admitted any completed subtask: fail closed on unadmitted ones, else empty."""
+    # Completed test-bearing subtasks that no lane admits are infra, not
+    # "no work" (#1580): fail closed instead of a quiet evaluated_empty.
+    unadmitted = _filter_completed_subtasks(plan, lambda _st: True)
+    if unadmitted:
+        tuples = sorted(
+            {
+                f"{st.get('language')}/{st.get('framework')}/{st.get('lane')}"
+                for st in unadmitted
+            }
+        )
+        # The pipeline triages after a failed evaluator; a stale file
+        # from an earlier run must not become this run's verdicts.
+        (spec_dir / "findings" / "verdicts.json").unlink(missing_ok=True)
+        _write_status_patch(
+            spec_dir,
+            status="evaluator_failed",
+            phase=f"evaluator_{mode}_no_lane_for_completed_subtasks",
+            evaluator_error=(
+                f"{len(unadmitted)} completed subtask(s) match no evaluator "
+                f"lane (language/framework/lane): {', '.join(tuples)}"
+            ),
+        )
+        return False
+    _write_empty_verdicts(spec_dir, mode)
+    return True
+
+
 async def run_evaluator(
     spec_dir: Path,
     project_dir: Path,
@@ -3581,6 +3614,13 @@ async def run_evaluator(
     from agents.utils import repair_linked_worktree  # noqa: PLC0415 - lazy by design
 
     repair_linked_worktree(project_dir)
+    from agents.services_gate import (  # noqa: PLC0415 - lazy by design
+        halt_if_services_declared,
+    )
+
+    if halt_if_services_declared(spec_dir, project_dir):
+        return True
+
     try:
         _write_status_patch(
             spec_dir,
@@ -3630,31 +3670,7 @@ async def run_evaluator(
 
         # 2. No work — early exit with evaluated_empty.
         if not completed:
-            # Completed test-bearing subtasks that no lane admits are infra, not
-            # "no work" (#1580): fail closed instead of a quiet evaluated_empty.
-            unadmitted = _filter_completed_subtasks(plan, lambda _st: True)
-            if unadmitted:
-                tuples = sorted(
-                    {
-                        f"{st.get('language')}/{st.get('framework')}/{st.get('lane')}"
-                        for st in unadmitted
-                    }
-                )
-                # The pipeline triages after a failed evaluator; a stale file
-                # from an earlier run must not become this run's verdicts.
-                (spec_dir / "findings" / "verdicts.json").unlink(missing_ok=True)
-                _write_status_patch(
-                    spec_dir,
-                    status="evaluator_failed",
-                    phase=f"evaluator_{mode}_no_lane_for_completed_subtasks",
-                    evaluator_error=(
-                        f"{len(unadmitted)} completed subtask(s) match no evaluator "
-                        f"lane (language/framework/lane): {', '.join(tuples)}"
-                    ),
-                )
-                return False
-            _write_empty_verdicts(spec_dir, mode)
-            return True
+            return _finish_without_completed(spec_dir, plan, mode)
 
         # 2b. Build the artifact under test if the config declares build steps
         #     (#233) — e.g. docker build an image a docker_run target then runs.

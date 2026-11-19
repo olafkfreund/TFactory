@@ -179,3 +179,39 @@ def test_an_all_accept_run_gets_no_flag_qualifier():
         [{"test_id": "a", "verdict": "accept", "lane": "unit"}], target_level="VAL-1"
     )
     assert "flag" not in block["claim"], block["claim"]
+
+
+def _import_flag(lane: str, n: int) -> list[dict]:
+    # the #1583 shape: collection error (pytest exit 2) graded `flag`
+    return [
+        {
+            "test_id": f"{lane}-{i}",
+            "lane": lane,
+            "verdict": "flag",
+            "signals_summary": {
+                "stability": "consistent_fail",
+                "failure_kind": "import",
+            },
+        }
+        for i in range(n)
+    ]
+
+
+def test_zero_executed_import_flags_cannot_claim_a_level() -> None:
+    block = build_verification_block(_import_flag("api", 14))
+    assert block["achieved_level"] == "VAL-0"
+    assert all(lv["status"] != "passed" for lv in block["levels"])
+    assert block["verdict_class"] == "infra"
+    assert block["claim"].startswith("NOT VERIFIED (infra)")
+
+
+def test_no_verdicts_is_evaluated_empty() -> None:
+    block = build_verification_block([])
+    assert block["achieved_level"] == "VAL-0"
+    assert block["verdict_class"] == "evaluated_empty"
+
+
+def test_executed_run_has_no_verdict_class() -> None:
+    block = build_verification_block(_v("unit", "accept", 2) + _import_flag("api", 1))
+    assert "verdict_class" not in block
+    assert block["achieved_level"] == "VAL-1"
