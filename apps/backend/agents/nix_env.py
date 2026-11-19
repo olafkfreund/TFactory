@@ -238,12 +238,11 @@ def detect_serve_command(
             errors="ignore"
         ):
             return f"python -m uvicorn app:app --host 127.0.0.1 --port {port}"
-        if (pd / "src" / "app" / "main.py").is_file() and _serves(pd / "src"):
-            return f"python -m uvicorn app.main:app --host 127.0.0.1 --port {port}"
-        # Top-level app/ package (factory-lab-cloud layout, #1582).
-        if (pd / "app" / "main.py").is_file() and "app" in (
-            pd / "app" / "main.py"
-        ).read_text(errors="ignore"):
+        # src/app package, or a top-level app/ package (factory-lab-cloud, #1582).
+        if ((pd / "src" / "app" / "main.py").is_file() and _serves(pd / "src")) or (
+            (pd / "app" / "main.py").is_file()
+            and "app" in (pd / "app" / "main.py").read_text(errors="ignore")
+        ):
             return f"python -m uvicorn app.main:app --host 127.0.0.1 --port {port}"
         if (pd / "main.py").is_file() and "app" in (pd / "main.py").read_text(
             errors="ignore"
@@ -392,9 +391,19 @@ def _services_prelude(services: list[tuple[str, str | None]]) -> str:
     return out
 
 
-def _skip_when_unhealthy(run_cmd: str, reruns: int) -> str:
+def _guard_serve(svc_prelude: str, serve_prelude: str) -> str:
+    """Do not boot the SUT against a dead sidecar."""
+    if svc_prelude and serve_prelude:
+        return f'if [ -z "$TF_NOT_HEALTHY" ]; then\n{serve_prelude}fi\n'
+    return serve_prelude
+
+
+def _skip_when_unhealthy(run_cmd: str, reruns: int, *, active: bool = True) -> str:
     """Run ``run_cmd`` only when the sidecars/SUT came up; otherwise emit the infra
-    marker inside every ``__PYTEST_RUN`` segment so the batched parser keeps it."""
+    marker inside every ``__PYTEST_RUN`` segment so the batched parser keeps it.
+    ``active=False`` returns ``run_cmd`` unchanged (no sidecars, no SUT)."""
+    if not active:
+        return run_cmd
     fail = (
         f"echo {_APP_NOT_HEALTHY_MARKER} dependency not healthy\necho __PYTEST_EXIT=1\n"
     )
@@ -404,6 +413,39 @@ def _skip_when_unhealthy(run_cmd: str, reruns: int) -> str:
         else fail
     )
     return f'if [ -n "$TF_NOT_HEALTHY" ]; then\n{skip}else\n{run_cmd}\nfi'
+
+
+def _resolve_serve(  # noqa: PLR0913 - the lane's own knobs, passed through
+    spec_dir: Path,
+    project_dir: Path,
+    env: dict[str, Any] | None,
+    lane: str,
+    extra_env: dict[str, str] | None,
+    serve_command: str | None,
+    serve_port: int | None,
+) -> tuple[str | None, int | None]:
+    """Api lane with no caller/env/yml target: boot the SUT in the Job (#612, #1582)."""
+    if (
+        serve_command is None
+        and lane == "api"
+        and "TFACTORY_TARGET_URL" not in (extra_env or {})
+        and not _has_external_target(spec_dir)
+    ):
+        cmd = detect_serve_command(Path(project_dir), env, port=_API_SELF_SERVE_PORT)
+        return cmd, _API_SELF_SERVE_PORT
+    return serve_command, serve_port
+
+
+def _with_sidecars(
+    sandbox: Any, services: list[tuple[str, str | None]]
+) -> tuple[Any, list[tuple[str, str | None]]]:
+    """The sandbox that adds sidecars to its Jobs, or the original with no services."""
+    if not services:
+        return sandbox, services
+    if hasattr(sandbox, "with_manifest_kw"):
+        return sandbox.with_manifest_kw(services=services), services
+    _log.warning("sandbox cannot run sidecars; services %s dropped", services)
+    return sandbox, []
 
 
 def _has_external_target(spec_dir: Path) -> bool:
@@ -662,28 +704,16 @@ def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve kno
     from agents.services_gate import required_services  # noqa: PLC0415 - lazy
 
     services = required_services(spec_dir, project_dir)
-    if (
-        serve_command is None
-        and lane == "api"
-        and "TFACTORY_TARGET_URL" not in (extra_env or {})
-        and not _has_external_target(spec_dir)
-    ):
-        serve_command = detect_serve_command(
-            Path(project_dir), env, port=_API_SELF_SERVE_PORT
-        )
-        serve_port = _API_SELF_SERVE_PORT
+    serve_command, serve_port = _resolve_serve(
+        spec_dir, project_dir, env, lane, extra_env, serve_command, serve_port
+    )
     # Consume the engine purely through the unified seam (#426): this lane works
     # with any ExecutionSandbox the factory returns, not just KubeJobSandbox.
     sandbox: ExecutionSandbox | None = nix_runner_from_env()
     if sandbox is None:
         _log.info("run_pytest_lane_via_nix: TFACTORY_NIX_RUNNER_IMAGE unset; skipping")
         return None
-    if services:
-        if hasattr(sandbox, "with_manifest_kw"):
-            sandbox = sandbox.with_manifest_kw(services=services)
-        else:
-            _log.warning("sandbox cannot run sidecars; services %s dropped", services)
-            services = []
+    sandbox, services = _with_sidecars(sandbox, services)
 
     # #623: isolate every run in a per-run scratch COPY of the checkout, instead of
     # mutating the shared project checkout in place. All specs for a project share
@@ -789,9 +819,7 @@ def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve kno
                 f'on {url}; see /tmp/tf_app.log"; TF_NOT_HEALTHY=1; }}\n'
             )
         svc_prelude = _services_prelude(services)
-        if svc_prelude and serve_prelude:
-            # Do not boot the SUT against a dead sidecar.
-            serve_prelude = f'if [ -z "$TF_NOT_HEALTHY" ]; then\n{serve_prelude}fi\n'
+        serve_prelude = _guard_serve(svc_prelude, serve_prelude)
         # TFactory#1152: the browser lane runs Playwright, not pytest, but through
         # this SAME Job path — the flake, the co-mount, the retry-on-missing-marker
         # and the exit-marker protocol are all lane-agnostic. Only the one command
@@ -800,8 +828,9 @@ def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve kno
         pytest_cmd = build_cmd(mount, name, reruns)
         if mutant_names:
             pytest_cmd = pytest_cmd + "\n" + _build_mutants_cmd(mutant_names)
-        if svc_prelude or serve_prelude:
-            pytest_cmd = _skip_when_unhealthy(pytest_cmd, reruns)
+        pytest_cmd = _skip_when_unhealthy(
+            pytest_cmd, reruns, active=bool(svc_prelude or serve_prelude)
+        )
         (pd / _JOB_SCRIPT).write_text(
             "#!/usr/bin/env bash\nset +e\n"
             + exports

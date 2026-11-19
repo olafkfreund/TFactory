@@ -11,6 +11,7 @@ from tfactory_yml import load_tfactory_yml
 _log = logging.getLogger(__name__)
 
 
+_MAX_SCAN_DEPTH = 2
 _COMPOSE_IMAGE = re.compile(r"image:\s*['\"]?(?:[\w./-]*/)?(postgres|redis)\b", re.I)
 _DRIVERS = re.compile(
     r"(?<![\w.-])(psycopg2-binary|psycopg2|psycopg|asyncpg|pg8000|aioredis|redis)(?![\w.-])",
@@ -72,7 +73,7 @@ def required_services(
         depth = len(Path(root).relative_to(project_dir).parts)
         dirs[:] = (
             []
-            if depth >= 2
+            if depth >= _MAX_SCAN_DEPTH
             else [
                 name
                 for name in dirs
