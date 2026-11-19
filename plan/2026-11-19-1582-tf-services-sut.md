@@ -67,6 +67,15 @@ Plumbing lives in `run_pytest_lane_via_nix` so every caller is covered.
    commit with `--no-verify` if the unrelated mcp collection error blocks the hook (say so
    in the commit body). Rebase on origin/dev, push, PR to dev linking intent/spec/plan.
 
+## Deviations (recorded with the code)
+
+- Step 3 (after the final Codex review): `app/main.py` detection honours the spec-target
+  scope (`_serves`) like `src/app/main.py`; skipped mutants emit `__MUT_EXIT=127` (not-run),
+  never a killed mutant. Lane helpers split out (`_resolve_serve`, `_with_sidecars`,
+  `_guard_serve`) to satisfy the ratchet's complexity limits. Postgres sidecar limit is
+  512Mi (128Mi would OOM on its default shared_buffers).
+- Step 1/2 were done by Codex in one handoff; step 3 by the lead.
+
 ## Tests
 
 `python -m pytest tests/test_kube_sandbox.py tests/test_services_gate.py tests/test_nix_env_services.py` plus the nix_env/evaluator suites; every new test must fail on dev without the change.

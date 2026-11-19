@@ -241,6 +241,7 @@ def detect_serve_command(
         # src/app package, or a top-level app/ package (factory-lab-cloud, #1582).
         if ((pd / "src" / "app" / "main.py").is_file() and _serves(pd / "src")) or (
             (pd / "app" / "main.py").is_file()
+            and _serves(pd / "app")
             and "app" in (pd / "app" / "main.py").read_text(errors="ignore")
         ):
             return f"python -m uvicorn app.main:app --host 127.0.0.1 --port {port}"
@@ -398,9 +399,12 @@ def _guard_serve(svc_prelude: str, serve_prelude: str) -> str:
     return serve_prelude
 
 
-def _skip_when_unhealthy(run_cmd: str, reruns: int, *, active: bool = True) -> str:
+def _skip_when_unhealthy(
+    run_cmd: str, reruns: int, *, active: bool = True, mutants: int = 0
+) -> str:
     """Run ``run_cmd`` only when the sidecars/SUT came up; otherwise emit the infra
     marker inside every ``__PYTEST_RUN`` segment so the batched parser keeps it.
+    Skipped mutants report 127 (shell not-run), never a killed mutant.
     ``active=False`` returns ``run_cmd`` unchanged (no sidecars, no SUT)."""
     if not active:
         return run_cmd
@@ -411,6 +415,9 @@ def _skip_when_unhealthy(run_cmd: str, reruns: int, *, active: bool = True) -> s
         "".join(f"echo __PYTEST_RUN={i}\n{fail}" for i in range(1, reruns + 1))
         if reruns > 1
         else fail
+    )
+    skip += "".join(
+        f"echo __MUT_RUN={k}\necho __MUT_EXIT=127\n" for k in range(1, mutants + 1)
     )
     return f'if [ -n "$TF_NOT_HEALTHY" ]; then\n{skip}else\n{run_cmd}\nfi'
 
@@ -829,7 +836,10 @@ def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve kno
         if mutant_names:
             pytest_cmd = pytest_cmd + "\n" + _build_mutants_cmd(mutant_names)
         pytest_cmd = _skip_when_unhealthy(
-            pytest_cmd, reruns, active=bool(svc_prelude or serve_prelude)
+            pytest_cmd,
+            reruns,
+            active=bool(svc_prelude or serve_prelude),
+            mutants=len(mutant_names),
         )
         (pd / _JOB_SCRIPT).write_text(
             "#!/usr/bin/env bash\nset +e\n"

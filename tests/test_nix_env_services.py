@@ -145,3 +145,25 @@ def test_marker_in_output_reads_as_unhealthy_when_services_requested(
     sb = _Sandbox(output=f"{_MARKER} sidecar postgres not ready\n__PYTEST_EXIT=1\n")
     res = _run(monkeypatch, tmp_path, sb, setup={"reqs": "asyncpg\n"})
     assert res.stdout.rstrip().endswith("(SUT boot failed)")
+
+
+def test_unhealthy_dependency_reports_skipped_mutants_not_run(tmp_path, monkeypatch):
+    from agents.nix_env import parse_mut_exits
+
+    sb = _Sandbox()
+    spec, project, test = _setup(tmp_path, reqs="asyncpg\n")
+    mutant = project / "m1_test.py"
+    mutant.write_text("def test_ok(): assert False\n")
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: sb)
+    run_pytest_lane_via_nix(spec, project, test, reruns=3, mutant_files=[mutant])
+    skip = sb.script.split("else\n")[0]
+    assert "echo __MUT_RUN=1\necho __MUT_EXIT=127" in skip
+    # 127 is a shell not-run code, which the evaluator maps to NOT_RUN, never KILLED
+    assert parse_mut_exits("__MUT_RUN=1\n__MUT_EXIT=127\n") == [127]
+
+
+def test_top_level_app_not_served_for_unrelated_spec_targets(tmp_path):
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "main.py").write_text("app = object()\n")
+    (tmp_path / "package.json").write_text('{"scripts": {"start": "node ."}}')
+    assert detect_serve_command(tmp_path, targets=["src/index.js"]) == "npm start"
