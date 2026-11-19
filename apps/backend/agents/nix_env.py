@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from agents.preflight_static import package_root_rel_paths, requirements_files
+from agents.stability_runner import all_skipped
 from agents.task_contract import read_task_contract
 from tools.runners.docker_runner import DockerRunResult
 from tools.runners.nix_provisioner import (
@@ -1551,7 +1552,8 @@ def _parse_exit_marker(output: str | None, prefix: str) -> int:
 
 def _parse_pytest_exit(output: str | None) -> int:
     """Recover the pytest exit code from the ``__PYTEST_EXIT=<n>`` marker line."""
-    return _parse_exit_marker(output, "__PYTEST_EXIT=")
+    code = _parse_exit_marker(output, "__PYTEST_EXIT=")
+    return 125 if code == 0 and all_skipped(output or "") else code
 
 
 def parse_pytest_exits(output: str | None) -> list[tuple[int, str]]:
@@ -1574,13 +1576,16 @@ def parse_pytest_exits(output: str | None) -> list[tuple[int, str]]:
     for start, stop in itertools.pairwise(bounds):
         code = 1
         body: list[str] = []
+        seen_exit = False
         for ln in lines[start + 1 : stop]:
             if ln.startswith("__PYTEST_EXIT="):
                 with contextlib.suppress(ValueError):
                     code = int(ln.split("=", 1)[1])
-            else:
+                seen_exit = True
+            elif not seen_exit:
                 body.append(ln)
-        runs.append((code, "\n".join(body)))
+        tail = "\n".join(body)
+        runs.append((125 if code == 0 and all_skipped(tail) else code, tail))
     return runs
 
 
@@ -1602,11 +1607,14 @@ def parse_mut_exits(output: str | None) -> list[int]:
     codes: list[int] = []
     for start, stop in itertools.pairwise(bounds):
         code = 1
+        body: list[str] = []
         for ln in lines[start + 1 : stop]:
             if ln.startswith("__MUT_EXIT="):
                 with contextlib.suppress(ValueError):
                     code = int(ln.split("=", 1)[1])
-        codes.append(code)
+                break
+            body.append(ln)
+        codes.append(125 if code == 0 and all_skipped("\n".join(body)) else code)
     return codes
 
 

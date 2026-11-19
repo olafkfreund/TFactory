@@ -339,7 +339,9 @@ of truth.
 | **TypeScript** | jest | playwright | supertest | testcontainers-node | stryker |
 | **Java** | JUnit 5 (Maven, or `gradle test`) | — | JUnit 5 | — | PIT |
 | **Kotlin** | Gradle, in a per-task Nix Job | — | — | — | — |
-| C# / Go / Rust / Ruby | — | — | — | — | — (no lane yet) |
+| **Shell** | bats + shellcheck, in a per-task Nix Job | — | — | — | — |
+| **Rust** | cargo test, in a per-task Nix Job | — | — | — | — |
+| C# / Go / Ruby | — | — | — | — | — (no lane yet) |
 | Swift | refused: "no in-cluster Swift lane" | — | — | — | — |
 
 Python and TypeScript have all five lanes in the registry; Java and Kotlin unit tests run in-cluster ([v0.9.27](https://github.com/olafkfreund/TFactory/releases/tag/v0.9.27), [v0.9.29](https://github.com/olafkfreund/TFactory/releases/tag/v0.9.29)).

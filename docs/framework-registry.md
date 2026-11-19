@@ -285,6 +285,29 @@ a percentage, preventing browser tests from being scored as low-value.
 
 ---
 
+## Rust (`cargo-test`) and the manifest `verify_commands` fallback
+
+`frameworks/cargo-test` makes `(rust, cargo-test, unit)` a valid Planner subtask
+(#1578). The Evaluator runs `cargo test --workspace --no-fail-fast` in the
+per-task Nix dev shell (rustc and cargo come from the provisioner's builtin
+`rust` table; crates are fetched at run time, so the lane is
+`network: restricted`).
+
+- **Test paths:** top-level `tests/<name>.rs` only. Cargo runs each as its own
+  integration-test target; a nested `tests/helpers/x.rs` is a module Cargo never
+  executes, so the validator rejects it.
+- **Evidence rule:** a zero exit with zero tests is a failure, only-ignored tests
+  is `not_run`, and a subtask counts only when cargo printed
+  `Running tests/<name>.rs` for its own file.
+- **Mutation** is not measured for Rust (as for Go and the JVM lanes).
+
+The manifest fallback: when a contract's `environment.verify_commands` names a
+command for a language that is **absent from the registry**, `get_tool_for_lane`
+synthesises a tool from it instead of refusing. It does not apply to a
+registered language such as Rust, and the Planner still requires a registered
+framework for any subtask, so it is a path for unregistered languages, not a way
+around lane registration.
+
 ## Testing the registry
 
 ```bash
@@ -302,6 +325,30 @@ print('OK:', list(r))
 ```
 
 ---
+
+## Shell (`bats`) and skip semantics
+
+`frameworks/bats` makes `(shell, bats, unit)` a valid Planner subtask (#1581), so
+a bash project gets `tests/**/*.bats` suites instead of pytest wrappers that
+shell out. The Evaluator runs `bats --tap` over every `.bats` file and
+`shellcheck -x -S warning` over the project's `.sh`/`.bash` files (tests
+excluded) in the per-task Nix dev shell:
+
+- **Tools:** when the repo owns a git-tracked `flake.nix` the lane runs inside
+  its `devShells.default`, which must provide `bats` and `shellcheck`; with no
+  flake a shell is generated from `languages/shell.yaml` (TFactory-local for
+  now; promoting it to the Factory hub is a follow-up).
+- **Exit codes:** a missing tool is 126 (`not_run`), every test skipped is 125
+  (`not_run`), zero tests is a failure, any failure or shellcheck finding beats
+  a skip, and a missing exit marker fails closed.
+- **Skips elsewhere:** a pytest run in which every test skipped (exit 0, nothing
+  passed) is now 125 as well, so a skipped test is never a pass, a surviving
+  mutant or a rejected test: it is `not_run`.
+- **Mutation** is not measured for shell.
+- **Manifest fallback:** when a contract's `environment.verify_commands` names a
+  command for a language **absent from the registry**, `get_tool_for_lane`
+  synthesises a tool from it. A registered language such as shell does not use
+  it, and the Planner still requires a registered framework for any subtask.
 
 ## File layout
 

@@ -29,6 +29,7 @@ spinning Docker.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
@@ -126,6 +127,13 @@ _PYTEST_TEST_FAILURE_CODE = 1
 # `docker run` failing before the container starts (e.g. runner image missing).
 # Either way the test never ran.
 _SHELL_NOT_RUN_CODES = (125, 126, 127)
+
+
+def all_skipped(text: str) -> bool:
+    """Whether pytest's summary reports skips without any executed outcomes."""
+    return bool(re.search(r"\b[1-9]\d*\s+skipped\b", text)) and not bool(
+        re.search(r"\b\d+\s+(?:passed|failed|errors?|xfailed|xpassed)\b", text)
+    )
 
 
 def classify_pytest_failure(stdout: str, returncode: int) -> str:
