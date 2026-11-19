@@ -2989,7 +2989,7 @@ def _persist_run_output(spec_dir: Path, bundles: list[Any]) -> None:
     out.write_text(json.dumps({"tests": entries}, indent=2), encoding="utf-8")
 
 
-def _build_all_bundles(  # noqa: PLR0913 - one list per lane
+def _build_all_bundles(  # noqa: PLR0912, PLR0913 - one branch and list per lane
     spec_dir,
     project_dir,
     unit,
