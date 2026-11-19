@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1609
 intent: intent/2026-11-19-1609-tf-serve-subdir.md
 ---
