@@ -882,3 +882,58 @@ def test_planner_accepts_a_shell_unit_subtask_and_rejects_a_py_wrapper(
     )
     assert not ok
     assert "test_shellcheck_clean.py" in detail
+
+
+@pytest.mark.skipif(
+    not _REAL_FRAMEWORKS_DIR.is_dir(),
+    reason=f"frameworks/ directory not found at {_REAL_FRAMEWORKS_DIR}",
+)
+def test_cargo_test_descriptor_owns_the_rust_unit_lane() -> None:
+    """Rust's in-cluster unit lane (#1578): the claimant the Planner selects."""
+    cargo = get_descriptor("cargo-test", frameworks_dir=_REAL_FRAMEWORKS_DIR)
+    assert cargo.language == "rust"
+    assert [ln.value if hasattr(ln, "value") else str(ln) for ln in cargo.lanes] == [
+        "unit"
+    ]
+    assert cargo.source_extensions == (".rs",)
+    assert "cargo test" in cargo.ac_command_tokens
+    assert "Cargo.toml" in cargo.manifest_signals
+    # The Nix cargo lane collects no coverage.
+    assert cargo.coverage_strategy == "skip"
+    assert cargo.context_block.strip(), "Rust generation guidance is the point"
+
+
+@pytest.mark.skipif(
+    not _REAL_FRAMEWORKS_DIR.is_dir(),
+    reason=f"frameworks/ directory not found at {_REAL_FRAMEWORKS_DIR}",
+)
+def test_planner_accepts_a_rust_unit_subtask_and_rejects_unrun_paths(
+    tmp_path: Path,
+) -> None:
+    """The validators let (rust, cargo-test, unit) through (#1578).
+
+    Only a top-level ``tests/<name>.rs`` is an integration-test target Cargo
+    runs; a nested helper file is a module Cargo never executes.
+    """
+    from types import SimpleNamespace
+
+    from agents.planner import _validate_framework_consistency, _validate_test_paths
+
+    registry = load_registry(_REAL_FRAMEWORKS_DIR)
+
+    def plan(path: str) -> SimpleNamespace:
+        st = SimpleNamespace(
+            id="st-rs",
+            language="rust",
+            framework="cargo-test",
+            lane="unit",
+            files_to_create=[path],
+        )
+        return SimpleNamespace(phases=[SimpleNamespace(subtasks=[st])])
+
+    ok_plan = plan("tests/calc.rs")
+    assert _validate_framework_consistency(ok_plan, registry) == (True, "")
+    assert _validate_test_paths(ok_plan, registry, tmp_path) == (True, "")
+    ok, detail = _validate_test_paths(plan("tests/helpers/calc.rs"), registry, tmp_path)
+    assert not ok
+    assert "tests/helpers/calc.rs" in detail

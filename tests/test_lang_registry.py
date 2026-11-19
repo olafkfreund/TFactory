@@ -96,11 +96,18 @@ def test_csharp_has_no_entries_yet():
         assert get_tool_for_lane("csharp", lane) is None, f"csharp/{lane}"
 
 
-def test_go_rust_ruby_have_no_entries_yet():
+def test_go_ruby_have_no_entries_yet():
     """v0.4+ ramp — placeholders only at v0.2."""
-    for lang in ("go", "rust", "ruby"):
+    for lang in ("go", "ruby"):
         for lane in ("unit", "browser", "api", "integration", "mutation"):
             assert get_tool_for_lane(lang, lane) is None, f"{lang}/{lane}"
+
+
+def test_rust_has_only_a_cargo_unit_lane():
+    """#1578: cargo test is the one Rust lane; the rest stay unwired."""
+    assert get_tool_for_lane("rust", "unit").binary == "cargo"
+    for lane in ("browser", "api", "integration", "mutation"):
+        assert get_tool_for_lane("rust", lane) is None, f"rust/{lane}"
 
 
 # ── Error paths ────────────────────────────────────────────────────────
@@ -141,6 +148,7 @@ def test_languages_supporting_lane_mvp_only_for_unit():
         "typescript",
         "kotlin",
         "shell",
+        "rust",
     }
 
 
@@ -157,6 +165,7 @@ def test_languages_supporting_lane_unfiltered_for_unit():
         "java",
         "kotlin",
         "shell",
+        "rust",
     }
 
 

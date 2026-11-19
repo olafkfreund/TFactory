@@ -97,8 +97,11 @@ _REGISTRY: dict[str, dict[str, ToolSpec | None]] = {
     "csharp": dict.fromkeys(_LANE_KEYS),
     # ── Go (v0.4+) ──────────────────────────────────────────────────────
     "go": dict.fromkeys(_LANE_KEYS),
-    # ── Rust (v0.4+) ────────────────────────────────────────────────────
-    "rust": dict.fromkeys(_LANE_KEYS),
+    # ── Rust (#1578): cargo test unit lane, in-cluster as a Nix Job ─────
+    "rust": {
+        **dict.fromkeys(_LANE_KEYS),
+        "unit": ToolSpec("cargo", "cargo test (libtest)", True, "3"),
+    },
     # ── Ruby (v0.4+) ────────────────────────────────────────────────────
     "ruby": dict.fromkeys(_LANE_KEYS),
 }

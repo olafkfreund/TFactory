@@ -39,6 +39,7 @@ shouldn't be able to drive itself recursively.
 
 from __future__ import annotations
 
+import importlib
 import json
 import logging
 import os
@@ -47,6 +48,7 @@ import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from agents.contract_signature import (
     apply_overlay,
@@ -208,26 +210,244 @@ def _status_file(project_id: str, spec_id: str, root: Path | None = None) -> Pat
     return _spec_dir(project_id, spec_id, root) / "status.json"
 
 
-def _find_task(task_id: str, root: Path | None = None) -> tuple[str, str] | None:
-    """Locate a task by ID. Returns (project_id, spec_id) or None.
+def _find_tasks(
+    task_id: str, root: Path | None = None, project_id: str | None = None
+) -> list[tuple[str, str]]:
+    """Every ``(project_id, spec_id)`` holding ``task_id``; one project if given.
 
     The spec_id IS the task_id in MVP — they're allocated 1:1 when
-    task_create_and_run runs. A separate id field exists in status.json
-    so a future store could decouple them without breaking the API.
+    task_create_and_run runs. The same spec id can exist in several projects
+    (#1583), so callers must not take the first hit blindly.
     """
     workspaces_root = (root or _workspace_root()) / "workspaces"
     if not workspaces_root.exists():
-        return None
-    for project_dir in workspaces_root.iterdir():
-        if not project_dir.is_dir():
+        return []
+    found = []
+    for project_dir in sorted(workspaces_root.iterdir()):
+        if not project_dir.is_dir() or (project_id and project_dir.name != project_id):
             continue
-        specs_dir = project_dir / "specs"
-        if not specs_dir.exists():
-            continue
-        candidate = specs_dir / task_id
-        if candidate.is_dir():
-            return (project_dir.name, task_id)
+        if (project_dir / "specs" / task_id).is_dir():
+            found.append((project_dir.name, task_id))
+    return found
+
+
+def _find_task(task_id: str, root: Path | None = None) -> tuple[str, str] | None:
+    """First match of :func:`_find_tasks`, or None (kept for existing callers)."""
+    found = _find_tasks(task_id, root)
+    return found[0] if found else None
+
+
+def _locate_local(args: dict[str, Any]) -> tuple[tuple[str, str] | None, str | None]:
+    """Resolve a task from ``task_id`` (+ optional ``project_id``): (hit, error)."""
+    task_id = args["task_id"]
+    found = _find_tasks(task_id, project_id=args.get("project_id"))
+    if not found:
+        return None, f"unknown task_id: {task_id!r}"
+    if len(found) > 1:
+        ids = ", ".join(p for p, _ in found)
+        return None, (
+            f"task_id {task_id!r} exists in several projects ({ids}); "
+            "pass project_id to pick one"
+        )
+    return found[0], None
+
+
+# ---------------------------------------------------------------------------
+# Cluster mode (#1574): TFACTORY_API_URL points the tools at a cluster TFactory
+# ---------------------------------------------------------------------------
+
+
+_REPO_DESC = (
+    "GitHub repo to verify, owner/name or https URL. The cluster TFactory "
+    "(TFACTORY_API_URL) clones it itself and checks out the ref; the project's "
+    "local root_path is not used."
+)
+_SPEC_TEXT_DESC = (
+    "Cluster mode only: the acceptance-criteria text of the spec (the cluster "
+    "TFactory cannot read the AIFactory pod's spec dir)"
+)
+_PID_DESC = (
+    "Optional project id or name; needed when the same spec id exists in two projects"
+)
+
+
+def _cluster_mode() -> bool:
+    return bool(os.environ.get("TFACTORY_API_URL", "").strip())
+
+
+def _portal_url(task_id: str) -> str:
+    base = (
+        os.environ.get("TFACTORY_PORTAL_URL")
+        or os.environ.get("TFACTORY_API_URL")
+        or ""
+    ).strip().rstrip("/") or (
+        f"http://localhost:{os.environ.get('TFACTORY_PORTAL_PORT', '3103')}"
+    )
+    return f"{base}/tasks/{task_id}"
+
+
+def _spec_task_path(located: tuple[str, str]) -> str:
+    return "/api/spec-tasks/{}/{}".format(*(quote(s, safe="") for s in located))
+
+
+async def _api(method: str, path: str, **kwargs: Any) -> Any:
+    http_client = importlib.import_module("agents.tools_pkg.http_client")
+    return await http_client.request(method, path, **kwargs)
+
+
+async def _remote_locate(
+    args: dict[str, Any],
+) -> tuple[tuple[str, str] | None, str | None]:
+    """Cluster twin of :func:`_locate_local`: (project_id, spec_id) or an error."""
+    task_id, project_id = args["task_id"], args.get("project_id")
+    if ":" in task_id and not project_id:  # REST-style "project:spec"
+        project_id, task_id = task_id.split(":", 1)
+    if project_id:
+        return (project_id, task_id), None
+    rows = (await _api("GET", "/api/spec-tasks")).get("tasks", [])
+    hits = [r for r in rows if task_id in (r.get("spec_id"), r.get("task_id"))]
+    if not hits:
+        return None, f"unknown task_id: {task_id!r}"
+    if len(hits) > 1:
+        ids = ", ".join(sorted({str(r.get("project_id")) for r in hits}))
+        return None, (
+            f"task_id {task_id!r} exists in several projects ({ids}); "
+            "pass project_id to pick one"
+        )
+    return (hits[0]["project_id"], task_id), None
+
+
+async def _cluster_create(args: dict[str, Any], *, from_spec: bool) -> dict[str, Any]:
+    """Cluster branch of both creation tools: preview first, then one ingest POST."""
+    project_id, spec_id = args["project_id"], args["spec_id"]
+    confirm = bool(args.get("confirm", False))
+    tree = "cluster_clone" if args.get("repo") else "cluster_project"
+    if from_spec:
+        ref = args.get("ref") or args.get("branch")
+        spec_text = args["spec_text"]
+        extra: dict[str, Any] = {
+            "format": args.get("format"),
+            "target_paths": args.get("target_paths") or [],
+            "ref": ref,
+        }
+    else:
+        spec_text = args.get("spec_text") or ""
+        if not spec_text:
+            return _format_error(
+                "cluster mode needs spec_text: the cluster TFactory cannot read "
+                "the AIFactory spec dir. Pass the acceptance criteria as spec_text."
+            )
+        extra = {"source_branch": args["branch"]}
+    if not confirm:
+        return _format_json(
+            {
+                "preview": True,
+                "would_create": f"{project_id}:{spec_id} on {tree}",
+                "repo": args.get("repo"),
+                "branch": args.get("branch"),
+                "ref": args.get("ref"),
+                "tree": tree,
+                "hint": "Re-run with confirm=true to create the task.",
+            }
+        )
+    payload = {
+        "project_id": project_id,
+        "spec_id": spec_id,
+        "spec_text": spec_text,
+        "repo": args.get("repo"),
+        "pr_number": args.get("pr_number"),
+        **extra,
+    }
+    try:
+        return _format_json(await _remote_ingest(payload, tree))
+    except Exception as exc:  # noqa: BLE001 - MCPHTTPError et al: one line
+        return _format_error(str(exc))
+
+
+async def _cluster_get(args: dict[str, Any], report: str | None) -> dict[str, Any]:
+    """Cluster branch of task_status (``report`` None) and report_get."""
+    task_id = args["task_id"]
+    try:
+        located, err = await _remote_locate(args)
+        if located is None:
+            return _format_error(err or f"unknown task_id: {task_id!r}")
+        res = await _api(
+            "GET",
+            _spec_task_path(located),
+            **({"params": {"report": report}} if report else {}),
+        )
+    except Exception as exc:  # noqa: BLE001 - MCPHTTPError et al: one line
+        return _format_error(str(exc))
+    if report:
+        body = {
+            "task_id": task_id,
+            "project_id": res["project_id"],
+            "format": report,
+            "body": res["report"]["body"],
+        }
+    else:
+        body = {
+            **res["status_json"],
+            "project_id": res["project_id"],
+            "source": res["source"],
+            "portal_url": _portal_url(task_id),
+        }
+    return _format_json({**body, "tree": "cluster"})
+
+
+async def _cluster_task_list(
+    project_id: str | None, status: str | None, limit: int
+) -> dict[str, Any]:
+    params = {"project_id": project_id, "status": status}
+    res = await _cluster_list("/api/spec-tasks", {k: v for k, v in params.items() if v})
+    if res.get("isError"):
+        return dict(res)
+    rows = res.get("tasks", [])[:limit]
+    return _format_json({"count": len(rows), "tasks": rows, "tree": "cluster"})
+
+
+async def _cluster_list(path: str, params: dict[str, Any] | None = None) -> Any:
+    """GET a listing from the cluster: the parsed body, or an error envelope."""
+    try:
+        return await _api("GET", path, **({"params": params} if params else {}))
+    except Exception as exc:  # noqa: BLE001 - MCPHTTPError et al: one line
+        return _format_error(str(exc))
+
+
+def _verify_args_error(args: dict[str, Any]) -> str | None:
+    """Argument checks shared by both creation tools; None when fine."""
+    if args.get("repo") and not _cluster_mode():
+        return (
+            "repo needs a cluster TFactory: set TFACTORY_API_URL (and "
+            "TFACTORY_MCP_KEY) in the MCP server environment, or omit repo to "
+            "use a local project checkout"
+        )
+    if args.get("branch") and args.get("ref"):
+        return "send either branch or ref, not both"
     return None
+
+
+async def _remote_ingest(payload: dict[str, Any], tree: str) -> dict[str, Any]:
+    """POST the ingest request to the cluster TFactory and shape the reply."""
+    res = await _api(
+        "POST",
+        "/api/specs/ingest",
+        json={k: v for k, v in payload.items() if v not in (None, "", [])},
+        timeout=660.0,  # a clone can take minutes; no retry (a repeat answers 409)
+    )
+    return {
+        "task_id": res.get("task_id"),
+        "project_id": res.get("workspace_project_id") or res.get("project_id"),
+        "spec_id": res.get("task_id"),
+        "ac_count": res.get("ac_count"),
+        "status": res.get("status"),
+        "planner_scheduled": res.get("planner_scheduled"),
+        "warnings": res.get("warnings", []),
+        "source_sha": res.get("source_sha"),
+        "repo_slug": res.get("repo_slug"),
+        "tree": res.get("tree", tree),
+        "portal_url": _portal_url(str(res.get("task_id"))),
+    }
 
 
 def _load_status(
@@ -287,7 +507,12 @@ _REF_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./@+-]*")
 
 
 def _add_spec_worktree(
-    base_clone: Path, worktree: Path, branch: str, spec_id: str
+    base_clone: Path,
+    worktree: Path,
+    branch: str,
+    spec_id: str,
+    *,
+    git_env: dict[str, str] | None = None,
 ) -> tuple[str | None, str]:
     """Materialize ``branch`` as this spec's OWN git worktree at ``worktree`` off
     the shared ``base_clone`` — so concurrent specs each get an independent HEAD
@@ -320,6 +545,7 @@ def _add_spec_worktree(
         for k, v in os.environ.items()
         if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
     }
+    _git_env.update(git_env or {})
 
     def _git(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess:
         return subprocess.run(
@@ -384,7 +610,9 @@ def _add_spec_worktree(
         return f"ref {branch!r} worktree error: {exc}", ""
 
 
-def _default_branch(base_clone: Path) -> tuple[str | None, str]:
+def _default_branch(
+    base_clone: Path, *, git_env: dict[str, str] | None = None
+) -> tuple[str | None, str]:
     """The remote's default branch name, asked of ``origin`` itself (#1404).
 
     Returns ``(warning, name)``. The local ``refs/remotes/origin/HEAD`` is not
@@ -395,6 +623,7 @@ def _default_branch(base_clone: Path) -> tuple[str | None, str]:
         for k, v in os.environ.items()
         if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
     }
+    env.update(git_env or {})
     argv = ["git", "-C", str(base_clone), "ls-remote", "--symref", "origin", "HEAD"]
     try:
         out = subprocess.run(  # noqa: S603 — fixed argv, no request data
@@ -464,6 +693,8 @@ def create_spec_ingest_workspace(
     clone_url: str | None = None,
     originator: str | None = None,
     agent_identity: str | None = None,
+    pr_number: int | None = None,
+    git_env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Create a TFactory workspace from a raw acceptance-criteria spec.
 
@@ -608,28 +839,32 @@ def create_spec_ingest_workspace(
     # stays on the on-disk tree.
     source_sha = ""
     checkout_failed_reason: str | None = None
+    source_tree_empty = False
     base_clone = Path(project_root).expanduser()
     sut_dir = base_clone  # non-git target-mode: the on-disk tree
     worktree_path: Path | None = None
     source_ref = source_branch or ref
     if source_ref is None and (base_clone / ".git").exists():
-        checkout_failed_reason, default = _default_branch(base_clone)
+        checkout_failed_reason, default = _default_branch(base_clone, git_env=git_env)
         source_ref = default or None
     if source_ref:
         worktree_path = spec_dir / ".worktree"
         checkout_failed_reason, source_sha = _add_spec_worktree(
-            base_clone, worktree_path, source_ref, spec_id
+            base_clone, worktree_path, source_ref, spec_id, git_env=git_env
         )
-    if checkout_failed_reason:
-        # A ref that won't materialize means we cannot prove which tree is under
-        # test. Verifying the wrong code silently is worse than not verifying
-        # (#742/#96/#1404) — fail the spec loudly and skip the planner instead
-        # of proceeding on whatever tree is present.
-        warnings.append(checkout_failed_reason)
-    elif worktree_path is not None:
+    if not checkout_failed_reason and worktree_path is not None:
         # From here the pipeline resolves the SUT to this spec's private
         # worktree — no other spec shares its HEAD.
         sut_dir = worktree_path
+    if not checkout_failed_reason and (
+        not sut_dir.is_dir()
+        or not any(entry.name != ".git" for entry in sut_dir.iterdir())
+    ):
+        checkout_failed_reason = "source tree is empty or missing: nothing to verify"
+        source_tree_empty = True
+    if checkout_failed_reason:
+        # An unresolved ref or empty tree cannot be verified safely.
+        warnings.append(checkout_failed_reason)
 
     # source.json: target_paths name the SUT; source_branch records which build
     # was checked out (when supplied). The Triager's PR-status side-effect skips
@@ -654,6 +889,7 @@ def create_spec_ingest_workspace(
         "source_format": spec.source_format.value,
         "target_paths": list(target_paths or []),
         "source_branch": source_branch,
+        "pr_number": pr_number,
         # The ref the worktree was fetched from (#1404): source_branch, the
         # requested ref, or origin's default branch. None for a non-git root.
         "source_ref": source_ref,
@@ -696,7 +932,13 @@ def create_spec_ingest_workspace(
         "spec_id": spec_id,
         "mode": "spec_ingest",
         "status": "failed" if checkout_failed_reason else "pending",
-        "phase": "source_checkout_failed" if checkout_failed_reason else "created",
+        "phase": (
+            "source_tree_empty"
+            if source_tree_empty
+            else "source_checkout_failed"
+            if checkout_failed_reason
+            else "created"
+        ),
         "tenant": tenant or "default",
         "lane_progress": dict.fromkeys(_MVP_LANES, "pending"),
         # What this run verifies (#1404); source_sha is also the verdict commit.
@@ -760,6 +1002,8 @@ def create_spec_ingest_workspace(
         "status": "failed" if checkout_failed_reason else "pending",
         "planner_scheduled": planner_scheduled,
         "warnings": warnings,
+        "source_sha": source_sha,
+        "repo_slug": project_of(repo_ref) or None,
     }
 
 
@@ -809,6 +1053,18 @@ def create_task_control_tools() -> list:
                     "type": "string",
                     "description": "Base ref to diff against (typically the PR base, e.g. main)",
                 },
+                "repo": {
+                    "type": "string",
+                    "description": _REPO_DESC,
+                },
+                "pr_number": {
+                    "type": "integer",
+                    "description": "Optional PR number the verdict is posted back to",
+                },
+                "spec_text": {
+                    "type": "string",
+                    "description": _SPEC_TEXT_DESC,
+                },
                 "confirm": {
                     "type": "boolean",
                     "default": False,
@@ -843,6 +1099,13 @@ def create_task_control_tools() -> list:
         # inspection?"; when enabled, {enabled, target, flow} threads to the
         # workspace so the browser lane records + packages an automated-test/ run.
         visual_inspection = args.get("visual_inspection") or {}
+
+        if (err := _verify_args_error(args)) or _cluster_mode():
+            return (
+                _format_error(err)
+                if err
+                else await _cluster_create(args, from_spec=False)
+            )
 
         projects = _load_projects()
         project_entry = next(
@@ -973,13 +1236,13 @@ def create_task_control_tools() -> list:
             )
             snapshot_warnings.append(f"planner scheduling failed: {exc}")
 
-        portal_port = os.environ.get("TFACTORY_PORTAL_PORT", "3103")
         return _format_json(
             {
                 "task_id": task_id,
                 "project_id": project_id,
                 "spec_dir": str(spec_dir),
-                "portal_url": f"http://localhost:{portal_port}/tasks/{task_id}",
+                "portal_url": _portal_url(task_id),
+                "tree": "local",
                 "status": "pending",
                 "snapshot_warnings": snapshot_warnings,
                 "planner_scheduled": planner_scheduled,
@@ -1034,6 +1297,18 @@ def create_task_control_tools() -> list:
                         "per-run worktree. Defaults to the remote's default branch."
                     ),
                 },
+                "repo": {
+                    "type": "string",
+                    "description": _REPO_DESC,
+                },
+                "pr_number": {
+                    "type": "integer",
+                    "description": "Optional PR number the verdict is posted back to",
+                },
+                "branch": {
+                    "type": "string",
+                    "description": "Alias of ref: the branch to verify",
+                },
                 "confirm": {
                     "type": "boolean",
                     "default": False,
@@ -1050,6 +1325,14 @@ def create_task_control_tools() -> list:
         fmt = args.get("format")
         target_paths = args.get("target_paths") or []
         confirm = bool(args.get("confirm", False))
+
+        ref = args.get("ref") or args.get("branch")
+        if (err := _verify_args_error(args)) or _cluster_mode():
+            return (
+                _format_error(err)
+                if err
+                else await _cluster_create(args, from_spec=True)
+            )
 
         projects = _load_projects()
         project_entry = next(
@@ -1083,12 +1366,12 @@ def create_task_control_tools() -> list:
                 fmt=fmt,
                 target_paths=target_paths,
                 project_root=project_entry.get("root_path", "."),
-                ref=args.get("ref"),
+                ref=ref,
+                pr_number=args.get("pr_number"),
             )
         except (FileExistsError, ValueError) as exc:
             return _format_error(str(exc))
 
-        portal_port = os.environ.get("TFACTORY_PORTAL_PORT", "3103")
         return _format_json(
             {
                 "task_id": spec_id,
@@ -1099,7 +1382,8 @@ def create_task_control_tools() -> list:
                 "ac_count": result["ac_count"],
                 "planner_scheduled": result["planner_scheduled"],
                 "warnings": result["warnings"],
-                "portal_url": f"http://localhost:{portal_port}/tasks/{spec_id}",
+                "portal_url": _portal_url(spec_id),
+                "tree": "local",
             }
         )
 
@@ -1115,15 +1399,21 @@ def create_task_control_tools() -> list:
             "type": "object",
             "properties": {
                 "task_id": {"type": "string", "description": "TFactory task ID"},
+                "project_id": {
+                    "type": "string",
+                    "description": _PID_DESC,
+                },
             },
             "required": ["task_id"],
         },
     )
     async def task_status(args: dict[str, Any]) -> dict[str, Any]:
         task_id = args["task_id"]
-        located = _find_task(task_id)
-        if not located:
-            return _format_error(f"unknown task_id: {task_id!r}")
+        if _cluster_mode():
+            return await _cluster_get(args, None)
+        located, err = _locate_local(args)
+        if located is None:
+            return _format_error(err or "unknown task_id")
         project_id, spec_id = located
         status = _load_status(project_id, spec_id)
         if status is None:
@@ -1147,6 +1437,7 @@ def create_task_control_tools() -> list:
             live = None
         if live is not None:
             status["lane_progress"] = live
+        status["tree"] = "local"
         return _format_json(status)
 
     tools.append(task_status)
@@ -1180,6 +1471,9 @@ def create_task_control_tools() -> list:
         project_filter = args.get("project_id")
         status_filter = args.get("status")
         limit = int(args.get("limit", 50))
+
+        if _cluster_mode():
+            return await _cluster_task_list(project_filter, status_filter, limit)
 
         results: list[dict[str, Any]] = []
         workspaces_root = _workspace_root() / "workspaces"
@@ -1228,6 +1522,13 @@ def create_task_control_tools() -> list:
         {"type": "object", "properties": {}},
     )
     async def project_list(args: dict[str, Any]) -> dict[str, Any]:
+        if _cluster_mode():
+            projects = await _cluster_list("/api/projects")
+            if not isinstance(projects, list):
+                return dict(projects)  # the error envelope
+            return _format_json(
+                {"count": len(projects), "projects": projects, "tree": "cluster"}
+            )
         data = _load_projects()
         return _format_json(
             {"count": len(data["projects"]), "projects": data["projects"]}
@@ -1300,6 +1601,10 @@ def create_task_control_tools() -> list:
             "type": "object",
             "properties": {
                 "task_id": {"type": "string", "description": "TFactory task ID"},
+                "project_id": {
+                    "type": "string",
+                    "description": _PID_DESC,
+                },
                 "format": {
                     "type": "string",
                     "enum": ["md", "json"],
@@ -1315,9 +1620,11 @@ def create_task_control_tools() -> list:
         fmt = args.get("format", "md")
         if fmt not in ("md", "json"):
             return _format_error(f"format must be 'md' or 'json'; got {fmt!r}")
-        located = _find_task(task_id)
-        if not located:
-            return _format_error(f"unknown task_id: {task_id!r}")
+        if _cluster_mode():
+            return await _cluster_get(args, fmt)
+        located, err = _locate_local(args)
+        if located is None:
+            return _format_error(err or "unknown task_id")
         project_id, spec_id = located
         spec_dir = _spec_dir(project_id, spec_id)
         filename = "triage_report.md" if fmt == "md" else "triage_report.json"
@@ -1339,6 +1646,7 @@ def create_task_control_tools() -> list:
                 "format": fmt,
                 "path": str(report_path),
                 "body": report_path.read_text(),
+                "tree": "local",
             }
         )
 
@@ -1356,6 +1664,10 @@ def create_task_control_tools() -> list:
             "type": "object",
             "properties": {
                 "task_id": {"type": "string", "description": "TFactory task ID"},
+                "project_id": {
+                    "type": "string",
+                    "description": _PID_DESC,
+                },
                 "lane": {
                     "type": "string",
                     "default": "unit",
@@ -1375,9 +1687,14 @@ def create_task_control_tools() -> list:
                 f"lane {lane!r} not supported in v0.2 — lit lanes are {list(_MVP_LANES)}. "
                 f"SAST/DAST/Fuzz are out of scope (see Decision 2)."
             )
-        located = _find_task(task_id)
-        if not located:
-            return _format_error(f"unknown task_id: {task_id!r}")
+        if _cluster_mode():
+            return _format_error(
+                "task_rerun is not available through TFACTORY_API_URL yet; "
+                "create a new task instead"
+            )
+        located, err = _locate_local(args)
+        if located is None:
+            return _format_error(err or "unknown task_id")
         project_id, spec_id = located
         # Reset the lane + status and re-fire the pipeline via the shared core
         # (also used by the inbound AIFactory completion webhook, epic #182).

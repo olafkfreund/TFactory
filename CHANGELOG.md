@@ -7,6 +7,9 @@
 - **Shell lane:** `frameworks/bats` and an in-cluster bats + shellcheck unit lane
   (the project's own flake devShell when it has one), so a bash project gets
   `.bats` tests instead of pytest wrappers (#1581).
+- **Rust lane:** `frameworks/cargo-test` and an in-cluster `cargo test` unit lane,
+  so the Planner can emit Rust subtasks and the Evaluator runs them in the
+  per-task Nix shell (#1578).
 
 ### Fixed
 
