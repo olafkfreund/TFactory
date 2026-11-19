@@ -8,7 +8,7 @@ intent: intent/2026-11-19-1609-tf-serve-evidence.md
 
 ## Design
 
-nix_env.py adds `_spec_text_targets(spec_dir, project_dir) -> list[str] | None`: read context/aifactory_spec.md, regex repo-relative tokens `[\w][\w./-]*\.(js|mjs|cjs|ts|html?)` (plain components only), keep those that exist as files under project_dir, dedupe, cap 20. run_browser_evidence uses it only when source.json has no target_paths. detect_serve_command is unchanged, so the existing node-subdir rule then serves `PORT=<port> node scoreboard/server.js`. serve_command in the evidence is the command the Job ran, so it is correct once the right one is chosen.
+nix_env.py adds \`_spec_text_targets(spec_dir, project_dir) -> list[str]\`: read context/aifactory_spec.md and match whole repo-relative tokens with the regex \`(?<![\w./~-])((?:[\w][\w.-]*/)*[\w][\w.-]*\.(?:js|mjs|cjs|ts))(?![\w-]|\.\w|/)\`, keep those that exist as files whose resolved path stays inside project_dir, dedupe, cap 20. Only script suffixes are inferred, so an inferred html page cannot flip detection into the static-page branch. A new \`_browser_targets(spec_dir, project_dir)\` returns source.json target_paths when non-empty, else the inferred list or None; run_browser_evidence calls it in place of its inline source.json read. detect_serve_command is unchanged, so its node-subdir rule serves \`PORT=<port> node scoreboard/server.js\`; serve_command in the evidence is the command the Job ran, so it is correct once the right one is chosen.
 
 ## Alternatives rejected
 
@@ -20,4 +20,4 @@ A spec that mentions an unrelated existing file could steer detection; limited t
 
 ## Verification
 
-tests/test_serve_command_node_subdir.py: demo layout with spec text naming scoreboard/server.js and no target_paths yields the node command; spec text without paths yields the old behaviour; nonexistent and traversal paths are ignored. The first fails on current dev.
+tests/test_serve_command_node_subdir.py: (1) _browser_targets with no source targets and spec text naming scoreboard/server.js and scoreboard/index.html returns only the .js, and detect_serve_command with it gives the node command; (2) explicit source.json targets take precedence; (3) spec text with no paths, a nonexistent file, ../scoreboard/server.js, /scoreboard/server.js, scoreboard/server.json: none inferred. Fixtures contain "listen" so removing a path guard breaks them. (1) fails on current dev.

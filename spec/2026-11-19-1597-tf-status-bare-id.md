@@ -20,4 +20,4 @@ A status.json legitimately written with a different task_id (renamed spec) would
 
 ## Verification
 
-tests/test_task_status_ingest.py: two concurrent tasks in one project, each id returns its own phase; a status.json whose task_id names the other task returns no phase for the requested id. The second fails on current dev.
+tests/test_task_status_ingest.py: two concurrent tasks in one project each return their own phase (guards the exact join); a status.json whose task_id names another task, and separately one whose spec_id does, return no phase for the requested id, via both the bare id and the project:spec form. The mismatch cases fail on current dev.
