@@ -229,8 +229,8 @@ def _resolve_branch(  # noqa: PLR0913 - one more pin list than the call is worth
     else None (having appended argvs + run them). See write_tests_to_branch."""
     if push:
         # #723: the verify Job's clone sits at a detached FETCH_HEAD, so fetch the
-        # branch and `checkout -B` it (create-or-reset) — the commit then lands on
-        # a named branch we can push.
+        # branch and check FETCH_HEAD out detached (#1598: a named checkout is refused
+        # when the project clone holds the branch); we push HEAD:refs/heads/<branch>.
         fetch_argv = (
             "git",
             "-C",
@@ -261,8 +261,7 @@ def _resolve_branch(  # noqa: PLR0913 - one more pin list than the call is worth
             "-C",
             str(request.repo_dir),
             "checkout",
-            "-B",
-            request.branch,
+            "--detach",
             "FETCH_HEAD",
         )
     else:
@@ -455,7 +454,7 @@ def write_tests_to_branch(
             "credential.https://github.com.helper=!gh auth git-credential",
             "push",
             "origin",
-            request.branch,
+            f"HEAD:refs/heads/{request.branch}",
         )
         argv_log.append(push_argv)
         if not dry_run:
