@@ -110,6 +110,13 @@ class Settings(BaseSettings):
     # a dev server started with --reload, where subprocesses outlive the reload).
     INLINE_ORPHAN_RECONCILE_ENABLED: bool = True
 
+    # Multi-replica safety (#1599): each process heartbeats under the workspaces
+    # volume; a peer only reaps an inline stage whose owner stopped beating. On
+    # SIGTERM the pod waits up to SHUTDOWN_DRAIN_SECONDS for its own inline
+    # stages (keep it below the pod's terminationGracePeriodSeconds).
+    INSTANCE_HEARTBEAT_SECONDS: float = 15
+    SHUTDOWN_DRAIN_SECONDS: float = 600
+
     # Worktree GC (#742) — one-shot at boot: remove the per-spec git worktree of
     # terminal specs to reclaim disk on the workspaces PVC (#781). ON by default;
     # set APP_WORKTREE_GC_ENABLED=0 to disable.

@@ -167,3 +167,42 @@ def test_top_level_app_not_served_for_unrelated_spec_targets(tmp_path):
     (tmp_path / "app" / "main.py").write_text("app = object()\n")
     (tmp_path / "package.json").write_text('{"scripts": {"start": "node ."}}')
     assert detect_serve_command(tmp_path, targets=["src/index.js"]) == "npm start"
+
+
+def _cloud_layout(tmp_path):
+    """factory-lab-cloud as ingested: no contract env, no flake, deps in app/."""
+    spec = tmp_path / "specs" / "1"
+    (spec / "context").mkdir(parents=True)
+    project = tmp_path / "proj"
+    (project / "app").mkdir(parents=True)
+    (project / "app" / "main.py").write_text("app = object()\n")
+    (project / "app" / "requirements.txt").write_text("redis==5.2.1\npsycopg[binary]\n")
+    test = project / "t_test.py"
+    test.write_text("def test_ok(): assert True\n")
+    return spec, project, test
+
+
+def test_contractless_api_repo_with_services_runs_in_the_job(tmp_path, monkeypatch):
+    # #1582 live: no contract env -> host runner -> KeyError TFACTORY_TARGET_URL.
+    spec, project, test = _cloud_layout(tmp_path)
+    sb = _Sandbox()
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: sb)
+    res = run_pytest_lane_via_nix(spec, project, test, lane="api")
+    assert res is not None
+    assert "export TFACTORY_TARGET_URL=http://127.0.0.1:8200" in sb.script
+    assert "uvicorn app.main:app" in sb.script
+
+
+def test_contractless_unit_lane_still_uses_the_host_runner(tmp_path, monkeypatch):
+    spec, project, test = _cloud_layout(tmp_path)
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", _Sandbox)
+    assert run_pytest_lane_via_nix(spec, project, test, lane="unit") is None
+
+
+def test_nix_verify_mode_selects_nix_for_api_repo_with_services(tmp_path, monkeypatch):
+    from agents.evaluator import _nix_verify_mode
+
+    spec, project, _ = _cloud_layout(tmp_path)
+    monkeypatch.setenv("TFACTORY_NIX_RUNNER_IMAGE", "img")
+    assert _nix_verify_mode(spec, project, "api") is True
+    assert _nix_verify_mode(spec, project, "unit") is False
