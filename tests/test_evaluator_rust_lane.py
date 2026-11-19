@@ -83,9 +83,7 @@ def test_build_all_bundles_runs_rust_through_the_cargo_lane(
 
     monkeypatch.setattr("agents.nix_rust_lane.run_cargo_lane_via_nix", _fake)
     rust = _completed_rust_subtasks(_plan(_rust_subtask()))
-    bundles = _build_all_bundles(
-        spec_dir, project_dir, [], [], [], [], [], (), (), rust
-    )
+    bundles = _build_all_bundles(spec_dir, project_dir, [], [], [], [], [], rust=rust)
     assert (project_dir / "tests" / "calc.rs").is_file()  # staged for cargo
     assert len(bundles) == 1 and bundles[0].test_id == "st-rs-0"
     assert bundles[0].stability.verdict == StabilityVerdict.STABLE
@@ -111,9 +109,7 @@ def test_one_stability_pass_per_crate(tmp_path: Path, monkeypatch) -> None:
 
     monkeypatch.setattr("agents.nix_rust_lane.run_cargo_lane_via_nix", _fake)
     rust = _completed_rust_subtasks(_plan(*subs))
-    bundles = _build_all_bundles(
-        spec_dir, project_dir, [], [], [], [], [], (), (), rust
-    )
+    bundles = _build_all_bundles(spec_dir, project_dir, [], [], [], [], [], rust=rust)
     assert len(bundles) == 3
     assert len(runs) == 3  # one crate-wide 3x pass, not 3 per subtask
 
@@ -134,9 +130,7 @@ def test_a_target_cargo_never_ran_is_error_while_its_sibling_is_graded(
 
     monkeypatch.setattr("agents.nix_rust_lane.run_cargo_lane_via_nix", _fake)
     rust = _completed_rust_subtasks(_plan(*subs))
-    bundles = _build_all_bundles(
-        spec_dir, project_dir, [], [], [], [], [], (), (), rust
-    )
+    bundles = _build_all_bundles(spec_dir, project_dir, [], [], [], [], [], rust=rust)
     got = {b.test_id: b.stability.verdict for b in bundles}
     assert got == {
         "st-ran": StabilityVerdict.STABLE,
