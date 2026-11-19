@@ -71,7 +71,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from agents.workspace_status import TERMINAL_STATUSES
+from agents.workspace_status import TERMINAL_STATUSES, read_status, write_status_patch
 from tools.runners import job_dispatch
 
 _log = logging.getLogger(__name__)
@@ -1046,9 +1046,11 @@ async def dispatch_verify_job(  # noqa: PLR0913 - 3 domain args + injectable sea
         spec_subpath,
         project_subpath,
     )
+    _mark_spec_verifying(spec_dir)
     try:
         await _apply_verify_job(manifest, namespace, apply_fn=apply_fn)
     except Exception:  # noqa: BLE001 — apply gap must not strand: fall back in-pod
+        _unmark_spec_verifying(spec_dir)
         _log.warning(
             "[verify-dispatch] apply of verify Job %s failed; caller should fall "
             "back to in-pod (the queued row will advance with the same job_id)",
@@ -1301,6 +1303,38 @@ async def _fail_unpacked_dispatch(
 # the source of truth (concurrency-conventions.md §3); this is a read-only echo
 # of it for callers that hold a spec dir and nothing else.
 SPEC_WORKER_REF_FILE = "worker_ref.json"
+
+
+def _mark_spec_verifying(spec_dir: Path) -> None:
+    """Expose an in-flight verify Job to status readers before applying it."""
+    try:
+        # shortcut: read-then-write, not atomic; a reaper write in that window
+        # is the same hazard every status writer has, accepted (see spec 1631).
+        if read_status(spec_dir).get("status") == "generated":
+            write_status_patch(
+                spec_dir,
+                "verify_dispatch",
+                status="evaluating",
+                phase="verify_job_running",
+            )
+    except (OSError, ValueError):
+        _log.warning(
+            "[verify-dispatch] could not mark %s verifying", spec_dir, exc_info=True
+        )
+
+
+def _unmark_spec_verifying(spec_dir: Path) -> None:
+    """Restore the in-pod starting state after a failed Job apply."""
+    try:
+        if read_status(spec_dir).get("phase") == "verify_job_running":
+            write_status_patch(
+                spec_dir,
+                "verify_dispatch",
+                status="generated",
+                phase="gen_functional_complete",
+            )
+    except (OSError, ValueError):
+        _log.warning("[verify-dispatch] could not restore %s", spec_dir, exc_info=True)
 
 
 def _record_spec_worker_ref(spec_dir: Path, worker_ref: dict[str, Any]) -> None:

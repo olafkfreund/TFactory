@@ -52,6 +52,12 @@ def test_running_ingest_task_reports_phase_and_running(
     assert r.phase == "gen_functional"
 
 
+def test_verify_job_phase_is_running(ex: ModuleType, tmp_path: Path) -> None:
+    _spec(tmp_path, "p1", "s1", status="evaluating", phase="verify_job_running")
+    r = _status(ex, "p1:s1")
+    assert (r.is_running, r.phase) == (True, "verify_job_running")
+
+
 def test_terminal_task_is_not_running_and_carries_reason(
     ex: ModuleType, tmp_path: Path
 ) -> None:

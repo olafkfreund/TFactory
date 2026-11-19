@@ -120,6 +120,15 @@ context_block: |
       and response JSON/body shape against what the AC actually specifies.
     - Do not assume a fixed request/response schema beyond what the AC states —
       assert only what the criterion actually claims.
+    - Shared state (a database behind the SUT outlives each test and each run, and
+      tests must not depend on test order): every test creates its OWN data with
+      unique identifiers (e.g. a uuid4 suffix in names/keys) and asserts the AC
+      against that data. Pagination, ordering and stats criteria stay required:
+      create the rows yourself, then assert page contents, relative order (create
+      your own tied rows) or a before/after delta, never an assumed empty or fixed
+      dataset or an absolute global count. This assumes no concurrent writers.
+    - When the SUT has a delete/reset endpoint for what the test created, remove it
+      in a fixture finalizer (yield). Never connect to the database directly.
     - Example (read the base URL INSIDE the test, never at module import — a
       module-level os.environ[...] read raises KeyError at collection time when
       the var is unset):

@@ -197,6 +197,54 @@ def test_quantity_before_a_noun_is_still_a_value() -> None:
     assert result.missing == ["3"]
 
 
+def test_layout_width_does_not_become_a_required_literal() -> None:
+    criterion = (
+        "printf 'a b\\nc\\n' | go run . prints counts 2 3 6; "
+        "counts right-aligned in width 8"
+    )
+    assert set(criterion_literals(criterion)) == {
+        Decimal("2"),
+        Decimal("3"),
+        Decimal("6"),
+    }
+
+    faithful = 'def test_counts():\n    assert output == "       2       3       6"\n'
+    assert check_criterion_literals(criterion, faithful).ok is True
+
+    missing_count = 'def test_counts():\n    assert output == "       2       3"\n'
+    result = check_criterion_literals(criterion, missing_count)
+    assert result.ok is False
+    assert result.missing == ["6"]
+
+
+@pytest.mark.parametrize(
+    "criterion",
+    [
+        "8 characters wide",
+        "padded to 8",
+        "indent 4",
+        "width 12.5",
+        "12.5 characters wide",
+    ],
+)
+def test_layout_parameters_are_not_asserted_values(criterion: str) -> None:
+    assert criterion_literals(criterion) == {}
+
+
+@pytest.mark.parametrize(
+    ("criterion", "expected"),
+    [
+        ("total 8", "8"),
+        ("total 12.5", "12.5"),
+        ("prints 8 in width 8", "8"),
+    ],
+)
+def test_values_outside_layout_parameters_survive(
+    criterion: str, expected: str
+) -> None:
+    assert criterion_literals(criterion) == {Decimal(expected): expected}
+
+
 # ── Non-Python sources ─────────────────────────────────────────────────
 
 
