@@ -1241,14 +1241,12 @@ def _build_candidates(spec_dir: Path, verdicts: list) -> list:
         source, found_file = _resolve_test_source(spec_dir, test_file)
         verdict = v
         if v.get("verdict") in ("accept", "flag") and not source.strip():
-            verdict = {
-                **v,
-                "verdict": "reject",
-                "reasons": [
-                    *(v.get("reasons") or []),
-                    f"test source not found or empty at {found_file}",
-                ],
-            }
+            from agents.confidence import add_system_reason
+
+            verdict = {**v, "verdict": "reject"}
+            add_system_reason(
+                verdict, f"test source not found or empty at {found_file}"
+            )
         candidates.append(
             TriageCandidate(
                 test_id=tid,
