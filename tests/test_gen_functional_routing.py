@@ -88,7 +88,7 @@ async def test_resolve_client_prefers_routed_test_gen_model(
     await _resolve_client(spec_dir, spec_dir)
 
     # Routed test_gen (haiku) is preferred over the coding-phase model (sonnet).
-    assert captured["model"] == "claude-haiku-4-5-20251001"
+    assert captured["model"] == "claude-haiku-5-5"
 
 
 @pytest.mark.asyncio

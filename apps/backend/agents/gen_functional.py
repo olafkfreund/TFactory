@@ -119,6 +119,7 @@ def _apply_runtime_override(
     lowered = model.strip().lower()
     is_explicit_claude = lowered.startswith("claude-") or lowered in {
         "opus",
+        "fable",
         "opus-1m",
         "opus-4.5",
         "opus-4.7",

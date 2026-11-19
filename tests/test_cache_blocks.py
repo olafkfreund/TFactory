@@ -250,6 +250,16 @@ class TestArchitectAmendments:
             f"Expected a 'below floor' warning for sonnet; got: {messages}"
         )
 
+    def test_min_size_guard_uses_4096_floor_for_opus_55(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # ~2000 tokens: above the 1024 fallback, below the 4096 Opus 5.5 floor.
+        caplog.set_level("WARNING", logger="core.cache")
+        build_cached_system_str(
+            BASE, claude_md_content="x" * 8000, model="claude-opus-5-5"
+        )
+        assert any("below floor" in r.message for r in caplog.records)
+
     def test_min_size_guard_silent_when_model_not_provided(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:

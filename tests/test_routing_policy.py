@@ -112,7 +112,7 @@ def test_policy_may_be_a_file_path(
 
 def test_verify_lane_default_is_unchanged_without_a_policy(tmp_path: Path) -> None:
     """A spec dir with no task_metadata.json is the real verify-lane shape."""
-    assert phase_config.get_phase_model(tmp_path, "qa") == "claude-opus-4-8"
+    assert phase_config.get_phase_model(tmp_path, "qa") == "claude-opus-5-5"
 
 
 def test_policy_retargets_the_verify_lane(
@@ -129,7 +129,7 @@ def test_removing_the_policy_restores_the_default(
     _set(monkeypatch, {"tiers": {"mid": QWEN}, "stages": {"qa": "mid"}})
     assert phase_config.get_phase_model(tmp_path, "qa") == QWEN
     monkeypatch.delenv(ENV_VAR)
-    assert phase_config.get_phase_model(tmp_path, "qa") == "claude-opus-4-8"
+    assert phase_config.get_phase_model(tmp_path, "qa") == "claude-opus-5-5"
 
 
 def test_explicit_task_model_outranks_the_policy(
@@ -138,7 +138,7 @@ def test_explicit_task_model_outranks_the_policy(
     """The policy replaces the DEFAULT, never an explicit per-task choice."""
     (tmp_path / "task_metadata.json").write_text(json.dumps({"model": "haiku"}))
     _set(monkeypatch, {"tiers": {"mid": QWEN}, "stages": {"qa": "mid"}})
-    assert phase_config.get_phase_model(tmp_path, "qa") == ("claude-haiku-4-5-20251001")
+    assert phase_config.get_phase_model(tmp_path, "qa") == ("claude-haiku-5-5")
 
 
 def test_auto_profile_phase_models_outrank_the_policy(
@@ -148,16 +148,14 @@ def test_auto_profile_phase_models_outrank_the_policy(
         json.dumps({"isAutoProfile": True, "phaseModels": {"qa": "haiku"}})
     )
     _set(monkeypatch, {"tiers": {"mid": QWEN}, "stages": {"qa": "mid"}})
-    assert phase_config.get_phase_model(tmp_path, "qa") == ("claude-haiku-4-5-20251001")
+    assert phase_config.get_phase_model(tmp_path, "qa") == ("claude-haiku-5-5")
 
 
 def test_cli_model_outranks_the_policy(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _set(monkeypatch, {"tiers": {"mid": QWEN}, "stages": {"qa": "mid"}})
-    assert phase_config.get_phase_model(tmp_path, "qa", "haiku") == (
-        "claude-haiku-4-5-20251001"
-    )
+    assert phase_config.get_phase_model(tmp_path, "qa", "haiku") == ("claude-haiku-5-5")
 
 
 def test_a_stage_the_policy_does_not_map_keeps_its_default(
@@ -165,7 +163,7 @@ def test_a_stage_the_policy_does_not_map_keeps_its_default(
 ) -> None:
     """Retargeting qa must not silently move coding too."""
     _set(monkeypatch, {"tiers": {"mid": QWEN}, "stages": {"qa": "mid"}})
-    assert phase_config.get_phase_model(tmp_path, "coding") == "claude-opus-4-8"
+    assert phase_config.get_phase_model(tmp_path, "coding") == "claude-opus-5-5"
 
 
 def test_the_colon_in_the_model_name_survives_resolution(
