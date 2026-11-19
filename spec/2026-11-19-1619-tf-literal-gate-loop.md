@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1619
 intent: intent/2026-11-19-1619-tf-literal-gate-loop.md
 ---
