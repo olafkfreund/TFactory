@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1631
 intent: intent/2026-11-19-1631-tf-status-verify-running.md
 ---

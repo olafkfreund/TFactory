@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1632
 intent: intent/2026-11-19-1632-tf-api-db-isolation.md
 ---
