@@ -8,6 +8,7 @@ Main entry point for the web server that provides:
 """
 
 import asyncio
+import contextlib
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -173,6 +174,24 @@ async def lifespan(app: FastAPI):
     init_skills_service()
     logger.info("SkillsService initialized")
 
+    # Multi-replica safety (#1599): publish THIS process's heartbeat synchronously
+    # before any reconcile or stage can run, so a peer never sees an owner stamp
+    # without a heartbeat; renewal runs as its own task (cancelled at shutdown,
+    # after the wait for own stages).
+    app.state.instance_tasks = []
+    try:
+        _add_backend_to_path()
+        from agents.liveness_sweep import beat  # noqa: PLC0415
+
+        beat()
+    except Exception:  # without a heartbeat this process stamps no owner (legacy rule)
+        logger.exception("#1599 first instance heartbeat failed (loop will retry)")
+    from .background.instance_heartbeat import heartbeat_loop  # noqa: PLC0415
+
+    app.state.instance_tasks.append(
+        asyncio.create_task(heartbeat_loop(settings.INSTANCE_HEARTBEAT_SECONDS))
+    )
+
     # Inline-orphan startup reconcile (#774): the planner/gen_functional stages
     # run in THIS process, not a Job, so a roll mid-generation strands a spec at
     # `planning`/`generating` with nothing for the #767 reaper to see. On boot,
@@ -200,10 +219,18 @@ async def lifespan(app: FastAPI):
         except Exception:  # noqa: BLE001 — a reconcile error must not block boot
             logger.exception("#774 startup reconcile failed (continuing)")
 
+    if settings.INLINE_ORPHAN_RECONCILE_ENABLED:
+        from .background.instance_heartbeat import reconcile_loop  # noqa: PLC0415
+
+        app.state.instance_tasks.append(
+            asyncio.create_task(reconcile_loop(settings.INSTANCE_HEARTBEAT_SECONDS * 2))
+        )
+
     # Interrupted-build reconcile (#1368): a build subprocess killed by a restart
     # leaves its phase `active` in task_logs.json, pinning the task at
-    # in_progress. Close those phases as failed. Shares the #774 flag.
-    if settings.INLINE_ORPHAN_RECONCILE_ENABLED:
+    # in_progress. Close those phases as failed. Shares the #774 flag. Skipped
+    # while another replica is alive (#1599): its builds are live.
+    if settings.INLINE_ORPHAN_RECONCILE_ENABLED and not _other_replica_alive():
         try:
             from .routes.tasks import reconcile_interrupted_builds  # noqa: PLC0415
 
@@ -299,6 +326,29 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
+    # #1599: let this process's own inline stages finish (bounded by
+    # SHUTDOWN_DRAIN_SECONDS, below the pod's grace period); the heartbeat task
+    # keeps running meanwhile. Leftovers are failed with an accurate reason.
+    try:
+        _add_backend_to_path()
+        from agents.liveness_sweep import drain_own_inline_stages  # noqa: PLC0415
+
+        left = await asyncio.to_thread(
+            drain_own_inline_stages, timeout=settings.SHUTDOWN_DRAIN_SECONDS
+        )
+        if left:
+            logger.warning(
+                "#1599 shutdown: failed %d inline stage(s) still running: %s",
+                len(left),
+                [d.name for d in left],
+            )
+    except Exception:  # never block shutdown
+        logger.exception("#1599 shutdown wait failed")
+    for t in getattr(app.state, "instance_tasks", []):
+        t.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await t
+
     vr_task = getattr(app.state, "verify_reconcile_task", None)
     if vr_task is not None:
         app.state.verify_reconcile_stop.set()
@@ -324,6 +374,18 @@ async def lifespan(app: FastAPI):
             pass
 
     logger.info("Shutting down Magestic AI Web Server...")
+
+
+def _other_replica_alive() -> bool:
+    """True when a peer replica's heartbeat is fresh (#1599); fail-safe to True."""
+    try:
+        _add_backend_to_path()
+        from agents.liveness_sweep import other_instance_alive  # noqa: PLC0415
+
+        return other_instance_alive()
+    except Exception:  # unsure means assume a peer is live
+        logger.exception("#1599 peer-liveness check failed; assuming a peer is live")
+        return True
 
 
 def _read_app_version() -> str:

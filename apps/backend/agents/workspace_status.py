@@ -22,6 +22,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -31,8 +33,11 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 
 __all__ = [
+    "INLINE_STATUSES",
+    "INSTANCE_ID",
     "TERMINAL_STATUSES",
     "anchor_stage_task",
+    "mark_instance_registered",
     "notify_terminal",
     "now_iso",
     "read_status",
@@ -54,6 +59,20 @@ TERMINAL_STATUSES = frozenset(
         "generated_empty",
     }
 )
+
+
+# Identity of THIS process (#1599). Inline stages (planner / gen_functional) run
+# in the control-plane process, so a stage records who owns it and a peer replica
+# only reaps it once the owner's heartbeat is gone. Per process, not per pod: a
+# container restart inside the same pod gets a new id.
+INSTANCE_ID = f"{os.environ.get('HOSTNAME') or 'local'}-{uuid.uuid4().hex[:8]}"
+INLINE_STATUSES = frozenset({"planning", "generating"})
+_registered = False  # set once this process has published a heartbeat
+
+
+def mark_instance_registered() -> None:
+    global _registered  # noqa: PLW0603 - process-wide flag by design
+    _registered = True
 
 
 def now_iso() -> str:
@@ -86,6 +105,10 @@ def write_status_patch(spec_dir: Path, stage: str, **fields: object) -> None:
     ``stage`` is the discriminator forwarded to the best-effort push-based
     progress event (#95); the event is a no-op unless opted in via env var.
     """
+    if fields.get("status") in INLINE_STATUSES:
+        # Unregistered process: clear any inherited owner (a rerun of a spec a dead
+        # web pod owned) so the stage falls under the legacy rule, not that owner.
+        fields = {**fields, "owner_instance": INSTANCE_ID if _registered else None}
     status = read_status(spec_dir)
     status.update(fields)
     status["updated_at"] = now_iso()
