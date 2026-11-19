@@ -81,6 +81,7 @@ from agents.mutate_probe import (
 )
 from agents.mutation_dispatch import is_mutation_supported, mutant_extension
 from agents.nix_env import (
+    _API_SELF_SERVE_PORT,
     detect_serve_command,
     environment_from_contract,
     has_nix_env,
@@ -215,12 +216,6 @@ _RunResultLike = RunResultLike
 
 
 _PYTEST_IMAGE = "tfactory-runner-pytest:latest"
-
-# Port the api lane self-serves the SUT on INSIDE the Nix Job pod (#612 reopened):
-# a spec-ingest app has no external target, so the endpoint test can only reach it
-# by booting it in the same pod at 127.0.0.1. The pod is network-isolated, so a
-# fixed port is safe (distinct from the browser lane's 8099 for clarity).
-_API_SELF_SERVE_PORT = 8200
 
 
 def _parse_marker_exit(stdout: str | None, prefix: str, default: int) -> int:
