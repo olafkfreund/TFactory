@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1630
 spec: spec/2026-11-19-1630-tf-literal-gate-ac-match.md
 coders:
