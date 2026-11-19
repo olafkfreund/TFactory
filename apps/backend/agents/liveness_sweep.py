@@ -34,6 +34,7 @@ from agents.liveness import StallVerdict, check_and_mark
 from agents.workspace_status import (
     INLINE_STATUSES,
     INSTANCE_ID,
+    mark_instance_registered,
     notify_terminal,
     now_iso,
 )
@@ -100,18 +101,30 @@ def beat(root: Path | None = None, instance_id: str = INSTANCE_ID) -> None:
     directory = instance_dir(root or default_workspace_root())
     directory.mkdir(parents=True, exist_ok=True)
     (directory / instance_id).touch()
+    # Only a process that has published a heartbeat may stamp stage ownership; an
+    # unregistered one (MCP server, demo scripts) stays ownerless and falls under
+    # the legacy `updated_at` rule instead of being reaped on a missing heartbeat.
+    mark_instance_registered()
+
+
+def _same_pod(a: str, b: str) -> bool:
+    """Ids are ``<hostname>-<8 hex>``: same hostname = a container restarted in
+    the same pod, so the earlier id is dead whatever its heartbeat file says."""
+    return a.rsplit("-", 1)[0] == b.rsplit("-", 1)[0]
 
 
 def instance_alive(
     root: Path, instance_id: str, *, now: datetime, stale: float | None = None
 ) -> bool:
+    """Only a missing file or an expired mtime means dead; any other filesystem
+    error is "unknown" and reads as alive (a false reap loses work)."""
     try:
-        path = instance_dir(root) / instance_id
-        return path.is_file() and now.timestamp() - path.stat().st_mtime < (
-            _stale_seconds() if stale is None else stale
-        )
-    except OSError:
+        age = now.timestamp() - (instance_dir(root) / instance_id).stat().st_mtime
+    except FileNotFoundError:
         return False
+    except OSError:
+        return True
+    return age < (_stale_seconds() if stale is None else stale)
 
 
 def other_instance_alive(
@@ -124,13 +137,16 @@ def other_instance_alive(
     base = root or default_workspace_root()
     when = now or datetime.now(UTC)
     try:
-        return any(
-            path.name != instance_id
-            and instance_alive(base, path.name, now=when, stale=stale)
-            for path in instance_dir(base).iterdir()
-        )
-    except OSError:
+        names = [p.name for p in instance_dir(base).iterdir()]
+    except FileNotFoundError:
         return False
+    except OSError:
+        return True
+    return any(
+        not _same_pod(name, instance_id)
+        and instance_alive(base, name, now=when, stale=stale)
+        for name in names
+    )
 
 
 def purge_old_instances(
@@ -372,7 +388,9 @@ def reconcile_inline_orphans(  # noqa: PLR0912 - owner/legacy/CAS branches
         if owner == instance_id:
             continue
         if owner:
-            if instance_alive(root, owner, now=when, stale=stale_seconds):
+            if not _same_pod(owner, instance_id) and instance_alive(
+                root, owner, now=when, stale=stale_seconds
+            ):
                 continue
         else:
             try:

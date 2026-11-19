@@ -184,13 +184,13 @@ async def lifespan(app: FastAPI):
         from agents.liveness_sweep import beat  # noqa: PLC0415
 
         beat()
-        from .background.instance_heartbeat import heartbeat_loop  # noqa: PLC0415
+    except Exception:  # without a heartbeat this process stamps no owner (legacy rule)
+        logger.exception("#1599 first instance heartbeat failed (loop will retry)")
+    from .background.instance_heartbeat import heartbeat_loop  # noqa: PLC0415
 
-        app.state.instance_tasks.append(
-            asyncio.create_task(heartbeat_loop(settings.INSTANCE_HEARTBEAT_SECONDS))
-        )
-    except Exception:  # a heartbeat error must not block boot
-        logger.exception("#1599 instance heartbeat could not start (continuing)")
+    app.state.instance_tasks.append(
+        asyncio.create_task(heartbeat_loop(settings.INSTANCE_HEARTBEAT_SECONDS))
+    )
 
     # Inline-orphan startup reconcile (#774): the planner/gen_functional stages
     # run in THIS process, not a Job, so a roll mid-generation strands a spec at

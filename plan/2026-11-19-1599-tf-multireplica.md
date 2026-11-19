@@ -22,6 +22,8 @@ Approved spec decisions, carried over: per-process `INSTANCE_ID`; `write_status_
 5. Full check (me): `python scripts/ratchet_lint.py --base origin/dev` (see `--help` for the per-package invocation; run it for apps/backend and apps/web-server), `ruff check apps/backend/agents apps/web-server/server`, the touched tests. Commit with `--no-verify` if the pre-commit hook trips on the unrelated mcp-library collection error in `test_mcp_remote_session_key.py`, and say so in the body.
 6. factory-gitops (separate PR, me): `terminationGracePeriodSeconds: 900` on the tfactory Deployment pod spec; replica cap stays 1 (coordinator raises it after release).
 
+Deviations (final Codex review round 1): `beat()` also marks the process registered and `write_status_patch` stamps `owner_instance` only for a registered process (MCP server / demo scripts stay ownerless, legacy rule); an instance id sharing the pod hostname prefix with this process is a dead predecessor (container restart), so it never blocks the #1368 gate nor protects a stage; `instance_alive` reads only a missing file or expired mtime as dead, other OSError as alive; a failed first beat no longer skips the heartbeat loop.
+
 Traps: ratchet lint on both apps; ruff `as`-alias rule not relevant here; do not touch `verify_dispatch` (the reaper fix is #1605).
 
 ## Tests

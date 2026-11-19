@@ -37,6 +37,7 @@ __all__ = [
     "INSTANCE_ID",
     "TERMINAL_STATUSES",
     "anchor_stage_task",
+    "mark_instance_registered",
     "notify_terminal",
     "now_iso",
     "read_status",
@@ -66,6 +67,12 @@ TERMINAL_STATUSES = frozenset(
 # container restart inside the same pod gets a new id.
 INSTANCE_ID = f"{os.environ.get('HOSTNAME') or 'local'}-{uuid.uuid4().hex[:8]}"
 INLINE_STATUSES = frozenset({"planning", "generating"})
+_registered = False  # set once this process has published a heartbeat
+
+
+def mark_instance_registered() -> None:
+    global _registered  # noqa: PLW0603 - process-wide flag by design
+    _registered = True
 
 
 def now_iso() -> str:
@@ -98,7 +105,7 @@ def write_status_patch(spec_dir: Path, stage: str, **fields: object) -> None:
     ``stage`` is the discriminator forwarded to the best-effort push-based
     progress event (#95); the event is a no-op unless opted in via env var.
     """
-    if fields.get("status") in INLINE_STATUSES:
+    if _registered and fields.get("status") in INLINE_STATUSES:
         fields = {**fields, "owner_instance": INSTANCE_ID}
     status = read_status(spec_dir)
     status.update(fields)

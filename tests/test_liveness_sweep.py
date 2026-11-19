@@ -246,6 +246,7 @@ def test_reconcile_aborts_when_owner_changes(
 
 
 def test_status_patch_stamps_inline_owner_only(tmp_path: Path) -> None:
+    beat(tmp_path)  # only a process with a published heartbeat stamps ownership
     spec = _spec(tmp_path, "p", "s", status="pending")
     write_status_patch(spec, "planner", status="planning")
     assert (
@@ -366,3 +367,39 @@ def test_gc_keeps_active_and_worktreeless(tmp_path: Path) -> None:
 
     assert reclaimed == []
     assert wt_gen.exists() and wt_eval.exists()
+
+
+def test_unregistered_process_stamps_no_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import agents.workspace_status as ws
+
+    monkeypatch.setattr(ws, "_registered", False)
+    spec = _spec(tmp_path, "p", "s", status="pending")
+    write_status_patch(spec, "planner", status="planning")
+    assert "owner_instance" not in json.loads((spec / "status.json").read_text())
+
+
+def test_same_pod_predecessor_is_dead_despite_fresh_heartbeat(tmp_path: Path) -> None:
+    from agents.liveness_sweep import other_instance_alive
+
+    beat(tmp_path, "pod-x-aaaaaaaa")  # crashed container, heartbeat still fresh
+    spec = _spec(tmp_path, "p", "s", status="planning", owner_instance="pod-x-aaaaaaaa")
+    assert not other_instance_alive(tmp_path, instance_id="pod-x-bbbbbbbb")
+    failed = reconcile_inline_orphans(tmp_path, instance_id="pod-x-bbbbbbbb")
+    assert [d for d, _ in failed] == [spec]
+
+
+def test_other_pod_heartbeat_counts_and_unreadable_reads_alive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from agents import liveness_sweep as ls
+
+    beat(tmp_path, "pod-y-aaaaaaaa")
+    assert ls.other_instance_alive(tmp_path, instance_id="pod-x-bbbbbbbb")
+
+    def boom(self: Path) -> None:
+        raise PermissionError
+
+    monkeypatch.setattr(Path, "stat", boom)
+    assert ls.instance_alive(tmp_path, "pod-y-aaaaaaaa", now=_NOW)
