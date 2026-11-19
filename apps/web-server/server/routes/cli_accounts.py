@@ -13,6 +13,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -21,11 +22,22 @@ from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, SecretStr
 
-from server.error_ref import client_error
 from server.paths import write_secret_file
+
+# apps/backend on sys.path so the shared user-prefix helpers resolve (same
+# pattern as routes/provider_runtimes.py).
+_BACKEND = Path(__file__).resolve().parents[3] / "backend"
+if str(_BACKEND) not in sys.path:
+    sys.path.insert(0, str(_BACKEND))
+
+from provider_runtime import prefer_user_cli_path, user_cli_prefix  # noqa: E402
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# User-installed CLIs live in a writable prefix (the image's is read-only); put
+# it first on PATH so detection and spawned agents find an updated CLI first.
+prefer_user_cli_path()
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -877,32 +889,30 @@ def install_or_update_cli(cli: str):
         logger.info(
             f"[{sanitize_log(cli)}] Running npm install -g {sanitize_log(package)}..."
         )
-        if cli == "gemini":
-            install_result = _run(
-                [
-                    "npm",
-                    "install",
-                    "-g",
-                    "--prefix",
-                    os.path.expanduser("~/.gemini/antigravity-cli"),
-                    package,
-                ],
-                timeout=120,
-            )
-        else:
-            install_result = _run(["npm", "install", "-g", package], timeout=120)
+        install_result = _run(
+            ["npm", "install", "-g", "--prefix", str(user_cli_prefix()), package],
+            timeout=120,
+        )
 
         if install_result.returncode != 0:
             error_msg = install_result.stderr.strip() or install_result.stdout.strip()
+            # Show the operator the real npm error (e.g. EROFS) instead of an
+            # opaque reference id; this route is behind token auth (see
+            # provider_runtime.run_install, Factory#780).
+            logger.warning(
+                "[%s] npm install failed: %s",
+                sanitize_log(cli),
+                sanitize_log(error_msg[-500:]),
+            )
             return {
                 "success": False,
-                "error": client_error(logger, "npm install failed", error_msg),
+                "error": f"npm install failed: {error_msg[-1500:]}",
             }
 
         # Create antigravity -> gemini symlink if we just installed gemini CLI
         if cli == "gemini":
             try:
-                bin_dir = Path.home() / ".gemini" / "antigravity-cli" / "bin"
+                bin_dir = user_cli_prefix() / "bin"
                 bin_dir.mkdir(parents=True, exist_ok=True)
                 symlink_path = bin_dir / "antigravity"
                 target_path = bin_dir / "gemini"
