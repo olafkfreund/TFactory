@@ -2368,6 +2368,12 @@ def _resolve_shell_runner_fn(
     def _run(_test_file: Path, project_dir_arg: Path, _seed: int) -> DockerRunResult:
         res = nix_shell_lane.run_bats_lane_via_nix(spec_dir, Path(project_dir_arg))
         if res is not None:
+            _run.lane_runs.append(
+                (
+                    nix_shell_lane.file_results(res.stdout or ""),
+                    "__SHELLCHECK_EXIT=0" in (res.stdout or "").splitlines(),
+                )
+            )
             return res
         return DockerRunResult(
             returncode=1,
@@ -2376,7 +2382,48 @@ def _resolve_shell_runner_fn(
             argv=["nix", "develop", "--", "bats", "--tap"],
         )
 
+    _run.lane_runs = []
     return _run
+
+
+def _per_file_stability(
+    shared: StabilityResult | None,
+    lane_runs: list[tuple[dict[str, int], bool]],
+    subtask: dict[str, Any],
+) -> StabilityResult | None:
+    if shared is None or shared.verdict == StabilityVerdict.ERROR:
+        return shared
+    if len(lane_runs) != len(shared.runs):
+        return shared
+    rel = Path(subtask["files_to_create"][0]).as_posix()
+    runs = []
+    for run, (files, shellcheck_ok) in zip(shared.runs, lane_runs, strict=True):
+        if not shellcheck_ok or run.returncode in (126, 127):
+            runs.append(run)
+            continue
+        code = next(
+            (code for path, code in files.items() if path.removeprefix("./") == rel),
+            None,
+        )
+        if code is None:
+            return StabilityResult(
+                verdict=StabilityVerdict.ERROR,
+                runs=shared.runs,
+                seed=shared.seed,
+                rerun_count=shared.rerun_count,
+                error_message=f"{rel} has no bats result: this test did not run",
+            )
+        runs.append(
+            StabilityRun(
+                returncode=code,
+                stdout_tail=(f"FAILED {rel}: this test file failed\n" + run.stdout_tail)
+                if code == 1
+                else "",
+            )
+        )
+    return classify_stability_runs(
+        runs, seed=shared.seed, rerun_count=shared.rerun_count
+    )
 
 
 def _shell_bundles(
@@ -2385,13 +2432,19 @@ def _shell_bundles(
     subtasks: Iterable[dict[str, Any]],
     runner_fn: Callable[[Path, Path, int], DockerRunResult],
 ) -> list[EvaluatorSignals]:
-    """ONE 3x stability pass for the whole project, shared by every shell
-    subtask: bats and shellcheck read the whole tree, so every subtask has the
-    identical result (the Go ``shared_go_stability`` pattern)."""
+    """Run one 3x stability pass, then grade each subtask's bats file."""
     group = list(subtasks)
     shared = _stability_for_subtask(spec_dir, project_dir, group[0], runner_fn)
     return [
-        _build_go_signal_bundle(spec_dir, project_dir, st, runner_fn, stability=shared)
+        _build_go_signal_bundle(
+            spec_dir,
+            project_dir,
+            st,
+            runner_fn,
+            stability=_per_file_stability(
+                shared, getattr(runner_fn, "lane_runs", []), st
+            ),
+        )
         for st in group
     ]
 
