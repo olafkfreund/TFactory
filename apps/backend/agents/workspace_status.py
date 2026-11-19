@@ -105,8 +105,10 @@ def write_status_patch(spec_dir: Path, stage: str, **fields: object) -> None:
     ``stage`` is the discriminator forwarded to the best-effort push-based
     progress event (#95); the event is a no-op unless opted in via env var.
     """
-    if _registered and fields.get("status") in INLINE_STATUSES:
-        fields = {**fields, "owner_instance": INSTANCE_ID}
+    if fields.get("status") in INLINE_STATUSES:
+        # Unregistered process: clear any inherited owner (a rerun of a spec a dead
+        # web pod owned) so the stage falls under the legacy rule, not that owner.
+        fields = {**fields, "owner_instance": INSTANCE_ID if _registered else None}
     status = read_status(spec_dir)
     status.update(fields)
     status["updated_at"] = now_iso()

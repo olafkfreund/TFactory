@@ -375,9 +375,9 @@ def test_unregistered_process_stamps_no_owner(
     import agents.workspace_status as ws
 
     monkeypatch.setattr(ws, "_registered", False)
-    spec = _spec(tmp_path, "p", "s", status="pending")
+    spec = _spec(tmp_path, "p", "s", status="pending", owner_instance="dead-pod-1")
     write_status_patch(spec, "planner", status="planning")
-    assert "owner_instance" not in json.loads((spec / "status.json").read_text())
+    assert json.loads((spec / "status.json").read_text())["owner_instance"] is None
 
 
 def test_same_pod_predecessor_is_dead_despite_fresh_heartbeat(tmp_path: Path) -> None:
