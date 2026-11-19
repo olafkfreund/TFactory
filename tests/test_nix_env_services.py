@@ -340,3 +340,56 @@ def test_serve_prelude_sets_the_per_run_reason_on_failure(tmp_path):
         text=True,
     ).stdout
     assert "REASON=process exited: boom" in out
+
+
+def _notes_api(tmp_path, *, node=False):
+    """aifactory-demo notes-api: FastAPI, no services, no contract env, no flake."""
+    spec = tmp_path / "specs" / "1"
+    (spec / "context").mkdir(parents=True)
+    project = tmp_path / "proj"
+    project.mkdir()
+    if node:
+        (project / "package.json").write_text('{"scripts": {"start": "node ."}}')
+    else:
+        (project / "main.py").write_text(
+            "from fastapi import FastAPI\napp = FastAPI()\n"
+        )
+        (project / "requirements.txt").write_text("fastapi\nuvicorn\n")
+    test = project / "t_test.py"
+    test.write_text("def test_ok(): assert True\n")
+    return spec, project, test
+
+
+def test_contractless_fastapi_api_lane_without_services_runs_in_the_job(
+    tmp_path, monkeypatch
+):
+    # #1582: 9 api tests died at `import requests` on the host runner, no SUT.
+    spec, project, test = _notes_api(tmp_path)
+    sb = _Sandbox()
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: sb)
+    res = run_pytest_lane_via_nix(spec, project, test, lane="api")
+    assert res is not None
+    assert "uvicorn main:app" in sb.script
+    assert "export TFACTORY_TARGET_URL=http://127.0.0.1:8200" in sb.script
+    assert sb.kw is None  # no sidecars: the app declares none
+
+
+def test_notes_api_flake_carries_the_test_client_libs(tmp_path):
+    from agents.nix_env import api_services_fallback_env
+    from tools.runners.nix_provisioner import generate_flake
+
+    spec, project, _ = _notes_api(tmp_path)
+    flake = generate_flake(api_services_fallback_env(spec, project, "api"))
+    for lib in ("requests", "httpx", "pytest", "fastapi", "uvicorn"):
+        assert f'p."{lib}"' in flake, lib
+
+
+def test_fallback_is_api_lane_python_only(tmp_path, monkeypatch):
+    from agents.evaluator import _nix_verify_mode
+
+    spec, project, _ = _notes_api(tmp_path)
+    monkeypatch.setenv("TFACTORY_NIX_RUNNER_IMAGE", "img")
+    assert _nix_verify_mode(spec, project, "api") is True
+    assert _nix_verify_mode(spec, project, "unit") is False
+    spec, project, _ = _notes_api(tmp_path / "n", node=True)
+    assert _nix_verify_mode(spec, project, "api") is False

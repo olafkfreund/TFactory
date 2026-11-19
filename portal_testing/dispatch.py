@@ -344,6 +344,7 @@ def build_portal_ui_job_manifest(
                 },
                 "spec": {
                     "restartPolicy": "Never",
+                    "enableServiceLinks": False,  # #1625
                     "imagePullSecrets": [{"name": "ghcr-pull"}],
                     # The harness talks to public portals and a co-mounted PVC.
                     # It has no reason to hold a kube API token.

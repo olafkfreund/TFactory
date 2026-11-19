@@ -111,6 +111,9 @@ _JEST_FALLBACK_ENV: dict[str, Any] = {
 # are pip-installed from its requirements). generated=True: a repo flake still wins.
 _API_SERVICES_FALLBACK_ENV: dict[str, Any] = {
     "system_packages": [],
+    # #1582: names uvicorn so the flake carries fastapi + uvicorn + httpx beside
+    # pytest/requests; a served app with no requirements file still starts.
+    "verify_commands": ["python -m uvicorn"],
     "provisioning": {"method": "nix", "generated": True},
 }
 
@@ -118,14 +121,16 @@ _API_SERVICES_FALLBACK_ENV: dict[str, Any] = {
 def api_services_fallback_env(
     spec_dir: Path, project_dir: Path | None, lane: str | None
 ) -> dict[str, Any] | None:
-    """The fallback nix env for an api lane whose repo needs sidecar services."""
+    """The fallback nix env for an api lane with sidecar services or a uvicorn app."""
     if lane != "api" or project_dir is None:
         return None
     from agents.services_gate import required_services  # noqa: PLC0415 - lazy
 
-    return (
-        _API_SERVICES_FALLBACK_ENV if required_services(spec_dir, project_dir) else None
-    )
+    # A uvicorn-served python app needs the Job too (requests, SUT), services or not.
+    serve = detect_serve_command(Path(project_dir), port=_API_SELF_SERVE_PORT)
+    if required_services(spec_dir, project_dir) or "uvicorn" in (serve or ""):
+        return _API_SERVICES_FALLBACK_ENV
+    return None
 
 
 @dataclass
@@ -2143,6 +2148,47 @@ export default defineConfig({{
     (Path(project_dir) / _PW_CONFIG).write_text(cfg, encoding="utf-8")
 
 
+_MAX_SPEC_TARGETS = 20
+
+
+def _spec_text_targets(spec_dir: Path, project_dir: Path) -> list[str]:
+    """Infer existing repo scripts named in the ingested spec."""
+    try:
+        text = (Path(spec_dir) / "context" / "aifactory_spec.md").read_text()
+    except OSError:
+        return []
+    root = Path(project_dir).resolve()
+    targets = []
+    for target in re.findall(
+        r"(?<![\w./~-])((?:[\w][\w.-]*/)*[\w][\w.-]*\.(?:js|mjs|cjs|ts))(?![\w-]|\.\w|/)",
+        text,
+    ):
+        try:
+            path = (root / target).resolve()
+            if not path.is_relative_to(root) or not path.is_file():
+                continue
+        except (OSError, RuntimeError):
+            continue
+        if target not in targets:
+            targets.append(target)
+            if len(targets) == _MAX_SPEC_TARGETS:
+                break
+    return targets
+
+
+def _browser_targets(spec_dir: Path, project_dir: Path) -> list[str] | None:
+    """Prefer explicit source targets, falling back to scripts in the spec."""
+    try:
+        source = json.loads((Path(spec_dir) / "context" / "source.json").read_text())
+        targets = [str(t) for t in (source.get("target_paths") or [])]
+        if targets:
+            return targets
+    except (OSError, json.JSONDecodeError, TypeError):
+        # No readable source.json: fall back to scripts named in the spec text.
+        pass
+    return _spec_text_targets(spec_dir, project_dir) or None
+
+
 def run_browser_evidence(
     spec_dir: Path, project_dir: Path, *, port: int = 8099, mount: str = "/work"
 ) -> dict | None:
@@ -2181,17 +2227,9 @@ def run_browser_evidence(
             }
         _write_pw_config(project_dir, port=port)
 
-        # The SUT this spec names. task_control writes source.json into the spec's
-        # CONTEXT dir, not its root (task_control.py:492) -- reading the root found
-        # nothing, so `targets` was always None and the scoping in
-        # detect_serve_command never fired (TFactory#1174). Still tolerant of the
-        # file being absent: detection then stays repo-wide, exactly as before.
-        try:
-            _src = json.loads((Path(spec_dir) / "context" / "source.json").read_text())
-            _targets = [str(t) for t in (_src.get("target_paths") or [])] or None
-        except (OSError, json.JSONDecodeError, TypeError):
-            _targets = None
-        serve = detect_serve_command(project_dir, env, port=port, targets=_targets)
+        serve = detect_serve_command(
+            project_dir, env, port=port, targets=_browser_targets(spec_dir, project_dir)
+        )
         # Scope the run to the staged config (NOT the contract's generic
         # "playwright test", which would also pick up stale repo specs). Export the
         # URL env the generated specs read.

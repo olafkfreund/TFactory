@@ -39,6 +39,7 @@ from agents.completion_envelope import (
     CompletionEnvelope,
     CompletionEvidence,
 )
+from agents.confidence import add_system_reason
 from agents.run_guard import ceiling_exceeded
 from agents.workspace_status import (
     anchor_stage_task,
@@ -1216,15 +1217,14 @@ def _load_verdicts_or_fail(spec_dir: Path) -> list | None:
     return verdicts_doc.get("verdicts") or []
 
 
-def _read_test_source(spec_dir: Path, test_file: str) -> str:
-    """Read a generated test file's source, or '' if absent/unreadable."""
-    test_path = spec_dir / test_file
-    if not test_path.exists():
-        return ""
-    try:
-        return test_path.read_text(encoding="utf-8")
-    except OSError:
-        return ""
+def _resolve_test_source(spec_dir: Path, test_file: str) -> tuple[str, str]:
+    """Read the named test or its spec-root fallback, retaining the real path."""
+    for relative_path in (test_file, Path(test_file).name):
+        try:
+            return (spec_dir / relative_path).read_text(encoding="utf-8"), relative_path
+        except (OSError, UnicodeDecodeError):
+            continue
+    return "", test_file
 
 
 def _build_candidates(spec_dir: Path, verdicts: list) -> list:
@@ -1239,12 +1239,19 @@ def _build_candidates(spec_dir: Path, verdicts: list) -> list:
             # Skip malformed entries — the Evaluator's validator should have
             # caught them, but be defensive.
             continue
+        source, found_file = _resolve_test_source(spec_dir, test_file)
+        verdict = v
+        if v.get("verdict") in ("accept", "flag") and not source.strip():
+            verdict = {**v, "verdict": "reject"}
+            add_system_reason(
+                verdict, f"test source not found or empty at {found_file}"
+            )
         candidates.append(
             TriageCandidate(
                 test_id=tid,
-                test_file=test_file,
-                verdict=v,
-                source=_read_test_source(spec_dir, test_file),
+                test_file=found_file,
+                verdict=verdict,
+                source=source,
             )
         )
     return candidates
@@ -1481,7 +1488,7 @@ def _run_git_side_effect(project_dir, committed, flagged, source_meta) -> dict:
     # accepted tests actually commit back to the PR branch (#964).
     branch = source_meta.get("branch") or source_meta.get("source_branch") or ""
     files_to_commit = tuple(
-        (c.test_file, c.source) for c in (*committed, *flagged) if c.source
+        (c.test_file, c.source) for c in (*committed, *flagged) if c.source.strip()
     )
     if not (branch and files_to_commit):
         return {

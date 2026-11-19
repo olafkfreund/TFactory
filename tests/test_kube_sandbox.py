@@ -187,6 +187,7 @@ def test_no_services_preserves_literal_manifest_baseline(mode):
                 },
                 "spec": {
                     "restartPolicy": "Never",
+                    "enableServiceLinks": False,
                     "automountServiceAccountToken": False,
                     "imagePullSecrets": [{"name": "ghcr-pull"}],
                     "securityContext": {"seccompProfile": {"type": "RuntimeDefault"}},

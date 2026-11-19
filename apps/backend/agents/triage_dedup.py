@@ -146,9 +146,11 @@ def dedup_candidates(candidates: Iterable[TriageCandidate]) -> DedupResult:
     cands = list(candidates)
 
     # Pass 1: byte-identical
-    byte_groups: dict[str, list[TriageCandidate]] = {}
-    for c in cands:
-        byte_groups.setdefault(byte_hash(c.source), []).append(c)
+    byte_groups: dict[str | int, list[TriageCandidate]] = {}
+    for i, c in enumerate(cands):
+        # Unreadable sources have no content to compare; keep each independently.
+        key = byte_hash(c.source) if c.source.strip() else i
+        byte_groups.setdefault(key, []).append(c)
 
     after_byte: list[TriageCandidate] = []
     collisions: list[DedupCollision] = []
@@ -166,15 +168,16 @@ def dedup_candidates(candidates: Iterable[TriageCandidate]) -> DedupResult:
         )
 
     # Pass 2: whitespace-normalised (over the byte-pass survivors).
-    norm_groups: dict[str, list[TriageCandidate]] = {}
-    for c in after_byte:
-        norm_groups.setdefault(normalised_hash(c.source), []).append(c)
+    norm_groups: dict[str | int, list[TriageCandidate]] = {}
+    for i, c in enumerate(after_byte):
+        key = normalised_hash(c.source) if c.source.strip() else i
+        norm_groups.setdefault(key, []).append(c)
 
     kept: list[TriageCandidate] = []
     # Preserve order from after_byte (already in input order).
-    seen: set[str] = set()
-    for c in after_byte:
-        n = normalised_hash(c.source)
+    seen: set[str | int] = set()
+    for i, c in enumerate(after_byte):
+        n = normalised_hash(c.source) if c.source.strip() else i
         if n in seen:
             continue
         seen.add(n)
