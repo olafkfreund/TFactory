@@ -103,6 +103,31 @@ _JEST_FALLBACK_ENV: dict[str, Any] = {
 }
 
 
+# TFactory#1582: an api-lane repo that needs postgres/redis but has no contract
+# env and no flake (every PR spec-ingest without a contract) used to take the
+# host runner, where no sidecar and no in-Job SUT exist: every test then died on
+# KeyError TFACTORY_TARGET_URL. The sidecars and self-served SUT live only in the
+# nix Job, so such a repo gets this minimum (python harness; the SUT's own deps
+# are pip-installed from its requirements). generated=True: a repo flake still wins.
+_API_SERVICES_FALLBACK_ENV: dict[str, Any] = {
+    "system_packages": [],
+    "provisioning": {"method": "nix", "generated": True},
+}
+
+
+def api_services_fallback_env(
+    spec_dir: Path, project_dir: Path | None, lane: str | None
+) -> dict[str, Any] | None:
+    """The fallback nix env for an api lane whose repo needs sidecar services."""
+    if lane != "api" or project_dir is None:
+        return None
+    from agents.services_gate import required_services  # noqa: PLC0415 - lazy
+
+    return (
+        _API_SERVICES_FALLBACK_ENV if required_services(spec_dir, project_dir) else None
+    )
+
+
 @dataclass
 class NixPlan:
     """A materialized Nix environment ready to run via the Job backend."""
@@ -173,6 +198,27 @@ def _is_safe_serve_command(command: str) -> bool:
         return False
 
 
+def _node_subdir_serve(pd: Path, targets: list[str] | None, port: int) -> str | None:
+    """``PORT=<port> node <dir>/server.js`` for the app nearest the spec's targets.
+
+    A node app in a subdirectory (aifactory-demo ``scoreboard/server.js``, #1609)
+    is not what the repo root's ``npm start`` runs; the nearest ancestor of a
+    target that holds a ``server.js``/``index.js`` is the app the spec names.
+    """
+    for t in targets or []:
+        parts = Path(str(t)).parts[:-1]
+        # Plain names only: the result is interpolated into the Job's bash script.
+        if Path(str(t)).is_absolute() or not all(
+            re.fullmatch(r"[\w][\w.-]*", x) for x in parts
+        ):
+            continue
+        for n in range(len(parts), 0, -1):
+            for entry in ("server.js", "index.js"):
+                if (pd.joinpath(*parts[:n]) / entry).is_file():
+                    return f"PORT={port} node {'/'.join(parts[:n])}/{entry}"
+    return None
+
+
 def detect_serve_command(
     project_dir: Path,
     env: dict | None = None,
@@ -233,6 +279,9 @@ def detect_serve_command(
     # Wrapped rather than an early `return None` so the return count does not
     # grow (PLR0911): the trailing `return None` already answers the static case.
     if not _static_page_targets(targets):
+        node_sub = _node_subdir_serve(pd, targets, port)
+        if node_sub:
+            return node_sub
         # Python ASGI: prefer a root app.py exposing `app`, then a src/app package.
         if (pd / "app.py").is_file() and "app" in (pd / "app.py").read_text(
             errors="ignore"
@@ -704,7 +753,8 @@ def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve kno
     """
     mount = _NIX_MOUNT
     env = environment_from_contract(spec_dir)
-    if not has_nix_env(spec_dir, project_dir):
+    fallback = api_services_fallback_env(spec_dir, project_dir, lane)
+    if not has_nix_env(spec_dir, project_dir) and fallback is None:
         return None
     # #1582: every caller (single run, batched stability/mutation, regression) gets
     # sidecars and the self-served SUT from here, not from its own plumbing.
@@ -748,7 +798,9 @@ def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve kno
             ),
             dirs_exist_ok=True,
         )
-        plan = materialize_flake(spec_dir, scratch, env=env, owner_dir=src)
+        plan = materialize_flake(
+            spec_dir, scratch, env=env, owner_dir=src, fallback_env=fallback
+        )
         if plan is None:
             return None
         pd = scratch
