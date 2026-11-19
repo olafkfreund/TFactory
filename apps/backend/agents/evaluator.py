@@ -562,9 +562,7 @@ def _resolve_runner_fn(
             )
             extra_env = {
                 "PYTHONHASHSEED": str(seed),
-                "PYTHONPATH": os.pathsep.join(
-                    [*_lead, "/scratch/src", "/scratch"]
-                ),
+                "PYTHONPATH": os.pathsep.join([*_lead, "/scratch/src", "/scratch"]),
             }
             if target_url:
                 extra_env["TFACTORY_TARGET_URL"] = target_url

@@ -298,9 +298,7 @@ def package_roots_for(project_dir: Path, module: str) -> list[str]:
     return roots
 
 
-def package_root_rel_paths(
-    root: Path, targets: list[str] | None = None
-) -> list[str]:
+def package_root_rel_paths(root: Path, targets: list[str] | None = None) -> list[str]:
     """Repo-relative dirs that must be importable for this tree's packages.
 
     The execution-time counterpart of ``package_roots_for``. That one answers

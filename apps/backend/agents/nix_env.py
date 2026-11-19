@@ -950,8 +950,7 @@ def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve kno
         _prefix = f"{_DEPS_TARGET}:" if _reqs else ""
         _pypath = _in_job_pythonpath(scratch, mount, _api_targets(spec_dir, pd))
         srcpath = (
-            f'export PYTHONPATH="{_prefix}{_pypath}'
-            f'${{PYTHONPATH:+:$PYTHONPATH}}"\n'
+            f'export PYTHONPATH="{_prefix}{_pypath}${{PYTHONPATH:+:$PYTHONPATH}}"\n'
         )
         # #764: install the SUT's own requirements into the Job. The flake's
         # curated PyPI->nixpkgs allowlist can never be complete, and a repo that
