@@ -186,3 +186,33 @@ def test_glob_characters_in_a_bare_id_match_nothing(
     with patch.object(ex, "load_projects", return_value={"a": {}}):
         assert _status(ex, "s*").phase is None
         assert _status(ex, "s1").phase == "p"
+
+
+def test_two_concurrent_tasks_in_one_project_each_get_their_own_status(
+    ex: ModuleType, tmp_path: Path
+) -> None:
+    _spec(
+        tmp_path, "u", "demo-624d", task_id="demo-624d", status="generating", phase="a"
+    )
+    _spec(tmp_path, "u", "l-go-pr1", task_id="l-go-pr1", status="verifying", phase="b")
+    with patch.object(ex, "load_projects", return_value={"u": {}}):
+        assert _status(ex, "demo-624d").phase == "a"
+        assert _status(ex, "u:l-go-pr1").phase == "b"
+
+
+@pytest.mark.parametrize("key", ["task_id", "spec_id"])
+@pytest.mark.parametrize("form", ["bare", "prefixed"])
+def test_status_json_naming_another_task_is_not_returned(
+    ex: ModuleType, tmp_path: Path, key: str, form: str
+) -> None:
+    _spec(
+        tmp_path,
+        "u",
+        "demo-624d",
+        status="generating",
+        phase="theirs",
+        **{key: "l-go-pr1"},
+    )
+    with patch.object(ex, "load_projects", return_value={"u": {}}):
+        r = _status(ex, "demo-624d" if form == "bare" else "u:demo-624d")
+    assert (r.is_running, r.phase) == (False, None)
