@@ -2365,10 +2365,12 @@ def _resolve_shell_runner_fn(
     from agents import nix_shell_lane  # noqa: PLC0415
     from tools.runners.docker_runner import DockerRunResult  # noqa: PLC0415
 
+    lane_runs: list[tuple[dict[str, int], bool, dict[str, str]]] = []
+
     def _run(_test_file: Path, project_dir_arg: Path, _seed: int) -> DockerRunResult:
         res = nix_shell_lane.run_bats_lane_via_nix(spec_dir, Path(project_dir_arg))
         if res is not None:
-            _run.lane_runs.append(
+            lane_runs.append(
                 (
                     nix_shell_lane.file_results(res.stdout or ""),
                     "__SHELLCHECK_EXIT=0" in (res.stdout or "").splitlines(),
@@ -2383,7 +2385,8 @@ def _resolve_shell_runner_fn(
             argv=["nix", "develop", "--", "bats", "--tap"],
         )
 
-    _run.lane_runs = []
+    # Via __dict__ so mypy sees no undeclared function attribute.
+    _run.__dict__["lane_runs"] = lane_runs
     return _run
 
 
