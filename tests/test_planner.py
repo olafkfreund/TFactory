@@ -1817,3 +1817,20 @@ async def test_playwright_spec_outside_testdir_still_rejected(
     )
     assert await run_planner(spec_dir, project_dir) is False
     assert "invalid_test_path" in calls[1]["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_jest_declared_on_api_lane_is_moved_to_unit(
+    spec_dir: Path, project_dir: Path, mock_sdk
+) -> None:
+    """TFactory#1616: jest is unit-only; lane 'api' is rewritten, not rejected twice."""
+    _write_javascript_project(project_dir)
+    st = _make_polyglot_subtask(
+        subtask_id="js-1", language="typescript", framework="jest", lane="api"
+    )
+    st["files_to_create"] = ["tests/scoreboard.test.js"]
+    calls = mock_sdk(plans=[_make_polyglot_plan_json([st])])
+    assert await run_planner(spec_dir, project_dir) is True
+    assert len(calls) == 1
+    saved = json.loads((spec_dir / "test_plan.json").read_text())
+    assert saved["phases"][0]["subtasks"][0]["lane"] == "unit"
