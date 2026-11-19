@@ -31,25 +31,35 @@ Plumbing lives in `run_pytest_lane_via_nix` so every caller is covered.
    an emptyDir volume for postgres. Add tests to `tests/test_kube_sandbox.py`: shape for
    postgres+redis (names, `restartPolicy: Always`, securityContext, env, args, volume,
    ordering after seed), version tag + invalid version fallback, env image override,
-   `services=()` manifest equals the manifest built without the arg.
+   `services=()` manifest equals an independent literal expected baseline (copy of the pre-change output) for the plain, `workspace_uri` and `nix_store_pvc` configurations.
    Verify: `cd apps/backend && python -m pytest ../../tests/test_kube_sandbox.py -q`.
    Traps: do not touch the `lane` container or `CONTAINER_SECURITY_CONTEXT`; ruff "as" alias sorting: plain imports.
 2. `apps/backend/agents/services_gate.py`: add `required_services(spec_dir, project_dir)`
    returning `[(name, version)]` (declared, from the same loader/snapshot code, plus
-   detected); change `halt_if_services_declared` to halt only when declared services exist and
+   detected: compose files = `docker-compose*.y*ml`, `compose.y*ml` at the repo root, regex
+   `image:\s*['\"]?(?:[\w./-]*/)?(postgres|redis)\b`; `requirements*.txt` and `pyproject.toml` at
+   depth <= 2 (skip `.git`, `node_modules`, `.venv`, `venv`), case-insensitive names
+   `psycopg`, `psycopg2`, `psycopg2-binary`, `asyncpg`, `pg8000` -> postgres and `redis`,
+   `aioredis` -> redis. Result order postgres then redis, one entry per name, the declared
+   entry (with its version) wins over a detected one); change `halt_if_services_declared` to halt only when declared services exist and
    `TFACTORY_NIX_RUNNER_IMAGE` is unset or `TFACTORY_VERIFY_BACKEND` in (host, docker).
-   Update `tests/test_services_gate.py` (existing halt tests set no runner image: keep them
-   passing) and add tests: runner present -> no halt; backend=host -> halt; detection from
+   Update `tests/test_services_gate.py` and the affected `tests/test_gate_honesty.py` (~l.302):
+   an autouse fixture clears `TFACTORY_NIX_RUNNER_IMAGE` and `TFACTORY_VERIFY_BACKEND`, capability
+   tests set them and add tests: runner present -> no halt; backend=host and backend=docker -> halt; declared+detected dedupe and version precedence; detection from
    compose/requirements/pyproject; declared version kept; unknown driver names -> none.
    Verify: `python -m pytest ../../tests/test_services_gate.py -q`.
 3. `apps/backend/agents/nix_env.py` `run_pytest_lane_via_nix` + `detect_serve_command`, and
-   `agents/evaluator.py` (`_API_SELF_SERVE_PORT` stays; nix_env gets its own constant 8200):
+   `agents/evaluator.py` (move `_API_SELF_SERVE_PORT = 8200` into nix_env; evaluator imports it from there):
    resolve services; `sandbox.with_manifest_kw(services=...)`; prelude exports
    DATABASE_URL/REDIS_URL and `/dev/tcp` waits (60s) emitting `__TF_APP_NOT_HEALTHY__`
-   naming the sidecar; marker check triggers also when services requested; auto-detect
+   naming the sidecar. A failed sidecar wait OR a SUT that never accepts a connection sets
+   `TF_NOT_HEALTHY=1`; the script then skips pytest and, per rerun (and mutants), emits
+   `__PYTEST_RUN=<i>`, the marker line, `__PYTEST_EXIT=1` and exits 0, so `parse_pytest_exits`
+   keeps the marker inside each run's tail and the batched path classifies infra
+   (`app_not_healthy`); the single-run marker check triggers also when services requested; auto-detect
    `serve_command` for `lane == "api"` when none passed, none in `extra_env`, and no
    http `base_url` target in the snapshot; `app/main.py` detection. Tests in
-   `tests/test_nix_env_services.py`: script prelude, marker, auto-serve on/off conditions,
+   `tests/test_nix_env_services.py`: script prelude, marker, auto-serve on/off conditions, batched (reruns>1) output through `parse_pytest_exits` keeps the marker per run,
    detection of `app/main.py`.
    Verify: new test file plus existing nix_env tests (`pytest ../../tests -q -k "nix_env or serve"`).
    Traps: batched callers (`_nix_batched_signals`, `_nix_batched_stability`) pass no serve args; do not change them.
