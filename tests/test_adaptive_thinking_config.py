@@ -28,8 +28,8 @@ from phase_config import (
 
 _OPUS_47 = "claude-opus-4-7"
 _OPUS_46 = "claude-opus-4-6"  # MODEL_ID_MAP["opus-1m"]
-_SONNET = MODEL_ID_MAP["sonnet"]
-_HAIKU = MODEL_ID_MAP["haiku"]
+_SONNET = MODEL_ID_MAP["sonnet-4.6"]  # legacy id: 5.x ids are adaptive-only (#1641)
+_HAIKU = MODEL_ID_MAP["haiku-4.5"]
 
 
 class TestThinkingConfigFor:

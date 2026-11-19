@@ -44,6 +44,13 @@ from pydantic import BaseModel
 # small; an unknown model simply yields cost 0.0 (never a guessed number).
 _PRICE_PER_MTOK: dict[str, tuple[float, float]] = {
     # model id (prefix-matched): (input $/Mtok, output $/Mtok)
+    # 5.x rates from the claude-api reference. shortcut: Haiku 5.5 is $0.50/$2.50
+    # above 100K-token prompts; one rate per prefix here, so those are under-
+    # estimated. OpenAI/Gemini prices are unknown and deliberately absent.
+    "claude-fable-5-2": (8.0, 40.0),
+    "claude-opus-5-5": (4.0, 20.0),
+    "claude-sonnet-5-5": (2.0, 10.0),
+    "claude-haiku-5-5": (0.10, 0.50),
     "claude-opus-4": (15.0, 75.0),
     "claude-sonnet-4": (3.0, 15.0),
     "claude-haiku-4": (1.0, 5.0),
