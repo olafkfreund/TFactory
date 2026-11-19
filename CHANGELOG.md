@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.13.0 — Services and self-served SUT in the verify Job (2026-11-19)
+
+### Added
+
+- **Verify:** postgres/redis sidecars and a self-served system under test in the nix pytest Job, so specs that declare services now run instead of halting early (#1582, #1606).
+
+### Fixed
+
+- **Verify:** a running verify Job is no longer reaped; task status reads the ingest workspace (#1599, #1597, #1605).
+- **Shell lane:** per-file bats runs, no nix/network tests, full TAP counts (#1601, #1604).
+- **Git writer:** delivery works from a detached checkout when the branch is in use (#1598, #1602).
+- **Lanes:** vitest subpackages run vitest; playwright accepts `.spec.js` and `testDir` (#1600, #1579, #1603).
+
 ## 0.12.2 — Workspace refresh no longer breaks on a deleted branch (2026-11-19)
 
 ### Fixed

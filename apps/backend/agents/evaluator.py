@@ -81,6 +81,7 @@ from agents.mutate_probe import (
 )
 from agents.mutation_dispatch import is_mutation_supported, mutant_extension
 from agents.nix_env import (
+    _API_SELF_SERVE_PORT,
     detect_serve_command,
     environment_from_contract,
     has_nix_env,
@@ -215,12 +216,6 @@ _RunResultLike = RunResultLike
 
 
 _PYTEST_IMAGE = "tfactory-runner-pytest:latest"
-
-# Port the api lane self-serves the SUT on INSIDE the Nix Job pod (#612 reopened):
-# a spec-ingest app has no external target, so the endpoint test can only reach it
-# by booting it in the same pod at 127.0.0.1. The pod is network-isolated, so a
-# fixed port is safe (distinct from the browser lane's 8099 for clarity).
-_API_SELF_SERVE_PORT = 8200
 
 
 def _parse_marker_exit(stdout: str | None, prefix: str, default: int) -> int:
@@ -2365,9 +2360,18 @@ def _resolve_shell_runner_fn(
     from agents import nix_shell_lane  # noqa: PLC0415
     from tools.runners.docker_runner import DockerRunResult  # noqa: PLC0415
 
+    lane_runs: list[tuple[dict[str, int], bool, dict[str, str]]] = []
+
     def _run(_test_file: Path, project_dir_arg: Path, _seed: int) -> DockerRunResult:
         res = nix_shell_lane.run_bats_lane_via_nix(spec_dir, Path(project_dir_arg))
         if res is not None:
+            lane_runs.append(
+                (
+                    nix_shell_lane.file_results(res.stdout or ""),
+                    "__SHELLCHECK_EXIT=0" in (res.stdout or "").splitlines(),
+                    nix_shell_lane.file_output(res.stdout or ""),
+                )
+            )
             return res
         return DockerRunResult(
             returncode=1,
@@ -2376,7 +2380,55 @@ def _resolve_shell_runner_fn(
             argv=["nix", "develop", "--", "bats", "--tap"],
         )
 
+    # Via __dict__ so mypy sees no undeclared function attribute.
+    _run.__dict__["lane_runs"] = lane_runs
     return _run
+
+
+def _per_file_stability(
+    shared: StabilityResult | None,
+    lane_runs: list[tuple[dict[str, int], bool, dict[str, str]]],
+    subtask: dict[str, Any],
+) -> StabilityResult | None:
+    if shared is None or shared.verdict == StabilityVerdict.ERROR:
+        return shared
+    if len(lane_runs) != len(shared.runs):
+        return shared
+    rel = Path(subtask["files_to_create"][0]).as_posix()
+    runs = []
+    for run, (files, shellcheck_ok, outputs) in zip(
+        shared.runs, lane_runs, strict=True
+    ):
+        # A shellcheck failure or a bats tool error (exit above 1) fails the lane.
+        if (
+            not shellcheck_ok
+            or run.returncode in (126, 127)
+            or any(c not in (0, 1, 125) for c in files.values())
+        ):
+            runs.append(run)
+            continue
+        key = next((p for p in files if p.removeprefix("./") == rel), None)
+        if key is None:
+            return StabilityResult(
+                verdict=StabilityVerdict.ERROR,
+                runs=shared.runs,
+                seed=shared.seed,
+                rerun_count=shared.rerun_count,
+                error_message=f"{rel} has no bats result: this test did not run",
+            )
+        code = files[key]
+        runs.append(
+            StabilityRun(
+                returncode=code,
+                stdout_tail=f"FAILED {rel}: this test file failed\n" + outputs[key]
+                if code == 1
+                else "",
+                stderr_tail=run.stderr_tail if code == 1 else "",
+            )
+        )
+    return classify_stability_runs(
+        runs, seed=shared.seed, rerun_count=shared.rerun_count
+    )
 
 
 def _shell_bundles(
@@ -2385,13 +2437,19 @@ def _shell_bundles(
     subtasks: Iterable[dict[str, Any]],
     runner_fn: Callable[[Path, Path, int], DockerRunResult],
 ) -> list[EvaluatorSignals]:
-    """ONE 3x stability pass for the whole project, shared by every shell
-    subtask: bats and shellcheck read the whole tree, so every subtask has the
-    identical result (the Go ``shared_go_stability`` pattern)."""
+    """Run one 3x stability pass, then grade each subtask's bats file."""
     group = list(subtasks)
     shared = _stability_for_subtask(spec_dir, project_dir, group[0], runner_fn)
     return [
-        _build_go_signal_bundle(spec_dir, project_dir, st, runner_fn, stability=shared)
+        _build_go_signal_bundle(
+            spec_dir,
+            project_dir,
+            st,
+            runner_fn,
+            stability=_per_file_stability(
+                shared, getattr(runner_fn, "lane_runs", []), st
+            ),
+        )
         for st in group
     ]
 

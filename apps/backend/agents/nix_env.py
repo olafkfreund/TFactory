@@ -238,7 +238,12 @@ def detect_serve_command(
             errors="ignore"
         ):
             return f"python -m uvicorn app:app --host 127.0.0.1 --port {port}"
-        if (pd / "src" / "app" / "main.py").is_file() and _serves(pd / "src"):
+        # src/app package, or a top-level app/ package (factory-lab-cloud, #1582).
+        if ((pd / "src" / "app" / "main.py").is_file() and _serves(pd / "src")) or (
+            (pd / "app" / "main.py").is_file()
+            and _serves(pd / "app")
+            and "app" in (pd / "app" / "main.py").read_text(errors="ignore")
+        ):
             return f"python -m uvicorn app.main:app --host 127.0.0.1 --port {port}"
         if (pd / "main.py").is_file() and "app" in (pd / "main.py").read_text(
             errors="ignore"
@@ -361,6 +366,102 @@ _NIX_MOUNT = "/work"  # where KubeJobSandbox co-mounts the worktree in the Job
 # Emitted by the api-lane Job script when the self-served SUT never accepts a
 # connection — so a boot failure reads as infra, not a silent endpoint-test bug.
 _APP_NOT_HEALTHY_MARKER = "__TF_APP_NOT_HEALTHY__"
+# Loopback port the api lane self-serves the SUT on (evaluator imports it).
+_API_SELF_SERVE_PORT = 8200
+# Sidecar loopback ports and the URLs the SUT/tests read (#1582). The credentials
+# are throwaway and only reachable inside the pod.
+_SERVICE_PORTS = {"postgres": 5432, "redis": 6379}
+_SERVICE_ENV = {
+    "postgres": "DATABASE_URL=postgresql://app:app@127.0.0.1:5432/app",
+    "redis": "REDIS_URL=redis://127.0.0.1:6379/0",
+}
+
+
+def _services_prelude(services: list[tuple[str, str | None]]) -> str:
+    """Export the sidecar URLs and wait (60s) for each port; flag unhealthy (#1582)."""
+    out = ""
+    for name, _version in services:
+        port = _SERVICE_PORTS[name]
+        probe = f"(echo >/dev/tcp/127.0.0.1/{port}) 2>/dev/null"
+        out += (
+            f"export {_SERVICE_ENV[name]}\n"
+            f"for i in $(seq 1 60); do {probe} && break; sleep 1; done\n"
+            f'{probe} || {{ echo "{_APP_NOT_HEALTHY_MARKER} sidecar {name} not '
+            f'ready on 127.0.0.1:{port}"; TF_NOT_HEALTHY=1; }}\n'
+        )
+    return out
+
+
+def _guard_serve(svc_prelude: str, serve_prelude: str) -> str:
+    """Do not boot the SUT against a dead sidecar."""
+    if svc_prelude and serve_prelude:
+        return f'if [ -z "$TF_NOT_HEALTHY" ]; then\n{serve_prelude}fi\n'
+    return serve_prelude
+
+
+def _skip_when_unhealthy(
+    run_cmd: str, reruns: int, *, active: bool = True, mutants: int = 0
+) -> str:
+    """Run ``run_cmd`` only when the sidecars/SUT came up; otherwise emit the infra
+    marker inside every ``__PYTEST_RUN`` segment so the batched parser keeps it.
+    Skipped mutants report 127 (shell not-run), never a killed mutant.
+    ``active=False`` returns ``run_cmd`` unchanged (no sidecars, no SUT)."""
+    if not active:
+        return run_cmd
+    fail = (
+        f"echo {_APP_NOT_HEALTHY_MARKER} dependency not healthy\necho __PYTEST_EXIT=1\n"
+    )
+    skip = (
+        "".join(f"echo __PYTEST_RUN={i}\n{fail}" for i in range(1, reruns + 1))
+        if reruns > 1
+        else fail
+    )
+    skip += "".join(
+        f"echo __MUT_RUN={k}\necho __MUT_EXIT=127\n" for k in range(1, mutants + 1)
+    )
+    return f'if [ -n "$TF_NOT_HEALTHY" ]; then\n{skip}else\n{run_cmd}\nfi'
+
+
+def _resolve_serve(  # noqa: PLR0913 - the lane's own knobs, passed through
+    spec_dir: Path,
+    project_dir: Path,
+    env: dict[str, Any] | None,
+    lane: str,
+    extra_env: dict[str, str] | None,
+    serve_command: str | None,
+    serve_port: int | None,
+) -> tuple[str | None, int | None]:
+    """Api lane with no caller/env/yml target: boot the SUT in the Job (#612, #1582)."""
+    if (
+        serve_command is None
+        and lane == "api"
+        and "TFACTORY_TARGET_URL" not in (extra_env or {})
+        and not _has_external_target(spec_dir)
+    ):
+        cmd = detect_serve_command(Path(project_dir), env, port=_API_SELF_SERVE_PORT)
+        return cmd, _API_SELF_SERVE_PORT
+    return serve_command, serve_port
+
+
+def _with_sidecars(
+    sandbox: Any, services: list[tuple[str, str | None]]
+) -> tuple[Any, list[tuple[str, str | None]]]:
+    """The sandbox that adds sidecars to its Jobs, or the original with no services."""
+    if not services:
+        return sandbox, services
+    if hasattr(sandbox, "with_manifest_kw"):
+        return sandbox.with_manifest_kw(services=services), services
+    _log.warning("sandbox cannot run sidecars; services %s dropped", services)
+    return sandbox, []
+
+
+def _has_external_target(spec_dir: Path) -> bool:
+    """True when the spec's .tfactory.yml declares a target with a base_url."""
+    from agents.evaluator_targets import _load_tfactory_cfg  # noqa: PLC0415 - cycle
+
+    cfg = _load_tfactory_cfg(spec_dir) or {}
+    return any(t.get("base_url") for t in cfg.get("targets") or [])
+
 
 # The deploy-lane tools we can run hermetically inside a per-task Nix Job (#597,
 # #603): ``tfsec`` + ``trivy`` are pure Go binaries (no insecure transitive deps),
@@ -605,12 +706,21 @@ def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve kno
     env = environment_from_contract(spec_dir)
     if not has_nix_env(spec_dir, project_dir):
         return None
+    # #1582: every caller (single run, batched stability/mutation, regression) gets
+    # sidecars and the self-served SUT from here, not from its own plumbing.
+    from agents.services_gate import required_services  # noqa: PLC0415 - lazy
+
+    services = required_services(spec_dir, project_dir)
+    serve_command, serve_port = _resolve_serve(
+        spec_dir, project_dir, env, lane, extra_env, serve_command, serve_port
+    )
     # Consume the engine purely through the unified seam (#426): this lane works
     # with any ExecutionSandbox the factory returns, not just KubeJobSandbox.
     sandbox: ExecutionSandbox | None = nix_runner_from_env()
     if sandbox is None:
         _log.info("run_pytest_lane_via_nix: TFACTORY_NIX_RUNNER_IMAGE unset; skipping")
         return None
+    sandbox, services = _with_sidecars(sandbox, services)
 
     # #623: isolate every run in a per-run scratch COPY of the checkout, instead of
     # mutating the shared project checkout in place. All specs for a project share
@@ -712,9 +822,11 @@ def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve kno
                 f"curl -sS -o /dev/null {url}/ >/dev/null 2>&1 && break; sleep 1; "
                 f"done\n"
                 f"curl -sS -o /dev/null {url}/ >/dev/null 2>&1 || "
-                f'echo "{_APP_NOT_HEALTHY_MARKER} SUT did not accept a connection '
-                f'on {url}; see /tmp/tf_app.log"\n'
+                f'{{ echo "{_APP_NOT_HEALTHY_MARKER} SUT did not accept a connection '
+                f'on {url}; see /tmp/tf_app.log"; TF_NOT_HEALTHY=1; }}\n'
             )
+        svc_prelude = _services_prelude(services)
+        serve_prelude = _guard_serve(svc_prelude, serve_prelude)
         # TFactory#1152: the browser lane runs Playwright, not pytest, but through
         # this SAME Job path — the flake, the co-mount, the retry-on-missing-marker
         # and the exit-marker protocol are all lane-agnostic. Only the one command
@@ -723,11 +835,18 @@ def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve kno
         pytest_cmd = build_cmd(mount, name, reruns)
         if mutant_names:
             pytest_cmd = pytest_cmd + "\n" + _build_mutants_cmd(mutant_names)
+        pytest_cmd = _skip_when_unhealthy(
+            pytest_cmd,
+            reruns,
+            active=bool(svc_prelude or serve_prelude),
+            mutants=len(mutant_names),
+        )
         (pd / _JOB_SCRIPT).write_text(
             "#!/usr/bin/env bash\nset +e\n"
             + exports
             + srcpath
             + deps_prelude
+            + svc_prelude
             + serve_prelude
             + pytest_cmd
             + "\n",
@@ -759,7 +878,9 @@ def run_pytest_lane_via_nix(  # noqa: PLR0913, PLR0915 - api-lane self-serve kno
                 res = sandbox.run([job_cmd], workdir=str(pd), timeout=timeout)
 
         stdout = res.stdout or ""
-        app_unhealthy = bool(serve_command) and _APP_NOT_HEALTHY_MARKER in stdout
+        app_unhealthy = bool(serve_command or services) and (
+            _APP_NOT_HEALTHY_MARKER in stdout
+        )
         if app_unhealthy:
             _log.warning(
                 "run_pytest_lane_via_nix: SUT never became healthy for %s — the "
@@ -1395,6 +1516,44 @@ def _write_jest_config(project_dir: Path) -> Path:
     return path
 
 
+def playwright_test_dir(project_dir: Path) -> str | None:
+    """``testDir`` from the repo's ``playwright.config.*``, repo-relative, or None.
+    A regex read, not a JS parse: only the plain ``testDir: './x'`` literal is
+    understood (TFactory#1579); anything computed falls back to the conventions."""
+    for ext in ("ts", "js", "mjs", "cjs", "mts"):
+        cfg = project_dir / f"playwright.config.{ext}"
+        if cfg.is_file():
+            try:
+                m = re.search(r"testDir\s*:\s*['\"]([^'\"]+)['\"]", cfg.read_text())
+            except OSError:
+                return None
+            d = os.path.normpath(m.group(1)) if m else ""
+            return None if d.startswith(("..", "/")) or d in ("", ".") else d
+    return None
+
+
+def _nearest_vitest_package(project_dir: Path, rel: str) -> str | None:
+    """Repo-relative dir of the NEAREST package.json above ``rel`` when it
+    declares vitest, else None (TFactory#1600: a ``ts/daterange/`` subpackage
+    with its own vitest was run under root jest, "Cannot find module 'vitest'").
+    Only the nearest manifest counts: it is the one the test resolves against."""
+    root = Path(project_dir).resolve()
+    d = (root / rel).parent
+    while d == root or root in d.parents:
+        pkg = d / "package.json"
+        if pkg.is_file():
+            try:
+                data = json.loads(pkg.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return None
+            deps = {**data.get("dependencies", {}), **data.get("devDependencies", {})}
+            if "vitest" in deps:
+                return d.relative_to(root).as_posix()
+            return None
+        d = d.parent
+    return None
+
+
 def run_jest_lane_via_nix(
     test_file: Path,
     project_dir: Path,
@@ -1491,14 +1650,35 @@ def run_jest_lane_via_nix(
             '|| { echo "__JEST_SETUP_FAILED: jest runner missing after install"; '
             "exit 127; }"
         )
-        _write_jest_config(pd)
-        # The local install puts jest, ts-jest and their shared peers in the
-        # worktree's own node_modules, so ordinary resolution finds the transform.
-        one = (
-            f"cd {mount} && "
-            f"{_JEST_BIN} --ci --forceExit --config {_JEST_CONFIG} {_shquote(rel)} 2>&1; "
-            f"echo __PYTEST_EXIT=$?"
-        )
+        vt_dir = _nearest_vitest_package(pd, rel)
+        if vt_dir is not None:
+            # TFactory#1600: the package declares vitest, so install ITS deps
+            # (lockfile-exact when there is one) and run vitest from its dir.
+            # shortcut: npm only; pnpm/yarn lockfiles fall back to `npm install`.
+            pkg = _shquote(f"{mount}/{vt_dir}" if vt_dir != "." else mount)
+            sub = _shquote(Path(rel).relative_to(vt_dir).as_posix())
+            setup = (
+                f"cd {pkg} && "
+                "if [ -f package-lock.json ]; then npm ci --no-audit --no-fund --silent; "
+                "else npm install --no-audit --no-fund --silent; fi "
+                '|| { echo "__JEST_SETUP_FAILED: npm install of the package failed"; '
+                "exit 127; }; "
+                '[ -x ./node_modules/.bin/vitest ] || { echo "__JEST_SETUP_FAILED: '
+                'vitest missing after install"; exit 127; }'
+            )
+            one = (
+                f"cd {pkg} && ./node_modules/.bin/vitest run {sub} 2>&1; "
+                f"echo __PYTEST_EXIT=$?"
+            )
+        else:
+            _write_jest_config(pd)
+            # The local install puts jest, ts-jest and their shared peers in the
+            # worktree's own node_modules, so ordinary resolution finds the transform.
+            one = (
+                f"cd {mount} && "
+                f"{_JEST_BIN} --ci --forceExit --config {_JEST_CONFIG} {_shquote(rel)} 2>&1; "
+                f"echo __PYTEST_EXIT=$?"
+            )
         jest_cmd = (
             setup
             + "\n"
@@ -1806,8 +1986,14 @@ def _stage_browser_specs(spec_dir: Path, project_dir: Path) -> int:
     shutil.rmtree(dest, ignore_errors=True)
     dest.mkdir(parents=True, exist_ok=True)
     tests_root = Path(spec_dir) / "tests"
+    # A repo whose playwright.config sets testDir elsewhere has its specs planned
+    # there (TFactory#1579); stage that tree too, keeping the path below its root.
+    td = playwright_test_dir(Path(project_dir))
+    roots = [tests_root] + ([Path(spec_dir) / td] if td else [])
     n = 0
-    for src in sorted(tests_root.rglob("*.spec.ts")):
+    for tests_root, src in sorted(
+        (r, f) for r in roots for g in ("*.spec.ts", "*.spec.js") for f in r.rglob(g)
+    ):
         # Preserve the path BELOW ``tests/`` rather than flattening to the file
         # name. The stage dir stands in for ``tests``, so a spec authored at
         # ``tests/e2e/x.spec.ts`` lands at ``.tf_e2e/e2e/x.spec.ts`` and keeps
@@ -1881,7 +2067,9 @@ def run_browser_evidence(
     try:
         n_specs = _stage_browser_specs(spec_dir, project_dir)
         if n_specs == 0:
-            _log.info("run_browser_evidence: no generated *.spec.ts to run; skipping")
+            _log.info(
+                "run_browser_evidence: no generated *.spec.{ts,js} to run; skipping"
+            )
             return {
                 "ok": False,
                 "output_tail": "no browser specs",

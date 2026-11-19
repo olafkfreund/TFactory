@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from agents.evaluator import (
     _build_all_bundles,
     _completed_functional_subtasks,
@@ -99,3 +100,121 @@ def test_all_skipped_bats_run_is_environment_not_a_rejected_test(
     )
     assert bundles[0].stability.verdict == StabilityVerdict.CONSISTENT_FAIL
     assert bundles[0].stability.failure_kind == "environment"
+
+
+@pytest.mark.parametrize("padding", ["", "# padding\n" * 600])
+def test_shell_bundles_grade_each_file_before_output_clipping(
+    tmp_path: Path, monkeypatch, padding: str
+) -> None:
+    spec_dir, project_dir = tmp_path / "spec", tmp_path / "project"
+    _stage(spec_dir, "tests/fail.bats", "tests/pass.bats")
+    stdout = (
+        "not ok 1 broken\n__BATS_FILE_EXIT=1 ./tests/fail.bats\n"
+        + padding
+        + "ok 1 works\n__BATS_FILE_EXIT=0 ./tests/pass.bats\n"
+        "__BATS_EXIT=1\n__SHELLCHECK_EXIT=0\n"
+    )
+    monkeypatch.setattr(
+        "agents.nix_shell_lane.run_bats_lane_via_nix",
+        lambda *a, **k: DockerRunResult(returncode=1, stdout=stdout, argv=["bats"]),
+    )
+    shell = [
+        _shell_subtask("fail", "tests/fail.bats"),
+        _shell_subtask("pass", "tests/pass.bats"),
+    ]
+    bundles = _build_all_bundles(
+        spec_dir, project_dir, [], [], [], [], [], (), (), shell
+    )
+    assert [b.stability.verdict for b in bundles] == [
+        StabilityVerdict.CONSISTENT_FAIL,
+        StabilityVerdict.STABLE,
+    ]
+    assert (
+        bundles[0]
+        .stability.runs[0]
+        .stdout_tail.startswith("FAILED tests/fail.bats: this test file failed\n")
+    )
+    assert all(run.stdout_tail == "" for run in bundles[1].stability.runs)
+
+
+def test_shellcheck_failure_still_fails_every_file(tmp_path: Path, monkeypatch) -> None:
+    spec_dir, project_dir = tmp_path / "spec", tmp_path / "project"
+    _stage(spec_dir, "tests/one.bats", "tests/two.bats")
+    stdout = (
+        "ok 1 one\n__BATS_FILE_EXIT=0 ./tests/one.bats\n"
+        "ok 1 two\n__BATS_FILE_EXIT=0 ./tests/two.bats\n"
+        "__BATS_EXIT=0\n__SHELLCHECK_EXIT=1\n"
+    )
+    monkeypatch.setattr(
+        "agents.nix_shell_lane.run_bats_lane_via_nix",
+        lambda *a, **k: DockerRunResult(returncode=1, stdout=stdout, argv=["bats"]),
+    )
+    shell = [
+        _shell_subtask("one", "tests/one.bats"),
+        _shell_subtask("two", "tests/two.bats"),
+    ]
+    bundles = _build_all_bundles(
+        spec_dir, project_dir, [], [], [], [], [], (), (), shell
+    )
+    assert [b.stability.verdict for b in bundles] == [
+        StabilityVerdict.CONSISTENT_FAIL,
+        StabilityVerdict.CONSISTENT_FAIL,
+    ]
+
+
+def test_shell_file_without_result_is_error(tmp_path: Path, monkeypatch) -> None:
+    spec_dir, project_dir = tmp_path / "spec", tmp_path / "project"
+    _stage(spec_dir, "tests/rotate.bats")
+    stdout = (
+        "ok 1 other\n__BATS_FILE_EXIT=0 ./tests/other.bats\n"
+        "__BATS_EXIT=0\n__SHELLCHECK_EXIT=0\n"
+    )
+    monkeypatch.setattr(
+        "agents.nix_shell_lane.run_bats_lane_via_nix",
+        lambda *a, **k: DockerRunResult(returncode=0, stdout=stdout, argv=["bats"]),
+    )
+    bundles = _build_all_bundles(
+        spec_dir, project_dir, [], [], [], [], [], (), (), [_shell_subtask()]
+    )
+    assert bundles[0].stability.verdict == StabilityVerdict.ERROR
+    assert bundles[0].stability.error_message == (
+        "tests/rotate.bats has no bats result: this test did not run"
+    )
+
+
+def test_bats_tool_error_fails_every_file_and_evidence_is_per_file(
+    tmp_path: Path, monkeypatch
+) -> None:
+    spec_dir, project_dir = tmp_path / "spec", tmp_path / "project"
+    _stage(spec_dir, "tests/a.bats", "tests/b.bats", "tests/c.bats")
+    stdout = (
+        "ModuleNotFoundError in b\n__BATS_FILE_EXIT=2 ./tests/b.bats\n"
+        "ok 1 a\n__BATS_FILE_EXIT=0 ./tests/a.bats\n"
+        "ok 1 c\n__BATS_FILE_EXIT=0 ./tests/c.bats\n"
+        "__BATS_EXIT=2\n__SHELLCHECK_EXIT=0\n"
+    )
+    monkeypatch.setattr(
+        "agents.nix_shell_lane.run_bats_lane_via_nix",
+        lambda *a, **k: DockerRunResult(returncode=1, stdout=stdout, argv=["bats"]),
+    )
+    shell = [_shell_subtask(n, f"tests/{n}.bats") for n in ("a", "b")]
+    bundles = _build_all_bundles(
+        spec_dir, project_dir, [], [], [], [], [], (), (), shell
+    )
+    assert all(b.stability.verdict == StabilityVerdict.CONSISTENT_FAIL for b in bundles)
+
+    # Two failing files keep their own evidence.
+    stdout = (
+        "not ok 1 x\nAssertionError in a\n__BATS_FILE_EXIT=1 ./tests/a.bats\n"
+        "ModuleNotFoundError in b\nnot ok 1 y\n__BATS_FILE_EXIT=1 ./tests/b.bats\n"
+        "__BATS_EXIT=1\n__SHELLCHECK_EXIT=0\n"
+    )
+    monkeypatch.setattr(
+        "agents.nix_shell_lane.run_bats_lane_via_nix",
+        lambda *a, **k: DockerRunResult(returncode=1, stdout=stdout, argv=["bats"]),
+    )
+    bundles = _build_all_bundles(
+        spec_dir, project_dir, [], [], [], [], [], (), (), shell
+    )
+    tail = bundles[0].stability.runs[0].stdout_tail
+    assert "AssertionError in a" in tail and "ModuleNotFoundError" not in tail

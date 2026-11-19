@@ -4,7 +4,7 @@ import asyncio
 import json
 
 import pytest
-from agents.services_gate import halt_if_services_declared
+from agents.services_gate import halt_if_services_declared, required_services
 from tfactory_yml import TFactoryYmlError, load_tfactory_yml_text
 
 _BASE = "version: 1\ntargets:\n  - name: api\n    type: http\n    base_url: https://example.test\n"
@@ -13,6 +13,8 @@ _BASE = "version: 1\ntargets:\n  - name: api\n    type: http\n    base_url: http
 @pytest.fixture(autouse=True)
 def _no_notifications(monkeypatch):
     monkeypatch.setattr("agents.workspace_status.notify_terminal", lambda *_: None)
+    monkeypatch.delenv("TFACTORY_NIX_RUNNER_IMAGE", raising=False)
+    monkeypatch.delenv("TFACTORY_VERIFY_BACKEND", raising=False)
 
 
 def test_declared_project_services_write_infra_status(tmp_path):
@@ -86,6 +88,111 @@ def test_unreadable_snapshot_does_not_gate(tmp_path, caplog):
     assert halt_if_services_declared(spec, project) is False
     assert not (spec / "status.json").exists()
     assert "unable to read snapshot" in caplog.text
+
+
+def test_runner_allows_declared_services(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".tfactory.yml").write_text(_BASE + "services:\n  - name: postgres\n")
+    spec = tmp_path / "spec"
+    spec.mkdir()
+    monkeypatch.setenv("TFACTORY_NIX_RUNNER_IMAGE", "runner:latest")
+
+    assert halt_if_services_declared(spec, project) is False
+    assert not (spec / "status.json").exists()
+
+
+@pytest.mark.parametrize("backend", ["host", "docker"])
+def test_explicit_non_nix_backend_still_gates(tmp_path, monkeypatch, backend):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".tfactory.yml").write_text(_BASE + "services:\n  - name: redis\n")
+    spec = tmp_path / "spec"
+    spec.mkdir()
+    monkeypatch.setenv("TFACTORY_NIX_RUNNER_IMAGE", "runner:latest")
+    monkeypatch.setenv("TFACTORY_VERIFY_BACKEND", backend)
+
+    assert halt_if_services_declared(spec, project) is True
+
+
+def test_required_services_declared_version_wins_over_detection(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".tfactory.yml").write_text(
+        _BASE + "services:\n  - name: redis\n    version: '8'\n"
+    )
+    (project / "compose.yaml").write_text(
+        "services:\n  db:\n    image: 'registry.example/db/postgres:16'\n"
+        "  cache:\n    image: redis:7\n"
+    )
+    (project / "requirements-dev.txt").write_text("redis>=5\npsycopg2-binary==2.9\n")
+
+    assert required_services(tmp_path / "spec", project) == [
+        ("postgres", None),
+        ("redis", "8"),
+    ]
+
+
+def test_required_services_detects_nested_drivers_and_ignores_excluded_dirs(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "pyproject.toml").write_text('dependencies = ["AsyncPG>=0.29"]\n')
+    nested = project / "src" / "app"
+    nested.mkdir(parents=True)
+    (nested / "requirements-test.txt").write_text("aioredis==2\n")
+    excluded = project / "node_modules"
+    excluded.mkdir()
+    (excluded / "requirements.txt").write_text("mysql\n")
+
+    assert required_services(tmp_path / "spec", project) == [
+        ("postgres", None),
+        ("redis", None),
+    ]
+
+
+def test_unknown_driver_names_do_not_trigger_services(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "requirements.txt").write_text("psycopg2helper\nredis-py\nmysql\n")
+    (project / "docker-compose.dev.yml").write_text("image: mysql:8\n")
+
+    assert required_services(tmp_path / "spec", project) == []
+
+
+def test_detected_only_service_does_not_gate(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "requirements.txt").write_text("redis>=5\n")
+    spec = tmp_path / "spec"
+    spec.mkdir()
+
+    assert required_services(spec, project) == [("redis", None)]
+    assert halt_if_services_declared(spec, project) is False
+    assert not (spec / "status.json").exists()
+
+
+def test_excluded_and_deeper_dependency_files_are_ignored(tmp_path):
+    project = tmp_path / "project"
+    (project / "node_modules").mkdir(parents=True)
+    (project / "node_modules" / "requirements.txt").write_text("redis\n")
+    deep = project / "src" / "app" / "module"
+    deep.mkdir(parents=True)
+    (deep / "pyproject.toml").write_text('dependencies = ["psycopg"]\n')
+
+    assert required_services(tmp_path / "spec", project) == []
+
+
+def test_snapshot_preserves_declared_version(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    spec = tmp_path / "spec"
+    context = spec / "context"
+    context.mkdir(parents=True)
+    (context / "tfactory_yml.json").write_text(
+        json.dumps({"services": [{"name": "postgres", "version": "15"}]})
+    )
+
+    assert required_services(spec, project) == [("postgres", "15")]
 
 
 def test_schema_accepts_supported_services_only():
