@@ -8,7 +8,7 @@ author: olafkfreund
 
 ## Problem
 
-aifactory-demo #625 passed VAL-2 but browser_evidence.serve_command read 'python -m uvicorn app.main:app'. serve_command is the exact command the Job ran, so the wrong server ran: ingest had no target_paths, detect_serve_command went repo-wide and found src/app/main.py before the node app.
+aifactory-demo #625 passed VAL-2 but browser_evidence.serve_command read 'python -m uvicorn app.main:app'. serve_command is the exact command the Job ran, so the Job script was built with the wrong server command (startup success is not proven by the field): ingest had no target_paths, detect_serve_command went repo-wide and found src/app/main.py before the node app.
 
 ## Proposed outcome
 

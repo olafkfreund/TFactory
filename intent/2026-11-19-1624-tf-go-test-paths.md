@@ -24,4 +24,4 @@ Smallest correct change; tests that fail without the fix; no cluster changes; ba
 
 ## Open questions
 
-None. Decision (owner delegation 2026-11-19): resolve test_file as spec_dir/<test_file>, else spec_dir/<basename>, and rewrite the candidate's test_file to where it was found; empty sources bypass dedup and are not committed (git_writer already skips them).
+None. Decision (owner delegation 2026-11-19): resolve test_file as spec_dir/<test_file>, else spec_dir/<basename>, and rewrite the candidate's test_file to where it was found; a source that is empty or undecodable (UnicodeDecodeError, not only OSError) counts as unreadable: it bypasses dedup and are not committed (git_writer already skips them).
