@@ -571,9 +571,14 @@ def test_config_probe_failure_prevents_write(tmp_path):
 
 def test_push_delivers_when_branch_checked_out_in_other_worktree(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """#1598: the project clone holds the PR branch; delivery from a second
     worktree must still commit and push it, leaving the clone's branch alone."""
+
+    for k in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{k}_NAME", "t")
+        monkeypatch.setenv(f"GIT_{k}_EMAIL", "t@x")
 
     def git(cwd: Path, *a: str) -> str:
         return subprocess.run(
