@@ -891,6 +891,85 @@ async def test_dispatch_falls_back_to_inpod_when_apply_fails(store):
     assert result is None  # → caller falls back to in-pod
 
 
+def _dispatch_spec(tmp_path, status="generated"):
+    spec = tmp_path / "specs" / "verify"
+    spec.mkdir(parents=True)
+    (spec / "status.json").write_text(
+        json.dumps({"status": status, "phase": "gen_functional_complete"})
+    )
+    return spec
+
+
+async def test_dispatch_marks_status_before_apply_and_keeps_it(store, tmp_path):
+    spec = _dispatch_spec(tmp_path)
+    apply = _RecordingApply()
+    observed = []
+
+    async def apply_fn(namespace, manifest):
+        observed.append(json.loads((spec / "status.json").read_text()))
+        await apply(namespace, manifest)
+
+    result = await vd.dispatch_verify_job(
+        job_id="status-before-apply",
+        spec_dir=spec,
+        project_dir=tmp_path,
+        sandbox=_FakeSandbox(data_root=str(tmp_path)),
+        store=store,
+        apply_fn=apply_fn,
+    )
+    assert result is not None
+    assert len(apply.calls) == 1
+    assert (observed[0]["status"], observed[0]["phase"]) == (
+        "evaluating",
+        "verify_job_running",
+    )
+    after = json.loads((spec / "status.json").read_text())
+    assert (after["status"], after["phase"]) == ("evaluating", "verify_job_running")
+
+
+async def test_dispatch_leaves_terminal_status_untouched(store, tmp_path):
+    spec = _dispatch_spec(tmp_path, status="triaged")
+    result = await vd.dispatch_verify_job(
+        job_id="terminal-before-apply",
+        spec_dir=spec,
+        project_dir=tmp_path,
+        sandbox=_FakeSandbox(data_root=str(tmp_path)),
+        store=store,
+        apply_fn=_RecordingApply(),
+    )
+    assert result is not None
+    after = json.loads((spec / "status.json").read_text())
+    assert (after["status"], after["phase"]) == ("triaged", "gen_functional_complete")
+
+
+async def test_dispatch_restores_generated_after_apply_failure(store, tmp_path):
+    spec = _dispatch_spec(tmp_path)
+    result = await vd.dispatch_verify_job(
+        job_id="apply-failed-status",
+        spec_dir=spec,
+        project_dir=tmp_path,
+        sandbox=_FakeSandbox(data_root=str(tmp_path)),
+        store=store,
+        apply_fn=_RecordingApply(fail=True),
+    )
+    assert result is None
+    after = json.loads((spec / "status.json").read_text())
+    assert (after["status"], after["phase"]) == ("generated", "gen_functional_complete")
+
+
+def test_apply_failure_restore_leaves_reaped_status_untouched(tmp_path):
+    spec = _dispatch_spec(tmp_path, status="failed")
+    status_path = spec / "status.json"
+    status_path.write_text(
+        json.dumps({"status": "failed", "phase": "verify_job_reaped"})
+    )
+    vd._unmark_spec_verifying(spec)
+    assert json.loads(status_path.read_text()) == {
+        "status": "failed",
+        "phase": "verify_job_reaped",
+    }
+
+
 # ─── reconcile_verify_job + is_terminal_record ────────────────────────────────
 
 

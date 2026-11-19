@@ -33,6 +33,8 @@ zero on honest specs, where a spurious rejection costs a replan):
     quantity and stays.
   - ISO dates and clock times are stripped before extraction; a criterion that
     names a date whose test builds a ``datetime`` is not drift.
+  - Layout parameters (``width 8``, ``8 characters wide``) are stripped; they
+    describe formatting, not values the test must spell out.
   - Negative numbers are not extracted (the leading ``-`` is indistinguishable
     from the hyphen in ``RFC-0002`` without parsing prose). A criterion whose
     only contested value is negative is not covered — a miss, not a misfire.
@@ -73,6 +75,10 @@ _REF_WORD = re.compile(
 )
 _ISO_DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?)?")
 _CLOCK = re.compile(r"\b\d{1,2}:\d{2}(?::\d{2})?\b")
+_LAYOUT_PARAM = re.compile(
+    r"\b(?:width|wide|padded|padding|pad|indent(?:ed|ation)?)\b\s*(?:of|to|by|=|:)?\s*\d+(?:\.\d+)?|(?<![\w.])\d+(?:\.\d+)?(?:\s*-\s*|\s+)(?:(?:characters?|chars?|columns?|spaces?)\s+)?(?:wide|width)\b",
+    re.I,
+)
 
 # Comment syntaxes for the non-Python fallback: // line, /* block */, # line,
 # and Python-style triple-quoted blocks (harmless elsewhere).
@@ -127,6 +133,7 @@ def criterion_literals(text: str) -> dict[Decimal, str]:
     cleaned = _REF_WORD.sub(" ", text or "")
     cleaned = _ISO_DATE.sub(" ", cleaned)
     cleaned = _CLOCK.sub(" ", cleaned)
+    cleaned = _LAYOUT_PARAM.sub(" ", cleaned)
     return _numbers_in_text(cleaned)
 
 

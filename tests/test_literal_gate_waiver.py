@@ -24,7 +24,8 @@ NOTES_TEST = (
 
 
 def test_gate_still_flags_derived_values_so_the_waiver_is_what_ends_the_loop():
-    assert not check_criterion_literals(GO_CRITERION, GO_TEST, language="go").ok
+    # #1630: the field width is a layout parameter, no longer demanded as a literal.
+    assert check_criterion_literals(GO_CRITERION, GO_TEST, language="go").ok
     assert not check_criterion_literals(NOTES_CRITERION, NOTES_TEST).ok
 
 
