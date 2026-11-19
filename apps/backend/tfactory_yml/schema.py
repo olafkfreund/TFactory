@@ -855,6 +855,11 @@ class QualityGatePolicy(BaseModel):
     context: str = "TFactory / tests"
 
 
+class ServiceSpec(BaseModel):
+    name: Literal["postgres", "redis"]
+    version: str | None = None
+
+
 class TFactoryConfig(BaseModel):
     """Parsed representation of a ``.tfactory.yml`` file.
 
@@ -878,6 +883,7 @@ class TFactoryConfig(BaseModel):
     # Optional build steps run before the lanes to produce the artifact under
     # test (e.g. docker build / npm run build) — see DockerRunTarget (#233).
     build: list[BuildStep] = []
+    services: list[ServiceSpec] = []
     test_data: TestData | None = None
     evidence_policy: EvidencePolicy | None = None
     # Optional path overrides (consumed by Planner / Gen-Functional)

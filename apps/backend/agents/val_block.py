@@ -118,6 +118,13 @@ def _level_for_verdict(v: dict[str, Any]) -> str | None:
     return _LANE_LEVEL.get(lane)
 
 
+def _never_executed(v: Any) -> bool:
+    if not isinstance(v, dict):
+        return False
+    summary = v.get("signals_summary")
+    return isinstance(summary, dict) and summary.get("failure_kind") == "import"
+
+
 def _level_status(verdicts: list[str]) -> str:
     """passed only if a lane ran and every verdict is a pass; else failed/not_run.
 
@@ -151,7 +158,12 @@ def build_verification_block(
     levels[], claim, _gate}`` — ``achieved_level`` is recomputed from what truly
     ran, so it can never overclaim.
     """
-    verdicts = verdicts or []
+    # A test that failed at collection (stamped `failure_kind: import`) never
+    # executed, so its verdict -- even a `flag` -- proves nothing (#1583).
+    verdicts = [
+        {**v, "verdict": "not_run"} if _never_executed(v) else v
+        for v in (verdicts or [])
+    ]
     by_level: dict[str, list[str]] = {}
     for v in verdicts:
         if not isinstance(v, dict):
@@ -258,7 +270,23 @@ def build_verification_block(
         "achieved_level": effective_target,
         "levels": levels,
     }
-    return _qualify_claim_with_flags(normalize_verification(block), verdicts)
+    out = _qualify_claim_with_flags(normalize_verification(block), verdicts)
+    val3_ran = val3 is not None and getattr(val3, "ran", False)
+    return out if any_ran or val3_ran else _fail_closed(out, bool(verdicts))
+
+
+def _fail_closed(out: dict[str, Any], have_verdicts: bool) -> dict[str, Any]:
+    """Zero executed tests is an explicit verdict class, never a level (#1583).
+
+    A genuine VAL-3 run is independent evidence and is left alone by the caller.
+    """
+    cls = "infra" if have_verdicts else "evaluated_empty"
+    out["verdict_class"] = cls
+    note = " (collection/environment errors, not code defects)" if have_verdicts else ""
+    out["claim"] = (
+        f"NOT VERIFIED ({cls}): no test executed{note}. {out.get('claim', '')}".strip()
+    )
+    return out
 
 
 def read_verification_block(

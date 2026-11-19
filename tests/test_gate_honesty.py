@@ -64,6 +64,7 @@ _COVERED: dict[str, str] = {
     "quality_gate.py": "test_quality_gate_refuses_a_contradictory_accept",
     "verification_gate.py": "test_verification_gate_refuses_an_overclaim",
     "coverage_gate.py": "test_coverage_gate_refuses_a_drop_and_an_empty_report",
+    "services_gate.py": "test_services_gate_refuses_a_run_that_needs_services",
     # scan 2: triager halt_reason rules
     "no_evidence": "test_no_evidence_rule_refuses_a_verdict_free_run",
     "dependency_review": "test_dependency_review_rule_refuses_a_gating_fail",
@@ -296,6 +297,25 @@ def test_dependency_review_rule_refuses_a_gating_fail(tmp_path: Path) -> None:
         "a failing dependency review must downgrade a would-be success"
     )
     assert envelope["halt_reason"].startswith("dependency_review:")
+
+
+def test_services_gate_refuses_a_run_that_needs_services(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """#1582: declared postgres/redis cannot be provisioned, so stop with infra."""
+    monkeypatch.setattr("agents.workspace_status.notify_terminal", lambda *_: None)
+    from agents.services_gate import halt_if_services_declared
+
+    (tmp_path / ".tfactory.yml").write_text(
+        "version: 1\ntargets:\n  - name: api\n    type: http\n"
+        "    base_url: https://example.test\nservices:\n  - name: postgres\n"
+    )
+    spec = tmp_path / "spec"
+    spec.mkdir()
+    assert halt_if_services_declared(spec, tmp_path) is True
+    status = json.loads((spec / "status.json").read_text())
+    assert status["verdict_class"] == "infra"
+    assert "needs services" in status["verify_skip_reason"]
 
 
 def test_zero_tests_rule_refuses_an_unexplained_empty_generation(
