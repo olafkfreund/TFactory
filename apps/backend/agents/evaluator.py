@@ -2413,8 +2413,7 @@ def _per_file_stability(
             runs.append(run)
             continue
         key = next((p for p in files if p.removeprefix("./") == rel), None)
-        code = files.get(key) if key is not None else None
-        if code is None:
+        if key is None:
             return StabilityResult(
                 verdict=StabilityVerdict.ERROR,
                 runs=shared.runs,
@@ -2422,6 +2421,7 @@ def _per_file_stability(
                 rerun_count=shared.rerun_count,
                 error_message=f"{rel} has no bats result: this test did not run",
             )
+        code = files[key]
         runs.append(
             StabilityRun(
                 returncode=code,
