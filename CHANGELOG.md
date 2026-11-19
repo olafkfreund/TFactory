@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.13.3 — Triager Go paths, status identity guard, verify Job env (2026-11-19)
+
+### Fixed
+
+- **Triager:** a verdict's test file resolves at the spec root when `tests/<file>` is absent and is committed under its real name; blank or undecodable sources are rejected with a reason (#1624, #1627).
+- **Status:** a status.json naming another task never answers for the requested id (#1597, #1627).
+- **Verify:** serve targets are inferred from script files named in the spec when source.json has none (#1609, #1627); verify Job pods no longer receive service-link env, and a contract-less FastAPI api lane takes the nix Job (#1625, #1582, #1626).
+
 ## 0.13.2 — Lane env fixes and literal-gate waiver (2026-11-19)
 
 ### Fixed

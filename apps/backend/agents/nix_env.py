@@ -2184,6 +2184,7 @@ def _browser_targets(spec_dir: Path, project_dir: Path) -> list[str] | None:
         if targets:
             return targets
     except (OSError, json.JSONDecodeError, TypeError):
+        # No readable source.json: fall back to scripts named in the spec text.
         pass
     return _spec_text_targets(spec_dir, project_dir) or None
 
