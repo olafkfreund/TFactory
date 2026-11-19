@@ -447,28 +447,35 @@ def check_import(
     else:
         script = _INTROSPECT_SCRIPT_FROM.format(module=imp.module, name=imp.name)
 
-    env = child_env()
-    if project_dir is not None:
-        existing = env.get("PYTHONPATH", "")
-        # Put the project root on PYTHONPATH, and — for src-layout packages
-        # (``<project>/src/<pkg>``) — the ``src`` dir too, so ``import <pkg>``
-        # resolves without an install step.
-        roots = [str(project_dir)]
-        src_dir = Path(project_dir) / "src"
-        if src_dir.is_dir():
-            roots.insert(0, str(src_dir))
-        # #732: put the dir that actually CONTAINS this module's package first,
-        # so a monorepo layout resolves from the checkout instead of falling
-        # through to an ambient copy of the same package name.
-        for found in reversed(package_roots_for(Path(project_dir), imp.module)):
-            if found in roots:
-                roots.remove(found)
-            roots.insert(0, found)
-        parts = roots + ([existing] if existing else [])
-        env["PYTHONPATH"] = os.pathsep.join(parts)
+    pkg_roots = (
+        package_roots_for(Path(project_dir), imp.module)
+        if project_dir is not None
+        else []
+    )
 
-    try:
-        proc = subprocess.run(
+    def _probe(
+        order: list[str], cwd: str | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        env = child_env()
+        if project_dir is not None:
+            existing = env.get("PYTHONPATH", "")
+            # Put the project root on PYTHONPATH, and — for src-layout packages
+            # (``<project>/src/<pkg>``) — the ``src`` dir too, so ``import <pkg>``
+            # resolves without an install step.
+            roots = [str(project_dir)]
+            src_dir = Path(project_dir) / "src"
+            if src_dir.is_dir():
+                roots.insert(0, str(src_dir))
+            # #732: put the dir that actually CONTAINS this module's package
+            # first, so a monorepo layout resolves from the checkout instead of
+            # falling through to an ambient copy of the same package name.
+            for found in reversed(order):
+                if found in roots:
+                    roots.remove(found)
+                roots.insert(0, found)
+            parts = roots + ([existing] if existing else [])
+            env["PYTHONPATH"] = os.pathsep.join(parts)
+        return subprocess.run(
             [python_exe, "-c", script],
             capture_output=True,
             text=True,
@@ -485,9 +492,23 @@ def check_import(
             # RUNNING SERVICE's copy, found the build's new symbol absent, and
             # reported a correct test as a hallucination (#752). #732 fixed which
             # roots go on PYTHONPATH; this fixes CWD outranking them.
-            cwd=str(project_dir) if project_dir is not None else None,
+            cwd=cwd or (str(project_dir) if project_dir is not None else None),
             check=False,
         )
+
+    try:
+        proc = _probe(pkg_roots)
+        # A checkout can hold several top-level packages of the same name (a
+        # repo-root ``src/app`` beside ``services/notes-api/app``). Only one wins
+        # on PYTHONPATH, so a missing name there proves nothing about the others:
+        # try each other copy and reject only if NONE has the name. The copy's
+        # root is also the CWD, which outranks PYTHONPATH on ``sys.path``.
+        if proc.returncode == _EXIT_MISSING_ATTR:
+            for alt in pkg_roots[1:]:
+                retry = _probe([alt, *(r for r in pkg_roots if r != alt)], cwd=alt)
+                if retry.returncode == 0:
+                    proc = retry
+                    break
     except subprocess.TimeoutExpired:
         imp.failed = True
         imp.reason = f"introspection timed out after {timeout_sec}s"

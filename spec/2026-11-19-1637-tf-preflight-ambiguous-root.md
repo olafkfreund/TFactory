@@ -8,7 +8,7 @@ intent: intent/2026-11-19-1637-tf-preflight-ambiguous-root.md
 
 ## Design
 
-In `check_import`, factor the subprocess run into `_probe(order)`. If the first probe exits 2 (missing attribute) and `package_roots_for` returned more than one root, re-run with each other root first and stop at the first result that is not exit 2. Reject only if every copy lacks the name. Exit 2 with one root is unchanged, so the `_shadowed_elsewhere` logic and third-party behaviour stay as is.
+In `check_import`, factor the subprocess run into `_probe(order)`. If the first probe exits 2 (missing attribute) and `package_roots_for` returned more than one root, re-run with each other root first and accept the first copy that provides the name (a broken sibling is skipped). Reject only if every copy lacks the name. Exit 2 with one root is unchanged, so the `_shadowed_elsewhere` logic and third-party behaviour stay as is.
 
 ## Alternatives rejected
 
