@@ -82,6 +82,7 @@ from agents.mutate_probe import (
 from agents.mutation_dispatch import is_mutation_supported, mutant_extension
 from agents.nix_env import (
     _API_SELF_SERVE_PORT,
+    api_services_fallback_env,
     detect_serve_command,
     environment_from_contract,
     has_nix_env,
@@ -278,7 +279,9 @@ def _host_runner_mode() -> bool:
     return not _container_runtime_available()  # auto: host when no runtime
 
 
-def _nix_verify_mode(spec_dir: Path, project_dir: Path | None = None) -> bool:
+def _nix_verify_mode(
+    spec_dir: Path, project_dir: Path | None = None, lane: str | None = None
+) -> bool:
     """Whether the pytest lane should run via the Nix k8s Job (RFC-0016 #469).
 
     nixjob is the DEFAULT verify execution path: ON when a Nix runner image is
@@ -298,7 +301,9 @@ def _nix_verify_mode(spec_dir: Path, project_dir: Path | None = None) -> bool:
         return False
     try:
         # One predicate with run_pytest_lane_via_nix so they cannot drift (#1187, #1397).
-        return has_nix_env(spec_dir, project_dir)
+        return has_nix_env(spec_dir, project_dir) or (
+            api_services_fallback_env(spec_dir, project_dir, lane) is not None
+        )
     except Exception:  # noqa: BLE001 - any contract-read issue → legacy runner
         return False
 
@@ -311,6 +316,7 @@ def _maybe_nix_verify(  # noqa: PLR0913 - explicit api-lane self-serve knobs
     *,
     serve_command: str | None = None,
     serve_port: int | None = None,
+    lane: str = "unit",
 ) -> DockerRunResult | None:
     """Run the pytest lane via the Nix k8s Job when selected, else None.
 
@@ -318,7 +324,7 @@ def _maybe_nix_verify(  # noqa: PLR0913 - explicit api-lane self-serve knobs
     isn't selected / is unavailable / errors — so the caller falls through to the
     legacy host/docker runner. Never raises (a config gap must not fail the lane).
     """
-    if not _nix_verify_mode(spec_dir, project_dir):
+    if not _nix_verify_mode(spec_dir, project_dir, lane):
         return None
     try:
         nix_res = run_pytest_lane_via_nix(
@@ -333,6 +339,7 @@ def _maybe_nix_verify(  # noqa: PLR0913 - explicit api-lane self-serve knobs
             timeout=900,
             serve_command=serve_command,
             serve_port=serve_port,
+            lane=lane,
         )
     except Exception as exc:  # noqa: BLE001 - never fail the lane on a config gap
         _eval_log.warning(
@@ -591,6 +598,7 @@ def _resolve_runner_fn(
                 extra_env,
                 serve_command=serve_command,
                 serve_port=_API_SELF_SERVE_PORT,
+                lane=str((subtask or {}).get("lane") or "unit"),
             )
             if nix_res is not None:
                 sandbox_creds.wipe()
@@ -1414,7 +1422,9 @@ def _stability_for_subtask(
     # (Factory#1712 review).
     batchable = framework == "jest" or language in ("", "python")
     try:
-        if batchable and _nix_verify_mode(spec_dir, project_dir):
+        if batchable and _nix_verify_mode(
+            spec_dir, project_dir, str(subtask.get("lane") or "unit")
+        ):
             batched = _nix_batched_stability(
                 spec_dir,
                 project_dir,
@@ -2924,7 +2934,7 @@ def _maybe_self_serve_api_bundle(
     """
     if st.get("lane") != "api":
         return None
-    if _nix_verify_mode(spec_dir, project_dir):
+    if _nix_verify_mode(spec_dir, project_dir, "api"):
         _eval_log.info(
             "api lane self-serve skipped for %s: nixjob backend runs the test "
             "in a separate pod that can't reach a host-local URL (follow-up)",
