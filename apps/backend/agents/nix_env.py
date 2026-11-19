@@ -461,10 +461,11 @@ def _serve_prelude(serve_command: str, url: str, mount: str) -> str:
         f"cd {mount}\n"
         f"{serve_command} >/tmp/tf_app.log 2>&1 &\n"
         "TF_SUT_PID=$!\n"
-        "end=$((SECONDS+60))\n"
-        f"while [ $SECONDS -lt $end ]; do {probe} && break; "
-        'kill -0 "$TF_SUT_PID" 2>/dev/null || break; sleep 1; done\n'
-        f"{probe} || {{\n"
+        "end=$((SECONDS+60)); TF_SUT_UP=\n"
+        f"while :; do {probe} && {{ TF_SUT_UP=1; break; }}; "
+        'kill -0 "$TF_SUT_PID" 2>/dev/null || break; '
+        "[ $SECONDS -ge $end ] && break; sleep 1; done\n"
+        'if [ -z "$TF_SUT_UP" ]; then\n'
         'if kill -0 "$TF_SUT_PID" 2>/dev/null; then '
         'state="still running, not accepting connections"; '
         'else state="process exited"; fi\n'
@@ -473,8 +474,11 @@ def _serve_prelude(serve_command: str, url: str, mount: str) -> str:
         "echo __TF_APP_LOG_BEGIN__\n"
         "tail -n 20 /tmp/tf_app.log\n"
         "echo __TF_APP_LOG_END__\n"
+        # Per-run copy for the skip branch: the batched parser drops text outside
+        # each __PYTEST_RUN segment (_skip_when_unhealthy echoes it back).
+        "TF_REASON=\"$state: $(tail -n 6 /tmp/tf_app.log | tr '\\n' '|' | tail -c 300)\"\n"
         "TF_NOT_HEALTHY=1\n"
-        "}\n"
+        "fi\n"
     )
 
 
@@ -512,6 +516,7 @@ def _skip_when_unhealthy(
     if not active:
         return run_cmd
     fail = (
+        'if [ -n "$TF_REASON" ]; then echo "$TF_REASON"; fi\n'
         f"echo {_APP_NOT_HEALTHY_MARKER} dependency not healthy\necho __PYTEST_EXIT=1\n"
     )
     skip = (

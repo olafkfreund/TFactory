@@ -303,3 +303,40 @@ def test_cloud_layout_script_and_unhealthy_reason_reach_the_lane_output(
     assert "--max-time 3" in script
     assert "KeyError: 'DATABASE_URL'" in res.stdout
     assert res.stdout.rstrip().endswith("(SUT boot failed)")
+
+
+def test_skip_branch_keeps_the_sut_reason_inside_every_run_segment(tmp_path):
+    # #1618: the batched parser drops text outside __PYTEST_RUN segments, so the
+    # reason must be echoed per run, not once before the first.
+    from agents.nix_env import _skip_when_unhealthy
+
+    script = tmp_path / "skip.sh"
+    script.write_text(_skip_when_unhealthy("pytest", 3) + "\n")
+    out = subprocess.run(
+        ["bash", str(script)],
+        env={**os.environ, "TF_NOT_HEALTHY": "1", "TF_REASON": "process exited: boom"},
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    runs = parse_pytest_exits(out)
+    assert [c for c, _ in runs] == [1, 1, 1]
+    assert all("boom" in tail and _MARKER in tail for _, tail in runs)
+
+
+def test_serve_prelude_sets_the_per_run_reason_on_failure(tmp_path):
+    curl = tmp_path / "curl"
+    curl.write_text("#!/bin/sh\nexit 7\n")
+    curl.chmod(0o755)
+    script = tmp_path / "serve.sh"
+    script.write_text(
+        _serve_prelude("sh -c 'echo boom >&2; exit 3'", "http://127.0.0.1:8200", "/")
+        + 'echo "REASON=$TF_REASON"\n'
+    )
+    out = subprocess.run(
+        ["bash", str(script)],
+        env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"},
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert "REASON=process exited: boom" in out
