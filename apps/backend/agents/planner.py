@@ -1044,7 +1044,9 @@ async def run_planner(  # noqa: PLR0911 - early-exit guards
     if _planner_blocked(spec_dir, project_dir):
         return False
 
-    from agents.services_gate import halt_if_services_declared  # noqa: PLC0415 - lazy by design
+    from agents.services_gate import (  # noqa: PLC0415 - lazy by design
+        halt_if_services_declared,
+    )
 
     if halt_if_services_declared(spec_dir, project_dir):
         return True

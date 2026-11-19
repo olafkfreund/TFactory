@@ -3373,7 +3373,9 @@ async def run_evaluator(
     from agents.utils import repair_linked_worktree  # noqa: PLC0415 - lazy by design
 
     repair_linked_worktree(project_dir)
-    from agents.services_gate import halt_if_services_declared  # noqa: PLC0415 - lazy by design
+    from agents.services_gate import (  # noqa: PLC0415 - lazy by design
+        halt_if_services_declared,
+    )
 
     if halt_if_services_declared(spec_dir, project_dir):
         return True
