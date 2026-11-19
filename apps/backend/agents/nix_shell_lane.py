@@ -54,14 +54,17 @@ def parse_tap(text: str) -> TapCounts:
     return TapCounts(passed, failed, skipped)
 
 
+_NOT_RUN_EXITS = (126, 127)
+_UNAVAILABLE = "bats or shellcheck unavailable: lane did not run"
+
+
 def _tool_problem(
     bats_exit: int | None, shellcheck_exit: int | None
 ) -> tuple[int, str] | None:
     """A lane that did not run, or a tool error: both beat any TAP evidence."""
-    if bats_exit in (126, 127) or shellcheck_exit in (126, 127):
-        return (bats_exit if bats_exit in (126, 127) else shellcheck_exit), (
-            "bats or shellcheck unavailable: lane did not run"
-        )
+    for code in (bats_exit, shellcheck_exit):
+        if code is not None and code in _NOT_RUN_EXITS:
+            return code, _UNAVAILABLE
     if bats_exit is None or shellcheck_exit is None:
         return 1, "missing exit marker"
     if bats_exit not in (0, 1) or shellcheck_exit not in (0, 1):
