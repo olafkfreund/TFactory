@@ -820,6 +820,9 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
         # lane (the build path was flipped, the gate path was not).
         "TFACTORY_NIX_IN_IMAGE",
         "TFACTORY_SANDBOX_NAMESPACE",
+        # #1617: the nested lane Job needs the nix access-token Secret too.
+        "TFACTORY_NIX_GITHUB_SECRET",
+        "TFACTORY_NIX_GITHUB_SECRET_KEY",
     ):
         _nix_val = os.environ.get(_nix_var)
         if _nix_val:

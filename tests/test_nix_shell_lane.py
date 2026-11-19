@@ -10,6 +10,7 @@ from agents.nix_shell_lane import (
     parse_tap,
     shell_verdict,
 )
+from agents.stability_runner import classify_pytest_failure
 
 
 @pytest.mark.parametrize(
@@ -54,7 +55,7 @@ def test_shell_verdict(bats, shellcheck, counts, code, reason):
 
 def test_bats_job_script():
     script = bats_job_script("/some path/it's source", {"VALUE": "it's fine"})
-    assert script.startswith("#!/usr/bin/env bash\nset +e\n")
+    assert script.startswith("#!/usr/bin/env bash\nset +e\necho __TF_JOB_STARTED__\n")
     assert "export VALUE='it'\"'\"'s fine'" in script
     assert "cp -r '/some path/it'\"'\"'s source'/." in script
     assert "command -v bats >/dev/null 2>&1" in script
@@ -109,27 +110,64 @@ def _run_with(tmp_path, monkeypatch, stdout):
 
 
 def test_run_bats_lane_maps_skip_to_not_run(tmp_path, monkeypatch):
-    out = "ok 1 a # skip no nix\n__BATS_EXIT=0\n__SHELLCHECK_EXIT=0\n"
+    out = (
+        "__TF_JOB_STARTED__\nok 1 a # skip no nix\n__BATS_EXIT=0\n__SHELLCHECK_EXIT=0\n"
+    )
     res = _run_with(tmp_path, monkeypatch, out)
     assert res.returncode == 125 and "skipped" in res.stderr
 
 
 def test_run_bats_lane_passes_and_fails(tmp_path, monkeypatch):
-    ok = "ok 1 a\n__BATS_EXIT=0\n__SHELLCHECK_EXIT=0\n"
+    ok = "__TF_JOB_STARTED__\nok 1 a\n__BATS_EXIT=0\n__SHELLCHECK_EXIT=0\n"
     assert _run_with(tmp_path, monkeypatch, ok).returncode == 0
-    bad = "ok 1 a\nnot ok 2 b\n__BATS_EXIT=1\n__SHELLCHECK_EXIT=0\n"
+    bad = "__TF_JOB_STARTED__\nok 1 a\nnot ok 2 b\n__BATS_EXIT=1\n__SHELLCHECK_EXIT=0\n"
     assert _run_with(tmp_path, monkeypatch, bad).returncode == 1
-    findings = "ok 1 a\n__BATS_EXIT=0\n__SHELLCHECK_EXIT=1\n"
+    findings = "__TF_JOB_STARTED__\nok 1 a\n__BATS_EXIT=0\n__SHELLCHECK_EXIT=1\n"
     assert _run_with(tmp_path, monkeypatch, findings).returncode == 1
 
 
 def test_run_bats_lane_missing_tool_marker_is_not_run(tmp_path, monkeypatch):
-    out = "bats is missing\n__BATS_EXIT=126\n__SHELLCHECK_EXIT=126\n"
+    out = (
+        "__TF_JOB_STARTED__\nbats is missing\n__BATS_EXIT=126\n__SHELLCHECK_EXIT=126\n"
+    )
     assert _run_with(tmp_path, monkeypatch, out).returncode == 126
 
 
 def test_run_bats_lane_with_no_markers_fails_closed(tmp_path, monkeypatch):
-    assert _run_with(tmp_path, monkeypatch, "ok 1 a\n").returncode == 1
+    res = _run_with(tmp_path, monkeypatch, "__TF_JOB_STARTED__\nok 1 a\n")
+    assert res.returncode == 1 and "missing exit marker" in res.stderr
+
+
+def test_run_bats_lane_nix_failure_before_start(tmp_path, monkeypatch):
+    from agents import nix_shell_lane
+
+    def unexpected_verdict(*_args):
+        pytest.fail("shell_verdict called before the job started")
+
+    monkeypatch.setattr(nix_shell_lane, "shell_verdict", unexpected_verdict)
+    out = "fetching input\nerror: unable to download: HTTP error 403\n"
+    res = _run_with(tmp_path, monkeypatch, out)
+    assert res.returncode == 125
+    assert res.stdout == out
+    assert "HTTP error 403" in res.stderr
+    assert res.junit_xml_path is None and res.coverage_xml_path is None
+    assert res.argv == ["nix", "develop", "path:/work#default", "--", "bats", "--tap"]
+
+
+def test_nix_failure_is_environment(tmp_path, monkeypatch):
+    res = _run_with(tmp_path, monkeypatch, "error: HTTP error 403\n")
+    assert (
+        classify_pytest_failure(res.stdout + res.stderr, res.returncode)
+        == "environment"
+    )
+
+
+def test_nix_failure_reason_falls_back_and_is_capped(tmp_path, monkeypatch):
+    out = "old output\n" + "x" * 500
+    res = _run_with(tmp_path, monkeypatch, out)
+    assert (
+        res.stderr == ("nix environment failed before tests ran: " + out[-400:])[:400]
+    )
 
 
 def test_shell_environment_respects_a_repo_owned_flake(tmp_path, monkeypatch):
@@ -159,7 +197,7 @@ def test_file_results_isolates_each_file():
 
 def test_run_bats_lane_reason_has_full_counts_and_failing_files(tmp_path, monkeypatch):
     out = (
-        "not ok 1 nix\n__BATS_FILE_EXIT=1 ./test/flake.bats\n"
+        "__TF_JOB_STARTED__\nnot ok 1 nix\n__BATS_FILE_EXIT=1 ./test/flake.bats\n"
         "ok 1 a\nok 2 b\n__BATS_FILE_EXIT=0 ./test/a.bats\n"
         "__BATS_EXIT=1\n__SHELLCHECK_EXIT=0\n"
     )

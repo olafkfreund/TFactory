@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import time
 from pathlib import Path
 
 import pytest
 from agents.nix_env import (
+    _serve_prelude,
     detect_serve_command,
     parse_pytest_exits,
     run_pytest_lane_via_nix,
@@ -21,6 +25,53 @@ _ENV = {
     "network": "none",
 }
 _MARKER = "__TF_APP_NOT_HEALTHY__"
+
+
+@pytest.mark.parametrize(
+    ("serve_command", "curl_exit", "state", "log_text"),
+    [
+        ("sh -c 'echo boom >&2; exit 3'", "7", "process exited", "boom"),
+        ("sleep 10", "0", None, None),
+        ("sleep 10", "7", "still running, not accepting connections", None),
+    ],
+)
+def test_serve_prelude_under_bash(tmp_path, serve_command, curl_exit, state, log_text):
+    curl = tmp_path / "curl"
+    curl.write_text('#!/bin/sh\nexit "$TF_CURL_EXIT"\n')
+    curl.chmod(0o755)
+    prelude = _serve_prelude(serve_command, "http://127.0.0.1:8200", str(tmp_path))
+    assert "SECONDS+60" in prelude
+    script = tmp_path / "serve.sh"
+    script.write_text(
+        prelude.replace("SECONDS+60", "SECONDS+3")
+        + 'kill "$TF_SUT_PID" 2>/dev/null || true\n'
+    )
+    started = time.monotonic()
+    result = subprocess.run(
+        ["bash", str(script)],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "TF_CURL_EXIT": curl_exit,
+        },
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=True,
+    )
+    elapsed = time.monotonic() - started
+    assert elapsed < 10
+    if state:
+        assert f"{_MARKER} SUT did not accept a connection" in result.stdout
+        assert f"({state})" in result.stdout
+        assert "__TF_APP_LOG_BEGIN__\n" in result.stdout
+        assert "__TF_APP_LOG_END__\n" in result.stdout
+        if log_text:
+            assert log_text in result.stdout
+            assert elapsed < 2.5  # a dead SUT must not wait for the deadline
+    else:
+        assert result.stdout == ""
 
 
 def _setup(tmp_path, *, tfactory_yml=None, app=None, reqs=None):
@@ -206,3 +257,86 @@ def test_nix_verify_mode_selects_nix_for_api_repo_with_services(tmp_path, monkey
     monkeypatch.setenv("TFACTORY_NIX_RUNNER_IMAGE", "img")
     assert _nix_verify_mode(spec, project, "api") is True
     assert _nix_verify_mode(spec, project, "unit") is False
+
+
+def test_unhealthy_reason_keeps_marker_and_log_block_tail_capped():
+    from agents.nix_env import _unhealthy_reason
+
+    out = (
+        f"noise\n{_MARKER} SUT did not accept a connection (process exited)\n"
+        "__TF_APP_LOG_BEGIN__\n"
+        + "".join(f"line{i}\n" for i in range(100))
+        + "KeyError: 'DATABASE_URL'\n__TF_APP_LOG_END__\n"
+        f"{_MARKER} dependency not healthy\n{_MARKER} dependency not healthy\n"
+        "__PYTEST_EXIT=1\n"
+    )
+    reason = _unhealthy_reason(out, 200)
+    assert len(reason) <= 200 and reason.endswith("dependency not healthy")
+    assert "KeyError: 'DATABASE_URL'" in _unhealthy_reason(out)
+    assert _unhealthy_reason(out, 5000).count("dependency not healthy") == 1
+    assert "noise" not in _unhealthy_reason(out)
+    assert _unhealthy_reason("all good\n") == ""
+
+
+def test_cloud_layout_script_and_unhealthy_reason_reach_the_lane_output(
+    tmp_path, monkeypatch
+):
+    # #1618: factory-lab-cloud layout (deps in app/requirements.txt, no contract).
+    spec, project, test = _cloud_layout(tmp_path)
+    sb = _Sandbox(
+        output=(
+            f"{_MARKER} SUT did not accept a connection on http://127.0.0.1:8200"
+            " (process exited)\n__TF_APP_LOG_BEGIN__\n"
+            "KeyError: 'DATABASE_URL'\n__TF_APP_LOG_END__\n"
+            f"{_MARKER} dependency not healthy\n__PYTEST_EXIT=1\n"
+        )
+    )
+    monkeypatch.setattr("agents.nix_env.nix_runner_from_env", lambda: sb)
+    res = run_pytest_lane_via_nix(spec, project, test, lane="api")
+    assert res is not None
+    script = sb.script
+    assert sb.kw == {"services": [("postgres", None), ("redis", None)]}
+    assert "-r /work/app/requirements.txt" in script
+    serve = script.index("TF_SUT_PID=$!")
+    assert script.index("export DATABASE_URL=") < serve
+    assert script.index("export REDIS_URL=") < serve
+    assert "--max-time 3" in script
+    assert "KeyError: 'DATABASE_URL'" in res.stdout
+    assert res.stdout.rstrip().endswith("(SUT boot failed)")
+
+
+def test_skip_branch_keeps_the_sut_reason_inside_every_run_segment(tmp_path):
+    # #1618: the batched parser drops text outside __PYTEST_RUN segments, so the
+    # reason must be echoed per run, not once before the first.
+    from agents.nix_env import _skip_when_unhealthy
+
+    script = tmp_path / "skip.sh"
+    script.write_text(_skip_when_unhealthy("pytest", 3) + "\n")
+    out = subprocess.run(
+        ["bash", str(script)],
+        env={**os.environ, "TF_NOT_HEALTHY": "1", "TF_REASON": "process exited: boom"},
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    runs = parse_pytest_exits(out)
+    assert [c for c, _ in runs] == [1, 1, 1]
+    assert all("boom" in tail and _MARKER in tail for _, tail in runs)
+
+
+def test_serve_prelude_sets_the_per_run_reason_on_failure(tmp_path):
+    curl = tmp_path / "curl"
+    curl.write_text("#!/bin/sh\nexit 7\n")
+    curl.chmod(0o755)
+    script = tmp_path / "serve.sh"
+    script.write_text(
+        _serve_prelude("sh -c 'echo boom >&2; exit 3'", "http://127.0.0.1:8200", "/")
+        + 'echo "REASON=$TF_REASON"\n'
+    )
+    out = subprocess.run(
+        ["bash", str(script)],
+        env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"},
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert "REASON=process exited: boom" in out

@@ -335,6 +335,16 @@ def test_manifest_propagates_nix_sandbox_env_when_set(monkeypatch):
     assert env["TFACTORY_NIX_STORE_PVC"] == "tfactory-nix-store"
 
 
+def test_nix_github_secret_reaches_the_dispatched_job(monkeypatch):
+    """#1617: the nested lane Job is dispatched from inside this one."""
+    monkeypatch.setenv("TFACTORY_NIX_GITHUB_SECRET", "gh-nix")
+    monkeypatch.setenv("TFACTORY_NIX_GITHUB_SECRET_KEY", "pat")
+    ps = build_verify_job_manifest(_cfg())["spec"]["template"]["spec"]
+    env = {e["name"]: e["value"] for e in ps["containers"][0]["env"]}
+    assert env["TFACTORY_NIX_GITHUB_SECRET"] == "gh-nix"
+    assert env["TFACTORY_NIX_GITHUB_SECRET_KEY"] == "pat"
+
+
 def test_nix_in_image_flag_reaches_the_dispatched_job(monkeypatch):
     """#623: the flag MUST travel with TFACTORY_NIX_STORE_PVC.
 
