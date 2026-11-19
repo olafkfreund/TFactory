@@ -2148,6 +2148,43 @@ export default defineConfig({{
     (Path(project_dir) / _PW_CONFIG).write_text(cfg, encoding="utf-8")
 
 
+def _spec_text_targets(spec_dir: Path, project_dir: Path) -> list[str]:
+    """Infer existing repo scripts named in the ingested spec."""
+    try:
+        text = (Path(spec_dir) / "context" / "aifactory_spec.md").read_text()
+    except OSError:
+        return []
+    root = Path(project_dir).resolve()
+    targets = []
+    for target in re.findall(
+        r"(?<![\w./~-])((?:[\w][\w.-]*/)*[\w][\w.-]*\.(?:js|mjs|cjs|ts))(?![\w-]|\.\w|/)",
+        text,
+    ):
+        try:
+            path = (root / target).resolve()
+            if not path.is_relative_to(root) or not path.is_file():
+                continue
+        except (OSError, RuntimeError):
+            continue
+        if target not in targets:
+            targets.append(target)
+            if len(targets) == 20:
+                break
+    return targets
+
+
+def _browser_targets(spec_dir: Path, project_dir: Path) -> list[str] | None:
+    """Prefer explicit source targets, falling back to scripts in the spec."""
+    try:
+        source = json.loads((Path(spec_dir) / "context" / "source.json").read_text())
+        targets = [str(t) for t in (source.get("target_paths") or [])]
+        if targets:
+            return targets
+    except (OSError, json.JSONDecodeError, TypeError):
+        pass
+    return _spec_text_targets(spec_dir, project_dir) or None
+
+
 def run_browser_evidence(
     spec_dir: Path, project_dir: Path, *, port: int = 8099, mount: str = "/work"
 ) -> dict | None:
@@ -2186,17 +2223,9 @@ def run_browser_evidence(
             }
         _write_pw_config(project_dir, port=port)
 
-        # The SUT this spec names. task_control writes source.json into the spec's
-        # CONTEXT dir, not its root (task_control.py:492) -- reading the root found
-        # nothing, so `targets` was always None and the scoping in
-        # detect_serve_command never fired (TFactory#1174). Still tolerant of the
-        # file being absent: detection then stays repo-wide, exactly as before.
-        try:
-            _src = json.loads((Path(spec_dir) / "context" / "source.json").read_text())
-            _targets = [str(t) for t in (_src.get("target_paths") or [])] or None
-        except (OSError, json.JSONDecodeError, TypeError):
-            _targets = None
-        serve = detect_serve_command(project_dir, env, port=port, targets=_targets)
+        serve = detect_serve_command(
+            project_dir, env, port=port, targets=_browser_targets(spec_dir, project_dir)
+        )
         # Scope the run to the staged config (NOT the contract's generic
         # "playwright test", which would also pick up stale repo specs). Export the
         # URL env the generated specs read.
