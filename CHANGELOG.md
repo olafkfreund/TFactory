@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added
+
+- **Rust lane:** `frameworks/cargo-test` and an in-cluster `cargo test` unit lane,
+  so the Planner can emit Rust subtasks and the Evaluator runs them in the
+  per-task Nix shell (#1578).
+
 ## 0.11.7 — Plan-Slug trailers in gitops bump (2026-11-18)
 
 ### Changed

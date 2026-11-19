@@ -2330,6 +2330,123 @@ def _resolve_kotlin_runner_fn(
     return _run
 
 
+def _completed_rust_subtasks(plan: dict[str, Any]) -> list[dict[str, Any]]:
+    """Completed unit-lane Rust subtasks (#1578).
+
+    Every other filter admits one language, so without this lane a Rust subtask
+    matched nothing: it was silently dropped, and a Rust-only plan fell through
+    to evaluated_empty.
+    """
+    return _filter_completed_subtasks(
+        plan,
+        lambda st: (
+            st.get("lane") in ("unit", "functional") and st.get("language") == "rust"
+        ),
+    )
+
+
+def _resolve_rust_runner_fn(
+    spec_dir: Path, _project_dir: Path
+) -> Callable[[Path, Path, int], DockerRunResult]:
+    """runner_fn(test_file, project_dir, seed) -> DockerRunResult running the
+    crate's tests in the per-task Nix dev shell (#1578).
+
+    The twin of :func:`_resolve_kotlin_runner_fn`: ``test_file`` is only the
+    crate-root hint (``cargo test --workspace`` covers the whole crate), and an
+    unconfigured sandbox returns a failing result so the gap is visible in the
+    stability signal instead of silently passing.
+    """
+    # Lazy on purpose: tests patch agents.nix_rust_lane.run_cargo_lane_via_nix
+    # on the module, which a top-level `from` import would bind past.
+    from agents import nix_rust_lane  # noqa: PLC0415
+    from tools.runners.docker_runner import DockerRunResult  # noqa: PLC0415
+
+    def _run(test_file: Path, project_dir_arg: Path, _seed: int) -> DockerRunResult:
+        try:
+            hint = Path(test_file).relative_to(spec_dir)
+        except ValueError:
+            hint = Path(test_file)
+        res = nix_rust_lane.run_cargo_lane_via_nix(
+            spec_dir, Path(project_dir_arg), hint=hint
+        )
+        if res is not None:
+            return res
+        return DockerRunResult(
+            returncode=1,
+            stdout="",
+            stderr="rust nix lane unavailable: TFACTORY_NIX_RUNNER_IMAGE unset",
+            argv=["nix", "develop", "--", "cargo", "test"],
+        )
+
+    return _run
+
+
+def _per_target_stability(
+    shared: StabilityResult | None, outputs: list[str], subtask: dict[str, Any]
+) -> StabilityResult | None:
+    """A Rust subtask counts only if cargo actually ran its ``tests/<name>.rs``.
+
+    ``cargo test`` is crate-wide, so other tests' passes must not vouch for a
+    generated file Cargo never compiled (the JVM per-class check, #1341).
+    """
+    if shared is None or shared.verdict == StabilityVerdict.ERROR:
+        return shared
+    if len(outputs) != len(shared.runs):
+        return shared
+    from agents.nix_rust_lane import cargo_ran_targets  # noqa: PLC0415
+
+    target = "/".join(Path(subtask["files_to_create"][0]).parts[-2:])
+    if all(target in cargo_ran_targets(out) for out in outputs):
+        return shared
+    return StabilityResult(
+        verdict=StabilityVerdict.ERROR,
+        runs=shared.runs,
+        seed=shared.seed,
+        rerun_count=shared.rerun_count,
+        error_message=f"{target} was not run by cargo: this test did not run",
+    )
+
+
+def _rust_bundles(
+    spec_dir: Path,
+    project_dir: Path,
+    subtasks: Iterable[dict[str, Any]],
+    runner_fn: Callable[[Path, Path, int], DockerRunResult],
+) -> list[EvaluatorSignals]:
+    from agents.nix_rust_lane import _cargo_crate_dir  # noqa: PLC0415
+
+    groups: dict[Path, list[dict[str, Any]]] = {}
+    for st in subtasks:
+        root = _cargo_crate_dir(project_dir, Path(st["files_to_create"][0]))
+        groups.setdefault(root, []).append(st)
+
+    bundles = []
+    for group in groups.values():
+        outputs: list[str] = []
+
+        def recording_runner(
+            test_file: Path,
+            project: Path,
+            seed: int,
+            outputs: list[str] = outputs,
+        ) -> DockerRunResult:
+            res = runner_fn(test_file, project, seed)
+            outputs.append(getattr(res, "stdout", "") or "")
+            return res
+
+        shared = _stability_for_subtask(
+            spec_dir, project_dir, group[0], recording_runner
+        )
+        for st in group:
+            stability = _per_target_stability(shared, outputs, st)
+            bundles.append(
+                _build_go_signal_bundle(
+                    spec_dir, project_dir, st, runner_fn, stability=stability
+                )
+            )
+    return bundles
+
+
 def _completed_java_subtasks(plan: dict[str, Any]) -> list[dict[str, Any]]:
     """Completed unit-lane Java subtasks (#1321).
 
@@ -2807,7 +2924,7 @@ def _persist_run_output(spec_dir: Path, bundles: list[Any]) -> None:
 
 
 def _build_all_bundles(  # noqa: PLR0913 - one list per lane
-    spec_dir, project_dir, unit, browser, api, jest, go, kotlin=(), java=()
+    spec_dir, project_dir, unit, browser, api, jest, go, kotlin=(), java=(), rust=()
 ) -> list:
     """Compute the per-test signal bundle for every completed subtask.
 
@@ -2919,6 +3036,14 @@ def _build_all_bundles(  # noqa: PLR0913 - one list per lane
             java,
             java_runner,
             lambda st: resolver(project_dir, Path(st["files_to_create"][0])),
+        )
+    if rust:
+        # `cargo test --workspace` covers a whole crate: one 3x pass per crate
+        # root, each subtask graded on its own tests/<name>.rs target (#1578).
+        for st in rust:
+            _stage_go_test(spec_dir, project_dir, st)
+        bundles += _rust_bundles(
+            spec_dir, project_dir, rust, _resolve_rust_runner_fn(spec_dir, project_dir)
         )
     return bundles
 
@@ -3402,6 +3527,7 @@ async def run_evaluator(
         go_completed = _completed_go_subtasks(plan)
         kotlin_completed = _completed_kotlin_subtasks(plan)
         java_completed = _completed_java_subtasks(plan)
+        rust_completed = _completed_rust_subtasks(plan)
         completed = (
             unit_completed
             + browser_completed
@@ -3410,10 +3536,34 @@ async def run_evaluator(
             + go_completed
             + kotlin_completed
             + java_completed
+            + rust_completed
         )
 
         # 2. No work — early exit with evaluated_empty.
         if not completed:
+            # Completed test-bearing subtasks that no lane admits are infra, not
+            # "no work" (#1580): fail closed instead of a quiet evaluated_empty.
+            unadmitted = _filter_completed_subtasks(plan, lambda _st: True)
+            if unadmitted:
+                tuples = sorted(
+                    {
+                        f"{st.get('language')}/{st.get('framework')}/{st.get('lane')}"
+                        for st in unadmitted
+                    }
+                )
+                # The pipeline triages after a failed evaluator; a stale file
+                # from an earlier run must not become this run's verdicts.
+                (spec_dir / "findings" / "verdicts.json").unlink(missing_ok=True)
+                _write_status_patch(
+                    spec_dir,
+                    status="evaluator_failed",
+                    phase=f"evaluator_{mode}_no_lane_for_completed_subtasks",
+                    evaluator_error=(
+                        f"{len(unadmitted)} completed subtask(s) match no evaluator "
+                        f"lane (language/framework/lane): {', '.join(tuples)}"
+                    ),
+                )
+                return False
             _write_empty_verdicts(spec_dir, mode)
             return True
 
@@ -3463,6 +3613,7 @@ async def run_evaluator(
             go_completed,
             kotlin_completed,
             java_completed,
+            rust_completed,
         )
 
         # 3b. Persist failing-run output for post-mortem (#1195). The judge

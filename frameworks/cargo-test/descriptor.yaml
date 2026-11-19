@@ -1,0 +1,79 @@
+# frameworks/cargo-test/descriptor.yaml
+#
+# Rust `cargo test` descriptor (#1578). Makes the in-cluster Rust unit lane
+# reachable from a planned task: the Evaluator routes `language == "rust"` to
+# `run_cargo_lane_via_nix` (agents/nix_rust_lane.py), and
+# `_validate_framework_consistency` validates every subtask's
+# (language, framework, lane) against THIS registry, so without a descriptor a
+# Rust subtask is rejected as `invalid_framework`.
+#
+# Unit only, on purpose: no other Rust lane has a runner. No toolchain
+# descriptor is needed: nix_provisioner's builtin `rust` table already provisions
+# rustc + cargo.
+#
+# Tests are top-level `tests/<name>.rs` files only: each one is an integration
+# test target Cargo discovers and runs. A nested `tests/helpers/x.rs` is just a
+# module Cargo never executes, so it is not a valid generated test path.
+name: cargo-test
+language: rust
+lanes:
+  - unit
+
+version_range: ">=1.70,<2.0"
+
+runtime:
+  # Nominal, as for frameworks/gradle and go-test: the lane runs in-cluster as
+  # a per-task Nix dev shell (RFC-0005) supplying rustc + cargo.
+  image: tfactory-runner-rust:latest
+  entrypoint:
+    - cargo
+    - "test"
+    - "--workspace"
+    - "--no-fail-fast"
+
+ac_command_tokens:
+  - "cargo test"
+  - "cargo build"
+
+source_extensions:
+  - ".rs"
+
+manifest_signals:
+  - "Cargo.toml"
+  - "Cargo.lock"
+
+test_path_conventions:
+  - "tests/*.rs"
+  - "**/tests/*.rs"
+
+# The lane collects no coverage; claiming one would advertise a signal nothing
+# produces.
+coverage_strategy: skip
+
+context_block: |
+  You are generating Rust integration tests that run under `cargo test`.
+
+  Placement:
+    - Write each test as a top-level file `tests/<name>.rs` in the crate (next
+      to `Cargo.toml`). Cargo compiles every such file as its own test crate.
+    - Do NOT create nested files under `tests/` (e.g. `tests/helpers/x.rs`):
+      Cargo never runs them.
+    - Do NOT edit files under `src/`; test the crate through its public API
+      (`use <crate_name>::...`).
+
+  Test structure:
+    - One `#[test] fn` per behaviour, named descriptively in snake_case
+      (e.g. `returns_error_when_input_is_empty`).
+    - Use `Result<(), Box<dyn std::error::Error>>` return types when a test
+      uses `?`.
+
+  Assertions:
+    - Use `assert_eq!`, `assert_ne!` and `assert!` with a message.
+    - Assert the happy path AND at least one boundary or error case
+      (e.g. `assert!(parse("").is_err())`).
+    - Use `#[should_panic(expected = "...")]` only for panics the API documents.
+
+  Determinism:
+    - No `std::thread::sleep` for synchronisation, no wall-clock or random
+      dependence, no network (the lane runs with restricted egress).
+    - Do not add dependencies; use only what `Cargo.toml` already lists.

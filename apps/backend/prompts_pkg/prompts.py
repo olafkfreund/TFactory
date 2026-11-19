@@ -534,17 +534,12 @@ def _build_framework_registry_block() -> str:
 
 # Languages with NO framework descriptor (#1311). Everything else is derived
 # from the registry below, so onboarding a language is a descriptor drop. Rust
-# has no descriptor under frameworks/, so deriving alone would silently lose
-# `.rs` -> rust and regress #443; these entries are exactly what no descriptor
-# can supply today. A test asserts this set and the derived one never overlap,
-# so a language can never be declared in both places.
-_NO_DESCRIPTOR_EXT_LANGUAGE: dict[str, str] = {
-    ".rs": "rust",
-}
-_NO_DESCRIPTOR_AC_COMMANDS: tuple[tuple[str, str], ...] = (
-    ("cargo test", "rust"),
-    ("cargo build", "rust"),
-)
+# left this fallback when frameworks/cargo-test arrived (#1578); it is empty
+# now, and kept so a future descriptor-less language has one place to go. A
+# test asserts this set and the derived one never overlap, so a language can
+# never be declared in both places.
+_NO_DESCRIPTOR_EXT_LANGUAGE: dict[str, str] = {}
+_NO_DESCRIPTOR_AC_COMMANDS: tuple[tuple[str, str], ...] = ()
 
 
 def _registry_map() -> dict[str, Any]:

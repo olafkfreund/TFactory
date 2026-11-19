@@ -336,3 +336,41 @@ def test_each_maven_module_runs_its_own_stability_pass(
     assert len(bundles) == 2
     assert len(hints) == 6
     assert {Path(h).parts[0] for h in hints} == {"a", "b"}
+
+
+# --- #1580: completed subtasks that no lane admits fail closed --------------
+
+
+def _run(tmp_path: Path, *subtasks: dict, stale: bool = False):
+    import asyncio
+    import json
+
+    from agents.evaluator import run_evaluator
+
+    spec_dir = tmp_path / "spec"
+    (spec_dir / "findings").mkdir(parents=True)
+    (spec_dir / "test_plan.json").write_text(json.dumps(_plan(*subtasks)))
+    if stale:
+        (spec_dir / "findings" / "verdicts.json").write_text('{"verdicts": [1]}')
+    ok = asyncio.run(run_evaluator(spec_dir, tmp_path / "proj"))
+    status = json.loads((spec_dir / "status.json").read_text())
+    return ok, status, spec_dir
+
+
+def test_completed_subtasks_no_lane_admits_fail_closed(tmp_path: Path) -> None:
+    st = _java_subtask()
+    st["language"] = "cobol"
+    st["framework"] = "cobolcheck"
+    ok, status, spec_dir = _run(tmp_path, st, stale=True)
+    assert ok is False
+    assert status["status"] == "evaluator_failed"
+    assert status["phase"].endswith("no_lane_for_completed_subtasks")
+    assert "cobol/cobolcheck/unit" in status["evaluator_error"]
+    assert not (spec_dir / "findings" / "verdicts.json").exists()
+
+
+def test_all_pending_plan_is_still_evaluated_empty(tmp_path: Path) -> None:
+    st = _java_subtask()
+    st["status"] = "pending"
+    ok, status, _ = _run(tmp_path, st)
+    assert ok is True and status["status"] == "evaluated_empty"
