@@ -263,6 +263,8 @@ def build_job_manifest(
     }
     pod_spec: dict[str, Any] = {
         "restartPolicy": "Never",
+        # #1625: service-link env (REDIS_PORT=tcp://...) breaks SUTs that read it.
+        "enableServiceLinks": False,
         # Verify lanes need no k8s API, so the token is NOT mounted by default.
         # The deploy lane's `kubectl create --dry-run=server` (VAL-2, #603) is the
         # one exception: pass a scoped service_account and it gets that SA's token

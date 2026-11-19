@@ -111,6 +111,9 @@ _JEST_FALLBACK_ENV: dict[str, Any] = {
 # are pip-installed from its requirements). generated=True: a repo flake still wins.
 _API_SERVICES_FALLBACK_ENV: dict[str, Any] = {
     "system_packages": [],
+    # #1582: names uvicorn so the flake carries fastapi + uvicorn + httpx beside
+    # pytest/requests; a served app with no requirements file still starts.
+    "verify_commands": ["python -m uvicorn"],
     "provisioning": {"method": "nix", "generated": True},
 }
 
@@ -118,14 +121,16 @@ _API_SERVICES_FALLBACK_ENV: dict[str, Any] = {
 def api_services_fallback_env(
     spec_dir: Path, project_dir: Path | None, lane: str | None
 ) -> dict[str, Any] | None:
-    """The fallback nix env for an api lane whose repo needs sidecar services."""
+    """The fallback nix env for an api lane with sidecar services or a uvicorn app."""
     if lane != "api" or project_dir is None:
         return None
     from agents.services_gate import required_services  # noqa: PLC0415 - lazy
 
-    return (
-        _API_SERVICES_FALLBACK_ENV if required_services(spec_dir, project_dir) else None
-    )
+    # A uvicorn-served python app needs the Job too (requests, SUT), services or not.
+    serve = detect_serve_command(Path(project_dir), port=_API_SELF_SERVE_PORT)
+    if required_services(spec_dir, project_dir) or "uvicorn" in (serve or ""):
+        return _API_SERVICES_FALLBACK_ENV
+    return None
 
 
 @dataclass
