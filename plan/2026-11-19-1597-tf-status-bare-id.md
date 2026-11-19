@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1597
 spec: spec/2026-11-19-1597-tf-status-bare-id.md
 coders:
