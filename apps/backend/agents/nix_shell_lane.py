@@ -133,7 +133,7 @@ def bats_job_script(run_dir: str, extra_env: dict[str, str]) -> str:
         + "  echo 'no .bats files'\n  echo __BATS_EXIT=1\n"
         # One bats per file: a file that fails (e.g. needs nix/network) must
         # not hide the results of the others. Worst exit wins.
-        + "else\n  worst=0\n  for f in \"${bats_files[@]}\"; do\n"
+        + 'else\n  worst=0\n  for f in "${bats_files[@]}"; do\n'
         + '    bats --tap "$f" 2>&1\n    rc=$?\n'
         + '    echo "__BATS_FILE_EXIT=$rc $f"\n'
         + '    [ "$rc" -gt "$worst" ] && worst=$rc\n  done\n'

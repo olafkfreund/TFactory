@@ -6,8 +6,8 @@ import pytest
 from agents.nix_shell_lane import (
     TapCounts,
     bats_job_script,
-    parse_tap,
     file_results,
+    parse_tap,
     shell_verdict,
 )
 
@@ -165,4 +165,6 @@ def test_run_bats_lane_reason_has_full_counts_and_failing_files(tmp_path, monkey
     )
     res = _run_with(tmp_path, monkeypatch, out)
     assert res.returncode == 1
-    assert "2 passed, 1 failed, 0 skipped; failing files: ./test/flake.bats" in res.stderr
+    assert (
+        "2 passed, 1 failed, 0 skipped; failing files: ./test/flake.bats" in res.stderr
+    )
