@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.13.2 — Lane env fixes and literal-gate waiver (2026-11-19)
+
+### Fixed
+
+- **Lanes:** authenticated nix fetches via an optional Kubernetes Secret, an honest not_run result when `nix develop` fails, and a bounded SUT health wait that reports why it failed (#1617, #1618, #1621).
+- **Verify:** the criterion-literal gate is waived after repeated rejection of the same subtask, and a unit-only framework declared on the api lane is moved to unit (#1619, #1616, #1620).
+
 ## 0.13.1 — Verify status ingest, contract-less API services, safe multi-replica reconciler (2026-11-19)
 
 ### Fixed
