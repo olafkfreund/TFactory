@@ -721,3 +721,20 @@ def test_host_runner_puts_the_targeted_root_first(tmp_path: Path, monkeypatch) -
     )
     first = seen["env"]["PYTHONPATH"].split(os.pathsep)[0]
     assert first == str(proj / "services" / "notes-api")
+
+
+def test_host_runner_target_in_src_keeps_src_first(tmp_path: Path, monkeypatch) -> None:
+    import agents.evaluator as ev
+
+    proj = _two_app_checkout(tmp_path)
+    seen: dict = {}
+
+    class _R:
+        stdout, stderr, returncode = "__PYTEST_EXIT=0\n", "", 0
+
+    monkeypatch.setattr(ev, "_ensure_host_venv", lambda _p: tmp_path / "venv")
+    monkeypatch.setattr(
+        "subprocess.run", lambda *a, **k: seen.update(env=k["env"]) or _R()
+    )
+    ev._run_pytest_on_host(proj, proj / "t.py", {}, proj, ["src/app/models.py"])
+    assert seen["env"]["PYTHONPATH"].split(os.pathsep)[0] == str(proj / "src")

@@ -473,18 +473,19 @@ def _run_pytest_on_host(
         "echo __PYTEST_EXIT=$?"
     )
     scratch_root = Path(scratch).resolve()
-    pythonpath = str(scratch_root)
-    src_dir = scratch_root / "src"
-    if src_dir.is_dir():
-        pythonpath = f"{src_dir}{os.pathsep}{pythonpath}"
-    # #756: a monorepo keeps its packages below both of those (e.g.
+    # #756: a monorepo keeps its packages below ``src`` and the root (e.g.
     # apps/web-server/server), so without the real roots pytest cannot collect
-    # and every AC reports an import error against correct code.
-    # First entry wins on a same-named package, so prepend last-to-first.
-    for rel in reversed(package_root_rel_paths(scratch_root, targets)):
-        root = str(scratch_root if rel == "." else scratch_root / rel)
-        if root not in pythonpath.split(os.pathsep):
-            pythonpath = f"{root}{os.pathsep}{pythonpath}"
+    # and every AC reports an import error against correct code. The first entry
+    # wins on a same-named package (#1637), so the target-holding root leads.
+    roots = [
+        str(scratch_root if rel == "." else scratch_root / rel)
+        for rel in package_root_rel_paths(scratch_root, targets)
+    ]
+    src_dir = scratch_root / "src"
+    for fallback in (str(src_dir) if src_dir.is_dir() else "", str(scratch_root)):
+        if fallback and fallback not in roots:
+            roots.append(fallback)
+    pythonpath = os.pathsep.join(roots)
     env = child_env(extra={**extra_env, "PYTHONPATH": pythonpath})
     res = subprocess.run(
         ["sh", "-c", cmd], capture_output=True, text=True, timeout=300, env=env
