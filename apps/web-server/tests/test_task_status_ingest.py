@@ -93,9 +93,53 @@ def test_in_process_wins_over_inactive_file(
     assert _status(ex, "p1:s1").is_running is True
 
 
-def test_bare_id_is_not_read_from_workspace(ex: ModuleType, tmp_path: Path) -> None:
-    _spec(tmp_path, "p1", "s1", status="generating")
-    assert _status(ex, "s1").is_running is False
+def test_bare_ingest_id_is_read_from_workspace(ex: ModuleType, tmp_path: Path) -> None:
+    # Real ingest layout: task_id is the bare spec_id, workspace keyed by uuid.
+    _spec(tmp_path, "uuid-1", "l1-pr610", status="generating", phase="gen_x")
+    with patch.object(ex, "load_projects", return_value={"uuid-1": {}}):
+        r = _status(ex, "l1-pr610")
+    assert (r.is_running, r.phase) == (True, "gen_x")
+
+
+def test_bare_id_of_unregistered_or_ambiguous_workspace_reveals_nothing(
+    ex: ModuleType, tmp_path: Path
+) -> None:
+    _spec(tmp_path, "stray", "s1", status="generating", phase="secret")
+    _spec(tmp_path, "a", "dup", status="generating", phase="pa")
+    _spec(tmp_path, "b", "dup", status="generating", phase="pb")
+    with patch.object(ex, "load_projects", return_value={"a": {}, "b": {}}):
+        assert _status(ex, "s1").phase is None
+        assert _status(ex, "dup").phase is None
+
+
+def test_project_name_prefix_resolves_to_uuid_workspace(
+    ex: ModuleType, tmp_path: Path
+) -> None:
+    _spec(tmp_path, "uuid-1", "s1", status="generating", phase="p")
+    with patch.object(
+        ex, "load_projects", return_value={"uuid-1": {"name": "my-proj"}}
+    ):
+        assert _status(ex, "my-proj:s1").phase == "p"
+
+
+def test_project_name_is_authorized_as_the_uuid(ex: ModuleType, tmp_path: Path) -> None:
+    _spec(tmp_path, "uuid-1", "s1", status="generating", phase="p")
+    seen: list[str] = []
+
+    class _Rec:
+        async def __call__(self, task_id: str, *_a: Any) -> None:
+            seen.append(task_id)
+
+    app = FastAPI()
+    app.include_router(ex.router, prefix="/api/tasks")
+    app.dependency_overrides[ex.get_db] = lambda: None
+    with (
+        patch.object(ex, "require_task_access", return_value=_Rec()),
+        patch.object(ex, "load_projects", return_value={"uuid-1": {"name": "my-proj"}}),
+    ):
+        assert TestClient(app).get("/api/tasks/my-proj:s1/status").status_code == 200
+        assert TestClient(app).get("/api/tasks/s1/status").status_code == 200
+    assert seen == ["uuid-1:s1", "uuid-1:s1"]
 
 
 def test_traversal_in_spec_part_is_rejected(ex: ModuleType) -> None:
@@ -104,7 +148,7 @@ def test_traversal_in_spec_part_is_rejected(ex: ModuleType) -> None:
     assert e.value.status_code == 400
 
 
-def test_denied_caller_gets_nothing_and_bare_id_skips_check(
+def test_denied_caller_gets_nothing_and_unowned_bare_id_skips_check(
     ex: ModuleType, tmp_path: Path
 ) -> None:
     _spec(tmp_path, "p1", "s1", status="generating", phase="secret-phase")
@@ -120,7 +164,11 @@ def test_denied_caller_gets_nothing_and_bare_id_skips_check(
         c = TestClient(app)
         r = c.get("/api/tasks/p1:s1/status")
         assert r.status_code == 403 and "secret-phase" not in r.text
-        assert c.get("/api/tasks/s1/status").status_code == 200
+        # a bare id owned by no registered project reveals nothing and needs no check
+        r = c.get("/api/tasks/s1/status")
+        assert r.status_code == 200 and "secret-phase" not in r.text
+        with patch.object(ex, "load_projects", return_value={"p1": {}}):
+            assert c.get("/api/tasks/s1/status").status_code == 403
 
 
 def test_wrongly_typed_fields_fall_back_instead_of_crashing(

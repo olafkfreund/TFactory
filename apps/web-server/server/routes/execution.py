@@ -96,38 +96,79 @@ async def get_running_tasks():
     return RunningTasksResponse(tasks=running, count=len(running))
 
 
+def _project_key(ref: str) -> str:
+    """The registered project id for an id-or-name reference (else ``ref``)."""
+    projects = load_projects()
+    if ref in projects:
+        return ref
+    return next((k for k, v in projects.items() if v.get("name") == ref), ref)
+
+
+def _ingest_path(task_id: str) -> Path | None:
+    """``status.json`` of a spec-ingest task, or None (#1597).
+
+    ``POST /api/specs/ingest`` returns ``task_id`` = the bare spec_id and keys
+    the workspace by the resolved project uuid, so a bare id is searched across
+    workspaces: only a registered project's workspace, and only when exactly one
+    matches (an ambiguous id is never guessed). ``project:spec`` resolves the
+    project by id or name.
+    """
+    root = (
+        Path(
+            os.environ.get("TFACTORY_WORKSPACE_ROOT") or Path.home() / ".tfactory"
+        ).expanduser()
+        / "workspaces"
+    )
+    project_id, sep, spec_id = task_id.partition(":")
+    if not sep:
+        spec = safe_component(task_id)
+        known = load_projects()
+        hits = [
+            p
+            for p in root.glob(f"*/specs/{spec}/status.json")
+            if p.is_file() and p.parents[2].name in known
+        ]
+        return hits[0] if len(hits) == 1 else None
+    path = (
+        root
+        / safe_component(_project_key(project_id))
+        / "specs"
+        / safe_component(spec_id)
+        / "status.json"
+    )
+    return path if path.is_file() else None
+
+
 async def _status_access(
     task_id: str,
     request: Request,
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ) -> None:
-    """Project-level read access, for ``project:spec`` ids only (#1597).
+    """Project-level read access (#1597).
 
-    A bare spec id has no project to authorize against and keeps the old
-    (workspace-free) answer, so it skips the check.
+    A bare ingest id is authorized against the project whose workspace holds it;
+    one that resolves to no registered project returns nothing, so needs no check.
     """
     if ":" in task_id:
-        await require_task_access("viewer")(task_id, request, db)
+        project_id, _, spec_id = task_id.partition(":")
+        task_id = f"{_project_key(project_id)}:{spec_id}"
+    else:
+        path = _ingest_path(task_id)
+        if path is None:
+            return
+        task_id = f"{path.parents[2].name}:{task_id}"
+    await require_task_access("viewer")(task_id, request, db)
 
 
 def _ingest_status(task_id: str) -> dict[str, str]:
     """The persisted ``status.json`` of a spec-ingest task, or ``{}`` (#1597).
 
     Ingest tasks run in-process / as k8s Jobs and never join ``running_tasks``;
-    their truth is the spec workspace. Only the ``project:spec`` form is read.
+    their truth is the spec workspace.
     """
-    project_id, sep, spec_id = task_id.partition(":")
-    if not sep:
+    path = _ingest_path(task_id)
+    if path is None:
         return {}
-    root = Path(os.environ.get("TFACTORY_WORKSPACE_ROOT") or Path.home() / ".tfactory")
-    path = (
-        root.expanduser()
-        / "workspaces"
-        / safe_component(project_id)
-        / "specs"
-        / safe_component(spec_id)
-        / "status.json"
-    )
     try:
         data = json.loads(path.read_text())
     except (OSError, ValueError):
