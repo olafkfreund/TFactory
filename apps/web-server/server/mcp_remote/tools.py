@@ -84,12 +84,12 @@ _SAFE_ID = re.compile(r"[\w:-][\w.:-]*")
 
 def _principal(key: AuthenticatedKey) -> dict[str, Any]:
     """Principal dict for ``authorize_project_for_user`` (#1456)."""
-    if not key.user_id:
-        return {"id": "default", "is_service": True}
     return {
         "id": key.user_id,
         "api_key_id": key.key_id,
         "org_id": key.org_id,
+        "scopes": sorted(key.scopes),
+        "scoped_service": key.user_id is None,
     }
 
 

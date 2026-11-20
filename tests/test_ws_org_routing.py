@@ -60,7 +60,12 @@ def socket_app(monkeypatch):
         "a-only": [("A",)],
         "other": [("B",)],
     }
-    setting = SimpleNamespace(RBAC_ENFORCE_TASK_ROUTES=True, DISABLE_AUTH=False)
+    setting = SimpleNamespace(
+        RBAC_ENFORCE_TASK_ROUTES=True,
+        DISABLE_AUTH=False,
+        PROJECTS_BACKEND="json",
+        LEGACY_SHARED_TOKEN_FULL_ACCESS=True,
+    )
     sent: dict[str, list[dict]] = {}
 
     async def authenticate(ws):
@@ -317,7 +322,7 @@ def test_flag_tracks_rest_dependency_on_open_socket(socket_app, monkeypatch):
             return_value=SimpleNamespace(scalar_one_or_none=lambda: None)
         ),
     )
-    request = Request({"type": "http"})
+    request = Request({"type": "http", "path_params": {"project_id": "p-b"}})
     request.state.user = {"id": "a-only"}
     checker = project_authz.ProjectAccessChecker()
     with TestClient(app) as client, _connect(client, "jwt-a") as ws:
@@ -326,7 +331,9 @@ def test_flag_tracks_rest_dependency_on_open_socket(socket_app, monkeypatch):
         client.portal.call(events.send_to_org, "B", "explicit", {})
         _emit(client, "shadow", {"projectId": "p-b"})
         assert ws.receive_json()["type"] == "shadow"
-        client.portal.call(checker.__call__, "p-b", request, db)
+        with pytest.raises(HTTPException) as exc:
+            client.portal.call(checker.__call__, request, db)
+        assert exc.value.status_code == 404
 
         setting.RBAC_ENFORCE_TASK_ROUTES = True
         _emit(client, "blocked", {"projectId": "p-b"})
@@ -334,8 +341,8 @@ def test_flag_tracks_rest_dependency_on_open_socket(socket_app, monkeypatch):
         assert ws.receive_json()["type"] == "allowed"
         assert [m["type"] for m in sent["jwt-a"]] == ["shadow", "allowed"]
         with pytest.raises(HTTPException) as exc:
-            client.portal.call(checker.__call__, "p-b", request, db)
-        assert exc.value.status_code == 403
+            client.portal.call(checker.__call__, request, db)
+        assert exc.value.status_code == 404
 
 
 def test_event_org_cache_expiry_and_reassignment(monkeypatch):

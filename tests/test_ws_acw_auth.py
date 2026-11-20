@@ -135,6 +135,8 @@ def test_owned_api_full_key_returns_principal(ws_auth_env):
         "role": "user",
         "api_key_id": "key-full",
         "org_id": "org-1",
+        "scopes": ["api:full", "mcp:read"],
+        "scoped_service": False,
     }
     ws.close.assert_not_awaited()
 
@@ -198,5 +200,9 @@ def test_jwt_and_legacy_paths_unchanged(ws_auth_env):
 
     ws_legacy = _make_ws(LEGACY_TOKEN)
     legacy_principal = asyncio.run(auth_mod.authenticate_websocket(ws_legacy))
-    assert legacy_principal is None
+    assert legacy_principal == {
+        "id": "default",
+        "is_service": True,
+        "is_legacy_token": True,
+    }
     ws_legacy.close.assert_not_awaited()

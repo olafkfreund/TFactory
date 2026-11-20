@@ -44,7 +44,12 @@ def env(tmp_path, monkeypatch):
             await db.commit()
 
     asyncio.run(_init())
-    settings = SimpleNamespace(DISABLE_AUTH=False, RBAC_ENFORCE_TASK_ROUTES=True)
+    settings = SimpleNamespace(
+        DISABLE_AUTH=False,
+        RBAC_ENFORCE_TASK_ROUTES=True,
+        PROJECTS_BACKEND="json",
+        LEGACY_SHARED_TOKEN_FULL_ACCESS=True,
+    )
     monkeypatch.setattr(pa, "get_settings", lambda: settings)
     store: dict = {}
     monkeypatch.setattr(projects, "load_projects", lambda: store)
@@ -83,7 +88,7 @@ def test_add_project_stamps_creator_org_and_is_visible_under_enforce(env, tmp_pa
     )  # no 403
 
 
-def test_unstamped_project_is_403_for_non_service(env, tmp_path):
+def test_unstamped_project_is_404_for_non_service(env, tmp_path):
     from server.routes import projects
 
     body = projects.ProjectCreate(path=str(tmp_path / "orphan"))
@@ -93,7 +98,7 @@ def test_unstamped_project_is_403_for_non_service(env, tmp_path):
         env.run(
             lambda db: env.pa.authorize_project_for_user({"id": "solo"}, out["id"], db)
         )
-    assert exc.value.status_code == 403
+    assert exc.value.status_code == 404
 
 
 def test_clone_register_stamps_org(env, tmp_path, monkeypatch):

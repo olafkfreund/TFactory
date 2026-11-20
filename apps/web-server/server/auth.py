@@ -252,6 +252,7 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
                 "email": None,
                 "role": "user",
                 "is_service": True,
+                "is_legacy_token": True,
             }
             return await call_next(request)
 
@@ -266,6 +267,8 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
             from .mcp_remote.auth import (
                 REST_API_SCOPE,
                 MCPAuthError,
+            )
+            from .mcp_remote.auth import (
                 authenticate as authenticate_api_key,
             )
 
@@ -281,6 +284,8 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
                     "role": "user",
                     "api_key_id": key.key_id,
                     "org_id": key.org_id,
+                    "scopes": sorted(key.scopes),
+                    "scoped_service": key.user_id is None,
                 }
                 return await call_next(request)
 
@@ -386,6 +391,8 @@ async def _ws_acw_principal(token: str) -> dict[str, object] | None:
         "role": "user",
         "api_key_id": key.key_id,
         "org_id": key.org_id,
+        "scopes": sorted(key.scopes),
+        "scoped_service": key.user_id is None,
     }
 
 
@@ -426,9 +433,9 @@ async def authenticate_websocket(websocket: WebSocket) -> dict | None:
             "role": jwt_payload.get("role", "user"),
         }
 
-    # Fall back to legacy token — no user info available
+    # Fall back to the legacy shared-token principal.
     if _is_legacy_api_token(token):
-        return None
+        return {"id": "default", "is_service": True, "is_legacy_token": True}
 
     if token.startswith("acw_"):
         principal = await _ws_acw_principal(token)

@@ -158,13 +158,15 @@ async def _authorize_key(
     minimum_role: str = "member",
 ) -> None:
     if isinstance(key, _LegacyAdminKey):
-        user = {"id": "default", "is_service": True}
+        user = {"id": "default", "is_service": True, "is_legacy_token": True}
     else:
         user = {
             "id": key.user_id,
             "role": "user",
             "api_key_id": key.key_id,
             "org_id": key.org_id,
+            "scopes": sorted(key.scopes),
+            "scoped_service": key.user_id is None,
         }
         # Not behind the flag: an org-A key must never reach org B, nor an
         # unknown project (a handler may resolve it elsewhere).

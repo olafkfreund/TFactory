@@ -84,7 +84,11 @@ def env(tmp_path, monkeypatch):
         async with session_local() as session:
             yield session
 
-    settings = SimpleNamespace(DISABLE_AUTH=False, RBAC_ENFORCE_TASK_ROUTES=False)
+    settings = SimpleNamespace(
+        DISABLE_AUTH=False,
+        PROJECTS_BACKEND="json",
+        LEGACY_SHARED_TOKEN_FULL_ACCESS=True,
+    )
     monkeypatch.setattr(tools_mod, "get_db", _db)
     monkeypatch.setattr(tools_mod, "get_settings", lambda: settings)
     monkeypatch.setattr(project_authz_mod, "get_settings", lambda: settings)

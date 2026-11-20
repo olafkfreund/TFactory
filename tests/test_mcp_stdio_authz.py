@@ -5,9 +5,10 @@ from __future__ import annotations
 import asyncio
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 _WEB_SERVER_DIR = Path(__file__).parent.parent / "apps" / "web-server"
@@ -175,18 +176,15 @@ def test_same_org_member_key_calls_handler(env):
     assert [a["action"] for a in env.audits] == ["mcp.task.stop"]
 
 
-def test_viewer_key_in_shadow_audits_would_deny_and_calls_handler(env):
+def test_viewer_key_write_is_denied_and_audited(env):
     env.set_key(user_id="viewer-a", org_id="A")
     r = env.client.post(
         "/api/mcp-stdio/tasks/p1:s1/stop",
         headers={"Authorization": "Bearer acw_viewer_a"},
     )
-    assert r.status_code == 200
-    assert env.calls == ["p1:s1"]
-    assert [a["action"] for a in env.audits] == [
-        "authz.task.would_deny",
-        "mcp.task.stop",
-    ]
+    assert r.status_code == 403
+    assert env.calls == []
+    assert [a["action"] for a in env.audits] == ["authz.task.denied"]
 
 
 def test_legacy_admin_token_calls_handler(env):
@@ -197,6 +195,32 @@ def test_legacy_admin_token_calls_handler(env):
     assert r.status_code == 200
     assert env.calls == ["p1:s1"]
     assert [a["action"] for a in env.audits] == ["mcp.task.stop"]
+
+
+def test_project_role_intersects_team_grant_and_token_scope(env):
+    from server.routes.project_authz import check_project_access
+
+    principal = {
+        "id": "owner",
+        "api_key_id": "k1",
+        "org_id": "A",
+        "scopes": ["mcp:read"],
+    }
+    project = {"id": "p1", "org_id": "A"}
+    owner = SimpleNamespace(role="owner")
+    assert check_project_access(principal, project, owner).role == "viewer"
+    with pytest.raises(HTTPException) as denied:
+        check_project_access(principal, project, owner, "member")
+    assert denied.value.status_code == 403
+
+    with pytest.raises(HTTPException) as invisible:
+        check_project_access(principal, {"id": "pB", "org_id": "B"}, owner)
+    assert invisible.value.status_code == 404
+
+    env.settings.LEGACY_SHARED_TOKEN_FULL_ACCESS = False
+    with pytest.raises(HTTPException) as legacy:
+        check_project_access({"id": "default", "is_legacy_token": True}, project, owner)
+    assert legacy.value.status_code == 404
 
 
 def test_project_lookup_failure_fails_closed_for_org_key(env):
