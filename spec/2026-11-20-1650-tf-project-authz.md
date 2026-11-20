@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1650
 intent: intent/2026-11-20-1650-tf-project-authz.md
 ---
