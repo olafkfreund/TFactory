@@ -15,14 +15,22 @@ import subprocess
 import urllib.parse
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.auth import _is_legacy_api_token, _try_decode_jwt
+from server.database.engine import get_db
 from server.error_ref import client_error
+from server.pty.access import project_id_for_path
+from server.routes.project_authz import (
+    ProjectAccessChecker,
+    require_project_role,
+    visible_project_ids,
+)
 
 from ..config import get_settings
 from ._specpath import (
@@ -236,6 +244,8 @@ async def discover_projects(
     max_depth: int = Query(
         1, description="How deep to scan (1 = direct children only)"
     ),
+    request: Request = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
     """
     Discover potential project folders in a directory.
@@ -316,16 +326,32 @@ async def discover_projects(
 
     scan_directory(base, 1)
 
+    principal = getattr(request.state, "user", None) if request is not None else None
+    db_session = db if isinstance(db, AsyncSession) else None
+    visible = await visible_project_ids(principal, db_session, "viewer")
+    out = []
+    for p in projects:
+        pid = project_id_for_path(p.path)
+        if pid is None or pid in visible:
+            out.append(p.model_dump())
+
     # Return array directly - api-client.ts adds the {success, data} wrapper
-    return [p.model_dump() for p in projects]
+    return out
 
 
 @router.get("/list")
 async def list_directory_direct(
     path: str = Query(..., description="Absolute path to directory"),
     show_hidden: bool = Query(False, description="Show hidden files"),
+    request: Request = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
     """List contents of a directory by absolute path."""
+    principal = getattr(request.state, "user", None) if request is not None else None
+    db_session = db if isinstance(db, AsyncSession) else None
+    await require_project_role(
+        principal, project_id_for_path(path), "viewer", db_session
+    )
     full_path = Path(path).expanduser().resolve()
 
     if _is_app_internal_path(full_path):
@@ -378,8 +404,15 @@ async def list_directory_direct(
 @router.get("/read")
 async def read_file_direct(
     path: str = Query(..., description="Absolute path to file"),
+    request: Request = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
     """Read file contents by absolute path."""
+    principal = getattr(request.state, "user", None) if request is not None else None
+    db_session = db if isinstance(db, AsyncSession) else None
+    await require_project_role(
+        principal, project_id_for_path(path), "viewer", db_session
+    )
     full_path = Path(path).expanduser().resolve()
 
     if _is_app_internal_path(full_path):
@@ -449,6 +482,44 @@ def _validate_serve_token(request: Request, token: str) -> bool:
     return False
 
 
+def _resolve_serve_principal(request: Request, token: str) -> dict[str, Any] | None:
+    """Resolve principal for /serve from request.state.user, header, or query token."""
+    principal = getattr(request.state, "user", None)
+    if isinstance(principal, dict):
+        return principal
+    settings = get_settings()
+    if settings.DISABLE_AUTH:
+        return {
+            "id": "default",
+            "email": "default@localhost",
+            "role": "admin",
+            "is_service": True,
+        }
+    auth_header = request.headers.get("Authorization")
+    candidates = []
+    if auth_header and auth_header.startswith("Bearer "):
+        candidates.append(auth_header[7:])
+    if token:
+        candidates.append(token)
+    for cand in candidates:
+        jwt_payload = _try_decode_jwt(cand)
+        if jwt_payload is not None:
+            return {
+                "id": jwt_payload.get("sub"),
+                "email": jwt_payload.get("email"),
+                "role": jwt_payload.get("role", "user"),
+            }
+        if _is_legacy_api_token(cand):
+            return {
+                "id": "default",
+                "email": None,
+                "role": "user",
+                "is_service": True,
+                "is_legacy_token": True,
+            }
+    return None
+
+
 @router.get("/serve")
 async def serve_project_file(
     request: Request,
@@ -457,6 +528,7 @@ async def serve_project_file(
         ..., description="Project root directory (for resolving relative URLs)"
     ),
     token: str = Query(default="", description="Bearer token for authentication"),
+    db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
     """Serve a project file with its correct MIME type.
 
@@ -467,6 +539,10 @@ async def serve_project_file(
     # Authenticate: check token from query param or Authorization header
     if not _validate_serve_token(request, token):
         raise HTTPException(status_code=401, detail="Authentication required")
+    principal = _resolve_serve_principal(request, token)
+    pid = project_id_for_path(root) or project_id_for_path(path)
+    db_session = db if isinstance(db, AsyncSession) else None
+    await require_project_role(principal, pid, "viewer", db_session)
     root_path = Path(root).expanduser().resolve()
 
     # Security: file must exist inside the declared project root.
@@ -557,7 +633,11 @@ async def serve_project_file(
     )
 
 
-@router.get("/{project_id}/list", response_model=DirectoryListing)
+@router.get(
+    "/{project_id}/list",
+    response_model=DirectoryListing,
+    dependencies=[Depends(ProjectAccessChecker("viewer"))],
+)
 async def list_directory(
     project_id: str,
     path: str = Query("", description="Relative path within project"),
@@ -611,7 +691,11 @@ async def list_directory(
     )
 
 
-@router.get("/{project_id}/read", response_model=FileContent)
+@router.get(
+    "/{project_id}/read",
+    response_model=FileContent,
+    dependencies=[Depends(ProjectAccessChecker("viewer"))],
+)
 async def read_file(
     project_id: str,
     path: str = Query(..., description="Relative path to file"),
@@ -660,7 +744,10 @@ async def read_file(
     )
 
 
-@router.put("/{project_id}/write")
+@router.put(
+    "/{project_id}/write",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def write_file(
     project_id: str,
     path: str = Query(..., description="Relative path to file"),
@@ -683,7 +770,10 @@ async def write_file(
     return {"success": True, "path": path}
 
 
-@router.delete("/{project_id}/delete")
+@router.delete(
+    "/{project_id}/delete",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def delete_file(
     project_id: str,
     path: str = Query(..., description="Relative path to file or directory"),
@@ -713,7 +803,11 @@ async def delete_file(
     return {"success": True}
 
 
-@router.get("/{project_id}/search", response_model=SearchResponse)
+@router.get(
+    "/{project_id}/search",
+    response_model=SearchResponse,
+    dependencies=[Depends(ProjectAccessChecker("viewer"))],
+)
 async def search_files(
     project_id: str,
     query: str = Query(..., description="Search query (regex supported)"),
@@ -824,7 +918,10 @@ async def search_files(
     )
 
 
-@router.get("/{project_id}/diff")
+@router.get(
+    "/{project_id}/diff",
+    dependencies=[Depends(ProjectAccessChecker("viewer"))],
+)
 async def get_git_diff(
     project_id: str,
     path: str = Query("", description="Path to get diff for (empty for all)"),
@@ -915,7 +1012,10 @@ def _get_project_path(project_id: str) -> Path:
     return resolve_project_path(project_id)
 
 
-@insights_router.delete("")
+@insights_router.delete(
+    "",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def clear_insights_session(projectId: str):
     """
     Clear current files insights session and create a new one.

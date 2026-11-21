@@ -17,7 +17,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.database.engine import get_db
 from server.error_ref import client_error
-from server.routes.project_authz import ProjectAccessChecker, creator_org
+from server.pty.access import project_id_for_path
+from server.routes.project_authz import (
+    ProjectAccessChecker,
+    creator_org,
+    visible_project_ids,
+)
 
 # --------------------------------------------------------------------------
 # Type Definitions for Validation
@@ -359,14 +364,24 @@ async def _resolve_git_credential(cred_id: str) -> tuple[str, str] | None:
 
 
 @router.get("")
-async def list_projects():
+async def list_projects(
+    request: Request = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+):
     """List all registered projects.
 
     Returns projects array directly (not wrapped) because
     the frontend api-client.ts adds the {success, data} wrapper automatically.
     """
+    principal = getattr(request.state, "user", None) if request is not None else None
+    db_session = db if isinstance(db, AsyncSession) else None
+    visible = await visible_project_ids(principal, db_session, "viewer")
     projects = load_projects()
-    project_list = [project_to_response(pid, pdata) for pid, pdata in projects.items()]
+    project_list = [
+        project_to_response(pid, pdata)
+        for pid, pdata in projects.items()
+        if pid in visible
+    ]
     return project_list
 
 
@@ -392,7 +407,11 @@ class ScanProjectsRequest(BaseModel):
 
 
 @router.post("/scan")
-async def scan_for_projects(request: ScanProjectsRequest):
+async def scan_for_projects(
+    request: ScanProjectsRequest,
+    http_request: Request = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+):
     """
     Scan filesystem for Magestic AI projects.
 
@@ -499,8 +518,21 @@ async def scan_for_projects(request: ScanProjectsRequest):
         # Start scanning from base path at depth 1
         scan_directory(base, 1)
 
+        principal = (
+            getattr(http_request.state, "user", None)
+            if http_request is not None
+            else None
+        )
+        db_session = db if isinstance(db, AsyncSession) else None
+        visible = await visible_project_ids(principal, db_session, "viewer")
+        out = []
+        for p in projects:
+            pid = project_id_for_path(p.path)
+            if pid is None or pid in visible:
+                out.append(p.model_dump())
+
         # Return list directly - frontend api-client.ts adds {success, data} wrapper
-        return [p.model_dump() for p in projects]
+        return out
 
     except HTTPException:
         # Re-raise HTTP exceptions
@@ -629,7 +661,10 @@ async def create_project(
     return response
 
 
-@router.get("/{project_id}")
+@router.get(
+    "/{project_id}",
+    dependencies=[Depends(ProjectAccessChecker("viewer"))],
+)
 async def get_project(project_id: str):
     """Get a specific project by ID."""
     projects = load_projects()
@@ -642,7 +677,10 @@ async def get_project(project_id: str):
     return project_to_response(project_id, projects[project_id])
 
 
-@router.put("/{project_id}")
+@router.put(
+    "/{project_id}",
+    dependencies=[Depends(ProjectAccessChecker("admin"))],
+)
 async def update_project(project_id: str, project: ProjectCreate):
     """Update a project's metadata."""
     projects = load_projects()
@@ -674,7 +712,11 @@ async def update_project(project_id: str, project: ProjectCreate):
     return project_to_response(project_id, project_data)
 
 
-@router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{project_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(ProjectAccessChecker("admin"))],
+)
 async def remove_project(project_id: str):
     """Remove a project (unregister, does not delete files)."""
     projects = load_projects()
@@ -688,7 +730,10 @@ async def remove_project(project_id: str):
     save_projects(projects)
 
 
-@router.post("/{project_id}/initialize")
+@router.post(
+    "/{project_id}/initialize",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def initialize_project(project_id: str):
     """Initialize Magestic AI in a project (create .tfactory directory).
 
@@ -722,7 +767,10 @@ async def initialize_project(project_id: str):
         return {"success": False, "error": "Failed to initialize project"}
 
 
-@router.get("/{project_id}/version")
+@router.get(
+    "/{project_id}/version",
+    dependencies=[Depends(ProjectAccessChecker("viewer"))],
+)
 async def check_project_version(project_id: str):
     """Check Magestic AI version info for a project."""
     projects = load_projects()
@@ -800,7 +848,10 @@ class ProjectSettingsUpdate(BaseModel):
         return v
 
 
-@router.patch("/{project_id}/settings")
+@router.patch(
+    "/{project_id}/settings",
+    dependencies=[Depends(ProjectAccessChecker("admin"))],
+)
 async def update_project_settings(project_id: str, settings: ProjectSettingsUpdate):
     """Update project settings."""
     projects = load_projects()
@@ -910,7 +961,10 @@ async def update_project_settings(project_id: str, settings: ProjectSettingsUpda
         )
 
 
-@router.get("/{project_id}/worktrees")
+@router.get(
+    "/{project_id}/worktrees",
+    dependencies=[Depends(ProjectAccessChecker("viewer"))],
+)
 async def list_project_worktrees(project_id: str):
     """List worktrees for a project with detailed stats."""
     import re
@@ -1059,7 +1113,10 @@ async def list_project_worktrees(project_id: str):
         return {"worktrees": [], "error": "Failed to list worktrees"}
 
 
-@router.get("/{project_id}/tasks")
+@router.get(
+    "/{project_id}/tasks",
+    dependencies=[Depends(ProjectAccessChecker("viewer"))],
+)
 async def list_project_tasks(project_id: str):
     """List all tasks for a specific project.
 
@@ -1234,7 +1291,10 @@ async def unwatch_project_task_logs(project_id: str, spec_id: str):
     return {"success": True, "message": "Log unwatching handled via WebSocket"}
 
 
-@router.get("/{project_id}/tasks/{spec_id}/logs")
+@router.get(
+    "/{project_id}/tasks/{spec_id}/logs",
+    dependencies=[Depends(ProjectAccessChecker("viewer"))],
+)
 async def get_project_task_logs(project_id: str, spec_id: str):
     """Get logs for a task (delegates to tasks router)."""
     from . import tasks as tasks_module

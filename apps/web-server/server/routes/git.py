@@ -17,10 +17,14 @@ from factory_common.url_safety import (
     assert_safe_outbound_url,
     build_no_redirect_opener,
 )
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from server.database.engine import get_db
 from server.error_ref import InputRejectedError, client_error
+from server.pty.access import project_id_for_path
+from server.routes.project_authz import ProjectAccessChecker, require_project_role
 
 from ._specpath import _require_safe_git_ref, safe_component, safe_join
 
@@ -74,8 +78,17 @@ def run_git_command(args: list[str], cwd: str) -> dict:
 
 
 @router.get("/branches")
-async def get_git_branches(path: str = Query(...)):
+async def get_git_branches(
+    path: str = Query(...),
+    request: Request = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+):
     """Get all branches for a repository."""
+    principal = getattr(request.state, "user", None) if request is not None else None
+    db_session = db if isinstance(db, AsyncSession) else None
+    await require_project_role(
+        principal, project_id_for_path(path), "viewer", db_session
+    )
     result = run_git_command(["branch", "--format=%(refname:short)"], path)
     if result["success"]:
         branches = [b.strip() for b in result["output"].split("\n") if b.strip()]
@@ -84,8 +97,17 @@ async def get_git_branches(path: str = Query(...)):
 
 
 @router.get("/current-branch")
-async def get_current_git_branch(path: str = Query(...)):
+async def get_current_git_branch(
+    path: str = Query(...),
+    request: Request = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+):
     """Get current branch name."""
+    principal = getattr(request.state, "user", None) if request is not None else None
+    db_session = db if isinstance(db, AsyncSession) else None
+    await require_project_role(
+        principal, project_id_for_path(path), "viewer", db_session
+    )
     result = run_git_command(["branch", "--show-current"], path)
     if result["success"]:
         return {"success": True, "data": result["output"]}
@@ -93,8 +115,17 @@ async def get_current_git_branch(path: str = Query(...)):
 
 
 @router.get("/main-branch")
-async def detect_main_branch(path: str = Query(...)):
+async def detect_main_branch(
+    path: str = Query(...),
+    request: Request = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+):
     """Detect the main branch (main or master)."""
+    principal = getattr(request.state, "user", None) if request is not None else None
+    db_session = db if isinstance(db, AsyncSession) else None
+    await require_project_role(
+        principal, project_id_for_path(path), "viewer", db_session
+    )
     # Check for main first
     result = run_git_command(["rev-parse", "--verify", "main"], path)
     if result["success"]:
@@ -109,8 +140,17 @@ async def detect_main_branch(path: str = Query(...)):
 
 
 @router.get("/status")
-async def check_git_status(path: str = Query(...)):
+async def check_git_status(
+    path: str = Query(...),
+    request: Request = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+):
     """Check git status for a repository."""
+    principal = getattr(request.state, "user", None) if request is not None else None
+    db_session = db if isinstance(db, AsyncSession) else None
+    await require_project_role(
+        principal, project_id_for_path(path), "viewer", db_session
+    )
     # Check if it's a git repo
     git_dir = safe_join(Path(path), ".git")
     if not git_dir.exists():
@@ -142,8 +182,21 @@ class InitGitRequest(BaseModel):
 
 
 @router.post("/init")
-async def initialize_git(request: InitGitRequest):
+async def initialize_git(
+    request: InitGitRequest,
+    http_request: Request = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+):
     """Initialize a new git repository with an initial commit (if needed)."""
+    principal = (
+        getattr(http_request.state, "user", None)
+        if http_request is not None
+        else None
+    )
+    db_session = db if isinstance(db, AsyncSession) else None
+    await require_project_role(
+        principal, project_id_for_path(request.path), "member", db_session
+    )
     path = request.path
     git_dir = safe_join(Path(path), ".git")
 
@@ -960,7 +1013,10 @@ async def detect_mcp_services():
 releases_router = APIRouter()
 
 
-@releases_router.get("/versions")
+@releases_router.get(
+    "/versions",
+    dependencies=[Depends(ProjectAccessChecker("viewer"))],
+)
 async def get_releaseable_versions(projectId: str):
     """Get versions that can be released."""
     return {"success": True, "data": []}
@@ -982,7 +1038,10 @@ class SquashCommitsRequest(BaseModel):
     )
 
 
-@project_router.post("/{projectId}/git/squash")
+@project_router.post(
+    "/{projectId}/git/squash",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def squash_commits(projectId: str, request: SquashCommitsRequest):
     """Squash multiple commits into a single commit.
 
@@ -1159,7 +1218,10 @@ class CreateWorktreeRequest(BaseModel):
     )
 
 
-@project_router.post("/{projectId}/git/worktree")
+@project_router.post(
+    "/{projectId}/git/worktree",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def create_worktree(projectId: str, request: CreateWorktreeRequest):
     """Create a git worktree for parallel task work.
 
@@ -1332,7 +1394,10 @@ class PreflightRequest(BaseModel):
     version: str
 
 
-@releases_router.post("/preflight")
+@releases_router.post(
+    "/preflight",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def run_release_preflight(projectId: str, request: PreflightRequest):
     """Run preflight checks for a release."""
     return {"success": True, "data": {"passed": True, "checks": []}}
@@ -1345,7 +1410,10 @@ class CreateReleaseRequest(BaseModel):
     platform: str = "github"
 
 
-@releases_router.post("")
+@releases_router.post(
+    "",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def create_release(projectId: str, request: CreateReleaseRequest):
     """Create a release using GitHub (gh) CLI.
 

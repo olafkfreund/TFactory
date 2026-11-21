@@ -11,17 +11,18 @@ import re
 from pathlib import Path as FilePath
 
 from factory_common.logsafe import sanitize_log
-from fastapi import APIRouter, HTTPException, Path
+from fastapi import APIRouter, Depends, HTTPException, Path
 from pydantic import BaseModel
 
 from server.error_ref import client_error
+from server.routes.project_authz import ProjectAccessChecker
 
 from ..services.insights_service import get_insights_service
 from ._specpath import _require_safe_git_date, _require_safe_git_ref, safe_component
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(ProjectAccessChecker("viewer"))])
 
 
 # ============================================
@@ -211,7 +212,10 @@ async def load_task_specs(projectId: str = Path(...), request: LoadSpecsRequest 
     return {"success": True, "data": specs}
 
 
-@router.post("/generate")
+@router.post(
+    "/generate",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def generate_changelog(
     projectId: str = Path(...), request: ChangelogGenerateRequest = ...
 ):
@@ -273,7 +277,10 @@ async def generate_changelog(
     return {"success": True, "message": "Changelog generation started"}
 
 
-@router.post("/save")
+@router.post(
+    "/save",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def save_changelog(
     projectId: str = Path(...), request: ChangelogSaveRequest = ...
 ):
@@ -732,7 +739,10 @@ async def get_commits_preview(
         return {"success": False, "error": "Failed to preview commits"}
 
 
-@router.post("/images")
+@router.post(
+    "/images",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def save_changelog_image(
     projectId: str = Path(...), request: SaveImageRequest = ...
 ):
@@ -834,7 +844,7 @@ async def save_changelog_image(
 # Insights Routes
 # ============================================
 
-insights_router = APIRouter()
+insights_router = APIRouter(dependencies=[Depends(ProjectAccessChecker("viewer"))])
 
 
 def _get_project_path(project_id: str) -> FilePath:
@@ -915,7 +925,10 @@ async def get_insights_session(projectId: str = Path(...)):
     }
 
 
-@insights_router.post("/message")
+@insights_router.post(
+    "/message",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def send_insights_message(
     projectId: str = Path(...), request: InsightsMessageRequest = ...
 ):
@@ -934,7 +947,10 @@ async def send_insights_message(
     return {"success": True}
 
 
-@insights_router.post("/stop")
+@insights_router.post(
+    "/stop",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def stop_insights_message(projectId: str = Path(...)):
     """Stop the currently running insights chat for a project."""
     service = get_insights_service()
@@ -942,7 +958,10 @@ async def stop_insights_message(projectId: str = Path(...)):
     return {"success": True, "cancelled": cancelled}
 
 
-@insights_router.delete("")
+@insights_router.delete(
+    "",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def clear_insights_session(projectId: str = Path(...)):
     """
     Clear current insights session and create a new one.
@@ -1003,7 +1022,10 @@ async def clear_insights_session(projectId: str = Path(...)):
         )
 
 
-@insights_router.post("/create-task")
+@insights_router.post(
+    "/create-task",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def create_task_from_insights(
     projectId: str = Path(...), request: CreateTaskRequest = ...
 ):
@@ -1023,7 +1045,10 @@ async def create_task_from_insights(
         return {"success": False, "error": "Failed to create task"}
 
 
-@insights_router.post("/generate-task")
+@insights_router.post(
+    "/generate-task",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def generate_task_from_chat(
     projectId: str = Path(...), request: GenerateTaskRequest = ...
 ):
@@ -1052,7 +1077,10 @@ async def list_insights_sessions(projectId: str = Path(...)):
     return {"success": True, "data": sessions}
 
 
-@insights_router.post("/sessions")
+@insights_router.post(
+    "/sessions",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def new_insights_session(projectId: str = Path(...)):
     """Create a new insights session."""
     project_path = _get_project_path(projectId)
@@ -1072,7 +1100,10 @@ async def new_insights_session(projectId: str = Path(...)):
     }
 
 
-@insights_router.post("/sessions/{sessionId}/switch")
+@insights_router.post(
+    "/sessions/{sessionId}/switch",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def switch_insights_session(
     projectId: str = Path(...), sessionId: str = Path(...)
 ):
@@ -1108,7 +1139,10 @@ async def switch_insights_session(
     }
 
 
-@insights_router.delete("/sessions/{sessionId}")
+@insights_router.delete(
+    "/sessions/{sessionId}",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def delete_insights_session(
     projectId: str = Path(...), sessionId: str = Path(...)
 ):
@@ -1122,7 +1156,10 @@ async def delete_insights_session(
     }
 
 
-@insights_router.patch("/sessions/{sessionId}")
+@insights_router.patch(
+    "/sessions/{sessionId}",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def rename_insights_session(
     projectId: str = Path(...),
     sessionId: str = Path(...),
@@ -1135,7 +1172,10 @@ async def rename_insights_session(
     return {"success": success}
 
 
-@insights_router.patch("/sessions/{sessionId}/model")
+@insights_router.patch(
+    "/sessions/{sessionId}/model",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def update_insights_model_config(
     projectId: str = Path(...),
     sessionId: str = Path(...),

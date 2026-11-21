@@ -17,7 +17,11 @@ import re
 import shutil
 import subprocess
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from server.database.engine import get_db
+from server.routes.project_authz import require_project_role
 
 from .github import (
     PersistTokenRequest,
@@ -177,13 +181,23 @@ async def check_github_auth():
 
 
 @router.get("/auto-detect")
-async def auto_detect_github(projectId: str | None = Query(None)):
+async def auto_detect_github(
+    projectId: str | None = Query(None),
+    request: Request = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+):
     """Auto-detect GitHub CLI authentication and username in one call.
 
     If projectId is provided, the CLI token is persisted directly to the
     project's .tfactory/.env file (server-side). The raw token is never
     included in the response.
     """
+    if projectId:
+        principal = (
+            getattr(request.state, "user", None) if request is not None else None
+        )
+        db_session = db if isinstance(db, AsyncSession) else None
+        await require_project_role(principal, projectId, "admin", db_session)
     # Check gh CLI is installed
     if not shutil.which("gh"):
         return {
@@ -425,11 +439,22 @@ async def get_github_token():
 
 
 @router.post("/persist-token")
-async def persist_github_token(request: PersistTokenRequest):
+async def persist_github_token(
+    request: PersistTokenRequest,
+    http_request: Request = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+):
     """Persist the gh CLI token to a project's .tfactory/.env file.
 
     The raw token never appears in the response.
     """
+    principal = (
+        getattr(http_request.state, "user", None)
+        if http_request is not None
+        else None
+    )
+    db_session = db if isinstance(db, AsyncSession) else None
+    await require_project_role(principal, request.projectId, "admin", db_session)
     persisted = _persist_cli_token_to_project(request.projectId)
     if persisted:
         return {"success": True, "data": {"tokenPersisted": True}}

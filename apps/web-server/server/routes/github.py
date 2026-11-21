@@ -13,9 +13,13 @@ from pathlib import Path as FilePath
 from typing import Any
 
 from factory_common.logsafe import sanitize_log
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from server.database.engine import get_db
+from server.pty.access import project_id_for_path
+from server.routes.project_authz import ProjectAccessChecker, require_project_role
 from server.services.git_base_url import safe_git_base_url
 
 from ._specpath import safe_component
@@ -471,8 +475,17 @@ async def list_github_orgs():
 
 
 @router.get("/detect-repo")
-async def detect_github_repo(path: str = Query(...)):
+async def detect_github_repo(
+    path: str = Query(...),
+    request: Request = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+):
     """Detect GitHub remote for a local repository."""
+    principal = getattr(request.state, "user", None) if request is not None else None
+    db_session = db if isinstance(db, AsyncSession) else None
+    await require_project_role(
+        principal, project_id_for_path(path), "viewer", db_session
+    )
     result = run_gh_command(
         ["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"], cwd=path
     )
@@ -529,8 +542,21 @@ async def create_github_repo(request: CreateRepoRequest):
 
 
 @router.post("/remote")
-async def add_git_remote(request: AddRemoteRequest):
+async def add_git_remote(
+    request: AddRemoteRequest,
+    http_request: Request = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+):
     """Add GitHub remote to local repository."""
+    principal = (
+        getattr(http_request.state, "user", None)
+        if http_request is not None
+        else None
+    )
+    db_session = db if isinstance(db, AsyncSession) else None
+    await require_project_role(
+        principal, project_id_for_path(request.projectPath), "admin", db_session
+    )
     remote_url = f"https://github.com/{request.repoFullName}.git"
     try:
         subprocess.run(
@@ -552,7 +578,7 @@ async def add_git_remote(request: AddRemoteRequest):
 # These are mounted under /api/projects/{projectId}/github
 # ============================================
 
-project_router = APIRouter()
+project_router = APIRouter(dependencies=[Depends(ProjectAccessChecker("viewer"))])
 
 
 def _resolve_project_path(projectId: str) -> FilePath | None:
@@ -1133,7 +1159,10 @@ async def get_project_github_issue_comments(projectId: str, issueNumber: int):
     return {"success": True, "data": comments}
 
 
-@project_router.post("/issues/{issueNumber}/investigate")
+@project_router.post(
+    "/issues/{issueNumber}/investigate",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def investigate_github_issue(
     projectId: str, issueNumber: int, request: InvestigateRequest
 ):
@@ -1279,7 +1308,10 @@ async def investigate_github_issue(
         return {"success": False, "error": "Failed to investigate issue"}
 
 
-@project_router.post("/import")
+@project_router.post(
+    "/import",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def import_github_issues(projectId: str, request: ImportIssuesRequest):
     """Import GitHub issues as tasks."""
     project_path = _resolve_project_path(projectId)
@@ -1385,7 +1417,10 @@ async def import_github_issues(projectId: str, request: ImportIssuesRequest):
     }
 
 
-@project_router.post("/issues/{issueNumber}/close")
+@project_router.post(
+    "/issues/{issueNumber}/close",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def close_github_issue(projectId: str, issueNumber: int):
     """Close a GitHub issue."""
     project_path = _resolve_project_path(projectId)
@@ -1414,7 +1449,10 @@ async def close_github_issue(projectId: str, issueNumber: int):
     return {"success": True}
 
 
-@project_router.post("/releases")
+@project_router.post(
+    "/releases",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def create_github_release(projectId: str, request: CreateReleaseRequest):
     """Create a GitHub release."""
     project_path = _resolve_project_path(projectId)
@@ -1454,8 +1492,15 @@ async def create_github_release(projectId: str, request: CreateReleaseRequest):
 @router.get("/fork-info")
 async def get_fork_info(
     project_path: str = Query(..., description="Absolute path to the project"),
+    request: Request = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
     """Detect if repo is a fork and return origin + upstream info."""
+    principal = getattr(request.state, "user", None) if request is not None else None
+    db_session = db if isinstance(db, AsyncSession) else None
+    await require_project_role(
+        principal, project_id_for_path(project_path), "viewer", db_session
+    )
     result = run_gh_command(
         ["repo", "view", "--json", "nameWithOwner,parent,isFork,defaultBranchRef"],
         cwd=project_path,
