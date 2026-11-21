@@ -45,6 +45,7 @@ def known_project(monkeypatch):
         "load_projects",
         lambda *a, **k: {"proj": {"path": "/tmp/p", "name": "proj"}},
     )
+    monkeypatch.setattr("server.routes.project_authz._auth_disabled", lambda: True)
 
     # Bypass the clone self-heal (#539) — exercised directly elsewhere — so these
     # tests stay focused on resolution + error mapping. Passthrough the path.

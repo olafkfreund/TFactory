@@ -31,6 +31,8 @@ from pydantic import BaseModel
 from ..config import get_settings
 from ..rate_limit import FixedWindowLimiter
 from ._specpath import is_safe_slug
+from .project_authz import resolve_project_id
+from .projects import load_projects
 
 # Throttle re-fires per task so a leaked secret / misbehaving caller can't drive
 # unbounded pipeline runs (#242). Generous — a healthy loop fires a handful of
@@ -170,8 +172,16 @@ async def aifactory_complete(
             status_code=http_status.HTTP_429_TOO_MANY_REQUESTS,
             detail="rate limit exceeded for this task; retry shortly",
         )
-    spec_dir = _resolve_workspace_root() / "workspaces" / project_id / "specs" / spec_id
-    if not (spec_dir / "status.json").exists():
+    projects = load_projects()
+    resolved_id = resolve_project_id(project_id) if projects else None
+    spec_dir = (
+        _resolve_workspace_root()
+        / "workspaces"
+        / (resolved_id or project_id)
+        / "specs"
+        / spec_id
+    )
+    if resolved_id is None or not (spec_dir / "status.json").exists():
         raise HTTPException(
             status_code=http_status.HTTP_404_NOT_FOUND,
             detail=f"unknown task {task_id}",
@@ -212,7 +222,7 @@ async def aifactory_complete(
 
     record_cycle(spec_dir, cycle=cycle + 1, failure_signature=current)
     result = rerun_pipeline(
-        project_id, spec_id, lane=payload.lane, root=_resolve_workspace_root()
+        resolved_id, spec_id, lane=payload.lane, root=_resolve_workspace_root()
     )
     return {
         "action": "retest",

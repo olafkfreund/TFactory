@@ -8,7 +8,7 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -17,7 +17,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.database.engine import get_db
 from server.error_ref import client_error
-from server.routes.project_authz import ProjectAccessChecker, creator_org
+from server.pty.access import project_id_for_path
+from server.routes.project_authz import (
+    ProjectAccessChecker,
+    creator_org,
+    is_service_principal,
+    require_project_role,
+    visible_project_ids,
+)
 
 # --------------------------------------------------------------------------
 # Type Definitions for Validation
@@ -282,7 +289,9 @@ def analyze_project(path: str) -> dict:
     }
 
 
-def project_to_response(project_id: str, project_data: dict) -> dict:
+def project_to_response(
+    project_id: str, project_data: dict, *, admin: bool = True
+) -> dict:
     """Convert stored project data to response dict matching frontend expectations."""
     analysis = analyze_project(project_data["path"])
 
@@ -309,11 +318,15 @@ def project_to_response(project_id: str, project_data: dict) -> dict:
     if saved_settings:
         # Merge notifications separately to preserve individual keys
         if "notifications" in saved_settings:
-            default_settings["notifications"].update(saved_settings["notifications"])
+            notifications = cast("dict[str, Any]", default_settings["notifications"])
+            notifications.update(saved_settings["notifications"])
             saved_settings = {
                 k: v for k, v in saved_settings.items() if k != "notifications"
             }
         default_settings.update(saved_settings)
+    if not admin:
+        default_settings.pop("gitToken", None)
+        default_settings.pop("githubToken", None)
 
     return {
         "id": project_id,
@@ -324,6 +337,21 @@ def project_to_response(project_id: str, project_data: dict) -> dict:
         "autoBuildPath": auto_build_path,
         "settings": default_settings,
     }
+
+
+def _check_claim(
+    path: Path, org_id: str | None = None, exclude_id: str | None = None
+) -> None:
+    # This path is compared with registered roots to reject another org's claim before registration.
+    target = path.resolve()
+    for pid, existing in load_projects().items():
+        if pid == exclude_id or not existing.get("path"):
+            continue
+        owned = Path(existing["path"]).resolve()
+        if (target == owned or target in owned.parents or owned in target.parents) and (
+            org_id is not None and existing.get("org_id") != org_id
+        ):
+            raise HTTPException(404, "Project not found")
 
 
 # --------------------------------------------------------------------------
@@ -359,14 +387,26 @@ async def _resolve_git_credential(cred_id: str) -> tuple[str, str] | None:
 
 
 @router.get("")
-async def list_projects():
+async def list_projects(
+    request: Request = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+):
     """List all registered projects.
 
     Returns projects array directly (not wrapped) because
     the frontend api-client.ts adds the {success, data} wrapper automatically.
     """
+    principal = getattr(request.state, "user", None) if request is not None else None
+    db_session = db if isinstance(db, AsyncSession) else None
+    visible = await visible_project_ids(principal, db_session, "viewer")
     projects = load_projects()
-    project_list = [project_to_response(pid, pdata) for pid, pdata in projects.items()]
+    project_list = []
+    for pid, pdata in projects.items():
+        if pid in visible:
+            access = await require_project_role(principal, pid, "viewer", db_session)
+            project_list.append(
+                project_to_response(pid, pdata, admin=access.role in {"admin", "owner"})
+            )
     return project_list
 
 
@@ -392,7 +432,11 @@ class ScanProjectsRequest(BaseModel):
 
 
 @router.post("/scan")
-async def scan_for_projects(request: ScanProjectsRequest):
+async def scan_for_projects(
+    request: ScanProjectsRequest,
+    http_request: Request = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+):
     """
     Scan filesystem for Magestic AI projects.
 
@@ -414,6 +458,12 @@ async def scan_for_projects(request: ScanProjectsRequest):
         HTTPException: 400 if path doesn't exist or isn't a directory
     """
     try:
+        principal = (
+            getattr(http_request.state, "user", None)
+            if http_request is not None
+            else None
+        )
+        await creator_org(principal, db)
         # Validate and resolve base path
         base = within_roots(
             request.basePath, browse_roots(), "browsable directories", expand_user=True
@@ -499,8 +549,21 @@ async def scan_for_projects(request: ScanProjectsRequest):
         # Start scanning from base path at depth 1
         scan_directory(base, 1)
 
+        principal = (
+            getattr(http_request.state, "user", None)
+            if http_request is not None
+            else None
+        )
+        db_session = db if isinstance(db, AsyncSession) else None
+        visible = await visible_project_ids(principal, db_session, "viewer")
+        out = []
+        for p in projects:
+            pid = project_id_for_path(p.path)
+            if pid is None or pid in visible:
+                out.append(p.model_dump())
+
         # Return list directly - frontend api-client.ts adds {success, data} wrapper
-        return [p.model_dump() for p in projects]
+        return out
 
     except HTTPException:
         # Re-raise HTTP exceptions
@@ -520,7 +583,24 @@ async def add_project(
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ) -> dict[str, Any]:
     """Register a project, stamped with the creating principal's org (#1036)."""
-    org_id = await creator_org(getattr(request.state, "user", None), db)
+    principal = getattr(request.state, "user", None)
+    org_id = await creator_org(principal, db)
+    if not is_service_principal(principal):
+        if project.gitUrl:
+            from server.services.project_workspace_service import (  # noqa: PLC0415
+                slug_from_git_url,
+                workspace_root,
+            )
+
+            target = workspace_root() / slug_from_git_url(project.gitUrl)
+        else:
+            # Local registration accepts a chosen path after org and claim checks.
+            target = Path(project.path or "").expanduser()  # noqa: ASYNC240
+        parent_id = project_id_for_path(str(target.resolve()))
+        if parent_id:
+            org_id = (
+                await require_project_role(principal, parent_id, "member", db)
+            ).org_id
     return await create_project(project, org_id)
 
 
@@ -543,10 +623,14 @@ async def create_project(
 
     if project.gitUrl:
         # Clone mode — defer to project_workspace_service.
-        from ..services.project_workspace_service import (
+        from server.services.project_workspace_service import (  # noqa: PLC0415
             GitOperationError,
             clone_or_update,
+            slug_from_git_url,
+            workspace_root,
         )
+
+        _check_claim(workspace_root() / slug_from_git_url(project.gitUrl), org_id)
 
         # Stored credential lookup (#82 PR-C). When the caller passes
         # gitCredentialId, fetch the (username, token) tuple from the
@@ -571,6 +655,7 @@ async def create_project(
         # Local mode — register the existing directory.
         assert project.path is not None  # model_validator guarantees this
         project_path = Path(project.path).expanduser()
+        _check_claim(project_path, org_id)
 
         if not project_path.exists():
             try:
@@ -629,8 +714,11 @@ async def create_project(
     return response
 
 
-@router.get("/{project_id}")
-async def get_project(project_id: str):
+@router.get(
+    "/{project_id}",
+    dependencies=[Depends(ProjectAccessChecker("viewer"))],
+)
+async def get_project(project_id: str, request: Request):
     """Get a specific project by ID."""
     projects = load_projects()
     if project_id not in projects:
@@ -639,10 +727,18 @@ async def get_project(project_id: str):
             detail="Project not found",
         )
 
-    return project_to_response(project_id, projects[project_id])
+    access = await require_project_role(
+        getattr(request.state, "user", None), project_id
+    )
+    return project_to_response(
+        project_id, projects[project_id], admin=access.role in {"admin", "owner"}
+    )
 
 
-@router.put("/{project_id}")
+@router.put(
+    "/{project_id}",
+    dependencies=[Depends(ProjectAccessChecker("admin"))],
+)
 async def update_project(project_id: str, project: ProjectCreate):
     """Update a project's metadata."""
     projects = load_projects()
@@ -656,6 +752,7 @@ async def update_project(project_id: str, project: ProjectCreate):
     project_data = projects[project_id]
     if project.path:
         project_path = Path(project.path)
+        _check_claim(project_path, project_data.get("org_id"), project_id)
         if not project_path.exists():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -674,7 +771,11 @@ async def update_project(project_id: str, project: ProjectCreate):
     return project_to_response(project_id, project_data)
 
 
-@router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{project_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(ProjectAccessChecker("admin"))],
+)
 async def remove_project(project_id: str):
     """Remove a project (unregister, does not delete files)."""
     projects = load_projects()
@@ -688,7 +789,10 @@ async def remove_project(project_id: str):
     save_projects(projects)
 
 
-@router.post("/{project_id}/initialize")
+@router.post(
+    "/{project_id}/initialize",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def initialize_project(project_id: str):
     """Initialize Magestic AI in a project (create .tfactory directory).
 
@@ -722,7 +826,10 @@ async def initialize_project(project_id: str):
         return {"success": False, "error": "Failed to initialize project"}
 
 
-@router.get("/{project_id}/version")
+@router.get(
+    "/{project_id}/version",
+    dependencies=[Depends(ProjectAccessChecker("viewer"))],
+)
 async def check_project_version(project_id: str):
     """Check Magestic AI version info for a project."""
     projects = load_projects()
@@ -800,7 +907,10 @@ class ProjectSettingsUpdate(BaseModel):
         return v
 
 
-@router.patch("/{project_id}/settings")
+@router.patch(
+    "/{project_id}/settings",
+    dependencies=[Depends(ProjectAccessChecker("admin"))],
+)
 async def update_project_settings(project_id: str, settings: ProjectSettingsUpdate):
     """Update project settings."""
     projects = load_projects()
@@ -910,7 +1020,10 @@ async def update_project_settings(project_id: str, settings: ProjectSettingsUpda
         )
 
 
-@router.get("/{project_id}/worktrees")
+@router.get(
+    "/{project_id}/worktrees",
+    dependencies=[Depends(ProjectAccessChecker("viewer"))],
+)
 async def list_project_worktrees(project_id: str):
     """List worktrees for a project with detailed stats."""
     import re
@@ -1059,7 +1172,10 @@ async def list_project_worktrees(project_id: str):
         return {"worktrees": [], "error": "Failed to list worktrees"}
 
 
-@router.get("/{project_id}/tasks")
+@router.get(
+    "/{project_id}/tasks",
+    dependencies=[Depends(ProjectAccessChecker("viewer"))],
+)
 async def list_project_tasks(project_id: str):
     """List all tasks for a specific project.
 
@@ -1234,7 +1350,10 @@ async def unwatch_project_task_logs(project_id: str, spec_id: str):
     return {"success": True, "message": "Log unwatching handled via WebSocket"}
 
 
-@router.get("/{project_id}/tasks/{spec_id}/logs")
+@router.get(
+    "/{project_id}/tasks/{spec_id}/logs",
+    dependencies=[Depends(ProjectAccessChecker("viewer"))],
+)
 async def get_project_task_logs(project_id: str, spec_id: str):
     """Get logs for a task (delegates to tasks router)."""
     from . import tasks as tasks_module

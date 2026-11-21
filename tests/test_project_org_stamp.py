@@ -44,9 +44,15 @@ def env(tmp_path, monkeypatch):
             await db.commit()
 
     asyncio.run(_init())
-    settings = SimpleNamespace(DISABLE_AUTH=False, RBAC_ENFORCE_TASK_ROUTES=True)
+    settings = SimpleNamespace(
+        DISABLE_AUTH=False,
+        RBAC_ENFORCE_TASK_ROUTES=True,
+        PROJECTS_BACKEND="json",
+        LEGACY_SHARED_TOKEN_FULL_ACCESS=True,
+    )
     monkeypatch.setattr(pa, "get_settings", lambda: settings)
     store: dict = {}
+    monkeypatch.setattr(pa, "_load_projects", lambda: store)
     monkeypatch.setattr(projects, "load_projects", lambda: store)
     monkeypatch.setattr(projects, "save_projects", lambda data: None)
 
@@ -63,9 +69,18 @@ def env(tmp_path, monkeypatch):
 def test_creator_org_by_principal(env):
     cases = [
         ({"id": "solo"}, "A"),  # one membership
-        ({"id": "multi"}, None),  # ambiguous: left unset
-        ({"id": "x", "api_key_id": "k", "org_id": "B"}, "B"),  # org key
-        ({"id": "default", "is_service": True}, None),  # service principal
+        ({"id": "multi"}, "A"),  # deterministic first org
+        (
+            {
+                "id": "x",
+                "api_key_id": "k",
+                "org_id": "B",
+                "scopes": ["project:write"],
+                "scoped_service": True,
+            },
+            "B",
+        ),  # org service key
+        ({"id": "default", "is_legacy_token": True}, None),  # legacy service principal
     ]
     for principal, expected in cases:
         assert env.run(lambda db, p=principal: env.pa.creator_org(p, db)) == expected
@@ -83,7 +98,7 @@ def test_add_project_stamps_creator_org_and_is_visible_under_enforce(env, tmp_pa
     )  # no 403
 
 
-def test_unstamped_project_is_403_for_non_service(env, tmp_path):
+def test_unstamped_project_is_404_for_non_service(env, tmp_path):
     from server.routes import projects
 
     body = projects.ProjectCreate(path=str(tmp_path / "orphan"))
@@ -93,7 +108,7 @@ def test_unstamped_project_is_403_for_non_service(env, tmp_path):
         env.run(
             lambda db: env.pa.authorize_project_for_user({"id": "solo"}, out["id"], db)
         )
-    assert exc.value.status_code == 403
+    assert exc.value.status_code == 404
 
 
 def test_clone_register_stamps_org(env, tmp_path, monkeypatch):

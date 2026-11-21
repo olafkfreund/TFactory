@@ -36,8 +36,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from server.database.engine import get_db
+from server.routes.project_authz import require_project_role, visible_project_ids
 
 # apps/backend carries the regression store helpers.
 _BACKEND_DIR = Path(__file__).resolve().parents[3] / "backend"
@@ -195,6 +199,7 @@ async def get_coverage(
     project_id: str = Query(
         "", description="skip repo resolution and use this project"
     ),
+    request: Request = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
     """Coverage for one commit, or an explicit reason there is none.
 
@@ -209,7 +214,11 @@ async def get_coverage(
             "reason": f"no sha supplied for {label}; coverage is keyed on commit",
         }
 
+    principal = getattr(request.state, "user", None) if request is not None else None
     candidates = [project_id] if project_id else _projects_for_repo(repo)
+    if request is not None:
+        visible = await visible_project_ids(principal, None, "viewer")
+        candidates = [pid for pid in candidates if pid in visible]
     if not candidates:
         return {
             "coverage_pct": None,
@@ -217,6 +226,8 @@ async def get_coverage(
         }
 
     for pid in candidates:
+        if request is not None:
+            await require_project_role(principal, pid, "viewer")
         found = _coverage_for_commit(pid, sha)
         if found:
             return {**found, "project_id": pid, "repo": repo}
@@ -247,7 +258,11 @@ class CoverageReport(BaseModel):
 
 
 @router.post("/api/coverage", status_code=status.HTTP_201_CREATED)
-async def record_commit_coverage(report: CoverageReport) -> dict[str, Any]:
+async def record_commit_coverage(
+    report: CoverageReport,
+    request: Request = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+) -> dict[str, Any]:
     """Record a coverage figure against a commit, so the GET above can serve it.
 
     Unlike the GET, an unresolvable repo here is a **404**, not a 200 with a
@@ -257,12 +272,15 @@ async def record_commit_coverage(report: CoverageReport) -> dict[str, Any]:
     again -- the producer would look like it recorded something it did not.
     """
     candidates = _projects_for_repo(report.repo)
+    principal = getattr(request.state, "user", None) if request is not None else None
+    db_session = db if isinstance(db, AsyncSession) else None
+    allowed = await visible_project_ids(principal, db_session)
+    candidates = [pid for pid in candidates if pid in allowed]
     if not candidates:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"no TFactory project has a checkout of {report.repo}",
-        )
+        raise HTTPException(404, "Project not found")
     project_id = candidates[0]
+    if request is not None:
+        await require_project_role(principal, project_id, "member", db_session)
     point = CoveragePoint(
         # Provenance stays readable in the ledger: a CI measurement and a
         # regression run are both project coverage, but they are not the same

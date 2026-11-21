@@ -10,10 +10,11 @@ import subprocess
 from pathlib import Path as FilePath
 
 from factory_common.url_safety import assert_safe_outbound_url
-from fastapi import APIRouter, Path, Query
+from fastapi import APIRouter, Depends, Path, Query
 from pydantic import BaseModel, Field, SecretStr
 
 from server.error_ref import InputRejectedError
+from server.routes.project_authz import ProjectAccessChecker
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +104,7 @@ class TestGraphitiRequest(BaseModel):
 # These are mounted under /api/projects/{projectId}
 # ============================================
 
-project_router = APIRouter()
+project_router = APIRouter(dependencies=[Depends(ProjectAccessChecker("viewer"))])
 
 
 @project_router.get("/context")
@@ -194,7 +195,10 @@ async def get_project_context(projectId: str = Path(...)):
     }
 
 
-@project_router.post("/context/refresh")
+@project_router.post(
+    "/context/refresh",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def refresh_project_index(projectId: str = Path(...)):
     """Refresh/regenerate project index."""
     from .projects import load_projects
@@ -422,7 +426,10 @@ def _extract_memory_summary(data: dict) -> str:
     return " | ".join(parts) if parts else "Session completed"
 
 
-@project_router.get("/env")
+@project_router.get(
+    "/env",
+    dependencies=[Depends(ProjectAccessChecker("admin"))],
+)
 async def get_project_env(projectId: str = Path(...)):
     """Get project environment configuration."""
     from .projects import load_projects
@@ -548,7 +555,10 @@ async def get_project_env(projectId: str = Path(...)):
     return {"success": True, "data": config}
 
 
-@project_router.patch("/env")
+@project_router.patch(
+    "/env",
+    dependencies=[Depends(ProjectAccessChecker("admin"))],
+)
 async def update_project_env(
     projectId: str = Path(...), config: ProjectEnvUpdate = ...
 ):
@@ -813,7 +823,10 @@ async def check_claude_auth(projectId: str = Path(...)):
     return {"success": True, "data": {"authenticated": False, "method": None}}
 
 
-@project_router.post("/claude-setup")
+@project_router.post(
+    "/claude-setup",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def invoke_claude_setup(projectId: str = Path(...)):
     """
     Check Claude CLI authentication status and provide setup instructions.

@@ -183,7 +183,7 @@ def test_read_scope_and_foreign_project_denied_by_id_and_name(env):
             client.get(
                 f"/api/mcp-stdio/spec-tasks/{project}/same", headers=HEADERS
             ).status_code
-            == 403
+            == 404
         )
 
 

@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from fastapi import FastAPI, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocketDisconnect
 from fastapi.testclient import TestClient
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -23,7 +23,7 @@ from server.websockets import terminal as terminal_ws  # noqa: E402
 ALICE = {"id": "alice", "role": "user"}
 BOB = {"id": "bob", "role": "user"}
 ADMIN_NOT_SERVICE = {"id": "root", "role": "admin"}
-SERVICE = {"id": "default", "is_service": True}
+SERVICE = {"id": "default", "is_service": True, "is_legacy_token": True}
 USERS = {"alice": ALICE, "bob": BOB, "root": ADMIN_NOT_SERVICE, "svc": SERVICE}
 
 
@@ -37,6 +37,7 @@ def env(tmp_path, monkeypatch):
     }
     state = {"members": {"alice": {"a"}, "bob": {"b"}}, "error": False}
     monkeypatch.setattr(projects_routes, "load_projects", lambda: projects)
+    monkeypatch.setattr("server.routes.project_authz._load_projects", lambda: projects)
     monkeypatch.setattr(terminal, "load_projects", lambda: projects)
 
     class Session:
@@ -48,13 +49,18 @@ def env(tmp_path, monkeypatch):
         async def __aexit__(self, *_):
             pass
 
-    async def authorize(user, project_id, _db):
+    async def authorize(user, project_id, _role="viewer", _db=None):
+        if state["error"]:
+            raise HTTPException(503, "Authorization unavailable")
+        if user.get("is_legacy_token"):
+            return
         key_org = user.get("api_key_id") and user.get("org_id") != "A"
-        if project_id not in state["members"].get(user["id"], set()) or key_org:
-            raise PermissionError("not a member")
+        if project_id not in state["members"].get(user.get("id"), set()) or key_org:
+            raise HTTPException(404, "Project not found")
 
     monkeypatch.setattr(access.engine, "async_session_factory", Session)
-    monkeypatch.setattr(access, "authorize_project_for_user", authorize)
+    monkeypatch.setattr(access, "require_project_role", authorize)
+    monkeypatch.setattr(terminal, "require_project_role", authorize)
 
     monkeypatch.setattr(
         PTYManager, "_resolve_claude_token", lambda self: (None, None, None)
@@ -122,20 +128,20 @@ def test_owner_uses_own_terminal_and_the_other_user_gets_404(env):
 
 
 def test_create_requires_an_authorized_project_that_contains_the_directory(env):
-    assert _create(env, "alice", cwd=str(env.root / "b")).status_code == 403
-    assert _create(env, "alice", projectId="b").status_code == 403
+    assert _create(env, "alice", cwd=str(env.root / "b")).status_code == 404
+    assert _create(env, "alice", projectId="b").status_code == 404
     # project A's id cannot authorize project B's directory
     assert (
-        _create(env, "alice", projectId="a", cwd=str(env.root / "b")).status_code == 403
+        _create(env, "alice", projectId="a", cwd=str(env.root / "b")).status_code == 404
     )
     # projectless (home directory) terminals stay service-only
-    assert _create(env, "alice", cwd=str(env.root)).status_code == 403
-    assert _create(env, "root", cwd=str(env.root / "a")).status_code == 403
+    assert _create(env, "alice", cwd=str(env.root)).status_code == 404
+    assert _create(env, "root", cwd=str(env.root / "a")).status_code == 404
     assert _create(env, "alice", projectId="a").status_code == 201
     assert _create(env, "alice", projectPath=str(env.root / "a")).status_code == 201
-    assert _create(env, "svc", cwd=str(env.root)).status_code == 201
+    assert _create(env, "svc", cwd=str(env.root)).status_code == 404
     env.state["error"] = True
-    assert _create(env, "alice", projectId="a").status_code == 403
+    assert _create(env, "alice", projectId="a").status_code == 503
 
 
 def test_duplicate_id_never_spawns_and_only_the_owner_reconnects(env, monkeypatch):
@@ -245,7 +251,12 @@ def test_worktree_clear_and_cleanup_routes(env):
         ("delete", "/api/terminals/sessions", {}),
         ("post", "/api/terminals/cleanup", {}),
     ]:
-        assert _as(env, "alice", method, path, **kw).status_code == 403, (method, path)
+        assert _as(env, "alice", method, path, **kw).status_code == (
+            403
+            if path == "/api/terminals/cleanup"
+            or (path == "/api/terminals/sessions" and not kw)
+            else 404
+        ), (method, path)
     assert _as(env, "svc", "post", "/api/terminals/cleanup").status_code == 200
     assert (
         _as(
@@ -319,9 +330,10 @@ def test_ws_owner_connects_others_get_4004(sockets):
 
 
 def test_ws_legacy_and_service_connect(sockets):
-    for user in (None, SERVICE):
-        sockets.principal["user"] = user
-        assert _first(sockets)["type"] == "connected"
+    sockets.principal["user"] = SERVICE
+    assert _first(sockets)["type"] == "connected"
+    sockets.principal["user"] = None
+    assert _first(sockets)["type"] == "error"
 
 
 def test_ws_membership_loss_closes_4003(sockets):

@@ -24,13 +24,21 @@ import json
 import logging
 import os
 import re
+import shutil
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from server.auth import WebSocketAuthError, authenticate_websocket
 from server.error_ref import InputRejectedError, client_error
 
-from ._specpath import safe_slug
+from ._specpath import safe_component, safe_slug
+from .project_authz import (
+    require_project_role,
+    resolve_task_project,
+    visible_project_ids,
+)
 
 # Evidence artifact content-type map (mirrors agents.evidence.layout)
 _EVIDENCE_CONTENT_TYPES: dict[str, str] = {
@@ -50,11 +58,10 @@ from fastapi import (
     APIRouter,
     Header,
     HTTPException,
+    Request,
     Response,
     WebSocket,
     WebSocketDisconnect,
-)
-from fastapi import (
     status as http_status,
 )
 from pydantic import BaseModel
@@ -90,13 +97,18 @@ def _validate_spec_id(spec_id: str) -> str:
     return safe_slug(spec_id, f"invalid spec_id: {spec_id!r}")
 
 
-def _find_spec_dir(root: Path, spec_id: str) -> Path | None:
-    """Locate the spec_dir for ``spec_id`` across all projects under root.
+def _find_spec_dir(
+    root: Path, spec_id: str, visible: set[str] | None = None
+) -> Path | None:
+    """Locate the spec_dir for ``spec_id`` across visible projects under root.
 
-    Returns the first match (spec_ids are unique within a project but
-    technically could collide across projects; production caller picks
-    the right project via list endpoint).
+    Returns the match within ``visible`` (or all projects when ``visible`` is
+    None for direct non-HTTP test calls).
     """
+    if visible is not None:
+        pid, sid = resolve_task_project(spec_id, visible)
+        candidate = root / "workspaces" / pid / "specs" / sid
+        return candidate if (candidate / "status.json").exists() else None
     workspaces = root / "workspaces"
     if not workspaces.exists():
         return None
@@ -107,6 +119,29 @@ def _find_spec_dir(root: Path, spec_id: str) -> Path | None:
         if (candidate / "status.json").exists():
             return candidate
     return None
+
+
+async def _authorize_spec_request(
+    request: Request | None,
+    spec_id: str,
+    min_role: str = "viewer",
+    project_id: str | None = None,
+) -> set[str] | None:
+    """Resolve and authorize ``spec_id`` against the caller's visible projects."""
+    if request is None or not hasattr(request, "state"):
+        raise HTTPException(401, "Authentication required")
+    _validate_spec_id(spec_id)
+    principal = getattr(request.state, "user", None)
+    q_pid = project_id or (
+        request.query_params.get("project_id")
+        if hasattr(request, "query_params")
+        else None
+    )
+    visible = await visible_project_ids(principal)
+    task_ref = f"{safe_component(q_pid)}:{spec_id}" if q_pid else spec_id
+    pid, _ = resolve_task_project(task_ref, visible)
+    await require_project_role(principal, pid, min_role)
+    return {pid}
 
 
 # ─── Helpers ────────────────────────────────────────────────────────────
@@ -238,11 +273,11 @@ def _artefact_meta(spec_dir: Path) -> dict[str, dict]:
 # ─── Endpoints ──────────────────────────────────────────────────────────
 
 
-@router.get("")
 def list_tasks(
     x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
-) -> dict:
-    """List all TFactory tasks across all projects.
+    visible: set[str] | None = None,
+) -> dict[str, Any]:
+    """List all TFactory tasks across visible projects.
 
     Response shape:
         {
@@ -266,7 +301,9 @@ def list_tasks(
     rows: list[dict] = []
     if workspaces.exists():
         for status_path in workspaces.glob("*/specs/*/status.json"):
-            rows.append(_summary_row(status_path))
+            row = _summary_row(status_path)
+            if visible is None or row.get("project_id") in visible:
+                rows.append(row)
     if multi_tenant_enabled():
         # Direct (non-HTTP) callers pass no header; Header default may be a
         # sentinel object in stubbed-fastapi unit tests — treat both as absent.
@@ -277,15 +314,24 @@ def list_tasks(
     return {"tasks": rows, "count": len(rows)}
 
 
-@router.get("/{spec_id}")
-def get_task(spec_id: str) -> dict:
+@router.get("")
+async def _list_tasks_route(
+    request: Request,
+    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
+) -> dict[str, Any]:
+    principal = getattr(request.state, "user", None)
+    visible = await visible_project_ids(principal, None, "viewer")
+    return list_tasks(x_tenant_id=x_tenant_id, visible=visible)
+
+
+def get_task(spec_id: str, visible: set[str] | None = None) -> dict:
     """Fetch full status.json for a task + artefact-existence meta.
 
     Returns 400 on malformed spec_id, 404 if no matching spec dir.
     """
     _validate_spec_id(spec_id)
     root = _resolve_workspace_root()
-    spec_dir = _find_spec_dir(root, spec_id)
+    spec_dir = _find_spec_dir(root, spec_id, visible)
     if spec_dir is None:
         raise HTTPException(
             status_code=http_status.HTTP_404_NOT_FOUND,
@@ -322,6 +368,16 @@ def get_task(spec_id: str) -> dict:
     }
 
 
+@router.get("/{spec_id}")
+async def _get_task_route(
+    spec_id: str,
+    request: Request,
+    project_id: str | None = None,
+) -> dict[str, Any]:
+    visible = await _authorize_spec_request(request, spec_id, "viewer", project_id)
+    return get_task(spec_id, visible)
+
+
 # ─── Artefact endpoints ────────────────────────────────────────────────
 
 
@@ -329,6 +385,7 @@ def _serve_artefact_file(
     spec_id: str,
     relpath: str,
     media_type: str,
+    visible: set[str] | None = None,
 ) -> Response:
     """Locate ``spec_id`` and serve the file at ``spec_dir/relpath``.
 
@@ -338,7 +395,7 @@ def _serve_artefact_file(
     """
     _validate_spec_id(spec_id)
     root = _resolve_workspace_root()
-    spec_dir = _find_spec_dir(root, spec_id)
+    spec_dir = _find_spec_dir(root, spec_id, visible)
     if spec_dir is None:
         raise HTTPException(
             status_code=http_status.HTTP_404_NOT_FOUND,
@@ -360,75 +417,131 @@ def _serve_artefact_file(
     return Response(content=content, media_type=media_type)
 
 
-@router.get("/{spec_id}/verdicts.json")
-def get_verdicts(spec_id: str) -> Response:
+def get_verdicts(spec_id: str, visible: set[str] | None = None) -> Response:
     """Stream the Evaluator's verdicts.json verbatim."""
     return _serve_artefact_file(
         spec_id,
         "findings/verdicts.json",
         "application/json",
+        visible,
     )
 
 
-@router.get("/{spec_id}/ac-fidelity.json")
-def get_ac_fidelity_json(spec_id: str) -> Response:
+@router.get("/{spec_id}/verdicts.json")
+async def _get_verdicts_route(
+    spec_id: str, request: Request, project_id: str | None = None
+) -> Response:
+    visible = await _authorize_spec_request(request, spec_id, "viewer", project_id)
+    return get_verdicts(spec_id, visible)
+
+
+def get_ac_fidelity_json(spec_id: str, visible: set[str] | None = None) -> Response:
     """Stream the AC-fidelity ledger (per-AC verified/flagged/unverified)."""
     return _serve_artefact_file(
         spec_id,
         "findings/ac_fidelity.json",
         "application/json",
+        visible,
     )
 
 
-@router.get("/{spec_id}/ac-fidelity.md")
-def get_ac_fidelity_md(spec_id: str) -> Response:
+@router.get("/{spec_id}/ac-fidelity.json")
+async def _get_ac_fidelity_json_route(
+    spec_id: str, request: Request, project_id: str | None = None
+) -> Response:
+    visible = await _authorize_spec_request(request, spec_id, "viewer", project_id)
+    return get_ac_fidelity_json(spec_id, visible)
+
+
+def get_ac_fidelity_md(spec_id: str, visible: set[str] | None = None) -> Response:
     """Stream the human-readable AC-fidelity report."""
     return _serve_artefact_file(
         spec_id,
         "findings/ac_fidelity.md",
         "text/markdown",
+        visible,
     )
 
 
-@router.get("/{spec_id}/triage-report.json")
-def get_triage_report_json(spec_id: str) -> Response:
+@router.get("/{spec_id}/ac-fidelity.md")
+async def _get_ac_fidelity_md_route(
+    spec_id: str, request: Request, project_id: str | None = None
+) -> Response:
+    visible = await _authorize_spec_request(request, spec_id, "viewer", project_id)
+    return get_ac_fidelity_md(spec_id, visible)
+
+
+def get_triage_report_json(spec_id: str, visible: set[str] | None = None) -> Response:
     """Stream the Triager's triage_report.json verbatim."""
     return _serve_artefact_file(
         spec_id,
         "findings/triage_report.json",
         "application/json",
+        visible,
     )
 
 
-@router.get("/{spec_id}/triage-report.md")
-def get_triage_report_md(spec_id: str) -> Response:
+@router.get("/{spec_id}/triage-report.json")
+async def _get_triage_report_json_route(
+    spec_id: str, request: Request, project_id: str | None = None
+) -> Response:
+    visible = await _authorize_spec_request(request, spec_id, "viewer", project_id)
+    return get_triage_report_json(spec_id, visible)
+
+
+def get_triage_report_md(spec_id: str, visible: set[str] | None = None) -> Response:
     """Stream the Triager's triage_report.md verbatim."""
     return _serve_artefact_file(
         spec_id,
         "findings/triage_report.md",
         "text/markdown",
+        visible,
     )
 
 
-@router.get("/{spec_id}/test-plan.json")
-def get_test_plan(spec_id: str) -> Response:
+@router.get("/{spec_id}/triage-report.md")
+async def _get_triage_report_md_route(
+    spec_id: str, request: Request, project_id: str | None = None
+) -> Response:
+    visible = await _authorize_spec_request(request, spec_id, "viewer", project_id)
+    return get_triage_report_md(spec_id, visible)
+
+
+def get_test_plan(spec_id: str, visible: set[str] | None = None) -> Response:
     """Stream the Planner's test_plan.json verbatim."""
     return _serve_artefact_file(
         spec_id,
         "test_plan.json",
         "application/json",
+        visible,
     )
 
 
-@router.get("/{spec_id}/pr-comment-body.md")
-def get_pr_comment_body(spec_id: str) -> Response:
+@router.get("/{spec_id}/test-plan.json")
+async def _get_test_plan_route(
+    spec_id: str, request: Request, project_id: str | None = None
+) -> Response:
+    visible = await _authorize_spec_request(request, spec_id, "viewer", project_id)
+    return get_test_plan(spec_id, visible)
+
+
+def get_pr_comment_body(spec_id: str, visible: set[str] | None = None) -> Response:
     """Stream findings/pr_comment_body.md — present when the Triager
     skipped a real gh pr comment (no PR number in source.json)."""
     return _serve_artefact_file(
         spec_id,
         "findings/pr_comment_body.md",
         "text/markdown",
+        visible,
     )
+
+
+@router.get("/{spec_id}/pr-comment-body.md")
+async def _get_pr_comment_body_route(
+    spec_id: str, request: Request, project_id: str | None = None
+) -> Response:
+    visible = await _authorize_spec_request(request, spec_id, "viewer", project_id)
+    return get_pr_comment_body(spec_id, visible)
 
 
 # ─── Logs endpoint — testable core + WS transport ──────────────────────
@@ -487,7 +600,9 @@ def _tail_lines(path: Path, n: int) -> list[str]:
 
 
 def tail_log_payload(
-    spec_id: str, lines_per_file: int = DEFAULT_LOG_TAIL_LINES
+    spec_id: str,
+    lines_per_file: int = DEFAULT_LOG_TAIL_LINES,
+    visible: set[str] | None = None,
 ) -> dict:
     """Build the JSON payload the WS endpoint sends.
 
@@ -508,7 +623,7 @@ def tail_log_payload(
     """
     _validate_spec_id(spec_id)
     root = _resolve_workspace_root()
-    spec_dir = _find_spec_dir(root, spec_id)
+    spec_dir = _find_spec_dir(root, spec_id, visible)
     if spec_dir is None:
         raise HTTPException(
             status_code=http_status.HTTP_404_NOT_FOUND,
@@ -536,10 +651,21 @@ async def websocket_logs(websocket: WebSocket, spec_id: str) -> None:
     reported by closing with code 4400 / 4404 so the frontend can
     distinguish them.
     """
+    try:
+        principal = await authenticate_websocket(websocket)
+    except WebSocketAuthError:
+        return
     await websocket.accept()
     try:
         try:
-            payload = tail_log_payload(spec_id)
+            _validate_spec_id(spec_id)
+            visible: set[str] | None = None
+            if principal is not None:
+                visible = await visible_project_ids(principal, None, "viewer")
+                pid, _ = resolve_task_project(spec_id, visible)
+                await require_project_role(principal, pid, "viewer")
+                visible = {pid}
+            payload = tail_log_payload(spec_id, visible=visible)
         except HTTPException as exc:
             # 400 → close with 4400, 404 → 4404 (custom WS close codes)
             code = 4400 if exc.status_code == 400 else 4404
@@ -564,8 +690,7 @@ async def websocket_logs(websocket: WebSocket, spec_id: str) -> None:
 # ─── Catalog endpoint (Task 14 / #30) ──────────────────────────────────────
 
 
-@router.get("/{spec_id}/catalog")
-def get_catalog(spec_id: str) -> Response:
+def get_catalog(spec_id: str, visible: set[str] | None = None) -> Response:
     """Serve the spec's ``context/tests_catalog.json`` snapshot.
 
     The snapshot is written by the AIFactory snapshotter (Task 4) when the
@@ -581,7 +706,7 @@ def get_catalog(spec_id: str) -> Response:
     """
     _validate_spec_id(spec_id)
     root = _resolve_workspace_root()
-    spec_dir = _find_spec_dir(root, spec_id)
+    spec_dir = _find_spec_dir(root, spec_id, visible)
     if spec_dir is None:
         raise HTTPException(
             status_code=http_status.HTTP_404_NOT_FOUND,
@@ -604,6 +729,14 @@ def get_catalog(spec_id: str) -> Response:
         ) from exc
 
     return Response(content=content, media_type="application/json")
+
+
+@router.get("/{spec_id}/catalog")
+async def _get_catalog_route(
+    spec_id: str, request: Request, project_id: str | None = None
+) -> Response:
+    visible = await _authorize_spec_request(request, spec_id, "viewer", project_id)
+    return get_catalog(spec_id, visible)
 
 
 # ─── Evidence artifact endpoint (Task 16 / #32) ────────────────────────────
@@ -651,8 +784,12 @@ def _evidence_content_type(artifact: str) -> str:
     return _EVIDENCE_CONTENT_TYPES.get(suffix, "application/octet-stream")
 
 
-@router.get("/{spec_id}/evidence/{test_id}/{artifact:path}")
-def get_evidence_artifact(spec_id: str, test_id: str, artifact: str) -> Response:
+def get_evidence_artifact(
+    spec_id: str,
+    test_id: str,
+    artifact: str,
+    visible: set[str] | None = None,
+) -> Response:
     """Serve a raw evidence artifact byte-for-byte.
 
     URL: ``GET /api/tfactory/tasks/{spec_id}/evidence/{test_id}/{artifact}``
@@ -691,7 +828,7 @@ def get_evidence_artifact(spec_id: str, test_id: str, artifact: str) -> Response
     _validate_artifact(artifact)
 
     root = _resolve_workspace_root()
-    spec_dir = _find_spec_dir(root, spec_id)
+    spec_dir = _find_spec_dir(root, spec_id, visible)
     if spec_dir is None:
         raise HTTPException(
             status_code=http_status.HTTP_404_NOT_FOUND,
@@ -745,6 +882,21 @@ def get_evidence_artifact(spec_id: str, test_id: str, artifact: str) -> Response
     return Response(content=content, media_type=_evidence_content_type(artifact))
 
 
+@router.get("/{spec_id}/evidence/{test_id}/{artifact:path}")
+async def _get_evidence_artifact_route(
+    spec_id: str,
+    test_id: str,
+    artifact: str,
+    request: Request,
+    project_id: str | None = None,
+) -> Response:
+    _validate_spec_id(spec_id)
+    _validate_test_id(test_id)
+    _validate_artifact(artifact)
+    visible = await _authorize_spec_request(request, spec_id, "viewer", project_id)
+    return get_evidence_artifact(spec_id, test_id, artifact, visible)
+
+
 # ── Browser-lane media (screenshots / recordings) ──────────────────────────
 #
 # The Nix browser job (RFC-0005 Tier A) writes its PNG screenshots to
@@ -755,7 +907,12 @@ def get_evidence_artifact(spec_id: str, test_id: str, artifact: str) -> Response
 # AC-fidelity ledger references.
 
 
-def _serve_findings_media(spec_id: str, subdir: str, artifact: str) -> Response:
+def _serve_findings_media(
+    spec_id: str,
+    subdir: str,
+    artifact: str,
+    visible: set[str] | None = None,
+) -> Response:
     """Serve a file under ``<spec_dir>/findings/<subdir>/`` byte-for-byte.
 
     ``subdir`` is a fixed caller-supplied constant (``screenshots`` / ``videos``),
@@ -766,7 +923,7 @@ def _serve_findings_media(spec_id: str, subdir: str, artifact: str) -> Response:
     _validate_artifact(artifact)
 
     root = _resolve_workspace_root()
-    spec_dir = _find_spec_dir(root, spec_id)
+    spec_dir = _find_spec_dir(root, spec_id, visible)
     if spec_dir is None:
         raise HTTPException(
             status_code=http_status.HTTP_404_NOT_FOUND,
@@ -804,16 +961,42 @@ def _serve_findings_media(spec_id: str, subdir: str, artifact: str) -> Response:
     return Response(content=content, media_type=_evidence_content_type(artifact))
 
 
-@router.get("/{spec_id}/screenshots/{artifact:path}")
-def get_screenshot(spec_id: str, artifact: str) -> Response:
+def get_screenshot(
+    spec_id: str, artifact: str, visible: set[str] | None = None
+) -> Response:
     """Serve a browser-lane screenshot: ``findings/screenshots/<artifact>`` (PNG)."""
-    return _serve_findings_media(spec_id, "screenshots", artifact)
+    return _serve_findings_media(spec_id, "screenshots", artifact, visible)
+
+
+@router.get("/{spec_id}/screenshots/{artifact:path}")
+async def _get_screenshot_route(
+    spec_id: str,
+    artifact: str,
+    request: Request,
+    project_id: str | None = None,
+) -> Response:
+    _validate_spec_id(spec_id)
+    _validate_artifact(artifact)
+    visible = await _authorize_spec_request(request, spec_id, "viewer", project_id)
+    return get_screenshot(spec_id, artifact, visible)
+
+
+def get_video(spec_id: str, artifact: str, visible: set[str] | None = None) -> Response:
+    """Serve a browser-lane recording: ``findings/videos/<artifact>`` (webm/mp4)."""
+    return _serve_findings_media(spec_id, "videos", artifact, visible)
 
 
 @router.get("/{spec_id}/videos/{artifact:path}")
-def get_video(spec_id: str, artifact: str) -> Response:
-    """Serve a browser-lane recording: ``findings/videos/<artifact>`` (webm/mp4)."""
-    return _serve_findings_media(spec_id, "videos", artifact)
+async def _get_video_route(
+    spec_id: str,
+    artifact: str,
+    request: Request,
+    project_id: str | None = None,
+) -> Response:
+    _validate_spec_id(spec_id)
+    _validate_artifact(artifact)
+    visible = await _authorize_spec_request(request, spec_id, "viewer", project_id)
+    return get_video(spec_id, artifact, visible)
 
 
 # ── Merge / dismiss (the human review gate) ─────────────────────────
@@ -834,13 +1017,62 @@ class MergeRequest(BaseModel):
     include_flagged: bool = False
 
 
-@router.post("/{spec_id}/merge")
-def merge_accepted_tests(spec_id: str, body: MergeRequest) -> dict[str, Any]:
+def _same_git_checkout(root: Path, candidate: Path) -> bool:
+    git = shutil.which("git")
+    if not git:
+        return False
+
+    def common_dir(path: Path) -> Path | None:
+        top = subprocess.run(  # noqa: S603 - fixed git argv
+            [git, "-C", str(path), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if top.returncode != 0 or Path(top.stdout.strip()).resolve() != path:
+            return None
+        result = subprocess.run(  # noqa: S603 - git argv is fixed; path is validated below
+            [
+                git,
+                "-C",
+                str(path),
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-common-dir",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        return Path(result.stdout.strip()).resolve() if result.returncode == 0 else None
+
+    origin = common_dir(root)
+    return origin is not None and common_dir(candidate) == origin
+
+
+def _verify_merge_destination(repo_dir: Path, project_id: str) -> None:
+    from server.pty.access import project_id_for_path  # noqa: PLC0415
+
+    from .projects import load_projects  # noqa: PLC0415
+
+    root = Path(load_projects()[project_id]["path"]).resolve()
+    owner = project_id_for_path(str(repo_dir))
+    if (owner is not None and owner != project_id) or (
+        repo_dir != root and not _same_git_checkout(root, repo_dir)
+    ):
+        raise HTTPException(404, "Project not found")
+
+
+def merge_accepted_tests(  # noqa: PLR0912
+    spec_id: str, body: MergeRequest, visible: set[str] | None = None
+) -> dict[str, Any]:
     """Commit the accepted (and optionally flagged) tests to the feature
     branch via the Triager's git_writer. Dry-run by default — returns the
     exact git argv + the files that would be committed, nothing written."""
     _validate_spec_id(spec_id)
-    spec_dir = _find_spec_dir(_resolve_workspace_root(), spec_id)
+    spec_dir = _find_spec_dir(_resolve_workspace_root(), spec_id, visible)
     if spec_dir is None:
         raise HTTPException(status_code=404, detail=f"spec not found: {spec_id}")
 
@@ -894,7 +1126,9 @@ def merge_accepted_tests(spec_id: str, body: MergeRequest) -> dict[str, Any]:
             status_code=400,
             detail="repo_dir is required for a real (non-dry-run) merge",
         )
-    repo_dir = Path(body.repo_dir) if body.repo_dir else spec_dir
+    repo_dir = Path(body.repo_dir).resolve() if body.repo_dir else spec_dir
+    if not body.dry_run and visible:
+        _verify_merge_destination(repo_dir, next(iter(visible)))
 
     from tools.git_writer import GitWriteRequest, write_tests_to_branch
 
@@ -921,12 +1155,24 @@ def merge_accepted_tests(spec_id: str, body: MergeRequest) -> dict[str, Any]:
     }
 
 
-@router.post("/{spec_id}/dismiss")
-def dismiss_run(spec_id: str) -> dict[str, Any]:
+@router.post("/{spec_id}/merge")
+async def _merge_accepted_tests_route(
+    spec_id: str,
+    body: MergeRequest,
+    request: Request,
+    project_id: str | None = None,
+) -> dict[str, Any]:
+    visible = await _authorize_spec_request(request, spec_id, "admin", project_id)
+    import asyncio  # noqa: PLC0415
+
+    return await asyncio.to_thread(merge_accepted_tests, spec_id, body, visible)
+
+
+def dismiss_run(spec_id: str, visible: set[str] | None = None) -> dict[str, Any]:
     """Mark a run dismissed (operator chose not to merge). Records a
     ``dismissed`` flag on status.json — non-destructive."""
     _validate_spec_id(spec_id)
-    spec_dir = _find_spec_dir(_resolve_workspace_root(), spec_id)
+    spec_dir = _find_spec_dir(_resolve_workspace_root(), spec_id, visible)
     if spec_dir is None:
         raise HTTPException(status_code=404, detail=f"spec not found: {spec_id}")
     status_path = spec_dir / "status.json"
@@ -941,6 +1187,14 @@ def dismiss_run(spec_id: str) -> dict[str, Any]:
             detail=client_error(logger, "could not write status.json", exc),
         ) from exc
     return {"ok": True, "dismissed": True, "dismissed_at": doc["dismissed_at"]}
+
+
+@router.post("/{spec_id}/dismiss")
+async def _dismiss_run_route(
+    spec_id: str, request: Request, project_id: str | None = None
+) -> dict[str, Any]:
+    visible = await _authorize_spec_request(request, spec_id, "member", project_id)
+    return dismiss_run(spec_id, visible)
 
 
 # ─── Visual regression baselines (#109) ───────────────────────────────────
@@ -958,20 +1212,21 @@ if str(_BACKEND_DIR) not in _sys.path:
     _sys.path.insert(0, str(_BACKEND_DIR))
 
 
-def _spec_dir_or_404(spec_id: str) -> Path:
+def _spec_dir_or_404(spec_id: str, visible: set[str] | None = None) -> Path:
     _validate_spec_id(spec_id)
-    spec_dir = _find_spec_dir(_resolve_workspace_root(), spec_id)
+    spec_dir = _find_spec_dir(_resolve_workspace_root(), spec_id, visible)
     if spec_dir is None:
         raise HTTPException(status_code=404, detail=f"task not found: {spec_id}")
     return spec_dir
 
 
-@router.get("/{spec_id}/visual-baselines")
-def list_visual_baselines(spec_id: str, target: str) -> dict:
+def list_visual_baselines(
+    spec_id: str, target: str, visible: set[str] | None = None
+) -> dict:
     """List the stored visual baselines for a target (snapshot name + size)."""
     from agents.evidence import visual_baseline as vb
 
-    spec_dir = _spec_dir_or_404(spec_id)
+    spec_dir = _spec_dir_or_404(spec_id, visible)
     try:
         entries = vb.list_baselines(spec_dir, target)
     except vb.VisualBaselineError as exc:
@@ -998,12 +1253,24 @@ def list_visual_baselines(spec_id: str, target: str) -> dict:
     }
 
 
-@router.get("/{spec_id}/visual-baselines/{target}/{snapshot}")
-def get_visual_baseline(spec_id: str, target: str, snapshot: str):
+@router.get("/{spec_id}/visual-baselines")
+async def _list_visual_baselines_route(
+    spec_id: str,
+    target: str,
+    request: Request,
+    project_id: str | None = None,
+) -> dict[str, Any]:
+    visible = await _authorize_spec_request(request, spec_id, "viewer", project_id)
+    return list_visual_baselines(spec_id, target, visible)
+
+
+def get_visual_baseline(
+    spec_id: str, target: str, snapshot: str, visible: set[str] | None = None
+):
     """Serve one baseline image (PNG)."""
     from agents.evidence import visual_baseline as vb
 
-    spec_dir = _spec_dir_or_404(spec_id)
+    spec_dir = _spec_dir_or_404(spec_id, visible)
     try:
         path = vb.baseline_path(spec_dir, target, snapshot)
     except vb.VisualBaselineError as exc:
@@ -1027,19 +1294,34 @@ def get_visual_baseline(spec_id: str, target: str, snapshot: str):
     return _FileResponse(path, media_type="image/png", filename=snapshot)
 
 
+@router.get("/{spec_id}/visual-baselines/{target}/{snapshot}")
+async def _get_visual_baseline_route(
+    spec_id: str,
+    target: str,
+    snapshot: str,
+    request: Request,
+    project_id: str | None = None,
+):
+    visible = await _authorize_spec_request(request, spec_id, "viewer", project_id)
+    return get_visual_baseline(spec_id, target, snapshot, visible)
+
+
 class _AcceptBaselineBody(BaseModel):
     # path (relative to the task workspace) of the captured screenshot to promote
     source: str
 
 
-@router.post("/{spec_id}/visual-baselines/{target}/{snapshot}/accept")
 def accept_visual_baseline(
-    spec_id: str, target: str, snapshot: str, body: _AcceptBaselineBody
+    spec_id: str,
+    target: str,
+    snapshot: str,
+    body: _AcceptBaselineBody,
+    visible: set[str] | None = None,
 ) -> dict:
     """Promote a captured screenshot to the stored baseline (accept/update flow)."""
     from agents.evidence import visual_baseline as vb
 
-    spec_dir = _spec_dir_or_404(spec_id)
+    spec_dir = _spec_dir_or_404(spec_id, visible)
     # The source must stay inside the task workspace (no traversal escape).
     src = (spec_dir / body.source).resolve()
     root = spec_dir.resolve()
@@ -1069,3 +1351,15 @@ def accept_visual_baseline(
         "snapshot": snapshot,
         "path": str(dest.relative_to(spec_dir)),
     }
+
+
+@router.post("/{spec_id}/visual-baselines/{target}/{snapshot}/accept")
+async def _accept_visual_baseline_route(
+    spec_id: str,
+    target: str,
+    snapshot: str,
+    body: _AcceptBaselineBody,
+    request: Request,
+) -> dict[str, Any]:
+    visible = await _authorize_spec_request(request, spec_id, "member")
+    return accept_visual_baseline(spec_id, target, snapshot, body, visible)

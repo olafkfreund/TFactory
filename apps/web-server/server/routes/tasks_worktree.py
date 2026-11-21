@@ -1423,7 +1423,7 @@ async def abort_worktree_merge(task_id: str):
 
 @router.post(
     "/{task_id}/worktree/create-pr",
-    dependencies=[Depends(require_task_access("member"))],
+    dependencies=[Depends(require_task_access("admin"))],
 )
 async def create_pr_from_task(task_id: str, options: CreatePRFromTaskOptions = None):
     """
@@ -1757,7 +1757,7 @@ async def create_pr_from_task(task_id: str, options: CreatePRFromTaskOptions = N
 
 
 @router.post(
-    "/{task_id}/worktree/merge", dependencies=[Depends(require_task_access("member"))]
+    "/{task_id}/worktree/merge", dependencies=[Depends(require_task_access("admin"))]
 )
 async def merge_worktree(task_id: str, options: WorktreeMergeOptions = None):
     """

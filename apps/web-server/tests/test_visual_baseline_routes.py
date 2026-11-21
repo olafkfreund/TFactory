@@ -29,6 +29,11 @@ def client(tmp_path, monkeypatch):
     ev.mkdir(parents=True)
     (ev / "homepage-actual.png").write_bytes(b"\x89PNG\r\n\x1a\nCAPTURED")
     monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setattr("server.routes.project_authz._auth_disabled", lambda: True)
+    monkeypatch.setattr(
+        "server.routes.projects.load_projects",
+        lambda: {"proj1": {"path": str(tmp_path / "proj1"), "name": "proj1"}},
+    )
     app = FastAPI()
     app.include_router(tfactory_tasks.router, prefix="/api/tfactory/tasks")
     return TestClient(app)

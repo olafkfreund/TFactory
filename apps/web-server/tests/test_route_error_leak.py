@@ -122,6 +122,11 @@ def test_a_files_write_failure_does_not_leak_the_path(tmp_path: Any) -> None:
     # and `path` is a QUERY parameter here, not part of the body.
     with (
         patch.object(files_routes, "resolve_path", return_value=tmp_path / "notes.txt"),
+        patch("server.routes.project_authz._auth_disabled", return_value=True),
+        patch(
+            "server.routes.projects.load_projects",
+            return_value={"p1": {"path": str(tmp_path)}},
+        ),
         patch("pathlib.Path.write_text", side_effect=BOOM),
     ):
         response = client.put(

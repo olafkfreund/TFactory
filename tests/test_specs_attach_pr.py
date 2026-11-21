@@ -23,7 +23,8 @@ from server.routes.specs import PrAttachRequest, attach_pr  # noqa: E402
 def _make_spec(tmp_path: Path, monkeypatch, *, status: str | None = None) -> Path:
     monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path))
     monkeypatch.setattr(
-        "server.routes.projects.load_projects", lambda: {"pid": {"name": "demo"}}
+        "server.routes.projects.load_projects",
+        lambda: {"pid": {"name": "demo", "clonedFrom": "https://github.com/o/r.git"}},
     )
     spec_dir = tmp_path / "workspaces" / "pid" / "specs" / "048-feat"
     (spec_dir / "context").mkdir(parents=True)

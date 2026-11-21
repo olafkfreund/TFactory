@@ -17,8 +17,10 @@ from __future__ import annotations
 import logging
 
 from factory_common.logsafe import sanitize_log
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
+
+from server.routes.project_authz import ProjectAccessChecker
 
 from . import github  # module-qualified so test patches on its helpers apply
 from .github import (
@@ -29,7 +31,7 @@ from .github import (
     PRReviewRequest,
 )
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(ProjectAccessChecker("viewer"))])
 logger = logging.getLogger(__name__)
 
 
@@ -67,7 +69,10 @@ async def get_project_github_prs(
     return service.list_prs(project_path, state=state)
 
 
-@router.post("/prs/{prNumber}/review")
+@router.post(
+    "/prs/{prNumber}/review",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def trigger_pr_review(
     projectId: str,
     prNumber: int,
@@ -160,7 +165,10 @@ async def get_pr_review(projectId: str, prNumber: int):
     return result
 
 
-@router.delete("/prs/{prNumber}/review")
+@router.delete(
+    "/prs/{prNumber}/review",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def delete_pr_review(projectId: str, prNumber: int):
     """Delete a stored PR review result.
 
@@ -186,7 +194,10 @@ async def delete_pr_review(projectId: str, prNumber: int):
     return result
 
 
-@router.post("/prs/{prNumber}/post-review")
+@router.post(
+    "/prs/{prNumber}/post-review",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def post_pr_review_to_github(
     projectId: str,
     prNumber: int,
@@ -228,7 +239,10 @@ async def post_pr_review_to_github(
     return result
 
 
-@router.post("/prs/{prNumber}/comment")
+@router.post(
+    "/prs/{prNumber}/comment",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def post_pr_comment(
     projectId: str,
     prNumber: int,
@@ -267,7 +281,10 @@ async def post_pr_comment(
     return result
 
 
-@router.post("/prs/{prNumber}/approve")
+@router.post(
+    "/prs/{prNumber}/approve",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def approve_pr(
     projectId: str,
     prNumber: int,
@@ -312,7 +329,10 @@ async def approve_pr(
     return result
 
 
-@router.post("/prs/{prNumber}/merge")
+@router.post(
+    "/prs/{prNumber}/merge",
+    dependencies=[Depends(ProjectAccessChecker("admin"))],
+)
 async def merge_pr(
     projectId: str,
     prNumber: int,
@@ -359,7 +379,10 @@ async def merge_pr(
     return result
 
 
-@router.post("/prs/{prNumber}/assign")
+@router.post(
+    "/prs/{prNumber}/assign",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def assign_pr(
     projectId: str,
     prNumber: int,
@@ -386,7 +409,10 @@ async def assign_pr(
     return result
 
 
-@router.post("/prs/{prNumber}/cancel")
+@router.post(
+    "/prs/{prNumber}/cancel",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def cancel_pr_review(
     projectId: str,
     prNumber: int,
