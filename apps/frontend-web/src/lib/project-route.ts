@@ -18,6 +18,7 @@ export function slugify(name: string, fallback: string): string {
   return slug || fallback;
 }
 
+// shortcut: browser-local slug ownership, server-side reservation comes with the #3857 phase 3 registry
 const RESERVATIONS = 'tfactory-project-slug-reservations';
 type Reservations = Record<string, string | null>;
 
@@ -34,15 +35,10 @@ export function projectsForBareSlug(projects: Project[], ref: string): Project[]
 
 export function isBareSlugChooser(projects: Project[], ref: string): boolean {
   const group = projectsForBareSlug(projects, ref);
-  return group.length > 1 || (group.length > 0 && (
-    group[0].urlSlug ? group[0].urlSlug.toLowerCase() !== ref.toLowerCase() : reservations()[ref.toLowerCase()] === null
-  ));
+  return group.length > 1 || (group.length > 0 && reservations()[ref.toLowerCase()] === null);
 }
 
 export function projectSlugs(projects: Project[]): Map<string, string> {
-  if (projects.every((project) => project.urlSlug)) {
-    return new Map(projects.map((project) => [project.id, project.urlSlug!]));
-  }
   const slugs = new Map<string, string>();
   const history = reservations();
   const groups = new Map<string, Project[]>();
@@ -79,8 +75,7 @@ export function findProjectByRef(projects: Project[], ref: string): Project | un
   if (isBareSlugChooser(projects, normalized)) return undefined;
   const slugs = projectSlugs(projects);
   return projects.find((project) => slugs.get(project.id)?.toLowerCase() === normalized)
-    ?? projects.find((project) => project.urlAliases?.some((alias) => alias.toLowerCase() === normalized))
-    ?? (projects.every((project) => project.urlSlug) ? undefined : projects.find((project) => reservations()[normalized] === project.id));
+    ?? projects.find((project) => reservations()[normalized] === project.id);
 }
 
 export function parseRoute(pathname: string): AppRoute {

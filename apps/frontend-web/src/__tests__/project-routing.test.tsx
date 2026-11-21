@@ -158,16 +158,15 @@ describe('URL-scoped projects', () => {
     expect(screen.getAllByRole('link')).toHaveLength(1);
   });
 
-  it('honors server reservations even in a fresh browser', async () => {
-    const first = { ...proj('id-first', 'Demo', '2026-01-01'), urlSlug: 'demo', urlAliases: ['demo'] };
-    const next = { ...proj('id-next', 'Demo', '2026-02-01'), urlSlug: 'demo-id-next', urlAliases: ['demo-id-next'] };
+  it('keeps a bare collision slug as a chooser after one project is removed', async () => {
+    const first = proj('id-first', 'Demo', '2026-01-01');
+    const next = proj('id-next', 'Demo', '2026-02-01');
     setApi({});
-    (window.API as unknown as { getProjects: () => Promise<unknown> }).getProjects = () => Promise.resolve({ success: true, data: [first] });
+    (window.API as unknown as { getProjects: () => Promise<unknown> }).getProjects = () => Promise.resolve({ success: true, data: [first, next] });
     renderAt('/p/demo');
-    await screen.findByTestId('project-tasks');
-    localStorage.clear();
-    act(() => { useProjectStore.setState({ projects: [next] }); });
     expect(await screen.findByText('Choose a project')).toBeInTheDocument();
+    act(() => { useProjectStore.setState({ projects: [next] }); });
+    expect(screen.getByText('Choose a project')).toBeInTheDocument();
     expect(screen.queryByTestId('project-tasks')).toBeNull();
   });
 
