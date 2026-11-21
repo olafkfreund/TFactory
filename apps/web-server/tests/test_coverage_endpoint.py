@@ -49,7 +49,9 @@ def _local_auth(monkeypatch: pytest.MonkeyPatch) -> None:
         project_authz,
         "get_settings",
         lambda: SimpleNamespace(
-            DISABLE_AUTH=True, PROJECTS_BACKEND="json", LEGACY_SHARED_TOKEN_FULL_ACCESS=True
+            DISABLE_AUTH=True,
+            PROJECTS_BACKEND="json",
+            LEGACY_SHARED_TOKEN_FULL_ACCESS=True,
         ),
     )
     monkeypatch.setattr(
@@ -57,7 +59,9 @@ def _local_auth(monkeypatch: pytest.MonkeyPatch) -> None:
         "load_projects",
         lambda: {
             path.name: {"path": str(path), "org_id": "default"}
-            for path in (cov._projects_root().iterdir() if cov._projects_root().exists() else ())
+            for path in (
+                cov._projects_root().iterdir() if cov._projects_root().exists() else ()
+            )
             if path.is_dir()
         },
     )

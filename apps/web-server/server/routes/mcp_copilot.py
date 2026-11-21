@@ -503,7 +503,8 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
             )
         await require_project_role(
             {
-                "id": "copilot-mcp", "is_copilot_token": True,
+                "id": "copilot-mcp",
+                "is_copilot_token": True,
                 "project_id": os.environ.get("COPILOT_MCP_TFACTORY_PROJECT_ID"),
                 "org_id": os.environ.get("COPILOT_MCP_TFACTORY_ORG_ID"),
             },

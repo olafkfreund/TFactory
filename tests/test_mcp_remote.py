@@ -245,8 +245,13 @@ async def test_write_tool_blocked_with_only_read_scope(read_only_key):
 async def test_read_tools_hit_correct_endpoint(
     tool_name, args, expected_method, expected_path, read_only_key
 ):
-    expected = ([{"id": "p1"}] if tool_name == "tfactory.list_projects" else
-                {"tasks": [{"ok": True}]} if tool_name == "tfactory.list_tasks" else {"ok": True})
+    expected = (
+        [{"id": "p1"}]
+        if tool_name == "tfactory.list_projects"
+        else {"tasks": [{"ok": True}]}
+        if tool_name == "tfactory.list_tasks"
+        else {"ok": True}
+    )
     mock_call = AsyncMock(return_value=expected)
     with patch("server.mcp_remote.tools._call_internal", mock_call):
         result = await dispatch_tool_call(tool_name, args, read_only_key)
@@ -259,7 +264,9 @@ async def test_read_tools_hit_correct_endpoint(
     assert not result.get("isError")
     # Content is JSON-text envelope
     payload = json.loads(result["content"][0]["text"])
-    assert payload == (expected["tasks"] if tool_name == "tfactory.list_tasks" else expected)
+    assert payload == (
+        expected["tasks"] if tool_name == "tfactory.list_tasks" else expected
+    )
 
 
 @pytest.mark.parametrize(

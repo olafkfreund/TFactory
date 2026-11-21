@@ -37,6 +37,7 @@ def env(tmp_path, monkeypatch):
     }
     state = {"members": {"alice": {"a"}, "bob": {"b"}}, "error": False}
     monkeypatch.setattr(projects_routes, "load_projects", lambda: projects)
+    monkeypatch.setattr("server.routes.project_authz._load_projects", lambda: projects)
     monkeypatch.setattr(terminal, "load_projects", lambda: projects)
 
     class Session:

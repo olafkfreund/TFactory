@@ -247,6 +247,12 @@ def mcp_client(tmp_path, monkeypatch):
 
     monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path))
     monkeypatch.setenv("COPILOT_MCP_TFACTORY_TOKEN", _TEST_MCP_TOKEN)
+    monkeypatch.setenv("COPILOT_MCP_TFACTORY_PROJECT_ID", "proj")
+    from server.routes import project_authz
+
+    monkeypatch.setattr(
+        project_authz, "_load_projects", lambda: {"proj": {"path": str(tmp_path)}}
+    )
 
     # Force fresh import so _workspace_root() picks up the monkeypatched env
     sys.modules.pop("server.routes.mcp_copilot", None)

@@ -90,12 +90,17 @@ async def get_git_branches(
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
     """Get all branches for a repository."""
+    # Resolution is a project lookup key; authorization below gates git access.
     path = str(Path(path).expanduser().resolve())  # noqa: ASYNC240
     principal = getattr(request.state, "user", None) if request is not None else None
     db_session = db if isinstance(db, AsyncSession) else None
     if project_id_for_path(path) is not None or not is_service_principal(principal):
-        await require_project_role(principal, project_id_for_path(path), "viewer", db_session)
-    result = await asyncio.to_thread(run_git_command, ["branch", "--format=%(refname:short)"], path)
+        await require_project_role(
+            principal, project_id_for_path(path), "viewer", db_session
+        )
+    result = await asyncio.to_thread(
+        run_git_command, ["branch", "--format=%(refname:short)"], path
+    )
     if result["success"]:
         branches = [b.strip() for b in result["output"].split("\n") if b.strip()]
         return {"success": True, "data": branches}
@@ -109,12 +114,17 @@ async def get_current_git_branch(
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
     """Get current branch name."""
+    # Resolution is a project lookup key; authorization below gates git access.
     path = str(Path(path).expanduser().resolve())  # noqa: ASYNC240
     principal = getattr(request.state, "user", None) if request is not None else None
     db_session = db if isinstance(db, AsyncSession) else None
     if project_id_for_path(path) is not None or not is_service_principal(principal):
-        await require_project_role(principal, project_id_for_path(path), "viewer", db_session)
-    result = await asyncio.to_thread(run_git_command, ["branch", "--show-current"], path)
+        await require_project_role(
+            principal, project_id_for_path(path), "viewer", db_session
+        )
+    result = await asyncio.to_thread(
+        run_git_command, ["branch", "--show-current"], path
+    )
     if result["success"]:
         return {"success": True, "data": result["output"]}
     return {"success": True, "data": None}
@@ -127,18 +137,25 @@ async def detect_main_branch(
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
     """Detect the main branch (main or master)."""
+    # Resolution is a project lookup key; authorization below gates git access.
     path = str(Path(path).expanduser().resolve())  # noqa: ASYNC240
     principal = getattr(request.state, "user", None) if request is not None else None
     db_session = db if isinstance(db, AsyncSession) else None
     if project_id_for_path(path) is not None or not is_service_principal(principal):
-        await require_project_role(principal, project_id_for_path(path), "viewer", db_session)
+        await require_project_role(
+            principal, project_id_for_path(path), "viewer", db_session
+        )
     # Check for main first
-    result = await asyncio.to_thread(run_git_command, ["rev-parse", "--verify", "main"], path)
+    result = await asyncio.to_thread(
+        run_git_command, ["rev-parse", "--verify", "main"], path
+    )
     if result["success"]:
         return {"success": True, "data": "main"}
 
     # Check for master
-    result = await asyncio.to_thread(run_git_command, ["rev-parse", "--verify", "master"], path)
+    result = await asyncio.to_thread(
+        run_git_command, ["rev-parse", "--verify", "master"], path
+    )
     if result["success"]:
         return {"success": True, "data": "master"}
 
@@ -152,11 +169,14 @@ async def check_git_status(
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
     """Check git status for a repository."""
+    # Resolution is a project lookup key; authorization below gates git access.
     path = str(Path(path).expanduser().resolve())  # noqa: ASYNC240
     principal = getattr(request.state, "user", None) if request is not None else None
     db_session = db if isinstance(db, AsyncSession) else None
     if project_id_for_path(path) is not None or not is_service_principal(principal):
-        await require_project_role(principal, project_id_for_path(path), "viewer", db_session)
+        await require_project_role(
+            principal, project_id_for_path(path), "viewer", db_session
+        )
     # Check if it's a git repo
     git_dir = safe_join(Path(path), ".git")
     if not git_dir.exists():
@@ -166,11 +186,15 @@ async def check_git_status(
         }
 
     # Get current branch
-    branch_result = await asyncio.to_thread(run_git_command, ["branch", "--show-current"], path)
+    branch_result = await asyncio.to_thread(
+        run_git_command, ["branch", "--show-current"], path
+    )
     current_branch = branch_result.get("output") if branch_result["success"] else None
 
     # Check for commits
-    commit_result = await asyncio.to_thread(run_git_command, ["rev-parse", "HEAD"], path)
+    commit_result = await asyncio.to_thread(
+        run_git_command, ["rev-parse", "HEAD"], path
+    )
     has_commits = commit_result["success"]
 
     return {
@@ -195,11 +219,10 @@ async def initialize_git(
 ):
     """Initialize a new git repository with an initial commit (if needed)."""
     principal = (
-        getattr(http_request.state, "user", None)
-        if http_request is not None
-        else None
+        getattr(http_request.state, "user", None) if http_request is not None else None
     )
     db_session = db if isinstance(db, AsyncSession) else None
+    # New repository paths require creator_org; existing paths require project membership below.
     path = str(Path(request.path).expanduser().resolve())  # noqa: ASYNC240
     project_id = project_id_for_path(path)
     if project_id is None:
@@ -210,7 +233,11 @@ async def initialize_git(
         for project in load_projects().values():
             if project.get("path"):
                 owned = Path(project["path"]).resolve()  # noqa: ASYNC240
-                if target == owned or target in owned.parents or owned in target.parents:
+                if (
+                    target == owned
+                    or target in owned.parents
+                    or owned in target.parents
+                ):
                     raise HTTPException(404, "Project not found")
         if not is_service_principal(principal) and not any(
             root in target.parents for root in browse_roots()
@@ -226,7 +253,9 @@ async def initialize_git(
     # Check if repo already has commits
     has_commits = False
     if is_git_repo:
-        commit_check = await asyncio.to_thread(run_git_command, ["rev-parse", "HEAD"], path)
+        commit_check = await asyncio.to_thread(
+            run_git_command, ["rev-parse", "HEAD"], path
+        )
         has_commits = commit_check["success"]
 
     # If already has commits, nothing to do

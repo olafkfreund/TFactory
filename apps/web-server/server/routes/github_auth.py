@@ -449,9 +449,7 @@ async def persist_github_token(
     The raw token never appears in the response.
     """
     principal = (
-        getattr(http_request.state, "user", None)
-        if http_request is not None
-        else None
+        getattr(http_request.state, "user", None) if http_request is not None else None
     )
     db_session = db if isinstance(db, AsyncSession) else None
     await require_project_role(principal, request.projectId, "admin", db_session)

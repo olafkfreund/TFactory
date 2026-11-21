@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import importlib
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -324,9 +325,12 @@ def resolve_task_project(
             return project_id, spec_id
         raise HTTPException(404, "Task not found")
     spec_id = safe_component(task_id)
-    from .tfactory_tasks import _resolve_workspace_root  # noqa: PLC0415
-
-    workspace_root = _resolve_workspace_root() / "workspaces"
+    workspace_root = (
+        Path(
+            os.environ.get("TFACTORY_WORKSPACE_ROOT") or Path.home() / ".tfactory"
+        ).expanduser()
+        / "workspaces"
+    )
     matches = [
         pid
         for pid in allowed
@@ -456,7 +460,9 @@ async def creator_org(
     if not isinstance(user, dict) or user.get("is_legacy_token"):
         raise HTTPException(403, "Project creation requires org membership")
     scopes = set(user.get("scopes") or ())
-    allowed_scopes = {"project:write", "api:full"} | ({"task:write"} if allow_task_write else set())
+    allowed_scopes = {"project:write", "api:full"} | (
+        {"task:write"} if allow_task_write else set()
+    )
     if user.get("api_key_id") and not (allowed_scopes & scopes):
         raise HTTPException(403, "Project creation requires project:write scope")
     if user.get("scoped_service") and user.get("org_id"):
@@ -479,4 +485,6 @@ async def creator_org(
         sanitize_log(user.get("id")),
         len(orgs),
     )
-    raise HTTPException(403, "Project creation requires one org membership with member role")
+    raise HTTPException(
+        403, "Project creation requires one org membership with member role"
+    )

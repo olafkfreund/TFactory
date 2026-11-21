@@ -29,7 +29,7 @@ from server.routes.project_authz import (
 )
 from server.services.git_base_url import safe_git_base_url
 
-from ._specpath import browse_roots, safe_component
+from ._specpath import browse_roots, contained_path, safe_component
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -454,7 +454,8 @@ async def list_github_user_repos(
         if exc.status_code != status.HTTP_403_FORBIDDEN:
             raise
         can_register = False
-    result = await asyncio.to_thread(run_gh_command,
+    result = await asyncio.to_thread(
+        run_gh_command,
         [
             "repo",
             "list",
@@ -462,7 +463,7 @@ async def list_github_user_repos(
             "name,nameWithOwner,description,isPrivate,url",
             "--limit",
             "100",
-        ]
+        ],
     )
     if result["success"]:
         try:
@@ -470,13 +471,16 @@ async def list_github_user_repos(
             from .projects import load_projects  # noqa: PLC0415
             from .specs import _github_slug  # noqa: PLC0415
 
-            allowed = await visible_project_ids(getattr(request.state, "user", None), db)
+            allowed = await visible_project_ids(
+                getattr(request.state, "user", None), db
+            )
             registered_slugs = {
                 (
                     _github_slug(p.get("clonedFrom"))
                     or (
                         await asyncio.to_thread(_get_repo_full_name, p["path"])
-                        if p.get("path") else ""
+                        if p.get("path")
+                        else ""
                     )
                     or ""
                 ).lower()
@@ -490,7 +494,8 @@ async def list_github_user_repos(
                     "isPrivate": r.get("isPrivate", False),
                 }
                 for r in raw_repos
-                if (r.get("nameWithOwner", "").lower() not in registered_slugs) == can_register
+                if (r.get("nameWithOwner", "").lower() not in registered_slugs)
+                == can_register
             ]
             return {"success": True, "data": {"repos": repos}}
         except json.JSONDecodeError:
@@ -515,16 +520,25 @@ async def detect_github_repo(
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
     """Detect GitHub remote for a local repository."""
-    path = str(FilePath(path).expanduser().resolve())  # noqa: ASYNC240
     principal = getattr(request.state, "user", None) if request is not None else None
     db_session = db if isinstance(db, AsyncSession) else None
+    from .projects import load_projects  # noqa: PLC0415
+
+    roots = [p["path"] for p in load_projects().values() if p.get("path")]
+    roots.extend([FilePath("/")] if is_service_principal(principal) else browse_roots())
+    try:
+        path = str(contained_path(path, roots, "accessible projects", expand_user=True))
+    except ValueError:
+        raise HTTPException(404, "Project not found") from None
     project_id = project_id_for_path(path)
     if project_id is None:
         await creator_org(principal, db)
     else:
         await require_project_role(principal, project_id, "viewer", db_session)
-    result = await asyncio.to_thread(run_gh_command,
-        ["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"], cwd=path
+    result = await asyncio.to_thread(
+        run_gh_command,
+        ["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
+        cwd=path,
     )
     if result["success"]:
         return {"success": True, "data": result["output"]}
@@ -547,12 +561,18 @@ async def get_github_branches(
 
     allowed = await visible_project_ids(getattr(request.state, "user", None), db)
     matching = [
-        pid for pid, p in load_projects().items()
+        pid
+        for pid, p in load_projects().items()
         if (
             _github_slug(p.get("clonedFrom"))
-            or (await asyncio.to_thread(_get_repo_full_name, p["path"]) if p.get("path") else "")
+            or (
+                await asyncio.to_thread(_get_repo_full_name, p["path"])
+                if p.get("path")
+                else ""
+            )
             or ""
-        ).lower() == repo.lower()
+        ).lower()
+        == repo.lower()
     ]
     if matching and not any(pid in allowed for pid in matching):
         raise HTTPException(404, "Project not found")
@@ -611,11 +631,10 @@ async def add_git_remote(
 ):
     """Add GitHub remote to local repository."""
     principal = (
-        getattr(http_request.state, "user", None)
-        if http_request is not None
-        else None
+        getattr(http_request.state, "user", None) if http_request is not None else None
     )
     db_session = db if isinstance(db, AsyncSession) else None
+    # The resolved path is checked against registered projects before the remote is changed.
     project_path = str(FilePath(request.projectPath).expanduser().resolve())  # noqa: ASYNC240
     project_id = project_id_for_path(project_path)
     if project_id is None:
@@ -626,7 +645,11 @@ async def add_git_remote(
         for project in load_projects().values():
             if project.get("path"):
                 owned = FilePath(project["path"]).resolve()  # noqa: ASYNC240
-                if target == owned or target in owned.parents or owned in target.parents:
+                if (
+                    target == owned
+                    or target in owned.parents
+                    or owned in target.parents
+                ):
                     raise HTTPException(404, "Project not found")
         if not is_service_principal(principal) and not any(
             root in target.parents for root in browse_roots()
@@ -637,7 +660,8 @@ async def add_git_remote(
     repo_name = _require_safe_gh_ref(request.repoFullName, "repository")
     remote_url = f"https://github.com/{repo_name}.git"
     try:
-        await asyncio.to_thread(subprocess.run,
+        await asyncio.to_thread(
+            subprocess.run,
             ["git", "remote", "add", "origin", remote_url],
             cwd=project_path,
             check=True,
@@ -1574,6 +1598,7 @@ async def get_fork_info(
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
     """Detect if repo is a fork and return origin + upstream info."""
+    # The resolved path is mapped to a registered project and authorized before the gh call.
     project_path = str(FilePath(project_path).expanduser().resolve())  # noqa: ASYNC240
     principal = getattr(request.state, "user", None) if request is not None else None
     db_session = db if isinstance(db, AsyncSession) else None

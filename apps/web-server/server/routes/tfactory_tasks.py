@@ -34,7 +34,11 @@ from server.auth import WebSocketAuthError, authenticate_websocket
 from server.error_ref import InputRejectedError, client_error
 
 from ._specpath import safe_component, safe_slug
-from .project_authz import require_project_role, resolve_task_project, visible_project_ids
+from .project_authz import (
+    require_project_role,
+    resolve_task_project,
+    visible_project_ids,
+)
 
 # Evidence artifact content-type map (mirrors agents.evidence.layout)
 _EVIDENCE_CONTENT_TYPES: dict[str, str] = {
@@ -1029,7 +1033,14 @@ def _same_git_checkout(root: Path, candidate: Path) -> bool:
         if top.returncode != 0 or Path(top.stdout.strip()).resolve() != path:
             return None
         result = subprocess.run(  # noqa: S603 - git argv is fixed; path is validated below
-            [git, "-C", str(path), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            [
+                git,
+                "-C",
+                str(path),
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-common-dir",
+            ],
             capture_output=True,
             text=True,
             timeout=10,

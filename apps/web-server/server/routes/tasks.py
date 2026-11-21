@@ -1638,7 +1638,8 @@ async def delete_task(
         spec_id = safe_component(task_id)
         _ws_root = await asyncio.to_thread(
             Path(
-                _os.environ.get("TFACTORY_WORKSPACE_ROOT") or (Path.home() / ".tfactory")
+                _os.environ.get("TFACTORY_WORKSPACE_ROOT")
+                or (Path.home() / ".tfactory")
             ).expanduser
         )
         matches = [

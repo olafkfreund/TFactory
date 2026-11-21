@@ -10,6 +10,7 @@ from pathlib import Path, PurePath
 from typing import Any
 
 from server.database import engine
+from server.routes._specpath import contained_path
 from server.routes.project_authz import is_service_principal, require_project_role
 
 
@@ -37,7 +38,9 @@ async def may_use(
     user: dict[str, Any] | None, session: Any, role: str = "viewer"
 ) -> bool:
     if user is None:
-        return is_service_principal(None) and await project_ok(None, session.project_id, role)
+        return is_service_principal(None) and await project_ok(
+            None, session.project_id, role
+        )
     if is_service_principal(user):
         return await project_ok(user, session.project_id, role)
     if session.owner_id is None:
@@ -72,7 +75,14 @@ def project_id_for_path(path: str | None) -> str | None:
         return path
     if not PurePath(path).is_absolute():
         return None
-    target = Path(path).resolve()
+    try:
+        target = contained_path(
+            path,
+            [root for project in projects.values() for root in _roots(project)],
+            "registered projects",
+        )
+    except ValueError:
+        return None
     best: tuple[int, str] | None = None
     ambiguous = False
     for project_id, project in projects.items():

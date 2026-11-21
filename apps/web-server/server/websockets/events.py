@@ -133,7 +133,7 @@ async def _may_receive(
             return True
         except Exception:  # noqa: BLE001 - deny on lookup failure
             return False
-    return is_service_principal(client.principal) or (
+    return (not client.key_org_id and is_service_principal(client.principal)) or (
         org is not None
         and org in client.org_ids
         and (not client.key_org_id or org == client.key_org_id)

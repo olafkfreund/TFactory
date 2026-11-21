@@ -162,6 +162,7 @@ async def _authorize_path(
     user: dict[str, Any] | None, path: str | None, role: str = "admin"
 ) -> str:
     """Authorize the project containing `path`."""
+    # The role check below rejects unknown paths before deletion.
     resolved = str(Path(path).expanduser().resolve()) if path else ""  # noqa: ASYNC240
     project_id = project_id_for_path(resolved)
     await require_project_role(user, project_id, role)
@@ -241,6 +242,7 @@ async def create_terminal(request: CreateTerminalRequest, http_request: Request)
 
     # Bind the session (#3740). Non-service callers must land inside a
     # registered project they are authorized for.
+    # The resolved cwd is bound to a registered project and authorized before session creation.
     cwd = str(Path(cwd).expanduser().resolve())  # noqa: ASYNC240
     project_id = project_id_for_path(cwd)
     if not settings.DISABLE_AUTH and (

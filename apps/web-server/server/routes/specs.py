@@ -207,7 +207,11 @@ class PrAttachRequest(BaseModel):
 
 
 async def _clone_and_register_project(
-    git_url: str, *, branch: str | None, name: str, org_id: str | None = None,
+    git_url: str,
+    *,
+    branch: str | None,
+    name: str,
+    org_id: str | None = None,
     service_access: bool = False,
 ) -> tuple[dict, str]:
     """Clone ``git_url`` (at ``branch``) into the TFactory workspace and register it.
@@ -237,7 +241,10 @@ async def _clone_and_register_project(
                 candidate == owned
                 or candidate in owned.parents
                 or owned in candidate.parents
-            ) and (candidate != owned or (not service_access and pdata.get("org_id") != org_id)):
+            ) and (
+                candidate != owned
+                or (not service_access and pdata.get("org_id") != org_id)
+            ):
                 raise HTTPException(404, "Project not found")
 
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
@@ -447,10 +454,11 @@ async def ingest_spec(  # noqa: PLR0912,PLR0915 - handoff stages share authoriza
                 candidate = (workspace_root() / slug_from_git_url(git_url)).resolve()
                 for pid, pdata in projects.items():
                     if (
-                        pdata.get("path")
-                        and Path(pdata["path"]).resolve() == candidate  # noqa: ASYNC240
+                        pdata.get("path") and Path(pdata["path"]).resolve() == candidate  # noqa: ASYNC240
                     ):
-                        access = await require_project_role(principal, pid, "member", db_session)
+                        access = await require_project_role(
+                            principal, pid, "member", db_session
+                        )
                         org_id = access.org_id
                         break
             if request is not None and not is_service_principal(principal):
@@ -619,8 +627,10 @@ async def attach_pr(
 
         entry = load_projects().get(resolved_id)
         if (
-            entry and entry.get("clonedFrom")
-            and (_github_slug(entry["clonedFrom"]) or "").lower() != req.repo_slug.lower()
+            entry
+            and entry.get("clonedFrom")
+            and (_github_slug(entry["clonedFrom"]) or "").lower()
+            != req.repo_slug.lower()
         ):
             raise HTTPException(404, "Project not found")
     spec_dir = _spec_dir(safe_component(resolved_id), safe_component(spec_id))

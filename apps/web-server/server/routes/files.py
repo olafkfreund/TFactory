@@ -36,6 +36,7 @@ from ..config import get_settings
 from ._specpath import (
     _require_safe_git_ref,
     browse_roots,
+    contained_path,
     safe_join,
     within_roots,
 )
@@ -224,7 +225,11 @@ def _protect_env(path: Path) -> None:
 
     projects = load_projects()
     owner = project_id_for_path(str(path))
-    parts = path.relative_to(Path(projects[owner]["path"]).resolve()).parts if owner else path.parts
+    parts = (
+        path.relative_to(Path(projects[owner]["path"]).resolve()).parts
+        if owner
+        else path.parts
+    )
     if any(
         part == ".tfactory"
         or part in {"secrets.json", "credentials.json"}
@@ -285,7 +290,9 @@ async def discover_projects(
     )
     from .project_authz import creator_org  # noqa: PLC0415
 
-    await creator_org(getattr(request.state, "user", None) if request is not None else None, db)
+    await creator_org(
+        getattr(request.state, "user", None) if request is not None else None, db
+    )
 
     if not base.exists():
         return {
@@ -575,7 +582,17 @@ async def serve_project_file(
     if not _validate_serve_token(request, token):
         raise HTTPException(status_code=401, detail="Authentication required")
     principal = _resolve_serve_principal(request, token)
-    root_path = Path(root).expanduser().resolve()
+    from .projects import load_projects  # noqa: PLC0415 - loaded after router setup
+
+    try:
+        root_path = contained_path(
+            root,
+            [p["path"] for p in load_projects().values() if p.get("path")],
+            "registered projects",
+            expand_user=True,
+        )
+    except ValueError:
+        raise HTTPException(404, "Project not found") from None
     file_path = safe_join(root_path, str(Path(path).expanduser()))
     pid = project_id_for_path(str(root_path))
     if pid is None or project_id_for_path(str(file_path)) != pid:

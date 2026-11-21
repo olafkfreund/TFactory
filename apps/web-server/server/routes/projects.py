@@ -339,7 +339,10 @@ def project_to_response(
     }
 
 
-def _check_claim(path: Path, org_id: str | None = None, exclude_id: str | None = None) -> None:
+def _check_claim(
+    path: Path, org_id: str | None = None, exclude_id: str | None = None
+) -> None:
+    # This path is compared with registered roots to reject another org's claim before registration.
     target = path.resolve()
     for pid, existing in load_projects().items():
         if pid == exclude_id or not existing.get("path"):
@@ -455,7 +458,11 @@ async def scan_for_projects(
         HTTPException: 400 if path doesn't exist or isn't a directory
     """
     try:
-        principal = getattr(http_request.state, "user", None) if http_request is not None else None
+        principal = (
+            getattr(http_request.state, "user", None)
+            if http_request is not None
+            else None
+        )
         await creator_org(principal, db)
         # Validate and resolve base path
         base = within_roots(
@@ -587,10 +594,13 @@ async def add_project(
 
             target = workspace_root() / slug_from_git_url(project.gitUrl)
         else:
+            # Local registration accepts a chosen path after org and claim checks.
             target = Path(project.path or "").expanduser()  # noqa: ASYNC240
         parent_id = project_id_for_path(str(target.resolve()))
         if parent_id:
-            org_id = (await require_project_role(principal, parent_id, "member", db)).org_id
+            org_id = (
+                await require_project_role(principal, parent_id, "member", db)
+            ).org_id
     return await create_project(project, org_id)
 
 
@@ -619,6 +629,7 @@ async def create_project(
             slug_from_git_url,
             workspace_root,
         )
+
         _check_claim(workspace_root() / slug_from_git_url(project.gitUrl), org_id)
 
         # Stored credential lookup (#82 PR-C). When the caller passes

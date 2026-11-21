@@ -52,6 +52,7 @@ def env(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(pa, "get_settings", lambda: settings)
     store: dict = {}
+    monkeypatch.setattr(pa, "_load_projects", lambda: store)
     monkeypatch.setattr(projects, "load_projects", lambda: store)
     monkeypatch.setattr(projects, "save_projects", lambda data: None)
 
@@ -68,9 +69,18 @@ def env(tmp_path, monkeypatch):
 def test_creator_org_by_principal(env):
     cases = [
         ({"id": "solo"}, "A"),  # one membership
-        ({"id": "multi"}, None),  # ambiguous: left unset
-        ({"id": "x", "api_key_id": "k", "org_id": "B"}, "B"),  # org key
-        ({"id": "default", "is_service": True}, None),  # service principal
+        ({"id": "multi"}, "A"),  # deterministic first org
+        (
+            {
+                "id": "x",
+                "api_key_id": "k",
+                "org_id": "B",
+                "scopes": ["project:write"],
+                "scoped_service": True,
+            },
+            "B",
+        ),  # org service key
+        ({"id": "default", "is_legacy_token": True}, None),  # legacy service principal
     ]
     for principal, expected in cases:
         assert env.run(lambda db, p=principal: env.pa.creator_org(p, db)) == expected

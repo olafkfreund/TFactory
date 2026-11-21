@@ -63,7 +63,8 @@ def client(tmp_path, monkeypatch):
 
     # Override settings to use our tmp projects dir
     settings = get_settings()
-    settings.PROJECTS_DATA_DIR = str(projects_dir)
+    monkeypatch.setattr(settings, "PROJECTS_DATA_DIR", str(projects_dir))
+    monkeypatch.setattr(settings, "DISABLE_AUTH", True)
 
     app = FastAPI()
     app.include_router(mcp_route.router)

@@ -51,6 +51,29 @@ def test_diff_base_allow_list(
     assert resp.status_code == code
 
 
+def test_serve_rejects_unregistered_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registered = tmp_path / "registered"
+    outside = tmp_path / "outside"
+    registered.mkdir()
+    outside.mkdir()
+    (outside / "note.txt").write_text("private")
+    monkeypatch.setattr(files, "_validate_serve_token", lambda *_: True)
+    monkeypatch.setattr(
+        files, "_resolve_serve_principal", lambda *_: {"is_legacy_token": True}
+    )
+    monkeypatch.setattr(
+        "server.routes.projects.load_projects", lambda: {"p": {"path": str(registered)}}
+    )
+    app = FastAPI()
+    app.include_router(files.router, prefix="/api/files")
+    response = TestClient(app).get(
+        "/api/files/serve", params={"root": str(outside), "path": "note.txt"}
+    )
+    assert response.status_code == 404
+
+
 @pytest.mark.asyncio
 async def test_worktree_name_barrier(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

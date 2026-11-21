@@ -65,6 +65,10 @@ def _env(tmp_path, monkeypatch):
         "server.routes.projects.load_projects",
         lambda: {"demo": {"name": "demo", "path": str(tmp_path / "demo")}},
     )
+    monkeypatch.setattr(
+        "server.routes.project_authz._load_projects",
+        lambda: {"demo": {"name": "demo", "path": str(tmp_path / "demo")}},
+    )
     hb._RATE_LIMITER.reset()  # isolate per-task throttle between tests (#242)
 
 

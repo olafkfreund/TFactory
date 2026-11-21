@@ -30,7 +30,14 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request as FastAPIRequest
+from fastapi import (
+    APIRouter,
+    Depends,
+    Header,
+    HTTPException,
+    Query,
+    Request as FastAPIRequest,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.database.engine import get_db
@@ -141,14 +148,18 @@ def _authorized_key(
 @router.get("/projects")
 async def proxy_list_projects(
     request: FastAPIRequest,
-    key: AuthenticatedKey | _LegacyAdminKey = Depends(require_acw_scope(MCP_READ_SCOPE)),
+    key: AuthenticatedKey | _LegacyAdminKey = Depends(
+        require_acw_scope(MCP_READ_SCOPE)
+    ),
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ) -> list[dict[str, Any]]:
     from ..routes.projects import list_projects
 
     allowed = await visible_project_ids(acw_principal(key), db)
     request.state.user = acw_principal(key)
-    return [p for p in await list_projects(request=request, db=db) if p.get("id") in allowed]
+    return [
+        p for p in await list_projects(request=request, db=db) if p.get("id") in allowed
+    ]
 
 
 @router.get("/tasks")
@@ -170,7 +181,9 @@ async def proxy_list_tasks(
 
 @router.get("/tasks/running")
 async def proxy_get_running_tasks(
-    key: AuthenticatedKey | _LegacyAdminKey = Depends(require_acw_scope(MCP_READ_SCOPE)),
+    key: AuthenticatedKey | _LegacyAdminKey = Depends(
+        require_acw_scope(MCP_READ_SCOPE)
+    ),
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ) -> object:
     from server.routes.execution import RunningTasksResponse, get_running_tasks
@@ -254,11 +267,14 @@ async def proxy_add_project(
     if not is_service_principal(principal):
         target = (
             workspace_root() / slug_from_git_url(project.gitUrl)
-            if project.gitUrl else Path(project.path or "").expanduser()  # noqa: ASYNC240
+            if project.gitUrl
+            else Path(project.path or "").expanduser()  # noqa: ASYNC240
         )
         parent_id = project_id_for_path(str(target.resolve()))
         if parent_id:
-            org_id = (await require_project_role(principal, parent_id, "member", db)).org_id
+            org_id = (
+                await require_project_role(principal, parent_id, "member", db)
+            ).org_id
     result = await create_project(project, org_id)
     # ``create_project`` returns the project dict with an ``id`` field.
     project_id = result.get("id") if isinstance(result, dict) else None

@@ -114,11 +114,10 @@ def require_acw_access(
     scoped = require_acw_scope(scope)
 
     async def _check(
-        request: Request, db: AsyncSession = Depends(get_db)  # noqa: B008
+        request: Request,
+        db: AsyncSession = Depends(get_db),  # noqa: B008
     ) -> mcp_remote_auth.AuthenticatedKey | _LegacyAdminKey:
-        key: mcp_remote_auth.AuthenticatedKey | _LegacyAdminKey = await scoped(
-            request
-        )
+        key: mcp_remote_auth.AuthenticatedKey | _LegacyAdminKey = await scoped(request)
         task_id = request.path_params.get("task_id")
         project_id = request.path_params.get("project_id")
         if task_id:
@@ -129,6 +128,7 @@ def require_acw_access(
                     resolve_task_project,
                     visible_project_ids,
                 )
+
                 visible = await visible_project_ids(acw_principal(key), db)
                 project_id = resolve_task_project(task_id, visible)[0]
         if project_id is None:

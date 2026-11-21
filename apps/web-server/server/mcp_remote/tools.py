@@ -149,6 +149,7 @@ async def _call_internal(
     method: str, path: str, key: AuthenticatedKey, **kwargs: Any
 ) -> Any:
     """Call the REST route in process with the scoped caller's principal."""
+    # Runtime-only main import runs after app initialization, so startup has no cycle.
     from server.auth import internal_mcp_principal  # noqa: PLC0415
     from server.main import app  # noqa: PLC0415
 

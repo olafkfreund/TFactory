@@ -143,7 +143,9 @@ def test_badges_serve_no_data_rather_than_traversing(evil):
 # ─── reachable over HTTP, not just in-process ─────────────────────────────────
 
 
-def test_percent_encoded_dotdot_reaches_the_handler_and_is_refused(monkeypatch, tmp_path):
+def test_percent_encoded_dotdot_reaches_the_handler_and_is_refused(
+    monkeypatch, tmp_path
+):
     """``%2E%2E`` survives routing as the literal id ``..``.
 
     A raw ``/api/projects/../regression`` is collapsed by the client before it
