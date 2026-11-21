@@ -27,15 +27,14 @@ from __future__ import annotations
 import importlib
 import json
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from fastapi import Request as FastAPIRequest
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request as FastAPIRequest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.database.engine import get_db
-from server.routes import specs as specs_routes
-from server.routes import tfactory_tasks as tfactory_tasks_routes
+from server.routes import specs as specs_routes, tfactory_tasks as tfactory_tasks_routes
 from server.routes._specpath import safe_component
 from server.routes.project_authz import (
     creator_org,
@@ -239,11 +238,28 @@ async def proxy_add_project(
     key=Depends(require_acw_scope(PROJECT_WRITE_SCOPE)),
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
+    from server.pty.access import project_id_for_path  # noqa: PLC0415
+    from server.routes.project_authz import is_service_principal  # noqa: PLC0415
+    from server.services.project_workspace_service import (  # noqa: PLC0415
+        slug_from_git_url,
+        workspace_root,
+    )
+
     from ..routes.projects import ProjectCreate, create_project
 
     body = await _read_json_body(request)
-    org_id = await creator_org(acw_principal(key), db)
-    result = await create_project(ProjectCreate(**body), org_id)
+    principal = acw_principal(key)
+    project = ProjectCreate(**body)
+    org_id = await creator_org(principal, db)
+    if not is_service_principal(principal):
+        target = (
+            workspace_root() / slug_from_git_url(project.gitUrl)
+            if project.gitUrl else Path(project.path or "").expanduser()  # noqa: ASYNC240
+        )
+        parent_id = project_id_for_path(str(target.resolve()))
+        if parent_id:
+            org_id = (await require_project_role(principal, parent_id, "member", db)).org_id
+    result = await create_project(project, org_id)
     # ``create_project`` returns the project dict with an ``id`` field.
     project_id = result.get("id") if isinstance(result, dict) else None
     await _audit_mcp_write(

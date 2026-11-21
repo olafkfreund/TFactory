@@ -104,9 +104,13 @@ def check_project_access(  # noqa: PLR0912
     if user.get("is_legacy_token") is True:
         raise HTTPException(status_code=404, detail="Project not found")
     if user.get("is_copilot_token") is True:
-        return EffectiveProjectAccess(
-            project_id, str(project.get("org_id") or "default"), "owner"
-        )
+        if user.get("project_id") == project_id or (
+            user.get("org_id") and user["org_id"] == project.get("org_id")
+        ):
+            return EffectiveProjectAccess(
+                project_id, str(project.get("org_id") or "default"), "owner"
+            )
+        raise HTTPException(404, "Project not found")
 
     org_id = project.get("org_id")
     if (
@@ -438,7 +442,9 @@ def require_task_access(minimum_role: str = "viewer") -> TaskAccessChecker:
     return TaskAccessChecker(minimum_role)
 
 
-async def creator_org(user: dict[str, Any] | None, db: AsyncSession) -> str | None:
+async def creator_org(
+    user: dict[str, Any] | None, db: AsyncSession, *, allow_task_write: bool = False
+) -> str | None:
     """The org to stamp on a project this principal creates (#1036).
 
     Authenticated callers need one org where they hold at least member, and
@@ -450,8 +456,11 @@ async def creator_org(user: dict[str, Any] | None, db: AsyncSession) -> str | No
     if not isinstance(user, dict) or user.get("is_legacy_token"):
         raise HTTPException(403, "Project creation requires org membership")
     scopes = set(user.get("scopes") or ())
-    if user.get("api_key_id") and not ({"project:write", "api:full"} & scopes):
+    allowed_scopes = {"project:write", "api:full"} | ({"task:write"} if allow_task_write else set())
+    if user.get("api_key_id") and not (allowed_scopes & scopes):
         raise HTTPException(403, "Project creation requires project:write scope")
+    if user.get("scoped_service") and user.get("org_id"):
+        return str(user["org_id"])
     orgs: list[str] = []
     if user.get("id"):
         rows = await db.execute(
@@ -463,8 +472,8 @@ async def creator_org(user: dict[str, Any] | None, db: AsyncSession) -> str | No
             if ROLE_LEVELS.get(row.role, -1) >= ROLE_LEVELS["member"]
             and (not user.get("org_id") or user["org_id"] == row.org_id)
         ]
-    if len(orgs) == 1:
-        return orgs[0]
+    if orgs:
+        return sorted(orgs)[0]
     logger.warning(
         "project.org_unstamped principal=%s orgs=%d",
         sanitize_log(user.get("id")),

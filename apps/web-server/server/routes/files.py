@@ -213,12 +213,34 @@ def resolve_path(project_id: str, relative_path: str) -> Path:
 
     # Resolve the full path, rejecting any traversal outside the project root.
     # safe_join raises HTTPException(400) for paths that escape project_path.
-    return safe_join(project_path, relative_path)
+    target = safe_join(project_path, relative_path)
+    if project_id_for_path(str(target)) != project_id:
+        raise HTTPException(404, "Project not found")
+    return target
 
 
 def _protect_env(path: Path) -> None:
-    if path.name in {".tfactory", "secrets.json", "credentials.json"} or path.name.startswith(
-        ".env"
+    from .projects import load_projects  # noqa: PLC0415
+
+    projects = load_projects()
+    owner = project_id_for_path(str(path))
+    parts = path.relative_to(Path(projects[owner]["path"]).resolve()).parts if owner else path.parts
+    if any(
+        part == ".tfactory"
+        or part in {"secrets.json", "credentials.json"}
+        or part.startswith(".env")
+        for part in parts
+    ) or any(
+        project.get("path")
+        and path.is_file()
+        and secret.is_file()
+        and path.samefile(secret)
+        for project in projects.values()
+        for secret in (
+            Path(project["path"]) / ".tfactory" / ".env",
+            Path(project["path"]) / "secrets.json",
+            Path(project["path"]) / "credentials.json",
+        )
     ):
         raise HTTPException(404, "File not found")
 
@@ -888,6 +910,13 @@ async def search_files(
                 data = __import__("json").loads(line)
                 if data.get("type") == "match":
                     match_data = data["data"]
+                    try:
+                        matched_path = Path(match_data["path"]["text"])
+                        if project_id_for_path(str(matched_path)) != project_id:
+                            continue
+                        _protect_env(matched_path)
+                    except HTTPException:
+                        continue
                     results.append(
                         SearchResult(
                             path=str(
@@ -918,10 +947,15 @@ async def search_files(
 
             if (
                 not file_path.is_file()
+                or project_id_for_path(str(file_path)) != project_id
                 or file_path.name.startswith(".env")
                 or file_path.name in {"secrets.json", "credentials.json"}
                 or is_binary_file(file_path)
             ):
+                continue
+            try:
+                _protect_env(file_path)
+            except HTTPException:
                 continue
 
             try:

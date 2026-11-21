@@ -39,11 +39,7 @@ for p in (str(_WEB_SERVER), str(_BACKEND)):
 
 from agents.regression.coverage_trend import coverage_trend_path  # noqa: E402
 from agents.regression.store import regression_dir  # noqa: E402
-from server.routes import (
-    coverage as cov,  # noqa: E402
-    project_authz,  # noqa: E402
-    projects,  # noqa: E402
-)
+from server.routes import coverage as cov, project_authz, projects  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

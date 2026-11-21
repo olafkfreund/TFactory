@@ -21,6 +21,7 @@ from server.pty.access import project_id_for_path
 from server.routes.project_authz import (
     ProjectAccessChecker,
     creator_org,
+    is_service_principal,
     require_project_role,
     visible_project_ids,
 )
@@ -338,13 +339,15 @@ def project_to_response(
     }
 
 
-def _check_claim(path: Path, exclude_id: str | None = None) -> None:
+def _check_claim(path: Path, org_id: str | None = None, exclude_id: str | None = None) -> None:
     target = path.resolve()
     for pid, existing in load_projects().items():
         if pid == exclude_id or not existing.get("path"):
             continue
         owned = Path(existing["path"]).resolve()
-        if target == owned or target in owned.parents or owned in target.parents:
+        if (target == owned or target in owned.parents or owned in target.parents) and (
+            org_id is not None and existing.get("org_id") != org_id
+        ):
             raise HTTPException(404, "Project not found")
 
 
@@ -573,7 +576,21 @@ async def add_project(
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ) -> dict[str, Any]:
     """Register a project, stamped with the creating principal's org (#1036)."""
-    org_id = await creator_org(getattr(request.state, "user", None), db)
+    principal = getattr(request.state, "user", None)
+    org_id = await creator_org(principal, db)
+    if not is_service_principal(principal):
+        if project.gitUrl:
+            from server.services.project_workspace_service import (  # noqa: PLC0415
+                slug_from_git_url,
+                workspace_root,
+            )
+
+            target = workspace_root() / slug_from_git_url(project.gitUrl)
+        else:
+            target = Path(project.path or "").expanduser()  # noqa: ASYNC240
+        parent_id = project_id_for_path(str(target.resolve()))
+        if parent_id:
+            org_id = (await require_project_role(principal, parent_id, "member", db)).org_id
     return await create_project(project, org_id)
 
 
@@ -602,7 +619,7 @@ async def create_project(
             slug_from_git_url,
             workspace_root,
         )
-        _check_claim(workspace_root() / slug_from_git_url(project.gitUrl))
+        _check_claim(workspace_root() / slug_from_git_url(project.gitUrl), org_id)
 
         # Stored credential lookup (#82 PR-C). When the caller passes
         # gitCredentialId, fetch the (username, token) tuple from the
@@ -627,7 +644,7 @@ async def create_project(
         # Local mode — register the existing directory.
         assert project.path is not None  # model_validator guarantees this
         project_path = Path(project.path).expanduser()
-        _check_claim(project_path)
+        _check_claim(project_path, org_id)
 
         if not project_path.exists():
             try:
@@ -724,7 +741,7 @@ async def update_project(project_id: str, project: ProjectCreate):
     project_data = projects[project_id]
     if project.path:
         project_path = Path(project.path)
-        _check_claim(project_path, project_id)
+        _check_claim(project_path, project_data.get("org_id"), project_id)
         if not project_path.exists():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -66,6 +67,7 @@ def env(tmp_path, monkeypatch):
     from server.routes import specs as specs_mod
     from server.routes import terminal as terminal_mod
     from server.routes import tfactory_tasks as tfactory_tasks_mod
+    from server.routes import worktree_tools as worktree_tools_mod
     from server.routes import coverage as coverage_mod
     from server.websockets import terminal as terminal_ws_mod
 
@@ -81,6 +83,7 @@ def env(tmp_path, monkeypatch):
     app.include_router(terminal_ws_mod.router)
     app.include_router(specs_mod.router)
     app.include_router(tfactory_tasks_mod.router, prefix="/api/tfactory/tasks")
+    app.include_router(worktree_tools_mod.router, prefix="/api/tasks")
     current_principal = {"value": None}
 
     @app.middleware("http")
@@ -626,6 +629,18 @@ def test_pr_attachment_rejects_other_repository(env):
     assert (response.status_code, response.json()) == (404, {"detail": "Project not found"})
 
 
+def test_pr_attachment_checks_stored_repository_without_slug(env, tmp_path, monkeypatch):
+    env.registered["p1"]["clonedFrom"] = "https://github.com/a/own.git"
+    monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path))
+    source = tmp_path / "workspaces" / "p1" / "specs" / "s1" / "context" / "source.json"
+    source.parent.mkdir(parents=True)
+    source.write_text('{"repo_slug":"b/hidden"}')
+    env.current_principal["value"] = {"id": "member-a", "org_id": "A"}
+    response = env.client.post("/api/specs/p1/s1/pr", json={"pr_number": 1})
+    assert (response.status_code, response.json()) == (404, {"detail": "Project not found"})
+    assert source.read_text() == '{"repo_slug":"b/hidden"}'
+
+
 def test_accepted_test_merge_rejects_other_checkout(env, tmp_path, monkeypatch):
     monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path))
     spec_dir = tmp_path / "workspaces" / "p1" / "specs" / "s1"
@@ -680,6 +695,7 @@ def test_copilot_mcp_credential_works_with_legacy_bypass_off(env, monkeypatch):
 
     env.settings.LEGACY_SHARED_TOKEN_FULL_ACCESS = False
     monkeypatch.setenv("COPILOT_MCP_TFACTORY_TOKEN", "copilot-test")
+    monkeypatch.setenv("COPILOT_MCP_TFACTORY_PROJECT_ID", "p1")
     monkeypatch.setitem(mcp_copilot._TOOL_DISPATCH, "tfactory_get_spec", lambda _args: {"ok": True})
     response = env.client.post(
         "/mcp",
@@ -691,6 +707,244 @@ def test_copilot_mcp_credential_works_with_legacy_bypass_off(env, monkeypatch):
     )
     assert response.status_code == 200
     assert response.json()["result"]["isError"] is False
+
+
+def test_copilot_token_cannot_cross_project(env, monkeypatch):
+    from server.routes import mcp_copilot
+
+    monkeypatch.setenv("COPILOT_MCP_TFACTORY_TOKEN", "copilot-test")
+    monkeypatch.setenv("COPILOT_MCP_TFACTORY_PROJECT_ID", "p1")
+    monkeypatch.setitem(mcp_copilot._TOOL_DISPATCH, "tfactory_get_spec", lambda _args: {"ok": True})
+    response = env.client.post(
+        "/mcp", headers={"Authorization": "Bearer copilot-test"},
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+              "params": {"name": "tfactory_get_spec", "arguments": {"task_id": "pB:s1"}}},
+    )
+    assert (response.status_code, response.json()) == (404, {"detail": "Project not found"})
+
+
+def test_member_can_register_nested_project_but_not_hidden_project(env, tmp_path, monkeypatch):
+    from server.routes import projects
+
+    monkeypatch.setattr(projects, "save_projects", lambda _projects: None)
+    env.current_principal["value"] = {"id": "member-a", "org_id": "A"}
+    child = tmp_path / "p1" / "package"
+    created = env.client.post("/api/projects", json={"path": str(child)})
+    assert created.status_code == 201
+    assert created.json()["path"] == str(child)
+    hidden = env.client.post("/api/projects", json={"path": str(tmp_path / "pB" / "package")})
+    assert (hidden.status_code, hidden.json()) == (404, {"detail": "Project not found"})
+    assert not (tmp_path / "pB" / "package").exists()
+
+
+def test_local_mode_keeps_nested_project_registration(env, tmp_path, monkeypatch):
+    from server.routes import projects
+
+    monkeypatch.setattr(env.settings, "DISABLE_AUTH", True)
+    monkeypatch.setattr(projects, "save_projects", lambda _projects: None)
+    env.current_principal["value"] = None
+    response = env.client.post("/api/projects", json={"path": str(tmp_path / "p1" / "package")})
+    assert response.status_code == 201
+
+
+def test_git_init_rejects_ancestor_and_local_git_reads_unregistered(env, tmp_path, monkeypatch):
+    env.current_principal["value"] = {"id": "member-a", "org_id": "A"}
+    denied = env.client.post("/api/git/init", json={"path": str(tmp_path)})
+    assert (denied.status_code, denied.json()) == (404, {"detail": "Project not found"})
+    assert not (tmp_path / ".git").exists()
+    monkeypatch.setattr(env.settings, "DISABLE_AUTH", True)
+    env.current_principal["value"] = None
+    for endpoint in ("status", "branches", "current-branch", "main-branch"):
+        assert env.client.get(f"/api/git/{endpoint}", params={"path": str(tmp_path)}).status_code == 200
+
+
+def test_member_can_initialize_eligible_unregistered_checkout(env, tmp_path, monkeypatch):
+    from server.routes import git
+
+    checkout = tmp_path / "new"
+    checkout.mkdir()
+    monkeypatch.setenv("APP_FILE_BROWSE_ROOTS", str(tmp_path))
+    called = []
+    monkeypatch.setattr(
+        git, "run_git_command",
+        lambda args, _cwd: called.append(args[0]) or {"success": True, "output": ""},
+    )
+    env.current_principal["value"] = {"id": "member-a", "org_id": "A"}
+    response = env.client.post("/api/git/init", json={"path": str(checkout)})
+    assert response.status_code == 200
+    assert called == ["init", "add", "commit"]
+
+
+def test_generic_file_routes_reject_env_backing_file(env, tmp_path):
+    root = tmp_path / "p1"
+    (root / ".tfactory").mkdir()
+    (root / "config.txt").write_text("credential")
+    (root / ".tfactory" / ".env").symlink_to(root / "config.txt")
+    env.current_principal["value"] = {"id": "member-a", "org_id": "A"}
+    read = env.client.get("/api/files/p1/read", params={"path": "config.txt"})
+    write = env.client.put("/api/files/p1/write", params={"path": "config.txt"}, json={"content": "changed"})
+    assert read.status_code == write.status_code == 404
+    assert (root / "config.txt").read_text() == "credential"
+
+
+def test_parent_project_file_route_cannot_enter_nested_other_org(env, tmp_path):
+    nested = tmp_path / "p1" / "nested"
+    nested.mkdir()
+    (nested / "secret.txt").write_text("private")
+    env.registered["nested"] = {"path": str(nested), "org_id": "B"}
+    env.current_principal["value"] = {"id": "member-a", "org_id": "A"}
+    response = env.client.get("/api/files/p1/read", params={"path": "nested/secret.txt"})
+    assert (response.status_code, response.json()) == (404, {"detail": "Project not found"})
+    search = env.client.get("/api/files/p1/search", params={"query": "private"})
+    assert search.status_code == 200
+    assert search.json()["results"] == []
+
+
+def test_member_can_select_unregistered_github_repo_and_branch(env, monkeypatch):
+    from server.routes import github
+
+    env.current_principal["value"] = {"id": "member-a", "org_id": "A"}
+    def gh(args, **_kwargs):
+        return {"success": True, "output": '[{"nameWithOwner":"new/repo"}]' if args[:2] == ["repo", "list"] else "main"}
+    monkeypatch.setattr(github, "run_gh_command", gh)
+    repos = env.client.get("/api/github/repos")
+    branches = env.client.get("/api/github/branches", params={"repo": "new/repo"})
+    assert repos.status_code == branches.status_code == 200
+    assert repos.json()["data"]["repos"][0]["fullName"] == "new/repo"
+    assert branches.json()["data"] == ["main"]
+
+
+def test_member_can_set_remote_before_registration(env, tmp_path, monkeypatch):
+    from server.routes import github
+
+    monkeypatch.setenv("APP_FILE_BROWSE_ROOTS", str(tmp_path))
+    called = []
+    monkeypatch.setattr(
+        github.subprocess, "run",
+        lambda argv, **_kw: called.append(argv) or SimpleNamespace(returncode=0),
+    )
+    env.current_principal["value"] = {"id": "member-a", "org_id": "A"}
+    response = env.client.post(
+        "/api/github/remote",
+        json={"projectPath": str(tmp_path / "new"), "repoFullName": "o/new"},
+    )
+    assert response.status_code == 200
+    assert called and called[0][-1] == "https://github.com/o/new.git"
+
+
+def test_legacy_and_task_write_key_reuse_registered_clone_by_alias(env, tmp_path, monkeypatch):
+    from server.services import project_workspace_service
+
+    monkeypatch.setenv("PROJECT_WORKSPACE_ROOT", str(tmp_path))
+    env.registered["p1"]["clonedFrom"] = "https://github.com/o/p1.git"
+    monkeypatch.setattr(project_workspace_service, "clone_or_update", AsyncMock(return_value=tmp_path / "p1"))
+    monkeypatch.setattr(
+        "agents.tools_pkg.tools.task_control.create_spec_ingest_workspace",
+        lambda **_kw: {"spec_dir": str(tmp_path)},
+    )
+    body = {"project_id": "alias", "spec_id": "s2", "spec_text": "# Spec", "git_url": "https://github.com/o/p1.git"}
+    env.current_principal["value"] = {"id": "legacy", "is_legacy_token": True}
+    legacy = env.client.post("/api/specs/ingest", json=body)
+    assert legacy.status_code == 200
+    env.set_key(user_id="member-a", scopes={"task:write"})
+    scoped = env.client.post("/api/mcp-stdio/specs/ingest", headers={"Authorization": "Bearer acw_test"}, json=body)
+    assert scoped.status_code == 200
+
+
+def test_scoped_ownerless_service_key_creates_only_in_own_org(env, tmp_path, monkeypatch):
+    from server.routes import projects
+
+    monkeypatch.setattr(projects, "save_projects", lambda _projects: None)
+    env.current_principal["value"] = {
+        "id": None, "api_key_id": "service", "org_id": "A",
+        "scoped_service": True, "scopes": ["project:write"],
+    }
+    own = env.client.post("/api/projects", json={"path": str(tmp_path / "p1" / "pkg")})
+    hidden = env.client.post("/api/projects", json={"path": str(tmp_path / "pB" / "pkg")})
+    assert own.status_code == 201
+    assert (hidden.status_code, hidden.json()) == (404, {"detail": "Project not found"})
+
+
+def test_multi_org_member_can_register_under_the_selected_parent(env, tmp_path, monkeypatch):
+    from server.database.models import Organization, OrgMember
+    from server.routes import projects
+
+    async def add_second_org():
+        async for session in env.db_dependency():
+            session.add(Organization(id="B", name="b", slug="b", owner_id="owner"))
+            await session.flush()
+            session.add(OrgMember(org_id="B", user_id="member-a", role="member"))
+            await session.commit()
+
+    asyncio.run(add_second_org())
+    monkeypatch.setattr(projects, "save_projects", lambda _projects: None)
+    env.current_principal["value"] = {"id": "member-a"}
+    created = env.client.post("/api/projects", json={"path": str(tmp_path / "pB" / "pkg")})
+    assert created.status_code == 201
+    assert env.registered[created.json()["id"]]["org_id"] == "B"
+
+
+def test_accepted_test_merge_uses_verified_worktree(env, tmp_path, monkeypatch):
+    from tools import git_writer
+
+    monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path))
+    root = tmp_path / "p1"
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    (root / "README").write_text("x")
+    subprocess.run(["git", "-C", str(root), "add", "README"], check=True)
+    subprocess.run(
+        ["git", "-C", str(root), "-c", "user.name=Test", "-c", "user.email=test@example.org",
+         "commit", "-qm", "base"], check=True,
+    )
+    worktree = root / ".tfactory" / "worktrees" / "tasks" / "s1"
+    worktree.parent.mkdir(parents=True)
+    subprocess.run(["git", "-C", str(root), "worktree", "add", "-qb", "feature", str(worktree)], check=True)
+    spec_dir = tmp_path / "workspaces" / "p1" / "specs" / "s1"
+    (spec_dir / "findings").mkdir(parents=True)
+    (spec_dir / "tests").mkdir()
+    (spec_dir / "tests" / "test_x.py").write_text("assert True")
+    (spec_dir / "status.json").write_text('{"status":"triaged"}')
+    (spec_dir / "findings" / "verdicts.json").write_text(
+        '{"verdicts":[{"verdict":"accept","test_file":"tests/test_x.py"}]}'
+    )
+    captured = {}
+    def writer(request, **_kw):
+        captured["repo_dir"] = request.repo_dir
+        return SimpleNamespace(ok=True, dry_run=False, committed_paths=(), commit_sha="abc", argv_log=(), error=None)
+    monkeypatch.setattr(git_writer, "write_tests_to_branch", writer)
+    env.current_principal["value"] = {"id": "owner", "org_id": "A"}
+    response = env.client.post(
+        "/api/tfactory/tasks/s1/merge", params={"project_id": "p1"},
+        json={"dry_run": False, "repo_dir": str(worktree), "target_branch": "feature"},
+    )
+    assert response.status_code == 200, response.text
+    assert captured["repo_dir"] == worktree.resolve()
+
+
+def test_worktree_terminal_requires_admin(env, tmp_path):
+    env.current_principal["value"] = {"id": "member-a", "org_id": "A"}
+    response = env.client.post(
+        "/api/tasks/worktree/open-in-terminal",
+        json={"worktreePath": str(tmp_path / "p1"), "terminal": "alacritty"},
+    )
+    assert response.status_code == 403
+
+
+def test_insights_task_creation_passes_authorized_principal(env, monkeypatch):
+    from server.routes import tasks
+
+    seen = {}
+    async def create_task(_task, request=None):
+        seen["principal"] = request.state.user
+        return {"id": "p1:s2"}
+    monkeypatch.setattr(tasks, "create_task", create_task)
+    env.current_principal["value"] = {"id": "member-a", "org_id": "A"}
+    response = env.client.post(
+        "/api/projects/p1/insights/create-task",
+        json={"title": "Task", "description": "Details"},
+    )
+    assert response.status_code == 200
+    assert seen["principal"] == env.current_principal["value"]
 
 
 def test_ingest_hidden_and_unknown_project_have_same_404(env):

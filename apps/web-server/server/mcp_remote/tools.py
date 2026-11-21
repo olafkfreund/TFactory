@@ -375,9 +375,10 @@ async def dispatch_tool_call(
             return _format_json(await _list_projects(key))
         if tool_name == "tfactory.list_tasks":
             project_id = arguments["project_id"]
-            return _format_json(
-                await _call_internal("GET", f"/api/projects/{project_id}/tasks", key)
+            listed = await _call_internal(
+                "GET", "/api/tasks", key, params={"project_id": project_id}
             )
+            return _format_json(listed["tasks"])
         if tool_name == "tfactory.get_task":
             return _format_json(
                 await _call_internal("GET", f"/api/tasks/{arguments['task_id']}", key)

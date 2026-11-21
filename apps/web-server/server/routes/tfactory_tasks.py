@@ -24,6 +24,8 @@ import json
 import logging
 import os
 import re
+import shutil
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -56,8 +58,6 @@ from fastapi import (
     Response,
     WebSocket,
     WebSocketDisconnect,
-)
-from fastapi import (
     status as http_status,
 )
 from pydantic import BaseModel
@@ -1013,6 +1013,47 @@ class MergeRequest(BaseModel):
     include_flagged: bool = False
 
 
+def _same_git_checkout(root: Path, candidate: Path) -> bool:
+    git = shutil.which("git")
+    if not git:
+        return False
+
+    def common_dir(path: Path) -> Path | None:
+        top = subprocess.run(  # noqa: S603 - fixed git argv
+            [git, "-C", str(path), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if top.returncode != 0 or Path(top.stdout.strip()).resolve() != path:
+            return None
+        result = subprocess.run(  # noqa: S603 - git argv is fixed; path is validated below
+            [git, "-C", str(path), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        return Path(result.stdout.strip()).resolve() if result.returncode == 0 else None
+
+    origin = common_dir(root)
+    return origin is not None and common_dir(candidate) == origin
+
+
+def _verify_merge_destination(repo_dir: Path, project_id: str) -> None:
+    from server.pty.access import project_id_for_path  # noqa: PLC0415
+
+    from .projects import load_projects  # noqa: PLC0415
+
+    root = Path(load_projects()[project_id]["path"]).resolve()
+    owner = project_id_for_path(str(repo_dir))
+    if (owner is not None and owner != project_id) or (
+        repo_dir != root and not _same_git_checkout(root, repo_dir)
+    ):
+        raise HTTPException(404, "Project not found")
+
+
 def merge_accepted_tests(  # noqa: PLR0912
     spec_id: str, body: MergeRequest, visible: set[str] | None = None
 ) -> dict[str, Any]:
@@ -1074,13 +1115,9 @@ def merge_accepted_tests(  # noqa: PLR0912
             status_code=400,
             detail="repo_dir is required for a real (non-dry-run) merge",
         )
-    repo_dir = Path(body.repo_dir) if body.repo_dir else spec_dir
+    repo_dir = Path(body.repo_dir).resolve() if body.repo_dir else spec_dir
     if not body.dry_run and visible:
-        from .projects import load_projects  # noqa: PLC0415
-
-        pid = next(iter(visible))
-        if repo_dir.resolve() != Path(load_projects()[pid]["path"]).resolve():
-            raise HTTPException(404, "Project not found")
+        _verify_merge_destination(repo_dir, next(iter(visible)))
 
     from tools.git_writer import GitWriteRequest, write_tests_to_branch
 
@@ -1115,7 +1152,9 @@ async def _merge_accepted_tests_route(
     project_id: str | None = None,
 ) -> dict[str, Any]:
     visible = await _authorize_spec_request(request, spec_id, "admin", project_id)
-    return merge_accepted_tests(spec_id, body, visible)
+    import asyncio  # noqa: PLC0415
+
+    return await asyncio.to_thread(merge_accepted_tests, spec_id, body, visible)
 
 
 def dismiss_run(spec_id: str, visible: set[str] | None = None) -> dict[str, Any]:

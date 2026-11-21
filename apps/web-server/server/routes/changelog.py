@@ -11,7 +11,7 @@ import re
 from pathlib import Path as FilePath
 
 from factory_common.logsafe import sanitize_log
-from fastapi import APIRouter, Depends, HTTPException, Path
+from fastapi import APIRouter, Depends, HTTPException, Path, Request
 from pydantic import BaseModel
 
 from server.error_ref import client_error
@@ -1027,7 +1027,7 @@ async def clear_insights_session(projectId: str = Path(...)):
     dependencies=[Depends(ProjectAccessChecker("member"))],
 )
 async def create_task_from_insights(
-    projectId: str = Path(...), request: CreateTaskRequest = ...
+    http_request: Request, projectId: str = Path(...), request: CreateTaskRequest = ...
 ):
     """Create a task from insights conversation."""
     from .tasks import TaskCreate, create_task
@@ -1038,7 +1038,7 @@ async def create_task_from_insights(
             title=request.title,
             description=request.description,
         )
-        result = await create_task(task_request)
+        result = await create_task(task_request, request=http_request)
         return {"success": True, "data": result}
     except Exception as e:
         logger.error(f"create_task_from_insights failed: {e}", exc_info=True)

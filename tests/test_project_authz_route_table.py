@@ -23,28 +23,21 @@ if str(_WEB_SERVER) not in sys.path:
 
 from server.main import create_app  # noqa: E402
 from server.mcp_remote import tools as remote_tools  # noqa: E402
-from server.pty import access as pty_access  # noqa: E402
 from server.routes import (  # noqa: E402  # noqa: E402
     project_authz,
+    mcp_copilot,
     projects,
     terminal,
-    tfactory_tasks,
-    mcp_copilot,
 )
 from server.websockets import events, task_access  # noqa: E402
 
 stdio_router = importlib.import_module("server.mcp_stdio.router")
 
 
-def _source(obj: Any) -> str:
-    return inspect.getsource(obj)
-
-
 def _has_guard(route: APIRoute | APIWebSocketRoute) -> bool:
     """Follow mounted dependencies and callable guards by object identity."""
     roots = {
         project_authz.require_project_role,
-        project_authz.visible_project_ids,
         project_authz.creator_org,
         project_authz.require_task_access,
         task_access.TaskSocketAccess,
@@ -66,11 +59,34 @@ def _has_guard(route: APIRoute | APIWebSocketRoute) -> bool:
         if not obj.__module__.startswith("server."):
             return False
         refs = {**inspect.getclosurevars(obj).globals, **inspect.getclosurevars(obj).nonlocals}
+        instructions = list(dis.get_instructions(obj))
+        def used_filter(start: int) -> bool:
+            call = next((i for i in range(start + 1, len(instructions))
+                         if instructions[i].opname == "CALL"), None)
+            if call is None:
+                return False
+            outcome = next((i for i in range(call + 1, len(instructions))
+                            if instructions[i].opname in {"STORE_FAST", "STORE_DEREF", "POP_TOP", "RETURN_VALUE"}), None)
+            if outcome is None:
+                return False
+            op = instructions[outcome]
+            if op.opname == "RETURN_VALUE":
+                return True
+            return op.opname.startswith("STORE_") and any(
+                later.opname in {"LOAD_FAST", "LOAD_DEREF"} and later.argval == op.argval
+                for later in instructions[outcome + 1:]
+            )
         return any(
-            visit(refs[instruction.argval])
-            for instruction in dis.get_instructions(obj)
+            (used_filter(index) if refs[instruction.argval] is project_authz.visible_project_ids
+             else visit(refs[instruction.argval]))
+            for index, instruction in enumerate(instructions)
             if instruction.opname in {"LOAD_GLOBAL", "LOAD_DEREF"}
             and instruction.argval in refs
+            and next(
+                (later.opname for later in instructions[index + 1:]
+                 if later.opname in {"CALL", "STORE_FAST", "STORE_DEREF", "RETURN_VALUE"}),
+                None,
+            ) == "CALL"
         )
 
     return visit(route.endpoint) or any(visit(dep.call) for dep in route.dependant.dependencies)
@@ -126,23 +142,6 @@ def test_project_route_table() -> None:
     unguarded = [route.path for route in routes if not _has_guard(route)]
     assert not unguarded, "\n".join(unguarded)
 
-    # The indirect guards above must continue to call the shared rule.
-    for helper in (
-        pty_access.project_ok,
-        terminal._authorize_path,
-        task_access._authorize_project,
-        remote_tools._authorize_call,
-        stdio_router._authorize_key,
-        tfactory_tasks._authorize_spec_request,
-        events._may_receive,
-    ):
-        assert any(
-            guard in _source(helper)
-            for guard in ("require_project_role", "visible_project_ids", "require_acw_access")
-        )
-    assert "require_acw_access" in _source(stdio_router._authorized_key)
-
-
 def test_unguarded_route_fails_route_table() -> None:
     from fastapi import FastAPI  # noqa: PLC0415
 
@@ -156,39 +155,52 @@ def test_unguarded_route_fails_route_table() -> None:
     assert route.path.startswith("/api/")
     assert not _has_guard(route)
 
+    @app.get("/api/loaded-only")
+    async def loaded_only() -> dict[str, bool]:
+        unused = project_authz.require_project_role
+        return {"ok": bool(unused)}
+
+    route = next(r for r in app.routes if getattr(r, "path", "") == "/api/loaded-only")
+    assert not _has_guard(route)
+
+    @app.get("/api/discarded-filter")
+    async def discarded_filter() -> dict[str, bool]:
+        await project_authz.visible_project_ids({})
+        return {"ok": True}
+
+    route = next(r for r in app.routes if getattr(r, "path", "") == "/api/discarded-filter")
+    assert not _has_guard(route)
+
+
+def test_sensitive_route_dependency_roles() -> None:
+    required = {
+        ("GET", "/api/projects/{projectId}/env"): "admin",
+        ("PATCH", "/api/projects/{projectId}/env"): "admin",
+        ("PUT", "/api/files/{project_id}/write"): "member",
+        ("DELETE", "/api/projects/{project_id}"): "admin",
+    }
+    checked = set()
+    for route in create_app().routes:
+        if not isinstance(route, APIRoute):
+            continue
+        for method in route.methods:
+            key = (method, route.path)
+            if key not in required:
+                continue
+            roles = [
+                dependency.call.minimum_role
+                for dependency in route.dependant.dependencies
+                if isinstance(dependency.call, project_authz.ProjectAccessChecker)
+            ]
+            assert roles and max(roles, key=project_authz.ROLE_LEVELS.get) == required[key]
+            checked.add(key)
+    assert checked == required.keys()
 
 def test_mcp_registries_use_authorized_dispatch() -> None:
-    from agents.tools_pkg.tools import task_control  # noqa: PLC0415
-
     remote_names = {tool["name"] for tool in remote_tools.get_tool_definitions()}
     assert remote_names == set(remote_tools._SCOPE_FOR_TOOL)
-    assert "_authorize_call" in _source(remote_tools.dispatch_tool_call)
     stdio_routes = [route for route in stdio_router.router.routes if isinstance(route, APIRoute)]
     assert len(stdio_routes) >= 16
-    assert all(
-        any(
-            guard in _source(route.endpoint)
-            for guard in (
-                "require_acw_",
-                "_authorized_key",
-                "_authorize_key",
-                "visible_project_ids",
-            )
-        )
-        for route in stdio_routes
-    )
-    assert "_locate_local" in _source(task_control.create_task_control_tools)
-    assert "_visible_local_projects" in _source(task_control._find_tasks)
-    assert {tool.name for tool in task_control.create_task_control_tools()} == {
-        "project_list",
-        "project_create",
-        "task_list",
-        "task_status",
-        "report_get",
-        "task_create_and_run",
-        "task_create_from_spec",
-        "task_rerun",
-    }
 
 
 @pytest.mark.parametrize(

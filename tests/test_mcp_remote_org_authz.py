@@ -97,6 +97,8 @@ def env(tmp_path, monkeypatch):
     ) -> object:
         if path == "/api/projects":
             return [{"id": "pa"}, {"id": "pb"}]
+        if path == "/api/tasks":
+            return {"tasks": [{"id": "pa:001"}]}
         return {"method": method, "path": path}
 
     call_internal = AsyncMock(side_effect=_fake_call_internal)

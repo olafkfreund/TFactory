@@ -272,7 +272,7 @@ async def open_worktree_in_ide(
         principal = getattr(http_request.state, "user", None)
         db_session = db if isinstance(db, AsyncSession) else None
         await require_project_role(
-            principal, project_id_for_path(worktree_path), "member", db_session
+            principal, project_id_for_path(worktree_path), "admin", db_session
         )
     ide = request.ide
 
@@ -322,7 +322,7 @@ async def open_worktree_in_terminal(
         principal = getattr(http_request.state, "user", None)
         db_session = db if isinstance(db, AsyncSession) else None
         await require_project_role(
-            principal, project_id_for_path(worktree_path), "member", db_session
+            principal, project_id_for_path(worktree_path), "admin", db_session
         )
     terminal = request.terminal
 
