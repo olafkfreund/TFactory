@@ -51,6 +51,7 @@ import { useProjectStore } from '../../stores/project-store';
 import type { UseProjectSettingsReturn } from '../project-settings/hooks/useProjectSettings';
 
 interface AppSettingsDialogProps {
+  projectId: string | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   initialSection?: AppSection;
@@ -91,7 +92,7 @@ const projectNavItemsConfig: NavItemConfig<ProjectSettingsSection>[] = [
  * Main application settings dialog container
  * Coordinates app and project settings sections
  */
-export function AppSettingsDialog({ open, onOpenChange, initialSection, initialProjectSection, onRerunWizard }: AppSettingsDialogProps) {
+export function AppSettingsDialog({ projectId, open, onOpenChange, initialSection, initialProjectSection, onRerunWizard }: AppSettingsDialogProps) {
   const { t } = useTranslation('settings');
   const { settings, setSettings, isSaving, error, saveSettings, revertTheme, commitTheme } = useSettings();
   const [version, setVersion] = useState<string>('');
@@ -116,9 +117,7 @@ export function AppSettingsDialog({ open, onOpenChange, initialSection, initialP
 
   // Project state
   const projects = useProjectStore((state) => state.projects);
-  const activeProjectId = useProjectStore((state) => state.activeProjectId);
-  const selectedProjectId = useProjectStore((state) => state.selectedProjectId);
-  const currentProjectId = activeProjectId ?? selectedProjectId;
+  const currentProjectId = projectId;
   const selectedProject = projects.find((p) => p.id === currentProjectId);
 
   // Project settings hook state (lifted from child)

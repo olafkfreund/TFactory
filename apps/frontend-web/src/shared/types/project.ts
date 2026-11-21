@@ -5,6 +5,8 @@
 export interface Project {
   id: string;
   slug?: string;
+  urlSlug?: string;
+  urlAliases?: string[];
   name: string;
   path: string;
   autoBuildPath: string;

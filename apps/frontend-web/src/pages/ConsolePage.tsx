@@ -5,6 +5,7 @@ import { AgentConsole } from '../components/task-detail/AgentConsole';
 import { useProjectStore } from '../stores/project-store';
 import { useEnsureProjects } from '../hooks/useEnsureProjects';
 import { findProjectByRef, projectSlug } from '../lib/project-route';
+import { useTranslation } from 'react-i18next';
 
 /**
  * Standalone deep-link page that drops you straight into the rmux Live
@@ -24,13 +25,14 @@ import { findProjectByRef, projectSlug } from '../lib/project-route';
  */
 export function ConsolePage(): ReactNode {
   const { slug, specId } = useParams<{ slug: string; specId: string }>();
-  useEnsureProjects();
+  const { ready, error, retry } = useEnsureProjects();
+  const { t } = useTranslation('welcome');
   const projects = useProjectStore((s) => s.projects);
-  const project = slug ? findProjectByRef(projects, slug) : undefined;
-  const projectId = project?.id ?? slug;
+  const project = ready && !error && slug ? findProjectByRef(projects, slug) : undefined;
+  const projectId = project?.id;
   const slugOrRef = project ? projectSlug(projects, project) : slug;
 
-  if (!projectId || !specId) {
+  if (!slug || !specId) {
     return (
       <div className="flex h-screen items-center justify-center text-muted-foreground">
         <p>
@@ -43,6 +45,10 @@ export function ConsolePage(): ReactNode {
       </div>
     );
   }
+
+  if (!ready) return null;
+  if (error) return <div role="alert">{error} <button onClick={retry}>{t('projectsPage.retry')}</button></div>;
+  if (!projectId) return <div>{t('projectsPage.notFound', { ref: slug })}</div>;
 
   const taskId = `${projectId}:${specId}`;
 

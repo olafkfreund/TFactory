@@ -1,4 +1,4 @@
-// URL <-> project mapping for /p/:slug[/:view]. Pure: no store, no router.
+// URL <-> project mapping for /p/:slug[/:view].
 import type { Project } from '../shared/types';
 
 export const PROJECT_VIEWS = [
@@ -18,27 +18,54 @@ export function slugify(name: string, fallback: string): string {
   return slug || fallback;
 }
 
-const created = (project: Project) => new Date(project.createdAt).getTime() || 0;
+const RESERVATIONS = 'tfactory-project-slug-reservations';
+type Reservations = Record<string, string | null>;
+
+function reservations(): Reservations {
+  try { return JSON.parse(localStorage.getItem(RESERVATIONS) || '{}') as Reservations; }
+  catch { return {}; }
+}
+
+const baseSlug = (project: Project) => (project.slug || slugify(project.name, project.id)).toLowerCase();
+
+export function projectsForBareSlug(projects: Project[], ref: string): Project[] {
+  return projects.filter((project) => baseSlug(project) === ref.toLowerCase());
+}
+
+export function isBareSlugChooser(projects: Project[], ref: string): boolean {
+  const group = projectsForBareSlug(projects, ref);
+  return group.length > 1 || (group.length > 0 && (
+    group[0].urlSlug ? group[0].urlSlug.toLowerCase() !== ref.toLowerCase() : reservations()[ref.toLowerCase()] === null
+  ));
+}
 
 export function projectSlugs(projects: Project[]): Map<string, string> {
-  const slugs = new Map<string, string>();
-  const used = new Set<string>();
-  for (const project of projects) {
-    if (project.slug) {
-      slugs.set(project.id, project.slug);
-      used.add(project.slug);
-    }
+  if (projects.every((project) => project.urlSlug)) {
+    return new Map(projects.map((project) => [project.id, project.urlSlug!]));
   }
-  const derived = projects.filter((project) => !project.slug)
-    .sort((a, b) => created(a) - created(b) || a.id.localeCompare(b.id));
-  for (const project of derived) {
-    const base = slugify(project.name, project.id);
-    const withId = `${base}-${project.id.slice(0, 8)}`;
-    let slug = used.has(base) ? withId : base;
-    for (let n = 2; used.has(slug); n++) slug = `${withId}-${String(n)}`;
+  const slugs = new Map<string, string>();
+  const history = reservations();
+  const groups = new Map<string, Project[]>();
+  for (const project of projects) {
+    const base = baseSlug(project);
+    groups.set(base, [...(groups.get(base) || []), project]);
+  }
+  const used = new Set(projects.map((project) => project.id.toLowerCase()));
+  for (const [base, group] of groups) {
+    if (group.length > 1) history[base] = null;
+    else if (!(base in history)) history[base] = group[0].id;
+  }
+  for (const project of [...projects].sort((a, b) => a.id.localeCompare(b.id))) {
+    const base = baseSlug(project);
+    const withId = `${base}-${project.id.toLowerCase()}`;
+    let slug = groups.get(base)?.length === 1 && history[base] === project.id && !used.has(base)
+      ? base : withId;
+    for (let n = 2; used.has(slug) || (slug in history && history[slug] !== project.id); n++) slug = `${withId}-${n}`;
     used.add(slug);
     slugs.set(project.id, slug);
+    if (!(slug in history)) history[slug] = project.id;
   }
+  try { localStorage.setItem(RESERVATIONS, JSON.stringify(history)); } catch { /* Storage may be unavailable. */ }
   return slugs;
 }
 
@@ -47,13 +74,13 @@ export const projectSlug = (projects: Project[], project: Project): string =>
 
 export function findProjectByRef(projects: Project[], ref: string): Project | undefined {
   const normalized = ref.toLowerCase();
+  const byId = projects.find((project) => project.id.toLowerCase() === normalized);
+  if (byId) return byId;
+  if (isBareSlugChooser(projects, normalized)) return undefined;
   const slugs = projectSlugs(projects);
   return projects.find((project) => slugs.get(project.id)?.toLowerCase() === normalized)
-    ?? projects.find((project) => project.id.toLowerCase() === normalized)
-    ?? projects.find((project) =>
-      project.slug?.toLowerCase() === normalized
-      || slugify(project.name, project.id) === normalized
-      || `${slugify(project.name, project.id)}-${project.id.slice(0, 8)}`.toLowerCase() === normalized);
+    ?? projects.find((project) => project.urlAliases?.some((alias) => alias.toLowerCase() === normalized))
+    ?? (projects.every((project) => project.urlSlug) ? undefined : projects.find((project) => reservations()[normalized] === project.id));
 }
 
 export function parseRoute(pathname: string): AppRoute {
