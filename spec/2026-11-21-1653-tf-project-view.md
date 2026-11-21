@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1653
 intent: intent/2026-11-21-1653-tf-project-view.md
 ---
