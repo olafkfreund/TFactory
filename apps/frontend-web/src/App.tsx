@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { Routes, Route, Navigate } from 'react-router';
+import { Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { TooltipProvider } from './components/ui/tooltip';
 import { Toaster } from './components/ui/toaster';
@@ -31,6 +31,8 @@ import { ProjectSwitchLoadingModal } from './components/ProjectSwitchLoadingModa
 import { LoginPage } from './pages/LoginPage';
 import { EditorPage } from './pages/EditorPage';
 import { ConsolePage } from './pages/ConsolePage';
+import { useEnsureProjects } from './hooks/useEnsureProjects';
+import { findProjectByRef, parseRoute, projectPath, projectSlugs } from './lib/project-route';
 import { ViewStateProvider } from './contexts/ViewStateContext';
 import { useProjectStore, loadProjects } from './stores/project-store';
 import { useTaskStore, loadTasks } from './stores/task-store';
@@ -41,7 +43,33 @@ import { useIpcListeners } from './hooks/useIpc';
 import { UI_SCALE_MIN, UI_SCALE_MAX, UI_SCALE_DEFAULT } from './shared/constants';
 import type { Task, Project } from './shared/types';
 
+const RETURN_TO_KEY = 'tf-return-to';
+
+function RedirectToLogin() {
+  const { pathname, search } = useLocation();
+  try {
+    if (pathname !== '/' && pathname !== '/login') sessionStorage.setItem(RETURN_TO_KEY, pathname + search);
+  } catch {
+    // sessionStorage may be unavailable.
+  }
+  return <Navigate to="/login" replace />;
+}
+
+function LegacyConsoleRedirect() {
+  const { projectId, specId } = useParams<{ projectId: string; specId: string }>();
+  const ready = useEnsureProjects();
+  const projects = useProjectStore((state) => state.projects);
+  if (!ready) return null;
+  const project = projectId ? findProjectByRef(projects, projectId) : undefined;
+  const slug = project ? projectSlugs(projects).get(project.id) ?? project.id : projectId ?? '';
+  return <Navigate to={`${projectPath(slug)}/console/${encodeURIComponent(specId ?? '')}`} replace />;
+}
+
 function AuthenticatedApp() {
+  const navigate = useNavigate();
+  const { pathname, search } = useLocation();
+  const route = useMemo(() => parseRoute(pathname), [pathname]);
+  const [projectsLoaded, setProjectsLoaded] = useState(false);
   // Loading screen state - show for 5 seconds on every page load
 
   // Stores
@@ -109,6 +137,38 @@ function AuthenticatedApp() {
   const [isOnboardingOpen, setIsOnboardingOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
 
+  const slugs = useMemo(() => projectSlugs(projects), [projects]);
+  const urlProject = route.kind === 'project' ? findProjectByRef(projects, route.ref) : undefined;
+  const urlProjectId = urlProject?.id;
+  const urlSlug = urlProjectId ? slugs.get(urlProjectId) : undefined;
+  const inSync = !!urlProjectId && activeProjectId === urlProjectId && selectedProjectId === urlProjectId;
+
+  useEffect(() => {
+    if (!projectsLoaded || !urlProjectId) return;
+    const state = useProjectStore.getState();
+    if (state.activeProjectId === urlProjectId && state.selectedProjectId === urlProjectId) return;
+    useTaskStore.getState().clearTasks();
+    state.openProjectTab(urlProjectId);
+    if (useProjectStore.getState().selectedProjectId !== urlProjectId) state.selectProject(urlProjectId);
+  }, [projectsLoaded, urlProjectId, activeProjectId, selectedProjectId]);
+
+  useEffect(() => {
+    if (route.kind === 'project' && urlSlug && route.ref !== urlSlug) {
+      void navigate(projectPath(urlSlug, route.view) + search, { replace: true });
+    }
+  }, [route, urlSlug, search, navigate]);
+
+  useEffect(() => {
+    if (route.kind !== 'home' || pathname !== '/') return;
+    try {
+      const to = sessionStorage.getItem(RETURN_TO_KEY);
+      sessionStorage.removeItem(RETURN_TO_KEY);
+      if (to?.startsWith('/') && !to.startsWith('//')) void navigate(to, { replace: true });
+    } catch {
+      // sessionStorage may be unavailable.
+    }
+  }, [route.kind, pathname, navigate]);
+
   // Command palette (⌘K / Ctrl-K): jump to any view or verify task, run actions.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -170,7 +230,7 @@ function AuthenticatedApp() {
     }));
   }, []);
 
-  const selectedProject = projects.find((p) => p.id === (activeProjectId || selectedProjectId));
+  const selectedProject = inSync ? urlProject : undefined;
 
   // Compute project name for loading modal
   const switchingProjectName = useMemo(() => {
@@ -180,7 +240,7 @@ function AuthenticatedApp() {
 
   // Initial load
   useEffect(() => {
-    loadProjects();
+    void loadProjects().finally(() => { setProjectsLoaded(true); });
     loadSettings();
   }, []);
 
@@ -530,10 +590,15 @@ function AuthenticatedApp() {
 export default function App() {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const checkAuth = useAuthStore((state) => state.checkAuth);
+  const [authChecked, setAuthChecked] = useState(false);
 
   useEffect(() => {
-    checkAuth();
+    let cancelled = false;
+    void checkAuth().finally(() => { if (!cancelled) setAuthChecked(true); });
+    return () => { cancelled = true; };
   }, [checkAuth]);
+
+  if (!authChecked) return null;
 
   return (
     <Routes>
@@ -546,11 +611,15 @@ export default function App() {
           opened on a phone, sent to a teammate over a VPN, etc. */}
       <Route
         path="/console/:projectId/:specId"
-        element={isAuthenticated ? <ConsolePage /> : <Navigate to="/login" replace />}
+        element={isAuthenticated ? <LegacyConsoleRedirect /> : <RedirectToLogin />}
+      />
+      <Route
+        path="/p/:slug/console/:specId"
+        element={isAuthenticated ? <ConsolePage /> : <RedirectToLogin />}
       />
       <Route
         path="/*"
-        element={isAuthenticated ? <AuthenticatedApp /> : <Navigate to="/login" replace />}
+        element={isAuthenticated ? <AuthenticatedApp /> : <RedirectToLogin />}
       />
     </Routes>
   );
