@@ -47,6 +47,7 @@ def env(tmp_path, monkeypatch):
             await db.flush()
             db.add(OrgMember(org_id="A", user_id="viewer-a", role="viewer"))
             db.add(OrgMember(org_id="A", user_id="member-a", role="member"))
+            db.add(OrgMember(org_id="A", user_id="owner", role="owner"))
             await db.commit()
 
     asyncio.run(_init())
@@ -65,6 +66,7 @@ def env(tmp_path, monkeypatch):
     settings = get_settings()
     monkeypatch.setattr(settings, "DISABLE_AUTH", False)
     monkeypatch.setattr(settings, "RBAC_ENFORCE_TASK_ROUTES", False)
+    monkeypatch.setattr(settings, "LEGACY_SHARED_TOKEN_FULL_ACCESS", True)
     monkeypatch.setattr(settings, "API_TOKEN", "legacy-admin-secret")
     monkeypatch.setattr("server.routes.projects.load_projects", lambda: PROJECTS)
 
@@ -139,10 +141,10 @@ def env(tmp_path, monkeypatch):
     e.client = TestClient(app)
     e.monkeypatch = monkeypatch
 
-    def set_key(user_id: str, org_id: str = "A", key_id: str = "k1"):
+    def set_key(user_id: str, org_id: str = "A", key_id: str = "k1", scopes=None):
         current_key["key"] = AuthenticatedKey(
             key_id=key_id,
-            scopes=frozenset({MCP_READ_SCOPE, TASK_WRITE_SCOPE}),
+            scopes=frozenset(scopes or {MCP_READ_SCOPE, TASK_WRITE_SCOPE}),
             user_id=user_id,
             org_id=org_id,
         )
@@ -159,10 +161,10 @@ def test_cross_org_key_denied_even_with_flag_off(env):
         "/api/mcp-stdio/tasks/p1:s1/stop",
         headers={"Authorization": "Bearer acw_org_b"},
     )
-    assert r.status_code == 403
-    assert r.json()["detail"] == "This API key is scoped to another organization"
+    assert r.status_code == 404
+    assert r.json()["detail"] == "Project not found"
     assert env.calls == []
-    assert [a["action"] for a in env.audits] == ["authz.task.denied"]
+    assert env.audits == []
 
 
 def test_same_org_member_key_calls_handler(env):
@@ -187,6 +189,18 @@ def test_viewer_key_write_is_denied_and_audited(env):
     assert [a["action"] for a in env.audits] == ["authz.task.denied"]
 
 
+def test_merge_scope_still_requires_admin_grant(env):
+    from server.mcp_stdio.auth import TASK_MERGE_SCOPE
+
+    env.set_key(user_id="member-a", scopes={TASK_MERGE_SCOPE})
+    response = env.client.post(
+        "/api/mcp-stdio/tasks/p1:s1/worktree/merge",
+        headers={"Authorization": "Bearer acw_member"},
+    )
+    assert response.status_code == 403
+    assert env.calls == []
+
+
 def test_legacy_admin_token_calls_handler(env):
     r = env.client.post(
         "/api/mcp-stdio/tasks/p1:s1/stop",
@@ -195,6 +209,16 @@ def test_legacy_admin_token_calls_handler(env):
     assert r.status_code == 200
     assert env.calls == ["p1:s1"]
     assert [a["action"] for a in env.audits] == ["mcp.task.stop"]
+
+
+def test_legacy_token_bypass_can_be_disabled(env):
+    env.settings.LEGACY_SHARED_TOKEN_FULL_ACCESS = False
+    response = env.client.post(
+        "/api/mcp-stdio/tasks/p1:s1/stop",
+        headers={"Authorization": "Bearer legacy-admin-secret"},
+    )
+    assert response.status_code == 404
+    assert env.calls == []
 
 
 def test_project_role_intersects_team_grant_and_token_scope(env):
@@ -238,6 +262,27 @@ def test_project_lookup_failure_fails_closed_for_org_key(env):
     assert env.calls == []
 
 
+def test_membership_lookup_failure_rolls_back_and_fails_closed(env):
+    from server.routes.project_authz import require_project_role
+
+    class BrokenDb:
+        rolled_back = False
+
+        async def execute(self, _statement):
+            raise RuntimeError("database unavailable")
+
+        async def rollback(self):
+            self.rolled_back = True
+
+    db = BrokenDb()
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(
+            require_project_role({"id": "member-a", "org_id": "A"}, "p1", "viewer", db)
+        )
+    assert error.value.status_code == 503
+    assert db.rolled_back
+
+
 @pytest.mark.parametrize("task_id", ["nope:s1", "s1"])
 def test_org_key_on_unknown_project_denied_even_with_flag_off(env, task_id):
     # get_worktree_diff once scanned every project for a bare/unknown-prefix spec.
@@ -248,7 +293,7 @@ def test_org_key_on_unknown_project_denied_even_with_flag_off(env, task_id):
     )
     assert r.status_code == 404
     assert env.calls == []
-    assert [a["action"] for a in env.audits] == ["authz.task.denied"]
+    assert env.audits == []
 
 
 @pytest.mark.parametrize("suffix", ["logs", "worktree/diff"])
@@ -258,11 +303,10 @@ def test_cross_org_key_denied_on_reads_even_with_flag_off(env, suffix):
         f"/api/mcp-stdio/tasks/p1:s1/{suffix}",
         headers={"Authorization": "Bearer acw_org_b"},
     )
-    assert r.status_code == 403
-    assert r.json()["detail"] == "This API key is scoped to another organization"
+    assert r.status_code == 404
+    assert r.json()["detail"] == "Project not found"
     assert env.calls == []
-    assert [a["action"] for a in env.audits] == ["authz.task.denied"]
-    assert env.audits[0]["details"]["minimum_role"] == "viewer"
+    assert env.audits == []
 
 
 @pytest.mark.parametrize("suffix", ["logs", "worktree/diff"])
@@ -282,13 +326,13 @@ def test_list_routes_filter_foreign_org_for_scoped_key(env):
     headers = {"Authorization": "Bearer acw_org_b"}
 
     projects = env.client.get("/api/mcp-stdio/projects", headers=headers).json()
-    assert [p["id"] for p in projects] == ["pB"]
+    assert [p["id"] for p in projects] == []
 
     tasks = env.client.get("/api/mcp-stdio/tasks", headers=headers).json()
-    assert ([t["project_id"] for t in tasks["tasks"]], tasks["total"]) == (["pB"], 1)
+    assert ([t["project_id"] for t in tasks["tasks"]], tasks["total"]) == ([], 0)
 
     running = env.client.get("/api/mcp-stdio/tasks/running", headers=headers).json()
-    assert (running["tasks"], running["count"]) == (["pB:s1"], 1)
+    assert (running["tasks"], running["count"]) == ([], 0)
 
 
 def test_list_routes_legacy_token_sees_all(env):

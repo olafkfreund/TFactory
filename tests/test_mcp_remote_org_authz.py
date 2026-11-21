@@ -40,7 +40,6 @@ WRITE_TASK_TOOLS = (
     "tfactory.start_task",
     "tfactory.stop_task",
     "tfactory.approve_plan",
-    "tfactory.merge_pr",
     "tfactory.reject_plan",
     "tfactory.recover_task",
 )
@@ -92,7 +91,6 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(tools_mod, "get_db", _db)
     monkeypatch.setattr(tools_mod, "get_settings", lambda: settings)
     monkeypatch.setattr(project_authz_mod, "get_settings", lambda: settings)
-    monkeypatch.setattr(tools_mod, "load_projects", lambda: PROJECTS)
     monkeypatch.setattr(projects_mod, "load_projects", lambda: PROJECTS)
 
     async def _fake_call_internal(
@@ -136,6 +134,25 @@ async def test_org_a_member_succeeds_on_own_org(env):
     )
     assert not res.get("isError")
     assert env.call_internal.called
+
+
+async def test_merge_requires_admin_grant_and_merge_scope(env):
+    key = _key("member-a", "A")
+    res = await tools_mod.dispatch_tool_call(
+        "tfactory.merge_pr", {"task_id": "pa:001"}, key
+    )
+    assert res.get("isError") is True
+    assert not env.call_internal.called
+
+    key = AuthenticatedKey(
+        key_id="k1", scopes=frozenset({"task:merge"}), user_id="member-a", org_id="A"
+    )
+    res = await tools_mod.dispatch_tool_call(
+        "tfactory.merge_pr", {"task_id": "pa:001"}, key
+    )
+    assert res.get("isError") is True
+    assert "denied" in res["content"][0]["text"]
+    assert not env.call_internal.called
 
 
 async def test_list_projects_hides_other_org(env):

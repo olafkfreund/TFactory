@@ -186,6 +186,22 @@ def _load_projects(root: Path | None = None) -> dict[str, Any]:
     return {"projects": _normalize_projects(raw, pf)}
 
 
+def _principal_org() -> str:
+    return os.environ.get("TFACTORY_PRINCIPAL_ORG_ID") or "default"
+
+
+def _visible_local_projects(root: Path | None = None) -> list[dict[str, Any]]:
+    return [
+        project
+        for project in _load_projects(root)["projects"]
+        if project.get("org_id", "default") == _principal_org()
+    ]
+
+
+def _local_project_allowed(project_id: str) -> bool:
+    return any(project.get("id") == project_id for project in _visible_local_projects())
+
+
 def _save_projects(data: dict[str, Any], root: Path | None = None) -> None:
     """Persist the envelope back in the web-server's canonical map shape.
 
@@ -223,8 +239,13 @@ def _find_tasks(
     if not workspaces_root.exists():
         return []
     found = []
+    allowed = {project["id"] for project in _visible_local_projects(root)}
     for project_dir in sorted(workspaces_root.iterdir()):
-        if not project_dir.is_dir() or (project_id and project_dir.name != project_id):
+        if (
+            not project_dir.is_dir()
+            or project_dir.name not in allowed
+            or (project_id and project_dir.name != project_id)
+        ):
             continue
         if (project_dir / "specs" / task_id).is_dir():
             found.append((project_dir.name, task_id))
@@ -1107,7 +1128,7 @@ def create_task_control_tools() -> list:
                 else await _cluster_create(args, from_spec=False)
             )
 
-        projects = _load_projects()
+        projects = {"projects": _visible_local_projects()}
         project_entry = next(
             (p for p in projects["projects"] if p.get("id") == project_id),
             None,
@@ -1334,7 +1355,7 @@ def create_task_control_tools() -> list:
                 else await _cluster_create(args, from_spec=True)
             )
 
-        projects = _load_projects()
+        projects = {"projects": _visible_local_projects()}
         project_entry = next(
             (p for p in projects["projects"] if p.get("id") == project_id),
             None,
@@ -1479,7 +1500,9 @@ def create_task_control_tools() -> list:
         workspaces_root = _workspace_root() / "workspaces"
         if workspaces_root.exists():
             for project_dir in sorted(workspaces_root.iterdir()):
-                if not project_dir.is_dir():
+                if not project_dir.is_dir() or not _local_project_allowed(
+                    project_dir.name
+                ):
                     continue
                 if project_filter and project_dir.name != project_filter:
                     continue
@@ -1529,7 +1552,7 @@ def create_task_control_tools() -> list:
             return _format_json(
                 {"count": len(projects), "projects": projects, "tree": "cluster"}
             )
-        data = _load_projects()
+        data = {"projects": _visible_local_projects()}
         return _format_json(
             {"count": len(data["projects"]), "projects": data["projects"]}
         )
@@ -1580,6 +1603,7 @@ def create_task_control_tools() -> list:
 
         entry = {
             "id": pid,
+            "org_id": _principal_org(),
             "name": name,
             "root_path": str(Path(root_path).expanduser()),
             "created_at": _now_iso(),

@@ -49,7 +49,14 @@ tools_mod = importlib.import_module("server.mcp_remote.tools")
 @pytest.fixture(autouse=True)
 def _stub_authz(monkeypatch):
     monkeypatch.setattr(tools_mod, "_authorize_call", AsyncMock())
-    monkeypatch.setattr(tools_mod, "_visible_org_ids", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        tools_mod, "visible_project_ids", AsyncMock(return_value={"p1"})
+    )
+
+    async def db():
+        yield None
+
+    monkeypatch.setattr(tools_mod, "get_db", db)
 
 
 # ── Feature flag ────────────────────────────────────────────────────
@@ -176,7 +183,7 @@ def read_only_key():
 def write_key():
     return AuthenticatedKey(
         key_id="key-w",
-        scopes=frozenset({MCP_READ_SCOPE, MCP_WRITE_SCOPE}),
+        scopes=frozenset({MCP_READ_SCOPE, MCP_WRITE_SCOPE, "task:merge"}),
         user_id="u1",
     )
 
@@ -238,7 +245,8 @@ async def test_write_tool_blocked_with_only_read_scope(read_only_key):
 async def test_read_tools_hit_correct_endpoint(
     tool_name, args, expected_method, expected_path, read_only_key
 ):
-    mock_call = AsyncMock(return_value={"ok": True})
+    expected = [{"id": "p1"}] if tool_name == "tfactory.list_projects" else {"ok": True}
+    mock_call = AsyncMock(return_value=expected)
     with patch("server.mcp_remote.tools._call_internal", mock_call):
         result = await dispatch_tool_call(tool_name, args, read_only_key)
 
@@ -250,7 +258,7 @@ async def test_read_tools_hit_correct_endpoint(
     assert not result.get("isError")
     # Content is JSON-text envelope
     payload = json.loads(result["content"][0]["text"])
-    assert payload == {"ok": True}
+    assert payload == expected
 
 
 @pytest.mark.parametrize(

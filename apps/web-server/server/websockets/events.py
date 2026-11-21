@@ -25,7 +25,7 @@ from server.auth import (
     _ws_extract_token,
     authenticate_websocket,
 )
-from server.config import get_settings
+from server.routes.project_authz import is_service_principal, require_project_role
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,7 @@ class ConnectedClient:
     user_id: str | None = None
     org_ids: set[str] = field(default_factory=set)
     key_org_id: str | None = None
+    principal: dict[str, Any] | None = None
 
 
 # Active WebSocket connections — keyed by WebSocket object for fast lookup
@@ -74,6 +75,7 @@ def _register_client(ws: WebSocket, user_info: dict | None) -> ConnectedClient:
         websocket=ws,
         user_id=user_info["id"] if user_info else None,
         key_org_id=(user_info or {}).get("org_id"),
+        principal=user_info,
     )
     _clients[ws] = client
     active_connections.add(ws)
@@ -91,16 +93,17 @@ def _unregister_client(ws: WebSocket) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _event_project(payload: dict[str, Any]) -> str | None:
+    project_id = payload.get("projectId") or payload.get("project_id")
+    task_id = payload.get("taskId") or payload.get("task_id")
+    if not project_id and isinstance(task_id, str) and ":" in task_id:
+        project_id = task_id.partition(":")[0]
+    return project_id if isinstance(project_id, str) and project_id else None
+
+
 def _event_org(payload: dict[str, Any]) -> str | None:
     try:
-        pid = payload.get("projectId")
-        if not pid:
-            task_id = payload.get("taskId")
-            pid = (
-                task_id.split(":", 1)[0]
-                if isinstance(task_id, str) and ":" in task_id
-                else None
-            )
+        pid = _event_project(payload)
         if not isinstance(pid, str) or not pid:
             return None
         cached = _org_cache.get(pid)
@@ -121,39 +124,24 @@ def _payload_org(payload: dict[str, Any]) -> str | None:
     )
 
 
-def _jwt_strict() -> bool:
-    return bool(get_settings().RBAC_ENFORCE_TASK_ROUTES)
-
-
-def _may_receive(
-    client: ConnectedClient, org: str | None, shadow: bool = False
+async def _may_receive(
+    client: ConnectedClient, org: str | None, project_id: str | None = None
 ) -> bool:
-    """``shadow`` marks a former broadcast: JWT sockets keep it until REST enforces.
-
-    Explicit ``send_to_org`` sends are members-only in every mode.
-    """
-    # Key rule first: an org-bound key with no owner must not pass as a service client.
-    if client.key_org_id is not None:
-        # Also needs live membership: a failed lookup or a removed owner gets nothing.
-        return org is not None and org == client.key_org_id and org in client.org_ids
-    if client.user_id is None:
-        return True
-    strict_ok = org is not None and org in client.org_ids
-    if not shadow or _jwt_strict():
-        return strict_ok
-    if not strict_ok:
-        logger.debug(
-            "ws would drop %s for user %s",
-            sanitize_log(org),
-            sanitize_log(client.user_id),
-        )
-    return True
+    if project_id:
+        try:
+            await require_project_role(client.principal, project_id)
+            return True
+        except Exception:  # noqa: BLE001 - deny on lookup failure
+            return False
+    return is_service_principal(client.principal) or (
+        org is not None and org in client.org_ids
+    )
 
 
 async def broadcast_event(event_type: str, payload: dict[str, Any]) -> None:
     """Route an event by its project organization."""
     await _deliver_local_to_org(
-        _event_org(payload) or SERVICE_ONLY_ORG, event_type, payload, shadow=True
+        _event_org(payload) or SERVICE_ONLY_ORG, event_type, payload
     )
 
 
@@ -161,10 +149,17 @@ async def send_to_user(user_id: str, event_type: str, payload: dict[str, Any]) -
     """Send an event to a specific user (all their connections)."""
     message = json.dumps({"type": event_type, "payload": payload})
     disconnected: list[WebSocket] = []
+    project_id = _event_project(payload)
+    org_id = _payload_org(payload)
 
     for ws, client in list(_clients.items()):
         if client.user_id == user_id and (
-            client.key_org_id is None or _may_receive(client, _payload_org(payload))
+            (
+                project_id is None
+                and org_id is None
+                and not (client.principal or {}).get("api_key_id")
+            )
+            or await _may_receive(client, org_id, project_id)
         ):
             try:
                 await ws.send_text(message)
@@ -176,14 +171,14 @@ async def send_to_user(user_id: str, event_type: str, payload: dict[str, Any]) -
 
 
 async def _deliver_local_to_org(
-    org_id: str, event_type: str, payload: dict[str, Any], shadow: bool = False
+    org_id: str, event_type: str, payload: dict[str, Any]
 ) -> None:
     """Send an event to members of an org connected to this server."""
     message = json.dumps({"type": event_type, "payload": payload})
     disconnected: list[WebSocket] = []
 
     for ws, client in list(_clients.items()):
-        if _may_receive(client, org_id or None, shadow):
+        if await _may_receive(client, org_id or None, _event_project(payload)):
             try:
                 await ws.send_text(message)
             except Exception:
@@ -228,7 +223,7 @@ async def _load_org_ids(
     client: ConnectedClient, user_info: dict[str, Any] | None
 ) -> bool:
     """Load the user's org memberships for routing; a failed lookup leaves none."""
-    if not (user_info and user_info.get("id")):
+    if not (user_info and user_info.get("id")) or is_service_principal(user_info):
         return True
     try:
         from sqlalchemy import select
@@ -292,6 +287,7 @@ async def events_websocket(websocket: WebSocket):  # noqa: PLR0912 - already bra
                             await websocket.close(code=4001)
                             break
                         user_info = principal
+                        client.principal = principal
                         org_id = principal.get("org_id")
                         client.key_org_id = str(org_id) if org_id else None
                         client.user_id = str(principal["id"])

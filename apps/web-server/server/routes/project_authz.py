@@ -160,10 +160,13 @@ async def authorize_project_for_user(
 
 def _load_projects() -> dict[str, dict[str, Any]]:
     # projects.py imports this module, so resolve its public store helper lazily.
-    return cast(
-        "dict[str, dict[str, Any]]",
-        importlib.import_module("server.routes.projects").load_projects(),
-    )
+    try:
+        return cast(
+            "dict[str, dict[str, Any]]",
+            importlib.import_module("server.routes.projects").load_projects(),
+        )
+    except Exception as exc:
+        raise HTTPException(503, "Project registry unavailable") from exc
 
 
 async def require_project_role(
@@ -231,6 +234,10 @@ async def require_project_role(
                 "authz.task.denied", principal, project_id, min_role, exc.detail
             )
         raise
+    except Exception as exc:
+        with contextlib.suppress(Exception):
+            await db.rollback()
+        raise HTTPException(503, "Authorization unavailable") from exc
 
 
 async def visible_project_ids(

@@ -30,10 +30,13 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from fastapi import HTTPException, Request, status
+from fastapi import Depends, HTTPException, Request, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.auth import _is_legacy_api_token
+from server.database.engine import get_db
 from server.error_ref import InputRejectedError, client_error
+from server.routes.project_authz import require_project_role
 
 from ..mcp_remote import auth as mcp_remote_auth
 
@@ -76,6 +79,44 @@ class _LegacyAdminKey:
 
     def has_scope(self, _scope: str) -> bool:
         return True
+
+
+def acw_principal(key: mcp_remote_auth.AuthenticatedKey | _LegacyAdminKey) -> dict:
+    if isinstance(key, _LegacyAdminKey):
+        return {"id": "default", "is_legacy_token": True}
+    return {
+        "id": key.user_id,
+        "api_key_id": key.key_id,
+        "org_id": key.org_id,
+        "scopes": sorted(key.scopes),
+        "scoped_service": key.user_id is None,
+    }
+
+
+def require_acw_principal(scope: str):
+    scoped = require_acw_scope(scope)
+
+    async def _check(request: Request) -> dict:
+        return acw_principal(await scoped(request))
+
+    return _check
+
+
+def require_acw_access(scope: str, min_role: str = "viewer"):
+    scoped = require_acw_scope(scope)
+
+    async def _check(request: Request, db: AsyncSession = Depends(get_db)):  # noqa: B008
+        key = await scoped(request)
+        task_id = request.path_params.get("task_id")
+        project_id = (
+            task_id.partition(":")[0]
+            if task_id
+            else request.query_params.get("project_id")
+        )
+        await require_project_role(acw_principal(key), project_id, min_role, db)
+        return key
+
+    return _check
 
 
 def _strip_bearer(authorization: str | None) -> str | None:

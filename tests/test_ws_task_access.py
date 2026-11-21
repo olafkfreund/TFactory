@@ -51,10 +51,9 @@ def endpoint(monkeypatch, request):
     monkeypatch.setattr(
         task_access, "authenticate_websocket", AsyncMock(return_value=principal)
     )
-    monkeypatch.setattr(task_access, "authorize_project_for_user", authorize)
+    monkeypatch.setattr(task_access, "require_project_role", authorize)
     monkeypatch.setattr(task_access, "async_session_factory", Session)
     monkeypatch.setattr(task_access, "_ws_acw_principal", validator)
-    monkeypatch.setattr(task_access, "get_settings", lambda: setting)
     monkeypatch.setattr(module, "get_agent_service", Service)
     return app, name, principal, setting, authorize, validator
 
@@ -84,8 +83,7 @@ def test_member_and_service_connect(endpoint):
     assert authorize.await_args.args[1] == "project"
     principal.clear()  # Auth stub now represents the legacy/service path below.
     task_access.authenticate_websocket.return_value = None
-    with TestClient(app) as client, _connect(client, name, "bare") as ws:
-        assert ws.receive_json()["type"] == "connected"
+    _denied(app, name, "bare")
 
 
 @pytest.mark.parametrize("task_id", ["project", ":spec", "project:"])
@@ -104,12 +102,7 @@ def test_jwt_flag_controls_denial_and_errors(endpoint, failure, strict, caplog):
     app, name, _, setting, authorize, _ = endpoint
     setting.RBAC_ENFORCE_TASK_ROUTES = strict
     authorize.side_effect = failure
-    if strict:
-        _denied(app, name)
-    else:
-        with TestClient(app) as client, _connect(client, name) as ws:
-            assert ws.receive_json()["type"] == "connected"
-        assert "Task WS access would deny" in caplog.text
+    _denied(app, name)
 
 
 @pytest.mark.parametrize(

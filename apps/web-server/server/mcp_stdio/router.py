@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import importlib
 import json
-from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
@@ -34,13 +33,14 @@ from fastapi import Request as FastAPIRequest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.database.engine import get_db
-from server.routes import projects as projects_routes
 from server.routes import specs as specs_routes
 from server.routes import tfactory_tasks as tfactory_tasks_routes
 from server.routes._specpath import safe_component
 from server.routes.project_authz import (
-    ProjectAccessChecker,
-    _audit_authz_denial,
+    creator_org,
+    require_project_role,
+    resolve_project_id,
+    visible_project_ids,
 )
 from server.routes.specs import SpecIngestRequest
 
@@ -62,6 +62,8 @@ from .auth import (
     TASK_MERGE_SCOPE,
     TASK_WRITE_SCOPE,
     _LegacyAdminKey,
+    acw_principal,
+    require_acw_access,
     require_acw_scope,
 )
 
@@ -120,105 +122,28 @@ async def _audit_mcp_write(
 # =============================================================================
 
 
-def _key_projects(key: AuthenticatedKey | _LegacyAdminKey) -> dict[str, Any] | None:
-    """The project map for an org-scoped key; None when the key has no org to check.
-
-    Fails closed (503): an unreadable registry must not let an org key through.
-    """
-    if isinstance(key, _LegacyAdminKey) or not key.org_id:
-        return None
-    from server.routes.projects import load_projects  # noqa: PLC0415
-
-    try:
-        projects: dict[str, Any] = load_projects()
-        return projects
-    except Exception:  # noqa: BLE001 - any registry error fails closed
-        raise HTTPException(503, "Project registry unavailable") from None
-
-
-def _foreign_ids(key: AuthenticatedKey, projects: dict[str, Any]) -> set[str]:
-    return {
-        pid
-        for pid, p in projects.items()
-        if isinstance(p, dict) and p.get("org_id") and p.get("org_id") != key.org_id
-    }
-
-
-def _foreign_projects(key: AuthenticatedKey | _LegacyAdminKey) -> set[str]:
-    projects = _key_projects(key)
-    if projects is None or isinstance(key, _LegacyAdminKey):
-        return set()
-    return _foreign_ids(key, projects)
-
-
 async def _authorize_key(
     key: AuthenticatedKey | _LegacyAdminKey,
     project_id: str,
     db: AsyncSession,
     minimum_role: str = "member",
 ) -> None:
-    if isinstance(key, _LegacyAdminKey):
-        user = {"id": "default", "is_service": True, "is_legacy_token": True}
-    else:
-        user = {
-            "id": key.user_id,
-            "role": "user",
-            "api_key_id": key.key_id,
-            "org_id": key.org_id,
-            "scopes": sorted(key.scopes),
-            "scoped_service": key.user_id is None,
-        }
-        # Not behind the flag: an org-A key must never reach org B, nor an
-        # unknown project (a handler may resolve it elsewhere).
-        projects = _key_projects(key)
-        if projects is not None and project_id not in projects:
-            await _audit_authz_denial(
-                "authz.task.denied", user, project_id, minimum_role, "Project not found"
-            )
-            raise HTTPException(404, "Project not found")
-        if projects is not None and project_id in _foreign_ids(key, projects):
-            detail = "This API key is scoped to another organization"
-            await _audit_authz_denial(
-                "authz.task.denied", user, project_id, minimum_role, detail
-            )
-            raise HTTPException(403, detail)
-
-    await ProjectAccessChecker(minimum_role).check(user, project_id, db)
+    await require_project_role(acw_principal(key), project_id, minimum_role, db)
 
 
-def _authorized_key(
-    scope: str,
-    minimum_role: str = "member",
-) -> Callable[..., Awaitable[AuthenticatedKey | _LegacyAdminKey]]:
-    """``require_acw_scope`` plus the project-org check for the task the
-    route acts on (``task_id`` path param, else the ``project_id`` query)."""
-    scoped = require_acw_scope(scope)
-
-    async def _dep(
-        request: FastAPIRequest,
-        db: Annotated[AsyncSession, Depends(get_db)],
-    ) -> AuthenticatedKey | _LegacyAdminKey:
-        key: AuthenticatedKey | _LegacyAdminKey = await scoped(
-            request
-        )  # 401/403 before any project lookup
-        task_id = request.path_params.get("task_id")
-        project_id = (
-            task_id.split(":", 1)[0]
-            if task_id
-            else request.query_params.get("project_id", "")
-        )
-        await _authorize_key(key, project_id, db, minimum_role)
-        return key
-
-    return _dep
+def _authorized_key(scope: str, minimum_role: str = "member"):
+    return require_acw_access(scope, minimum_role)
 
 
 @router.get("/projects")
-async def proxy_list_projects(key=Depends(require_acw_scope(MCP_READ_SCOPE))):
+async def proxy_list_projects(
+    key=Depends(require_acw_scope(MCP_READ_SCOPE)),
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+):
     from ..routes.projects import list_projects
 
-    foreign = _foreign_projects(key)
-    return [p for p in await list_projects() if p.get("id") not in foreign]
+    allowed = await visible_project_ids(acw_principal(key), db)
+    return [p for p in await list_projects() if p.get("id") in allowed]
 
 
 @router.get("/tasks")
@@ -226,22 +151,28 @@ async def proxy_list_tasks(
     project_id: str | None = Query(default=None),
     status: str | None = Query(default=None),
     key=Depends(require_acw_scope(MCP_READ_SCOPE)),
+    db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
     from server.routes.tasks import TaskList, list_tasks
 
-    foreign = _foreign_projects(key)
+    allowed = await visible_project_ids(acw_principal(key), db)
+    if project_id is not None:
+        await require_project_role(acw_principal(key), project_id, db=db)
     res = await list_tasks(project_id=project_id, status=status)
-    tasks = [t for t in res.tasks if t.project_id not in foreign]
+    tasks = [t for t in res.tasks if t.project_id in allowed]
     return TaskList(tasks=tasks, total=len(tasks))
 
 
 @router.get("/tasks/running")
-async def proxy_get_running_tasks(key=Depends(require_acw_scope(MCP_READ_SCOPE))):
+async def proxy_get_running_tasks(
+    key=Depends(require_acw_scope(MCP_READ_SCOPE)),
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+):
     from server.routes.execution import RunningTasksResponse, get_running_tasks
 
-    foreign = _foreign_projects(key)
+    allowed = await visible_project_ids(acw_principal(key), db)
     res = await get_running_tasks()
-    tasks = [t for t in res.tasks if t.split(":", 1)[0] not in foreign]
+    tasks = [t for t in res.tasks if t.split(":", 1)[0] in allowed]
     return RunningTasksResponse(tasks=tasks, count=len(tasks))
 
 
@@ -292,11 +223,12 @@ async def proxy_get_worktree_diff(
 async def proxy_add_project(
     request: FastAPIRequest,
     key=Depends(require_acw_scope(PROJECT_WRITE_SCOPE)),
+    db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
     from ..routes.projects import ProjectCreate, create_project
 
     body = await _read_json_body(request)
-    org_id = key.org_id if isinstance(key, AuthenticatedKey) else None  # #1036
+    org_id = await creator_org(acw_principal(key), db)
     result = await create_project(ProjectCreate(**body), org_id)
     # ``create_project`` returns the project dict with an ``id`` field.
     project_id = result.get("id") if isinstance(result, dict) else None
@@ -342,12 +274,7 @@ async def proxy_create_and_run_task(
 
 
 def _resolve_project(ref: str) -> str | None:
-    projects = projects_routes.load_projects()
-    if ref in projects:
-        return ref
-    return next(
-        (pid for pid, project in projects.items() if project.get("name") == ref), None
-    )
+    return resolve_project_id(ref)
 
 
 _Key = AuthenticatedKey | _LegacyAdminKey
@@ -368,8 +295,9 @@ async def proxy_ingest_spec(
     resolved_id = _resolve_project(req.project_id)
     if resolved_id is not None:
         await _authorize_key(key, resolved_id, db, "member")
-    elif isinstance(key, AuthenticatedKey) and key.org_id:
+    elif not (req.git_url or req.repo):
         raise HTTPException(404, "Project not found")
+    request.state.user = acw_principal(key)
     result = await specs_routes.ingest_spec(
         req, x_tenant_id=x_tenant_id, request=request, db=db
     )
@@ -398,15 +326,11 @@ async def proxy_list_spec_tasks(
         if resolved_id is None:
             raise HTTPException(404, "Project not found")
         await _authorize_key(key, resolved_id, db, "viewer")
-    foreign = _foreign_projects(key)
-    # An org-scoped key sees only projects that are registered and not foreign:
-    # a workspace whose registration is gone is nobody's to list.
-    known = _key_projects(key)
+    allowed = await visible_project_ids(acw_principal(key), db)
     rows = [
         row
         for row in tfactory_tasks_routes.list_tasks(x_tenant_id=x_tenant_id)["tasks"]
-        if row["project_id"] not in foreign
-        and (known is None or row["project_id"] in known)
+        if row["project_id"] in allowed
         and (resolved_id is None or row["project_id"] == resolved_id)
         and (status is None or row["status"] == status)
     ]
@@ -558,7 +482,7 @@ async def proxy_approve_plan(
 async def proxy_create_pr(
     task_id: str,
     request: FastAPIRequest,
-    key=Depends(_authorized_key(TASK_MERGE_SCOPE)),
+    key=Depends(_authorized_key(TASK_MERGE_SCOPE, "admin")),
 ):
     from ..routes.tasks import CreatePRFromTaskOptions, create_pr_from_task
 
@@ -580,7 +504,7 @@ async def proxy_create_pr(
 async def proxy_merge_worktree(
     task_id: str,
     request: FastAPIRequest,
-    key=Depends(_authorized_key(TASK_MERGE_SCOPE)),
+    key=Depends(_authorized_key(TASK_MERGE_SCOPE, "admin")),
 ):
     from ..routes.tasks import WorktreeMergeOptions, merge_worktree
 

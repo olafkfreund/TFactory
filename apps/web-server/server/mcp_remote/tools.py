@@ -48,13 +48,10 @@ from typing import Any
 
 import httpx
 from fastapi import HTTPException
-from sqlalchemy import select
 
 from server.config import get_settings
 from server.database.engine import get_db
-from server.database.models import OrgMember
-from server.routes.project_authz import authorize_project_for_user
-from server.routes.projects import load_projects
+from server.routes.project_authz import require_project_role, visible_project_ids
 
 from .auth import (
     MCP_READ_SCOPE,
@@ -119,8 +116,8 @@ async def _authorize_call(
         raise MCPAuthError(f"invalid {arg}")
     async for db in get_db():
         try:
-            await authorize_project_for_user(
-                _principal(key), value.partition(":")[0], db, minimum_role
+            await require_project_role(
+                _principal(key), value.partition(":")[0], minimum_role, db
             )
         except HTTPException as exc:
             raise MCPAuthError(f"{tool_name} denied: {exc.detail}") from exc
@@ -128,34 +125,14 @@ async def _authorize_call(
     raise MCPAuthError("Authorization is temporarily unavailable")
 
 
-async def _visible_org_ids(key: AuthenticatedKey) -> set[str] | None:
-    """Org ids the key may list; ``None`` means all (service key / auth off)."""
-    if not key.user_id or get_settings().DISABLE_AUTH:
-        return None
-    if not key.org_id:
-        return set()
-    async for db in get_db():
-        row = (
-            await db.execute(
-                select(OrgMember.id).where(
-                    OrgMember.org_id == key.org_id,
-                    OrgMember.user_id == key.user_id,
-                )
-            )
-        ).scalar_one_or_none()
-        return {key.org_id} if row is not None else set()
-    raise MCPAuthError("Authorization is temporarily unavailable")
-
-
 async def _list_projects(key: AuthenticatedKey) -> list[dict[str, Any]]:
     listed: list[dict[str, Any]] = await _call_internal("GET", "/api/projects", key)
-    allowed = await _visible_org_ids(key)
-    if allowed is None:
-        return listed
-    projects = load_projects()
-    return [
-        p for p in listed if projects.get(p.get("id", ""), {}).get("org_id") in allowed
-    ]
+    async for db in get_db():
+        allowed = await visible_project_ids(_principal(key), db)
+        break
+    else:
+        raise MCPAuthError("Authorization is temporarily unavailable")
+    return [p for p in listed if p.get("id") in allowed]
 
 
 def _format_json(data: Any) -> dict[str, Any]:
@@ -361,7 +338,7 @@ _SCOPE_FOR_TOOL: dict[str, str] = {
     "tfactory.start_task": MCP_WRITE_SCOPE,
     "tfactory.stop_task": MCP_WRITE_SCOPE,
     "tfactory.approve_plan": MCP_WRITE_SCOPE,
-    "tfactory.merge_pr": MCP_WRITE_SCOPE,
+    "tfactory.merge_pr": "task:merge",
     # V1.1
     "tfactory.get_qa_report": MCP_READ_SCOPE,
     "tfactory.tail_agent_console": MCP_READ_SCOPE,
@@ -391,7 +368,9 @@ async def dispatch_tool_call(
             tool_name,
             arguments,
             key,
-            "viewer" if required_scope == MCP_READ_SCOPE else "member",
+            "admin"
+            if tool_name == "tfactory.merge_pr"
+            else ("viewer" if required_scope == MCP_READ_SCOPE else "member"),
         )
     except MCPAuthError as exc:
         return _format_error(str(exc))
