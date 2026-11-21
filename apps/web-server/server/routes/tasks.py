@@ -4,6 +4,7 @@ Task management routes.
 Handles CRUD operations for tasks (specs) within projects.
 """
 
+import asyncio
 import json
 import re
 from datetime import UTC, datetime
@@ -1634,9 +1635,11 @@ async def delete_task(
             )
     else:
         spec_id = safe_component(task_id)
-        _ws_root = Path(
-            _os.environ.get("TFACTORY_WORKSPACE_ROOT") or (Path.home() / ".tfactory")
-        ).expanduser()
+        _ws_root = await asyncio.to_thread(
+            Path(
+                _os.environ.get("TFACTORY_WORKSPACE_ROOT") or (Path.home() / ".tfactory")
+            ).expanduser
+        )
         matches = [
             pid
             for pid, pdata in projects.items()

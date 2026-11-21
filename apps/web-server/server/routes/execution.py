@@ -844,7 +844,6 @@ async def create_and_run_task(
     description: str,
     request: StartTaskRequest,
     http_request: Request = None,  # type: ignore[assignment]
-    db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
     """Author a spec for a new task. This route does NOT run verification.
 
@@ -864,8 +863,7 @@ async def create_and_run_task(
     """
     if http_request is not None:
         principal = getattr(http_request.state, "user", None)
-        db_session = db if isinstance(db, AsyncSession) else None
-        await require_project_role(principal, project_id, "member", db_session)
+        await require_project_role(principal, project_id, "member")
 
     projects = load_projects()
 

@@ -31,6 +31,8 @@ from pydantic import BaseModel
 from ..config import get_settings
 from ..rate_limit import FixedWindowLimiter
 from ._specpath import is_safe_slug
+from .project_authz import resolve_project_id
+from .projects import load_projects
 
 # Throttle re-fires per task so a leaked secret / misbehaving caller can't drive
 # unbounded pipeline runs (#242). Generous — a healthy loop fires a handful of
@@ -170,9 +172,6 @@ async def aifactory_complete(
             status_code=http_status.HTTP_429_TOO_MANY_REQUESTS,
             detail="rate limit exceeded for this task; retry shortly",
         )
-    from .project_authz import resolve_project_id
-    from .projects import load_projects
-
     projects = load_projects()
     resolved_id = resolve_project_id(project_id) if projects else None
     spec_dir = (

@@ -143,7 +143,7 @@ def test_badges_serve_no_data_rather_than_traversing(evil):
 # ─── reachable over HTTP, not just in-process ─────────────────────────────────
 
 
-def test_percent_encoded_dotdot_reaches_the_handler_and_is_refused(monkeypatch):
+def test_percent_encoded_dotdot_reaches_the_handler_and_is_refused(monkeypatch, tmp_path):
     """``%2E%2E`` survives routing as the literal id ``..``.
 
     A raw ``/api/projects/../regression`` is collapsed by the client before it
@@ -153,7 +153,7 @@ def test_percent_encoded_dotdot_reaches_the_handler_and_is_refused(monkeypatch):
     """
     monkeypatch.setattr("server.routes.project_authz._auth_disabled", lambda: True)
     monkeypatch.setattr(
-        "server.routes.projects.load_projects", lambda: {"..": {"path": "/tmp"}}
+        "server.routes.projects.load_projects", lambda: {"..": {"path": str(tmp_path)}}
     )
     app = FastAPI()
     app.include_router(regression.router)

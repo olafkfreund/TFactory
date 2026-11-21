@@ -28,7 +28,9 @@ synthetic legacy key) so handlers can record key_id in audit logs.
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from typing import Any
 
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -81,7 +83,9 @@ class _LegacyAdminKey:
         return True
 
 
-def acw_principal(key: mcp_remote_auth.AuthenticatedKey | _LegacyAdminKey) -> dict:
+def acw_principal(
+    key: mcp_remote_auth.AuthenticatedKey | _LegacyAdminKey,
+) -> dict[str, Any]:
     if isinstance(key, _LegacyAdminKey):
         return {"id": "default", "is_legacy_token": True}
     return {
@@ -93,20 +97,28 @@ def acw_principal(key: mcp_remote_auth.AuthenticatedKey | _LegacyAdminKey) -> di
     }
 
 
-def require_acw_principal(scope: str):
+def require_acw_principal(
+    scope: str,
+) -> Callable[[Request], Awaitable[dict[str, Any]]]:
     scoped = require_acw_scope(scope)
 
-    async def _check(request: Request) -> dict:
+    async def _check(request: Request) -> dict[str, Any]:
         return acw_principal(await scoped(request))
 
     return _check
 
 
-def require_acw_access(scope: str, min_role: str = "viewer"):
+def require_acw_access(
+    scope: str, min_role: str = "viewer"
+) -> Callable[..., Awaitable[mcp_remote_auth.AuthenticatedKey | _LegacyAdminKey]]:
     scoped = require_acw_scope(scope)
 
-    async def _check(request: Request, db: AsyncSession = Depends(get_db)):  # noqa: B008
-        key = await scoped(request)
+    async def _check(
+        request: Request, db: AsyncSession = Depends(get_db)  # noqa: B008
+    ) -> mcp_remote_auth.AuthenticatedKey | _LegacyAdminKey:
+        key: mcp_remote_auth.AuthenticatedKey | _LegacyAdminKey = await scoped(
+            request
+        )
         task_id = request.path_params.get("task_id")
         project_id = (
             task_id.partition(":")[0]

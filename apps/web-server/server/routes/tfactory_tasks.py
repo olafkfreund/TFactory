@@ -28,9 +28,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from server.auth import WebSocketAuthError, authenticate_websocket
 from server.error_ref import InputRejectedError, client_error
 
-from ._specpath import safe_slug
+from ._specpath import safe_component, safe_slug
+from .project_authz import require_project_role, resolve_task_project, visible_project_ids
 
 # Evidence artifact content-type map (mirrors agents.evidence.layout)
 _EVIDENCE_CONTENT_TYPES: dict[str, str] = {
@@ -60,13 +62,7 @@ from fastapi import (
 )
 from pydantic import BaseModel
 
-from ._specpath import safe_component
 from ._tenancy import DEFAULT_TENANT, multi_tenant_enabled, resolve_tenant
-from .project_authz import (
-    require_project_role,
-    resolve_task_project,
-    visible_project_ids,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -276,7 +272,7 @@ def _artefact_meta(spec_dir: Path) -> dict[str, dict]:
 def list_tasks(
     x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
     visible: set[str] | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """List all TFactory tasks across visible projects.
 
     Response shape:
@@ -318,7 +314,7 @@ def list_tasks(
 async def _list_tasks_route(
     request: Request,
     x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
-) -> dict:
+) -> dict[str, Any]:
     principal = getattr(request.state, "user", None)
     visible = await visible_project_ids(principal, None, "viewer")
     return list_tasks(x_tenant_id=x_tenant_id, visible=visible)
@@ -373,7 +369,7 @@ async def _get_task_route(
     spec_id: str,
     request: Request,
     project_id: str | None = None,
-) -> dict:
+) -> dict[str, Any]:
     visible = await _authorize_spec_request(request, spec_id, "viewer", project_id)
     return get_task(spec_id, visible)
 
@@ -651,8 +647,6 @@ async def websocket_logs(websocket: WebSocket, spec_id: str) -> None:
     reported by closing with code 4400 / 4404 so the frontend can
     distinguish them.
     """
-    from server.auth import WebSocketAuthError, authenticate_websocket
-
     try:
         principal = await authenticate_websocket(websocket)
     except WebSocketAuthError:
@@ -1209,7 +1203,7 @@ async def _list_visual_baselines_route(
     target: str,
     request: Request,
     project_id: str | None = None,
-) -> dict:
+) -> dict[str, Any]:
     visible = await _authorize_spec_request(request, spec_id, "viewer", project_id)
     return list_visual_baselines(spec_id, target, visible)
 
@@ -1310,7 +1304,6 @@ async def _accept_visual_baseline_route(
     snapshot: str,
     body: _AcceptBaselineBody,
     request: Request,
-    project_id: str | None = None,
-) -> dict:
-    visible = await _authorize_spec_request(request, spec_id, "member", project_id)
+) -> dict[str, Any]:
+    visible = await _authorize_spec_request(request, spec_id, "member")
     return accept_visual_baseline(spec_id, target, snapshot, body, visible)

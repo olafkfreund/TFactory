@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import importlib
 import json
+from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
@@ -131,15 +132,17 @@ async def _authorize_key(
     await require_project_role(acw_principal(key), project_id, minimum_role, db)
 
 
-def _authorized_key(scope: str, minimum_role: str = "member"):
+def _authorized_key(
+    scope: str, minimum_role: str = "member"
+) -> Callable[..., Awaitable[AuthenticatedKey | _LegacyAdminKey]]:
     return require_acw_access(scope, minimum_role)
 
 
 @router.get("/projects")
 async def proxy_list_projects(
-    key=Depends(require_acw_scope(MCP_READ_SCOPE)),
+    key: AuthenticatedKey | _LegacyAdminKey = Depends(require_acw_scope(MCP_READ_SCOPE)),
     db: AsyncSession = Depends(get_db),  # noqa: B008
-):
+) -> list[dict[str, Any]]:
     from ..routes.projects import list_projects
 
     allowed = await visible_project_ids(acw_principal(key), db)
@@ -165,9 +168,9 @@ async def proxy_list_tasks(
 
 @router.get("/tasks/running")
 async def proxy_get_running_tasks(
-    key=Depends(require_acw_scope(MCP_READ_SCOPE)),
+    key: AuthenticatedKey | _LegacyAdminKey = Depends(require_acw_scope(MCP_READ_SCOPE)),
     db: AsyncSession = Depends(get_db),  # noqa: B008
-):
+) -> object:
     from server.routes.execution import RunningTasksResponse, get_running_tasks
 
     allowed = await visible_project_ids(acw_principal(key), db)

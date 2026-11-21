@@ -23,11 +23,12 @@ from server.services.project_store import get_project_store
 from ._specpath import safe_component
 
 logger = logging.getLogger(__name__)
+_FORBIDDEN = status.HTTP_403_FORBIDDEN
 
 __all__ = [
-    "ProjectAccessChecker",
-    "EffectiveProjectAccess",
     "SCOPE_CEILING",
+    "EffectiveProjectAccess",
+    "ProjectAccessChecker",
     "TaskAccessChecker",
     "authorize_project_for_user",
     "check_project_access",
@@ -227,7 +228,7 @@ async def require_project_role(
             membership = result.scalar_one_or_none()
         return check_project_access(principal or {}, project, membership, min_role)
     except HTTPException as exc:
-        if exc.status_code == 403:
+        if exc.status_code == _FORBIDDEN:
             with contextlib.suppress(Exception):
                 await db.rollback()
             await _audit_authz_denial(
@@ -273,11 +274,10 @@ async def visible_project_ids(
         else:
             org_ids = []
         projects = {}
-        for org_id in org_ids:
-            if org_id:
-                projects.update(
-                    await get_project_store(session=db, org_id=org_id).load_all()
-                )
+        for org_id in filter(None, org_ids):
+            projects.update(
+                await get_project_store(session=db, org_id=org_id).load_all()
+            )
     else:
         projects = _load_projects()
     visible: set[str] = set()

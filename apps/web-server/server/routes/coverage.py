@@ -200,7 +200,6 @@ async def get_coverage(
         "", description="skip repo resolution and use this project"
     ),
     request: Request = None,  # type: ignore[assignment]
-    db: AsyncSession = Depends(get_db),  # noqa: B008
 ) -> dict[str, Any]:
     """Coverage for one commit, or an explicit reason there is none.
 
@@ -216,10 +215,9 @@ async def get_coverage(
         }
 
     principal = getattr(request.state, "user", None) if request is not None else None
-    db_session = db if isinstance(db, AsyncSession) else None
     candidates = [project_id] if project_id else _projects_for_repo(repo)
     if request is not None:
-        visible = await visible_project_ids(principal, db_session, "viewer")
+        visible = await visible_project_ids(principal, None, "viewer")
         candidates = [pid for pid in candidates if pid in visible]
     if not candidates:
         return {
@@ -229,7 +227,7 @@ async def get_coverage(
 
     for pid in candidates:
         if request is not None:
-            await require_project_role(principal, pid, "viewer", db_session)
+            await require_project_role(principal, pid, "viewer")
         found = _coverage_for_commit(pid, sha)
         if found:
             return {**found, "project_id": pid, "repo": repo}

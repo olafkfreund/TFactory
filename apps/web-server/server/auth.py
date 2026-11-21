@@ -264,20 +264,14 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
         if token.startswith("acw_"):
             # Imported lazily: the DB-backed MCP auth module pulls in ORM models
             # and is only relevant once a user actually presents an acw_ key.
-            from .mcp_remote.auth import (
-                REST_API_SCOPE,
-                MCPAuthError,
-            )
-            from .mcp_remote.auth import (
-                authenticate as authenticate_api_key,
-            )
+            mcp_auth = importlib.import_module("server.mcp_remote.auth")
 
             try:
-                key = await authenticate_api_key(f"Bearer {token}")
-            except MCPAuthError:
+                key = await mcp_auth.authenticate(f"Bearer {token}")
+            except mcp_auth.MCPAuthError:
                 key = None
 
-            if key is not None and key.has_scope(REST_API_SCOPE):
+            if key is not None and key.has_scope(mcp_auth.REST_API_SCOPE):
                 request.state.user = {
                     "id": key.user_id,
                     "email": None,
@@ -293,7 +287,7 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
                 {
                     "error": (
                         "API key is not valid for REST access "
-                        f"(requires the '{REST_API_SCOPE}' scope)"
+                        f"(requires the '{mcp_auth.REST_API_SCOPE}' scope)"
                     )
                 },
                 status_code=status.HTTP_403_FORBIDDEN,
