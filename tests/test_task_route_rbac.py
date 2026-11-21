@@ -133,7 +133,6 @@ def env(tmp_path, monkeypatch):
 
     settings = get_settings()
     monkeypatch.setattr(settings, "DISABLE_AUTH", False)
-    monkeypatch.setattr(settings, "RBAC_ENFORCE_TASK_ROUTES", False)
     monkeypatch.setattr("server.routes.projects.load_projects", lambda: PROJECTS)
 
     audits: list[dict] = []
@@ -166,71 +165,60 @@ def env(tmp_path, monkeypatch):
     asyncio.run(engine.dispose())
 
 
-def _enforce(env, on=True):
-    env.monkeypatch.setattr(env.settings, "RBAC_ENFORCE_TASK_ROUTES", on)
-
-
 def test_enforced_viewer_forbidden_on_start(env):
-    _enforce(env)
     r = env.call("viewer-a", path="start", **{"Content-Type": "application/json"})
     assert r.status_code == 403
     assert env.audits[0]["action"] == "authz.task.denied"
 
 
-def test_shadow_viewer_gets_handler_response(env):
+def test_viewer_cannot_write(env):
     r = env.call("viewer-a")
     assert r.status_code == 403
 
 
 def test_enforced_member_passes(env):
-    _enforce(env)
     assert env.call("member-a").json()["detail"] == "Task is not running"
 
 
 def test_enforced_service_passes(env):
-    _enforce(env)
     r = env.call("svc", task="p1:s1", **{"X-Test-Service": "1"})
     assert r.json()["detail"] == "Task is not running"
 
 
 def test_enforced_key_bound_to_other_org_forbidden(env):
-    _enforce(env)
     assert env.call("member-a", **{"X-Test-Key-Org": "B"}).status_code == 404
 
 
 def test_enforced_jwt_admin_claim_without_membership_forbidden(env):
-    _enforce(env)
     assert env.call("stranger", **{"X-Test-Jwt-Role": "admin"}).status_code == 404
 
 
 def test_enforced_unowned_project_forbidden(env):
-    _enforce(env)
     assert env.call("member-a", task="legacy:s1").status_code == 404
 
 
-def test_shadow_unknown_project_same_as_without_dependency(env):
-    shadow = env.call("member-a", task="nope:s1")
+def test_unknown_project_hidden_in_enforced_and_local_modes(env):
+    enforced = env.call("member-a", task="nope:s1")
     env.monkeypatch.setattr(env.settings, "DISABLE_AUTH", True)
-    baseline = env.call("member-a", task="nope:s1")
-    assert (shadow.status_code, shadow.json()) == (
-        baseline.status_code,
-        baseline.json(),
+    local = env.call("member-a", task="nope:s1")
+    assert (enforced.status_code, enforced.json()) == (
+        local.status_code,
+        local.json(),
     )
-    assert shadow.json()["detail"] == "Project not found"
+    assert enforced.json()["detail"] == "Project not found"
 
 
-def test_shadow_lookup_failure_fails_open(env):
-    def _boom():
-        raise RuntimeError("projects.json unreadable")
+def test_org_lookup_failure_fails_closed(env):
+    async def _boom(_session, _statement, *args, **kwargs):
+        raise RuntimeError("org lookup unavailable")
 
-    env.monkeypatch.setattr("server.routes.projects.load_projects", _boom)
+    env.monkeypatch.setattr("sqlalchemy.ext.asyncio.AsyncSession.execute", _boom)
     with pytest.raises(RuntimeError):
-        env.call("viewer-a")
+        env.call("member-a")
+    assert env.rollbacks
 
 
 def test_enforced_lookup_failure_propagates(env):
-    _enforce(env)
-
     def _boom():
         raise RuntimeError("projects.json unreadable")
 
@@ -245,7 +233,7 @@ def test_denied_write_is_audited(env):
     assert env.audits[0]["resource_id"] == "p1"
 
 
-def test_shadow_allowed_writes_no_audit(env):
+def test_allowed_writes_no_audit(env):
     env.call("member-a")
     assert env.audits == []
 
@@ -273,13 +261,11 @@ def test_worktree_routes_hide_invisible_project(env, tmp_path):
 
 
 def test_session_rolled_back_after_allowed_member_call(env):
-    _enforce(env)
     env.call("member-a")
     assert env.rollbacks == [True]
 
 
 def test_session_rolled_back_on_enforced_deny(env):
-    _enforce(env)
     assert env.call("viewer-a").status_code == 403
     assert env.rollbacks == [True, True]
 

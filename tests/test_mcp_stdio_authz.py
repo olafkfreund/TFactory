@@ -254,11 +254,10 @@ def test_project_lookup_failure_fails_closed_for_org_key(env):
     env.monkeypatch.setattr("server.routes.projects.load_projects", _boom)
     env.set_key(user_id="member-a", org_id="A")
     headers = {"Authorization": "Bearer acw_org_a"}
-    assert (
-        env.client.post("/api/mcp-stdio/tasks/p1:s1/stop", headers=headers).status_code
-        == 503
-    )
-    assert env.client.get("/api/mcp-stdio/projects", headers=headers).status_code == 503
+    with pytest.raises(RuntimeError, match="projects.json unreadable"):
+        env.client.post("/api/mcp-stdio/tasks/p1:s1/stop", headers=headers)
+    with pytest.raises(RuntimeError, match="projects.json unreadable"):
+        env.client.get("/api/mcp-stdio/projects", headers=headers)
     assert env.calls == []
 
 
@@ -275,11 +274,10 @@ def test_membership_lookup_failure_rolls_back_and_fails_closed(env):
             self.rolled_back = True
 
     db = BrokenDb()
-    with pytest.raises(HTTPException) as error:
+    with pytest.raises(RuntimeError, match="database unavailable"):
         asyncio.run(
             require_project_role({"id": "member-a", "org_id": "A"}, "p1", "viewer", db)
         )
-    assert error.value.status_code == 503
     assert db.rolled_back
 
 
