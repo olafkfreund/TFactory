@@ -24,6 +24,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -38,7 +39,32 @@ for p in (str(_WEB_SERVER), str(_BACKEND)):
 
 from agents.regression.coverage_trend import coverage_trend_path  # noqa: E402
 from agents.regression.store import regression_dir  # noqa: E402
-from server.routes import coverage as cov  # noqa: E402
+from server.routes import (
+    coverage as cov,  # noqa: E402
+    project_authz,  # noqa: E402
+    projects,  # noqa: E402
+)
+
+
+@pytest.fixture(autouse=True)
+def _local_auth(monkeypatch: pytest.MonkeyPatch) -> None:
+    # These legacy direct-handler tests have no HTTP request principal.
+    monkeypatch.setattr(
+        project_authz,
+        "get_settings",
+        lambda: SimpleNamespace(
+            DISABLE_AUTH=True, PROJECTS_BACKEND="json", LEGACY_SHARED_TOKEN_FULL_ACCESS=True
+        ),
+    )
+    monkeypatch.setattr(
+        projects,
+        "load_projects",
+        lambda: {
+            path.name: {"path": str(path), "org_id": "default"}
+            for path in (cov._projects_root().iterdir() if cov._projects_root().exists() else ())
+            if path.is_dir()
+        },
+    )
 
 
 def _call(**kw: Any) -> dict[str, Any]:
@@ -268,7 +294,7 @@ def test_an_unknown_repo_is_a_404_not_a_silent_success(
     with pytest.raises(HTTPException) as excinfo:
         _record(repo="nobody/nothing")
     assert excinfo.value.status_code == 404
-    assert "nobody/nothing" in str(excinfo.value.detail)
+    assert excinfo.value.detail == "Project not found"
 
 
 @pytest.mark.parametrize(

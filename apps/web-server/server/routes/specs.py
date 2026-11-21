@@ -220,8 +220,24 @@ async def _clone_and_register_project(
     from pathlib import Path
     from uuid import uuid4
 
-    from ..services.project_workspace_service import clone_or_update
+    from server.services.project_workspace_service import (  # noqa: PLC0415
+        clone_or_update,
+        slug_from_git_url,
+        workspace_root,
+    )
+
     from .projects import load_projects, save_projects
+
+    candidate = (workspace_root() / slug_from_git_url(git_url)).resolve()
+    for pdata in load_projects().values():
+        if pdata.get("path") and pdata.get("org_id") != org_id:
+            owned = Path(pdata["path"]).resolve()  # noqa: ASYNC240
+            if (
+                candidate == owned
+                or candidate in owned.parents
+                or owned in candidate.parents
+            ):
+                raise HTTPException(404, "Project not found")
 
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     credential = ("x-access-token", token) if token else None
@@ -233,6 +249,8 @@ async def _clone_and_register_project(
     projects = load_projects()
     for pid, pdata in projects.items():
         if pdata.get("path") == path:
+            if pdata.get("org_id") != org_id:
+                raise HTTPException(404, "Project not found")
             return pdata, pid  # already registered (e.g. a re-handoff)
     now = datetime.now().isoformat()
     pid = str(uuid4())
@@ -449,10 +467,7 @@ async def ingest_spec(
         if entry is None:
             raise HTTPException(
                 status.HTTP_404_NOT_FOUND,
-                detail=(
-                    f"unknown project_id: {req.project_id!r} "
-                    "(and no git_url provided to self-register it)"
-                ),
+                detail="Project not found",
             )
         _check_origin(entry, repo_slug)
         if repo_slug and git_url and not self_registered:
@@ -575,6 +590,22 @@ async def attach_pr(
         db_session = db if isinstance(db, AsyncSession) else None
         await require_project_role(principal, resolved_id, "member", db_session)
     resolved_id = resolved_id or project_id
+    if req.repo_slug:
+        from .github import _get_repo_full_name  # noqa: PLC0415
+        from .projects import load_projects  # noqa: PLC0415
+
+        entry = load_projects().get(resolved_id)
+        bound_repo = (
+            _github_slug(entry.get("clonedFrom"))
+            or _get_repo_full_name(entry["path"])
+            if entry
+            else None
+        )
+        if (
+            entry is None
+            or (bound_repo or "").lower() != req.repo_slug.lower()
+        ):
+            raise HTTPException(404, "Project not found")
 
     spec_dir = _spec_dir(safe_component(resolved_id), safe_component(spec_id))
     source_path = spec_dir / "context" / "source.json"

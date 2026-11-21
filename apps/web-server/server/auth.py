@@ -11,7 +11,9 @@ Public paths (no auth required): /api/auth/*, /api/health, static assets, etc.
 import hmac
 import importlib
 import logging
+from contextvars import ContextVar
 from functools import lru_cache
+from typing import Any
 
 from fastapi import HTTPException, Request, WebSocket, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -20,6 +22,10 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
 from .config import get_settings
+
+internal_mcp_principal: ContextVar[dict[str, Any] | None] = ContextVar(
+    "internal_mcp_principal", default=None
+)
 
 
 @lru_cache(maxsize=1)
@@ -182,6 +188,10 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
 
         # Initialize user state to None for every request
         request.state.user = None
+        principal = internal_mcp_principal.get()
+        if path.startswith("/api/") and principal is not None:
+            request.state.user = principal
+            return await call_next(request)
 
         # Skip all auth when disabled (development mode).
         # Populate request.state.user with the default user so that routes

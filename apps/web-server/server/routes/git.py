@@ -24,7 +24,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from server.database.engine import get_db
 from server.error_ref import InputRejectedError, client_error
 from server.pty.access import project_id_for_path
-from server.routes.project_authz import ProjectAccessChecker, require_project_role
+from server.routes.project_authz import (
+    ProjectAccessChecker,
+    creator_org,
+    require_project_role,
+)
 
 from ._specpath import _require_safe_git_ref, safe_component, safe_join
 
@@ -84,6 +88,7 @@ async def get_git_branches(
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
     """Get all branches for a repository."""
+    path = str(Path(path).expanduser().resolve())  # noqa: ASYNC240
     principal = getattr(request.state, "user", None) if request is not None else None
     db_session = db if isinstance(db, AsyncSession) else None
     await require_project_role(
@@ -103,6 +108,7 @@ async def get_current_git_branch(
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
     """Get current branch name."""
+    path = str(Path(path).expanduser().resolve())  # noqa: ASYNC240
     principal = getattr(request.state, "user", None) if request is not None else None
     db_session = db if isinstance(db, AsyncSession) else None
     await require_project_role(
@@ -121,6 +127,7 @@ async def detect_main_branch(
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
     """Detect the main branch (main or master)."""
+    path = str(Path(path).expanduser().resolve())  # noqa: ASYNC240
     principal = getattr(request.state, "user", None) if request is not None else None
     db_session = db if isinstance(db, AsyncSession) else None
     await require_project_role(
@@ -146,6 +153,7 @@ async def check_git_status(
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
     """Check git status for a repository."""
+    path = str(Path(path).expanduser().resolve())  # noqa: ASYNC240
     principal = getattr(request.state, "user", None) if request is not None else None
     db_session = db if isinstance(db, AsyncSession) else None
     await require_project_role(
@@ -194,10 +202,12 @@ async def initialize_git(
         else None
     )
     db_session = db if isinstance(db, AsyncSession) else None
-    await require_project_role(
-        principal, project_id_for_path(request.path), "member", db_session
-    )
-    path = request.path
+    path = str(Path(request.path).expanduser().resolve())  # noqa: ASYNC240
+    project_id = project_id_for_path(path)
+    if project_id is None:
+        await creator_org(principal, db)
+    else:
+        await require_project_role(principal, project_id, "member", db_session)
     git_dir = safe_join(Path(path), ".git")
 
     # Check if already a git repo

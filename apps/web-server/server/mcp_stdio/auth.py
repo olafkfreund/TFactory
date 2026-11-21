@@ -120,11 +120,19 @@ def require_acw_access(
             request
         )
         task_id = request.path_params.get("task_id")
-        project_id = (
-            task_id.partition(":")[0]
-            if task_id
-            else request.query_params.get("project_id")
-        )
+        project_id = request.path_params.get("project_id")
+        if task_id:
+            if ":" in task_id:
+                project_id = task_id.partition(":")[0]
+            else:
+                from server.routes.project_authz import (  # noqa: PLC0415
+                    resolve_task_project,
+                    visible_project_ids,
+                )
+                visible = await visible_project_ids(acw_principal(key), db)
+                project_id = resolve_task_project(task_id, visible)[0]
+        if project_id is None:
+            project_id = request.query_params.get("project_id")
         await require_project_role(acw_principal(key), project_id, min_role, db)
         return key
 

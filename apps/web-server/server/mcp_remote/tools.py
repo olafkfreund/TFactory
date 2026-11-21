@@ -3,18 +3,17 @@
 Each tool is a thin wrapper that:
   1. Checks the caller's scope (mcp:read or mcp:write) and authorizes the
      key's owner against the target project (#1456), as stdio does (#1458)
-  2. Calls the matching REST endpoint via loopback HTTP
+  2. Calls the matching REST endpoint in process with the scoped principal
   3. Returns a JSON-RPC ``content[]`` envelope
 
-Why loopback HTTP rather than direct internal-function imports?
+Why in-process REST rather than direct internal-function imports?
 - The MCP surface IS the existing REST surface — any drift in REST
   behaviour shows up identically through MCP, no hidden divergence.
 - The internal handlers are wrapped in FastAPI ``Depends(...)`` chains
   that pull in DB sessions / user-resolution / audit hooks; calling the
   HTTP endpoint reuses all of that for free.
-- The audit log already attributes the call (it sees the caller's bearer
-  token via ``request.state``), so adding ``X-MCP-Key-Id`` as a tracer
-  header carries the MCP key id through to the audit row.
+- The audit log sees the caller's principal via ``request.state`` and the
+  ``X-MCP-Key-Id`` tracer header.
 
 8 ship-in-this-PR tools (the ones backed by existing REST endpoints):
 
@@ -49,7 +48,6 @@ from typing import Any
 import httpx
 from fastapi import HTTPException
 
-from server.config import get_settings
 from server.database.engine import get_db
 from server.routes.project_authz import require_project_role, visible_project_ids
 
@@ -98,9 +96,8 @@ async def _authorize_call(
 ) -> None:
     """Authorize the key's owner for the project the tool acts on (#1456).
 
-    The loopback runs as the service principal, which REST never org-checks,
-    so this is the only org check a remote tool call gets. The target is the
-    argument the tool proxies, never any other one the caller sent.
+    The in-process REST call carries this same scoped principal. The target
+    here is the argument the tool proxies, never another caller input.
     """
     if tool_name == "tfactory.list_projects":
         return
@@ -151,24 +148,22 @@ def _format_error(message: str) -> dict[str, Any]:
 async def _call_internal(
     method: str, path: str, key: AuthenticatedKey, **kwargs: Any
 ) -> Any:
-    """Make a self-call against the web-server's own REST surface.
+    """Call the REST route in process with the scoped caller's principal."""
+    from server.auth import internal_mcp_principal  # noqa: PLC0415
+    from server.main import app  # noqa: PLC0415
 
-    The legacy ``settings.API_TOKEN`` from the env carries the request
-    through ``TokenAuthMiddleware`` so the regular REST handlers run
-    unchanged. The ``X-MCP-Key-Id`` header is a tracer the audit code
-    can pick up to attribute the action to a specific MCP key.
-
-    Returns the parsed JSON body, raising on any HTTP error so the
-    caller's ``dispatch_tool_call`` ``except`` block formats it.
-    """
-    settings = get_settings()
     headers = dict(kwargs.pop("headers", {}) or {})
-    headers["Authorization"] = f"Bearer {settings.API_TOKEN}"
     headers["X-MCP-Key-Id"] = key.key_id
-
-    base = _loopback_url()
-    async with httpx.AsyncClient(base_url=base, timeout=30.0) as client:
-        response = await client.request(method, path, headers=headers, **kwargs)
+    token = internal_mcp_principal.set(_principal(key))
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://tfactory.internal",
+            timeout=30.0,
+        ) as client:
+            response = await client.request(method, path, headers=headers, **kwargs)
+    finally:
+        internal_mcp_principal.reset(token)
     response.raise_for_status()
     if not response.content:
         return {}

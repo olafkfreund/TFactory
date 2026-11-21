@@ -1622,8 +1622,9 @@ async def delete_task(
     if request is not None:
         principal = getattr(request.state, "user", None)
         db_session = db if isinstance(db, AsyncSession) else None
-        visible = await visible_project_ids(principal, db_session, "member")
+        visible = await visible_project_ids(principal, db_session)
         project_id, spec_id = resolve_task_project(task_id, visible)
+        await require_project_role(principal, project_id, "member", db_session)
     elif ":" in task_id:
         project_id, spec_id = task_id.split(":", 1)
         safe_component(project_id)

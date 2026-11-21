@@ -181,7 +181,7 @@ async def aifactory_complete(
         / "specs"
         / spec_id
     )
-    if (projects and resolved_id is None) or not (spec_dir / "status.json").exists():
+    if resolved_id is None or not (spec_dir / "status.json").exists():
         raise HTTPException(
             status_code=http_status.HTTP_404_NOT_FOUND,
             detail=f"unknown task {task_id}",
@@ -222,7 +222,7 @@ async def aifactory_complete(
 
     record_cycle(spec_dir, cycle=cycle + 1, failure_signature=current)
     result = rerun_pipeline(
-        project_id, spec_id, lane=payload.lane, root=_resolve_workspace_root()
+        resolved_id, spec_id, lane=payload.lane, root=_resolve_workspace_root()
     )
     return {
         "action": "retest",

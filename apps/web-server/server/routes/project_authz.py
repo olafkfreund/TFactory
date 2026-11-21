@@ -74,7 +74,7 @@ def is_service_principal(user: dict[str, Any] | None) -> bool:
     )
 
 
-def check_project_access(
+def check_project_access(  # noqa: PLR0912
     user: dict[str, Any] | None,
     project: dict[str, Any] | None,
     membership: OrgMember | None,
@@ -103,6 +103,10 @@ def check_project_access(
         )
     if user.get("is_legacy_token") is True:
         raise HTTPException(status_code=404, detail="Project not found")
+    if user.get("is_copilot_token") is True:
+        return EffectiveProjectAccess(
+            project_id, str(project.get("org_id") or "default"), "owner"
+        )
 
     org_id = project.get("org_id")
     if (
@@ -437,21 +441,28 @@ def require_task_access(minimum_role: str = "viewer") -> TaskAccessChecker:
 async def creator_org(user: dict[str, Any] | None, db: AsyncSession) -> str | None:
     """The org to stamp on a project this principal creates (#1036).
 
-    An org-scoped key: its org. A human: their org when they belong to exactly
-    one. The service principal has no org and nothing here resolves a single-org
-    default, so it, and a human in several orgs, get None and a log line; an
-    org-less project is 403 for non-service callers until an org is set.
+    Authenticated callers need one org where they hold at least member, and
+    keys need a project-write scope. Local mode and the enabled legacy service
+    token retain the org-less single-user behavior.
     """
-    if _auth_disabled() or is_service_principal(user) or not isinstance(user, dict):
+    if is_service_principal(user):
         return None
-    if user.get("api_key_id") and user.get("org_id"):
-        return str(user["org_id"])
+    if not isinstance(user, dict) or user.get("is_legacy_token"):
+        raise HTTPException(403, "Project creation requires org membership")
+    scopes = set(user.get("scopes") or ())
+    if user.get("api_key_id") and not ({"project:write", "api:full"} & scopes):
+        raise HTTPException(403, "Project creation requires project:write scope")
     orgs: list[str] = []
     if user.get("id"):
         rows = await db.execute(
-            select(OrgMember.org_id).where(OrgMember.user_id == user["id"])
+            select(OrgMember).where(OrgMember.user_id == user["id"])
         )
-        orgs = [str(o) for o in rows.scalars().all()]
+        orgs = [
+            str(row.org_id)
+            for row in rows.scalars().all()
+            if ROLE_LEVELS.get(row.role, -1) >= ROLE_LEVELS["member"]
+            and (not user.get("org_id") or user["org_id"] == row.org_id)
+        ]
     if len(orgs) == 1:
         return orgs[0]
     logger.warning(
@@ -459,4 +470,4 @@ async def creator_org(user: dict[str, Any] | None, db: AsyncSession) -> str | No
         sanitize_log(user.get("id")),
         len(orgs),
     )
-    return None
+    raise HTTPException(403, "Project creation requires one org membership with member role")

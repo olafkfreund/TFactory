@@ -19,7 +19,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.database.engine import get_db
 from server.pty.access import project_id_for_path
-from server.routes.project_authz import ProjectAccessChecker, require_project_role
+from server.routes.project_authz import (
+    ProjectAccessChecker,
+    creator_org,
+    require_project_role,
+    visible_project_ids,
+)
 from server.services.git_base_url import safe_git_base_url
 
 from ._specpath import safe_component
@@ -435,7 +440,10 @@ async def get_github_user():
 
 
 @router.get("/repos")
-async def list_github_user_repos():
+async def list_github_user_repos(
+    request: Request,
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+):
     """List repositories for authenticated user."""
     result = run_gh_command(
         [
@@ -450,13 +458,25 @@ async def list_github_user_repos():
     if result["success"]:
         try:
             raw_repos = json.loads(result["output"])
+            from .projects import load_projects  # noqa: PLC0415
+            from .specs import _github_slug  # noqa: PLC0415
+
+            allowed = await visible_project_ids(getattr(request.state, "user", None), db)
+            slugs = {
+                (
+                    _github_slug(p.get("clonedFrom"))
+                    or (_get_repo_full_name(p["path"]) if p.get("path") else "")
+                ).lower()
+                for pid, p in load_projects().items()
+                if pid in allowed
+            }
             repos = [
                 {
                     "fullName": r.get("nameWithOwner", r.get("name", "")),
                     "description": r.get("description"),
                     "isPrivate": r.get("isPrivate", False),
                 }
-                for r in raw_repos
+                for r in raw_repos if r.get("nameWithOwner", "").lower() in slugs
             ]
             return {"success": True, "data": {"repos": repos}}
         except json.JSONDecodeError:
@@ -481,6 +501,7 @@ async def detect_github_repo(
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
     """Detect GitHub remote for a local repository."""
+    path = str(FilePath(path).expanduser().resolve())  # noqa: ASYNC240
     principal = getattr(request.state, "user", None) if request is not None else None
     db_session = db if isinstance(db, AsyncSession) else None
     await require_project_role(
@@ -497,12 +518,27 @@ async def detect_github_repo(
 @router.get("/branches")
 async def get_github_branches(
     repo: str = Query(...),
+    request: Request = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
     """Get branches for a GitHub repository."""
     # `repo` is request-controlled and is interpolated into the gh api path
     # argv element; validate it (owner/repo charset, no leading dash) so it
     # cannot inject a CLI option or path (py/command-line-injection).
     repo = _require_safe_gh_ref(repo, "repository")
+    from .projects import load_projects  # noqa: PLC0415
+    from .specs import _github_slug  # noqa: PLC0415
+
+    allowed = await visible_project_ids(getattr(request.state, "user", None), db)
+    if not any(
+        (
+            _github_slug(p.get("clonedFrom"))
+            or (_get_repo_full_name(p["path"]) if p.get("path") else "")
+        ).lower() == repo.lower()
+        for pid, p in load_projects().items()
+        if pid in allowed
+    ):
+        raise HTTPException(404, "Project not found")
     result = run_gh_command(["api", f"repos/{repo}/branches", "--jq", ".[].name"])
     if result["success"]:
         branches = result["output"].split("\n") if result["output"] else []
@@ -511,13 +547,18 @@ async def get_github_branches(
 
 
 @router.post("/repos")
-async def create_github_repo(request: CreateRepoRequest):
+async def create_github_repo(
+    request: CreateRepoRequest,
+    http_request: Request,
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+):
     """Create a new GitHub repository."""
     # repoName/orgName flow into the gh argv as the positional repo target;
     # validate against the ref allow-list so they cannot be interpreted as CLI
     # options (py/command-line-injection). `description` stays an option-value
     # of --description (free text) and is consumed as a single argv element.
     repo_name = _require_safe_gh_ref(request.repoName, "repository name")
+    await creator_org(getattr(http_request.state, "user", None), db)
     args = ["repo", "create", repo_name, "--confirm"]
     if request.description:
         args.extend(["--description", request.description])
@@ -554,14 +595,15 @@ async def add_git_remote(
         else None
     )
     db_session = db if isinstance(db, AsyncSession) else None
+    project_path = str(FilePath(request.projectPath).expanduser().resolve())  # noqa: ASYNC240
     await require_project_role(
-        principal, project_id_for_path(request.projectPath), "admin", db_session
+        principal, project_id_for_path(project_path), "admin", db_session
     )
     remote_url = f"https://github.com/{request.repoFullName}.git"
     try:
         subprocess.run(
             ["git", "remote", "add", "origin", remote_url],
-            cwd=request.projectPath,
+            cwd=project_path,
             check=True,
             capture_output=True,
         )
@@ -1496,6 +1538,7 @@ async def get_fork_info(
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
     """Detect if repo is a fork and return origin + upstream info."""
+    project_path = str(FilePath(project_path).expanduser().resolve())  # noqa: ASYNC240
     principal = getattr(request.state, "user", None) if request is not None else None
     db_session = db if isinstance(db, AsyncSession) else None
     await require_project_role(

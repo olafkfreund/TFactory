@@ -23,6 +23,8 @@ async def project_ok(
     user: dict[str, Any] | None, project_id: str | None, role: str = "viewer"
 ) -> bool:
     """Strict project authorization; denial or lookup failure is False."""
+    if project_id is None and is_service_principal(None):
+        return True
     try:
         async with engine.async_session_factory() as db:
             await require_project_role(user, project_id, role, db)
@@ -35,14 +37,14 @@ async def may_use(
     user: dict[str, Any] | None, session: Any, role: str = "viewer"
 ) -> bool:
     if user is None:
-        return session.owner_id is None and await project_ok(
-            None, session.project_id, role
-        )
+        return is_service_principal(None) and await project_ok(None, session.project_id, role)
     if is_service_principal(user):
         return await project_ok(user, session.project_id, role)
-    if session.owner_id is not None and user.get("id") != session.owner_id:
+    if session.owner_id is None:
+        return await project_ok(user, session.project_id, "admin")
+    if user.get("id") != session.owner_id:
         return False
-    return await project_ok(user, session.project_id, role)
+    return await project_ok(user, session.project_id, "admin")
 
 
 def _roots(project: object) -> list[PurePath]:
@@ -70,18 +72,23 @@ def project_id_for_path(path: str | None) -> str | None:
         return path
     if not PurePath(path).is_absolute():
         return None
-    # Pure path arithmetic: the caller's string never reaches a filesystem call.
-    target = PurePath(os.path.normpath(path))
+    target = Path(path).resolve()
     best: tuple[int, str] | None = None
+    ambiguous = False
     for project_id, project in projects.items():
         for root in _roots(project):
-            if _inside(target, root) and (best is None or len(root.parts) > best[0]):
+            if not _inside(target, root):
+                continue
+            if best is None or len(root.parts) > best[0]:
                 best = (len(root.parts), project_id)
-    return best[1] if best else None
+                ambiguous = False
+            elif len(root.parts) == best[0] and project_id != best[1]:
+                ambiguous = True
+    return best[1] if best and not ambiguous else None
 
 
 def path_in_project(path: str, project_id: str) -> bool:
     if not PurePath(path).is_absolute():
         return False
-    target = PurePath(os.path.normpath(path))
+    target = Path(path).resolve()
     return any(_inside(target, root) for root in _roots(_projects().get(project_id)))

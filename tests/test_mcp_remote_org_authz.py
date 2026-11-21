@@ -89,7 +89,6 @@ def env(tmp_path, monkeypatch):
         LEGACY_SHARED_TOKEN_FULL_ACCESS=True,
     )
     monkeypatch.setattr(tools_mod, "get_db", _db)
-    monkeypatch.setattr(tools_mod, "get_settings", lambda: settings)
     monkeypatch.setattr(project_authz_mod, "get_settings", lambda: settings)
     monkeypatch.setattr(projects_mod, "load_projects", lambda: PROJECTS)
 

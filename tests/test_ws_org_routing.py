@@ -185,6 +185,16 @@ def test_service_and_bound_key_narrowing_and_widening(socket_app):
         assert [m["type"] for m in sent["acw_a"]] == ["a"]
 
 
+def test_bound_key_does_not_receive_other_org_event_after_membership_update(socket_app):
+    app, _, sent = socket_app
+    with TestClient(app) as client, _connect(client, "acw_a") as key:
+        events.update_client_orgs("owner", {"A", "B"})
+        client.portal.call(events.send_to_org, "B", "hidden", {})
+        client.portal.call(events.send_to_org, "A", "visible", {})
+        assert key.receive_json()["type"] == "visible"
+        assert [message["type"] for message in sent.get("acw_a", [])] == ["visible"]
+
+
 def test_real_task_status_emitter_routes_by_task_project(socket_app):
     app, _, sent = socket_app
     with (

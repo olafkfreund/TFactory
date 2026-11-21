@@ -18,7 +18,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from server.error_ref import InputRejectedError, client_error
 from server.pty.access import (
     may_use,
-    path_in_project,
     project_id_for_path,
 )
 from server.pty.manager import DuplicateSessionError, get_pty_manager
@@ -160,11 +159,13 @@ def _service_only(http_request: Request) -> None:
 
 
 async def _authorize_path(
-    user: dict[str, Any] | None, path: str | None, role: str = "member"
-) -> None:
+    user: dict[str, Any] | None, path: str | None, role: str = "admin"
+) -> str:
     """Authorize the project containing `path`."""
-    project_id = project_id_for_path(path)
+    resolved = str(Path(path).expanduser().resolve()) if path else ""  # noqa: ASYNC240
+    project_id = project_id_for_path(resolved)
     await require_project_role(user, project_id, role)
+    return resolved
 
 
 async def _owned(
@@ -240,10 +241,14 @@ async def create_terminal(request: CreateTerminalRequest, http_request: Request)
 
     # Bind the session (#3740). Non-service callers must land inside a
     # registered project they are authorized for.
-    project_id = request.project_id or project_id_for_path(cwd)
-    if not project_id or not path_in_project(cwd, project_id):
+    cwd = str(Path(cwd).expanduser().resolve())  # noqa: ASYNC240
+    project_id = project_id_for_path(cwd)
+    if not settings.DISABLE_AUTH and (
+        not project_id or (request.project_id and request.project_id != project_id)
+    ):
         raise HTTPException(status_code=404, detail="Project not found")
-    await require_project_role(user, project_id, "member")
+    if project_id:
+        await require_project_role(user, project_id, "admin")
     if not Path(cwd).exists():
         raise HTTPException(status_code=400, detail=f"Directory does not exist: {cwd}")
 
@@ -329,7 +334,7 @@ async def clear_terminal_sessions(http_request: Request, project: str | None = N
     """
 
     if project:
-        await _authorize_path(_user(http_request), project)
+        project = await _authorize_path(_user(http_request), project)
     else:
         _service_only(http_request)
 
@@ -455,7 +460,7 @@ async def list_terminal_worktrees(http_request: Request, project: str = Query(..
     Returns:
         IPCResult with list of TerminalWorktreeConfig dicts
     """
-    await _authorize_path(_user(http_request), project, "viewer")
+    project = await _authorize_path(_user(http_request), project, "viewer")
     try:
         service = TerminalWorktreeService(project)
         worktrees = service.list_worktrees()
@@ -477,9 +482,9 @@ async def create_terminal_worktree(
     Returns:
         TerminalWorktreeResult with success status and config/error
     """
-    await _authorize_path(_user(http_request), request.projectPath)
+    project_path = await _authorize_path(_user(http_request), request.projectPath)
     try:
-        service = TerminalWorktreeService(request.projectPath)
+        service = TerminalWorktreeService(project_path)
         config = service.create_worktree(
             name=request.name,
             terminal_id=request.terminalId,
@@ -518,7 +523,7 @@ async def remove_terminal_worktree(
     Returns:
         IPCResult with success status
     """
-    await _authorize_path(_user(http_request), project)
+    project = await _authorize_path(_user(http_request), project)
     try:
         service = TerminalWorktreeService(project)
         success = service.remove_worktree(name, deleteBranch)

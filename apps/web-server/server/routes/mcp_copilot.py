@@ -502,7 +502,7 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
                 status_code=400, detail="task_id must identify a project"
             )
         await require_project_role(
-            {"id": "default", "is_legacy_token": True},
+            {"id": "copilot-mcp", "is_copilot_token": True},
             task_id.partition(":")[0],
             "member" if tool_name == "tfactory_report_result" else "viewer",
         )

@@ -272,15 +272,14 @@ async def record_commit_coverage(
     again -- the producer would look like it recorded something it did not.
     """
     candidates = _projects_for_repo(report.repo)
+    principal = getattr(request.state, "user", None) if request is not None else None
+    db_session = db if isinstance(db, AsyncSession) else None
+    allowed = await visible_project_ids(principal, db_session)
+    candidates = [pid for pid in candidates if pid in allowed]
     if not candidates:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"no TFactory project has a checkout of {report.repo}",
-        )
+        raise HTTPException(404, "Project not found")
     project_id = candidates[0]
     if request is not None:
-        principal = getattr(request.state, "user", None)
-        db_session = db if isinstance(db, AsyncSession) else None
         await require_project_role(principal, project_id, "member", db_session)
     point = CoveragePoint(
         # Provenance stays readable in the ledger: a CI measurement and a

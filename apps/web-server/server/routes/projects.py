@@ -8,7 +8,7 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -21,6 +21,7 @@ from server.pty.access import project_id_for_path
 from server.routes.project_authz import (
     ProjectAccessChecker,
     creator_org,
+    require_project_role,
     visible_project_ids,
 )
 
@@ -287,7 +288,9 @@ def analyze_project(path: str) -> dict:
     }
 
 
-def project_to_response(project_id: str, project_data: dict) -> dict:
+def project_to_response(
+    project_id: str, project_data: dict, *, admin: bool = True
+) -> dict:
     """Convert stored project data to response dict matching frontend expectations."""
     analysis = analyze_project(project_data["path"])
 
@@ -314,11 +317,15 @@ def project_to_response(project_id: str, project_data: dict) -> dict:
     if saved_settings:
         # Merge notifications separately to preserve individual keys
         if "notifications" in saved_settings:
-            default_settings["notifications"].update(saved_settings["notifications"])
+            notifications = cast("dict[str, Any]", default_settings["notifications"])
+            notifications.update(saved_settings["notifications"])
             saved_settings = {
                 k: v for k, v in saved_settings.items() if k != "notifications"
             }
         default_settings.update(saved_settings)
+    if not admin:
+        default_settings.pop("gitToken", None)
+        default_settings.pop("githubToken", None)
 
     return {
         "id": project_id,
@@ -329,6 +336,16 @@ def project_to_response(project_id: str, project_data: dict) -> dict:
         "autoBuildPath": auto_build_path,
         "settings": default_settings,
     }
+
+
+def _check_claim(path: Path, exclude_id: str | None = None) -> None:
+    target = path.resolve()
+    for pid, existing in load_projects().items():
+        if pid == exclude_id or not existing.get("path"):
+            continue
+        owned = Path(existing["path"]).resolve()
+        if target == owned or target in owned.parents or owned in target.parents:
+            raise HTTPException(404, "Project not found")
 
 
 # --------------------------------------------------------------------------
@@ -377,11 +394,13 @@ async def list_projects(
     db_session = db if isinstance(db, AsyncSession) else None
     visible = await visible_project_ids(principal, db_session, "viewer")
     projects = load_projects()
-    project_list = [
-        project_to_response(pid, pdata)
-        for pid, pdata in projects.items()
-        if pid in visible
-    ]
+    project_list = []
+    for pid, pdata in projects.items():
+        if pid in visible:
+            access = await require_project_role(principal, pid, "viewer", db_session)
+            project_list.append(
+                project_to_response(pid, pdata, admin=access.role in {"admin", "owner"})
+            )
     return project_list
 
 
@@ -433,6 +452,8 @@ async def scan_for_projects(
         HTTPException: 400 if path doesn't exist or isn't a directory
     """
     try:
+        principal = getattr(http_request.state, "user", None) if http_request is not None else None
+        await creator_org(principal, db)
         # Validate and resolve base path
         base = within_roots(
             request.basePath, browse_roots(), "browsable directories", expand_user=True
@@ -575,10 +596,13 @@ async def create_project(
 
     if project.gitUrl:
         # Clone mode — defer to project_workspace_service.
-        from ..services.project_workspace_service import (
+        from server.services.project_workspace_service import (  # noqa: PLC0415
             GitOperationError,
             clone_or_update,
+            slug_from_git_url,
+            workspace_root,
         )
+        _check_claim(workspace_root() / slug_from_git_url(project.gitUrl))
 
         # Stored credential lookup (#82 PR-C). When the caller passes
         # gitCredentialId, fetch the (username, token) tuple from the
@@ -603,6 +627,7 @@ async def create_project(
         # Local mode — register the existing directory.
         assert project.path is not None  # model_validator guarantees this
         project_path = Path(project.path).expanduser()
+        _check_claim(project_path)
 
         if not project_path.exists():
             try:
@@ -665,7 +690,7 @@ async def create_project(
     "/{project_id}",
     dependencies=[Depends(ProjectAccessChecker("viewer"))],
 )
-async def get_project(project_id: str):
+async def get_project(project_id: str, request: Request):
     """Get a specific project by ID."""
     projects = load_projects()
     if project_id not in projects:
@@ -674,7 +699,12 @@ async def get_project(project_id: str):
             detail="Project not found",
         )
 
-    return project_to_response(project_id, projects[project_id])
+    access = await require_project_role(
+        getattr(request.state, "user", None), project_id
+    )
+    return project_to_response(
+        project_id, projects[project_id], admin=access.role in {"admin", "owner"}
+    )
 
 
 @router.put(
@@ -694,6 +724,7 @@ async def update_project(project_id: str, project: ProjectCreate):
     project_data = projects[project_id]
     if project.path:
         project_path = Path(project.path)
+        _check_claim(project_path, project_id)
         if not project_path.exists():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

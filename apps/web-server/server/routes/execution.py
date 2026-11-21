@@ -116,7 +116,7 @@ def _project_key(ref: str) -> str:
     return next((k for k, v in projects.items() if v.get("name") == ref), ref)
 
 
-def _ingest_path(task_id: str) -> Path | None:
+def _ingest_path(task_id: str, allowed: set[str] | None = None) -> Path | None:
     """``status.json`` of a spec-ingest task, or None (#1597).
 
     ``POST /api/specs/ingest`` returns ``task_id`` = the bare spec_id and keys
@@ -139,7 +139,9 @@ def _ingest_path(task_id: str) -> Path | None:
         hits = [
             p
             for d in (root.iterdir() if root.is_dir() else [])
-            if d.name in known and (p := d / "specs" / spec / "status.json").is_file()
+            if d.name in known
+            and (allowed is None or d.name in allowed)
+            and (p := d / "specs" / spec / "status.json").is_file()
         ]
         return hits[0] if len(hits) == 1 else None
     path = (
@@ -166,9 +168,10 @@ async def _status_access(
         project_id, _, spec_id = task_id.partition(":")
         task_id = f"{_project_key(project_id)}:{spec_id}"
     else:
-        path = _ingest_path(task_id)
+        visible = await visible_project_ids(getattr(request.state, "user", None), db)
+        path = _ingest_path(task_id, visible)
         if path is None:
-            return
+            raise HTTPException(404, "Task not found")
         # The handler reads this same path: no second lookup after the await.
         request.state.ingest_path = path
         task_id = f"{path.parents[2].name}:{task_id}"

@@ -216,6 +216,13 @@ def resolve_path(project_id: str, relative_path: str) -> Path:
     return safe_join(project_path, relative_path)
 
 
+def _protect_env(path: Path) -> None:
+    if path.name in {".tfactory", "secrets.json", "credentials.json"} or path.name.startswith(
+        ".env"
+    ):
+        raise HTTPException(404, "File not found")
+
+
 # --------------------------------------------------------------------------
 # Routes
 # --------------------------------------------------------------------------
@@ -254,6 +261,9 @@ async def discover_projects(
     base = within_roots(
         base_path, browse_roots(), "browsable directories", expand_user=True
     )
+    from .project_authz import creator_org  # noqa: PLC0415
+
+    await creator_org(getattr(request.state, "user", None) if request is not None else None, db)
 
     if not base.exists():
         return {
@@ -349,10 +359,11 @@ async def list_directory_direct(
     """List contents of a directory by absolute path."""
     principal = getattr(request.state, "user", None) if request is not None else None
     db_session = db if isinstance(db, AsyncSession) else None
-    await require_project_role(
-        principal, project_id_for_path(path), "viewer", db_session
-    )
     full_path = Path(path).expanduser().resolve()
+    if not get_settings().DISABLE_AUTH:
+        await require_project_role(
+            principal, project_id_for_path(str(full_path)), "viewer", db_session
+        )
 
     if _is_app_internal_path(full_path):
         return {"success": False, "error": "Access denied", "data": None}
@@ -410,10 +421,12 @@ async def read_file_direct(
     """Read file contents by absolute path."""
     principal = getattr(request.state, "user", None) if request is not None else None
     db_session = db if isinstance(db, AsyncSession) else None
-    await require_project_role(
-        principal, project_id_for_path(path), "viewer", db_session
-    )
     full_path = Path(path).expanduser().resolve()
+    if not get_settings().DISABLE_AUTH:
+        await require_project_role(
+            principal, project_id_for_path(str(full_path)), "viewer", db_session
+        )
+    _protect_env(full_path)
 
     if _is_app_internal_path(full_path):
         return {"success": False, "error": "Access denied", "data": None}
@@ -460,7 +473,7 @@ def _validate_serve_token(request: Request, token: str) -> bool:
     """
     settings = get_settings()
 
-    if settings.DISABLE_AUTH:
+    if settings.DISABLE_AUTH or isinstance(getattr(request.state, "user", None), dict):
         return True
 
     # 1. Try Authorization header
@@ -540,16 +553,19 @@ async def serve_project_file(
     if not _validate_serve_token(request, token):
         raise HTTPException(status_code=401, detail="Authentication required")
     principal = _resolve_serve_principal(request, token)
-    pid = project_id_for_path(root) or project_id_for_path(path)
+    root_path = Path(root).expanduser().resolve()
+    file_path = safe_join(root_path, str(Path(path).expanduser()))
+    pid = project_id_for_path(str(root_path))
+    if pid is None or project_id_for_path(str(file_path)) != pid:
+        raise HTTPException(404, "Project not found")
     db_session = db if isinstance(db, AsyncSession) else None
     await require_project_role(principal, pid, "viewer", db_session)
-    root_path = Path(root).expanduser().resolve()
 
     # Security: file must exist inside the declared project root.
     # safe_join rejects (HTTP 400) any path that escapes root_path.
     if not root_path.is_dir():
         raise HTTPException(status_code=400, detail="Root is not a directory")
-    file_path = safe_join(root_path, str(Path(path).expanduser()))
+    _protect_env(file_path)
 
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
@@ -645,6 +661,7 @@ async def list_directory(
 ):
     """List contents of a directory."""
     full_path = resolve_path(project_id, path)
+    _protect_env(full_path)
 
     if not full_path.exists():
         raise HTTPException(
@@ -702,6 +719,7 @@ async def read_file(
 ):
     """Read file contents."""
     full_path = resolve_path(project_id, path)
+    _protect_env(full_path)
 
     if not full_path.exists():
         raise HTTPException(
@@ -755,6 +773,7 @@ async def write_file(
 ):
     """Write content to a file."""
     full_path = resolve_path(project_id, path)
+    _protect_env(full_path)
 
     # Ensure parent directory exists
     full_path.parent.mkdir(parents=True, exist_ok=True)
@@ -780,6 +799,9 @@ async def delete_file(
 ):
     """Delete a file or directory."""
     full_path = resolve_path(project_id, path)
+    _protect_env(full_path)
+    if full_path == resolve_path(project_id, ""):
+        raise HTTPException(400, "Cannot delete project root")
 
     if not full_path.exists():
         raise HTTPException(
@@ -817,6 +839,7 @@ async def search_files(
 ):
     """Search for text in files using ripgrep or fallback."""
     full_path = resolve_path(project_id, path)
+    _protect_env(full_path)
 
     if not full_path.exists():
         raise HTTPException(
@@ -846,6 +869,12 @@ async def search_files(
             str(max_results),
             "--glob",
             file_pattern,
+            "--glob",
+            "!.env*",
+            "--glob",
+            "!secrets.json",
+            "--glob",
+            "!credentials.json",
             "--",
             query,
             str(full_path),
@@ -887,7 +916,12 @@ async def search_files(
                 truncated = True
                 break
 
-            if not file_path.is_file() or is_binary_file(file_path):
+            if (
+                not file_path.is_file()
+                or file_path.name.startswith(".env")
+                or file_path.name in {"secrets.json", "credentials.json"}
+                or is_binary_file(file_path)
+            ):
                 continue
 
             try:

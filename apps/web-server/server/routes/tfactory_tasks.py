@@ -125,7 +125,7 @@ async def _authorize_spec_request(
 ) -> set[str] | None:
     """Resolve and authorize ``spec_id`` against the caller's visible projects."""
     if request is None or not hasattr(request, "state"):
-        return None
+        raise HTTPException(401, "Authentication required")
     _validate_spec_id(spec_id)
     principal = getattr(request.state, "user", None)
     q_pid = project_id or (
@@ -133,7 +133,7 @@ async def _authorize_spec_request(
         if hasattr(request, "query_params")
         else None
     )
-    visible = await visible_project_ids(principal, None, min_role)
+    visible = await visible_project_ids(principal)
     task_ref = f"{safe_component(q_pid)}:{spec_id}" if q_pid else spec_id
     pid, _ = resolve_task_project(task_ref, visible)
     await require_project_role(principal, pid, min_role)
@@ -1013,7 +1013,7 @@ class MergeRequest(BaseModel):
     include_flagged: bool = False
 
 
-def merge_accepted_tests(
+def merge_accepted_tests(  # noqa: PLR0912
     spec_id: str, body: MergeRequest, visible: set[str] | None = None
 ) -> dict[str, Any]:
     """Commit the accepted (and optionally flagged) tests to the feature
@@ -1075,6 +1075,12 @@ def merge_accepted_tests(
             detail="repo_dir is required for a real (non-dry-run) merge",
         )
     repo_dir = Path(body.repo_dir) if body.repo_dir else spec_dir
+    if not body.dry_run and visible:
+        from .projects import load_projects  # noqa: PLC0415
+
+        pid = next(iter(visible))
+        if repo_dir.resolve() != Path(load_projects()[pid]["path"]).resolve():
+            raise HTTPException(404, "Project not found")
 
     from tools.git_writer import GitWriteRequest, write_tests_to_branch
 

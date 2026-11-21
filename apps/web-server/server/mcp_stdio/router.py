@@ -41,6 +41,7 @@ from server.routes.project_authz import (
     creator_org,
     require_project_role,
     resolve_project_id,
+    resolve_task_project,
     visible_project_ids,
 )
 from server.routes.specs import SpecIngestRequest
@@ -140,13 +141,15 @@ def _authorized_key(
 
 @router.get("/projects")
 async def proxy_list_projects(
+    request: FastAPIRequest,
     key: AuthenticatedKey | _LegacyAdminKey = Depends(require_acw_scope(MCP_READ_SCOPE)),
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ) -> list[dict[str, Any]]:
     from ..routes.projects import list_projects
 
     allowed = await visible_project_ids(acw_principal(key), db)
-    return [p for p in await list_projects() if p.get("id") in allowed]
+    request.state.user = acw_principal(key)
+    return [p for p in await list_projects(request=request, db=db) if p.get("id") in allowed]
 
 
 @router.get("/tasks")
@@ -190,11 +193,19 @@ async def proxy_get_task(
 
 @router.get("/tasks/{task_id}/status")
 async def proxy_get_task_status(
-    task_id: str, _=Depends(_authorized_key(MCP_READ_SCOPE, "viewer"))
+    task_id: str,
+    key=Depends(_authorized_key(MCP_READ_SCOPE, "viewer")),
+    db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
     from ..routes.execution import get_task_status
 
-    return await get_task_status(task_id)
+    requested_id = task_id
+    if ":" not in task_id:
+        allowed = await visible_project_ids(acw_principal(key), db)
+        project_id, spec_id = resolve_task_project(task_id, allowed)
+        task_id = f"{project_id}:{spec_id}"
+    result = await get_task_status(task_id)
+    return result.model_copy(update={"task_id": requested_id})
 
 
 @router.get("/tasks/{task_id}/logs")
