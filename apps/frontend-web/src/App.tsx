@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router';
+import { Routes, Route, Navigate, Link, useLocation, useNavigate, useParams } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { TooltipProvider } from './components/ui/tooltip';
 import { Toaster } from './components/ui/toaster';
@@ -7,6 +7,7 @@ import { Sidebar, type SidebarView } from './components/Sidebar';
 import { CommandPalette, type PaletteCommand, type PaletteTask } from './components/CommandPalette';
 import { apiRequest } from './lib/api-client';
 import { ProjectTabBar } from './components/ProjectTabBar';
+import { ProjectsPage } from './pages/ProjectsPage';
 import { TerminalGrid } from './components/TerminalGrid';
 import { Worktrees } from './components/Worktrees';
 import { Context } from './components/context/Context';
@@ -78,9 +79,7 @@ function AuthenticatedApp() {
   const activeProjectId = useProjectStore((state) => state.activeProjectId);
   const openProjectIds = useProjectStore((state) => state.openProjectIds);
   const tabOrder = useProjectStore((state) => state.tabOrder);
-  const openProjectTab = useProjectStore((state) => state.openProjectTab);
   const closeProjectTab = useProjectStore((state) => state.closeProjectTab);
-  const setActiveProject = useProjectStore((state) => state.setActiveProject);
   const isSwitchingProject = useProjectStore((state) => state.isSwitchingProject);
   const tasks = useTaskStore((state) => state.tasks);
   const settings = useSettingsStore((state) => state.settings);
@@ -129,7 +128,6 @@ function AuthenticatedApp() {
     },
     [selectedTaskId, tasks]
   );
-  const [activeView, setActiveView] = useState<SidebarView>('tfactory');
   const [isNewTaskDialogOpen, setIsNewTaskDialogOpen] = useState(false);
   const [isCloudCheckOpen, setIsCloudCheckOpen] = useState(false);
   const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
@@ -138,9 +136,22 @@ function AuthenticatedApp() {
   const [paletteOpen, setPaletteOpen] = useState(false);
 
   const slugs = useMemo(() => projectSlugs(projects), [projects]);
+  const breadcrumbProjects = useMemo(
+    () => projects.map((p) => ({ slug: slugs.get(p.id) ?? p.id, name: p.name })),
+    [projects, slugs]
+  );
   const urlProject = route.kind === 'project' ? findProjectByRef(projects, route.ref) : undefined;
   const urlProjectId = urlProject?.id;
   const urlSlug = urlProjectId ? slugs.get(urlProjectId) : undefined;
+  const activeView: SidebarView = route.kind === 'project' ? route.view : 'tfactory';
+  const navProject = urlProject ?? projects.find((p) => p.id === (activeProjectId ?? selectedProjectId));
+  const goProject = useCallback((id: string, view?: string) => {
+    const slug = slugs.get(id) ?? id;
+    void navigate(projectPath(slug, view));
+  }, [navigate, slugs]);
+  const setActiveView = useCallback((view: SidebarView) => {
+    if (navProject) goProject(navProject.id, view);
+  }, [navProject, goProject]);
   const inSync = !!urlProjectId && activeProjectId === urlProjectId && selectedProjectId === urlProjectId;
 
   useEffect(() => {
@@ -202,11 +213,18 @@ function AuthenticatedApp() {
       keywords: v.id,
       run: () => { setActiveView(v.id); },
     }));
+    const switchProject: PaletteCommand[] = projects.map((p) => ({
+      id: `project-${p.id}`,
+      group: 'Go to',
+      label: `Switch project: ${p.name}`,
+      keywords: `project switch ${slugs.get(p.id) ?? ''}`,
+      run: () => { goProject(p.id); },
+    }));
     const actions: PaletteCommand[] = [
       { id: 'act-settings', group: 'Actions', label: 'Open settings', keywords: 'preferences config theme', run: () => { setIsSettingsDialogOpen(true); } },
     ];
-    return [...nav, ...actions];
-  }, []);
+    return [...nav, ...switchProject, ...actions];
+  }, [projects, slugs, goProject, setActiveView]);
 
   // Federated fleet search (#149): the cockpit aggregates every portal's work
   // and exposes a ranked /api/search; this portal proxies it same-origin
@@ -277,7 +295,7 @@ function AuthenticatedApp() {
   }, [settings.onboardingCompleted]);
 
   // Sync i18n language with settings
-  const { i18n } = useTranslation();
+  const { t, i18n } = useTranslation();
   useEffect(() => {
     if (settings.language && settings.language !== i18n.language) {
       i18n.changeLanguage(settings.language);
@@ -380,7 +398,7 @@ function AuthenticatedApp() {
 
   const handleProjectAdded = (project: Project, needsInit: boolean) => {
     console.log('[Web] Project added:', project.name, 'needs init:', needsInit);
-    // Optionally navigate to the project or show init dialog
+    goProject(project.id);
   };
 
   // Handler for opening inbuilt terminal with specific working directory
@@ -394,7 +412,7 @@ function AuthenticatedApp() {
     });
     // Switch to terminals view to show the new terminal
     setActiveView('terminals');
-  }, []);
+  }, [setActiveView]);
 
   return (
     <ViewStateProvider>
@@ -420,43 +438,53 @@ function AuthenticatedApp() {
               projects={openProjects}
               activeProjectId={activeProjectId}
               onProjectSelect={(projectId) => {
-                setActiveProject(projectId);
-                // Also update selectedProjectId so components use the correct project context
-                useProjectStore.getState().selectProject(projectId);
+                goProject(projectId, route.kind === 'project' ? route.view : undefined);
               }}
-              onProjectClose={(projectId) => closeProjectTab(projectId)}
-              onAddProject={handleAddProject}
-              onProjectAdded={handleProjectAdded}
+              onProjectClose={(projectId) => {
+                if (urlProjectId === projectId) {
+                  const next = openProjects.find((p) => p.id !== projectId);
+                  void navigate(next ? projectPath(slugs.get(next.id) ?? next.id) : '/');
+                }
+                closeProjectTab(projectId);
+              }}
+              currentSlug={urlSlug}
+              onViewAllProjects={() => { void navigate('/projects'); }}
               onSettingsClick={() => setIsSettingsDialogOpen(true)}
               onOpenOnboarding={() => setIsOnboardingOpen(true)}
             />
 
             <main className="flex-1 overflow-hidden">
-              {activeView === 'tfactory' ? (
-                /* TFactory's own surface: the test-generation review queue.
-                   Global (reads ~/.tfactory workspaces), so it renders with or
-                   without a selected project. */
-                <div className="h-full overflow-hidden">
-                  <TFactoryPortal />
+              {route.kind === 'project' && urlProject && (
+                /* TerminalGrid stays mounted across project switches to preserve xterm instances and PTY connections */
+                <div className={activeView === 'terminals' ? 'h-full' : 'hidden'}>
+                  <TerminalGrid
+                    projectPath={urlProject.path}
+                    onNewTaskClick={() => setIsNewTaskDialogOpen(true)}
+                    isActive={activeView === 'terminals'}
+                  />
                 </div>
-              ) : selectedProject ? (
+              )}
+              {route.kind === 'project' && !urlProject && projectsLoaded && (
+                <div className="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground">
+                  <p>{t('welcome:projectsPage.notFound', { ref: route.ref })}</p>
+                  <Link to="/" className="text-sm underline">{t('welcome:projectsPage.backHome')}</Link>
+                </div>
+              )}
+              {selectedProject && (
                 <>
-                  {/* TerminalGrid stays mounted but hidden to preserve xterm instances and PTY connections */}
-                  <div className={activeView === 'terminals' ? 'h-full' : 'hidden'}>
-                    <TerminalGrid
-                      projectPath={selectedProject?.path}
-                      onNewTaskClick={() => setIsNewTaskDialogOpen(true)}
-                      isActive={activeView === 'terminals'}
-                    />
-                  </div>
+                  {activeView === 'tfactory' && (
+                    <div className="h-full overflow-hidden">
+                      <TFactoryPortal />
+                    </div>
+                  )}
                   {activeView === 'editor' && (
-                    <EditorPage projectPath={selectedProject?.path} />
+                    <EditorPage projectPath={selectedProject.path} />
                   )}
                   {activeView === 'worktrees' && (
-                    <Worktrees projectId={selectedProject?.id || ''} />
+                    <Worktrees projectId={selectedProject.id} />
                   )}
                   {activeView === 'context' && (
-                    <Context projectId={selectedProject?.id || ''} />
+                    <Context projectId={selectedProject.id} />
                   )}
                   {activeView === 'github-issues' && (
                     <GitHubIssues
@@ -475,7 +503,7 @@ function AuthenticatedApp() {
                   )}
                   {activeView === 'changelog' && <Changelog />}
                   {activeView === 'insights' && (
-                    <Insights projectId={selectedProject?.id || ''} onNavigate={setActiveView} />
+                    <Insights projectId={selectedProject.id} onNavigate={setActiveView} />
                   )}
                   {activeView === 'agent-tools' && <AgentTools />}
                   {activeView === 'skills' && <SkillsPage />}
@@ -490,14 +518,21 @@ function AuthenticatedApp() {
                     </div>
                   )}
                 </>
-              ) : (
+              )}
+              {route.kind === 'projects' && (
+                <ProjectsPage
+                  projects={projects}
+                  slugs={slugs}
+                  onAdd={handleAddProject}
+                  onOpen={(p) => { goProject(p.id); }}
+                />
+              )}
+              {route.kind === 'home' && (
                 <WelcomeScreen
                   projects={projects}
                   onNewProject={handleAddProject}
                   onOpenProject={handleAddProject}
-                  onSelectProject={(projectId) => {
-                    openProjectTab(projectId);
-                  }}
+                  onSelectProject={(projectId) => { goProject(projectId); }}
                 />
               )}
             </main>
@@ -531,6 +566,8 @@ function AuthenticatedApp() {
             open={paletteOpen}
             onClose={() => { setPaletteOpen(false); }}
             commands={paletteCommands}
+            projects={breadcrumbProjects}
+            onSwitchProject={(slug) => { void navigate(projectPath(slug)); }}
             onSearch={searchFleet}
             onOpenTask={(t) => {
               window.location.href = `${cockpitUrl}/?task=${encodeURIComponent(t.id)}`;
