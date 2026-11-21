@@ -170,8 +170,19 @@ async def aifactory_complete(
             status_code=http_status.HTTP_429_TOO_MANY_REQUESTS,
             detail="rate limit exceeded for this task; retry shortly",
         )
-    spec_dir = _resolve_workspace_root() / "workspaces" / project_id / "specs" / spec_id
-    if not (spec_dir / "status.json").exists():
+    from .project_authz import resolve_project_id
+    from .projects import load_projects
+
+    projects = load_projects()
+    resolved_id = resolve_project_id(project_id) if projects else None
+    spec_dir = (
+        _resolve_workspace_root()
+        / "workspaces"
+        / (resolved_id or project_id)
+        / "specs"
+        / spec_id
+    )
+    if (projects and resolved_id is None) or not (spec_dir / "status.json").exists():
         raise HTTPException(
             status_code=http_status.HTTP_404_NOT_FOUND,
             detail=f"unknown task {task_id}",

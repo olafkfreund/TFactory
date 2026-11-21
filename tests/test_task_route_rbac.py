@@ -45,15 +45,19 @@ EXPECTED = [
             "resolve-uncommitted",
             "resolve-git-merge",
             "abort-merge",
-            "create-pr",
-            "merge",
             "discard",
         )
     ],
+    *[("tasks_worktree", "POST", _W + p, "admin") for p in ("create-pr", "merge")],
     *[
         ("tasks_worktree", "GET", _W + p, "viewer")
         for p in ("merge-preview", "status", "diff")
     ],
+    ("tasks", "GET", "/{task_id}", "viewer"),
+    ("tasks_logs", "GET", "/{task_id}/logs", "viewer"),
+    ("tasks_views", "GET", "/{task_id}/qa-report", "viewer"),
+    ("tasks_views", "GET", "/{task_id}/plan-html", "viewer"),
+    ("execution", "GET", "/{task_id}/running", "viewer"),
 ]
 
 EXPECTED_PROJECT_ROUTES = [
@@ -300,7 +304,7 @@ def test_every_task_write_route_carries_member_dependency():
         if not ok:
             missing.append((module, method, path, role))
     assert not missing
-    assert len(EXPECTED) == 24
+    assert len(EXPECTED) == 29
 
 
 def test_every_project_task_route_carries_project_access_dependency():

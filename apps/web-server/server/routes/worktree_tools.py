@@ -14,8 +14,13 @@ import re
 import subprocess
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from server.database.engine import get_db
+from server.pty.access import project_id_for_path
+from server.routes.project_authz import require_project_role
 
 from ._specpath import safe_join
 
@@ -247,7 +252,11 @@ def get_terminal_command(terminal: str, path: str) -> list[str]:
 
 
 @router.post("/worktree/open-in-ide")
-async def open_worktree_in_ide(request: OpenInIDERequest):
+async def open_worktree_in_ide(
+    request: OpenInIDERequest,
+    http_request: Request = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+):
     """
     Open a worktree path in the specified IDE.
     Used by the web UI to launch external IDE applications.
@@ -259,6 +268,12 @@ async def open_worktree_in_ide(request: OpenInIDERequest):
 
     reject_custom_path(request.customPath)
     worktree_path = _safe_arg(_validated_worktree_path(request.worktreePath))
+    if http_request is not None:
+        principal = getattr(http_request.state, "user", None)
+        db_session = db if isinstance(db, AsyncSession) else None
+        await require_project_role(
+            principal, project_id_for_path(worktree_path), "member", db_session
+        )
     ide = request.ide
 
     # Validate the path exists
@@ -288,7 +303,11 @@ async def open_worktree_in_ide(request: OpenInIDERequest):
 
 
 @router.post("/worktree/open-in-terminal")
-async def open_worktree_in_terminal(request: OpenInTerminalRequest):
+async def open_worktree_in_terminal(
+    request: OpenInTerminalRequest,
+    http_request: Request = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+):
     """
     Open a worktree path in the specified terminal emulator.
     Used by the web UI to launch external terminal applications.
@@ -299,6 +318,12 @@ async def open_worktree_in_terminal(request: OpenInTerminalRequest):
     # (command-line-injection).
     reject_custom_path(request.customPath)
     worktree_path = _safe_arg(_validated_worktree_path(request.worktreePath))
+    if http_request is not None:
+        principal = getattr(http_request.state, "user", None)
+        db_session = db if isinstance(db, AsyncSession) else None
+        await require_project_role(
+            principal, project_id_for_path(worktree_path), "member", db_session
+        )
     terminal = request.terminal
 
     # Validate the path exists

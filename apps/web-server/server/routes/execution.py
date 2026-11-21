@@ -20,7 +20,11 @@ from server.error_ref import client_error
 from ..services.agent_service import get_agent_service
 from ..websockets.events import emit_task_status
 from ._specpath import safe_component
-from .project_authz import require_task_access
+from .project_authz import (
+    require_project_role,
+    require_task_access,
+    visible_project_ids,
+)
 from .projects import load_projects
 from .tasks import (
     close_active_phases,
@@ -89,10 +93,18 @@ class RunningTasksResponse(BaseModel):
 
 
 @router.get("/running", response_model=RunningTasksResponse)
-async def get_running_tasks():
+async def get_running_tasks(
+    request: Request = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+):
     """Get list of all currently running tasks."""
     agent_service = get_agent_service()
     running = agent_service.get_running_tasks()
+    if request is not None:
+        principal = getattr(request.state, "user", None)
+        db_session = db if isinstance(db, AsyncSession) else None
+        visible = await visible_project_ids(principal, db_session, "viewer")
+        running = [t for t in running if t.split(":", 1)[0] in visible]
     return RunningTasksResponse(tasks=running, count=len(running))
 
 
@@ -218,7 +230,10 @@ async def get_task_status(
     )
 
 
-@router.get("/{task_id}/running")
+@router.get(
+    "/{task_id}/running",
+    dependencies=[Depends(require_task_access("viewer"))],
+)
 async def is_task_running(task_id: str):
     """Check if a specific task is currently running."""
     agent_service = get_agent_service()
@@ -828,6 +843,8 @@ async def create_and_run_task(
     title: str,
     description: str,
     request: StartTaskRequest,
+    http_request: Request = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
     """Author a spec for a new task. This route does NOT run verification.
 
@@ -845,6 +862,11 @@ async def create_and_run_task(
     (``zero_tests``): whichever route a run arrives by, a terminal verify that
     generated nothing can no longer read as a completed verification.
     """
+    if http_request is not None:
+        principal = getattr(http_request.state, "user", None)
+        db_session = db if isinstance(db, AsyncSession) else None
+        await require_project_role(principal, project_id, "member", db_session)
+
     projects = load_projects()
 
     if project_id not in projects:

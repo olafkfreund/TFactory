@@ -26,7 +26,10 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-@router.get("/{task_id}/qa-report")
+@router.get(
+    "/{task_id}/qa-report",
+    dependencies=[Depends(require_task_access("viewer"))],
+)
 async def get_qa_report(task_id: str):
     """Return the QA report markdown for a task.
 
@@ -183,7 +186,10 @@ async def stream_agent_console(task_id: str):
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
-@router.get("/{task_id}/plan-html")
+@router.get(
+    "/{task_id}/plan-html",
+    dependencies=[Depends(require_task_access("viewer"))],
+)
 async def get_plan_html(task_id: str):
     """Generate and return HTML view of the implementation plan.
 

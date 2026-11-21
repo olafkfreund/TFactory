@@ -22,9 +22,11 @@ from typing import Any
 from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.database.engine import get_db
+from server.database.models import OrgMember
 from server.error_ref import InputRejectedError, client_error
 from server.services.project_workspace_service import (
     GitOperationError,
@@ -33,7 +35,13 @@ from server.services.project_workspace_service import (
 
 from ._specpath import safe_component
 from ._tenancy import resolve_tenant
-from .project_authz import creator_org
+from .project_authz import (
+    check_project_access,
+    creator_org,
+    is_service_principal,
+    require_project_role,
+    resolve_project_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -388,14 +396,13 @@ async def ingest_spec(
     # *name*; accept either.
     from .projects import load_projects
 
+    principal = getattr(request.state, "user", None) if request is not None else None
+    db_session = db if isinstance(db, AsyncSession) else None
     projects = load_projects()  # {id: project_data}
-    resolved_id = req.project_id
-    entry = projects.get(req.project_id)
-    if entry is None:
-        for pid, data in projects.items():
-            if data.get("name") == req.project_id:
-                entry, resolved_id = data, pid
-                break
+    resolved_id = resolve_project_id(req.project_id) or req.project_id
+    entry = projects.get(resolved_id)
+    if entry is not None and request is not None:
+        await require_project_role(principal, resolved_id, "member", db_session)
     repo_slug, git_url = _repo_binding(req)
     self_registered = False
     try:
@@ -406,10 +413,32 @@ async def ingest_spec(
             # /api/projects uses. This makes the AIFactory->TFactory handoff work
             # for ANY built project without manual pre-registration.
             org_id = (
-                await creator_org(getattr(request.state, "user", None), db)
-                if request is not None
+                await creator_org(principal, db_session)
+                if request is not None and db_session is not None
                 else None
             )  # #1036
+            if request is not None and not is_service_principal(principal):
+                membership = None
+                if (
+                    org_id
+                    and db_session is not None
+                    and isinstance(principal, dict)
+                    and principal.get("id")
+                ):
+                    membership = (
+                        await db_session.execute(
+                            select(OrgMember).where(
+                                OrgMember.org_id == org_id,
+                                OrgMember.user_id == principal["id"],
+                            )
+                        )
+                    ).scalar_one_or_none()
+                check_project_access(
+                    principal,
+                    {"id": req.project_id, "org_id": org_id},
+                    membership,
+                    "member",
+                )
             entry, resolved_id = await _clone_and_register_project(
                 git_url,
                 branch=req.source_branch,
@@ -522,7 +551,13 @@ async def ingest_spec(
     "/{project_id}/{spec_id}/pr",
     summary="Attach the opened PR to an ingested spec so the verdict posts back",
 )
-async def attach_pr(project_id: str, spec_id: str, req: PrAttachRequest) -> dict:
+async def attach_pr(
+    project_id: str,
+    spec_id: str,
+    req: PrAttachRequest,
+    request: Request = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+) -> dict:
     """Record `pr_number`/`repo_slug` on an ingested spec's source.json (#964).
 
     The verifying handoff is sent before the PR exists, so this back-fills the
@@ -533,16 +568,13 @@ async def attach_pr(project_id: str, spec_id: str, req: PrAttachRequest) -> dict
 
     from agents.tools_pkg.tools.task_control import _spec_dir
 
-    from .projects import load_projects
-
     # Same name-or-id resolution the ingest route uses (AIFactory sends the name).
-    projects = load_projects()
-    resolved_id = project_id
-    if project_id not in projects:
-        for pid, data in projects.items():
-            if data.get("name") == project_id:
-                resolved_id = pid
-                break
+    resolved_id = resolve_project_id(project_id)
+    if request is not None:
+        principal = getattr(request.state, "user", None)
+        db_session = db if isinstance(db, AsyncSession) else None
+        await require_project_role(principal, resolved_id, "member", db_session)
+    resolved_id = resolved_id or project_id
 
     spec_dir = _spec_dir(safe_component(resolved_id), safe_component(spec_id))
     source_path = spec_dir / "context" / "source.json"

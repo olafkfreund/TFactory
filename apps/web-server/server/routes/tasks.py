@@ -11,11 +11,19 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from factory_common.logsafe import sanitize_log
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from server.database.engine import get_db
 
 from ._specpath import safe_component, safe_spec_dir
-from .project_authz import require_task_access
+from .project_authz import (
+    require_project_role,
+    require_task_access,
+    resolve_task_project,
+    visible_project_ids,
+)
 from .projects import load_projects
 
 router = APIRouter()
@@ -1172,18 +1180,27 @@ def task_to_dict(task: Task) -> dict:
 async def list_tasks(
     project_id: str | None = Query(None, description="Filter by project ID"),
     status: TaskStatus | None = Query(None, description="Filter by status"),
+    request: Request = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
     """List all tasks, optionally filtered by project or status."""
+    principal = getattr(request.state, "user", None) if request is not None else None
+    db_session = db if isinstance(db, AsyncSession) else None
     projects = load_projects()
 
     # Filter projects
     if project_id:
+        if request is not None:
+            await require_project_role(principal, project_id, "viewer", db_session)
         if project_id not in projects:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Project not found",
             )
         project_ids = [project_id]
+    elif request is not None:
+        visible = await visible_project_ids(principal, db_session, "viewer")
+        project_ids = [pid for pid in projects if pid in visible]
     else:
         project_ids = list(projects.keys())
 
@@ -1205,7 +1222,10 @@ async def list_tasks(
     return TaskList(tasks=all_tasks, total=len(all_tasks))
 
 
-@router.get("/{task_id}")
+@router.get(
+    "/{task_id}",
+    dependencies=[Depends(require_task_access("viewer"))],
+)
 async def get_task(task_id: str):
     """Get a specific task by ID.
 
@@ -1242,8 +1262,17 @@ async def get_task(task_id: str):
 
 
 @router.post("", response_model=Task, status_code=status.HTTP_201_CREATED)
-async def create_task(task: TaskCreate):
+async def create_task(
+    task: TaskCreate,
+    request: Request = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+):
     """Create a new task (spec) in a project."""
+    if request is not None:
+        principal = getattr(request.state, "user", None)
+        db_session = db if isinstance(db, AsyncSession) else None
+        await require_project_role(principal, task.project_id, "member", db_session)
+
     projects = load_projects()
 
     if task.project_id not in projects:
@@ -1568,7 +1597,11 @@ async def update_task(task_id: str, update: TaskUpdate):
     dependencies=[Depends(require_task_access("member"))],
     status_code=status.HTTP_204_NO_CONTENT,
 )
-async def delete_task(task_id: str):
+async def delete_task(
+    task_id: str,
+    request: Request = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+):
     """Delete a task (removes its spec directory).
 
     Accepts both id shapes:
@@ -1581,52 +1614,71 @@ async def delete_task(task_id: str):
         reconcile poll. Resolve it by finding the project whose workspace holds
         the spec.
     """
-    projects = load_projects()
+    import os as _os
+    import shutil
 
-    if ":" in task_id:
+    projects = load_projects()
+    if request is not None:
+        principal = getattr(request.state, "user", None)
+        db_session = db if isinstance(db, AsyncSession) else None
+        visible = await visible_project_ids(principal, db_session, "member")
+        project_id, spec_id = resolve_task_project(task_id, visible)
+    elif ":" in task_id:
         project_id, spec_id = task_id.split(":", 1)
+        safe_component(project_id)
+        safe_component(spec_id)
         if project_id not in projects:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Project not found",
+                detail="Task not found",
             )
-        candidates = [projects[project_id]]
     else:
-        # Bare spec_id (spec-ingest): search every project's workspace for it.
-        spec_id = task_id
-        candidates = list(projects.values())
-
-    import shutil
-
-    for entry in candidates:
+        spec_id = safe_component(task_id)
+        _ws_root = Path(
+            _os.environ.get("TFACTORY_WORKSPACE_ROOT") or (Path.home() / ".tfactory")
+        ).expanduser()
+        matches = [
+            pid
+            for pid, pdata in projects.items()
+            if (_ws_root / "workspaces" / pid / "specs" / spec_id).is_dir()
+            or (
+                pdata.get("path")
+                and (Path(pdata["path"]) / ".tfactory" / "specs" / spec_id).is_dir()
+            )
+        ]
+        if not matches and not projects:
+            for sd in (_ws_root / "workspaces").glob(f"*/specs/{spec_id}"):
+                if sd.is_dir():
+                    shutil.rmtree(sd)
+                    return
+        if len(matches) > 1:
+            raise HTTPException(409, "Specify project_id for this task")
+        if not matches:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Task not found",
+            )
+        project_id = matches[0]
+    entry = projects.get(project_id)
+    if entry and entry.get("path"):
         spec_dir = safe_spec_dir(Path(entry["path"]), spec_id)
         if spec_dir.exists():
             shutil.rmtree(spec_dir)
             return
 
-    # Spec-ingest tasks (the verify lane, created via /api/specs/ingest) do NOT
-    # live under a registered project path — they live in the MCP workspace tree
-    # at ``<workspace_root>/workspaces/<project_id>/specs/<spec_id>``. The loop
-    # above only checks the project-local layout, so an ingested verify task 404s
-    # on delete and keeps RESURRECTING via the reconcile poll (the cockpit's
-    # Remove reported "done" but the card came straight back). Search the
-    # workspace tree too before giving up.
-    import glob as _glob
-    import os as _os
-
-    # Same resolution as task_control._workspace_root (env override > default),
-    # replicated inline to avoid a cross-package import from the web-server.
     _ws_root = Path(
         _os.environ.get("TFACTORY_WORKSPACE_ROOT") or (Path.home() / ".tfactory")
     ).expanduser()
-    # spec_id is request-controlled and feeds a glob whose matches are rmtree'd;
-    # reject any traversal/separator component before it reaches the filesystem.
-    pattern = str(_ws_root / "workspaces" / "*" / "specs" / safe_component(spec_id))
-    for sd in _glob.glob(pattern):
-        spec_dir = Path(sd)
-        if spec_dir.exists():
-            shutil.rmtree(spec_dir)
-            return
+    ws_spec_dir = (
+        _ws_root
+        / "workspaces"
+        / safe_component(project_id)
+        / "specs"
+        / safe_component(spec_id)
+    )
+    if ws_spec_dir.exists():
+        shutil.rmtree(ws_spec_dir)
+        return
 
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
