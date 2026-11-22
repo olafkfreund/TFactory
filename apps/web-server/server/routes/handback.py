@@ -173,7 +173,7 @@ async def aifactory_complete(
             detail="rate limit exceeded for this task; retry shortly",
         )
     projects = load_projects()
-    resolved_id = resolve_project_id(project_id) if projects else None
+    resolved_id = resolve_project_id(project_id, projects)
     spec_dir = (
         _resolve_workspace_root()
         / "workspaces"

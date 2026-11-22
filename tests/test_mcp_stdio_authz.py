@@ -453,10 +453,8 @@ def test_file_routes_reject_env_and_resolved_foreign_symlink(env, tmp_path):
         ).status_code
         == 404
     )
-    assert (
-        env.client.delete("/api/files/p1/delete", params={"path": "."}).status_code
-        == 400
-    )
+    response = env.client.delete("/api/files/p1/delete", params={"path": "."})
+    assert response.status_code == 400
     assert (own / ".tfactory" / ".env").read_text() == "redacted"
 
 

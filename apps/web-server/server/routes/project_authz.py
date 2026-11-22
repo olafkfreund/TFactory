@@ -298,9 +298,11 @@ async def visible_project_ids(
     return visible
 
 
-def resolve_project_id(ref: str) -> str | None:
+def resolve_project_id(
+    ref: str, projects: dict[str, dict[str, Any]] | None = None
+) -> str | None:
     """Resolve an exact registered ID or an unambiguous project name."""
-    projects = _load_projects()
+    projects = _load_projects() if projects is None else projects
     if ref in projects:
         return ref
     matches = [pid for pid, project in projects.items() if project.get("name") == ref]

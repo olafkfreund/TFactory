@@ -62,11 +62,8 @@ def _env(tmp_path, monkeypatch):
     monkeypatch.delenv("TFACTORY_HANDBACK_MAX_CYCLES", raising=False)  # default 2
     monkeypatch.setattr(hb, "get_settings", lambda: _Settings())
     monkeypatch.setattr(
-        "server.routes.projects.load_projects",
-        lambda: {"demo": {"name": "demo", "path": str(tmp_path / "demo")}},
-    )
-    monkeypatch.setattr(
-        "server.routes.project_authz._load_projects",
+        hb,
+        "load_projects",
         lambda: {"demo": {"name": "demo", "path": str(tmp_path / "demo")}},
     )
     hb._RATE_LIMITER.reset()  # isolate per-task throttle between tests (#242)

@@ -593,6 +593,7 @@ async def serve_project_file(
         )
     except ValueError:
         raise HTTPException(404, "Project not found") from None
+    # CodeQL flags expansion here; safe_join rejects paths outside the authorized root.
     file_path = safe_join(root_path, str(Path(path).expanduser()))
     pid = project_id_for_path(str(root_path))
     if pid is None or project_id_for_path(str(file_path)) != pid:

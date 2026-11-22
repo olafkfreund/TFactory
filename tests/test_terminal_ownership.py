@@ -29,6 +29,8 @@ USERS = {"alice": ALICE, "bob": BOB, "root": ADMIN_NOT_SERVICE, "svc": SERVICE}
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
+    # CI enables anonymous endpoint tests globally; ownership tests need real auth.
+    monkeypatch.setattr("server.config.settings.DISABLE_AUTH", False)
     for name in ("a", "b"):
         (tmp_path / name).mkdir()
     projects = {
