@@ -116,7 +116,7 @@ def _project_key(ref: str) -> str:
     return next((k for k, v in projects.items() if v.get("name") == ref), ref)
 
 
-def _ingest_path(task_id: str, allowed: set[str] | None = None) -> Path | None:
+def _ingest_path(task_id: str) -> Path | None:
     """``status.json`` of a spec-ingest task, or None (#1597).
 
     ``POST /api/specs/ingest`` returns ``task_id`` = the bare spec_id and keys
@@ -139,9 +139,7 @@ def _ingest_path(task_id: str, allowed: set[str] | None = None) -> Path | None:
         hits = [
             p
             for d in (root.iterdir() if root.is_dir() else [])
-            if d.name in known
-            and (allowed is None or d.name in allowed)
-            and (p := d / "specs" / spec / "status.json").is_file()
+            if d.name in known and (p := d / "specs" / spec / "status.json").is_file()
         ]
         return hits[0] if len(hits) == 1 else None
     path = (
@@ -168,14 +166,23 @@ async def _status_access(
         project_id, _, spec_id = task_id.partition(":")
         task_id = f"{_project_key(project_id)}:{spec_id}"
     else:
-        visible = await visible_project_ids(getattr(request.state, "user", None), db)
-        path = _ingest_path(task_id, visible)
+        path = _ingest_path(task_id)
         if path is None:
-            raise HTTPException(404, "Task not found")
+            request.state.ingest_missing = True
+            return
         # The handler reads this same path: no second lookup after the await.
         request.state.ingest_path = path
         task_id = f"{path.parents[2].name}:{task_id}"
-    await require_task_access("viewer")(task_id, request, db)
+    try:
+        await require_task_access("viewer")(task_id, request, db)
+    except HTTPException as exc:
+        if (
+            ":" not in request.path_params["task_id"]
+            and exc.status_code == status.HTTP_404_NOT_FOUND
+        ):
+            request.state.ingest_missing = True
+            return
+        raise
 
 
 def _ingest_status(task_id: str, path: Path | None = None) -> dict[str, str]:
@@ -220,6 +227,8 @@ async def get_task_status(
     """
     from agents.liveness import ACTIVE_STATUSES  # noqa: PLC0415
 
+    if getattr(getattr(request, "state", None), "ingest_missing", False):
+        return TaskExecutionStatus(task_id=task_id, is_running=False)
     path = getattr(getattr(request, "state", None), "ingest_path", None)
     persisted = _ingest_status(task_id, path)
     is_running = get_agent_service().is_running(task_id) or (

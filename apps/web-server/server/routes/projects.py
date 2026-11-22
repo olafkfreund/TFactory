@@ -586,6 +586,7 @@ async def add_project(
     principal = getattr(request.state, "user", None)
     org_id = await creator_org(principal, db)
     if not is_service_principal(principal):
+        target: Path | str
         if project.gitUrl:
             from server.services.project_workspace_service import (  # noqa: PLC0415
                 slug_from_git_url,
@@ -595,7 +596,7 @@ async def add_project(
             target = workspace_root() / slug_from_git_url(project.gitUrl)
         else:
             # Local registration accepts a chosen path after org and claim checks.
-            target = Path(project.path or "").expanduser()  # noqa: ASYNC240
+            target = project.path or ""
         target = trusted_project_root(str(target), must_exist=False)
         parent_id = project_id_for_path(str(target))
         if parent_id:

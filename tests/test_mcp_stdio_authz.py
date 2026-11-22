@@ -552,18 +552,21 @@ def test_stdio_bare_status_uses_visible_project_when_hidden_status_matches(
 def test_rest_bare_status_has_same_missing_response_for_hidden_and_unknown(
     env, tmp_path, monkeypatch
 ):
+    from server.routes import execution
+
     monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setattr(execution, "load_projects", lambda: PROJECTS)
     hidden = tmp_path / "workspaces" / "pB" / "specs" / "hidden"
     hidden.mkdir(parents=True)
     (hidden / "status.json").write_text('{"status":"running"}')
     env.current_principal["value"] = {"id": "viewer-a", "org_id": "A"}
     hidden_response = env.client.get("/api/tasks/hidden/status")
     unknown_response = env.client.get("/api/tasks/unknown/status")
-    assert (
-        (hidden_response.status_code, hidden_response.json())
-        == (unknown_response.status_code, unknown_response.json())
-        == (404, {"detail": "Task not found"})
-    )
+    assert hidden_response.status_code == unknown_response.status_code == 200
+    for response in (hidden_response, unknown_response):
+        assert response.json()["is_running"] is False
+        assert response.json()["phase"] is None
+        assert response.json()["message"] is None
 
 
 def test_path_project_id_wins_over_query_project_id(env):

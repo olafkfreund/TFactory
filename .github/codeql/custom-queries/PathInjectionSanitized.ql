@@ -71,7 +71,7 @@ class SpecPathSanitizer extends PathInjection::Sanitizer {
     // safe_join's varargs are checked against the resolved base inside the helper.
     exists(Function f |
       f.getName() = "safe_join" and
-      this.(DataFlow::ParameterNode).getParameter() = f.getArg(1)
+      this.(DataFlow::ParameterNode).getParameter() = f.getVararg()
     )
   }
 }
