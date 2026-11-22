@@ -111,6 +111,9 @@ def test_canonical_project_path_checks_resolved_containment(tmp_path, monkeypatc
 def test_safe_join_expands_home_inside_containment(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     assert safe_join(tmp_path, "~/note.txt", expand_user=True) == tmp_path / "note.txt"
+    assert safe_join(
+        tmp_path, "~tfactory_nonexistent_user/note.txt", expand_user=True
+    ) == (tmp_path / "~tfactory_nonexistent_user/note.txt")
     with pytest.raises(HTTPException):
         safe_join(tmp_path / "project", "~/note.txt", expand_user=True)
 

@@ -93,9 +93,14 @@ def safe_join(base: Path, *parts: str, expand_user: bool = False) -> Path:
     Returns the validated absolute path.
     """
     base_real = os.path.realpath(base)
-    joined_real = os.path.realpath(
-        base.joinpath(*(os.path.expanduser(p) if expand_user else p for p in parts))
-    )
+    expanded_parts = []
+    for part in parts:
+        expanded = part
+        if expand_user:
+            with contextlib.suppress(RuntimeError):
+                expanded = str(Path(part).expanduser())
+        expanded_parts.append(expanded)
+    joined_real = os.path.realpath(base.joinpath(*expanded_parts))
     if joined_real != base_real and not joined_real.startswith(base_real + os.sep):
         raise HTTPException(status_code=400, detail="Invalid path")
     return Path(joined_real)

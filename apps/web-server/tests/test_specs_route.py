@@ -137,7 +137,7 @@ def test_unknown_project_404(client, monkeypatch):
     monkeypatch.setattr(projects_store, "load_projects", lambda *a, **k: {})
     r = client.post("/api/specs/ingest", json=_body())
     assert r.status_code == 404
-    assert "unknown project_id" in r.json()["detail"]
+    assert r.json()["detail"] == "Project not found"  # D6: no existence oracle
 
 
 def test_value_error_maps_to_400(client, known_project, monkeypatch):

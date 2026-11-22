@@ -181,7 +181,7 @@ def canonical_project_path(path: str, *, allow_unregistered: bool = False) -> Pa
     """Resolve a path inside a registered project, or an explicitly trusted local root."""
     try:
         if allow_unregistered:
-            return trusted_project_root(path)
+            return trusted_project_root(path, must_exist=False)
         roots = [p["path"] for p in _load_projects().values() if p.get("path")]
         return contained_path(path, roots, "registered projects", expand_user=True)
     except ValueError:

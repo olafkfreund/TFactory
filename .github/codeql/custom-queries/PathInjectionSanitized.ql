@@ -41,7 +41,7 @@ import PathInjectionFlow::PathGraph
  * contained_path / within_roots confine a whole request path to server-owned
  * roots (registered projects, $HOME, APP_FILE_BROWSE_ROOTS) (Factory#813).
  * canonical_project_path uses contained_path for registered paths; its explicit
- * local-service branch uses trusted_project_root's existing-directory check.
+ * local-service branch uses trusted_project_root's resolved path.
  */
 class SpecPathSanitizer extends PathInjection::Sanitizer {
   SpecPathSanitizer() {
