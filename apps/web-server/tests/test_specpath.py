@@ -20,10 +20,12 @@ from server.routes._specpath import (  # noqa: E402
     _require_safe_git_date,
     _require_safe_git_ref,
     browse_roots,
+    safe_join,
     safe_spec_dir,
     trusted_project_root,
     within_roots,
 )
+from server.routes.project_authz import canonical_project_path  # noqa: E402
 
 
 def test_valid_spec_id_builds_expected_path(tmp_path):
@@ -73,10 +75,44 @@ def test_trusted_project_root_resolves_existing_dir(tmp_path):
     assert trusted_project_root(str(tmp_path)) == tmp_path.resolve()
 
 
+def test_trusted_project_root_expands_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert trusted_project_root("~") == tmp_path
+
+
 def test_trusted_project_root_rejects_missing_dir(tmp_path):
 
     with pytest.raises(ValueError, match="Project path does not exist"):
         trusted_project_root(str(tmp_path / "nope"))
+    assert (
+        trusted_project_root(str(tmp_path / "nope"), must_exist=False)
+        == tmp_path / "nope"
+    )
+
+
+def test_canonical_project_path_checks_resolved_containment(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    outside = tmp_path / "outside"
+    project.mkdir()
+    outside.mkdir()
+    (project / "escape").symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(
+        "server.routes.projects.load_projects",
+        lambda: {"p": {"path": str(project)}},
+    )
+
+    assert canonical_project_path(str(project / "child")) == project / "child"
+    with pytest.raises(HTTPException) as exc:
+        canonical_project_path(str(project / "escape"))
+    assert exc.value.status_code == 404
+    assert canonical_project_path(str(outside), allow_unregistered=True) == outside
+
+
+def test_safe_join_expands_home_inside_containment(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert safe_join(tmp_path, "~/note.txt", expand_user=True) == tmp_path / "note.txt"
+    with pytest.raises(HTTPException):
+        safe_join(tmp_path / "project", "~/note.txt", expand_user=True)
 
 
 def test_within_roots_inside_returns_resolved(tmp_path):

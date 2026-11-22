@@ -3,6 +3,7 @@ Git, Ollama, MCP, and utility routes.
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -27,12 +28,18 @@ from server.error_ref import InputRejectedError, client_error
 from server.pty.access import project_id_for_path
 from server.routes.project_authz import (
     ProjectAccessChecker,
+    canonical_project_path,
     creator_org,
     is_service_principal,
     require_project_role,
 )
 
-from ._specpath import _require_safe_git_ref, browse_roots, safe_component, safe_join
+from ._specpath import (
+    _require_safe_git_ref,
+    browse_roots,
+    safe_component,
+    safe_join,
+)
 
 # Single source of truth for the gh-CLI wrapper lives in github.py (its heaviest
 # user); re-exported here so existing `from .git import run_gh_command` resolves.
@@ -90,9 +97,10 @@ async def get_git_branches(
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
     """Get all branches for a repository."""
-    # Resolution is a project lookup key; authorization below gates git access.
-    path = str(Path(path).expanduser().resolve())  # noqa: ASYNC240
     principal = getattr(request.state, "user", None) if request is not None else None
+    path = str(
+        canonical_project_path(path, allow_unregistered=is_service_principal(principal))
+    )
     db_session = db if isinstance(db, AsyncSession) else None
     if project_id_for_path(path) is not None or not is_service_principal(principal):
         await require_project_role(
@@ -114,9 +122,10 @@ async def get_current_git_branch(
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
     """Get current branch name."""
-    # Resolution is a project lookup key; authorization below gates git access.
-    path = str(Path(path).expanduser().resolve())  # noqa: ASYNC240
     principal = getattr(request.state, "user", None) if request is not None else None
+    path = str(
+        canonical_project_path(path, allow_unregistered=is_service_principal(principal))
+    )
     db_session = db if isinstance(db, AsyncSession) else None
     if project_id_for_path(path) is not None or not is_service_principal(principal):
         await require_project_role(
@@ -137,9 +146,10 @@ async def detect_main_branch(
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
     """Detect the main branch (main or master)."""
-    # Resolution is a project lookup key; authorization below gates git access.
-    path = str(Path(path).expanduser().resolve())  # noqa: ASYNC240
     principal = getattr(request.state, "user", None) if request is not None else None
+    path = str(
+        canonical_project_path(path, allow_unregistered=is_service_principal(principal))
+    )
     db_session = db if isinstance(db, AsyncSession) else None
     if project_id_for_path(path) is not None or not is_service_principal(principal):
         await require_project_role(
@@ -169,9 +179,10 @@ async def check_git_status(
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
     """Check git status for a repository."""
-    # Resolution is a project lookup key; authorization below gates git access.
-    path = str(Path(path).expanduser().resolve())  # noqa: ASYNC240
     principal = getattr(request.state, "user", None) if request is not None else None
+    path = str(
+        canonical_project_path(path, allow_unregistered=is_service_principal(principal))
+    )
     db_session = db if isinstance(db, AsyncSession) else None
     if project_id_for_path(path) is not None or not is_service_principal(principal):
         await require_project_role(
@@ -222,11 +233,14 @@ async def initialize_git(
         getattr(http_request.state, "user", None) if http_request is not None else None
     )
     db_session = db if isinstance(db, AsyncSession) else None
-    # New repository paths require creator_org; existing paths require project membership below.
-    path = str(Path(request.path).expanduser().resolve())  # noqa: ASYNC240
+    # Resolve registered paths without probing whether a new path exists.
+    path = ""
+    with contextlib.suppress(HTTPException):  # canonical_project_path only raises 404
+        path = str(canonical_project_path(request.path))
     project_id = project_id_for_path(path)
     if project_id is None:
         await creator_org(principal, db)
+        path = str(canonical_project_path(request.path, allow_unregistered=True))
         from .projects import load_projects  # noqa: PLC0415
 
         target = Path(path)

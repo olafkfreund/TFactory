@@ -39,6 +39,7 @@ Why in-process REST rather than direct internal-function imports?
 
 from __future__ import annotations
 
+import importlib
 import json
 import logging
 import os
@@ -151,7 +152,8 @@ async def _call_internal(
     """Call the REST route in process with the scoped caller's principal."""
     # Runtime-only main import runs after app initialization, so startup has no cycle.
     from server.auth import internal_mcp_principal  # noqa: PLC0415
-    from server.main import app  # noqa: PLC0415
+
+    app = importlib.import_module("server.main").app
 
     headers = dict(kwargs.pop("headers", {}) or {})
     headers["X-MCP-Key-Id"] = key.key_id

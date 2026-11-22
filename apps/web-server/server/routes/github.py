@@ -5,6 +5,7 @@ Handles GitHub OAuth, repository management, issues, PRs, and releases.
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -22,6 +23,7 @@ from server.database.engine import get_db
 from server.pty.access import project_id_for_path
 from server.routes.project_authz import (
     ProjectAccessChecker,
+    canonical_project_path,
     creator_org,
     is_service_principal,
     require_project_role,
@@ -29,7 +31,11 @@ from server.routes.project_authz import (
 )
 from server.services.git_base_url import safe_git_base_url
 
-from ._specpath import browse_roots, contained_path, safe_component
+from ._specpath import (
+    browse_roots,
+    contained_path,
+    safe_component,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -634,11 +640,16 @@ async def add_git_remote(
         getattr(http_request.state, "user", None) if http_request is not None else None
     )
     db_session = db if isinstance(db, AsyncSession) else None
-    # The resolved path is checked against registered projects before the remote is changed.
-    project_path = str(FilePath(request.projectPath).expanduser().resolve())  # noqa: ASYNC240
+    # Resolve registered paths without probing whether a new path exists.
+    project_path = ""
+    with contextlib.suppress(HTTPException):  # canonical_project_path only raises 404
+        project_path = str(canonical_project_path(request.projectPath))
     project_id = project_id_for_path(project_path)
     if project_id is None:
         await creator_org(principal, db)
+        project_path = str(
+            canonical_project_path(request.projectPath, allow_unregistered=True)
+        )
         from .projects import load_projects  # noqa: PLC0415
 
         target = FilePath(project_path)
@@ -1599,7 +1610,7 @@ async def get_fork_info(
 ):
     """Detect if repo is a fork and return origin + upstream info."""
     # The resolved path is mapped to a registered project and authorized before the gh call.
-    project_path = str(FilePath(project_path).expanduser().resolve())  # noqa: ASYNC240
+    project_path = str(canonical_project_path(project_path))
     principal = getattr(request.state, "user", None) if request is not None else None
     db_session = db if isinstance(db, AsyncSession) else None
     await require_project_role(

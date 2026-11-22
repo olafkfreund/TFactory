@@ -83,22 +83,25 @@ def safe_component(name: str) -> str:
     return base
 
 
-def safe_join(base: Path, *parts: str) -> Path:
+def safe_join(base: Path, *parts: str, expand_user: bool = False) -> Path:
     """Join request-controlled ``parts`` onto ``base``, staying within ``base``.
 
     Unlike :func:`safe_component`, each part may legitimately contain separators
     (e.g. a relative file path). The joined path is resolved and confirmed to be
     inside ``base``; anything that escapes (via ``..`` or an absolute component)
-    is refused with HTTP 400. Returns the validated absolute path.
+    is refused with HTTP 400. Optional home expansion occurs inside this guard.
+    Returns the validated absolute path.
     """
     base_real = os.path.realpath(base)
-    joined_real = os.path.realpath(base.joinpath(*parts))
+    joined_real = os.path.realpath(
+        base.joinpath(*(os.path.expanduser(p) if expand_user else p for p in parts))
+    )
     if joined_real != base_real and not joined_real.startswith(base_real + os.sep):
         raise HTTPException(status_code=400, detail="Invalid path")
     return Path(joined_real)
 
 
-def trusted_project_root(path: str) -> Path:
+def trusted_project_root(path: str, *, must_exist: bool = True) -> Path:
     """Resolve a request-supplied local project root, or raise ``ValueError``.
 
     Under the local-install trust model an authenticated client may point the
@@ -110,11 +113,15 @@ def trusted_project_root(path: str) -> Path:
     path-injection barrier so deliberately-accepted project roots stop firing
     ``py/path-injection-sanitized`` at every derived filesystem access.
 
-    Raises ``ValueError`` (not ``HTTPException``) so service-layer callers keep
-    their existing error contracts.
+    ``must_exist=False`` is for a new project path being checked for conflicting
+    claims before creation. Raises ``ValueError`` (not ``HTTPException``) so
+    service-layer callers keep their existing error contracts.
     """
-    root = Path(path).resolve()
-    if not root.is_dir():
+    try:
+        root = Path(path).expanduser().resolve()
+    except (OSError, RuntimeError) as exc:
+        raise ValueError(f"Project path does not exist: {path}") from exc
+    if must_exist and not root.is_dir():
         raise ValueError(f"Project path does not exist: {path}")
     return root
 

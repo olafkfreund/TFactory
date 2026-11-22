@@ -22,7 +22,11 @@ from server.pty.access import (
 )
 from server.pty.manager import DuplicateSessionError, get_pty_manager
 from server.pty.session import PTYSession
-from server.routes.project_authz import is_service_principal, require_project_role
+from server.routes.project_authz import (
+    canonical_project_path,
+    is_service_principal,
+    require_project_role,
+)
 
 from ..config import get_settings
 from ..services.terminal_worktree_service import TerminalWorktreeService
@@ -163,7 +167,11 @@ async def _authorize_path(
 ) -> str:
     """Authorize the project containing `path`."""
     # The role check below rejects unknown paths before deletion.
-    resolved = str(Path(path).expanduser().resolve()) if path else ""  # noqa: ASYNC240
+    resolved = (
+        str(canonical_project_path(path, allow_unregistered=is_service_principal(user)))
+        if path
+        else ""
+    )
     project_id = project_id_for_path(resolved)
     await require_project_role(user, project_id, role)
     return resolved
@@ -243,7 +251,9 @@ async def create_terminal(request: CreateTerminalRequest, http_request: Request)
     # Bind the session (#3740). Non-service callers must land inside a
     # registered project they are authorized for.
     # The resolved cwd is bound to a registered project and authorized before session creation.
-    cwd = str(Path(cwd).expanduser().resolve())  # noqa: ASYNC240
+    cwd = str(
+        canonical_project_path(cwd, allow_unregistered=is_service_principal(user))
+    )
     project_id = project_id_for_path(cwd)
     if not settings.DISABLE_AUTH and (
         not project_id or (request.project_id and request.project_id != project_id)

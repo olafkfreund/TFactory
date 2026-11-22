@@ -40,6 +40,8 @@ import PathInjectionFlow::PathGraph
  *
  * contained_path / within_roots confine a whole request path to server-owned
  * roots (registered projects, $HOME, APP_FILE_BROWSE_ROOTS) (Factory#813).
+ * canonical_project_path uses contained_path for registered paths; its explicit
+ * local-service branch uses trusted_project_root's existing-directory check.
  */
 class SpecPathSanitizer extends PathInjection::Sanitizer {
   SpecPathSanitizer() {
@@ -49,7 +51,7 @@ class SpecPathSanitizer extends PathInjection::Sanitizer {
       name in [
           "safe_component", "safe_spec_dir", "safe_join", "safe_slug",
           "get_next_spec_id", "trusted_project_root", "contained_path",
-          "within_roots"
+          "within_roots", "canonical_project_path"
         ] and
       (
         call.getFunction().asExpr().(Name).getId() = name or
@@ -62,8 +64,14 @@ class SpecPathSanitizer extends PathInjection::Sanitizer {
     // parameter so the resolve()/is_dir() probes inside the helper do not
     // re-fire the very alerts the barrier exists to clear.
     exists(Function f |
-      f.getName() in ["trusted_project_root", "contained_path", "within_roots"] and
+      f.getName() in ["trusted_project_root", "contained_path", "within_roots", "canonical_project_path"] and
       this.(DataFlow::ParameterNode).getParameter() = f.getArg(0)
+    )
+    or
+    // safe_join's varargs are checked against the resolved base inside the helper.
+    exists(Function f |
+      f.getName() = "safe_join" and
+      this.(DataFlow::ParameterNode).getParameter() = f.getArg(1)
     )
   }
 }

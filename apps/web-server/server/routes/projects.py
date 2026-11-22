@@ -35,7 +35,7 @@ MemoryBackendType = Literal["graphiti", "file"]
 
 from ..config import get_settings
 from . import changelog, context, files, git, github, github_pr
-from ._specpath import browse_roots, safe_component, within_roots
+from ._specpath import browse_roots, safe_component, trusted_project_root, within_roots
 
 router = APIRouter()
 
@@ -343,7 +343,7 @@ def _check_claim(
     path: Path, org_id: str | None = None, exclude_id: str | None = None
 ) -> None:
     # This path is compared with registered roots to reject another org's claim before registration.
-    target = path.resolve()
+    target = trusted_project_root(str(path), must_exist=False)
     for pid, existing in load_projects().items():
         if pid == exclude_id or not existing.get("path"):
             continue
@@ -596,7 +596,8 @@ async def add_project(
         else:
             # Local registration accepts a chosen path after org and claim checks.
             target = Path(project.path or "").expanduser()  # noqa: ASYNC240
-        parent_id = project_id_for_path(str(target.resolve()))
+        target = trusted_project_root(str(target), must_exist=False)
+        parent_id = project_id_for_path(str(target))
         if parent_id:
             org_id = (
                 await require_project_role(principal, parent_id, "member", db)

@@ -6,9 +6,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
-from server.routes import files, git
+from server.routes import files, git, github
 from server.routes._specpath import safe_component
 
 
@@ -99,3 +99,39 @@ async def test_worktree_name_barrier(
     assert ok["success"] is True
     assert (repo / ".tfactory" / "worktrees" / "tasks" / "ok-1").is_dir()
     assert seen == ["ok-1"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("module", "handler", "payload"),
+    [
+        (git, git.initialize_git, git.InitGitRequest(path="/unregistered")),
+        (
+            github,
+            github.add_git_remote,
+            github.AddRemoteRequest(projectPath="/unregistered", repoFullName="o/r"),
+        ),
+    ],
+)
+async def test_new_git_path_checks_creator_before_existing_directory(
+    monkeypatch, module, handler, payload
+):
+    calls = []
+
+    def canonical(_path, *, allow_unregistered=False):
+        calls.append(allow_unregistered)
+        if allow_unregistered:
+            pytest.fail("Unregistered path probed before creator authorization")
+        raise HTTPException(404, "Project not found")
+
+    async def deny_creator(*_args):
+        raise HTTPException(403, "No project creation access")
+
+    monkeypatch.setattr(module, "canonical_project_path", canonical)
+    monkeypatch.setattr(module, "project_id_for_path", lambda _path: None)
+    monkeypatch.setattr(module, "creator_org", deny_creator)
+    request = SimpleNamespace(state=SimpleNamespace(user={"id": "u"}))
+    with pytest.raises(HTTPException) as exc:
+        await handler(payload, http_request=request, db=object())
+    assert exc.value.status_code == 403
+    assert calls == [False]

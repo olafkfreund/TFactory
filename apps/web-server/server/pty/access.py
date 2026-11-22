@@ -5,9 +5,10 @@ A session is bound to its creating user and project. The service principal
 to own the session and still hold its project. Every check fails closed.
 """
 
+import importlib
 import os
 from pathlib import Path, PurePath
-from typing import Any
+from typing import Any, cast
 
 from server.database import engine
 from server.routes._specpath import contained_path
@@ -15,9 +16,11 @@ from server.routes.project_authz import is_service_principal, require_project_ro
 
 
 def _projects() -> dict[str, Any]:
-    from server.routes.projects import load_projects  # noqa: PLC0415 - import cycle
-
-    return load_projects()
+    # The route package imports terminal access while assembling its routers.
+    return cast(
+        "dict[str, Any]",
+        importlib.import_module("server.routes.projects").load_projects(),
+    )
 
 
 async def project_ok(

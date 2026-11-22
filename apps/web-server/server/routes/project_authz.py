@@ -21,7 +21,7 @@ from server.database.models import OrgMember, Project
 from server.routes.organizations import ROLE_LEVELS
 from server.services.project_store import get_project_store
 
-from ._specpath import safe_component
+from ._specpath import contained_path, safe_component, trusted_project_root
 
 logger = logging.getLogger(__name__)
 _FORBIDDEN = status.HTTP_403_FORBIDDEN
@@ -32,6 +32,7 @@ __all__ = [
     "ProjectAccessChecker",
     "TaskAccessChecker",
     "authorize_project_for_user",
+    "canonical_project_path",
     "check_project_access",
     "creator_org",
     "is_service_principal",
@@ -174,6 +175,17 @@ def _load_projects() -> dict[str, dict[str, Any]]:
         "dict[str, dict[str, Any]]",
         importlib.import_module("server.routes.projects").load_projects(),
     )
+
+
+def canonical_project_path(path: str, *, allow_unregistered: bool = False) -> Path:
+    """Resolve a path inside a registered project, or an explicitly trusted local root."""
+    try:
+        if allow_unregistered:
+            return trusted_project_root(path)
+        roots = [p["path"] for p in _load_projects().values() if p.get("path")]
+        return contained_path(path, roots, "registered projects", expand_user=True)
+    except ValueError:
+        raise HTTPException(404, "Project not found") from None
 
 
 async def require_project_role(
