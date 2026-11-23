@@ -108,6 +108,7 @@ export function TFactoryLogViewer({ specId, projectId, wsFactory, wsBaseUrl }: P
     // reconnect from firing after unmount.
     let disposed = false;
     let attempt = 0;
+    let handshakeFailures = 0;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
     const scheduleReconnect = () => {
@@ -132,12 +133,15 @@ export function TFactoryLogViewer({ specId, projectId, wsFactory, wsBaseUrl }: P
         return;
       }
       socketRef.current = socket;
+      let opened = false;
 
       setState('connecting');
       setError(null);
 
       socket.onopen = () => {
+        opened = true;
         attempt = 0; // healthy connection — reset backoff
+        handshakeFailures = 0;
         setState('open');
       };
 
@@ -179,6 +183,11 @@ export function TFactoryLogViewer({ specId, projectId, wsFactory, wsBaseUrl }: P
         // A clean close (1000) is intentional/terminal — stay closed.
         if (ev.code === 1000) {
           setState('closed');
+          return;
+        }
+        if (!opened && ++handshakeFailures >= 3) {
+          setState('error');
+          setError(t('errors.signInAgain'));
           return;
         }
         // Abnormal close (1006 idle-timeout, network drop, pod restart) →

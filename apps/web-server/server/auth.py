@@ -64,8 +64,8 @@ def _ws_extract_token(websocket: WebSocket) -> str | None:
     # Annotated: starlette's .get() is declared `-> Any`, so without these the
     # strict-mypy return type of this function silently degrades to Any.
     auth_header: str | None = websocket.headers.get("authorization")
-    if auth_header and auth_header.startswith("Bearer "):
-        return auth_header[7:]
+    if auth_header is not None:
+        return auth_header[7:] if auth_header.startswith("Bearer ") else None
 
     # Backward-compatible fallback: token in the URL query string.
     query_token: str | None = websocket.query_params.get("token")
@@ -75,22 +75,37 @@ def _ws_extract_token(websocket: WebSocket) -> str | None:
 
     cookie_token: str | None = websocket.cookies.get("access_token")
     if cookie_token:
-        # Cookie sessions only for same-origin handshakes (CSWSH guard). Compare
-        # hosts, not schemes: TLS ends at the ingress, so the pod sees ws://.
+        # Cookie sessions only for same-host handshakes (CSWSH guard).
         origin = websocket.headers.get("origin")
         request_host = websocket.headers.get("host")
-        if origin and (
-            (
-                request_host
-                and urlparse(origin).netloc == request_host
-                # A wss:// socket never accepts a plain-http page as its origin.
-                and not (
-                    urlparse(origin).scheme == "http" and websocket.url.scheme == "wss"
-                )
-            )
-            or origin in get_settings().CORS_ORIGINS
+        external_scheme = websocket.headers.get("x-forwarded-proto")
+        if external_scheme is None:
+            external_scheme = websocket.url.scheme
+        external_scheme = external_scheme.lower()
+        if (
+            origin
+            and request_host
+            and external_scheme in ("http", "https", "ws", "wss")
         ):
-            return cookie_token
+            try:
+                parsed = urlparse(origin)
+                if (
+                    parsed.scheme in ("http", "https")
+                    and parsed.hostname
+                    and parsed.netloc.lower() == request_host.lower()
+                    and parsed.path in ("", "/")
+                    and not (parsed.params or parsed.query or parsed.fragment)
+                    and "?" not in origin
+                    and "#" not in origin
+                    and parsed.username is None
+                    and parsed.password is None
+                    and not (
+                        external_scheme in ("https", "wss") and parsed.scheme == "http"
+                    )
+                ):
+                    return cookie_token
+            except ValueError:
+                pass
 
     return None
 

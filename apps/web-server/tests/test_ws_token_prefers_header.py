@@ -16,6 +16,7 @@ import asyncio
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -32,7 +33,7 @@ def _ws(
     query: str | None = None,
     cookie: str | None = None,
     origin: str | None = None,
-) -> SimpleNamespace:
+) -> Any:
     return SimpleNamespace(
         headers={
             **({"authorization": header} if header else {}),
@@ -69,7 +70,7 @@ def test_token_order_with_cookie() -> None:
 
 
 @pytest.mark.parametrize(
-    "origin", ["https://app.example.test", "https://allowed.example.test"]
+    "origin", ["https://app.example.test", "https://APP.EXAMPLE.TEST/"]
 )
 def test_cookie_with_accepted_origin_authenticates(
     monkeypatch: pytest.MonkeyPatch, origin: str
@@ -84,7 +85,7 @@ def test_cookie_with_accepted_origin_authenticates(
     monkeypatch.setattr(
         auth_mod,
         "_try_decode_jwt",
-        lambda token: {"sub": "user-1"} if token == "cookie-token" else None,
+        lambda token: {"sub": "user-1"} if token == "cookie-token" else None,  # noqa: S105
     )
     assert asyncio.run(
         auth_mod.authenticate_websocket(_ws(cookie="cookie-token", origin=origin))
@@ -92,7 +93,20 @@ def test_cookie_with_accepted_origin_authenticates(
 
 
 @pytest.mark.parametrize(
-    "origin", [None, "https://foreign.example.test", "http://app.example.test"]
+    "origin",
+    [
+        None,
+        "https://foreign.example.test",
+        "https://allowed.example.test",
+        "http://app.example.test",
+        "ftp://app.example.test",
+        "https://user@app.example.test",
+        "https://app.example.test/path",
+        "https://app.example.test/?q=1",
+        "https://app.example.test/?",
+        "https://app.example.test/#frag",
+        "https://app.example.test/#",
+    ],
 )
 def test_cookie_with_untrusted_origin_closes_4001(
     monkeypatch: pytest.MonkeyPatch, origin: str | None
@@ -117,7 +131,7 @@ def test_header_auth_ignores_foreign_origin(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(
         auth_mod,
         "_try_decode_jwt",
-        lambda token: {"sub": "user-1"} if token == "hdr-token" else None,
+        lambda token: {"sub": "user-1"} if token == "hdr-token" else None,  # noqa: S105
     )
     ws = _ws(
         header="Bearer hdr-token",
@@ -128,13 +142,27 @@ def test_header_auth_ignores_foreign_origin(monkeypatch: pytest.MonkeyPatch) -> 
     ws.close.assert_not_awaited()
 
 
+def test_cookie_rejects_http_origin_behind_https_proxy() -> None:
+    ws = _ws(cookie="cookie-token", origin="http://app.example.test")
+    ws.url.scheme = "ws"
+    ws.headers["x-forwarded-proto"] = "https"
+    assert auth_mod._ws_extract_token(ws) is None
+
+
 def test_no_token_returns_none() -> None:
     assert auth_mod._ws_extract_token(_ws()) is None
 
 
-def test_non_bearer_header_falls_through_to_query() -> None:
-    ws = _ws(header="Basic abc", query="qs-token")
-    assert auth_mod._ws_extract_token(ws) == "qs-token"
+@pytest.mark.parametrize("header", ["Basic abc", "bearer abc", ""])
+def test_non_bearer_header_fails_closed(header: str) -> None:
+    ws = _ws(
+        header=header,
+        query="qs-token",
+        cookie="cookie-token",
+        origin="https://app.example.test",
+    )
+    ws.headers["authorization"] = header
+    assert auth_mod._ws_extract_token(ws) is None
 
 
 def test_query_use_warns_once(caplog: pytest.LogCaptureFixture) -> None:

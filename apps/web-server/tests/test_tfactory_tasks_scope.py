@@ -10,7 +10,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
@@ -22,6 +22,7 @@ for root in (
         sys.path.insert(0, str(root))
 
 from server.routes import project_authz, projects, tfactory_tasks  # noqa: E402
+from server.auth import WebSocketAuthError  # noqa: E402
 
 
 @pytest.fixture
@@ -158,6 +159,45 @@ def test_tfactory_tasks_websocket_logs_use_project(scoped_tasks, monkeypatch):
         "/api/tfactory/tasks/same-spec/logs/stream?project_id=Workspace%20A"
     ) as websocket:
         assert json.loads(websocket.receive_text())["files"]["planner"] == ["uuid-a"]
+
+
+def test_websocket_logs_auth_failure_closes_after_accept(scoped_tasks, monkeypatch):
+    client, _ = scoped_tasks
+
+    async def reject(websocket):
+        await websocket.close(code=4001, reason="Unauthorized")
+        raise WebSocketAuthError("No token provided")
+
+    monkeypatch.setattr(tfactory_tasks, "authenticate_websocket", reject)
+    with (
+        client.websocket_connect(
+            "/api/tfactory/tasks/same-spec/logs/stream"
+        ) as websocket,
+        pytest.raises(WebSocketDisconnect) as exc,
+    ):
+        websocket.receive_text()
+    assert exc.value.code == 4001
+
+
+def test_websocket_logs_role_denied_closes_4003(scoped_tasks, monkeypatch):
+    client, _ = scoped_tasks
+
+    async def authenticate(_websocket):
+        return {"id": "owner", "org_id": "A"}
+
+    async def deny(*_args):
+        raise HTTPException(403, "Forbidden")
+
+    monkeypatch.setattr(tfactory_tasks, "authenticate_websocket", authenticate)
+    monkeypatch.setattr(tfactory_tasks, "require_project_role", deny)
+    with (
+        client.websocket_connect(
+            "/api/tfactory/tasks/same-spec/logs/stream?project_id=uuid-a"
+        ) as websocket,
+        pytest.raises(WebSocketDisconnect) as exc,
+    ):
+        websocket.receive_text()
+    assert exc.value.code == 4003
 
 
 def test_list_tasks_unknown_and_invisible_project_match(scoped_tasks):
