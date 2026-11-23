@@ -2,6 +2,7 @@
   "pipeline": {
     "failed": "Falhas ({{count}})",
     "showDismissed": "Mostrar dispensadas",
+    "showMore": "Mostrar mais {{count}}",
     "rerun": "Executar novamente",
     "dismiss": "Dispensar",
     "plannerNotScheduled": "O planejador não foi agendado",

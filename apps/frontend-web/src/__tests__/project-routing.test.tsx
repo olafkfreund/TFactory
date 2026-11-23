@@ -1,13 +1,10 @@
 /** @vitest-environment jsdom */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, act, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter, useLocation, useNavigate } from 'react-router';
 import type { Project } from '../shared/types';
 
 // Heavy children are stubs that print which project/view they got.
-vi.mock('../components/ProjectTabBar', () => ({
-  ProjectTabBar: (p: { currentSlug?: string; activeProjectId: string | null }) => <div data-testid="bar">{p.currentSlug}:{p.activeProjectId ?? 'none'}</div>,
-}));
 const mounts = vi.hoisted(() => ({ n: 0 }));
 vi.mock('../components/TerminalGrid', async () => {
   const { useEffect } = await import('react');
@@ -31,7 +28,10 @@ vi.mock('../components/settings/sections/CloudAssessmentPage', () => ({ CloudAss
 vi.mock('../components/settings/sections/VisualReportsPage', () => ({ VisualReportsPage: () => null }));
 vi.mock('../components/WelcomeScreen', () => ({ WelcomeScreen: () => <div data-testid="home" /> }));
 vi.mock('../components/AddProjectModal', () => ({ AddProjectModal: () => null }));
-vi.mock('../components/settings', () => ({ AppSettingsDialog: (p: { projectId: string | null }) => <output data-testid="settings-project">{p.projectId ?? 'none'}</output> }));
+vi.mock('../components/settings', () => ({
+  ProjectSettingsPage: (p: { projectId: string | null }) => <output data-testid="settings-project">{p.projectId ?? 'none'}</output>,
+  PreferencesPage: () => <div data-testid="preferences-page" />,
+}));
 vi.mock('../components/TaskCreationWizard', () => ({ TaskCreationWizard: (p: { projectId: string }) => <output data-testid="wizard-project">{p.projectId}</output> }));
 vi.mock('../components/CloudCheckDialog', () => ({ CloudCheckDialog: () => null }));
 vi.mock('../components/task-detail', () => ({ TaskDetailModal: () => null }));
@@ -44,7 +44,10 @@ vi.mock('../pages/LoginPage', () => ({ LoginPage: () => <div data-testid="login"
 vi.mock('../components/task-detail/AgentConsole', () => ({ AgentConsole: (p: { taskId: string }) => <div data-testid="console">{p.taskId}</div> }));
 vi.mock('../hooks/useIpc', () => ({ useIpcListeners: () => undefined }));
 vi.mock('../hooks/useSessionKeepAlive', () => ({ useSessionKeepAlive: () => undefined }));
-vi.mock('../lib/api-client', () => ({ apiRequest: vi.fn().mockResolvedValue({ success: false }) }));
+vi.mock('../lib/api-client', () => ({
+  apiRequest: vi.fn().mockResolvedValue({ success: false }),
+  get: vi.fn().mockResolvedValue({ success: false }),
+}));
 vi.mock('../stores/auth-store', async () => {
   const { create } = await import('zustand');
   const useAuthStore = create(() => ({
@@ -127,8 +130,7 @@ describe('URL-scoped projects', () => {
     renderAt('/p/id-beta');
     await screen.findByTestId('task-row-t2');
     await waitFor(() => { expect(screen.getByTestId('terms')).toHaveTextContent('/src/id-beta'); });
-    await waitFor(() => { expect(screen.getByTestId('bar')).toHaveTextContent('beta'); });
-    expect(screen.getByTestId('location')).toHaveTextContent('/p/beta');
+    await waitFor(() => { expect(screen.getByTestId('location')).toHaveTextContent('/p/beta'); });
   });
 
   it('opens different URL projects with the same saved tab state', async () => {
@@ -158,11 +160,11 @@ describe('URL-scoped projects', () => {
     (window.API as unknown as { getProjects: () => Promise<unknown> }).getProjects = () => Promise.resolve({ success: true, data: [second, first] });
     renderAt('/p/DEMO');
     expect(await screen.findByText('Choose a project')).toBeInTheDocument();
-    expect(screen.getAllByRole('link')).toHaveLength(2);
+    expect(within(screen.getByRole('main')).getAllByRole('link')).toHaveLength(2);
     expect(screen.queryByTestId('tfactory-portal')).toBeNull();
     act(() => { useProjectStore.setState({ projects: [second] }); });
     expect(screen.getByText('Choose a project')).toBeInTheDocument();
-    expect(screen.getAllByRole('link')).toHaveLength(1);
+    expect(within(screen.getByRole('main')).getAllByRole('link')).toHaveLength(1);
   });
 
   it('keeps a bare collision slug as a chooser after one project is removed', async () => {
@@ -228,7 +230,8 @@ describe('URL-scoped projects', () => {
       return { ok: true, json: async () => body };
     }));
     renderAt('/p/alpha');
-    fireEvent.click(await screen.findByTestId('task-row-t1'));
+    await screen.findByTestId('task-row-t1');
+    fireEvent.click(screen.getByRole('button', { name: 't1' }));
     expect(await screen.findByTestId('tfactory-task-detail')).toBeInTheDocument();
     act(() => { void nav('/p/beta'); });
     expect(await screen.findByTestId('task-row-t2')).toBeInTheDocument();
@@ -288,9 +291,16 @@ describe('URL-scoped projects', () => {
     expect(screen.getByTestId('wizard-project')).toHaveTextContent('id-alpha');
     act(() => { void nav('/projects'); });
     expect(screen.getByRole('button', { name: 'Files' })).toBeDisabled();
-    expect(screen.getByTestId('settings-project')).toHaveTextContent('none');
-    expect(screen.getByTestId('bar')).toHaveTextContent(':none');
+    expect(screen.queryByTestId('settings-project')).toBeNull();
     expect(screen.queryByTestId('wizard-project')).toBeNull();
+  });
+
+  it('routes /p/:slug/settings and /preferences to the dedicated settings pages', async () => {
+    setApi({});
+    renderAt('/p/alpha/settings');
+    expect(await screen.findByTestId('settings-project')).toHaveTextContent('id-alpha');
+    act(() => { void nav('/preferences'); });
+    expect(await screen.findByTestId('preferences-page')).toBeInTheDocument();
   });
 
   it('shows fetch failure with retry instead of project not found', async () => {

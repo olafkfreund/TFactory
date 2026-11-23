@@ -2,6 +2,7 @@
   "pipeline": {
     "failed": "Failed ({{count}})",
     "showDismissed": "Show dismissed",
+    "showMore": "Show {{count}} more",
     "rerun": "Re-run",
     "dismiss": "Dismiss",
     "plannerNotScheduled": "Planner was not scheduled",
