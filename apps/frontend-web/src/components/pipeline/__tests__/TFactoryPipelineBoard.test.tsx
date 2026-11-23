@@ -1,12 +1,12 @@
 /**
  * @vitest-environment jsdom
  *
- * Terminal badges on the pipeline board (#1367).
+ * Pipeline board with shared WorkColumn, WorkCard and PipelineStrip (#3876).
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import '@testing-library/jest-dom/vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 import { TFactoryPipelineBoard } from '../TFactoryPipelineBoard';
 import { TFactoryPipelineView } from '../TFactoryPipelineView';
@@ -29,20 +29,61 @@ const task = (status: string, phase: string) => ({
 const renderBoard = (t: ReturnType<typeof task>) =>
   render(<TFactoryPipelineBoard tasks={[t]} onSelectTask={() => {}} />);
 
-describe('TFactoryPipelineBoard terminal badges', () => {
-  it('keeps a reaped failed run outside the stage columns', () => {
+beforeEach(() => {
+  localStorage.clear();
+});
+
+describe('TFactoryPipelineBoard shared WorkColumn and WorkCard', () => {
+  it('keeps a reaped failed run outside the stage columns and renders WorkCard in failed-runs', () => {
     const { container } = renderBoard(task('failed', 'verify_job_reaped'));
-    expect(container.querySelectorAll('.pl-speccard')).toHaveLength(0);
-    expect(screen.getByRole('button', { name: 'Failed (1)' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Failed (1)' }));
-    expect(screen.getByTestId('failed-runs')).toHaveTextContent('t1');
+    expect(container.querySelectorAll('.f-column .f-card')).toHaveLength(0);
+    expect(screen.getAllByRole('button', { name: 'Failed (1)' }).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Failed (1)' })[0]);
+    const failedRuns = screen.getByTestId('failed-runs');
+    expect(failedRuns).toHaveTextContent('t1');
+    expect(failedRuns).toHaveTextContent('verify_job_reaped');
   });
 
-  it('shows generated_empty as done with the never-run stages pending', () => {
+  it('collapses done/triaged cards by default and shows phase states when expanded', () => {
     const { container } = renderBoard(task('generated_empty', 'gen_functional'));
-    expect(screen.getAllByLabelText('Triaged')).toHaveLength(1);
-    const states = [...container.querySelectorAll('.pl-chip')].map((c) => c.getAttribute('data-state'));
+    const card = container.querySelector('.f-card');
+    expect(card).toHaveClass('f-card--collapsed');
+    fireEvent.click(screen.getByRole('button', { name: 'Expand t1' }));
+    expect(container.querySelector('.f-card')).toHaveClass('f-card--expanded');
+    const states = [...container.querySelectorAll('.f-card__phase')].map((c) => {
+      if (c.classList.contains('f-card__phase--done')) return 'done';
+      if (c.classList.contains('f-card__phase--active')) return 'active';
+      if (c.classList.contains('f-card__phase--failed')) return 'failed';
+      return 'pending';
+    });
     expect(states).toEqual(['done', 'done', 'pending', 'pending']);
+    expect(card).toHaveClass('f-card--warning');
+  });
+
+  it('keeps triaged_empty compact with a warning tone', () => {
+    const { container } = renderBoard(task('triaged_empty', 'triager'));
+    expect(container.querySelector('.f-card')).toHaveClass('f-card--collapsed', 'f-card--warning');
+  });
+
+  it('filters columns and failed runs from the PipelineStrip toolbar', () => {
+    const { container } = render(
+      <TFactoryPipelineBoard
+        tasks={[
+          task('planning', 'planner'),
+          { ...task('failed', 'executor'), spec_id: 't-fail', task_id: 't-fail' },
+        ]}
+        onSelectTask={() => {}}
+      />
+    );
+    expect(container.querySelectorAll('.f-column')).toHaveLength(4);
+    const toolbar = screen.getByRole('toolbar', { name: /Pipeline stages/i });
+    const planStageBtn = toolbar.querySelectorAll('.f-strip__node')[0];
+    fireEvent.click(planStageBtn);
+    expect(container.querySelectorAll('.f-column')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: /Clear filter/i }));
+    expect(container.querySelectorAll('.f-column')).toHaveLength(4);
+    fireEvent.click(screen.getByRole('button', { name: /Filter Execute failures/i }));
+    expect(screen.getByTestId('failed-runs')).toHaveTextContent('t-fail');
   });
 
   it('keeps failed and dismissed classification after a poll', () => {
@@ -50,21 +91,56 @@ describe('TFactoryPipelineBoard terminal badges', () => {
     const view = render(<TFactoryPipelineBoard tasks={[failed]} onSelectTask={() => {}} />);
     expect(screen.getByRole('button', { name: 'Failed (0)' })).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText('Show dismissed'));
-    expect(screen.getByRole('button', { name: 'Failed (1)' })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Failed (1)' }).length).toBeGreaterThan(0);
     view.rerender(<TFactoryPipelineBoard tasks={[{ ...failed }]} onSelectTask={() => {}} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Failed (1)' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Failed (1)' })[0]);
     expect(screen.getByTestId('failed-runs')).toHaveTextContent('t1');
-    expect(view.container.querySelectorAll('.pl-col .pl-speccard')).toHaveLength(0);
+    expect(screen.getByTestId('failed-runs').querySelector('.f-card')).toHaveClass('f-card--collapsed');
+    expect(view.container.querySelectorAll('.f-column .f-card')).toHaveLength(0);
+  });
+
+  it('flares for the first failure after a clean poll', async () => {
+    const view = render(<TFactoryPipelineBoard tasks={[]} onSelectTask={() => {}} />);
+    view.rerender(<TFactoryPipelineBoard tasks={[task('failed', 'executor')]} onSelectTask={() => {}} />);
+    await waitFor(() => expect(view.container.querySelector('.f-strip__flare')).toBeInTheDocument());
+  });
+
+  it.each(['rerun', 'dismiss'] as const)('%s keeps duplicate spec IDs scoped while pending and after rejection', async (action) => {
+    let rejectRequest: (error: Error) => void = () => undefined;
+    let attempts = 0;
+    const fetchFn = vi.fn().mockImplementation(() => ++attempts === 1
+      ? new Promise((_resolve, reject) => { rejectRequest = reject; })
+      : Promise.resolve({ ok: true, json: async () => ({ planner_scheduled: true, dismissed: true }) })) as unknown as typeof fetch;
+    render(<TFactoryPipelineBoard tasks={[
+      task('failed', 'executor'),
+      { ...task('failed', 'executor'), project_id: 'other' },
+    ]} onSelectTask={() => {}} fetchFn={fetchFn} />);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Failed (2)' })[0]);
+    const rows = screen.getAllByTestId('task-row-t1');
+    const target = rows.find((row) => row.textContent?.includes('other'))!;
+    fireEvent.click(within(target).getByRole('button', { name: action === 'rerun' ? 'Re-run' : 'Dismiss' }));
+    expect(fetchFn).toHaveBeenCalledWith(`/api/tfactory/tasks/t1/${action}?project_id=other`, expect.objectContaining({ method: 'POST' }));
+    expect(within(target).getByRole('button', { name: action === 'rerun' ? 'Re-run' : 'Dismiss' })).toBeDisabled();
+    expect(within(rows.find((row) => row !== target)!).getByRole('button', { name: 'Re-run' })).toBeDisabled();
+    await act(async () => rejectRequest(new Error('Request rejected')));
+    expect(screen.getByRole('alert')).toHaveTextContent('Request rejected');
+    expect(within(target).getByRole('button', { name: action === 'rerun' ? 'Re-run' : 'Dismiss' })).toBeEnabled();
+    fireEvent.click(within(target).getByRole('button', { name: action === 'rerun' ? 'Re-run' : 'Dismiss' }));
+    await waitFor(() => expect(fetchFn).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
   });
 
   it('reruns a failed card in its project and moves it to Plan', async () => {
-    const fetchFn = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ planner_scheduled: false, planner_reason: 'auto_plan_disabled' }) }) as unknown as typeof fetch;
+    const fetchFn = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ planner_scheduled: false, planner_reason: 'auto_plan_disabled' }),
+    }) as unknown as typeof fetch;
     const view = render(<TFactoryPipelineBoard tasks={[task('failed', 'executor')]} onSelectTask={() => {}} fetchFn={fetchFn} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Failed (1)' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Failed (1)' })[0]);
     fireEvent.click(screen.getByRole('button', { name: 'Re-run' }));
-    await waitFor(() => expect(view.container.querySelectorAll('.pl-col')[0]).toHaveTextContent('t1'));
+    await waitFor(() => expect(view.container.querySelectorAll('.f-column')[0]).toHaveTextContent('t1'));
     expect(fetchFn).toHaveBeenCalledWith('/api/tfactory/tasks/t1/rerun?project_id=demo', expect.objectContaining({ method: 'POST' }));
-    expect(view.container.querySelector('.pl-col .pl-speccard')).not.toHaveTextContent('executor');
+    expect(view.container.querySelector('.f-column .f-card')).not.toHaveTextContent('executor');
     expect(screen.getByRole('status')).toHaveTextContent('Automatic planning is disabled');
   });
 
@@ -79,11 +155,12 @@ describe('TFactoryPipelineBoard terminal badges', () => {
           : { ...task('failed', 'executor'), updated_at: '2026-05-28T10:02:00+00:00' }], count: 1 },
     })) as unknown as typeof fetch;
     render(<TFactoryPipelineView projectId="demo" fetchFn={fetchFn} pollMs={200} onSelectTask={() => {}} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Failed (1)' }));
+    const failedBtns = await screen.findAllByRole('button', { name: 'Failed (1)' });
+    fireEvent.click(failedBtns[0]);
     fireEvent.click(screen.getByRole('button', { name: 'Re-run' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Failed (0)' })).toBeInTheDocument());
     await waitFor(() => expect(screen.getByTestId('tfactory-pipeline')).toHaveTextContent('planning'));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Failed (1)' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Failed (1)' }).length).toBeGreaterThan(0));
     expect(screen.getByTestId('failed-runs')).toHaveTextContent('t1');
     expect(screen.getByRole('button', { name: 'Re-run' })).toBeInTheDocument();
   });
@@ -95,7 +172,7 @@ describe('TFactoryPipelineBoard terminal badges', () => {
   ])('localizes planner reason %s', async (reason, message) => {
     const fetchFn = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ planner_scheduled: false, planner_reason: reason }) }) as unknown as typeof fetch;
     render(<TFactoryPipelineBoard tasks={[task('failed', 'executor')]} onSelectTask={() => {}} fetchFn={fetchFn} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Failed (1)' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Failed (1)' })[0]);
     fireEvent.click(screen.getByRole('button', { name: 'Re-run' }));
     expect(await screen.findByRole('status')).toHaveTextContent(message);
   });
@@ -108,7 +185,7 @@ describe('TFactoryPipelineBoard terminal badges', () => {
     try {
       const fetchFn = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ planner_scheduled: false, planner_reason: reason }) }) as unknown as typeof fetch;
       render(<TFactoryPipelineBoard tasks={[task('failed', 'executor')]} onSelectTask={() => {}} fetchFn={fetchFn} />);
-      fireEvent.click(screen.getByRole('button', { name: i18n.t('tasks:pipeline.failed', { count: 1 }) }));
+      fireEvent.click(screen.getAllByRole('button', { name: i18n.t('tasks:pipeline.failed', { count: 1 }) })[0]);
       fireEvent.click(screen.getByRole('button', { name: i18n.t('tasks:pipeline.rerun') }));
       expect(await screen.findByRole('status')).toHaveTextContent(message);
     } finally {
@@ -120,7 +197,7 @@ describe('TFactoryPipelineBoard terminal badges', () => {
     const failed = task('failed', 'executor');
     const fetchFn = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ ok: true, dismissed: true }) }) as unknown as typeof fetch;
     const view = render(<TFactoryPipelineBoard tasks={[failed]} onSelectTask={() => {}} fetchFn={fetchFn} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Failed (1)' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Failed (1)' })[0]);
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Failed (0)' })).toBeInTheDocument());
     expect(fetchFn).toHaveBeenCalledWith('/api/tfactory/tasks/t1/dismiss?project_id=demo', expect.objectContaining({ method: 'POST' }));

@@ -2,6 +2,7 @@
   "pipeline": {
     "failed": "Échecs ({{count}})",
     "showDismissed": "Afficher les exécutions écartées",
+    "showMore": "Afficher {{count}} de plus",
     "rerun": "Relancer",
     "dismiss": "Écarter",
     "plannerNotScheduled": "La planification n’a pas été lancée",

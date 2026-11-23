@@ -50,11 +50,13 @@ describe('project routes', () => {
     expect(parseRoute('/p/alpha')).toEqual({ kind: 'project', ref: 'alpha', view: 'tfactory' });
     expect(parseRoute('/p/alpha/cloud')).toEqual({ kind: 'project', ref: 'alpha', view: 'cloud' });
     expect(parseRoute('/p/alpha/visual-reports')).toEqual({ kind: 'project', ref: 'alpha', view: 'visual-reports' });
+    expect(parseRoute('/p/alpha/settings')).toEqual({ kind: 'project', ref: 'alpha', view: 'settings' });
     expect(parseRoute('/p/alpha/bogus')).toEqual({ kind: 'project', ref: 'alpha', view: 'tfactory' });
     expect(parseRoute('/p/%E0%A4%A')).toMatchObject({ kind: 'project' });
     expect(parseRoute(projectPath('a b', 'terminals'))).toEqual({ kind: 'project', ref: 'a b', view: 'terminals' });
     expect(projectPath('x', 'tfactory')).toBe('/p/x');
     expect(parseRoute('/projects/')).toEqual({ kind: 'projects' });
+    expect(parseRoute('/preferences')).toEqual({ kind: 'preferences' });
     expect(parseRoute('/')).toEqual({ kind: 'home' });
   });
 });

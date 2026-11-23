@@ -3,13 +3,14 @@ import type { Project } from '../shared/types';
 
 export const PROJECT_VIEWS = [
   'tfactory', 'terminals', 'editor', 'context', 'github-issues', 'github-prs',
-  'changelog', 'insights', 'worktrees', 'agent-tools', 'skills', 'cloud', 'visual-reports',
+  'changelog', 'insights', 'worktrees', 'agent-tools', 'skills', 'cloud', 'visual-reports', 'settings',
 ] as const;
 export type ProjectView = (typeof PROJECT_VIEWS)[number];
 
 export type AppRoute =
   | { kind: 'project'; ref: string; view: ProjectView }
   | { kind: 'projects' }
+  | { kind: 'preferences' }
   | { kind: 'home' };
 
 export function slugify(name: string, fallback: string): string {
@@ -87,6 +88,7 @@ export function parseRoute(pathname: string): AppRoute {
     return { kind: 'project', ref, view };
   }
   if (/^\/projects\/?$/.test(pathname)) return { kind: 'projects' };
+  if (/^\/preferences\/?$/.test(pathname)) return { kind: 'preferences' };
   return { kind: 'home' };
 }
 

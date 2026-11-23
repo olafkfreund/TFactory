@@ -8,9 +8,7 @@
 //
 // Optional `needsCount` (#148/#149) renders a small badge on the Cockpit chip —
 // the fleet count of work items blocked on a human — so every portal's top bar
-// shows the same "N need you" nudge toward the cockpit inbox. Omit it and the
-// component renders exactly as before (byte-identical for hosts that don't wire
-// the count).
+// shows the same "N need you" nudge toward the cockpit inbox.
 export type FactoryPortal = 'plan' | 'build' | 'test' | 'cockpit' | 'meet';
 
 // import.meta.env values are typed loosely; keep the URLs strictly string.
@@ -25,35 +23,39 @@ const PORTALS: { key: FactoryPortal; label: string; dot: string; url: string }[]
   { key: 'meet', label: 'Meet', dot: 'var(--f-meet)', url: envUrl(import.meta.env.VITE_RFACTORY_URL, 'https://rfactory.freundcloud.org.uk') },
 ];
 
-const ITEM = 'inline-flex items-center gap-1.5 rounded-md px-2 py-1 font-mono text-xs';
-
 export function PortalSwitcher({
   current,
   needsCount,
   project,
+  labels,
+  ariaLabel,
 }: {
   current: FactoryPortal;
-  needsCount?: number;
-  project?: { slug: string; portals: FactoryPortal[] };
+  needsCount?: number | undefined;
+  project?: { slug: string; portals: FactoryPortal[] } | undefined;
+  labels?: Record<FactoryPortal, string> | undefined;
+  ariaLabel?: string | undefined;
 }) {
   return (
     <nav
-      aria-label="Factory portals"
-      className="inline-flex items-center gap-0.5 rounded-lg border border-border bg-card p-0.5"
+      aria-label={ariaLabel ?? "Factory portals"}
+      className="f-portal-switcher"
     >
       {PORTALS.map((p) => {
+        const label = labels?.[p.key] ?? p.label;
         const badge = p.key === 'cockpit' && needsCount ? needsCount : 0;
         const inner = (
           <>
             <span
-              className="h-2 w-2 flex-none rounded-full"
+              className="f-portal-switcher__dot"
+              aria-hidden
               style={{ background: p.dot, boxShadow: `0 0 6px ${p.dot}` }}
             />
-            <span className="hidden sm:inline">{p.label}</span>
+            <span className="f-portal-switcher__label">{label}</span>
             {badge > 0 && (
               <span
                 aria-label={`${String(badge)} need you`}
-                className="ml-0.5 min-w-4 rounded-full bg-primary px-1 text-center text-xs font-semibold leading-4 text-primary-foreground"
+                className="f-portal-switcher__badge"
               >
                 {badge}
               </span>
@@ -61,7 +63,7 @@ export function PortalSwitcher({
           </>
         );
         return p.key === current ? (
-          <span key={p.key} aria-current="page" className={`${ITEM} bg-muted text-foreground`}>
+          <span key={p.key} aria-current="page" className="f-portal-switcher__item">
             {inner}
           </span>
         ) : (
@@ -69,8 +71,8 @@ export function PortalSwitcher({
             key={p.key}
             href={project?.portals.includes(p.key) ? `${p.url.replace(/\/+$/, '')}/p/${encodeURIComponent(project.slug)}` : p.url}
             rel="noopener"
-            title={`Open the ${p.label} portal`}
-            className={`${ITEM} text-muted-foreground transition-colors hover:bg-muted hover:text-foreground`}
+            title={label}
+            className="f-portal-switcher__item"
           >
             {inner}
           </a>
