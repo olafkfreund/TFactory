@@ -115,8 +115,9 @@ def test_same_name_in_other_org_does_not_break_resolution(
         == "uuid-a"
     )
     assert (
-        client.get("/api/tfactory/tasks/same-spec", params={"project_id": "Workspace A"})
-        .json()["project_id"]
+        client.get(
+            "/api/tfactory/tasks/same-spec", params={"project_id": "Workspace A"}
+        ).json()["project_id"]
         == "uuid-a"
     )
     assert (
@@ -166,9 +167,7 @@ def test_list_tasks_unknown_and_invisible_project_match(scoped_tasks):
         for project_id in ("missing", "uuid-c")
     ]
     assert [response.status_code for response in responses] == [404, 404]
-    assert responses[0].json() == responses[1].json() == {
-        "detail": "Project not found"
-    }
+    assert responses[0].json() == responses[1].json() == {"detail": "Project not found"}
 
 
 def test_websocket_logs_unknown_and_invisible_project_match(scoped_tasks, monkeypatch):
@@ -180,9 +179,12 @@ def test_websocket_logs_unknown_and_invisible_project_match(scoped_tasks, monkey
     monkeypatch.setattr(tfactory_tasks, "authenticate_websocket", authenticate)
     errors = []
     for project_id in ("missing", "uuid-c"):
-        with client.websocket_connect(
-            f"/api/tfactory/tasks/same-spec/logs/stream?project_id={project_id}"
-        ) as websocket, pytest.raises(WebSocketDisconnect) as exc:
+        with (
+            client.websocket_connect(
+                f"/api/tfactory/tasks/same-spec/logs/stream?project_id={project_id}"
+            ) as websocket,
+            pytest.raises(WebSocketDisconnect) as exc,
+        ):
             websocket.receive_text()
         errors.append((exc.value.code, exc.value.reason))
     assert errors == [(4404, "Project not found")] * 2

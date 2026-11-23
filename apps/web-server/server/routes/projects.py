@@ -360,7 +360,9 @@ def repo_label(git_url: str | None) -> str | None:
     path = (
         git_url.split(":", 1)[1]
         if git_url.startswith("git@") and ":" in git_url
-        else urlsplit(git_url).path if "://" in git_url else git_url
+        else urlsplit(git_url).path
+        if "://" in git_url
+        else git_url
     )
     path = path.rsplit("@", 1)[-1]
     parts = [part for part in path.strip("/").split("/") if part and ":" not in part]

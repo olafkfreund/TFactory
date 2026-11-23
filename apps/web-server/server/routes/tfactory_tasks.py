@@ -1271,8 +1271,13 @@ async def _rerun_route(
             run_status.endswith("_failed")
             or run_status
             in {
-                "failed", "stuck", "stalled", "replan_needed", "completed",
-                "done", "dismissed",
+                "failed",
+                "stuck",
+                "stalled",
+                "replan_needed",
+                "completed",
+                "done",
+                "dismissed",
             }
         )
         if (isinstance(run_status, str) and run_status in active) or not (
