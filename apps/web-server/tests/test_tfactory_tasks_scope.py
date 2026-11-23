@@ -21,8 +21,8 @@ for root in (
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
 
-from server.routes import project_authz, projects, tfactory_tasks  # noqa: E402
 from server.auth import WebSocketAuthError  # noqa: E402
+from server.routes import project_authz, projects, tfactory_tasks  # noqa: E402
 
 
 @pytest.fixture
