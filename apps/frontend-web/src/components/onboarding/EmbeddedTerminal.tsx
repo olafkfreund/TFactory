@@ -3,6 +3,7 @@ import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
+import { getTerminalTheme } from '../terminal/terminalTheme';
 
 interface EmbeddedTerminalProps {
   /** Command to run after the terminal shell is ready */
@@ -70,13 +71,6 @@ export function EmbeddedTerminal({ initialCommand, onExit, onUrlDetected, onToke
 
     const terminalId = terminalIdRef.current;
 
-    const rootStyle = getComputedStyle(document.documentElement);
-    const readColor = (token: string, fallback: string) =>
-      rootStyle.getPropertyValue(token).trim() || fallback;
-    const bg = readColor('--color-background', '#0B0B0F');
-    const fg = readColor('--color-foreground', '#E8E6E3');
-    const cursor = readColor('--color-primary', '#D6D876');
-
     // Create xterm instance
     const xterm = new XTerm({
       cursorBlink: true,
@@ -84,29 +78,7 @@ export function EmbeddedTerminal({ initialCommand, onExit, onUrlDetected, onToke
       fontSize: 11,
       fontFamily: '"Ubuntu Mono", "DejaVu Sans Mono", "Liberation Mono", monospace',
       lineHeight: 1.2,
-      theme: {
-        background: bg,
-        foreground: fg,
-        cursor,
-        cursorAccent: bg,
-        selectionBackground: cursor.startsWith('#') ? `${cursor}40` : cursor,
-        black: '#1A1A1F',
-        red: readColor('--color-destructive', '#FF6B6B'),
-        green: readColor('--color-success', '#87D687'),
-        yellow: readColor('--color-warning', '#D6D876'),
-        blue: readColor('--color-info', '#6BB3FF'),
-        magenta: '#C792EA',
-        cyan: '#89DDFF',
-        white: fg,
-        brightBlack: '#4A4A50',
-        brightRed: '#FF8A8A',
-        brightGreen: '#A5E6A5',
-        brightYellow: '#E8E87A',
-        brightBlue: '#8AC4FF',
-        brightMagenta: '#DEB3FF',
-        brightCyan: '#A6E8FF',
-        brightWhite: '#FFFFFF',
-      },
+      theme: getTerminalTheme(),
       allowProposedApi: true,
       scrollback: 5000,
     });
