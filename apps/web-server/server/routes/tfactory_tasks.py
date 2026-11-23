@@ -63,8 +63,8 @@ from fastapi import (
     Response,
     WebSocket,
     WebSocketDisconnect,
+    status as http_status,
 )
-from fastapi import status as http_status
 from pydantic import BaseModel
 
 from ._tenancy import DEFAULT_TENANT, multi_tenant_enabled, resolve_tenant
@@ -1400,7 +1400,6 @@ async def _accept_visual_baseline_route(
     snapshot: str,
     body: _AcceptBaselineBody,
     request: Request,
-    project_id: str | None = None,
 ) -> dict[str, Any]:
-    visible = await _authorize_spec_request(request, spec_id, "member", project_id)
+    visible = await _authorize_spec_request(request, spec_id, "member")
     return accept_visual_baseline(spec_id, target, snapshot, body, visible)

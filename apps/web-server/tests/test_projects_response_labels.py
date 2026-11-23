@@ -21,9 +21,9 @@ from server.services import project_workspace_service as workspace  # noqa: E402
     "explicit,expected", [(None, "widget"), ("Custom App", "Custom App")]
 )
 def test_projects_clone_name_and_slug(tmp_path, monkeypatch, explicit, expected):
-    store = {}
+    store: dict[str, dict[str, object]] = {}
     monkeypatch.setattr(projects, "load_projects", lambda: store)
-    monkeypatch.setattr(projects, "save_projects", lambda value: store.update(value))
+    monkeypatch.setattr(projects, "save_projects", store.update)
     monkeypatch.setattr(workspace, "workspace_root", lambda: tmp_path)
 
     async def clone_or_update(**kwargs):
@@ -45,7 +45,7 @@ def test_projects_clone_name_and_slug(tmp_path, monkeypatch, explicit, expected)
     assert "token" not in str(response)
 
 
-def test_projects_same_basename_different_repos(tmp_path, monkeypatch):
+def test_projects_same_basename_different_repos(tmp_path):
     a = projects.project_to_response(
         "a",
         {

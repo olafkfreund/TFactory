@@ -15,8 +15,8 @@ for root in (
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
 
-from server.database.engine import get_db
-from server.routes import context, project_authz, projects
+from server.database.engine import get_db  # noqa: E402
+from server.routes import context, project_authz, projects  # noqa: E402
 
 
 @pytest.fixture
@@ -31,7 +31,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         projects, "load_projects", lambda: {"known": {"path": str(tmp_path)}}
     )
 
-    async def authorize(principal, project_id, min_role="viewer", db=None):
+    async def authorize(principal, project_id, min_role="viewer", _db=None):
         if project_id != "known" or principal["role"] == "invisible":
             raise HTTPException(404, "Project not found")
         role = "viewer" if principal["role"] == "scoped-owner" else principal["role"]

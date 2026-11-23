@@ -8,6 +8,7 @@ import logging
 import re
 import subprocess
 from pathlib import Path as FilePath
+from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from factory_common.url_safety import assert_safe_outbound_url
@@ -449,7 +450,7 @@ async def get_project_env(
     project_path = FilePath(projects[projectId]["path"])
     env_path = project_path / ".tfactory" / ".env"
 
-    config = {
+    config: dict[str, Any] = {
         "claudeAuthStatus": "not_configured",
         "githubEnabled": False,
         "githubTokenSet": False,

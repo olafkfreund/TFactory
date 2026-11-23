@@ -363,7 +363,7 @@ def repo_label(git_url: str | None) -> str | None:
         else urlsplit(git_url).path
     )
     parts = [part for part in path.strip("/").split("/") if part]
-    if len(parts) < 2:
+    if len(parts) <= 1:
         return None
     owner, repo = parts[-2], parts[-1].removesuffix(".git")
     if not all(re.fullmatch(r"[A-Za-z0-9_.-]+", part) for part in (owner, repo)):

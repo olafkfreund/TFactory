@@ -32,10 +32,10 @@ def scoped_tasks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     )
     monkeypatch.setattr(project_authz, "_load_projects", projects.load_projects)
 
-    async def visible(principal, db=None, min_role="viewer"):
+    async def visible(principal: dict[str, str], _db=None, _min_role="viewer") -> set[str]:
         return {"uuid-a", "uuid-b"} if principal["role"] != "invisible" else set()
 
-    async def authorize(principal, pid, min_role="viewer", db=None):
+    async def authorize(principal, pid, min_role="viewer", _db=None):
         if pid not in await visible(principal):
             raise HTTPException(404, "Project not found")
         if min_role == "member" and principal["role"] == "viewer":
