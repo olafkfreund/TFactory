@@ -8,13 +8,17 @@ import logging
 import re
 import subprocess
 from pathlib import Path as FilePath
+from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from factory_common.url_safety import assert_safe_outbound_url
-from fastapi import APIRouter, Depends, Path, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from pydantic import BaseModel, Field, SecretStr
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from server.database.engine import get_db
 from server.error_ref import InputRejectedError
-from server.routes.project_authz import ProjectAccessChecker
+from server.routes.project_authz import ProjectAccessChecker, require_project_role
 
 logger = logging.getLogger(__name__)
 
@@ -428,20 +432,27 @@ def _extract_memory_summary(data: dict) -> str:
 
 @project_router.get(
     "/env",
-    dependencies=[Depends(ProjectAccessChecker("admin"))],
+    dependencies=[Depends(ProjectAccessChecker("viewer"))],
 )
-async def get_project_env(projectId: str = Path(...)):
+async def get_project_env(
+    request: Request,
+    projectId: str = Path(...),
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+):
     """Get project environment configuration."""
     from .projects import load_projects
 
+    access = await require_project_role(
+        getattr(request.state, "user", None), projectId, "viewer", db
+    )
     projects = load_projects()
     if projectId not in projects:
-        return {"success": False, "error": f"Project {projectId} not found"}
+        raise HTTPException(404, "Project not found")
 
     project_path = FilePath(projects[projectId]["path"])
     env_path = project_path / ".tfactory" / ".env"
 
-    config = {
+    config: dict[str, Any] = {
         "claudeAuthStatus": "not_configured",
         "githubEnabled": False,
         "githubTokenSet": False,
@@ -552,6 +563,50 @@ async def get_project_env(projectId: str = Path(...)):
     except Exception:
         pass
 
+    if access.role not in ("admin", "owner"):
+
+        def strip_userinfo(value: str) -> str:
+            try:
+                parsed = urlsplit(value if "://" in value else f"//{value}")
+                safe = urlunsplit(
+                    (
+                        parsed.scheme,
+                        parsed.netloc.rsplit("@", 1)[-1],
+                        parsed.path,
+                        "",
+                        "",
+                    )
+                )
+                return safe[2:] if not parsed.scheme and safe.startswith("//") else safe
+            except ValueError:
+                return ""
+
+        allowed = {
+            "claudeAuthStatus",
+            "githubEnabled",
+            "githubTokenSet",
+            "githubRepo",
+            "graphitiEnabled",
+            "enableFancyUi",
+            "gitProvider",
+            "gitRepo",
+            "gitOrg",
+            "gitProject",
+        }
+        redacted = {key: value for key, value in config.items() if key in allowed}
+        for key in ("gitBaseUrl", "gitRepo", "githubRepo"):
+            redacted[key] = strip_userinfo(config[key])
+        provider = config.get("graphitiProviderConfig", {})
+        redacted["graphitiKeysSet"] = any(
+            provider.get(key)
+            for key in (
+                "openaiApiKey",
+                "voyageApiKey",
+                "googleApiKey",
+                "azureOpenaiApiKey",
+            )
+        )
+        return {"success": True, "data": redacted}
     return {"success": True, "data": config}
 
 

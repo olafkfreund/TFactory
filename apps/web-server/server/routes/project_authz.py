@@ -317,7 +317,11 @@ def resolve_project_id(
     projects = _load_projects() if projects is None else projects
     if ref in projects:
         return ref
-    matches = [pid for pid, project in projects.items() if project.get("name") == ref]
+    matches = [
+        pid
+        for pid, project in projects.items()
+        if ref == project.get("name") or ref in (project.get("aliases") or ())
+    ]
     return matches[0] if len(matches) == 1 else None
 
 
