@@ -200,7 +200,7 @@ export function CommandPalette({
             return (
               <div key={row.kind === 'cmd' ? row.cmd.id : row.kind === 'task' ? `t-${row.task.id}` : `p-${row.project.slug}`}>
                 {header && (
-                  <div className="px-2 pb-1 pt-2 font-mono text-[0.62rem] uppercase tracking-wider text-muted-foreground">
+                  <div className="px-2 pb-1 pt-2 font-mono text-xs uppercase tracking-wider text-muted-foreground">
                     {header}
                   </div>
                 )}
@@ -220,7 +220,7 @@ export function CommandPalette({
                     {row.kind === 'cmd' ? row.cmd.label : row.kind === 'task' ? row.task.title : row.project.name}
                   </span>
                   {row.kind === 'task' && row.task.hint && (
-                    <span className="flex-none font-mono text-[0.62rem] uppercase tracking-wider text-muted-foreground">
+                    <span className="flex-none font-mono text-xs uppercase tracking-wider text-muted-foreground">
                       {row.task.hint}
                     </span>
                   )}
@@ -230,7 +230,7 @@ export function CommandPalette({
           })}
         </div>
 
-        <div className="flex gap-4 border-t border-border px-4 py-2 font-mono text-[0.68rem] text-muted-foreground">
+        <div className="flex gap-4 border-t border-border px-4 py-2 font-mono text-xs text-muted-foreground">
           <span><b className="text-foreground/70">↑↓</b> navigate</span>
           <span><b className="text-foreground/70">↵</b> open</span>
           <span><b className="text-foreground/70">esc</b> close</span>
