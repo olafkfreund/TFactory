@@ -9,7 +9,8 @@ import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import { TFactoryPipelineBoard } from '../TFactoryPipelineBoard';
-import '../../../shared/i18n';
+import { TFactoryPipelineView } from '../TFactoryPipelineView';
+import i18n from '../../../shared/i18n';
 
 vi.stubGlobal('ResizeObserver', class {
   observe() {}
@@ -57,13 +58,62 @@ describe('TFactoryPipelineBoard terminal badges', () => {
   });
 
   it('reruns a failed card in its project and moves it to Plan', async () => {
-    const fetchFn = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ planner_scheduled: false, planner_reason: 'No planner available' }) }) as unknown as typeof fetch;
+    const fetchFn = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ planner_scheduled: false, planner_reason: 'auto_plan_disabled' }) }) as unknown as typeof fetch;
     const view = render(<TFactoryPipelineBoard tasks={[task('failed', 'executor')]} onSelectTask={() => {}} fetchFn={fetchFn} />);
     fireEvent.click(screen.getByRole('button', { name: 'Failed (1)' }));
     fireEvent.click(screen.getByRole('button', { name: 'Re-run' }));
     await waitFor(() => expect(view.container.querySelectorAll('.pl-col')[0]).toHaveTextContent('t1'));
     expect(fetchFn).toHaveBeenCalledWith('/api/tfactory/tasks/t1/rerun?project_id=demo', expect.objectContaining({ method: 'POST' }));
-    expect(screen.getByRole('status')).toHaveTextContent('No planner available');
+    expect(view.container.querySelector('.pl-col .pl-speccard')).not.toHaveTextContent('executor');
+    expect(screen.getByRole('status')).toHaveTextContent('Automatic planning is disabled');
+  });
+
+  it('shows a new failure after a rerun and a successful poll', async () => {
+    let polls = 0;
+    const fetchFn = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => ({
+      ok: true,
+      json: async () => init?.method === 'POST'
+        ? { planner_scheduled: true }
+        : { tasks: [polls++ === 0 ? task('failed', 'executor') : polls === 2
+          ? { ...task('planning', 'planner'), updated_at: '2026-05-28T10:01:00+00:00' }
+          : { ...task('failed', 'executor'), updated_at: '2026-05-28T10:02:00+00:00' }], count: 1 },
+    })) as unknown as typeof fetch;
+    render(<TFactoryPipelineView projectId="demo" fetchFn={fetchFn} pollMs={200} onSelectTask={() => {}} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Failed (1)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Re-run' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Failed (0)' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('tfactory-pipeline')).toHaveTextContent('planning'));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Failed (1)' })).toBeInTheDocument());
+    expect(screen.getByTestId('failed-runs')).toHaveTextContent('t1');
+    expect(screen.getByRole('button', { name: 'Re-run' })).toBeInTheDocument();
+  });
+
+  it.each([
+    ['checkout_failed', 'Source checkout failed; planner was not scheduled'],
+    ['scheduler_failed', 'Planner scheduling failed'],
+    ['auto_plan_disabled', 'Automatic planning is disabled'],
+  ])('localizes planner reason %s', async (reason, message) => {
+    const fetchFn = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ planner_scheduled: false, planner_reason: reason }) }) as unknown as typeof fetch;
+    render(<TFactoryPipelineBoard tasks={[task('failed', 'executor')]} onSelectTask={() => {}} fetchFn={fetchFn} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Failed (1)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Re-run' }));
+    expect(await screen.findByRole('status')).toHaveTextContent(message);
+  });
+
+  it.each([
+    ['fr', 'scheduler_failed', 'Le lancement de la planification a échoué'],
+    ['pt-BR', 'checkout_failed', 'Falha ao obter o código-fonte; o planejador não foi agendado'],
+  ])('shows planner reason in %s', async (language, reason, message) => {
+    await i18n.changeLanguage(language);
+    try {
+      const fetchFn = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ planner_scheduled: false, planner_reason: reason }) }) as unknown as typeof fetch;
+      render(<TFactoryPipelineBoard tasks={[task('failed', 'executor')]} onSelectTask={() => {}} fetchFn={fetchFn} />);
+      fireEvent.click(screen.getByRole('button', { name: i18n.t('tasks:pipeline.failed', { count: 1 }) }));
+      fireEvent.click(screen.getByRole('button', { name: i18n.t('tasks:pipeline.rerun') }));
+      expect(await screen.findByRole('status')).toHaveTextContent(message);
+    } finally {
+      await i18n.changeLanguage('en');
+    }
   });
 
   it('dismisses a failed card and keeps it hidden after a stale poll', async () => {

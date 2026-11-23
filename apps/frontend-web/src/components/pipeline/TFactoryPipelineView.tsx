@@ -43,12 +43,13 @@ export function TFactoryPipelineView({ onSelectTask, projectId, fetchFn, pollMs 
 
   useEffect(() => {
     if (!pollMs || pollMs <= 0) return;
+    let cancelled = false;
     const id = setInterval(() => {
       listTasks({ fetchFn, projectId })
-        .then((response) => setTasks(response.tasks))
+        .then((response) => { if (!cancelled) setTasks(response.tasks); })
         .catch(() => { /* keep last-good board on a transient poll error */ });
     }, pollMs);
-    return () => clearInterval(id);
+    return () => { cancelled = true; clearInterval(id); };
   }, [fetchFn, projectId, pollMs]);
 
   return (

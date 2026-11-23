@@ -480,6 +480,13 @@ function VerdictBuckets({ verdicts }: { verdicts: TFactoryVerdict[] }) {
 
 // ── Evidence panel ──────────────────────────────────────────────────
 
+function scopedArtifactUrl(url: string, projectId?: string): string {
+  if (!projectId || !/^\/api\/tfactory\/tasks\/[^/]+\/(?:evidence|screenshots|videos)\//.test(url)) return url;
+  const parsed = new URL(url, window.location.origin);
+  parsed.searchParams.set('project_id', projectId);
+  return parsed.pathname + parsed.search + parsed.hash;
+}
+
 function EvidenceTestRow({ specId, projectId, testId, urls }: { specId: string; projectId?: string; testId: string; urls: EvidenceUrls }) {
   const screenshots: string[] = Array.isArray(urls.screenshots)
     ? urls.screenshots : typeof urls.screenshots === 'string' ? [urls.screenshots] : [];
@@ -487,7 +494,7 @@ function EvidenceTestRow({ specId, projectId, testId, urls }: { specId: string; 
   const traceUrl = typeof urls.trace === 'string' ? urls.trace : null;
   const networkUrl = typeof urls.network === 'string' ? urls.network : null;
   const buildUrl = (p: string) => p.startsWith('/api/')
-    ? `${p}${projectId ? `${p.includes('?') ? '&' : '?'}project_id=${encodeURIComponent(projectId)}` : ''}`
+    ? scopedArtifactUrl(p, projectId)
     : evidenceArtifactUrl(specId, testId, p, projectId);
 
   return (
@@ -830,7 +837,7 @@ export function TFactoryTaskDetail({ specId, projectId, fetchFn, wsFactory, poll
             {reportError && <div role="alert" className="p-4 text-sm text-destructive">{reportError}</div>}
             {reportMd && (
               <div data-testid="report-md-content" className="rounded-lg border border-border bg-card p-4">
-                <MarkdownBody source={reportMd} />
+                <MarkdownBody source={reportMd} rewriteUrl={(url) => scopedArtifactUrl(url, projectId)} />
               </div>
             )}
           </>

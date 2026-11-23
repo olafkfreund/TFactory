@@ -5,10 +5,6 @@ import { MemoryRouter, useLocation, useNavigate } from 'react-router';
 import type { Project } from '../shared/types';
 
 // Heavy children are stubs that print which project/view they got.
-vi.mock('../components/Sidebar', () => ({ Sidebar: (p: { projectId: string | null; onViewChange: (view: 'tfactory') => void }) => <>
-  <output data-testid="sidebar-project">{p.projectId ?? 'none'}</output>
-  <button onClick={() => p.onViewChange('tfactory')}>Tests</button>
-</> }));
 vi.mock('../components/ProjectTabBar', () => ({
   ProjectTabBar: (p: { currentSlug?: string; activeProjectId: string | null }) => <div data-testid="bar">{p.currentSlug}:{p.activeProjectId ?? 'none'}</div>,
 }));
@@ -291,7 +287,7 @@ describe('URL-scoped projects', () => {
     await screen.findByTestId('task-row-t1');
     expect(screen.getByTestId('wizard-project')).toHaveTextContent('id-alpha');
     act(() => { void nav('/projects'); });
-    expect(screen.getByTestId('sidebar-project')).toHaveTextContent('none');
+    expect(screen.getByRole('button', { name: 'Files' })).toBeDisabled();
     expect(screen.getByTestId('settings-project')).toHaveTextContent('none');
     expect(screen.getByTestId('bar')).toHaveTextContent(':none');
     expect(screen.queryByTestId('wizard-project')).toBeNull();

@@ -4,7 +4,10 @@
     "showDismissed": "Mostrar dispensadas",
     "rerun": "Executar novamente",
     "dismiss": "Dispensar",
-    "plannerNotScheduled": "O planejador não foi agendado"
+    "plannerNotScheduled": "O planejador não foi agendado",
+    "checkoutFailed": "Falha ao obter o código-fonte; o planejador não foi agendado",
+    "schedulerFailed": "Falha ao agendar o planejador",
+    "autoPlanDisabled": "O planejamento automático está desativado"
   },
   "status": {
     "backlog": "Backlog",

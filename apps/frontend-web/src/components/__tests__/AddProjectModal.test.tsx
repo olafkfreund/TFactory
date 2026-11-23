@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import '../../shared/i18n';
 import { AddProjectModal } from '../AddProjectModal';
 
@@ -66,5 +66,40 @@ describe('AddProjectModal', () => {
     const reopenedGitUrlInput = screen.getByLabelText('Git repository URL');
     expect(reopenedGitUrlInput).toHaveValue('');
     expect(discoverProjects).not.toHaveBeenCalled();
+  });
+
+  it('ignores a scan that finishes after switching to Clone or closing', async () => {
+    let rejectScan: ((reason: Error) => void) | undefined;
+    discoverProjects.mockImplementation(() => new Promise((_, reject) => { rejectScan = reject; }));
+    const onOpenChange = vi.fn();
+    const view = render(<AddProjectModal open={true} onOpenChange={onOpenChange} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Local folder' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Clone from Git URL' }));
+    fireEvent.change(screen.getByLabelText('Git repository URL'), { target: { value: 'https://github.com/acme/demo.git' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Add Project' })).toBeEnabled());
+    await act(async () => { rejectScan?.(new Error('stale scan failure')); });
+    expect(screen.queryByText('stale scan failure')).toBeNull();
+    view.rerender(<AddProjectModal open={false} onOpenChange={onOpenChange} />);
+    view.rerender(<AddProjectModal open={true} onOpenChange={onOpenChange} />);
+    expect(screen.queryByText('stale scan failure')).toBeNull();
+  });
+
+  it('clears a completed Local scan error on Clone and ignores a scan from the previous opening', async () => {
+    discoverProjects.mockResolvedValueOnce({ success: false, error: 'local scan failed' });
+    const onOpenChange = vi.fn();
+    const view = render(<AddProjectModal open={true} onOpenChange={onOpenChange} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Local folder' }));
+    expect(await screen.findByText('local scan failed')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Clone from Git URL' }));
+    expect(screen.queryByText('local scan failed')).toBeNull();
+
+    let rejectOldScan: ((reason: Error) => void) | undefined;
+    discoverProjects.mockImplementationOnce(() => new Promise((_, reject) => { rejectOldScan = reject; }));
+    fireEvent.click(screen.getByRole('button', { name: 'Local folder' }));
+    view.rerender(<AddProjectModal open={false} onOpenChange={onOpenChange} />);
+    view.rerender(<AddProjectModal open={true} onOpenChange={onOpenChange} />);
+    await act(async () => { rejectOldScan?.(new Error('closed scan failed')); });
+    expect(screen.queryByText('closed scan failed')).toBeNull();
+    expect(screen.getByLabelText('Git repository URL')).toBeInTheDocument();
   });
 });

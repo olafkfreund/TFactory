@@ -133,7 +133,7 @@ export function TFactoryPipelineBoard({ tasks, onSelectTask, fetchFn }: Props) {
   const { t } = useTranslation('tasks');
   const [showFailed, setShowFailed] = useState(false);
   const [showDismissed, setShowDismissed] = useState(false);
-  const [overrides, setOverrides] = useState<Record<string, Partial<TFactoryTaskSummary>>>({});
+  const [overrides, setOverrides] = useState<Record<string, { patch: Partial<TFactoryTaskSummary>; updatedAt: string }>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [plannerReason, setPlannerReason] = useState<string | null>(null);
@@ -143,9 +143,22 @@ export function TFactoryPipelineBoard({ tasks, onSelectTask, fetchFn }: Props) {
   const [flights, setFlights] = useState<Flight[]>([]);
   const prevStage = useRef<Map<string, Stage>>(new Map());
 
+  useEffect(() => {
+    setOverrides((current) => {
+      const next = { ...current };
+      for (const task of tasks) {
+        const key = `${task.project_id}:${task.spec_id}`;
+        const override = next[key];
+        if (override && (task.updated_at !== override.updatedAt || !isFailed(task) || (override.patch.dismissed === true && task.dismissed === true))) delete next[key];
+      }
+      return Object.keys(next).length === Object.keys(current).length ? current : next;
+    });
+  }, [tasks]);
+
   const visible = useMemo(() => tasks.map((task) => ({
     ...task,
-    ...(isFailed(task) ? overrides[`${task.project_id}:${task.spec_id}`] : undefined),
+    ...(isFailed(task) && overrides[`${task.project_id}:${task.spec_id}`]?.updatedAt === task.updated_at
+      ? overrides[`${task.project_id}:${task.spec_id}`].patch : undefined),
   })).filter((task) => showDismissed || !task.dismissed), [tasks, overrides, showDismissed]);
   const failed = visible.filter(isFailed);
 
@@ -157,11 +170,18 @@ export function TFactoryPipelineBoard({ tasks, onSelectTask, fetchFn }: Props) {
     try {
       if (action === 'rerun') {
         const result = await rerunTask(task.spec_id, { projectId: task.project_id, fetchFn });
-        setOverrides((current) => ({ ...current, [key]: { status: 'pending', dismissed: false } }));
-        if (!result.planner_scheduled) setPlannerReason(result.planner_reason || t('pipeline.plannerNotScheduled'));
+        setOverrides((current) => ({ ...current, [key]: { patch: { status: 'pending', phase: null, dismissed: false }, updatedAt: task.updated_at } }));
+        if (!result.planner_scheduled) {
+          const reasons: Record<string, string> = {
+            checkout_failed: 'pipeline.checkoutFailed',
+            scheduler_failed: 'pipeline.schedulerFailed',
+            auto_plan_disabled: 'pipeline.autoPlanDisabled',
+          };
+          setPlannerReason(t(reasons[result.planner_reason ?? ''] ?? 'pipeline.plannerNotScheduled'));
+        }
       } else {
         await dismissRun(task.spec_id, { projectId: task.project_id, fetchFn });
-        setOverrides((current) => ({ ...current, [key]: { dismissed: true } }));
+        setOverrides((current) => ({ ...current, [key]: { patch: { dismissed: true }, updatedAt: task.updated_at } }));
       }
     } catch (error) {
       setActionError(error instanceof Error ? error.message : String(error));
