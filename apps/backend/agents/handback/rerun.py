@@ -104,6 +104,8 @@ def rerun_pipeline(
     status.setdefault("lane_progress", {})[lane] = "pending"
     status["status"] = "pending"
     status["phase"] = "created"
+    status.pop("dismissed", None)
+    status.pop("dismissed_at", None)
     status["updated_at"] = _now_iso()
     status_file.write_text(json.dumps(status, indent=2))
 
@@ -111,6 +113,7 @@ def rerun_pipeline(
     # gated by TFACTORY_AUTO_PLAN and each stage's success path auto-chains the
     # next agent, so this one call drives the whole pipeline.
     planner_scheduled = False
+    planner_reason = None
     try:
         from agents.planner import schedule_planner
 
@@ -120,8 +123,10 @@ def rerun_pipeline(
             mode="initial",
         )
         planner_scheduled = task is not None
+        if not planner_scheduled:
+            planner_reason = "Automatic planning is disabled"
     except ImportError:
-        pass  # planner not importable (minimal venv) — status stays pending
+        planner_reason = "Planner is unavailable"
 
     return {
         "task_id": f"{project_id}:{spec_id}",
@@ -129,4 +134,5 @@ def rerun_pipeline(
         "rerun_count": rerun_count,
         "status": "pending",
         "planner_scheduled": planner_scheduled,
+        "planner_reason": planner_reason,
     }

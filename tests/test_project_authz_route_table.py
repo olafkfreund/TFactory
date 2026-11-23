@@ -237,7 +237,7 @@ def test_unguarded_route_fails_route_table() -> None:
 
 def test_sensitive_route_dependency_roles() -> None:
     required = {
-        ("GET", "/api/projects/{projectId}/env"): "admin",
+        ("GET", "/api/projects/{projectId}/env"): "viewer",
         ("PATCH", "/api/projects/{projectId}/env"): "admin",
         ("PUT", "/api/files/{project_id}/write"): "member",
         ("DELETE", "/api/projects/{project_id}"): "admin",

@@ -35,7 +35,9 @@ async def test_unknown_project_with_git_url_clones_and_registers(monkeypatch, tm
 
     # project store empty -> unknown project
     monkeypatch.setattr("server.routes.projects.load_projects", lambda: {})
-    monkeypatch.setattr("server.routes.projects.save_projects", lambda p: None)
+    monkeypatch.setattr(
+        "server.routes.projects.save_projects", lambda p: seen.update(projects=p)
+    )
     monkeypatch.setattr(
         "server.services.project_workspace_service.clone_or_update", fake_clone
     )
@@ -57,6 +59,7 @@ async def test_unknown_project_with_git_url_clones_and_registers(monkeypatch, tm
     assert seen["branch"] == "aifactory/027-x"
     assert seen["project_root"] == str(tmp_path)  # cloned path used as root
     assert seen["source_branch"] == "aifactory/027-x"
+    assert next(iter(seen["projects"].values()))["name"] == "aifactory-test"
 
 
 @pytest.mark.asyncio

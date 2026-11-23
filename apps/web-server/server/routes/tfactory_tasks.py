@@ -36,6 +36,7 @@ from server.error_ref import InputRejectedError, client_error
 from ._specpath import safe_component, safe_slug
 from .project_authz import (
     require_project_role,
+    resolve_project_id,
     resolve_task_project,
     visible_project_ids,
 )
@@ -62,8 +63,8 @@ from fastapi import (
     Response,
     WebSocket,
     WebSocketDisconnect,
-    status as http_status,
 )
+from fastapi import status as http_status
 from pydantic import BaseModel
 
 from ._tenancy import DEFAULT_TENANT, multi_tenant_enabled, resolve_tenant
@@ -138,7 +139,13 @@ async def _authorize_spec_request(
         else None
     )
     visible = await visible_project_ids(principal)
-    task_ref = f"{safe_component(q_pid)}:{spec_id}" if q_pid else spec_id
+    if q_pid:
+        pid_ref = resolve_project_id(q_pid)
+        if pid_ref not in visible:
+            raise HTTPException(404, "Project not found")
+        task_ref = f"{safe_component(pid_ref)}:{spec_id}"
+    else:
+        task_ref = spec_id
     pid, _ = resolve_task_project(task_ref, visible)
     await require_project_role(principal, pid, min_role)
     return {pid}
@@ -201,6 +208,7 @@ def _summary_row(status_path: Path) -> dict[str, Any]:
         # Surface the spec title so the cockpit/Pipeline cards aren't blank.
         "title": status_doc.get("title"),
         "status": status_doc.get("status"),
+        "dismissed": bool(status_doc.get("dismissed", False)),
         "phase": status_doc.get("phase"),
         # Tenant scoping (#683): rows written before tenant stamping lazily
         # backfill to "default" at read time.
@@ -276,6 +284,7 @@ def _artefact_meta(spec_dir: Path) -> dict[str, dict]:
 def list_tasks(
     x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
     visible: set[str] | None = None,
+    project_id: str | None = None,
 ) -> dict[str, Any]:
     """List all TFactory tasks across visible projects.
 
@@ -296,13 +305,20 @@ def list_tasks(
     belonging to the request's tenant (``X-Tenant-Id`` header, fallback
     "default") are returned; off = unchanged (all rows).
     """
+    resolved_id = resolve_project_id(project_id) if project_id else None
+    if project_id and (
+        resolved_id is None or (visible is not None and resolved_id not in visible)
+    ):
+        raise HTTPException(404, "Project not found")
     root = _resolve_workspace_root()
     workspaces = root / "workspaces"
     rows: list[dict] = []
     if workspaces.exists():
         for status_path in workspaces.glob("*/specs/*/status.json"):
             row = _summary_row(status_path)
-            if visible is None or row.get("project_id") in visible:
+            if (visible is None or row.get("project_id") in visible) and (
+                resolved_id is None or row.get("project_id") == resolved_id
+            ):
                 rows.append(row)
     if multi_tenant_enabled():
         # Direct (non-HTTP) callers pass no header; Header default may be a
@@ -317,11 +333,12 @@ def list_tasks(
 @router.get("")
 async def _list_tasks_route(
     request: Request,
+    project_id: str | None = None,
     x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
 ) -> dict[str, Any]:
     principal = getattr(request.state, "user", None)
     visible = await visible_project_ids(principal, None, "viewer")
-    return list_tasks(x_tenant_id=x_tenant_id, visible=visible)
+    return list_tasks(x_tenant_id=x_tenant_id, visible=visible, project_id=project_id)
 
 
 def get_task(spec_id: str, visible: set[str] | None = None) -> dict:
@@ -642,7 +659,9 @@ def tail_log_payload(
 
 
 @router.websocket("/{spec_id}/logs/stream")
-async def websocket_logs(websocket: WebSocket, spec_id: str) -> None:
+async def websocket_logs(
+    websocket: WebSocket, spec_id: str, project_id: str | None = None
+) -> None:
     """WebSocket log tail. Sends one ``tail_log_payload`` snapshot on
     connect; the frontend polls via reconnect for refreshes (live tail
     is a Task 11 follow-up).
@@ -659,12 +678,15 @@ async def websocket_logs(websocket: WebSocket, spec_id: str) -> None:
     try:
         try:
             _validate_spec_id(spec_id)
-            visible: set[str] | None = None
-            if principal is not None:
-                visible = await visible_project_ids(principal, None, "viewer")
-                pid, _ = resolve_task_project(spec_id, visible)
-                await require_project_role(principal, pid, "viewer")
-                visible = {pid}
+            visible = await visible_project_ids(principal, None, "viewer")
+            pid_ref = resolve_project_id(project_id) if project_id else None
+            if project_id and pid_ref not in visible:
+                raise HTTPException(404, "Project not found")
+            pid, _ = resolve_task_project(
+                f"{pid_ref}:{spec_id}" if pid_ref else spec_id, visible
+            )
+            await require_project_role(principal, pid, "viewer")
+            visible = {pid}
             payload = tail_log_payload(spec_id, visible=visible)
         except HTTPException as exc:
             # 400 → close with 4400, 404 → 4404 (custom WS close codes)
@@ -1197,6 +1219,24 @@ async def _dismiss_run_route(
     return dismiss_run(spec_id, visible)
 
 
+@router.post("/{spec_id}/rerun")
+async def _rerun_route(
+    spec_id: str, request: Request, project_id: str | None = None
+) -> dict[str, Any]:
+    visible = await _authorize_spec_request(request, spec_id, "member", project_id)
+    spec_dir = _spec_dir_or_404(spec_id, visible)
+    from .handback import _ACTIVE_STATUSES  # noqa: PLC0415
+
+    current = _read_json(spec_dir / "status.json") or {}
+    if current.get("status") in _ACTIVE_STATUSES:
+        raise HTTPException(409, "Task is already active")
+    from agents.handback.rerun import rerun_pipeline  # noqa: PLC0415
+
+    return rerun_pipeline(
+        spec_dir.parent.parent.name, spec_id, root=_resolve_workspace_root()
+    )
+
+
 # ─── Visual regression baselines (#109) ───────────────────────────────────
 #
 # Surface the stored visual baselines (agents.evidence.visual_baseline) so the
@@ -1360,6 +1400,7 @@ async def _accept_visual_baseline_route(
     snapshot: str,
     body: _AcceptBaselineBody,
     request: Request,
+    project_id: str | None = None,
 ) -> dict[str, Any]:
-    visible = await _authorize_spec_request(request, spec_id, "member")
+    visible = await _authorize_spec_request(request, spec_id, "member", project_id)
     return accept_visual_baseline(spec_id, target, snapshot, body, visible)

@@ -491,10 +491,12 @@ async def ingest_spec(  # noqa: PLR0912,PLR0915 - handoff stages share authoriza
                         membership,
                         "member",
                     )
+            from .projects import repo_basename  # noqa: PLC0415
+
             entry, resolved_id = await _clone_and_register_project(
                 git_url,
                 branch=req.source_branch,
-                name=str(req.project_id),
+                name=repo_basename(git_url),
                 org_id=org_id,
                 service_access=is_service_principal(principal),
             )
