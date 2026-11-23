@@ -59,29 +59,11 @@ RUN mkdir -p apps/web-server/static \
 # digest as frontend-build, so both move together in one Dependabot bump.
 FROM docker.io/node:26-bookworm-slim@sha256:c8fedd782bcd1b68d8a7d1ed2577b5f820eba820871323f605292651ff11e3c6 AS node-runtime
 
-FROM cgr.dev/chainguard/python:latest-dev@sha256:96cb9c155159daf6b21e70555f244081909ff161c5589112ddf308624c1a1c77 AS runtime
+FROM ghcr.io/olafkfreund/tfactory-base:runtime-20261123-2754c6e@sha256:8612728b4dfb544b999f3803bb2395202f50f1135992bbf6a9f42abd6eeafb09 AS runtime
 
 USER root
 
-# Pull all available Wolfi security patches at build time. The base is pinned
-# by digest for reproducibility, but a pinned digest lags behind freshly-
-# disclosed CVEs. When the rolling Wolfi repo is ahead of the pinned snapshot,
-# `apk upgrade` clears fixable HIGH/CRITICAL findings on each rebuild without a
-# digest bump — the between-bumps guard (cf. the binutils constraint below).
-# When the snapshot itself lags (the repo has no newer rev yet), bump the base
-# digest above to a Chainguard rebuild that ships the fix — that's what cleared
-# CVE-2026-45447 (libcrypto3/libssl3 3.6.2-r5 → 3.6.3-r1). Dependabot automates
-# the digest bumps; this RUN covers the window in between.
-#
-# SECURITY_REFRESH busts THIS layer's cache. CI builds with `cache-from`, so
-# without it the upgrade layer is served from cache and never re-runs -- the
-# image keeps shipping whatever Debian shipped the day the layer was first
-# built. That is how CFactory#440 hit a Trivy failure for CVE-2026-14456 on an
-# image whose Dockerfile already ran `apt-get upgrade`: the upgrade was real,
-# its result was frozen. CI passes the date, so it rebuilds at most daily.
-ARG SECURITY_REFRESH=0
-RUN echo "security refresh: ${SECURITY_REFRESH}" \
-    && apk upgrade --no-cache
+# Wolfi packages are installed in docker/base.Dockerfile.
 
 # Node from the official image (Factory#1710). apk `nodejs` is rebuilt on the
 # rolling index against the newest glibc, while this base pins glibc exactly in
@@ -101,87 +83,7 @@ RUN want="$(tr -dc '0-9.' < /tmp/.nvmrc | cut -d. -f1)" \
  || { echo "Node major drift: .nvmrc=$want runtime=$have (Factory#1710)"; exit 1; } \
  && rm /tmp/.nvmrc
 
-# System packages from Wolfi APK index. Build tools come bundled in :latest-dev.
-#   git           — worktree operations
-#   curl, wget    — downloads (HEALTHCHECK uses curl)
-#   gh            — GitHub CLI (Wolfi apk package name)
-#   (Node is NOT from apk: see the node-runtime COPY below, Factory#1710.)
-#   ca-certificates — TLS roots
-#   bash          — entrypoint script (will be removed in P0.3)
-#   binutils      — the :latest-dev base bundles binutils 2.46-r1, which carries
-#                   CVE-2026-6846 (HIGH, heap overflow in XCOFF linking; fixed in
-#                   2.46-r2). Force a build-newer rev to clear the P0.8 Trivy gate
-#                   (test_trivy_no_high_critical). Constraint, not =2.46-r2, so
-#                   the build stays green when Wolfi revs the package further;
-#                   drop this once the base digest ships the fix (Dependabot).
-#   bubblewrap    — OS-level bash sandbox for agent commands. Without it the
-#                   Claude Agent SDK logs "Sandbox disabled: ... bubblewrap
-#                   (bwrap) not installed" and runs commands with NO filesystem
-#                   /network enforcement — unacceptable for enterprise use. The
-#                   cluster node allows unprivileged user namespaces, so bwrap
-#                   can create the sandbox.
-#   socat         — required alongside bwrap by the SDK sandbox network-proxy
-#                   path; its absence triggers the same warning.
-# Two version floors below are CVE remediation, not preference. `apk upgrade`
-# earlier in this stage does not clear either, because both packages come from
-# the base image layer and must be named explicitly to be pulled forward:
-#   libssl3 / libcrypto3 3.6.3-r3 — CVE-2026-14456 (HIGH), fixed in 3.6.3-r5.
-#                        Named together because they ship from the same openssl
-#                        origin and apk will not move one without the other.
-#   busybox 1.37.0-r61 — CVE-2026-38753 (DoS via crafted AWK in awk_sub) and
-#                        CVE-2026-38754 (heap overflow in ifsbreakup, shell/ash.c),
-#                        both HIGH, both fixed in 1.38.0-r0.
-#   wget    1.25.0-r14 — CVE-2026-58471 and CVE-2026-58472, both HIGH, both
-#                        fixed in 1.25.0-r15.
-#   curl / libcurl-openssl4 8.22.0-r4 — CVE-2026-92392 (HIGH), fixed in
-#                        8.23.0-r0. Named together: same origin.
-#   ca-certificates-bundle 20260909-r2 — CVE-2026-111943 (HIGH), fixed in
-#                        20260909-r3.
-#   uv 0.12.22-r0 — CVE-2026-111943 (HIGH, same Go x509 denylist), fixed in
-#                        0.13.6-r1. Agents launch MCP servers with uvx.
-#   libbrotlicommon1 / libbrotlidec1 / libbrotlienc1 1.2.0-r5 — CVE-2026-111497
-#                        (HIGH), fixed in 1.2.0-r7. Named together: same origin.
-#   py3-pip-wheel 26.2.1-r2 — CVE-2026-114613 (HIGH), msgpack map-deserialization
-#                        leak in pip's vendored msgpack 1.2.1; fixed in 26.2.2-r1
-#                        (vendors 1.2.3). python-3.14 depends on it, so it cannot
-#                        be apk-deleted with the other pip packages below.
-#   libexpat1 2.8.5-r0 — CVE-2026-113351 and CVE-2026-115506, both HIGH, both
-#                        fixed in 2.10.0-r0.
-#   python-3.14 (+ -base, -base-dev, -dev) 3.14.8_git20261001-r1 — CVE-2026-119170,
-#                        HIGH, fixed in 3.14.10_git20261111-r0. Same minor, so
-#                        wheel ABI is unchanged (no digest re-pin: that broke
-#                        real_ladybug in #1553).
-# Floors rather than == pins, so the build stays green as Wolfi revs further
-# (1.38.0-r1 and later already exist); drop each once the base digest ships it.
-# Verified present in the Wolfi x86_64 APKINDEX, then confirmed against the
-# pinned base digest itself — a floor above the newest available version fails
-# the build outright.
-RUN apk add --no-cache \
-        bash \
-        "busybox>=1.38.0-r0" \
-        "libcrypto3>=3.6.3-r5" \
-        "libssl3>=3.6.3-r5" \
-        "binutils>2.46-r1" \
-        bubblewrap \
-        ca-certificates \
-        "ca-certificates-bundle>=20260909-r3" \
-        "uv>=0.13.6-r1" \
-        "curl>=8.23.0-r0" \
-        "libcurl-openssl4>=8.23.0-r0" \
-        "libbrotlicommon1>=1.2.0-r7" \
-        "libbrotlidec1>=1.2.0-r7" \
-        "libbrotlienc1>=1.2.0-r7" \
-        "py3-pip-wheel>=26.2.2-r1" \
-        "libexpat1>=2.10.0-r0" \
-        "python-3.14>=3.14.10_git20261111-r0" \
-        "python-3.14-base>=3.14.10_git20261111-r0" \
-        "python-3.14-base-dev>=3.14.10_git20261111-r0" \
-        "python-3.14-dev>=3.14.10_git20261111-r0" \
-        git \
-        gh \
-        gnupg \
-        socat \
-        "wget>=1.25.0-r15"
+# Wolfi packages are installed in docker/base.Dockerfile.
 
 # The npm copied from the node-runtime stage above ships with VENDORED deps carry HIGH CVEs
 # that the P0 Trivy gate rejects. Measured in the running image:
@@ -338,7 +240,7 @@ RUN npm install -g \
 RUN python3 -m venv /home/projects/MagesticAI/.venv
 
 # pip is removed from the venv in the same layer that finishes using it, and
-# the base copies are apk-deleted below. Ported from PFactory#679, which hit
+# the base copies are apk-deleted in docker/base.Dockerfile. Ported from PFactory#679, which hit
 # and solved this first; TFactory#1277 is the same two findings here.
 #
 # The two HIGH findings this clears are NOT project dependencies — nothing in
@@ -362,14 +264,7 @@ RUN /home/projects/MagesticAI/.venv/bin/pip install --no-cache-dir \
         -r /home/projects/MagesticAI/apps/backend/requirements.txt \
  && /home/projects/MagesticAI/.venv/bin/pip uninstall -y pip
 
-# Remove the base image's pip too (same findings, second copy).
-# py3-pip-wheel ships deliberately: python-3.14 depends on it, so apk refuses to
-# drop it (warns, exits 0). Its CVEs are cleared by its floor above. The apk info
-# checks fail the build if the removal ever silently no-ops.
-USER root
-RUN apk del --no-cache py3.14-pip py3.14-pip-base \
- && ! apk info -e py3.14-pip && ! apk info -e py3.14-pip-base
-USER nonroot
+# Wolfi packages are installed in docker/base.Dockerfile.
 
 # Git identity for in-container worktree operations
 RUN git config --global user.name "TFactory" \
