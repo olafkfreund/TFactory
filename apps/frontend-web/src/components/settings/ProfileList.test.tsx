@@ -62,7 +62,7 @@ const testProfiles: APIProfile[] = [
  * Factory function to create a default settings store mock
  * Override properties by spreading with custom values
  */
-function createSettingsStoreMock(overrides: Partial<ReturnType<typeof useSettingsStore>> = {}) {
+function createSettingsStoreMock(overrides: Partial<ReturnType<typeof useSettingsStore.getState>> = {}) {
   const mockDeleteProfile = vi.fn().mockResolvedValue(true);
   const mockSetActiveProfile = vi.fn().mockResolvedValue(true);
 

@@ -22,7 +22,7 @@ vi.mock('../stores/settings-store', () => ({
  * @param overrides - Partial store state to override defaults
  * @returns Complete mock settings store object
  */
-function createUseSettingsStoreMock(overrides?: Partial<ReturnType<typeof useSettingsStore>>) {
+function createUseSettingsStoreMock(overrides?: Partial<ReturnType<typeof useSettingsStore.getState>>) {
   return {
     profiles: testProfiles,
     activeProfileId: null,
