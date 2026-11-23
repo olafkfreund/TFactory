@@ -4,10 +4,10 @@
    Stage colors are local vars so the look is identical in light/dark themes.
    ─────────────────────────────────────────────────────────────────────────── */
 .pl-pipeline {
-  --pl-plan: 340 38% 62%;   /* dusty pink */
-  --pl-code: 42 70% 56%;    /* amber / gold */
-  --pl-test: 74 42% 50%;    /* olive */
-  --pl-panel: 240 6% 12%;
+  --pl-plan: hsl(340 38% 62%);   /* dusty pink */
+  --pl-code: hsl(42 70% 56%);    /* amber / gold */
+  --pl-test: hsl(74 42% 50%);    /* olive */
+  --pl-panel: hsl(240 6% 12%);
   position: relative;
   display: flex;
   align-items: flex-start;
@@ -16,7 +16,7 @@
   padding: 26px clamp(16px, 5vw, 56px) 30px;
   background:
     radial-gradient(120% 140% at 50% -10%, hsl(240 6% 17% / 0.9), transparent 60%),
-    linear-gradient(180deg, hsl(var(--pl-panel) / 0.92), hsl(var(--pl-panel) / 0.6));
+    linear-gradient(180deg, color-mix(in oklch, var(--pl-panel) 92%, transparent), color-mix(in oklch, var(--pl-panel) 60%, transparent));
   border-bottom: 1px solid hsl(0 0% 100% / 0.06);
   overflow: hidden;
 }
@@ -47,24 +47,24 @@
   border-radius: 50%;
   display: grid;
   place-items: center;
-  color: hsl(var(--c));
-  border: 2px solid hsl(var(--c) / 0.45);
+  color: var(--c);
+  border: 2px solid color-mix(in oklch, var(--c) 45%, transparent);
   background: transparent;
   transition: border-color 0.4s, transform 0.4s;
 }
-.pl-ring svg { color: hsl(var(--c) / 0.85); }
+.pl-ring svg { color: color-mix(in oklch, var(--c) 85%, transparent); }
 
 /* active stage: brighten + glow + a slow rotating dashed halo */
 .pl-stage.is-active .pl-ring {
-  border-color: hsl(var(--c));
+  border-color: var(--c);
 }
-.pl-stage.is-active .pl-ring svg { color: hsl(var(--c)); }
+.pl-stage.is-active .pl-ring svg { color: var(--c); }
 .pl-stage.is-active .pl-ring::before {
   content: "";
   position: absolute;
   inset: -7px;
   border-radius: 50%;
-  border: 2px dashed hsl(var(--c) / 0.5);
+  border: 2px dashed color-mix(in oklch, var(--c) 50%, transparent);
   animation: pl-spin 9s linear infinite;
 }
 .pl-stage.is-idle .pl-ring { opacity: 0.55; filter: saturate(0.7); }
@@ -87,15 +87,15 @@
   font-weight: 700;
   /* Fixed dark text reads on the pastel accent in both light + dark themes. */
   color: hsl(220 14% 14%);
-  background: hsl(var(--c) / 0.9);
+  background: color-mix(in oklch, var(--c) 90%, transparent);
 }
-.pl-stage.is-idle .pl-badge { background: hsl(var(--c) / 0.55); }
+.pl-stage.is-idle .pl-badge { background: color-mix(in oklch, var(--c) 55%, transparent); }
 .pl-label {
   font-family: var(--font-sans, system-ui, sans-serif);
   font-size: clamp(13px, 1.4vw, 16px);
   font-weight: 600;
   letter-spacing: 0.02em;
-  color: hsl(var(--c) / 0.85);
+  color: color-mix(in oklch, var(--c) 85%, transparent);
 }
 
 /* ── connectors (marching ants flow toward active work) ───────────────────── */
@@ -105,7 +105,7 @@
   max-width: 220px;
   height: 2px;
   margin-top: clamp(38px, 5.5vw, 58px);
-  background-image: linear-gradient(90deg, hsl(var(--c) / 0.65) 0 8px, transparent 8px 16px);
+  background-image: linear-gradient(90deg, color-mix(in oklch, var(--c) 65%, transparent) 0 8px, transparent 8px 16px);
   background-size: 16px 2px;
   background-repeat: repeat-x;
   opacity: 0.4;
@@ -121,7 +121,7 @@
   position: absolute;
   top: -2px;
   left: -10px;
-  color: hsl(var(--c));
+  color: var(--c);
   opacity: 0;
 }
 .pl-stage.is-active .pl-mcp { animation: pl-mcp-show 3.2s ease-in-out infinite; }
@@ -164,8 +164,8 @@
   min-height: 22px;
 }
 .pl-term {
-  color: hsl(var(--pl-code));
-  filter: drop-shadow(0 0 6px hsl(var(--pl-code) / 0.4));
+  color: var(--pl-code);
+  filter: drop-shadow(0 0 6px color-mix(in oklch, var(--pl-code) 40%, transparent));
 }
 .pl-term .term-cursor { animation: pl-cursor 1s steps(1) infinite; }
 @keyframes pl-cursor { 0%,50% { opacity: 1; } 51%,100% { opacity: 0; } }
@@ -173,7 +173,7 @@
   font-family: var(--font-mono, monospace);
   font-size: 11px;
   font-weight: 700;
-  color: hsl(var(--pl-code) / 0.85);
+  color: color-mix(in oklch, var(--pl-code) 85%, transparent);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -191,11 +191,11 @@
    PipelineBoard — the rings ARE the board (4 ring-columns: Plan/Code/Review/Done)
    ═══════════════════════════════════════════════════════════════════════════ */
 .pl-board {
-  --pl-plan: 340 38% 62%;
-  --pl-code: 42 70% 56%;
-  --pl-review: 288 46% 64%;  /* soft violet */
-  --pl-done: 150 42% 52%;    /* green */
-  --pl-panel: 240 6% 12%;
+  --pl-plan: hsl(340 38% 62%);
+  --pl-code: hsl(42 70% 56%);
+  --pl-review: hsl(288 46% 64%);  /* soft violet */
+  --pl-done: hsl(150 42% 52%);    /* green */
+  --pl-panel: hsl(240 6% 12%);
   position: relative;
   display: flex;
   flex-direction: column;
@@ -212,7 +212,7 @@
   z-index: 1;
 }
 .pl-col { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
-.pl-col + .pl-col { border-left: 1px solid hsl(var(--border) / 0.5); }
+.pl-col + .pl-col { border-left: 1px solid color-mix(in oklch, var(--color-border) 50%, transparent); }
 .pl-col-head {
   display: flex;
   justify-content: center;
@@ -231,20 +231,20 @@
   scrollbar-width: thin;
 }
 .pl-col-list::-webkit-scrollbar { width: 6px; }
-.pl-col-list::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 3px; }
+.pl-col-list::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 3px; }
 
 .pl-empty {
   margin-top: 18px;
   text-align: center;
   font-size: 12px;
-  color: hsl(var(--muted-foreground));
+  color: var(--color-muted-foreground);
   font-family: var(--font-sans, system-ui, sans-serif);
 }
 .pl-add {
   align-self: stretch;
-  border: 1px dashed hsl(var(--c) / 0.4);
-  color: hsl(var(--c) / 0.85);
-  background: hsl(var(--c) / 0.05);
+  border: 1px dashed color-mix(in oklch, var(--c) 40%, transparent);
+  color: color-mix(in oklch, var(--c) 85%, transparent);
+  background: color-mix(in oklch, var(--c) 5%, transparent);
   border-radius: 10px;
   padding: 8px;
   font-size: 12px;
@@ -252,14 +252,14 @@
   cursor: pointer;
   transition: background 0.2s, border-color 0.2s;
 }
-.pl-add:hover { background: hsl(var(--c) / 0.12); border-color: hsl(var(--c) / 0.7); }
+.pl-add:hover { background: color-mix(in oklch, var(--c) 12%, transparent); border-color: color-mix(in oklch, var(--c) 70%, transparent); }
 
 /* connectors overlay (positioned from measured ring centers) */
 .pl-connectors { position: absolute; inset: 0; pointer-events: none; z-index: 0; }
 .pl-conn {
   position: absolute;
   height: 2px;
-  background-image: linear-gradient(90deg, hsl(var(--c) / 0.6) 0 8px, transparent 8px 16px);
+  background-image: linear-gradient(90deg, color-mix(in oklch, var(--c) 60%, transparent) 0 8px, transparent 8px 16px);
   background-size: 16px 2px;
   opacity: 0.35;
 }
@@ -271,7 +271,7 @@
   position: absolute;
   margin-left: -11px;
   margin-top: -11px;
-  color: hsl(var(--c));
+  color: var(--c);
 }
 
 /* a subtle per-card stage tick so cards read at a glance (functional + cool) */
@@ -285,8 +285,8 @@
   /* The single card box (#267): one border here; the inner SpecCard is
      borderless so there's no box-in-a-box. State classes (is-done/failed/live)
      recolour this border. */
-  border: 1px solid hsl(var(--border));
-  background: hsl(var(--card));
+  border: 1px solid var(--color-border);
+  background: var(--color-card);
   overflow: hidden;
 }
 .pl-card-wrap::before {
@@ -295,7 +295,7 @@
   left: 0; top: 8px; bottom: 8px;
   width: 3px;
   border-radius: 3px;
-  background: hsl(var(--c) / 0.7);
+  background: color-mix(in oklch, var(--c) 70%, transparent);
   z-index: 2;
   pointer-events: none;
 }
@@ -303,7 +303,7 @@
   position: absolute;
   top: 9px; right: 9px;
   z-index: 3;
-  color: hsl(var(--c) / 0.85);
+  color: color-mix(in oklch, var(--c) 85%, transparent);
   opacity: 0.7;
   pointer-events: none;
 }
@@ -368,7 +368,7 @@
   gap: 6px;
   padding: 7px 10px 8px;
   margin-top: 0;
-  border-top: 1px solid hsl(var(--border));
+  border-top: 1px solid var(--color-border);
 }
 .pl-chip {
   flex: 1;
@@ -380,7 +380,7 @@
   font-size: 9px;
   letter-spacing: 0.02em;
   /* Each phase shows its OWN stage hue (--cc), not the card's done-green. */
-  color: hsl(var(--cc, var(--muted-foreground)));
+  color: var(--cc, var(--color-muted-foreground));
 }
 .pl-chip-ico { position: relative; display: inline-flex; }
 /* Bolder phase icons (stroke-based icons). */
@@ -407,7 +407,7 @@
   /* Flat: no box / shading — blends with the page background. A single bottom
      divider separates the rail from the columns. */
   background: transparent;
-  border-bottom: 1px solid hsl(var(--border));
+  border-bottom: 1px solid var(--color-border);
 }
 .pl-rail { display: grid; grid-template-columns: repeat(4, 1fr); align-items: start; }
 .pl-rail-cell { display: flex; justify-content: center; }
@@ -419,7 +419,7 @@
   border-width: 3px;
 }
 .pl-railpanel .pl-stage.is-active .pl-ring {
-  box-shadow: 0 0 0 2px hsl(var(--c) / 0.3), 0 0 40px hsl(var(--c) / 0.4);
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--c) 30%, transparent), 0 0 40px color-mix(in oklch, var(--c) 40%, transparent);
 }
 .pl-railpanel .pl-stage.is-active .pl-ring::before { inset: -10px; border-width: 3px; }
 .pl-badge { min-width: 36px; height: 36px; font-size: 15px; top: -8px; right: -8px; }
@@ -428,7 +428,7 @@
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 12px;
   font-weight: 500;
-  color: hsl(var(--muted-foreground));
+  color: var(--color-muted-foreground);
   letter-spacing: 0.04em;
 }
 .pl-conn { height: 3px; }
@@ -441,8 +441,8 @@
   position: absolute;
   top: 8px; left: 10px;
   z-index: 4;
-  color: hsl(var(--c));
-  filter: drop-shadow(0 0 7px hsl(var(--c) / 0.55));
+  color: var(--c);
+  filter: drop-shadow(0 0 7px color-mix(in oklch, var(--c) 55%, transparent));
   pointer-events: none;
   animation: pl-now 1.8s ease-in-out infinite;
 }
@@ -463,12 +463,12 @@
 .pl-card-agents-lbl {
   font-family: var(--font-mono, monospace);
   font-size: 10px;
-  color: hsl(var(--pl-code) / 0.7);
+  color: color-mix(in oklch, var(--pl-code) 70%, transparent);
   margin-right: 2px;
 }
 .pl-card-agents .pl-term {
-  color: hsl(var(--pl-code));
-  filter: drop-shadow(0 0 7px hsl(var(--pl-code) / 0.6));
+  color: var(--pl-code);
+  filter: drop-shadow(0 0 7px color-mix(in oklch, var(--pl-code) 60%, transparent));
   animation: pl-now 2s ease-in-out infinite;
 }
 
@@ -478,7 +478,7 @@
   position: absolute;
   inset: -5px;
   border-radius: 50%;
-  border: 1.5px solid hsl(var(--cc, 42 75% 58%) / 0.7);
+  border: 1.5px solid color-mix(in oklch, var(--cc, hsl(42 75% 58%)) 70%, transparent);
   animation: pl-pulse-ring 1.4s ease-out infinite;
 }
 @keyframes pl-pulse-ring {
@@ -519,7 +519,7 @@
   right: -11px;
   padding: 4px 5px;
   border-radius: 999px;
-  background: hsl(var(--card));
+  background: var(--color-card);
 }
 .pl-card-done { border: 1px solid hsl(150 50% 52% / 0.5); }
 .pl-card-fail { border: 1px solid hsl(0 72% 58% / 0.5); }
@@ -529,9 +529,9 @@
    TaskCard's own border/ring is flattened so the phase strip + agent terminals
    sit inside one aligned box; status color + active pulse move to the wrapper. */
 .pl-card-wrap {
-  border: 1px solid hsl(var(--border));
+  border: 1px solid var(--color-border);
   border-radius: 14px;
-  background: hsl(var(--card));
+  background: var(--color-card);
   overflow: visible;            /* keep corner stickers visible */
 }
 .pl-card-wrap .card-surface {
@@ -557,7 +557,7 @@
 .pl-phase-strip {
   padding: 8px 14px 12px;
   margin-top: 4px;
-  border-top: 1px solid hsl(var(--border));
+  border-top: 1px solid var(--color-border);
 }
 
 /* ───────────────────────────────────────────────────────────────────────────
@@ -579,21 +579,21 @@
   transition: background 0.15s ease;
 }
 .pl-card-wrap:hover {
-  border-color: hsl(var(--c) / 0.5);
+  border-color: color-mix(in oklch, var(--c) 50%, transparent);
 }
 .pl-speccard:hover {
-  background: hsl(var(--foreground) / 0.04);
+  background: color-mix(in oklch, var(--color-foreground) 4%, transparent);
 }
 .pl-speccard-id {
   font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
   font-size: 13px;
   font-weight: 600;
-  color: hsl(var(--foreground));
+  color: var(--color-foreground);
   word-break: break-word;
 }
 .pl-speccard-proj {
   font-size: 11px;
-  color: hsl(var(--muted-foreground));
+  color: var(--color-muted-foreground);
 }
 .pl-speccard-meta {
   display: flex;
@@ -613,17 +613,17 @@
 .pl-speccard-status[data-status-color='green'] { color: hsl(150 50% 60%); }
 .pl-speccard-status[data-status-color='red'] { color: hsl(0 65% 64%); }
 .pl-speccard-status[data-status-color='yellow'] { color: hsl(42 75% 60%); }
-.pl-speccard-status[data-status-color='gray'] { color: hsl(var(--muted-foreground)); }
+.pl-speccard-status[data-status-color='gray'] { color: var(--color-muted-foreground); }
 .pl-speccard-phase {
   font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
   font-size: 10px;
-  color: hsl(var(--muted-foreground));
-  background: hsl(var(--muted));
+  color: var(--color-muted-foreground);
+  background: var(--color-muted);
   padding: 1px 6px;
   border-radius: 5px;
 }
 .pl-speccard-time {
   font-size: 10px;
-  color: hsl(var(--muted-foreground));
+  color: var(--color-muted-foreground);
   margin-top: 2px;
 }

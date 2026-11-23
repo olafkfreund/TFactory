@@ -23,6 +23,13 @@ export function useXterm({ terminalId, onCommandEnter, onResize }: UseXtermOptio
   useEffect(() => {
     if (!terminalRef.current || xtermRef.current) return;
 
+    const rootStyle = getComputedStyle(document.documentElement);
+    const readColor = (token: string, fallback: string) =>
+      rootStyle.getPropertyValue(token).trim() || fallback;
+    const bg = readColor('--color-background', '#0B0B0F');
+    const fg = readColor('--color-foreground', '#E8E6E3');
+    const cursor = readColor('--color-primary', '#D6D876');
+
     const xterm = new XTerm({
       cursorBlink: true,
       cursorStyle: 'block',
@@ -31,20 +38,20 @@ export function useXterm({ terminalId, onCommandEnter, onResize }: UseXtermOptio
       lineHeight: 2,
       letterSpacing: 0,
       theme: {
-        background: '#0B0B0F',
-        foreground: '#E8E6E3',
-        cursor: '#D6D876',
-        cursorAccent: '#0B0B0F',
-        selectionBackground: '#D6D87640',
-        selectionForeground: '#E8E6E3',
+        background: bg,
+        foreground: fg,
+        cursor,
+        cursorAccent: bg,
+        selectionBackground: cursor.startsWith('#') ? `${cursor}40` : cursor,
+        selectionForeground: fg,
         black: '#1A1A1F',
-        red: '#FF6B6B',
-        green: '#87D687',
-        yellow: '#D6D876',
-        blue: '#6BB3FF',
+        red: readColor('--color-destructive', '#FF6B6B'),
+        green: readColor('--color-success', '#87D687'),
+        yellow: readColor('--color-warning', '#D6D876'),
+        blue: readColor('--color-info', '#6BB3FF'),
         magenta: '#C792EA',
         cyan: '#89DDFF',
-        white: '#E8E6E3',
+        white: fg,
         brightBlack: '#4A4A50',
         brightRed: '#FF8A8A',
         brightGreen: '#A5E6A5',

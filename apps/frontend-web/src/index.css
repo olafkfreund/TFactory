@@ -1,149 +1,20 @@
 @import 'tailwindcss';
+@import './styles/tokens.css';
+@import './styles/tailwind-theme.css';
 @import './styles/syntax-highlighting.css';
 
 @plugin '@tailwindcss/typography';
 
-/* ============================================
-   Tailwind Theme Configuration (v4)
-   ============================================ */
-@theme {
-  --color-background: hsl(var(--background));
-  --color-foreground: hsl(var(--foreground));
-  --color-card: hsl(var(--card));
-  --color-card-foreground: hsl(var(--card-foreground));
-  --color-popover: hsl(var(--popover));
-  --color-popover-foreground: hsl(var(--popover-foreground));
-  --color-primary: hsl(var(--primary));
-  --color-primary-foreground: hsl(var(--primary-foreground));
-  --color-secondary: hsl(var(--secondary));
-  --color-secondary-foreground: hsl(var(--secondary-foreground));
-  --color-muted: hsl(var(--muted));
-  --color-muted-foreground: hsl(var(--muted-foreground));
-  --color-accent: hsl(var(--accent));
-  --color-accent-foreground: hsl(var(--accent-foreground));
-  --color-destructive: hsl(var(--destructive));
-  --color-destructive-foreground: hsl(var(--destructive-foreground));
-  --color-success: hsl(var(--success));
-  --color-success-foreground: hsl(var(--success-foreground));
-  --color-warning: hsl(var(--warning));
-  --color-warning-foreground: hsl(var(--warning-foreground));
-  --color-info: hsl(var(--info));
-  --color-info-foreground: hsl(var(--info-foreground));
-  --color-border: hsl(var(--border));
-  --color-input: hsl(var(--input));
-  --color-ring: hsl(var(--ring));
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
-  /* Factory design language — shared across all Factory portals (see
-     docs/design-system.md): Hanken Grotesk for UI prose, Archivo for display
-     headings, JetBrains Mono for the data plane (test ids, verdicts, lane
-     codes, reports). The mono-led identity fits a test tool whose content IS
-     code, and Gruvbox's terminal heritage. */
-  --font-sans: 'Hanken Grotesk', ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --font-display: 'Archivo', 'Hanken Grotesk', ui-sans-serif, system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', 'Menlo', monospace;
-}
-
-/* ============================================
-   Theme CSS Variables
-   ============================================ */
-
-/* Default Theme - Light Mode */
 :root {
-  font-family: 'Hanken Grotesk', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-family: var(--font-sans);
   line-height: 1.5;
   font-weight: 400;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-
-  /* Gruvbox — light mode (bg0 #fbf1c7 · fg #3c3836) */
-  --background: 48 87% 88%;          /* bg0   #fbf1c7 */
-  --foreground: 20 5% 22%;           /* fg1   #3c3836 */
-  --card: 46 80% 92%;                /* cream */
-  --card-foreground: 20 5% 22%;
-  --popover: 46 80% 92%;
-  --popover-foreground: 20 5% 22%;
-  --primary: 56 80% 26%;             /* green  #79740e */
-  --primary-foreground: 48 87% 92%;
-  --secondary: 43 36% 81%;           /* bg1   #ebdbb2 */
-  --secondary-foreground: 20 5% 22%;
-  --muted: 43 36% 81%;
-  --muted-foreground: 26 10% 44%;
-  --accent: 18 96% 35%;              /* orange #af3a03 */
-  --accent-foreground: 48 87% 92%;
-  --destructive: 2 99% 31%;          /* red    #9d0006 */
-  --destructive-foreground: 48 87% 92%;
-  --success: 146 30% 37%;            /* aqua   #427b58 */
-  --success-foreground: 48 87% 92%;
-  --warning: 36 80% 39%;             /* yellow #b57614 */
-  --warning-foreground: 48 87% 92%;
-  --info: 189 90% 25%;               /* blue   #076678 */
-  --info-foreground: 48 87% 92%;
-  --border: 40 33% 73%;              /* bg2   #d5c4a1 */
-  --input: 40 33% 73%;
-  --ring: 56 80% 26%;
-  --radius: 0.5rem;
-
-  color-scheme: light;
-  color: hsl(var(--foreground));
-  background-color: hsl(var(--background));
-}
-
-/* Gruvbox — dark mode (bg0 #282828 · fg #ebdbb2) */
-.dark {
-  --background: 0 0% 16%;            /* bg0  #282828 */
-  --foreground: 43 36% 81%;         /* fg1  #ebdbb2 */
-  --card: 20 5% 22%;                /* bg1  #3c3836 */
-  --card-foreground: 43 36% 81%;
-  --popover: 24 7% 29%;             /* bg2  #504945 */
-  --popover-foreground: 43 36% 81%;
-  --primary: 61 66% 44%;            /* green  #b8bb26 */
-  --primary-foreground: 0 0% 12%;
-  --secondary: 24 7% 29%;           /* bg2 */
-  --secondary-foreground: 43 36% 81%;
-  --muted: 24 7% 29%;
-  --muted-foreground: 40 14% 59%;   /* fg4  #a89984 */
-  --accent: 27 99% 55%;             /* orange #fe8019 */
-  --accent-foreground: 0 0% 12%;
-  --destructive: 6 96% 59%;         /* red    #fb4934 */
-  --destructive-foreground: 0 0% 12%;
-  --success: 110 33% 62%;           /* aqua   #8ec07c */
-  --success-foreground: 0 0% 12%;
-  --warning: 42 95% 58%;            /* yellow #fabd2f */
-  --warning-foreground: 0 0% 12%;
-  --info: 155 16% 58%;              /* blue   #83a598 */
-  --info-foreground: 0 0% 12%;
-  --border: 24 7% 29%;              /* bg2 */
-  --input: 24 7% 29%;
-  --ring: 61 66% 44%;
-
-  color-scheme: dark;
-  color: hsl(var(--foreground));
-  background-color: hsl(var(--background));
-}
-
-/* ============================================
-   Gruvbox Color Theme
-   ============================================ */
-
-[data-theme="gruvbox"] {
-  --primary: 56 80% 26%;             /* green  #79740e */
-  --primary-foreground: 48 87% 92%;
-  --accent: 18 96% 35%;              /* orange #af3a03 */
-  --accent-foreground: 48 87% 92%;
-  --ring: 56 80% 26%;
-}
-[data-theme="gruvbox"].dark, .dark[data-theme="gruvbox"] {
-  --background: 0 0% 16%;            /* bg0  #282828 */
-  --card: 20 5% 22%;                /* bg1  #3c3836 */
-  --popover: 24 7% 29%;             /* bg2  #504945 */
-  --border: 24 7% 29%;
-  --primary: 61 66% 44%;            /* green  #b8bb26 */
-  --accent: 27 99% 55%;             /* orange #fe8019 */
+  color: var(--color-foreground);
+  background-color: var(--color-background);
 }
 
 body {
@@ -164,16 +35,16 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: hsl(var(--background));
+  background: var(--color-background);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: hsl(var(--border));
+  background: var(--color-border);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--muted-foreground));
+  background: var(--color-muted-foreground);
 }
 
 /* Accessibility: respect the user's reduced-motion preference (a11y) */
@@ -232,17 +103,17 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: hsl(var(--primary-foreground));
-  background: hsl(var(--primary));
-  box-shadow: 0 8px 24px color-mix(in srgb, hsl(var(--primary)) 38%, transparent),
+  color: var(--color-primary-foreground);
+  background: var(--color-primary);
+  box-shadow: 0 8px 24px color-mix(in oklch, var(--color-primary) 38%, transparent),
               0 2px 8px rgba(0, 0, 0, 0.45);
   transition: transform 0.16s ease, box-shadow 0.16s ease, background 0.16s ease, color 0.16s ease;
 }
 .chat-fab:hover { transform: translateY(-2px) scale(1.05); }
-.chat-fab:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 3px; }
+.chat-fab:focus-visible { outline: 2px solid var(--color-ring); outline-offset: 3px; }
 .chat-fab--open {
-  background: hsl(var(--card));
-  color: hsl(var(--primary));
+  background: var(--color-card);
+  color: var(--color-primary);
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
 }
 
@@ -257,8 +128,8 @@ body {
   max-height: 660px;
   display: flex;
   flex-direction: column;
-  background: hsl(var(--card));
-  border: 1px solid hsl(var(--border));
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
   border-radius: 14px;
   box-shadow: 0 18px 52px rgba(0, 0, 0, 0.55);
   overflow: hidden;
@@ -273,8 +144,8 @@ body {
   align-items: center;
   justify-content: space-between;
   padding: 0.7rem 0.9rem;
-  border-bottom: 1px solid hsl(var(--border));
-  background: hsl(var(--secondary));
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-secondary);
 }
 .chat-pop__title {
   display: flex;
@@ -284,19 +155,19 @@ body {
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: hsl(var(--primary));
+  color: var(--color-primary);
   font-family: var(--font-mono);
 }
 .chat-pop__x {
   background: none;
   border: none;
-  color: hsl(var(--muted-foreground));
+  color: var(--color-muted-foreground);
   line-height: 1;
   cursor: pointer;
   padding: 0.15rem;
   display: flex;
 }
-.chat-pop__x:hover { color: hsl(var(--foreground)); }
+.chat-pop__x:hover { color: var(--color-foreground); }
 .chat-pop__body {
   flex: 1;
   min-height: 0;
