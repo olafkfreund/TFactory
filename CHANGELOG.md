@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.14.3 — Shared Factory shell (2026-11-23)
+
+### Changed
+
+- **Frontend (Factory#3876, #1670):** adopt the shared Factory shell: AppShell with a 48px top bar, a 64px pipeline strip, WorkCard / WorkColumn, Settings and Preferences routes, ProjectTabBar removed, and the factory-ui pin moved to c6cf953.
+
 ## 0.14.2 — Factory design tokens and Tests view buttons (2026-11-23)
 
 ### Changed
