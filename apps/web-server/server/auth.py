@@ -105,6 +105,7 @@ def _ws_extract_token(websocket: WebSocket) -> str | None:
                 ):
                     return cookie_token
             except ValueError:
+                # Malformed Origin: refuse the cookie (fail closed -> close 4001).
                 pass
 
     return None

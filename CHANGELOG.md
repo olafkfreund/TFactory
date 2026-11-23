@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.14.5 — Mobile top bar and auth comment (2026-11-23)
+
+### Changed
+
+- **Frontend (Factory#3876, #1678):** re-vendor the shared shell at hub 3b02535; the top bar fits at 390px.
+
+### Maintenance
+
+- **Auth (#1673, #1677):** explain the fail-closed `except` in WebSocket cookie auth (comment only).
+
 ## 0.14.4 — WebSocket SSO cookie auth (2026-11-23)
 
 ### Fixed
