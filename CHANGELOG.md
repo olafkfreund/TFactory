@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.14.2 — Factory design tokens and Tests view buttons (2026-11-23)
+
+### Changed
+
+- **Frontend (#1665, #1667):** adopt the shared Factory design tokens: new dark and light colours, `data-portal="test"`, the terminal palette, and the factory-ui drift pin moved to 7f3ca3f.
+
+### Fixed
+
+- **Frontend (#1660, #1666):** the Failed filter and the Re-run/Dismiss buttons use the house Button.
+
 ## 0.14.1 — UI test fixes for the project view (2026-11-23)
 
 ### Fixed
