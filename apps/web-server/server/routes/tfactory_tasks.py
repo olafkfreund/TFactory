@@ -1441,12 +1441,13 @@ def accept_visual_baseline(
 
 
 @router.post("/{spec_id}/visual-baselines/{target}/{snapshot}/accept")
-async def _accept_visual_baseline_route(
+async def _accept_visual_baseline_route(  # noqa: PLR0913 - FastAPI route parameters
     spec_id: str,
     target: str,
     snapshot: str,
     body: _AcceptBaselineBody,
     request: Request,
+    project_id: str | None = None,
 ) -> dict[str, Any]:
-    visible = await _authorize_spec_request(request, spec_id, "member")
+    visible = await _authorize_spec_request(request, spec_id, "member", project_id)
     return accept_visual_baseline(spec_id, target, snapshot, body, visible)

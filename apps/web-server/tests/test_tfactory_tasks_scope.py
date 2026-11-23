@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 for root in (
     Path(__file__).resolve().parents[1],
@@ -156,6 +157,53 @@ def test_tfactory_tasks_websocket_logs_use_project(scoped_tasks, monkeypatch):
         "/api/tfactory/tasks/same-spec/logs/stream?project_id=Workspace%20A"
     ) as websocket:
         assert json.loads(websocket.receive_text())["files"]["planner"] == ["uuid-a"]
+
+
+def test_list_tasks_unknown_and_invisible_project_match(scoped_tasks):
+    client, _ = scoped_tasks
+    responses = [
+        client.get("/api/tfactory/tasks", params={"project_id": project_id})
+        for project_id in ("missing", "uuid-c")
+    ]
+    assert [response.status_code for response in responses] == [404, 404]
+    assert responses[0].json() == responses[1].json() == {
+        "detail": "Project not found"
+    }
+
+
+def test_websocket_logs_unknown_and_invisible_project_match(scoped_tasks, monkeypatch):
+    client, _ = scoped_tasks
+
+    async def authenticate(_websocket):
+        return {"id": "owner", "org_id": "A"}
+
+    monkeypatch.setattr(tfactory_tasks, "authenticate_websocket", authenticate)
+    errors = []
+    for project_id in ("missing", "uuid-c"):
+        with client.websocket_connect(
+            f"/api/tfactory/tasks/same-spec/logs/stream?project_id={project_id}"
+        ) as websocket, pytest.raises(WebSocketDisconnect) as exc:
+            websocket.receive_text()
+        errors.append((exc.value.code, exc.value.reason))
+    assert errors == [(4404, "Project not found")] * 2
+
+
+def test_accept_visual_baseline_uses_project_id(scoped_tasks, monkeypatch):
+    client, _ = scoped_tasks
+    monkeypatch.setattr(
+        tfactory_tasks,
+        "accept_visual_baseline",
+        lambda _spec, _target, _snapshot, _body, visible: {"visible": sorted(visible)},
+    )
+    url = "/api/tfactory/tasks/same-spec/visual-baselines/browser/home.png/accept"
+    body = {"source": "findings/screenshots/home.png"}
+    response = client.post(url, params={"project_id": "uuid-b"}, json=body)
+    assert response.status_code == 200
+    assert response.json() == {"visible": ["uuid-b"]}
+    unknown = client.post(url, params={"project_id": "missing"}, json=body)
+    invisible = client.post(url, params={"project_id": "uuid-c"}, json=body)
+    assert unknown.status_code == invisible.status_code == 404
+    assert unknown.json() == invisible.json() == {"detail": "Project not found"}
 
 
 def test_tfactory_tasks_rerun_auth_active_and_dismiss(scoped_tasks):

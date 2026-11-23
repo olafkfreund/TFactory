@@ -65,3 +65,19 @@ def test_projects_same_basename_different_repos(tmp_path):
     assert a["slug"] == b["slug"] == "widget"
     assert (a["repoLabel"], b["repoLabel"]) == ("acme/widget", "other/widget")
     assert "secret" not in str(a)
+
+
+@pytest.mark.parametrize(
+    "url,label,name",
+    [
+        ("https://git.example/owner/../repo", None, "repository"),
+        ("https://git.example/owner/./repo", None, "repository"),
+        ("https://git.example/./repo", None, "repository"),
+        ("token:secret@host/owner/repo", "owner/repo", "repo"),
+        ("token:secret/repo", None, "repository"),
+        ("owner/token:secret/repo", "owner/repo", "repo"),
+    ],
+)
+def test_repo_labels_reject_traversal_and_credentials(url, label, name):
+    assert projects.repo_label(url) == label
+    assert projects.repo_basename(url) == name
