@@ -2,8 +2,7 @@ name: Runtime base image
 
 on:
   push:
-    # The task branch seeds GHCR before the first digest-pinned Dockerfile PR.
-    branches: [dev, feat/3880-ghcr-base-images]
+    branches: [dev]
     paths:
       - docker/base.Dockerfile
   schedule:
@@ -11,12 +10,15 @@ on:
   workflow_dispatch: {}
 
 permissions:
-  contents: write
+  contents: read
   packages: write
-  pull-requests: write
+
+concurrency:
+  group: base-image
 
 jobs:
   runtime:
+    if: github.ref == 'refs/heads/dev'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -52,13 +54,13 @@ jobs:
           cache-from: type=gha,scope=runtime-base
           cache-to: type=gha,mode=max,scope=runtime-base
 
-      - name: Open digest bump PR when the base changed
+      - name: Rewrite application base pin
         env:
-          GH_TOKEN: ${{ secrets.GITOPS_PAT }}
           DIGEST: ${{ steps.build.outputs.digest }}
           TAG: ${{ steps.meta.outputs.tag }}
         run: |
           set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo 'Invalid runtime base digest' >&2; exit 1; }
           old="$(sed -nE 's|^FROM ghcr.io/olafkfreund/tfactory-base:[^ ]+@sha256:([0-9a-f]{64}) AS runtime$|\1|p' Dockerfile)"
           if [ "$old" = "${DIGEST#sha256:}" ]; then
             echo 'Runtime base digest unchanged'
@@ -71,6 +73,7 @@ jobs:
 
           path = Path('Dockerfile')
           content = path.read_text()
+          first_rollout = 'FROM cgr.dev/chainguard/python:latest-dev@sha256:' in content
           content, count = re.subn(
               r'^FROM (?:cgr\.dev/chainguard/python:latest-dev|ghcr\.io/olafkfreund/tfactory-base:[^ ]+)@sha256:[0-9a-f]{64} AS runtime$',
               f'FROM ghcr.io/olafkfreund/tfactory-base:{os.environ["TAG"]}@{os.environ["DIGEST"]} AS runtime',
@@ -95,16 +98,47 @@ jobs:
           if any(command in content for command in ('RUN apk add', 'RUN apk del', 'apk upgrade --no-cache')):
               raise SystemExit('Main Dockerfile still contains a Chainguard package-index operation')
           path.write_text(content)
+          if first_rollout:
+              test = Path('tests/docker/test_p0_multi_arch.py')
+              text = test.read_text()
+              arm64_check = '        assert "arm64" in arches, ('
+              if text.count(arm64_check) != 1:
+                  raise SystemExit('Expected exactly one P0 arm64 assertion')
+              text = (
+                  '"""P0.6 — published base manifests cover their supported architectures.\n\n'
+                  'The TFactory runtime base is published for amd64; upstream bases cover amd64 and arm64.\n'
+                  '"""' + text[text.index('"""', 3) + 3:]
+              )
+              text = text.replace(
+                  'P0.6 — base images we pin support both linux/amd64 and linux/arm64.',
+                  'P0.6 — base images support their published architectures.',
+              ).replace(
+                  arm64_check,
+                  '        if ref.startswith("ghcr.io/olafkfreund/tfactory-base:"):\n'
+                  '            continue  # The runtime base is published for linux/amd64 only.\n'
+                  + arm64_check,
+              )
+              test.write_text(text)
           PY
-          git diff --exit-code --quiet Dockerfile && { echo 'Runtime FROM line not changed' >&2; exit 1; }
+
+      - name: Open digest bump PR when the base changed
+        env:
+          GH_TOKEN: ${{ secrets.GITOPS_PAT }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- Dockerfile; then
+            echo 'Runtime base digest unchanged'
+            exit 0
+          fi
           branch="chore/3880-tfactory-base-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           git switch -c "$branch"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add Dockerfile
+          git add Dockerfile tests/docker/test_p0_multi_arch.py
           git commit -m "chore(deps): pin TFactory runtime base ${TAG} (#3880)"
           gh auth setup-git
           git push origin "$branch"
           gh pr create --base dev --head "$branch" \
             --title "chore(deps): pin TFactory runtime base ${TAG}" \
-            --body 'Pins the GHCR runtime base image by digest. Closes olafkfreund/Factory#3880.'
+            --body 'Pins the GHCR runtime base image by digest. Refs olafkfreund/Factory#3880.'

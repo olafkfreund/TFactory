@@ -1,5 +1,6 @@
 # TFactory runtime base: all Chainguard package-index operations happen here.
 FROM cgr.dev/chainguard/python:latest-dev@sha256:96cb9c155159daf6b21e70555f244081909ff161c5589112ddf308624c1a1c77 AS runtime
+LABEL org.opencontainers.image.source="https://github.com/olafkfreund/TFactory"
 USER root
 
 # Pull all available Wolfi security patches at build time. The base is pinned
