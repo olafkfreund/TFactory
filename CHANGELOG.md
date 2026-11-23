@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.14.4 — WebSocket SSO cookie auth (2026-11-23)
+
+### Fixed
+
+- **Auth (#1673, #1674):** WebSockets accept the SSO `access_token` cookie for same-host origins; the log stream accepts and then closes with 4001/4003 instead of an HTTP 403; the log viewer stops after repeated failures.
+
 ## 0.14.3 — Shared Factory shell (2026-11-23)
 
 ### Changed
