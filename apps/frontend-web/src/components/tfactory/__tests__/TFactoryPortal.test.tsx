@@ -88,7 +88,7 @@ describe('<TFactoryPortal>', () => {
     });
     render(<TFactoryPortal fetchFn={fetchFn} />);
     await waitFor(() => screen.getByTestId('task-row-spec-a'));
-    fireEvent.click(screen.getByTestId('task-row-spec-a'));
+    fireEvent.click(screen.getByRole('button', { name: 'spec-a' }));
 
     await waitFor(() =>
       expect(screen.getByTestId('tfactory-portal')).toHaveAttribute(
@@ -106,7 +106,7 @@ describe('<TFactoryPortal>', () => {
     });
     render(<TFactoryPortal fetchFn={fetchFn} />);
     await waitFor(() => screen.getByTestId('task-row-spec-a'));
-    fireEvent.click(screen.getByTestId('task-row-spec-a'));
+    fireEvent.click(screen.getByRole('button', { name: 'spec-a' }));
 
     await waitFor(() => screen.getByTestId('portal-back'));
     fireEvent.click(screen.getByTestId('portal-back'));

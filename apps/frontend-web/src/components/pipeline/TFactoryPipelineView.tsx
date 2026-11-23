@@ -1,8 +1,7 @@
 /**
  * TFactoryPipelineView — fetches the TFactory workspace specs and renders them
- * as the animated ring pipeline board (#267). This is the unified "Tasks + Tests"
- * view: same data as the old Tests list, presented as the Factory-brand pipeline.
- * Polls so live status changes (planning → … → triaged) flow between rings.
+ * as the shared Factory pipeline board. Polls so live status changes
+ * (planning → … → triaged) flow between stages.
  */
 import { useEffect, useState } from 'react';
 
@@ -54,20 +53,31 @@ export function TFactoryPipelineView({ onSelectTask, projectId, fetchFn, pollMs 
 
   return (
     <div data-testid="tfactory-pipeline" className="flex flex-col gap-3 h-full">
-      <header className="border-b border-border pb-2">
-        <h1 className="text-xl font-semibold">TFactory Pipeline</h1>
-        <p className="text-xs text-muted-foreground">
-          Plan → Generate → Execute → Report. Live view of TFactory workspaces under ~/.tfactory/.
-        </p>
+      <header className="f-page-head">
+        <div className="f-page-head__main">
+          <h1 className="f-page-head__title">TFactory Pipeline</h1>
+          <p className="f-page-head__desc">
+            Plan → Generate → Execute → Report. Live view of TFactory workspaces under ~/.tfactory/.
+          </p>
+        </div>
       </header>
       {loading && tasks.length === 0 ? (
-        <div className="text-sm text-muted-foreground p-4">Loading pipeline…</div>
+        <div className="f-state f-state--loading" aria-busy="true">
+          <div className="f-state__skeleton f-state__skeleton--row" />
+        </div>
       ) : error && tasks.length === 0 ? (
-        <div className="text-sm text-red-400 p-4" data-testid="tfactory-pipeline-error">
-          Failed to load TFactory workspaces: {error}
+        <div className="f-state f-state--error" data-testid="tfactory-pipeline-error">
+          <div className="f-state__body">
+            <span className="f-state__reason">Failed to load TFactory workspaces: {error}</span>
+          </div>
         </div>
       ) : (
-        <TFactoryPipelineBoard tasks={tasks} onSelectTask={onSelectTask} fetchFn={fetchFn} />
+        <TFactoryPipelineBoard
+          tasks={tasks}
+          projectId={projectId}
+          onSelectTask={onSelectTask}
+          fetchFn={fetchFn}
+        />
       )}
     </div>
   );

@@ -29,35 +29,32 @@ interface Props {
 export function TFactoryPortal({ projectId, fetchFn, wsFactory }: Props) {
   const [selected, setSelected] = useState<TFactoryTaskSelection | null>(null);
 
-  if (selected === null) {
-    return (
-      <div data-testid="tfactory-portal" data-view="list" className="h-full">
+  return (
+    <div data-testid="tfactory-portal" data-view={selected === null ? 'list' : 'detail'} className="h-full">
+      <div className={selected === null ? 'h-full' : 'hidden'}>
         <TFactoryPipelineView
           projectId={projectId}
           onSelectTask={setSelected}
           fetchFn={fetchFn}
         />
       </div>
-    );
-  }
-
-  return (
-    <div data-testid="tfactory-portal" data-view="detail" className="flex flex-col gap-3 h-full overflow-auto p-4">
-      <button
-        type="button"
-        data-testid="portal-back"
-        onClick={() => setSelected(null)}
-        className="self-start inline-flex items-center gap-1 text-sm text-primary hover:text-primary"
-      >
-        <ChevronLeft className="h-4 w-4" aria-hidden />
-        Back to tasks
-      </button>
-      <TFactoryTaskDetail
-        specId={selected.specId}
-        projectId={selected.projectId}
-        fetchFn={fetchFn}
-        wsFactory={wsFactory}
-      />
+      {selected !== null && <div className="flex flex-col gap-3 h-full overflow-auto p-4">
+        <button
+          type="button"
+          data-testid="portal-back"
+          onClick={() => setSelected(null)}
+          className="self-start inline-flex items-center gap-1 text-sm text-primary hover:text-primary"
+        >
+          <ChevronLeft className="h-4 w-4" aria-hidden />
+          Back to tasks
+        </button>
+        <TFactoryTaskDetail
+          specId={selected.specId}
+          projectId={selected.projectId}
+          fetchFn={fetchFn}
+          wsFactory={wsFactory}
+        />
+      </div>}
     </div>
   );
 }
