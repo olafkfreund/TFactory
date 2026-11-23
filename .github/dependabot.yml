@@ -54,6 +54,19 @@ updates:
       prefix: "chore(deps)"
     open-pull-requests-limit: 5
 
+  - package-ecosystem: docker
+    directory: "/docker"
+    target-branch: dev
+    schedule:
+      interval: daily
+    labels:
+      - dependencies
+      - docker
+      - base-image
+    commit-message:
+      prefix: "chore(deps)"
+    open-pull-requests-limit: 5
+
   # github-actions. Added alongside the SHA pinning in Factory#711.
   #
   # Why it is not optional: every third-party action in .github/workflows/ is now
