@@ -193,9 +193,11 @@ export interface PreferencesPageProps {
  */
 export function PreferencesPage({ initialSection = 'agent', onRerunWizard }: PreferencesPageProps) {
   const { t } = useTranslation(['settings', 'common', 'navigation']);
-  const { settings, setSettings, isSaving, error, saveSettings, commitTheme } = useSettings();
+  const { settings, setSettings, isSaving, error, saveSettings, commitTheme, revertTheme } = useSettings();
   const [appSection, setAppSection] = useState<AppSection>(initialSection);
   const [version, setVersion] = useState<string>('');
+
+  useEffect(() => () => revertTheme(), [revertTheme]);
 
   useEffect(() => {
     void window.API?.getAppVersion?.().then((v: unknown) => {

@@ -1,12 +1,13 @@
 /** @vitest-environment jsdom */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import '@testing-library/jest-dom/vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import '../shared/i18n';
 import App from '../App';
 import { useAuthStore } from '../stores/auth-store';
 import { useProjectStore } from '../stores/project-store';
+import { useSettingsStore } from '../stores/settings-store';
 import type { Project } from '../shared/types';
 
 vi.mock('../hooks/useIpc', () => ({ useIpcListeners: () => undefined }));
@@ -122,5 +123,35 @@ describe('TFactory adapted AppShell', () => {
     // User menu Preferences navigates to /preferences
     fireEvent.click(screen.getByRole('button', { name: 'Preferences' }));
     expect(await screen.findByTestId('preferences-page')).toBeInTheDocument();
+  });
+
+  it('filters only failed Execute runs through the shell strip and clears both filters', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ tasks: [
+      { task_id: 'running', project_id: 'id-alpha', spec_id: 'running', status: 'executing', phase: 'executor', updated_at: '2026-05-28T10:00:00Z' },
+      { task_id: 'failed', project_id: 'id-alpha', spec_id: 'failed', status: 'failed', phase: 'executor', updated_at: '2026-05-28T10:00:00Z' },
+    ], count: 2 }) }));
+    const { container } = render(<MemoryRouter initialEntries={['/p/alpha']}><App /></MemoryRouter>);
+    await screen.findByTestId('task-row-running');
+    fireEvent.click(await screen.findByRole('button', { name: /Filter Execute failures/ }));
+    expect(container.querySelectorAll('.f-column .f-card')).toHaveLength(0);
+    expect(screen.getByTestId('failed-runs')).toHaveTextContent('failed');
+    fireEvent.click(screen.getByRole('button', { name: /Clear filter/ }));
+    expect(container.querySelectorAll('.f-column .f-card')).toHaveLength(1);
+    expect(screen.queryByTestId('failed-runs')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Files' }));
+    expect(screen.getByRole('toolbar', { name: /Pipeline stages/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Project.*Alpha/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'All projects' }));
+    expect(await screen.findByRole('toolbar', { name: /Pipeline stages/ })).toBeInTheDocument();
+  });
+
+  it('reverts an unsaved appearance preview on route change', async () => {
+    render(<MemoryRouter initialEntries={['/preferences']}><App /></MemoryRouter>);
+    await screen.findByTestId('preferences-page');
+    fireEvent.click(screen.getByRole('button', { name: /Appearance/i }));
+    fireEvent.click(within(screen.getByTestId('preferences-page')).getByRole('button', { name: /light/i }));
+    expect(useSettingsStore.getState().settings.theme).toBe('light');
+    fireEvent.click(screen.getByRole('button', { name: 'Tests' }));
+    await waitFor(() => expect(useSettingsStore.getState().settings.theme).toBe('dark'));
   });
 });

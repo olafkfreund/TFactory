@@ -5,20 +5,24 @@ import { MemoryRouter, useLocation, useNavigate } from 'react-router';
 import type { Project } from '../shared/types';
 
 // Heavy children are stubs that print which project/view they got.
-const mounts = vi.hoisted(() => ({ n: 0 }));
+const xterm = vi.hoisted(() => ({ current: null as { disposed: boolean } | null }));
 vi.mock('../components/TerminalGrid', async () => {
-  const { useEffect } = await import('react');
+  const { useEffect, useState } = await import('react');
   return {
     TerminalGrid: (p: { projectPath?: string }) => {
-      useEffect(() => { mounts.n++; }, []);
+      const [instance] = useState(() => ({ disposed: false }));
+      useEffect(() => {
+        xterm.current = instance;
+        return () => { instance.disposed = true; };
+      }, [instance]);
       return <div data-testid="terms">{p.projectPath}</div>;
     },
   };
 });
 vi.mock('../components/Worktrees', () => ({ Worktrees: () => null }));
 vi.mock('../components/context/Context', () => ({ Context: () => null }));
-vi.mock('../components/GitHubIssues', () => ({ GitHubIssues: () => null }));
-vi.mock('../components/github-prs/GitHubPRs', () => ({ GitHubPRs: () => null }));
+vi.mock('../components/GitHubIssues', () => ({ GitHubIssues: (p: { onOpenSettings: () => void }) => <button onClick={p.onOpenSettings}>Issue settings</button> }));
+vi.mock('../components/github-prs/GitHubPRs', () => ({ GitHubPRs: (p: { onOpenSettings: () => void }) => <button onClick={p.onOpenSettings}>PR settings</button> }));
 vi.mock('../components/changelog/Changelog', () => ({ Changelog: () => null }));
 vi.mock('../components/Insights', () => ({ Insights: () => <div data-testid="insights" /> }));
 vi.mock('../components/ChatLauncher', () => ({ ChatLauncher: () => null }));
@@ -35,9 +39,9 @@ vi.mock('../components/settings', () => ({
 vi.mock('../components/TaskCreationWizard', () => ({ TaskCreationWizard: (p: { projectId: string }) => <output data-testid="wizard-project">{p.projectId}</output> }));
 vi.mock('../components/CloudCheckDialog', () => ({ CloudCheckDialog: () => null }));
 vi.mock('../components/task-detail', () => ({ TaskDetailModal: () => null }));
-vi.mock('../components/onboarding', () => ({ OnboardingWizard: () => null }));
+vi.mock('../components/onboarding', () => ({ OnboardingWizard: (p: { onOpenSettings: () => void }) => <button onClick={p.onOpenSettings}>Onboarding settings</button> }));
 vi.mock('../components/ProjectSwitchLoadingModal', () => ({ ProjectSwitchLoadingModal: () => null }));
-vi.mock('../components/CommandPalette', () => ({ CommandPalette: () => null }));
+vi.mock('../components/CommandPalette', () => ({ CommandPalette: (p: { open: boolean }) => p.open ? <div data-testid="palette" /> : null }));
 vi.mock('../components/ui/toaster', () => ({ Toaster: () => null }));
 vi.mock('../pages/EditorPage', () => ({ EditorPage: () => null }));
 vi.mock('../pages/LoginPage', () => ({ LoginPage: () => <div data-testid="login" /> }));
@@ -91,7 +95,7 @@ const renderAt = (path: string) =>
 
 beforeEach(() => {
   useAuthStore.setState({ isAuthenticated: true });
-  mounts.n = 0;
+  xterm.current = null;
   localStorage.clear();
   sessionStorage.clear();
   Object.defineProperty(window, 'matchMedia', {
@@ -193,13 +197,66 @@ describe('URL-scoped projects', () => {
     expect(useProjectStore.getState().activeProjectId).toBe('id-beta');
   });
 
-  it('TerminalGrid is not remounted by a project switch', async () => {
+  it('keeps the xterm instance alive through project and global route switches', async () => {
     setApi({});
     renderAt('/p/alpha');
     await waitFor(() => { expect(screen.getByTestId('terms')).toHaveTextContent('/src/id-alpha'); });
+    const instance = xterm.current;
     act(() => { void nav('/p/beta'); });
     await waitFor(() => { expect(screen.getByTestId('terms')).toHaveTextContent('/src/id-beta'); });
-    expect(mounts.n).toBe(1);
+    act(() => { void nav('/preferences'); });
+    await screen.findByTestId('preferences-page');
+    act(() => { void nav('/projects'); });
+    await screen.findByRole('heading', { name: 'Projects' });
+    expect(xterm.current).toBe(instance);
+    expect(instance?.disposed).toBe(false);
+  });
+
+  it('switcher searches, uses arrows and Enter, preserves view and task scope, and Escape cancels', async () => {
+    setApi({});
+    renderAt('/p/alpha/insights');
+    await screen.findByTestId('insights');
+    fireEvent.click(screen.getByRole('button', { name: /Project.*Alpha/ }));
+    const search = screen.getByRole('combobox', { name: /Search projects/i });
+    fireEvent.change(search, { target: { value: 'beta' } });
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/p/beta/insights'));
+    await waitFor(() => expect(useTaskStore.getState().tasks.map((task) => task.projectId)).toEqual(['id-beta']));
+    expect(screen.getByTestId('terms')).toHaveTextContent('/src/id-beta');
+    fireEvent.click(screen.getByRole('button', { name: /Project.*Beta/ }));
+    fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Escape' });
+    expect(screen.queryByRole('combobox')).toBeNull();
+    expect(screen.getByTestId('location')).toHaveTextContent('/p/beta/insights');
+  });
+
+  it('numeric shortcuts follow registry order, skip editable fields, and Ctrl+K opens the palette', async () => {
+    setApi({});
+    renderAt('/p/beta/insights');
+    await screen.findByTestId('insights');
+    fireEvent.keyDown(window, { key: '1', ctrlKey: true });
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/p/alpha/insights'));
+    fireEvent.click(screen.getByRole('button', { name: /Project.*Alpha/ }));
+    const search = screen.getByRole('combobox');
+    fireEvent.keyDown(search, { key: '2', ctrlKey: true });
+    expect(screen.getByTestId('location')).toHaveTextContent('/p/alpha/insights');
+    fireEvent.keyDown(search, { key: 'Escape' });
+    fireEvent.keyDown(window, { key: '2', metaKey: true });
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/p/beta/insights'));
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+    expect(screen.getByTestId('palette')).toBeInTheDocument();
+  });
+
+  it('maps Ctrl/⌘+1–9 to all nine registry slots', async () => {
+    const nine = Array.from({ length: 9 }, (_, i) => proj(`id-${i + 1}`, `Project${i + 1}`, `2026-01-${String(i + 1).padStart(2, '0')}`));
+    setApi({});
+    (window.API as unknown as { getProjects: () => Promise<unknown> }).getProjects = () => Promise.resolve({ success: true, data: nine });
+    renderAt('/p/project1/insights');
+    await screen.findByTestId('insights');
+    for (let i = 1; i <= 9; i++) {
+      fireEvent.keyDown(window, { key: String(i), ctrlKey: i % 2 === 1, metaKey: i % 2 === 0 });
+      await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent(`/p/project${i}/insights`));
+    }
   });
 
   it('view segment selects the view', async () => {
@@ -301,6 +358,39 @@ describe('URL-scoped projects', () => {
     expect(await screen.findByTestId('settings-project')).toHaveTextContent('id-alpha');
     act(() => { void nav('/preferences'); });
     expect(await screen.findByTestId('preferences-page')).toBeInTheDocument();
+  });
+
+  it('opens Preferences directly and leaves fleet Tests enabled from global pages', async () => {
+    setApi({});
+    renderAt('/preferences');
+    expect(await screen.findByTestId('preferences-page')).toBeInTheDocument();
+    const tests = screen.getByRole('button', { name: 'Tests' });
+    expect(tests).toBeEnabled();
+    fireEvent.click(tests);
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/tests'));
+  });
+
+  it('keeps Settings in an ambiguous project chooser link', async () => {
+    const first = proj('id-first', 'Demo', '2026-01-01');
+    const second = proj('id-second', 'demo', '2026-02-01');
+    setApi({});
+    (window.API as unknown as { getProjects: () => Promise<unknown> }).getProjects = () => Promise.resolve({ success: true, data: [first, second] });
+    renderAt('/p/demo/settings');
+    expect(await screen.findByText('Choose a project')).toBeInTheDocument();
+    fireEvent.click(within(screen.getByRole('main')).getAllByRole('link')[0]);
+    expect(await screen.findByTestId('settings-project')).toHaveTextContent('id-first');
+    expect(screen.getByTestId('location')).toHaveTextContent('/settings');
+  });
+
+  it.each([
+    ['/p/alpha/github-issues', 'Issue settings', '/p/alpha/settings'],
+    ['/p/alpha/github-prs', 'PR settings', '/p/alpha/settings'],
+    ['/p/alpha', 'Onboarding settings', '/preferences'],
+  ])('routes %s entry point to its settings page', async (path, label, destination) => {
+    setApi({});
+    renderAt(path);
+    fireEvent.click(await screen.findByRole('button', { name: label }));
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent(destination));
   });
 
   it('shows fetch failure with retry instead of project not found', async () => {

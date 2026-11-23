@@ -647,14 +647,16 @@ function AuthenticatedApp() {
             version={version}
             labels={shellLabels}
           >
-            {route.kind === 'project' && urlProject && (
-              /* TerminalGrid stays mounted across project switches to preserve xterm instances and PTY connections */
-              <div className={activeView === 'terminals' ? 'h-full' : 'hidden'}>
-                <TerminalGrid
-                  projectPath={urlProject.path}
-                  onNewTaskClick={() => setIsNewTaskDialogOpen(true)}
-                  isActive={activeView === 'terminals'}
-                />
+            <div className={route.kind === 'project' && urlProject && activeView === 'terminals' ? 'h-full' : 'hidden'}>
+              <TerminalGrid
+                projectPath={urlProject?.path}
+                onNewTaskClick={() => setIsNewTaskDialogOpen(true)}
+                isActive={route.kind === 'project' && !!urlProject && activeView === 'terminals'}
+              />
+            </div>
+            {projectsLoaded && !projectError && (route.kind !== 'project' || urlProject) && (
+              <div className={(selectedProject && activeView === 'tfactory') || pathname === '/tests' ? 'h-full overflow-auto' : 'hidden'}>
+                <TFactoryPortal key={selectedProject?.id ?? 'fleet'} projectId={selectedProject?.id} />
               </div>
             )}
             {projectError && projectsLoaded && (
@@ -674,7 +676,7 @@ function AuthenticatedApp() {
               <div className="flex h-full flex-col items-center justify-center gap-2">
                 <p>{t('welcome:projectsPage.chooseProject')}</p>
                 {projectsForBareSlug(projects, route.ref).map((p) => (
-                  <Link key={p.id} to={projectPath(slugs.get(p.id) ?? p.id)}>
+                  <Link key={p.id} to={projectPath(slugs.get(p.id) ?? p.id, route.view)}>
                     {p.name} — {p.path}
                   </Link>
                 ))}
@@ -690,11 +692,6 @@ function AuthenticatedApp() {
             )}
             {selectedProject && (
               <>
-                {activeView === 'tfactory' && (
-                  <div className="h-full overflow-auto">
-                    <TFactoryPortal key={selectedProject.id} projectId={selectedProject.id} />
-                  </div>
-                )}
                 {activeView === 'editor' && <EditorPage projectPath={selectedProject.path} />}
                 {activeView === 'worktrees' && <Worktrees projectId={selectedProject.id} />}
                 {activeView === 'context' && <Context projectId={selectedProject.id} />}
@@ -744,7 +741,6 @@ function AuthenticatedApp() {
                 }}
               />
             )}
-            {pathname === '/tests' && !projectError && <TFactoryPortal />}
             {route.kind === 'home' && pathname !== '/tests' && !projectError && (
               <WelcomeScreen
                 projects={projects}

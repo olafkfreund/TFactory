@@ -116,6 +116,7 @@ export function TFactoryPipelineBoard({ tasks, projectId, onSelectTask, fetchFn 
   const { t } = useTranslation(['tasks', 'navigation']);
   const stripSlot = usePipelineStripSlot();
   const [selectedStage, setSelectedStage] = useState<Stage | null>(null);
+  const [failureOnly, setFailureOnly] = useState(false);
   const [showFailed, setShowFailed] = useState(false);
   const [showDismissed, setShowDismissed] = useState(false);
   const [overrides, setOverrides] = useState<Record<string, { patch: Partial<TFactoryTaskSummary>; updatedAt: string }>>({});
@@ -123,7 +124,7 @@ export function TFactoryPipelineBoard({ tasks, projectId, onSelectTask, fetchFn 
   const [actionError, setActionError] = useState<string | null>(null);
   const [plannerReason, setPlannerReason] = useState<string | null>(null);
   const [alarm, setAlarm] = useState<{ key: string; event: string | number } | undefined>(undefined);
-  const prevFailedRef = useRef<Set<string>>(new Set());
+  const prevFailedRef = useRef<Set<string> | null>(null);
 
   useEffect(() => {
     setOverrides((current) => {
@@ -165,7 +166,7 @@ export function TFactoryPipelineBoard({ tasks, projectId, onSelectTask, fetchFn 
     for (const task of failed) {
       const key = `${task.project_id}:${task.spec_id}`;
       nextFailed.add(key);
-      if (prevFailedRef.current.size > 0 && !prevFailedRef.current.has(key)) {
+      if (prevFailedRef.current && !prevFailedRef.current.has(key)) {
         latestAlarm = { key: stageOf(task), event: `${key}:${task.updated_at}` };
       }
     }
@@ -244,10 +245,13 @@ export function TFactoryPipelineBoard({ tasks, projectId, onSelectTask, fetchFn 
 
   const handleSelectStage = useCallback((key: string | null) => {
     setSelectedStage((key as Stage | null) ?? null);
+    setFailureOnly(false);
+    if (key === null) setShowFailed(false);
   }, []);
 
   const handleSelectFailed = useCallback((key: string) => {
     setSelectedStage(key as Stage);
+    setFailureOnly(true);
     setShowFailed(true);
   }, []);
 
@@ -322,9 +326,12 @@ export function TFactoryPipelineBoard({ tasks, projectId, onSelectTask, fetchFn 
             projectId={projectId}
             emptyLabel={emptyText(stage.key)}
             showMoreLabel={(count) => t('tasks:pipeline.showMore', { count, defaultValue: `Show ${count} more` })}
-            items={byStage[stage.key].map((task) => {
+            items={(failureOnly ? [] : byStage[stage.key]).map((task) => {
               const done = isDone(task);
               const running = activeStage(task) !== null;
+              const tone = done
+                ? (['generated_empty', 'triaged_empty'].includes(_norm(task.status)) ? 'warning' : 'success')
+                : (running ? 'running' : 'neutral');
               return {
                 id: task.spec_id,
                 projectId: task.project_id,
@@ -336,7 +343,7 @@ export function TFactoryPipelineBoard({ tasks, projectId, onSelectTask, fetchFn 
                       title={task.spec_id}
                       subtitle={task.project_id}
                       status={task.status ?? '—'}
-                      tone={done ? 'success' : running ? 'running' : 'neutral'}
+                      tone={tone}
                       age={formatRelativeTime(task.updated_at)}
                       phases={phaseStrip(task)}
                       badges={[task.project_id, ...(task.phase ? [task.phase] : [])]}
@@ -386,6 +393,7 @@ export function TFactoryPipelineBoard({ tasks, projectId, onSelectTask, fetchFn 
                   subtitle={task.project_id}
                   status={task.status ?? '—'}
                   tone="danger"
+                  collapsedByDefault={Boolean(task.dismissed)}
                   age={formatRelativeTime(task.updated_at)}
                   reason={task.phase ?? task.status ?? undefined}
                   phases={phaseStrip(task)}

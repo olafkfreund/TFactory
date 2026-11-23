@@ -7,7 +7,7 @@ Inventory of every action the previous `ProjectTabBar`, `SortableProjectTab`, `S
 | `ProjectTabBar` / `SortableProjectTab` | Select open project tab | `AppShell` → `ProjectSwitcher` combobox (`onSelectProject`, searchable with recent projects in `localStorage`) |
 | `ProjectTabBar` / `SortableProjectTab` | Drag-reorder project tabs | **dropped by design: drag-reorder tabs** (`ProjectSwitcher` recents replace manual tab ordering) |
 | `ProjectTabBar` / `SortableProjectTab` | Close project tab (`×` button, `⌘W` / `Ctrl+W`) | `ProjectSwitcher` recents (no open-tab strip to close) |
-| `ProjectTabBar` | `⌘1–9` / `Ctrl+1–9` switch to project N | Bound in the `App.tsx` portal keyboard handler (`goProject(projects[index].id)`) |
+| `ProjectTabBar` | `⌘1–9` / `Ctrl+1–9` switch to project N | Bound in the `App.tsx` portal keyboard handler (`goProject(projects[index].id)`); N now follows the full project registry order, not the former ordered open tabs or switcher recents |
 | `ProjectTabBar` | `⌘Tab` / `⌘Shift+Tab` cycle open tabs | `ProjectSwitcher` combobox arrow keys + recent projects list |
 | `ProjectTabBar` / `SortableProjectTab` | Active tab Project Settings icon (`onSettingsClick`) | `AppShell` sidebar bottom-pinned `projectSettings` item → routed `/p/<slug>/settings` (`ProjectSettingsPage` with tabs General, Git, Memory, MCP) |
 | `ProjectTabBar` | `PortalSwitcher` (`current="test"`, `project` slug handoff) | `AppShell` topbar (`portal="test"`, `portalProject`) |
@@ -19,7 +19,7 @@ Inventory of every action the previous `ProjectTabBar`, `SortableProjectTab`, `S
 | `ProjectTabBar` | Help & docs button (`https://github.com/olafkfreund/TFactory#readme`) | `AppShell` user menu → `Help & docs` |
 | `Sidebar` | Brand logo & `TFactory` wordmark | `AppShell` topbar `.f-brand` (`labels.brand`) |
 | `Sidebar` | Project section header (`Project — <name>`) and project filesystem path | `AppShell` → `ProjectSwitcher` (`currentProject` name and `projectSubtitle={urlProject?.path}`) |
-| `Sidebar` | Navigation items (`Tests`, `Files`, `MCP`, `Skills`, `Changelog`, `Index & Memory`, `Cloud Reports`, `Visual Reports`, plus provider-driven `Test Plans` and `GitHub PRs` / `GitLab MRs` / `ADO Pull Requests`) | `AppShell` `nav` prop via `useTFactoryShellAdapter`, translated with `t()` and disabled when no project is selected; client-side navigation via `onNavigate` |
+| `Sidebar` | Navigation items (`Tests`, `Files`, `MCP`, `Skills`, `Changelog`, `Index & Memory`, `Cloud Reports`, `Visual Reports`, plus provider-driven `Test Plans` and `GitHub PRs` / `GitLab MRs` / `ADO Pull Requests`) | `AppShell` `nav` prop via `useTFactoryShellAdapter`, translated with `t()`; Tests stays enabled without a project and opens `/tests`, other project items are disabled; client-side navigation via `onNavigate` |
 | `Sidebar` | `RateLimitIndicator` | `AppShell` `topbarStatus` slot |
 | `Sidebar` | `+ Task` primary button | `AppShell` `primaryAction` (`label: "+ Task"`, `disabled`, `disabledReason`, `onClick`) |
 | `Sidebar` | "Initialize TFactory to create tasks" button | `AppShell` `sidebarHeader` slot + Initialize dialog in `useTFactoryShellAdapter` |

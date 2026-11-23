@@ -154,7 +154,7 @@ export function useTFactoryShellAdapter(projectId: string | null) {
           id: item.id,
           label: t(item.labelKey),
           icon: <Icon className="h-4 w-4" />,
-          disabled: !projectId,
+          disabled: !projectId && item.id !== 'tfactory',
         };
       }),
     [visibleNavItems, projectId, t]
