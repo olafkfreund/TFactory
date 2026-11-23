@@ -88,6 +88,7 @@ def test_unresolvable_source_branch_fails_spec_loudly(tmp_path):
     assert result["source_format"] == "markdown"
     assert result["status"] == "failed"
     assert result["planner_scheduled"] is False
+    assert result["planner_reason"] == "checkout_failed"
     assert any(
         "source_branch" in w or "not a git repo" in w for w in result["warnings"]
     )
@@ -201,11 +202,28 @@ def test_concurrent_specs_get_independent_worktrees(tmp_path):
     assert "Goodbye" in wt_b.read_text()
 
 
+def test_scheduler_failure_has_reason(tmp_path, monkeypatch):
+    def fail_schedule(**_kwargs):
+        raise RuntimeError("scheduler unavailable")
+
+    monkeypatch.setattr("agents.planner.schedule_planner", fail_schedule)
+    result = create_spec_ingest_workspace(
+        project_id="proj",
+        spec_id="spec1",
+        spec_text=_MARKDOWN,
+        root=tmp_path,
+        schedule=True,
+    )
+    assert result["planner_scheduled"] is False
+    assert result["planner_reason"] == "scheduler_failed"
+
+
 def test_gherkin_creates_workspace(tmp_path):
     result = _ingest(tmp_path, _GHERKIN, target_paths=["src/auth.py"])
     assert result["source_format"] == "gherkin"
     assert result["ac_count"] >= 1
     assert result["planner_scheduled"] is False
+    assert result["planner_reason"] == "auto_plan_disabled"
 
     sd = _spec_dir(tmp_path)
     spec_md = (sd / "context" / "aifactory_spec.md").read_text()

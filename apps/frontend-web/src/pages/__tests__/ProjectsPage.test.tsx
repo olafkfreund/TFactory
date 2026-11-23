@@ -8,7 +8,12 @@ import { ProjectsPage } from '../ProjectsPage';
 const { removeProject } = vi.hoisted(() => ({ removeProject: vi.fn(() => Promise.resolve(true)) }));
 vi.mock('../../stores/project-store', () => ({ removeProject }));
 
-const project = { id: 'project-1', name: 'Alpha App', path: '/code/alpha' } as Project;
+const project = {
+  id: 'project-1',
+  name: 'Alpha App',
+  path: '/data/workspaces/alpha',
+  repoLabel: 'acme/alpha',
+} as Project;
 const props = {
   projects: [project],
   slugs: new Map([['project-1', 'alpha-app']]),
@@ -34,11 +39,13 @@ describe('ProjectsPage', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
-  it('opens and adds projects through the supplied callbacks', () => {
+  it('opens and adds projects through the supplied callbacks and shows repoLabel instead of pod path', () => {
     props.onAdd.mockClear();
     props.onOpen.mockClear();
     render(<ProjectsPage {...props} />);
     expect(screen.getByText('/p/alpha-app')).toBeInTheDocument();
+    expect(screen.getByText('acme/alpha')).toHaveAttribute('title', 'acme/alpha');
+    expect(screen.queryByText('/data/workspaces/alpha')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Open' }));
     fireEvent.click(screen.getByRole('button', { name: 'Add project' }));
     expect(props.onOpen).toHaveBeenCalledExactlyOnceWith(project);

@@ -259,6 +259,18 @@ describe('<TFactoryTaskDetail> verdicts tab', () => {
 // ── Report tab (lazy load) ───────────────────────────────────────────
 
 describe('<TFactoryTaskDetail> report tab', () => {
+  it('scopes report artifact links to the selected project', async () => {
+    const md = '[screenshot](/api/tfactory/tasks/spec-x/evidence/ac1/screenshots/1.png)';
+    const fetchFn = makeUrlAwareFetch({
+      '/spec-x?project_id=demo': { jsonBody: sampleDetail() },
+      '/spec-x/triage-report.md?project_id=demo': { textBody: md },
+    });
+    render(<TFactoryTaskDetail specId="spec-x" projectId="demo" fetchFn={fetchFn} />);
+    fireEvent.click(await screen.findByTestId('tab-report'));
+    const link = await screen.findByRole('link', { name: 'screenshot' });
+    expect(link).toHaveAttribute('href', '/api/tfactory/tasks/spec-x/evidence/ac1/screenshots/1.png?project_id=demo');
+  });
+
   it('lazy-fetches the markdown and renders it on tab open', async () => {
     const md = '# Triage Report\n\nLooks good.\n';
     const fetchFn = makeUrlAwareFetch({
@@ -450,6 +462,21 @@ const sampleVerdictsWithEvidence = (specId: string, testId: string) => ({
 });
 
 describe('<TFactoryTaskDetail> evidence tab (Task 16)', () => {
+  it('keeps one project_id on prequalified evidence URLs', async () => {
+    const verdicts = sampleVerdictsWithEvidence('spec-x', 'ac1-login');
+    verdicts.verdicts[0].evidence_urls.screenshots[0] += '?project_id=demo';
+    const fetchFn = makeUrlAwareFetch({
+      '/spec-x?project_id=demo': { jsonBody: sampleDetail() },
+      '/spec-x/verdicts.json?project_id=demo': { jsonBody: verdicts },
+    });
+    render(<TFactoryTaskDetail specId="spec-x" projectId="demo" fetchFn={fetchFn} />);
+    fireEvent.click(await screen.findByTestId('tab-verdicts'));
+    await screen.findByTestId('verdict-table');
+    fireEvent.click(screen.getByTestId('tab-evidence'));
+    const image = await screen.findByTestId('evidence-screenshot-img-0001.png?project_id=demo');
+    expect(image).toHaveAttribute('src', '/api/tfactory/tasks/spec-x/evidence/ac1-login/screenshots/0001.png?project_id=demo');
+  });
+
   it('renders Evidence tab button when verdicts artefact exists', async () => {
     const fetchFn = makeUrlAwareFetch({
       '/spec-x': { jsonBody: sampleDetail({ verdictsExists: true }) },

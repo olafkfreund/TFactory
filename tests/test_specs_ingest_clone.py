@@ -35,7 +35,9 @@ async def test_unknown_project_with_git_url_clones_and_registers(monkeypatch, tm
 
     # project store empty -> unknown project
     monkeypatch.setattr("server.routes.projects.load_projects", lambda: {})
-    monkeypatch.setattr("server.routes.projects.save_projects", lambda p: None)
+    monkeypatch.setattr(
+        "server.routes.projects.save_projects", lambda p: seen.update(projects=p)
+    )
     monkeypatch.setattr(
         "server.services.project_workspace_service.clone_or_update", fake_clone
     )
@@ -57,6 +59,74 @@ async def test_unknown_project_with_git_url_clones_and_registers(monkeypatch, tm
     assert seen["branch"] == "aifactory/027-x"
     assert seen["project_root"] == str(tmp_path)  # cloned path used as root
     assert seen["source_branch"] == "aifactory/027-x"
+    assert next(iter(seen["projects"].values()))["name"] == "aifactory-test"
+
+
+@pytest.mark.asyncio
+async def test_self_registered_alias_resolves_second_ingest_without_clone(
+    monkeypatch, tmp_path
+):
+    projects = {}
+    calls = []
+
+    async def clone(*, git_url, branch, credential):
+        calls.append(git_url)
+        (tmp_path / ".git").mkdir(exist_ok=True)
+        return tmp_path
+
+    monkeypatch.setattr("server.routes.projects.load_projects", lambda: projects.copy())
+    monkeypatch.setattr(
+        "server.routes.projects.save_projects", lambda data: projects.update(data)
+    )
+    monkeypatch.setattr(
+        "server.services.project_workspace_service.clone_or_update", clone
+    )
+    monkeypatch.setattr(
+        "agents.tools_pkg.tools.task_control.create_spec_ingest_workspace",
+        lambda **kw: {"spec_dir": str(tmp_path)},
+    )
+    first = SpecIngestRequest(
+        project_id="sender-id",
+        spec_id="first",
+        spec_text="## Acceptance Criteria\n- works",
+        git_url="https://github.com/o/repo.git",
+    )
+    second = SpecIngestRequest(
+        project_id="sender-id",
+        spec_id="second",
+        spec_text="## Acceptance Criteria\n- works",
+        no_register=True,
+    )
+    assert (await ingest_spec(first))["task_id"] == "first"
+    assert next(iter(projects.values()))["name"] == "repo"
+    assert next(iter(projects.values()))["aliases"] == ["sender-id"]
+    assert (await ingest_spec(second))["task_id"] == "second"
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_no_register_rejects_unknown_project_before_clone(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    clone = AsyncMock(side_effect=AssertionError("must not clone"))
+    monkeypatch.setattr("server.routes.projects.load_projects", lambda: {})
+    monkeypatch.setattr(
+        "server.services.project_workspace_service.clone_or_update", clone
+    )
+    req = SpecIngestRequest(
+        project_id="unknown",
+        spec_id="s1",
+        spec_text="## Acceptance Criteria\n- works",
+        repo="owner/repo",
+        no_register=True,
+    )
+    with pytest.raises(HTTPException) as error:
+        await ingest_spec(req)
+    assert (error.value.status_code, error.value.detail) == (
+        404,
+        "Project not found",
+    )
+    clone.assert_not_awaited()
 
 
 @pytest.mark.asyncio

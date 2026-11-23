@@ -69,6 +69,7 @@ _PROVENANCE_RE = r"^[\w.:@/+\- ]+$"
 
 class SpecIngestRequest(BaseModel):
     project_id: str = Field(..., description="Registered project id")
+    no_register: bool = False
     spec_id: str = Field(
         ..., min_length=1, description="New task/spec id (workspace dir name)"
     )
@@ -206,11 +207,12 @@ class PrAttachRequest(BaseModel):
     )
 
 
-async def _clone_and_register_project(
+async def _clone_and_register_project(  # noqa: PLR0913
     git_url: str,
     *,
     branch: str | None,
     name: str,
+    alias: str | None = None,
     org_id: str | None = None,
     service_access: bool = False,
 ) -> tuple[dict, str]:
@@ -265,6 +267,7 @@ async def _clone_and_register_project(
     pdata: dict = {
         "path": path,
         "name": name,
+        "aliases": [alias] if alias else [],
         "created_at": now,
         "updated_at": now,
         "clonedFrom": git_url,
@@ -429,6 +432,8 @@ async def ingest_spec(  # noqa: PLR0912,PLR0915 - handoff stages share authoriza
     entry = projects.get(resolved_id)
     if entry is not None and request is not None:
         await require_project_role(principal, resolved_id, "member", db_session)
+    if entry is None and req.no_register:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Project not found")
     repo_slug, git_url = _repo_binding(req)
     self_registered = False
     try:
@@ -488,10 +493,13 @@ async def ingest_spec(  # noqa: PLR0912,PLR0915 - handoff stages share authoriza
                         membership,
                         "member",
                     )
+            from .projects import repo_basename  # noqa: PLC0415
+
             entry, resolved_id = await _clone_and_register_project(
                 git_url,
                 branch=req.source_branch,
-                name=str(req.project_id),
+                name=repo_basename(git_url),
+                alias=req.project_id,
                 org_id=org_id,
                 service_access=is_service_principal(principal),
             )

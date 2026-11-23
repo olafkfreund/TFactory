@@ -1,6 +1,6 @@
 {
   "name": "tfactory-web",
-  "version": "0.14.0",
+  "version": "0.14.1",
   "type": "module",
   "description": "Web UI for TFactory autonomous coding framework",
   "scripts": {
@@ -81,7 +81,7 @@
     "tailwindcss": "^4.1.17",
     "tsx": "^4.20.0",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.61.1",
+    "typescript-eslint": "^8.73.0",
     "vite": "^7.3.7",
     "vitest": "^4.1.12"
   }

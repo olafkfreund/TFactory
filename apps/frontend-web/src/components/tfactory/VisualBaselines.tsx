@@ -31,6 +31,7 @@ export interface CapturedScreenshot {
 
 interface Props {
   specId: string;
+  projectId?: string;
   /** Pre-select a target (else the operator types one). */
   initialTarget?: string;
   /** Captures offered in the "set as baseline" control. */
@@ -39,7 +40,7 @@ interface Props {
   fetchFn?: typeof fetch;
 }
 
-export function VisualBaselines({ specId, initialTarget = '', captures = [], fetchFn }: Props) {
+export function VisualBaselines({ specId, projectId, initialTarget = '', captures = [], fetchFn }: Props) {
   const [target, setTarget] = useState(initialTarget);
   const [loaded, setLoaded] = useState<string | null>(null);
   const [baselines, setBaselines] = useState<VisualBaselineEntry[]>([]);
@@ -53,7 +54,7 @@ export function VisualBaselines({ specId, initialTarget = '', captures = [], fet
       setLoading(true);
       setError(null);
       try {
-        const doc = await listVisualBaselines(specId, name, { fetchFn });
+        const doc = await listVisualBaselines(specId, name, { fetchFn, projectId });
         setBaselines(doc.baselines);
         setLoaded(name);
       } catch (e) {
@@ -64,7 +65,7 @@ export function VisualBaselines({ specId, initialTarget = '', captures = [], fet
         setLoading(false);
       }
     },
-    [specId, fetchFn],
+    [specId, projectId, fetchFn],
   );
 
   return (
@@ -117,7 +118,7 @@ export function VisualBaselines({ specId, initialTarget = '', captures = [], fet
           {baselines.map((b) => (
             <figure key={b.snapshot} data-testid={`vb-item-${b.snapshot}`} className="space-y-1">
               <img
-                src={visualBaselineImageUrl(specId, loaded ?? target, b.snapshot)}
+                src={visualBaselineImageUrl(specId, loaded ?? target, b.snapshot, projectId)}
                 alt={`baseline ${b.snapshot}`}
                 data-testid={`vb-img-${b.snapshot}`}
                 className="h-32 w-auto rounded border border-border bg-background object-contain"
@@ -133,6 +134,7 @@ export function VisualBaselines({ specId, initialTarget = '', captures = [], fet
       {loaded && !error && (
         <AcceptControl
           specId={specId}
+          projectId={projectId}
           target={loaded}
           captures={captures}
           fetchFn={fetchFn}
@@ -145,12 +147,14 @@ export function VisualBaselines({ specId, initialTarget = '', captures = [], fet
 
 function AcceptControl({
   specId,
+  projectId,
   target,
   captures,
   fetchFn,
   onAccepted,
 }: {
   specId: string;
+  projectId?: string;
   target: string;
   captures: CapturedScreenshot[];
   fetchFn?: typeof fetch;
@@ -167,7 +171,7 @@ function AcceptControl({
     setBusy(true);
     setMsg(null);
     try {
-      await acceptVisualBaseline(specId, target, snap, source, { fetchFn });
+      await acceptVisualBaseline(specId, target, snap, source, { fetchFn, projectId });
       setMsg(`Promoted to baseline ${snap}`);
       onAccepted();
     } catch (e) {

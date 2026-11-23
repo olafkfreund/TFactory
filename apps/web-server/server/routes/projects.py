@@ -6,9 +6,12 @@ Handles CRUD operations for projects (git repositories that Magestic AI manages)
 
 import json
 import logging
+import re
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, cast
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -328,15 +331,54 @@ def project_to_response(
         default_settings.pop("gitToken", None)
         default_settings.pop("githubToken", None)
 
+    name = project_data.get("name", Path(project_data["path"]).name)
+    base_slug = (
+        re.sub(
+            r"^-+|-+$",
+            "",
+            re.sub(r"[^a-z0-9]+", "-", unicodedata.normalize("NFKD", name).lower()),
+        )
+        or project_id
+    )
     return {
         "id": project_id,
         "path": project_data["path"],
-        "name": project_data.get("name", Path(project_data["path"]).name),
+        "name": name,
+        "slug": base_slug,
+        "repoLabel": repo_label(project_data.get("clonedFrom")),
         "createdAt": project_data.get("created_at", datetime.now().isoformat()),
         "updatedAt": project_data.get("updated_at", datetime.now().isoformat()),
         "autoBuildPath": auto_build_path,
         "settings": default_settings,
     }
+
+
+def repo_label(git_url: str | None) -> str | None:
+    """Return the last owner/repo path components without URL credentials."""
+    if not git_url:
+        return None
+    path = (
+        git_url.split(":", 1)[1]
+        if git_url.startswith("git@") and ":" in git_url
+        else urlsplit(git_url).path
+        if "://" in git_url
+        else git_url
+    )
+    path = path.rsplit("@", 1)[-1]
+    parts = [part for part in path.strip("/").split("/") if part and ":" not in part]
+    if any(part in {".", ".."} for part in parts):
+        return None
+    if len(parts) <= 1:
+        return None
+    owner, repo = parts[-2], parts[-1].removesuffix(".git")
+    if not all(re.fullmatch(r"[A-Za-z0-9_.-]+", part) for part in (owner, repo)):
+        return None
+    return f"{owner}/{repo}"
+
+
+def repo_basename(git_url: str) -> str:
+    label = repo_label(git_url)
+    return label.rsplit("/", 1)[-1] if label else "repository"
 
 
 def _check_claim(
@@ -694,7 +736,8 @@ async def create_project(
     now = datetime.now().isoformat()
     project_data = {
         "path": str(project_path.resolve()),
-        "name": project.name or project_path.name,
+        "name": project.name
+        or (repo_basename(project.gitUrl) if project.gitUrl else project_path.name),
         "created_at": now,
         "updated_at": now,
         **({"org_id": org_id} if org_id else {}),

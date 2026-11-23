@@ -42,7 +42,7 @@ import { useAuthStore } from './stores/auth-store';
 import { useSessionKeepAlive } from './hooks/useSessionKeepAlive';
 import { useIpcListeners } from './hooks/useIpc';
 import { UI_SCALE_MIN, UI_SCALE_MAX, UI_SCALE_DEFAULT } from './shared/constants';
-import type { Task, Project } from './shared/types';
+import type { Project } from './shared/types';
 
 const RETURN_TO_KEY = 'tf-return-to';
 
@@ -148,8 +148,8 @@ function AuthenticatedApp() {
     void navigate(projectPath(slug, view));
   }, [navigate, slugs]);
   const setActiveView = useCallback((view: SidebarView) => {
-    if (view === 'tfactory') { void navigate('/tests'); return; }
     if (navProject) goProject(navProject.id, view);
+    else if (view === 'tfactory') void navigate('/tests');
   }, [navProject, goProject, navigate]);
   const inSync = !!urlProjectId && activeProjectId === urlProjectId && selectedProjectId === urlProjectId;
 
@@ -390,10 +390,6 @@ function AuthenticatedApp() {
     root.setAttribute('data-ui-scale', clampedScale.toString());
   }, [settings.uiScale]);
 
-  const handleTaskClick = (task: Task) => {
-    setSelectedTaskId(task.id);
-  };
-
   const handleAddProject = () => {
     setIsAddProjectModalOpen(true);
   };
@@ -489,10 +485,7 @@ function AuthenticatedApp() {
                 <>
                   {activeView === 'tfactory' && (
                     <div className="h-full overflow-auto p-4">
-                      <ul data-testid="project-tasks">{tasks.filter((task) => task.projectId === selectedProject.id).map((task) => (
-                        <li key={task.id}><button onClick={() => handleTaskClick(task)}>{task.title}</button></li>
-                      ))}</ul>
-                      <Link to="/tests" className="underline">{t('navigation:items.tests')}</Link>
+                      <TFactoryPortal key={selectedProject.id} projectId={selectedProject.id} />
                     </div>
                   )}
                   {activeView === 'editor' && (

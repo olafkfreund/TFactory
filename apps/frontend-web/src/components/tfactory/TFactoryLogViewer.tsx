@@ -40,8 +40,9 @@ export function buildLogStreamUrl(
   specId: string,
   envBase?: string,
   location?: { protocol: string; host: string },
+  projectId?: string,
 ): string {
-  const path = `/api/tfactory/tasks/${specId}/logs/stream`;
+  const path = `/api/tfactory/tasks/${specId}/logs/stream${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''}`;
   if (envBase) {
     // Allow caller to omit trailing slash; we always join with /api/...
     const cleanBase = envBase.replace(/\/+$/, '');
@@ -59,6 +60,7 @@ export type WsState = 'connecting' | 'open' | 'closed' | 'error';
 
 interface Props {
   specId: string;
+  projectId?: string;
   /** Test seam: replace ``new WebSocket(url)``. */
   wsFactory?: (url: string) => WebSocket;
   /** Test seam: pin an env-style base. Otherwise reads VITE_WS_BASE_URL. */
@@ -75,7 +77,7 @@ interface LogStreamPayload {
 
 // ── Component ────────────────────────────────────────────────────────
 
-export function TFactoryLogViewer({ specId, wsFactory, wsBaseUrl }: Props) {
+export function TFactoryLogViewer({ specId, projectId, wsFactory, wsBaseUrl }: Props) {
   const [state, setState] = useState<WsState>('connecting');
   const [payload, setPayload] = useState<LogStreamPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -94,7 +96,7 @@ export function TFactoryLogViewer({ specId, wsFactory, wsBaseUrl }: Props) {
   }, [wsBaseUrl]);
 
   useEffect(() => {
-    const url = buildLogStreamUrl(specId, envBase);
+    const url = buildLogStreamUrl(specId, envBase, undefined, projectId);
     const factory = wsFactory ?? ((u: string) => new WebSocket(u));
 
     // Reconnect-with-backoff: a dropped log stream (proxy idle-timeout, network
@@ -196,7 +198,7 @@ export function TFactoryLogViewer({ specId, wsFactory, wsBaseUrl }: Props) {
       }
       socketRef.current = null;
     };
-  }, [specId, envBase, wsFactory]);
+  }, [specId, projectId, envBase, wsFactory]);
 
   // ── Render ───────────────────────────────────────────────────────
 

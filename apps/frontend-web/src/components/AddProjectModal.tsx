@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { FolderOpen, Search, Loader2, GitBranch, Package, FileCode, CheckCircle, FileText, FolderPlus } from 'lucide-react';
 import { Button } from './ui/button';
@@ -51,10 +51,11 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
   // Epic #82 PR-B — clone-from-Git-URL mode. Mutually exclusive with the
   // local-folder mode above; toggled via the segmented button at the top
   // of the modal body.
-  const [mode, setMode] = useState<'local' | 'clone'>('local');
+  const [mode, setMode] = useState<'local' | 'clone'>('clone');
   const [gitUrl, setGitUrl] = useState('');
   const [gitBranch, setGitBranch] = useState('');
   const [gitName, setGitName] = useState('');
+  const scanId = useRef(0);
 
   // Filter and sort projects - Claude-ready projects first
   const sortedProjects = [...discoveredProjects].sort((a, b) => {
@@ -74,6 +75,7 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
   // Scan for projects when folder changes
   const scanProjects = useCallback(async () => {
     if (!projectsFolder.trim()) return;
+    const id = ++scanId.current;
 
     setIsScanning(true);
     setError(null);
@@ -82,6 +84,7 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
 
     try {
       const result = await window.API.discoverProjects(projectsFolder, 2);
+      if (id !== scanId.current) return;
       if (result.success && result.data) {
         setDiscoveredProjects(result.data);
         if (result.data.length === 0) {
@@ -91,28 +94,32 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
         setError(result.error || 'Failed to scan for projects');
       }
     } catch (err) {
+      if (id !== scanId.current) return;
       setError(err instanceof Error ? err.message : 'Failed to scan for projects');
     } finally {
-      setIsScanning(false);
+      if (id === scanId.current) setIsScanning(false);
     }
   }, [projectsFolder]);
 
-  // Scan on modal open
+  // Reset state on modal open (without scanning local projects)
   useEffect(() => {
     if (open) {
       setCustomPath('');
       setSelectedProject(null);
+      setDiscoveredProjects([]);
       setUseCustomPath(false);
       setShowClaudeReadyOnly(false);
       setError(null);
       setCreatedDirPath(null);
-      setMode('local');
+      setMode('clone');
       setGitUrl('');
       setGitBranch('');
       setGitName('');
-      scanProjects();
+    } else {
+      scanId.current++;
+      setIsScanning(false);
     }
-  }, [open, scanProjects]);
+  }, [open]);
 
   const handleAddProject = async () => {
     setIsAdding(true);
@@ -217,7 +224,11 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
           <div className="flex rounded-lg border border-border p-1 bg-muted/30">
             <button
               type="button"
-              onClick={() => setMode('local')}
+              onClick={() => {
+                if (mode === 'local') return;
+                setMode('local');
+                void scanProjects();
+              }}
               className={cn(
                 'flex-1 text-sm font-medium rounded-md px-3 py-1.5 transition-colors',
                 mode === 'local'
@@ -229,7 +240,7 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
             </button>
             <button
               type="button"
-              onClick={() => setMode('clone')}
+              onClick={() => { scanId.current++; setIsScanning(false); setError(null); setMode('clone'); }}
               className={cn(
                 'flex-1 text-sm font-medium rounded-md px-3 py-1.5 transition-colors',
                 mode === 'clone'
