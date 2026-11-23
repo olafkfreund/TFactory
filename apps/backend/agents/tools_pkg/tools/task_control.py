@@ -463,6 +463,7 @@ async def _remote_ingest(payload: dict[str, Any], tree: str) -> dict[str, Any]:
         "ac_count": res.get("ac_count"),
         "status": res.get("status"),
         "planner_scheduled": res.get("planner_scheduled"),
+        "planner_reason": res.get("planner_reason"),
         "warnings": res.get("warnings", []),
         "source_sha": res.get("source_sha"),
         "repo_slug": res.get("repo_slug"),
@@ -993,6 +994,9 @@ def create_spec_ingest_workspace(
         notify_terminal(spec_dir)
 
     planner_scheduled = False
+    planner_reason = (
+        "checkout_failed" if checkout_failed_reason else "auto_plan_disabled"
+    )
     if schedule and not checkout_failed_reason:
         try:
             from agents.planner import schedule_planner
@@ -1004,10 +1008,12 @@ def create_spec_ingest_workspace(
             )
             planner_scheduled = task is not None
         except ImportError as exc:
+            planner_reason = "scheduler_failed"
             warnings.append(
                 f"planner module not importable — task stays at status=pending: {exc}"
             )
         except Exception as exc:  # noqa: BLE001 — don't let a scheduling error
+            planner_reason = "scheduler_failed"
             # silently leave the spec at pending; surface it (TFactory #347).
             import logging as _lg
 
@@ -1022,6 +1028,7 @@ def create_spec_ingest_workspace(
         "ac_count": len(spec.criteria),
         "status": "failed" if checkout_failed_reason else "pending",
         "planner_scheduled": planner_scheduled,
+        **({"planner_reason": planner_reason} if not planner_scheduled else {}),
         "warnings": warnings,
         "source_sha": source_sha,
         "repo_slug": project_of(repo_ref) or None,
@@ -1233,6 +1240,7 @@ def create_task_control_tools() -> list:
         # Errors inside the planner do NOT raise here — they show up in
         # status.json as status=planner_failed. See planner.run_planner.
         planner_scheduled = False
+        planner_reason = "auto_plan_disabled"
         try:
             from agents.planner import schedule_planner
 
@@ -1244,12 +1252,14 @@ def create_task_control_tools() -> list:
             )
             planner_scheduled = task is not None
         except ImportError as exc:
+            planner_reason = "scheduler_failed"
             # planner module not importable (e.g. minimal venv without SDK
             # transitive deps); leave status=pending and surface a warning.
             snapshot_warnings.append(
                 f"planner module not importable — task stays at status=pending: {exc}"
             )
         except Exception as exc:  # noqa: BLE001 — don't silently leave pending
+            planner_reason = "scheduler_failed"
             import logging as _lg
 
             _lg.getLogger(__name__).error(
@@ -1267,6 +1277,7 @@ def create_task_control_tools() -> list:
                 "status": "pending",
                 "snapshot_warnings": snapshot_warnings,
                 "planner_scheduled": planner_scheduled,
+                **({"planner_reason": planner_reason} if not planner_scheduled else {}),
                 "note": (
                     "Workspace created + AIFactory spec snapshotted into context/. "
                     "Pipeline execution (planner + generators + executor + evaluator + triager) "
@@ -1402,6 +1413,11 @@ def create_task_control_tools() -> list:
                 "source_format": result["source_format"],
                 "ac_count": result["ac_count"],
                 "planner_scheduled": result["planner_scheduled"],
+                **(
+                    {"planner_reason": result.get("planner_reason")}
+                    if not result["planner_scheduled"]
+                    else {}
+                ),
                 "warnings": result["warnings"],
                 "portal_url": _portal_url(spec_id),
                 "tree": "local",

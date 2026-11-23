@@ -60,6 +60,31 @@ async def test_unknown_project_with_git_url_clones_and_registers(monkeypatch, tm
 
 
 @pytest.mark.asyncio
+async def test_no_register_rejects_unknown_project_before_clone(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    clone = AsyncMock(side_effect=AssertionError("must not clone"))
+    monkeypatch.setattr("server.routes.projects.load_projects", lambda: {})
+    monkeypatch.setattr(
+        "server.services.project_workspace_service.clone_or_update", clone
+    )
+    req = SpecIngestRequest(
+        project_id="unknown",
+        spec_id="s1",
+        spec_text="## Acceptance Criteria\n- works",
+        repo="owner/repo",
+        no_register=True,
+    )
+    with pytest.raises(HTTPException) as error:
+        await ingest_spec(req)
+    assert (error.value.status_code, error.value.detail) == (
+        404,
+        "Project not found",
+    )
+    clone.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_ref_with_source_branch_is_400(monkeypatch, tmp_path):
     """#1416: both fields is a caller error, not a silently dropped ref. The
     real ingest runs, so this also proves ``ref`` reaches it (#1404)."""
