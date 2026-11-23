@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.14.0 — Project-role enforcement and the project view (2026-11-23)
+
+### Added
+
+- **Authz:** `require_project_role` enforces scopes ∩ project grants on every project-scoped path; the legacy shared token keeps full access by default (`APP_LEGACY_SHARED_TOKEN_FULL_ACCESS=true`) (#1650, #1651).
+- **Frontend:** the AIFactory-style project view with `/p/:slug` routes, breadcrumb and My projects (#1653, #1654).
+
 ## 0.13.6 — Claude 5.5, GPT-6 and Gemini 4 models, CLI update fix (2026-11-19)
 
 ### Added
