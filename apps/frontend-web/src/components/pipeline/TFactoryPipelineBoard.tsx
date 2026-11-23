@@ -25,6 +25,7 @@ import {
   CrossIcon, FlaskIcon, PackageIcon, PlanDocIcon,
   RobotHeadIcon, RobotThumbsDownIcon, RobotThumbsUpIcon, SignalIcon, TerminalIcon,
 } from './icons';
+import { Button } from '../ui/button';
 import './pipeline.css';
 
 type Stage = 'plan' | 'generate' | 'execute' | 'report';
@@ -361,9 +362,9 @@ export function TFactoryPipelineBoard({ tasks, onSelectTask, fetchFn }: Props) {
       </div>
 
       <div className="flex flex-wrap items-center gap-4 text-sm">
-        <button type="button" aria-expanded={showFailed} onClick={() => setShowFailed((value) => !value)}>
+        <Button type="button" size="sm" variant="outline" aria-expanded={showFailed} onClick={() => setShowFailed((value) => !value)}>
           {t('pipeline.failed', { count: failed.length })}
-        </button>
+        </Button>
         <label className="flex items-center gap-2">
           <input type="checkbox" checked={showDismissed} onChange={(event) => setShowDismissed(event.target.checked)} />
           {t('pipeline.showDismissed')}
@@ -376,8 +377,8 @@ export function TFactoryPipelineBoard({ tasks, onSelectTask, fetchFn }: Props) {
           {failed.map((task) => <div key={`${task.project_id}:${task.spec_id}`} className="rounded border border-destructive/40 p-2">
             <SpecCard task={task} onClick={() => onSelectTask({ projectId: task.project_id, specId: task.spec_id })} />
             <div className="flex gap-2 mt-2">
-              <button type="button" disabled={busy !== null} onClick={() => void actOn(task, 'rerun')}>{t('pipeline.rerun')}</button>
-              <button type="button" disabled={busy !== null || task.dismissed} onClick={() => void actOn(task, 'dismiss')}>{t('pipeline.dismiss')}</button>
+              <Button type="button" size="sm" variant="outline" disabled={busy !== null} onClick={() => void actOn(task, 'rerun')}>{t('pipeline.rerun')}</Button>
+              <Button type="button" size="sm" variant="ghost" disabled={busy !== null || task.dismissed} onClick={() => void actOn(task, 'dismiss')}>{t('pipeline.dismiss')}</Button>
             </div>
           </div>)}
         </div>
