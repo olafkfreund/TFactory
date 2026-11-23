@@ -16,22 +16,25 @@ import { ChevronLeft } from 'lucide-react';
 
 import { TFactoryPipelineView } from '../pipeline/TFactoryPipelineView';
 import { TFactoryTaskDetail } from './TFactoryTaskDetail';
+import type { TFactoryTaskSelection } from '../../lib/tfactory-api';
 
 interface Props {
+  projectId?: string;
   /** Test seam threaded into both children. */
   fetchFn?: typeof fetch;
   /** Test seam for the log viewer's WebSocket factory. */
   wsFactory?: (url: string) => WebSocket;
 }
 
-export function TFactoryPortal({ fetchFn, wsFactory }: Props) {
-  const [selectedSpecId, setSelectedSpecId] = useState<string | null>(null);
+export function TFactoryPortal({ projectId, fetchFn, wsFactory }: Props) {
+  const [selected, setSelected] = useState<TFactoryTaskSelection | null>(null);
 
-  if (selectedSpecId === null) {
+  if (selected === null) {
     return (
       <div data-testid="tfactory-portal" data-view="list" className="h-full">
         <TFactoryPipelineView
-          onSelectTask={(specId) => setSelectedSpecId(specId)}
+          projectId={projectId}
+          onSelectTask={setSelected}
           fetchFn={fetchFn}
         />
       </div>
@@ -43,14 +46,15 @@ export function TFactoryPortal({ fetchFn, wsFactory }: Props) {
       <button
         type="button"
         data-testid="portal-back"
-        onClick={() => setSelectedSpecId(null)}
+        onClick={() => setSelected(null)}
         className="self-start inline-flex items-center gap-1 text-sm text-primary hover:text-primary"
       >
         <ChevronLeft className="h-4 w-4" aria-hidden />
         Back to tasks
       </button>
       <TFactoryTaskDetail
-        specId={selectedSpecId}
+        specId={selected.specId}
+        projectId={selected.projectId}
         fetchFn={fetchFn}
         wsFactory={wsFactory}
       />

@@ -5,6 +5,7 @@
 export interface Project {
   id: string;
   slug?: string;
+  repoLabel?: string | null;
   name: string;
   path: string;
   autoBuildPath: string;

@@ -30,7 +30,10 @@ export interface TFactoryTaskSummary {
   status: string | null;
   phase: string | null;
   updated_at: string;
+  dismissed?: boolean;
 }
+
+export interface TFactoryTaskSelection { projectId: string; specId: string }
 
 export interface TFactoryTaskListResponse {
   tasks: TFactoryTaskSummary[];
@@ -115,14 +118,19 @@ type FetchLike = typeof fetch;
 interface FetchOptions {
   signal?: AbortSignal;
   fetchFn?: FetchLike;
+  projectId?: string;
 }
+
+const scoped = (endpoint: string, projectId?: string): string =>
+  projectId ? `${endpoint}${endpoint.includes('?') ? '&' : '?'}project_id=${encodeURIComponent(projectId)}` : endpoint;
 
 async function _request<T>(
   endpoint: string,
   parse: 'json' | 'text',
   options: FetchOptions = {},
 ): Promise<T> {
-  const { signal, fetchFn = fetch } = options;
+  const { signal, fetchFn = fetch, projectId } = options;
+  endpoint = scoped(endpoint, projectId);
   const response = await fetchFn(endpoint, {
     method: 'GET',
     headers: { ...getAuthHeaders() },
@@ -155,7 +163,8 @@ async function _request<T>(
 }
 
 async function _post<T>(endpoint: string, body: unknown, options: FetchOptions = {}): Promise<T> {
-  const { signal, fetchFn = fetch } = options;
+  const { signal, fetchFn = fetch, projectId } = options;
+  endpoint = scoped(endpoint, projectId);
   const response = await fetchFn(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
@@ -245,6 +254,13 @@ export async function dismissRun(
 ): Promise<{ ok: boolean; dismissed: boolean; dismissed_at: string }> {
   _validateSpecId(specId);
   return _post(`${TFACTORY_PREFIX}/${specId}/dismiss`, {}, options);
+}
+
+export async function rerunTask(
+  specId: string, options: FetchOptions = {},
+): Promise<{ planner_scheduled: boolean; planner_reason: string | null }> {
+  _validateSpecId(specId);
+  return _post(`${TFACTORY_PREFIX}/${specId}/rerun`, {}, options);
 }
 
 // ─── Spec-id validation (mirrors backend) ─────────────────────────────
@@ -393,8 +409,9 @@ export function evidenceArtifactUrl(
   specId: string,
   testId: string,
   artifact: string,
+  projectId?: string,
 ): string {
-  return `${TFACTORY_PREFIX}/${specId}/evidence/${testId}/${artifact}`;
+  return scoped(`${TFACTORY_PREFIX}/${specId}/evidence/${testId}/${artifact}`, projectId);
 }
 
 /**
@@ -402,13 +419,13 @@ export function evidenceArtifactUrl(
  * Served from findings/screenshots/; authenticated via the same Bearer/cookie
  * path as the other artefact GETs.
  */
-export function screenshotUrl(specId: string, file: string): string {
-  return `${TFACTORY_PREFIX}/${specId}/screenshots/${encodeURIComponent(file)}`;
+export function screenshotUrl(specId: string, file: string, projectId?: string): string {
+  return scoped(`${TFACTORY_PREFIX}/${specId}/screenshots/${encodeURIComponent(file)}`, projectId);
 }
 
 /** URL for one browser-lane recording — use directly as a `<video src>`. */
-export function videoUrl(specId: string, file: string): string {
-  return `${TFACTORY_PREFIX}/${specId}/videos/${encodeURIComponent(file)}`;
+export function videoUrl(specId: string, file: string, projectId?: string): string {
+  return scoped(`${TFACTORY_PREFIX}/${specId}/videos/${encodeURIComponent(file)}`, projectId);
 }
 
 // ─── Visual baselines (#109) ──────────────────────────────────────────
@@ -445,8 +462,9 @@ export function visualBaselineImageUrl(
   specId: string,
   target: string,
   snapshot: string,
+  projectId?: string,
 ): string {
-  return `${TFACTORY_PREFIX}/${specId}/visual-baselines/${encodeURIComponent(target)}/${encodeURIComponent(snapshot)}`;
+  return scoped(`${TFACTORY_PREFIX}/${specId}/visual-baselines/${encodeURIComponent(target)}/${encodeURIComponent(snapshot)}`, projectId);
 }
 
 /**

@@ -6,18 +6,19 @@
  */
 import { useEffect, useState } from 'react';
 
-import { listTasks, type TFactoryTaskSummary } from '../../lib/tfactory-api';
+import { listTasks, type TFactoryTaskSelection, type TFactoryTaskSummary } from '../../lib/tfactory-api';
 import { TFactoryPipelineBoard } from './TFactoryPipelineBoard';
 
 interface Props {
-  onSelectTask: (specId: string) => void;
+  onSelectTask: (selection: TFactoryTaskSelection) => void;
+  projectId?: string;
   /** Test seam: inject a fake fetch (default: global fetch). */
   fetchFn?: typeof fetch;
   /** Background auto-refresh interval (ms). 0 disables. */
   pollMs?: number;
 }
 
-export function TFactoryPipelineView({ onSelectTask, fetchFn, pollMs = 5000 }: Props) {
+export function TFactoryPipelineView({ onSelectTask, projectId, fetchFn, pollMs = 5000 }: Props) {
   const [tasks, setTasks] = useState<TFactoryTaskSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -26,7 +27,7 @@ export function TFactoryPipelineView({ onSelectTask, fetchFn, pollMs = 5000 }: P
     let cancelled = false;
     setLoading(true);
     setError(null);
-    listTasks({ fetchFn })
+    listTasks({ fetchFn, projectId })
       .then((response) => {
         if (cancelled) return;
         setTasks(response.tasks);
@@ -38,17 +39,17 @@ export function TFactoryPipelineView({ onSelectTask, fetchFn, pollMs = 5000 }: P
         setLoading(false);
       });
     return () => { cancelled = true; };
-  }, [fetchFn]);
+  }, [fetchFn, projectId]);
 
   useEffect(() => {
     if (!pollMs || pollMs <= 0) return;
     const id = setInterval(() => {
-      listTasks({ fetchFn })
+      listTasks({ fetchFn, projectId })
         .then((response) => setTasks(response.tasks))
         .catch(() => { /* keep last-good board on a transient poll error */ });
     }, pollMs);
     return () => clearInterval(id);
-  }, [fetchFn, pollMs]);
+  }, [fetchFn, projectId, pollMs]);
 
   return (
     <div data-testid="tfactory-pipeline" className="flex flex-col gap-3 h-full">
@@ -65,7 +66,7 @@ export function TFactoryPipelineView({ onSelectTask, fetchFn, pollMs = 5000 }: P
           Failed to load TFactory workspaces: {error}
         </div>
       ) : (
-        <TFactoryPipelineBoard tasks={tasks} onSelectTask={onSelectTask} />
+        <TFactoryPipelineBoard tasks={tasks} onSelectTask={onSelectTask} fetchFn={fetchFn} />
       )}
     </div>
   );

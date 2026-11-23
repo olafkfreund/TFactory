@@ -1,4 +1,11 @@
 {
+  "pipeline": {
+    "failed": "Falhas ({{count}})",
+    "showDismissed": "Mostrar dispensadas",
+    "rerun": "Executar novamente",
+    "dismiss": "Dispensar",
+    "plannerNotScheduled": "O planejador não foi agendado"
+  },
   "status": {
     "backlog": "Backlog",
     "todo": "A Fazer",

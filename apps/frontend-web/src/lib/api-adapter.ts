@@ -60,6 +60,44 @@ const activeTerminalSubscriptions = new Map<string, () => void>();
 // Track pending task start requests to prevent duplicates
 const pendingTaskStarts = new Set<string>();
 
+let cachedAppVersion: string | null = null;
+let appVersionPromise: Promise<string> | null = null;
+
+export function resetAppVersionCache(): void {
+  cachedAppVersion = null;
+  appVersionPromise = null;
+}
+
+async function fetchAppVersion(): Promise<string> {
+  if (cachedAppVersion !== null) {
+    return cachedAppVersion;
+  }
+  if (appVersionPromise !== null) {
+    return appVersionPromise;
+  }
+  appVersionPromise = get<{ version?: unknown }>('/health')
+    .then((result) => {
+      const version =
+        result?.success &&
+        result.data &&
+        typeof result.data.version === 'string' &&
+        result.data.version.trim()
+          ? result.data.version.trim()
+          : null;
+      if (version) {
+        cachedAppVersion = version;
+        return version;
+      }
+      appVersionPromise = null;
+      return 'unknown';
+    })
+    .catch(() => {
+      appVersionPromise = null;
+      return 'unknown';
+    });
+  return appVersionPromise;
+}
+
 function registerCallback<T extends Callback>(event: string, callback: T): () => void {
   if (!eventCallbacks.has(event)) {
     eventCallbacks.set(event, new Set());
@@ -671,7 +709,7 @@ export const webAPI: API & { _isWebMode: boolean } = {
   getDefaultProjectLocation: async () => null,
 
   // App info
-  getAppVersion: async () => '1.0.0-web',
+  getAppVersion: () => fetchAppVersion(),
 
   // ========== Context Operations ==========
   getProjectContext: (projectId: string) => get(`/projects/${projectId}/context`),
@@ -939,7 +977,7 @@ export const webAPI: API & { _isWebMode: boolean } = {
 
   // ========== Debug Operations ==========
   getDebugInfo: async () => ({
-    systemInfo: { appVersion: '1.0.0-web', platform: 'web', isPackaged: 'false' },
+    systemInfo: { appVersion: await fetchAppVersion(), platform: 'web', isPackaged: 'false' },
     recentErrors: [],
     logsPath: '/api/logs',
     debugReport: '[Web Mode] Debug report not available',

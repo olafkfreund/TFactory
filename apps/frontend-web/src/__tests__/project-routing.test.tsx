@@ -5,7 +5,10 @@ import { MemoryRouter, useLocation, useNavigate } from 'react-router';
 import type { Project } from '../shared/types';
 
 // Heavy children are stubs that print which project/view they got.
-vi.mock('../components/Sidebar', () => ({ Sidebar: (p: { projectId: string | null }) => <output data-testid="sidebar-project">{p.projectId ?? 'none'}</output> }));
+vi.mock('../components/Sidebar', () => ({ Sidebar: (p: { projectId: string | null; onViewChange: (view: 'tfactory') => void }) => <>
+  <output data-testid="sidebar-project">{p.projectId ?? 'none'}</output>
+  <button onClick={() => p.onViewChange('tfactory')}>Tests</button>
+</> }));
 vi.mock('../components/ProjectTabBar', () => ({
   ProjectTabBar: (p: { currentSlug?: string; activeProjectId: string | null }) => <div data-testid="bar">{p.currentSlug}:{p.activeProjectId ?? 'none'}</div>,
 }));
@@ -102,7 +105,15 @@ beforeEach(() => {
   };
   useProjectStore.setState({ projects: [], selectedProjectId: null, activeProjectId: null, openProjectIds: [], tabOrder: [] });
   useTaskStore.setState({ tasks: [] });
-  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ tasks: [], count: 0 }) }));
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url: string) => {
+    const projectId = new URL(url, 'http://localhost').searchParams.get('project_id');
+    const tasks = projectId ? (tasksFor[projectId] ?? []).map((task) => ({
+      task_id: task.id, project_id: projectId, spec_id: task.id,
+      status: 'triaged', phase: null, updated_at: '2026-01-01',
+    })) : [];
+    return { ok: true, json: async () => ({ tasks, count: tasks.length }) };
+  }));
 });
 
 describe('URL-scoped projects', () => {
@@ -110,7 +121,7 @@ describe('URL-scoped projects', () => {
     localStorage.setItem('lastSelectedProjectId', 'id-beta');
     setApi({ openProjectIds: ['id-beta'], activeProjectId: 'id-beta', tabOrder: ['id-beta'] });
     renderAt('/p/alpha');
-    await waitFor(() => { expect(screen.getByTestId('project-tasks')).toHaveTextContent('alpha-task'); });
+    await screen.findByTestId('task-row-t1');
     expect(useProjectStore.getState().activeProjectId).toBe('id-alpha');
     expect(useProjectStore.getState().openProjectIds).toContain('id-beta');
   });
@@ -118,7 +129,7 @@ describe('URL-scoped projects', () => {
   it('rewrites an id in the URL to the canonical slug', async () => {
     setApi({});
     renderAt('/p/id-beta');
-    await waitFor(() => { expect(screen.getByTestId('project-tasks')).toHaveTextContent('beta-task'); });
+    await screen.findByTestId('task-row-t2');
     await waitFor(() => { expect(screen.getByTestId('terms')).toHaveTextContent('/src/id-beta'); });
     await waitFor(() => { expect(screen.getByTestId('bar')).toHaveTextContent('beta'); });
     expect(screen.getByTestId('location')).toHaveTextContent('/p/beta');
@@ -127,13 +138,13 @@ describe('URL-scoped projects', () => {
   it('opens different URL projects with the same saved tab state', async () => {
     setApi({ openProjectIds: ['id-beta'], activeProjectId: 'id-beta', tabOrder: ['id-beta'] });
     const first = renderAt('/p/alpha');
-    await waitFor(() => { expect(screen.getByTestId('project-tasks')).toHaveTextContent('alpha-task'); });
+    await screen.findByTestId('task-row-t1');
     expect(screen.getByTestId('location')).toHaveTextContent('/p/alpha');
     first.unmount();
     useProjectStore.setState({ projects: [], selectedProjectId: null, activeProjectId: null, openProjectIds: [], tabOrder: [] });
     useTaskStore.getState().clearTasks();
     renderAt('/p/beta');
-    await waitFor(() => { expect(screen.getByTestId('project-tasks')).toHaveTextContent('beta-task'); });
+    await screen.findByTestId('task-row-t2');
     expect(screen.getByTestId('location')).toHaveTextContent('/p/beta');
   });
 
@@ -141,7 +152,7 @@ describe('URL-scoped projects', () => {
     setApi({});
     renderAt('/p/nope');
     expect(await screen.findByText(/Project not found/)).toBeInTheDocument();
-    expect(screen.queryByTestId('project-tasks')).toBeNull();
+    expect(screen.queryByTestId('tfactory-portal')).toBeNull();
   });
 
   it('shows a chooser for a collision and never promotes its bare slug', async () => {
@@ -152,7 +163,7 @@ describe('URL-scoped projects', () => {
     renderAt('/p/DEMO');
     expect(await screen.findByText('Choose a project')).toBeInTheDocument();
     expect(screen.getAllByRole('link')).toHaveLength(2);
-    expect(screen.queryByTestId('project-tasks')).toBeNull();
+    expect(screen.queryByTestId('tfactory-portal')).toBeNull();
     act(() => { useProjectStore.setState({ projects: [second] }); });
     expect(screen.getByText('Choose a project')).toBeInTheDocument();
     expect(screen.getAllByRole('link')).toHaveLength(1);
@@ -167,20 +178,20 @@ describe('URL-scoped projects', () => {
     expect(await screen.findByText('Choose a project')).toBeInTheDocument();
     act(() => { useProjectStore.setState({ projects: [next] }); });
     expect(screen.getByText('Choose a project')).toBeInTheDocument();
-    expect(screen.queryByTestId('project-tasks')).toBeNull();
+    expect(screen.queryByTestId('tfactory-portal')).toBeNull();
   });
 
   it('back/forward style navigation re-syncs and never shows the other project tasks', async () => {
     setApi({});
     renderAt('/p/alpha');
-    await waitFor(() => { expect(screen.getByTestId('project-tasks')).toHaveTextContent('alpha-task'); });
+    await screen.findByTestId('task-row-t1');
     act(() => { void nav('/p/beta'); });
-    await waitFor(() => { expect(screen.getByTestId('project-tasks')).toHaveTextContent('beta-task'); });
-    expect(screen.getByTestId('project-tasks')).not.toHaveTextContent('alpha-task');
+    await screen.findByTestId('task-row-t2');
+    expect(screen.queryByTestId('task-row-t1')).toBeNull();
     act(() => { void nav(-1); });
-    await waitFor(() => { expect(screen.getByTestId('project-tasks')).toHaveTextContent('alpha-task'); });
+    await screen.findByTestId('task-row-t1');
     act(() => { void nav(1); });
-    await waitFor(() => { expect(screen.getByTestId('project-tasks')).toHaveTextContent('beta-task'); });
+    await screen.findByTestId('task-row-t2');
     expect(useProjectStore.getState().activeProjectId).toBe('id-beta');
   });
 
@@ -197,6 +208,35 @@ describe('URL-scoped projects', () => {
     setApi({});
     renderAt('/p/alpha/insights');
     expect(await screen.findByTestId('insights')).toBeInTheDocument();
+  });
+
+  it('Tests click from another view keeps the project', async () => {
+    setApi({});
+    renderAt('/p/alpha/insights');
+    await screen.findByTestId('insights');
+    fireEvent.click(screen.getByRole('button', { name: 'Tests' }));
+    expect(await screen.findByTestId('task-row-t1')).toBeInTheDocument();
+    expect(screen.getByTestId('location')).toHaveTextContent('/p/alpha');
+    expect(screen.queryByTestId('task-row-t2')).toBeNull();
+    expect(fetch).toHaveBeenCalledWith('/api/tfactory/tasks?project_id=id-alpha', expect.anything());
+  });
+
+  it('project switch resets an open detail view', async () => {
+    setApi({});
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url: string) => {
+      const projectId = new URL(url, 'http://localhost').searchParams.get('project_id');
+      const specId = projectId === 'id-beta' ? 't2' : 't1';
+      const body = url.includes(`/${specId}?`)
+        ? { task_id: specId, project_id: projectId, spec_id: specId, status_json: { status: 'triaged' }, artefacts: {} }
+        : { tasks: [{ task_id: specId, project_id: projectId, spec_id: specId, status: 'triaged', phase: null, updated_at: '2026-01-01' }], count: 1 };
+      return { ok: true, json: async () => body };
+    }));
+    renderAt('/p/alpha');
+    fireEvent.click(await screen.findByTestId('task-row-t1'));
+    expect(await screen.findByTestId('tfactory-task-detail')).toBeInTheDocument();
+    act(() => { void nav('/p/beta'); });
+    expect(await screen.findByTestId('task-row-t2')).toBeInTheDocument();
+    expect(screen.queryByTestId('tfactory-task-detail')).toBeNull();
   });
 
   it('/ shows My projects, /projects the Projects page', async () => {
@@ -237,19 +277,18 @@ describe('URL-scoped projects', () => {
       ], count: 2,
     }) }));
     renderAt('/p/alpha');
-    await screen.findByTestId('project-tasks');
-    expect(screen.queryByTestId('tfactory-portal')).toBeNull();
+    await screen.findByTestId('task-row-001');
     act(() => { void nav('/tests'); });
     expect(await screen.findByTestId('tfactory-portal')).toBeInTheDocument();
     expect(await screen.findByTestId('task-row-001')).toBeInTheDocument();
     expect(screen.getByTestId('task-row-002')).toBeInTheDocument();
-    expect(screen.queryByTestId('project-tasks')).toBeNull();
+    expect(screen.queryByTestId('task-row-t1')).toBeNull();
   });
 
   it('drops project-only consumers when leaving the project URL', async () => {
     setApi({ openProjectIds: ['id-beta'], activeProjectId: 'id-beta', tabOrder: ['id-beta'] });
     renderAt('/p/alpha');
-    await screen.findByTestId('project-tasks');
+    await screen.findByTestId('task-row-t1');
     expect(screen.getByTestId('wizard-project')).toHaveTextContent('id-alpha');
     act(() => { void nav('/projects'); });
     expect(screen.getByTestId('sidebar-project')).toHaveTextContent('none');
@@ -268,7 +307,7 @@ describe('URL-scoped projects', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Network down');
     expect(screen.queryByText(/Project not found/)).toBeNull();
     fireEvent.click(screen.getByText('Retry'));
-    expect(await screen.findByTestId('project-tasks')).toBeInTheDocument();
+    expect(await screen.findByTestId('tfactory-portal')).toBeInTheDocument();
   });
 
   it('shows fetch failure on the projects index too', async () => {
@@ -320,7 +359,7 @@ describe('URL-scoped projects', () => {
     let resolve: (value: unknown) => void = () => undefined;
     (window.API as unknown as { getTasks: (id: string) => Promise<unknown> }).getTasks = () => new Promise((r) => { resolve = r; });
     renderAt('/p/alpha');
-    await screen.findByTestId('project-tasks');
+    await screen.findByTestId('task-row-t1');
     act(() => { void nav('/projects'); });
     await act(async () => { resolve({ success: true, data: tasksFor['id-alpha'] }); });
     expect(useTaskStore.getState().tasks).toEqual([]);

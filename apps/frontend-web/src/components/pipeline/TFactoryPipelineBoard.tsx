@@ -17,7 +17,8 @@ import {
   type CSSProperties,
 } from 'react';
 
-import type { TFactoryTaskSummary } from '../../lib/tfactory-api';
+import { dismissRun, rerunTask, type TFactoryTaskSelection, type TFactoryTaskSummary } from '../../lib/tfactory-api';
+import { useTranslation } from 'react-i18next';
 import { formatRelativeTime } from '../../lib/utils';
 import { statusColor } from '../tfactory/TFactoryTaskList';
 import {
@@ -124,33 +125,66 @@ interface Flight { id: string; to: number; x0: number; x1: number; y: number; }
 
 interface Props {
   tasks: TFactoryTaskSummary[];
-  onSelectTask: (specId: string) => void;
+  onSelectTask: (selection: TFactoryTaskSelection) => void;
+  fetchFn?: typeof fetch;
 }
 
-export function TFactoryPipelineBoard({ tasks, onSelectTask }: Props) {
+export function TFactoryPipelineBoard({ tasks, onSelectTask, fetchFn }: Props) {
+  const { t } = useTranslation('tasks');
+  const [showFailed, setShowFailed] = useState(false);
+  const [showDismissed, setShowDismissed] = useState(false);
+  const [overrides, setOverrides] = useState<Record<string, Partial<TFactoryTaskSummary>>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [plannerReason, setPlannerReason] = useState<string | null>(null);
   const boardRef = useRef<HTMLDivElement>(null);
   const ringRefs = useRef<(HTMLDivElement | null)[]>([]);
   const [centers, setCenters] = useState<{ x: number; y: number }[]>([]);
   const [flights, setFlights] = useState<Flight[]>([]);
   const prevStage = useRef<Map<string, Stage>>(new Map());
 
+  const visible = useMemo(() => tasks.map((task) => ({
+    ...task,
+    ...(isFailed(task) ? overrides[`${task.project_id}:${task.spec_id}`] : undefined),
+  })).filter((task) => showDismissed || !task.dismissed), [tasks, overrides, showDismissed]);
+  const failed = visible.filter(isFailed);
+
+  const actOn = async (task: TFactoryTaskSummary, action: 'rerun' | 'dismiss') => {
+    const key = `${task.project_id}:${task.spec_id}`;
+    setBusy(key);
+    setActionError(null);
+    setPlannerReason(null);
+    try {
+      if (action === 'rerun') {
+        const result = await rerunTask(task.spec_id, { projectId: task.project_id, fetchFn });
+        setOverrides((current) => ({ ...current, [key]: { status: 'pending', dismissed: false } }));
+        if (!result.planner_scheduled) setPlannerReason(result.planner_reason || t('pipeline.plannerNotScheduled'));
+      } else {
+        await dismissRun(task.spec_id, { projectId: task.project_id, fetchFn });
+        setOverrides((current) => ({ ...current, [key]: { dismissed: true } }));
+      }
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error));
+    } finally { setBusy(null); }
+  };
+
   const byStage = useMemo(() => {
     const g: Record<Stage, TFactoryTaskSummary[]> = { plan: [], generate: [], execute: [], report: [] };
-    for (const t of tasks) g[stageOf(t)].push(t);
+    for (const t of visible) if (!isFailed(t)) g[stageOf(t)].push(t);
     for (const k of ORDER) {
       g[k].sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
     }
     return g;
-  }, [tasks]);
+  }, [visible]);
 
   const active = useMemo(() => {
     const a: Record<Stage, boolean> = { plan: false, generate: false, execute: false, report: false };
-    for (const t of tasks) {
+    for (const t of visible) {
       const s = activeStage(t);
       if (s) a[s] = true;
     }
     return a;
-  }, [tasks]);
+  }, [visible]);
 
   const measure = useCallback(() => {
     const board = boardRef.current;
@@ -175,20 +209,21 @@ export function TFactoryPipelineBoard({ tasks, onSelectTask }: Props) {
 
   useEffect(() => {
     if (centers.length < ORDER.length) {
-      if (prevStage.current.size === 0) for (const t of tasks) prevStage.current.set(t.task_id, stageOf(t));
+      if (prevStage.current.size === 0) for (const t of tasks) prevStage.current.set(`${t.project_id}:${t.spec_id}`, stageOf(t));
       return;
     }
     const launched: Flight[] = [];
     const seen = new Set<string>();
     for (const t of tasks) {
-      seen.add(t.task_id);
+      const key = `${t.project_id}:${t.spec_id}`;
+      seen.add(key);
       const cur = stageOf(t);
-      const was = prevStage.current.get(t.task_id);
-      prevStage.current.set(t.task_id, cur);
+      const was = prevStage.current.get(key);
+      prevStage.current.set(key, cur);
       if (was && was !== cur) {
         const from = ORDER.indexOf(was), to = ORDER.indexOf(cur);
         launched.push({
-          id: `${t.task_id}-${was}-${cur}`,
+          id: `${key}-${was}-${cur}`,
           to, x0: centers[from].x, x1: centers[to].x, y: centers[from].y,
         });
       }
@@ -250,7 +285,7 @@ export function TFactoryPipelineBoard({ tasks, onSelectTask }: Props) {
                     const now = activeStage(task);
                     const NowIcon = now ? STAGE_ICON[now] : null;
                     return (
-                      <motion.div key={task.task_id} layout
+                      <motion.div key={`${task.project_id}:${task.spec_id}`} layout
                         className={`pl-card-wrap ${failed ? 'is-failed' : ''} ${done ? 'is-done' : ''} ${now ? 'is-live' : ''}`}
                         initial={{ opacity: 0, y: 10, scale: 0.98 }}
                         animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -275,7 +310,7 @@ export function TFactoryPipelineBoard({ tasks, onSelectTask }: Props) {
                         )}
                         {failed && <span className="pl-card-cross" aria-hidden><CrossIcon size={84} /></span>}
 
-                        <SpecCard task={task} onClick={() => onSelectTask(task.spec_id)} />
+                        <SpecCard task={task} onClick={() => onSelectTask({ projectId: task.project_id, specId: task.spec_id })} />
 
                         <div className="pl-phase-strip" aria-hidden>
                           {phaseStrip(task).map((p) => (
@@ -304,6 +339,29 @@ export function TFactoryPipelineBoard({ tasks, onSelectTask }: Props) {
           );
         })}
       </div>
+
+      <div className="flex flex-wrap items-center gap-4 text-sm">
+        <button type="button" aria-expanded={showFailed} onClick={() => setShowFailed((value) => !value)}>
+          {t('pipeline.failed', { count: failed.length })}
+        </button>
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={showDismissed} onChange={(event) => setShowDismissed(event.target.checked)} />
+          {t('pipeline.showDismissed')}
+        </label>
+      </div>
+      {actionError && <p role="alert" className="text-sm text-destructive">{actionError}</p>}
+      {plannerReason && <p role="status" className="text-sm text-warning">{plannerReason}</p>}
+      {showFailed && failed.length > 0 && (
+        <div data-testid="failed-runs" className="grid gap-2">
+          {failed.map((task) => <div key={`${task.project_id}:${task.spec_id}`} className="rounded border border-destructive/40 p-2">
+            <SpecCard task={task} onClick={() => onSelectTask({ projectId: task.project_id, specId: task.spec_id })} />
+            <div className="flex gap-2 mt-2">
+              <button type="button" disabled={busy !== null} onClick={() => void actOn(task, 'rerun')}>{t('pipeline.rerun')}</button>
+              <button type="button" disabled={busy !== null || task.dismissed} onClick={() => void actOn(task, 'dismiss')}>{t('pipeline.dismiss')}</button>
+            </div>
+          </div>)}
+        </div>
+      )}
 
       <div className="pl-flights" aria-hidden>
         <AnimatePresence>

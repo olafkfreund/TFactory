@@ -51,7 +51,7 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
   // Epic #82 PR-B — clone-from-Git-URL mode. Mutually exclusive with the
   // local-folder mode above; toggled via the segmented button at the top
   // of the modal body.
-  const [mode, setMode] = useState<'local' | 'clone'>('local');
+  const [mode, setMode] = useState<'local' | 'clone'>('clone');
   const [gitUrl, setGitUrl] = useState('');
   const [gitBranch, setGitBranch] = useState('');
   const [gitName, setGitName] = useState('');
@@ -97,22 +97,22 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
     }
   }, [projectsFolder]);
 
-  // Scan on modal open
+  // Reset state on modal open (without scanning local projects)
   useEffect(() => {
     if (open) {
       setCustomPath('');
       setSelectedProject(null);
+      setDiscoveredProjects([]);
       setUseCustomPath(false);
       setShowClaudeReadyOnly(false);
       setError(null);
       setCreatedDirPath(null);
-      setMode('local');
+      setMode('clone');
       setGitUrl('');
       setGitBranch('');
       setGitName('');
-      scanProjects();
     }
-  }, [open, scanProjects]);
+  }, [open]);
 
   const handleAddProject = async () => {
     setIsAdding(true);
@@ -217,7 +217,10 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
           <div className="flex rounded-lg border border-border p-1 bg-muted/30">
             <button
               type="button"
-              onClick={() => setMode('local')}
+              onClick={() => {
+                setMode('local');
+                void scanProjects();
+              }}
               className={cn(
                 'flex-1 text-sm font-medium rounded-md px-3 py-1.5 transition-colors',
                 mode === 'local'
