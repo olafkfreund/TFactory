@@ -23,6 +23,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Loader2, Plug, Unplug } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 // ── WS URL helper ────────────────────────────────────────────────────
 
@@ -78,6 +79,7 @@ interface LogStreamPayload {
 // ── Component ────────────────────────────────────────────────────────
 
 export function TFactoryLogViewer({ specId, projectId, wsFactory, wsBaseUrl }: Props) {
+  const { t } = useTranslation('common');
   const [state, setState] = useState<WsState>('connecting');
   const [payload, setPayload] = useState<LogStreamPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -101,7 +103,7 @@ export function TFactoryLogViewer({ specId, projectId, wsFactory, wsBaseUrl }: P
 
     // Reconnect-with-backoff: a dropped log stream (proxy idle-timeout, network
     // blip, pod restart) should silently re-establish rather than die. Terminal
-    // server codes (4400 invalid spec / 4404 missing task) are NOT retried —
+    // server codes (4001/4003 auth, 4400 invalid spec, 4404 missing task) are NOT retried —
     // reconnecting would just fail identically. `disposed` stops any pending
     // reconnect from firing after unmount.
     let disposed = false;
@@ -158,8 +160,12 @@ export function TFactoryLogViewer({ specId, projectId, wsFactory, wsBaseUrl }: P
       };
 
       socket.onclose = (ev: CloseEvent) => {
-        // The backend uses custom codes 4400/4404 for known failures
-        // (path-traversal / missing spec) — terminal, surface and stop.
+        if (ev.code === 4001 || ev.code === 4003) {
+          setState('error');
+          setError(t('errors.signInAgain'));
+          return;
+        }
+        // Known failures are terminal: surface them and stop.
         if (ev.code === 4400) {
           setState('error');
           setError('Invalid spec_id');
@@ -198,7 +204,7 @@ export function TFactoryLogViewer({ specId, projectId, wsFactory, wsBaseUrl }: P
       }
       socketRef.current = null;
     };
-  }, [specId, projectId, envBase, wsFactory]);
+  }, [specId, projectId, envBase, wsFactory, t]);
 
   // ── Render ───────────────────────────────────────────────────────
 

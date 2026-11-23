@@ -113,8 +113,11 @@ function openAndHandshake(): void {
 
 describe('<AgentConsole>', () => {
   it('opens a WS to the agent-console endpoint with the task id', () => {
+    localStorage.removeItem('tfactory-token');
+    localStorage.removeItem('magestic-ai-token');
     render(<AgentConsole taskId="proj:spec-001" />);
     expect(MockWebSocket.last.url).toContain('/api/tasks/proj%3Aspec-001/agent-console/ws');
+    expect(MockWebSocket.last.url).not.toContain('token=');
   });
 
   it('disables the Attach button until WS handshake + connection_id arrive', () => {

@@ -57,7 +57,8 @@
     "unknownError": "Ocorreu um erro desconhecido",
     "networkError": "Erro de rede",
     "notFound": "Não encontrado",
-    "unauthorized": "Não autorizado"
+    "unauthorized": "Não autorizado",
+    "signInAgain": "Não autorizado: entre novamente"
   },
   "notification": {
     "accountSwitched": "Conta Alternada",

@@ -14,6 +14,7 @@ import logging
 from contextvars import ContextVar
 from functools import lru_cache
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import HTTPException, Request, WebSocket, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -52,9 +53,9 @@ def _ws_extract_token(websocket: WebSocket) -> str | None:
     """Pull the bearer token from a WebSocket, preferring the header (#555).
 
     Order: ``Authorization: Bearer <token>`` header first, then the legacy
-    ``?token=`` query param. Using the query param emits a one-time deprecation
-    warning since it leaks the token into logs/history. Returns ``None`` when no
-    token is present.
+    ``?token=`` query param, then the ``access_token`` cookie. Using the query
+    param emits a one-time deprecation warning since it leaks the token into
+    logs/history. Returns ``None`` when no token is present.
 
     The previous order here was the other way round: the query param won even
     when a header was present, so a correctly-behaving client still got its
@@ -71,6 +72,25 @@ def _ws_extract_token(websocket: WebSocket) -> str | None:
     if query_token:
         _warn_ws_query_token_once()
         return query_token
+
+    cookie_token: str | None = websocket.cookies.get("access_token")
+    if cookie_token:
+        # Cookie sessions only for same-origin handshakes (CSWSH guard). Compare
+        # hosts, not schemes: TLS ends at the ingress, so the pod sees ws://.
+        origin = websocket.headers.get("origin")
+        request_host = websocket.headers.get("host")
+        if origin and (
+            (
+                request_host
+                and urlparse(origin).netloc == request_host
+                # A wss:// socket never accepts a plain-http page as its origin.
+                and not (
+                    urlparse(origin).scheme == "http" and websocket.url.scheme == "wss"
+                )
+            )
+            or origin in get_settings().CORS_ORIGINS
+        ):
+            return cookie_token
 
     return None
 
@@ -355,8 +375,8 @@ async def verify_websocket_token(websocket: WebSocket) -> bool:
     if settings.DISABLE_AUTH:
         return True
 
-    # Prefer the Authorization header; fall back to the legacy ?token= query
-    # param (with a deprecation warning) for backward compatibility (#555).
+    # Prefer the Authorization header, then the legacy ?token= query param,
+    # then a same-origin or configured-origin cookie session.
     token = _ws_extract_token(websocket)
 
     if not token:

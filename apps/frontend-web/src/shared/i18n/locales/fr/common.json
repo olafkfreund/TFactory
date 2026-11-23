@@ -61,7 +61,8 @@
     "unknownError": "Une erreur inconnue s'est produite",
     "networkError": "Erreur réseau",
     "notFound": "Non trouvé",
-    "unauthorized": "Non autorisé"
+    "unauthorized": "Non autorisé",
+    "signInAgain": "Non autorisé : reconnectez-vous"
   },
   "notification": {
     "accountSwitched": "Compte changé",
