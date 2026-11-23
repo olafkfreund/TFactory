@@ -207,11 +207,12 @@ class PrAttachRequest(BaseModel):
     )
 
 
-async def _clone_and_register_project(
+async def _clone_and_register_project(  # noqa: PLR0913
     git_url: str,
     *,
     branch: str | None,
     name: str,
+    alias: str | None = None,
     org_id: str | None = None,
     service_access: bool = False,
 ) -> tuple[dict, str]:
@@ -266,6 +267,7 @@ async def _clone_and_register_project(
     pdata: dict = {
         "path": path,
         "name": name,
+        "aliases": [alias] if alias else [],
         "created_at": now,
         "updated_at": now,
         "clonedFrom": git_url,
@@ -497,6 +499,7 @@ async def ingest_spec(  # noqa: PLR0912,PLR0915 - handoff stages share authoriza
                 git_url,
                 branch=req.source_branch,
                 name=repo_basename(git_url),
+                alias=req.project_id,
                 org_id=org_id,
                 service_access=is_service_principal(principal),
             )

@@ -20,6 +20,7 @@ Workspace root resolution:
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 import os
@@ -35,6 +36,7 @@ from server.error_ref import InputRejectedError, client_error
 
 from ._specpath import safe_component, safe_slug
 from .project_authz import (
+    _load_projects,
     require_project_role,
     resolve_project_id,
     resolve_task_project,
@@ -140,7 +142,10 @@ async def _authorize_spec_request(
     )
     visible = await visible_project_ids(principal)
     if q_pid:
-        pid_ref = resolve_project_id(q_pid)
+        pid_ref = resolve_project_id(
+            q_pid,
+            {pid: data for pid, data in _load_projects().items() if pid in visible},
+        )
         if pid_ref not in visible:
             raise HTTPException(404, "Project not found")
         task_ref = f"{safe_component(pid_ref)}:{spec_id}"
@@ -305,7 +310,13 @@ def list_tasks(
     belonging to the request's tenant (``X-Tenant-Id`` header, fallback
     "default") are returned; off = unchanged (all rows).
     """
-    resolved_id = resolve_project_id(project_id) if project_id else None
+    projects = _load_projects()
+    allowed = (
+        projects
+        if visible is None
+        else {pid: data for pid, data in projects.items() if pid in visible}
+    )
+    resolved_id = resolve_project_id(project_id, allowed) if project_id else None
     if project_id and (
         resolved_id is None or (visible is not None and resolved_id not in visible)
     ):
@@ -679,7 +690,18 @@ async def websocket_logs(
         try:
             _validate_spec_id(spec_id)
             visible = await visible_project_ids(principal, None, "viewer")
-            pid_ref = resolve_project_id(project_id) if project_id else None
+            pid_ref = (
+                resolve_project_id(
+                    project_id,
+                    {
+                        pid: data
+                        for pid, data in _load_projects().items()
+                        if pid in visible
+                    },
+                )
+                if project_id
+                else None
+            )
             if project_id and pid_ref not in visible:
                 raise HTTPException(404, "Project not found")
             pid, _ = resolve_task_project(
@@ -1225,16 +1247,41 @@ async def _rerun_route(
 ) -> dict[str, Any]:
     visible = await _authorize_spec_request(request, spec_id, "member", project_id)
     spec_dir = _spec_dir_or_404(spec_id, visible)
-    from .handback import _ACTIVE_STATUSES  # noqa: PLC0415
-
-    current = _read_json(spec_dir / "status.json") or {}
-    if current.get("status") in _ACTIVE_STATUSES:
-        raise HTTPException(409, "Task is already active")
     from agents.handback.rerun import rerun_pipeline  # noqa: PLC0415
 
-    return rerun_pipeline(
-        spec_dir.parent.parent.name, spec_id, root=_resolve_workspace_root()
-    )
+    # Lock the check and the status reset as one operation across workers.
+    with (spec_dir / "status.json.lock").open("a+b") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        current = _read_json(spec_dir / "status.json") or {}
+        run_status = current.get("status")
+        active = {
+            "pending",
+            "planning",
+            "planned",
+            "generating",
+            "generated",
+            "executing",
+            "evaluating",
+            "evaluated",
+            "triaging",
+            "running",
+            "in_progress",
+        }
+        terminal = isinstance(run_status, str) and (
+            run_status.endswith("_failed")
+            or run_status
+            in {
+                "failed", "stuck", "stalled", "replan_needed", "completed",
+                "done", "dismissed",
+            }
+        )
+        if (isinstance(run_status, str) and run_status in active) or not (
+            terminal or (current.get("dismissed") and isinstance(run_status, str))
+        ):
+            raise HTTPException(409, "Task is already active")
+        return rerun_pipeline(
+            spec_dir.parent.parent.name, spec_id, root=_resolve_workspace_root()
+        )
 
 
 # ─── Visual regression baselines (#109) ───────────────────────────────────

@@ -2,10 +2,15 @@
 
 import json
 import sys
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 for root in (
@@ -26,23 +31,44 @@ def scoped_tasks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         projects,
         "load_projects",
         lambda: {
-            "uuid-a": {"name": "Workspace A", "path": str(tmp_path / "a")},
-            "uuid-b": {"name": "Workspace B", "path": str(tmp_path / "b")},
+            "uuid-a": {
+                "name": "Workspace A",
+                "path": str(tmp_path / "a"),
+                "org_id": "A",
+            },
+            "uuid-b": {
+                "name": "Workspace B",
+                "path": str(tmp_path / "b"),
+                "org_id": "A",
+            },
+            "uuid-c": {
+                "name": "Workspace A",
+                "path": str(tmp_path / "c"),
+                "org_id": "B",
+            },
         },
     )
     monkeypatch.setattr(project_authz, "_load_projects", projects.load_projects)
+    monkeypatch.setattr(
+        project_authz,
+        "get_settings",
+        lambda: SimpleNamespace(
+            DISABLE_AUTH=False,
+            PROJECTS_BACKEND="json",
+            LEGACY_SHARED_TOKEN_FULL_ACCESS=False,
+        ),
+    )
+    role: list[str] = ["owner"]
+    db = AsyncMock()
+    db.execute.side_effect = lambda *_: SimpleNamespace(
+        scalar_one_or_none=lambda: SimpleNamespace(role=role[0])
+    )
 
-    async def visible(principal: dict[str, str], _db=None, _min_role="viewer") -> set[str]:
-        return {"uuid-a", "uuid-b"} if principal["role"] != "invisible" else set()
+    @asynccontextmanager
+    async def session():
+        yield db
 
-    async def authorize(principal, pid, min_role="viewer", _db=None):
-        if pid not in await visible(principal):
-            raise HTTPException(404, "Project not found")
-        if min_role == "member" and principal["role"] == "viewer":
-            raise HTTPException(403, "Forbidden")
-
-    monkeypatch.setattr(tfactory_tasks, "visible_project_ids", visible)
-    monkeypatch.setattr(tfactory_tasks, "require_project_role", authorize)
+    monkeypatch.setattr("server.database.engine.async_session_factory", session)
     for pid in ("uuid-a", "uuid-b"):
         spec_dir = tmp_path / "workspaces" / pid / "specs" / "same-spec"
         spec_dir.mkdir(parents=True)
@@ -54,7 +80,14 @@ def scoped_tasks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     @app.middleware("http")
     async def identity(request: Request, call_next):
-        request.state.user = {"role": request.headers.get("X-Role", "member")}
+        selected = request.headers.get("X-Role", "owner")
+        role[0] = "viewer" if selected == "viewer" else "owner"
+        request.state.user = {
+            "id": selected,
+            "org_id": "Z" if selected == "invisible" else "A",
+        }
+        if selected == "scoped-owner":
+            request.state.user.update(api_key_id="read-key", scopes=["mcp:read"])
         return await call_next(request)
 
     app.include_router(tfactory_tasks.router, prefix="/api/tfactory/tasks")
@@ -68,6 +101,31 @@ def test_tfactory_tasks_filter_uuid_and_workspace_name(scoped_tasks):
         response = client.get("/api/tfactory/tasks", params={"project_id": ref})
         assert response.status_code == 200
         assert [row["project_id"] for row in response.json()["tasks"]] == ["uuid-a"]
+
+
+def test_same_name_in_other_org_does_not_break_resolution(
+    scoped_tasks: tuple[TestClient, Path],
+) -> None:
+    client, _ = scoped_tasks
+    assert (
+        client.get("/api/tfactory/tasks", params={"project_id": "Workspace A"}).json()[
+            "tasks"
+        ][0]["project_id"]
+        == "uuid-a"
+    )
+    assert (
+        client.get("/api/tfactory/tasks/same-spec", params={"project_id": "Workspace A"})
+        .json()["project_id"]
+        == "uuid-a"
+    )
+    assert (
+        client.get("/api/tfactory/tasks", params={"project_id": "uuid-c"}).status_code
+        == 404
+    )
+    assert (
+        client.get("/api/tfactory/tasks", params={"project_id": "missing"}).json()
+        == client.get("/api/tfactory/tasks", params={"project_id": "uuid-c"}).json()
+    )
 
 
 def test_tfactory_tasks_duplicate_spec_ids_require_project(scoped_tasks):
@@ -87,13 +145,17 @@ def test_tfactory_tasks_websocket_logs_use_project(scoped_tasks, monkeypatch):
         (logs / "planner.log").write_text(pid + "\n")
 
     async def authenticate(_websocket):
-        return {"role": "member"}
+        return {"id": "owner", "org_id": "A"}
 
     monkeypatch.setattr(tfactory_tasks, "authenticate_websocket", authenticate)
     with client.websocket_connect(
         "/api/tfactory/tasks/same-spec/logs/stream?project_id=uuid-b"
     ) as websocket:
         assert json.loads(websocket.receive_text())["files"]["planner"] == ["uuid-b"]
+    with client.websocket_connect(
+        "/api/tfactory/tasks/same-spec/logs/stream?project_id=Workspace%20A"
+    ) as websocket:
+        assert json.loads(websocket.receive_text())["files"]["planner"] == ["uuid-a"]
 
 
 def test_tfactory_tasks_rerun_auth_active_and_dismiss(scoped_tasks):
@@ -103,6 +165,12 @@ def test_tfactory_tasks_rerun_auth_active_and_dismiss(scoped_tasks):
     assert (
         client.post(
             url + "/rerun", params=params, headers={"X-Role": "viewer"}
+        ).status_code
+        == 403
+    )
+    assert (
+        client.post(
+            url + "/rerun", params=params, headers={"X-Role": "scoped-owner"}
         ).status_code
         == 403
     )
@@ -130,3 +198,41 @@ def test_tfactory_tasks_rerun_auth_active_and_dismiss(scoped_tasks):
         )["status"]
         == "pending"
     )
+
+
+@pytest.mark.parametrize("run_status", ["planned", "generated", "evaluated"])
+def test_inflight_run_refuses_rerun(
+    scoped_tasks: tuple[TestClient, Path], run_status: str
+) -> None:
+    client, root = scoped_tasks
+    status = root / "workspaces/uuid-a/specs/same-spec/status.json"
+    status.write_text(json.dumps({"status": run_status, "dismissed": True}))
+    assert (
+        client.post(
+            "/api/tfactory/tasks/same-spec/rerun", params={"project_id": "uuid-a"}
+        ).status_code
+        == 409
+    )
+    assert json.loads(status.read_text())["status"] == run_status
+
+
+def test_concurrent_rerun_schedules_once(
+    scoped_tasks: tuple[TestClient, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, root = scoped_tasks
+    scheduled: list[dict[str, Any]] = []
+
+    def schedule(**kwargs: Any) -> object:
+        scheduled.append(kwargs)
+        return object()
+
+    monkeypatch.setattr("agents.planner.schedule_planner", schedule)
+    url = "/api/tfactory/tasks/same-spec/rerun?project_id=uuid-a"
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(lambda _: client.post(url), range(2)))
+    assert sorted(response.status_code for response in responses) == [200, 409]
+    assert len(scheduled) == 1
+    status = json.loads(
+        (root / "workspaces/uuid-a/specs/same-spec/status.json").read_text()
+    )
+    assert status["rerun_count"] == 1

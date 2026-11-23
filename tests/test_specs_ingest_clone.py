@@ -63,6 +63,29 @@ async def test_unknown_project_with_git_url_clones_and_registers(monkeypatch, tm
 
 
 @pytest.mark.asyncio
+async def test_self_registered_alias_resolves_second_ingest_without_clone(monkeypatch, tmp_path):
+    projects = {}
+    calls = []
+
+    async def clone(*, git_url, branch, credential):
+        calls.append(git_url)
+        (tmp_path / ".git").mkdir(exist_ok=True)
+        return tmp_path
+
+    monkeypatch.setattr("server.routes.projects.load_projects", lambda: projects.copy())
+    monkeypatch.setattr("server.routes.projects.save_projects", lambda data: projects.update(data))
+    monkeypatch.setattr("server.services.project_workspace_service.clone_or_update", clone)
+    monkeypatch.setattr("agents.tools_pkg.tools.task_control.create_spec_ingest_workspace", lambda **kw: {"spec_dir": str(tmp_path)})
+    first = SpecIngestRequest(project_id="sender-id", spec_id="first", spec_text="## Acceptance Criteria\n- works", git_url="https://github.com/o/repo.git")
+    second = SpecIngestRequest(project_id="sender-id", spec_id="second", spec_text="## Acceptance Criteria\n- works", no_register=True)
+    assert (await ingest_spec(first))["task_id"] == "first"
+    assert next(iter(projects.values()))["name"] == "repo"
+    assert next(iter(projects.values()))["aliases"] == ["sender-id"]
+    assert (await ingest_spec(second))["task_id"] == "second"
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_no_register_rejects_unknown_project_before_clone(monkeypatch):
     from unittest.mock import AsyncMock
 

@@ -12,7 +12,7 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from factory_common.url_safety import assert_safe_outbound_url
-from fastapi import APIRouter, Depends, Path, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from pydantic import BaseModel, Field, SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -446,6 +446,8 @@ async def get_project_env(
         getattr(request.state, "user", None), projectId, "viewer", db
     )
     projects = load_projects()
+    if projectId not in projects:
+        raise HTTPException(404, "Project not found")
 
     project_path = FilePath(projects[projectId]["path"])
     env_path = project_path / ".tfactory" / ".env"
@@ -562,16 +564,23 @@ async def get_project_env(
         pass
 
     if access.role not in ("admin", "owner"):
-        base_url = urlsplit(config["gitBaseUrl"])
-        safe_base_url = urlunsplit(
-            (
-                base_url.scheme,
-                base_url.netloc.rsplit("@", 1)[-1],
-                base_url.path,
-                "",  # a query or fragment can carry a token (?private_token=)
-                "",
-            )
-        )
+
+        def strip_userinfo(value: str) -> str:
+            try:
+                parsed = urlsplit(value if "://" in value else f"//{value}")
+                safe = urlunsplit(
+                    (
+                        parsed.scheme,
+                        parsed.netloc.rsplit("@", 1)[-1],
+                        parsed.path,
+                        "",
+                        "",
+                    )
+                )
+                return safe[2:] if not parsed.scheme and safe.startswith("//") else safe
+            except ValueError:
+                return ""
+
         allowed = {
             "claudeAuthStatus",
             "githubEnabled",
@@ -583,11 +592,10 @@ async def get_project_env(
             "gitRepo",
             "gitOrg",
             "gitProject",
-            "graphitiMcpEnabled",
-            "mcpEnabled",
         }
         redacted = {key: value for key, value in config.items() if key in allowed}
-        redacted["gitBaseUrl"] = safe_base_url
+        for key in ("gitBaseUrl", "gitRepo", "githubRepo"):
+            redacted[key] = strip_userinfo(config[key])
         provider = config.get("graphitiProviderConfig", {})
         redacted["graphitiKeysSet"] = any(
             provider.get(key)
