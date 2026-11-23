@@ -52,15 +52,25 @@ def socket_app(monkeypatch):
         "jwt-a": {"id": "a-only"},
         "jwt-owner": {"id": "owner"},
         "jwt-b": {"id": "other"},
-        "acw_a": {"id": "owner", "org_id": "A", "api_key_id": "key"},
-        "shared": None,
+        "acw_a": {
+            "id": "owner",
+            "org_id": "A",
+            "api_key_id": "key",
+            "scopes": ["mcp:read"],
+        },
+        "shared": {"id": "default", "is_legacy_token": True},
     }
     memberships = {
         "owner": [("A",), ("B",)],
         "a-only": [("A",)],
         "other": [("B",)],
     }
-    setting = SimpleNamespace(RBAC_ENFORCE_TASK_ROUTES=True, DISABLE_AUTH=False)
+    setting = SimpleNamespace(
+        RBAC_ENFORCE_TASK_ROUTES=True,
+        DISABLE_AUTH=False,
+        PROJECTS_BACKEND="json",
+        LEGACY_SHARED_TOKEN_FULL_ACCESS=True,
+    )
     sent: dict[str, list[dict]] = {}
 
     async def authenticate(ws):
@@ -92,8 +102,20 @@ def socket_app(monkeypatch):
     monkeypatch.setattr(WebSocket, "send_text", record_send)
     monkeypatch.setattr(_engine(), "async_session_factory", Session)
     monkeypatch.setattr(events, "authenticate_websocket", authenticate)
-    monkeypatch.setattr(events, "get_settings", lambda: setting)
     monkeypatch.setattr(project_authz, "get_settings", lambda: setting)
+
+    async def require_role(principal, project_id):
+        org = events.load_projects().get(project_id, {}).get("org_id")
+        if org is None:
+            raise HTTPException(404, "Project not found")
+        if principal.get("is_legacy_token"):
+            return
+        if principal.get("org_id") and principal["org_id"] != org:
+            raise HTTPException(404, "Project not found")
+        if org not in {row[0] for row in memberships.get(principal.get("id"), [])}:
+            raise HTTPException(404, "Project not found")
+
+    monkeypatch.setattr(events, "require_project_role", require_role)
     monkeypatch.setattr(
         events,
         "load_projects",
@@ -163,6 +185,16 @@ def test_service_and_bound_key_narrowing_and_widening(socket_app):
         assert [m["type"] for m in sent["acw_a"]] == ["a"]
 
 
+def test_bound_key_does_not_receive_other_org_event_after_membership_update(socket_app):
+    app, _, sent = socket_app
+    with TestClient(app) as client, _connect(client, "acw_a") as key:
+        events.update_client_orgs("owner", {"A", "B"})
+        client.portal.call(events.send_to_org, "B", "hidden", {})
+        client.portal.call(events.send_to_org, "A", "visible", {})
+        assert key.receive_json()["type"] == "visible"
+        assert [message["type"] for message in sent.get("acw_a", [])] == ["visible"]
+
+
 def test_real_task_status_emitter_routes_by_task_project(socket_app):
     app, _, sent = socket_app
     with (
@@ -198,7 +230,10 @@ def test_unresolved_and_no_org_events_are_service_only(socket_app, payload):
         _connect(client, "shared") as service,
     ):
         _emit(client, "unresolved", payload)
-        assert service.receive_json()["type"] == "unresolved"
+        if not payload.get("projectId"):
+            assert service.receive_json()["type"] == "unresolved"
+        else:
+            assert sent.get("shared", []) == []
         assert sent.get("acw_a", []) == []
         assert sent.get("jwt-a", []) == []
 
@@ -221,7 +256,7 @@ def test_registry_failure_is_service_only(socket_app, monkeypatch):
         _connect(client, "shared") as service,
     ):
         _emit(client, "failed", {"projectId": "p-a"})
-        assert service.receive_json()["type"] == "failed"
+        assert sent.get("shared", []) == []
         assert sent.get("acw_a", []) == []
         assert sent.get("jwt-a", []) == []
 
@@ -265,7 +300,7 @@ def test_user_events_require_matching_org_for_key(socket_app):
         client.portal.call(
             events.send_to_user, "owner", "dropped", {"data": {"org_id": "A"}}
         )
-        assert sent["jwt-owner"][-1]["type"] == "dropped"
+        assert sent["jwt-owner"][-1]["type"] == "notification:new"
         assert [m["type"] for m in sent["acw_a"]] == ["notification:new"]
 
 
@@ -317,7 +352,7 @@ def test_flag_tracks_rest_dependency_on_open_socket(socket_app, monkeypatch):
             return_value=SimpleNamespace(scalar_one_or_none=lambda: None)
         ),
     )
-    request = Request({"type": "http"})
+    request = Request({"type": "http", "path_params": {"project_id": "p-b"}})
     request.state.user = {"id": "a-only"}
     checker = project_authz.ProjectAccessChecker()
     with TestClient(app) as client, _connect(client, "jwt-a") as ws:
@@ -325,17 +360,19 @@ def test_flag_tracks_rest_dependency_on_open_socket(socket_app, monkeypatch):
         # An explicit org send is members-only even in shadow mode.
         client.portal.call(events.send_to_org, "B", "explicit", {})
         _emit(client, "shadow", {"projectId": "p-b"})
-        assert ws.receive_json()["type"] == "shadow"
-        client.portal.call(checker.__call__, "p-b", request, db)
+        assert sent.get("jwt-a", []) == []
+        with pytest.raises(HTTPException) as exc:
+            client.portal.call(checker.__call__, request, db)
+        assert exc.value.status_code == 404
 
         setting.RBAC_ENFORCE_TASK_ROUTES = True
         _emit(client, "blocked", {"projectId": "p-b"})
         _emit(client, "allowed", {"projectId": "p-a"})
         assert ws.receive_json()["type"] == "allowed"
-        assert [m["type"] for m in sent["jwt-a"]] == ["shadow", "allowed"]
+        assert [m["type"] for m in sent["jwt-a"]] == ["allowed"]
         with pytest.raises(HTTPException) as exc:
-            client.portal.call(checker.__call__, "p-b", request, db)
-        assert exc.value.status_code == 403
+            client.portal.call(checker.__call__, request, db)
+        assert exc.value.status_code == 404
 
 
 def test_event_org_cache_expiry_and_reassignment(monkeypatch):
@@ -593,10 +630,10 @@ def test_empty_membership_and_legacy_socket_stay_open(socket_app, monkeypatch):
     ):
         assert all(socket.org_ids == set() for socket in events._clients.values())
         jwt_socket = next(
-            socket for socket in events._clients.values() if socket.user_id
+            socket for socket in events._clients.values() if socket.user_id == "a-only"
         )
         legacy_socket = next(
-            socket for socket in events._clients.values() if not socket.user_id
+            socket for socket in events._clients.values() if socket.user_id == "default"
         )
         assert (
             client.portal.call(events._load_org_ids, jwt_socket, {"id": "a-only"})
@@ -607,10 +644,11 @@ def test_empty_membership_and_legacy_socket_stay_open(socket_app, monkeypatch):
         assert legacy_socket.websocket in events._clients
 
 
-def test_org_bound_key_without_owner_is_not_a_service_client():
+@pytest.mark.asyncio
+async def test_org_bound_key_without_owner_is_not_a_service_client():
     client = events.ConnectedClient(websocket=None, user_id=None, key_org_id="A")
-    assert not events._may_receive(client, "B")
-    assert not events._may_receive(client, None, shadow=True)
+    assert not await events._may_receive(client, "B")
+    assert not await events._may_receive(client, None)
 
 
 def test_jwt_membership_is_reloaded_on_open_socket(socket_app, monkeypatch):

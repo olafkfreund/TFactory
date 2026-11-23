@@ -75,7 +75,7 @@ def _mock_load_projects(project_dir: Path):
 
 
 @pytest.fixture()
-def client(_mock_load_projects):
+def client(_mock_load_projects, project_dir, monkeypatch):
     """FastAPI TestClient with auth disabled via settings."""
     from fastapi.testclient import TestClient
     from server.config import get_settings
@@ -83,6 +83,13 @@ def client(_mock_load_projects):
     settings = get_settings()
     original_disable = settings.DISABLE_AUTH
     settings.DISABLE_AUTH = True
+    from server.routes import project_authz
+
+    monkeypatch.setattr(
+        project_authz,
+        "_load_projects",
+        lambda: {"test-proj": {"path": str(project_dir)}},
+    )
 
     from server.main import create_app
 
@@ -209,9 +216,7 @@ class TestListPRs:
     def test_list_prs_project_not_found(self, client):
         """Returns error for unknown project ID."""
         resp = client.get("/api/projects/nonexistent/github/prs")
-        data = resp.json()
-        assert data["success"] is False
-        assert "not found" in data.get("error", "").lower()
+        assert resp.status_code == 404
 
     def test_list_prs_empty_list(self, client, project_dir):
         """Returns empty array when no PRs exist."""

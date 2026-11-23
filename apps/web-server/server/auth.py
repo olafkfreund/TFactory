@@ -11,7 +11,9 @@ Public paths (no auth required): /api/auth/*, /api/health, static assets, etc.
 import hmac
 import importlib
 import logging
+from contextvars import ContextVar
 from functools import lru_cache
+from typing import Any
 
 from fastapi import HTTPException, Request, WebSocket, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -20,6 +22,10 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
 from .config import get_settings
+
+internal_mcp_principal: ContextVar[dict[str, Any] | None] = ContextVar(
+    "internal_mcp_principal", default=None
+)
 
 
 @lru_cache(maxsize=1)
@@ -182,6 +188,10 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
 
         # Initialize user state to None for every request
         request.state.user = None
+        principal = internal_mcp_principal.get()
+        if path.startswith("/api/") and principal is not None:
+            request.state.user = principal
+            return await call_next(request)
 
         # Skip all auth when disabled (development mode).
         # Populate request.state.user with the default user so that routes
@@ -252,6 +262,7 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
                 "email": None,
                 "role": "user",
                 "is_service": True,
+                "is_legacy_token": True,
             }
             return await call_next(request)
 
@@ -263,24 +274,22 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
         if token.startswith("acw_"):
             # Imported lazily: the DB-backed MCP auth module pulls in ORM models
             # and is only relevant once a user actually presents an acw_ key.
-            from .mcp_remote.auth import (
-                REST_API_SCOPE,
-                MCPAuthError,
-                authenticate as authenticate_api_key,
-            )
+            mcp_auth = importlib.import_module("server.mcp_remote.auth")
 
             try:
-                key = await authenticate_api_key(f"Bearer {token}")
-            except MCPAuthError:
+                key = await mcp_auth.authenticate(f"Bearer {token}")
+            except mcp_auth.MCPAuthError:
                 key = None
 
-            if key is not None and key.has_scope(REST_API_SCOPE):
+            if key is not None and key.has_scope(mcp_auth.REST_API_SCOPE):
                 request.state.user = {
                     "id": key.user_id,
                     "email": None,
                     "role": "user",
                     "api_key_id": key.key_id,
                     "org_id": key.org_id,
+                    "scopes": sorted(key.scopes),
+                    "scoped_service": key.user_id is None,
                 }
                 return await call_next(request)
 
@@ -288,7 +297,7 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
                 {
                     "error": (
                         "API key is not valid for REST access "
-                        f"(requires the '{REST_API_SCOPE}' scope)"
+                        f"(requires the '{mcp_auth.REST_API_SCOPE}' scope)"
                     )
                 },
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -386,6 +395,8 @@ async def _ws_acw_principal(token: str) -> dict[str, object] | None:
         "role": "user",
         "api_key_id": key.key_id,
         "org_id": key.org_id,
+        "scopes": sorted(key.scopes),
+        "scoped_service": key.user_id is None,
     }
 
 
@@ -426,9 +437,9 @@ async def authenticate_websocket(websocket: WebSocket) -> dict | None:
             "role": jwt_payload.get("role", "user"),
         }
 
-    # Fall back to legacy token — no user info available
+    # Fall back to the legacy shared-token principal.
     if _is_legacy_api_token(token):
-        return None
+        return {"id": "default", "is_service": True, "is_legacy_token": True}
 
     if token.startswith("acw_"):
         principal = await _ws_acw_principal(token)

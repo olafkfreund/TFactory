@@ -45,15 +45,19 @@ EXPECTED = [
             "resolve-uncommitted",
             "resolve-git-merge",
             "abort-merge",
-            "create-pr",
-            "merge",
             "discard",
         )
     ],
+    *[("tasks_worktree", "POST", _W + p, "admin") for p in ("create-pr", "merge")],
     *[
         ("tasks_worktree", "GET", _W + p, "viewer")
         for p in ("merge-preview", "status", "diff")
     ],
+    ("tasks", "GET", "/{task_id}", "viewer"),
+    ("tasks_logs", "GET", "/{task_id}/logs", "viewer"),
+    ("tasks_views", "GET", "/{task_id}/qa-report", "viewer"),
+    ("tasks_views", "GET", "/{task_id}/plan-html", "viewer"),
+    ("execution", "GET", "/{task_id}/running", "viewer"),
 ]
 
 EXPECTED_PROJECT_ROUTES = [
@@ -121,14 +125,14 @@ def env(tmp_path, monkeypatch):
             user["role"] = role
         if "X-Test-Service" in request.headers:
             user["is_service"] = True
+            user["is_legacy_token"] = True
         if key_org := request.headers.get("X-Test-Key-Org"):
-            user.update(api_key_id="k1", org_id=key_org)
+            user.update(api_key_id="k1", org_id=key_org, scopes=["api:full"])
         request.state.user = user
         return await call_next(request)
 
     settings = get_settings()
     monkeypatch.setattr(settings, "DISABLE_AUTH", False)
-    monkeypatch.setattr(settings, "RBAC_ENFORCE_TASK_ROUTES", False)
     monkeypatch.setattr("server.routes.projects.load_projects", lambda: PROJECTS)
 
     audits: list[dict] = []
@@ -161,71 +165,60 @@ def env(tmp_path, monkeypatch):
     asyncio.run(engine.dispose())
 
 
-def _enforce(env, on=True):
-    env.monkeypatch.setattr(env.settings, "RBAC_ENFORCE_TASK_ROUTES", on)
-
-
 def test_enforced_viewer_forbidden_on_start(env):
-    _enforce(env)
     r = env.call("viewer-a", path="start", **{"Content-Type": "application/json"})
     assert r.status_code == 403
     assert env.audits[0]["action"] == "authz.task.denied"
 
 
-def test_shadow_viewer_gets_handler_response(env):
+def test_viewer_cannot_write(env):
     r = env.call("viewer-a")
-    assert (r.status_code, r.json()["detail"]) == (404, "Task is not running")
+    assert r.status_code == 403
 
 
 def test_enforced_member_passes(env):
-    _enforce(env)
     assert env.call("member-a").json()["detail"] == "Task is not running"
 
 
 def test_enforced_service_passes(env):
-    _enforce(env)
-    r = env.call("svc", task="nope:s1", **{"X-Test-Service": "1"})
+    r = env.call("svc", task="p1:s1", **{"X-Test-Service": "1"})
     assert r.json()["detail"] == "Task is not running"
 
 
 def test_enforced_key_bound_to_other_org_forbidden(env):
-    _enforce(env)
-    assert env.call("member-a", **{"X-Test-Key-Org": "B"}).status_code == 403
+    assert env.call("member-a", **{"X-Test-Key-Org": "B"}).status_code == 404
 
 
 def test_enforced_jwt_admin_claim_without_membership_forbidden(env):
-    _enforce(env)
-    assert env.call("stranger", **{"X-Test-Jwt-Role": "admin"}).status_code == 403
+    assert env.call("stranger", **{"X-Test-Jwt-Role": "admin"}).status_code == 404
 
 
 def test_enforced_unowned_project_forbidden(env):
-    _enforce(env)
-    assert env.call("member-a", task="legacy:s1").status_code == 403
+    assert env.call("member-a", task="legacy:s1").status_code == 404
 
 
-def test_shadow_unknown_project_same_as_without_dependency(env):
-    shadow = env.call("member-a", task="nope:s1")
-    env.monkeypatch.setattr(env.settings, "DISABLE_AUTH", True)  # checker no-ops
-    baseline = env.call("member-a", task="nope:s1")
-    assert (shadow.status_code, shadow.json()) == (
-        baseline.status_code,
-        baseline.json(),
+def test_unknown_project_hidden_in_enforced_and_local_modes(env):
+    enforced = env.call("member-a", task="nope:s1")
+    env.monkeypatch.setattr(env.settings, "DISABLE_AUTH", True)
+    local = env.call("member-a", task="nope:s1")
+    assert (enforced.status_code, enforced.json()) == (
+        local.status_code,
+        local.json(),
     )
-    assert shadow.json()["detail"] == "Task is not running"
+    assert enforced.json()["detail"] == "Project not found"
 
 
-def test_shadow_lookup_failure_fails_open(env):
-    def _boom():
-        raise RuntimeError("projects.json unreadable")
+def test_org_lookup_failure_fails_closed(env):
+    async def _boom(_session, _statement, *args, **kwargs):
+        raise RuntimeError("org lookup unavailable")
 
-    env.monkeypatch.setattr("server.routes.projects.load_projects", _boom)
-    r = env.call("viewer-a")
-    assert (r.status_code, r.json()["detail"]) == (404, "Task is not running")
+    env.monkeypatch.setattr("sqlalchemy.ext.asyncio.AsyncSession.execute", _boom)
+    with pytest.raises(RuntimeError):
+        env.call("member-a")
+    assert env.rollbacks
 
 
 def test_enforced_lookup_failure_propagates(env):
-    _enforce(env)
-
     def _boom():
         raise RuntimeError("projects.json unreadable")
 
@@ -234,20 +227,18 @@ def test_enforced_lookup_failure_propagates(env):
         env.call("viewer-a")
 
 
-def test_shadow_would_deny_is_audited_and_logged(env, caplog):
-    with caplog.at_level("WARNING"):
-        env.call("viewer-a")
-    assert [a["action"] for a in env.audits] == ["authz.task.would_deny"]
+def test_denied_write_is_audited(env):
+    assert env.call("viewer-a").status_code == 403
+    assert [a["action"] for a in env.audits] == ["authz.task.denied"]
     assert env.audits[0]["resource_id"] == "p1"
-    assert "would deny" in caplog.text
 
 
-def test_shadow_allowed_writes_no_audit(env):
+def test_allowed_writes_no_audit(env):
     env.call("member-a")
     assert env.audits == []
 
 
-def test_shadow_worktree_routes_log_would_deny_for_other_org(env, tmp_path):
+def test_worktree_routes_hide_invisible_project(env, tmp_path):
     from server.routes import tasks_worktree
 
     env.client.app.include_router(tasks_worktree.router, prefix="/api/tasks")
@@ -265,22 +256,18 @@ def test_shadow_worktree_routes_log_would_deny_for_other_org(env, tmp_path):
             f"/api/tasks/p1:s1/worktree/{path}",
             headers={"X-Test-Principal": "stranger"},
         )
-        assert response.status_code == 200
-        assert [audit["action"] for audit in env.audits] == ["authz.task.would_deny"]
-        assert env.audits[0]["resource_id"] == "p1"
-        env.audits.clear()
+        assert response.status_code == 404
+        assert env.audits == []
 
 
 def test_session_rolled_back_after_allowed_member_call(env):
-    _enforce(env)
     env.call("member-a")
     assert env.rollbacks == [True]
 
 
 def test_session_rolled_back_on_enforced_deny(env):
-    _enforce(env)
     assert env.call("viewer-a").status_code == 403
-    assert env.rollbacks == [True]
+    assert env.rollbacks == [True, True]
 
 
 def test_every_task_write_route_carries_member_dependency():
@@ -303,7 +290,7 @@ def test_every_task_write_route_carries_member_dependency():
         if not ok:
             missing.append((module, method, path, role))
     assert not missing
-    assert len(EXPECTED) == 24
+    assert len(EXPECTED) == 29
 
 
 def test_every_project_task_route_carries_project_access_dependency():

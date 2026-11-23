@@ -58,7 +58,7 @@ def endpoint(monkeypatch, request):
 
     service = Service()
 
-    async def check(_, project_id, __):
+    async def check(_, project_id, _role, _db):
         if project_id == "other":
             raise PermissionError("other org")
 
@@ -66,10 +66,9 @@ def endpoint(monkeypatch, request):
     monkeypatch.setattr(
         task_access, "authenticate_websocket", AsyncMock(return_value=principal)
     )
-    monkeypatch.setattr(task_access, "authorize_project_for_user", authorize)
+    monkeypatch.setattr(task_access, "require_project_role", authorize)
     monkeypatch.setattr(task_access, "async_session_factory", Session)
     monkeypatch.setattr(task_access, "_ws_acw_principal", validator)
-    monkeypatch.setattr(task_access, "get_settings", lambda: setting)
     monkeypatch.setattr(module, "get_agent_service", lambda: service)
     return app, name, principal, setting, service, authorize, validator
 
@@ -98,9 +97,9 @@ def test_legacy_and_service_see_all(endpoint, identity):
     with TestClient(app) as client, _connect(client, name) as ws:
         connected = ws.receive_json()
         if name == "progress":
-            assert connected["running_tasks"] == service.tasks
-        assert set(service.callbacks) == set(service.tasks)
-    authorize.assert_not_awaited()
+            assert connected["running_tasks"] == ["own:one"]
+        assert set(service.callbacks) == {"own:one"}
+    assert authorize.await_count > 0
 
 
 @pytest.mark.parametrize(
@@ -113,9 +112,7 @@ def test_jwt_shadow_and_strict(endpoint, failure, strict, caplog):
     authorize.side_effect = failure
     with TestClient(app) as client, _connect(client, name) as ws:
         ws.receive_json()
-        assert set(service.callbacks) == (set() if strict else {"own:one", "other:two"})
-    if not strict:
-        assert "Task WS access would deny" in caplog.text
+        assert set(service.callbacks) == set()
 
 
 def test_key_always_strict_and_revocation(endpoint, monkeypatch):
@@ -199,11 +196,7 @@ async def test_refresh_deadline_drops_newly_denied_message(endpoint, monkeypatch
         module.all_logs_websocket if name == "logs" else module.all_progress_websocket
     )
     await handler(Socket())
-    assert [message["type"] for message in sent] == [
-        "connected",
-        name[:-1] if name == "logs" else "progress",
-        "heartbeat",
-    ]
+    assert [message["type"] for message in sent] == ["connected", "heartbeat"]
     assert not service.callbacks
     if name == "progress":
         assert sent[-1]["running_tasks"] == []

@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "apps" / "web-server"))
 from server.routes import terminal  # noqa: E402
 
 _SERVICE = SimpleNamespace(
-    state=SimpleNamespace(user={"id": "default", "is_service": True})
+    state=SimpleNamespace(user={"id": "default", "is_legacy_token": True})
 )
 _SECRET = "/srv/secret-root/tenant-42/.tfactory/terminal-sessions/terminal_a.json"
 
@@ -32,6 +32,10 @@ def test_unlink_failure_reports_a_count_not_the_exception_or_path(
 
     monkeypatch.setattr(
         terminal, "load_projects", lambda: {"p": {"path": str(tmp_path)}}
+    )
+    monkeypatch.setattr("server.routes.projects.load_projects", terminal.load_projects)
+    monkeypatch.setattr(
+        "server.routes.project_authz._load_projects", terminal.load_projects
     )
 
     real_unlink = Path.unlink

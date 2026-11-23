@@ -1006,3 +1006,24 @@ def test_summary_row_declares_correlation_key_and_created_at(tmp_path: Path) -> 
     row = _summary_row(spec_dir / "status.json")
     assert row["correlation_key"] == "o/r#7"
     assert row["created_at"] == "2026-06-01T10:00:00Z"
+
+
+def test_list_and_get_task_filter_by_visible_projects(
+    workspace_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Step 3 (#1650): list_tasks and bare spec_id resolution are scoped to visible_project_ids."""
+    _make_task(workspace_root, project_id="p-vis", spec_id="s-vis")
+    _make_task(workspace_root, project_id="p-hid", spec_id="s-hid")
+    monkeypatch.setattr(
+        "server.routes.projects.load_projects",
+        lambda: {"p-vis": {"org_id": "A"}, "p-hid": {"org_id": "B"}},
+    )
+
+    out = list_tasks(visible={"p-vis"})
+    assert [t["project_id"] for t in out["tasks"]] == ["p-vis"]
+
+    assert get_task("s-vis", visible={"p-vis"})["project_id"] == "p-vis"
+    with pytest.raises(_HTTPException) as exc:
+        get_task("s-hid", visible={"p-vis"})
+    assert exc.value.status_code == 404

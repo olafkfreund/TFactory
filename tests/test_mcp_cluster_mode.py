@@ -206,6 +206,10 @@ async def test_cluster_reads_listing_ambiguity_and_rerun(cluster):
 async def test_local_duplicate_ids_require_project_and_single_hit_still_works(
     tools, tmp_path
 ):
+    (tmp_path / "projects.json").write_text(
+        json.dumps({"p1": {"path": str(tmp_path)}, "p2": {"path": str(tmp_path)}})
+    )
+
     def write(project):
         path = tmp_path / "workspaces" / project / "specs" / "same"
         (path / "findings").mkdir(parents=True)

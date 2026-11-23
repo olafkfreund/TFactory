@@ -27,7 +27,10 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-@router.get("/{task_id}/logs")
+@router.get(
+    "/{task_id}/logs",
+    dependencies=[Depends(require_task_access("viewer"))],
+)
 async def get_task_logs(task_id: str):
     """Get logs for a task.
 

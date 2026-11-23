@@ -52,6 +52,7 @@ import type { Project, AutoBuildVersionInfo, GitStatus, ProjectEnvConfig } from 
 export type SidebarView = 'tfactory' | 'terminals' | 'editor' | 'context' | 'github-issues' | 'github-prs' | 'changelog' | 'insights' | 'worktrees' | 'agent-tools' | 'skills' | 'cloud' | 'visual-reports';
 
 interface SidebarProps {
+  projectId: string | null;
   onSettingsClick: () => void;
   onNewTaskClick: () => void;
   onOpenOnboarding?: () => void;
@@ -81,6 +82,7 @@ const baseNavItems: NavItem[] = [
 ];
 
 export function Sidebar({
+  projectId,
   onSettingsClick,
   onNewTaskClick,
   onOpenOnboarding,
@@ -89,7 +91,7 @@ export function Sidebar({
 }: SidebarProps) {
   const { t } = useTranslation(['navigation', 'dialogs', 'common']);
   const projects = useProjectStore((state) => state.projects);
-  const selectedProjectId = useProjectStore((state) => state.selectedProjectId);
+  const selectedProjectId = projectId;
   const settings = useSettingsStore((state) => state.settings);
   const logout = useAuthStore((state) => state.logout);
 
@@ -303,7 +305,7 @@ export function Sidebar({
       <button
         key={item.id}
         onClick={() => handleNavClick(item.id)}
-        disabled={!selectedProjectId}
+        disabled={!selectedProjectId && item.id !== 'tfactory'}
         className={cn(
           'flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-all duration-200',
           'hover:bg-primary/10 hover:text-primary',

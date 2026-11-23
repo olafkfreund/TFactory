@@ -45,6 +45,7 @@ def known_project(monkeypatch):
         "load_projects",
         lambda *a, **k: {"proj": {"path": "/tmp/p", "name": "proj"}},
     )
+    monkeypatch.setattr("server.routes.project_authz._auth_disabled", lambda: True)
 
     # Bypass the clone self-heal (#539) — exercised directly elsewhere — so these
     # tests stay focused on resolution + error mapping. Passthrough the path.
@@ -136,7 +137,7 @@ def test_unknown_project_404(client, monkeypatch):
     monkeypatch.setattr(projects_store, "load_projects", lambda *a, **k: {})
     r = client.post("/api/specs/ingest", json=_body())
     assert r.status_code == 404
-    assert "unknown project_id" in r.json()["detail"]
+    assert r.json()["detail"] == "Project not found"  # D6: no existence oracle
 
 
 def test_value_error_maps_to_400(client, known_project, monkeypatch):

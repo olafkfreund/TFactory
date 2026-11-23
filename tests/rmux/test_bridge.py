@@ -73,6 +73,11 @@ def app_with_bridge(tmp_path, monkeypatch) -> tuple[FastAPI, SessionRegistry]:
     # Attach semantics, not authz: skip the RBAC check (TestAttachRbac re-enables it).
     monkeypatch.setattr(get_settings(), "DISABLE_AUTH", True)
 
+    async def _allow_project(_checker, _user, _project_id, _db):
+        return {}
+
+    monkeypatch.setattr("server.rmux.bridge.ProjectAccessChecker.check", _allow_project)
+
     return app, registry
 
 
@@ -279,14 +284,14 @@ class TestAttachRbac:
             lambda: {"p1": {"org_id": "org-a"}},
         )
 
-        async def _deny_viewer(user, project_id, db, minimum_role="viewer"):
+        async def _deny_viewer(_checker, _user, _project_id, _db):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="This action requires at least 'member' role",
             )
 
         monkeypatch.setattr(
-            "server.routes.project_authz.authorize_project_for_user",
+            "server.rmux.bridge.ProjectAccessChecker.check",
             _deny_viewer,
         )
 
@@ -309,7 +314,7 @@ class TestAttachRbac:
         )
         assert r.status_code == 403
 
-    def test_shadow_viewer_attach_returns_200(
+    def test_shadow_viewer_attach_returns_403(
         self, app_with_bridge, primed_session: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         c = self._configure_rbac(app_with_bridge, monkeypatch, enforce=False)
@@ -317,8 +322,7 @@ class TestAttachRbac:
             f"/api/tasks/p1:{primed_session}/agent-console/attach",
             json={"connection_id": "conn-viewer"},
         )
-        assert r.status_code == 200
-        assert r.json()["status"] == "attached"
+        assert r.status_code == 403
 
     def test_enforced_stranger_ws_closes_4003(
         self, app_with_bridge, primed_session: str, monkeypatch: pytest.MonkeyPatch
@@ -360,13 +364,11 @@ class TestCrossProjectSpec:
         monkeypatch.setattr(get_settings(), "DISABLE_AUTH", False)
         monkeypatch.setattr(get_settings(), "RBAC_ENFORCE_TASK_ROUTES", True)
 
-        async def _allow(user, project_id, db, minimum_role="viewer"):
+        async def _allow(_checker, _user, project_id, _db):
             assert project_id == "pA"  # caller is a member of pA only
             return "org-a"
 
-        monkeypatch.setattr(
-            "server.routes.project_authz.authorize_project_for_user", _allow
-        )
+        monkeypatch.setattr("server.rmux.bridge.ProjectAccessChecker.check", _allow)
 
         async def _member_a(_ws):
             return {"id": "member-a", "role": "user"}

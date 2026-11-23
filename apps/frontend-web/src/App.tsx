@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { Routes, Route, Navigate } from 'react-router';
+import { Routes, Route, Navigate, Link, useLocation, useNavigate, useParams } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { TooltipProvider } from './components/ui/tooltip';
 import { Toaster } from './components/ui/toaster';
@@ -7,6 +7,7 @@ import { Sidebar, type SidebarView } from './components/Sidebar';
 import { CommandPalette, type PaletteCommand, type PaletteTask } from './components/CommandPalette';
 import { apiRequest } from './lib/api-client';
 import { ProjectTabBar } from './components/ProjectTabBar';
+import { ProjectsPage } from './pages/ProjectsPage';
 import { TerminalGrid } from './components/TerminalGrid';
 import { Worktrees } from './components/Worktrees';
 import { Context } from './components/context/Context';
@@ -31,6 +32,8 @@ import { ProjectSwitchLoadingModal } from './components/ProjectSwitchLoadingModa
 import { LoginPage } from './pages/LoginPage';
 import { EditorPage } from './pages/EditorPage';
 import { ConsolePage } from './pages/ConsolePage';
+import { useEnsureProjects } from './hooks/useEnsureProjects';
+import { findProjectByRef, isBareSlugChooser, parseRoute, projectPath, projectSlugs, projectsForBareSlug } from './lib/project-route';
 import { ViewStateProvider } from './contexts/ViewStateContext';
 import { useProjectStore, loadProjects } from './stores/project-store';
 import { useTaskStore, loadTasks } from './stores/task-store';
@@ -41,18 +44,48 @@ import { useIpcListeners } from './hooks/useIpc';
 import { UI_SCALE_MIN, UI_SCALE_MAX, UI_SCALE_DEFAULT } from './shared/constants';
 import type { Task, Project } from './shared/types';
 
+const RETURN_TO_KEY = 'tf-return-to';
+
+function RedirectToLogin() {
+  const { pathname, search } = useLocation();
+  try {
+    if (pathname !== '/' && pathname !== '/login') sessionStorage.setItem(RETURN_TO_KEY, pathname + search);
+  } catch {
+    // sessionStorage may be unavailable.
+  }
+  return <Navigate to="/login" replace />;
+}
+
+function LegacyConsoleRedirect() {
+  const { projectId, specId } = useParams<{ projectId: string; specId: string }>();
+  const { ready, error, retry } = useEnsureProjects();
+  const { search } = useLocation();
+  const { t } = useTranslation('welcome');
+  const projects = useProjectStore((state) => state.projects);
+  if (!ready) return null;
+  if (error) return <div role="alert">{error} <button onClick={retry}>{t('projectsPage.retry')}</button></div>;
+  const project = projects.find((p) => p.id.toLowerCase() === projectId?.toLowerCase());
+  if (!project) return <div>{t('projectsPage.notFound', { ref: projectId })}</div>;
+  const slug = projectSlugs(projects).get(project.id) ?? project.id;
+  return <Navigate to={`${projectPath(slug)}/console/${encodeURIComponent(specId ?? '')}${search}`} replace />;
+}
+
 function AuthenticatedApp() {
+  const navigate = useNavigate();
+  const { pathname, search } = useLocation();
+  const route = useMemo(() => parseRoute(pathname), [pathname]);
+  const [projectsLoaded, setProjectsLoaded] = useState(false);
+  const [projectLoadAttempt, setProjectLoadAttempt] = useState(0);
   // Loading screen state - show for 5 seconds on every page load
 
   // Stores
   const projects = useProjectStore((state) => state.projects);
+  const projectError = useProjectStore((state) => state.error);
   const selectedProjectId = useProjectStore((state) => state.selectedProjectId);
   const activeProjectId = useProjectStore((state) => state.activeProjectId);
   const openProjectIds = useProjectStore((state) => state.openProjectIds);
   const tabOrder = useProjectStore((state) => state.tabOrder);
-  const openProjectTab = useProjectStore((state) => state.openProjectTab);
   const closeProjectTab = useProjectStore((state) => state.closeProjectTab);
-  const setActiveProject = useProjectStore((state) => state.setActiveProject);
   const isSwitchingProject = useProjectStore((state) => state.isSwitchingProject);
   const tasks = useTaskStore((state) => state.tasks);
   const settings = useSettingsStore((state) => state.settings);
@@ -90,24 +123,61 @@ function AuthenticatedApp() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   // Derive selectedTask from store so it updates when store changes
   // Dependencies: [selectedTaskId, tasks] - tasks is a new array ref on every store update
-  const selectedTask = useMemo(
-    () => {
-      if (!selectedTaskId) return null;
-      const task = tasks.find(t => t.id === selectedTaskId || t.specId === selectedTaskId) ?? null;
-      if (window.DEBUG && task) {
-        console.log('[App] selectedTask derived:', task.id, 'status:', task.status, 'subtasks:', task.subtasks?.length);
-      }
-      return task;
-    },
-    [selectedTaskId, tasks]
-  );
-  const [activeView, setActiveView] = useState<SidebarView>('tfactory');
   const [isNewTaskDialogOpen, setIsNewTaskDialogOpen] = useState(false);
   const [isCloudCheckOpen, setIsCloudCheckOpen] = useState(false);
   const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
   const [isAddProjectModalOpen, setIsAddProjectModalOpen] = useState(false);
   const [isOnboardingOpen, setIsOnboardingOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+
+  const slugs = useMemo(() => projectSlugs(projects), [projects]);
+  const breadcrumbProjects = useMemo(
+    () => projects.map((p) => ({ slug: slugs.get(p.id) ?? p.id, name: p.name })),
+    [projects, slugs]
+  );
+  const urlProject = route.kind === 'project' && !projectError ? findProjectByRef(projects, route.ref) : undefined;
+  const urlProjectId = urlProject?.id;
+  const selectedTask = useMemo(() => selectedTaskId && urlProjectId
+    ? tasks.find((task) => task.projectId === urlProjectId && (task.id === selectedTaskId || task.specId === selectedTaskId)) ?? null
+    : null, [selectedTaskId, tasks, urlProjectId]);
+  const urlSlug = urlProjectId ? slugs.get(urlProjectId) : undefined;
+  const activeView: SidebarView = route.kind === 'project' ? route.view : 'tfactory';
+  const navProject = urlProject;
+  const goProject = useCallback((id: string, view?: string) => {
+    const slug = slugs.get(id) ?? id;
+    void navigate(projectPath(slug, view));
+  }, [navigate, slugs]);
+  const setActiveView = useCallback((view: SidebarView) => {
+    if (view === 'tfactory') { void navigate('/tests'); return; }
+    if (navProject) goProject(navProject.id, view);
+  }, [navProject, goProject, navigate]);
+  const inSync = !!urlProjectId && activeProjectId === urlProjectId && selectedProjectId === urlProjectId;
+
+  useEffect(() => {
+    if (!projectsLoaded || projectError || !urlProjectId) return;
+    const state = useProjectStore.getState();
+    if (state.activeProjectId === urlProjectId && state.selectedProjectId === urlProjectId) return;
+    useTaskStore.getState().clearTasks();
+    state.openProjectTab(urlProjectId);
+    if (useProjectStore.getState().selectedProjectId !== urlProjectId) state.selectProject(urlProjectId);
+  }, [projectsLoaded, projectError, urlProjectId, activeProjectId, selectedProjectId]);
+
+  useEffect(() => {
+    if (route.kind === 'project' && urlSlug && route.ref !== urlSlug) {
+      void navigate(projectPath(urlSlug, route.view) + search, { replace: true });
+    }
+  }, [route, urlSlug, search, navigate]);
+
+  useEffect(() => {
+    if (route.kind !== 'home' || pathname !== '/') return;
+    try {
+      const to = sessionStorage.getItem(RETURN_TO_KEY);
+      sessionStorage.removeItem(RETURN_TO_KEY);
+      if (to?.startsWith('/') && !to.startsWith('//')) void navigate(to, { replace: true });
+    } catch {
+      // sessionStorage may be unavailable.
+    }
+  }, [route.kind, pathname, navigate]);
 
   // Command palette (⌘K / Ctrl-K): jump to any view or verify task, run actions.
   useEffect(() => {
@@ -142,11 +212,18 @@ function AuthenticatedApp() {
       keywords: v.id,
       run: () => { setActiveView(v.id); },
     }));
+    const switchProject: PaletteCommand[] = projects.map((p) => ({
+      id: `project-${p.id}`,
+      group: 'Go to',
+      label: `Switch project: ${p.name}`,
+      keywords: `project switch ${slugs.get(p.id) ?? ''}`,
+      run: () => { goProject(p.id); },
+    }));
     const actions: PaletteCommand[] = [
       { id: 'act-settings', group: 'Actions', label: 'Open settings', keywords: 'preferences config theme', run: () => { setIsSettingsDialogOpen(true); } },
     ];
-    return [...nav, ...actions];
-  }, []);
+    return [...nav, ...switchProject, ...actions];
+  }, [projects, slugs, goProject, setActiveView]);
 
   // Federated fleet search (#149): the cockpit aggregates every portal's work
   // and exposes a ranked /api/search; this portal proxies it same-origin
@@ -170,19 +247,23 @@ function AuthenticatedApp() {
     }));
   }, []);
 
-  const selectedProject = projects.find((p) => p.id === (activeProjectId || selectedProjectId));
+  const selectedProject = inSync ? urlProject : undefined;
+
+  useEffect(() => {
+    if (!selectedProject) setIsNewTaskDialogOpen(false);
+  }, [selectedProject]);
 
   // Compute project name for loading modal
   const switchingProjectName = useMemo(() => {
-    if (!isSwitchingProject || !activeProjectId) return undefined;
-    return projects.find(p => p.id === activeProjectId)?.name;
-  }, [isSwitchingProject, activeProjectId, projects]);
+    if (!isSwitchingProject || !urlProjectId) return undefined;
+    return projects.find(p => p.id === urlProjectId)?.name;
+  }, [isSwitchingProject, urlProjectId, projects]);
 
   // Initial load
   useEffect(() => {
-    loadProjects();
-    loadSettings();
-  }, []);
+    void loadProjects().finally(() => { setProjectsLoaded(true); });
+  }, [projectLoadAttempt]);
+  useEffect(() => { loadSettings(); }, []);
 
   // Trigger onboarding only if CLI not installed or auth token missing
   useEffect(() => {
@@ -217,7 +298,7 @@ function AuthenticatedApp() {
   }, [settings.onboardingCompleted]);
 
   // Sync i18n language with settings
-  const { i18n } = useTranslation();
+  const { t, i18n } = useTranslation();
   useEffect(() => {
     if (settings.language && settings.language !== i18n.language) {
       i18n.changeLanguage(settings.language);
@@ -226,14 +307,13 @@ function AuthenticatedApp() {
 
   // Load tasks when project changes
   useEffect(() => {
-    const currentProjectId = activeProjectId || selectedProjectId;
-    if (currentProjectId) {
-      loadTasks(currentProjectId);
+    if (selectedProject?.id) {
+      void loadTasks(selectedProject.id);
       setSelectedTaskId(null);
     } else {
       useTaskStore.getState().clearTasks();
     }
-  }, [activeProjectId, selectedProjectId]);
+  }, [selectedProject?.id]);
 
   // Safety timeout: auto-clear stuck switching state after 10 seconds
   useEffect(() => {
@@ -320,7 +400,7 @@ function AuthenticatedApp() {
 
   const handleProjectAdded = (project: Project, needsInit: boolean) => {
     console.log('[Web] Project added:', project.name, 'needs init:', needsInit);
-    // Optionally navigate to the project or show init dialog
+    goProject(project.id);
   };
 
   // Handler for opening inbuilt terminal with specific working directory
@@ -334,7 +414,7 @@ function AuthenticatedApp() {
     });
     // Switch to terminals view to show the new terminal
     setActiveView('terminals');
-  }, []);
+  }, [setActiveView]);
 
   return (
     <ViewStateProvider>
@@ -342,6 +422,7 @@ function AuthenticatedApp() {
         <div className="flex h-screen bg-background">
           {/* Sidebar */}
           <Sidebar
+            projectId={urlProjectId ?? null}
             onSettingsClick={() => setIsSettingsDialogOpen(true)}
             onNewTaskClick={() => setIsNewTaskDialogOpen(true)}
             onOpenOnboarding={() => setIsOnboardingOpen(true)}
@@ -358,45 +439,70 @@ function AuthenticatedApp() {
                 ``openProjects`` is empty. */}
             <ProjectTabBar
               projects={openProjects}
-              activeProjectId={activeProjectId}
+              activeProjectId={urlProjectId ?? null}
               onProjectSelect={(projectId) => {
-                setActiveProject(projectId);
-                // Also update selectedProjectId so components use the correct project context
-                useProjectStore.getState().selectProject(projectId);
+                goProject(projectId, route.kind === 'project' ? route.view : undefined);
               }}
-              onProjectClose={(projectId) => closeProjectTab(projectId)}
-              onAddProject={handleAddProject}
-              onProjectAdded={handleProjectAdded}
+              onProjectClose={(projectId) => {
+                if (urlProjectId === projectId) {
+                  const next = openProjects.find((p) => p.id !== projectId);
+                  void navigate(next ? projectPath(slugs.get(next.id) ?? next.id) : '/');
+                }
+                closeProjectTab(projectId);
+              }}
+              currentSlug={urlSlug}
+              onViewAllProjects={() => { void navigate('/projects'); }}
               onSettingsClick={() => setIsSettingsDialogOpen(true)}
               onOpenOnboarding={() => setIsOnboardingOpen(true)}
             />
 
             <main className="flex-1 overflow-hidden">
-              {activeView === 'tfactory' ? (
-                /* TFactory's own surface: the test-generation review queue.
-                   Global (reads ~/.tfactory workspaces), so it renders with or
-                   without a selected project. */
-                <div className="h-full overflow-hidden">
-                  <TFactoryPortal />
+              {route.kind === 'project' && urlProject && (
+                /* TerminalGrid stays mounted across project switches to preserve xterm instances and PTY connections */
+                <div className={activeView === 'terminals' ? 'h-full' : 'hidden'}>
+                  <TerminalGrid
+                    projectPath={urlProject.path}
+                    onNewTaskClick={() => setIsNewTaskDialogOpen(true)}
+                    isActive={activeView === 'terminals'}
+                  />
                 </div>
-              ) : selectedProject ? (
+              )}
+              {projectError && projectsLoaded && (
+                <div role="alert" className="flex h-full flex-col items-center justify-center gap-2">
+                  <p>{projectError}</p>
+                  <button onClick={() => { setProjectsLoaded(false); setProjectLoadAttempt((n) => n + 1); }}>{t('welcome:projectsPage.retry')}</button>
+                </div>
+              )}
+              {route.kind === 'project' && !projectError && !urlProject && projectsLoaded && isBareSlugChooser(projects, route.ref) && (
+                <div className="flex h-full flex-col items-center justify-center gap-2">
+                  <p>{t('welcome:projectsPage.chooseProject')}</p>
+                  {projectsForBareSlug(projects, route.ref).map((p) => <Link key={p.id} to={projectPath(slugs.get(p.id) ?? p.id)}>{p.name} — {p.path}</Link>)}
+                </div>
+              )}
+              {route.kind === 'project' && !projectError && !urlProject && projectsLoaded && !isBareSlugChooser(projects, route.ref) && (
+                <div className="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground">
+                  <p>{t('welcome:projectsPage.notFound', { ref: route.ref })}</p>
+                  <Link to="/" className="text-sm underline">{t('welcome:projectsPage.backHome')}</Link>
+                </div>
+              )}
+              {selectedProject && (
                 <>
-                  {/* TerminalGrid stays mounted but hidden to preserve xterm instances and PTY connections */}
-                  <div className={activeView === 'terminals' ? 'h-full' : 'hidden'}>
-                    <TerminalGrid
-                      projectPath={selectedProject?.path}
-                      onNewTaskClick={() => setIsNewTaskDialogOpen(true)}
-                      isActive={activeView === 'terminals'}
-                    />
-                  </div>
+                  {activeView === 'tfactory' && (
+                    <div className="h-full overflow-auto p-4">
+                      <ul data-testid="project-tasks">{tasks.filter((task) => task.projectId === selectedProject.id).map((task) => (
+                        <li key={task.id}><button onClick={() => handleTaskClick(task)}>{task.title}</button></li>
+                      ))}</ul>
+                      <Link to="/tests" className="underline">{t('navigation:items.tests')}</Link>
+                    </div>
+                  )}
                   {activeView === 'editor' && (
-                    <EditorPage projectPath={selectedProject?.path} />
+                    <EditorPage projectPath={selectedProject.path} />
                   )}
                   {activeView === 'worktrees' && (
-                    <Worktrees projectId={selectedProject?.id || ''} />
+                    <Worktrees projectId={selectedProject.id} />
                   )}
                   {activeView === 'context' && (
-                    <Context projectId={selectedProject?.id || ''} />
+                    <Context projectId={selectedProject.id} />
                   )}
                   {activeView === 'github-issues' && (
                     <GitHubIssues
@@ -415,7 +521,7 @@ function AuthenticatedApp() {
                   )}
                   {activeView === 'changelog' && <Changelog />}
                   {activeView === 'insights' && (
-                    <Insights projectId={selectedProject?.id || ''} onNavigate={setActiveView} />
+                    <Insights projectId={selectedProject.id} onNavigate={setActiveView} />
                   )}
                   {activeView === 'agent-tools' && <AgentTools />}
                   {activeView === 'skills' && <SkillsPage />}
@@ -430,14 +536,22 @@ function AuthenticatedApp() {
                     </div>
                   )}
                 </>
-              ) : (
+              )}
+              {route.kind === 'projects' && !projectError && (
+                <ProjectsPage
+                  projects={projects}
+                  slugs={slugs}
+                  onAdd={handleAddProject}
+                  onOpen={(p) => { goProject(p.id); }}
+                />
+              )}
+              {pathname === '/tests' && !projectError && <TFactoryPortal />}
+              {route.kind === 'home' && pathname !== '/tests' && !projectError && (
                 <WelcomeScreen
                   projects={projects}
                   onNewProject={handleAddProject}
                   onOpenProject={handleAddProject}
-                  onSelectProject={(projectId) => {
-                    openProjectTab(projectId);
-                  }}
+                  onSelectProject={(projectId) => { goProject(projectId); }}
                 />
               )}
             </main>
@@ -452,7 +566,7 @@ function AuthenticatedApp() {
 
           {/* Project Switch Loading Modal */}
           <ProjectSwitchLoadingModal
-            open={isSwitchingProject}
+            open={isSwitchingProject && !!urlProjectId}
             projectName={switchingProjectName}
           />
 
@@ -471,6 +585,8 @@ function AuthenticatedApp() {
             open={paletteOpen}
             onClose={() => { setPaletteOpen(false); }}
             commands={paletteCommands}
+            projects={breadcrumbProjects}
+            onSwitchProject={(slug) => { void navigate(projectPath(slug)); }}
             onSearch={searchFleet}
             onOpenTask={(t) => {
               window.location.href = `${cockpitUrl}/?task=${encodeURIComponent(t.id)}`;
@@ -479,21 +595,15 @@ function AuthenticatedApp() {
 
           {/* Settings Dialog */}
           <AppSettingsDialog
+            projectId={urlProjectId ?? null}
             open={isSettingsDialogOpen}
             onOpenChange={setIsSettingsDialogOpen}
           />
 
           {/* Task Creation Wizard */}
-          {/*
-            Fix: Use activeProjectId first, then fall back to selectedProjectId
-            This ensures the correct project path is resolved in multi-tab scenarios.
-            Without this, the Browse Files button wouldn't render because projectPath
-            lookup would fail when the wizard is opened from a different tab than
-            the one with selectedProjectId.
-          */}
-          {(activeProjectId || selectedProjectId) && (
+          {selectedProject && (
             <TaskCreationWizard
-              projectId={(activeProjectId || selectedProjectId)!}
+              projectId={selectedProject.id}
               open={isNewTaskDialogOpen}
               onOpenChange={setIsNewTaskDialogOpen}
               onCloudInfra={() => setIsCloudCheckOpen(true)}
@@ -530,10 +640,15 @@ function AuthenticatedApp() {
 export default function App() {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const checkAuth = useAuthStore((state) => state.checkAuth);
+  const [authChecked, setAuthChecked] = useState(false);
 
   useEffect(() => {
-    checkAuth();
+    let cancelled = false;
+    void checkAuth().finally(() => { if (!cancelled) setAuthChecked(true); });
+    return () => { cancelled = true; };
   }, [checkAuth]);
+
+  if (!authChecked) return null;
 
   return (
     <Routes>
@@ -546,11 +661,15 @@ export default function App() {
           opened on a phone, sent to a teammate over a VPN, etc. */}
       <Route
         path="/console/:projectId/:specId"
-        element={isAuthenticated ? <ConsolePage /> : <Navigate to="/login" replace />}
+        element={isAuthenticated ? <LegacyConsoleRedirect /> : <RedirectToLogin />}
+      />
+      <Route
+        path="/p/:slug/console/:specId"
+        element={isAuthenticated ? <ConsolePage /> : <RedirectToLogin />}
       />
       <Route
         path="/*"
-        element={isAuthenticated ? <AuthenticatedApp /> : <Navigate to="/login" replace />}
+        element={isAuthenticated ? <AuthenticatedApp /> : <RedirectToLogin />}
       />
     </Routes>
   );

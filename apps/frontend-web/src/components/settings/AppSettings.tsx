@@ -46,12 +46,12 @@ import { McpApiKeysSettings } from './sections/McpApiKeysSettings';
 import { AdvancedSettings } from './AdvancedSettings';
 import { DebugSettings } from './DebugSettings';
 import { LLMProvidersPage } from './sections/LLMProvidersPage';
-import { ProjectSelector } from './ProjectSelector';
 import { ProjectSettingsContent, ProjectSettingsSection } from './ProjectSettingsContent';
 import { useProjectStore } from '../../stores/project-store';
 import type { UseProjectSettingsReturn } from '../project-settings/hooks/useProjectSettings';
 
 interface AppSettingsDialogProps {
+  projectId: string | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   initialSection?: AppSection;
@@ -92,7 +92,7 @@ const projectNavItemsConfig: NavItemConfig<ProjectSettingsSection>[] = [
  * Main application settings dialog container
  * Coordinates app and project settings sections
  */
-export function AppSettingsDialog({ open, onOpenChange, initialSection, initialProjectSection, onRerunWizard }: AppSettingsDialogProps) {
+export function AppSettingsDialog({ projectId, open, onOpenChange, initialSection, initialProjectSection, onRerunWizard }: AppSettingsDialogProps) {
   const { t } = useTranslation('settings');
   const { settings, setSettings, isSaving, error, saveSettings, revertTheme, commitTheme } = useSettings();
   const [version, setVersion] = useState<string>('');
@@ -117,9 +117,8 @@ export function AppSettingsDialog({ open, onOpenChange, initialSection, initialP
 
   // Project state
   const projects = useProjectStore((state) => state.projects);
-  const selectedProjectId = useProjectStore((state) => state.selectedProjectId);
-  const selectProject = useProjectStore((state) => state.selectProject);
-  const selectedProject = projects.find((p) => p.id === selectedProjectId);
+  const currentProjectId = projectId;
+  const selectedProject = projects.find((p) => p.id === currentProjectId);
 
   // Project settings hook state (lifted from child)
   const [projectSettingsHook, setProjectSettingsHook] = useState<UseProjectSettingsReturn | null>(null);
@@ -166,10 +165,6 @@ export function AppSettingsDialog({ open, onOpenChange, initialSection, initialP
     onOpenChange(false);
   };
 
-  const handleProjectChange = (projectId: string | null) => {
-    selectProject(projectId);
-  };
-
   const renderAppSection = () => {
     switch (appSection) {
       case 'appearance':
@@ -214,7 +209,7 @@ export function AppSettingsDialog({ open, onOpenChange, initialSection, initialP
   };
 
   // Determine if project nav items should be disabled
-  const projectNavDisabled = !selectedProjectId;
+  const projectNavDisabled = !currentProjectId;
 
   return (
     <FullScreenDialog open={open} onOpenChange={(newOpen) => {
@@ -303,13 +298,14 @@ export function AppSettingsDialog({ open, onOpenChange, initialSection, initialP
                       {t('tabs.project')}
                     </h3>
 
-                    {/* Project Selector */}
-                    <div className="px-1 mb-3">
-                      <ProjectSelector
-                        selectedProjectId={selectedProjectId}
-                        onProjectChange={handleProjectChange}
-                      />
-                    </div>
+                    {selectedProject && (
+                      <div className="mb-3 rounded-lg border border-border bg-background/60 px-3 py-2">
+                        <div className="truncate text-sm font-medium text-foreground">{selectedProject.name}</div>
+                        <div className="truncate text-xs text-muted-foreground" title={selectedProject.path}>
+                          {selectedProject.path}
+                        </div>
+                      </div>
+                    )}
 
                     {/* Project Nav Items */}
                     <div className="space-y-1">
