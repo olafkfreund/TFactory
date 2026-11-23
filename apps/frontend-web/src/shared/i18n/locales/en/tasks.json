@@ -1,4 +1,14 @@
 {
+  "pipeline": {
+    "failed": "Failed ({{count}})",
+    "showDismissed": "Show dismissed",
+    "rerun": "Re-run",
+    "dismiss": "Dismiss",
+    "plannerNotScheduled": "Planner was not scheduled",
+    "checkoutFailed": "Source checkout failed; planner was not scheduled",
+    "schedulerFailed": "Planner scheduling failed",
+    "autoPlanDisabled": "Automatic planning is disabled"
+  },
   "status": {
     "backlog": "Backlog",
     "todo": "To Do",

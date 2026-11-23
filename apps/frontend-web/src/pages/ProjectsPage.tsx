@@ -43,9 +43,11 @@ export function ProjectsPage({
             <div key={project.id} className="flex items-center gap-4 p-4">
               <div className="min-w-0 flex-1">
                 <div className="font-medium">{project.name}</div>
-                <div className="truncate text-sm text-muted-foreground" title={project.path}>
-                  {project.path}
-                </div>
+                {project.repoLabel && (
+                  <div className="truncate text-sm text-muted-foreground" title={project.repoLabel}>
+                    {project.repoLabel}
+                  </div>
+                )}
                 <div className="font-mono text-xs text-muted-foreground">
                   /p/{slugs.get(project.id)}
                 </div>

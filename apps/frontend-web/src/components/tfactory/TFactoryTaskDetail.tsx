@@ -54,6 +54,7 @@ type Tab =
 
 interface Props {
   specId: string;
+  projectId?: string;
   fetchFn?: typeof fetch;
   wsFactory?: (url: string) => WebSocket;
   /**
@@ -335,8 +336,9 @@ function Signal({ label, children }: { label: string; children: ReactNode }) {
 
 // ── Merge / dismiss action bar (the human review gate) ──────────────
 
-function MergeActionBar({ specId, verdicts, fetchFn }: {
+function MergeActionBar({ specId, projectId, verdicts, fetchFn }: {
   specId: string;
+  projectId?: string;
   verdicts: TFactoryVerdict[];
   fetchFn?: typeof fetch;
 }) {
@@ -357,7 +359,7 @@ function MergeActionBar({ specId, verdicts, fetchFn }: {
         dry_run: dryRun,
         target_branch: branch.trim() || undefined,
         include_flagged: includeFlagged,
-      }, { fetchFn });
+      }, { fetchFn, projectId });
       setResult(r);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -365,7 +367,7 @@ function MergeActionBar({ specId, verdicts, fetchFn }: {
   };
   const onDismiss = async () => {
     setBusy('dismiss'); setError(null);
-    try { await dismissRun(specId, { fetchFn }); setDismissed(true); }
+    try { await dismissRun(specId, { fetchFn, projectId }); setDismissed(true); }
     catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(null); }
   };
@@ -478,13 +480,22 @@ function VerdictBuckets({ verdicts }: { verdicts: TFactoryVerdict[] }) {
 
 // ── Evidence panel ──────────────────────────────────────────────────
 
-function EvidenceTestRow({ specId, testId, urls }: { specId: string; testId: string; urls: EvidenceUrls }) {
+function scopedArtifactUrl(url: string, projectId?: string): string {
+  if (!projectId || !/^\/api\/tfactory\/tasks\/[^/]+\/(?:evidence|screenshots|videos)\//.test(url)) return url;
+  const parsed = new URL(url, window.location.origin);
+  parsed.searchParams.set('project_id', projectId);
+  return parsed.pathname + parsed.search + parsed.hash;
+}
+
+function EvidenceTestRow({ specId, projectId, testId, urls }: { specId: string; projectId?: string; testId: string; urls: EvidenceUrls }) {
   const screenshots: string[] = Array.isArray(urls.screenshots)
     ? urls.screenshots : typeof urls.screenshots === 'string' ? [urls.screenshots] : [];
   const videoUrl = typeof urls.video === 'string' ? urls.video : null;
   const traceUrl = typeof urls.trace === 'string' ? urls.trace : null;
   const networkUrl = typeof urls.network === 'string' ? urls.network : null;
-  const buildUrl = (p: string) => (p.startsWith('/api/') ? p : evidenceArtifactUrl(specId, testId, p));
+  const buildUrl = (p: string) => p.startsWith('/api/')
+    ? scopedArtifactUrl(p, projectId)
+    : evidenceArtifactUrl(specId, testId, p, projectId);
 
   return (
     <div data-testid={`evidence-row-${testId}`} className="rounded-lg border border-border bg-card p-3 space-y-2">
@@ -526,11 +537,13 @@ function EvidenceTestRow({ specId, testId, urls }: { specId: string; testId: str
 
 function EvidenceTab({
   specId,
+  projectId,
   evidenceByTest,
   screenshots,
   videos,
 }: {
   specId: string;
+  projectId?: string;
   evidenceByTest: Record<string, EvidenceUrls>;
   screenshots: string[];
   videos: string[];
@@ -543,12 +556,12 @@ function EvidenceTab({
       {/* Browser-lane screenshots + recordings (the Nix Job's findings/), the
           same gallery the Acceptance tab shows — so the Evidence tab is the
           dedicated home for captured artifacts and isn't empty when they exist. */}
-      <EvidenceGallery specId={specId} screenshots={screenshots} videos={videos} />
+      <EvidenceGallery specId={specId} projectId={projectId} screenshots={screenshots} videos={videos} />
       {/* Visual-regression baselines for a target (#109) — view + accept. */}
-      <VisualBaselines specId={specId} />
+      <VisualBaselines specId={specId} projectId={projectId} />
       {hasPerTest ? (
         entries.map(([testId, urls]) => (
-          <EvidenceTestRow key={testId} specId={specId} testId={testId} urls={urls} />
+          <EvidenceTestRow key={testId} specId={specId} projectId={projectId} testId={testId} urls={urls} />
         ))
       ) : (
         !hasBrowserMedia && (
@@ -571,10 +584,12 @@ function EvidenceTab({
 
 function EvidenceGallery({
   specId,
+  projectId,
   screenshots,
   videos,
 }: {
   specId: string;
+  projectId?: string;
   screenshots: string[];
   videos: string[];
 }) {
@@ -599,7 +614,7 @@ function EvidenceGallery({
                     caption track; `muted` satisfies jsx-a11y/media-has-caption. */}
                 <video
                   data-testid={`evidence-video-${file}`}
-                  src={videoUrl(specId, file)}
+                  src={videoUrl(specId, file, projectId)}
                   controls
                   muted
                   className="w-full rounded"
@@ -620,10 +635,10 @@ function EvidenceGallery({
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {screenshots.map((file) => (
               <figure key={file} className="rounded-lg border border-border bg-card p-2">
-                <a href={screenshotUrl(specId, file)} target="_blank" rel="noreferrer">
+                <a href={screenshotUrl(specId, file, projectId)} target="_blank" rel="noreferrer">
                   <img
                     data-testid={`evidence-shot-${file}`}
-                    src={screenshotUrl(specId, file)}
+                    src={screenshotUrl(specId, file, projectId)}
                     alt={file}
                     loading="lazy"
                     className="w-full rounded border border-border"
@@ -643,7 +658,7 @@ function EvidenceGallery({
 
 // ── Main component ───────────────────────────────────────────────────
 
-export function TFactoryTaskDetail({ specId, fetchFn, wsFactory, pollMs = 5000 }: Props) {
+export function TFactoryTaskDetail({ specId, projectId, fetchFn, wsFactory, pollMs = 5000 }: Props) {
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(true);
@@ -670,7 +685,7 @@ export function TFactoryTaskDetail({ specId, fetchFn, wsFactory, pollMs = 5000 }
     let cancelled = false;
     setLoadingDetail(true);
     setDetailError(null);
-    getTaskDetail(specId, { fetchFn })
+    getTaskDetail(specId, { fetchFn, projectId })
       .then((d) => { if (!cancelled) { setDetail(d); setLoadingDetail(false); } })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -678,7 +693,7 @@ export function TFactoryTaskDetail({ specId, fetchFn, wsFactory, pollMs = 5000 }
         setLoadingDetail(false);
       });
     return () => { cancelled = true; };
-  }, [specId, fetchFn]);
+  }, [specId, projectId, fetchFn]);
 
   // Background auto-refresh: re-fetch the detail on an interval so live
   // status/lane changes (e.g. a watchdog `stalled` flip, #95) surface without
@@ -686,7 +701,7 @@ export function TFactoryTaskDetail({ specId, fetchFn, wsFactory, pollMs = 5000 }
   // refetches the moment it returns to the foreground. Updates only on success:
   // a transient poll error keeps the last-good detail rather than erroring.
   useVisibilityAwarePolling(() => {
-    getTaskDetail(specId, { fetchFn })
+    getTaskDetail(specId, { fetchFn, projectId })
       .then((d) => setDetail(d))
       .catch(() => {
         /* keep last-good detail on a transient poll error */
@@ -707,7 +722,7 @@ export function TFactoryTaskDetail({ specId, fetchFn, wsFactory, pollMs = 5000 }
       setVerdictsRequested(true);
       setLoadingVerdicts(true);
       setVerdictsError(null);
-      getVerdicts(specId, { fetchFn })
+      getVerdicts(specId, { fetchFn, projectId })
         .then((d) => { setVerdicts(d); setLoadingVerdicts(false); _extractEvidenceFromVerdicts(d); })
         .catch((err: unknown) => {
           setVerdictsError(err instanceof TFactoryApiError && err.status === 404
@@ -720,7 +735,7 @@ export function TFactoryTaskDetail({ specId, fetchFn, wsFactory, pollMs = 5000 }
       setReportRequested(true);
       setLoadingReport(true);
       setReportError(null);
-      getTriageReportMarkdown(specId, { fetchFn })
+      getTriageReportMarkdown(specId, { fetchFn, projectId })
         .then((md) => { setReportMd(md); setLoadingReport(false); })
         .catch((err: unknown) => {
           setReportError(err instanceof TFactoryApiError && err.status === 404
@@ -733,7 +748,7 @@ export function TFactoryTaskDetail({ specId, fetchFn, wsFactory, pollMs = 5000 }
       setAcRequested(true);
       setLoadingAc(true);
       setAcError(null);
-      getAcFidelityMarkdown(specId, { fetchFn })
+      getAcFidelityMarkdown(specId, { fetchFn, projectId })
         .then((md) => { setAcFidelityMd(md); setLoadingAc(false); })
         .catch((err: unknown) => {
           setAcError(err instanceof TFactoryApiError && err.status === 404
@@ -745,7 +760,7 @@ export function TFactoryTaskDetail({ specId, fetchFn, wsFactory, pollMs = 5000 }
     if (tab === 'evidence' && verdicts && Object.keys(evidenceByTest).length === 0) {
       _extractEvidenceFromVerdicts(verdicts);
     }
-  }, [specId, fetchFn, verdictsRequested, reportRequested, acRequested, verdicts, evidenceByTest, _extractEvidenceFromVerdicts]);
+  }, [specId, projectId, fetchFn, verdictsRequested, reportRequested, acRequested, verdicts, evidenceByTest, _extractEvidenceFromVerdicts]);
 
   if (loadingDetail) {
     return (
@@ -810,7 +825,7 @@ export function TFactoryTaskDetail({ specId, fetchFn, wsFactory, pollMs = 5000 }
             {verdictsError && <div role="alert" className="p-4 text-sm text-destructive">{verdictsError}</div>}
             {verdicts && (
               <div className="space-y-4">
-                <MergeActionBar specId={specId} verdicts={verdicts.verdicts} fetchFn={fetchFn} />
+                <MergeActionBar specId={specId} projectId={projectId} verdicts={verdicts.verdicts} fetchFn={fetchFn} />
                 <VerdictBuckets verdicts={verdicts.verdicts} />
               </div>
             )}
@@ -822,7 +837,7 @@ export function TFactoryTaskDetail({ specId, fetchFn, wsFactory, pollMs = 5000 }
             {reportError && <div role="alert" className="p-4 text-sm text-destructive">{reportError}</div>}
             {reportMd && (
               <div data-testid="report-md-content" className="rounded-lg border border-border bg-card p-4">
-                <MarkdownBody source={reportMd} />
+                <MarkdownBody source={reportMd} rewriteUrl={(url) => scopedArtifactUrl(url, projectId)} />
               </div>
             )}
           </>
@@ -838,22 +853,24 @@ export function TFactoryTaskDetail({ specId, fetchFn, wsFactory, pollMs = 5000 }
             )}
             <EvidenceGallery
               specId={specId}
+              projectId={projectId}
               screenshots={detail.artefacts.screenshots?.files ?? []}
               videos={detail.artefacts.videos?.files ?? []}
             />
           </>
         )}
-        {activeTab === 'logs' && <TFactoryLogViewer specId={specId} wsFactory={wsFactory} />}
+        {activeTab === 'logs' && <TFactoryLogViewer specId={specId} projectId={projectId} wsFactory={wsFactory} />}
         {activeTab === 'evidence' && (
           <EvidenceTab
             specId={specId}
+            projectId={projectId}
             evidenceByTest={evidenceByTest}
             screenshots={detail.artefacts.screenshots?.files ?? []}
             videos={detail.artefacts.videos?.files ?? []}
           />
         )}
         {activeTab === 'regression' && (
-          <RegressionPanel projectId={detail.project_id} />
+          <RegressionPanel projectId={projectId ?? detail.project_id} />
         )}
       </div>
     </div>

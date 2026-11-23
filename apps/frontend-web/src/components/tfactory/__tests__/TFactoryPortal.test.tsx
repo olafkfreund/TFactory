@@ -84,7 +84,7 @@ describe('<TFactoryPortal>', () => {
   it('switches to detail view when a task row is clicked', async () => {
     const fetchFn = makeUrlAwareFetch({
       '/api/tfactory/tasks': { jsonBody: taskListBody },
-      '/api/tfactory/tasks/spec-a': { jsonBody: detailBody('spec-a') },
+      '/api/tfactory/tasks/spec-a?project_id=demo': { jsonBody: detailBody('spec-a') },
     });
     render(<TFactoryPortal fetchFn={fetchFn} />);
     await waitFor(() => screen.getByTestId('task-row-spec-a'));
@@ -102,7 +102,7 @@ describe('<TFactoryPortal>', () => {
   it('back button returns to list view', async () => {
     const fetchFn = makeUrlAwareFetch({
       '/api/tfactory/tasks': { jsonBody: taskListBody },
-      '/api/tfactory/tasks/spec-a': { jsonBody: detailBody('spec-a') },
+      '/api/tfactory/tasks/spec-a?project_id=demo': { jsonBody: detailBody('spec-a') },
     });
     render(<TFactoryPortal fetchFn={fetchFn} />);
     await waitFor(() => screen.getByTestId('task-row-spec-a'));

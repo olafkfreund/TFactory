@@ -106,9 +106,11 @@ export function WelcomeScreen({
                           </span>
                         )}
                       </div>
-                      <p className="text-xs text-muted-foreground truncate mt-0.5">
-                        {project.path}
-                      </p>
+                      {project.repoLabel && (
+                        <p className="text-xs text-muted-foreground truncate mt-0.5">
+                          {project.repoLabel}
+                        </p>
+                      )}
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
                       <span className="text-xs text-muted-foreground">

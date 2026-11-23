@@ -19,6 +19,8 @@ import {
   getTriageReportMarkdown,
   getVerdicts,
   listTasks,
+  dismissRun,
+  rerunTask,
 } from '../tfactory-api';
 
 // Stub auth — getAuthHeaders is called by the client; localStorage is
@@ -53,6 +55,20 @@ function makeFetch(opts: {
     };
   }) as unknown as typeof fetch;
 }
+
+it('qualifies task reads and actions by project', async () => {
+  const fetchFn = makeFetch({ jsonBody: { planner_scheduled: true, planner_reason: null } });
+  await listTasks({ projectId: 'project a', fetchFn });
+  await getTaskDetail('042-x', { projectId: 'project a', fetchFn });
+  await dismissRun('042-x', { projectId: 'project a', fetchFn });
+  await rerunTask('042-x', { projectId: 'project a', fetchFn });
+  expect(vi.mocked(fetchFn).mock.calls.map(([url]) => url)).toEqual([
+    '/api/tfactory/tasks?project_id=project%20a',
+    '/api/tfactory/tasks/042-x?project_id=project%20a',
+    '/api/tfactory/tasks/042-x/dismiss?project_id=project%20a',
+    '/api/tfactory/tasks/042-x/rerun?project_id=project%20a',
+  ]);
+});
 
 // ─── URL construction ─────────────────────────────────────────────────
 

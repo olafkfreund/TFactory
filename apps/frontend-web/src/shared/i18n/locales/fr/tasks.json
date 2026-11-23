@@ -1,4 +1,14 @@
 {
+  "pipeline": {
+    "failed": "Échecs ({{count}})",
+    "showDismissed": "Afficher les exécutions écartées",
+    "rerun": "Relancer",
+    "dismiss": "Écarter",
+    "plannerNotScheduled": "La planification n’a pas été lancée",
+    "checkoutFailed": "L’extraction du code source a échoué ; la planification n’a pas été lancée",
+    "schedulerFailed": "Le lancement de la planification a échoué",
+    "autoPlanDisabled": "La planification automatique est désactivée"
+  },
   "status": {
     "backlog": "Backlog",
     "todo": "À faire",

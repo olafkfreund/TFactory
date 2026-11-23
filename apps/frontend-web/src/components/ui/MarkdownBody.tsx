@@ -24,7 +24,7 @@
  */
 
 import type { ComponentPropsWithoutRef } from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
@@ -169,12 +169,14 @@ interface MarkdownBodyProps {
   source: string;
   /** Optional layout-level className, e.g. for max-height + overflow */
   className?: string;
+  rewriteUrl?: (url: string) => string;
 }
 
-export function MarkdownBody({ source, className }: MarkdownBodyProps) {
+export function MarkdownBody({ source, className, rewriteUrl }: MarkdownBodyProps) {
   return (
     <div className={cn("min-w-0 break-words", className)}>
       <ReactMarkdown
+        urlTransform={(url) => defaultUrlTransform(rewriteUrl?.(url) ?? url)}
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[
           rehypeRaw, // must run BEFORE sanitize — parses embedded HTML into AST
