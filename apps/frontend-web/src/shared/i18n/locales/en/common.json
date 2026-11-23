@@ -61,7 +61,8 @@
     "unknownError": "An unknown error occurred",
     "networkError": "Network error",
     "notFound": "Not found",
-    "unauthorized": "Unauthorized"
+    "unauthorized": "Unauthorized",
+    "signInAgain": "Not authorised: sign in again"
   },
   "notification": {
     "accountSwitched": "Account Switched",

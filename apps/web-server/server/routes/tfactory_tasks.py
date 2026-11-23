@@ -681,11 +681,11 @@ async def websocket_logs(
     reported by closing with code 4400 / 4404 so the frontend can
     distinguish them.
     """
+    await websocket.accept()
     try:
         principal = await authenticate_websocket(websocket)
     except WebSocketAuthError:
         return
-    await websocket.accept()
     try:
         try:
             _validate_spec_id(spec_id)
@@ -711,8 +711,8 @@ async def websocket_logs(
             visible = {pid}
             payload = tail_log_payload(spec_id, visible=visible)
         except HTTPException as exc:
-            # 400 → close with 4400, 404 → 4404 (custom WS close codes)
-            code = 4400 if exc.status_code == 400 else 4404
+            # 400 → 4400, 403 → 4003, 404 → 4404.
+            code = {400: 4400, 403: 4003}.get(exc.status_code, 4404)
             await websocket.close(code=code, reason=exc.detail)
             return
         await websocket.send_text(_json_mod.dumps(payload))
