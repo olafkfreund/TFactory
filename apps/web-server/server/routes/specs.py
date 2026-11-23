@@ -69,6 +69,7 @@ _PROVENANCE_RE = r"^[\w.:@/+\- ]+$"
 
 class SpecIngestRequest(BaseModel):
     project_id: str = Field(..., description="Registered project id")
+    no_register: bool = False
     spec_id: str = Field(
         ..., min_length=1, description="New task/spec id (workspace dir name)"
     )
@@ -429,6 +430,8 @@ async def ingest_spec(  # noqa: PLR0912,PLR0915 - handoff stages share authoriza
     entry = projects.get(resolved_id)
     if entry is not None and request is not None:
         await require_project_role(principal, resolved_id, "member", db_session)
+    if entry is None and req.no_register:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Project not found")
     repo_slug, git_url = _repo_binding(req)
     self_registered = False
     try:

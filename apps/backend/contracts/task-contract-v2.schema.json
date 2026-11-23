@@ -27,7 +27,36 @@
         "repo": { "type": "string", "description": "owner/name of the target repo." },
         "base_ref": { "type": "string", "description": "RFC-0010 reconnaissance: the branch/tag the plan was built against, e.g. 'main'." },
         "baseline_commit": { "type": "string", "description": "RFC-0010 reconnaissance: the resolved commit SHA the RepoMap was built from. Lets AIFactory/TFactory anchor to the exact tree the human approved and detect drift." },
-        "content_trust": { "$ref": "#/$defs/content_trust" }
+        "content_trust": { "$ref": "#/$defs/content_trust" },
+        "source_artifacts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["stage", "path", "blob_sha", "approve_commit_sha", "approve_commit_author", "attested_by"],
+            "additionalProperties": true,
+            "properties": {
+              "stage": { "type": "string", "enum": ["intent", "spec", "plan"] },
+              "path": { "type": "string", "maxLength": 512 },
+              "blob_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+              "approve_commit_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+              "approve_commit_author": { "type": "string", "maxLength": 200 },
+              "attested_by": { "type": "string", "const": "client" }
+            }
+          }
+        },
+        "human_approval": {
+          "type": "object",
+          "required": ["user_id", "approver_display", "auth_kind", "approved_at", "plan_hash"],
+          "additionalProperties": true,
+          "properties": {
+            "user_id": { "type": "string" },
+            "approver_display": { "type": "string" },
+            "auth_kind": { "type": "string" },
+            "approved_at": { "type": "string", "format": "date-time" },
+            "plan_hash": { "type": "string" }
+          }
+        },
+        "submission_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
       }
     },
     "approval": {

@@ -341,7 +341,7 @@ async def proxy_ingest_spec(
     resolved_id = _resolve_project(req.project_id)
     if resolved_id is not None:
         await _authorize_key(key, resolved_id, db, "member")
-    elif not (req.git_url or req.repo):
+    elif req.no_register or not (req.git_url or req.repo):
         raise HTTPException(404, "Project not found")
     request.state.user = acw_principal(key)
     result = await specs_routes.ingest_spec(

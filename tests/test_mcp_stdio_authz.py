@@ -1200,6 +1200,82 @@ def test_ingest_hidden_and_unknown_project_have_same_404(env):
     )
 
 
+def test_scoped_no_register_hides_unknown_and_invisible_projects(env, monkeypatch):
+    from server.services import project_workspace_service
+
+    clone = AsyncMock(side_effect=AssertionError("must not register"))
+    monkeypatch.setattr(project_workspace_service, "clone_or_update", clone)
+    env.set_key("member-a", scopes={"task:write"})
+    body = {
+        "spec_id": "s1",
+        "spec_text": "## Acceptance Criteria\n- works",
+        "repo": "owner/repo",
+        "no_register": True,
+    }
+    headers = {"Authorization": "Bearer acw_test"}
+    responses = [
+        env.client.post(
+            "/api/mcp-stdio/specs/ingest",
+            json={**body, "project_id": project_id},
+            headers=headers,
+        )
+        for project_id in ("missing", "pB")
+    ]
+    assert [(r.status_code, r.json()) for r in responses] == [
+        (404, {"detail": "Project not found"}),
+    ] * 2
+    clone.assert_not_awaited()
+    assert env.audits == []
+
+
+def test_narrow_key_ingests_with_pr_and_reads_spec_task(env, tmp_path, monkeypatch):
+    from server.routes import specs
+
+    monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path))
+    env.registered["p1"]["clonedFrom"] = "https://github.com/owner/repo.git"
+    monkeypatch.setattr(
+        specs, "_clone_named_repo", AsyncMock(return_value=str(tmp_path))
+    )
+    seen = {}
+
+    def create_workspace(**kwargs):
+        seen.update(kwargs)
+        spec_dir = tmp_path / "workspaces/p1/specs/s1"
+        spec_dir.mkdir(parents=True)
+        (spec_dir / "status.json").write_text('{"status":"pending"}')
+        return {
+            "spec_dir": str(spec_dir),
+            "planner_scheduled": False,
+            "planner_reason": "auto_plan_disabled",
+        }
+
+    monkeypatch.setattr(
+        "agents.tools_pkg.tools.task_control.create_spec_ingest_workspace",
+        create_workspace,
+    )
+    env.set_key("member-a", scopes={"task:write", "mcp:read"})
+    headers = {"Authorization": "Bearer acw_test"}
+    response = env.client.post(
+        "/api/mcp-stdio/specs/ingest",
+        headers=headers,
+        json={
+            "project_id": "p1",
+            "spec_id": "s1",
+            "spec_text": "## Acceptance Criteria\n- works",
+            "repo": "owner/repo",
+            "pr_number": 42,
+            "no_register": True,
+        },
+    )
+    assert response.status_code == 200, response.json()
+    assert response.json()["planner_reason"] == "auto_plan_disabled"
+    assert seen["pr_number"] == 42
+    assert seen["repo_ref"] == "owner/repo"
+    read = env.client.get("/api/mcp-stdio/spec-tasks/p1/s1", headers=headers)
+    assert read.status_code == 200, read.json()
+    assert read.json()["spec_id"] == "s1"
+
+
 def test_ownerless_terminal_is_available_only_to_project_admin(env, monkeypatch):
     from server.routes import terminal
 
