@@ -14,6 +14,7 @@ import logging
 from contextvars import ContextVar
 from functools import lru_cache
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import HTTPException, Request, WebSocket, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -52,9 +53,9 @@ def _ws_extract_token(websocket: WebSocket) -> str | None:
     """Pull the bearer token from a WebSocket, preferring the header (#555).
 
     Order: ``Authorization: Bearer <token>`` header first, then the legacy
-    ``?token=`` query param. Using the query param emits a one-time deprecation
-    warning since it leaks the token into logs/history. Returns ``None`` when no
-    token is present.
+    ``?token=`` query param, then the ``access_token`` cookie. Using the query
+    param emits a one-time deprecation warning since it leaks the token into
+    logs/history. Returns ``None`` when no token is present.
 
     The previous order here was the other way round: the query param won even
     when a header was present, so a correctly-behaving client still got its
@@ -63,14 +64,48 @@ def _ws_extract_token(websocket: WebSocket) -> str | None:
     # Annotated: starlette's .get() is declared `-> Any`, so without these the
     # strict-mypy return type of this function silently degrades to Any.
     auth_header: str | None = websocket.headers.get("authorization")
-    if auth_header and auth_header.startswith("Bearer "):
-        return auth_header[7:]
+    if auth_header is not None:
+        return auth_header[7:] if auth_header.startswith("Bearer ") else None
 
     # Backward-compatible fallback: token in the URL query string.
     query_token: str | None = websocket.query_params.get("token")
     if query_token:
         _warn_ws_query_token_once()
         return query_token
+
+    cookie_token: str | None = websocket.cookies.get("access_token")
+    if cookie_token:
+        # Cookie sessions only for same-host handshakes (CSWSH guard).
+        origin = websocket.headers.get("origin")
+        request_host = websocket.headers.get("host")
+        external_scheme = websocket.headers.get("x-forwarded-proto")
+        if external_scheme is None:
+            external_scheme = websocket.url.scheme
+        external_scheme = external_scheme.lower()
+        if (
+            origin
+            and request_host
+            and external_scheme in ("http", "https", "ws", "wss")
+        ):
+            try:
+                parsed = urlparse(origin)
+                if (
+                    parsed.scheme in ("http", "https")
+                    and parsed.hostname
+                    and parsed.netloc.lower() == request_host.lower()
+                    and parsed.path in ("", "/")
+                    and not (parsed.params or parsed.query or parsed.fragment)
+                    and "?" not in origin
+                    and "#" not in origin
+                    and parsed.username is None
+                    and parsed.password is None
+                    and not (
+                        external_scheme in ("https", "wss") and parsed.scheme == "http"
+                    )
+                ):
+                    return cookie_token
+            except ValueError:
+                pass
 
     return None
 
@@ -355,8 +390,8 @@ async def verify_websocket_token(websocket: WebSocket) -> bool:
     if settings.DISABLE_AUTH:
         return True
 
-    # Prefer the Authorization header; fall back to the legacy ?token= query
-    # param (with a deprecation warning) for backward compatibility (#555).
+    # Prefer the Authorization header, then the legacy ?token= query param,
+    # then a same-origin or configured-origin cookie session.
     token = _ws_extract_token(websocket)
 
     if not token:

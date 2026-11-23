@@ -7,8 +7,9 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import '@testing-library/jest-dom/vitest';
-import { act, render } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 
+import '../../../shared/i18n';
 import { TFactoryLogViewer } from '../TFactoryLogViewer';
 
 class FakeWebSocket {
@@ -81,5 +82,38 @@ describe('TFactoryLogViewer reconnect', () => {
 
     act(() => { vi.advanceTimersByTime(30_000); });
     expect(sockets).toHaveLength(1); // no retry
+  });
+
+  it.each([4001, 4003])('shows auth error and does not reconnect on %i', (code) => {
+    const sockets: FakeWebSocket[] = [];
+    const wsFactory = (url: string) => {
+      const socket = new FakeWebSocket(url);
+      sockets.push(socket);
+      return socket as unknown as WebSocket;
+    };
+
+    render(<TFactoryLogViewer specId="abc" wsBaseUrl="ws://t" wsFactory={wsFactory} />);
+    act(() => sockets[0].triggerClose(code));
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Not authorised: sign in again');
+    act(() => { vi.advanceTimersByTime(30_000); });
+    expect(sockets).toHaveLength(1);
+  });
+
+  it('stops after three consecutive pre-open failures', () => {
+    const sockets: FakeWebSocket[] = [];
+    const wsFactory = (url: string) => {
+      const socket = new FakeWebSocket(url);
+      sockets.push(socket);
+      return socket as unknown as WebSocket;
+    };
+
+    render(<TFactoryLogViewer specId="abc" wsBaseUrl="ws://t" wsFactory={wsFactory} />);
+    for (let i = 0; i < 3; i++) {
+      act(() => sockets[i].triggerClose(1006));
+      act(() => { vi.advanceTimersByTime(30_000); });
+    }
+    expect(sockets).toHaveLength(3);
+    expect(screen.getByRole('alert')).toHaveTextContent('Not authorised: sign in again');
   });
 });

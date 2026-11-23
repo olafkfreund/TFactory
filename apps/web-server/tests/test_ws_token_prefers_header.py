@@ -12,9 +12,12 @@ second. Only a request carrying BOTH distinguishes the fix from the bug.
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -25,10 +28,22 @@ if str(_WEB_SERVER) not in sys.path:
 from server import auth as auth_mod  # noqa: E402
 
 
-def _ws(header: str | None = None, query: str | None = None) -> SimpleNamespace:
+def _ws(
+    header: str | None = None,
+    query: str | None = None,
+    cookie: str | None = None,
+    origin: str | None = None,
+) -> Any:
     return SimpleNamespace(
-        headers={"authorization": header} if header else {},
+        headers={
+            **({"authorization": header} if header else {}),
+            **({"origin": origin} if origin else {}),
+            "host": "app.example.test",
+        },
         query_params={"token": query} if query else {},
+        cookies={"access_token": cookie} if cookie else {},
+        url=SimpleNamespace(scheme="wss"),
+        close=AsyncMock(),
     )
 
 
@@ -47,13 +62,107 @@ def test_header_wins_when_both_present() -> None:
     assert auth_mod._ws_extract_token(ws) == "hdr-token"
 
 
+def test_token_order_with_cookie() -> None:
+    ws = _ws(header="Bearer hdr-token", query="qs-token", cookie="cookie-token")
+    assert auth_mod._ws_extract_token(ws) == "hdr-token"
+    ws = _ws(query="qs-token", cookie="cookie-token")
+    assert auth_mod._ws_extract_token(ws) == "qs-token"
+
+
+@pytest.mark.parametrize(
+    "origin", ["https://app.example.test", "https://APP.EXAMPLE.TEST/"]
+)
+def test_cookie_with_accepted_origin_authenticates(
+    monkeypatch: pytest.MonkeyPatch, origin: str
+) -> None:
+    monkeypatch.setattr(
+        auth_mod,
+        "get_settings",
+        lambda: SimpleNamespace(
+            DISABLE_AUTH=False, CORS_ORIGINS=["https://allowed.example.test"]
+        ),
+    )
+    monkeypatch.setattr(
+        auth_mod,
+        "_try_decode_jwt",
+        lambda token: {"sub": "user-1"} if token == "cookie-token" else None,  # noqa: S105
+    )
+    assert asyncio.run(
+        auth_mod.authenticate_websocket(_ws(cookie="cookie-token", origin=origin))
+    ) == {"id": "user-1", "email": None, "role": "user"}
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        None,
+        "https://foreign.example.test",
+        "https://allowed.example.test",
+        "http://app.example.test",
+        "ftp://app.example.test",
+        "https://user@app.example.test",
+        "https://app.example.test/path",
+        "https://app.example.test/?q=1",
+        "https://app.example.test/?",
+        "https://app.example.test/#frag",
+        "https://app.example.test/#",
+    ],
+)
+def test_cookie_with_untrusted_origin_closes_4001(
+    monkeypatch: pytest.MonkeyPatch, origin: str | None
+) -> None:
+    monkeypatch.setattr(
+        auth_mod,
+        "get_settings",
+        lambda: SimpleNamespace(
+            DISABLE_AUTH=False, CORS_ORIGINS=["https://allowed.example.test"]
+        ),
+    )
+    ws = _ws(cookie="cookie-token", origin=origin)
+    with pytest.raises(auth_mod.WebSocketAuthError, match="No token provided"):
+        asyncio.run(auth_mod.authenticate_websocket(ws))
+    ws.close.assert_awaited_once_with(code=4001, reason="Unauthorized")
+
+
+def test_header_auth_ignores_foreign_origin(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        auth_mod, "get_settings", lambda: SimpleNamespace(DISABLE_AUTH=False)
+    )
+    monkeypatch.setattr(
+        auth_mod,
+        "_try_decode_jwt",
+        lambda token: {"sub": "user-1"} if token == "hdr-token" else None,  # noqa: S105
+    )
+    ws = _ws(
+        header="Bearer hdr-token",
+        cookie="cookie-token",
+        origin="https://foreign.example.test",
+    )
+    assert asyncio.run(auth_mod.authenticate_websocket(ws))["id"] == "user-1"
+    ws.close.assert_not_awaited()
+
+
+def test_cookie_rejects_http_origin_behind_https_proxy() -> None:
+    ws = _ws(cookie="cookie-token", origin="http://app.example.test")
+    ws.url.scheme = "ws"
+    ws.headers["x-forwarded-proto"] = "https"
+    assert auth_mod._ws_extract_token(ws) is None
+
+
 def test_no_token_returns_none() -> None:
     assert auth_mod._ws_extract_token(_ws()) is None
 
 
-def test_non_bearer_header_falls_through_to_query() -> None:
-    ws = _ws(header="Basic abc", query="qs-token")
-    assert auth_mod._ws_extract_token(ws) == "qs-token"
+@pytest.mark.parametrize("header", ["Basic abc", "bearer abc", ""])
+def test_non_bearer_header_fails_closed(header: str) -> None:
+    ws = _ws(
+        header=header,
+        query="qs-token",
+        cookie="cookie-token",
+        origin="https://app.example.test",
+    )
+    ws.headers["authorization"] = header
+    assert auth_mod._ws_extract_token(ws) is None
 
 
 def test_query_use_warns_once(caplog: pytest.LogCaptureFixture) -> None:
