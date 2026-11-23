@@ -29,6 +29,7 @@ class Settings(BaseSettings):
 
     # Authentication
     API_TOKEN: str = Field(default="", repr=False)  # Will generate default if not set
+    LEGACY_SHARED_TOKEN_FULL_ACCESS: bool = True
 
     # Federated search (#149). The cockpit (CFactory) aggregates every portal's
     # work and exposes a ranked /api/search; this portal proxies to it so its ⌘K

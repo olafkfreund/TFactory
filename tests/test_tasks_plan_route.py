@@ -32,6 +32,9 @@ def test_plan_routes_registered():
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
+    from server.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "DISABLE_AUTH", True)
     monkeypatch.setattr(tasks_plan, "load_projects", lambda: {})
     app = FastAPI()
     app.include_router(tasks_plan.router, prefix="/api/tasks")

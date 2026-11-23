@@ -1,10 +1,8 @@
 """Project access for task-scoped WebSocket streams."""
 
-import logging
 import time
 from typing import Any
 
-from factory_common.logsafe import sanitize_log
 from fastapi import WebSocket
 
 from server.auth import (
@@ -13,17 +11,15 @@ from server.auth import (
     _ws_extract_token,
     authenticate_websocket,
 )
-from server.config import get_settings
 from server.database.engine import async_session_factory
-from server.routes.project_authz import authorize_project_for_user, is_service_principal
+from server.routes.project_authz import require_project_role
 
-logger = logging.getLogger(__name__)
 _KEY_RECHECK_SECONDS = 300
 
 
-async def _authorize_project(principal: dict[str, Any], project_id: str) -> None:
+async def _authorize_project(principal: dict[str, Any] | None, project_id: str) -> None:
     async with async_session_factory() as db:
-        await authorize_project_for_user(principal, project_id, db)
+        await require_project_role(principal, project_id, "viewer", db)
 
 
 class TaskSocketAccess:
@@ -36,42 +32,31 @@ class TaskSocketAccess:
         self.last_key_check = time.monotonic()
 
     async def _authorize(
-        self, principal: dict[str, Any], project_id: str | None = None
+        self, principal: dict[str, Any] | None, project_id: str | None = None
     ) -> None:
         await _authorize_project(principal, project_id or self.project_id)
-
-    @staticmethod
-    def _strict(principal: dict[str, Any]) -> bool:
-        return bool(
-            principal.get("api_key_id") or get_settings().RBAC_ENFORCE_TASK_ROUTES
-        )
 
     async def connect(self) -> bool:
         try:
             self.principal = await authenticate_websocket(self.websocket)
         except WebSocketAuthError:
             return False
-        if self.principal is None:
-            return True
         if not self.valid_task_id:
             await self.websocket.close(code=4003)
             return False
 
-        strict = self._strict(self.principal)
         try:
             await self._authorize(self.principal)
-        except Exception:  # noqa: BLE001 - strict sockets fail closed on DB failures
-            if strict:
-                await self.websocket.close(code=4003)
-                return False
-            logger.warning(
-                "Task WS access would deny: project=%s user=%s",
-                sanitize_log(self.project_id),
-                sanitize_log(self.principal.get("id")),
-            )
+        except Exception:  # noqa: BLE001 - denied or unavailable authorization
+            await self.websocket.close(code=4003)
+            return False
 
         token = _ws_extract_token(self.websocket)
-        if token and token.startswith("acw_") and self.principal.get("api_key_id"):
+        if (
+            token
+            and token.startswith("acw_")
+            and (self.principal or {}).get("api_key_id")
+        ):
             self.key_token = token
             self.last_key_check = time.monotonic()
         return True
@@ -135,8 +120,6 @@ class AllTaskSocketAccess:
         return True
 
     async def readable(self, task_ids: list[str]) -> set[str]:
-        if self.user is None or is_service_principal(self.user):
-            return set(task_ids)
         allowed: set[str] = set()
         projects: dict[str, bool] = {}
         for task_id in task_ids:
@@ -148,13 +131,7 @@ class AllTaskSocketAccess:
                     await _authorize_project(self.user, project_id)
                     projects[project_id] = True
                 except Exception:  # noqa: BLE001 - strict sockets fail closed on DB failures
-                    projects[project_id] = not TaskSocketAccess._strict(self.user)
-                    if projects[project_id]:
-                        logger.warning(
-                            "Task WS access would deny: project=%s user=%s",
-                            sanitize_log(project_id),
-                            sanitize_log(self.user.get("id")),
-                        )
+                    projects[project_id] = False
             if projects[project_id]:
                 allowed.add(task_id)
         return allowed

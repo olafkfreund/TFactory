@@ -15,19 +15,28 @@ import subprocess
 import urllib.parse
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.auth import _is_legacy_api_token, _try_decode_jwt
+from server.database.engine import get_db
 from server.error_ref import client_error
+from server.pty.access import project_id_for_path
+from server.routes.project_authz import (
+    ProjectAccessChecker,
+    require_project_role,
+    visible_project_ids,
+)
 
 from ..config import get_settings
 from ._specpath import (
     _require_safe_git_ref,
     browse_roots,
+    contained_path,
     safe_join,
     within_roots,
 )
@@ -205,7 +214,40 @@ def resolve_path(project_id: str, relative_path: str) -> Path:
 
     # Resolve the full path, rejecting any traversal outside the project root.
     # safe_join raises HTTPException(400) for paths that escape project_path.
-    return safe_join(project_path, relative_path)
+    target = safe_join(project_path, relative_path)
+    if project_id_for_path(str(target)) != project_id:
+        raise HTTPException(404, "Project not found")
+    return target
+
+
+def _protect_env(path: Path) -> None:
+    from .projects import load_projects  # noqa: PLC0415
+
+    projects = load_projects()
+    owner = project_id_for_path(str(path))
+    parts = (
+        path.relative_to(Path(projects[owner]["path"]).resolve()).parts
+        if owner
+        else path.parts
+    )
+    if any(
+        part == ".tfactory"
+        or part in {"secrets.json", "credentials.json"}
+        or part.startswith(".env")
+        for part in parts
+    ) or any(
+        project.get("path")
+        and path.is_file()
+        and secret.is_file()
+        and path.samefile(secret)
+        for project in projects.values()
+        for secret in (
+            Path(project["path"]) / ".tfactory" / ".env",
+            Path(project["path"]) / "secrets.json",
+            Path(project["path"]) / "credentials.json",
+        )
+    ):
+        raise HTTPException(404, "File not found")
 
 
 # --------------------------------------------------------------------------
@@ -236,6 +278,8 @@ async def discover_projects(
     max_depth: int = Query(
         1, description="How deep to scan (1 = direct children only)"
     ),
+    request: Request = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
     """
     Discover potential project folders in a directory.
@@ -243,6 +287,11 @@ async def discover_projects(
     """
     base = within_roots(
         base_path, browse_roots(), "browsable directories", expand_user=True
+    )
+    from .project_authz import creator_org  # noqa: PLC0415
+
+    await creator_org(
+        getattr(request.state, "user", None) if request is not None else None, db
     )
 
     if not base.exists():
@@ -316,17 +365,34 @@ async def discover_projects(
 
     scan_directory(base, 1)
 
+    principal = getattr(request.state, "user", None) if request is not None else None
+    db_session = db if isinstance(db, AsyncSession) else None
+    visible = await visible_project_ids(principal, db_session, "viewer")
+    out = []
+    for p in projects:
+        pid = project_id_for_path(p.path)
+        if pid is None or pid in visible:
+            out.append(p.model_dump())
+
     # Return array directly - api-client.ts adds the {success, data} wrapper
-    return [p.model_dump() for p in projects]
+    return out
 
 
 @router.get("/list")
 async def list_directory_direct(
     path: str = Query(..., description="Absolute path to directory"),
     show_hidden: bool = Query(False, description="Show hidden files"),
+    request: Request = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
     """List contents of a directory by absolute path."""
+    principal = getattr(request.state, "user", None) if request is not None else None
+    db_session = db if isinstance(db, AsyncSession) else None
     full_path = Path(path).expanduser().resolve()
+    if not get_settings().DISABLE_AUTH:
+        await require_project_role(
+            principal, project_id_for_path(str(full_path)), "viewer", db_session
+        )
 
     if _is_app_internal_path(full_path):
         return {"success": False, "error": "Access denied", "data": None}
@@ -378,9 +444,18 @@ async def list_directory_direct(
 @router.get("/read")
 async def read_file_direct(
     path: str = Query(..., description="Absolute path to file"),
+    request: Request = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
     """Read file contents by absolute path."""
+    principal = getattr(request.state, "user", None) if request is not None else None
+    db_session = db if isinstance(db, AsyncSession) else None
     full_path = Path(path).expanduser().resolve()
+    if not get_settings().DISABLE_AUTH:
+        await require_project_role(
+            principal, project_id_for_path(str(full_path)), "viewer", db_session
+        )
+    _protect_env(full_path)
 
     if _is_app_internal_path(full_path):
         return {"success": False, "error": "Access denied", "data": None}
@@ -427,7 +502,7 @@ def _validate_serve_token(request: Request, token: str) -> bool:
     """
     settings = get_settings()
 
-    if settings.DISABLE_AUTH:
+    if settings.DISABLE_AUTH or isinstance(getattr(request.state, "user", None), dict):
         return True
 
     # 1. Try Authorization header
@@ -449,6 +524,44 @@ def _validate_serve_token(request: Request, token: str) -> bool:
     return False
 
 
+def _resolve_serve_principal(request: Request, token: str) -> dict[str, Any] | None:
+    """Resolve principal for /serve from request.state.user, header, or query token."""
+    principal = getattr(request.state, "user", None)
+    if isinstance(principal, dict):
+        return principal
+    settings = get_settings()
+    if settings.DISABLE_AUTH:
+        return {
+            "id": "default",
+            "email": "default@localhost",
+            "role": "admin",
+            "is_service": True,
+        }
+    auth_header = request.headers.get("Authorization")
+    candidates = []
+    if auth_header and auth_header.startswith("Bearer "):
+        candidates.append(auth_header[7:])
+    if token:
+        candidates.append(token)
+    for cand in candidates:
+        jwt_payload = _try_decode_jwt(cand)
+        if jwt_payload is not None:
+            return {
+                "id": jwt_payload.get("sub"),
+                "email": jwt_payload.get("email"),
+                "role": jwt_payload.get("role", "user"),
+            }
+        if _is_legacy_api_token(cand):
+            return {
+                "id": "default",
+                "email": None,
+                "role": "user",
+                "is_service": True,
+                "is_legacy_token": True,
+            }
+    return None
+
+
 @router.get("/serve")
 async def serve_project_file(
     request: Request,
@@ -457,6 +570,7 @@ async def serve_project_file(
         ..., description="Project root directory (for resolving relative URLs)"
     ),
     token: str = Query(default="", description="Bearer token for authentication"),
+    db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
     """Serve a project file with its correct MIME type.
 
@@ -467,13 +581,30 @@ async def serve_project_file(
     # Authenticate: check token from query param or Authorization header
     if not _validate_serve_token(request, token):
         raise HTTPException(status_code=401, detail="Authentication required")
-    root_path = Path(root).expanduser().resolve()
+    principal = _resolve_serve_principal(request, token)
+    from .projects import load_projects  # noqa: PLC0415 - loaded after router setup
+
+    try:
+        root_path = contained_path(
+            root,
+            [p["path"] for p in load_projects().values() if p.get("path")],
+            "registered projects",
+            expand_user=True,
+        )
+    except ValueError:
+        raise HTTPException(404, "Project not found") from None
+    file_path = safe_join(root_path, path, expand_user=True)
+    pid = project_id_for_path(str(root_path))
+    if pid is None or project_id_for_path(str(file_path)) != pid:
+        raise HTTPException(404, "Project not found")
+    db_session = db if isinstance(db, AsyncSession) else None
+    await require_project_role(principal, pid, "viewer", db_session)
 
     # Security: file must exist inside the declared project root.
     # safe_join rejects (HTTP 400) any path that escapes root_path.
     if not root_path.is_dir():
         raise HTTPException(status_code=400, detail="Root is not a directory")
-    file_path = safe_join(root_path, str(Path(path).expanduser()))
+    _protect_env(file_path)
 
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
@@ -557,7 +688,11 @@ async def serve_project_file(
     )
 
 
-@router.get("/{project_id}/list", response_model=DirectoryListing)
+@router.get(
+    "/{project_id}/list",
+    response_model=DirectoryListing,
+    dependencies=[Depends(ProjectAccessChecker("viewer"))],
+)
 async def list_directory(
     project_id: str,
     path: str = Query("", description="Relative path within project"),
@@ -565,6 +700,7 @@ async def list_directory(
 ):
     """List contents of a directory."""
     full_path = resolve_path(project_id, path)
+    _protect_env(full_path)
 
     if not full_path.exists():
         raise HTTPException(
@@ -611,13 +747,18 @@ async def list_directory(
     )
 
 
-@router.get("/{project_id}/read", response_model=FileContent)
+@router.get(
+    "/{project_id}/read",
+    response_model=FileContent,
+    dependencies=[Depends(ProjectAccessChecker("viewer"))],
+)
 async def read_file(
     project_id: str,
     path: str = Query(..., description="Relative path to file"),
 ):
     """Read file contents."""
     full_path = resolve_path(project_id, path)
+    _protect_env(full_path)
 
     if not full_path.exists():
         raise HTTPException(
@@ -660,7 +801,10 @@ async def read_file(
     )
 
 
-@router.put("/{project_id}/write")
+@router.put(
+    "/{project_id}/write",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def write_file(
     project_id: str,
     path: str = Query(..., description="Relative path to file"),
@@ -668,6 +812,7 @@ async def write_file(
 ):
     """Write content to a file."""
     full_path = resolve_path(project_id, path)
+    _protect_env(full_path)
 
     # Ensure parent directory exists
     full_path.parent.mkdir(parents=True, exist_ok=True)
@@ -683,13 +828,19 @@ async def write_file(
     return {"success": True, "path": path}
 
 
-@router.delete("/{project_id}/delete")
+@router.delete(
+    "/{project_id}/delete",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def delete_file(
     project_id: str,
     path: str = Query(..., description="Relative path to file or directory"),
 ):
     """Delete a file or directory."""
     full_path = resolve_path(project_id, path)
+    _protect_env(full_path)
+    if full_path == resolve_path(project_id, ""):
+        raise HTTPException(400, "Cannot delete project root")
 
     if not full_path.exists():
         raise HTTPException(
@@ -713,7 +864,11 @@ async def delete_file(
     return {"success": True}
 
 
-@router.get("/{project_id}/search", response_model=SearchResponse)
+@router.get(
+    "/{project_id}/search",
+    response_model=SearchResponse,
+    dependencies=[Depends(ProjectAccessChecker("viewer"))],
+)
 async def search_files(
     project_id: str,
     query: str = Query(..., description="Search query (regex supported)"),
@@ -723,6 +878,7 @@ async def search_files(
 ):
     """Search for text in files using ripgrep or fallback."""
     full_path = resolve_path(project_id, path)
+    _protect_env(full_path)
 
     if not full_path.exists():
         raise HTTPException(
@@ -752,6 +908,12 @@ async def search_files(
             str(max_results),
             "--glob",
             file_pattern,
+            "--glob",
+            "!.env*",
+            "--glob",
+            "!secrets.json",
+            "--glob",
+            "!credentials.json",
             "--",
             query,
             str(full_path),
@@ -765,6 +927,13 @@ async def search_files(
                 data = __import__("json").loads(line)
                 if data.get("type") == "match":
                     match_data = data["data"]
+                    try:
+                        matched_path = Path(match_data["path"]["text"])
+                        if project_id_for_path(str(matched_path)) != project_id:
+                            continue
+                        _protect_env(matched_path)
+                    except HTTPException:
+                        continue
                     results.append(
                         SearchResult(
                             path=str(
@@ -793,7 +962,17 @@ async def search_files(
                 truncated = True
                 break
 
-            if not file_path.is_file() or is_binary_file(file_path):
+            if (
+                not file_path.is_file()
+                or project_id_for_path(str(file_path)) != project_id
+                or file_path.name.startswith(".env")
+                or file_path.name in {"secrets.json", "credentials.json"}
+                or is_binary_file(file_path)
+            ):
+                continue
+            try:
+                _protect_env(file_path)
+            except HTTPException:
                 continue
 
             try:
@@ -824,7 +1003,10 @@ async def search_files(
     )
 
 
-@router.get("/{project_id}/diff")
+@router.get(
+    "/{project_id}/diff",
+    dependencies=[Depends(ProjectAccessChecker("viewer"))],
+)
 async def get_git_diff(
     project_id: str,
     path: str = Query("", description="Path to get diff for (empty for all)"),
@@ -915,7 +1097,10 @@ def _get_project_path(project_id: str) -> Path:
     return resolve_project_path(project_id)
 
 
-@insights_router.delete("")
+@insights_router.delete(
+    "",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def clear_insights_session(projectId: str):
     """
     Clear current files insights session and create a new one.

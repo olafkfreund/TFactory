@@ -25,8 +25,10 @@ import logging
 from typing import Any
 
 from factory_common.logsafe import sanitize_log
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+
+from server.routes.project_authz import ProjectAccessChecker
 
 from ..services import auto_fix_service
 
@@ -56,7 +58,10 @@ class AutoFixConfigPayload(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-@router.get("/{projectId}/auto-fix/config")
+@router.get(
+    "/{projectId}/auto-fix/config",
+    dependencies=[Depends(ProjectAccessChecker("viewer"))],
+)
 async def get_auto_fix_config(projectId: str) -> dict[str, Any] | None:
     """Return AutoFixConfig for the project, or null if no project."""
     cfg = auto_fix_service.get_config(projectId)
@@ -66,7 +71,10 @@ async def get_auto_fix_config(projectId: str) -> dict[str, Any] | None:
     return {k: v for k, v in cfg.items() if k != "queue"}
 
 
-@router.put("/{projectId}/auto-fix/config")
+@router.put(
+    "/{projectId}/auto-fix/config",
+    dependencies=[Depends(ProjectAccessChecker("admin"))],
+)
 async def save_auto_fix_config(
     projectId: str, payload: AutoFixConfigPayload
 ) -> dict[str, bool]:
@@ -77,13 +85,19 @@ async def save_auto_fix_config(
     return {"success": True}
 
 
-@router.get("/{projectId}/auto-fix/queue")
+@router.get(
+    "/{projectId}/auto-fix/queue",
+    dependencies=[Depends(ProjectAccessChecker("viewer"))],
+)
 async def get_auto_fix_queue(projectId: str) -> list[dict[str, Any]]:
     """Return the AutoFix queue items."""
     return auto_fix_service.get_queue(projectId)
 
 
-@router.post("/{projectId}/auto-fix/check-new")
+@router.post(
+    "/{projectId}/auto-fix/check-new",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def check_new_issues(projectId: str) -> dict[str, Any]:
     """Manually trigger a poll: find new issues + start each one.
 
@@ -112,7 +126,10 @@ async def check_new_issues(projectId: str) -> dict[str, Any]:
     return result
 
 
-@router.post("/{projectId}/auto-fix/{issueNumber}/start")
+@router.post(
+    "/{projectId}/auto-fix/{issueNumber}/start",
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 async def start_auto_fix_one(projectId: str, issueNumber: int) -> dict[str, Any]:
     """Import + start the agent on a single issue."""
     try:

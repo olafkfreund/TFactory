@@ -494,6 +494,24 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
         if handler is None:
             return _err(-32601, f"Unknown tool: {tool_name!r}")
 
+        from server.routes.project_authz import require_project_role  # noqa: PLC0415
+
+        task_id = tool_args.get("task_id")
+        if not isinstance(task_id, str) or ":" not in task_id:
+            raise HTTPException(
+                status_code=400, detail="task_id must identify a project"
+            )
+        await require_project_role(
+            {
+                "id": "copilot-mcp",
+                "is_copilot_token": True,
+                "project_id": os.environ.get("COPILOT_MCP_TFACTORY_PROJECT_ID"),
+                "org_id": os.environ.get("COPILOT_MCP_TFACTORY_ORG_ID"),
+            },
+            task_id.partition(":")[0],
+            "member" if tool_name == "tfactory_report_result" else "viewer",
+        )
+
         try:
             result_data = handler(tool_args)
         except HTTPException:

@@ -43,7 +43,7 @@ async def _watch(
             if user is None:
                 await websocket.close(code=4001)
                 return
-        if not await may_use(user, session):
+        if not await may_use(user, session, "member"):
             await websocket.close(code=4003)
             return
 
@@ -71,8 +71,8 @@ async def terminal_websocket(websocket: WebSocket, terminal_id: str):
 
     manager = get_pty_manager()
     session = manager.get_session(terminal_id)
-    # user None: legacy token or auth disabled, unrestricted as on all-task sockets.
-    if session is not None and user is not None and not await may_use(user, session):
+    # Auth-disabled mode may return None; project and session checks still apply.
+    if session is not None and not await may_use(user, session, "member"):
         session = None  # another user's terminal reads as missing
 
     if session is None:

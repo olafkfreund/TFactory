@@ -33,6 +33,13 @@ from server.routes import regression as regression_route  # noqa: E402
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("PROJECT_WORKSPACE_ROOT", str(tmp_path))
+    from server.config import get_settings
+    from server.routes import project_authz
+
+    monkeypatch.setattr(get_settings(), "DISABLE_AUTH", True)
+    monkeypatch.setattr(
+        project_authz, "_load_projects", lambda: {"demo": {"path": str(tmp_path)}}
+    )
     app = FastAPI()
     app.include_router(regression_route.router)
     return TestClient(app), tmp_path
@@ -73,7 +80,9 @@ def test_trigger_run_schedules_and_returns_run_id(client, monkeypatch):
 def test_trigger_run_rejects_invalid_id(client):
     cl, _ = client
     resp = cl.post("/api/projects/bad id!/regression/run")
-    assert resp.status_code == 400
+    assert (
+        resp.status_code == 404
+    )  # unregistered IDs are hidden before route validation
 
 
 def test_returns_seeded_run(client):
@@ -107,4 +116,6 @@ def test_rejects_path_traversal_project_id(client):
 def test_rejects_invalid_slug(client):
     cl, _ = client
     resp = cl.get("/api/projects/bad id!/regression")
-    assert resp.status_code == 400
+    assert (
+        resp.status_code == 404
+    )  # unregistered IDs are hidden before route validation

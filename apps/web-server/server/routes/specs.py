@@ -22,9 +22,11 @@ from typing import Any
 from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.database.engine import get_db
+from server.database.models import OrgMember
 from server.error_ref import InputRejectedError, client_error
 from server.services.project_workspace_service import (
     GitOperationError,
@@ -33,7 +35,13 @@ from server.services.project_workspace_service import (
 
 from ._specpath import safe_component
 from ._tenancy import resolve_tenant
-from .project_authz import creator_org
+from .project_authz import (
+    check_project_access,
+    creator_org,
+    is_service_principal,
+    require_project_role,
+    resolve_project_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -199,7 +207,12 @@ class PrAttachRequest(BaseModel):
 
 
 async def _clone_and_register_project(
-    git_url: str, *, branch: str | None, name: str, org_id: str | None = None
+    git_url: str,
+    *,
+    branch: str | None,
+    name: str,
+    org_id: str | None = None,
+    service_access: bool = False,
 ) -> tuple[dict, str]:
     """Clone ``git_url`` (at ``branch``) into the TFactory workspace and register it.
 
@@ -212,8 +225,27 @@ async def _clone_and_register_project(
     from pathlib import Path
     from uuid import uuid4
 
-    from ..services.project_workspace_service import clone_or_update
+    from server.services.project_workspace_service import (  # noqa: PLC0415
+        clone_or_update,
+        slug_from_git_url,
+        workspace_root,
+    )
+
     from .projects import load_projects, save_projects
+
+    candidate = (workspace_root() / slug_from_git_url(git_url)).resolve()
+    for pdata in load_projects().values():
+        if pdata.get("path"):
+            owned = Path(pdata["path"]).resolve()  # noqa: ASYNC240
+            if (
+                candidate == owned
+                or candidate in owned.parents
+                or owned in candidate.parents
+            ) and (
+                candidate != owned
+                or (not service_access and pdata.get("org_id") != org_id)
+            ):
+                raise HTTPException(404, "Project not found")
 
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     credential = ("x-access-token", token) if token else None
@@ -225,6 +257,8 @@ async def _clone_and_register_project(
     projects = load_projects()
     for pid, pdata in projects.items():
         if pdata.get("path") == path:
+            if not service_access and pdata.get("org_id") != org_id:
+                raise HTTPException(404, "Project not found")
             return pdata, pid  # already registered (e.g. a re-handoff)
     now = datetime.now().isoformat()
     pid = str(uuid4())
@@ -371,7 +405,7 @@ async def _clone_named_repo(git_url: str) -> str:
 @router.post(
     "/ingest", summary="Create a TFactory task from a raw spec (no AIFactory branch)"
 )
-async def ingest_spec(
+async def ingest_spec(  # noqa: PLR0912,PLR0915 - handoff stages share authorization
     req: SpecIngestRequest,
     x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
     request: Request = None,  # type: ignore[assignment]  # None only on direct calls
@@ -388,14 +422,13 @@ async def ingest_spec(
     # *name*; accept either.
     from .projects import load_projects
 
+    principal = getattr(request.state, "user", None) if request is not None else None
+    db_session = db if isinstance(db, AsyncSession) else None
     projects = load_projects()  # {id: project_data}
-    resolved_id = req.project_id
-    entry = projects.get(req.project_id)
-    if entry is None:
-        for pid, data in projects.items():
-            if data.get("name") == req.project_id:
-                entry, resolved_id = data, pid
-                break
+    resolved_id = resolve_project_id(req.project_id) or req.project_id
+    entry = projects.get(resolved_id)
+    if entry is not None and request is not None:
+        await require_project_role(principal, resolved_id, "member", db_session)
     repo_slug, git_url = _repo_binding(req)
     self_registered = False
     try:
@@ -406,24 +439,67 @@ async def ingest_spec(
             # /api/projects uses. This makes the AIFactory->TFactory handoff work
             # for ANY built project without manual pre-registration.
             org_id = (
-                await creator_org(getattr(request.state, "user", None), db)
-                if request is not None
+                await creator_org(principal, db_session, allow_task_write=True)
+                if request is not None and db_session is not None
                 else None
             )  # #1036
+            if request is not None and not is_service_principal(principal):
+                from pathlib import Path  # noqa: PLC0415
+
+                from server.services.project_workspace_service import (  # noqa: PLC0415
+                    slug_from_git_url,
+                    workspace_root,
+                )
+
+                candidate = (workspace_root() / slug_from_git_url(git_url)).resolve()
+                for pid, pdata in projects.items():
+                    if (
+                        pdata.get("path") and Path(pdata["path"]).resolve() == candidate  # noqa: ASYNC240
+                    ):
+                        access = await require_project_role(
+                            principal, pid, "member", db_session
+                        )
+                        org_id = access.org_id
+                        break
+            if request is not None and not is_service_principal(principal):
+                membership = None
+                if (
+                    org_id
+                    and db_session is not None
+                    and isinstance(principal, dict)
+                    and principal.get("id")
+                ):
+                    membership = (
+                        await db_session.execute(
+                            select(OrgMember).where(
+                                OrgMember.org_id == org_id,
+                                OrgMember.user_id == principal["id"],
+                            )
+                        )
+                    ).scalar_one_or_none()
+                if not (
+                    isinstance(principal, dict)
+                    and principal.get("api_key_id")
+                    and "task:write" in (principal.get("scopes") or ())
+                ):
+                    check_project_access(
+                        principal,
+                        {"id": req.project_id, "org_id": org_id},
+                        membership,
+                        "member",
+                    )
             entry, resolved_id = await _clone_and_register_project(
                 git_url,
                 branch=req.source_branch,
                 name=str(req.project_id),
                 org_id=org_id,
+                service_access=is_service_principal(principal),
             )
             self_registered = True
         if entry is None:
             raise HTTPException(
                 status.HTTP_404_NOT_FOUND,
-                detail=(
-                    f"unknown project_id: {req.project_id!r} "
-                    "(and no git_url provided to self-register it)"
-                ),
+                detail="Project not found",
             )
         _check_origin(entry, repo_slug)
         if repo_slug and git_url and not self_registered:
@@ -522,7 +598,13 @@ async def ingest_spec(
     "/{project_id}/{spec_id}/pr",
     summary="Attach the opened PR to an ingested spec so the verdict posts back",
 )
-async def attach_pr(project_id: str, spec_id: str, req: PrAttachRequest) -> dict:
+async def attach_pr(
+    project_id: str,
+    spec_id: str,
+    req: PrAttachRequest,
+    request: Request = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+) -> dict:
     """Record `pr_number`/`repo_slug` on an ingested spec's source.json (#964).
 
     The verifying handoff is sent before the PR exists, so this back-fills the
@@ -533,17 +615,24 @@ async def attach_pr(project_id: str, spec_id: str, req: PrAttachRequest) -> dict
 
     from agents.tools_pkg.tools.task_control import _spec_dir
 
-    from .projects import load_projects
-
     # Same name-or-id resolution the ingest route uses (AIFactory sends the name).
-    projects = load_projects()
-    resolved_id = project_id
-    if project_id not in projects:
-        for pid, data in projects.items():
-            if data.get("name") == project_id:
-                resolved_id = pid
-                break
+    resolved_id = resolve_project_id(project_id)
+    if request is not None:
+        principal = getattr(request.state, "user", None)
+        db_session = db if isinstance(db, AsyncSession) else None
+        await require_project_role(principal, resolved_id, "member", db_session)
+    resolved_id = resolved_id or project_id
+    if req.repo_slug:
+        from .projects import load_projects  # noqa: PLC0415
 
+        entry = load_projects().get(resolved_id)
+        if (
+            entry
+            and entry.get("clonedFrom")
+            and (_github_slug(entry["clonedFrom"]) or "").lower()
+            != req.repo_slug.lower()
+        ):
+            raise HTTPException(404, "Project not found")
     spec_dir = _spec_dir(safe_component(resolved_id), safe_component(spec_id))
     source_path = spec_dir / "context" / "source.json"
     if not source_path.exists():
@@ -553,6 +642,19 @@ async def attach_pr(project_id: str, spec_id: str, req: PrAttachRequest) -> dict
         )
 
     source = json.loads(source_path.read_text())
+    repo_slug = req.repo_slug or source.get("repo_slug")
+    if repo_slug and request is not None:
+        import asyncio  # noqa: PLC0415
+
+        from .github import _get_repo_full_name  # noqa: PLC0415
+        from .projects import load_projects  # noqa: PLC0415
+
+        entry = load_projects().get(resolved_id)
+        bound_repo = _github_slug(entry.get("clonedFrom")) if entry else None
+        if not bound_repo and entry and entry.get("path"):
+            bound_repo = await asyncio.to_thread(_get_repo_full_name, entry["path"])
+        if (bound_repo or "").lower() != str(repo_slug).lower():
+            raise HTTPException(404, "Project not found")
     source["pr_number"] = req.pr_number
     if req.repo_slug:
         source["repo_slug"] = req.repo_slug

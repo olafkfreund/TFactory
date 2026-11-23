@@ -48,6 +48,31 @@ if not SDK_INSTALLED:
 
 from agents.tools_pkg.tools.task_control import create_task_control_tools  # noqa: E402
 
+
+@pytest.mark.asyncio
+async def test_local_tools_only_see_principal_org(
+    tools: dict, workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TFACTORY_PRINCIPAL_ORG_ID", "A")
+    created = await tools["project_create"](
+        {"id": "own", "name": "Own", "root_path": "/tmp/own"}
+    )
+    assert not created.get("isError")
+    assert json.loads(_content(created))["org_id"] == "A"
+    task = workspace / "workspaces" / "own" / "specs" / "s1"
+    task.mkdir(parents=True)
+    (task / "status.json").write_text(
+        json.dumps({"task_id": "s1", "project_id": "own"})
+    )
+    monkeypatch.setenv("TFACTORY_PRINCIPAL_ORG_ID", "B")
+    listed = await tools["project_list"]({})
+    assert "own" not in _content(listed)
+    assert "own" not in _content(await tools["task_list"]({}))
+    assert (await tools["task_status"]({"task_id": "s1", "project_id": "own"}))[
+        "isError"
+    ]
+
+
 # ── Fixtures ─────────────────────────────────────────────────────────────
 
 

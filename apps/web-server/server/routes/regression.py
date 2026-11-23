@@ -15,7 +15,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, status
+from fastapi import APIRouter, BackgroundTasks, Depends, status
+
+from server.routes.project_authz import ProjectAccessChecker
 
 # Make apps/backend importable for the regression read-model.
 _BACKEND = Path(__file__).resolve().parents[3] / "backend"
@@ -36,7 +38,10 @@ from ._specpath import safe_slug  # noqa: E402
 router = APIRouter(prefix="/api/projects", tags=["Regression"])
 
 
-@router.get("/{project_id}/regression")
+@router.get(
+    "/{project_id}/regression",
+    dependencies=[Depends(ProjectAccessChecker("viewer"))],
+)
 def get_regression_summary(project_id: str) -> dict[str, Any]:
     """Return the regression read-model for *project_id* (empty-but-valid if none)."""
     # project_id is interpolated into a filesystem path. ``safe_slug`` returns the
@@ -47,7 +52,11 @@ def get_regression_summary(project_id: str) -> dict[str, Any]:
     return project_regression_summary(reg)
 
 
-@router.post("/{project_id}/regression/run", status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/{project_id}/regression/run",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(ProjectAccessChecker("member"))],
+)
 def trigger_regression_run(
     project_id: str, background_tasks: BackgroundTasks
 ) -> dict[str, Any]:

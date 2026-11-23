@@ -24,6 +24,10 @@ from server.routes import tasks_logs  # noqa: E402
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
+    from server.config import get_settings
+    from server.routes import project_authz
+
+    monkeypatch.setattr(get_settings(), "DISABLE_AUTH", True)
     project_path = tmp_path / "proj"
     (project_path).mkdir()
     monkeypatch.setattr(
@@ -31,6 +35,7 @@ def client(tmp_path, monkeypatch):
         "load_projects",
         lambda: {"p1": {"path": str(project_path)}},
     )
+    monkeypatch.setattr(project_authz, "_load_projects", tasks_logs.load_projects)
     app = FastAPI()
     app.include_router(tasks_logs.router, prefix="/api/tasks")
     return TestClient(app), project_path
@@ -44,7 +49,7 @@ def test_watch_unwatch_stubs(client):
 
 def test_logs_invalid_task_id(client):
     cl, _ = client
-    assert cl.get("/api/tasks/no-colon/logs").status_code == 400
+    assert cl.get("/api/tasks/no-colon/logs").status_code == 404
 
 
 def test_logs_unknown_project(client):
