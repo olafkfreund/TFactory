@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.14.1 — UI test fixes for the project view (2026-11-23)
+
+### Fixed
+
+- **Backend (#1660, #1661):** the project env viewer no longer returns 403 and redacts secret values; runs and the rerun route are project-scoped; `GET /api/projects` returns `slug` and `repoLabel`.
+- **Frontend (#1660, #1662):** the Tests view is project-scoped, with a Failed (N) filter and Re-run/Dismiss actions; the app version is shown; Add Project has sensible defaults.
+- **Deps (#1658):** bump typescript-eslint to 8.73 for minimatch 11.
+
+### Added
+
+- **Specs (#1659):** `no_register` ingest, `planner_reason` and contract provenance fields (Factory#3865).
+
 ## 0.14.0 — Project-role enforcement and the project view (2026-11-23)
 
 ### Added
