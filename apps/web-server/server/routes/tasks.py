@@ -9,7 +9,7 @@ import json
 import re
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal, Optional, cast
 
 from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -736,7 +736,7 @@ def load_spec_metadata(spec_dir: Path) -> dict:
 
     for field in ("archivedAt", "archivedInVersion"):
         if metadata[field] is not None:
-            metadata["task_metadata"][field] = metadata[field]
+            cast(dict[str, Any], metadata["task_metadata"])[field] = metadata[field]
 
     # Surface the PARR correlation key (GitHub issue number) so the CFactory
     # cockpit can attach this TFactory task to its issue-keyed work item and

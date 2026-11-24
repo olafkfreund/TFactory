@@ -37,16 +37,13 @@ from fastapi import (
     Header,
     HTTPException,
     Query,
-)
-from fastapi import (
     Request as FastAPIRequest,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.database.engine import get_db
 from server.error_ref import client_error
-from server.routes import specs as specs_routes
-from server.routes import tfactory_tasks as tfactory_tasks_routes
+from server.routes import specs as specs_routes, tfactory_tasks as tfactory_tasks_routes
 from server.routes._specpath import safe_component
 from server.routes.project_authz import (
     creator_org,
@@ -57,9 +54,7 @@ from server.routes.project_authz import (
 )
 from server.routes.projects import ArchiveTasksRequest, archive_tasks
 from server.routes.specs import SpecIngestRequest
-
-from ..mcp_remote.auth import AuthenticatedKey
-from ..services.audit_service import (
+from server.services.audit_service import (
     ACTION_MCP_PROJECT_CREATE,
     ACTION_MCP_TASK_APPROVE_PLAN,
     ACTION_MCP_TASK_ARCHIVE,
@@ -71,6 +66,8 @@ from ..services.audit_service import (
     ACTION_MCP_TASK_STOP,
     log_audit_event_bg,
 )
+
+from ..mcp_remote.auth import AuthenticatedKey
 from .auth import (
     MCP_READ_SCOPE,
     PROJECT_WRITE_SCOPE,
@@ -471,7 +468,7 @@ async def proxy_archive_tasks(
             is None
         ):
             raise HTTPException(404, "Task not found")
-    archived_ids = []
+    archived_ids: list[str] = []
     for task_id in body.taskIds:
         try:
             await archive_tasks(
