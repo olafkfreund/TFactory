@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.14.6 — Project switcher fix and GHCR runtime base (2026-11-24)
+
+### Fixed
+
+- **Frontend (Factory#3887, #1688):** the top-bar project switcher no longer shows the pod filesystem path.
+
+### Changed
+
+- **CI (Factory#3880, #1682):** the runtime image base is hosted on GHCR (phase 1), so releases stop depending on Chainguard.
+- **Deps (#1684):** bump chainguard/python in /docker.
+
 ## 0.14.5 — Mobile top bar and auth comment (2026-11-23)
 
 ### Changed
