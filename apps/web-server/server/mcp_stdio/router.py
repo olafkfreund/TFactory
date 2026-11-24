@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -36,12 +37,16 @@ from fastapi import (
     Header,
     HTTPException,
     Query,
+)
+from fastapi import (
     Request as FastAPIRequest,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.database.engine import get_db
-from server.routes import specs as specs_routes, tfactory_tasks as tfactory_tasks_routes
+from server.error_ref import client_error
+from server.routes import specs as specs_routes
+from server.routes import tfactory_tasks as tfactory_tasks_routes
 from server.routes._specpath import safe_component
 from server.routes.project_authz import (
     creator_org,
@@ -50,12 +55,14 @@ from server.routes.project_authz import (
     resolve_task_project,
     visible_project_ids,
 )
+from server.routes.projects import ArchiveTasksRequest
 from server.routes.specs import SpecIngestRequest
 
 from ..mcp_remote.auth import AuthenticatedKey
 from ..services.audit_service import (
     ACTION_MCP_PROJECT_CREATE,
     ACTION_MCP_TASK_APPROVE_PLAN,
+    ACTION_MCP_TASK_ARCHIVE,
     ACTION_MCP_TASK_CREATE_AND_RUN,
     ACTION_MCP_TASK_CREATE_PR,
     ACTION_MCP_TASK_MERGE,
@@ -76,6 +83,7 @@ from .auth import (
 )
 
 router = APIRouter(prefix="/api/mcp-stdio", tags=["MCP (stdio)"])
+logger = logging.getLogger(__name__)
 
 
 async def _read_json_body(request: FastAPIRequest) -> dict:
@@ -438,6 +446,52 @@ async def proxy_get_spec_task(
             raise HTTPException(404, "Report not found")
         result["report"] = {"format": report, "body": report_path.read_text()}
     return result
+
+
+@router.post("/projects/{project_id}/tasks/archive")
+async def proxy_archive_tasks(
+    project_id: str,
+    body: ArchiveTasksRequest,
+    request: FastAPIRequest,
+    key: _WriteKey,
+    db: _Db,
+) -> dict[str, Any]:
+    resolved_id = _resolve_project(project_id)
+    if resolved_id is None:
+        raise HTTPException(404, "Project not found")
+    await _authorize_key(key, resolved_id, db, "member")
+    root = tfactory_tasks_routes._resolve_workspace_root()
+    spec_ids = []
+    for task_id in body.taskIds:
+        task_project, spec_id = resolve_task_project(task_id, {resolved_id})
+        if (
+            task_project != resolved_id
+            or tfactory_tasks_routes._find_spec_dir(
+                root, f"{resolved_id}:{spec_id}", {resolved_id}
+            )
+            is None
+        ):
+            raise HTTPException(404, "Task not found")
+        spec_ids.append(spec_id)
+    for spec_id in spec_ids:
+        try:
+            tfactory_tasks_routes.dismiss_run(spec_id, {resolved_id})
+        except HTTPException as exc:
+            if 400 <= exc.status_code < 500:
+                raise HTTPException(
+                    exc.status_code,
+                    client_error(logger, "could not archive task", exc),
+                ) from exc
+            raise
+    await _audit_mcp_write(
+        key,
+        ACTION_MCP_TASK_ARCHIVE,
+        "project",
+        resolved_id,
+        request,
+        details={"task_ids": body.taskIds},
+    )
+    return {"success": True, "archivedCount": len(spec_ids), "errors": None}
 
 
 @router.post("/tasks/{task_id}/start")

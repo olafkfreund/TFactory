@@ -22,7 +22,10 @@ from server.mcp_remote.auth import AuthenticatedKey  # noqa: E402
 from server.mcp_stdio.auth import MCP_READ_SCOPE, TASK_WRITE_SCOPE  # noqa: E402
 
 proxy = importlib.import_module("server.mcp_stdio.router")
-from server.services.audit_service import ACTION_MCP_TASK_CREATE_AND_RUN  # noqa: E402
+from server.services.audit_service import (  # noqa: E402
+    ACTION_MCP_TASK_ARCHIVE,
+    ACTION_MCP_TASK_CREATE_AND_RUN,
+)
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
 
 HEADERS = {"Authorization": "Bearer acw_test"}
@@ -223,3 +226,79 @@ def test_malformed_ids_never_touch_filesystem(env, monkeypatch):
     ):
         assert client.get(path, headers=HEADERS).status_code in (400, 404)
     assert calls == []
+
+
+def test_archive_dismisses_task_and_audits(env):
+    client, _, write_task, audits, _ = env
+    task_dir = write_task("p1", "s", "first")
+    response = client.post(
+        "/api/mcp-stdio/projects/p1/tasks/archive",
+        json={"taskIds": ["p1:s"]},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.json() == {"success": True, "archivedCount": 1, "errors": None}
+    assert json.loads((task_dir / "status.json").read_text())["dismissed"] is True
+    assert audits[-1]["action"] == ACTION_MCP_TASK_ARCHIVE
+
+
+def test_archive_refuses_foreign_or_wrong_project_before_writing(env):
+    client, set_key, write_task, audits, _ = env
+    task_dir = write_task("p1", "s", "first")
+    write_task("p2", "other", "second")
+    for path, task_ids in (
+        ("foreign", ["p1:s"]),
+        ("missing", ["p1:s"]),
+        ("p1", ["p1:s", "p2:other"]),
+    ):
+        response = client.post(
+            f"/api/mcp-stdio/projects/{path}/tasks/archive",
+            json={"taskIds": task_ids},
+            headers=HEADERS,
+        )
+        assert response.status_code == 404
+    set_key(org="B")
+    assert (
+        client.post(
+            "/api/mcp-stdio/projects/p1/tasks/archive",
+            json={"taskIds": ["p1:s"]},
+            headers=HEADERS,
+        ).status_code
+        == 404
+    )
+    set_key(user="viewer")
+    assert (
+        client.post(
+            "/api/mcp-stdio/projects/p1/tasks/archive",
+            json={"taskIds": ["p1:s"]},
+            headers=HEADERS,
+        ).status_code
+        == 403
+    )
+    assert "dismissed" not in json.loads((task_dir / "status.json").read_text())
+    assert not any(a["action"] == ACTION_MCP_TASK_ARCHIVE for a in audits)
+
+
+def test_archive_requires_task_write_scope(env):
+    client, set_key, write_task, audits, _ = env
+    task_dir = write_task("p1", "s", "first")
+    set_key(scopes={MCP_READ_SCOPE})
+    response = client.post(
+        "/api/mcp-stdio/projects/p1/tasks/archive",
+        json={"taskIds": ["p1:s"]},
+        headers=HEADERS,
+    )
+    assert response.status_code == 403
+    assert "dismissed" not in json.loads((task_dir / "status.json").read_text())
+    assert audits == []
+
+
+def test_archive_unknown_task_is_404(env):
+    client, _, _, audits, _ = env
+    response = client.post(
+        "/api/mcp-stdio/projects/p1/tasks/archive",
+        json={"taskIds": ["p1:missing"]},
+        headers=HEADERS,
+    )
+    assert response.status_code == 404
+    assert audits == []
