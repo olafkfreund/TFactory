@@ -5,8 +5,8 @@ under ``/api/mcp-stdio/*`` — each route gated by ``acw_`` key + scope.
 
 Every handler delegates to the same service the regular REST routes
 use. The proxy adds nothing but auth + audit: no URL rewriting, no
-payload transformation, no extra hop. If a delegated handler raises
-``HTTPException``, it propagates as-is (and no audit row is written).
+payload transformation, no extra hop. The archive route records completed
+writes even if a later task fails.
 
 Why import-and-call instead of HTTP-forwarding to the existing routes:
 - One process, no extra hop, no risk of an MCP request looping back
@@ -15,8 +15,8 @@ Why import-and-call instead of HTTP-forwarding to the existing routes:
 - Same code path, so behavior identity is mechanical.
 
 Audit logging (Epic #50 acceptance criterion #2):
-Each write route fires a background ``log_audit_event_bg`` call after
-the delegated handler returns successfully. Actions land under the
+Each write route fires a background ``log_audit_event_bg`` call for completed
+writes. Actions land under the
 ``mcp.*`` namespace (``mcp.task.start``, ``mcp.project.create``, etc.)
 so MCP-initiated mutations stay distinguishable from equivalent
 UI-driven actions in the audit log.
@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -41,6 +42,7 @@ from fastapi import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.database.engine import get_db
+from server.error_ref import client_error
 from server.routes import specs as specs_routes, tfactory_tasks as tfactory_tasks_routes
 from server.routes._specpath import safe_component
 from server.routes.project_authz import (
@@ -50,12 +52,12 @@ from server.routes.project_authz import (
     resolve_task_project,
     visible_project_ids,
 )
+from server.routes.projects import ArchiveTasksRequest, archive_tasks
 from server.routes.specs import SpecIngestRequest
-
-from ..mcp_remote.auth import AuthenticatedKey
-from ..services.audit_service import (
+from server.services.audit_service import (
     ACTION_MCP_PROJECT_CREATE,
     ACTION_MCP_TASK_APPROVE_PLAN,
+    ACTION_MCP_TASK_ARCHIVE,
     ACTION_MCP_TASK_CREATE_AND_RUN,
     ACTION_MCP_TASK_CREATE_PR,
     ACTION_MCP_TASK_MERGE,
@@ -64,6 +66,8 @@ from ..services.audit_service import (
     ACTION_MCP_TASK_STOP,
     log_audit_event_bg,
 )
+
+from ..mcp_remote.auth import AuthenticatedKey
 from .auth import (
     MCP_READ_SCOPE,
     PROJECT_WRITE_SCOPE,
@@ -76,6 +80,7 @@ from .auth import (
 )
 
 router = APIRouter(prefix="/api/mcp-stdio", tags=["MCP (stdio)"])
+logger = logging.getLogger(__name__)
 
 
 async def _read_json_body(request: FastAPIRequest) -> dict:
@@ -438,6 +443,61 @@ async def proxy_get_spec_task(
             raise HTTPException(404, "Report not found")
         result["report"] = {"format": report, "body": report_path.read_text()}
     return result
+
+
+@router.post("/projects/{project_id}/tasks/archive")
+async def proxy_archive_tasks(
+    project_id: str,
+    body: ArchiveTasksRequest,
+    request: FastAPIRequest,
+    key: _WriteKey,
+    db: _Db,
+) -> dict[str, Any]:
+    resolved_id = _resolve_project(project_id)
+    if resolved_id is None:
+        raise HTTPException(404, "Project not found")
+    await _authorize_key(key, resolved_id, db, "member")
+    root = tfactory_tasks_routes._resolve_workspace_root()
+    for task_id in body.taskIds:
+        task_project, spec_id = resolve_task_project(task_id, {resolved_id})
+        if (
+            task_project != resolved_id
+            or tfactory_tasks_routes._find_spec_dir(
+                root, f"{resolved_id}:{spec_id}", {resolved_id}
+            )
+            is None
+        ):
+            raise HTTPException(404, "Task not found")
+    archived_ids: list[str] = []
+    for task_id in body.taskIds:
+        try:
+            await archive_tasks(
+                resolved_id, body.model_copy(update={"taskIds": [task_id]})
+            )
+        except Exception as exc:
+            if archived_ids:
+                await _audit_mcp_write(
+                    key,
+                    ACTION_MCP_TASK_ARCHIVE,
+                    "project",
+                    resolved_id,
+                    request,
+                    details={"task_ids": archived_ids},
+                )
+            raise HTTPException(
+                exc.status_code if isinstance(exc, HTTPException) else 500,
+                client_error(logger, "could not archive task", exc),
+            ) from exc
+        archived_ids.append(task_id)
+    await _audit_mcp_write(
+        key,
+        ACTION_MCP_TASK_ARCHIVE,
+        "project",
+        resolved_id,
+        request,
+        details={"task_ids": archived_ids},
+    )
+    return {"success": True, "archivedCount": len(archived_ids), "errors": None}
 
 
 @router.post("/tasks/{task_id}/start")
