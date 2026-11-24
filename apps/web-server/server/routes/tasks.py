@@ -734,6 +734,10 @@ def load_spec_metadata(spec_dir: Path) -> dict:
     else:
         metadata["task_metadata"] = {}
 
+    for field in ("archivedAt", "archivedInVersion"):
+        if metadata[field] is not None:
+            metadata["task_metadata"][field] = metadata[field]
+
     # Surface the PARR correlation key (GitHub issue number) so the CFactory
     # cockpit can attach this TFactory task to its issue-keyed work item and
     # render the test-stage lane (#94). Stored per spec (RFC-0002 contract /

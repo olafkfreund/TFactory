@@ -5,8 +5,8 @@ under ``/api/mcp-stdio/*`` — each route gated by ``acw_`` key + scope.
 
 Every handler delegates to the same service the regular REST routes
 use. The proxy adds nothing but auth + audit: no URL rewriting, no
-payload transformation, no extra hop. If a delegated handler raises
-``HTTPException``, it propagates as-is (and no audit row is written).
+payload transformation, no extra hop. The archive route records completed
+writes even if a later task fails.
 
 Why import-and-call instead of HTTP-forwarding to the existing routes:
 - One process, no extra hop, no risk of an MCP request looping back
@@ -15,8 +15,8 @@ Why import-and-call instead of HTTP-forwarding to the existing routes:
 - Same code path, so behavior identity is mechanical.
 
 Audit logging (Epic #50 acceptance criterion #2):
-Each write route fires a background ``log_audit_event_bg`` call after
-the delegated handler returns successfully. Actions land under the
+Each write route fires a background ``log_audit_event_bg`` call for completed
+writes. Actions land under the
 ``mcp.*`` namespace (``mcp.task.start``, ``mcp.project.create``, etc.)
 so MCP-initiated mutations stay distinguishable from equivalent
 UI-driven actions in the audit log.
@@ -55,7 +55,7 @@ from server.routes.project_authz import (
     resolve_task_project,
     visible_project_ids,
 )
-from server.routes.projects import ArchiveTasksRequest
+from server.routes.projects import ArchiveTasksRequest, archive_tasks
 from server.routes.specs import SpecIngestRequest
 
 from ..mcp_remote.auth import AuthenticatedKey
@@ -461,7 +461,6 @@ async def proxy_archive_tasks(
         raise HTTPException(404, "Project not found")
     await _authorize_key(key, resolved_id, db, "member")
     root = tfactory_tasks_routes._resolve_workspace_root()
-    spec_ids = []
     for task_id in body.taskIds:
         task_project, spec_id = resolve_task_project(task_id, {resolved_id})
         if (
@@ -472,26 +471,36 @@ async def proxy_archive_tasks(
             is None
         ):
             raise HTTPException(404, "Task not found")
-        spec_ids.append(spec_id)
-    for spec_id in spec_ids:
+    archived_ids = []
+    for task_id in body.taskIds:
         try:
-            tfactory_tasks_routes.dismiss_run(spec_id, {resolved_id})
-        except HTTPException as exc:
-            if 400 <= exc.status_code < 500:
-                raise HTTPException(
-                    exc.status_code,
-                    client_error(logger, "could not archive task", exc),
-                ) from exc
-            raise
+            await archive_tasks(
+                resolved_id, body.model_copy(update={"taskIds": [task_id]})
+            )
+        except Exception as exc:
+            if archived_ids:
+                await _audit_mcp_write(
+                    key,
+                    ACTION_MCP_TASK_ARCHIVE,
+                    "project",
+                    resolved_id,
+                    request,
+                    details={"task_ids": archived_ids},
+                )
+            raise HTTPException(
+                exc.status_code if isinstance(exc, HTTPException) else 500,
+                client_error(logger, "could not archive task", exc),
+            ) from exc
+        archived_ids.append(task_id)
     await _audit_mcp_write(
         key,
         ACTION_MCP_TASK_ARCHIVE,
         "project",
         resolved_id,
         request,
-        details={"task_ids": body.taskIds},
+        details={"task_ids": archived_ids},
     )
-    return {"success": True, "archivedCount": len(spec_ids), "errors": None}
+    return {"success": True, "archivedCount": len(archived_ids), "errors": None}
 
 
 @router.post("/tasks/{task_id}/start")
