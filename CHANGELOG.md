@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.14.7 — mcp-stdio tasks archive proxy (2026-11-24)
+
+### Added
+
+- **mcp-stdio (#1687, Factory#3882 step 1b, #1689):** proxy routes for the factory CLI, including the tasks archive proxy that `factory archive tf:` needs.
+
 ## 0.14.6 — Project switcher fix and GHCR runtime base (2026-11-24)
 
 ### Fixed
