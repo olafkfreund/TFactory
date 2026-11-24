@@ -1415,7 +1415,9 @@ async def get_project_task_logs(project_id: str, spec_id: str):
 class ArchiveTasksRequest(BaseModel):
     """Request to archive tasks."""
 
-    taskIds: list[str] = Field(..., description="List of task IDs to archive")
+    taskIds: list[str] = Field(
+        ..., min_length=1, description="List of task IDs to archive"
+    )
     version: str | None = Field(
         None, description="Version tag for the archive (e.g., 'v1.2.0')"
     )
