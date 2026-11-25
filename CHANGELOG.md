@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.14.8 — top-bar project dropdown fix (2026-11-25)
+
+### Fixed
+
+- **ui (Factory#3903, #1694, #1696):** the project dropdown is no longer clipped by the top bar, and the page name is no longer truncated next to the project pill.
+
 ## 0.14.7 — mcp-stdio tasks archive proxy (2026-11-24)
 
 ### Added
