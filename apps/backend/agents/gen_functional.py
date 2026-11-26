@@ -38,7 +38,10 @@ import logging as _logging
 import os
 import re
 import traceback
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
+from contextlib import suppress
+from copy import deepcopy
+from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -48,9 +51,19 @@ from agents.workspace_status import now_iso, read_status, write_status_patch
 if TYPE_CHECKING:
     from agents.criterion_authority import AuthorityResult
     from agents.criterion_literals import LiteralDriftResult
+    from framework_registry import FrameworkDescriptor
     from test_plan import ImplementationPlan, Subtask
 
 _gen_log = _logging.getLogger(__name__)
+
+REGEN_SUFFIX = "-regen1"
+
+
+@dataclass(frozen=True)
+class GeneratedTest:
+    test_id: str
+    test_file: str
+    subtask: dict[str, Any]
 
 
 # ─── Workspace helpers — shared via agents.workspace_status (#451).
@@ -383,7 +396,7 @@ def _resolve_runner_fn(framework_descriptor=None):
     return _run
 
 
-def _resolve_framework_descriptor(subtask):
+def _resolve_framework_descriptor(subtask: object) -> "FrameworkDescriptor | None":
     """Look up the FrameworkDescriptor for this subtask's ``framework`` field.
 
     For polyglot v0.2 subtasks (``subtask.framework`` is set) the descriptor
@@ -1106,6 +1119,117 @@ def _code_values(source: str, subtask: object) -> set[Decimal]:
     from agents.criterion_literals import code_values  # noqa: PLC0415 - lazy
 
     return code_values(source, getattr(subtask, "language", None))
+
+
+def _regenerated_test_path(original: Path) -> Path:
+    if not original.name or original.is_absolute() or ".." in original.parts:
+        raise ValueError("original test path must be relative to the spec directory")
+    suffix = REGEN_SUFFIX.replace("-", "_", 1)
+    if original.name.endswith("_test.go"):
+        return original.with_name(
+            original.name.removesuffix("_test.go") + suffix + "_test.go"
+        )
+    stem, dot, extension = original.name.partition(".")
+    return original.with_name(stem + suffix + dot + extension)
+
+
+async def regenerate_test(
+    task_dir: Path,
+    subtask: Mapping[str, Any],
+    brief: str,
+    *,
+    project_dir: Path,
+    verbose: bool = False,
+) -> GeneratedTest | None:
+    """Generate and guard one replacement within the evaluator's pass."""
+    cleanup_path: Path | None = None
+    try:
+        files = subtask.get("files_to_create")
+        original_id = subtask.get("id")
+        if (
+            not isinstance(files, list)
+            or not files
+            or not isinstance(files[0], str)
+            or not original_id
+            or not isinstance(original_id, str)
+        ):
+            return None
+        replacement = _regenerated_test_path(Path(files[0]))
+        test_path = task_dir / replacement
+        task_root = await asyncio.to_thread(task_dir.resolve)
+        if (
+            test_path.is_symlink()
+            or test_path.exists()
+            or not test_path.parent.resolve().is_relative_to(task_root)
+        ):
+            return None
+
+        from prompts_pkg.prompts import (  # noqa: PLC0415 - lazy for SDK dependencies
+            get_tfactory_gen_functional_prompt,
+        )
+        from test_plan import Subtask  # noqa: PLC0415 - lazy like the main generator
+
+        test_id = original_id + REGEN_SUFFIX
+        test_file = replacement.as_posix()
+        replacement_data = deepcopy(dict(subtask))
+        replacement_data.update(
+            id=test_id, files_to_create=[test_file], status="completed"
+        )
+        replacement_subtask = Subtask.from_dict(replacement_data)
+
+        framework_descriptor = _resolve_framework_descriptor(replacement_subtask)
+        # Regeneration uses the single-step prompt because the brief supplies the context.
+        prompt = (
+            get_tfactory_gen_functional_prompt(
+                task_dir,
+                project_dir,
+                replacement_data,
+                framework_descriptor=framework_descriptor,
+                step="single",
+            )
+            + "\n\n"
+            + brief
+        )
+
+        cleanup_path = test_path
+        client = await _resolve_client(task_dir, project_dir)
+        session_status, _, _ = await _invoke_session(client, prompt, task_dir, verbose)
+        if (
+            session_status == "error"
+            or test_path.is_symlink()
+            or not test_path.is_file()
+        ):
+            return None
+
+        async def _retry(feedback: str) -> str:
+            retry_client = await _resolve_client(task_dir, project_dir)
+            status, _, _ = await _invoke_session(
+                retry_client, prompt + feedback, task_dir, verbose
+            )
+            if status == "error" or test_path.is_symlink():
+                raise RuntimeError("replacement import repair session failed")
+            return status
+
+        await _repair_imports(
+            task_dir, project_dir, replacement_subtask, test_file, _retry
+        )
+        source = test_path.read_text()
+        _record_unresolvable_imports(
+            task_dir, replacement_subtask, source, project_dir, project_dir / test_file
+        )
+        if _source_guardrail_rejection(replacement_subtask, source, project_dir):
+            return None
+
+        result = GeneratedTest(test_id, test_file, replacement_data)
+        cleanup_path = None
+        return result
+    except Exception as exc:  # noqa: BLE001 - keep the original reject on any failure
+        _gen_log.warning("gen_functional: replacement generation failed: %s", exc)
+        return None
+    finally:
+        if cleanup_path is not None:
+            with suppress(OSError):
+                cleanup_path.unlink(missing_ok=True)
 
 
 async def _generate_one_subtask(
