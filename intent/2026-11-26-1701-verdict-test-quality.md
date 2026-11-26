@@ -1,5 +1,5 @@
 ---
-status: approved
+status: draft
 issue: 1701
 author: olafkfreund
 ---
@@ -47,25 +47,30 @@ Two existing edges also matter:
 
 ## Proposed outcome
 
-- **Test-quality problems leave the merge decision when the evidence is deterministic.** `flaky`,
-  `survived`, lint promotion, low relevance and `new_lines == 0` come from measured signals, not
-  from an LLM opinion. A test rejected only for these is excluded from the verdicts AIFactory
-  consumes. It is still dropped from the commit and still shown in the report and the PR comment.
-- **A failing assertion stays a product failure unless its invalidity is proven.** A test that
-  "contradicts the spec" is excluded only when both of these hold:
-  - every judge in the vote agrees;
-  - the contradiction is checked against the contract's acceptance criteria by something other
-    than the judge's own claim.
+Owner decision (2026-11-26), revised after the spec reviews: **regenerate, don't exclude.** Both
+reviewers showed that removing a failing test from the verdict can also remove a real product
+failure. That applies to flaky, mutation-survived and lint signals, and even to a unanimous "contradicts
+spec" quote. So no failing test is ever removed from the verdict.
 
-  If either is missing, the test stays `reject` and fails the gate.
-- **Coverage floor.** A pass needs at least one accepted or flagged test for every acceptance
-  criterion that had a generated test. If excluding tests leaves a criterion without evidence, the
-  result is no trusted verdict, not a pass.
-- **A product failure reaches AIFactory as `fail`, not `None`.** A run whose remaining verdicts are
-  all `reject` is a real failure, and AIFactory sees it that way.
-- **AIFactory's gate is unchanged** (owner decision, 2026-11-26): `reject` still means fail.
-- **Live proof:** E2E P1 passes for a correct build, AIFactory merges the PR (S4), and S5 reports
-  the verdict on the merge SHA. A deliberately wrong build still fails.
+- **A suspected-invalid test is regenerated, not excluded.** When every judge in the vote says a
+  consistently failing test contradicts a quoted acceptance criterion, TFactory doesn't record a
+  final verdict for it. It sends that subtask back through the existing replan path
+  (`context/replan_request.json`, Planner replan mode, with the existing per-subtask and global
+  replan caps). The replan request carries the quoted criterion and the reason.
+- **Only a passing, regenerated test can turn the verdict green.** The regenerated test is judged
+  like any other test. If it passes, it is accepted. If the regenerated test still fails, or the
+  replan cap is reached, the verdict is `reject` and AIFactory reads `fail`.
+- **No other rule changes the verdict.** Flaky, survived, lint and low-relevance rejects stay
+  `reject`, as today. The vote's fail-closed behaviour is unchanged.
+- **A product failure reaches AIFactory as `fail`, not `None`.** A run whose final verdicts are all
+  `reject` ends as `triaged`, so AIFactory reads `fail`, and its completion envelope says failure.
+- **AIFactory's gate is unchanged** (owner decision): `reject` means fail.
+- **Visibility:** the report and the PR comment show any test that was regenerated, the quoted
+  criterion, and what happened to the regenerated test.
+- **Live proof:**
+  - E2E P1 with a correct build: a contradicting generated test is regenerated, the regenerated
+    test passes, AIFactory merges the PR (S4), and S5 reports the verdict on the merge SHA.
+  - A deliberately wrong build still fails.
 
 ## Affected users and systems
 
@@ -88,24 +93,14 @@ Two existing edges also matter:
 
 ## Open questions
 
-1. **Where exclusion happens.** Proposed: as a deterministic step after the vote, with excluded
-   rows moved to a top-level `excluded` list. The vote, enrichment and traceability keep seeing
-   every test. The Triager, the report and the PR comment are taught to show `excluded`.
-   Rejected: a new verdict value, because AIFactory reads an unknown value as `None` for the
-   whole run.
-2. **How a spec contradiction is proven.** Options:
-   - (a) a unanimous vote, plus the cited acceptance-criterion text quoted exactly and matched in
-     the contract;
-   - (b) a separate deterministic AC-fidelity check, if `ac_fidelity` or `criterion_authority`
-     can decide it;
-   - (c) never exclude for spec contradiction in this fix, and only handle the deterministic
-     signals.
-
-   (a) is proposed, with (c) as the fallback if (a) proves unreliable in tests. Note that the
-   run-`m` case is exactly a spec contradiction, so (c) alone wouldn't unblock P1.
-3. **Precedence.** When a test is both flaky or `survived` and fails consistently on an
-   assertion, proposed: the failure wins, and the test stays `reject`.
-4. **Regenerating an excluded test** to restore coverage of its criterion is a follow-up.
-
-Already decided: a judge call that errors counts as a deny, as it does today. An evaluation that
-fails as a whole gives no trusted verdict.
+1. **Where the regeneration trigger lives.** The judge's contradiction claim is only known after the
+   vote. So the evaluator, after the vote, writes the replan request for those subtasks instead of
+   finishing. The evaluator must then return to the Planner for those subtasks only, without
+   re-running the ones that are already decided. The spec has to show that this loop exists or can
+   reuse the generation-time `criterion_literals` path.
+2. **Trigger strictness.** The proposal: a unanimous vote with at least 2 calls, where every call
+   quotes a criterion found in the plan's AC text. A quote that doesn't match never triggers a
+   replan, so the test stays `reject`. A false trigger costs only one regeneration, because the new
+   test still has to pass, so the trigger can be stricter than an exclusion would need to be
+   without any risk of a false green.
+3. **Cost.** At most one regeneration per subtask per run, within the existing caps.
