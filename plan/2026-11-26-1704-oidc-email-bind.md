@@ -49,3 +49,13 @@ The verify commands above.
 ## Rollback
 
 Revert the PR. The unverified bind comes back.
+
+## Deviations
+
+- `oidc_routes.py` uses `datetime.UTC` at 3 existing call sites. `origin/dev` failed plain
+  `ruff check` (UP017) on this file, so the touched file needed it to pass. The import of
+  `jit_provision_user` is now absolute.
+- `OIDCBindRefused` carries `# noqa: N818`, because the spec fixes the name.
+- A bound account has `password_hash == ""`, like every JIT user. A local `/login` then fails
+  (passlib `UnknownHashError`, most likely a 401 or 500 path), which is the same as for JIT users
+  today.
