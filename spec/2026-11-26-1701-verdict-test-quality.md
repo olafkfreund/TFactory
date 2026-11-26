@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1701
 intent: intent/2026-11-26-1701-verdict-test-quality.md
 ---
