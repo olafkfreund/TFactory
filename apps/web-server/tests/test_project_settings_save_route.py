@@ -4,6 +4,7 @@ import sys
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -74,8 +75,10 @@ def settings_response(
     payload = projects.ProjectSettings().model_dump(mode="json")
     payload.update(graphitiMcpEnabled=True, graphitiMcpUrl="http://localhost:3102/mcp/")
     with TestClient(app) as client:
-        response: Response = client.patch("/api/projects/known/settings", json=payload)
-        return response
+        # cast: TestClient may come from a different httpx build than the imported Response type
+        return cast(
+            "Response", client.patch("/api/projects/known/settings", json=payload)
+        )
 
 
 @pytest.mark.parametrize(
