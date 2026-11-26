@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1702
 intent: intent/2026-11-26-1702-settings-save-role.md
 ---
