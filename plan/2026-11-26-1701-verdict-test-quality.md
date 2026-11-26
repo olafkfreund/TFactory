@@ -146,3 +146,16 @@ Revert the PR. Rejects become final again, and reject-only runs report `triaged_
 
   Follow-up issues: the portal colours an all-reject `triaged` run green; the AC fidelity ledger
   doesn't map `<id>-regen1` to its subtask.
+- Fix round done: `regenerate_test` and the PENDING loop share `_generate_and_guard` (two-step
+  flow, criterion-value guard, import repair, preflight, flake lint); the brief is in every prompt.
+- Fix round done: the same-build guard snapshots `git status` plus file hashes; a change outside
+  the replacement files keeps every original (`kept_reject`, `checkout_changed`), nothing restored.
+- **Guard scope (lead fix after the wave 3b verify).** The checkout snapshot skips
+  `<project>/.tfactory/`, which is TFactory's own spec workspace, status and findings, and not
+  product code. Without that, its own `status.json` write made every regeneration end in
+  `checkout_changed` in the standard layout, where it is untracked and not ignored. This is tested
+  with the spec dir inside the checkout.
+- **Known limit.** Edits to gitignored files, such as `dist/`, `.env` and build output, are
+  invisible to the guard, because `git status` doesn't list them, yet the pytest and jest lanes
+  copy them into scratch. Adding `--ignored` would trip on runner artefacts. This is accepted: it
+  is the same exposure normal generation has.

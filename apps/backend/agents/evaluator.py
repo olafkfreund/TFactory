@@ -40,11 +40,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging as _logging
 import os
 import re
 import shutil
+import stat
 import subprocess
 import traceback
 from collections import Counter
@@ -1795,7 +1797,12 @@ def _maybe_run_build(spec_dir: Path, project_dir: Path) -> None:
         _eval_log.warning("build step execution skipped: %s", exc)
 
 
-def _stage_browser_test(spec_dir: Path, project_dir: Path, subtask: dict) -> None:
+def _stage_browser_test(
+    spec_dir: Path,
+    project_dir: Path,
+    subtask: dict,
+    staged_tests: set[Path] | None = None,
+) -> None:
     """Copy the generated test from the workspace into the project checkout so
     the playwright runner (which mounts project_dir at /repo) can see it."""
     import shutil as _sh
@@ -1806,6 +1813,8 @@ def _stage_browser_test(spec_dir: Path, project_dir: Path, subtask: dict) -> Non
     if src.exists():
         dst.parent.mkdir(parents=True, exist_ok=True)
         _sh.copy2(src, dst)
+        if staged_tests is not None:
+            staged_tests.add(Path(project_dir).resolve() / rel)
 
 
 def _stage_visual_baselines(
@@ -2217,7 +2226,12 @@ def _go_top_level_names(text: str, *, funcs_only: bool = False) -> set[str]:
     return names
 
 
-def _stage_go_test(spec_dir: Path, project_dir: Path, subtask: dict) -> None:
+def _stage_go_test(
+    spec_dir: Path,
+    project_dir: Path,
+    subtask: dict,
+    staged_tests: set[Path] | None = None,
+) -> None:
     """Copy a Go subtask's generated ``_test.go`` files from the workspace into
     the worktree at their repo-relative paths, so ``go test ./...`` (which runs
     over the co-mounted worktree) sees them next to the code they exercise.
@@ -2242,6 +2256,8 @@ def _stage_go_test(spec_dir: Path, project_dir: Path, subtask: dict) -> None:
         dst.parent.mkdir(parents=True, exist_ok=True)
         if not is_go:
             _sh.copy2(src, dst)
+            if staged_tests is not None:
+                staged_tests.add(root / rel)
             continue
         gen = src.read_text(errors="replace")
         if dst.exists() and dst.read_text(errors="replace") == gen:
@@ -2263,6 +2279,8 @@ def _stage_go_test(spec_dir: Path, project_dir: Path, subtask: dict) -> None:
             target = dst.with_name(f"{stem}_tfgen{n}_test.go")
         if not target.is_symlink() and target.resolve().is_relative_to(root):
             target.write_text(gen)
+            if staged_tests is not None:
+                staged_tests.add((root / rel).with_name(target.name))
 
 
 _GO_LITERAL_OR_NAME = r"\"(?:\\.|[^\"\\\n])*\"|`[^`]*`|'(?:\\.|[^'\\\n])+'|//[^\n]*"
@@ -3096,6 +3114,8 @@ def _build_all_bundles(  # noqa: PLR0912, PLR0913 - one branch and list per lane
     java=(),
     shell=(),
     rust=(),
+    *,
+    staged_tests: set[Path] | None = None,
 ) -> list:
     """Compute the per-test signal bundle for every completed subtask.
 
@@ -3112,7 +3132,7 @@ def _build_all_bundles(  # noqa: PLR0912, PLR0913 - one branch and list per lane
     for st in browser:
         # Stage the generated spec into the checkout so the Playwright runner
         # (mounts project_dir at /repo) can see it.
-        _stage_browser_test(spec_dir, project_dir, st)
+        _stage_browser_test(spec_dir, project_dir, st, staged_tests)
         bundles.append(
             _build_kube_or_static_bundle(
                 spec_dir,
@@ -3152,7 +3172,7 @@ def _build_all_bundles(  # noqa: PLR0912, PLR0913 - one branch and list per lane
         # Stage every generated _test.go into the worktree first, then run the
         # module: `go test ./...` must see all of them on every stability pass.
         for st in go:
-            _stage_go_test(spec_dir, project_dir, st)
+            _stage_go_test(spec_dir, project_dir, st, staged_tests)
         go_runner = _resolve_go_runner_fn(spec_dir, project_dir)
         # `go test ./...` is MODULE-WIDE, so its 3× stability result is identical
         # for every Go unit subtask in the module. Compute it ONCE and share it,
@@ -3178,7 +3198,7 @@ def _build_all_bundles(  # noqa: PLR0912, PLR0913 - one branch and list per lane
         from agents import nix_env  # noqa: PLC0415
 
         for st in kotlin:
-            _stage_go_test(spec_dir, project_dir, st)
+            _stage_go_test(spec_dir, project_dir, st, staged_tests)
         kotlin_runner = _resolve_kotlin_runner_fn(spec_dir, project_dir)
         bundles += _jvm_bundles(
             spec_dir,
@@ -3194,7 +3214,7 @@ def _build_all_bundles(  # noqa: PLR0912, PLR0913 - one branch and list per lane
         from agents import nix_env  # noqa: PLC0415
 
         for st in java:
-            _stage_go_test(spec_dir, project_dir, st)
+            _stage_go_test(spec_dir, project_dir, st, staged_tests)
         java_runner = _resolve_java_runner_fn(spec_dir, project_dir)
         resolver = (
             nix_env._maven_module_dir
@@ -3212,7 +3232,7 @@ def _build_all_bundles(  # noqa: PLR0912, PLR0913 - one branch and list per lane
         # bats and shellcheck cover a whole project: stage every generated
         # .bats first, then one shared 3x pass per project root (#1581).
         for st in shell:
-            _stage_go_test(spec_dir, project_dir, st)
+            _stage_go_test(spec_dir, project_dir, st, staged_tests)
         bundles += _shell_bundles(
             spec_dir,
             project_dir,
@@ -3223,7 +3243,7 @@ def _build_all_bundles(  # noqa: PLR0912, PLR0913 - one branch and list per lane
         # `cargo test --workspace` covers a whole crate: one 3x pass per crate
         # root, each subtask graded on its own tests/<name>.rs target (#1578).
         for st in rust:
-            _stage_go_test(spec_dir, project_dir, st)
+            _stage_go_test(spec_dir, project_dir, st, staged_tests)
         bundles += _rust_bundles(
             spec_dir, project_dir, rust, _resolve_rust_runner_fn(spec_dir, project_dir)
         )
@@ -3512,6 +3532,75 @@ def _git_head(project_dir: Path) -> str | None:
         return None
 
 
+_CheckoutSnapshot = list[tuple[Path, bytes, str | None]]
+
+
+def _checkout_path_hash(path: Path) -> str | None:
+    if path.parent.resolve() != path.parent:
+        return None  # A tracked path can disappear behind a parent symlink.
+    try:
+        mode = path.lstat().st_mode
+    except (FileNotFoundError, NotADirectoryError):
+        return None  # Git reports deleted paths too.
+    if stat.S_ISLNK(mode):
+        return hashlib.sha256(os.fsencode(path.readlink())).hexdigest()
+    if not stat.S_ISREG(mode):
+        raise ValueError("cannot hash checkout entry")
+    with path.open("rb") as f:
+        return hashlib.file_digest(f, "sha256").hexdigest()
+
+
+def _checkout_snapshot(
+    project_dir: Path, excluded: Iterable[Path] = ()
+) -> _CheckoutSnapshot | None:
+    try:
+        root = project_dir.resolve()
+        result = subprocess.run(  # noqa: S603 - fixed argv for a local read
+            [  # noqa: S607 - use Git from PATH, as in _git_head
+                "git",
+                "-C",
+                str(root),
+                "status",
+                "--porcelain",
+                "--untracked-files=all",
+                "-z",
+                # Report both sides of renames independently for path filtering.
+                "--no-renames",
+            ],
+            capture_output=True,
+            check=True,
+            timeout=30,
+        )
+        snapshot: _CheckoutSnapshot = []
+        # TFactory's own state (spec workspace, status.json, findings) is not product.
+        state_dir = root / ".tfactory"
+        for entry in result.stdout.split(b"\0")[:-1]:
+            path = root / os.fsdecode(entry[3:])
+            if path not in excluded and not path.is_relative_to(state_dir):
+                snapshot.append((path, entry[:2], _checkout_path_hash(path)))
+        return snapshot
+    except (OSError, subprocess.SubprocessError, ValueError, RuntimeError):
+        return None
+
+
+def _mark_checkout_changes(
+    project_dir: Path,
+    before: _CheckoutSnapshot | None,
+    excluded: set[Path],
+    attempted: bool,
+    entries: list[dict[str, Any]],
+) -> bool:
+    if not attempted or before is None:
+        return False
+    if _checkout_snapshot(project_dir, excluded) == [
+        entry for entry in before if entry[0] not in excluded
+    ]:
+        return False
+    for entry in entries:
+        entry["reason"] = "checkout_changed"
+    return True
+
+
 def _prepare_replacement(
     spec_dir: Path,
     subtask: dict[str, Any],
@@ -3625,11 +3714,13 @@ async def _collect_replacements(  # noqa: PLR0913 - track paths before generatio
     list[dict[str, Any]],
     list[tuple[GeneratedTest, dict[str, Any], str | None]],
     str | None,
+    _CheckoutSnapshot | None,
 ]:
     from agents import gen_functional  # noqa: PLC0415 - lazy SDK import
 
     plan = _read_plan(spec_dir) or {}
     head = _git_head(project_dir)
+    checkout = _checkout_snapshot(project_dir) if head is not None else None
     cap = regeneration.MAX_REGENERATIONS_PER_RUN
     entries: list[dict[str, Any]] = []
     generated: list[tuple[GeneratedTest, dict[str, Any], str | None]] = []
@@ -3646,11 +3737,14 @@ async def _collect_replacements(  # noqa: PLR0913 - track paths before generatio
         if candidate.quoted_ac is not None:
             entry["quoted_ac"] = candidate.quoted_ac
         entries.append(entry)
-        if i > cap:
-            entry["reason"] = f"over the per-run regeneration cap ({cap})"
-            continue
         if head is None:
             entry["reason"] = "git HEAD unreadable"
+            continue
+        if checkout is None:
+            entry["reason"] = "git checkout unreadable"
+            continue
+        if i > cap:
+            entry["reason"] = f"over the per-run regeneration cap ({cap})"
             continue
         subtask = _resolve_subtask(plan, row)
         if subtask is None:
@@ -3684,7 +3778,7 @@ async def _collect_replacements(  # noqa: PLR0913 - track paths before generatio
             raise ValueError(f"invalid replacement for {candidate.test_id}")
         entry["replacement_id"] = gen.test_id
         generated.append((gen, entry, subtask.get("lane")))
-    return entries, generated, head
+    return entries, generated, head, checkout
 
 
 def _merge_replacement_rows(
@@ -3752,17 +3846,20 @@ async def _run_regeneration_pass(  # noqa: PLR0913 - use the caller's rollback s
         return
 
     attempted: dict[Path, dict[str, Any]] = {}
+    workspace = await asyncio.to_thread(spec_dir.resolve)
     verdicts_written = False
     try:
-        entries, generated, head = await _collect_replacements(
+        entries, generated, head, checkout = await _collect_replacements(
             spec_dir, project_dir, doc, eligible, verbose, attempted
         )
         final_rows = list(rows)
+        staged_tests: set[Path] = set()
+        replacements: list[EvaluatorSignals] = []
         if generated:
             mini_plan = {
                 "phases": [{"subtasks": [gen.subtask for gen, _, _ in generated]}]
             }
-            replacements: list[EvaluatorSignals] = _build_all_bundles(
+            replacements = _build_all_bundles(
                 spec_dir,
                 project_dir,
                 _completed_functional_subtasks(mini_plan),
@@ -3774,7 +3871,15 @@ async def _run_regeneration_pass(  # noqa: PLR0913 - use the caller's rollback s
                 _completed_java_subtasks(mini_plan),
                 _completed_shell_subtasks(mini_plan),
                 _completed_rust_subtasks(mini_plan),
+                staged_tests=staged_tests,
             )
+        excluded = staged_tests | {
+            workspace / path.relative_to(spec_dir) for path in attempted
+        }
+        checkout_changed = _mark_checkout_changes(
+            project_dir, checkout, excluded, bool(attempted), entries
+        )
+        if generated and not checkout_changed:
             if _git_head(project_dir) != head:
                 raise RuntimeError(
                     "git HEAD changed while generating replacement evidence"

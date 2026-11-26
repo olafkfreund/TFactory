@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -62,6 +63,8 @@ def scenario(tmp_path, monkeypatch):
         built=[],
         replacement_bundles=[],
         heads=[],
+        checkout_edit=None,
+        stage_replacement=False,
     )
     spec = tmp_path / "spec"
     project = tmp_path / "project"
@@ -69,9 +72,30 @@ def scenario(tmp_path, monkeypatch):
     findings.mkdir(parents=True)
     (spec / "tests").mkdir()
     project.mkdir()
+    git = ["git", "-C", str(project)]
+    subprocess.run([*git, "init", "-q", "--template="], check=True)
+    (project / "product.py").write_text("# committed product")
+    subprocess.run([*git, "add", "product.py"], check=True)
+    subprocess.run(
+        [
+            *git,
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "commit",
+            "-qm",
+            "fixture",
+            "--no-gpg-sign",
+        ],
+        check=True,
+    )
     verdicts = findings / "verdicts.json"
     state.findings = findings
     state.spec = spec
+    state.project = project
     state.verdicts = verdicts
     monkeypatch.setenv("TFACTORY_AUTO_TRIAGE", "0")
 
@@ -165,12 +189,17 @@ def scenario(tmp_path, monkeypatch):
             dict(subtask, id=replacement_id, files_to_create=[test_file]),
         )
 
-    def build(spec_dir, project_dir, *lanes):
+    def build(spec_dir, project_dir, *lanes, staged_tests=None):
         assert spec_dir == spec and project_dir == project
         subtasks = [subtask for lane in lanes for subtask in lane]
         assert subtasks
         assert all(st["id"].endswith("-regen1") for st in subtasks)
         state.built.extend(st["id"] for st in subtasks)
+        if state.checkout_edit is not None:
+            state.checkout_edit.write_text("# changed during regeneration")
+        if state.stage_replacement:
+            for st in subtasks:
+                evaluator._stage_browser_test(spec_dir, project_dir, st, staged_tests)
         if state.failure == "build_raise":
             raise RuntimeError("signal runner failed")
         if state.failure == "no_bundles":
@@ -234,6 +263,68 @@ def scenario(tmp_path, monkeypatch):
     monkeypatch.setattr(confidence, "enrich_verdicts", enrich)
     state.run = run
     return state
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tracked", [True, False])
+@pytest.mark.parametrize("already_dirty", [True, False])
+async def test_product_checkout_change_keeps_all_originals(
+    scenario: SimpleNamespace, tracked: bool, already_dirty: bool
+) -> None:
+    scenario.ids = ["a", "b"]
+    product_file = scenario.project / ("product.py" if tracked else "untracked.txt")
+    if already_dirty:
+        product_file.write_text("# dirty before regeneration")
+    scenario.checkout_edit = product_file
+
+    result = await scenario.run()
+
+    first_rows = json.loads(scenario.first)["verdicts"]
+    assert result["verdicts"] == first_rows
+    outcomes = [(e["outcome"], e["reason"]) for e in result["regenerated"]]
+    assert outcomes == [("kept_reject", "checkout_changed")] * len(scenario.ids)
+    violation = regeneration.check_merge_invariant(
+        first_rows, result["verdicts"], result["regenerated"]
+    )
+    assert violation is None
+    assert len(scenario.calls) == scenario.votes
+    assert product_file.read_text() == "# changed during regeneration"
+    assert not list(scenario.spec.rglob("*_regen1*"))
+
+
+@pytest.mark.asyncio
+async def test_tfactory_state_inside_checkout_is_not_a_product_change(
+    scenario: SimpleNamespace,
+) -> None:
+    # The spec workspace normally lives in <project>/.tfactory, untracked and not ignored.
+    scenario.lane = "browser"
+    scenario.stage_replacement = True
+    state_file = scenario.project / ".tfactory" / "specs" / "001" / "status.json"
+    state_file.parent.mkdir(parents=True)
+    state_file.write_text("{}")
+    scenario.checkout_edit = state_file
+
+    result = await scenario.run()
+
+    [entry] = result["regenerated"]
+    assert entry["outcome"] == "replaced"
+    assert entry["reason"] != "checkout_changed"
+
+
+@pytest.mark.asyncio
+async def test_staged_replacement_allows_second_vote(scenario: SimpleNamespace) -> None:
+    scenario.lane = "browser"
+    scenario.stage_replacement = True
+
+    result = await scenario.run()
+
+    [row] = result["verdicts"]
+    [entry] = result["regenerated"]
+    assert entry["outcome"] == "replaced"
+    assert entry["reason"] != "checkout_changed"
+    assert row["test_id"] == "original-regen1"
+    assert (scenario.project / row["test_file"]).read_text() == "# replacement"
+    assert len(scenario.calls) == 2 * scenario.votes
 
 
 @pytest.mark.asyncio
