@@ -45,6 +45,7 @@ import logging as _logging
 import os
 import re
 import shutil
+import subprocess
 import traceback
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
@@ -52,6 +53,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
+from agents import regeneration
 from agents.confidence import add_system_reason, set_system_reasons
 from agents.preflight_static import package_root_rel_paths, requirements_files
 from agents.run_result import RunResultLike
@@ -59,6 +61,7 @@ from agents.verdict_vote import majority_vote
 from tfactory_secrets.redaction import scrub_log_text
 
 if TYPE_CHECKING:
+    from agents.gen_functional import GeneratedTest
     from tools.runners.docker_runner import DockerRunResult
 
 # Cohesive helpers extracted to focused modules (issue #450, god-file split).
@@ -3438,6 +3441,376 @@ async def _merge_voted_verdicts(
     return doc, summary
 
 
+def _enrich_evaluator_verdicts(
+    spec_dir: Path,
+    doc: dict[str, Any],
+    bundles: list[EvaluatorSignals],
+    *,
+    strict: bool = False,
+) -> None:
+    """Apply the same deterministic confidence and scope to either vote."""
+    from agents.confidence import enrich_verdicts  # noqa: PLC0415 - lazy by design
+
+    flaky_by_test_id = {}
+    # Deterministic import-vs-assertion classification for a
+    # consistent_fail (#629) — fixes the `reasons` narrative regardless
+    # of what the judge LLM guessed. Only populated when stability
+    # actually ran and landed on CONSISTENT_FAIL.
+    failure_kind_by_test_id = {}
+    for b in bundles:
+        fh = getattr(b, "flaky_history", None)
+        if fh is not None:
+            try:
+                flaky_by_test_id[b.test_id] = fh.as_dict()
+            except Exception:
+                if strict:
+                    raise
+                _eval_log.debug(
+                    "evaluator: skipping malformed flaky_history for %s",
+                    b.test_id,
+                    exc_info=True,
+                )
+        stability = getattr(b, "stability", None)
+        failure_kind = getattr(stability, "failure_kind", None) if stability else None
+        if failure_kind is not None:
+            failure_kind_by_test_id[b.test_id] = {
+                "failure_kind": failure_kind,
+                "rerun_count": getattr(stability, "rerun_count", 3),
+                # The underlying exception line (#892) — so the reason names
+                # the missing module instead of just its bucket.
+                "failure_detail": getattr(stability, "failure_detail", None),
+                # pytest exit 2 = collection error: the test never executed.
+                "returncode": getattr(
+                    getattr(stability, "runs", [None])[0], "returncode", None
+                ),
+            }
+    enrich_verdicts(doc, flaky_by_test_id, failure_kind_by_test_id)
+    # Honor the RFC-0002 contract execution scope (#247): record declared
+    # coverage_target / mutation_scope / security_scope into the run output.
+    try:
+        from agents.contract_scope import apply_execution_scope  # noqa: PLC0415
+        from agents.task_contract import read_tfactory_profile  # noqa: PLC0415
+
+        apply_execution_scope(doc, read_tfactory_profile(spec_dir))
+    except Exception as exc:
+        if strict:
+            raise
+        _eval_log.warning("contract scope skipped: %s", exc)
+
+
+def _git_head(project_dir: Path) -> str | None:
+    try:
+        result = subprocess.run(  # noqa: S603 - fixed argv for a local read
+            ["git", "-C", str(project_dir), "rev-parse", "HEAD"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        )
+        return result.stdout.strip() or None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
+def _prepare_replacement(
+    spec_dir: Path,
+    subtask: dict[str, Any],
+    candidate: regeneration.Candidate,
+    row: dict[str, Any],
+) -> tuple[Path, str] | None:
+    from agents import gen_functional  # noqa: PLC0415 - lazy SDK import
+
+    files = subtask.get("files_to_create")
+    if not isinstance(files, list) or not files or not isinstance(files[0], str):
+        return None
+    replacement = spec_dir / gen_functional._regenerated_test_path(Path(files[0]))
+    root = spec_dir.resolve()
+    if not replacement.parent.resolve().is_relative_to(root):
+        return None
+    replacement.unlink(missing_ok=True)
+
+    source = "(source unavailable)"
+    original = (spec_dir / (row.get("test_file") or files[0])).resolve()
+    if original.is_relative_to(root) and original == (spec_dir / files[0]).resolve():
+        with contextlib.suppress(FileNotFoundError):
+            source = original.read_text()
+    criterion = candidate.ac_text or (
+        subtask.get("criterion")
+        or subtask.get("rationale")
+        or subtask.get("description")
+    )
+    quote = f"Quoted AC: {candidate.quoted_ac}\n" if candidate.quoted_ac else ""
+    brief = (
+        f"Regenerate {candidate.test_id}. Reason kind: {candidate.reason_kind}\n"
+        f"Rejection reasons: {json.dumps(row.get('reasons'))}\n"
+        f"{quote}Acceptance criterion: {criterion}\n"
+        "Assert the acceptance criterion's behaviour fully, including ordering "
+        "and edge cases targeted by the original. Never weaken an expectation "
+        "to make the test pass.\n\n"
+        f"Original test source:\n{source}"
+    )
+    return replacement, brief
+
+
+def _archive_first_pass_votes(findings: Path, n: int) -> None:
+    for i in range(n):
+        current = findings / f"verdicts.vote{i}.json"
+        archived = findings / f"verdicts.pass1.vote{i}.json"
+        archived.unlink(missing_ok=True)
+        if current.exists():
+            current.rename(archived)
+
+
+def _replacement_prompt(
+    spec_dir: Path,
+    project_dir: Path,
+    bundles: list[EvaluatorSignals],
+    entries: list[dict[str, Any]],
+) -> str:
+    from prompts_pkg.prompts import get_tfactory_evaluator_prompt  # noqa: PLC0415
+
+    context = [
+        {
+            "replacement_id": entry["replacement_id"],
+            "original_id": entry["original"]["test_id"],
+            "original_test_file": entry["original"].get("test_file"),
+            "rejection_reasons": entry["original"].get("reasons"),
+            **({"quoted_ac": entry["quoted_ac"]} if "quoted_ac" in entry else {}),
+        }
+        for entry in entries
+    ]
+    return (
+        get_tfactory_evaluator_prompt(spec_dir, project_dir, bundles)
+        + "\n\n## REPLACEMENTS\n"
+        "Each listed test replaces a previously rejected test. A replacement "
+        "must assert the originally targeted behaviour at least as strongly "
+        "as the original. Accept only then, otherwise reject.\n"
+        + json.dumps(context, indent=2)
+    )
+
+
+async def _judge_replacements(  # noqa: PLR0913 - vote and enrichment share the evidence
+    spec_dir: Path,
+    project_dir: Path,
+    bundles: list[EvaluatorSignals],
+    entries: list[dict[str, Any]],
+    verbose: bool,
+    n: int,
+) -> dict[str, Any] | None:
+    prompt = _replacement_prompt(spec_dir, project_dir, bundles, entries)
+    _archive_first_pass_votes(spec_dir / "findings", n)
+    docs, _ = await _collect_judge_docs(spec_dir, project_dir, prompt, verbose, n)
+    if all(doc is None for doc in docs):
+        return None
+    doc: dict[str, Any] | None
+    if n > 1:
+        doc, _summary = await _merge_voted_verdicts(
+            docs, {b.test_id: str(b.test_file) for b in bundles}
+        )
+    else:
+        doc = docs[0]
+    if doc is not None:
+        _enrich_evaluator_verdicts(spec_dir, doc, bundles, strict=True)
+    return doc
+
+
+async def _collect_replacements(  # noqa: PLR0913 - track paths before generation awaits
+    spec_dir: Path,
+    project_dir: Path,
+    doc: dict[str, Any],
+    eligible: list[regeneration.Candidate],
+    verbose: bool,
+    attempted: dict[Path, dict[str, Any]],
+) -> tuple[
+    list[dict[str, Any]],
+    list[tuple[GeneratedTest, dict[str, Any], str | None]],
+    str | None,
+]:
+    from agents import gen_functional  # noqa: PLC0415 - lazy SDK import
+
+    plan = _read_plan(spec_dir) or {}
+    head = _git_head(project_dir)
+    cap = regeneration.MAX_REGENERATIONS_PER_RUN
+    entries: list[dict[str, Any]] = []
+    generated: list[tuple[GeneratedTest, dict[str, Any], str | None]] = []
+    for i, candidate in enumerate(eligible, start=1):
+        row = _entry_for(doc, candidate.test_id)
+        if row is None or row.get("verdict") != "reject":
+            raise ValueError(f"ambiguous original reject for {candidate.test_id}")
+        entry: dict[str, Any] = {
+            "original": dict(row),
+            "reason_kind": candidate.reason_kind,
+            "replacement_id": None,
+            "outcome": "kept_reject",
+        }
+        if candidate.quoted_ac is not None:
+            entry["quoted_ac"] = candidate.quoted_ac
+        entries.append(entry)
+        if i > cap:
+            entry["reason"] = f"over the per-run regeneration cap ({cap})"
+            continue
+        if head is None:
+            entry["reason"] = "git HEAD unreadable"
+            continue
+        subtask = _resolve_subtask(plan, row)
+        if subtask is None:
+            entry["reason"] = "original subtask missing"
+            continue
+        _write_status_patch(
+            spec_dir,
+            status="evaluating",
+            phase=f"evaluator_regenerating_{i}_of_{min(cap, len(eligible))}",
+        )
+        prepared = _prepare_replacement(spec_dir, subtask, candidate, row)
+        if prepared is None:
+            entry["reason"] = "original test path unavailable"
+            continue
+        replacement, brief = prepared
+        if replacement in attempted:
+            raise ValueError(f"duplicate replacement path for {candidate.test_id}")
+        attempted[replacement] = entry
+        gen = await gen_functional.regenerate_test(
+            spec_dir, subtask, brief, project_dir=project_dir, verbose=verbose
+        )
+        if gen is None:
+            entry["reason"] = "no replacement generated"
+            continue
+        if (
+            gen.test_id != f"{candidate.test_id}{gen_functional.REGEN_SUFFIX}"
+            or spec_dir / gen.test_file != replacement
+            or replacement.is_symlink()
+            or not replacement.is_file()
+        ):
+            raise ValueError(f"invalid replacement for {candidate.test_id}")
+        entry["replacement_id"] = gen.test_id
+        generated.append((gen, entry, subtask.get("lane")))
+    return entries, generated, head
+
+
+def _merge_replacement_rows(
+    spec_dir: Path,
+    final_rows: list[dict[str, Any]],
+    generated: list[tuple[GeneratedTest, dict[str, Any], str | None]],
+    bundles: list[EvaluatorSignals],
+    second: dict[str, Any] | None,
+) -> None:
+    by_id = {bundle.test_id: bundle for bundle in bundles}
+    for gen, entry, lane in generated:
+        bundle = by_id.get(gen.test_id)
+        row = _entry_for(second, gen.test_id)
+        if bundle is None:
+            entry["reason"] = "replacement bundle missing"
+            continue
+        if second is None:
+            entry["reason"] = "replacement vote failed"
+            continue
+        if row is None or row.get("judged") is False:
+            entry["reason"] = "replacement verdict missing"
+            continue
+        if not (spec_dir / gen.test_file).is_file():
+            entry["reason"] = "a selected replacement is missing"
+            continue
+        counts, cap_at_flag, reason = regeneration.replacement_gate(row, bundle, lane)
+        entry["reason"] = reason
+        if not counts:
+            continue
+        replacement = dict(
+            row,
+            test_id=gen.test_id,
+            test_file=gen.test_file,
+            lane=lane,
+            regenerated_from=entry["original"]["test_id"],
+        )
+        if cap_at_flag and replacement["verdict"] == "accept":
+            replacement["verdict"] = "flag"
+            add_system_reason(replacement, reason)
+        final_rows.remove(entry["original"])
+        final_rows.append(replacement)
+        entry["outcome"] = "replaced"
+
+
+async def _run_regeneration_pass(  # noqa: PLR0913 - use the caller's rollback snapshot
+    spec_dir: Path,
+    project_dir: Path,
+    bundles: list[EvaluatorSignals],
+    docs: list[dict[str, Any] | None],
+    verbose: bool,
+    pass1: bytes,
+) -> None:
+    doc: dict[str, Any] = json.loads(pass1)
+    rows: list[dict[str, Any]] = doc["verdicts"]
+    n = len(docs)
+    findings = spec_dir / "findings"
+    vote_docs = regeneration.load_vote_docs(findings, n) if n > 1 else []
+    for i, raw_doc in enumerate(docs):
+        if n > 1 and raw_doc is None:
+            vote_docs[i] = None  # A crashed call may have a stale vote file.
+    eligible = regeneration.eligible_candidates(
+        rows, bundles, vote_docs, regeneration.load_ac_texts(spec_dir)
+    )
+    if not eligible:
+        return
+
+    attempted: dict[Path, dict[str, Any]] = {}
+    verdicts_written = False
+    try:
+        entries, generated, head = await _collect_replacements(
+            spec_dir, project_dir, doc, eligible, verbose, attempted
+        )
+        final_rows = list(rows)
+        if generated:
+            mini_plan = {
+                "phases": [{"subtasks": [gen.subtask for gen, _, _ in generated]}]
+            }
+            replacements: list[EvaluatorSignals] = _build_all_bundles(
+                spec_dir,
+                project_dir,
+                _completed_functional_subtasks(mini_plan),
+                _completed_browser_subtasks(mini_plan),
+                _completed_api_subtasks(mini_plan),
+                _completed_jest_subtasks(mini_plan),
+                _completed_go_subtasks(mini_plan),
+                _completed_kotlin_subtasks(mini_plan),
+                _completed_java_subtasks(mini_plan),
+                _completed_shell_subtasks(mini_plan),
+                _completed_rust_subtasks(mini_plan),
+            )
+            if _git_head(project_dir) != head:
+                raise RuntimeError(
+                    "git HEAD changed while generating replacement evidence"
+                )
+            expected = Counter(gen.test_id for gen, _, _ in generated)
+            actual = Counter(bundle.test_id for bundle in replacements)
+            if actual - expected:
+                raise ValueError("unexpected or duplicate replacement bundles")
+            second = None
+            if replacements:
+                second = await _judge_replacements(
+                    spec_dir,
+                    project_dir,
+                    replacements,
+                    [entry for gen, entry, _ in generated if gen.test_id in actual],
+                    verbose,
+                    n,
+                )
+            _merge_replacement_rows(
+                spec_dir, final_rows, generated, replacements, second
+            )
+
+        violation = regeneration.check_merge_invariant(rows, final_rows, entries)
+        if violation is not None:
+            raise ValueError(violation)
+        doc["verdicts"] = final_rows
+        doc["regenerated"] = entries
+        (findings / "verdicts.json").write_text(json.dumps(doc, indent=2))
+        verdicts_written = True
+    finally:
+        for path, entry in attempted.items():
+            if not verdicts_written or entry["outcome"] != "replaced":
+                with contextlib.suppress(OSError):
+                    path.unlink(missing_ok=True)
+
+
 async def _run_evaluator_session(
     spec_dir: Path,
     project_dir: Path,
@@ -3486,64 +3859,27 @@ async def _run_evaluator_session(
     else:
         count = len((docs[0] or {}).get("verdicts") or [])
 
-    # Stamp deterministic confidence + flaky-history onto each verdict + a
-    # run-level rollup (#238, #239). Best-effort: a scoring hiccup must never
-    # fail an otherwise valid evaluation — the categorical verdicts already
-    # passed validation. The flaky map (cross-run flip-rate) comes from the
-    # signal bundles and drives both the confidence penalty and the
-    # accept→flag override inside enrich_verdicts.
+    # The first vote already passed validation, so enrichment is best effort.
     try:
-        from agents.confidence import enrich_verdicts
-
-        flaky_by_test_id = {}
-        # Deterministic import-vs-assertion classification for a
-        # consistent_fail (#629) — fixes the `reasons` narrative regardless
-        # of what the judge LLM guessed. Only populated when stability
-        # actually ran and landed on CONSISTENT_FAIL.
-        failure_kind_by_test_id = {}
-        for b in bundles:
-            fh = getattr(b, "flaky_history", None)
-            if fh is not None:
-                try:
-                    flaky_by_test_id[b.test_id] = fh.as_dict()
-                except Exception:  # noqa: BLE001 — skip a malformed entry
-                    _eval_log.debug(
-                        "evaluator: skipping malformed flaky_history for %s",
-                        b.test_id,
-                        exc_info=True,
-                    )
-            stability = getattr(b, "stability", None)
-            failure_kind = (
-                getattr(stability, "failure_kind", None) if stability else None
-            )
-            if failure_kind is not None:
-                failure_kind_by_test_id[b.test_id] = {
-                    "failure_kind": failure_kind,
-                    "rerun_count": getattr(stability, "rerun_count", 3),
-                    # The underlying exception line (#892) — so the reason names
-                    # the missing module instead of just its bucket.
-                    "failure_detail": getattr(stability, "failure_detail", None),
-                    # pytest exit 2 = collection error: the test never executed.
-                    "returncode": getattr(
-                        getattr(stability, "runs", [None])[0], "returncode", None
-                    ),
-                }
         doc = json.loads(verdicts_path.read_text())
-        enrich_verdicts(doc, flaky_by_test_id, failure_kind_by_test_id)
-        # Honor the RFC-0002 contract execution scope (#247): record declared
-        # coverage_target / mutation_scope / security_scope into the run output.
-        try:
-            from agents.contract_scope import apply_execution_scope
-            from agents.task_contract import read_tfactory_profile
-
-            apply_execution_scope(doc, read_tfactory_profile(spec_dir))
-        except Exception as exc:  # noqa: BLE001 — scope is additive metadata
-            _eval_log.warning("contract scope skipped: %s", exc)
+        _enrich_evaluator_verdicts(spec_dir, doc, bundles)
         verdicts_path.write_text(json.dumps(doc, indent=2))
     except Exception as exc:  # noqa: BLE001 — confidence is additive metadata
         _eval_log.warning("confidence/flaky enrichment skipped: %s", exc)
 
     _apply_lane_attribution(spec_dir, verdicts_path)
+
+    pass1 = verdicts_path.read_bytes()
+    try:
+        await _run_regeneration_pass(
+            spec_dir, project_dir, bundles, docs, verbose, pass1
+        )
+    except Exception:  # noqa: BLE001 - keep the first-pass verdicts on failure
+        _eval_log.exception("evaluator regeneration failed")
+        verdicts_path.write_bytes(pass1)
+    except BaseException:
+        verdicts_path.write_bytes(pass1)
+        raise
 
     # Vote splits ride on status.json so the Triager's completion envelope
     # surfaces them (calibration hook, #649 step 5).
