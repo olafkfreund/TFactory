@@ -95,8 +95,9 @@ async def jit_provision_user(
       3. Create a new User when the email has no match.
 
     Always ensures an OrganizationMember row exists in the configured
-    default org with the claim-mapped role. Updates the role on every
-    login so IdP-side group changes propagate immediately.
+    default org with the claim-mapped role, except that the recorded org
+    owner keeps the owner role. Updates the role on every login so
+    IdP-side group changes propagate immediately.
     """
     sub = userinfo["sub"]
     email = userinfo["email"]
@@ -142,6 +143,8 @@ async def jit_provision_user(
 
     # Ensure OrganizationMember row exists with the current role.
     org = await _get_or_create_default_org(db, user)
+    # The recorded org owner keeps owner rights regardless of the IdP claim (#1702).
+    member_role = "owner" if org.owner_id == user.id else role
     result = await db.execute(
         select(OrgMember).where(
             OrgMember.org_id == org.id, OrgMember.user_id == user.id
@@ -149,19 +152,21 @@ async def jit_provision_user(
     )
     membership = result.scalar_one_or_none()
     if membership is None:
-        membership = OrgMember(org_id=org.id, user_id=user.id, role=role)
+        membership = OrgMember(org_id=org.id, user_id=user.id, role=member_role)
         db.add(membership)
         await db.commit()
-        logger.info("OIDC added user %s to org %s with role %s", email, org.slug, role)
-    elif membership.role != role:
+        logger.info(
+            "OIDC added user %s to org %s with role %s", email, org.slug, member_role
+        )
+    elif membership.role != member_role:
         # IdP-side role changed; sync.
-        membership.role = role
+        membership.role = member_role
         await db.commit()
         logger.info(
             "OIDC updated role for user %s in org %s: %s",
             email,
             org.slug,
-            role,
+            member_role,
         )
 
     return user

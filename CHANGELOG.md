@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.14.9 - 2026-11-26
+
+Merged to `dev` since 0.14.8.
+
+### Fixed
+
+- Verify Job names end in a 12-hex hash of the full job id, and the verify reaper leaves a row alone when the Job under its name belongs to another job id. (Factory#3922, #1699)
+
 ## Unreleased
 
 ## 0.14.8 — top-bar project dropdown fix (2026-11-25)
