@@ -113,3 +113,36 @@ The verify commands above, plus the full `tests/` suite once at the end, compare
 ## Rollback
 
 Revert the PR. Rejects become final again, and reject-only runs report `triaged_empty`.
+
+## Deviations (wave 3)
+
+- **`regeneration.py`** holds selection (step 1) and, added in step 3, the pure
+  `replacement_gate` and `check_merge_invariant`. The plan put the gate in `evaluator.py`.
+- **Stricter than the spec:**
+  - a contradiction quote needs at least 12 normalized characters (`MIN_QUOTE_CHARS`);
+  - an unknown or missing lane is gated as a unit lane, so its mutation must be `killed`;
+  - on browser, api and integration lanes, only `not_run` is allowed, capped at `flag`.
+- **`regenerate_test` is async** and adds the keyword arguments `project_dir` and `verbose`.
+- **Replacement files.** A replacement is written to its own file (`test_x_regen1.py`,
+  `foo_regen1_test.go`), and the original is never overwritten. Stale or unused `_regen1` files
+  are deleted.
+- **Added safety:**
+  - a merge invariant is checked before the final write;
+  - an unreadable git HEAD skips regeneration, so every candidate is `kept_reject`;
+  - the merge is per test, so siblings proceed when one replacement fails;
+  - any exception or cancellation restores the first-pass `verdicts.json` bytes.
+- **Replacement rows** carry `regenerated_from` and `lane`.
+- **`_load_verdicts_or_fail`** returns the whole document, so the triager can read
+  `regenerated`.
+- **Shared enrichment.** Enrichment was extracted into `_enrich_evaluator_verdicts`: best-effort
+  in pass 1, strict in pass 2.
+- **Step 4 also edited** `tests/test_gate_honesty.py` (the registry needs a refusal proof for
+  `product_failed`) and `docs/completion-event-envelope.md`.
+- **Fix round (from the verify), to be done before release:**
+  - `regenerate_test` must use the same generation path as the PENDING loop, including the
+    two-step `TFACTORY_GEN_TWO_STEP` assertion-first flow and its guards;
+  - the same-build guard must also refuse regeneration that leaves the product checkout dirty
+    outside the replacement test file.
+
+  Follow-up issues: the portal colours an all-reject `triaged` run green; the AC fidelity ledger
+  doesn't map `<id>-regen1` to its subtask.
