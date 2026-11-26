@@ -56,3 +56,12 @@ The verify commands above pass, along with the full `apps/web-server/tests/test_
 ## Rollback
 
 Revert the PR. The owner is demoted again at the next login, and the generic error returns.
+
+## Deviations
+
+- **The reproduction test needed fixing for the ratchet.** `test_project_settings_save_route.py`
+  was committed with the issue, before the plan existed. It got an ARG001 noqa for its
+  side-effect fixture and mypy `--strict` annotations, so the CI ratchet passes.
+- **Known behaviour, from the approved decision.** Demoting the recorded owner through the
+  member-role API does not change `org.owner_id`, so that user is `owner` again at their next
+  login. A real ownership transfer moves `owner_id` and behaves correctly.
