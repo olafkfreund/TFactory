@@ -1,186 +1,166 @@
 ---
 status: draft
-superseded: true  # exclusion design rejected 2026-11-26; see intent (regenerate, planned)
 issue: 1701
 intent: intent/2026-11-26-1701-verdict-test-quality.md
 ---
 
-# Spec: exclude proven-invalid tests from the verdict, keep product failures failing
+# Spec: regenerate test-quality rejects inside the evaluator; an all-reject run reports failure
+
+This replaces the earlier, superseded exclusion draft. All paths are under `apps/backend/agents/`
+unless stated otherwise.
+
+## Why not the Planner's replan path
+
+The code map rules it out:
+
+- **Shared request file:** `context/replan_request.json` is one file (`gen_functional.py:293`), so
+  concurrent requests overwrite each other.
+- **Shared budget:** `_GLOBAL_REPLAN_BUDGET = 12` is shared by the whole run (`planner.py:882`),
+  so regenerations could spend it and fail the run.
+- **Stuck counter:** `_STUCK_AFTER_REPLANS` counts per original subtask (`planner.py:562`), so a
+  regenerated test can be marked stuck.
+- **Full re-evaluation:** the evaluator re-runs every completed subtask, build step included
+  (`evaluator.py:3742-3769`).
+- **No watchdog:** `replan_needed` is outside the liveness watchdog (`liveness.py:40-42`).
+
+Regeneration is therefore a **bounded pass inside `_run_evaluator_session`**. It reuses the same
+build and runs in the same verify Job. Its status stays `evaluating`, which is a watched status.
 
 ## Design
 
-The code map has one key finding: the deterministic test-quality signals live only in the
-`EvaluatorSignals` bundles (`agents/evaluator.py` ~line 691). Bundles carry `stability`,
-`mutation`, `lint_promotion` and `flaky_history`. Verdict rows hold copies the LLM wrote, and
-nothing in code enforces the prompt's reject rules. **Exclusion therefore reads bundles, never row
-fields.**
+### 1. What counts for regeneration (new module `regeneration.py`, pure functions)
 
-### 1. New module `agents/verdict_exclusion.py`
+`select_candidates(final_verdicts, bundles, vote_docs, ac_texts) -> list[Candidate]` runs on the
+final verdicts, after the vote, `enrich_verdicts`, `apply_execution_scope` and lane attribution
+(`evaluator.py:~3546`). Only rows with `verdict == "reject"` and a bundle with the same `test_id`
+qualify.
 
-```python
-def apply_exclusions(doc: dict, bundles: list[EvaluatorSignals], ac_texts: list[str]) -> dict
-```
+**A test-quality reject regenerates.** That is a reject whose bundle `stability.verdict` is
+`stable` (the test passed) or `flaky`. Low relevance, a surviving mutation, lint promotion,
+`new_lines == 0` and flakiness are all covered, because none of them means the product failed.
 
-The evaluator calls this in `_run_evaluator_session`, after `enrich_verdicts` and
-`apply_execution_scope` and before `_apply_lane_attribution` (~line 3533). `bundles` is in scope
-there, and row ids still equal bundle ids at that point.
+**A possible product failure regenerates only on a contradiction.** That is `stability.verdict ==
+consistent_fail` with `failure_kind == "assertion"`. All of the following must hold:
 
-**Overwrite first.** `doc["excluded"]` is first set to `[]`, discarding any `excluded` key a judge
-wrote.
+- the vote has at least 2 calls and none of them crashed;
+- every raw call in `verdicts.vote{i}.json` rejects that test with a new optional field
+  `spec_contradiction: {"criterion": "<quote>"}`;
+- each quote, after collapsing whitespace and lowercasing, is a substring of the same AC text, from
+  `test_plan.json` phase names `AC#N: …` or the contract's `final_acceptance`.
 
-**Which rows it considers.** Only rows with `verdict == "reject"`, `judged` not `False`, and a
-bundle with the same `test_id`. Unjudged rows (crashes, a fail-closed vote) are never excluded.
+**Never a candidate:**
 
-**`product_failure` comes first.** A row is a product failure when its bundle's
-`stability.verdict` is `CONSISTENT_FAIL` and `failure_kind` is `assertion`. Such a row stays
-`reject` unless the spec-contradiction rule below is met. When both rules apply, the failure
-wins, which answers the intent's precedence question.
+- `error`, `not_run` and infra rows;
+- unjudged rows, with `judged` set to `False`;
+- a `consistent_fail` whose `failure_kind` is not `assertion`;
+- anything without a bundle.
 
-**Measured quality rules.** A non-product-failure row moves to `excluded` with
-`exclusion = {"kind": <k>, "evidence": <short fixed string>}` when its bundle shows one of these:
+**Caps:** at most `MAX_REGENERATIONS_PER_RUN = 3` candidates, chosen in a stable order by
+`test_id`, and one attempt per original test. Any rejects over the cap stay `reject`.
 
-| `kind` | Bundle signal |
-|---|---|
-| `flaky` | `flaky_history.classification == "flaky"` (flip_rate > 0), or `stability.verdict == FLAKY` |
-| `mutation_survived` | `mutation.verdict == SURVIVED` |
-| `lint_rejected` | `lint_promotion.should_reject is True` |
+### 2. Generating a replacement (`gen_functional.py`)
 
-**Not excluded, stays `reject`.** Two of the intent's signals aren't measured, so this fix doesn't
-exclude them:
+A new function, `regenerate_test(task_dir, subtask, brief) -> GeneratedTest | None`, generates
+exactly one replacement test for the original subtask. It reuses Gen-Functional's existing
+per-subtask generation session, the same function the PENDING loop uses. It does not touch the
+plan, `replan_request.json` or the replan caps.
 
-- **Low semantic relevance:** only the LLM provides it.
-- **`new_lines == 0`:** no baseline is written, so `CoverageDelta.new_lines` is unavailable.
+The brief carries:
 
-**Spec contradiction**, `kind: "spec_contradiction"`. A `CONSISTENT_FAIL` assertion row moves to
-`excluded` only when all of these hold:
+- the original test's code;
+- its rejection reasons, kind and quoted AC;
+- the AC text;
+- the instruction to assert the AC's behaviour fully, including ordering and edge cases the
+  original targeted.
 
-1. The row has a `vote` block, so the vote count is 2 or more. `TFACTORY_VERDICT_VOTES=1` never
-   qualifies.
-2. The split is unanimous for reject.
-3. **Every** call's row carries `spec_contradiction.criterion`. That field is a new, optional
-   field the judge writes when it claims the test contradicts the spec.
-4. Each quoted criterion, after collapsing whitespace and lowercasing, is a substring of one of
-   the `ac_texts`.
+The replacement's `test_id` is `<original>-regen1`, so it is never confused with the original.
 
-`ac_texts` are the `AC#N: <text>` phase names from `test_plan.json`, plus the contract's
-`final_acceptance` items when present.
+### 3. Judging the replacement (`evaluator.py`)
 
-`evidence` holds the matched AC label, for example `"AC#3"`, never the free-text reasons.
+After candidate selection, each replacement goes through a narrow pass:
 
-**Carrying each call's quote through the vote.** `_merge_voted_verdicts` (~line 3355) adds
-`vote.contradictions`: one list entry per call, holding that call's quoted criterion or `None`.
+- **Bundles for the replacements only.** They are built from the existing workspace at the same
+  `source_sha`, with **no build step** (the build guard asserts that git HEAD is unchanged).
+- **The same judge vote,** using the same prompt plus the rule "a replacement must assert the
+  originally targeted behaviour at least as strongly; accept only then".
+- **The same `enrich_verdicts` and `apply_execution_scope`.**
 
-**Prompt.** `prompts/evaluator.md` gains one rule. When the verdict is `reject` because the test's
-own expectation contradicts an acceptance criterion, add
-`"spec_contradiction": {"criterion": "<exact quote of that criterion>"}`. Never add it for a
-product that fails a correct test. `_validate_one_verdict` lets the optional field through. It
-already ignores unknown keys, and a test pins this.
+**A replacement counts only when all of these hold:**
 
-### 2. Coverage floor, and reject-only means fail (`agents/triager.py`)
+- the judged verdict is `accept` or `flag`;
+- the bundle's `stability.verdict == stable`;
+- the mutation is not `survived`;
+- for unit lanes, the mutation is `killed`. For other lanes `not_run` is allowed, but the verdict
+  is then capped at `flag`.
 
-**Loading.** `_load_verdicts_or_fail` (~line 1190) also returns `doc.get("excluded", [])`.
+**Merging:**
 
-**Coverage floor.** This is a new helper, `_uncovered_criteria(plan, verdicts, excluded)`. It
-runs after `_apply_lane_attribution` has rekeyed ids to plan subtask ids, so the ids join to
-`test_plan.json` phases. `excluded` rows are rekeyed the same way: `_stamp_verdict_lanes` is
-applied to `excluded` as well.
+- **Counted:** the original row is removed from `verdicts` and appended to a new top-level
+  `regenerated` list, as `{original, reason_kind, quoted_ac?, replacement_id, outcome:
+  "replaced"}`. The replacement row goes into `verdicts`.
+- **Not counted** (missing, fails, rejected, or over the cap): the original row stays `reject`,
+  and `regenerated` records `outcome: "kept_reject"` with the reason.
+- **Audit files:** the first-pass `verdicts.vote{i}.json` files are renamed to
+  `verdicts.pass1.vote{i}.json` before the second vote runs. `verdicts.json` is written once more,
+  at the end.
+- **Fail closed:** any exception in the regeneration pass leaves the original rejects untouched.
 
-- A criterion phase is **uncovered** when at least one of its subtasks produced a row in
-  `verdicts` or `excluded`, but none has `accept` or `flag`.
-- If excluding tests leaves any phase uncovered, while that phase also has an excluded row, the
-  final status becomes `triaged_uncovered`.
-- AIFactory requires `status == "triaged"`, so it reads `triaged_uncovered` as no trusted verdict
-  (`None`).
-- `_outcome_for_status` maps `triaged_uncovered` to `"empty"`, and the triager warning names the
-  uncovered AC labels.
-- A phase that is uncovered only because of product-failure rejects keeps the reject-means-fail
-  path below. The floor does not mask a real failure.
+### 4. The judge field (`evaluator_verdicts.py`, `prompts/evaluator.md`)
 
-**Reject-only means fail.** `final_status` (~line 1865) becomes `"triaged"` whenever there are
-rejects, even with zero accepted and flagged tests. AIFactory then reads `verdicts.json`, sees a
-`reject` and returns `fail`.
+- **Validation:** `_validate_verdicts` lets through an optional `spec_contradiction.criterion`
+  string of at most 500 characters.
+- **Prompt:** one rule is added: when a test is rejected because its own expectation contradicts
+  an acceptance criterion, add that field with the exact quote. Never add it when the product
+  fails a correct test.
 
-To keep the completion envelope honest, `_status_verdict` (~line 638) gains a rule modelled on
-`_zero_tests_verdict`. A `triaged` result with accepted plus flagged equal to 0 and rejected > 0
-gives `("failure", "product_failed: <n> generated tests failed against the product")`.
+### 5. The triager (`triager.py`)
 
-### 3. Visibility
+- **Status.** `final_status` (`:1865-1867`) becomes `triaged` whenever there is any accept, flag
+  or reject. `triaged_empty` stays for no verdicts at all.
+- **Completion envelope.** `_status_verdict` (`:638-686`) gives `("failure", "product_failed: <n>
+  generated tests failed against the product")` for a `triaged` run with accepted + flagged = 0
+  and rejected > 0. Without this, the code map shows that `verdicts_count` scores such a run as
+  success.
+- **Reports.** `triage_report` (JSON and Markdown, which also feeds the PR comment) gains a
+  "Regenerated tests" section: the original, the reason, the replacement id and the outcome.
 
-- `triage_report.py`:
-  - `TriageReport` gains `excluded`;
-  - `render_json` adds `"excluded"`;
-  - `render_markdown` adds an **Excluded (test-quality)** section after Rejected, one line per test
-    with its `kind` and `evidence`;
-  - the PR comment is built from this Markdown, so it gets the section automatically.
-- `_write_ac_fidelity` (~line 1413) receives `excluded`, so the AC ledger shows those tests as
-  excluded rather than missing.
-- Readers that keep counting `verdicts` only are documented in the module docstring as
-  intended. Excluded tests aren't product evidence:
-  - `quality_gate`, `val_block`, `lane_progress`;
-  - handback (`_FAILING_VERDICTS = {"reject"}`, so excluded tests don't trigger a correction);
-  - backstage counts, and `mcp_copilot` counts.
-
-### 4. AIFactory
-
-AIFactory doesn't change. It reads `status == "triaged"` and the `verdicts` list, and it ignores
-`excluded`.
+AIFactory is unchanged: `status == triaged`, and any `reject` in `verdicts` means `fail`.
 
 ## Alternatives rejected
 
-- **A new verdict value.** AIFactory reads an unknown kind as `None`, which would hide a real
-  reject in the same run.
-- **Trusting row-level `stability` / `mutation`.** These are LLM-copied, so a judge could fake an
-  exclusion.
-- **Excluding on a majority vote for spec contradiction.** That's too weak against a false green;
-  the intent requires a unanimous vote.
-- **Using `ac_fidelity` / `criterion_authority` as the contradiction proof.** They run at
-  generation, before execution, and don't judge a failing assertion. They are a candidate follow-up.
+- **The Planner replan path:** see "Why not the Planner's replan path".
+- **Excluding rejects:** the owner ruled it out, because it can drop a real product failure.
+- **Regenerating every `consistent_fail`:** a weaker replacement could pass a broken product. Only a
+  unanimous, quoted AC contradiction qualifies.
 
 ## Risks
 
-- **False green from a spec-contradiction exclusion.** Four things limit it: the vote must be
-  unanimous, every call must quote a criterion that matches the contract text, a product failure
-  takes precedence, and the coverage floor applies. A residual risk remains: all judges quote a
-  real criterion and are all wrong. Mitigation: the excluded test is listed in the PR comment with
-  its AC label.
-- **Readers that ignore `excluded`** under-report test counts on badges and in VAL. This is
-  documented and accepted.
-- **Reject-only runs** now report `triaged` with envelope outcome `failure`, where they used to be
-  `triaged_empty` and `empty`. Consumers that keyed on `triaged_empty` for this case will change.
-  `_triaged_empty_warnings` is still used when there are no rejects either.
-- **Prod.** A normal TFactory release. No data migration is needed: old `verdicts.json` files have
-  no `excluded` key, which reads as `[]`.
+- **Cost.** At most 3 extra generation sessions plus their vote per run.
+- **Judge leniency on the replacement.** Bounded by the deterministic conditions: stable, not
+  survived, and killed on unit lanes.
+- **Unverified function.** The code map did not verify Gen-Functional's per-subtask function
+  signature. Plan step 2 confirms it, or adds the smallest wrapper.
 
 ## Verification
 
-Unit tests:
+**Unit tests:**
 
-- **`apply_exclusions`, one test per rule:**
-  - flaky moves to `excluded`;
-  - mutation survived moves;
-  - lint rejected moves;
-  - low relevance only stays `reject`;
-  - an unjudged reject stays;
-  - a CONSISTENT_FAIL assertion stays `reject`;
-  - the same row with a unanimous 3/3 vote, all quotes matching AC text, moves (`spec_contradiction`);
-  - a 2/1 split stays;
-  - one call missing the quote stays;
-  - a quote that matches no AC stays;
-  - with `VOTES=1` it stays;
-  - a judge-written `excluded` key is overwritten.
-- **Vote:** `vote.contradictions` keeps each call's quote.
+- **Selection:**
+  - a stable reject is selected; a flaky reject is selected;
+  - a `consistent_fail` assertion is selected only with a unanimous quoted AC;
+  - a 2-1 vote, a missing quote, a non-matching quote, or `VOTES=1` is not selected;
+  - `error`/`not_run`/infra is not selected;
+  - the cap is 3.
+- **Merge:** a replaced test, a kept reject, an exception keeping the original, and the audit
+  file rename.
+- **Replacement gate:** an unstable replacement, a survived mutation, and `not_run` capped at flag.
 - **Triager:**
-  - reject-only gives status `triaged` and envelope `failure` with `product_failed`;
-  - an excluded test that leaves its AC uncovered gives `triaged_uncovered` and outcome `empty`;
-  - an excluded test whose AC is still covered by an accept stays `triaged`;
-  - the report JSON and Markdown list the excluded tests;
-  - the AC ledger marks them.
-- **AIFactory compatibility fixture:** `verdicts.json` with an `excluded` list and accept-only
-  `verdicts` gives `pass` through a copy of `tfactory_verdict`'s rules.
-- **Existing suites** keep passing: `test_verdict_vote`, `test_evaluator*`, `test_confidence*`,
-  `test_triager*`, `test_triage_report`, `test_quality_gate`, `test_ac_fidelity`, `test_val_block`
-  and `test_lane_progress`.
-- **Live:** release TFactory, then rerun E2E P1.
-  - The run-`m` style bad test lands in `excluded` (`spec_contradiction`, AC#N).
-  - The verdict is `pass`, and AIFactory merges the PR (S4).
-  - S5 reports the verdict on the merge SHA.
+  - all-reject gives `triaged` with envelope `failure`/`product_failed`;
+  - mixed results stay `triaged`/success when an accept exists;
+  - no verdicts gives `triaged_empty`;
+  - the report section is present.
+- **Existing suites:** `test_evaluator*`, `test_verdict_vote`, `test_confidence*`,
+  `test_triager*`, `test_empty_verdict_is_not_done`, `test_verify_pipeline`, `test_gen_functional*`.
+
+**Live:** a TFactory release, then E2E P1. A test-quality reject is regenerated, the replacement is
+accepted, AIFactory merges (S4), and S5 runs. A deliberately wrong build still fails.
