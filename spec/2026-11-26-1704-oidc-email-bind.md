@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1704
 intent: intent/2026-11-26-1704-oidc-email-bind.md
 ---
