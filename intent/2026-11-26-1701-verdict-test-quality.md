@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1701
 author: olafkfreund
 ---
@@ -47,29 +47,43 @@ Two existing edges also matter:
 
 ## Proposed outcome
 
-Owner decision (2026-11-26), revised after the spec reviews: **regenerate, don't exclude.** Both
-reviewers showed that removing a failing test from the verdict can also remove a real product
-failure. That applies to flaky, mutation-survived and lint signals, and even to a unanimous "contradicts
-spec" quote. So no failing test is ever removed from the verdict.
+Owner decisions (2026-11-26), latest first:
 
-- **A suspected-invalid test is regenerated, not excluded.** When every judge in the vote says a
-  consistently failing test contradicts a quoted acceptance criterion, TFactory doesn't record a
-  final verdict for it. It sends that subtask back through the existing replan path
-  (`context/replan_request.json`, Planner replan mode, with the existing per-subtask and global
-  replan caps). The replan request carries the quoted criterion and the reason.
-- **Only a passing, regenerated test can turn the verdict green.** The regenerated test is judged
-  like any other test. If it passes, it is accepted. If the regenerated test still fails, or the
-  replan cap is reached, the verdict is `reject` and AIFactory reads `fail`.
-- **No other rule changes the verdict.** Flaky, survived, lint and low-relevance rejects stay
-  `reject`, as today. The vote's fail-closed behaviour is unchanged.
+- **Un-parked.** E2E run `mvr-20261126p` showed the gap is not only spec contradictions. TFactory
+  rejected one of its own tests, `wordfreq-suite-passes`, which **passed**: a 2-1 vote judged it
+  not relevant to AC#4. The other 5 tests were accepted and 1 was flagged, the build was correct,
+  and AIFactory's gate correctly read `fail`.
+- **Regenerate every test-quality reject.** Earlier the owner ruled out exclusion: no failing test
+  is ever removed from the verdict. Regeneration is safe for every test-quality reject, because the
+  replacement has to pass on the same build and be accepted on its own.
+
+What this means:
+
+- **A test-quality reject is regenerated, not final.** A rejected test is regenerated once
+  through the replan path, within the existing per-subtask and global replan caps, when any of
+  these holds:
+  - its runs **passed**, but it was judged weak or not relevant (low semantic relevance,
+    `new_lines == 0`, lint promotion);
+  - it was **flaky**;
+  - its **mutation survived**.
+
+  The replan request carries the reason and the AC being targeted.
+- **A consistently failing assertion is treated as a possible product failure.** It is
+  regenerated only when every judge call in the vote, at least 2, quotes the same acceptance
+  criterion that the test contradicts, and the quote is found in the plan's AC text. Otherwise it
+  stays a final `reject`.
+- **Only a replacement that passes and is accepted can turn a reject green.** The replacement runs
+  fresh on the same build and is judged like any other test. It must assert the behaviour the
+  original targeted, and be at least as strong. If it fails, is rejected, is missing, or the cap is
+  hit, the verdict is `reject` and AIFactory reads `fail`.
 - **A product failure reaches AIFactory as `fail`, not `None`.** A run whose final verdicts are all
-  `reject` ends as `triaged`, so AIFactory reads `fail`, and its completion envelope says failure.
-- **AIFactory's gate is unchanged** (owner decision): `reject` means fail.
-- **Visibility:** the report and the PR comment show any test that was regenerated, the quoted
-  criterion, and what happened to the regenerated test.
+  `reject` ends as `triaged`.
+- **AIFactory's gate is unchanged:** `reject` means fail.
+- **Visibility:** the report and the PR comment show each regenerated test, why it was regenerated,
+  and what happened to its replacement.
 - **Live proof:**
-  - E2E P1 with a correct build: a contradicting generated test is regenerated, the regenerated
-    test passes, AIFactory merges the PR (S4), and S5 reports the verdict on the merge SHA.
+  - E2E P1 on a correct build: a test-quality reject is regenerated, the replacement is accepted,
+    AIFactory merges (S4), and S5 reports on the merge SHA.
   - A deliberately wrong build still fails.
 
 ## Affected users and systems
@@ -107,9 +121,8 @@ spec" quote. So no failing test is ever removed from the verdict.
 
 ## Status (2026-11-26)
 
-The owner decided: **strict now, regenerate later.** TFactory is unchanged for now. A test that
-contradicts the spec keeps blocking the merge, which can cause false fails but never false
-greens. This intent stays a draft and is tracked as a planned feature.
+It was parked on "strict now, regenerate later", then un-parked the same day after run `p`, with
+regeneration widened to every test-quality reject. The spec and plan follow.
 
 The reviews of this revision set these requirements for the feature:
 
