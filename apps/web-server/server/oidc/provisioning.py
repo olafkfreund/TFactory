@@ -2,8 +2,8 @@
 
 Maps an IdP's ``userinfo`` claims onto TFactory's User +
 OrganizationMember model. Stable lookup is by ``sub`` (subject
-identifier), which is the IdP's permanent ID for the user — falling
-back to email only when sub is unavailable from the IdP.
+identifier), which is the IdP's permanent ID for the user. A verified
+email can bind an existing account when no user matches the subject.
 
 Role mapping: env var ``APP_OIDC_GROUP_TO_ROLE`` is a JSON object
 mapping IdP group names to internal roles. First match wins. If no
@@ -29,6 +29,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import Organization, OrgMember, User
 
 logger = logging.getLogger(__name__)
+
+
+class OIDCBindRefused(Exception):  # noqa: N818
+    """An existing account cannot be linked to this OIDC sign-in."""
 
 
 def _slugify(text: str) -> str:
@@ -87,10 +91,8 @@ async def jit_provision_user(
 
     Lookup precedence:
       1. ``users.oidc_sub == userinfo['sub']``  (stable IdP identifier)
-      2. ``users.email == userinfo['email']``   (one-time bind for users
-                                                  who registered locally
-                                                  before SSO was enabled)
-      3. Create a new User.
+      2. Existing email match: bind only with a verified email and no conflicting subject.
+      3. Create a new User when the email has no match.
 
     Always ensures an OrganizationMember row exists in the configured
     default org with the claim-mapped role. Updates the role on every
@@ -106,13 +108,17 @@ async def jit_provision_user(
     user = result.scalar_one_or_none()
 
     if user is None:
-        # Fall back to email lookup so a user who pre-registered locally
-        # and now signs in via OIDC doesn't double-create.
         result = await db.execute(select(User).where(User.email == email))
-        user = result.scalar_one_or_none()
-        if user is not None:
-            user.oidc_sub = sub  # bind for future logins
-            logger.info("OIDC bound existing local user %s to sub=%s", email, sub)
+        existing = result.scalar_one_or_none()
+        if existing is not None:
+            if userinfo.get("email_verified") is not True:
+                raise OIDCBindRefused("email not verified")
+            if existing.oidc_sub and existing.oidc_sub != sub:
+                raise OIDCBindRefused("account already linked")
+            existing.oidc_sub = sub
+            existing.password_hash = ""  # binding makes the account SSO-only
+            user = existing
+            logger.info("OIDC bound existing local user to sub=%s", sub)
 
     if user is None:
         # Genuine new user — JIT-provision.
