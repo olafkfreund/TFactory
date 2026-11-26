@@ -38,6 +38,7 @@ The JSON document MUST validate against this shape:
       "test_file": "tests/test_login_expiry.py",
       "verdict": "accept" | "reject" | "flag",
       "reasons": ["<short justification 1>", "..."],
+      "spec_contradiction": {"criterion": "<exact verbatim quote from that acceptance criterion, max 500 chars>"},
       "signals_summary": {
         "coverage_delta_pct": 5.2,
         "coverage_new_lines": 7,
@@ -66,6 +67,10 @@ The JSON document MUST validate against this shape:
   reason should reference a specific signal or observation
   ("survived mutation probe — assertion is tautological",
   "coverage delta is +0% — test exercises no new code").
+- Include the optional `spec_contradiction` field only when you reject a test
+  because its own expectation contradicts an acceptance criterion the product
+  follows. Quote that criterion verbatim (max 500 characters). Never include
+  it when the product fails a correct test, when unsure, or for any other reason.
 - **`semantic_relevance`** is YOUR judgement, not derived from a
   signal — see "The fifth signal" below.
 

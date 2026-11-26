@@ -38,7 +38,10 @@ import logging as _logging
 import os
 import re
 import traceback
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
+from contextlib import suppress
+from copy import deepcopy
+from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -48,9 +51,19 @@ from agents.workspace_status import now_iso, read_status, write_status_patch
 if TYPE_CHECKING:
     from agents.criterion_authority import AuthorityResult
     from agents.criterion_literals import LiteralDriftResult
+    from framework_registry import FrameworkDescriptor
     from test_plan import ImplementationPlan, Subtask
 
 _gen_log = _logging.getLogger(__name__)
+
+REGEN_SUFFIX = "-regen1"
+
+
+@dataclass(frozen=True)
+class GeneratedTest:
+    test_id: str
+    test_file: str
+    subtask: dict[str, Any]
 
 
 # ─── Workspace helpers — shared via agents.workspace_status (#451).
@@ -383,7 +396,7 @@ def _resolve_runner_fn(framework_descriptor=None):
     return _run
 
 
-def _resolve_framework_descriptor(subtask):
+def _resolve_framework_descriptor(subtask: object) -> "FrameworkDescriptor | None":
     """Look up the FrameworkDescriptor for this subtask's ``framework`` field.
 
     For polyglot v0.2 subtasks (``subtask.framework`` is set) the descriptor
@@ -1108,30 +1121,110 @@ def _code_values(source: str, subtask: object) -> set[Decimal]:
     return code_values(source, getattr(subtask, "language", None))
 
 
-async def _generate_one_subtask(
+def _regenerated_test_path(original: Path) -> Path:
+    if not original.name or original.is_absolute() or ".." in original.parts:
+        raise ValueError("original test path must be relative to the spec directory")
+    suffix = REGEN_SUFFIX.replace("-", "_", 1)
+    if original.name.endswith("_test.go"):
+        return original.with_name(
+            original.name.removesuffix("_test.go") + suffix + "_test.go"
+        )
+    stem, dot, extension = original.name.partition(".")
+    return original.with_name(stem + suffix + dot + extension)
+
+
+async def regenerate_test(
+    task_dir: Path,
+    subtask: Mapping[str, Any],
+    brief: str,
+    *,
+    project_dir: Path,
+    verbose: bool = False,
+) -> GeneratedTest | None:
+    """Generate and guard one replacement within the evaluator's pass."""
+    cleanup_path: Path | None = None
+    try:
+        files = subtask.get("files_to_create")
+        original_id = subtask.get("id")
+        if (
+            not isinstance(files, list)
+            or not files
+            or not isinstance(files[0], str)
+            or not original_id
+            or not isinstance(original_id, str)
+        ):
+            return None
+        replacement = _regenerated_test_path(Path(files[0]))
+        test_path = task_dir / replacement
+        task_root = await asyncio.to_thread(task_dir.resolve)
+        if (
+            test_path.is_symlink()
+            or test_path.exists()
+            or not test_path.parent.resolve().is_relative_to(task_root)
+        ):
+            return None
+
+        from test_plan import Subtask  # noqa: PLC0415 - lazy like the main generator
+
+        test_id = original_id + REGEN_SUFFIX
+        test_file = replacement.as_posix()
+        replacement_data = deepcopy(dict(subtask))
+        replacement_data.update(
+            id=test_id, files_to_create=[test_file], status="completed"
+        )
+        replacement_subtask = Subtask.from_dict(replacement_data)
+
+        cleanup_path = test_path.parent.resolve() / test_path.name
+        rejection = await _generate_and_guard(
+            task_dir, project_dir, replacement_subtask, verbose, brief=brief
+        )
+        if (
+            rejection is not None
+            or test_path.is_symlink()
+            or test_path.resolve() != cleanup_path
+            or not test_path.is_file()
+        ):
+            return None
+
+        result = GeneratedTest(test_id, test_file, replacement_data)
+        cleanup_path = None
+        return result
+    except Exception as exc:  # noqa: BLE001 - keep the original reject on any failure
+        _gen_log.warning("gen_functional: replacement generation failed: %s", exc)
+        return None
+    finally:
+        if cleanup_path is not None:
+            with suppress(OSError):
+                cleanup_path.unlink(missing_ok=True)
+
+
+async def _generate_and_guard(
     spec_dir: Path,
     project_dir: Path,
-    plan,
-    plan_file: Path,
-    subtask,
-    tests_generated: int,
+    subtask: "Subtask",
     verbose: bool,
-) -> str:
-    """Generate, guard, and record ONE subtask's test file.
-
-    Returns one of:
-      ``"generated"`` — file written and both guards passed (caller counts it)
-      ``"skipped"``   — recoverable per-subtask failure; move to the next one
-      ``"rejected"``  — a guardrail rejected and a Planner replan was scheduled;
-                        the caller must stop the loop (return False)
-    """
-    from prompts_pkg.prompts import get_tfactory_gen_functional_prompt
+    *,
+    brief: str | None = None,
+) -> tuple[str, str, str | None] | Literal["session_error"] | None:
+    """Return a guard rejection (reason, phase, source), a session error, or success."""
+    from prompts_pkg.prompts import (  # noqa: PLC0415 - lazy for SDK dependencies
+        get_tfactory_gen_functional_prompt,
+    )
 
     files = _files_to_create(subtask)
-    if not files:
-        subtask.fail("subtask had no files_to_create — Planner emit error")
-        return "skipped"
     test_path = spec_dir / files[0]
+    replacement_path = test_path.resolve() if brief is not None else None
+
+    async def _run(prompt: str) -> str:
+        if brief:
+            prompt += "\n\n" + brief
+        client = await _resolve_client(spec_dir, project_dir)
+        status, _, _ = await _invoke_session(client, prompt, spec_dir, verbose)
+        if replacement_path is not None and (
+            test_path.is_symlink() or test_path.resolve() != replacement_path
+        ):
+            raise ValueError("replacement test path changed during generation")
+        return status
 
     # Resolve the framework descriptor (v0.2 polyglot path). For v0.1-style
     # subtasks (framework=None) the descriptor is None, which triggers the
@@ -1155,20 +1248,8 @@ async def _generate_one_subtask(
             framework_descriptor=framework_descriptor,
             step=step,
         )
-        client = await _resolve_client(spec_dir, project_dir)
-        session_status, _response, _err = await _invoke_session(
-            client,
-            prompt,
-            spec_dir,
-            verbose,
-        )
-        if session_status == "error":
-            _gen_log.warning(
-                "gen_functional: session error on subtask %s — skipping",
-                subtask.id,
-            )
-            subtask.fail("SDK session returned status=error")
-            return "skipped"
+        if await _run(prompt) == "error":
+            return "session_error"
         if step == "assert":
             if not test_path.exists():
                 break  # no draft: skip wiring, the no-write rejection below applies
@@ -1183,72 +1264,96 @@ async def _generate_one_subtask(
             )
 
     # Did the agent actually write the file?
-    if not test_path.exists():
-        _reject_subtask_for_replan(
-            spec_dir,
-            project_dir,
-            plan,
-            plan_file,
-            subtask,
-            reason="agent did not Write the expected test file",
-            phase="gen_functional_no_write",
-            tests_generated=tests_generated,
+    exists = test_path.is_file() if replacement_path is not None else test_path.exists()
+    if not exists:
+        return (
+            "agent did not Write the expected test file",
+            "gen_functional_no_write",
+            None,
         )
-        return "rejected"
 
     async def _retry(feedback: str) -> str:
-        retry_client = await _resolve_client(spec_dir, project_dir)
-        status, _resp, _err = await _invoke_session(
-            retry_client, prompt + feedback, spec_dir, verbose
-        )
+        status = await _run(prompt + feedback)
+        if status == "error" and replacement_path is not None:
+            raise RuntimeError("replacement import repair session failed")
         return status
 
     # Imports are judged from where the test RUNS — staged at its authored path
     # inside the project checkout — not from the spec dir it is written to.
     await _repair_imports(spec_dir, project_dir, subtask, files[0], _retry)
     source = test_path.read_text()
-    if locked and not locked <= _code_values(source, subtask):
+    if locked:
         gone = sorted(locked - _code_values(source, subtask))
-        _reject_subtask_for_replan(
-            spec_dir,
-            project_dir,
-            plan,
-            plan_file,
-            subtask,
-            test_path=test_path,
-            reason=(
+        if gone:
+            return (
                 "an expected value written from the criterion before the diff "
-                f"was shown is missing from the final test: {[str(v) for v in gone]}"
-            ),
-            phase="gen_functional_assertions_changed",
-            tests_generated=tests_generated,
-        )
-        return "rejected"
+                f"was shown is missing from the final test: {[str(v) for v in gone]}",
+                "gen_functional_assertions_changed",
+                None,
+            )
     _record_unresolvable_imports(
         spec_dir, subtask, source, project_dir, Path(project_dir) / files[0]
     )
     rejection = _source_guardrail_rejection(subtask, source, project_dir)
-    if rejection is not None and _waive_repeated_literal_rejection(
-        spec_dir, subtask, rejection
-    ):
-        # Only the literal gate is waived; authority etc. still run.
-        rejection = _source_guardrail_rejection(
-            subtask, source, project_dir, waive_literal=True
+    return (*rejection, source) if rejection is not None else None
+
+
+async def _generate_one_subtask(
+    spec_dir: Path,
+    project_dir: Path,
+    plan: "ImplementationPlan",
+    plan_file: Path,
+    subtask: "Subtask",
+    tests_generated: int,
+    verbose: bool,
+) -> str:
+    """Generate, guard, and record ONE subtask's test file.
+
+    Returns one of:
+      ``"generated"`` — file written and both guards passed (caller counts it)
+      ``"skipped"``   — recoverable per-subtask failure; move to the next one
+      ``"rejected"``  — a guardrail rejected and a Planner replan was scheduled;
+                        the caller must stop the loop (return False)
+    """
+    files = _files_to_create(subtask)
+    if not files:
+        subtask.fail("subtask had no files_to_create — Planner emit error")
+        return "skipped"
+
+    result = await _generate_and_guard(spec_dir, project_dir, subtask, verbose)
+    if result == "session_error":
+        _gen_log.warning(
+            "gen_functional: session error on subtask %s — skipping", subtask.id
         )
-    if rejection is not None:
-        reason, phase = rejection
-        _reject_subtask_for_replan(
-            spec_dir,
-            project_dir,
-            plan,
-            plan_file,
-            subtask,
-            test_path=test_path,
-            reason=reason,
-            phase=phase,
-            tests_generated=tests_generated,
-        )
-        return "rejected"
+        subtask.fail("SDK session returned status=error")
+        return "skipped"
+
+    if result is not None:
+        reason, phase, source = result
+        rejection: tuple[str, str] | None = reason, phase
+        if source is not None and _waive_repeated_literal_rejection(
+            spec_dir, subtask, rejection
+        ):
+            # Only the literal gate is waived; authority etc. still run.
+            rejection = _source_guardrail_rejection(
+                subtask, source, project_dir, waive_literal=True
+            )
+        if rejection is not None:
+            reason, phase = rejection
+            _reject_subtask_for_replan(
+                spec_dir,
+                project_dir,
+                plan,
+                plan_file,
+                subtask,
+                test_path=(
+                    None if phase == "gen_functional_no_write" else spec_dir / files[0]
+                ),
+                reason=reason,
+                phase=phase,
+                tests_generated=tests_generated,
+            )
+            return "rejected"
 
     subtask.complete(output=f"wrote {files[0]}")
     return "generated"

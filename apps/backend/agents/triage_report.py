@@ -35,7 +35,7 @@ import json
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from agents.confidence import reason_lines
 from agents.triage_dedup import DedupCollision, TriageCandidate
@@ -103,6 +103,7 @@ class TriageReport:
     # accepted candidates are still listed — under a heading that says they did
     # not land — and ``committed_count`` reads 0, because nothing was committed.
     delivery_error: str | None = None
+    regenerated: tuple[dict[str, Any], ...] = ()
 
     @property
     def accepted_count(self) -> int:
@@ -181,6 +182,7 @@ def build_report(
     spec_dir: Path | None = None,
     component_ref: str | None = None,
     delivery_error: str | None = None,
+    regenerated: Sequence[dict[str, Any]] = (),
 ) -> TriageReport:
     """Construct a TriageReport from the Triager's commit-5 working set.
 
@@ -223,6 +225,7 @@ def build_report(
         flaky_by_test_id=flaky_by_test_id,
         component_ref=component_ref,
         delivery_error=delivery_error,
+        regenerated=tuple(regenerated),
     )
 
 
@@ -296,6 +299,18 @@ def _collision_to_json(coll: DedupCollision) -> dict:
     }
 
 
+def _regenerated_to_json(entry: dict[str, Any]) -> dict[str, Any]:
+    original = entry["original"]
+    return {
+        "original": original["test_id"] if isinstance(original, dict) else original,
+        "reason_kind": entry["reason_kind"],
+        "quoted_ac": entry.get("quoted_ac"),
+        "replacement_id": entry["replacement_id"],
+        "outcome": entry["outcome"],
+        "reason": entry.get("reason"),
+    }
+
+
 def render_json(report: TriageReport) -> str:
     """Render the report as deterministic JSON.
 
@@ -320,12 +335,14 @@ def render_json(report: TriageReport) -> str:
             "delivery_error": report.delivery_error,
             "flagged_count": report.flagged_count,
             "rejected_count": report.rejected_count,
+            "regenerated_count": len(report.regenerated),
             "skipped_count": report.skipped_count,
             "dedup_collision_count": len(report.collisions),
         },
         "committed": [_candidate_to_json(c, decisions) for c in report.committed],
         "flagged": [_candidate_to_json(c, decisions) for c in report.flagged],
         "rejected": [_candidate_to_json(c) for c in report.rejected],
+        "regenerated": [_regenerated_to_json(entry) for entry in report.regenerated],
         "skipped": [_candidate_to_json(c, decisions) for c in report.skipped],
         "dedup_collisions": [_collision_to_json(c) for c in report.collisions],
     }
@@ -470,8 +487,9 @@ def render_markdown(report: TriageReport) -> str:
       4. ## Flagged  (ranked flagged tests, with intent)
       5. ## Skipped  (operator-locked, Task 11)
       6. ## Rejected  (rejects, input order, with reasons)
-      7. ## Dedup Collisions  (representative ← dropped ids)
-      8. Footer line with the triager_version
+      7. ## Regenerated tests  (originals and replacement outcomes)
+      8. ## Dedup Collisions  (representative ← dropped ids)
+      9. Footer line with the triager_version
 
     Output ends with a single trailing newline.
     """
@@ -517,6 +535,16 @@ def render_markdown(report: TriageReport) -> str:
         _candidate_md_block(c, flaky=flaky_by_id.get(c.test_id))
         for c in report.rejected
     )
+    regenerated_lines = []
+    for entry in report.regenerated:
+        row = _regenerated_to_json(entry)
+        replacement = row["replacement_id"] or "none"
+        reason = " ".join((row["reason"] or "").split())
+        line = (
+            f"- `{row['original']}` ({row['reason_kind']}) → "
+            f"`{replacement}` ({row['outcome']})"
+        )
+        regenerated_lines.append(f"{line} — {reason}" if reason else line)
     collisions_body = "\n".join(
         f"- **{coll.kind}**: kept `{coll.representative.test_id}`, "
         f"dropped {', '.join(f'`{d.test_id}`' for d in coll.dropped)}"
@@ -549,6 +577,7 @@ def render_markdown(report: TriageReport) -> str:
         _section("Flagged", flagged_body),
         _section("Skipped", skipped_body),
         _section("Rejected", rejected_body),
+        _section("Regenerated tests", "\n".join(regenerated_lines)),
         _section("Dedup Collisions", collisions_body),
         "---\n",
         "_Rendered by triager-task8-commit3._\n",

@@ -26,6 +26,7 @@ import json
 import logging as _logging
 import os
 import traceback
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -380,34 +381,29 @@ _TERMINAL_STATUSES = frozenset({"triaged", "triaged_empty", "triager_failed"})
 
 def _triaged_empty_warnings(
     final_status: str,
-    committed_count: int,
+    accepted_count: int,
     flagged_count: int,
     rejected_count: int,
     ac_summary: object,
 ) -> list[str]:
     """Loud diagnostics for a hollow verdict (#729).
 
-    A ``triaged_empty`` that came from rejecting 100% of the generated tests is
-    almost never N independent judgements — it is a systematic failure (the wrong
-    build tree checked out, see #742; a collection/import error; a harness
-    mismatch). Left as a bare ``triaged_empty`` it reads as a clean "nothing to
-    do" and nobody notices. Same for an all-unverified AC fidelity. Return the
-    warnings to persist on status.json so the cockpit/report surface them.
+    A 100% rejection can indicate a systematic failure such as the wrong build
+    tree (#742), a collection/import error, or a harness mismatch. Surface
+    that and all-unverified AC fidelity in status.json.
     """
     warnings: list[str] = []
     if (
-        final_status == "triaged_empty"
+        final_status == "triaged"
         and rejected_count > 0
-        and committed_count == 0
+        and accepted_count == 0
         and flagged_count == 0
     ):
         warnings.append(
-            f"triaged_empty from a 100% rejection: all {rejected_count} generated "
-            "tests were rejected and none committed. This is almost always a "
-            "systematic failure (wrong build tree checked out — #742 — a "
-            "collection/import error, or a harness mismatch), not independent "
-            "judgements. Inspect the rejected candidates' evaluation output before "
-            "trusting this verdict."
+            f"100% rejection: all {rejected_count} generated tests were rejected. "
+            "Inspect their evaluation output for product failures or systematic "
+            "issues such as the wrong build tree, collection/import errors, or "
+            "a harness mismatch."
         )
     if (
         isinstance(ac_summary, dict)
@@ -642,7 +638,7 @@ def _status_verdict(
 ) -> tuple[str, str | None]:
     """The normalized ``(outcome, halt_reason)`` from the spec's own status.
 
-    Two rules, in order; the first to refuse keeps its reason.
+    The first applicable rule keeps its reason.
 
     RFC-0001a evidence gate: a verify may only report a success OUTCOME if it
     produced real verdicts. A "triaged" with zero verdicts evaluated nothing —
@@ -653,6 +649,9 @@ def _status_verdict(
     human attention" by design and drives the handback loop, which is a valid
     non-failure outcome.
 
+    Then #1701 ``product_failed``, for a triaged run whose verdicts were all
+    rejects.
+
     Then #1253 ``zero_tests`` (see :func:`_zero_tests_verdict`), which catches
     the stage before: a run whose GENERATION produced nothing has no verdicts to
     be missing, so ``no_evidence`` cannot see it.
@@ -661,14 +660,19 @@ def _status_verdict(
     the stage AFTER: a run that accepted tests and then failed to commit them has
     verdicts and non-zero counts, so neither rule above can see it.
     """
-    # Actionable evidence = any real verdict produced (evaluated, accepted, or
-    # flagged). A "triaged" success with NONE of these evaluated nothing.
-    actionable = (
-        evidence["verdicts"] > 0 or evidence["accepted"] > 0 or evidence["flagged"] > 0
-    )
-    if status_value == "triaged" and not actionable:
-        halt_reason = "no_evidence: verify produced no verdicts"
-        return "failure", halt_reason
+    if status_value == "triaged":
+        accepted = evidence["accepted"]
+        flagged = evidence["flagged"]
+        rejected = evidence["rejected"]
+        if max(evidence["verdicts"], accepted, flagged, rejected) <= 0:
+            halt_reason = "no_evidence: verify produced no verdicts"
+            return "failure", halt_reason
+        if accepted + flagged == 0 and rejected > 0:
+            halt_reason = (
+                "product_failed: "
+                + f"{rejected} generated tests failed against the product"
+            )
+            return "failure", halt_reason
     outcome = _outcome_for_status(status_value)
     if outcome == "failure":
         # zero_tests only ever refuses; it never softens a status that already
@@ -1187,10 +1191,10 @@ def emit_usage_snapshot(spec_dir: Path, status: dict[str, object]) -> None:
 # ─── The agent itself ───────────────────────────────────────────────────
 
 
-def _load_verdicts_or_fail(spec_dir: Path) -> list | None:
+def _load_verdicts_or_fail(spec_dir: Path) -> dict[str, Any] | None:
     """Read findings/verdicts.json tolerantly (#96 envelope extractor).
 
-    Returns the verdicts list (possibly empty), or None after writing a
+    Returns the verdicts document, or None after writing a
     ``triager_failed`` status when the file is missing or unparseable.
     """
     verdicts_path = spec_dir / "findings" / "verdicts.json"
@@ -1206,7 +1210,9 @@ def _load_verdicts_or_fail(spec_dir: Path) -> list | None:
 
     try:
         verdicts_doc, _ = extract_json(verdicts_path.read_text())
-    except OutputEnvelopeError as exc:
+        if not isinstance(verdicts_doc, dict):
+            raise OutputEnvelopeError("expected a verdicts object")
+    except (OSError, UnicodeError, OutputEnvelopeError) as exc:
         _write_status_patch(
             spec_dir,
             status="triager_failed",
@@ -1214,7 +1220,34 @@ def _load_verdicts_or_fail(spec_dir: Path) -> list | None:
             triager_error=f"verdicts.json invalid: {exc}",
         )
         return None
-    return verdicts_doc.get("verdicts") or []
+    return verdicts_doc
+
+
+def _regenerated_entries(doc: dict[str, Any]) -> list[dict[str, Any]]:
+    """Read the optional regeneration audit list without affecting verdicts."""
+    entries = doc.get("regenerated")
+    if not isinstance(entries, list):
+        return []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            return []
+        original = entry.get("original")
+        if isinstance(original, dict):
+            original = original.get("test_id")
+        if (
+            not isinstance(original, str)
+            or not original.strip()
+            or entry.get("reason_kind") not in ("test_quality", "spec_contradiction")
+            or entry.get("outcome") not in ("replaced", "kept_reject")
+            or "replacement_id" not in entry
+            or any(
+                entry.get(key) is not None and not isinstance(entry[key], str)
+                for key in ("quoted_ac", "replacement_id", "reason")
+            )
+            or (entry["outcome"] == "replaced" and not entry["replacement_id"])
+        ):
+            return []
+    return entries
 
 
 def _resolve_test_source(spec_dir: Path, test_file: str) -> tuple[str, str]:
@@ -1321,6 +1354,7 @@ def _render_and_write_report(
     keepers,
     decisions,
     delivery_error: str | None = None,
+    regenerated: Sequence[dict[str, Any]] = (),
 ) -> tuple:
     """Build the report and write triage_report.{json,md}; return (report, report_md).
 
@@ -1353,6 +1387,7 @@ def _render_and_write_report(
         spec_dir=spec_dir,
         component_ref=component_ref,
         delivery_error=delivery_error,
+        regenerated=regenerated,
     )
     findings_dir = spec_dir / "findings"
     findings_dir.mkdir(parents=True, exist_ok=True)
@@ -1761,9 +1796,11 @@ async def run_triager(
         )
 
         # 1. Load verdicts.json and wrap each as a TriageCandidate.
-        verdicts = _load_verdicts_or_fail(spec_dir)
-        if verdicts is None:
+        verdicts_doc = _load_verdicts_or_fail(spec_dir)
+        if verdicts_doc is None:
             return False
+        verdicts = verdicts_doc.get("verdicts") or []
+        regenerated = _regenerated_entries(verdicts_doc)
         # RFC-0006 #75 VAL-3 lane + #650 dependency review (6th verdict
         # signal) — both best-effort side-effects recorded to findings/ before
         # the verification block / completion envelope are read.
@@ -1773,7 +1810,7 @@ async def run_triager(
 
         if not candidates:
             # No verdicts at all — empty pass.
-            _write_empty_report(spec_dir, mode)
+            _write_empty_report(spec_dir, mode, regenerated)
             _write_status_patch(
                 spec_dir,
                 status="triaged_empty",
@@ -1815,6 +1852,7 @@ async def run_triager(
             keepers,
             decisions,
             delivery_error=delivery_error,
+            regenerated=regenerated,
         )
 
         # 4b. AC fidelity: which acceptance criteria are actually verified (honest).
@@ -1859,16 +1897,15 @@ async def run_triager(
         committed_count = 0 if delivery_error else accepted_count
         flagged_count = len(flagged)
         rejected_count = len(rejects)
-        # Keyed on the ACCEPT count: a delivery failure must not be demoted to
-        # `triaged_empty`, which reads as a clean "nothing to do". The failure is
-        # carried by the completion outcome (_delivery_verdict) instead.
+        # A verdict is terminal even if no test landed. The completion
+        # envelope carries product and delivery failures.
         final_status = (
-            "triaged" if (accepted_count or flagged_count) else "triaged_empty"
+            "triaged"
+            if accepted_count + flagged_count + rejected_count > 0
+            else "triaged_empty"
         )
-        # #729: a silent triaged_empty from a systematic 100% rejection reads as a
-        # clean run. Surface the real signal instead.
         triager_warnings = _triaged_empty_warnings(
-            final_status, committed_count, flagged_count, rejected_count, ac_summary
+            final_status, accepted_count, flagged_count, rejected_count, ac_summary
         )
         if delivery_error:
             triager_warnings.append(
@@ -1957,7 +1994,9 @@ def _load_source_meta(spec_dir: Path) -> dict:
         return {}
 
 
-def _write_empty_report(spec_dir: Path, mode: str) -> None:
+def _write_empty_report(
+    spec_dir: Path, mode: str, regenerated: Sequence[dict[str, Any]] = ()
+) -> None:
     """Write empty placeholder reports for the no-candidates path."""
     from agents.triage_report import build_report, render_json, render_markdown
 
@@ -1969,6 +2008,7 @@ def _write_empty_report(spec_dir: Path, mode: str) -> None:
         rejected=[],
         collisions=[],
         dedup_input_count=0,
+        regenerated=regenerated,
     )
     findings_dir = spec_dir / "findings"
     findings_dir.mkdir(parents=True, exist_ok=True)
