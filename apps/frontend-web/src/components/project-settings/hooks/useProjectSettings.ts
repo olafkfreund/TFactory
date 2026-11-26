@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import {
-  updateProjectSettings,
+  updateProjectSettingsResult,
   checkProjectVersion,
   initializeProject
 } from '../../../stores/project-store';
@@ -277,9 +277,9 @@ export function useProjectSettings(
     setError(null);
 
     try {
-      const success = await updateProjectSettings(project.id, settings);
-      if (!success) {
-        setError('Failed to save settings');
+      const { ok, error } = await updateProjectSettingsResult(project.id, settings);
+      if (!ok) {
+        setError(error || 'Failed to save settings');
         return;
       }
 

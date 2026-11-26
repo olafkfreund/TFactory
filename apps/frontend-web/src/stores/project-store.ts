@@ -429,6 +429,13 @@ export async function updateProjectSettings(
   projectId: string,
   settings: Partial<ProjectSettings>
 ): Promise<boolean> {
+  return (await updateProjectSettingsResult(projectId, settings)).ok;
+}
+
+export async function updateProjectSettingsResult(
+  projectId: string,
+  settings: Partial<ProjectSettings>
+): Promise<{ ok: boolean; error?: string }> {
   const store = useProjectStore.getState();
 
   try {
@@ -443,11 +450,11 @@ export async function updateProjectSettings(
           settings: { ...project.settings, ...settings }
         });
       }
-      return true;
+      return { ok: true };
     }
-    return false;
-  } catch {
-    return false;
+    return { ok: false, error: result.error };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : undefined };
   }
 }
 
