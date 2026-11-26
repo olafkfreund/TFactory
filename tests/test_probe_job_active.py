@@ -127,13 +127,21 @@ async def test_reconcile_keeps_fresh_job_and_reaps_failed_job(
     _fake_jobs(
         monkeypatch,
         {
-            "fresh": SimpleNamespace(status=SimpleNamespace(active=0)),
+            "fresh": SimpleNamespace(
+                metadata=SimpleNamespace(
+                    annotations=vd.job_dispatch.job_annotations("fresh")
+                ),
+                status=SimpleNamespace(active=0),
+            ),
             "failed": SimpleNamespace(
+                metadata=SimpleNamespace(
+                    annotations=vd.job_dispatch.job_annotations("failed")
+                ),
                 status=SimpleNamespace(
                     active=0,
                     succeeded=0,
                     conditions=[SimpleNamespace(type="Failed", status="True")],
-                )
+                ),
             ),
         },
     )
