@@ -509,9 +509,15 @@ def test_manifest_omits_database_url_when_unset(monkeypatch):
 
 
 def test_manifest_labels_durable_coordinates():
-    labels = build_verify_job_manifest(_cfg())["metadata"]["labels"]
+    manifest = build_verify_job_manifest(_cfg())
+    metadata = manifest["metadata"]
+    labels = metadata["labels"]
     assert labels["factory.io/kind"] == "verify"
     assert "factory.io/job-id" in labels
+    assert metadata["annotations"][job_dispatch.JOB_ID_ANNOTATION] == _cfg().job_id
+    assert job_dispatch.JOB_ID_ANNOTATION not in manifest["spec"]["template"].get(
+        "metadata", {}
+    ).get("annotations", {})
 
 
 # ─── the shared job-dispatch contract (Factory#483) ───────────────────────────
@@ -1087,6 +1093,56 @@ async def test_reconcile_tick_reaps_vanished_dispatched_job(store):
     rec = await store.get("proj:100")
     assert rec["lifecycle_state"] == "stuck"
     assert "vanished" in (rec["error"] or "")
+
+
+@pytest.mark.parametrize(
+    ("owner", "error_status", "expected_state"),
+    [
+        ("proj:owner", None, "stuck"),
+        ("proj:other", None, "queued"),
+        (None, None, "queued"),
+        (None, 404, "stuck"),
+        (None, 500, "queued"),
+    ],
+    ids=["matching", "mismatched", "unstamped", "not-found", "api-error"],
+)
+async def test_reconcile_tick_probes_job_ownership(
+    monkeypatch, store, tmp_path, owner, error_status, expected_state
+):
+    dispatched = await _dispatch(store, "proj:owner")
+    reads = []
+
+    class _ApiError(Exception):
+        def __init__(self, status):
+            self.status = status
+
+    class _Batch:
+        async def read_namespaced_job(self, name, namespace):
+            reads.append((name, namespace))
+            if error_status is not None:
+                raise _ApiError(error_status)
+            return SimpleNamespace(
+                metadata=SimpleNamespace(
+                    annotations=job_dispatch.job_annotations(owner) if owner else None
+                ),
+                status=SimpleNamespace(
+                    conditions=[SimpleNamespace(type="Failed", status="True")]
+                ),
+            )
+
+    class _Api:
+        async def close(self):
+            pass
+
+    async def _batch():
+        return _Api(), _Batch()
+
+    monkeypatch.setattr(vd, "_k8s_batch", _batch)
+    assert await vd.reconcile_and_reap_once(store=store, data_root=str(tmp_path)) == (
+        1 if expected_state == "stuck" else 0
+    )
+    assert (await store.get("proj:owner"))["lifecycle_state"] == expected_state
+    assert reads == [(dispatched.job_name, "factory")]
 
 
 async def test_reconcile_tick_leaves_running_job(store):

@@ -522,7 +522,7 @@ def verify_exec_mode() -> str:
 
 
 def _short(job_id: str) -> str:
-    """k8s-safe short suffix from a job_id (DNS-1123, <=20 chars).
+    """k8s-safe readable tail and full-id hash (DNS-1123, <=26 chars).
 
     The hub canonical's shortener (Factory#483). This was a byte-identical
     hand-copy; keeping the local name keeps every call site unchanged while the
@@ -904,6 +904,9 @@ def build_verify_job_manifest(cfg: VerifyJobConfig) -> dict[str, Any]:
     manifest["metadata"].setdefault("labels", {})
     manifest["metadata"]["labels"].update(
         {"factory.io/job-id": _short(cfg.job_id), "factory.io/kind": KIND}
+    )
+    manifest["metadata"].setdefault("annotations", {}).update(
+        job_dispatch.job_annotations(cfg.job_id)
     )
     # #481: seed file-auth CLI creds into the Job pod (opt-in; env-auth unchanged).
     _inject_verify_seed_creds(manifest)
@@ -1531,7 +1534,11 @@ _HTTP_NOT_FOUND = 404
 
 
 async def _probe_job(
-    namespace: str, job_name: str, *, probe_fn: Any = None
+    namespace: str,
+    job_name: str,
+    *,
+    probe_fn: Any = None,
+    expected_job_id: str | None = None,
 ) -> tuple[bool, bool, bool]:
     """Return ``(job_exists, job_active, job_succeeded)``. Fail-safe.
 
@@ -1590,6 +1597,12 @@ async def _probe_job(
             namespace,
             job_name,
             exc_info=True,
+        )
+        return True, True, False
+    if expected_job_id is not None and job_dispatch.job_owner(job) != expected_job_id:
+        _log.warning(
+            "[verify-dispatch] job ownership mismatch for suffix %s (leaving row active)",
+            _short(expected_job_id),
         )
         return True, True, False
     st = getattr(job, "status", None)
@@ -1706,7 +1719,10 @@ async def reconcile_and_reap_once(
                 if is_terminal_record(await reconcile_verify_job(job_id, store=s)):
                     continue
                 exists, active, succeeded = await _probe_job(
-                    namespace, job_name, probe_fn=probe_fn
+                    namespace,
+                    job_name,
+                    probe_fn=probe_fn,
+                    expected_job_id=job_id,
                 )
                 reaped_rec = await reap_if_orphaned(
                     job_id,
