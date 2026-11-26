@@ -1,5 +1,6 @@
 ---
 status: draft
+superseded: true  # exclusion design rejected 2026-11-26; see intent (regenerate, planned)
 issue: 1701
 intent: intent/2026-11-26-1701-verdict-test-quality.md
 ---

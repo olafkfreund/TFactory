@@ -104,3 +104,30 @@ spec" quote. So no failing test is ever removed from the verdict.
    test still has to pass, so the trigger can be stricter than an exclusion would need to be
    without any risk of a false green.
 3. **Cost.** At most one regeneration per subtask per run, within the existing caps.
+
+## Status (2026-11-26)
+
+The owner decided: **strict now, regenerate later.** TFactory is unchanged for now. A test that
+contradicts the spec keeps blocking the merge, which can cause false fails but never false
+greens. This intent stays a draft and is tracked as a planned feature.
+
+The reviews of this revision set these requirements for the feature:
+
+1. **A post-vote replan loop.** It must:
+   - keep the verdicts already decided;
+   - handle several regeneration requests one at a time;
+   - bind each replacement to its original subtask;
+   - keep intermediate votes out of the final `verdicts.json`;
+   - hold the Triager until every request resolves;
+   - give a stuck request an owner (today `replan_needed` is outside the liveness watchdog).
+2. **Fail-closed caps.** Record the regeneration against the original subtask before dispatch.
+   If the replacement is missing, truncated or out of budget, write a terminal `reject`. The
+   existing STUCK path and the partial-verify path at the budget limit must never end green.
+3. **The replacement must be at least as strong as the original.** A passing replacement needs
+   fresh execution on the same build, plus evidence that it asserts the originally disputed
+   behaviour. A replacement that checks the items but ignores their order must not pass.
+4. **The trigger is judged from every raw judge call.** Each call must name the same subtask and
+   AC, and there must be runner evidence of an assertion failure. A crashed or missing call
+   doesn't count. Decide whether single-run browser evidence qualifies.
+5. **An all-reject run must report `fail`.** Both `final_status` and the completion envelope
+   (`_status_verdict`) change, and the mixed accept/reject outcome is specified.
