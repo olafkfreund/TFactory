@@ -1,6 +1,7 @@
 """PATCH /settings accepts the Memory tab payload for project admins and owners."""
 
 import sys
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -9,6 +10,7 @@ import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from httpx import Response
+from starlette.responses import Response as StarletteResponse
 
 for root in (
     Path(__file__).resolve().parents[1],
@@ -33,7 +35,7 @@ def settings_response(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     membership_role: str | None,
-    save_projects: Mock,
+    save_projects: Mock,  # noqa: ARG001 - requested for its patch of projects.save_projects
 ) -> Response:
     project_data = {"known": {"path": str(tmp_path), "org_id": "A", "name": "p"}}
     monkeypatch.setattr(projects, "load_projects", lambda: project_data)
@@ -55,14 +57,16 @@ def settings_response(
         scalar_one_or_none=lambda: membership
     )
 
-    async def db():
+    async def db() -> AsyncIterator[AsyncMock]:
         yield db_session
 
     app = FastAPI()
     app.dependency_overrides[get_db] = db
 
     @app.middleware("http")
-    async def identity(request: Request, call_next):
+    async def identity(
+        request: Request, call_next: Callable[[Request], Awaitable[StarletteResponse]]
+    ) -> StarletteResponse:
         request.state.user = {"id": "u1", "email": "u@example.test", "role": "member"}
         return await call_next(request)
 
@@ -70,7 +74,8 @@ def settings_response(
     payload = projects.ProjectSettings().model_dump(mode="json")
     payload.update(graphitiMcpEnabled=True, graphitiMcpUrl="http://localhost:3102/mcp/")
     with TestClient(app) as client:
-        return client.patch("/api/projects/known/settings", json=payload)
+        response: Response = client.patch("/api/projects/known/settings", json=payload)
+        return response
 
 
 @pytest.mark.parametrize(
