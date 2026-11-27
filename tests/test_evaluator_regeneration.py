@@ -898,3 +898,19 @@ def test_merge_invariant():
     assert check([original, other], [other, replacement], [entry] * 4)
     assert check([original, other], [other, replacement, replacement], [entry])
     assert check([original, other], [other, replacement, original], [entry])
+
+
+def test_plan_row_resolves_a_replacement_through_its_original() -> None:
+    from agents.evaluator import _plan_row, _resolve_subtask
+
+    subtask = {"id": "orig", "files_to_create": ["tests/test_orig.py"]}
+    plan = {"phases": [{"name": "AC#1: x", "subtasks": [subtask]}]}
+    replacement = {
+        "test_id": "orig-regen1",
+        "test_file": "tests/test_orig_regen1.py",
+        "regenerated_from": "orig",
+    }
+    assert _resolve_subtask(plan, replacement) is None
+    assert _resolve_subtask(plan, _plan_row(replacement)) is subtask
+    plain = {"test_id": "orig", "test_file": "tests/test_orig.py"}
+    assert _plan_row(plain) is plain

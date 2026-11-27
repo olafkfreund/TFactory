@@ -56,6 +56,8 @@ def test_discarded_regeneration_entry_is_read() -> None:
     "change",
     [
         {"replacement_id": ""},
+        {"replacement_id": None},
+        {"outcome": "replaced", "replacement_id": None},
         {"replacement_quote": ""},
         {"replacement_quote": "   "},
         {"replacement_quote": 123},

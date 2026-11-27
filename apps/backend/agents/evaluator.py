@@ -3860,6 +3860,12 @@ def _merge_replacement_rows(
         entry["outcome"] = "replaced"
 
 
+def _plan_row(row: dict[str, Any]) -> dict[str, Any]:
+    """A replacement row resolves to its plan subtask through its original ID."""
+    origin = row.get("regenerated_from")
+    return {"test_id": origin} if isinstance(origin, str) and origin else row
+
+
 def _discard_confirmed_contradictions(  # noqa: PLR0913 - evidence from both passes
     spec_dir: Path,
     final_rows: list[dict[str, Any]],
@@ -3871,7 +3877,7 @@ def _discard_confirmed_contradictions(  # noqa: PLR0913 - evidence from both pas
     ac_texts: list[str],
     n: int,
 ) -> None:
-    if n < regeneration.MIN_DISCARD_VOTES:
+    if min(n, len(docs2)) < regeneration.MIN_DISCARD_VOTES:
         return
     plan = _read_plan(spec_dir) or {}
     by_id = {bundle.test_id: bundle for bundle in replacements}
@@ -3914,18 +3920,16 @@ def _discard_confirmed_contradictions(  # noqa: PLR0913 - evidence from both pas
             ),
             None,
         )
+        original_id = original.get("test_id")
+        others = [row for row in final_rows if row.get("test_id") != original_id]
         if phase is None or not any(
             row.get("verdict") in ("accept", "flag")
-            and any(
-                st is _resolve_subtask(plan, row) for st in phase.get("subtasks") or []
-            )
-            for row in final_rows
-            if row is not original
+            and (resolved := _resolve_subtask(plan, _plan_row(row))) is not None
+            and any(st is resolved for st in phase.get("subtasks") or [])
+            for row in others
         ):
             continue
-        if not any(
-            row.get("verdict") == "accept" for row in final_rows if row is not original
-        ):
+        if not any(row.get("verdict") == "accept" for row in others):
             continue
         final_rows.remove(original)
         entry["outcome"] = "discarded"

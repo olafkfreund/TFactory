@@ -1251,7 +1251,7 @@ def _regenerated_entries(doc: dict[str, Any]) -> list[dict[str, Any]]:
             )
             or (
                 entry["outcome"] in ("replaced", "discarded")
-                and not entry["replacement_id"].strip()
+                and not (entry["replacement_id"] or "").strip()
             )
             or (
                 entry["outcome"] == "discarded"

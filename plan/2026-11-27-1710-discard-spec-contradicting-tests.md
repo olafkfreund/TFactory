@@ -244,3 +244,17 @@ the worktree was unchanged after each.
 ## Rollback
 
 Revert the PR. A spec-contradicting reject then fails the run again, as it did before.
+
+## Deviations (diff review, 2026-11-27)
+
+Codex, agy and a fresh Opus reviewer read the implemented diff.
+
+- **Phase-pass check, §C5:** a replacement row (`<id>-regen1`, which is not in the plan) now
+  resolves to its plan subtask through `regenerated_from`, using the new `_plan_row` helper. The
+  check also requires a resolved subtask before comparing, and the original is now excluded by
+  `test_id`; the code compared by object identity before, which never matched, because the row
+  is a copy (Codex P2, agy, Opus).
+- **Vote floor, §C2:** it now checks the number of pass-2 docs as well as `n`.
+- **`triager._regenerated_entries`:** a `null` `replacement_id` on `replaced` or `discarded` is
+  rejected instead of raising `AttributeError`. This was a regression that all three reviewers
+  found, and it now has tests.
