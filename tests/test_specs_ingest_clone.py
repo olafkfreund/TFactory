@@ -290,3 +290,12 @@ def test_ingest_route_rejects_invalid_correlation_key_with_422(
         },
     )
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_spec_ingest_request_blank_correlation_key_is_none(blank: str) -> None:
+    # #1713 review: "" means "no key", never a 422.
+    req = SpecIngestRequest(
+        project_id="p", spec_id="s", spec_text="x", correlation_key=blank
+    )
+    assert req.correlation_key is None

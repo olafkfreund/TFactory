@@ -83,3 +83,16 @@ changes.
 | An empty or whitespace key is stored as is (agy) | confirmed (`task_control.py:933`) | normalised via `_handoff_key` |
 | The digits validator needs a `None` guard (agy) | confirmed | done |
 | Anchors drifted, and the grep doesn't recurse (Codex) | confirmed | anchors and test files named |
+
+## Deviations (diff review, 2026-11-27)
+
+- **Fresh Opus review (medium):** a `mode="before"` validator turns an empty or whitespace
+  `correlation_key` into `None`. Before, it got a 422 over HTTP. There is a test in
+  `tests/test_specs_ingest_clone.py`.
+- **Accepted, not fixed:**
+  - a project member can send any valid key, the same as a handoff contract could before;
+  - a contract's own key isn't re-checked against the new pattern.
+
+  Both behaved the same before this change. They are noted for a follow-up.
+- **agy said "tests missing":** refuted. The diff I gave agy covered `apps/` only. The tests are
+  in `tests/`, and 186 pass.

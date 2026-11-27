@@ -181,6 +181,12 @@ class SpecIngestRequest(BaseModel):
         pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,127}$",
     )
 
+    @field_validator("correlation_key", mode="before")
+    @classmethod
+    def _blank_is_none(cls, value: object) -> object:
+        # A caller that always sends the field uses "" for "no key" (#1713 review).
+        return None if isinstance(value, str) and not value.strip() else value
+
     @field_validator("correlation_key")
     @classmethod
     def _reject_all_digits(cls, value: str | None) -> str | None:
