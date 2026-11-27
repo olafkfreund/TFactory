@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1710
 intent: intent/2026-11-27-1710-discard-spec-contradicting-tests.md
 ---
