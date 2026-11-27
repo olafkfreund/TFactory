@@ -67,6 +67,7 @@ _COVERED: dict[str, str] = {
     "services_gate.py": "test_services_gate_refuses_a_run_that_needs_services",
     # scan 2: triager halt_reason rules
     "no_evidence": "test_no_evidence_rule_refuses_a_verdict_free_run",
+    "product_failed": "test_product_failed_rule_refuses_all_rejects",
     "dependency_review": "test_dependency_review_rule_refuses_a_gating_fail",
     "criterion_conflict": "test_criterion_conflict_rule_refuses_a_gating_conflict",
     "zero_tests": "test_zero_tests_rule_refuses_an_unexplained_empty_generation",
@@ -280,6 +281,23 @@ def test_no_evidence_rule_refuses_a_verdict_free_run(tmp_path: Path) -> None:
     )
     assert envelope["halt_reason"].startswith("no_evidence:")
     assert _build_completion_envelope(tmp_path, _status())["outcome"] == "success"
+
+
+def test_product_failed_rule_refuses_all_rejects(tmp_path: Path) -> None:
+    status = _status(
+        verdicts_count=2, committed_count=0, flagged_count=0, rejected_count=2
+    )
+    status_path = tmp_path / "status.json"
+    status_path.write_text(json.dumps(status))
+    failed = _build_completion_envelope(tmp_path, json.loads(status_path.read_text()))
+    assert failed["outcome"] == "failure"
+    assert failed["halt_reason"].startswith("product_failed: 2 generated tests")
+
+    status.update(accepted_count=1, rejected_count=1)
+    status_path.write_text(json.dumps(status))
+    mixed = _build_completion_envelope(tmp_path, json.loads(status_path.read_text()))
+    assert mixed["outcome"] == "success"
+    assert "halt_reason" not in mixed
 
 
 def test_dependency_review_rule_refuses_a_gating_fail(tmp_path: Path) -> None:

@@ -24,6 +24,7 @@ _eval_log = _logging.getLogger("agents.evaluator")
 
 
 _VALID_VERDICTS = frozenset({"accept", "reject", "flag"})
+_MAX_CONTRADICTION_QUOTE_CHARS = 500
 
 
 def _loads_tolerant(text: str) -> tuple[object, bool]:
@@ -41,6 +42,23 @@ def _loads_tolerant(text: str) -> tuple[object, bool]:
         return extract_json(text)
     except OutputEnvelopeError as exc:
         raise json.JSONDecodeError(str(exc), text or "", 0) from None
+
+
+def _validate_spec_contradiction(i: int, contradiction: object) -> str | None:
+    if contradiction is None:
+        return None
+    if not isinstance(contradiction, dict):
+        return f"verdict[{i}].spec_contradiction must be an object or null"
+    criterion = contradiction.get("criterion")
+    if (
+        not isinstance(criterion, str)
+        or not 1 <= len(criterion) <= _MAX_CONTRADICTION_QUOTE_CHARS
+    ):
+        return (
+            f"verdict[{i}].spec_contradiction.criterion must be a non-empty "
+            f"string of at most {_MAX_CONTRADICTION_QUOTE_CHARS} characters"
+        )
+    return None
 
 
 def _validate_one_verdict(
@@ -85,7 +103,7 @@ def _validate_one_verdict(
                 test_id,
                 cdp,
             )
-    return None
+    return _validate_spec_contradiction(i, v.get("spec_contradiction"))
 
 
 def _validate_verdicts(

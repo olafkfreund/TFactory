@@ -28,6 +28,7 @@ if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
 
 from agents import verify_pipeline as vp  # noqa: E402
+from agents.triager import _build_completion_envelope  # noqa: E402
 
 
 def test_evaluated_empty_is_not_a_verdict() -> None:
@@ -39,17 +40,17 @@ def test_evaluated_empty_is_not_a_verdict() -> None:
     )
 
 
-def test_triaged_empty_is_still_a_verdict() -> None:
-    """The false-refusal direction: a 100% rejection IS a judgement.
-
-    If this ever fails, healthy runs are being reaped as stalls — the same
-    defect with the opposite sign.
-    """
-    assert "triaged_empty" in vp._VERDICT_STATUSES, (
-        "the triager reaches triaged_empty after really judging candidates; "
-        "reaping it as a stall would false-refuse a healthy run"
-    )
+def test_terminal_triage_does_not_make_rejects_a_pass(tmp_path: Path) -> None:
+    """Empty and reject-only triage finish the Job with distinct outcomes."""
+    assert "triaged_empty" in vp._VERDICT_STATUSES
     assert "triaged" in vp._VERDICT_STATUSES
+    empty = _build_completion_envelope(tmp_path, {"status": "triaged_empty"})
+    assert empty["outcome"] == "empty"
+    rejected = _build_completion_envelope(
+        tmp_path, {"status": "triaged", "verdicts_count": 2, "rejected_count": 2}
+    )
+    assert rejected["outcome"] == "failure"
+    assert rejected["halt_reason"].startswith("product_failed:")
 
 
 def test_create_and_run_route_states_it_does_not_verify() -> None:

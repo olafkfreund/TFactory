@@ -33,6 +33,8 @@ from unittest.mock import patch
 import pytest
 from agents.triager import (
     _BG_TRIAGER_TASKS,
+    _build_completion_envelope,
+    _status_verdict,
     run_triager,
     schedule_triager,
 )
@@ -143,6 +145,14 @@ async def test_happy_three_verdicts_mixed(
     """1 accept + 1 flag + 1 reject → triaged, report emitted,
     git_writer dry-run argv recorded."""
     verdicts = _make_verdicts(3, ["accept", "flag", "reject"])
+    verdicts["regenerated"] = [
+        {
+            "original": {"test_id": "original"},
+            "reason_kind": "test_quality",
+            "replacement_id": "st0",
+            "outcome": "replaced",
+        }
+    ]
     (spec_dir / "findings" / "verdicts.json").write_text(json.dumps(verdicts))
     _write_test_files(spec_dir, 3)
 
@@ -155,11 +165,16 @@ async def test_happy_three_verdicts_mixed(
     assert status["flagged_count"] == 1
     assert status["rejected_count"] == 1
     assert status["dedup_collision_count"] == 0
+    envelope = _build_completion_envelope(spec_dir, status)
+    assert envelope["outcome"] == "success"
+    assert "halt_reason" not in envelope
 
     # Report files emitted
     report_json = json.loads((spec_dir / "findings" / "triage_report.json").read_text())
     assert report_json["summary"]["committed_count"] == 1
     assert report_json["summary"]["rejected_count"] == 1
+    assert report_json["summary"]["regenerated_count"] == 1
+    assert report_json["regenerated"][0]["original"] == "original"
     assert len(report_json["committed"]) == 1
     assert report_json["committed"][0]["test_id"] == "st0"
 
@@ -266,6 +281,7 @@ async def test_empty_verdicts_is_triaged_empty(
     status = json.loads((spec_dir / "status.json").read_text())
     assert status["status"] == "triaged_empty"
     assert status["committed_count"] == 0
+    assert _build_completion_envelope(spec_dir, status)["outcome"] == "empty"
 
     # Empty report files still emitted
     report = json.loads((spec_dir / "findings" / "triage_report.json").read_text())
@@ -273,13 +289,16 @@ async def test_empty_verdicts_is_triaged_empty(
 
 
 @pytest.mark.asyncio
-async def test_all_rejects_is_triaged_empty(
+@pytest.mark.parametrize("regenerated", [None, {}, ["bad row"], [{"original": {}}]])
+async def test_all_rejects_is_triaged_failure(
     spec_dir: Path,
     project_dir: Path,
+    regenerated: object,
 ) -> None:
-    """All verdicts are reject → triaged_empty, but rejects recorded
-    in the report."""
+    """All rejects fail verification even if the regeneration audit is malformed."""
     verdicts = _make_verdicts(2, ["reject", "reject"])
+    if regenerated is not None:
+        verdicts["regenerated"] = regenerated
     (spec_dir / "findings" / "verdicts.json").write_text(json.dumps(verdicts))
     _write_test_files(spec_dir, 2)
 
@@ -287,13 +306,83 @@ async def test_all_rejects_is_triaged_empty(
     assert ok is True
 
     status = json.loads((spec_dir / "status.json").read_text())
-    # No survivors → triaged_empty (committed=0 + flagged=0)
-    assert status["status"] == "triaged_empty"
+    assert status["status"] == "triaged"
     assert status["committed_count"] == 0
     assert status["rejected_count"] == 2
+    assert any("100% rejection" in warning for warning in status["triager_warnings"])
+    envelope = _build_completion_envelope(spec_dir, status)
+    assert envelope["outcome"] == "failure"
+    assert envelope["halt_reason"].startswith("product_failed: 2 generated tests")
 
     report = json.loads((spec_dir / "findings" / "triage_report.json").read_text())
     assert report["summary"]["rejected_count"] == 2
+    assert report["regenerated"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("labels", [["accept", "reject"], ["flag", "flag"]])
+async def test_triaged_survivors_report_success(
+    spec_dir: Path, project_dir: Path, labels: list[str]
+) -> None:
+    (spec_dir / "findings" / "verdicts.json").write_text(
+        json.dumps(_make_verdicts(len(labels), labels))
+    )
+    _write_test_files(spec_dir, len(labels))
+
+    assert await run_triager(spec_dir, project_dir) is True
+
+    status = json.loads((spec_dir / "status.json").read_text())
+    assert status["status"] == "triaged"
+    envelope = _build_completion_envelope(spec_dir, status)
+    assert envelope["outcome"] == "success"
+    assert "halt_reason" not in envelope
+
+
+@pytest.mark.parametrize(
+    ("status_value", "counts", "status", "outcome", "rule"),
+    [
+        ("triaged", (0, 0, 0, 0), {"tests_generated": 0}, "failure", "no_evidence"),
+        ("triaged", (0, 0, 0, 2), {"tests_generated": 0}, "failure", "product_failed"),
+        ("triaged", (2, 1, 0, 1), {}, "success", None),
+        ("triaged", (2, 0, 1, 1), {}, "success", None),
+        ("triaged", (2, 0, 2, 0), {}, "success", None),
+        ("triaged_empty", (0, 0, 0, 0), {}, "empty", None),
+        ("triager_failed", (0, 0, 0, 0), {}, "failure", None),
+        ("triaged", (1, 1, 0, 0), {"tests_generated": 0}, "failure", "zero_tests"),
+        (
+            "triaged_empty",
+            (0, 0, 0, 0),
+            {"tests_generated": 0, "verify_skip_reason": "no pending subtasks"},
+            "empty",
+            "zero_tests",
+        ),
+        (
+            "triaged",
+            (1, 1, 0, 0),
+            {"accepted_count": 1, "git_writer": {"ok": False}},
+            "failure",
+            "delivery_failed",
+        ),
+    ],
+)
+def test_status_verdict(status_value, counts, status, outcome, rule) -> None:
+    verdicts, accepted, flagged, rejected = counts
+    actual, reason = _status_verdict(
+        status_value,
+        {
+            "proof_kind": "tests",
+            "verdicts": verdicts,
+            "accepted": accepted,
+            "flagged": flagged,
+            "rejected": rejected,
+        },
+        status,
+    )
+    assert actual == outcome
+    if rule is None:
+        assert reason is None
+    else:
+        assert reason is not None and reason.startswith(f"{rule}:")
 
 
 # ── Failure paths ──────────────────────────────────────────────────────

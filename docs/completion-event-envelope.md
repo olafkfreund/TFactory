@@ -131,6 +131,8 @@ to `outcome="failure"` with `halt_reason="no_evidence: verify produced no verdic
 - `accepted_count > 0` (at least one test accepted), or
 - `flagged_count > 0` (at least one test flagged).
 
+A reject count also proves a verdict was reached. A `triaged` run with rejects and zero accepts or flags reports `outcome="failure"` with `halt_reason="product_failed: <n> generated tests failed against the product"`.
+
 ### Delivery gate (#1260)
 
 `accepted_count` is how many tests triage **accepted**; `committed_count` is how

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.14.10 - 2026-11-27
+
+Merged to `dev` since 0.14.9.
+
+### Fixed
+
+- A test TFactory generated badly no longer fails a correct build.
+  - **Which rejects are regenerated:** test-quality rejects (the test passed, was flaky or was judged weak or not relevant) get one regeneration inside the evaluator, on the same build. A consistently failing assertion qualifies only when every judge quotes the acceptance criterion it contradicts.
+  - **When a replacement counts:** it must be stable, kill its mutation and be accepted. Otherwise the original stays `reject`.
+  - **All-reject runs:** these now end `triaged`, with completion `failure`/`product_failed`, not `triaged_empty` or success. (#1701, #1708)
+- At OIDC login the organization's recorded owner keeps `owner`, whatever the IdP groups claim says. A failed project-settings save now shows the server's reason. (#1702, #1703)
+- An SSO login is bound to an existing account by email only when the ID token says `email_verified: true` and the account isn't linked to another identity. Binding clears the local password. A refused bind returns 403. (#1704, #1705)
+
 ## 0.14.9 - 2026-11-26
 
 Merged to `dev` since 0.14.8.

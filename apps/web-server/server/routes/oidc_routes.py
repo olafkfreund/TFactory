@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 import secrets as _secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -31,13 +31,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.oidc import authorize_access_token
+from server.oidc.provisioning import OIDCBindRefused, jit_provision_user
 
 from ..config import get_settings
 from ..database import User
 from ..database.engine import get_db
 from ..database.models import OidcRefreshSession
 from ..oidc import get_oauth_client, is_oidc_enabled
-from ..oidc.provisioning import jit_provision_user
 from ..oidc.userinfo_cache import get_cached, invalidate
 from ..oidc.userinfo_cache import put as cache_put
 from .auth_routes import create_access_token
@@ -45,6 +45,11 @@ from .auth_routes import create_access_token
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/auth/oidc", tags=["Auth (OIDC)"])
+
+OIDC_BIND_REFUSED_DETAIL = (
+    "This email belongs to an existing account that can't be linked to this sign-in. "
+    "Sign in the way you did before, or ask an admin."
+)
 
 
 # ---------------------------------------------------------------------------
@@ -56,15 +61,13 @@ router = APIRouter(prefix="/api/auth/oidc", tags=["Auth (OIDC)"])
 def _create_refresh_token(user: User, jti: str) -> str:
     """Create a refresh token with a JTI that ties it to a RefreshSession row."""
     settings = get_settings()
-    expires = datetime.now(timezone.utc) + timedelta(
-        days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS
-    )
+    expires = datetime.now(UTC) + timedelta(days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS)
     payload = {
         "sub": user.id,
         "type": "refresh",
         "jti": jti,
         "exp": expires,
-        "iat": datetime.now(timezone.utc),
+        "iat": datetime.now(UTC),
     }
     return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
 
@@ -195,14 +198,21 @@ async def oidc_callback(request: Request, db: AsyncSession = Depends(get_db)):
 
     # JIT provisioning: stable sub-based User lookup + claim-mapped role
     # + OrganizationMember row in the configured default org.
-    user = await jit_provision_user(db, userinfo)
+    try:
+        user = await jit_provision_user(db, userinfo)
+    except OIDCBindRefused as exc:
+        logger.warning("OIDC account bind refused for sub=%s: %s", sub, exc)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=OIDC_BIND_REFUSED_DETAIL,
+        ) from exc
 
     # Create a RefreshSession so the refresh path can hit IdP userinfo
     # and propagate revocation. The jti binds the refresh JWT to the
     # session row; logging out / revocation = deleting the row.
     settings = get_settings()
     jti = _secrets.token_urlsafe(32)
-    refresh_expires = datetime.now(timezone.utc) + timedelta(
+    refresh_expires = datetime.now(UTC) + timedelta(
         days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS
     )
     session_row = OidcRefreshSession(

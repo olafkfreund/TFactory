@@ -301,6 +301,14 @@ def test_body_mentions_verdicts_json_schema(dataclass_bundle) -> None:
     assert "signals_summary" in p
 
 
+def test_body_limits_spec_contradiction_to_wrong_test_expectations() -> None:
+    prompt = get_tfactory_evaluator_prompt(Path("/ws"), Path("/p"), [])
+    assert '"spec_contradiction": {"criterion":' in prompt
+    assert "its own expectation contradicts an acceptance criterion" in prompt
+    assert "Quote that criterion verbatim (max 500 characters)" in prompt
+    assert "when the product fails a correct test, when unsure" in prompt
+
+
 def test_total_size_in_range(dataclass_bundle) -> None:
     p = get_tfactory_evaluator_prompt(
         Path("/ws"),

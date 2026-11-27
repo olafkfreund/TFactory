@@ -179,8 +179,57 @@ def test_render_json_empty_buckets() -> None:
     assert doc["committed"] == []
     assert doc["flagged"] == []
     assert doc["rejected"] == []
+    assert doc["regenerated"] == []
     assert doc["dedup_collisions"] == []
     assert doc["summary"]["dedup_input_count"] == 0
+    assert doc["summary"]["regenerated_count"] == 0
+
+
+def test_regenerated_tests_in_both_formats() -> None:
+    entries = [
+        {
+            "original": {"test_id": "t1", "verdict": "reject"},
+            "reason_kind": "spec_contradiction",
+            "quoted_ac": "The user stays signed in",
+            "replacement_id": "t1-regen1",
+            "outcome": "replaced",
+        },
+        {
+            "original": "t2",
+            "reason_kind": "test_quality",
+            "replacement_id": None,
+            "outcome": "kept_reject",
+            "reason": "No replacement generated",
+        },
+    ]
+    report = build_report(
+        mode="initial",
+        generated_at="2026-05-28T00:00:00+00:00",
+        committed=[_cand(test_id="t1-regen1")],
+        flagged=[],
+        rejected=[_cand(test_id="t2", verdict="reject")],
+        collisions=[],
+        dedup_input_count=1,
+        regenerated=entries,
+    )
+    assert report.regenerated == tuple(entries)
+    doc = json.loads(render_json(report))
+    assert doc["regenerated"] == [
+        dict(entries[0], original="t1", reason=None),
+        dict(entries[1], quoted_ac=None),
+    ]
+    assert doc["summary"]["regenerated_count"] == 2
+    assert doc["summary"]["rejected_count"] == 1
+    assert [row["test_id"] for row in doc["rejected"]] == ["t2"]
+
+    md = render_markdown(report)
+    assert md.index("## Rejected") < md.index("## Regenerated tests")
+    assert (
+        "## Regenerated tests\n\n"
+        "- `t1` (spec_contradiction) → `t1-regen1` (replaced)\n"
+        "- `t2` (test_quality) → `none` (kept_reject) — No replacement generated\n"
+        in md
+    )
 
 
 def test_render_json_trailing_newline() -> None:
@@ -263,7 +312,10 @@ def test_markdown_matches_golden_file() -> None:
     """Snapshot test: change the renderer → regenerate the golden file."""
     actual = render_markdown(_build_golden_report())
     expected_path = GOLDEN_DIR / "expected.md"
-    expected = expected_path.read_text()
+    expected = expected_path.read_text().replace(
+        "## Dedup Collisions\n",
+        "## Regenerated tests\n\n_(none)_\n\n## Dedup Collisions\n",
+    )
     if actual != expected:
         # Provide a diff hint via the assertion message
         import difflib
@@ -297,6 +349,7 @@ def test_markdown_has_all_sections() -> None:
         "## Flagged",
         "## Skipped",
         "## Rejected",
+        "## Regenerated tests",
         "## Dedup Collisions",
     ):
         assert section in md
@@ -344,10 +397,8 @@ def test_markdown_empty_section_placeholder() -> None:
         dedup_input_count=0,
     )
     md = render_markdown(report)
-    # Task 11 added Skipped section → five sections now emit _(none)_
-    # when all are empty: Committed, Flagged, Skipped, Rejected,
-    # Dedup Collisions
-    assert md.count("_(none)_") == 5
+    assert "## Regenerated tests\n\n_(none)_\n" in md
+    assert md.count("_(none)_") == 6
 
 
 def test_markdown_missing_signal_degrades_gracefully() -> None:
