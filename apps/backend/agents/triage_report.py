@@ -306,6 +306,7 @@ def _regenerated_to_json(entry: dict[str, Any]) -> dict[str, Any]:
         "reason_kind": entry["reason_kind"],
         "quoted_ac": entry.get("quoted_ac"),
         "replacement_id": entry["replacement_id"],
+        "replacement_quote": entry.get("replacement_quote"),
         "outcome": entry["outcome"],
         "reason": entry.get("reason"),
     }
@@ -536,8 +537,12 @@ def render_markdown(report: TriageReport) -> str:
         for c in report.rejected
     )
     regenerated_lines = []
+    discarded_lines = []
     for entry in report.regenerated:
         row = _regenerated_to_json(entry)
+        if row["outcome"] == "discarded":
+            quote = " ".join(row["replacement_quote"].split())[:200]
+            discarded_lines.append(f'- `{row["original"]}` — contradicts: "{quote}"')
         replacement = row["replacement_id"] or "none"
         reason = " ".join((row["reason"] or "").split())
         line = (
@@ -577,6 +582,11 @@ def render_markdown(report: TriageReport) -> str:
         _section("Flagged", flagged_body),
         _section("Skipped", skipped_body),
         _section("Rejected", rejected_body),
+        *(
+            [_section("Discarded (test contradicts spec)", "\n".join(discarded_lines))]
+            if discarded_lines
+            else []
+        ),
         _section("Regenerated tests", "\n".join(regenerated_lines)),
         _section("Dedup Collisions", collisions_body),
         "---\n",

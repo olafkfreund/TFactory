@@ -215,8 +215,8 @@ def test_regenerated_tests_in_both_formats() -> None:
     assert report.regenerated == tuple(entries)
     doc = json.loads(render_json(report))
     assert doc["regenerated"] == [
-        dict(entries[0], original="t1", reason=None),
-        dict(entries[1], quoted_ac=None),
+        dict(entries[0], original="t1", reason=None, replacement_quote=None),
+        dict(entries[1], quoted_ac=None, replacement_quote=None),
     ]
     assert doc["summary"]["regenerated_count"] == 2
     assert doc["summary"]["rejected_count"] == 1
@@ -229,6 +229,48 @@ def test_regenerated_tests_in_both_formats() -> None:
         "- `t1` (spec_contradiction) → `t1-regen1` (replaced)\n"
         "- `t2` (test_quality) → `none` (kept_reject) — No replacement generated\n"
         in md
+    )
+
+
+def test_discarded_section_and_json_quote() -> None:
+    entry = {
+        "original": {"test_id": "wrong-test"},
+        "reason_kind": "spec_contradiction",
+        "replacement_id": "wrong-test-regen1",
+        "replacement_quote": "  Return  items\n in order  " + "x" * 205,
+        "outcome": "discarded",
+    }
+    report = build_report(
+        mode="initial",
+        generated_at="2026-05-28T00:00:00+00:00",
+        committed=[_cand(test_id="passing")],
+        flagged=[],
+        rejected=[],
+        collisions=[],
+        dedup_input_count=1,
+        regenerated=[entry],
+    )
+    md = render_markdown(report)
+    assert md.index("## Rejected") < md.index("## Discarded (test contradicts spec)")
+    assert md.index("## Discarded (test contradicts spec)") < md.index(
+        "## Regenerated tests"
+    )
+    assert '- `wrong-test` — contradicts: "Return items in order ' in md
+    assert "x" * 201 not in md.split("## Discarded", 1)[1].split("##", 1)[0]
+    assert (
+        json.loads(render_json(report))["regenerated"][0]["replacement_quote"]
+        == entry["replacement_quote"]
+    )
+    assert "## Discarded" not in render_markdown(
+        build_report(
+            mode="initial",
+            generated_at="2026-05-28T00:00:00+00:00",
+            committed=[],
+            flagged=[],
+            rejected=[],
+            collisions=[],
+            dedup_input_count=0,
+        )
     )
 
 

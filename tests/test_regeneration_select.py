@@ -14,6 +14,8 @@ from agents.regeneration import (
     REASON_SPEC_CONTRADICTION,
     REASON_TEST_QUALITY,
     Candidate,
+    check_merge_invariant,
+    confirmed_contradiction,
     eligible_candidates,
     load_ac_texts,
     load_vote_docs,
@@ -63,6 +65,112 @@ def test_unanimous_votes_match_one_criterion(calls: int) -> None:
     ]
     assert normalize_quote(first_quote) == "return an empty list"
     assert normalize_quote(123) == ""
+
+
+def test_confirmed_contradiction_returns_matching_ac() -> None:
+    assert confirmed_contradiction("test-a", [_quoted_vote()] * 3, [OTHER_AC, AC]) == AC
+
+
+@pytest.mark.parametrize(
+    "docs",
+    [
+        [_quoted_vote(), None],
+        [_quoted_vote(), _vote()],
+        [_quoted_vote(), _quoted_vote("Unrelated criterion text")],
+        [_quoted_vote()],
+        [
+            _quoted_vote(),
+            _vote(verdict="accept", spec_contradiction={"criterion": QUOTE}),
+        ],
+        [_quoted_vote(), _vote(judged=False, spec_contradiction={"criterion": QUOTE})],
+        [_quoted_vote(), _quoted_vote("short")],
+        [_quoted_vote(), {"verdicts": [_quoted_vote()["verdicts"][0]] * 2}],
+    ],
+)
+def test_confirmed_contradiction_requires_every_valid_vote(
+    docs: list[dict[str, Any] | None],
+) -> None:
+    assert confirmed_contradiction("test-a", docs, [AC]) is None
+
+
+def test_merge_invariant_accepts_discard() -> None:
+    original = {**REJECT, "spec_contradiction": {"criterion": QUOTE}}
+    passing = {"test_id": "test-b", "verdict": "accept"}
+    entry = {
+        "outcome": "discarded",
+        "reason_kind": REASON_SPEC_CONTRADICTION,
+        "original": original,
+        "replacement_id": "replacement-a",
+        "replacement_quote": AC,
+    }
+    assert check_merge_invariant([original, passing], [passing], [entry]) is None
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"original": REJECT},
+        {"reason_kind": REASON_TEST_QUALITY},
+        {"replacement_id": ""},
+        {"replacement_quote": ""},
+    ],
+)
+def test_merge_invariant_rejects_invalid_discard(change: dict[str, Any]) -> None:
+    original = {**REJECT, "spec_contradiction": {"criterion": QUOTE}}
+    entry = {
+        "outcome": "discarded",
+        "reason_kind": REASON_SPEC_CONTRADICTION,
+        "original": original,
+        "replacement_id": "replacement-a",
+        "replacement_quote": AC,
+        **change,
+    }
+    assert check_merge_invariant([original], [], [entry]) is not None
+
+
+@pytest.mark.parametrize(
+    "remaining", [[REJECT], [{"test_id": "replacement-a", "verdict": "reject"}]]
+)
+def test_merge_invariant_rejects_discarded_rows_still_present(
+    remaining: list[dict[str, Any]],
+) -> None:
+    original = {**REJECT, "spec_contradiction": {"criterion": QUOTE}}
+    entry = {
+        "outcome": "discarded",
+        "reason_kind": REASON_SPEC_CONTRADICTION,
+        "original": original,
+        "replacement_id": "replacement-a",
+        "replacement_quote": AC,
+    }
+    assert check_merge_invariant([original], remaining, [entry]) is not None
+
+
+def test_merge_invariant_rejects_double_consumption_and_cap() -> None:
+    originals = [
+        {
+            "test_id": str(i),
+            "verdict": "reject",
+            "spec_contradiction": {"criterion": QUOTE},
+        }
+        for i in range(4)
+    ]
+    entries = [
+        {
+            "outcome": "discarded",
+            "reason_kind": REASON_SPEC_CONTRADICTION,
+            "original": row,
+            "replacement_id": f"replacement-{i}",
+            "replacement_quote": AC,
+        }
+        for i, row in enumerate(originals)
+    ]
+    assert check_merge_invariant(originals[:1], [], entries[:1] * 2) is not None
+    assert check_merge_invariant(originals[:1] * 2, [], entries[:1] * 2) is not None
+    entries[0]["outcome"] = "replaced"
+    assert (
+        check_merge_invariant(originals, [], entries)
+        == "replacement count exceeds the regeneration cap"
+    )
 
 
 @pytest.mark.parametrize(

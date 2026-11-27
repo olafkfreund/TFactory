@@ -14,6 +14,7 @@ from agents.mutate_probe import MutationVerdict
 from agents.stability_runner import StabilityVerdict
 
 AC = "Return items in the order they were added"
+OTHER_AC = "Reject malformed input with a validation error"
 
 
 def _row(test_id, verdict="reject", quote=None):
@@ -46,12 +47,18 @@ def scenario(tmp_path, monkeypatch):
     state = SimpleNamespace(
         ids=["original"],
         accepted=[],
+        flagged=[],
         lane="unit",
         verdict="reject",
         votes=3,
         quotes=[None, None, None],
         crashed_first=None,
         second_verdict="accept",
+        second_quotes=[None, None, None],
+        second_judged=True,
+        second_failure_kind=None,
+        phase_split=False,
+        extra_ac=None,
         crashed_second=0,
         stability=StabilityVerdict.STABLE,
         assertion_failure=False,
@@ -127,7 +134,10 @@ def scenario(tmp_path, monkeypatch):
         verdicts.unlink(missing_ok=True)
         if call >= state.votes:
             assert "## REPLACEMENTS" in prompt
-            assert "at least as strongly" in prompt
+            if "Judge each spec_contradiction replacement" in prompt:
+                assert "Judge each spec_contradiction replacement" in prompt
+            else:
+                assert "at least as strongly" in prompt
             if state.failure == "second_raise":
                 raise RuntimeError("second vote failed after unlink")
             if state.failure == "cancel":
@@ -136,19 +146,31 @@ def scenario(tmp_path, monkeypatch):
                 verdicts.write_text('{"verdicts": []}')
                 return None, "evaluator_session_error", "crashed"
             if state.failure == "file_removed_during_vote":
-                (spec / "tests/test_b_regen1.py").unlink(missing_ok=True)
+                missing_id = "original" if state.ids[0] == "original" else "b"
+                (spec / f"tests/test_{missing_id}_regen1.py").unlink(missing_ok=True)
             rows = [
-                _row(test_id, state.second_verdict)
+                _row(
+                    test_id,
+                    state.second_verdict,
+                    state.second_quotes[call - state.votes],
+                )
                 for test_id in state.replacement_bundles
                 if not (state.failure == "omitted_vote" and test_id == "b-regen1")
             ]
+            if not state.second_judged:
+                for row in rows:
+                    row["judged"] = False
         else:
             if call == state.crashed_first:
                 return None, "evaluator_session_error", "crashed"
             rows = [
                 _row(
                     tid,
-                    "accept" if tid in state.accepted else state.verdict,
+                    "accept"
+                    if tid in state.accepted
+                    else "flag"
+                    if tid in state.flagged
+                    else state.verdict,
                     state.quotes[call],
                 )
                 for tid in state.ids
@@ -166,7 +188,7 @@ def scenario(tmp_path, monkeypatch):
         assert "assert original_source" in brief
         assert AC in brief
         assert "Never weaken" in brief
-        if state.quotes[0]:
+        if state.quotes[0] and state.stability == StabilityVerdict.CONSISTENT_FAIL:
             assert f"Quoted AC: {state.quotes[0]}" in brief
         if state.failure == "generate_raise":
             raise RuntimeError("generator failed")
@@ -210,6 +232,7 @@ def scenario(tmp_path, monkeypatch):
                 spec / st["files_to_create"][0],
                 state.second_stability,
                 state.second_mutation,
+                failure_kind=state.second_failure_kind,
             )
             for st in subtasks
             if not (state.failure == "missing_bundle" and st["id"] == "b-regen1")
@@ -230,9 +253,16 @@ def scenario(tmp_path, monkeypatch):
             }
             for tid in state.ids
         ]
-        (spec / "test_plan.json").write_text(
-            json.dumps({"phases": [{"name": f"AC#1: {AC}", "subtasks": subtasks}]})
-        )
+        phases = [{"name": f"AC#1: {AC}", "subtasks": subtasks}]
+        if state.phase_split:
+            phases = [
+                {"name": f"AC#1: {AC}", "subtasks": subtasks[:1]},
+                {"name": f"AC#2: {OTHER_AC}", "subtasks": subtasks[1:]},
+            ]
+        plan = {"phases": phases}
+        if state.extra_ac:
+            plan["final_acceptance"] = [state.extra_ac]
+        (spec / "test_plan.json").write_text(json.dumps(plan))
         bundles = []
         for st in subtasks:
             path = spec / st["files_to_create"][0]
@@ -263,6 +293,208 @@ def scenario(tmp_path, monkeypatch):
     monkeypatch.setattr(confidence, "enrich_verdicts", enrich)
     state.run = run
     return state
+
+
+def _contradiction_scenario(state):
+    state.ids = ["original", "passing"]
+    state.accepted = ["passing"]
+    state.stability = StabilityVerdict.CONSISTENT_FAIL
+    state.assertion_failure = True
+    state.quotes = [AC] * 3
+    state.second_verdict = "reject"
+    state.second_quotes = [AC] * 3
+    state.second_stability = StabilityVerdict.CONSISTENT_FAIL
+    state.second_failure_kind = "assertion"
+
+
+@pytest.mark.asyncio
+async def test_confirmed_contradiction_discards_and_cleans_replacement(scenario):
+    _contradiction_scenario(scenario)
+    result = await scenario.run()
+    assert [row["test_id"] for row in result["verdicts"]] == ["passing"]
+    [entry] = result["regenerated"]
+    assert entry["outcome"] == "discarded"
+    assert entry["replacement_quote"] == AC
+    assert (
+        entry["reason"]
+        == "original and replacement both contradict the quoted criterion"
+    )
+    assert not (scenario.spec / "tests/test_original_regen1.py").exists()
+
+
+@pytest.mark.asyncio
+async def test_discard_exception_restores_first_pass_bytes(scenario, monkeypatch):
+    _contradiction_scenario(scenario)
+    monkeypatch.setattr(
+        regeneration, "check_merge_invariant", lambda *_: "injected failure"
+    )
+    await scenario.run()
+    assert scenario.verdicts.read_bytes() == scenario.first
+    assert not (scenario.spec / "tests/test_original_regen1.py").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "two_votes",
+        "missing_second_vote",
+        "missing_quote",
+        "unjudged_second_vote",
+        "different_ac",
+        "wrong_stability",
+        "wrong_failure_kind",
+        "missing_file",
+        "no_phase_pass",
+        "no_run_accept",
+        "test_quality",
+        "no_replacement",
+    ],
+)
+async def test_discard_gate_keeps_reject_when_evidence_is_incomplete(scenario, failure):
+    _contradiction_scenario(scenario)
+    if failure == "two_votes":
+        scenario.votes = 2
+        scenario.quotes = [AC] * 2
+    elif failure == "missing_second_vote":
+        scenario.crashed_second = 1
+    elif failure == "missing_quote":
+        scenario.second_quotes[1] = None
+    elif failure == "unjudged_second_vote":
+        scenario.second_judged = False
+    elif failure == "different_ac":
+        scenario.second_quotes = [OTHER_AC] * 3
+        scenario.extra_ac = OTHER_AC
+    elif failure == "wrong_stability":
+        scenario.second_stability = StabilityVerdict.STABLE
+    elif failure == "wrong_failure_kind":
+        scenario.second_failure_kind = "import"
+    elif failure == "missing_file":
+        scenario.failure = "file_removed_during_vote"
+    elif failure == "no_phase_pass":
+        scenario.phase_split = True
+    elif failure == "no_run_accept":
+        scenario.accepted = []
+        scenario.flagged = ["passing"]
+    elif failure == "test_quality":
+        scenario.stability = StabilityVerdict.STABLE
+    elif failure == "no_replacement":
+        scenario.failure = "no_replacement"
+    result = await scenario.run()
+    assert any(
+        row["test_id"] == "original" and row["verdict"] == "reject"
+        for row in result["verdicts"]
+    )
+    [entry] = result["regenerated"]
+    assert entry["outcome"] == "kept_reject"
+
+
+@pytest.mark.asyncio
+async def test_corrected_replacement_is_replaced(scenario):
+    _contradiction_scenario(scenario)
+    scenario.second_verdict = "accept"
+    scenario.second_stability = StabilityVerdict.STABLE
+    result = await scenario.run()
+    assert any(
+        row["test_id"] == "original-regen1" and row["verdict"] == "accept"
+        for row in result["verdicts"]
+    )
+    assert result["regenerated"][0]["outcome"] == "replaced"
+
+
+@pytest.mark.parametrize("note", ["", "  \n ", 42, "a" * 600])
+def test_contradiction_brief_note_rules(tmp_path, note):
+    source = tmp_path / "tests/test_original.py"
+    source.parent.mkdir()
+    source.write_text("assert original_source")
+    row = _row("original", quote=AC)
+    row["semantic_notes"] = note
+    subtask = {"files_to_create": ["tests/test_original.py"], "rationale": AC}
+    candidate = regeneration.Candidate("original", "spec_contradiction", AC, AC)
+    _, brief = evaluator._prepare_replacement(tmp_path, subtask, candidate, row)
+    assert "correct or drop that expectation and keep the rest" in brief
+    if isinstance(note, str) and note.strip():
+        assert f"Judge's note: {note[:500]}" in brief
+        assert "a" * 501 not in brief
+    else:
+        assert "Judge's note:" not in brief
+
+
+def test_contradiction_brief_collapses_note_and_quality_is_unchanged(tmp_path):
+    source = tmp_path / "tests/test_original.py"
+    source.parent.mkdir()
+    source.write_text("assert original_source")
+    row = _row("original")
+    row["semantic_notes"] = "  first\n second  "
+    subtask = {"files_to_create": ["tests/test_original.py"], "rationale": AC}
+    candidate = regeneration.Candidate("original", "spec_contradiction", AC, AC)
+    _, brief = evaluator._prepare_replacement(tmp_path, subtask, candidate, row)
+    assert "Judge's note: first second\n" in brief
+    _, quality = evaluator._prepare_replacement(
+        tmp_path, subtask, regeneration.Candidate("original", "test_quality"), row
+    )
+    assert quality == (
+        "Regenerate original. Reason kind: test_quality\n"
+        f"Rejection reasons: {json.dumps(row['reasons'])}\n"
+        f"Acceptance criterion: {AC}\n"
+        "Assert the acceptance criterion's behaviour fully, including ordering "
+        "and edge cases targeted by the original. Never weaken an expectation "
+        "to make the test pass.\n\n"
+        "Original test source:\nassert original_source"
+    )
+
+
+def test_replacement_prompt_keeps_quality_bytes_and_isolates_contradiction(tmp_path):
+    from prompts_pkg.prompts import get_tfactory_evaluator_prompt
+
+    original = _row("original")
+    quality = {
+        "original": original,
+        "replacement_id": "original-regen1",
+        "reason_kind": "test_quality",
+    }
+    base = get_tfactory_evaluator_prompt(tmp_path, tmp_path, [])
+    expected = (
+        base + "\n\n## REPLACEMENTS\n"
+        "Each listed test replaces a previously rejected test. A replacement "
+        "must assert the originally targeted behaviour at least as strongly "
+        "as the original. Accept only then, otherwise reject.\n"
+        + json.dumps(
+            [
+                {
+                    "replacement_id": "original-regen1",
+                    "original_id": "original",
+                    "original_test_file": original["test_file"],
+                    "rejection_reasons": original["reasons"],
+                }
+            ],
+            indent=2,
+        )
+    )
+    assert evaluator._replacement_prompt(tmp_path, tmp_path, [], [quality]) == expected
+    contradiction = dict(quality, reason_kind="spec_contradiction", quoted_ac=AC)
+    prompt = evaluator._replacement_prompt(tmp_path, tmp_path, [], [contradiction])
+    context = json.loads(
+        prompt.split("Judge each spec_contradiction replacement", 1)[1].split("\n", 1)[
+            1
+        ]
+    )
+    assert context == [
+        {
+            "replacement_id": "original-regen1",
+            "original_id": "original",
+            "original_test_file": original["test_file"],
+            "reason_kind": "spec_contradiction",
+        }
+    ]
+    assert "rejection_reasons" not in prompt.split("## REPLACEMENTS", 1)[1]
+    assert "quoted_ac" not in prompt.split("## REPLACEMENTS", 1)[1]
+    mixed = evaluator._replacement_prompt(
+        tmp_path, tmp_path, [], [quality, contradiction]
+    )
+    assert "Each test_quality replacement replaces" in mixed
+    assert "A test_quality replacement must assert" in mixed
+    assert "Each listed test replaces" not in mixed.split("## REPLACEMENTS", 1)[1]
 
 
 @pytest.mark.asyncio
@@ -666,3 +898,19 @@ def test_merge_invariant():
     assert check([original, other], [other, replacement], [entry] * 4)
     assert check([original, other], [other, replacement, replacement], [entry])
     assert check([original, other], [other, replacement, original], [entry])
+
+
+def test_plan_row_resolves_a_replacement_through_its_original() -> None:
+    from agents.evaluator import _plan_row, _resolve_subtask
+
+    subtask = {"id": "orig", "files_to_create": ["tests/test_orig.py"]}
+    plan = {"phases": [{"name": "AC#1: x", "subtasks": [subtask]}]}
+    replacement = {
+        "test_id": "orig-regen1",
+        "test_file": "tests/test_orig_regen1.py",
+        "regenerated_from": "orig",
+    }
+    assert _resolve_subtask(plan, replacement) is None
+    assert _resolve_subtask(plan, _plan_row(replacement)) is subtask
+    plain = {"test_id": "orig", "test_file": "tests/test_orig.py"}
+    assert _plan_row(plain) is plain
