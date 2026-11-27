@@ -624,3 +624,41 @@ def test_validate_returns_paths_not_values():
     errors = validate_task_contract({"contract_version": "SECRET"})
     assert "contract_version: enum" in errors
     assert not any("SECRET" in e for e in errors)
+
+
+# --- #1713: correlation_key on spec ingest ---------------------------------
+
+
+def test_correlation_key_stored_and_read_by_triager(tmp_path):
+    from agents.triager import _correlation_key
+
+    _ingest(tmp_path, _MARKDOWN, correlation_key="o/r#42")
+    sd = _spec_dir(tmp_path)
+    source = json.loads((sd / "context" / "source.json").read_text())
+    status = json.loads((sd / "status.json").read_text())
+    assert source["correlation_key"] == "o/r#42"
+    assert _correlation_key(sd, status, source) == "o/r#42"
+
+
+def test_contract_correlation_key_wins_without_rfc0002_markers(tmp_path):
+    from agents.triager import _correlation_key
+
+    _ingest(
+        tmp_path,
+        _MARKDOWN,
+        contract={"correlation_key": "o/r#99"},
+        correlation_key="pf-337-x",
+    )
+    sd = _spec_dir(tmp_path)
+    assert not (sd / "context" / "task_contract.json").exists()
+    source = json.loads((sd / "context" / "source.json").read_text())
+    status = json.loads((sd / "status.json").read_text())
+    assert source["correlation_key"] == "o/r#99"
+    assert _correlation_key(sd, status, source) == "o/r#99"
+
+
+@pytest.mark.parametrize("raw_key", [None, "", "   "])
+def test_blank_or_missing_correlation_key_stores_null(tmp_path, raw_key):
+    _ingest(tmp_path, _MARKDOWN, correlation_key=raw_key)
+    source = json.loads((_spec_dir(tmp_path) / "context" / "source.json").read_text())
+    assert source["correlation_key"] is None

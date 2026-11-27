@@ -1301,3 +1301,50 @@ def test_ownerless_terminal_is_available_only_to_project_admin(env, monkeypatch)
     assert env.client.get("/api/terminals/ownerless").status_code == 404
     env.current_principal["value"] = {"id": "owner", "org_id": "A"}
     assert env.client.get("/api/terminals/ownerless").status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("spec_id", "correlation_key"),
+    [("s-issue", "o/r#42"), ("s-pf", "pf-337-x")],
+)
+def test_mcp_stdio_ingest_writes_correlation_key_to_source_json(
+    env, tmp_path, monkeypatch, spec_id, correlation_key
+):
+    import json
+
+    monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("TFACTORY_AUTO_PLAN", "0")
+    (Path(env.registered["p1"]["path"]) / "README.md").write_text("x")
+    env.set_key("member-a", scopes={"task:write"})
+    response = env.client.post(
+        "/api/mcp-stdio/specs/ingest",
+        headers={"Authorization": "Bearer acw_test"},
+        json={
+            "project_id": "p1",
+            "spec_id": spec_id,
+            "spec_text": "## Acceptance Criteria\n- works",
+            "correlation_key": correlation_key,
+        },
+    )
+    assert response.status_code == 200, response.json()
+    source_path = (
+        tmp_path / "workspaces" / "p1" / "specs" / spec_id / "context" / "source.json"
+    )
+    source = json.loads(source_path.read_text())
+    assert source["correlation_key"] == correlation_key
+
+
+@pytest.mark.parametrize("bad_key", ["x" * 129, "pf 337", "12345"])
+def test_mcp_stdio_ingest_rejects_invalid_correlation_key_with_422(env, bad_key):
+    env.set_key("member-a", scopes={"task:write"})
+    response = env.client.post(
+        "/api/mcp-stdio/specs/ingest",
+        headers={"Authorization": "Bearer acw_test"},
+        json={
+            "project_id": "p1",
+            "spec_id": "s1",
+            "spec_text": "## Acceptance Criteria\n- works",
+            "correlation_key": bad_key,
+        },
+    )
+    assert response.status_code == 422
