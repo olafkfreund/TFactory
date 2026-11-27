@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1713
 spec: spec/2026-11-27-1713-ingest-correlation-key.md
 coders:
