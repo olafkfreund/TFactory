@@ -3629,12 +3629,25 @@ def _prepare_replacement(
         or subtask.get("description")
     )
     quote = f"Quoted AC: {candidate.quoted_ac}\n" if candidate.quoted_ac else ""
+    contradiction = candidate.reason_kind == regeneration.REASON_SPEC_CONTRADICTION
+    note = row.get("semantic_notes")
+    judge_note = (
+        f"Judge's note: {' '.join(note.split())[:500]}\n"
+        if contradiction and isinstance(note, str) and note.strip()
+        else ""
+    )
+    instruction = (
+        "The original asserted an expectation that contradicts the quoted criterion; "
+        "correct or drop that expectation and keep the rest. "
+        if contradiction
+        else "Assert the acceptance criterion's behaviour fully, including ordering "
+        "and edge cases targeted by the original. "
+    )
     brief = (
         f"Regenerate {candidate.test_id}. Reason kind: {candidate.reason_kind}\n"
         f"Rejection reasons: {json.dumps(row.get('reasons'))}\n"
         f"{quote}Acceptance criterion: {criterion}\n"
-        "Assert the acceptance criterion's behaviour fully, including ordering "
-        "and edge cases targeted by the original. Never weaken an expectation "
+        f"{judge_note}{instruction}Never weaken an expectation "
         "to make the test pass.\n\n"
         f"Original test source:\n{source}"
     )
@@ -3658,22 +3671,45 @@ def _replacement_prompt(
 ) -> str:
     from prompts_pkg.prompts import get_tfactory_evaluator_prompt  # noqa: PLC0415
 
-    context = [
-        {
+    context = []
+    for entry in entries:
+        item = {
             "replacement_id": entry["replacement_id"],
             "original_id": entry["original"]["test_id"],
             "original_test_file": entry["original"].get("test_file"),
-            "rejection_reasons": entry["original"].get("reasons"),
-            **({"quoted_ac": entry["quoted_ac"]} if "quoted_ac" in entry else {}),
         }
-        for entry in entries
-    ]
-    return (
-        get_tfactory_evaluator_prompt(spec_dir, project_dir, bundles)
-        + "\n\n## REPLACEMENTS\n"
+        if entry["reason_kind"] == regeneration.REASON_SPEC_CONTRADICTION:
+            item["reason_kind"] = entry["reason_kind"]
+        else:
+            item["rejection_reasons"] = entry["original"].get("reasons")
+            if "quoted_ac" in entry:
+                item["quoted_ac"] = entry["quoted_ac"]
+        context.append(item)
+    instruction = (
         "Each listed test replaces a previously rejected test. A replacement "
         "must assert the originally targeted behaviour at least as strongly "
         "as the original. Accept only then, otherwise reject.\n"
+    )
+    if any(e["reason_kind"] == regeneration.REASON_SPEC_CONTRADICTION for e in entries):
+        quality_instruction = instruction.replace(
+            "Each listed test replaces", "Each test_quality replacement replaces"
+        ).replace("A replacement must assert", "A test_quality replacement must assert")
+        instruction = (
+            "Judge each spec_contradiction replacement on its own against the acceptance criteria. "
+            "It may omit or correct an expectation of the original that contradicts a criterion; "
+            "it must still assert every other behaviour the original targeted.\n"
+        ) + (
+            quality_instruction
+            if any(
+                e["reason_kind"] != regeneration.REASON_SPEC_CONTRADICTION
+                for e in entries
+            )
+            else ""
+        )
+    return (
+        get_tfactory_evaluator_prompt(spec_dir, project_dir, bundles)
+        + "\n\n## REPLACEMENTS\n"
+        + instruction
         + json.dumps(context, indent=2)
     )
 
@@ -3685,12 +3721,12 @@ async def _judge_replacements(  # noqa: PLR0913 - vote and enrichment share the 
     entries: list[dict[str, Any]],
     verbose: bool,
     n: int,
-) -> dict[str, Any] | None:
+) -> tuple[dict[str, Any] | None, list[dict[str, Any] | None]]:
     prompt = _replacement_prompt(spec_dir, project_dir, bundles, entries)
     _archive_first_pass_votes(spec_dir / "findings", n)
     docs, _ = await _collect_judge_docs(spec_dir, project_dir, prompt, verbose, n)
     if all(doc is None for doc in docs):
-        return None
+        return None, docs
     doc: dict[str, Any] | None
     if n > 1:
         doc, _summary = await _merge_voted_verdicts(
@@ -3700,7 +3736,7 @@ async def _judge_replacements(  # noqa: PLR0913 - vote and enrichment share the 
         doc = docs[0]
     if doc is not None:
         _enrich_evaluator_verdicts(spec_dir, doc, bundles, strict=True)
-    return doc
+    return doc, docs
 
 
 async def _collect_replacements(  # noqa: PLR0913 - track paths before generation awaits
@@ -3736,6 +3772,7 @@ async def _collect_replacements(  # noqa: PLR0913 - track paths before generatio
         }
         if candidate.quoted_ac is not None:
             entry["quoted_ac"] = candidate.quoted_ac
+            entry["_candidate_ac_text"] = candidate.ac_text
         entries.append(entry)
         if head is None:
             entry["reason"] = "git HEAD unreadable"
@@ -3823,6 +3860,81 @@ def _merge_replacement_rows(
         entry["outcome"] = "replaced"
 
 
+def _discard_confirmed_contradictions(  # noqa: PLR0913 - evidence from both passes
+    spec_dir: Path,
+    final_rows: list[dict[str, Any]],
+    entries: list[dict[str, Any]],
+    generated: list[tuple[GeneratedTest, dict[str, Any], str | None]],
+    replacements: list[EvaluatorSignals],
+    second: dict[str, Any],
+    docs2: list[dict[str, Any] | None],
+    ac_texts: list[str],
+    n: int,
+) -> None:
+    if n < regeneration.MIN_DISCARD_VOTES:
+        return
+    plan = _read_plan(spec_dir) or {}
+    by_id = {bundle.test_id: bundle for bundle in replacements}
+    for gen, entry, _ in generated:
+        replacement_id = entry.get("replacement_id")
+        if (
+            entry.get("reason_kind") != regeneration.REASON_SPEC_CONTRADICTION
+            or entry.get("outcome") != "kept_reject"
+            or not isinstance(replacement_id, str)
+            or not replacement_id
+        ):
+            continue
+        row = _entry_for(second, replacement_id)
+        bundle = by_id.get(replacement_id)
+        stability = getattr(bundle, "stability", None)
+        verdict = getattr(stability, "verdict", None)
+        if (
+            row is None
+            or row.get("judged") is False
+            or row.get("verdict") != "reject"
+            or getattr(verdict, "value", verdict) != "consistent_fail"
+            or getattr(stability, "failure_kind", None) != "assertion"
+            or not (spec_dir / gen.test_file).is_file()
+        ):
+            continue
+        ac_text = regeneration.confirmed_contradiction(replacement_id, docs2, ac_texts)
+        if ac_text is None or regeneration.normalize_quote(
+            ac_text
+        ) != regeneration.normalize_quote(entry.get("_candidate_ac_text")):
+            continue
+        original = entry["original"]
+        subtask = _resolve_subtask(plan, original)
+        phase = next(
+            (
+                phase
+                for phase in plan.get("phases") or []
+                if isinstance(phase, dict)
+                and subtask is not None
+                and any(st is subtask for st in phase.get("subtasks") or [])
+            ),
+            None,
+        )
+        if phase is None or not any(
+            row.get("verdict") in ("accept", "flag")
+            and any(
+                st is _resolve_subtask(plan, row) for st in phase.get("subtasks") or []
+            )
+            for row in final_rows
+            if row is not original
+        ):
+            continue
+        if not any(
+            row.get("verdict") == "accept" for row in final_rows if row is not original
+        ):
+            continue
+        final_rows.remove(original)
+        entry["outcome"] = "discarded"
+        entry["reason"] = (
+            "original and replacement both contradict the quoted criterion"
+        )
+        entry["replacement_quote"] = ac_text
+
+
 async def _run_regeneration_pass(  # noqa: PLR0913 - use the caller's rollback snapshot
     spec_dir: Path,
     project_dir: Path,
@@ -3839,9 +3951,8 @@ async def _run_regeneration_pass(  # noqa: PLR0913 - use the caller's rollback s
     for i, raw_doc in enumerate(docs):
         if n > 1 and raw_doc is None:
             vote_docs[i] = None  # A crashed call may have a stale vote file.
-    eligible = regeneration.eligible_candidates(
-        rows, bundles, vote_docs, regeneration.load_ac_texts(spec_dir)
-    )
+    ac_texts = regeneration.load_ac_texts(spec_dir)
+    eligible = regeneration.eligible_candidates(rows, bundles, vote_docs, ac_texts)
     if not eligible:
         return
 
@@ -3889,8 +4000,9 @@ async def _run_regeneration_pass(  # noqa: PLR0913 - use the caller's rollback s
             if actual - expected:
                 raise ValueError("unexpected or duplicate replacement bundles")
             second = None
+            docs2: list[dict[str, Any] | None] = []
             if replacements:
-                second = await _judge_replacements(
+                second, docs2 = await _judge_replacements(
                     spec_dir,
                     project_dir,
                     replacements,
@@ -3901,10 +4013,24 @@ async def _run_regeneration_pass(  # noqa: PLR0913 - use the caller's rollback s
             _merge_replacement_rows(
                 spec_dir, final_rows, generated, replacements, second
             )
+            if second is not None:
+                _discard_confirmed_contradictions(
+                    spec_dir,
+                    final_rows,
+                    entries,
+                    generated,
+                    replacements,
+                    second,
+                    docs2,
+                    ac_texts,
+                    n,
+                )
 
         violation = regeneration.check_merge_invariant(rows, final_rows, entries)
         if violation is not None:
             raise ValueError(violation)
+        for entry in entries:
+            entry.pop("_candidate_ac_text", None)
         doc["verdicts"] = final_rows
         doc["regenerated"] = entries
         (findings / "verdicts.json").write_text(json.dumps(doc, indent=2))

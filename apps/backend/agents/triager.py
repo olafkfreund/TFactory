@@ -1238,13 +1238,25 @@ def _regenerated_entries(doc: dict[str, Any]) -> list[dict[str, Any]]:
             not isinstance(original, str)
             or not original.strip()
             or entry.get("reason_kind") not in ("test_quality", "spec_contradiction")
-            or entry.get("outcome") not in ("replaced", "kept_reject")
+            or entry.get("outcome") not in ("replaced", "kept_reject", "discarded")
             or "replacement_id" not in entry
             or any(
                 entry.get(key) is not None and not isinstance(entry[key], str)
-                for key in ("quoted_ac", "replacement_id", "reason")
+                for key in (
+                    "quoted_ac",
+                    "replacement_id",
+                    "reason",
+                    "replacement_quote",
+                )
             )
-            or (entry["outcome"] == "replaced" and not entry["replacement_id"])
+            or (
+                entry["outcome"] in ("replaced", "discarded")
+                and not entry["replacement_id"].strip()
+            )
+            or (
+                entry["outcome"] == "discarded"
+                and not (entry.get("replacement_quote") or "").strip()
+            )
         ):
             return []
     return entries

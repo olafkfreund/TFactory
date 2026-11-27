@@ -34,10 +34,45 @@ import pytest
 from agents.triager import (
     _BG_TRIAGER_TASKS,
     _build_completion_envelope,
+    _regenerated_entries,
     _status_verdict,
     run_triager,
     schedule_triager,
 )
+
+
+def test_discarded_regeneration_entry_is_read() -> None:
+    entry = {
+        "original": {"test_id": "wrong-test"},
+        "reason_kind": "spec_contradiction",
+        "replacement_id": "wrong-test-regen1",
+        "replacement_quote": "Return items in order",
+        "outcome": "discarded",
+    }
+    assert _regenerated_entries({"regenerated": [entry]}) == [entry]
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"replacement_id": ""},
+        {"replacement_quote": ""},
+        {"replacement_quote": "   "},
+        {"replacement_quote": 123},
+        {"outcome": "unknown"},
+    ],
+)
+def test_invalid_discarded_regeneration_rejects_entire_list(change: dict) -> None:
+    entry = {
+        "original": {"test_id": "wrong-test"},
+        "reason_kind": "spec_contradiction",
+        "replacement_id": "wrong-test-regen1",
+        "replacement_quote": "Return items in order",
+        "outcome": "discarded",
+        **change,
+    }
+    assert _regenerated_entries({"regenerated": [entry]}) == []
+
 
 # ── autouse env pins ───────────────────────────────────────────────────
 
