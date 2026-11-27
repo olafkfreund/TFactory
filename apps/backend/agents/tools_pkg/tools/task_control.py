@@ -716,6 +716,7 @@ def create_spec_ingest_workspace(
     originator: str | None = None,
     agent_identity: str | None = None,
     pr_number: int | None = None,
+    correlation_key: str | None = None,
     git_env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Create a TFactory workspace from a raw acceptance-criteria spec.
@@ -930,7 +931,8 @@ def create_spec_ingest_workspace(
         # The handoff's declared correlation key (#1775). A build-only contract
         # has no RFC-0002 markers, so task_contract.json is not written and the
         # key would otherwise be lost; the readers check it before the issue.
-        "correlation_key": _handoff_key(contract),
+        "correlation_key": _handoff_key(contract)
+        or _handoff_key({"correlation_key": correlation_key}),
         # Tenant scoping (#683): service-local metadata, lazily backfilled —
         # readers treat a missing value as "default".
         "tenant": tenant or "default",

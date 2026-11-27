@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.14.12 - 2026-11-27
+
+Merged to `dev` since 0.14.11.
+
+### Added
+
+- Spec ingest (`POST /api/specs/ingest` and the mcp-stdio proxy) accepts an optional `correlation_key`. The key must be at most 128 characters from a safe set and never all digits; a blank value means no key. It is stored in `context/source.json`, so a `factory test` verify can join the run's CFactory work item. A handoff contract's own key still wins. (#1713, #1714, Factory#3939)
+
 ## 0.14.11 - 2026-11-27
 
 Merged to `dev` since 0.14.10.
