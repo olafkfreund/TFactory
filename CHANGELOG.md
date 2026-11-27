@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.14.11 - 2026-11-27
+
+Merged to `dev` since 0.14.10.
+
+### Fixed
+
+- A generated test that contradicts the spec no longer fails a correct build.
+  - **Regeneration:** the regeneration brief names the contradiction. The replacement is judged independently of the first pass, and it may drop the expectation that contradicts the spec.
+  - **Discard:** if the replacement is again unanimously rejected for contradicting the same acceptance criterion, the test is discarded as a test defect and does not count as a code failure. This needs at least 3 votes per pass and a consistent assertion failure, and the test's plan phase and the run must each keep a passing test. Each discard is listed in the triage report. (#1710, #1711)
+
 ## 0.14.10 - 2026-11-27
 
 Merged to `dev` since 0.14.9.
