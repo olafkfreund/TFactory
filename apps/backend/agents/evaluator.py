@@ -3772,7 +3772,6 @@ async def _collect_replacements(  # noqa: PLR0913 - track paths before generatio
         }
         if candidate.quoted_ac is not None:
             entry["quoted_ac"] = candidate.quoted_ac
-            entry["_candidate_ac_text"] = candidate.ac_text
         entries.append(entry)
         if head is None:
             entry["reason"] = "git HEAD unreadable"
@@ -3874,6 +3873,7 @@ def _discard_confirmed_contradictions(  # noqa: PLR0913 - evidence from both pas
     second: dict[str, Any] | None,
     docs2: list[dict[str, Any] | None],
     ac_texts: list[str],
+    ac_by_id: dict[str, str | None],
     n: int,
 ) -> None:
     if second is None or min(n, len(docs2)) < regeneration.MIN_DISCARD_VOTES:
@@ -3905,7 +3905,9 @@ def _discard_confirmed_contradictions(  # noqa: PLR0913 - evidence from both pas
         ac_text = regeneration.confirmed_contradiction(replacement_id, docs2, ac_texts)
         if ac_text is None or regeneration.normalize_quote(
             ac_text
-        ) != regeneration.normalize_quote(entry.get("_candidate_ac_text")):
+        ) != regeneration.normalize_quote(
+            ac_by_id.get(entry["original"].get("test_id"))
+        ):
             continue
         original = entry["original"]
         subtask = _resolve_subtask(plan, original)
@@ -4024,14 +4026,13 @@ async def _run_regeneration_pass(  # noqa: PLR0913 - use the caller's rollback s
                 second,
                 docs2,
                 ac_texts,
+                {c.test_id: c.ac_text for c in eligible},
                 n,
             )
 
         violation = regeneration.check_merge_invariant(rows, final_rows, entries)
         if violation is not None:
             raise ValueError(violation)
-        for entry in entries:
-            entry.pop("_candidate_ac_text", None)
         doc["verdicts"] = final_rows
         doc["regenerated"] = entries
         (findings / "verdicts.json").write_text(json.dumps(doc, indent=2))
