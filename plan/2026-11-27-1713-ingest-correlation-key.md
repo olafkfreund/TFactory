@@ -15,14 +15,15 @@ reviewers:
 
 The spec, copied here so this plan stands alone.
 
-- **Request field:** `apps/web-server/server/routes/specs.py` `SpecIngestRequest` (~70–165) gains
+- **Request field:** `apps/web-server/server/routes/specs.py` `SpecIngestRequest` (~70–177) gains
   `correlation_key: str | None = Field(default=None, max_length=128,
   pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,127}$")`, plus a `field_validator` that raises
-  `ValueError` for an all-digits value. That gives a 422.
+  `ValueError` when the value is not `None` and is all digits. That gives a 422.
 - **Pass-through:** `ingest_spec` (~557–567) passes `correlation_key=req.correlation_key`.
 - **Workspace:** `apps/backend/agents/tools_pkg/tools/task_control.py`
   `create_spec_ingest_workspace` (~699) gains the keyword `correlation_key: str | None = None`.
-  `source["correlation_key"]` (~931) becomes `_handoff_key(contract) or correlation_key`.
+  `source["correlation_key"]` (~933) becomes `_handoff_key(contract) or _handoff_key({"correlation_key": correlation_key})`.
+  That reuses the strip/blank rule, so `""` and whitespace store `null` (agy review).
 - **No change:**
   - `triager.py`, which already reads `source.json`;
   - the MCP-stdio router, which uses the same model;
@@ -35,15 +36,19 @@ The spec, copied here so this plan stands alone.
    **Tests:**
    - in `tests/test_spec_ingest_workspace.py`:
      - the key is stored;
-     - a contract key wins;
-     - with no key, the value is null;
+     - a contract key wins, using a contract **without** RFC-0002 markers, so the workspace fallback
+       is exercised;
+     - with no key, `""` or whitespace, the value is null;
      - `triager._correlation_key` returns the stored key for that spec dir.
-   - in the specs route tests, found with `grep -ln SpecIngestRequest tests/`: an over-length
-     key, one with a space, and an all-digits key each return 422.
+   - in `tests/test_specs_ingest_clone.py` (direct route) and `tests/test_mcp_stdio_authz.py`
+     (mcp-stdio proxy), following their existing ingest fixtures:
+     - a **successful** ingest with `correlation_key="o/r#42"` or `"pf-337-x"` writes it to
+       `source.json` (Codex and agy review: otherwise a missing pass-through goes undetected);
+     - an over-length key, one with a space, and an all-digits key each return 422.
 
    **Verify:**
    ```bash
-   /mnt/code/Source-home/GitHub/TFactory/apps/backend/.venv/bin/pytest -q tests/test_spec_ingest_workspace.py <the route test file> tests/test_triager.py
+   /mnt/code/Source-home/GitHub/TFactory/apps/backend/.venv/bin/pytest -q tests/test_spec_ingest_workspace.py tests/test_specs_ingest_clone.py tests/test_mcp_stdio_authz.py tests/test_triager.py
    ```
    Then run `ruff check` and `ruff format --check` on the changed files.
 
@@ -62,5 +67,19 @@ The spec, copied here so this plan stands alone.
 
 ## Rollback
 
-Revert the PR. The field disappears, and callers that send it get a 422 for an unknown field,
-but only if the model forbids extras. Check this before release.
+Revert the PR. `SpecIngestRequest` doesn't forbid extra fields (Pydantic's default is ignore), so
+callers that still send `correlation_key` are accepted. The key is silently dropped, and verify
+events go back to `tf-…` (Codex and agy review).
+
+## Review (plan draft, 2026-11-27)
+
+Codex (gpt-6.2-sol) and agy (model not reported) reviewed the draft. Both were read-only, with no
+changes.
+
+| Finding | Verdict | Change |
+|---|---|---|
+| The rollback note is wrong: extras are ignored, not rejected with 422 (both) | confirmed (`specs.py:70`, no `model_config`) | Rollback rewritten |
+| No route-level pass-through test (both) | confirmed | a successful ingest test on each route |
+| An empty or whitespace key is stored as is (agy) | confirmed (`task_control.py:933`) | normalised via `_handoff_key` |
+| The digits validator needs a `None` guard (agy) | confirmed | done |
+| Anchors drifted, and the grep doesn't recurse (Codex) | confirmed | anchors and test files named |
