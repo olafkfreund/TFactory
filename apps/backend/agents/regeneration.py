@@ -222,6 +222,67 @@ def replacement_gate(
     return False, False, f"replacement mutation ({verdict}) did not meet the lane gate"
 
 
+def _discard_violation(
+    entry: Mapping[str, Any],
+    original: Mapping[str, Any],
+    replacement_id: str,
+    remaining: Sequence[Mapping[str, Any]],
+) -> str | None:
+    quote = entry.get("replacement_quote")
+    if (
+        entry.get("reason_kind") != REASON_SPEC_CONTRADICTION
+        or not isinstance(quote, str)
+        or not quote.strip()
+        or not isinstance(original.get("spec_contradiction"), dict)
+    ):
+        return "discard has incomplete contradiction evidence"
+    if any(
+        row.get("test_id") in (original.get("test_id"), replacement_id)
+        for row in remaining
+    ):
+        return "discarded test remains in final verdicts"
+    return None
+
+
+def _consume(
+    entry: Mapping[str, Any],
+    pass1_rows: Sequence[Mapping[str, Any]],
+    originals: list[Mapping[str, Any]],
+    remaining: list[Mapping[str, Any]],
+    consumed_ids: set[str],
+) -> str | None:
+    """Consume one replaced or discarded entry's original; return a violation."""
+    original = entry.get("original")
+    test_id = original.get("test_id") if isinstance(original, Mapping) else None
+    if (
+        not isinstance(original, Mapping)
+        or original.get("verdict") != "reject"
+        or original not in originals
+        or not isinstance(test_id, str)
+        or test_id in consumed_ids
+    ):
+        return "replacement has no matching original reject"
+    replacement_id = entry.get("replacement_id")
+    if (
+        not isinstance(replacement_id, str)
+        or not replacement_id.strip()
+        or any(row.get("test_id") == replacement_id for row in pass1_rows)
+    ):
+        return "replacement ID is missing or collides with a first-pass test"
+    if entry.get("outcome") == "discarded":
+        violation = _discard_violation(entry, original, replacement_id, remaining)
+        if violation is not None:
+            return violation
+    else:
+        matches = [row for row in remaining if row.get("test_id") == replacement_id]
+        if len(matches) != 1 or matches[0].get("verdict") not in ("accept", "flag"):
+            return f"replacement {replacement_id} has no unique accept or flag verdict"
+        remaining.remove(matches[0])
+    originals.remove(original)
+    consumed_ids.add(test_id)
+    return None
+
+
 def check_merge_invariant(
     pass1_rows: Sequence[Mapping[str, Any]],
     final_rows: Sequence[Mapping[str, Any]],
@@ -240,44 +301,9 @@ def check_merge_invariant(
     remaining = list(final_rows)
     consumed_ids: set[str] = set()
     for entry in consumed:
-        original = entry.get("original")
-        if (
-            not isinstance(original, Mapping)
-            or original.get("verdict") != "reject"
-            or original not in originals
-            or not isinstance(original.get("test_id"), str)
-            or original.get("test_id") in consumed_ids
-        ):
-            return "replacement has no matching original reject"
-        replacement_id = entry.get("replacement_id")
-        if (
-            not isinstance(replacement_id, str)
-            or not replacement_id.strip()
-            or any(row.get("test_id") == replacement_id for row in pass1_rows)
-        ):
-            return "replacement ID is missing or collides with a first-pass test"
-        if entry.get("outcome") == "discarded":
-            if (
-                entry.get("reason_kind") != REASON_SPEC_CONTRADICTION
-                or not isinstance(entry.get("replacement_quote"), str)
-                or not entry["replacement_quote"].strip()
-                or not isinstance(original.get("spec_contradiction"), dict)
-            ):
-                return "discard has incomplete contradiction evidence"
-            if any(
-                row.get("test_id") in (original.get("test_id"), replacement_id)
-                for row in remaining
-            ):
-                return "discarded test remains in final verdicts"
-            originals.remove(original)
-            consumed_ids.add(original.get("test_id"))
-            continue
-        matches = [row for row in remaining if row.get("test_id") == replacement_id]
-        if len(matches) != 1 or matches[0].get("verdict") not in ("accept", "flag"):
-            return f"replacement {replacement_id} has no unique accept or flag verdict"
-        originals.remove(original)
-        consumed_ids.add(original.get("test_id"))
-        remaining.remove(matches[0])
+        violation = _consume(entry, pass1_rows, originals, remaining, consumed_ids)
+        if violation is not None:
+            return violation
 
     for row in originals:
         if row not in remaining:

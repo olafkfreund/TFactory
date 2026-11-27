@@ -3869,15 +3869,14 @@ def _plan_row(row: dict[str, Any]) -> dict[str, Any]:
 def _discard_confirmed_contradictions(  # noqa: PLR0913 - evidence from both passes
     spec_dir: Path,
     final_rows: list[dict[str, Any]],
-    entries: list[dict[str, Any]],
     generated: list[tuple[GeneratedTest, dict[str, Any], str | None]],
     replacements: list[EvaluatorSignals],
-    second: dict[str, Any],
+    second: dict[str, Any] | None,
     docs2: list[dict[str, Any] | None],
     ac_texts: list[str],
     n: int,
 ) -> None:
-    if min(n, len(docs2)) < regeneration.MIN_DISCARD_VOTES:
+    if second is None or min(n, len(docs2)) < regeneration.MIN_DISCARD_VOTES:
         return
     plan = _read_plan(spec_dir) or {}
     by_id = {bundle.test_id: bundle for bundle in replacements}
@@ -4017,18 +4016,16 @@ async def _run_regeneration_pass(  # noqa: PLR0913 - use the caller's rollback s
             _merge_replacement_rows(
                 spec_dir, final_rows, generated, replacements, second
             )
-            if second is not None:
-                _discard_confirmed_contradictions(
-                    spec_dir,
-                    final_rows,
-                    entries,
-                    generated,
-                    replacements,
-                    second,
-                    docs2,
-                    ac_texts,
-                    n,
-                )
+            _discard_confirmed_contradictions(
+                spec_dir,
+                final_rows,
+                generated,
+                replacements,
+                second,
+                docs2,
+                ac_texts,
+                n,
+            )
 
         violation = regeneration.check_merge_invariant(rows, final_rows, entries)
         if violation is not None:
